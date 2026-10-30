@@ -174,8 +174,15 @@ func TestHookGateRelayTimeoutWriteAfterGateStopsHolding(t *testing.T) {
 	if n := len(linesAfter(t, before, "ad.hook.fired", id)); n != 1 {
 		t.Errorf("ad.hook.fired lines = %d; want 1", n)
 	}
-	if want := hook.EncodeDecision(hook.EventNamePermissionRequest, "deny", store.DecisionReasonFindMissing) + "\n"; stdout.String() != want {
-		t.Errorf("stdout = %q; want %q, the mark's deny, acked", stdout.String(), want)
+	if stdout.String() != "" {
+		t.Errorf("stdout = %q; observational closeout authorized output", stdout.String())
+	}
+	requests, err := st.PermissionRequestsForSpawn(id)
+	if err != nil || len(requests) != 1 {
+		t.Fatalf("closed requests: %+v %v", requests, err)
+	}
+	if pr := requests[0]; pr.DecisionOrigin != store.DecisionOriginObservation || pr.ResponseState != "" || !pr.DeliveredAt.IsZero() {
+		t.Fatalf("closed response authority: %+v", pr)
 	}
 }
 

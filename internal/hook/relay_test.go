@@ -69,6 +69,72 @@ func decideOnly(t *testing.T, st *store.Store, id, verdict string) {
 	}
 }
 
+func TestRelayOriginCloseoutAcrossProviders(t *testing.T) {
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		for _, history := range []string{"allow", "deny", "timeout", "closed", "allow then closed", "outside", "unknown"} {
+			t.Run(agent+"/"+history, func(t *testing.T) {
+				const id = "relay-origin"
+				st, path := cxRelayRow(t, id, agent, store.StateWorking)
+				hc := relayHC(id, cxRelayParent(t, st, id, agent), 10*time.Second)
+				hc.Agent = agent
+				atSleep(t, hc, 1, func() {
+					if history == "allow" || history == "deny" || history == "allow then closed" || history == "unknown" {
+						verdict := "allow"
+						if history == "deny" {
+							verdict = "deny"
+						}
+						decideOnly(t, st, id, verdict)
+					}
+					pr := onlyRequest(t, st, id)
+					switch history {
+					case "closed", "allow then closed":
+						row := mustGetSpawn(t, st, id)
+						if _, result, err := st.MarkMissingIfSameLife(id, row.Snapshot); err != nil || result != store.CondApplied {
+							t.Fatalf("close: %v %v", result, err)
+						}
+					case "outside":
+						if ok, err := st.RecordPaneOutside(id, pr.RequestToken, "allow", 0, nil); err != nil || !ok {
+							t.Fatalf("outside: %v %v", ok, err)
+						}
+					case "unknown":
+						db, err := sql.Open("sqlite", path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer db.Close()
+						if _, err := db.Exec("UPDATE permission_requests SET decision_origin=NULL"); err != nil {
+							t.Fatal(err)
+						}
+					}
+				})
+				out, _ := fireRelay(t, st, hc, relayPayload)
+				want, origin := "", ""
+				if history == "allow" || history == "deny" || history == "timeout" {
+					verdict, reason := history, ""
+					origin = store.DecisionOriginCaller
+					if history == "deny" {
+						reason = store.DecisionReasonOperator
+					}
+					if history == "timeout" {
+						verdict, origin = "deny", store.DecisionOriginTimeout
+					}
+					want = hook.EncodeDecision(hook.EventNamePermissionRequest, verdict, reason) + "\n"
+				}
+				if out != want {
+					t.Fatalf("exact %s envelope = %q; want %q", agent, out, want)
+				}
+				pr := onlyRequest(t, st, id)
+				if want != "" && (pr.DecisionOrigin != origin || pr.ResponseState != store.ResponseRelayClaimed || pr.DeliveredAt.IsZero()) {
+					t.Fatalf("output lacks claim: %+v", pr)
+				}
+				if want == "" && (!pr.DeliveredAt.IsZero() || pr.ResponseState != "") {
+					t.Fatalf("observation became claim: %+v", pr)
+				}
+			})
+		}
+	}
+}
+
 // fireRelay runs Handle for payload and returns its stdout and how long it took.
 func fireRelay(t *testing.T, st hook.HookStore, hc hook.HandleConfig, payload string) (string, time.Duration) {
 	t.Helper()

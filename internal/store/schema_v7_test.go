@@ -96,8 +96,11 @@ func TestV7MigrationKeepsV6Rows(t *testing.T) {
 	if ok, err := s.DecideRelayRequest(f.id, f.open, "allow", "", WriterProcessDecide, openCreated, DefaultLockWait); err != nil || ok {
 		t.Errorf("decide at a cutoff not before created_at = %v, %v; want refused (fallen back by time)", ok, err)
 	}
-	if ok, err := s.DecideRelayRequest(f.id, f.open, "allow", "", WriterProcessDecide, openCreated.Add(-time.Second), DefaultLockWait); err != nil || !ok {
-		t.Errorf("decide at a cutoff before created_at = %v, %v; want written", ok, err)
+	if ok, err := s.DecideRelayRequest(f.id, f.open, "allow", "", WriterProcessDecide, openCreated.Add(-time.Second), DefaultLockWait); err != nil || ok {
+		t.Errorf("decide at a cutoff before created_at = %v, %v; want refused (unknown historical authority)", ok, err)
+	}
+	if pr, err := s.GetPermissionRequest(f.id, f.open); err != nil || pr.DecisionOrigin != "" || pr.ResponseState != "" || pr.OwnerLifeNumber != -1 {
+		t.Fatalf("migration invented authority: %+v %v", pr, err)
 	}
 }
 

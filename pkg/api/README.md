@@ -617,8 +617,8 @@ an internal error. Once the verdict is confirmed committed, `Decide` never
 returns `ErrStoreBusy`. Zero-wait semantics and recovery are defined in the
 [caller contract](../../docs/caller-contract.md#permission-relay).
 
-`ErrNoOpenPermissionRequest` means no open request has that token, or the
-request is closed; see the
+`ErrNoOpenPermissionRequest` means no eligible request has that token,
+including a closed, proven-gone or obsolete request; see the
 [caller contract](../../docs/caller-contract.md#permission-relay) for handling.
 A request still awaiting
 an answer when its Spawn ended (its agent's terminal SessionEnd, or the move
@@ -629,7 +629,8 @@ stays closed after `Resume`; `Get` and `List` no longer show it. The same
 close includes decided requests without a confirmation or completed pane
 answer, including requests recorded by an older binary.
 `GetPermission` still reads its delivery. For a request with a settle
-instant, `delivered` requires its relay hook's confirmation. Requests
+instant, `delivered` retains an acknowledgement from before closure; closure
+cannot authorize a later response. Requests
 recorded by an older binary retain the
 [legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary),
 including derived delivery after expiry even when closed.

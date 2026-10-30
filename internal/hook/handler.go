@@ -687,8 +687,10 @@ func codexTurnGate(gate *store.HookGate, res ClassifyResult) {
 // closeToolRan is the PostToolUse close (b.146 rule 13): a PostToolUse or
 // PostToolUseFailure for toolUseID on a relayed row closes the request of the
 // row carrying that tool_use_id that has fallen back (store
-// CloseToolRanRequests: pane_answer tool_ran, decision allow, decision_reason
-// tool_ran), each relay hook judged by hc.RelayHookGone before the guarded
+// CloseToolRanRequests: pane_answer tool_ran, preserving any prior verdict,
+// non-null reason and origin, inferring observational allow only if undecided,
+// and filling a missing reason with tool_ran),
+// each relay hook judged by hc.RelayHookGone before the guarded
 // write, which carries the hook's gate. It runs before the hook's ordinary
 // write, so that write's working transition is no longer held by the request
 // it closed. It is fail-open: a store without the close, or a failed close,

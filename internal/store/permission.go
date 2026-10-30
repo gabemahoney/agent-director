@@ -240,6 +240,15 @@ type PermissionRow struct {
 	AdmittedAt           time.Time
 	FallbackAt           time.Time
 	FallbackBasis        string
+
+	// DecisionOrigin is persisted provenance, never inferred from reason.
+	// ResponseState is a pre-emission claim/issue marker, not delivery proof.
+	// Missing admission ownership is historical and grants no new response.
+	DecisionOrigin        string
+	ResponseState         string
+	OwnerLifeNumber       int64 // -1 when historical ownership is unknown
+	OwnerSessionID        string
+	OwnerCursorConnection string
 }
 
 // ProvenGone reports whether Claude Code proved r's permission dialog gone
@@ -376,7 +385,9 @@ const permissionColumns = `pr.request_id, pr.instance_id, pr.tool_name, pr.tool_
        pr.pane_intent_at, pr.closed_at,
        pr.proven_gone_at, COALESCE(pr.proven_gone_how, ''), pr.main_turn_end_eligible,
        COALESCE(pr.owner_launch_token, ''), COALESCE(pr.owner_permission_epoch, -1),
-       pr.admitted_at, pr.fallback_at, COALESCE(pr.fallback_basis, '')`
+       pr.admitted_at, pr.fallback_at, COALESCE(pr.fallback_basis, ''),
+       COALESCE(pr.decision_origin, ''), COALESCE(pr.response_state, ''),
+       COALESCE(pr.owner_life_number, -1), COALESCE(pr.owner_session_id, ''), COALESCE(pr.owner_cursor_connection, '')`
 
 // scanPermissionRow scans one row selected with permissionColumns. The Scan
 // error is returned as is, so callers can still detect sql.ErrNoRows.
@@ -398,7 +409,8 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 		&r.PaneSender.PID, &r.PaneSender.Starttime, &r.PaneSender.PIDNamespace,
 		&intentAt, &closedAt,
 		&provenAt, &r.ProvenGoneHow, &r.MainTurnEndEligible,
-		&r.OwnerLaunchToken, &r.OwnerPermissionEpoch, &admittedAt, &fallbackAt, &r.FallbackBasis)
+		&r.OwnerLaunchToken, &r.OwnerPermissionEpoch, &admittedAt, &fallbackAt, &r.FallbackBasis,
+		&r.DecisionOrigin, &r.ResponseState, &r.OwnerLifeNumber, &r.OwnerSessionID, &r.OwnerCursorConnection)
 	if err != nil {
 		return PermissionRow{}, err
 	}
@@ -495,9 +507,9 @@ func (s *Store) UpsertOpenPermissionRequestResult(instanceID string, gate HookGa
 	insRes, err := tx.Exec(`
 		INSERT INTO permission_requests
 		  (instance_id, request_token, tool_name, tool_input, main_turn_end_eligible,
-           owner_launch_token, owner_permission_epoch, admitted_at)
+           owner_launch_token, owner_permission_epoch, admitted_at, owner_life_number, owner_session_id)
         SELECT ?, ?, ?, ?, agent IS NOT 'cursor', launch_token,
-           permission_epoch + CASE WHEN state = 'check_permission' THEN 0 ELSE 1 END, `+nowMsSQL+` FROM spawns
+           permission_epoch + CASE WHEN state = 'check_permission' THEN 0 ELSE 1 END, `+nowMsSQL+`, life_number, session_id FROM spawns
 		 WHERE instance_id = ? AND `+hookGateSQL+`
 	`, insArgs...)
 	if err != nil {
@@ -695,9 +707,10 @@ func (s *Store) PermissionRequestsForSpawnWithin(instanceID string, maxWait time
 // not closed, a request recorded before schema v7 also being deliverable by
 // its created_at, and its Spawn being live.
 const decideRelayRequestSQL = `UPDATE permission_requests
-	   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+	   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, decision_origin = 'caller'
 	 WHERE instance_id = ? AND request_token = ? AND decision IS NULL
-	   AND delivered_at IS NULL AND pane_answer = 'none' AND closed_at IS NULL
+	   AND delivered_at IS NULL AND pane_answer = 'none' AND response_state IS NULL
+	   AND ` + permissionResponseEligibleSQL + `
 	   AND (settled_at IS NOT NULL OR created_at > ?)
 	   AND NOT EXISTS (SELECT 1 FROM spawns
 	                    WHERE instance_id = ? AND ` + finishedStateGuardSQL + `)
@@ -839,8 +852,10 @@ func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reas
 	// so the trail event carries them without a separate SELECT.
 	const q = `
 		UPDATE permission_requests
-		   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+		   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, decision_origin = ?
 		 WHERE instance_id = ? AND request_token = ? AND decision IS NULL
+		   AND delivered_at IS NULL AND pane_answer = 'none' AND response_state IS NULL
+		   AND closed_at IS NULL AND proven_gone_at IS NULL
 		 RETURNING request_id, tool_name
 	`
 	var reasonArg any
@@ -852,7 +867,11 @@ func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reas
 
 	var requestID int64
 	var toolName string
-	err := s.db.QueryRow(q, decision, reasonArg, instanceID, requestToken).Scan(&requestID, &toolName)
+	origin := DecisionOriginObservation
+	if writerProcess == WriterProcessDecide {
+		origin = DecisionOriginCaller
+	}
+	err := s.db.QueryRow(q, decision, reasonArg, origin, instanceID, requestToken).Scan(&requestID, &toolName)
 	if errors.Is(err, sql.ErrNoRows) {
 		// RowsAffected == 0: either the row was already decided or no row exists.
 		// ErrAlreadyDecided / ErrNoOpenPermissionRequest are distinguished by the

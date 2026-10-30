@@ -89,6 +89,7 @@ func TestCursorTerminalReadsPreserveRequestEvidence(t *testing.T) {
 					want.ClosedAt = got.ClosedAt
 					if was.Decision == "" {
 						want.Decision, want.DecisionReason, want.DecidedAt = "deny", store.DecisionReasonFindMissing, got.DecidedAt
+						want.DecisionOrigin = store.DecisionOriginObservation
 						if got.DecidedAt.IsZero() {
 							t.Error("orphan deny lacks timestamp")
 						}

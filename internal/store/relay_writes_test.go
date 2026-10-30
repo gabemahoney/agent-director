@@ -17,6 +17,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -234,10 +236,314 @@ func TestInsertRelayRequestOneTransaction(t *testing.T) {
 // errAnyStore stands for "any error" in a case table.
 var errAnyStore = errors.New("any store error")
 
+// Origin and ownership are read back through a new connection, never inferred
+// from a public decision/reason. SQL below is explicit corrupt/legacy evidence.
+func TestPermissionAuthorityReopen(t *testing.T) {
+	for _, history := range []string{"allow", "deny", "timeout", "outside", "refused", "proof", "allow then proof", "deny then proof", "closed", "allow then closed", "unknown", "unsupported", "old life", "old session", "old epoch", "old launch"} {
+		t.Run(history, func(t *testing.T) {
+			s, path := newRelayRow(t, "on", StateWorking)
+			insertRelay(t, s, relayReq(tokenA))
+			origin, decision, reason, claim := "", "", "", ""
+			if history == "allow" || history == "deny" || history == "deny then proof" || strings.HasPrefix(history, "allow then") || strings.HasPrefix(history, "old ") || history == "unknown" || history == "unsupported" {
+				decision, origin = "allow", DecisionOriginCaller
+				if history == "deny" || history == "deny then proof" {
+					decision, reason = "deny", DecisionReasonOperator
+				}
+				if ok, err := s.DecideRelayRequest(relayID, tokenA, decision, reason, WriterProcessDecide, time.Time{}, DefaultLockWait); err != nil || !ok {
+					t.Fatalf("decide: %v %v", ok, err)
+				}
+			}
+			switch history {
+			case "timeout":
+				if ok, err := s.DenyRelayTimeout(relayID, tokenA, time.Now(), DefaultLockWait, nil); err != nil || !ok {
+					t.Fatalf("timeout: %v %v", ok, err)
+				}
+				origin, decision, reason, claim = DecisionOriginTimeout, "deny", DecisionReasonTimeout, ResponseRelayClaimed
+			case "outside":
+				if ok, err := s.RecordPaneOutside(relayID, tokenA, "allow", DefaultLockWait, nil); err != nil || !ok {
+					t.Fatalf("outside: %v %v", ok, err)
+				}
+				origin, decision, reason = DecisionOriginObservation, "allow", DecisionReasonPaneOutside
+			case "refused":
+				if err := s.RecordRefusedDecision(relayID, tokenA, "allow", time.Now(), time.Now(), DefaultLockWait); err != nil {
+					t.Fatal(err)
+				}
+			case "proof", "allow then proof", "deny then proof":
+				if _, err := s.CloseToolRanRequests(relayID, agentGate("PostToolUse", ""), relayReq(tokenA).ToolUseID, time.Now(), func(PermissionRow) bool { return true }); err != nil {
+					t.Fatal(err)
+				}
+				if history == "proof" {
+					origin, decision = DecisionOriginObservation, "allow"
+				}
+				if reason == "" {
+					reason = DecisionReasonToolRan
+				}
+			case "closed", "allow then closed":
+				markRelayRow(t, s)
+				if history == "closed" {
+					origin, decision, reason = DecisionOriginObservation, "deny", DecisionReasonFindMissing
+				}
+			case "unknown", "unsupported":
+				origin = ""
+				var value any
+				if history == "unsupported" {
+					origin = "future-origin"
+					value = origin
+				}
+				mustExec(t, s.db, "UPDATE permission_requests SET decision_origin=?", value)
+			case "old life":
+				mustExec(t, s.db, "UPDATE spawns SET life_number=life_number+1")
+			case "old session":
+				mustExec(t, s.db, "UPDATE spawns SET session_id='replacement'")
+			case "old epoch":
+				mustExec(t, s.db, "UPDATE spawns SET permission_epoch=permission_epoch+1")
+			case "old launch":
+				mustExec(t, s.db, "UPDATE spawns SET launch_token='2222222222222222'")
+			}
+			other, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer other.Close()
+			pr := mustRequest(t, other, tokenA)
+			if pr.DecisionOrigin != origin || pr.Decision != decision || pr.DecisionReason != reason || pr.ResponseState != claim {
+				t.Fatalf("reopened history: %+v", pr)
+			}
+			_, _, ack, err := other.AckRelayDecision(relayID, tokenA, time.Now(), DefaultLockWait, nil)
+			want := history == "allow" || history == "deny"
+			if err != nil || ack != want {
+				t.Fatalf("ack=%v %v, want %v", ack, err, want)
+			}
+			if _, _, again, err := other.AckRelayDecision(relayID, tokenA, time.Now(), DefaultLockWait, nil); err != nil || again {
+				t.Fatalf("replay=%v %v", again, err)
+			}
+		})
+	}
+}
+
+func TestPermissionClaimSQLiteCommitBoundary(t *testing.T) {
+	for _, cut := range []string{"before commit", "lost commit result", "busy"} {
+		t.Run(cut, func(t *testing.T) {
+			s, path := newRelayRow(t, "on", StateWorking)
+			insertRelay(t, s, relayReq(tokenA))
+			if ok, err := s.DecideRelayRequest(relayID, tokenA, "allow", "", WriterProcessDecide, time.Time{}, DefaultLockWait); err != nil || !ok {
+				t.Fatal(err)
+			}
+			injected := errors.New("injected SQLite boundary failure")
+			release := func() {}
+			if cut == "busy" {
+				release = holdStoreLock(t, path)
+			} else {
+				ObserveDecisionBoundaryForTest(t, s, path, func(_ context.Context, q string) error {
+					if q == "COMMIT" && cut == "before commit" {
+						return injected
+					}
+					return nil
+				}, func(context.Context) error { return injected })
+			}
+			decision, reason, ack, err := s.AckRelayDecision(relayID, tokenA, time.Now(), 0, nil)
+			release()
+			if err == nil || ack || decision != "" || reason != "" {
+				t.Fatalf("unconfirmed result authorized output: %q %q %v %v", decision, reason, ack, err)
+			}
+			if cut == "busy" && !errors.Is(err, ErrStoreBusy) {
+				t.Fatalf("busy: %v", err)
+			}
+			other, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer other.Close()
+			pr := mustRequest(t, other, tokenA)
+			committed := cut == "lost commit result"
+			if (!pr.DeliveredAt.IsZero()) != committed || (pr.ResponseState == ResponseRelayClaimed) != committed || pr.ProvenGone() {
+				t.Fatalf("independent commit observation: %+v", pr)
+			}
+			_, _, ack, err = other.AckRelayDecision(relayID, tokenA, time.Now(), DefaultLockWait, nil)
+			if err != nil || ack == committed {
+				t.Fatalf("retry after %s: %v %v", cut, ack, err)
+			}
+		})
+	}
+}
+
+// The child exits at the actual SQLite boundary without Close or rollback.
+// This proves process-crash/reopen behavior, not power-loss durability.
+func TestPermissionClaimCrashReopen(t *testing.T) {
+	if path := os.Getenv("AD_PERMISSION_CRASH_DB"); path != "" {
+		s, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cut := os.Getenv("AD_PERMISSION_CRASH_CUT")
+		ObserveDecisionBoundaryForTest(t, s, path, func(_ context.Context, q string) error {
+			if q == "COMMIT" && cut == "before" {
+				os.Exit(73)
+			}
+			return nil
+		}, func(context.Context) error { os.Exit(73); return nil })
+		_, _, _, _ = s.AckRelayDecision(relayID, tokenA, time.Now(), DefaultLockWait, nil)
+		t.Fatal("crash boundary was not reached")
+	}
+	for _, cut := range []string{"before", "after"} {
+		t.Run(cut, func(t *testing.T) {
+			s, path := newRelayRow(t, "on", StateWorking)
+			insertRelay(t, s, relayReq(tokenA))
+			if ok, err := s.DecideRelayRequest(relayID, tokenA, "allow", "", WriterProcessDecide, time.Time{}, DefaultLockWait); err != nil || !ok {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestPermissionClaimCrashReopen$")
+			cmd.Env = append(os.Environ(), "AD_PERMISSION_CRASH_DB="+path, "AD_PERMISSION_CRASH_CUT="+cut)
+			out, err := cmd.CombinedOutput()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 73 {
+				t.Fatalf("crash child: %v %s", err, out)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			pr := mustRequest(t, reopened, tokenA)
+			if (pr.ResponseState == ResponseRelayClaimed) != (cut == "after") || pr.DecisionOrigin != DecisionOriginCaller {
+				t.Fatalf("crash history: %+v", pr)
+			}
+			_, _, ack, err := reopened.AckRelayDecision(relayID, tokenA, time.Now(), DefaultLockWait, nil)
+			if err != nil || ack != (cut == "before") {
+				t.Fatalf("crash retry=%v %v", ack, err)
+			}
+		})
+	}
+}
+
+func TestPermissionArbitrationAtCommit(t *testing.T) {
+	for _, winner := range []string{"caller", "pane", "timeout", "proof", "close"} {
+		t.Run(winner, func(t *testing.T) {
+			s, path := newRelayRow(t, "on", StateWorking)
+			insertRelay(t, s, relayReq(tokenA))
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			boundary := installDeadlineBoundary(t, s, path)
+			boundary.before = func(_ context.Context, q string) error {
+				if q == "COMMIT" {
+					close(entered)
+					<-release
+				}
+				return nil
+			}
+			if winner == "proof" {
+				// This hook uses one autocommit UPDATE RETURNING. Hold its returned
+				// row before Close releases the real SQLite writer transaction.
+				boundary.afterNext = func(_ context.Context, q string, err error) {
+					if q == closeToolRanSQL && err == nil {
+						close(entered)
+						<-release
+					}
+				}
+			}
+			won := make(chan error, 1)
+			go func() {
+				var err error
+				switch winner {
+				case "caller":
+					_, err = s.DecideRelayRequest(relayID, tokenA, "allow", "", WriterProcessDecide, time.Time{}, DefaultLockWait)
+				case "pane":
+					_, _, err = s.RecordPaneIntent(relayID, tokenA, "allow", testHook, time.Now, DefaultLockWait, nil)
+				case "timeout":
+					_, err = s.DenyRelayTimeout(relayID, tokenA, time.Now(), DefaultLockWait, nil)
+				case "proof":
+					_, err = s.CloseToolRanRequests(relayID, agentGate("PostToolUse", ""), relayReq(tokenA).ToolUseID, time.Now(), func(PermissionRow) bool { return true })
+				case "close":
+					row, e := s.GetSpawn(relayID)
+					if e != nil {
+						err = e
+						break
+					}
+					_, _, err = s.MarkMissingIfSameLife(relayID, row.Snapshot)
+				}
+				won <- err
+			}()
+			select {
+			case <-entered:
+			case err := <-won:
+				t.Fatalf("winner missed COMMIT: %v", err)
+			case <-time.After(2 * time.Second):
+				t.Fatal("winner did not reach COMMIT")
+			}
+			// Separate connections contend against the real held SQLite write lock.
+			start, ready, results := make(chan struct{}), make(chan struct{}, 2), make(chan error, 2)
+			for _, decision := range []string{"allow", "deny"} {
+				other, err := Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer other.Close()
+				go func() {
+					ready <- struct{}{}
+					<-start
+					ok, err := other.DecideRelayRequest(relayID, tokenA, decision, DecisionReasonOperator, WriterProcessDecide, time.Time{}, DefaultLockWait)
+					if ok {
+						err = fmt.Errorf("competing decision won")
+					}
+					results <- err
+				}()
+			}
+			<-ready
+			<-ready
+			close(start)
+			unblock()
+			if err := <-won; err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				err := <-results
+				if err != nil {
+					t.Fatalf("store arbiter loser must return false,nil: %v", err)
+				}
+			}
+			reader, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			pr := mustRequest(t, reader, tokenA)
+			_, _, ack, err := reader.AckRelayDecision(relayID, tokenA, time.Now(), DefaultLockWait, nil)
+			if err != nil || ack != (winner == "caller") {
+				t.Fatalf("winner=%s final ack=%v %v history=%+v", winner, ack, err, pr)
+			}
+		})
+	}
+}
+
+func TestPermissionClaimChecksActualLeaseDurability(t *testing.T) {
+	for _, mode := range []string{"NORMAL", "OFF", "FULL"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := newRelayRow(t, "on", StateWorking)
+			insertRelay(t, s, relayReq(tokenA))
+			if ok, err := s.DecideRelayRequest(relayID, tokenA, "allow", "", WriterProcessDecide, time.Time{}, DefaultLockWait); err != nil || !ok {
+				t.Fatal(err)
+			}
+			mustExec(t, s.db, "PRAGMA synchronous="+mode) // explicit weakened-lease fault
+			_, _, ack, err := s.AckRelayDecision(relayID, tokenA, time.Now(), DefaultLockWait, nil)
+			if (err == nil) != (mode == "FULL") || ack != (mode == "FULL") {
+				t.Fatalf("lease %s: ack=%v err=%v", mode, ack, err)
+			}
+			if mode != "FULL" && mustRequest(t, s, tokenA).ResponseState != "" {
+				t.Fatal("weak lease recorded authority")
+			}
+		})
+	}
+}
+
 // TestRelayAckAndTimeoutDeny (b.146 rules 3, 12): the ack commits delivered_at
 // only on a decided, unacked request with no pane answer and returns that
-// verdict, a request find-missing's mark closed included (its verdict, or the
-// mark's deny); the timeout deny records deny, timeout and its own ack
+// verdict only while the request remains eligible; neither a retained verdict
+// nor a closeout's synthetic deny authorizes output. The timeout records its ack
 // together, only on an undecided request with no pane answer. A write that
 // matches nothing changes nothing.
 func TestRelayAckAndTimeoutDeny(t *testing.T) {
@@ -256,8 +562,8 @@ func TestRelayAckAndTimeoutDeny(t *testing.T) {
 		{"ack an allow", "allow", "", false, "ack", true, "allow", "", true},
 		{"ack a deny with its reason", "deny", "", false, "ack", true, "deny", DecisionReasonOperator, true},
 		{"ack, a pane answer begun", "allow", PaneAnswerIntent, false, "ack", false, "allow", "", false},
-		{"ack a verdict the mark closed", "allow", "", true, "ack", true, "allow", "", true},
-		{"ack the mark's deny", "", "", true, "ack", true, "deny", DecisionReasonFindMissing, true},
+		{"ack a verdict the mark closed", "allow", "", true, "ack", false, "allow", "", false},
+		{"ack the mark's deny", "", "", true, "ack", false, "deny", DecisionReasonFindMissing, false},
 		{"timeout deny, undecided", "", "", false, "deny", true, "deny", DecisionReasonTimeout, true},
 		{"timeout deny, a verdict landed first", "allow", "", false, "deny", false, "allow", "", false},
 		{"timeout deny, a pane answer begun", "", PaneAnswerIntent, false, "deny", false, "", "", false},

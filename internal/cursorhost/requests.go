@@ -310,6 +310,15 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 		}
 		return current()
 	}
+	issue := func() error {
+		if e := current(); e != nil {
+			return e
+		}
+		if e := c.rep.store.IssueCursorAnswer(binding, r.token, relay, deadline, check); e != nil {
+			return e
+		}
+		return current()
+	}
 	return c.protocol.sendGuarded(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(r.auth.frame.ID), "result": result}, deadline, guard, func(e error) {
 		if e == nil {
 			r.sent.Store(true)
@@ -317,7 +326,7 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 			r.terminal.Store(true)
 			fmt.Fprint(c.out, "Cursor response failed or retired; delivery is unconfirmed and will not be retried\r\n")
 		}
-	})
+	}, issue)
 }
 func (c *requestController) tick() error {
 	for _, r := range c.requests {

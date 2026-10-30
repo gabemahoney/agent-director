@@ -55,7 +55,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10 through v15→v16, the old-layout steps below do not apply",
+		"including schema v9→v10 through v16→v17, the old-layout steps below do not apply",
 		"stop all writers and keep a copy of the actual store (`[store] db_path` when set), its existing `-wal`/`-shm`, and all legacy input evidence",
 		"Keep provider logs/transcripts outside those roots too",
 		"maintain the same exclusion, preserve the post-upgrade evidence",
@@ -68,10 +68,11 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"Never replay an attempt merely because the restored copy lacks its proof",
 		"The journal cutover creates a separate stopped-writer backup before schema changes; other installer steps do not supply this complete recovery set",
 		"A copy made after migration cannot replace the pre-upgrade set",
-		"Schema v16 has no supported in-place downgrade or replayable file-journal export",
-		"A binary swap or version reset cannot undo the cutover",
+		"Schema v17 permission provenance and response claims have no supported reverse recipe",
+		"Schema v16 has no in-place downgrade or replayable file-journal export",
+		"A binary swap or version reset cannot undo either",
 		"Schema v15, v14 and v13 are also restore-only",
-		"The v12→v11 family-history recipe applies only to genuine family-only v12 stores; it cannot operate on v13–v16",
+		"The v12→v11 family-history recipe applies only to genuine family-only v12 stores; it cannot operate on v13–v17",
 		"Without that set, or while an uncertain attempt remains unreconciled, stop and obtain human help",
 	} {
 		if !strings.Contains(advice, phrase) {

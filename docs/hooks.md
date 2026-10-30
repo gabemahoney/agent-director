@@ -820,10 +820,10 @@ The relay-mode `PermissionRequest` path is fail-*closed* until its request
 is recorded: any internal error before then, its first store write
 included, or an invalid `--agent`, emits a `deny` decision envelope on stdout before the hook
 exits, so the tool is denied. Once the request is recorded, the hook writes
-only an answer it has first confirmed in the store; any failure after that
-ends with no answer, so the agent asks in its own permission prompt and
-the request reads `fallen_back`. See "PermissionRequest relay path" below
-and [Permissions](permissions.md).
+only an answer it has first confirmed in the store. A failure after recording
+produces no answer, but a late or uncertain commit can retain `delivered`.
+See [Permission relay](caller-contract.md#permission-relay) for delivery and
+recovery, and "PermissionRequest relay path" below for the hook's steps.
 
 ## Fire order
 
@@ -965,12 +965,14 @@ instant, with a 2 s reserve before it for writing the answer and exiting:
 | Instant | What happens there |
 | --- | --- |
 | start + N − 3 s | the poll ends: no verdict yet means the timeout deny |
-| start + N − 2 s | the last moment a store write may commit; later, the hook gives no answer |
+| start + N − 2 s | the write-budget deadline; a final check suppresses output at or after it |
 | start + N | the agent ends the hook |
 | start + N + 2 s | the request's settle instant (`settled_at`), `confirm_by` |
 
-So `timeout_seconds` of 3 or less leaves no time to poll, and at 2 or less
-no time to answer.
+This budget does not bound completion of a COMMIT already in progress.
+See [Permission relay](caller-contract.md#permission-relay) for retained
+acknowledgement without output. `timeout_seconds` of 3 or less leaves no time
+to poll, and at 2 or less no time to answer.
 
 ### The steps
 
@@ -980,16 +982,18 @@ no time to answer.
    request has no `tool_use_id`. Failure before recording returns a deny.
 2. It polls its own request at `max(50ms, relay.poll_base_ms +
    uniform(0, relay.poll_jitter_ms))`, stopping by the poll deadline.
-3. A verdict is answered only after its delivery is confirmed in the
-   store and the parent is still the agent that started the hook.
-4. At the deadline, an undecided request receives a confirmed timeout deny.
-   A verdict that arrived first is confirmed instead. The deny changes no state.
+3. An eligible verdict is answered only after its acknowledgement commits
+   and a final check confirms the starting parent and remaining write budget.
+4. At the poll deadline, an eligible undecided request attempts its own timeout
+   deny and acknowledgement. An eligible verdict that arrived first is
+   confirmed instead. Both paths use the same final output check; the deny
+   changes no spawn state.
 
 After recording, a failed confirmation, a changed parent, a deleted
 request or five consecutive failed reads produces empty stdout. The agent
-then asks in its own permission prompt; the request reads `fallen_back`
-once readers see the relay hook gone. See the [caller contract](caller-contract.md#permission-relay)
-for handling this outcome.
+can then ask in its own permission prompt. Empty stdout does not determine
+stored delivery: a committed acknowledgement can remain `delivered`.
+See [Permission relay](caller-contract.md#permission-relay) for handling this outcome.
 
 ### Writing the envelope
 
@@ -1101,14 +1105,16 @@ prove a request's dialog gone" below):
   `tool_use_id` and still await an answer;
 - judges each one's relay hook as the readers do (its process provably
   gone, or, when it cannot be checked, its `confirm_by` passed) and skips
-  one whose hook may still answer it;
-- closes each other one only from the row's own agent: `pane_answer` `tool_ran`,
-  `decision` `allow`, `decision_reason` `tool_ran`, `hook_gone_at` when
-  not yet set, and `proven_gone_at` with `proven_gone_how` `tool_ran` when
-  not yet proven, only while the request still awaits an answer. Each close writes `ad.row_mutation.committed` with `writer_process` `hook`.
+  one whose hook is not judged gone;
+- closes each other one only from the row's own agent with `pane_answer`
+  `tool_ran`, preserving an existing verdict and non-null reason. It infers
+  allow only when undecided and fills a missing reason with `tool_ran`.
+  It also fills missing `hook_gone_at` and proof fields. Each close writes
+  `ad.row_mutation.committed` with `writer_process` `hook`.
 
 A matching tool-use hook proves the dialog gone even when the request
-is left open because its relay hook may still answer. It closes only allows:
+is left open because its relay hook may still run. That proof prevents a new
+relay response. It observes an allowed tool invocation:
 a deny runs no tool-use hook. A missed close can leave a request open;
 see [a request answered outside agent-director](permissions.md#a-request-answered-outside-agent-director).
 A different or missing `tool_use_id` closes nothing.
@@ -1122,9 +1128,9 @@ update, closes every request of the row that still awaits an
 answer, plus decided requests without a relay confirmation or completed
 pane answer, including those recorded by an older binary: both the row
 and request changes are written or neither is. Each gets `closed_at`; an
-undecided one is also denied with `decision_reason` `ended` (so a relay
-hook still polling for it reads a deny), and a decided one whose relay
-hook had not confirmed the verdict keeps it. Each deny is written to the
+undecided one also gets a historical deny with `decision_reason` `ended`,
+and a decided one keeps its verdict. Neither authorizes a later relay
+acknowledgement or response. Each deny is written to the
 trail as one `ad.row_mutation.committed` (`writer_process` `hook`), before
 the row's `ad.spawn.state_transition`. `find-missing`'s mark closes a
 `missing` row's requests the same way (`decision_reason` `find_missing`),

@@ -590,7 +590,12 @@ func TestDecideKeepsDurableOrigin(t *testing.T) {
 			now := time.Now()
 			s, path := apitest.SeedDecideFixtureAgent(t, "on", agent, store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash", ToolInput: "{}", MainTurnEndEligible: &no, SettledAt: now.Add(time.Hour)})
 			setupBudget := int64(5000)
-			res, err := api.DecideWithSleep(s, api.RelayView{Now: func() time.Time { return now }}, func(d time.Duration) { now = now.Add(d) }, api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "deny", MaxWaitMs: &setupBudget})
+			var res api.DecideResult
+			err := storefix.WithSeedPane(path, "id-d-1", func(store.HookGate) error {
+				var err error
+				res, err = api.DecideWithSleep(s, api.RelayView{Now: func() time.Time { return now }}, func(d time.Duration) { now = now.Add(d) }, api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "deny", MaxWaitMs: &setupBudget})
+				return err
+			})
 			if err != nil || res.Delivery != api.DeliveryNotConfirmed {
 				t.Fatalf("decide %+v %v", res, err)
 			}
@@ -600,7 +605,7 @@ func TestDecideKeepsDurableOrigin(t *testing.T) {
 			}
 			defer reopened.Close()
 			request := rowA(t, reopened)
-			if request.MainTurnEndEligible || request.AgentID != "" || request.Decision != "deny" || request.ProvenGone() {
+			if request.MainTurnEndEligible || request.AgentID != "" || request.Decision != "deny" || request.ProvenGone() || request.DecisionOrigin != store.DecisionOriginCaller || request.ResponseState != "" {
 				t.Fatalf("decision upgraded origin/proof %+v", request)
 			}
 		})

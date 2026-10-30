@@ -16,9 +16,9 @@ func TestLegacyDecidedIntentClosesWithSpawn(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeIntent(t, s, "allow", time.Now())
-			if ok, err := s.DecidePermissionRequest(relayID, tokenA, "deny", DecisionReasonOperator, WriterProcessDecide); err != nil || !ok {
-				t.Fatalf("legacy decision = %v, %v", ok, err)
-			}
+			// Explicit pre-v7 historical fault: current writers exclude this
+			// decided-plus-intent combination; its old verdict has unknown origin.
+			mustExec(t, s.db, `UPDATE permission_requests SET decision='deny',decision_reason='operator',decided_at=CURRENT_TIMESTAMP,decision_origin=NULL WHERE request_token=?`, tokenA)
 			before := mustRequest(t, s, tokenA)
 			if c.unclosed {
 				endRelayRowUnclosed(t, path)
@@ -30,7 +30,7 @@ func TestLegacyDecidedIntentClosesWithSpawn(t *testing.T) {
 			if !after.Closed() || after.ProvenGoneHow != ProvenGoneAgentGone {
 				t.Errorf("b.w21 decided legacy intent remains unclosed: %+v", after)
 			}
-			if after.Decision != before.Decision || after.DecisionReason != before.DecisionReason || !after.DecidedAt.Equal(before.DecidedAt) ||
+			if after.DecisionOrigin != "" || after.ResponseState != "" || after.Decision != before.Decision || after.DecisionReason != before.DecisionReason || !after.DecidedAt.Equal(before.DecidedAt) ||
 				!after.DeliveredAt.Equal(before.DeliveredAt) || after.PaneAnswer != PaneAnswerIntent || after.PaneAs != before.PaneAs ||
 				after.PaneSender != before.PaneSender || !after.PaneIntentAt.Equal(before.PaneIntentAt) {
 				t.Errorf("legacy close changed verdict or completed its intent: before %+v, after %+v", before, after)

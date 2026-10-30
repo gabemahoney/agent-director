@@ -34,6 +34,9 @@ func TestV15MigrationPreservationAndReentry(t *testing.T) {
 			path := makeVersionedDB(t, dir, 14)
 			seedV13PermissionFixture(t, path)
 			preAddV14Columns(t, path, tc.specs)
+			// Later permission columns are present so the full-row comparison
+			// isolates this hop's preservation contract.
+			preAddV14Columns(t, path, v17ColumnSpecs)
 			var spawnCols []string
 			withRaw(t, path, func(db *sql.DB) {
 				if len(tc.specs) > 0 {

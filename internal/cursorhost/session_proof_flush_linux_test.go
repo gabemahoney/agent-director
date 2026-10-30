@@ -255,15 +255,11 @@ func sessionCancelCount(t *testing.T, c *cursorSession) int {
 	return n
 }
 
-// lateDecisionSendsNothing allows the cancel-proof request through the API,
-// which records the verdict as not_confirmed, and checks that nothing reaches
-// the peer and the row stays waiting.
+// lateDecisionSendsNothing verifies the API refuses a cancel-proof request,
+// nothing reaches the peer and the row stays waiting.
 func lateDecisionSendsNothing(t *testing.T, c *cursorSession, token string) {
 	t.Helper()
-	c.e.decide(t, token, "allow")
-	if got := c.e.request(t, token); got.Decision != "allow" {
-		t.Fatalf("late decision not stored: %+v", got)
-	}
+	c.e.refuseProvenDecision(t, token, "allow")
 	// No gateway event marks a controller tick, so this watches a window, as
 	// TestCursorExitStoresDeferredProofBeforeTermination does. The ticks run
 	// every 50 ms; TestCursorRowStateAfterLastDeliveredDecision checks the

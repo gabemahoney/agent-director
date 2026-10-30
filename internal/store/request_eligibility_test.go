@@ -96,11 +96,21 @@ func TestRequestEligibilityWritersReadersAndProof(t *testing.T) {
 					t.Fatalf("list %+v %v", rows, err)
 				}
 			}
-			if ok, err := s.DecideRelayRequest(relayID, tokenA, "deny", "", "", time.Time{}, DefaultLockWait); err != nil || !ok {
+			// The legacy seeding primitive has no current relay admission;
+			// its retained hold/proof eligibility must not confer response authority.
+			if ok, err := s.DecideRelayRequest(relayID, tokenA, "deny", "", "", time.Time{}, DefaultLockWait); err != nil || ok != !tc.legacy {
 				t.Fatalf("decide %v %v", ok, err)
 			}
-			if _, _, ok, err := s.AckRelayDecision(relayID, tokenA, proofAt, DefaultLockWait, nil); err != nil || !ok {
+			if _, _, ok, err := s.AckRelayDecision(relayID, tokenA, proofAt, DefaultLockWait, nil); err != nil || ok != !tc.legacy {
 				t.Fatalf("ack %v %v", ok, err)
+			}
+			got := mustRequest(t, s, tokenA)
+			origin, claim := DecisionOriginCaller, ResponseRelayClaimed
+			if tc.legacy {
+				origin, claim = "", ""
+			}
+			if got.DecisionOrigin != origin || got.ResponseState != claim {
+				t.Fatalf("response authority: %+v", got)
 			}
 			s.Close()
 			var err error

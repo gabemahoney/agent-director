@@ -37,6 +37,7 @@ type outgoingFrame struct {
 	raw      []byte
 	deadline time.Time
 	guard    func() error
+	issue    func() error // one durable claim consumption immediately before I/O
 	done     func(error)
 }
 
@@ -114,7 +115,11 @@ func (p *protocol) send(value any) error {
 	return p.sendGuarded(value, time.Now().Add(transportWriteWait), nil, nil)
 }
 
-func (p *protocol) sendGuarded(value any, deadline time.Time, guard func() error, done func(error)) error {
+func (p *protocol) sendGuarded(value any, deadline time.Time, guard func() error, done func(error), issue ...func() error) error {
+	var claim func() error
+	if len(issue) > 0 {
+		claim = issue[0]
+	}
 	raw, e := json.Marshal(value)
 	if e != nil {
 		return e
@@ -133,7 +138,7 @@ func (p *protocol) sendGuarded(value any, deadline time.Time, guard func() error
 	default:
 	}
 	select {
-	case p.outgoing <- outgoingFrame{raw: append(raw, '\n'), deadline: deadline, guard: guard, done: done}:
+	case p.outgoing <- outgoingFrame{raw: append(raw, '\n'), deadline: deadline, guard: guard, issue: claim, done: done}:
 	default:
 		return fmt.Errorf("ACP output queue exceeds limit")
 	}
@@ -197,6 +202,12 @@ func (p *protocol) writeLoop() {
 			if next.guard != nil {
 				if err := next.guard(); err != nil {
 					result <- writeResult{err: err, prewrite: errors.Is(err, errPromptRetired)}
+					return
+				}
+			}
+			if next.issue != nil {
+				if err := next.issue(); err != nil {
+					result <- writeResult{err: err}
 					return
 				}
 			}

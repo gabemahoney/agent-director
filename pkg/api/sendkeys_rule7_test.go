@@ -26,20 +26,27 @@ var (
 	r7HookAlive r7Step = func(_ *testing.T, p *paEnv) { p.pc.Set(relayEnvHook.PID, procfix.Alive(relayEnvHook.Starttime)) }
 	// r7Acked: decide's allow on A, acked by its relay hook.
 	r7Acked r7Step = func(t *testing.T, p *paEnv) {
-		if ok, err := p.st.DecideRelayRequest(p.r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide,
-			time.Time{}, store.DefaultLockWait); err != nil || !ok {
-			t.Fatalf("decide = %v, %v", ok, err)
-		}
-		if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, storefix.TestRequestTokenA, p.now, store.DefaultLockWait, nil); err != nil || !ok {
-			t.Fatalf("ack = %v, %v", ok, err)
+		p.withPermissionWriter(t, func() {
+			if ok, err := p.st.DecideRelayRequest(p.r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide,
+				time.Time{}, store.DefaultLockWait); err != nil || !ok {
+				t.Fatalf("decide = %v, %v", ok, err)
+			}
+			if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, storefix.TestRequestTokenA, p.now, store.DefaultLockWait, nil); err != nil || !ok {
+				t.Fatalf("ack = %v, %v", ok, err)
+			}
+		})
+		if pr := p.request(t, storefix.TestRequestTokenA); pr.DecisionOrigin != store.DecisionOriginCaller || pr.ResponseState != store.ResponseRelayClaimed {
+			t.Fatalf("ack authority: %+v", pr)
 		}
 	}
 	// r7Decided: decide's allow on A, not acked.
 	r7Decided r7Step = func(t *testing.T, p *paEnv) {
-		if ok, err := p.st.DecideRelayRequest(p.r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide,
-			time.Time{}, store.DefaultLockWait); err != nil || !ok {
-			t.Fatalf("decide = %v, %v", ok, err)
-		}
+		p.withPermissionWriter(t, func() {
+			if ok, err := p.st.DecideRelayRequest(p.r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide,
+				time.Time{}, store.DefaultLockWait); err != nil || !ok {
+				t.Fatalf("decide = %v, %v", ok, err)
+			}
+		})
 	}
 	// r7Outside: A recorded answered outside agent-director.
 	r7Outside r7Step = func(t *testing.T, p *paEnv) {

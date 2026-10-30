@@ -108,7 +108,7 @@ relay_observe() {
  cat > "$case_dir/observer" <<OBSERVER
 #!/bin/bash
 set -euo pipefail
-/opt/driver/sql.sh -readonly -json '$STORE' 'SELECT request_token,decision,delivered_at FROM permission_requests ORDER BY request_id;' | jq -c 'select(length>0)' >> '$case_dir/commits.jsonl'
+/opt/driver/sql.sh -readonly -json '$STORE' 'SELECT request_token,decision,delivered_at,decision_origin,response_state,proven_gone_at FROM permission_requests ORDER BY request_id;' | jq -c 'select(length>0)' >> '$case_dir/commits.jsonl'
 OBSERVER
  chmod 700 "$case_dir/observer"
 }
@@ -178,7 +178,8 @@ relay_gate_after_ack() {
  cat > "$case_dir/gate-bin/tmux" <<GATE
 #!/bin/bash
 set -euo pipefail
-if [[ -f '$case_dir/gate-armed' ]] && [[ \$(/opt/driver/sql.sh -readonly '$STORE' 'SELECT count(*) FROM permission_requests WHERE delivered_at IS NOT NULL;' 2>/dev/null || echo 0) != 0 ]]; then
+if [[ -f '$case_dir/gate-armed' ]] && { [[ '$gate_check' == native-choice ]] || [[ \$(/opt/driver/sql.sh -readonly '$STORE' 'SELECT count(*) FROM permission_requests WHERE response_state IS NOT NULL;' 2>/dev/null || echo 0) != 0 ]]; }; then
+ if [[ '$gate_check' == native-choice && " \$* " != *' list-panes '* ]]; then exec '$real_tmux' "\$@"; fi
  if [[ '$gate_check' == final ]]; then
   # Each CheckCursorAnswer ends in one list-panes. Allow the worker's
   # initial guard; hold the second guard running under the transport timer.

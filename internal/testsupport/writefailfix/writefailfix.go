@@ -125,6 +125,9 @@ const (
 	// are unaffected. Install on the existing legacy DB through a raw
 	// connection, never Store.Open, which would try to activate its schema.
 	InputAuthority Kind = 13
+	// PermissionResponseIssue fails only consumption of a relay/native claim
+	// into issued state for the named instance. Claim creation is unaffected.
+	PermissionResponseIssue Kind = 14
 )
 
 // String names the kind, for test failure messages.
@@ -156,6 +159,8 @@ func (k Kind) String() string {
 		return "input current"
 	case InputAuthority:
 		return "input authority"
+	case PermissionResponseIssue:
+		return "permission response issue"
 	default:
 		return fmt.Sprintf("writefailfix.Kind(%d)", int(k))
 	}
@@ -163,7 +168,7 @@ func (k Kind) String() string {
 
 // Kinds lists every kind, for table-driven tests.
 func Kinds() []Kind {
-	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, MissingDeadlineOverrun, DisplayObservation, InputAttemptInsert, InputTextIntent, InputCurrent, InputAuthority}
+	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, MissingDeadlineOverrun, DisplayObservation, InputAttemptInsert, InputTextIntent, InputCurrent, InputAuthority, PermissionResponseIssue}
 }
 
 // createTargetsTable creates the bookkeeping table: one row per installed
@@ -189,6 +194,11 @@ type trigger struct {
 // triggersByKind holds every trigger's SQL: the single source (SR-20.3).
 // The kind number in each WHEN clause is the Kind constant's fixed value.
 var triggersByKind = map[Kind][]trigger{
+	PermissionResponseIssue: {{name: "ad_test_fail_permission_issue", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_permission_issue
+ BEFORE UPDATE OF response_state ON permission_requests
+ WHEN NEW.response_state IN ('relay_issued','native_issued')
+ AND EXISTS (SELECT 1 FROM ad_test_write_failure WHERE kind=14 AND instance_id=OLD.instance_id)
+ BEGIN SELECT RAISE(ABORT, 'injected write failure: permission response issue'); END`}},
 	InputAttemptInsert: {{name: "ad_test_fail_input_attempt", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_input_attempt
  BEFORE INSERT ON input_attempts
  WHEN EXISTS (SELECT 1 FROM ad_test_write_failure

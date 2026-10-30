@@ -121,8 +121,9 @@ export interface VerbSummary {
 /**
  * A permission request's delivery state:
  * - `"delivered"`: the relay durably acknowledged a verdict before enqueue/write;
- *   this is not agent receipt, tool execution or dialog closure.
+ *   this is not transport completion, agent receipt, tool execution or dialog closure.
  * - `"not_confirmed"`: no ack yet and the relay hook may still run; it ends by `confirm_by`.
+ *   This grants no response authority to a closed or proven-gone request.
  * - `"fallen_back"`: no ack, and the relay hook is gone (or cannot be checked and `confirm_by`
  *   has passed): no answer from the relay reached the agent. While `pane_answer` is `"none"` or
  *   `"intent"` the request awaits an answer unless acknowledged or closed with its Spawn. A pane
@@ -141,9 +142,9 @@ export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
  * - `"outside"`: a caller recorded it answered outside agent-director (`recordPaneAnswer`,
  *   `decision_reason` `"pane_outside"`).
  * - `"tool_ran"`: agent hooks or validated correlated Cursor execution output established
- *   its tool ran. The hook close records `decision` `"allow"` and `decision_reason` `"tool_ran"`;
- *   Cursor proof preserves any earlier verdict and non-null reason, filling a missing reason
- *   with `"tool_ran"`.
+ *   its tool ran. Hook close and successful Cursor proof preserve any earlier verdict and
+ *   non-null reason, inferring allow only when undecided and filling a missing reason with
+ *   `"tool_ran"`. This history supplies no response authority.
  * `"sent"`, `"outside"` and `"tool_ran"` close the request; its `delivery` stays `"fallen_back"`.
  */
 export type PaneAnswer = "none" | "intent" | "sent" | "outside" | "tool_ran";

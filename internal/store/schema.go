@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v16 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v17 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -220,6 +220,11 @@ CREATE TABLE IF NOT EXISTS permission_requests (
     admitted_at INTEGER,
     fallback_at INTEGER,
     fallback_basis TEXT,
+    decision_origin TEXT,
+    response_state TEXT,
+    owner_life_number INTEGER,
+    owner_session_id TEXT,
+    owner_cursor_connection TEXT,
     UNIQUE(instance_id, request_token)
 );
 CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(instance_id, decision);
@@ -318,6 +323,7 @@ var migrationSteps = []migrationStep{
 	{from: 13, apply: migrateV13toV14},
 	{from: 14, apply: migrateV14toV15},
 	{from: 15, inputCutover: true, apply: migrateV15toV16},
+	{from: 16, apply: migrateV16toV17},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.

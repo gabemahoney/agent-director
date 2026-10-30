@@ -107,12 +107,11 @@ func RepairCheckPermission(s CheckPermissionRepairStore, v RelayView, lg FindMis
 // moved to missing or ended (or, for one an earlier release left open, when
 // the finished row was resumed), so the row is in check_permission again only
 // through a later hook (after a resume, a later life's), and the closed
-// request is not what holds it there. Its leftover relay hook cannot change
-// the row: one whose parent is gone fails its parent check and acks nothing,
-// and even one whose parent lives (the mark judged wrong) writes only its own
-// request's delivered_at, never the row, and reads a verdict at once (no
-// close leaves a closed request undecided), so it ends within one poll. The closed request no
-// longer awaits an answer, and the repair statement ignores it already
+// request is not what holds it there. Its leftover relay hook cannot acquire
+// response authority: a closed request cannot be acknowledged, even if the
+// parent still lives (the mark judged wrong). Closeout's recorded verdict is
+// history only; it cannot cause a new response. The closed request no longer
+// awaits an answer, and the repair statement ignores it already
 // (holdsRowSQL). Judging it would let a hook that cannot be checked
 // (another or unreadable pid namespace, unreadable /proc) hold the row in
 // check_permission until its confirm_by, up to a relay window later.

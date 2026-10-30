@@ -1,12 +1,101 @@
 package store_test
 
 import (
+	"context"
+	"errors"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func TestCursorClaimAndIssueSQLiteBoundary(t *testing.T) {
+	for _, mode := range []string{"relay", "native"} {
+		for _, phase := range []string{"claim", "issue"} {
+			for _, cut := range []string{"before commit", "lost result"} {
+				t.Run(mode+"/"+phase+"/"+cut, func(t *testing.T) {
+					f, row, b := cursorRowBinding(t)
+					if ok, err := f.s.SetCursorRuntimeSession(b, "claim-session"); err != nil || !ok {
+						t.Fatalf("session: %v %v", ok, err)
+					}
+					b.SessionID = "claim-session"
+					gate := store.HookGate{Event: "SessionStart", ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
+					if a, err := f.s.ApplyHookTransition(row.InstanceID, gate, store.StateWaiting, false, "SessionStart", "claim-transcript", true); err != nil || !a.Applied {
+						t.Fatalf("start: %+v %v", a, err)
+					}
+					until := time.UnixMilli(time.Now().Add(time.Hour).UnixMilli())
+					check := func(store.Spawn) error { return nil } // store-only independent-evidence stub
+					req := store.RelayRequest{RequestToken: "authority-token", ToolName: "Bash", ToolInput: "{}", ToolUseID: "tool", SettledAt: until}
+					if err := f.s.InsertCursorRequest(b, req, 0, until, store.DefaultLockWait, check); err != nil {
+						t.Fatal(err)
+					}
+					if mode == "relay" {
+						if ok, err := f.s.DecideRelayRequest(row.InstanceID, req.RequestToken, "allow", "", store.WriterProcessDecide, time.Time{}, store.DefaultLockWait); err != nil || !ok {
+							t.Fatalf("decide: %v %v", ok, err)
+						}
+					}
+					claim := func(s *store.Store) (bool, error) {
+						if mode == "native" {
+							return s.ClaimCursorPaneAnswer(b, req.RequestToken, "allow", until, store.DefaultLockWait, check)
+						}
+						_, ok, err := s.AckCursorDecision(b, req.RequestToken, false, until, until, store.DefaultLockWait, check)
+						return ok, err
+					}
+					if phase == "issue" {
+						if ok, err := claim(f.s); err != nil || !ok {
+							t.Fatalf("claim: %v %v", ok, err)
+						}
+					}
+					failure := errors.New("injected permission commit result")
+					store.ObserveDecisionBoundaryForTest(t, f.s, f.path, func(_ context.Context, q string) error {
+						if q == "COMMIT" && cut == "before commit" {
+							return failure
+						}
+						return nil
+					}, func(context.Context) error { return failure })
+					if phase == "claim" {
+						if ok, err := claim(f.s); err == nil || ok {
+							t.Fatalf("unconfirmed claim authorized: %v %v", ok, err)
+						}
+					} else if err := f.s.IssueCursorAnswer(b, req.RequestToken, mode == "relay", until, check); err == nil {
+						t.Fatal("unconfirmed issue authorized output")
+					}
+					other, err := store.Open(f.path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer other.Close()
+					pr, err := other.GetPermissionRequest(row.InstanceID, req.RequestToken)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := ""
+					if phase == "issue" || cut == "lost result" {
+						want = mode + "_claimed"
+					}
+					if phase == "issue" && cut == "lost result" {
+						want = mode + "_issued"
+					}
+					if pr.ResponseState != want || pr.ProvenGone() {
+						t.Fatalf("independent SQLite state=%+v want=%s", pr, want)
+					}
+					if phase == "claim" {
+						ok, err := claim(other)
+						if err != nil || ok != (cut == "before commit") {
+							t.Fatalf("claim retry: %v %v", ok, err)
+						}
+					} else {
+						err := other.IssueCursorAnswer(b, req.RequestToken, mode == "relay", until, check)
+						if (err == nil) != (cut == "before commit") {
+							t.Fatalf("issue retry: %v", err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
 
 func cursorRowBinding(t *testing.T) (*v5Store, store.Spawn, store.CursorRuntime) {
 	t.Helper()

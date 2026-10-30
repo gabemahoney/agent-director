@@ -282,12 +282,26 @@ func TestCursorTrailProofFinalValuesAndDuplicate(t *testing.T) {
 				e.exec(t, `UPDATE permission_requests SET proven_gone_at=1234,proven_gone_how='tool_ran',pane_answer='tool_ran',decision='allow',decided_at='2026-01-01 00:00:00' WHERE request_token='target'`)
 			}
 			before := e.read(t, "target")
+			wantOrigin, wantClaim := store.DecisionOriginObservation, ""
+			switch prior {
+			case "API allow", "operator deny":
+				wantOrigin = store.DecisionOriginCaller
+			case "timeout deny":
+				wantOrigin, wantClaim = store.DecisionOriginTimeout, store.ResponseRelayClaimed
+			case "native pane":
+				wantOrigin, wantClaim = store.DecisionOriginPane, store.ResponseNativeClaimed
+			case "incomplete proof":
+				wantOrigin = "" // unknown historical provenance stays unknown
+			}
 			mark := store.TrailMark(t)
 			seen := e.beforeCommit(t, mark)
 			if err := e.f.s.ProveCursorToolRan(e.b, "target", "tool-target", true, cursorTrailCheck); err != nil {
 				t.Fatal(err)
 			}
 			r := e.assertEvent(t, mark, "target", "update", decision, reason)
+			if r.DecisionOrigin != wantOrigin || r.ResponseState != wantClaim {
+				t.Fatalf("proof changed response authority: %+v", r)
+			}
 			if !*seen || !r.ProvenGone() || r.ProvenGoneHow != "tool_ran" || r.MainTurnEndEligible || r.AgentID != "" {
 				t.Fatalf("proof contract: %+v", r)
 			}

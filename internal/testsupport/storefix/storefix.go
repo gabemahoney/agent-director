@@ -367,11 +367,12 @@ const (
 	WriteFailMissingDeadlineOverrun = writefailfix.MissingDeadlineOverrun
 	// WriteFailDisplayObservation fails the final report write after request
 	// clocks are written.
-	WriteFailDisplayObservation = writefailfix.DisplayObservation
-	WriteFailInputAttemptInsert = writefailfix.InputAttemptInsert
-	WriteFailInputTextIntent    = writefailfix.InputTextIntent
-	WriteFailInputCurrent       = writefailfix.InputCurrent
-	WriteFailInputAuthority     = writefailfix.InputAuthority
+	WriteFailDisplayObservation      = writefailfix.DisplayObservation
+	WriteFailInputAttemptInsert      = writefailfix.InputAttemptInsert
+	WriteFailInputTextIntent         = writefailfix.InputTextIntent
+	WriteFailInputCurrent            = writefailfix.InputCurrent
+	WriteFailInputAuthority          = writefailfix.InputAuthority
+	WriteFailPermissionResponseIssue = writefailfix.PermissionResponseIssue
 )
 
 // InjectWriteFailure makes one kind of write to instanceID's rows fail with a

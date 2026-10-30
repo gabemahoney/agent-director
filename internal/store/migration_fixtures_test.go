@@ -1587,6 +1587,25 @@ func seedPreMigrationRow(t *testing.T, path string, from int) {
 	})
 }
 
+// v17 fixtures retain v16's actual schema and history; no origin is backfilled.
+var v17ColumnSpecs = []columnSpec{
+	{"permission_requests", "decision_origin", "TEXT", false, ""},
+	{"permission_requests", "response_state", "TEXT", false, ""},
+	{"permission_requests", "owner_life_number", "INTEGER", false, ""},
+	{"permission_requests", "owner_session_id", "TEXT", false, ""},
+	{"permission_requests", "owner_cursor_connection", "TEXT", false, ""},
+}
+
+func seedV16PermissionHistory(t *testing.T, path string) {
+	t.Helper()
+	seedPreMigrationRow(t, path, 16)
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,decision,decided_at,proven_gone_at,proven_gone_how) VALUES('pre',?,'Bash','{}','allow','2026-10-01 01:00:00',12345,'tool_ran')`, tokenA)
+		mustExec(t, db, `INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,decision,decision_reason,decided_at) VALUES('pre',?,'Bash','{}','deny','operator','2026-10-01 01:00:01')`, tokenB)
+		mustExec(t, db, `INSERT INTO session_history(instance_id,session_id,life_number) VALUES('pre','history-session',2)`)
+	})
+}
+
 // insertRow inserts row (column to value) into table; the columns are the
 // test's own literals.
 func insertRow(t *testing.T, db *sql.DB, table string, row map[string]any) {

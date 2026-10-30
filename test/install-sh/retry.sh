@@ -438,6 +438,9 @@ EOF
     chmod 0755 "$ROOT/locking/sqlite3"
 }
 
+# Genuine released journal fixture; later schema hops do not change its stamp.
+PRE_CUTOVER_SCHEMA=15
+
 # pre_cutover_store <db> <current>: replace an owned, closed fixture with the
 # genuine pre-cutover schema. All old callers have returned; no other roots
 # exist outside this fixture HOME, and real admin inventory remains enabled.
@@ -445,7 +448,7 @@ pre_cutover_store() {
     rm -f "$1" "$1-wal" "$1-shm"
     (umask 077; sqlite3 "$1" <"$HERE/testdata/pre-cutover-v15.sql") || die "create pre-cutover store"
     sqlite3 "$1" 'PRAGMA journal_mode=WAL;' >/dev/null || die "initialize fixture WAL mode"
-    [[ "$(sqlite3 "$1" 'PRAGMA user_version;')" == "$(( $2 - 1 ))" ]] || die "pre-cutover fixture is not the preceding schema"
+    [[ "$(sqlite3 "$1" 'PRAGMA user_version;')" == "$PRE_CUTOVER_SCHEMA" ]] || die "pre-cutover fixture is not v15"
     chmod 0600 "$1" || die "private fixture store"
     JOURNAL_WINDOW=1
 }
@@ -463,11 +466,11 @@ older_store() {
 }
 
 # report_upgraded <name>: the upgrade of an older_store exited 0, its step-2
-# read authorized v<schema-1>→v<schema>, its step-5 read verified v<schema>,
+# read authorized v15→v<schema>, its step-5 read verified v<schema>,
 # and no migrate-authorized file is left.
 report_upgraded() {
     report "$1-exit-code" "$RC" "0"
-    report "$1-step2-read" "$(grep -cF "authorized migration v$((schema - 1))→v$schema " "$OUT")" "1"
+    report "$1-step2-read" "$(grep -cF "authorized migration v$PRE_CUTOVER_SCHEMA→v$schema " "$OUT")" "1"
     report "$1-step5-read" "$(grep -cF "migration verified — state.db now at v$schema" "$OUT")" "1"
     report "$1-no-sentinel-left" "$(ls -A "$H/.config/agent-director" | grep '^migrate-authorized')" ""
 }
@@ -522,7 +525,7 @@ for spec in '.headers on|user_version,V' '.mode json|[{"user_version":V}]'; do
     sqliterc_on
     SQLITERC="$rc"
     report "$name-bare-read" "$(AGENT_DIRECTOR_TEST_SQLITERC="$rc" sqlite3 "$db" 'PRAGMA user_version;' | paste -sd,)" \
-        "${bare//V/$((schema - 1))}"
+        "${bare//V/$PRE_CUTOVER_SCHEMA}"
     run_install 0 '*' --from-release v0.11.0-fake --no-symlink
     SQLITERC=""
     sqliterc_off
@@ -598,7 +601,7 @@ report sentinel-mv-fails-nothing-left "$(ls -A "$H/.config/agent-director" | gre
 # own). Step 3 and step 5 read as with no sentinel.
 for name in v0 current older-mismatched; do
     older_store "leftover-sentinel-$name"
-    sentinel="$H/.config/agent-director/migrate-authorized" from=$((schema - 1)) left=migrate-authorized
+    sentinel="$H/.config/agent-director/migrate-authorized" from=$PRE_CUTOVER_SCHEMA left=migrate-authorized
     lines="  schema  : state.db at v$schema; no migration authorization needed"
     case "$name" in
         v0)
@@ -608,8 +611,8 @@ for name in v0 current older-mismatched; do
             rm -f "$db" "$db-wal" "$db-shm"
             cp -p "$ROOT/current-fixture.db" "$db" || die "restore genuine current store" ;;
         older-mismatched)
-            from=$((schema - 2)) left=""
-            lines="  schema  : authorized migration v$((schema - 1))→v$schema (sentinel $sentinel)|  schema  : migration verified — state.db now at v$schema" ;;
+            from=$((PRE_CUTOVER_SCHEMA - 1)) left=""
+            lines="  schema  : authorized migration v$PRE_CUTOVER_SCHEMA→v$schema (sentinel $sentinel)|  schema  : migration verified — state.db now at v$schema" ;;
     esac
     printf '{"from": %d, "to": %d}\n' "$from" "$schema" >"$sentinel"
     run_install 0 '*' --from-release v0.11.0-fake --no-symlink
@@ -649,7 +652,7 @@ db_path_upgrade() {
     report "$name-upgrade-exit-code" "$RC" "0"
     report "$name-upgrade-store-line" "$(grep '^  store   : ' "$OUT")" "$store_line"
     report "$name-upgrade-sentinel-beside-db" \
-        "$(grep -cxF "  schema  : authorized migration v$((v - 1))→v$v (sentinel $dir/migrate-authorized)" "$OUT")" "1"
+        "$(grep -cxF "  schema  : authorized migration v$PRE_CUTOVER_SCHEMA→v$v (sentinel $dir/migrate-authorized)" "$OUT")" "1"
     report "$name-upgrade-verified" "$(grep -cxF "  schema  : migration verified — $shown now at v$v" "$OUT")" "1"
     report "$name-upgrade-user-version" "$(sqlite3 "$db" 'PRAGMA user_version;')" "$v"
     report "$name-upgrade-sentinel-consumed" "$(compgen -G "$dir/migrate-authorized*"; compgen -G "$H/.config/agent-director/migrate-authorized*")" ""
@@ -749,7 +752,7 @@ report busy-timeout-short-locked-first-stderr-line "$(head -n 1 "$ERR")" "instal
 report busy-timeout-short-locked-reads "$(sed 's/ [0-9]*$//' "$ROOT/locks.log" | paste -sd,)" "held"
 report busy-timeout-short-locked-nothing-authorized "$(ls -A "$H/.config/agent-director" | grep '^migrate-authorized')" ""
 # The stand-in has reaped its holder; the refused read changed no schema.
-report busy-timeout-short-locked-user-version "$(sqlite3 -cmd '.timeout 5000' "$db" 'PRAGMA user_version;')" "$((schema - 1))"
+report busy-timeout-short-locked-user-version "$(sqlite3 -cmd '.timeout 5000' "$db" 'PRAGMA user_version;')" "$PRE_CUTOVER_SCHEMA"
 
 # snap: every path under H with its type, mode, size, mtime and link target,
 # and every file's sha256.

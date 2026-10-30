@@ -1094,6 +1094,14 @@ For Cursor, use the same request token, decision and delivery fields.
 bounds and once-only approval mapping are in
 [Cursor permissions](permissions.md#cursor-spawns).
 
+A recorded verdict or historical closeout is not permission to emit a response.
+Closure, proof and outside-answer records cannot create that permission.
+A response claim is recorded before output; if its commit or output is uncertain,
+do not replay it. A hook's late or uncertain acknowledgement commit can leave
+`delivered` with no response output; silence does not imply `fallen_back`.
+Neither a claim nor durable acknowledgement proves transport completion, agent
+receipt, execution or dialog closure.
+
 Every Cursor relay reply, including timeout denial, requires its own durable
 acknowledgement. Failed or missing acknowledgement means no relay answer is
 sent to Cursor. Separately validated cancellation or policy rejection is a
@@ -1103,7 +1111,8 @@ approval as though known absent. See [Cursor permissions](permissions.md#cursor-
 for delivery, proof and request lifetime rules.
 
 For fallback, inspect a connected current menu and make a fresh deliberate
-choice for that request. `fallen_back` alone does not guarantee an answerable
+choice for that request only while it remains eligible and unclaimed.
+`fallen_back` alone does not guarantee an answerable
 native request. Do not reuse a choice from before the relay deadline, or retry
 an uncertain answer. Terminal cancellation or native timeout cannot revive a
 request. On disconnect, follow [Cursor operation boundaries](#cursor-operation-boundaries)
@@ -1149,8 +1158,9 @@ supplies neither ACP approval authority nor proof.
 - `ErrAlreadyDecided`: a verdict is already recorded (first `decide` wins, and
   the relay hook records a deny of its own when its time runs out,
   `decision_reason` `timeout`), or the request was answered at the pane.
-- `ErrNoOpenPermissionRequest`: no open request by that token, or it is
-  closed. Do not answer it at the pane. A request still awaiting an answer
+- `ErrNoOpenPermissionRequest`: no eligible request by that token, including
+  a closed, proven-gone or obsolete request. Do not answer it at the pane.
+  A request still awaiting an answer
   when its agent ended, or when `find-missing` marked it `missing`, is
   closed, and stays closed after `resume`. A decided request without a
   relay acknowledgement or completed pane answer is also closed when its
@@ -1266,8 +1276,14 @@ A request retired at a Cursor turn's end (see "A turn's end" in
 [Cursor spawns](permissions.md#cursor-spawns)) still reads as awaiting an
 answer: `get-permission` shows it with `proven_gone_how` `turn_end`, and if a
 later request moves the row to `check_permission`, `permission_requests`
-lists it beside that one. Don't choose it to decide, because a verdict on it
-reaches nothing. On a relay-on row, until its `confirm_by` (24 h + 4 s after
+lists it beside that one. Do not answer this proven-gone request at the pane
+or choose it to decide. Before `confirm_by`, a new verdict is refused with
+`ErrNoOpenPermissionRequest`, leaving the request unchanged. At or after
+`confirm_by`, an undecided, still-open request takes the fallback refusal:
+`ErrRelayFallenBack`, which can record `attempted_decision`, `attempted_at`
+and fallback history, but no new verdict or response. An existing verdict
+or pane answer retains its own refusal. On a relay-on row, until its
+`confirm_by` (24 h + 4 s after
 admission at the default relay window) every `send-keys` and `pause` is
 refused with `ErrSendKeysWhileRelayed`, and `decide` does not lift that
 refusal. After `confirm_by`, a plain `send-keys` or `pause` gets

@@ -88,7 +88,8 @@ connected pane choices are available and `decide` is refused. Native choices
 have a separate 30-minute lifetime: from admission with relay off, or from
 relay settlement with relay on. After settlement, a fresh deliberate choice
 can resolve a still-open connected native request, even with an unacknowledged
-recorded decision. The [caller contract](caller-contract.md#permission-relay)
+recorded decision, provided no response was already claimed and the request
+is neither closed nor proven gone. The [caller contract](caller-contract.md#permission-relay)
 owns fallback actions, expired choices, uncertain output and disconnects.
 
 Direct supported question cancellation rejects that question without resolving
@@ -104,6 +105,9 @@ The exact failed invocation proves only that its permission dialog is gone,
 using `proven_gone_how` `tool_ran`; it does not establish that the underlying
 server action ran or succeeded. It preserves decision, reason, decision time,
 delivery and pane-answer fields, without inferring an allow or pane answer.
+Proof that the tool ran preserves an existing verdict and non-null reason;
+it infers allow only when undecided and fills a missing reason with `tool_ran`.
+These historical facts grant no permission to send a response.
 Status alone and other failed or ambiguous MCP output supply no proof.
 Only this validated invocation proof, a turn's end for a request the gateway
 never answered (below), or the owning launch ending, releases their hold.
@@ -127,10 +131,10 @@ unless a decision was already recorded, and still reads as awaiting an
 answer, but it no longer holds the row or the dialog. The row then reads
 `waiting` unless another request still holds it; after `/clear` or `/new` the
 rotation publishes `waiting` on the same terms and held input can be admitted.
-Nothing is delivered for it later: its pane keys are gone, and a later
-`decide` records a verdict that never reaches the agent. For what
-`send-keys`, `pause` and `decide` meet on such a request, see the
-[caller contract](caller-contract.md#permission-relay). Not retired: a request
+Nothing is delivered for it later: its pane keys are gone and a later
+`decide` cannot record a new verdict. Its refusal and possible attempted-decision
+history depend on `confirm_by`; those phases and the `send-keys`/`pause`
+holds are in the [caller contract](caller-contract.md#permission-relay). Not retired: a request
 already answered (`delivered`, or answered at the pane), which keeps its
 [dialog hold](#the-dialog-hold), and one whose tool already ran, which is
 proven `tool_ran` instead.
@@ -419,12 +423,14 @@ would be applied to the in-flight tool and race the legitimate
 PermissionRequest process.
 
 Once the request is recorded, the hook writes only an answer it has first
-confirmed in the store, and every failure ends with **no answer**: the hook
-exits 0 with empty stdout, the agent asks in its own permission prompt,
-and the request falls back (its `delivery` reads `fallen_back` once a
-reader finds the hook gone). Claude Code acts on a hook's JSON whatever
-its exit code, so an answer written before its confirmation could reach
-the agent while `decide` and `get-permission` report that it did not.
+confirmed in the store. A failed or uncertain confirmation, or a failed final
+budget or parent check, ends with **no answer**: the hook exits 0 with empty
+stdout. With no persisted acknowledgement, the request reads `fallen_back`
+once a reader finds the hook gone. An acknowledgement that commits late,
+or whose successful commit result is lost, can remain `delivered` despite
+zero response output. That history permits no replay and does not prove the
+agent received an answer. Claude Code acts on a hook's JSON whatever its
+exit code, so confirmation must precede output.
 The failure modes are:
 
 | Failure | Outcome |
@@ -435,9 +441,9 @@ The failure modes are:
 | stdin payload read failure | silent exit 0 (event name unknowable) |
 | Classify failure (unparseable payload) | silent exit 0 (event name unknowable) |
 | The first write (the request and `check_permission`) fails, or its wait for the store's write lock reaches 2 s before the agent ends the hook | deny envelope; nothing recorded |
-| The poll reaches its end (3 s before the agent ends the hook) | `timeout` deny recorded and confirmed, then a deny envelope |
+| The poll reaches its end (3 s before the agent ends the hook) | A still-eligible request gets a recorded and confirmed `timeout` deny, then a deny envelope; lost authority or budget means no answer |
 | The hook's parent process is no longer the agent that started it | no answer |
-| The confirmation or the timeout deny fails, or cannot commit by 2 s before the agent ends the hook | no answer |
+| The confirmation or timeout deny fails, its outcome is uncertain, or the final budget check finds 2 s or less before the agent ends the hook | no answer; a committed acknowledgement can remain |
 | `ctx.Done()` during poll | no answer |
 | Row preempted (`sql.ErrNoRows` during poll) | no answer |
 | Read-retry budget exhausted (5 consecutive read errors) | no answer |
@@ -484,10 +490,11 @@ the window.
 
 **The hook keeps the last 3 s for itself.** Counted back from that instant:
 
-- 2 s before it, the hook's last store write may commit. A write that
-  cannot commit by then is not made: the first write gives way to a deny,
-  a later one to no answer (see "Fail-closed boundary" above). The 2 s are
-  left for writing the answer and exiting.
+- 2 s before it is the write budget's deadline. No acknowledgement or
+  timeout deny starts with that budget exhausted, and output requires a
+  final check that time remains. A commit already in progress can finish
+  late and retain its acknowledgement, but emits no answer (see
+  "Fail-closed boundary" above). The reserve is for writing the answer and exiting.
 - 3 s before it, the poll ends and the hook makes its `timeout` deny,
   whose own wait for the store's write lock may take the next second.
 - 2 s after it is the request's settle instant (`settled_at`), its
@@ -658,8 +665,12 @@ a fail-closed deny.
 
 Only the first accepted verdict is recorded. Concurrent later calls receive
 `ErrAlreadyDecided`. A request that has fallen back is refused with
-`ErrRelayFallenBack`; a closed request cannot accept a verdict. Success
-reports delivery separately from the recorded decision (see "Delivery"
+`ErrRelayFallenBack`; a closed or proven-gone request cannot accept a new verdict.
+A deliberate current pane choice competes with `decide`; a pending or completed
+pane answer excludes relay acknowledgement. A stored verdict alone, a historical
+closeout, an outside-answer record or execution proof cannot authorize a response.
+The request's own timeout may deny only while that request remains eligible.
+Success reports delivery separately from the recorded decision (see "Delivery"
 below). For recovery, follow [Permission relay](caller-contract.md#permission-relay).
 
 Depending on the request's current state, `decide` returns one of
@@ -729,19 +740,18 @@ Every request that still awaits an answer is closed (`closed_at` is set).
 The close also includes a decided request without a relay confirmation or
 completed pane answer, even when recorded by an older binary:
 
-- an undecided request gets `decision` `deny` with `decision_reason`
-  `find_missing` (the mark) or `ended` (the other three), so a relay hook
-  still polling for it reads that deny (and returns it, once confirmed, if
-  its agent is still the one that started it). `decide` on the
+- an undecided request gets a historical `decision` `deny` with `decision_reason`
+  `find_missing` (the mark) or `ended` (the other three). This deny cannot
+  be acknowledged or emitted by the relay. `decide` on the
   mark's deny returns `ErrAlreadyDecided`, and on the `ended` deny
   `ErrNoOpenPermissionRequest`;
 - a decided request whose relay hook had not confirmed the verdict keeps
-  it (a hook whose agent still runs may still confirm and return
-  it); `decide` on it returns `ErrNoOpenPermissionRequest`, whose message
+  it, without permission for a later acknowledgement or response;
+  `decide` on it returns `ErrNoOpenPermissionRequest`, whose message
   says the request is closed (its spawn ended, or `find-missing` marked it
   missing, before its relay hook delivered a verdict), nothing was
-  recorded, and not to answer it at the pane (`ErrAlreadyDecided` once its
-  hook has confirmed it).
+  recorded, and not to answer it at the pane. An acknowledgement recorded
+  before closure retains `ErrAlreadyDecided`.
 
 Each deny is written to the trail as one `ad.row_mutation.committed`
 (`writer_process` `find_missing`, `hook` or `resume`). The mark's deny and the
@@ -756,8 +766,8 @@ Cursor's independent dialog hold and `get.unproven_requests` follow
 [The dialog hold](#the-dialog-hold).
 `decide` refuses it as above, never with `ErrRelayFallenBack`.
 `get-permission` still reads it by its token, and its `delivery` follows
-the rules in "Delivery" below like any request's: `delivered` once its hook
-confirmed, `not_confirmed` while that hook may still run, `fallen_back`
+the rules in "Delivery" below like any request's: `delivered` if its relay
+acknowledged before closure, `not_confirmed` while that hook may still run, `fallen_back`
 once it is gone (or cannot be checked and `confirm_by` has passed). A
 spawn marked `missing` or ended by its agent never keeps an open request.
 
@@ -778,7 +788,7 @@ with a settle instant. Requests recorded by an older binary retain the
 
 | Field | Meaning |
 |---|---|
-| `delivery` | `delivered`: the relay durably acknowledged a verdict before output, without proving receipt. `not_confirmed`: no acknowledgement yet and the request relay may still answer. `fallen_back`: no confirmation, and the hook is gone, or cannot be checked and `confirm_by` has passed: the relay is no longer confirmed to answer. While `pane_answer` is `none` or `intent` the request awaits an answer unless valid execution proof or owning-spawn closure resolves it; a pane answer or `record-pane-answer` can also close it; with `sent`, `outside` or `tool_ran` it is closed and stays `fallen_back`. |
+| `delivery` | `delivered`: the relay durably acknowledged a verdict before output; this proves neither transport completion, receipt, execution nor dialog closure. `not_confirmed`: no acknowledgement and the relay may still run; a closed or proven-gone request cannot gain authority from this state. `fallen_back`: no acknowledgement and the hook is gone, or cannot be checked and `confirm_by` has passed. A completed pane answer also reads `fallen_back`. Delivery is separate from whether a request is answerable or its dialog is proven gone. |
 | `confirm_by` | The request's fixed settle instant: hook end plus 2 s for Claude/Codex, or the Cursor decision deadline plus 4 s. `not_confirmed` never lasts past it. |
 | `hook_alive` | `true` or `false` by the check below; `null` when it cannot tell. |
 | `hook_gone_at` | When a reader first found the request fallen back; `null` until then. |
@@ -969,19 +979,18 @@ that binary judged it:
   first plain `send-keys` needs a person or an LLM to read the pane and
   send with that read's `pane_sha256`, and so does stopping it (see
   "`pause`" under "Send-keys interaction" below).
-- `decide` records a verdict on it only before its window less 1 s, and
-  returns at once, with no wait for a confirmation such a hook never
-  writes. Refused from then, it first waits until `confirm_by` (at most
-  3 s; under `--max-wait-ms` that ends sooner it returns `ErrStoreBusy`
-  instead) and reads the request again (a request already answered at the
-  pane is `ErrAlreadyDecided` at once, with no wait): decided meanwhile
-  (normally the hook's own timeout deny, `decision_reason` `timeout`) →
-  `ErrAlreadyDecided`; still open → `ErrRelayFallenBack` only while the
-  spawn is still in `check_permission` with no other open request and none
-  recorded after this one, otherwise `ErrNoOpenPermissionRequest` (do not
-  answer it at the pane). Eviction at the cap keeps the spawn's newest
-  request while this one is open, so a later request stays visible to that
-  check.
+- A migrated request with unknown ownership cannot accept a new `decide`
+  verdict, even before its relay cutoff. The delivery rules above retain
+  historical results; they do not grant response authority. Before the
+  cutoff, an undecided request is refused with `ErrNoOpenPermissionRequest`.
+  Once its window less 1 s has elapsed, the compatibility path first waits
+  until `confirm_by` (at most 3 s; `ErrStoreBusy` if `--max-wait-ms` cannot
+  cover that wait), then reads it again. An existing verdict or completed
+  pane answer retains its own refusal. A still-open request gets
+  `ErrRelayFallenBack`, with the submitted verdict kept only as attempted,
+  if the spawn remains in `check_permission` with no other open request and
+  none recorded later; otherwise it gets `ErrNoOpenPermissionRequest`.
+  See [Permission relay](caller-contract.md#permission-relay) for handling.
 
 ### Unanswered permission requests
 
@@ -1163,8 +1172,9 @@ a live hook's verdict or deny does only if both:
   write); and
 - The agent kills the hook more than 1 s after its per-hook timeout.
 
-A relay hook of this release commits its last store write at least 2 s
-before the agent ends it, and its `confirm_by` is that end plus 2 s.
+The hook's write budget ends 2 s before its scheduled kill, and its
+`confirm_by` is that kill plus 2 s. A commit already in progress may finish
+later; the final budget check suppresses response output in that case.
 Nothing stored shows a hook stuck delivering, so this race is not closed
 for a call that carries a pane hash (a pane answer, or a plain call that
 passes the dialog hold). A plain call without one stays refused after
@@ -1413,52 +1423,22 @@ gone. Two ways close it:
    way). When the agent's `PostToolUse` or
    `PostToolUseFailure` hook carries the `tool_use_id` of a fallen-back
    request recorded from this release on, the tool ran, so its prompt was
-   answered allow: the hook records `pane_answer` `tool_ran`, `decision`
-   `allow` and `decision_reason` `tool_ran`, only while the request still
+   answered allow: the hook records `pane_answer` `tool_ran`, infers `decision`
+   `allow` only if no verdict exists, and fills a missing `decision_reason`
+   with `tool_ran`, preserving an existing verdict and non-null reason. It does
+   so only while the request still
    awaits an answer and its relay hook is judged gone (see
-   [hooks.md](hooks.md#a-request-whose-tool-ran)). It closes only allows:
-   Claude Code runs no hook for a deny at its prompt. That hook can fail
+   [hooks.md](hooks.md#a-request-whose-tool-ran)). Claude Code runs no tool-use
+   hook for a deny at its prompt. That hook can fail
    too, so this close is a help, not a guarantee. The same hook proves the
    request gone (`tool_ran`), whether or not it closes it.
 
 #### Recovering a wedged relayed spawn
 
-The hook-specific sequence below describes Claude and Codex. For Cursor,
-follow [the caller contract](caller-contract.md#permission-relay): a recorded
-unacknowledged decision can still leave a connected native request answerable
-after settlement. An `ErrAlreadyDecided` alone establishes no receipt.
-
-At the window's end the relay hook normally denies the request itself
-(see "Relay timeout default and override" above): `decide` then returns
-`ErrAlreadyDecided` (`decision_reason` `timeout`) and there is nothing to
-recover. A relayed spawn is wedged when its relay hook died or was killed
-without answering: `decide`, a plain `send-keys` and `pause` return
-`ErrRelayFallenBack`. Recover it through agent-director, **never through
-raw tmux**:
-
-1. Take the request's facts from the error's `err_details` (or
-   `get-permission`). If `decide` returns `ErrAlreadyDecided` instead, the
-   relay hook or another caller answered the request and there is nothing
-   to recover; if it returns `ErrNoOpenPermissionRequest`, the request is
-   closed or its prompt cannot be shown to wait: do not answer it at the
-   pane. If a plain `send-keys` is still refused with `ErrRelayFallenBack`
-   on that request (a stale record from an older binary), close it
-   with step 4.
-2. `read-pane`, and have a person or an LLM look at it.
-3. If the request's prompt waits there, answer it with `send-keys` and its
-   `request_token`, the key and verdict chosen, and that read's
-   `pane_sha256`.
-4. If it was answered already, close it with `record-pane-answer` (`--as
-   unknown` unless the answer was seen).
-5. Both are audited: `ad.send_keys.called` (with `guard_evaluation`
-   `released` for a pane answer let through) and the request's
-   `ad.row_mutation.committed`.
-6. Neither proves the request gone: a plain `send-keys` without a pane
-   hash, and `pause`, stay held (`ErrDialogMaybeOpen`) until the agent's hooks
-   prove it (after a deny of an eligible main request, normally the turn's `Stop`; on a Codex row, the
-   turn's `Stop` or Interrupt, after an allow too). To type before that,
-   read the pane again and send with that read's `pane_sha256`; to stop
-   the spawn, see "`pause`" under "Send-keys interaction" above.
+Follow [Permission relay](caller-contract.md#permission-relay) for polling,
+uncertain commits and fallback recovery, and
+[Answer a request at the pane](usage.md#answer-a-request-at-the-pane) for
+commands. `ErrAlreadyDecided` alone proves neither receipt nor dialog closure.
 
 ### Known limitations
 
@@ -1487,12 +1467,12 @@ processes, never the agent's screen. These cases are not covered:
   stands for, so a plain `send-keys` is not refused, and its Enter can
   answer that prompt. The dialog hold starts at the request's first write,
   so it does not cover this case.
-- **A confirmed answer not returned.** The relay hook confirms its verdict
-  or its timeout deny at least 2 s before the agent ends it, then writes
-  it. A hook that dies or stalls past the agent's kill between the two
-  leaves the request reading `delivered` while the agent never received
-  the answer: `decide` on it returns `ErrAlreadyDecided`, which advises no
-  pane answer. The request is not proven gone, so a plain `send-keys`
+- **A confirmed answer not returned.** A late or uncertain acknowledgement
+  commit, or a hook that dies between acknowledgement and output, can leave
+  `delivered` with no answer received. See
+  [Permission relay](caller-contract.md#permission-relay) for this distinction
+  and recovery. `decide` on it returns `ErrAlreadyDecided`. Without proof the
+  request is not known gone, so a plain `send-keys`
   without a pane hash is held (`ErrDialogMaybeOpen`) and `get` lists it in
   `unproven_requests` until someone looks at the pane.
 - **Between the capture and the key.** The pane can change between

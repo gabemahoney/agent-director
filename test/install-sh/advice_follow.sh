@@ -139,6 +139,8 @@ ADMIN_NUL="$ROOT/bin/agent-director-admin-nul"
 mkdir -p "$ROOT/probe-home"
 HOME="$ROOT/probe-home" "$BIN" list >/dev/null || die "probe list"
 SCHEMA="$("$SQLITE" "$ROOT/probe-home/.config/agent-director/state.db" 'PRAGMA user_version;')"
+# The genuine pre-cutover fixture remains v15 across later schema hops.
+PRE_CUTOVER_SCHEMA=15
 [[ "$SCHEMA" =~ ^[0-9]+$ ]] || die "read schema version: $SCHEMA"
 sed -E "s/^const schemaVersion = [0-9]+$/const schemaVersion = $((SCHEMA + 1))/" \
     "$REPO_ROOT/internal/store/store.go" >"$ROOT/store-newer.go"
@@ -1100,7 +1102,7 @@ j6_break_hop() {
             "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_turn;
                 ALTER TABLE spawns DROP COLUMN codex_turn_ended;" || return 1
             ;;
-        16)
+        16|17)
             local installed
             installed="$("$TS_HELPER" install-write-failure --store "$1" \
                 --kind input-authority --id native_input_authority)" || return 1
@@ -1108,7 +1110,7 @@ j6_break_hop() {
             ;;
         *) bad "j6_break_hop has no failure injection for v$SCHEMA"; return 1 ;;
     esac
-    if [[ "$SCHEMA" != 16 ]]; then
+    if [[ "$SCHEMA" -lt 16 ]]; then
         "$SQLITE" "$1" "ALTER TABLE spawns ADD COLUMN $J6_CONFLICT_COLUMN TEXT GENERATED ALWAYS AS (NULL) VIRTUAL;" || return 1
     fi
     "$SQLITE" "$1" "
@@ -1116,7 +1118,7 @@ j6_break_hop() {
         INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,main_turn_end_eligible) VALUES ('j6','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}',1);"
 }
 j6_repair_hop() {
-    if [[ "$SCHEMA" == 16 ]]; then
+    if [[ "$SCHEMA" -ge 16 ]]; then
         "$TS_HELPER" remove-write-failure --store "$1" --handle "$J6_FAILURE_HANDLE" >/dev/null
     else
         "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN $J6_CONFLICT_COLUMN;"
@@ -1125,9 +1127,9 @@ j6_repair_hop() {
 
 j6_assert_rollback() {
     local db="$J6H/.config/agent-director/state.db"
-    [[ "$(db_version "$J6H")" == $((SCHEMA - 1)) ]] || bad "failed migration stamped v$SCHEMA"
+    [[ "$(db_version "$J6H")" == $PRE_CUTOVER_SCHEMA ]] || bad "failed migration stamped v$SCHEMA"
     [[ "$("$SQLITE" "$db" '.sha3sum --schema')" == "$J6_BEFORE" ]] || bad "failed migration changed schema or data"
-    if [[ "$SCHEMA" == 16 ]]; then
+    if [[ "$SCHEMA" -ge 16 ]]; then
         [[ "$("$SQLITE" "$db" "SELECT count(*) FROM sqlite_master WHERE name IN ('input_launches','input_attempts','input_imports'); SELECT count(*) FROM store_meta WHERE key='native_input_authority';")" == $'0\n0' ]] \
             || bad "failed cutover retained native DDL or authority"
     else
@@ -1169,7 +1171,7 @@ test_J6_MigrationFailedRerunRetries() {
     expect_advice '"reason":"migration_incomplete_or_commit_unknown"'
     expect_advice "Keep the maintenance boundary and restart administrator verification."
     j6_assert_rollback
-    [[ "$(db_version "$J6H")" == $((SCHEMA - 1)) ]] || bad "store moved off v$((SCHEMA - 1)) on a failed re-run"
+    [[ "$(db_version "$J6H")" == $PRE_CUTOVER_SCHEMA ]] || bad "store moved off v$PRE_CUTOVER_SCHEMA on a failed re-run"
     j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; return; }
     run_journal "$J6H" "${J6ARGV[@]}"
     expect_rc 0 "re-run once the cause is gone" || return
@@ -1189,13 +1191,13 @@ test_J6_MigrationFailedRerunRetries() {
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT owner_launch_token IS NULL AND owner_permission_epoch IS NULL AND admitted_at IS NULL AND fallback_at IS NULL AND fallback_basis IS NULL FROM permission_requests WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated historical ownership or fallback facts"
     fi
-    if [[ "$SCHEMA" == 15 || "$SCHEMA" == 16 ]]; then
+    if [[ "$SCHEMA" == 15 || "$SCHEMA" -ge 16 ]]; then
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('codex_turn','codex_turn_ended') AND type='TEXT' AND \"notnull\"=0 AND dflt_value IS NULL;")" == 2 ]] \
             || bad "corrected retry did not add both nullable Codex turn columns"
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT codex_turn IS NULL AND codex_turn_ended IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated a Codex turn for the historical spawn"
     fi
-    local ran="  schema  : authorized migration v$((SCHEMA - 1))→v$SCHEMA (sentinel $(sentinel "$J6H"))"
+    local ran="  schema  : authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA (sentinel $(sentinel "$J6H"))"
     grep -qxF "$ran" "$OUT" || bad "no \"$ran\" line: $(grep -F "  schema  : " "$OUT")"
     grep -qF "no migration authorization needed" "$OUT" && bad "step 3 says no migration was needed after its probe ran one"
     grep -qxF "  schema  : migration verified — state.db now at v$SCHEMA" "$OUT" \
@@ -1399,7 +1401,7 @@ j7_warned() {
 # j7_mismatch: j7_verify_fails with the verification read answering the
 # pre-migration version; checks its advice (state.db's path shell-quoted).
 j7_mismatch() {
-    local t="$SCHEMA" a="$((SCHEMA - 1))" db
+    local t="$SCHEMA" a="$PRE_CUTOVER_SCHEMA" db
     j7_verify_fails "$a" || return 1
     db="$(printf %q "$J7H/.config/agent-director/state.db")"
     expect_advice "actual user_version: $a"
@@ -1422,7 +1424,7 @@ j7_rerun_verified() {
 # maintainers is a human step; not followed.
 test_J7_VersionMismatchRerun() {
     local version
-    for version in $((SCHEMA - 1)) $((SCHEMA + 1)) "$SCHEMA"; do
+    for version in $PRE_CUTOVER_SCHEMA $((SCHEMA + 1)) "$SCHEMA"; do
         j7_mismatch || continue
         if ((version < SCHEMA)); then
             pre_cutover_store "$J7H/.config/agent-director/state.db" || continue
@@ -1455,7 +1457,7 @@ test_J7_VersionMismatchCheckVersion() {
     for spec in "|" "\$x\`y\`'q\"z.|" "|1234"; do
         IFS='|' read -r HOME_TAG J7_BUSY_MS <<<"$spec"
         j7_mismatch || continue
-        grep -qF "authorized migration v$((SCHEMA - 1))→v$SCHEMA " "$OUT" || bad "HOME $J7H: the install authorized no migration: $(flat "$OUT")"
+        grep -qF "authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA " "$OUT" || bad "HOME $J7H: the install authorized no migration: $(flat "$OUT")"
         if compgen -G "$(sentinel "$J7H")*" >/dev/null; then
             bad "HOME $J7H: the sentinel was not consumed: $(compgen -G "$(sentinel "$J7H")*")"
         fi
@@ -1528,7 +1530,7 @@ test_J7_FailedReadRerun() {
                 bad "$what: an existing state.db reported as a fresh create: $(flat "$OUT")"
             fi
             [[ ! -e "$(sentinel "$J7H")" ]] || bad "$what: a migration was authorized without the store's version"
-            [[ "$(db_version "$J7H")" == $((SCHEMA - 1)) ]] || bad "$what: store moved off v$((SCHEMA - 1)): v$(db_version "$J7H")"
+            [[ "$(db_version "$J7H")" == $PRE_CUTOVER_SCHEMA ]] || bad "$what: store moved off v$PRE_CUTOVER_SCHEMA: v$(db_version "$J7H")"
         fi
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$what: first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         grep -qxF "  actual   user_version: <unreadable>" "$ERR" || bad "$what: no <unreadable> line: $(flat "$ERR")"
@@ -1549,8 +1551,8 @@ test_J7_FailedReadRerun() {
         fi
     done 3<<EOF
 1||$SHIM_LOCK_ERR|5
-1|$((SCHEMA - 1))||10
-1|$((SCHEMA - 1))|Error: stepping, disk I/O error (10)|10
+1|$PRE_CUTOVER_SCHEMA||10
+1|$PRE_CUTOVER_SCHEMA|Error: stepping, disk I/O error (10)|10
 2||$SHIM_LOCK_ERR|5
 2|$SCHEMA||10
 2|||0
@@ -1610,13 +1612,13 @@ j7_rerun_same() {
 # <changed>|<stdout>|<stderr>.
 test_J7_NotAVersionBeforeOpenRerun() {
     local spec changed call answer err printed stand_in version could want="install.sh: reading state.db's schema version FAILED"
-    for spec in "sqlite3|user_version\n$((SCHEMA - 1))|" "sqlite3|08|" "sqlite3|010|" \
-        "sqlite3|$((SCHEMA - 1))|-- Loading resources from /dev/null" "state.db|-1|"; do
+    for spec in "sqlite3|user_version\n$PRE_CUTOVER_SCHEMA|" "sqlite3|08|" "sqlite3|010|" \
+        "sqlite3|$PRE_CUTOVER_SCHEMA|-- Loading resources from /dev/null" "state.db|-1|"; do
         IFS='|' read -r changed answer err <<<"$spec"
         printed="${err:+$err\n}$answer" # stderr first, as the stand-in prints them
         j7_older_store || continue
         if [[ "$changed" == sqlite3 ]]; then
-            version=$((SCHEMA - 1)) call=1 stand_in="$answer"
+            version=$PRE_CUTOVER_SCHEMA call=1 stand_in="$answer"
         else
             version="$answer" call=0 stand_in=""
             "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $version;"
@@ -1679,7 +1681,7 @@ test_J7_UnreadableAfterProbeRerun() {
     for answer in "" "[{\"user_version\":$SCHEMA}]"; do
         J7ARGV=("${J7FULL[@]}")
         j7_installed || continue
-        J7_RETAINED_SENTINEL="{\"from\":$((SCHEMA - 1)),\"to\":$SCHEMA}"
+        J7_RETAINED_SENTINEL="{\"from\":$PRE_CUTOVER_SCHEMA,\"to\":$SCHEMA}"
         printf '%s' "$J7_RETAINED_SENTINEL" >"$(sentinel "$J7H")"
         before="$("$SQLITE" "$J7H/.config/agent-director/state.db" '.sha3sum --schema')"
         j7_run 2 "$answer" # step 2's read, then step 3's after the probe
@@ -2148,7 +2150,7 @@ test_J13_ConfigRefusedFixAndRerun() {
         IFS='|' read -r store config named fix <<<"$spec"
         case "$store" in
             fresh) J7H="$(new_home)" before=none; mkdir -p "$J7H/.config/agent-director" ;;
-            older) j7_older_store || continue; before=$((SCHEMA - 1)) ;;
+            older) j7_older_store || continue; before=$PRE_CUTOVER_SCHEMA ;;
             current) j7_installed || continue; before="$SCHEMA" ;;
         esac
         printf '%b\n' "$config" >"$J7H/.config/agent-director/config.toml"
@@ -2188,7 +2190,7 @@ test_J13_ConfigRefusedFixAndRerun() {
         expect_installed "$J7H" "$BIN" "$ADMIN"
         [[ ! -e "$(sentinel "$J7H")" ]] || bad "$store, \"$named\": sentinel left after the re-run"
         if [[ "$store" == older ]]; then
-            grep -qF "authorized migration v$((SCHEMA - 1))→v$SCHEMA " "$OUT" \
+            grep -qF "authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA " "$OUT" \
                 || bad "$store, \"$named\": the re-run did not authorize the pending migration: $(flat "$OUT")"
         elif [[ "$store" == current ]]; then
             # The probe opened the store (no err_name): step 3 says nothing to authorize.
@@ -2238,7 +2240,7 @@ expect_store() {
     fi
     [[ "${4:-}" == migrated ]] || return 0
     [[ "$(is_kept "$db")" == 1 ]] || bad "$ctx: the store at $db is not the one there before"
-    grep -qxF "  schema  : authorized migration v$((SCHEMA - 1))→v$SCHEMA (sentinel $dir/migrate-authorized)" "$OUT" \
+    grep -qxF "  schema  : authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA (sentinel $dir/migrate-authorized)" "$OUT" \
         || bad "$ctx: the run did not authorize the migration beside $db: $(flat "$OUT")"
 }
 
@@ -2511,7 +2513,7 @@ test_J15_SentinelTempFailedFixAndRerun() {
         # Its error is above: mktemp's own, naming a template no one can predict.
         [[ "$(head -n 2 "$ERR")" == "mktemp: failed to create file via template '$sentinel.tmp.XXXXXX': Permission denied"$'\n'"install.sh: writing the migration sentinel FAILED" ]] \
             || bad "$shown: stderr does not open with mktemp's error for $sentinel.tmp.XXXXXX, then the failure: $(head -n 2 "$ERR" | tr '\n' '|')"
-        expect_advice "sentinel: $sentinel mktemp could not create a temp file beside it (its error is above), so no migration was authorized: $shown is still at v$((SCHEMA - 1)). The new agent-director does not open it until it is at v$SCHEMA. Fix what mktemp's error names (a directory you cannot write, say, or a full disk), then re-run this install: it authorizes the migration again."
+        expect_advice "sentinel: $sentinel mktemp could not create a temp file beside it (its error is above), so no migration was authorized: $shown is still at v$PRE_CUTOVER_SCHEMA. The new agent-director does not open it until it is at v$SCHEMA. Fix what mktemp's error names (a directory you cannot write, say, or a full disk), then re-run this install: it authorizes the migration again."
         if compgen -G "$sentinel*" >/dev/null; then
             bad "$shown: left beside the store: $(compgen -G "$sentinel*")"
         fi
@@ -2663,7 +2665,7 @@ j17_newer_store() {
     run_journal "$J7H" "${J7ARGV[@]}"
 }
 # j17_mismatch: an older store whose step-5 read gives the pre-migration version.
-j17_mismatch() { j7_older_store && j7_run 2 "$((SCHEMA - 1))"; }
+j17_mismatch() { j7_older_store && j7_run 2 "$PRE_CUTOVER_SCHEMA"; }
 # The canonical cutover failure fixture preserves the complete old schema/data
 # and uses the shared write-failure handle, never another trigger definition.
 j17_journal_refused() {

@@ -81,7 +81,7 @@ func resumeFinishedRow(t *testing.T, s *store.Store, dbPath, id string) {
 // fallen back, its hook gone though it is: closed before its hook acked a
 // verdict find-missing did not write (one recorded on it, or the SessionEnd
 // close's deny), it is ErrNoOpenPermissionRequest, the Spawn finished or
-// resumed; the mark's own deny, and a verdict acked after the mark, are
+// resumed; the mark's own deny, and a verdict acked before the mark, are
 // ErrAlreadyDecided.
 func TestDecideRefusesAClosedRequest(t *testing.T) {
 	t.Parallel()
@@ -97,7 +97,7 @@ func TestDecideRefusesAClosedRequest(t *testing.T) {
 		{"decided, not acked, the spawn resumed", []closeStep{closeDecide, closeMark, closeResume}, store.ErrNoOpenPermissionRequest, closedText, "allow", ""},
 		{"the mark's deny, the spawn missing", []closeStep{closeMark}, store.ErrAlreadyDecided, `(decision_reason "find_missing")`, "deny", store.DecisionReasonFindMissing},
 		{"the mark's deny, the spawn resumed", []closeStep{closeMark, closeResume}, store.ErrAlreadyDecided, `(decision_reason "find_missing")`, "deny", store.DecisionReasonFindMissing},
-		{"decided, acked after the mark, the spawn resumed", []closeStep{closeDecide, closeMark, closeAck, closeResume}, store.ErrAlreadyDecided, `already decided as "allow"`, "allow", ""},
+		{"decided, acked before the mark, the spawn resumed", []closeStep{closeDecide, closeAck, closeMark, closeResume}, store.ErrAlreadyDecided, `already decided as "allow"`, "allow", ""},
 		{"decided, not acked, the spawn ended", []closeStep{closeDecide, closeEnd}, store.ErrNoOpenPermissionRequest, closedText, "allow", ""},
 		{"decided, not acked, the spawn ended and resumed", []closeStep{closeDecide, closeEnd, closeResume}, store.ErrNoOpenPermissionRequest, closedText, "allow", ""},
 		{"the SessionEnd's deny, the spawn ended", []closeStep{closeEnd}, store.ErrNoOpenPermissionRequest, closedText, "deny", store.DecisionReasonEnded},
@@ -122,7 +122,7 @@ func TestDecideRefusesAClosedRequest(t *testing.T) {
 					t.Errorf("decide waited %v; want the refusal at once", waited)
 				}
 				pr := e.request(t)
-				if pr.Decision != tc.decision || pr.DecisionReason != tc.reason || pr.AttemptedDecision != "" || !pr.Closed() {
+				if pr.Decision != tc.decision || pr.DecisionReason != tc.reason || pr.AttemptedDecision != "" || (!pr.Closed() && pr.DeliveredAt.IsZero()) {
 					t.Errorf("request = decision %q (%q), attempted %q, closed %v; want %q (%q) kept, nothing attempted, closed",
 						pr.Decision, pr.DecisionReason, pr.AttemptedDecision, pr.Closed(), tc.decision, tc.reason)
 				}
@@ -133,7 +133,7 @@ func TestDecideRefusesAClosedRequest(t *testing.T) {
 
 // TestClosedRequestDelivery (b.146 rules 5, 12, 15; b.59i): a closed
 // request's delivery follows the ordinary rules: not_confirmed while its hook
-// may still ack, fallen_back once the hook is gone without an ack
+// may still run, fallen_back once the hook is gone without an ack
 // (hook_gone_at recorded), delivered once acked. Get and list no longer show
 // it, the Spawn finished or resumed.
 func TestClosedRequestDelivery(t *testing.T) {
@@ -147,7 +147,7 @@ func TestClosedRequestDelivery(t *testing.T) {
 		{"decided, not acked, its hook alive", []closeStep{closeDecide, closeMark}, api.DeliveryNotConfirmed, "true"},
 		{"decided, not acked, its hook gone, the spawn resumed", []closeStep{closeDecide, closeMark, closeResume, closeGone}, api.DeliveryFallenBack, "false"},
 		{"the mark's deny, its hook gone", []closeStep{closeMark, closeGone}, api.DeliveryFallenBack, "false"},
-		{"acked after the mark, its hook gone since, the spawn resumed", []closeStep{closeDecide, closeMark, closeAck, closeResume, closeGone}, api.DeliveryDelivered, "false"},
+		{"acked before the mark, its hook gone since, the spawn resumed", []closeStep{closeDecide, closeAck, closeMark, closeResume, closeGone}, api.DeliveryDelivered, "false"},
 		{"decided, not acked, the spawn ended, its hook alive", []closeStep{closeDecide, closeEnd}, api.DeliveryNotConfirmed, "true"},
 		{"the SessionEnd's deny, its hook gone", []closeStep{closeEnd, closeGone}, api.DeliveryFallenBack, "false"},
 		{"the SessionEnd's deny, its hook gone, the spawn resumed", []closeStep{closeEnd, closeResume, closeGone}, api.DeliveryFallenBack, "false"},
@@ -160,6 +160,9 @@ func TestClosedRequestDelivery(t *testing.T) {
 				step(t, e)
 			}
 
+			if _, _, ack, err := e.s.AckRelayDecision(e.id, storefix.TestRequestTokenA, e.now, store.DefaultLockWait, nil); err != nil || ack {
+				t.Fatalf("closed request acquired new acknowledgement: %v %v", ack, err)
+			}
 			res := e.getPermission(t, e.s)
 			fromGet, fromList := e.listed(t)
 

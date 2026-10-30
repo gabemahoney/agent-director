@@ -2,6 +2,7 @@ package apitest
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -133,6 +134,19 @@ func SeedDecideFixtureAgent(t *testing.T, relayMode, agent string, requests ...s
 		RelayMode:       relayMode,
 	}); err != nil {
 		t.Fatalf("SeedDecideFixture: InsertPending: %v", err)
+	}
+	if agent == store.AgentCursor {
+		if err := storefix.WithSeedPane(dbPath, "id-d-1", func(gate store.HookGate) error {
+			const session = "synthetic-decide-session"
+			ok, err := s.SetCursorRuntimeSession(*gate.Cursor, session)
+			if err != nil || !ok {
+				return fmt.Errorf("seed Cursor session binding: applied=%v: %w", ok, err)
+			}
+			gate.Cursor.SessionID, gate.SessionID = session, session
+			return storefix.SeedAgentWrites(s, gate, "id-d-1", session, store.StatePending)
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// Transition into check_permission so it looks realistic.
 	seedAgentState(t, s, "id-d-1", store.StateCheckPermission, "SeedDecideFixture")

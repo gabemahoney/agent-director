@@ -362,6 +362,11 @@ func (r *relayRun) parentCheck() error {
 	if !r.parentIsStarter() {
 		return errParentChanged
 	}
+	// Acquiring the write lock and checking the parent can consume the
+	// original budget. Never turn a late ack/timeout into a fresh allowance.
+	if r.clock.waitLeft() <= 0 {
+		return fmt.Errorf("relay response deadline passed")
+	}
 	return nil
 }
 
@@ -396,6 +401,12 @@ func (r *relayRun) deliver(createdAt time.Time) {
 		r.silent("ack: no decided, unacked request to ack")
 		return
 	}
+	// A commit already in progress can finish after its caller's budget.
+	// The durable acknowledgement remains truthful, but grants no late write.
+	if err := r.parentCheck(); err != nil {
+		r.silent("after ack: %v", err)
+		return
+	}
 	logf(r.logger, "relay: %s for %s token=%s (%s)", decision, r.instanceID, r.token, reason)
 	_, _ = fmt.Fprintln(r.stdout, EncodeDecision(EventNamePermissionRequest, decision, reason))
 	emitResume(r.ctx, r.instanceID, r.token, decision, createdAt)
@@ -419,6 +430,10 @@ func (r *relayRun) timeoutDeny(createdAt time.Time) {
 	}
 	if !denied {
 		r.deliver(createdAt)
+		return
+	}
+	if err := r.parentCheck(); err != nil {
+		r.silent("after timeout deny: %v", err)
 		return
 	}
 	logf(r.logger, "relay: timeout deny for %s token=%s", r.instanceID, r.token)

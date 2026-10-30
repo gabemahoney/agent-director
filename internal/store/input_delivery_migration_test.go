@@ -633,7 +633,9 @@ func TestInputJournalMigrationBackupIncludesWALAndSHM(t *testing.T) {
 }
 
 func TestInputJournalMigrationSentinelCannotAuthorizeRuntime(t *testing.T) {
-	for _, from := range []int{1, schemaVersion - 1} {
+	// The journal cutover is v16. Later schema-only hops may consume their
+	// own sentinel, but cannot authorize importing a pre-v16 journal.
+	for _, from := range []int{1, 15} {
 		path := makeVersionedDB(t, t.TempDir(), from)
 		writeSentinel(t, filepath.Dir(path), from, schemaVersion)
 		before := snapshotDBBytes(t, path)

@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -50,6 +51,94 @@ func columnsByName(shape map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+func TestPermissionV17Migration(t *testing.T) {
+	for _, variant := range []string{"absent", "compatible reentry", "invalid origin", "invalid claim", "negative life", "empty connection", "wrong shape"} {
+		t.Run(variant, func(t *testing.T) {
+			dir := t.TempDir()
+			path := makeVersionedDB(t, dir, 16)
+			seedV16PermissionHistory(t, path)
+			if variant != "absent" {
+				specs := slices.Clone(v17ColumnSpecs)
+				if variant == "wrong shape" {
+					withRaw(t, path, func(db *sql.DB) {
+						mustExec(t, db, "ALTER TABLE permission_requests ADD COLUMN decision_origin INTEGER")
+					})
+				} else {
+					preAddV14Columns(t, path, specs)
+					withRaw(t, path, func(db *sql.DB) {
+						query := map[string]string{
+							"compatible reentry": "UPDATE permission_requests SET decision_origin='observation',owner_life_number=2,owner_session_id='history-session'",
+							"invalid origin":     "UPDATE permission_requests SET decision_origin='automatic'",
+							"invalid claim":      "UPDATE permission_requests SET response_state='delivered'",
+							"negative life":      "UPDATE permission_requests SET owner_life_number=-1",
+							"empty connection":   "UPDATE permission_requests SET owner_cursor_connection=''",
+						}[variant]
+						mustExec(t, db, query)
+					})
+				}
+			}
+			var cols, histories []string
+			withRaw(t, path, func(db *sql.DB) {
+				cols = tableColumnNames(t, db, "permission_requests")
+				histories = tableColumnNames(t, db, "session_history")
+			})
+			before := readQuotedRows(t, path, "permission_requests", "pre", "request_id", cols)
+			history := readRawHistory(t, path, "pre", histories)
+			snapshot := snapshotDBBytes(t, path)
+			if s, err := Open(path); !errors.Is(err, ErrSchemaMigrationRequired) {
+				if s != nil {
+					s.Close()
+				}
+				t.Fatalf("unauthorized migration: %v", err)
+			}
+			assertDBBytesUnchanged(t, path, snapshot)
+			writeSentinel(t, dir, 16, schemaVersion)
+			s, err := openMigrationTestStore(t, path)
+			valid := variant == "absent" || variant == "compatible reentry"
+			if !valid {
+				if s != nil {
+					s.Close()
+				}
+				if !errors.Is(err, ErrSchemaMismatch) {
+					t.Fatalf("invalid migration: %v", err)
+				}
+				if readUserVersion(t, path) != 16 {
+					t.Fatal("failed migration changed stamp")
+				}
+				assertSentinel(t, dir, true)
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				fresh, _ := openTempStore(t)
+				if !reflect.DeepEqual(columnsByName(schemaShape(t, fresh.db)), columnsByName(schemaShape(t, s.db))) {
+					t.Fatal("fresh/migrated schema diverged")
+				}
+				assertSentinel(t, dir, false)
+				for _, token := range []string{tokenA, tokenB} {
+					pr, err := s.GetPermissionRequest("pre", token)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if pr.ResponseState != "" || (variant == "absent" && (pr.DecisionOrigin != "" || pr.OwnerLifeNumber != -1)) {
+						t.Fatalf("migration invented authority: %+v", pr)
+					}
+					if _, _, ack, err := s.AckRelayDecision("pre", token, time.Now(), DefaultLockWait, nil); err != nil || ack {
+						t.Fatalf("historical ack: %v %v", ack, err)
+					}
+				}
+			}
+			if got := readQuotedRows(t, path, "permission_requests", "pre", "request_id", cols); !reflect.DeepEqual(got, before) {
+				t.Fatalf("migration changed historical values: %v != %v", got, before)
+			}
+			if got := readRawHistory(t, path, "pre", histories); !reflect.DeepEqual(got, history) {
+				t.Fatal("session history changed")
+			}
+		})
+	}
 }
 
 // TestFreshStoreSchema checks a new store and a reopen of it: user_version at
@@ -157,6 +246,7 @@ func TestFreshStoreSchema(t *testing.T) {
 	assertColumnSpecs(t, db, []columnSpec{{"spawns", "codex_startup", "TEXT", false, ""}, {"spawns", "claude_capacity", "TEXT", false, ""}})
 	assertColumnSpecs(t, db, v14ColumnSpecs)
 	assertColumnSpecs(t, db, v15ColumnSpecs)
+	assertColumnSpecs(t, db, v17ColumnSpecs)
 	// The v14 columns' earlier names are gone; an upgrade's schema is this one.
 	for _, old := range []string{"stuck_version", "stuck_observation", "stuck_exit", "no_screen_change_timeout_seconds"} {
 		if slices.Contains(tableColumnNames(t, db, "spawns"), old) {
@@ -170,6 +260,9 @@ func TestFreshStoreSchema(t *testing.T) {
 	wantRequestsTail := append([]string{"created_at"}, v7ColumnNames("permission_requests")...)
 	wantRequestsTail = append(wantRequestsTail, "main_turn_end_eligible")
 	wantRequestsTail = append(wantRequestsTail, v14ColumnNames("permission_requests")...)
+	for _, column := range v17ColumnSpecs {
+		wantRequestsTail = append(wantRequestsTail, column.name)
+	}
 	if cols := tableColumnNames(t, db, "permission_requests"); len(cols) < len(wantRequestsTail) ||
 		!slices.Equal(cols[len(cols)-len(wantRequestsTail):], wantRequestsTail) {
 		t.Errorf("permission_requests columns = %v; want created_at then the v7 and v11 columns last, in order %v", cols, wantRequestsTail)

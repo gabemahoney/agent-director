@@ -509,6 +509,7 @@ func runWrite(t *testing.T, s *store.Store, dbPath string, w proxyWrite, id stri
 func TestInjectWriteFailure(t *testing.T) {
 	const target, other = "wf-target", "wf-other"
 	writes := append(slices.Clone(proxyWrites), inputFailureProxies()...)
+	writes = append(writes, permissionIssueFailureProxies()...)
 	covered := map[storefix.WriteFailureKind]bool{}
 	for _, w := range writes {
 		covered[w.kind] = true
@@ -562,4 +563,27 @@ func TestInjectWriteFailure(t *testing.T) {
 			})
 		}
 	}
+}
+
+// These leaf-trigger probes exercise the exact issued-state UPDATE shape;
+// real guarded IssueCursorAnswer coverage lives in request_boundary_linux_test.
+func permissionIssueFailureProxies() []proxyWrite {
+	var out []proxyWrite
+	for _, state := range []string{store.ResponseRelayIssued, store.ResponseNativeIssued} {
+		out = append(out, proxyWrite{
+			name: state, kind: storefix.WriteFailPermissionResponseIssue, ownKindOnly: true,
+			seed: func(t *testing.T, s *store.Store, _ string, id string) { storefix.SeedCheckPermission(t, s, id) },
+			writeRaw: func(path, id string) error {
+				db, err := sql.Open("sqlite", path)
+				if err != nil {
+					return err
+				}
+				defer db.Close()
+				_, err = db.Exec("UPDATE permission_requests SET response_state=? WHERE instance_id=?", state, id)
+				return err
+			},
+			observe: observeOpenRequests,
+		})
+	}
+	return out
 }

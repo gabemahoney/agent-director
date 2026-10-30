@@ -683,8 +683,8 @@ The response is a single permission row:
 `timeout` (relay timeout deny), `find_missing`/`ended` (owning-spawn closure),
 `pane` (`send-keys` or a native Cursor choice), `pane_outside` (outside claim),
 or `tool_ran` (tool execution). API allow initially has no reason; later
-validated Cursor execution can fill that missing reason with `tool_ran`,
-while preserving an existing verdict and reason. Failed MCP invocation proof
+hook close or validated successful Cursor execution can fill that missing
+reason with `tool_ran`, preserving an existing verdict and non-null reason. Failed MCP invocation proof
 leaves these fields unchanged. Read `decision` for the
 verdict and the [delivery and proof fields](permissions.md#delivery) for its
 outcome; a reason is not an immutable writer identity.
@@ -697,7 +697,7 @@ Cursor gateway request, or for a
 request recorded by an older agent-director); such a request falls back by
 time, at `confirm_by`. A closed request's `delivery` follows the same
 [delivery rules](permissions.md#delivery) as an open one's: a request with
-a settle instant requires its relay hook's confirmation for `delivered`,
+a settle instant requires an acknowledgement from before closure for `delivered`,
 while requests recorded by an older binary retain their
 [time-derived delivery](permissions.md#requests-recorded-by-an-older-binary).
 A row

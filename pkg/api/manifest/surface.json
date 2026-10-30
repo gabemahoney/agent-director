@@ -921,7 +921,7 @@
     },
     {
       "name": "decide",
-      "description": "Caller's allow/deny on open PermissionRequest (relay_mode=on only): first wins (else ErrAlreadyDecided). Cursor allow: offered allow_once or blocking-plan acceptance; deny: supported rejection; persistent native choices need deliberate pane selection. Up to 1 s for relay-hook ack: delivery delivered/not_confirmed (poll get-permission; ends by confirm_by). Hook gone: immediate ErrRelayFallenBack. ErrNoOpenPermissionRequest (no open token, spawn ended/missing, or dialog may have closed): no pane answer. max_wait_ms blocks required pre-record wait: ErrStoreBusy.",
+      "description": "Caller's allow/deny on open PermissionRequest (relay_mode=on only): first wins (else ErrAlreadyDecided). Cursor allow: offered allow_once or blocking-plan acceptance; deny: supported rejection; persistent native choices need deliberate pane selection. Up to 1 s for relay-hook ack: delivery delivered/not_confirmed (poll get-permission; ends by confirm_by). Hook gone: immediate ErrRelayFallenBack. ErrNoOpenPermissionRequest (absent, closed, proven-gone or obsolete request): no pane answer. max_wait_ms blocks required pre-record wait: ErrStoreBusy.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -978,7 +978,7 @@
         {
           "name": "delivery",
           "type": "string",
-          "description": "delivered: the relay durably acknowledged the verdict before enqueue/write; this is not agent receipt, execution or dialog closure. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack, or ErrAlreadyDecided once answered at the pane.",
+          "description": "delivered: the relay durably acknowledged the verdict before enqueue/write; this is not transport completion, agent receipt, execution or dialog closure. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack, or ErrAlreadyDecided once answered at the pane.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -1040,7 +1040,7 @@
         {
           "name": "pane_answer",
           "type": "string",
-          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent or the Cursor gateway recorded its native choice (decision_reason pane); this does not establish ACP delivery, agent receipt or execution. outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: the agent's hooks or validated correlated Cursor execution output established its tool ran. The hook close records decision allow and decision_reason tool_ran; Cursor proof preserves any earlier verdict and non-null reason, filling a missing reason with tool_ran. A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
+          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent or the Cursor gateway recorded its native choice (decision_reason pane); this does not establish ACP delivery, agent receipt or execution. outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: the agent's hooks or validated correlated Cursor execution output established its tool ran. Hook close and successful Cursor proof preserve any earlier verdict and non-null reason, inferring allow only when undecided and filling a missing reason with tool_ran. These facts grant no response authority. A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -1107,7 +1107,7 @@
     },
     {
       "name": "get-permission",
-      "description": "Get by request_token. Cursor: full raw permission/plan params envelope, preserving options/absent/null fields, no added connection context. Undecided: decision/decided_at null. Decided may stay open until acked. Outcome: delivery.",
+      "description": "Get by request_token. Cursor retains raw permission/plan params. Undecided: decision/decided_at null. Decided may stay open until acked. Delivery and proof are distinct; a verdict or closeout grants no response authority.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1165,7 +1165,7 @@
         {
           "name": "decision",
           "type": "string?",
-          "description": "\"allow\" or \"deny\" once a verdict is recorded; null while undecided, and for a record-pane-answer claiming unknown. A recorded verdict is not the outcome: read delivery and pane_answer.",
+          "description": "\"allow\" or \"deny\" once a verdict is recorded; null while undecided, and for a record-pane-answer claiming unknown. A recorded verdict does not authorize a response: read delivery, pane_answer and proof separately.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": [
@@ -1176,7 +1176,7 @@
         {
           "name": "decision_reason",
           "type": "string?",
-          "description": "Canonical decision-reason string: for deny rows operator / timeout / find_missing / ended (find_missing and ended: the request was still undecided when find-missing marked its spawn missing, or when its spawn ended or was resumed, and is closed); pane (a pane answer through send-keys or a Cursor native choice) and pane_outside (record-pane-answer) describe claims, not ACP delivery, receipt or execution proof. tool_ran records tool execution evidence. Initially null while undecided without an outside claim, and for an allow from decide. Validated Cursor execution proof fills a missing reason with tool_ran while preserving any earlier verdict and non-null reason.",
+          "description": "Canonical decision-reason string: for deny rows operator / timeout / find_missing / ended (find_missing and ended: the request was still undecided when find-missing marked its spawn missing, or when its spawn ended or was resumed, and is closed); pane (a pane answer through send-keys or a Cursor native choice) and pane_outside (record-pane-answer) describe claims, not ACP delivery, receipt or execution proof. tool_ran records tool execution evidence. Initially null while undecided without an outside claim, and for an allow from decide. Hook close and successful Cursor execution proof fill a missing reason with tool_ran while preserving any earlier verdict and non-null reason; this grants no response authority.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": [
@@ -1200,7 +1200,7 @@
         {
           "name": "delivery",
           "type": "string",
-          "description": "delivered: the relay durably acknowledged a verdict before enqueue/write; this is not agent receipt, execution or dialog closure. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent. While pane_answer is none or intent the request awaits an answer unless acknowledged or closed with its spawn; a pane answer, record-pane-answer or validated execution proof can close it; with sent, outside or tool_ran it is closed. Derived on every read; a request with no recorded settle instant falls back by its relay window plus 2 s.",
+          "description": "delivered: the relay durably acknowledged a verdict before enqueue/write; this is not transport completion, agent receipt, execution or dialog closure. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by and grants no authority to a closed or proven-gone request. fallen_back: no ack, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent. While pane_answer is none or intent the request awaits an answer unless acknowledged or closed with its spawn; a pane answer, record-pane-answer or validated execution proof can close it; with sent, outside or tool_ran it is closed. Derived on every read; a request with no recorded settle instant falls back by its relay window plus 2 s.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -1263,7 +1263,7 @@
         {
           "name": "pane_answer",
           "type": "string",
-          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent or the Cursor gateway recorded its native choice (decision_reason pane); this does not establish ACP delivery, agent receipt or execution. outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: the agent's hooks or validated correlated Cursor execution output established its tool ran. The hook close records decision allow and decision_reason tool_ran; Cursor proof preserves any earlier verdict and non-null reason, filling a missing reason with tool_ran. A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
+          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent or the Cursor gateway recorded its native choice (decision_reason pane); this does not establish ACP delivery, agent receipt or execution. outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: the agent's hooks or validated correlated Cursor execution output established its tool ran. Hook close and successful Cursor proof preserve any earlier verdict and non-null reason, inferring allow only when undecided and filling a missing reason with tool_ran. These facts grant no response authority. A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -1321,7 +1321,7 @@
     },
     {
       "name": "record-pane-answer",
-      "description": "Close a fallen-back request answered outside agent-director; types nothing. Needs read-pane's pane_sha256; too soon: ErrClaimTooSoon.",
+      "description": "Record an outside answer to a fallen-back request; no typing, response authority or proof. Needs read-pane's pane_sha256; too soon: ErrClaimTooSoon.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -2077,7 +2077,7 @@
         {
           "name": "timeout",
           "type": "int",
-          "description": "The per-hook timeout, in seconds, spawn wrote for this hook in the agent's settings (the PermissionRequest entry: the relay window). The relay hook's kill instant is its start plus it; the hook never acks a verdict without 2 s left before it. Absent, unparseable or not positive: the loaded config's relay.timeout_seconds.",
+          "description": "The per-hook timeout, in seconds, spawn wrote for this hook in the agent's settings (the PermissionRequest entry: the relay window). The relay hook's kill instant is its start plus it; the write budget ends 2 s before it. A final parent/deadline check suppresses late output; a late or uncertain commit may retain acknowledgement without an answer. Absent, unparseable or not positive: the loaded config's relay.timeout_seconds.",
           "required": false,
           "nullable": false,
           "allow_empty": false,

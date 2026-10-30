@@ -4,6 +4,7 @@ package cursorhost
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -165,6 +166,20 @@ func (e *requestEnv) decide(t *testing.T, token, decision string) {
 	}
 }
 
+// refuseProvenDecision preserves a retired request while exercising the public caller.
+func (e *requestEnv) refuseProvenDecision(t *testing.T, token, decision string) {
+	t.Helper()
+	before := e.request(t, token)
+	zero := int64(0)
+	_, err := api.Decide(e.s, api.RelayView{}, api.DecideParams{InstanceID: e.binding.InstanceID, RequestToken: token, Decision: decision, MaxWaitMs: &zero})
+	if !errors.Is(err, api.ErrNoOpenPermissionRequest) {
+		t.Fatalf("late decision: %v", err)
+	}
+	if got := e.request(t, token); got != before {
+		t.Fatalf("refused decision changed proven request: before=%+v after=%+v", before, got)
+	}
+}
+
 func (e *requestEnv) admit(t *testing.T, c *requestController, id, method string, params []byte) *pendingAuthorization {
 	t.Helper()
 	before := len(c.requests)
@@ -181,6 +196,41 @@ func (e *requestEnv) admit(t *testing.T, c *requestController, id, method string
 	}
 	t.Fatal("lost request")
 	return nil
+}
+
+// observeQueuedRequest wraps completion while blockProtocol holds the writer.
+// Initial guard refusal calls done without publishing to protocol.writes.
+func observeQueuedRequest(t *testing.T, p *protocol, wrapIssue ...func(func() error) func() error) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	select {
+	case next := <-p.outgoing:
+		if len(wrapIssue) != 0 {
+			next.issue = wrapIssue[0](next.issue)
+		}
+		original := next.done
+		next.done = func(err error) {
+			if original != nil {
+				original(err)
+			}
+			done <- err
+		}
+		p.outgoing <- next
+	case <-time.After(time.Second):
+		t.Fatal("request was not queued behind barrier")
+	}
+	return done
+}
+
+func requestCompletion(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(4 * time.Second):
+		t.Fatal("request completion missing")
+		return nil
+	}
 }
 
 // observedWire allows a committed read before the first response byte is accepted.

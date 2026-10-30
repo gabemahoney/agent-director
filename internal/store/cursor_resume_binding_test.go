@@ -219,13 +219,16 @@ func TestCursorLoadedWriterCancellationCannotPublishAfterRelease(t *testing.T) {
 func TestCursorResumeRegistrationPreservesDurableRequestFacts(t *testing.T) {
 	e := newCursorTrailEnv(t)
 	e.insert(t, "old-choice")
-	if ok, err := e.f.s.DecidePermissionRequest(e.b.InstanceID, "old-choice", "deny", "user", "test"); err != nil || !ok {
+	if ok, err := e.f.s.DecidePermissionRequest(e.b.InstanceID, "old-choice", "deny", "user", store.WriterProcessDecide); err != nil || !ok {
 		t.Fatalf("old decision: %v %v", ok, err)
 	}
 	if decision, ok, err := e.f.s.AckCursorDecision(e.b, "old-choice", false, e.until, e.until, store.DefaultLockWait, cursorTrailCheck); err != nil || !ok || decision != "deny" {
 		t.Fatalf("old delivery: %s %v %v", decision, ok, err)
 	}
 	priorRequest := e.read(t, "old-choice")
+	if priorRequest.DecisionOrigin != store.DecisionOriginCaller || priorRequest.ResponseState != store.ResponseRelayClaimed {
+		t.Fatalf("old response authority: %+v", priorRequest)
+	}
 	e.exec(t, `UPDATE spawns SET state='ended',jsonl_path='retained-protected-path' WHERE instance_id=?`, e.b.InstanceID)
 	old, err := e.f.s.GetSpawn(e.b.InstanceID)
 	if err != nil {

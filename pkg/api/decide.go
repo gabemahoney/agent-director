@@ -660,7 +660,8 @@ func closedRequestError(params DecideParams, state string) error {
 //     the verdict as attempted.
 //   - Otherwise ErrAlreadyDecided (first call wins), a request the mark
 //     denied because it was undecided (decision_reason find_missing, as
-//     before) and a closed request a live relay hook acked since included.
+//     before) and a request acknowledged before it was closed included.
+//     Closing a request never permits a later acknowledgement.
 func recordedRefusal(params DecideParams, pr PermissionRow) error {
 	switch {
 	case pr.Closed() && pr.DeliveredAt.IsZero() && pr.DecisionReason != store.DecisionReasonFindMissing:

@@ -317,12 +317,14 @@ func TestUnknownOriginHoldAfterReopen(t *testing.T) {
 				}
 				other := storefix.TestRequestTokenB
 				p.seedRequest(t, other, "independent-tool", relayEnvHook)
-				if ok, err := p.st.DecideRelayRequest(p.r.ID, other, "deny", "", "", time.Time{}, store.DefaultLockWait); err != nil || !ok {
-					t.Fatalf("independent decision %v %v", ok, err)
-				}
-				if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, other, p.now, store.DefaultLockWait, nil); err != nil || !ok {
-					t.Fatalf("independent ack %v %v", ok, err)
-				}
+				p.withPermissionWriter(t, func() {
+					if ok, err := p.st.DecideRelayRequest(p.r.ID, other, "deny", "", "", time.Time{}, store.DefaultLockWait); err != nil || !ok {
+						t.Fatalf("independent decision %v %v", ok, err)
+					}
+					if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, other, p.now, store.DefaultLockWait, nil); err != nil || !ok {
+						t.Fatalf("independent ack %v %v", ok, err)
+					}
+				})
 				if agent == store.AgentCursor {
 					if n := p.prove(t, toolRan(paToolUseID)); n != 0 {
 						t.Fatalf("generic Cursor proof released %d", n)

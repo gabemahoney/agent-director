@@ -13,10 +13,11 @@ import (
 const (
 	// DeliveryDelivered: the request's relay hook acked a verdict (committed
 	// delivered_at) before enqueueing or writing the reply. This is not proof
-	// of agent receipt, tool execution or dialog closure.
+	// of transport completion, agent receipt, tool execution or dialog closure.
 	DeliveryDelivered = "delivered"
 	// DeliveryNotConfirmed: no ack yet, and the relay hook may still be
-	// alive; it never lasts past confirm_by.
+	// alive; it never lasts past confirm_by. This grants no response authority
+	// to a closed or proven-gone request.
 	DeliveryNotConfirmed = "not_confirmed"
 	// DeliveryFallenBack: no ack, and the relay hook is gone (or cannot be
 	// checked and its settle instant has passed): no answer from the relay
@@ -112,8 +113,9 @@ type RequestDelivery struct {
 	// choice; neither establishes ACP delivery, receipt or proof), outside (a caller
 	// recorded it answered outside agent-director) or tool_ran (agent hooks or
 	// validated correlated Cursor execution output established its tool ran).
-	// The hook close records allow/tool_ran; Cursor proof preserves an earlier
-	// verdict and non-null reason, filling a missing reason with tool_ran.
+	// Hook close and successful Cursor proof preserve an earlier verdict and
+	// non-null reason, inferring allow only when undecided and filling a missing
+	// reason with tool_ran. This history supplies no response authority.
 	PaneAnswer string `json:"pane_answer"`
 	// PaneAs is the verdict a pane answer claims: allow, deny, or unknown (an
 	// outside record that did not see the answer); null when none was
@@ -277,12 +279,11 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 //
 // A request closed with its Spawn (b.146 rule 12; closed_at: find-missing's
 // mark, the terminal SessionEnd's move to ended, or resume's move to pending)
-// is derived by the same rules, so each value keeps its meaning and never
-// goes back: it is delivered only when its relay hook acked (a hook whose
-// parent is still alive may yet ack the verdict recorded on it, or the
-// close's deny of an undecided one), not_confirmed while that hook may still
-// run, and fallen_back once it is gone or past confirm_by: no answer from the
-// relay reached the agent. A closed request no longer awaits an answer, so
+// is derived by the same rules, so each value keeps its meaning: delivered
+// retains an earlier durable ack. Closure cannot authorize a later ack,
+// even while the hook's parent lives; not_confirmed reports no ack while
+// the hook may still run, and fallen_back follows its disappearance or
+// confirm_by. A closed request no longer awaits an answer, so
 // get and list do not show it, and decide refuses it as closed
 // (ErrNoOpenPermissionRequest, or ErrAlreadyDecided for the mark's deny),
 // never as fallen back; for a request recorded before schema v7 a close's
