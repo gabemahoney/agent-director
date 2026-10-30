@@ -13,7 +13,7 @@ mkdir -m 700 -p "$HOME/.config/agent-director" "$TMUX_TMPDIR" "$case_dir/cwd" "$
 STORE="$case_dir/override.db"
 id="co-$(node -e 'console.log(require("crypto").randomUUID())')"
 export AD_CURSOR_FIX_SETTINGS
-AD_CURSOR_FIX_SETTINGS=$(jq -cn --arg dir "$case_dir" '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}')
+AD_CURSOR_FIX_SETTINGS=$(jq -cn --arg dir "$case_dir" '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused"),events:($dir+"/events.json")}')
 export AD_CURSOR_FIX_SOURCE="$SOURCE_DIR/internal/testsupport/cursorfix/runtime.js"
 cat > "$case_dir/index.js" <<'RUNTIME'
 #!/bin/sh
@@ -43,7 +43,7 @@ cleanup_cursor_case() {
   if declare -F sql >/dev/null; then
    sql -readonly -json "SELECT state,session_id,pane_pid FROM spawns WHERE instance_id='$id'; SELECT request_token,tool_use_id,decision,settled_at,delivered_at,proven_gone_at FROM permission_requests WHERE instance_id='$id';" >&2 || true
   fi
-  for artifact in scenario trace.jsonl permission.json error pause-error; do
+  for artifact in scenario trace.jsonl raw sent.jsonl commits.jsonl permission.json error pause-error; do
    if [[ -f $case_dir/$artifact ]]; then
     printf 'CASE_ARTIFACT %s\n' "$artifact" >&2
     cat "$case_dir/$artifact" >&2 || true
@@ -61,7 +61,7 @@ trap cleanup_cursor_case EXIT
 ad() { local verb=$1; shift; local selection=(); if [[ $verb == spawn ]]; then selection=(--extra-env "CURSOR_CONFIG_DIR=$CURSOR_CONFIG_DIR" --extra-env "CURSOR_DATA_DIR=$CURSOR_DATA_DIR"); fi; agent-director "$verb" --home "$HOME" --store-path "$STORE" "${selection[@]}" "$@"; }
 sql() { /opt/driver/sql.sh "$STORE" "$@"; }
 row_state() { sql "SELECT state FROM spawns WHERE instance_id='$id';"; }
-wait_state() { local want=$1 deadline=$((SECONDS+15)); while [[ $(row_state) != "$want" ]]; do (( SECONDS < deadline )); sleep 0.05; done; }
+wait_state() { local want=$1 deadline=$((SECONDS+15)); while [[ $(row_state) != "$want" ]]; do (( SECONDS < deadline )) || return 1; sleep 0.05; done; }
 load_identity() {
  gateway=$(sql "SELECT pane_pid FROM spawns WHERE instance_id='$id';")
  pane=$(sql "SELECT pane_id FROM spawns WHERE instance_id='$id';")
@@ -73,7 +73,7 @@ load_identity() {
 proc_gone() {
  node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' "$1"
 }
-wait_gone() { local pid=$1 deadline=$((SECONDS+15)); until proc_gone "$pid"; do (( SECONDS < deadline )); sleep 0.05; done; }
+wait_gone() { local pid=$1 deadline=$((SECONDS+15)); until proc_gone "$pid"; do (( SECONDS < deadline )) || return 1; sleep 0.05; done; }
 spawn_cursor() { ad spawn --agent cursor --instance-id "$id" --cwd "$case_dir/cwd" --no-pre-trust "$@" | jq -e --arg id "$id" '.instance_id==$id and .pre_trust=="skipped"' >/dev/null; }
 frames() { if [[ -f $case_dir/trace.jsonl ]]; then cat "$case_dir/trace.jsonl"; fi; }
 evidence() {

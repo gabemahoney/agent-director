@@ -1,6 +1,6 @@
 # E3 coverage and evidence inventory
 
-AUTHORED; scheduler and authenticated acceptance PENDING. These five collector
+AUTHORED; scheduler and authenticated acceptance PENDING. These six collector
 cases are representative compositions, not replacements for the focused owners.
 All AC numbers refer to E3's seven numbered criteria, not the broader PRD list.
 SR-0.4 does not exist. No resume/load/reuse/life-switch, group, install feature,
@@ -60,3 +60,16 @@ responses before the snapshot are preserved as actual allowed bytes. Public
 adversarial tests apply the same raw/complete-stream equality after owned death.
 These are assertions authored for the collector, not collector runtime receipts;
 received-byte observation does not claim visibility into unread kernel-pipe bytes.
+
+Task t2.7tz.6o.ej adds .xz: malformed JSON, partial EOF, a delayed frame
+completed by a second explicit write, and 80 finite notifications exceeding the
+32-frame queue. Exact provider bytes, no invented input/proof, and fresh-input
+positive controls distinguish failure from live progress. Controller tests own
+keyed stale/lost/replacement wakes and old completion/new event isolation.
+Repeated actual interrupt, turn, idle report and rotation paths use two events;
+exit consumes its helper, so its two executions use two live helpers, with
+same-helper duplicate/obsolete flush completions covered separately. Fatal and
+runtime-gone paths supplement those five event kinds. Successful check IDs and
+raw artifacts are retained per cut; pv's ordinary-evidence-bindings.json carries
+the exact execution status. Formal, general E3 cleanup, shared E4 confirmation
+and authenticated provider qualification remain pending separately.

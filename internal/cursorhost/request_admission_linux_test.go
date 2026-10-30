@@ -46,14 +46,14 @@ func TestCursorCapturedAdmission(t *testing.T) {
 			if !strings.Contains(pane.String(), pr.ToolName) {
 				t.Fatal("actual title absent from pane")
 			}
-			if err = c.tick(); err != nil {
+			if err = continuePermission(c, r); err != nil {
 				t.Fatal(err)
 			}
 			if len(wire.bytes()) != 0 {
 				t.Fatal("request answered before decision")
 			}
 			e.decide(t, r.token, "allow")
-			if err = c.tick(); err != nil {
+			if err = continuePermission(c, r); err != nil {
 				t.Fatal(err)
 			}
 			if err = completedWrite(t, c.protocol); err != nil {
@@ -110,7 +110,7 @@ func TestCursorAdmissionIdentityAndBounds(t *testing.T) {
 				id = `1e0`
 			case "answered reuse":
 				c.choose(r.token, "reject-once")
-				c.tick()
+				continuePermission(c, r)
 				if err := completedWrite(t, c.protocol); err != nil {
 					t.Fatal(err)
 				}

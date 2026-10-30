@@ -733,6 +733,17 @@ submission guarantee. Inspect the pane and the
 [protected transcript](usage.md#cursor-transcripts) when admission or delivery
 is uncertain; do not blindly resend an uncertain submission.
 
+Only confirmed store writes establish durable input or exact tool-proof
+evidence. These records are not a recovery queue. A still-live accepted input
+may finish its own prerequisites under the same launch, conversation and
+decision guards. Gateway death, reopening the
+store or transcript, and observational reads cannot replay it or a permission
+response. An unconfirmed commit remains unknown; a missing record does not
+prove that input was never sent. A committed issue record, relay acknowledgement,
+completed transport write, provider execution and dialog proof are separate
+facts. Permanent storage failure, lost evidence or a lost completion wake can
+prevent progress; acceptance promises no unconditional completion.
+
 On an explicit capacity refusal, wait for capacity and explicitly submit the
 refused text again. Refused input is not queued for later execution and does
 not replace accepted work.
@@ -791,16 +802,27 @@ evidence cannot produce a ready report; a launch may remain `pending` until
 failures emit `ad.cursor.failed` with a reason when the gateway has identified its row.
 Examples include an ACP operation timeout, unsupported ACP protocol,
 changed runtime/session binding, a refused report or transport failure.
-Storing a tool's execution proof waits for a locked store for up to
-`[store] busy_timeout_ms`; a store still locked after that fails the gateway
-without the proof. While a control (an interrupt, rotation, `/exit` or `pause`)
-runs, the three-second cancellation deadline also applies: an interrupt or
-rotation still waiting at it fails the gateway (the rotation is refused), and
-an `/exit` or `pause` still waiting at it keeps the proof but ends the row
-`missing`, not `ended`. Proving a finished turn's unanswered requests gone
-(see [Cursor spawns](permissions.md#cursor-spawns)) waits the same way, within
-the cancellation deadline while a control runs; a store still locked fails the
-gateway.
+Each tool proof keeps the original `[store] busy_timeout_ms` window from its
+first persistence attempt; retries never renew it. Failure to confirm storage
+fails the gateway without establishing either persistence or rollback. The
+actual event determines what must finish before the next lifecycle step:
+
+| Event | Required proof persistence and limit |
+|---|---|
+| Ctrl-C interruption | The completed turn retires its unanswered requests, then stores deferred tool proofs before its Stop report; idle-control recovery also stores them before reporting waiting. The first control's three-second deadline bounds this work. |
+| `/clear` or `/new` | A completed outgoing turn first retires its unanswered requests. Deferred tool proofs must be stored before rotation publication, within the same first-control deadline; failure refuses rotation. |
+| Ordinary turn completion | Unanswered-request retirement has its own fixed store-busy window; deferred tool proofs keep theirs and must be stored before the Stop report. |
+| Waiting report | Startup and turn/idle-control Stop reports store their captured deferred proofs first, within each proof's remaining window and any earlier cancellation deadline. |
+| `/exit`, eligible `pause` or terminating signal | Before terminating the runtime, try to store deferred proofs through their remaining original windows. This can outlast the cancellation deadline: a confirmed proof then survives, but intentional end cannot be confirmed and the row becomes `missing`, not `ended`. Storage failure remains failure. |
+
+A lifecycle flush retains one immediate attempt even when its captured window
+has already expired; it gains no retry time. Fatal cleanup is best effort within
+the first control's remaining deadline, or three seconds from failure when no
+control is pending. If the runtime is already gone, each proof gets one attempt
+without busy retries; death supplies no missing authority or proof.
+The prompt's 30-minute response phase pauses while admitted requests remain
+open and restarts when an actual completion releases the last one. This is not
+a fixed total-turn limit; it never renews the first control's deadline.
 These are asynchronous launch failures, not new typed spawn errors.
 
 Failure reasons identify the initiating operation (`initialize`, `session/new`,

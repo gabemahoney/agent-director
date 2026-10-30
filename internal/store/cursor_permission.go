@@ -270,7 +270,7 @@ func (s *Store) cursorAnswer(b CursorRuntime, token string, relay bool, until ti
 // turnOpen says a prompt turn is open and the request's retained decision is
 // not deny (proveCursorTool).
 func (s *Store) ProveCursorToolRan(b CursorRuntime, token, tool string, turnOpen bool, check CursorCheck) error {
-	return s.proveCursorTool(b, token, tool, true, turnOpen, check)
+	return s.proveCursorTool(b, token, tool, true, turnOpen, check, nil)
 }
 
 // ProveCursorToolFailed proves only the exact completed invocation's dialog
@@ -283,7 +283,18 @@ func (s *Store) ProveCursorToolRan(b CursorRuntime, token, tool string, turnOpen
 // prompt turn is open and the request's retained decision is not deny
 // (proveCursorTool).
 func (s *Store) ProveCursorToolFailed(b CursorRuntime, token, tool string, turnOpen bool, check CursorCheck) error {
-	return s.proveCursorTool(b, token, tool, false, turnOpen, check)
+	return s.proveCursorTool(b, token, tool, false, turnOpen, check, nil)
+}
+
+// CommitCursorProof extends the same proof transaction with exact durable
+// source evidence. No ledger entry exists unless all request/state effects
+// commit too. A matching event is idempotent; a reused identity is refused.
+func (s *Store) CommitCursorProof(p CursorProof, turnOpen bool, check CursorCheck) error {
+	p.Raw = append([]byte(nil), p.Raw...)
+	if err := p.validate(); err != nil {
+		return err
+	}
+	return s.proveCursorTool(p.Owner.Runtime, p.Token, p.Tool, p.Ran, turnOpen, check, &p)
 }
 
 // proveCursorTool writes the proof and, in the same transaction and only when
@@ -300,7 +311,7 @@ func (s *Store) ProveCursorToolFailed(b CursorRuntime, token, tool string, turnO
 // retained decision is deny moves nothing either, whether a delivered deny
 // gets no proof or a failed one keeps its deny: the row keeps
 // check_permission until the turn's Stop.
-func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOpen bool, check CursorCheck) error {
+func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOpen bool, check CursorCheck, proof *CursorProof) error {
 	var written, moved bool
 	var requestID int64
 	var toolName, decision, reason string
@@ -317,6 +328,12 @@ func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOp
 	err := s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
 		if _, e := s.cursorAuthority(ctx, conn, b, time.Time{}, check); e != nil {
 			return e
+		}
+		if proof != nil {
+			inserted, e := s.recordCursorProof(ctx, conn, *proof)
+			if e != nil || !inserted {
+				return e
+			}
 		}
 		e := conn.QueryRowContext(ctx, `UPDATE permission_requests SET proven_gone_at=COALESCE(proven_gone_at,?),proven_gone_how=COALESCE(proven_gone_how,?)`+set+`
  WHERE instance_id=? AND request_token=? AND tool_use_id=? AND closed_at IS NULL

@@ -111,9 +111,11 @@ These historical facts grant no permission to send a response.
 Status alone and other failed or ambiguous MCP output supply no proof.
 Only this validated invocation proof, a turn's end for a request the gateway
 never answered (below), or the owning launch ending, releases their hold.
-A proof that finds the store locked by another writer is retried, and is
-stored before the row next reports waiting, publishes a rotated conversation
-or ends intentionally ([when it fails](caller-contract.md#cursor-operation-boundaries)).
+A proof that finds the store locked has its own fixed retry window. Its exact
+evidence and request effects commit together before waiting, rotation
+publication or intentional end can succeed. Stored evidence cannot replay an
+input or permission response after gateway loss; persistence and completion
+limits are in the [caller contract](caller-contract.md#cursor-operation-boundaries).
 Other execution evidence remains conservative. Ending a launch establishes no
 per-request proof: gateway or runtime death leaves `proven_gone_at` and
 `proven_gone_how` unchanged, including on requests already reading `delivered`.

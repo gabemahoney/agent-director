@@ -23,6 +23,13 @@ type policyRejection struct{ error }
 
 type nativeChoice struct{ token, option, decision string }
 type pendingAuthorization struct {
+	storeID                      string
+	binding                      store.CursorRuntime
+	wait                         requestWait
+	proofWait                    requestWait
+	lastProof                    []byte
+	responseDeadline             time.Time
+	responseDone                 bool
 	session                      string
 	generation                   uint64
 	auth                         *authorization
@@ -34,9 +41,10 @@ type pendingAuthorization struct {
 	retired                      atomic.Bool
 	terminal                     atomic.Bool
 	// turnEnded: retired at its turn's completion (turnEnd).
-	turnEnded bool
-	choice    *nativeChoice
-	proof     *deferredProof
+	turnEnded       bool
+	turnEndSequence uint64
+	choice          *nativeChoice
+	proof           *deferredProof
 }
 
 // A validated completion whose proof write met a competing writer. Its
@@ -46,23 +54,31 @@ type deferredProof struct {
 	binding store.CursorRuntime
 	ran     bool
 	since   time.Time
+	event   store.CursorProof
+	flush   uint64
 }
 
 // proofRetry paces a proof flush's attempts while another writer holds the lock.
 const proofRetry = 10 * time.Millisecond
 
 type requestController struct {
-	rep        *reporter
-	protocol   *protocol
-	out        io.Writer
-	requests   map[string]*pendingAuthorization
-	seenIDs    map[string]bool
-	idSessions map[string]string
-	seenTools  map[string]bool
-	menuMu     sync.Mutex
-	menu       map[rune]nativeChoice
-	nextKey    int
-	generation atomic.Uint64
+	clock         requestClock
+	events        chan requestWake
+	closed        chan struct{}
+	closeOnce     sync.Once
+	nextFlush     uint64
+	prerequisites uint64
+	rep           *reporter
+	protocol      *protocol
+	out           io.Writer
+	requests      map[string]*pendingAuthorization
+	seenIDs       map[string]bool
+	idSessions    map[string]string
+	seenTools     map[string]bool
+	menuMu        sync.Mutex
+	menu          map[rune]nativeChoice
+	nextKey       int
+	generation    atomic.Uint64
 	// turnOpen reports whether a prompt turn is open and no rotation is under
 	// way (the session loop's busy && !rotating). Read it only on the
 	// controller goroutine; nil reads false.
@@ -70,7 +86,7 @@ type requestController struct {
 }
 
 func newRequestController(rep *reporter, p *protocol, out io.Writer) *requestController {
-	return &requestController{rep: rep, protocol: p, out: out, requests: map[string]*pendingAuthorization{}, seenIDs: map[string]bool{}, idSessions: map[string]string{}, seenTools: map[string]bool{}, menu: map[rune]nativeChoice{}}
+	return &requestController{clock: realRequestClock{}, events: make(chan requestWake, 3*maxActiveRequests), closed: make(chan struct{}), rep: rep, protocol: p, out: out, requests: map[string]*pendingAuthorization{}, seenIDs: map[string]bool{}, idSessions: map[string]string{}, seenTools: map[string]bool{}, menu: map[rune]nativeChoice{}}
 }
 func (c *requestController) check(row store.Spawn) error {
 	return c.checkFor(c.rep.binding)(row)
@@ -150,7 +166,7 @@ func (c *requestController) admit(f frame, session string) error {
 	if e != nil {
 		return e
 	}
-	now := time.Now()
+	now := c.clock.Now()
 	settle := time.UnixMilli(now.Add(time.Duration(c.rep.cfg.Relay.EffectiveTimeoutSeconds())*time.Second + requestReserve).UnixMilli())
 	relay := row.RelayMode == "on"
 	if !relay {
@@ -160,7 +176,7 @@ func (c *requestController) admit(f frame, session string) error {
 	if relay {
 		nativeUntil = settle.Add(30 * time.Minute)
 	}
-	r := &pendingAuthorization{session: session, generation: c.generation.Load(), auth: a, token: token, settle: settle, timeout: settle.Add(-requestReserve), nativeUntil: nativeUntil, relay: relay}
+	r := &pendingAuthorization{storeID: c.rep.store.StoreID(), binding: c.rep.binding, session: session, generation: c.generation.Load(), auth: a, token: token, settle: settle, timeout: settle.Add(-requestReserve), nativeUntil: nativeUntil, relay: relay}
 	e = c.rep.store.InsertCursorRequest(c.rep.binding, store.RelayRequest{RequestToken: token, ToolName: a.name, ToolInput: string(f.Params), ToolUseID: a.toolID, SettledAt: settle}, c.rep.cfg.Relay.PermissionRequestCap, now.Add(transportWriteWait), transportWriteWait, c.checkFor(c.rep.binding))
 	if e != nil {
 		return e
@@ -186,6 +202,7 @@ func (c *requestController) admit(f frame, session string) error {
 			c.addKey(r, o.ID, d, o.Name)
 		}
 	}
+	c.scheduleRequest(r, c.clock.Now())
 	return nil
 }
 
@@ -245,10 +262,14 @@ func (c *requestController) choose(token, option string) {
 		}
 	}
 	c.menuMu.Unlock()
+	if r.choice != nil {
+		c.scheduleRequest(r, c.clock.Now())
+	}
 }
 func (c *requestController) cancel() {
 	c.generation.Add(1)
 	for _, r := range c.requests {
+		r.wait.stop()
 		r.terminal.Store(true)
 		r.retired.Store(true)
 		c.removeKeys(r.token)
@@ -281,13 +302,14 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 		// already-established native bound, never a replay of this frame.
 		until = r.timeout
 	}
-	deadline := time.Now().Add(transportWriteWait)
+	deadline := c.clock.Now().Add(transportWriteWait)
 	if until.Before(deadline) {
 		deadline = until
 	}
-	binding := c.rep.binding
+	r.responseDeadline = deadline
+	binding := r.binding
 	current := func() error {
-		if r.generation != c.generation.Load() || r.terminal.Load() || (relay && r.retired.Load()) || !time.Now().Before(deadline) {
+		if r.generation != c.generation.Load() || r.terminal.Load() || (relay && r.retired.Load()) || !c.clock.Now().Before(deadline) {
 			return fmt.Errorf("Cursor request response retired")
 		}
 		return nil
@@ -326,103 +348,96 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 			r.terminal.Store(true)
 			fmt.Fprint(c.out, "Cursor response failed or retired; delivery is unconfirmed and will not be retried\r\n")
 		}
+		c.deliver(requestWake{storeID: r.storeID, token: r.token, binding: binding, generation: r.generation, kind: responseCompleted, deadline: deadline, err: e})
 	}, issue)
 }
-func (c *requestController) tick() error {
-	for _, r := range c.requests {
-		// Proof is independent of answer delivery and request retirement.
-		if r.proof != nil {
-			if e := c.prove(r); e != nil {
-				return e
-			}
-		}
-		if r.generation != c.generation.Load() {
-			r.terminal.Store(true)
-			r.retired.Store(true)
-			c.removeKeys(r.token)
-		}
-		if r.terminal.Load() || r.sent.Load() {
-			continue
-		}
-		now := time.Now()
-		if !now.Before(r.nativeUntil) {
-			r.terminal.Store(true)
-			r.retired.Store(true)
-			c.removeKeys(r.token)
-			return fmt.Errorf("Cursor native request timed out")
-		}
-		// Drop a choice captured by the relay before switching to native
-		// fallback. Only a new deliberate choice may use the native lifetime.
-		if r.choice != nil && r.relay && !now.Before(r.timeout) {
-			r.choice = nil
-			fmt.Fprint(c.out, "Cursor relay approval deadline passed; stale pane choice refused\r\n")
-		}
-		if r.relay && !now.Before(r.settle) {
-			r.retired.Store(true)
-			if r.queued {
-				r.terminal.Store(true)
-				c.removeKeys(r.token)
-				fmt.Fprint(c.out, "Cursor relay settled; delivery uncertain, answer will not be replayed\r\n")
-				continue
-			}
-			r.relay = false
-			fmt.Fprintf(c.out, "Cursor relay settled for %s; connected native choices remain available\r\n", r.token)
-		}
+func (c *requestController) advanceRequest(r *pendingAuthorization) error {
+	if r.generation != c.generation.Load() {
+		r.terminal.Store(true)
+		r.retired.Store(true)
+		c.removeKeys(r.token)
+	}
+	if r.terminal.Load() || r.sent.Load() {
+		return nil
+	}
+	now := c.clock.Now()
+	if !now.Before(r.nativeUntil) {
+		r.terminal.Store(true)
+		r.retired.Store(true)
+		c.removeKeys(r.token)
+		return fmt.Errorf("Cursor native request timed out")
+	}
+	// Drop a choice captured by the relay before switching to native
+	// fallback. Only a new deliberate choice may use the native lifetime.
+	if r.choice != nil && r.relay && !now.Before(r.timeout) {
+		r.choice = nil
+		fmt.Fprint(c.out, "Cursor relay approval deadline passed; stale pane choice refused\r\n")
+	}
+	if r.relay && !now.Before(r.settle) {
+		r.retired.Store(true)
 		if r.queued {
-			continue
+			r.terminal.Store(true)
+			c.removeKeys(r.token)
+			fmt.Fprint(c.out, "Cursor relay settled; delivery uncertain, answer will not be replayed\r\n")
+			return nil
 		}
-		if r.choice != nil {
-			pr, e := c.rep.store.GetPermissionRequest(c.rep.binding.InstanceID, r.token)
-			if e != nil {
-				return e
-			}
-			if pr.PaneAnswer == store.PaneAnswerIntent {
-				continue
-			}
-			if pr.PaneAnswer == store.PaneAnswerOutside {
-				r.choice = nil
-				fmt.Fprint(c.out, "Outside answer is a claim; no ACP response sent\r\n")
-				continue
-			}
-			// A deliberate choice can win while relay is active only before an API
-			// decision. The transaction arbitrates those competing writers.
-			nativeDeadline := r.nativeUntil
-			if r.relay {
-				nativeDeadline = r.timeout
-			}
-			chosen, e := c.rep.store.ClaimCursorPaneAnswer(c.rep.binding, r.token, r.choice.decision, nativeDeadline, 0, c.checkFor(c.rep.binding))
-			if e != nil {
-				continue
-			}
-			if chosen {
-				if e = c.enqueue(r, r.choice.decision, r.choice.option, false); e != nil {
-					return e
-				}
-				continue
-			}
+		r.relay = false
+		fmt.Fprintf(c.out, "Cursor relay settled for %s; connected native choices remain available\r\n", r.token)
+	}
+	if r.queued {
+		return nil
+	}
+	if r.choice != nil {
+		pr, e := c.rep.store.GetPermissionRequest(r.binding.InstanceID, r.token)
+		if e != nil {
+			return e
+		}
+		if pr.PaneAnswer == store.PaneAnswerIntent {
+			return nil
+		}
+		if pr.PaneAnswer == store.PaneAnswerOutside {
 			r.choice = nil
+			fmt.Fprint(c.out, "Outside answer is a claim; no ACP response sent\r\n")
+			return nil
 		}
-		if r.relay && !r.retired.Load() {
-			pr, e := c.rep.store.GetPermissionRequest(c.rep.binding.InstanceID, r.token)
-			if e != nil {
+		// A deliberate choice can win while relay is active only before an API
+		// decision. The transaction arbitrates those competing writers.
+		nativeDeadline := r.nativeUntil
+		if r.relay {
+			nativeDeadline = r.timeout
+		}
+		chosen, e := c.rep.store.ClaimCursorPaneAnswer(r.binding, r.token, r.choice.decision, nativeDeadline, 0, c.checkFor(r.binding))
+		if e != nil {
+			return nil
+		}
+		if chosen {
+			if e = c.enqueue(r, r.choice.decision, r.choice.option, false); e != nil {
 				return e
 			}
-			if pr.Closed() || pr.ProvenGone() || pr.PaneAnswered() {
-				r.terminal.Store(true)
-				c.removeKeys(r.token)
-				continue
-			}
-			if pr.Decision == "" && now.Before(r.timeout) {
-				continue
-			}
-			d, ok, e := c.rep.store.AckCursorDecision(c.rep.binding, r.token, !now.Before(r.timeout), r.settle, r.timeout, 0, c.checkFor(c.rep.binding))
-			if e != nil {
-				continue
-			}
-			if ok {
-				if e = c.enqueue(r, d, "", true); e != nil {
-					return e
-				}
+			return nil
+		}
+		r.choice = nil
+	}
+	if r.relay && !r.retired.Load() {
+		pr, e := c.rep.store.GetPermissionRequest(r.binding.InstanceID, r.token)
+		if e != nil {
+			return e
+		}
+		if pr.Closed() || pr.ProvenGone() || pr.PaneAnswered() {
+			r.terminal.Store(true)
+			c.removeKeys(r.token)
+			return nil
+		}
+		if pr.Decision == "" && now.Before(r.timeout) {
+			return nil
+		}
+		d, ok, e := c.rep.store.AckCursorDecision(r.binding, r.token, !now.Before(r.timeout), r.settle, r.timeout, 0, c.checkFor(r.binding))
+		if e != nil {
+			return nil
+		}
+		if ok {
+			if e = c.enqueue(r, d, "", true); e != nil {
+				return e
 			}
 		}
 	}
@@ -447,52 +462,114 @@ func (c *requestController) execution(params json.RawMessage) error {
 		return nil
 	}
 	for _, r := range c.requests {
-		if r.session != p.Session || r.auth.plan || r.auth.toolID != p.Update.Tool {
+		if r.session != p.Session || r.binding != c.rep.binding || r.auth.plan || r.auth.toolID != p.Update.Tool {
 			continue
 		}
 		ran := r.auth.executionOutput(p.Update.Status, p.Update.Output)
 		if !ran && !r.auth.completedMCPError(p.Update.Status, p.Update.Output) {
 			return nil
 		}
+		if r.proof != nil {
+			if bytes.Equal(r.proof.event.Raw, params) {
+				return nil
+			}
+			// A second, different completion cannot replace an unresolved
+			// captured event or borrow its persistence attempts.
+			return fmt.Errorf("Cursor conflicting completion while exact proof is unresolved")
+		}
 		if r.proof == nil {
-			r.proof = &deferredProof{binding: c.rep.binding, ran: ran, since: time.Now()}
+			if bytes.Equal(r.lastProof, params) {
+				return nil
+			}
+			id, e := randomID()
+			if e != nil {
+				return e
+			}
+			now := c.clock.Now()
+			r.proof = &deferredProof{binding: r.binding, ran: ran, since: now, event: store.CursorProof{
+				Owner: store.CursorOwner{StoreID: c.rep.store.StoreID(), Runtime: r.binding}, ID: id, Token: r.token, Tool: r.auth.toolID,
+				Generation: c.generation.Load(), Kind: "tool_call_update", CapturedAt: now,
+				BusyUntil: now.Add(time.Duration(c.rep.cfg.Store.EffectiveBusyTimeoutMs()) * time.Millisecond),
+				Ran:       ran, TurnOpen: c.isTurnOpen(), Raw: append([]byte(nil), params...),
+			}}
 		}
 		if e := c.prove(r); e != nil {
 			return e
 		}
+		r.wait.stop()
 		r.terminal.Store(true)
 		r.retired.Store(true)
 		c.removeKeys(r.token)
+		c.prerequisites++
 		return nil
 	}
 	return nil
 }
 
 // prove attempts a deferred proof once, without blocking the controller. A
-// busy store leaves it deferred, to be retried on later ticks until the busy
-// timeout has passed since its first attempt. A busy attempt after that, and
-// any other failure, is returned. The controller writes tool proofs only
-// through prove and proofFlush, never by calling writeProof directly.
+// busy store leaves it deferred, with only its own named wake until the busy
+// timeout has passed since its first attempt. An expired wake makes no new
+// attempt. Expiry and any other failure are returned. The controller writes
+// tool proofs only through prove and proofFlush, never writeProof directly.
 func (c *requestController) prove(r *pendingAuthorization) error {
-	e := c.writeProof(r.token, r.auth.toolID, *r.proof, c.isTurnOpen())
-	if errors.Is(e, store.ErrStoreBusy) && time.Now().Before(c.proofDeadline(*r.proof)) {
+	p := r.proof
+	if p == nil {
+		return nil
+	}
+	e := c.writeProof(r.token, r.auth.toolID, *p, c.isTurnOpen())
+	if errors.Is(e, store.ErrStoreBusy) && c.clock.Now().Before(c.proofDeadline(*p)) {
+		c.scheduleProof(r, p)
 		return nil
 	}
 	if e != nil {
 		return e
 	}
-	r.proof = nil
+	if r.proof == p {
+		r.lastProof = append([]byte(nil), p.event.Raw...)
+		r.proof = nil
+		r.proofWait.stop()
+	}
 	return nil
 }
 
 // writeProof's turnOpen lets the proof move its row to working; a proof
 // written while no turn is open moves nothing (proveCursorTool).
 func (c *requestController) writeProof(token, tool string, p deferredProof, turnOpen bool) error {
-	prove := c.rep.store.ProveCursorToolRan
-	if !p.ran {
-		prove = c.rep.store.ProveCursorToolFailed
+	if err := p.checkSnapshot(token, tool); err != nil {
+		return err
 	}
-	return prove(p.binding, token, tool, turnOpen, c.checkFor(p.binding))
+	if !c.clock.Now().Before(p.event.BusyUntil) {
+		return errProofDeadline
+	}
+	return c.rep.store.CommitCursorProof(p.event, p.event.TurnOpen && turnOpen, c.checkProof(p.binding, p.event.BusyUntil))
+}
+
+var errProofDeadline = fmt.Errorf("Cursor proof persistence deadline passed: %w", store.ErrStoreBusy)
+
+// The deadline fences authority acquisition, including a late store lease or
+// slow independent evidence. It does not reinterpret an already-issued COMMIT.
+// Only an expired flush's single immediate attempt supplies a zero deadline.
+func (c *requestController) checkProof(binding store.CursorRuntime, until time.Time) store.CursorCheck {
+	check := c.checkFor(binding)
+	return func(row store.Spawn) error {
+		if !until.IsZero() && !c.clock.Now().Before(until) {
+			return errProofDeadline
+		}
+		if err := check(row); err != nil {
+			return err
+		}
+		if !until.IsZero() && !c.clock.Now().Before(until) {
+			return errProofDeadline
+		}
+		return nil
+	}
+}
+
+func (p deferredProof) checkSnapshot(token, tool string) error {
+	if p.event.Token != token || p.event.Tool != tool || p.event.Owner.Runtime != p.binding || p.event.Ran != p.ran || !p.event.CapturedAt.Equal(p.since) {
+		return fmt.Errorf("Cursor proof snapshot changed")
+	}
+	return nil
 }
 
 func (c *requestController) isTurnOpen() bool {
@@ -500,124 +577,7 @@ func (c *requestController) isTurnOpen() bool {
 }
 
 func (c *requestController) proofDeadline(p deferredProof) time.Time {
-	return p.since.Add(time.Duration(c.rep.cfg.Store.EffectiveBusyTimeoutMs()) * time.Millisecond)
-}
-
-// proofFlush writes the proofs deferred when it was taken, waiting out each
-// one's remaining busy window in place instead of across later ticks. Take and
-// settle it on the controller goroutine. write touches only the flush's own
-// snapshot, never request state, so it may run in await's worker; a write
-// abandoned there races nothing, and a repeated proof write is a no-op. Its
-// turnOpen is the controller's when the flush was taken.
-type proofFlush struct {
-	c        *requestController
-	proofs   []flushedProof
-	turnOpen bool
-}
-
-type flushedProof struct {
-	r           *pendingAuthorization
-	token, tool string
-	proof       deferredProof
-	stored      bool
-}
-
-func (c *requestController) flushProofs() *proofFlush {
-	f := &proofFlush{c: c, turnOpen: c.isTurnOpen()}
-	for _, r := range c.requests {
-		if r.proof != nil {
-			f.proofs = append(f.proofs, flushedProof{r: r, token: r.token, tool: r.auth.toolID, proof: *r.proof})
-		}
-	}
-	return f
-}
-
-// write attempts every unstored proof, retrying a busy one until its busy
-// window ends or until a nonzero until, whichever is sooner. A proof past
-// that bound still gets one attempt. The first failure is returned.
-func (f *proofFlush) write(until time.Time) error {
-	var first error
-	for i := range f.proofs {
-		p := &f.proofs[i]
-		if p.stored {
-			continue
-		}
-		end := f.c.proofDeadline(p.proof)
-		if !until.IsZero() && until.Before(end) {
-			end = until
-		}
-		for {
-			e := f.c.writeProof(p.token, p.tool, p.proof, f.turnOpen)
-			if e == nil {
-				p.stored = true
-				break
-			}
-			if !errors.Is(e, store.ErrStoreBusy) || !time.Now().Before(end) {
-				if first == nil {
-					first = e
-				}
-				break
-			}
-			time.Sleep(min(proofRetry, time.Until(end)))
-		}
-	}
-	return first
-}
-
-// settle clears the proofs write has stored. Call it only once write has
-// returned, so no tick retries a durable proof into a later busy failure.
-func (f *proofFlush) settle() {
-	for _, p := range f.proofs {
-		if p.stored {
-			p.r.proof = nil
-		}
-	}
-}
-
-// turnEnd retires, at a prompt turn's completion, the conversation's requests
-// the gateway never answered: none queued or sent, and none with a deferred
-// tool proof, which the Stop report's or the rotation's flush writes instead
-// (b.gwj). A cancellation's or rotation's earlier retirement counts as
-// unanswered too. Take and settle it on the controller goroutine; write
-// touches only its own snapshot, so it may run in await's worker.
-type turnEnd struct {
-	c       *requestController
-	binding store.CursorRuntime
-	retired []*pendingAuthorization
-	tokens  []string
-}
-
-func (c *requestController) endTurn() *turnEnd {
-	t := &turnEnd{c: c, binding: c.rep.binding}
-	for _, r := range c.requests {
-		if r.session == t.binding.SessionID && !r.turnEnded && !r.queued && !r.sent.Load() && r.proof == nil {
-			t.retired = append(t.retired, r)
-			t.tokens = append(t.tokens, r.token)
-		}
-	}
-	return t
-}
-
-// write proves the snapshot's requests gone, turn_end, under the binding's
-// authority, waiting for the write lock until the store's busy window ends or
-// until a nonzero until, whichever is sooner.
-func (t *turnEnd) write(until time.Time) error {
-	end := time.Now().Add(time.Duration(t.c.rep.cfg.Store.EffectiveBusyTimeoutMs()) * time.Millisecond)
-	if !until.IsZero() && until.Before(end) {
-		end = until
-	}
-	return t.c.rep.store.ProveCursorTurnEnded(t.binding, t.tokens, end, t.c.checkFor(t.binding))
-}
-
-// settle ends the snapshot's requests in the gateway once write has stored
-// their proof: no later delivery, and no pane key left to choose them.
-func (t *turnEnd) settle() {
-	for _, r := range t.retired {
-		r.turnEnded = true
-		r.terminal.Store(true)
-		r.retired.Store(true)
-		t.c.removeKeys(r.token)
-	}
+	return p.event.BusyUntil
 }
 
 func (a *authorization) executionOutput(status string, raw json.RawMessage) bool {

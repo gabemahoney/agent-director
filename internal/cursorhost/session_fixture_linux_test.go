@@ -24,16 +24,19 @@ type submissionRecord struct {
 	Token      string `json:"launch_token"`
 	Life       int64  `json:"life_number"`
 	Data       struct {
-		ID         string    `json:"submission_id"`
-		Request    string    `json:"request_id"`
-		Text       string    `json:"text"`
-		Started    bool      `json:"started"`
-		Reason     string    `json:"reason"`
-		ConsumedAt time.Time `json:"consumed_at"`
-		Control    string    `json:"control"`
-		InputID    string    `json:"input_id"`
-		InputEpoch *uint64   `json:"input_epoch"`
-		Count      uint64    `json:"count"`
+		ID          string          `json:"submission_id"`
+		Request     string          `json:"request_id"`
+		Text        string          `json:"text"`
+		Started     bool            `json:"started"`
+		Reason      string          `json:"reason"`
+		Completion  string          `json:"completion"`
+		RuntimeGone bool            `json:"runtime_gone"`
+		ConsumedAt  time.Time       `json:"consumed_at"`
+		Control     string          `json:"control"`
+		InputID     string          `json:"input_id"`
+		InputEpoch  *uint64         `json:"input_epoch"`
+		Count       uint64          `json:"count"`
+		Update      json.RawMessage `json:"update"`
 	} `json:"data"`
 }
 
@@ -211,6 +214,41 @@ func (c *cursorSession) keys(t *testing.T, keys string) {
 	if _, err := c.master.Write([]byte(keys)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// idleObservationBarrier orders two non-authoritative provider observations.
+// The second record proves the first completed the controller path, including
+// its next loop turn. Injected timer/read inactivity is checked separately by
+// TestCursorReplacementControllerDoesNotDiscoverDurableWork.
+func (c *cursorSession) idleObservationBarrier(t *testing.T, label string) {
+	t.Helper()
+	binding, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire []byte
+	var last []byte
+	for _, suffix := range []string{"-first", "-processed"} {
+		last, err = json.Marshal(map[string]any{"sessionId": binding.SessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": label + suffix}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		line, err := json.Marshal(frame{JSONRPC: "2.0", Method: "session/update", Params: last})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire = append(wire, line...)
+		wire = append(wire, '\n')
+	}
+	c.e.runtime.Emit(t, label, string(wire))
+	c.wait(t, label, func() bool {
+		for _, record := range c.records(t) {
+			if record.Kind == "startup_or_idle_update" && bytes.Equal(record.Data.Update, last) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func (c *cursorSession) records(t *testing.T) []submissionRecord {

@@ -1,6 +1,6 @@
 # Cursor relay acceptance ownership
 
-Authoring inventory, not an execution result. The collector has ten ordered cases. Existing unit matrices remain primary for detailed authority/permutation checks; the collector supplements them with shipped-artifact topology. No count below adds overlapping selections.
+Authoring inventory, not an execution result. The collector has twelve ordered cases. Existing unit matrices remain primary for detailed authority/permutation checks; the collector supplements them with shipped-artifact topology. No count below adds overlapping selections.
 
 | E2 criterion | Shipped collector primary | Public real-pane owner | Detailed unit owner / limit |
 |---|---|---|---|
@@ -20,3 +20,14 @@ The raw observer samples SQLite at the first receiving data callback before read
 Explicit pending predicates: actual current-revision authenticated request kinds/options/child route and native choices; any live question-denial observation; supported runtime/protocol/platform receipts. Cursor load/resume is currently refused: fresh/load policy signatures in unit fixtures do not enable E4. Loaded-session/manual predicates are deferred until that feature is authorized and implemented. R2 captures establish prior route feasibility, not current AD relay acceptance; R3 is a closed product decision, not live prevention proof. See operator-acceptance.md.
 
 The shared peer also records SentFrames independently from received Frames: public field comparisons use the exact scripted params emitted on the peer side, with actual gateway admission establishing reception. SentFrames is not authenticated traffic. PauseAfterRequests publishes an explicit paused barrier before the test injects kernel backpressure; no polling delay is used as proof that reads stopped.
+
+Task t2.7tz.6o.ej adds .p5: five actual SIGKILL/reopen cuts before input
+persistence, after input issue, after input completion, before proof persistence
+and after atomic proof commit. The replacement helper loads the same synthetic
+conversation; exact retained records and raw bytes grant no replay authority.
+Only fresh explicit input may run. This scripted load check does not close the
+authenticated load/resume predicates above. Store tests own injected lost COMMIT
+results, rollback and ambiguous metadata/raw-source refusal; a crash alone is
+not lost-COMMIT-result injection. Stable successful check IDs and raw SQL,
+transcript and wire artifacts are retained per cut. Execution results belong to
+pv's ordinary-evidence-bindings.json; this inventory makes no pass claim.

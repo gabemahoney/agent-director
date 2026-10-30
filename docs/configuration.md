@@ -65,12 +65,12 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether managed launches receive AD guidance: a SessionStart help entry for Claude and Codex, or session-scoped MCP instructions for Cursor. `install.sh` sets `true` unless `--no-hooks`. See [settings](settings.md#defaultsinject_help_hook-config). |
 | `[relay] poll_base_ms` | ms | 100 | Wait between a relay hook's polls for a decision (never under 50 ms; 0 or negative gives that floor plus jitter). |
 | `[relay] poll_jitter_ms` | ms | 100 | Random time added to each poll wait; 0 or negative adds none. |
-| `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit: the agent ends the hook that long after it starts. A request has this less 3 s to be decided (see [The relay hook's time limit](#the-relay-hooks-time-limit)). |
+| `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit; its decision window is 3 s shorter (see [The relay hook's time limit](#the-relay-hooks-time-limit)). For Cursor, the full value is the decision window from admission, followed by a separate four-second settlement reserve; see [Cursor spawns](permissions.md#cursor-spawns). |
 | `[relay] permission_request_cap` | 0 or more | 1000 | Permission requests kept before the oldest closed ones go; 0 is unbounded, negative gives the default. |
 | `[pause] timeout_seconds` | 1 to 9223372036 | 30 | How long `pause` waits for the agent to exit. |
 | `[pre_trust] lock_wait_seconds` | 1 to 9223372036 | 12 | How long `spawn` and `resume` of a Claude agent wait for Claude Code's lock on `.claude.json`. On timeout the launch goes ahead with `pre_trust` `failed`. Codex pre-trust takes no lock, so a Codex launch never waits and ignores this key. |
 | `[store] db_path` | path | `~/.config/agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores); a relative path is joined onto `~/.config/agent-director`. Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
-| `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | How long a call, or a Cursor gateway storing a tool's proof, waits for a locked store before it fails. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
+| `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | A call's locked-store wait, and each Cursor tool proof's fixed window from its first persistence attempt. Retries do not renew that window; [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries) define control and exit precedence. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
 | `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new `state` or raw family aggregate must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
 | `[state] needs_intelligence_timeout_seconds` | 1 to 9223372036 | 30 | Nothing: accepted and range-checked, so existing files keep loading (see [Needs-intelligence timeout](#needs-intelligence-timeout-state)). |
 | `[state] idle_screen_timeout_seconds` | 1 to 9223372036 | 1200 | How long a `working` Claude or Codex agent's pane must look the same on every read before `status`, `get` and `list` can show `displayed_state` `idle_screen` (see [Idle-screen timeout](#idle-screen-timeout-state)). |
@@ -105,6 +105,11 @@ and a value of 3 or less leaves no time at all: at 3 the request is denied
 at once, and at 2 or less the hook gives no answer, so the agent asks in
 its own permission prompt. An agent keeps the value in force when it was
 launched (`spawn` or `resume`).
+
+Cursor keeps launch-time settings for its separate
+[request bounds](permissions.md#cursor-spawns). Admitted requests may poll their
+own decisions and retry their own proofs within those bounds; the hook's
+`poll_*` settings do not control these waits.
 
 ## Waits that keep their time limits
 

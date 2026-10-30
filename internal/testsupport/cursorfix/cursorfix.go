@@ -14,7 +14,7 @@ import (
 var scripts embed.FS
 
 // Runtime records received frames without accessing Cursor or authentication.
-type Runtime struct{ Program, Trace, PID, Release, WorkerPID, WorkerRelease, Scenario, Raw, Observer, Sent, Paused, NewRelease, MCPTrace, MCPRelease, MCPControl string }
+type Runtime struct{ Program, Trace, PID, Release, WorkerPID, WorkerRelease, Scenario, Raw, Observer, Sent, Paused, NewRelease, MCPTrace, MCPRelease, MCPControl, Events string }
 
 // Selection reads only designated synthetic selectors, preserving absent versus empty.
 func (r Runtime) Selection(t testing.TB) map[string]*string {
@@ -39,6 +39,7 @@ func NewWithWorker(t testing.TB, worker bool) Runtime {
 	r := Runtime{Program: filepath.Join(dir, "index.js"), Trace: filepath.Join(dir, "trace.jsonl"), PID: filepath.Join(dir, "pid"), Release: filepath.Join(dir, "release"), WorkerPID: filepath.Join(dir, "worker-pid"), WorkerRelease: filepath.Join(dir, "worker-release"), Scenario: filepath.Join(dir, "scenario"), Raw: filepath.Join(dir, "raw"), Observer: filepath.Join(dir, "observer"), Sent: filepath.Join(dir, "sent.jsonl"), Paused: filepath.Join(dir, "paused"), NewRelease: filepath.Join(dir, "new-release")}
 	r.MCPTrace, r.MCPRelease = filepath.Join(dir, "mcp.jsonl"), filepath.Join(dir, "mcp-release")
 	r.MCPControl = filepath.Join(dir, "mcp-control.json")
+	r.Events = filepath.Join(dir, "events.json")
 	raw, err := scripts.ReadFile("runtime.js")
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +55,7 @@ func NewWithWorker(t testing.TB, worker bool) Runtime {
 func (r Runtime) Settings() string { return r.settings(false) }
 
 func (r Runtime) settings(worker bool) string {
-	settings, _ := json.Marshal(map[string]any{"trace": r.Trace, "pid": r.PID, "release": r.Release, "worker": worker, "workerPID": r.WorkerPID, "workerRelease": r.WorkerRelease, "scenario": r.Scenario, "raw": r.Raw, "observer": r.Observer, "sent": r.Sent, "paused": r.Paused, "newRelease": r.NewRelease, "mcpTrace": r.MCPTrace, "mcpRelease": r.MCPRelease, "mcpControl": r.MCPControl})
+	settings, _ := json.Marshal(map[string]any{"trace": r.Trace, "pid": r.PID, "release": r.Release, "worker": worker, "workerPID": r.WorkerPID, "workerRelease": r.WorkerRelease, "scenario": r.Scenario, "raw": r.Raw, "observer": r.Observer, "sent": r.Sent, "paused": r.Paused, "newRelease": r.NewRelease, "mcpTrace": r.MCPTrace, "mcpRelease": r.MCPRelease, "mcpControl": r.MCPControl, "events": r.Events})
 	return string(settings)
 }
 func (r Runtime) Frames(t testing.TB) []map[string]json.RawMessage {
@@ -64,6 +65,23 @@ func (r Runtime) Frames(t testing.TB) []map[string]json.RawMessage {
 // SentFrames records scripted peer output; admission separately proves what the gateway received.
 func (r Runtime) SentFrames(t testing.TB) []map[string]json.RawMessage {
 	return readFrames(t, r.Sent)
+}
+
+// Emit sends an explicit synthetic provider event batch through the real ACP
+// pipe. Callers wait for its observation before replacing the command file.
+// raw retains whitespace/escaping and also permits malformed/partial IPC tests.
+func (r Runtime) Emit(t testing.TB, id, raw string) {
+	t.Helper()
+	command, err := json.Marshal(map[string]string{"id": id, "raw": raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.Events+".tmp", command, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(r.Events+".tmp", r.Events); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // MCPCommand controls the retained configured process independently of ACP input.

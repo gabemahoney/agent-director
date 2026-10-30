@@ -278,9 +278,12 @@ func TestCursorRotationPublicationAndEveryHoldPrecedePromotion(t *testing.T) {
 	c.wait(t, "remaining hold refuses", func() bool { return rotationRecordCount(c, t, "submission_refused") == 2 })
 	rotationNoBytes(t, c, "held-until-all-proofs")
 	c.rotationFixtureSQL(t, nil, 1, `UPDATE permission_requests SET proven_gone_at=? WHERE tool_name='Plan'`, time.Now().UnixMilli())
-	c.wait(t, "all proofs release held", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
+	c.idleObservationBarrier(t, "rotation-holds-independently-cleared")
+	rotationNoBytes(t, c, "held-until-all-proofs")
+	c.keys(t, "fresh-explicit-after-rotation-hold\r")
+	c.wait(t, "all proofs release held before new input", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 2 })
 	c.stop(t)
-	if got := rotationPrompts(c, t); !reflect.DeepEqual(got, []rotationPrompt{{"synthetic-session-2", "held-until-all-proofs"}}) {
+	if got := rotationPrompts(c, t); !reflect.DeepEqual(got, []rotationPrompt{{"synthetic-session-2", "held-until-all-proofs"}, {"synthetic-session-2", "fresh-explicit-after-rotation-hold"}}) {
 		t.Fatalf("guard release %+v", got)
 	}
 }
@@ -541,7 +544,10 @@ func TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional(t *tes
 		t.Fatal("closed_at supplied unknown proof")
 	}
 	c.rotationFixtureSQL(t, nil, 1, `UPDATE permission_requests SET proven_gone_at=? WHERE request_token=?`, time.Now().UnixMilli(), token)
-	c.wait(t, "guarded fresh turn completes", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
+	c.idleObservationBarrier(t, "parked-hold-independently-cleared")
+	rotationNoBytes(t, c, parked.text)
+	c.keys(t, "fresh-explicit-after-parked-hold\r")
+	c.wait(t, "guarded fresh turns complete in order", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 2 })
 	c.stop(t)
 	accepted := 0
 	row, _ := c.e.s.GetSpawn(b.InstanceID)
@@ -561,14 +567,14 @@ func TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional(t *tes
 		if err := json.Unmarshal(line, &r); err != nil {
 			t.Fatal(err)
 		}
-		if r.Kind == "submission_accepted" {
+		if r.Kind == "submission_accepted" && r.Data.ID == heldID {
 			accepted++
 			if r.Data.ID != heldID || !r.Data.Released || r.Session != "synthetic-session-2" {
 				t.Fatalf("parked value bypassed guarded fresh promotion: %s", line)
 			}
 		}
 	}
-	if accepted != 1 || !reflect.DeepEqual(rotationPrompts(c, t), []rotationPrompt{{"synthetic-session-2", parked.text}}) {
+	if accepted != 1 || !reflect.DeepEqual(rotationPrompts(c, t), []rotationPrompt{{"synthetic-session-2", parked.text}, {"synthetic-session-2", "fresh-explicit-after-parked-hold"}}) {
 		t.Fatalf("parked input lost/replayed/crossed sessions: accepted=%d prompts=%+v", accepted, rotationPrompts(c, t))
 	}
 }
@@ -613,5 +619,56 @@ func TestCursorRotationRetiredNumericResponsesKeepSessionBoundaries(t *testing.T
 	c.stop(t)
 	if got := rotationPrompts(c, t); !reflect.DeepEqual(got, []rotationPrompt{{"synthetic-session-1", "boundary-turn-1"}, {"synthetic-session-2", "boundary-turn-2"}, {"synthetic-session-3", "fresh-after-retired-numeric"}}) {
 		t.Fatalf("retired responses acquired current authority: %+v", got)
+	}
+}
+
+func TestCursorRepeatedRotationPathsKeepSeparatePublication(t *testing.T) {
+	// Serial: real session, protocol and guarded publication subprocesses.
+	c := postBootstrapCursorSession(t, "off", "")
+	before, err := c.e.s.GetSpawn(c.e.binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := 1; n <= 2; n++ {
+		c.e.runtime.Configure(t, cursorfix.Scenario{WaitForNew: true})
+		c.keys(t, "/new\r")
+		c.wait(t, "new rotation request", func() bool { return rotationNewCount(c, t) == n+1 })
+		repeated := bytes.Count(c.pane.bytes(), []byte("repeated control ignored"))
+		c.keys(t, "/clear\r/new\r")
+		c.wait(t, "same pending rotation controls consumed", func() bool { return bytes.Count(c.pane.bytes(), []byte("repeated control ignored")) > repeated })
+		row, _ := c.e.s.GetSpawn(before.InstanceID)
+		if row.SessionID != fmt.Sprintf("synthetic-session-%d", n) || rotationNewCount(c, t) != n+1 {
+			t.Fatal("repeat published or issued another session/new")
+		}
+		rotationRelease(t, c.e.runtime.NewRelease)
+		c.wait(t, "new rotation published", func() bool {
+			return rotationRecordCount(c, t, "rotation_published") == n && bytes.Count(c.pane.bytes(), []byte("Cursor fresh conversation published")) == n
+		})
+		if err := os.Remove(c.e.runtime.NewRelease); err != nil {
+			t.Fatal(err)
+		}
+		row, err = c.e.s.GetSpawn(before.InstanceID)
+		history, historyErr := c.e.s.ListSessionHistory(before.InstanceID, before.LifeNumber)
+		if err != nil || historyErr != nil || row.SessionID != fmt.Sprintf("synthetic-session-%d", n+1) || row.LifeNumber != before.LifeNumber || len(history) != n {
+			t.Fatalf("publication/history: %+v %+v %v %v", row, history, err, historyErr)
+		}
+		seen := map[string]bool{}
+		for _, h := range history {
+			if seen[h.SessionID] {
+				t.Fatal("duplicate publication history")
+			}
+			seen[h.SessionID] = true
+		}
+		for i := 1; i <= n; i++ {
+			if !seen[fmt.Sprintf("synthetic-session-%d", i)] {
+				t.Fatal("new rotation lost old history")
+			}
+		}
+	}
+	c.keys(t, "fresh-after-two-rotations\r")
+	c.wait(t, "positive fresh turn", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
+	c.stop(t)
+	if got := rotationPrompts(c, t); !reflect.DeepEqual(got, []rotationPrompt{{"synthetic-session-3", "fresh-after-two-rotations"}}) {
+		t.Fatalf("rotation replay/captured target: %+v", got)
 	}
 }

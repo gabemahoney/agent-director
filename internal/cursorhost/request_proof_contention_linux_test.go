@@ -21,7 +21,7 @@ func TestCursorExecutionProofSurvivesBriefWriterContention(t *testing.T) {
 	c := e.controller(t, &observedWire{}, io.Discard)
 	r := e.admit(t, c, `1`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "shell", "execute"))
 	e.decide(t, r.token, "allow")
-	if err := c.tick(); err != nil {
+	if err := continuePermission(c, r); err != nil {
 		t.Fatal(err)
 	}
 	if err := completedWrite(t, c.protocol); err != nil {
@@ -39,7 +39,7 @@ func TestCursorExecutionProofSurvivesBriefWriterContention(t *testing.T) {
 		t.Fatalf("proof stored while another writer held the lock: %+v", got)
 	}
 	release()
-	if err := c.tick(); err != nil {
+	if err := continueProof(c, r); err != nil {
 		t.Fatalf("tick after the competing writer released: %v", err)
 	}
 	got := e.request(t, r.token)

@@ -994,7 +994,7 @@ when it cannot write the crontab back.
 ## Going back to the previous release
 
 For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10 through v16→v17, the old-layout steps below do not
+including schema v9→v10 through v17→v18, the old-layout steps below do not
 apply. Before upgrading, stop all writers and keep a copy of the actual store
 (`[store] db_path` when set), its existing `-wal`/`-shm`, and all legacy input
 evidence. Keep provider logs/transcripts outside those roots too. The journal
@@ -1011,11 +1011,12 @@ reconcile uncertain attempts against the preserved evidence: restoration loses
 all later writes and can lose proof of input that already reached an agent.
 Never replay an attempt merely because the restored copy lacks its proof.
 
+Schema v18 Cursor input and proof evidence has no supported reverse recipe.
 Schema v17 permission provenance and response claims have no supported reverse
 recipe. Schema v16 has no in-place downgrade or replayable file-journal
-export. A binary swap or version reset cannot undo either. Schema v15,
+export. A binary swap or version reset cannot undo these changes. Schema v15,
 v14 and v13 are also restore-only. The v12→v11 family-history recipe applies
-only to genuine family-only v12 stores; it cannot operate on v13–v17. No
+only to genuine family-only v12 stores; it cannot operate on v13–v18. No
 supported reverse path crosses v11→v10 or v10→v9. A copy made after migration
 cannot replace the pre-upgrade set. Without that set, or while an uncertain
 attempt remains unreconciled, stop and obtain human help.

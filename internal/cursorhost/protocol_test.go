@@ -3,6 +3,7 @@ package cursorhost
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -59,6 +60,71 @@ func TestProtocolFraming(t *testing.T) {
 				t.Fatalf("frame err %v; refused %v", got.err, tc.refused)
 			}
 		})
+	}
+}
+
+func TestProtocolNotificationSaturationPreservesOrder(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	var out bytes.Buffer
+	p := newProtocol(&out, reader)
+	defer p.close()
+	const count = 80
+	want := make([]string, count)
+	for n := range want {
+		want[n] = fmt.Sprintf(`{ "sessionId":"saturation-session", "update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"finite-notification-%d","ordinal":%d,"escaped":"exact\u0020bytes","optional":null}}}`, n, n)
+	}
+	saturated, sent := make(chan struct{}), make(chan error, 1)
+	go func() {
+		for n, params := range want {
+			_, err := io.WriteString(writer, `{"jsonrpc":"2.0","method":"session/update","params":`+params+"}\n")
+			if err != nil {
+				sent <- err
+				return
+			}
+			// io.Pipe has no buffer. The read of frame capacity+1 happens
+			// only after all earlier frames entered the bounded channel.
+			// No consumer runs until the test observes that full channel.
+			if n == cap(p.frames) {
+				close(saturated)
+			}
+		}
+		sent <- writer.Close()
+	}()
+	select {
+	case <-saturated:
+	case err := <-sent:
+		t.Fatalf("producer ended before saturation: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("producer did not reach the bounded channel")
+	}
+	if len(p.frames) != cap(p.frames) {
+		t.Fatalf("queue was not full before consumption: %d/%d", len(p.frames), cap(p.frames))
+	}
+	for n, params := range want {
+		got := nextFrame(t, p)
+		if got.err != nil || got.frame.JSONRPC != "2.0" || got.frame.Method != "session/update" || len(got.frame.ID) != 0 || string(got.frame.Params) != params {
+			t.Fatalf("notification %d changed, disappeared or moved: %+v; want params %s", n, got, params)
+		}
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	if got := nextFrame(t, p); got.err != io.EOF {
+		t.Fatalf("extra notification or missing EOF: %+v", got)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("notifications supplied output authority: %s", out.Bytes())
+	}
+	if _, err := p.request("session/prompt", map[string]string{"sessionId": "saturation-session", "text": "fresh-explicit"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := completedWrite(t, p); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Count(out.Bytes(), []byte{'\n'}) != 1 || !bytes.Contains(out.Bytes(), []byte(`"text":"fresh-explicit"`)) {
+		t.Fatalf("live transport positive control: %s", out.Bytes())
 	}
 }
 

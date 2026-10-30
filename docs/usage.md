@@ -222,7 +222,9 @@ launch/conversation identity and submission identities linking accepted input,
 dispatch starts, updates, cancellation and confirmed outcomes; refusals and
 uncertain delivery or completion are recorded separately. A dispatch-start
 record precedes prompt delivery and does not prove Cursor received it.
-Recorded admission does not establish execution or durable resumability.
+Recorded admission does not establish execution or replay authority. The store
+also retains input dispositions and exact proof evidence; neither those records
+nor the transcript reconstruct queued work after gateway loss.
 The transcript is separate from Cursor's native session storage.
 After rotation, `get`'s current session and `prior_sessions` can reference this
 same file within the current life. Same-agent reuse keeps prior references

@@ -207,7 +207,7 @@ func (p *protocol) writeLoop() {
 			}
 			if next.issue != nil {
 				if err := next.issue(); err != nil {
-					result <- writeResult{err: err}
+					result <- writeResult{err: err, prewrite: errors.Is(err, errPromptRetired)}
 					return
 				}
 			}
@@ -242,7 +242,7 @@ func (p *protocol) writeLoop() {
 		}
 		timer.Stop()
 		if prewrite {
-			// A retired prompt is known unwritten at the final guard too.
+			// A retired prompt is known unwritten at the final guard or issue.
 			// Other final authority failures retain their fail-closed behavior.
 			if next.done != nil {
 				next.done(err)
@@ -301,12 +301,17 @@ func (p *protocol) requestGuarded(method string, params any, guard func() error,
 	if len(completions) > 0 {
 		done = completions[0]
 	}
+	return p.requestGuardedIssue(method, params, guard, done, nil)
+}
+
+// A prompt's durable issue is consumed once by the existing serialized writer.
+func (p *protocol) requestGuardedIssue(method string, params any, guard func() error, done func(error), issue func() error) (string, error) {
 	if p.pendingID != "" {
 		return "", fmt.Errorf("ACP request already pending")
 	}
 	p.next++
 	id := fmt.Sprint(p.next)
-	if err := p.sendGuarded(map[string]any{"jsonrpc": "2.0", "id": p.next, "method": method, "params": params}, time.Now().Add(transportWriteWait), guard, done); err != nil {
+	if err := p.sendGuarded(map[string]any{"jsonrpc": "2.0", "id": p.next, "method": method, "params": params}, time.Now().Add(transportWriteWait), guard, done, issue); err != nil {
 		return "", err
 	}
 	p.pendingID = id

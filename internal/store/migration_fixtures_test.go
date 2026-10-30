@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -1603,6 +1604,40 @@ func seedV16PermissionHistory(t *testing.T, path string) {
 		mustExec(t, db, `INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,decision,decided_at,proven_gone_at,proven_gone_how) VALUES('pre',?,'Bash','{}','allow','2026-10-01 01:00:00',12345,'tool_ran')`, tokenA)
 		mustExec(t, db, `INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,decision,decision_reason,decided_at) VALUES('pre',?,'Bash','{}','deny','operator','2026-10-01 01:00:01')`, tokenB)
 		mustExec(t, db, `INSERT INTO session_history(instance_id,session_id,life_number) VALUES('pre','history-session',2)`)
+	})
+}
+
+// seedV18Obligation records partial migration state beside the retained v17
+// permission/history fixture. Runtime tests use cursorRowBinding instead.
+func seedV18Obligation(t *testing.T, path, table string) {
+	t.Helper()
+	owner := CursorOwner{StoreID: assertOneStoreID(t, path), Runtime: CursorRuntime{
+		InstanceID: "pre", Token: "launch", Life: 2, GatewayPID: 11, GatewayStart: "gateway",
+		RuntimePID: 12, RuntimeStart: "runtime", Connection: "connection", InputPipe: "pipe:[1]",
+		OutputPipe: "pipe:[2]", InputFD: 3, OutputFD: 4, SessionID: "session"}}
+	at := time.Date(2026, 10, 30, 1, 2, 3, 4, time.UTC)
+	withRaw(t, path, func(db *sql.DB) {
+		if table == "cursor_inputs" {
+			mustExec(t, db, cursorInputsDDL)
+			v := CursorInput{Owner: owner, SubmissionID: "input", Generation: 3, Order: 5, Epoch: 7,
+				Text: " original\n\t文字 ", CapturedAt: at, State: CursorInputUnresolved,
+				TargetSession: "session", RequestID: "prompt", Deadline: at.Add(time.Second), Detail: "unknown commit"}
+			raw, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustExec(t, db, `INSERT INTO cursor_inputs VALUES(?,?,?,?,?)`, owner.StoreID, "connection", "pre", "input", string(raw))
+		} else {
+			mustExec(t, db, cursorProofsDDL)
+			v := CursorProof{Owner: owner, ID: "proof", Token: tokenA, Tool: "tool", Generation: 3,
+				Kind: "tool_call_update", CapturedAt: at, BusyUntil: at.Add(time.Second), Ran: true, TurnOpen: true}
+			raw, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence := []byte(" {\"sessionId\":\"session\", \"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tool\",\"status\":\"completed\",\"rawOutput\":{\"exitCode\":0,\"stdout\":\"\\u0020\",\"stderr\":\"\"}}} \n")
+			mustExec(t, db, `INSERT INTO cursor_proofs VALUES(?,?,?,?,?,?)`, owner.StoreID, "connection", "pre", "proof", string(raw), evidence)
+		}
 	})
 }
 

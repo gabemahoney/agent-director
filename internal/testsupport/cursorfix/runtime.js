@@ -40,6 +40,17 @@ function send(frame) {
  if(SETTINGS.sent) fs.appendFileSync(SETTINGS.sent,line+'\n');
  process.stdout.write(line+'\n');
 }
+// An explicit test-owned batch, never synthesized from gateway/store state.
+let lastEvents = '';
+setInterval(()=>{
+ if(!SETTINGS.events || !fs.existsSync(SETTINGS.events)) return;
+ const command=JSON.parse(fs.readFileSync(SETTINGS.events,'utf8'));
+ if(command.id===lastEvents) return;
+ if(typeof command.id!=='string' || !command.id || typeof command.raw!=='string') throw Error('invalid synthetic ACP event batch');
+ lastEvents=command.id;
+ if(SETTINGS.sent) fs.appendFileSync(SETTINGS.sent,command.raw);
+ process.stdout.write(command.raw);
+},10);
 // Observe raw chunks before readline can hide a partial response. The optional
 // observer is synchronous and opens its own committed store connection.
 process.stdin.on('data', chunk => {

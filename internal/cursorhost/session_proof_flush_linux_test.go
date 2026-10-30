@@ -5,6 +5,8 @@ package cursorhost
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"os"
 	"regexp"
 	"testing"
 	"time"
@@ -46,6 +48,28 @@ func flushRequestToken(t *testing.T, c *cursorSession) string {
 		t.Fatalf("want one permission request: %+v %v", rows, err)
 	}
 	return rows[0].RequestToken
+}
+
+// An actual newly admitted provider completion is a prompt prerequisite event.
+// It does not discover or replay any of the fixture's independent durable holds.
+func admitProviderPrerequisite(t *testing.T, c *cursorSession, id string) func() {
+	t.Helper()
+	b, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := rotationRecordCount(c, t, "authorization_admitted")
+	permission, err := json.Marshal(frame{JSONRPC: "2.0", ID: json.RawMessage(fmt.Sprintf("%q", id)), Method: "session/request_permission", Params: cursorfix.Permission(b.SessionID, id, "execute")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.e.runtime.Emit(t, id+"-admit", string(permission)+"\n")
+	c.wait(t, "actual prerequisite admitted", func() bool { return rotationRecordCount(c, t, "authorization_admitted") == before+1 })
+	completion, err := json.Marshal(frame{JSONRPC: "2.0", Method: "session/update", Params: executionUpdate(b.SessionID, id, "completed", flushShellOutput)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func() { c.e.runtime.Emit(t, id+"-complete", string(completion)+"\n") }
 }
 
 func flushPaneProof(t *testing.T, got store.PermissionRow) {
@@ -260,10 +284,8 @@ func sessionCancelCount(t *testing.T, c *cursorSession) int {
 func lateDecisionSendsNothing(t *testing.T, c *cursorSession, token string) {
 	t.Helper()
 	c.e.refuseProvenDecision(t, token, "allow")
-	// No gateway event marks a controller tick, so this watches a window, as
-	// TestCursorExitStoresDeferredProofBeforeTermination does. The ticks run
-	// every 50 ms; TestCursorRowStateAfterLastDeliveredDecision checks the
-	// same at the controller with one explicit tick.
+	// Watch for forbidden transport after the refused late decision. The keyed
+	// controller tests separately exercise stale wakes without a request scan.
 	quiet := time.Now().Add(time.Second)
 	for time.Now().Before(quiet) {
 		if peerAnswered(t, c, `"cancel-proof"`) {
@@ -415,5 +437,98 @@ func TestCursorExitStoresDeferredProofBeforeTermination(t *testing.T) {
 	row, err := c.e.s.GetSpawn(c.e.binding.InstanceID)
 	if err != nil || row.State != store.StateEnded || rotationRecordCount(c, t, "session_end") != 1 {
 		t.Fatalf("exit not intentional: %+v %v", row, err)
+	}
+}
+
+// These are the actual session control, turn-end and waiting-report paths.
+// The controller-level flush test separately covers duplicate completion identity.
+func TestCursorRepeatedTurnAndInterruptPathsRetainTheirOwnRequests(t *testing.T) {
+	// Serial: real Run, report subprocess and PTY with a synthetic ACP peer.
+	for _, interrupt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("interrupt=%v", interrupt), func(t *testing.T) {
+			c := postBootstrapCursorSession(t, "on", "")
+			var tokens []string
+			for n := 1; n <= 2; n++ {
+				id := fmt.Sprintf("repeated-%d", n)
+				permission, err := json.Marshal(frame{JSONRPC: "2.0", ID: json.RawMessage(fmt.Sprintf("%q", id)), Method: "session/request_permission", Params: cursorfix.Permission("synthetic-session-1", id, "execute")})
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.e.runtime.Configure(t, cursorfix.Scenario{Requests: []json.RawMessage{permission}, CompleteBeforeAnswers: true, WaitForRelease: true})
+				c.keys(t, id+"\r")
+				c.wait(t, "new event admitted its own request", func() bool { return rotationRecordCount(c, t, "authorization_admitted") == n })
+				rows, err := c.e.s.PermissionRequestsForSpawn(c.e.binding.InstanceID)
+				if err != nil || len(rows) != n {
+					t.Fatalf("requests=%+v %v", rows, err)
+				}
+				var token string
+				for _, r := range rows {
+					if !r.ProvenGone() {
+						token = r.RequestToken
+					}
+				}
+				if token == "" {
+					t.Fatal("new live request missing")
+				}
+				tokens = append(tokens, token)
+				if interrupt {
+					// Two distinct controls in this cancellation cycle cannot issue twice.
+					c.keys(t, "\x03\x03")
+					c.wait(t, "one cancellation for active turn", func() bool { return sessionCancelCount(t, c) == n })
+				}
+				rotationRelease(t, c.e.runtime.Release)
+				message := []byte("Cursor turn complete")
+				if interrupt {
+					message = []byte("submit a new prompt to continue")
+				}
+				c.wait(t, "new turn and waiting report complete", func() bool {
+					return rotationRecordCount(c, t, "turn_outcome") == n && bytes.Count(c.pane.bytes(), message) == n
+				})
+				if err := os.Remove(c.e.runtime.Release); err != nil {
+					t.Fatal(err)
+				}
+				c.e.wantState(t, "new waiting report", store.StateWaiting)
+				for _, token := range tokens {
+					r := c.e.request(t, token)
+					if r.ProvenGoneHow != store.ProvenGoneTurnEnd || r.Decision != "" || !r.DeliveredAt.IsZero() || r.ResponseState != "" {
+						t.Fatalf("turn end borrowed response authority: %+v", r)
+					}
+				}
+				if peerAnswered(t, c, fmt.Sprintf("%q", id)) {
+					t.Fatal("turn end answered retired request")
+				}
+			}
+			if tokens[0] == tokens[1] || len(c.prompts(t)) != 2 {
+				t.Fatal("new event reused old job")
+			}
+			reports, err := os.ReadFile(c.e.path + ".reports")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stops := 0
+			for _, line := range bytes.Split(bytes.TrimSpace(reports), []byte{'\n'}) {
+				var r struct {
+					Event   string `json:"hook_event_name"`
+					Session string `json:"session_id"`
+				}
+				if err := json.Unmarshal(line, &r); err != nil {
+					t.Fatal(err)
+				}
+				if r.Event == "Stop" {
+					stops++
+					if r.Session != "synthetic-session-1" {
+						t.Fatalf("report crossed session: %s", line)
+					}
+				}
+			}
+			wantStops := 2
+			if interrupt {
+				wantStops = 4
+			} // turn Stop plus idle-control recovery Stop each cycle
+			if stops != wantStops {
+				t.Fatalf("actual waiting reports=%d want=%d", stops, wantStops)
+			}
+			c.stop(t)
+		})
 	}
 }

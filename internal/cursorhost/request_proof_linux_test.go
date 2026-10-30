@@ -342,7 +342,7 @@ func TestCursorRowStateAfterLastDeliveredDecision(t *testing.T) {
 								}
 							}
 							c.choose(r.token, "allow-once") // a delayed choice cannot revive it either
-							if err := c.tick(); err != nil {
+							if err := continuePermission(c, r); err != nil {
 								t.Fatal(err)
 							}
 							if got := e.request(t, r.token); got != want {
@@ -371,7 +371,7 @@ func TestCursorRowStateAfterLastDeliveredDecision(t *testing.T) {
 				return
 			}
 			e.decide(t, r.token, tc.decision)
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, r); err != nil {
 				t.Fatal(err)
 			}
 			if err := completedWrite(t, c.protocol); err != nil {

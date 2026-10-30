@@ -48,7 +48,7 @@ func TestCursorFailedMCPReleasesOnlyMatchingDeliveredHold(t *testing.T) {
 		r := e.admit(t, c, fmt.Sprint(i), "session/request_permission", params)
 		requests = append(requests, r)
 		e.decide(t, r.token, "allow")
-		if err := c.tick(); err != nil {
+		if err := continuePermission(c, r); err != nil {
 			t.Fatal(err)
 		}
 		if err := completedWrite(t, c.protocol); err != nil {
@@ -151,7 +151,7 @@ func TestCursorFailedMCPProofPreservesAnswerEvidence(t *testing.T) {
 				e.decide(t, r.token, "deny")
 			}
 			if state != "undecided" {
-				if err := c.tick(); err != nil {
+				if err := continuePermission(c, r); err != nil {
 					t.Fatal(err)
 				}
 				if err := completedWrite(t, c.protocol); err != nil {

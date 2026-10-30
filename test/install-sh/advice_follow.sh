@@ -1102,7 +1102,7 @@ j6_break_hop() {
             "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_turn;
                 ALTER TABLE spawns DROP COLUMN codex_turn_ended;" || return 1
             ;;
-        16|17)
+        16|17|18)
             local installed
             installed="$("$TS_HELPER" install-write-failure --store "$1" \
                 --kind input-authority --id native_input_authority)" || return 1

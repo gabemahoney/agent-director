@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,7 +19,9 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -75,7 +78,7 @@ func TestCursorAckCommittedBeforeFirstByte(t *testing.T) {
 			if !e.request(t, r.token).DeliveredAt.IsZero() {
 				t.Fatal("decision became acknowledgement")
 			}
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, r); err != nil {
 				t.Fatal(err)
 			}
 			if err := completedWrite(t, c.protocol); err != nil {
@@ -139,7 +142,7 @@ func TestCursorOriginClaimIssueNonreplay(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					if err := c.tick(); err != nil && cut != "closed before claim" {
+					if err := continuePermission(c, r); err != nil && cut != "closed before claim" {
 						t.Fatal(err)
 					}
 					if cut == "closed before claim" {
@@ -225,7 +228,7 @@ func TestCursorOriginClaimIssueNonreplay(t *testing.T) {
 						t.Fatal("transport became execution proof")
 					}
 					c.choose(r.token, "allow-once")
-					_ = c.tick()
+					_ = continuePermission(c, r)
 					if !bytes.Equal(raw, wire.bytes()) {
 						t.Fatal("late callback replayed")
 					}
@@ -259,7 +262,10 @@ func TestCursorIndependentClaimSurvivesOtherProof(t *testing.T) {
 						c.choose(r.token, "allow-once")
 					}
 				}
-				if err := c.tick(); err != nil {
+				if err := continuePermission(c, first); err != nil {
+					t.Fatal(err)
+				}
+				if err := continuePermission(c, second); err != nil {
 					t.Fatal(err)
 				}
 				claim := store.ResponseRelayClaimed
@@ -323,7 +329,7 @@ func TestCursorOrderedToolPlanOrigins(t *testing.T) {
 				requests[i] = e.admit(t, c, fmt.Sprint(i+1), method, params)
 			}
 			e.decide(t, requests[0].token, "allow")
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, requests[0]); err != nil {
 				t.Fatal(err)
 			}
 			if err := completedWrite(t, c.protocol); err != nil {
@@ -337,7 +343,7 @@ func TestCursorOrderedToolPlanOrigins(t *testing.T) {
 				option = "reject"
 			}
 			c.choose(requests[1].token, option)
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, requests[1]); err != nil {
 				t.Fatal(err)
 			}
 			if err := completedWrite(t, c.protocol); err != nil {
@@ -407,7 +413,7 @@ func TestCursorQueuedAnswersLoseAuthority(t *testing.T) {
 				}
 				release := blockProtocol(t, c.protocol)
 				e.decide(t, r.token, decision)
-				if err := c.tick(); err != nil {
+				if err := continuePermission(c, r); err != nil {
 					t.Fatal(err)
 				}
 				if e.request(t, r.token).DeliveredAt.IsZero() {
@@ -423,7 +429,7 @@ func TestCursorQueuedAnswersLoseAuthority(t *testing.T) {
 				case "settlement retirement":
 					r.timeout = time.Now().Add(-time.Millisecond)
 					r.settle = time.Now().Add(-time.Millisecond)
-					if err := c.tick(); err != nil {
+					if err := continuePermission(c, r); err != nil {
 						t.Fatal(err)
 					}
 				case "cancel":
@@ -454,7 +460,7 @@ func TestCursorQueuedAnswersLoseAuthority(t *testing.T) {
 					t.Fatal("independent hold lost")
 				}
 				c.choose(r.token, "allow-always")
-				c.tick()
+				continuePermission(c, r)
 				if len(wire.bytes()) != 0 {
 					t.Fatal("retired answer replayed as native")
 				}
@@ -485,8 +491,8 @@ func TestCursorMissingOrFailedAckEmitsNothing(t *testing.T) {
 				case "stale connection":
 					e.exec(t, `UPDATE cursor_runtimes SET bound_connection_id='replacement'`)
 				}
-				c.tick()
-				c.tick()
+				continuePermission(c, r)
+				continuePermission(c, r)
 				if len(wire.bytes()) != 0 || r.queued {
 					t.Fatal("ack failure emitted or queued a relay response")
 				}
@@ -546,11 +552,11 @@ func TestCursorPartialAndAckOnlyNeverReplay(t *testing.T) {
 					t.Fatalf("ack %v %v", ok, err)
 				}
 				// Reconstruct controller state after an acknowledgement without transport receipt.
-				if err = c.tick(); err != nil {
+				if err = continuePermission(c, r); err != nil {
 					t.Fatal(err)
 				}
 			} else {
-				if err := c.tick(); err != nil {
+				if err := continuePermission(c, r); err != nil {
 					t.Fatal(err)
 				}
 				if err := completedWrite(t, c.protocol); err == nil {
@@ -559,8 +565,8 @@ func TestCursorPartialAndAckOnlyNeverReplay(t *testing.T) {
 			}
 			before := len(wire.bytes())
 			c.choose(r.token, "allow-once")
-			c.tick()
-			c.tick()
+			continuePermission(c, r)
+			continuePermission(c, r)
 			pr := e.request(t, r.token)
 			if len(wire.bytes()) != before || pr.DeliveredAt.IsZero() || pr.ProvenGone() || pr.Closed() {
 				t.Fatalf("ack/partial replay or false proof: %+v", pr)
@@ -654,7 +660,7 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			}
 			releaseWriter := blockProtocol(t, c.protocol)
 			e.decide(t, first.token, decision)
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, first); err != nil {
 				t.Fatal(err)
 			}
 			ackComplete := time.Now()
@@ -890,7 +896,7 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 				if len(firstBytes) != 0 {
 					t.Errorf("%s during store contention emitted bytes: %s", tc.loss, firstBytes)
 				}
-				if err := c.tick(); err != nil {
+				if err := continuePermission(c, first); err != nil {
 					t.Fatal(err)
 				}
 				if len(wire.bytes()) != 0 {
@@ -902,7 +908,7 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 				t.Errorf("valid acknowledged %s answer lost under finite same-Store contention: guard=%v completion=%v bytes=%q", decision, guardErr, writeErr, firstBytes)
 			}
 			e.decide(t, second.token, decision)
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, second); err != nil {
 				t.Fatal(err)
 			}
 			waitRequestTerminalOrSent := time.After(time.Second)
@@ -1000,7 +1006,7 @@ func TestCursorCommittedIssueLostResultDoesNotEmit(t *testing.T) {
 			} else {
 				c.choose(r.token, "allow-once")
 			}
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, r); err != nil {
 				t.Fatal(err)
 			}
 			lost := errors.New("injected committed issue result loss")
@@ -1048,7 +1054,7 @@ func TestCursorCommittedIssueLostResultDoesNotEmit(t *testing.T) {
 				t.Fatal("reopened claim replayed")
 			}
 			c.choose(r.token, "allow-once")
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, r); err != nil {
 				t.Fatal(err)
 			}
 			if len(wire.bytes()) != 0 || commits.Load() != 1 {
@@ -1059,5 +1065,190 @@ func TestCursorCommittedIssueLostResultDoesNotEmit(t *testing.T) {
 				t.Fatalf("uncertainty changed durable state: %+v", pr)
 			}
 		})
+	}
+}
+
+func TestCursorKeyedPermissionWakeCannotDiscoverAnotherJob(t *testing.T) {
+	// Serial: shared verified pane fixture sets HOME and PATH.
+	e := newRequestEnv(t, "on", "synthetic-session")
+	wire := &observedWire{}
+	c := e.controller(t, wire, io.Discard)
+	first := e.admit(t, c, `1`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "first", "execute"))
+	second := e.admit(t, c, `2`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "second", "execute"))
+	e.decide(t, second.token, "deny")
+	before := e.request(t, second.token)
+	wake := permissionWakeFor(first)
+	for _, bad := range []string{"store", "token", "launch", "life", "connection", "session", "generation", "sequence", "deadline", "generic"} {
+		t.Run(bad, func(t *testing.T) {
+			w := wake
+			switch bad {
+			case "store":
+				w.storeID += "other"
+			case "token":
+				w.token = "not-admitted"
+			case "launch":
+				w.binding.Token += "other"
+			case "life":
+				w.binding.Life++
+			case "connection":
+				w.binding.Connection += "other"
+			case "session":
+				w.binding.SessionID += "other"
+			case "generation":
+				w.generation++
+			case "sequence":
+				w.sequence++
+			case "deadline":
+				w.deadline = w.deadline.Add(time.Second)
+			case "generic":
+				w = requestWake{}
+			}
+			if progressed, err := c.continueRequest(w); err != nil || progressed {
+				t.Fatalf("invalid wake progressed=%v error=%v", progressed, err)
+			}
+			if e.request(t, second.token) != before || len(wire.bytes()) != 0 || second.queued {
+				t.Fatal("invalid wake discovered another decision")
+			}
+		})
+	}
+	// A valid first job can reread only itself while the second has deliverable work.
+	if err := continuePermission(c, first); err != nil {
+		t.Fatal(err)
+	}
+	if e.request(t, second.token) != before || second.queued || len(wire.bytes()) != 0 {
+		t.Fatal("first job scanned another request")
+	}
+	if progressed, err := c.continueRequest(wake); err != nil || progressed {
+		t.Fatalf("duplicate wake progressed=%v error=%v", progressed, err)
+	}
+	if err := continuePermission(c, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := completedWrite(t, c.protocol); err != nil {
+		t.Fatal(err)
+	}
+	if got := wire.bytes(); bytes.Count(got, []byte{'\n'}) != 1 || !bytes.Contains(got, []byte(`"id":2`)) || !bytes.Contains(got, []byte(`"optionId":"reject-once"`)) {
+		t.Fatalf("positive own-token response: %s", got)
+	}
+	if r := e.request(t, first.token); r.Decision != "" || r.ResponseState != "" {
+		t.Fatalf("second touched first: %+v", r)
+	}
+	// Retiring the connection also retires its original timer, even with a live provider.
+	late := permissionWakeFor(first)
+	c.close()
+	if progressed, err := c.continueRequest(late); err != nil || progressed {
+		t.Fatalf("retired wake progressed=%v error=%v", progressed, err)
+	}
+	if len(wire.bytes()) == 0 {
+		t.Fatal("negative controls used a disconnected worker")
+	}
+}
+
+func TestCursorReplacementControllerDoesNotDiscoverDurableWork(t *testing.T) {
+	// Serial: shared verified pane fixture sets HOME and PATH.
+	e := newRequestEnv(t, "on", "synthetic-session")
+	wire := &observedWire{}
+	old := e.controller(t, wire, io.Discard)
+	r := e.admit(t, old, `1`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "old", "execute"))
+	e.decide(t, r.token, "allow")
+	wake := permissionWakeFor(r)
+	before := e.request(t, r.token)
+	old.close()
+	replacement := e.controller(t, wire, io.Discard)
+	clock := &requestTestClock{Clock: tmuxfix.NewClock(time.Now().Add(-24 * time.Hour))}
+	replacement.clock = clock
+	var statements, reads atomic.Int64
+	observeRequestSQLite(t, e.s, sqliteobserve.Hooks{Before: func(_ context.Context, q string) error {
+		statements.Add(1)
+		if strings.HasPrefix(strings.TrimSpace(q), "SELECT") && (strings.Contains(q, "permission_requests") || strings.Contains(q, "cursor_proofs") || strings.Contains(q, "cursor_inputs")) {
+			reads.Add(1)
+		}
+		return nil
+	}})
+	for _, w := range []requestWake{wake, {}, {kind: permissionWait, deadline: time.Now().Add(24 * time.Hour)}} {
+		if progressed, err := replacement.continueRequest(w); err != nil || progressed {
+			t.Fatalf("replacement discovered history: %v %v", progressed, err)
+		}
+	}
+	if len(replacement.requests) != 0 || replacement.open() || len(wire.bytes()) != 0 || e.request(t, r.token) != before {
+		t.Fatal("replacement reconstructed a response job")
+	}
+	assertIdle := func(duration time.Duration) {
+		t.Helper()
+		beforeSQL, beforeReads := statements.Load(), reads.Load()
+		scheduled, active := clock.counts()
+		if active != 0 {
+			t.Fatalf("idle controller retained %d timers", active)
+		}
+		clock.advance(duration)
+		afterScheduled, afterActive := clock.counts()
+		if statements.Load() != beforeSQL || reads.Load() != beforeReads || afterScheduled != scheduled || afterActive != 0 || len(replacement.events) != 0 {
+			t.Fatalf("idle time discovered work: SQL %d->%d reads %d->%d timers %d->%d active=%d events=%d", beforeSQL, statements.Load(), beforeReads, reads.Load(), scheduled, afterScheduled, afterActive, len(replacement.events))
+		}
+	}
+	assertIdle(24 * time.Hour)
+	// A new provider event is the positive control for the same still-live binding.
+	fresh := e.admit(t, replacement, `2`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "fresh", "execute"))
+	e.decide(t, fresh.token, "deny")
+	beforeReads := reads.Load()
+	clock.advance(0)
+	wake = nextRequestWake(t, replacement)
+	if wake.token != fresh.token || wake.kind != permissionWait {
+		t.Fatalf("wrong scheduled job: %+v", wake)
+	}
+	if _, err := replacement.continueRequest(wake); err != nil {
+		t.Fatal(err)
+	}
+	if err := completedWrite(t, replacement.protocol); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completion := <-replacement.events:
+		if completion.kind != responseCompleted || completion.token != fresh.token {
+			t.Fatalf("wrong completion: %+v", completion)
+		}
+		if progressed, err := replacement.continueRequest(completion); err != nil || !progressed {
+			t.Fatalf("completion: %v %v", progressed, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("response completion was not delivered")
+	}
+	if reads.Load() == beforeReads {
+		t.Fatal("live scheduled permission performed no native request read")
+	}
+	// A separately captured proof retains its own finite retry; idle time never
+	// creates this job. Exercise the timer and real busy/released writer boundary.
+	release := apitest.HoldWriteLock(t, e.path, time.Minute)
+	if err := replacement.execution(executionUpdate(e.binding.SessionID, "fresh", "completed", flushShellOutput)); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.proof == nil {
+		t.Fatal("proof was not retained under the writer lock")
+	}
+	proofID := fresh.proof.event.ID
+	clock.advance(proofRetry)
+	proofWake := nextRequestWake(t, replacement)
+	if proofWake.kind != proofWait || proofWake.proofID != proofID {
+		t.Fatalf("wrong scheduled proof: %+v", proofWake)
+	}
+	if _, err := replacement.continueRequest(proofWake); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.proof == nil {
+		t.Fatal("busy proof completed before the writer released")
+	}
+	release()
+	clock.advance(proofRetry)
+	proofWake = nextRequestWake(t, replacement)
+	if progressed, err := replacement.continueRequest(proofWake); err != nil || !progressed || fresh.proof != nil {
+		t.Fatalf("live proof retry: %v %v %+v", progressed, err, fresh.proof)
+	}
+	frozen := append([]byte(nil), wire.bytes()...)
+	assertIdle(48 * time.Hour)
+	if !bytes.Equal(wire.bytes(), frozen) {
+		t.Fatal("idle completion emitted additional bytes")
+	}
+	if bytes.Contains(wire.bytes(), []byte(`"id":1`)) || !bytes.Contains(wire.bytes(), []byte(`"id":2`)) || e.request(t, r.token) != before {
+		t.Fatalf("new job adopted old work: %s", wire.bytes())
 	}
 }

@@ -93,7 +93,7 @@ func TestCursorRuntimeWaitsForIndependentPlanAndPermission(t *testing.T) {
 	default:
 	}
 	c.choose(pendingPlan.token, "reject")
-	if err = c.tick(); err != nil {
+	if err = continuePermission(c, pendingPlan); err != nil {
 		t.Fatal(err)
 	}
 	if err = completedWrite(t, p); err != nil {
@@ -103,7 +103,7 @@ func TestCursorRuntimeWaitsForIndependentPlanAndPermission(t *testing.T) {
 		t.Fatal("plan answer acknowledged permission")
 	}
 	e.decide(t, pendingPermission.token, "allow")
-	if err = c.tick(); err != nil {
+	if err = continuePermission(c, pendingPermission); err != nil {
 		t.Fatal(err)
 	}
 	if err = completedWrite(t, p); err != nil {
