@@ -236,8 +236,11 @@ type sendKeysGuard struct {
 // blocks automatic replay after partial delivery, missing proof or a crash.
 // delivery_request_id makes retries observation-only and allows deliberate
 // identical native turns with fresh ids. Supported native composers reject unsafe
-// framing before input. Other launches retain the established pane input path,
-// without claiming exact transcript proof or native request deduplication.
+// framing before input. Ordinary unsupported Codex input uses a literal paste
+// then one Enter, refusing unsafe controls and a final dollar token before any
+// input. It requires a PasteKeysTmux adapter. Other launches and manual calls
+// retain the established pane input path. Fallback claims neither exact
+// transcript proof nor native request deduplication.
 // Pending Codex fallback input retains bounded hook observation. An unresolved
 // native attempt blocks fallback resends. Manual operations below retain their
 // separate contract and serialize with ordinary delivery. State, relay and
@@ -361,18 +364,22 @@ type sendKeysGuard struct {
 // Manual calls are at most one lookup, one pane listing, one capture, the text
 // or key call, the Enter call and, only after an action failure other than a
 // timeout, one follow-up lookup (SR-13.2). SendKeys never writes the row's
-// state. Ordinary delivery revalidates ownership and guards before every write
-// and queue sample, within bounded readiness, drain and confirmation loops.
+// state. Native ordinary delivery revalidates ownership and guards before
+// every write and queue sample, within bounded readiness, drain and
+// confirmation loops.
 //
 // Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
 // record per distinct reason per call (source ad_send_keys), fail-open, and
 // none in the normal case; Client.SendKeys writes the same records through
-// the same path, plus its one ad.send_keys.called. Each record's action is
-// what the call typed: keys_sent (the text and Enter, or the key, went
-// through), text_sent (the text or key call timed out, or the text went
-// through and the Enter call failed or timed out) or nothing_sent (no keys
-// call, or the text or key call failed other than by timing out). A pane
-// answer's sent write emits ad.row_mutation.committed (writer send_keys).
+// the same path, plus its one ad.send_keys.called. Each record's action
+// summarizes recorded send facts, not submission proof: keys_sent (input was
+// attempted with no recorded send error), text_sent (structured
+// SubmissionUnconfirmedDetails with KeysSent true, including non-timeout
+// fallback paste failures; otherwise a text/key timeout or failed Enter
+// after text) or nothing_sent (no input attempt, or any remaining send
+// error). The legacy non-timeout text/key failure mapping to nothing_sent
+// does not override structured possible-input details. A pane answer's sent
+// write emits ad.row_mutation.committed (writer send_keys).
 //
 // env carries the relay judge (its start-time reader judges the lookup's
 // server, SR-3.3, and an adopted pane, SR-3.6, too), the sender reader and
@@ -412,6 +419,7 @@ type sendKeysRun struct {
 	facts          sendKeysFacts
 	input          InputDeliverySession
 	automatic      bool
+	paste          PasteKeysTmux
 	deliveryResult SendKeysResult
 }
 
@@ -488,6 +496,16 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 		}
 	}
 	r.keysRun = newKeysRun(r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
+	if !r.automatic && row.Agent == store.AgentCodex && !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != "" {
+		if reason := codexPasteRefusal(plan.text); reason != "" {
+			return deliveryNotStarted(row, reason)
+		}
+		paste, ok := r.t.(PasteKeysTmux)
+		if !ok {
+			return deliveryNotStarted(row, "the tmux adapter does not support Codex fallback paste; use a paste-capable adapter")
+		}
+		r.paste = paste
+	}
 	if plan.enter {
 		// A literal retry after a text call with Enter would type the text
 		// again after its unsubmitted copy (b.9o4); without Enter, or for a
@@ -507,9 +525,9 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	return err
 }
 
-// send is the tmux phase: the agent's pane, then the pane answer
-// (paneAnswer), or the hash check when asked (paneMatches) and the plain
-// keys.
+// send is the tmux phase: the agent's pane, then native ordinary delivery,
+// a pane answer (paneAnswer), or the hash check when asked (paneMatches)
+// followed by a key, fallback paste or literal text.
 func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	paneID, launch, err := r.targetPane()
 	if err != nil {
@@ -533,6 +551,9 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 		if err := r.recordManualInput(); err != nil {
 			return err
 		}
+	}
+	if r.paste != nil {
+		return r.pasteText(paneID, plan.text)
 	}
 	return r.typeText(paneID, launch, plan.text, plan.enter)
 }
@@ -869,10 +890,14 @@ func isInteractiveState(state string) bool {
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
 //     was launched on.
-//   - [ErrSubmissionUnconfirmed]: ordinary delivery could not establish exact
-//     native proof. Details distinguish no input, partial text and possible
-//     Enter delivery. Never replay uncertain text or Enter; passively observe
-//     the original delivery_request_id or use operator-controlled recovery.
+//   - [ErrSubmissionUnconfirmed]: native delivery lacks exact proof, or Codex
+//     fallback was refused before input, had a paste transport failure, or lacks
+//     bounded hook-derived submission observation. Structured outcomes distinguish
+//     no input, partial text and possible Enter delivery; failed hook observation
+//     carries only keys_sent, submission_confirmed and row_state. Never replay
+//     uncertain text or Enter. Only native attempts support passive reconciliation
+//     with the original delivery_request_id. For fallback, inspect hook-derived
+//     get or status and escalate if submission remains unknown.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs.

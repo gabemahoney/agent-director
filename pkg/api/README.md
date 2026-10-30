@@ -371,13 +371,13 @@ with `Outcome: "submitted"`, `RequestID`, `SessionID`, `RecordSHA256` and
 normalized text in the launch's native transcript. `DeliveryRequestID` owns
 one attempt: the same ID and text retrieve confirmation or reconcile without
 replay; a new ID allows an intentional identical turn. Launches without native
-capability retain literal text and one Enter, return an empty result on success
-and make no exact transcript-confirmation claim. Manual operations
+capability use fallback input, return an empty result on success and make no
+exact transcript-confirmation claim. Manual operations
 (`NoEnter`, `Key`, empty text, pane hashes and permission answers) return an
 empty result on success; input-ownership refusals, including those from
 `Pause`, are in [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
-Supported launches, omitted-ID behavior, structured outcomes
-and recovery are in
+Supported launches, Codex fallback paste and input restrictions, omitted-ID
+behavior, structured outcomes and recovery are in
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
 
 Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
@@ -417,10 +417,10 @@ arrive.
 supported launches; it does not make a startup dialog an ordinary composer.
 For fallback input to a pending Codex row, the bounded hook-state observation
 and its unconfirmed result are described in the caller contract.
-Native `ErrSubmissionUnconfirmed` carries `SubmissionUnconfirmedDetails` through
+`ErrSubmissionUnconfirmed` carries `SubmissionUnconfirmedDetails` through
 `api.ErrDetails(err)`: `RequestID`, `Outcome`, `Phase`, `BytesAttempted`,
 `EnterMayHaveBeenSent`, optional `LastQueue`, `Reason`, `KeysSent`,
-`SubmissionConfirmed` and `RowState`. Fallback pending-Codex uncertainty has
+`SubmissionConfirmed` and `RowState`. A failed fallback hook observation has
 an empty `Outcome` and serializes only `keys_sent: true`,
 `submission_confirmed: false` and `row_state`. See
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
@@ -445,6 +445,14 @@ delivery), and optional `Sleep` for readiness, drain and submission checks
 (nil uses `time.Sleep`). Most callers use the Client method, which supplies these.
 Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
 bounding connection and lock waits by the supplied duration.
+Custom tmux adapters supplied to this function or through `Options.TmuxClient`
+must also implement optional `PasteKeysTmux` to support ordinary Codex fallback:
+`PasteKeysPane(socket, paneID, text string) error`. It preserves text and LF in
+one paste, sends one Enter only after paste succeeds, and never retries input.
+Failures use `*TmuxCallError` with the failed text or Enter call. Adapters
+without this capability remain source-compatible but receive a pre-input
+`not_started` refusal on that path; native and manual operations keep their
+existing methods. The default client provides the capability.
 See their godoc for each field's contract.
 
 ```go

@@ -383,13 +383,28 @@ outside this contract. Accepted extra arguments are `--model`/`-m`,
 `--dangerously-skip-permissions`. The launch's keybinding requirements and
 generated settings are in [Ordinary delivery launch settings](settings.md#ordinary-delivery-launch-settings).
 When native capability is unavailable, including other versions, platforms,
-resumed conversations or unsupported launch arguments, `send-keys` retains
-literal text delivery followed by one Enter. Success returns an empty object
-and makes no exact transcript-confirmation claim. A pending Codex row is
+resumed conversations or unsupported launch arguments, ordinary Codex input
+uses one paste followed by one Enter; other agents retain literal text plus
+Enter. Paste framing requires the application to have enabled bracketed paste;
+it does not establish composer readiness. Fallback success returns an empty
+object, without exact transcript confirmation. A pending Codex row is
 observed for up to 2 s for hook-derived `working`, `ask_user` or
 `check_permission` state. If that activity is not observed, the call returns
 `ErrSubmissionUnconfirmed` with `keys_sent: true`,
-`submission_confirmed: false` and `row_state`; it never resends input.
+`submission_confirmed: false` and `row_state`, without an `outcome`.
+Missing hooks can leave submission unknown even when input reached the agent.
+
+Codex fallback refuses invalid UTF-8, control characters other than LF after
+CR removal (including tabs and escape characters), and a final
+whitespace-delimited token beginning with `$`. Trailing horizontal whitespace
+still counts; LF, U+2028 or U+2029 after the token ends that match. Earlier
+dollar tokens and dollars embedded in another token are not refused by this
+rule. These refusals return `ErrSubmissionUnconfirmed` with
+`outcome: "not_started"`, `phase: "pre_input"`, zero `bytes_attempted`,
+`keys_sent: false` and `enter_may_have_been_sent: false`. Put the prompt in a
+file the agent can read and send a short instruction naming that file.
+These restrictions apply to ordinary Codex fallback, not the separate manual
+operations below.
 
 State, permission-relay and dialog guards run before capability selection or
 stored-request observation. `ended` and `missing` rows are always refused
@@ -430,15 +445,21 @@ request discovers late proof for its predecessor,
 it reports `not_started`; re-issue the new request only after the predecessor
 has settled.
 
-For native delivery, `ErrSubmissionUnconfirmed` carries these `err_details`:
+Native delivery and Codex fallback refusals or paste-transport failures use
+these `ErrSubmissionUnconfirmed` details:
 
 | Field | Meaning |
 |---|---|
 | `outcome` | `not_started`: this request attempted no input; `partial_input_unconfirmed`: text or manual input may be present, with no automatic Enter attempted; `submission_unconfirmed`: Enter may have been sent and submission remains unknown. |
-| `request_id`, `phase` | The owned attempt, when allocated, and its last delivery phase. An earlier unresolved attempt can be reported instead of the requested new input. |
+| `request_id`, `phase` | The owned native attempt, when allocated, and the last delivery phase. An earlier unresolved native attempt can be reported instead of the requested new input. Fallback paste has no request ID. |
 | `bytes_attempted`, `enter_may_have_been_sent`, `keys_sent` | Conservative input-attempt facts, not byte receipts. `keys_sent` means input was attempted and may have reached the pane. |
 | `last_queue` | Optional last terminal queue sample; zero is not submission evidence. |
 | `submission_confirmed`, `row_state`, `reason` | Confirmation is false; state and reason describe the observation, not proof of failure. |
+
+A fallback paste-transport failure counts the whole offered payload as
+attempted, even when delivery may not have begun. It reports
+`partial_input_unconfirmed` when Enter is known unattempted, otherwise
+`submission_unconfirmed`; neither proves which bytes arrived.
 
 A `not_started` request can be re-issued after its stated condition clears.
 For partial or unconfirmed input, never automatically repeat text, Enter or
@@ -446,6 +467,8 @@ editing keys: input may still submit later. For a native attempt, re-issue the
 same request only to observe proof while the guards allow it; if it remains
 unresolved, escalate to a human using
 [Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
+For fallback uncertainty, check hook-derived `get` or `status` without
+resending; if still unknown, escalate through the same procedure.
 Agent-director never retries text or Enter on missing evidence, including
 after a crash.
 
@@ -473,7 +496,7 @@ or Enter. If submission remains unknown, use
 
 Manual input, including `pause`, changes the native composer contract and prevents
 further new native delivery on that launch. A pane without native capability
-retains its literal input path after manual input. A state, permission or pane refusal
+retains its fallback input path after manual input. A state, permission or pane refusal
 from `pause` does not change that contract. Manual input does not clear an
 unresolved attempt. Direct terminal writers must also be excluded during an
 automatic request; agent-director's lock cannot serialize them.

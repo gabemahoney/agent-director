@@ -9,32 +9,37 @@ import (
 )
 
 // The ad.provenance.disagree action values the keys verbs write (SR-14):
-// what the call typed into the agent's pane. send-keys and pause share them
-// (keysRun.emitDisagree); pause's text is `/exit`.
+// recorded input attempts and transport outcomes, not submission proof.
+// send-keys and pause share them (keysRun.emitDisagree); pause's text is `/exit`.
 //
-//   - sendKeysActionKeysSent: the text call and the Enter call both went
-//     through.
-//   - sendKeysActionTextSent: the text may have been typed with no submit
-//     known to have gone through: the text call timed out, or it went through
-//     and the Enter call then failed or timed out.
-//   - sendKeysActionNothingSent: no text call was made (after a failed line
-//     clear of pause's too: C-u types no text), or the text call failed
-//     other than by timing out.
+//   - sendKeysActionKeysSent: input was attempted with no recorded send error
+//     (text/paste and any requested Enter, or a key).
+//   - sendKeysActionTextSent: structured SubmissionUnconfirmedDetails reports
+//     KeysSent true, including fallback paste failures without a timeout;
+//     otherwise the legacy transport mapping applies: a text/key timeout,
+//     or successful text followed by a failed or timed-out Enter.
+//   - sendKeysActionNothingSent: no input attempt (including after pause's
+//     failed line clear: C-u types no text), or any remaining send error.
+//     The legacy non-timeout text/key failure rule does not override
+//     structured possible-input details.
 const (
 	sendKeysActionKeysSent    = "keys_sent"
 	sendKeysActionTextSent    = "text_sent"
 	sendKeysActionNothingSent = "nothing_sent"
 )
 
-// sendKeysAction is the call's action value from whether SendKeysPane was
-// called (sent; a failed line clear before it leaves sent false) and its
-// error (sendErr).
+// sendKeysAction is the call's action value from whether text, paste or a key
+// was attempted (sent; a failed line clear before it leaves sent false) and
+// the recorded send error (sendErr), including structured paste uncertainty.
 func sendKeysAction(sent bool, sendErr error) string {
 	if !sent {
 		return sendKeysActionNothingSent
 	}
 	if sendErr == nil {
 		return sendKeysActionKeysSent
+	}
+	if details, ok := ErrDetails(sendErr).(SubmissionUnconfirmedDetails); ok && details.KeysSent {
+		return sendKeysActionTextSent
 	}
 	var ce *tmux.CallError
 	if errors.As(sendErr, &ce) && (ce.Failure == tmux.FailTimeout || enterFailedAfterText(ce)) {

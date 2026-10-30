@@ -4,15 +4,17 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// This file holds the tmux phase shared by the pane verbs that type keys
-// into the agent's pane (SR-3.6, SR-3.7, SR-7.2, SR-7.3, SR-13.2): send-keys'
-// text and pause's /exit. Each verb runs its own row read and state rules
-// first, then this phase: one lookup, on Ours one pane listing and the
-// adoption when due (paneRun), then the keys and Enter by the agent's pane
-// id, with a failed send mapped in the "keys may have reached the pane" mode
-// (paneActionFailure.Keys). The verbs differ only in their Leftover refusal
-// (keysRun.leftover), their next step after a keys failure (keysRun.next),
-// whether the input line is cleared first (keysRun.clear) and the keys typed.
+// This file holds the tmux lookup and send facts shared by the pane verbs that
+// send input into the agent's pane (SR-3.6, SR-3.7, SR-7.2, SR-7.3, SR-13.2):
+// send-keys' text and pause's /exit. Each verb runs its own row read and state rules
+// first, then one lookup, on Ours one pane listing and the adoption when due
+// (paneRun). The shared literal-text path sends keys and Enter by pane id,
+// with a failed send mapped in the "keys may have reached the pane" mode
+// (paneActionFailure.Keys). send-keys also uses native delivery or fallback
+// paste after the shared lookup; those paths have their own failure handling.
+// The shared path allows each verb its own Leftover refusal (keysRun.leftover),
+// next step after a keys failure (keysRun.next), input-line clear (keysRun.clear)
+// and text.
 
 // lineClearKey is the key pause sends to the agent's pane before typing
 // /exit (b.9o4): C-u, which Claude Code's prompt input binds to deleting
@@ -62,10 +64,12 @@ type keysFacts struct {
 	// Session is the session concerned: the Ours session the lookup found;
 	// zero on every other verdict.
 	Session tmux.Session
-	// Sent reports that SendKeysPane was called (keys may have reached the
-	// pane); SendErr is its error, nil when the keys and Enter both went
-	// through. enterFailedAfterText tells a failed Enter after the text. A
-	// failed line clear (keysRun.clear) types no text and leaves both unset.
+	// Sent reports a text, paste or key send attempt (input may have reached
+	// the pane); SendErr is the recorded send error, including structured
+	// fallback paste uncertainty. Nil means no send error was recorded, not
+	// proof of submission. enterFailedAfterText identifies a legacy transport
+	// error from Enter after text. A failed line clear (keysRun.clear) types
+	// no text and leaves both unset.
 	Sent    bool
 	SendErr error
 	// FollowUp is the follow-up lookup after a failed send (Ran false when

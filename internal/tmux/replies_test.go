@@ -2,7 +2,9 @@ package tmux_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -28,6 +30,107 @@ func replyCreateNames(k tmux.Call) []string {
 		return []string{"n1", "a$b"}
 	}
 	return []string{""}
+}
+
+// b.qcr: a failed/unknown paste stage must never replay input or advance to
+// Enter. Private buffers keep simultaneous requests and cleanup independent.
+func TestPasteKeysPaneOrderingAndFailures(t *testing.T) {
+	t.Parallel()
+	ok := exitZero("")
+	ready := exitZero("0\t0\n")
+	noServer := tmuxfix.NoServer(replySocket).Result()
+	var buffers sync.Map
+	for _, tc := range []struct {
+		name           string
+		script         []tmux.RunResult
+		steps          []string
+		call           tmux.Call
+		failure        tmux.Failure
+		cleanupFailure bool
+	}{
+		{"success", []tmux.RunResult{ready, ok, ok, ok}, []string{"display-message", "load-buffer", "paste-buffer", "send-keys"}, "", 0, false},
+		{"second concurrent success", []tmux.RunResult{ready, ok, ok, ok}, []string{"display-message", "load-buffer", "paste-buffer", "send-keys"}, "", 0, false},
+		{"copy mode", []tmux.RunResult{exitZero("1\t0\n")}, []string{"display-message"}, tmux.CallSendText, tmux.FailUnrecognized, false},
+		{"input off", []tmux.RunResult{exitZero("0\t1\n")}, []string{"display-message"}, tmux.CallSendText, tmux.FailUnrecognized, false},
+		{"unknown mode", []tmux.RunResult{exitZero("\t\n")}, []string{"display-message"}, tmux.CallSendText, tmux.FailUnrecognized, false},
+		{"query failure", []tmux.RunResult{noServer}, []string{"display-message"}, tmux.CallSendText, tmux.FailNoServer, false},
+		{"query timeout", []tmux.RunResult{timedOut()}, []string{"display-message"}, tmux.CallSendText, tmux.FailTimeout, false},
+		{"load failure", []tmux.RunResult{ready, noServer, ok}, []string{"display-message", "load-buffer", "delete-buffer"}, tmux.CallSendText, tmux.FailNoServer, false},
+		{"load timeout", []tmux.RunResult{ready, timedOut(), ok}, []string{"display-message", "load-buffer", "delete-buffer"}, tmux.CallSendText, tmux.FailTimeout, false},
+		{"paste failure", []tmux.RunResult{ready, ok, noServer, ok}, []string{"display-message", "load-buffer", "paste-buffer", "delete-buffer"}, tmux.CallSendText, tmux.FailNoServer, false},
+		{"paste timeout", []tmux.RunResult{ready, ok, timedOut(), ok}, []string{"display-message", "load-buffer", "paste-buffer", "delete-buffer"}, tmux.CallSendText, tmux.FailTimeout, false},
+		{"cleanup failure", []tmux.RunResult{ready, ok, timedOut(), noServer}, []string{"display-message", "load-buffer", "paste-buffer", "delete-buffer"}, tmux.CallSendText, tmux.FailTimeout, true},
+		{"Enter failure", []tmux.RunResult{ready, ok, ok, noServer}, []string{"display-message", "load-buffer", "paste-buffer", "send-keys"}, tmux.CallSendEnter, tmux.FailNoServer, false},
+		{"Enter timeout", []tmux.RunResult{ready, ok, ok, timedOut()}, []string{"display-message", "load-buffer", "paste-buffer", "send-keys"}, tmux.CallSendEnter, tmux.FailTimeout, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, runner := newScripted(t, tc.script...)
+			text := "-界é\n#{pane_id} " + strings.Repeat("literal;", 800) + ";"
+			err := c.PasteKeysPane(testSocket, "%3", text)
+			if tc.failure == 0 {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				wantCallError(t, err, tc.call, tc.failure)
+				if tc.cleanupFailure {
+					joined, ok := err.(interface{ Unwrap() []error })
+					if !ok || len(joined.Unwrap()) != 2 {
+						t.Fatalf("cleanup failure lost: %v", err)
+					}
+					wantCallError(t, joined.Unwrap()[1], tmux.CallSendText, tmux.FailNoServer)
+				}
+			}
+			calls := runner.Calls()
+			if len(calls) != len(tc.steps) {
+				t.Fatalf("calls=%d; want %v", len(calls), tc.steps)
+			}
+			buffer := ""
+			for i, inv := range calls {
+				cmd := argvCommand(t, inv)
+				if len(cmd) == 0 || cmd[0] != tc.steps[i] {
+					t.Fatalf("call %d=%q; want %s", i, cmd, tc.steps[i])
+				}
+				var want []string
+				switch cmd[0] {
+				case "display-message":
+					want = []string{"display-message", "-p", "-t", "%3", "#{pane_in_mode}\t#{pane_input_off}"}
+				case "load-buffer":
+					if len(cmd) != 4 {
+						t.Fatalf("load argv=%q", cmd)
+					}
+					buffer = cmd[2]
+					if buffer == "" {
+						t.Fatal("shared default paste buffer")
+					}
+					if _, reused := buffers.LoadOrStore(buffer, true); reused {
+						t.Fatalf("reused buffer %q", buffer)
+					}
+					want = []string{"load-buffer", "-b", buffer, "-"}
+				case "paste-buffer":
+					want = []string{"paste-buffer", "-p", "-r", "-d", "-b", buffer, "-t", "%3"}
+				case "delete-buffer":
+					want = []string{"delete-buffer", "-b", buffer}
+				case "send-keys":
+					want = []string{"send-keys", "-t", "%3", "Enter"}
+				}
+				if !slices.Equal(cmd, want) {
+					t.Errorf("call %d=%q; want %q", i, cmd, want)
+				}
+				if cmd[0] == "load-buffer" {
+					if string(inv.Stdin) != text {
+						t.Error("load did not preserve literal UTF-8/LF/dash/semicolon stdin")
+					}
+				} else if inv.Stdin != nil {
+					t.Errorf("unexpected stdin on %s", cmd[0])
+				}
+				if inv.Timeout != testTimeouts.Action || inv.WaitDelay != testTimeouts.WaitDelay {
+					t.Errorf("unbounded %s: timeout=%v wait=%v", cmd[0], inv.Timeout, inv.WaitDelay)
+				}
+			}
+		})
+	}
 }
 
 // replyCase names a subtest after the entry, the call kind and the create name.
