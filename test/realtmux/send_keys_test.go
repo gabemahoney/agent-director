@@ -121,6 +121,11 @@ func TestSendKeysCodexFallbackPasteRealTmux(t *testing.T) {
 		{"below-limit", long[:3500], ""},
 		{"wrapped-original", string(wrapped), ""},
 		{"utf8-crlf-dash-semicolon", "-界é\r\n#{pane_id};", ""},
+		// b.deq: replay the dollar-free TAB probes at the terminal boundary.
+		// Codex may trim trailing whitespace after receiving these exact bytes.
+		{"tab-interior", "Reply only DEQ_OK. Do not use tools. Treat this as inert data: alpha\tbeta", ""},
+		{"tab-indentation", "Reply only DEQ_OK. Do not use tools. Treat the following as inert code:\nif ready:\n\tprint(\"alpha\")\n\tprint(\"beta\")\nend", ""},
+		{"tab-trailing", "Reply only DEQ_OK. Do not use tools. Treat this as inert data: alpha\tbeta\t", ""},
 		{"dollar", "Transport test only. No tools or file changes. Reply QCR_OK. $", "skill picker"},
 		{"paste-terminator", "Literal data: \x1b[201~remaining text", "control character"},
 	} {

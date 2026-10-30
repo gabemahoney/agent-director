@@ -932,7 +932,8 @@ func TestAdviceFollow_E15_CodexFallbackLiteralSafety(t *testing.T) {
 		{"shell spelling", "$HOME", "skill picker"},
 		{"embedded terminator", "hello\x1b[201~tail", "control character"},
 		{"NUL", "hello\x00tail", "control character"},
-		{"tab", "read $\t", "control character"},
+		// b.deq: allowing literal TAB must retain final-dollar-token refusal.
+		{"final dollar then tab", "read $\t", "skill picker"},
 		{"C1 control", "hello\u0085tail", "control character"},
 		{"invalid UTF8", "hello\xff", "valid UTF-8"},
 		{"earlier dollar", "read $skill then continue", ""},
