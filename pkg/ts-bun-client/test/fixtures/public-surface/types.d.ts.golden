@@ -986,7 +986,11 @@ export interface PaneKeySentDetails {
     key_sent: true;
     request_token: string;
 }
-/** ErrSubmissionUnconfirmed's errDetails; submission remains unknown despite keys_sent. */
+/**
+ * ErrSubmissionUnconfirmed's three-field errDetails for failed pending-Codex hook
+ * observation; submission remains unknown despite keys_sent. Native and paste
+ * outcomes use the generic errDetails record.
+ */
 export interface SubmissionUnconfirmedDetails {
     keys_sent: true;
     submission_confirmed: false;

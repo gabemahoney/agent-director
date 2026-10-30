@@ -34,8 +34,14 @@ func (p *paEnv) codexState(t *testing.T) string {
 // assertTyped fails unless a plain send-keys on p now types.
 func (p *paEnv) assertTyped(t *testing.T) {
 	t.Helper()
-	if run := p.sendKeysRun(p.plain("hi")); run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
+	run := p.sendKeysRun(p.plain("hi"))
+	if run.err != nil {
 		t.Fatalf("plain send-keys = %v, calls %v; want it typed", run.err, paKinds(run.calls))
+	}
+	if p.isCodex() {
+		assertFallbackPaste(t, run.calls, p.r.Socket, p.r.Spawn.Identity.PaneID, "hi")
+	} else if !slices.Equal(paKinds(run.calls), paneSendCalls) {
+		t.Fatalf("plain send-keys calls %v; want %v", paKinds(run.calls), paneSendCalls)
 	}
 }
 

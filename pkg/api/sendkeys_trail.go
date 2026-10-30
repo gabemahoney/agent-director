@@ -9,14 +9,13 @@ import (
 )
 
 // The ad.provenance.disagree action values the keys verbs write (SR-14):
-// what the call typed into the agent's pane. send-keys and pause share them
-// (keysRun.emitDisagree); pause's text is `/exit`.
+// recorded input attempts and transport outcomes, not submission proof.
+// send-keys and pause share them (keysRun.emitDisagree); pause's text is `/exit`.
 //
-//   - sendKeysActionKeysSent: the text call and the Enter call both went
-//     through.
-//   - sendKeysActionTextSent: the text may have been typed with no submit
-//     known to have gone through: the text call timed out, or it went through
-//     and Enter or the admission check before it then failed.
+//   - sendKeysActionKeysSent: input was attempted with no recorded send error.
+//   - sendKeysActionTextSent: structured details report possible input, including
+//     paste failures; otherwise text was sent before Enter or its admission
+//     failed, or the legacy transport reported a timeout.
 //   - sendKeysActionNothingSent: no text call was made (after a failed line
 //     clear of pause's too: C-u types no text), or the text call failed
 //     other than by timing out.
@@ -34,6 +33,9 @@ func sendKeysAction(f keysFacts) string {
 	}
 	if f.SendErr == nil {
 		return sendKeysActionKeysSent
+	}
+	if details, ok := ErrDetails(f.SendErr).(SubmissionUnconfirmedDetails); ok && details.KeysSent {
+		return sendKeysActionTextSent
 	}
 	var ce *tmux.CallError
 	if f.TextSent || errors.As(f.SendErr, &ce) && (ce.Failure == tmux.FailTimeout || enterFailedAfterText(ce)) {

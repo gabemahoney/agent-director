@@ -169,6 +169,22 @@ func Duplicate(stored string) Entry {
 		FirstLine: line}
 }
 
+// NoBuffer is paste-buffer's missing named-buffer reply (b.qcr;
+// TestRepliesMissingBuffer/paste-buffer, tmux 3.3a).
+func NoBuffer(name string) Entry {
+	return unrecognized("reply/no-buffer:"+name,
+		"b.qcr: TestRepliesMissingBuffer/paste-buffer, tmux 3.3a, j20261030004533-da22e2",
+		"no buffer "+name, tmux.CallSendText)
+}
+
+// UnknownBuffer is delete-buffer's missing named-buffer reply (b.qcr;
+// TestRepliesMissingBuffer/delete-buffer, tmux 3.3a).
+func UnknownBuffer(name string) Entry {
+	return unrecognized("reply/unknown-buffer:"+name,
+		"b.qcr: TestRepliesMissingBuffer/delete-buffer, tmux 3.3a, j20261030004533-da22e2",
+		"unknown buffer: "+name, tmux.CallSendText)
+}
+
 // unrecognized is a stderr reply no call recognises, for the given calls.
 func unrecognized(name, source, line string, calls ...tmux.Call) Entry {
 	return Entry{Name: name, Source: source, Stderr: line + "\n", Exit: 1,
@@ -198,6 +214,8 @@ func Replies(socket string) []Entry {
 		Duplicate("proj-abc123"), // E.3 D2
 		Duplicate("dot_x"),       // E.10 N6: the stored form of dot.x
 		Duplicate(`a\$b`),        // E.3 N1: the stored form of a$b after the D2 prefix
+		NoBuffer("ad-missing-buffer"),
+		UnknownBuffer("ad-missing-buffer"),
 		unrecognized("reply/cant-find-pane", "E.10 O4; E.3 D1; the key send's on tmux 3.3a (b.9o4)", wordNoPane,
 			tmux.CallSendText, tmux.CallSendEnter, tmux.CallSendKey, tmux.CallCapture),
 		unrecognized("reply/cant-find-session", "E.10 O4; E.3 D1, D3", "can't find session: $0", tmux.CallKillSession),

@@ -143,6 +143,9 @@ func newNativeSubmissionEnv(t *testing.T) *nativeSubmissionEnv {
 			e.s.sent = true
 		}
 	})
+	e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) {
+		e.s.sent = true // Codex fallback's guarded paste uses the transport Enter call.
+	})
 	e.env = api.SendKeysEnv{Input: e.b, Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()}, Sleep: func(d time.Duration) { e.slept += d; e.clock.Advance(d) }}
 	return e
 }
@@ -324,8 +327,8 @@ func assertDeliveryError(t *testing.T, err error, outcome string, bytes int, ent
 func assertOrdinaryWrites(t *testing.T, e *killEnv, r killRow, text string) {
 	t.Helper()
 	for _, c := range e.rec.SocketCallsOf(tmux.CallSendText) {
-		if len(c.Text) > 512 {
-			t.Fatalf("oversized native chunk: %d", len(c.Text))
+		if c.Paste || len(c.Text) > 512 {
+			t.Fatalf("unsafe native chunk: %+v", c)
 		}
 	}
 	assertInputWrites(t, e, r, text)

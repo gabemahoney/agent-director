@@ -728,6 +728,28 @@ func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string) {
 	assertEnterSent(t, e.rec, socket, paneID)
 }
 
+// assertFallbackPaste checks one bracketed paste and one Enter, including
+// the ownership checks immediately before each write.
+func assertFallbackPaste(t *testing.T, calls []tmuxfix.SocketCall, socket, paneID, text string) {
+	t.Helper()
+	want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes,
+		tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText,
+		tmux.CallLookup, tmux.CallListPanes, tmux.CallSendEnter}
+	if !slices.Equal(paKinds(calls), want) {
+		t.Fatalf("fallback calls = %v; want %v", paKinds(calls), want)
+	}
+	for _, c := range calls {
+		if c.Call == tmux.CallSendText || c.Call == tmux.CallSendEnter {
+			if c.Socket != socket || c.Target != paneID {
+				t.Errorf("fallback write = %+v; want pane %s on %s", c, paneID, socket)
+			}
+		}
+		if c.Call == tmux.CallSendText && (c.Text != text || !c.Paste || c.PressEnter) {
+			t.Errorf("fallback text = %+v; want one paste of %q without Enter", c, text)
+		}
+	}
+}
+
 // assertEnterOnly requires all admission checks and one actual Enter key,
 // with no literal transport operation, including an empty-text operation.
 func (e *killEnv) assertEnterOnly(t *testing.T, socket, paneID string) {

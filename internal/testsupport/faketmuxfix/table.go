@@ -70,6 +70,8 @@ type Table struct {
 	// Injections replace or delay the fake's answer per call kind; the
 	// first one matching a call applies (see Injection).
 	Injections []Injection `json:"injections,omitempty"`
+	// Buffers holds private load-buffer stdin until paste -d or delete-buffer.
+	Buffers map[string][]byte `json:"buffers,omitempty"`
 }
 
 // Server is a tmux server's identity as #{pid} and #{start_time} show it.

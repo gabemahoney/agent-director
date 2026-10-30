@@ -221,8 +221,7 @@ func TestIdleScreenLeavesCommandGuards(t *testing.T) {
 	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: e.id, Text: "go on"}); err != nil {
 		t.Fatalf("send-keys on a row displayed idle_screen: %v; want delivered", err)
 	}
-	assertTextSent(t, e.rec, apitest.TestSocket, apitest.TestPaneID, "go on")
-	assertEnterSent(t, e.rec, apitest.TestSocket, apitest.TestPaneID)
+	assertFallbackPaste(t, e.rec.SocketCalls(), apitest.TestSocket, apitest.TestPaneID, "go on")
 	if got := observeStatus(t, c, e.id, api.StateIdleScreen, nil); got.Since != entered.Since || minutes(t, got) != minutes(t, entered) || e.row(t).State != store.StateWorking {
 		t.Errorf("after send-keys: %+v, raw %s; want the episode %+v on a raw working row", got, e.row(t).State, entered)
 	}

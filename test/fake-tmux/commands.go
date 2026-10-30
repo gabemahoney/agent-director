@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -66,6 +67,8 @@ func (s *server) exec(name string, args []string) (int, error) {
 		return s.killSession(args)
 	case "send-keys":
 		return s.sendKeys(args)
+	case "load-buffer", "paste-buffer", "delete-buffer":
+		return s.buffer(name, args)
 	case "capture-pane":
 		return s.capturePane(args)
 	case "new-session":
@@ -113,12 +116,22 @@ func (s *server) sorted() []*faketmuxfix.Session {
 // no-socket reply (exit 1), as tmux does there, so the fake never names a
 // server that does not run.
 func (s *server) displayMessage(args []string) (int, error) {
-	o, rest, ok := getopt(args, "", "p")
+	o, rest, ok := getopt(args, "t", "p")
 	if !ok || len(rest) != 1 || !o.has('p') {
 		return 0, errBadArgv
 	}
 	if s.tb.Server == nil {
 		return s.reply(tmuxfix.NoSocket(s.socket)), nil
+	}
+	if len(o['t']) == 1 {
+		if _, _, ok := s.findPane(o['t'][0]); !ok {
+			return s.reply(s.catalogued("reply/cant-find-pane")), nil
+		}
+		if rest[0] != "#{pane_in_mode}\t#{pane_input_off}" {
+			return 0, errBadArgv
+		}
+		s.out.stdout += "0\t0\n"
+		return 0, nil
 	}
 	s.out.stdout += expand(rest[0], serverVars(s.tb.Server)) + "\n"
 	return 0, nil
@@ -252,6 +265,55 @@ func (s *server) sendKeys(args []string) (int, error) {
 	if _, _, ok := s.findPane(t); !ok {
 		return s.reply(s.catalogued("reply/cant-find-pane")), nil
 	}
+	return 0, nil
+}
+
+// buffer supports the b.qcr paste transport using the existing per-socket
+// table. It models ownership/deletion, not terminal framing or agent acceptance.
+func (s *server) buffer(name string, args []string) (int, error) {
+	o, rest, ok := getopt(args, "bt", "prd")
+	if !ok || len(o['b']) != 1 {
+		return 0, errBadArgv
+	}
+	if s.tb.Server == nil {
+		return s.reply(tmuxfix.NoSocket(s.socket)), nil
+	}
+	id := o['b'][0]
+	if name == "load-buffer" {
+		if len(rest) != 1 || rest[0] != "-" {
+			return 0, errBadArgv
+		}
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return 0, err
+		}
+		if s.tb.Buffers == nil {
+			s.tb.Buffers = map[string][]byte{}
+		}
+		s.tb.Buffers[id] = data
+	} else {
+		if len(rest) != 0 {
+			return 0, errBadArgv
+		}
+		if _, exists := s.tb.Buffers[id]; !exists {
+			if name == "delete-buffer" {
+				return s.reply(tmuxfix.UnknownBuffer(id)), nil
+			}
+			return s.reply(tmuxfix.NoBuffer(id)), nil
+		}
+		if name == "paste-buffer" {
+			if len(o['t']) != 1 {
+				return 0, errBadArgv
+			}
+			if _, _, ok := s.findPane(o['t'][0]); !ok {
+				return s.reply(s.catalogued("reply/cant-find-pane")), nil
+			}
+		}
+		if name == "delete-buffer" || o.has('d') {
+			delete(s.tb.Buffers, id)
+		}
+	}
+	s.changed = true
 	return 0, nil
 }
 

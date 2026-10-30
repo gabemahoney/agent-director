@@ -116,10 +116,7 @@ func TestPlainSendKeysHeldUntilProven(t *testing.T) {
 					if n := p.prove(t, proof); n != 1 {
 						t.Fatalf("%s proved %d; want request A", pf.name, n)
 					}
-					run := p.sendKeysRun(p.plain("hi"))
-					if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
-						t.Fatalf("plain send-keys once proven = %v, calls %v; want it typed", run.err, paKinds(run.calls))
-					}
+					p.assertTyped(t)
 					if pr := p.request(t, tok); pr.ProvenGoneHow != proof.How {
 						t.Errorf("request A proven_gone_how = %q; want %q", pr.ProvenGoneHow, proof.How)
 					}

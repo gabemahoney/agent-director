@@ -170,25 +170,25 @@ type PaneKeySentDetails struct {
 }
 
 // SubmissionUnconfirmedDetails reports delivery or dispatch facts for native,
-// manual, permission-pane and pause input, or pending Codex fallback input
-// without a bounded hook-derived observation.
+// manual, permission-pane and pause input, refused or failed Codex fallback
+// paste, or pending Codex fallback input without a bounded hook-derived observation.
 // RowState is the last raw state read, not a synthetic state or proof that the
 // prompt remains unsubmitted.
 type SubmissionUnconfirmedDetails struct {
 	// RequestID identifies the native attempt when one was recorded.
-	RequestID            string `json:"request_id,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
 	// Outcome classifies delivery or dispatch; empty selects legacy fallback details.
-	Outcome              string `json:"outcome"`
+	Outcome string `json:"outcome"`
 	// Phase is the attempt or dispatch phase reported by this call, not proof of persistence.
-	Phase                string `json:"phase"`
+	Phase string `json:"phase"`
 	// BytesAttempted counts text bytes that may have been sent, not received bytes.
-	BytesAttempted       int    `json:"bytes_attempted"`
+	BytesAttempted int `json:"bytes_attempted"`
 	// EnterMayHaveBeenSent records possible Enter dispatch, not submission proof.
-	EnterMayHaveBeenSent bool   `json:"enter_may_have_been_sent"`
+	EnterMayHaveBeenSent bool `json:"enter_may_have_been_sent"`
 	// LastQueue is the last observed terminal input-queue length, if available.
-	LastQueue            *int   `json:"last_queue,omitempty"`
+	LastQueue *int `json:"last_queue,omitempty"`
 	// Reason explains why the call could not confirm submission.
-	Reason               string `json:"reason"`
+	Reason string `json:"reason"`
 	// KeysSent means input was attempted and may have reached the pane.
 	KeysSent bool `json:"keys_sent"`
 
@@ -199,8 +199,9 @@ type SubmissionUnconfirmedDetails struct {
 	RowState string `json:"row_state"`
 }
 
-// MarshalJSON preserves the legacy pending-Codex three-field payload. Native
-// outcomes retain every required field, including zero bytes and false Enter.
+// MarshalJSON preserves the three-field payload for a failed pending-Codex hook
+// observation when Outcome is empty. Nonempty native or Codex fallback outcomes
+// retain every required field, including zero bytes and false Enter.
 func (d SubmissionUnconfirmedDetails) MarshalJSON() ([]byte, error) {
 	if d.Outcome == "" {
 		return json.Marshal(struct {
