@@ -69,6 +69,12 @@ load_identity() {
  session=$(sql "SELECT session_id FROM spawns WHERE instance_id='$id';")
  [[ $gateway =~ ^[0-9]+$ && $runtime =~ ^[0-9]+$ && $pane =~ ^%[0-9]+$ && -n $session ]]
  [[ $(sql "SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='$id' AND s.agent='cursor' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;") == 1 ]]
+ # Compare the captured identities with independent kernel facts before any loss.
+ [[ $(proc_start "$gateway") == "$(sql "SELECT bound_gateway_start FROM cursor_runtimes WHERE bound_instance_id='$id';")" ]]
+ [[ $(proc_start "$runtime") == "$(sql "SELECT bound_runtime_start FROM cursor_runtimes WHERE bound_instance_id='$id';")" ]]
+}
+proc_start() {
+ node -e 'const s=require("fs").readFileSync("/proc/"+process.argv[1]+"/stat","utf8");const f=s.slice(s.lastIndexOf(")")+2).split(" ");if(f[0]==="Z")process.exit(1);console.log(f[19])' "$1"
 }
 proc_gone() {
  node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' "$1"

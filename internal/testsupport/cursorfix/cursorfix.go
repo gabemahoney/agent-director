@@ -6,12 +6,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
 
-//go:embed runtime.js
+//go:embed runtime.js trace_lifecycle.c
 var scripts embed.FS
+
+// TraceLifecycle builds a Linux tracee for real fork/vfork and pthread exec
+// schedules that the Go subprocess helper cannot control independently of its runtime.
+// Process lifecycle tests must reuse this fixture; callers own termination and pipe cleanup.
+func TraceLifecycle(t testing.TB) string {
+	t.Helper()
+	dir := t.TempDir()
+	source, err := scripts.ReadFile("trace_lifecycle.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "trace_lifecycle.c")
+	if err = os.WriteFile(path, source, 0600); err != nil {
+		t.Fatal(err)
+	}
+	program := filepath.Join(dir, "trace-lifecycle")
+	if output, err := exec.Command("cc", "-Wall", "-Wextra", "-Werror", "-pthread", "-o", program, path).CombinedOutput(); err != nil {
+		t.Fatalf("build tracee fixture: %v: %s", err, output)
+	}
+	return program
+}
 
 // Runtime records received frames without accessing Cursor or authentication.
 type Runtime struct{ Program, Trace, PID, Release, WorkerPID, WorkerRelease, Scenario, Raw, Observer, Sent, Paused, NewRelease, MCPTrace, MCPRelease, MCPControl, Events string }
@@ -32,8 +54,15 @@ func (r Runtime) Selection(t testing.TB) map[string]*string {
 
 func New(t testing.TB) Runtime { return NewWithWorker(t, false) }
 
-// NewWithWorker uses a separate terminal session for the independent worker with neither ACP pipe.
-func NewWithWorker(t testing.TB, worker bool) Runtime {
+// WorkerOptions varies only the descendant's role and standard descriptors.
+// Omitted options retain the independent worker with neither ACP pipe.
+type WorkerOptions struct {
+	Args  []string
+	Stdio []string
+}
+
+// NewWithWorker uses a separate terminal session for the synthetic worker.
+func NewWithWorker(t testing.TB, worker bool, options ...WorkerOptions) Runtime {
 	t.Helper()
 	dir := t.TempDir()
 	r := Runtime{Program: filepath.Join(dir, "index.js"), Trace: filepath.Join(dir, "trace.jsonl"), PID: filepath.Join(dir, "pid"), Release: filepath.Join(dir, "release"), WorkerPID: filepath.Join(dir, "worker-pid"), WorkerRelease: filepath.Join(dir, "worker-release"), Scenario: filepath.Join(dir, "scenario"), Raw: filepath.Join(dir, "raw"), Observer: filepath.Join(dir, "observer"), Sent: filepath.Join(dir, "sent.jsonl"), Paused: filepath.Join(dir, "paused"), NewRelease: filepath.Join(dir, "new-release")}
@@ -44,7 +73,7 @@ func NewWithWorker(t testing.TB, worker bool) Runtime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw = append([]byte("#!/usr/local/bin/node\nconst SETTINGS = JSON.parse(process.env.AD_CURSOR_FIX_SETTINGS || "+fmt.Sprintf("%q", r.settings(worker))+");\n"), raw...)
+	raw = append([]byte("#!/usr/local/bin/node\nconst SETTINGS = JSON.parse(process.env.AD_CURSOR_FIX_SETTINGS || "+fmt.Sprintf("%q", r.settings(worker, options...))+");\n"), raw...)
 	if err = os.WriteFile(r.Program, raw, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +83,17 @@ func NewWithWorker(t testing.TB, worker bool) Runtime {
 // Settings selects this runtime's isolated files when sharing a stable executable.
 func (r Runtime) Settings() string { return r.settings(false) }
 
-func (r Runtime) settings(worker bool) string {
-	settings, _ := json.Marshal(map[string]any{"trace": r.Trace, "pid": r.PID, "release": r.Release, "worker": worker, "workerPID": r.WorkerPID, "workerRelease": r.WorkerRelease, "scenario": r.Scenario, "raw": r.Raw, "observer": r.Observer, "sent": r.Sent, "paused": r.Paused, "newRelease": r.NewRelease, "mcpTrace": r.MCPTrace, "mcpRelease": r.MCPRelease, "mcpControl": r.MCPControl, "events": r.Events})
+func (r Runtime) settings(worker bool, options ...WorkerOptions) string {
+	fields := map[string]any{"trace": r.Trace, "pid": r.PID, "release": r.Release, "worker": worker, "workerPID": r.WorkerPID, "workerRelease": r.WorkerRelease, "scenario": r.Scenario, "raw": r.Raw, "observer": r.Observer, "sent": r.Sent, "paused": r.Paused, "newRelease": r.NewRelease, "mcpTrace": r.MCPTrace, "mcpRelease": r.MCPRelease, "mcpControl": r.MCPControl, "events": r.Events}
+	if len(options) > 0 {
+		if len(options[0].Args) > 0 {
+			fields["workerArgs"] = options[0].Args
+		}
+		if len(options[0].Stdio) > 0 {
+			fields["workerStdio"] = options[0].Stdio
+		}
+	}
+	settings, _ := json.Marshal(fields)
 	return string(settings)
 }
 func (r Runtime) Frames(t testing.TB) []map[string]json.RawMessage {

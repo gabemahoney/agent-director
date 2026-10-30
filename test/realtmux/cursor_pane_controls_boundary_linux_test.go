@@ -18,7 +18,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
-func assertPaneNoPromptBytes(t *testing.T, r cursorfix.Runtime, texts ...string) {
+func assertPaneNoPromptBytes(t *testing.T, r cursorfix.Runtime, finalCancelSession string, texts ...string) {
 	t.Helper()
 	raw := rawInput(t, r)
 	complete, err := os.ReadFile(r.Trace)
@@ -26,8 +26,16 @@ func assertPaneNoPromptBytes(t *testing.T, r cursorfix.Runtime, texts ...string)
 		t.Fatal(err)
 	}
 	// Call after owned termination: readline cannot hide a partial prompt tail.
+	// The peer writes raw chunks before its readline callback logs frames. SIGKILL
+	// can interrupt those two writes for the final repeated session/cancel. Admit
+	// only one byte-identical copy of an already observed cancellation; arbitrary
+	// extra frames, partial bytes and every cancelled prompt remain failures.
 	if !bytes.Equal(raw, complete) {
-		t.Fatalf("raw ACP differs from complete frames (partial or extra bytes): raw=%q frames=%q", raw, complete)
+		expected, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]string{"sessionId": finalCancelSession}})
+		expected = append(expected, '\n')
+		if finalCancelSession == "" || !bytes.HasSuffix(complete, expected) || !bytes.Equal(raw, bytes.Join([][]byte{complete, expected}, nil)) {
+			t.Fatalf("raw ACP differs from complete frames (partial or extra bytes): raw=%q frames=%q", raw, complete)
+		}
 	}
 	for _, text := range texts {
 		encoded, _ := json.Marshal(text)
@@ -90,6 +98,13 @@ func TestCursorPaneControlsPublicMixedQueueRetirement(t *testing.T) {
 			before := readRow(t, f.DBPath, id)
 			path := before.JSONLPath.(string)
 			pid := paneRuntimePID(t, r)
+			finalCancelSession := ""
+			if tc.control == "/exit" {
+				finalCancelSession = before.SessionID.(string)
+				// Teardown may finish before the CLI returns. Preserve the actual
+				// terminal output, while still requiring the runtime/gateway to die.
+				launch.rt.must(t, "set-option", "-w", "-t", launch.Row.PaneID.(string), "remain-on-exit", "on")
+			}
 			sentinel := launch.rt.startSession(t, uniqueName())
 			diag := func() string {
 				return fmt.Sprintf("instance=%s control=%s records=%+v prompts=%+v row=%+v", id, tc.control, paneRecords(t, path), panePrompts(t, r), readRow(t, f.DBPath, id))
@@ -134,7 +149,9 @@ func TestCursorPaneControlsPublicMixedQueueRetirement(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.control == "/exit" {
-				waitForObserved(t, 3*time.Second, "ended only after owned runtime death", func() bool { return pidGone(pid) && readRow(t, f.DBPath, id).State == store.StateEnded }, diag)
+				waitForObserved(t, 3*time.Second, "ended only after owned runtime death", func() bool {
+					return pidGone(pid) && pidGone(int(before.PanePID.(int64))) && readRow(t, f.DBPath, id).State == store.StateEnded
+				}, diag)
 			} else {
 				waitFor(t, "control confirmation", func() bool {
 					row := readRow(t, f.DBPath, id)
@@ -152,7 +169,7 @@ func TestCursorPaneControlsPublicMixedQueueRetirement(t *testing.T) {
 			if got := panePrompts(t, r); len(got) != 1 || got[0].Text != "HOLD" {
 				t.Fatalf("control/cancelled queue became model prompts: %+v", got)
 			}
-			assertPaneNoPromptBytes(t, r, append(texts, "/new", "/exit")...)
+			assertPaneNoPromptBytes(t, r, finalCancelSession, append(texts, "/new", "/exit")...)
 			for _, rec := range paneRecords(t, path) {
 				if cancelled[rec.Data.ID] > 0 && (rec.Kind == "submission_started" || rec.Kind == "turn_outcome") {
 					t.Fatalf("cancelled submission later executed: %+v", rec)
@@ -266,7 +283,7 @@ func TestCursorPaneControlsPublicIndependentHoldsUntilTurnEnd(t *testing.T) {
 	waitForObserved(t, 3*time.Second, "owned death before final guard raw observation", func() bool {
 		return pidGone(paneRuntimePID(t, r)) && pidGone(int(launch.Row.PanePID.(int64)))
 	}, diag)
-	assertPaneNoPromptBytes(t, r, "retired-requests-refuse-input")
+	assertPaneNoPromptBytes(t, r, "", "retired-requests-refuse-input")
 	if len(panePrompts(t, r)) != 1 {
 		t.Fatal("request inspection/recreation/new session replayed prompt")
 	}
@@ -403,7 +420,7 @@ func TestCursorPaneControlsPublicFailureInspection(t *testing.T) {
 			if tc.fault != "terminal loss" && durableEnd || paneRecordCount(t, path, "submission_accepted") != 0 || paneRecordCount(t, path, "submission_started") != 0 {
 				t.Fatalf("failed input gained durable execution/end: %s", diag())
 			}
-			assertPaneNoPromptBytes(t, r, texts...)
+			assertPaneNoPromptBytes(t, r, "", texts...)
 			if strings.Contains(tc.fault, "rotation") && paneRecordCount(t, path, "held_input_refused") != 2 {
 				t.Fatalf("held identities not individually refused: %s", diag())
 			}

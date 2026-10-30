@@ -621,30 +621,44 @@ the notice, and the existing bounded stop is unchanged. The protected
 transcript retains history; display content or loss never classifies AD state
 or authority, and transcript content grants no dispatch authority.
 
-`process_linux.go` installs ptrace EXITKILL and parent-death protection at the
-initial exec stop before ACP input. Fork/clone/exec descendants stay guarded
-across launcher chains. Runtime/pipes are independently identified; a second
-ACP owner is refused. Only an explicitly identified same-runtime executable
-or script worker-server possessing neither ACP pipe may detach. Unknown
-process evidence grants no ownership. Stop reconciles inherited tracees
-through kernel `TracerPid` matching the locked supervisor OS-thread id,
-including an announcement overtaken by SIGKILL, then signals/drains those
-exact tracees. `PTRACE_O_TRACEEXIT` also reconciles these exact-owned tasks at
-the early exit stop: normal descendant group exit can overtake a clone
-announcement and otherwise prevent the leader's final wait status. The early
-event is not death proof; actual `Wait4` exit/signaled status remains required.
-The configured MCP child and its ordinary descendants retain this same owned
-cleanup path and receive no worker detach exception. No independent worker or
-AD child is adopted. Success requires confirmed leader exit and owned tracees gone.
+Runtime and configured-MCP lifecycle paths MUST reuse the owner behind
+`startProcess` and `ownedProcess.terminate` in `process_linux.go`. It pins its
+OS thread, subscribes to SIGCHLD before launch and establishes ptrace EXITKILL
+and parent-death protection at the initial exec stop, before ACP input.
+Startup, notifications and explicit stop drain exact-owned statuses to
+quiescence; idle ownership blocks without timed scans or repeated signals.
+Each owner releases only its own subscription. Exact thread-scoped waits leave
+unrelated subprocess statuses to their owners; there is no sweep-owned reaper
+or process-group cleanup.
+
+Causal lifecycle events and stop recover inherited tracees, including fork/clone
+announcements overtaken by exit. Admission requires the pinned owner's
+`TracerPid` and positive `Tgid` from one coherent status snapshot. Unknown
+evidence grants no ownership; failures of required evidence retain failure.
+Nonleader EXEC retains captured transition obligations until terminal
+reconciliation: a mutable event message or reused numeric TID cannot discharge
+them. Runtime/pipes are independently identified; a second ACP owner is refused.
+Only an identified same-runtime executable or script worker-server with readable
+evidence of neither ACP pipe, no pending EXEC reconciliation and no stop/failure
+may detach. Ordinary descendants, including the configured MCP child, retain
+owned cleanup without that exception. No independent worker or AD child is adopted.
+
+Success requires an actual leader exit/signaled wait status and owned tracees
+gone with no unresolved evidence. The single terminal result retains failure
+after its notification is consumed. `terminate` allows three seconds to request
+stop, then five seconds to confirm it; expiration or abandoned waiting does not
+certify exit or stop the owner's cleanup. SIGCHLD, early exit stops and EOF are
+not death proof; permanent wake loss can prevent completion. Explicit exit
+flushes deferred proofs before termination under the
+[existing proof-flush rules](#cursor-authorization-dataflow-and-authority).
+
 The transport writes through a separately closeable, pollable duplicate of
 the owned input pipe. Closing it releases stalled I/O while the registered
 ownership descriptor remains open through verified intentional end reporting.
 Transport closure supplies no process-death evidence.
-No process-group cleanup or arbitrary-child wait is allowed. Independent or
-shared surviving work retains the existing kill limits. EOF is transport
-failure, never child-death evidence; child loss stops the gateway rather than
-leaving a renderer classified live. Non-Linux lifetime/terminal operations
-fail closed.
+Independent or shared surviving work retains the existing kill limits. EOF is
+transport failure; child loss stops the gateway rather than leaving a renderer
+classified live. Non-Linux lifetime/terminal operations fail closed.
 
 On a fatal `Run` return after registration, run the bounded deferred-proof
 flush (see
@@ -1133,6 +1147,11 @@ screen classification or another transcript format.
 
 ### cursorfix: synthetic ACP runtime (reusable test fixture)
 
+Process lifecycle tests MUST reuse `cursorfix.TraceLifecycle(t)` for real Linux
+fork/vfork and pthread-exec barriers. It compiles embedded
+`internal/testsupport/cursorfix/trace_lifecycle.c` into `t.TempDir()`;
+callers own termination and pipe cleanup through the existing process owner.
+
 `internal/testsupport/cursorfix` owns `runtime.js` at its package root, embedded
 by `cursorfix.go`. `New` and `NewWithWorker` produce a private executable
 Node stand-in, trace and independently observable accepting runtime/worker
@@ -1223,9 +1242,10 @@ and useful peer work afterward. `Scenario.RecordArtifacts` opts into these
 observations; ordinary scenarios retain their previous behavior. Extend this
 parameterized owner rather than copy the individual selection/failure matrices.
 
-`NewWithWorker` retains the recognized detached `index.js worker-server` shape
-without either ACP pipe. Its designated selection record and bounded operation
-channel establish useful independent operations before/after origin exit,
+`NewWithWorker` defaults to the recognized detached `index.js worker-server`
+shape without either ACP pipe; reuse its optional `WorkerOptions{Args, Stdio}`
+for role and partial-pipe negative controls. Its selection record and bounded
+operation channel establish useful independent operations before/after origin exit,
 including exact input/result/cwd/PID. Release/reap belongs to fixture cleanup
 after observations. This supplies no native account/renewal proof or authority
 to adopt workers or signal a process group. The worker's actual shipped-hook

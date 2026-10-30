@@ -10,7 +10,8 @@ function artifact(operation, input) {
  }
  return result;
 }
-if(process.argv[2]==='worker-server') {
+const workerArgs = SETTINGS.workerArgs || ['worker-server'];
+if(process.argv[2]===workerArgs[0]) {
  fs.writeFileSync(SETTINGS.workerPID,String(process.pid));
  fs.writeFileSync(SETTINGS.workerPID+'.selection.json',JSON.stringify(selection));
  let last='';
@@ -34,7 +35,7 @@ if(process.argv[2]==='worker-server') {
 fs.writeFileSync(SETTINGS.pid, String(process.pid));
 fs.writeFileSync(SETTINGS.pid+'.selection.json',JSON.stringify(Object.fromEntries(
  ['CURSOR_CONFIG_DIR','CURSOR_DATA_DIR','CURSOR_API_KEY','AGENT_CLI_CREDENTIAL_STORE'].map(key=>[key,process.env[key] ?? null]))));
-if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,'worker-server'],{stdio:'ignore',detached:true}).unref();
+if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,...workerArgs],{stdio:SETTINGS.workerStdio || 'ignore',detached:true}).unref();
 function send(frame) {
  const line=JSON.stringify({jsonrpc:'2.0',...frame});
  if(SETTINGS.sent) fs.appendFileSync(SETTINGS.sent,line+'\n');

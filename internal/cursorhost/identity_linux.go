@@ -13,10 +13,18 @@ import (
 )
 
 func procStatus(pid int, key string) (int, error) {
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	raw, err := readProcStatus(pid)
 	if err != nil {
 		return 0, err
 	}
+	return procStatusField(raw, key)
+}
+
+func readProcStatus(pid int) ([]byte, error) {
+	return os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+}
+
+func procStatusField(raw []byte, key string) (int, error) {
 	for _, line := range strings.Split(string(raw), "\n") {
 		parts := strings.Fields(line)
 		if len(parts) == 2 && parts[0] == key+":" {
