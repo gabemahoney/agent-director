@@ -169,8 +169,9 @@ type PaneKeySentDetails struct {
 	RequestToken string `json:"request_token"`
 }
 
-// SubmissionUnconfirmedDetails describes an unconfirmed native delivery attempt
-// or pending Codex fallback input without a bounded hook-derived observation.
+// SubmissionUnconfirmedDetails describes a refused or unconfirmed native or
+// Codex fallback paste attempt, or pending Codex fallback input without a
+// bounded hook-derived observation.
 // RowState is the last raw state read, not a synthetic state or proof that the
 // prompt remains unsubmitted.
 type SubmissionUnconfirmedDetails struct {
@@ -191,8 +192,9 @@ type SubmissionUnconfirmedDetails struct {
 	RowState string `json:"row_state"`
 }
 
-// MarshalJSON preserves the legacy pending-Codex three-field payload. Native
-// outcomes retain every required field, including zero bytes and false Enter.
+// MarshalJSON preserves the three-field payload for a failed pending-Codex hook
+// observation when Outcome is empty. Nonempty native or Codex fallback outcomes
+// retain every required field, including zero bytes and false Enter.
 func (d SubmissionUnconfirmedDetails) MarshalJSON() ([]byte, error) {
 	if d.Outcome == "" {
 		return json.Marshal(struct {

@@ -9,6 +9,9 @@ package api_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -915,4 +918,138 @@ func TestAdviceFollow_E9_SendKeysPendingAllowPending(t *testing.T) {
 		t.Fatalf("re-issued with allow_pending: %v; want delivery", err)
 	}
 	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skaText)
+}
+
+// E15 (b.qcr): "put the prompt in a file and send a short instruction to read it".
+// Safe Unicode/newline boundaries retain literal delivery.
+func TestAdviceFollow_E15_CodexFallbackLiteralSafety(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, text, reason string }{
+		{"bare dollar", "read $", "skill picker"},
+		{"named dollar", "read $skill", "skill picker"},
+		{"trailing space", "read $skill   ", "skill picker"},
+		{"unicode spaces", "read\u00a0$skill\u2003", "skill picker"},
+		{"shell spelling", "$HOME", "skill picker"},
+		{"embedded terminator", "hello\x1b[201~tail", "control character"},
+		{"NUL", "hello\x00tail", "control character"},
+		{"tab", "read $\t", "control character"},
+		{"C1 control", "hello\u0085tail", "control character"},
+		{"invalid UTF8", "hello\xff", "valid UTF-8"},
+		{"earlier dollar", "read $skill then continue", ""},
+		{"embedded dollar", "cost$", ""},
+		{"newline ends completion", "read $\n", ""},
+		{"newline then spaces", "read $skill\n  ", ""},
+		{"unicode line separator", "read $skill\u2028 ", ""},
+		{"unicode paragraph separator", "read $skill\u2029 ", ""},
+		{"CR LF literals", "-界é\r\n#{pane_id};", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newSubmissionEnv(t)
+			r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
+			before := e.columns(t, r.ID)
+			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: tc.text})
+			text := strings.ReplaceAll(tc.text, "\r", "")
+			if tc.reason != "" {
+				d := assertDeliveryError(t, err, "not_started", 0, false)
+				want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StateWaiting, Reason: d.Reason}
+				if d != want || !strings.Contains(d.Reason, tc.reason) {
+					t.Fatalf("refusal=%+v; want %+v with reason %q", d, want, tc.reason)
+				}
+				e.assertNoTmuxCall(t)
+				e.assertRowUnchanged(t, r.ID, before)
+				adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "put the prompt in a file and send a short instruction to read it")
+				// Follow the advice only after proven pre-input refusal.
+				file := filepath.Join(t.TempDir(), "prompt.txt")
+				if err := os.WriteFile(file, []byte(tc.text), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				text = "Read " + file + " and follow its instructions."
+				err = e.send(api.SendKeysParams{InstanceID: r.ID, Text: text})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text)
+			if calls := e.rec.SocketCallsOf(tmux.CallSendText); len(calls) != 1 || !calls[0].Paste {
+				t.Fatalf("not one paste: %+v", calls)
+			}
+			e.assertRowUnchanged(t, r.ID, before)
+		})
+	}
+}
+
+// E16 (b.qcr): "use a paste-capable adapter" after a pre-input refusal.
+func TestAdviceFollow_E16_CodexFallbackRequiresPasteCapability(t *testing.T) {
+	t.Parallel()
+	e := newSubmissionEnv(t)
+	r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
+	before := e.columns(t, r.ID)
+	p := api.SendKeysParams{InstanceID: r.ID, Text: skpText}
+	// Interface embedding deliberately hides Recorder's optional capability.
+	legacy := struct{ api.SendKeysTmux }{e.rec}
+	_, err := api.SendKeys(e.s, legacy, e.env, p)
+	d := assertDeliveryError(t, err, "not_started", 0, false)
+	if d.KeysSent || d.Phase != "pre_input" {
+		t.Fatalf("capability refusal=%+v", d)
+	}
+	adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "use a paste-capable adapter")
+	e.assertNoTmuxCall(t)
+	e.assertRowUnchanged(t, r.ID, before)
+	if err := e.send(p); err != nil {
+		t.Fatal(err)
+	}
+	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+	if !e.rec.SocketCallsOf(tmux.CallSendText)[0].Paste {
+		t.Fatal("replacement adapter did not paste")
+	}
+}
+
+// E17 (b.qcr): "inspect get or status and escalate if submission remains unknown".
+// Never inherit manual advice to send another Enter.
+func TestAdviceFollow_E17_CodexFallbackTransportUncertain(t *testing.T) {
+	t.Parallel()
+	for _, call := range []tmux.Call{tmux.CallSendText, tmux.CallSendEnter} {
+		for _, failure := range []tmux.Failure{tmux.FailTimeout, tmux.FailNoServer} {
+			t.Run(fmt.Sprintf("%s/%v", call, failure), func(t *testing.T) {
+				t.Parallel()
+				e := newSubmissionEnv(t)
+				r, other := e.seedKeysDisagreeCase(t, keysDisagreeCase{
+					spec:  codexSpec(store.StatePending, agentAlive, false),
+					setup: []func(*testing.T, *killEnv, *killRow){ktrRestart},
+				})
+				before := e.columns(t, r.ID)
+				e.rec.Script(r.Socket, tmuxfix.Script{Failure: failure}, call)
+				err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+				outcome, phase, enters := "partial_input_unconfirmed", "text_attempted", 0
+				if call == tmux.CallSendEnter {
+					outcome, phase, enters = "submission_unconfirmed", "enter_attempted", 1
+				}
+				d := assertDeliveryError(t, err, outcome, len(skpText), enters == 1)
+				if !d.KeysSent || d.Phase != phase || d.RequestID != "" {
+					t.Fatalf("paste uncertainty=%+v", d)
+				}
+				adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "do not automatically replay text or Enter")
+				adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "inspect get or status and escalate if submission remains unknown")
+				row, getErr := api.Get(e.st, e.env.Relay, r.ID)
+				if getErr != nil || row.State != store.StatePending {
+					t.Fatalf("inspect Get=%+v, %v", row, getErr)
+				}
+				if texts := e.rec.SocketCallsOf(tmux.CallSendText); len(texts) != 1 || !texts[0].Paste {
+					t.Fatalf("text attempts=%+v", texts)
+				}
+				if got := len(e.rec.SocketCallsOf(tmux.CallSendEnter)); got != enters {
+					t.Fatalf("Enter attempts=%d; want %d", got, enters)
+				}
+				e.assertNoCalls(t, tmux.CallSendKey, tmux.CallCapture)
+				e.assertRowUnchanged(t, r.ID, before)
+				assertKeysDisagrees(t, e.killEnv, sktDisagrees(t, r.ID), r, "send-keys", other, []disagreeWant{
+					{reason: "server_restarted", server: "restarted", verdict: "ours", action: "text_sent", ours: true},
+				})
+				if e.waits != 0 || e.s.reads != 0 {
+					t.Fatalf("polled submission after failed transport: %d/%d", e.waits, e.s.reads)
+				}
+			})
+		}
+	}
 }

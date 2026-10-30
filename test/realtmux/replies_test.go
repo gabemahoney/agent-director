@@ -135,6 +135,25 @@ func TestRepliesDuplicateSession(t *testing.T) {
 	}
 }
 
+// b.qcr: missing paste/cleanup buffers use the same parameterized catalogue
+// reply as the subprocess fake, checked against real tmux's exact streams.
+func TestRepliesMissingBuffer(t *testing.T) {
+	rt := newRealTmux(t)
+	anchor := rt.mustCreate(t, createSpec{})
+	for _, command := range []string{"paste-buffer", "delete-buffer"} {
+		t.Run(command, func(t *testing.T) {
+			name := newInstanceID("missing-buffer")
+			args := []string{command, "-b", name}
+			want := tmuxfix.UnknownBuffer(name)
+			if command == "paste-buffer" {
+				args = append(args, "-p", "-r", "-d", "-t", anchor.Reply.PaneID)
+				want = tmuxfix.NoBuffer(name)
+			}
+			assertTriple(t, rt.run(t, args...), want)
+		})
+	}
+}
+
 // sessionIDs lists a lookup answer's session ids for failure messages.
 func sessionIDs(ans tmux.LookupAnswer) []string {
 	var ids []string

@@ -40,6 +40,8 @@ type SocketCall struct {
 	// Text and PressEnter are SendKeysPane's arguments (on the text call).
 	Text       string
 	PressEnter bool
+	// Paste distinguishes the optional Codex paste capability from manual text.
+	Paste bool
 	// Key is the key a key send names, which tmux reads as a key and never
 	// types literally (send-keys -t <pane id> <key>), for example pause's
 	// C-u before /exit (b.9o4); "" on every other call. A key send is
@@ -207,7 +209,17 @@ func sendEffect(paneID string, call tmux.Call) effect {
 // text call succeeded, the Enter call, mirroring the production client. The
 // pane must be in socket's table.
 func (r *Recorder) SendKeysPane(socket, paneID, text string, pressEnter bool) error {
-	textCall := SocketCall{Call: tmux.CallSendText, Socket: socket, Target: paneID, Text: text, PressEnter: pressEnter}
+	return r.sendKeysPane(socket, paneID, text, pressEnter, false)
+}
+
+// PasteKeysPane models the optional paste capability at the API seam. Actual
+// buffer commands and byte framing are covered by tmux and real-tmux tests.
+func (r *Recorder) PasteKeysPane(socket, paneID, text string) error {
+	return r.sendKeysPane(socket, paneID, text, true, true)
+}
+
+func (r *Recorder) sendKeysPane(socket, paneID, text string, pressEnter, paste bool) error {
+	textCall := SocketCall{Call: tmux.CallSendText, Socket: socket, Target: paneID, Text: text, PressEnter: pressEnter, Paste: paste}
 	if _, err := r.do(textCall, sendEffect(paneID, tmux.CallSendText)); err != nil || !pressEnter {
 		return err
 	}

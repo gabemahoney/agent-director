@@ -34,6 +34,9 @@ type Invocation struct {
 	// every AGENT_DIRECTOR_* variable removed. Cursor creates additionally
 	// exclude ambient Cursor selection; no call adds client environment values.
 	Env []string
+	// Stdin is literal input for commands such as load-buffer. Nil means no
+	// input; it is never interpreted by a shell or tmux's command parser.
+	Stdin []byte
 	// Timeout is the call class's timeout (SR-13.1).
 	Timeout time.Duration
 	// WaitDelay is the pipe-close wait (SR-2.4).
@@ -92,6 +95,9 @@ func execRunnerWithOutputWrapper(inv Invocation, wrap func(io.Writer) io.Writer)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, inv.Binary, inv.Args...)
 	cmd.Env = inv.Env
+	if inv.Stdin != nil {
+		cmd.Stdin = bytes.NewReader(inv.Stdin)
+	}
 	cmd.WaitDelay = max(inv.WaitDelay, time.Nanosecond)
 	var stdout, stderr outputBuffer
 	cmd.Stdout = &stdout
@@ -236,6 +242,10 @@ func (c *Client) invoke(call Call, socket string, cmds ...[]string) RunResult {
 // invokeEnv permits a launch to narrow only its own client environment.
 // Other calls and shared servers retain their existing environment policy.
 func (c *Client) invokeEnv(call Call, socket string, environ []string, cmds ...[]string) RunResult {
+	return c.invokeInput(call, socket, environ, nil, cmds...)
+}
+
+func (c *Client) invokeInput(call Call, socket string, environ []string, input []byte, cmds ...[]string) RunResult {
 	argv := append([]string{"-u", "-S", socket}, commandArgv(cmds...)...)
 	run := c.runCall
 	if run == nil {
@@ -245,6 +255,7 @@ func (c *Client) invokeEnv(call Call, socket string, environ []string, cmds ...[
 		Binary:    c.binaryPath(),
 		Args:      argv,
 		Env:       environ,
+		Stdin:     input,
 		Timeout:   c.timeoutFor(call),
 		WaitDelay: c.timeouts.WaitDelay,
 	})

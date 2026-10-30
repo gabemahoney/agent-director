@@ -3,6 +3,7 @@ package api_test
 // Pending Codex submission uses raw same-launch turn activity, never pane text.
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -371,13 +372,16 @@ func TestSendKeysSubmissionApplicability(t *testing.T) {
 		name   string
 		spec   killRowSpec
 		params api.SendKeysParams
+		paste  bool
 	}{
-		{"pending Claude", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText}},
-		{"waiting Codex", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: skpText}},
-		{"working Codex", codexSpec(store.StateWorking, agentAlive, false), api.SendKeysParams{Text: skpText}},
-		{"pending Codex no_enter", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: skpText, NoEnter: true}},
-		{"pending Codex named key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "Enter"}},
-		{"pending Codex character key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "x"}},
+		{"pending Claude", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText}, false},
+		{"waiting Codex", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: skpText}, true},
+		{"working Codex", codexSpec(store.StateWorking, agentAlive, false), api.SendKeysParams{Text: skpText}, true},
+		{"pending Codex no_enter", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: "manual $", NoEnter: true}, false},
+		{"pending Codex named key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "Enter"}, false},
+		{"pending Codex character key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "x"}, false},
+		{"waiting Codex empty", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{}, false},
+		{"waiting Codex hash", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: "manual $", ExpectPaneSHA256: fmt.Sprintf("%x", sha256.Sum256(nil))}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -392,6 +396,15 @@ func TestSendKeysSubmissionApplicability(t *testing.T) {
 			if e.s.reads != 0 || e.waits != 0 {
 				t.Errorf("submission reads/waits = %d/%d; want none", e.s.reads, e.waits)
 			}
+			pastes := 0
+			for _, call := range e.rec.SocketCallsOf(tmux.CallSendText) {
+				if call.Paste {
+					pastes++
+				}
+			}
+			if pastes != map[bool]int{false: 0, true: 1}[tc.paste] {
+				t.Errorf("paste calls=%d; want selected=%v", pastes, tc.paste)
+			}
 		})
 	}
 }
@@ -404,7 +417,10 @@ func TestSendKeysCodexSubmissionTmuxFailurePrecedence(t *testing.T) {
 			e := newSubmissionEnv(t)
 			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, call)
-			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+			// b.qcr: preserve the manual transport's original error contract;
+			// ordinary Codex paste has separate structured-uncertainty coverage.
+			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true,
+				ExpectPaneSHA256: fmt.Sprintf("%x", sha256.Sum256(nil))})
 			assertOneName(t, err, "ErrTmuxUnresponsive")
 			if e.s.reads != 0 || e.waits != 0 || api.ErrDetails(err) != nil {
 				t.Errorf("submission reads/waits/details = %d/%d/%+v; want none after tmux failure", e.s.reads, e.waits, api.ErrDetails(err))

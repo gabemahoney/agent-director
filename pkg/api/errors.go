@@ -35,14 +35,16 @@ var ErrClientClosed = errors.New("api: client is closed")
 // its current launch (SR-7.1, SR-18.14, SR-22.8).
 var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 
-// ErrSubmissionUnconfirmed means native ordinary delivery has no durable exact
-// transcript proof, or pending Codex fallback input has no bounded hook-derived
-// submission observation. For native delivery, SubmissionUnconfirmedDetails
-// distinguishes not_started, partial_input_unconfirmed and submission_unconfirmed.
-// Fallback details carry KeysSent, SubmissionConfirmed and RowState. Partial or
-// uncertain input may still submit later; never replay text or Enter automatically.
-// Repeating a native delivery_request_id passively reconciles the original
-// attempt after the state, relay and dialog guards pass.
+// ErrSubmissionUnconfirmed means ordinary delivery was refused or remains
+// unconfirmed. SubmissionUnconfirmedDetails distinguishes not_started,
+// partial_input_unconfirmed and submission_unconfirmed for both native delivery
+// and Codex fallback paste. Native delivery requires durable exact transcript
+// proof; pending Codex fallback uses bounded hook observation, whose failure
+// carries only KeysSent, SubmissionConfirmed and RowState. Partial or uncertain
+// input may still submit later; never replay text or Enter automatically.
+// Only native attempts support passive reconciliation by repeating the original
+// delivery_request_id after the state, relay and dialog guards pass. For fallback,
+// inspect hook-derived get or status and escalate if submission remains unknown.
 var ErrSubmissionUnconfirmed = errors.New("ErrSubmissionUnconfirmed")
 
 // ErrSpawnNotPausable is returned by the pause verb when the target

@@ -61,8 +61,9 @@ type killRowSpec struct {
 	State      string
 	Token      string
 	InstanceID string
-	NoPane     bool   // a lost create reply: the server identity recorded, no pane
-	PaneID     string // recorded in place of the reply's pane id (e.g. one the server never issued)
+	NoPane     bool                  // a lost create reply: the server identity recorded, no pane
+	PaneID     string                // recorded in place of the reply's pane id (e.g. one the server never issued)
+	Opts       []apitest.SpawnOption // additional row facts, such as the agent whose input contract is tested
 }
 
 // killRow is a seeded live row: its agent (id, token, name, reply, identity),
@@ -95,15 +96,16 @@ func (f *killFix) liveRow(t *testing.T, spec killRowSpec) killRow {
 	if spec.NoPane {
 		id.PaneID, id.PanePID, id.PaneStarttime = "", 0, ""
 	}
-	return killRow{agent: a, RT: rt, Before: f.seedRow(t, a.InstanceID, a.Name, spec.State, id)}
+	return killRow{agent: a, RT: rt, Before: f.seedRow(t, a.InstanceID, a.Name, spec.State, id, spec.Opts...)}
 }
 
 // seedRow seeds a row named name in state ("" is waiting) recording id, with
 // no agent process recorded, and returns it as stored.
-func (f *killFix) seedRow(t testing.TB, instanceID, name, state string, id store.LaunchIdentity) apitest.SpawnColumns {
+func (f *killFix) seedRow(t testing.TB, instanceID, name, state string, id store.LaunchIdentity, opts ...apitest.SpawnOption) apitest.SpawnColumns {
 	t.Helper()
+	opts = append([]apitest.SpawnOption{apitest.WithTmuxSessionName(name), apitest.WithLaunchIdentity(id)}, opts...)
 	if _, err := apitest.SeedSpawn(f.DBPath, instanceID, state, "", "", "", false,
-		apitest.WithTmuxSessionName(name), apitest.WithLaunchIdentity(id)); err != nil {
+		opts...); err != nil {
 		t.Fatalf("SeedSpawn %s: %v", instanceID, err)
 	}
 	return readRow(t, f.DBPath, instanceID)

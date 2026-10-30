@@ -155,7 +155,7 @@ func assertOrdinaryWrites(t *testing.T, e *killEnv, r killRow, text string) {
 	t.Helper()
 	var joined string
 	for _, c := range e.rec.SocketCallsOf(tmux.CallSendText) {
-		if c.Target != r.Spawn.Identity.PaneID || c.Socket != r.Socket || c.PressEnter || len(c.Text) > 512 {
+		if c.Target != r.Spawn.Identity.PaneID || c.Socket != r.Socket || c.PressEnter || c.Paste || len(c.Text) > 512 {
 			t.Fatalf("unsafe text write %+v", c)
 		}
 		joined += c.Text
