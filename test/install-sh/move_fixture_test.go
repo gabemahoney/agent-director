@@ -386,7 +386,11 @@ func (r moveResult) Last() string {
 }
 
 func (h *moveHome) command(args ...string) *exec.Cmd {
-	argv := append([]string{h.S.Install, "--binary", h.Pair.Main, "--admin-binary", h.Pair.Admin}, h.Flags...)
+	argv := []string{h.S.Install}
+	if h.Pair != (movePair{}) {
+		argv = append(argv, "--binary", h.Pair.Main, "--admin-binary", h.Pair.Admin)
+	}
+	argv = append(argv, h.Flags...)
 	cmd := exec.Command(h.S.Bash, append(argv, args...)...)
 	cmd.Dir = h.Cwd
 	// The schedule step (b.wur) reads the real crontab and systemctl unless a case

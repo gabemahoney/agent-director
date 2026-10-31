@@ -52,7 +52,25 @@
   `User=` has no `HOME`; run the script with `HOME` set to the user's home
   directory. (A `~/` path in `config.toml` is refused at load while `HOME` is
   unset or empty: see [configuration](configuration.md).)
-- `jq`, `sqlite3` and `file` on PATH (the installer checks for them).
+- Bash to run `install.sh`, and these commands on PATH in every install mode:
+  `jq`, `sqlite3`, `file`, `uname`, `basename`, `cat`, `chmod`, `cmp`, `cp`,
+  `date`, `dirname`, `find`, `grep`, `head`, `id`, `ln`, `mkdir`, `mktemp`,
+  `mv`, `od`, `readlink`, `rm`, `rmdir`, `sed`, `stat`, `tail` and `tr`,
+  in addition to `tmux` above.
+- `awk` unless `--no-hooks` is supplied; checksum verification also requires
+  it, even with `--no-hooks`.
+- With `--from-release`: `curl` and `sleep`. With `--sha256` and
+  `--admin-sha256`: either `sha256sum` or `shasum`.
+
+After validating arguments and the install path, the installer checks all
+required commands for the selected mode before running external commands,
+downloading files or changing the installation. If any are missing, it exits
+2 with one report listing all of them and package-install hints.
+
+`gh` is optional for release lookup and download fallback; `curl` remains
+required for release installs. `git`, `ps`, `lsof`, `pgrep`, `getent`, `dscl`,
+`crontab` and `systemctl` remain optional probes or alternatives. Scheduling
+keeps its [cron/systemd fallback and warnings](#schedule-the-sweeps).
 
 Native confirmed ordinary text delivery has narrower requirements: Linux, the exact
 agent versions above and a fresh supported launch. See
