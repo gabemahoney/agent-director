@@ -146,7 +146,7 @@
 #      installed (a full disk, or permissions changed since pre-flight): see
 #      "The agent-rename migration" below. The file is as it was, every copy
 #      is kept, and the store is not opened.
-#   2  pre-flight failure (tmux, jq, file or sqlite3 missing, no
+#   2  pre-flight failure (required external commands missing, no
 #      Claude Code, Codex or Cursor found (see "Agents" below), whitespace in path,
 #      a bad flag, only one of --sha256 and --admin-sha256, or HOME unset,
 #      empty or not an absolute path: checked first, before anything is read
@@ -376,7 +376,7 @@ SCHEDULE=0
 readonly RELEASE_REPO_SLUG="gabemahoney/agent-director"
 
 # Pick a sensible default symlink dir: ~/.local/bin if on PATH.
-if printf '%s' ":${PATH}:" | grep -q ":${HOME}/.local/bin:"; then
+if [[ ":${PATH}:" == *":${HOME}/.local/bin:"* ]]; then
     SYMLINK_DEFAULT="${HOME}/.local/bin"
 fi
 
@@ -417,7 +417,14 @@ while [[ $# -gt 0 ]]; do
         --schedule)
             SCHEDULE=1; shift ;;
         -h|--help)
-            sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+            # Help must also work before any external command is available.
+            { IFS= read -r help_line || true
+              while IFS= read -r help_line; do
+                  [[ -n "$help_line" ]] || break
+                  help_line="${help_line#\#}"
+                  printf '%s\n' "${help_line# }"
+              done
+            } <"$0"
             exit 0 ;;
         *)
             echo "install.sh: unknown flag: $1" >&2
@@ -552,6 +559,57 @@ if [[ "$DEFAULT_INSTALL_ROOT" =~ [[:space:]] ]]; then
     exit 2
 fi
 
+# tmux must be on PATH (Claude Code, Codex and Cursor are looked for after the
+# [launch] reader, below: at least one of them is needed). `file` is required for the --binary
+# architecture probe (SR-2.2) — hard requirement; never silent-skip.
+# `sqlite3` is required for the schema-migration flow: it reads the DB's
+# ACTUAL user_version through the WAL (raw header bytes are subtly wrong
+# for a WAL-mode DB) both to decide whether a migration sentinel is
+# needed and to verify the post-open version. Hard requirement — never
+# silent-skip; a bad read would either skip a needed migration or pass a
+# broken install.
+# Standard utilities cover the install, migration, rollback and diagnostics.
+# Only shell builtins may run before this whole inventory has been checked.
+# Keep optional probes (git, ps/lsof, scheduler and passwd tools) optional.
+required_tools=(tmux jq file sqlite3 uname basename cat chmod cmp cp date dirname
+    find grep head id ln mkdir mktemp mv od readlink rm rmdir sed stat tail tr)
+if [[ "$NO_HOOKS" -eq 0 || -n "$SHA256_EXPECTED" ]]; then
+    required_tools+=(awk)
+fi
+if [[ "$FROM_RELEASE" -eq 1 ]]; then
+    required_tools+=(curl sleep)
+fi
+missing_tools=()
+for tool in "${required_tools[@]}"; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing_tools+=("$tool")
+    fi
+done
+if [[ -n "$SHA256_EXPECTED" ]] && ! command -v sha256sum >/dev/null 2>&1 \
+    && ! command -v shasum >/dev/null 2>&1; then
+    missing_tools+=("sha256sum or shasum")
+fi
+if [[ ${#missing_tools[@]} -gt 0 ]]; then
+    echo "install.sh: required tools not found on PATH:" >&2
+    for tool in "${missing_tools[@]}"; do
+        printf '  %s\n' "$tool" >&2
+        case "$tool" in
+            tmux)    echo "  Install tmux via your package manager (apt/brew/dnf/etc.)." >&2 ;;
+            jq)      echo "  Install jq via your package manager (we use it to safely edit settings.json)." >&2 ;;
+            file)    echo "  Install file via your package manager (apt install file / brew install file-formula / dnf install file). Required for the --binary architecture probe." >&2 ;;
+            sqlite3) echo "  Install sqlite3 via your package manager (apt install sqlite3 / brew install sqlite / dnf install sqlite). Required to read state.db's schema version for the migration flow." >&2 ;;
+            curl)    echo "  --from-release downloads via curl; install it via your package manager." >&2 ;;
+            awk)     echo "  Install an awk package (apt install mawk / brew install gawk / dnf install gawk)." >&2 ;;
+            grep|sed) echo "  Install $tool via your package manager (apt/dnf install $tool; macOS supplies it)." >&2 ;;
+            cmp)     echo "  Install diffutils via your package manager (apt/dnf install diffutils; macOS supplies cmp)." >&2 ;;
+            find)    echo "  Install findutils via your package manager (apt/dnf install findutils; macOS supplies find)." >&2 ;;
+            "sha256sum or shasum") echo "  Checksum verification needs either sha256sum (coreutils package) or shasum (Perl / libdigest-sha-perl package)." >&2 ;;
+            *)       echo "  Install $tool from the coreutils package (apt/brew/dnf install coreutils; macOS supplies the standard utility)." >&2 ;;
+        esac
+    done
+    exit 2
+fi
+
 # SRD §SR-2.1 / Idea Bee b.fg3: refuse with exit 2 any host outside the
 # supported set {Linux/x86_64, Darwin/arm64}, before anything is
 # downloaded or written. Linux/aarch64 is refused too; b.fg3 deferred
@@ -569,31 +627,6 @@ case "${uname_s}/${uname_m}" in
         exit 2
         ;;
 esac
-
-# tmux must be on PATH (Claude Code, Codex and Cursor are looked for after the
-# [launch] reader, below: at least one of them is needed). `file` is required for the --binary
-# architecture probe (SR-2.2) — hard requirement; never silent-skip.
-# `sqlite3` is required for the schema-migration flow: it reads the DB's
-# ACTUAL user_version through the WAL (raw header bytes are subtly wrong
-# for a WAL-mode DB) both to decide whether a migration sentinel is
-# needed and to verify the post-open version. Hard requirement — never
-# silent-skip; a bad read would either skip a needed migration or pass a
-# broken install.
-required_tools=(tmux jq file sqlite3)
-[[ "$FROM_RELEASE" -eq 1 ]] && required_tools+=(curl)
-for tool in "${required_tools[@]}"; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "install.sh: required tool not found on PATH: $tool" >&2
-        case "$tool" in
-            tmux)    echo "  Install tmux via your package manager (apt/brew/dnf/etc.)." >&2 ;;
-            jq)      echo "  Install jq via your package manager (we use it to safely edit settings.json)." >&2 ;;
-            file)    echo "  Install file via your package manager (apt install file / brew install file-formula / dnf install file). Required for the --binary architecture probe." >&2 ;;
-            sqlite3) echo "  Install sqlite3 via your package manager (apt install sqlite3 / brew install sqlite / dnf install sqlite). Required to read state.db's schema version for the migration flow." >&2 ;;
-            curl)    echo "  --from-release downloads via curl; install it via your package manager." >&2 ;;
-        esac
-        exit 2
-    fi
-done
 
 # The one Claude Code program (SR-11.1): every Claude Code command this
 # script runs (the summary's version line, `mcp get`, `mcp add` and `mcp

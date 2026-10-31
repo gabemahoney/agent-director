@@ -9,9 +9,102 @@ package installsh_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// TestInstallerPrerequisites (b.ufx): one refusal names all missing commands
+// for the selected mode, with install advice, before touching the home or staging files.
+func TestInstallerPrerequisites(t *testing.T) {
+	rows := []struct {
+		name    string
+		release bool
+		hashes  bool
+		missing []string
+		want    []string
+		absent  []string
+	}{
+		{"reported-pair", true, true, []string{"file", "sqlite3"}, []string{"file", "sqlite3"}, nil},
+		{"common-commands", false, false, []string{"uname", "sed", "cp", "mktemp"}, []string{"uname", "sed", "cp", "mktemp"}, nil},
+		{"release-commands", true, true, []string{"curl", "sleep", "sha256sum", "shasum"}, []string{"curl", "sleep", "sha256sum", "shasum"}, nil},
+		{"local-needs-no-download-or-hash", false, false, []string{"file", "curl", "sleep", "sha256sum", "shasum"}, []string{"file"}, []string{"curl", "sleep", "sha256sum", "shasum"}},
+		{"release-without-checksums", true, false, []string{"file", "sha256sum", "shasum"}, []string{"file"}, []string{"sha256sum", "shasum"}},
+		{"checksum-alternative", true, true, []string{"file", "sha256sum"}, []string{"file"}, []string{"sha256sum", "shasum"}},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			h := newMoveHome(t)
+			// Keep an existing installation, prior backup, config link and store
+			// sentinel: a prerequisite refusal must not migrate or replace any of them.
+			h.Write(filepath.Join(h.New, "bin", "agent-director"), "old binary\n", 0o755)
+			h.Write(filepath.Join(h.New, "bin", "agent-director.prior"), "prior binary\n", 0o700)
+			h.Write(filepath.Join(h.Home, "dotfiles", "config.toml"), "[defaults]\n", 0o640)
+			h.Link("../../dotfiles/config.toml", filepath.Join(h.New, "config.toml"))
+			h.Write(filepath.Join(h.New, "state.db"), "store must not be opened\n", 0o600)
+			h.Flags = []string{"--keep-prior"}
+			if row.release {
+				h.Pair = movePair{}
+				h.Flags = append(h.Flags, "--from-release", "v0.17.1")
+				if row.hashes {
+					h.Flags = append(h.Flags, "--sha256", strings.Repeat("0", 64), "--admin-sha256", strings.Repeat("0", 64))
+				}
+			}
+			// Copy the existing toolbox's links, excluding only this case's missing
+			// commands. Never append the ambient PATH, which could restore them.
+			entries, err := os.ReadDir(h.S.Toolbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if !slices.Contains(row.missing, entry.Name()) {
+					h.Link(filepath.Join(h.S.Toolbox, entry.Name()), filepath.Join(h.Tools, entry.Name()))
+				}
+			}
+			// The shared toolbox omits curl; supply a presence-only executable.
+			// A shasum stand-in makes the alternative deterministic on both images.
+			for _, tool := range []string{"curl", "shasum"} {
+				if !slices.Contains(row.missing, tool) {
+					if err := os.Remove(filepath.Join(h.Tools, tool)); err != nil && !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
+					h.WriteTool(tool, "echo UNEXPECTED_PREREQUISITE_EXECUTION >&2; exit 99")
+				}
+			}
+			h.Env["PATH"] = h.Tools
+			before := h.Snapshot()
+			res := h.Install()
+			if res.Code != 2 || res.Stdout != "" {
+				t.Errorf("prerequisite refusal: exit=%d stdout=%q; want exit=2 and empty stdout\nstderr:\n%s", res.Code, res.Stdout, res.Stderr)
+			}
+			for _, tool := range row.want {
+				if !regexp.MustCompile(`\b` + regexp.QuoteMeta(tool) + `\b`).MatchString(res.Stderr) {
+					t.Errorf("aggregate prerequisite diagnostic omits %q:\n%s", tool, res.Stderr)
+				}
+			}
+			for _, tool := range row.absent {
+				if regexp.MustCompile(`\b` + regexp.QuoteMeta(tool) + `\b`).MatchString(res.Stderr) {
+					t.Errorf("diagnostic requires unneeded command %q:\n%s", tool, res.Stderr)
+				}
+			}
+			if !strings.Contains(strings.ToLower(res.Stderr), "install") || !strings.Contains(strings.ToLower(res.Stderr), "package") {
+				t.Errorf("missing prerequisite package installation advice:\n%s", res.Stderr)
+			}
+			for _, bad := range []string{"command not found", "UNEXPECTED_PREREQUISITE_EXECUTION", "err_name="} {
+				if strings.Contains(res.Stderr, bad) {
+					t.Errorf("preflight did not stop cleanly (%s):\n%s", bad, res.Stderr)
+				}
+			}
+			if diff := moveDiff(before, h.Snapshot()); diff != "" {
+				t.Errorf("missing prerequisites changed HOME:\n%s", diff)
+			}
+			if entries, err := os.ReadDir(h.Tmp); err != nil || len(entries) != 0 {
+				t.Errorf("prerequisite refusal left staging files: %v, %v", entries, err)
+			}
+		})
+	}
+}
 
 // migSetup lays a store below the rename's version, config and templates in the
 // install's directory, and applies flags (nil keeps the fixture's --no-hooks).
