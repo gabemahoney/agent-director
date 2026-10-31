@@ -963,6 +963,117 @@ func TestOwnedExecReplacementKeepsTerminalObligations(t *testing.T) {
 	}
 }
 
+func TestOwnedRealIdleDoesNotProbeAndStopWakes(t *testing.T) {
+	// b.x9o/F1: isolate SIGCHLD from other package tests. Compile before starting
+	// the helper, whose only child is this real tracee; keep production signals live.
+	program := os.Getenv("AD_TEST_OWNED_IDLE")
+	if program == "" {
+		program = cursorfix.TraceLifecycle(t)
+		cmd := exec.Command(os.Args[0], "-test.run=^TestOwnedRealIdleDoesNotProbeAndStopWakes$", "-test.v", "-test.timeout=15s")
+		cmd.Env = append(os.Environ(), "AD_TEST_OWNED_IDLE="+program)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("isolated real idle owner: %v\n%s", err, output)
+		}
+		t.Logf("%s", output)
+		return
+	}
+	var waits, scans, signals, statuses, blocks, subscriptions atomic.Int64
+	var terminalPID, terminalStatus, terminals atomic.Int64
+	blocked, retired := make(chan struct{}, 2), make(chan struct{})
+	hooks := &processTraceHooks{observe: func(point string, tid int, status unix.WaitStatus) {
+		switch point {
+		case "subscribed":
+			subscriptions.Add(1)
+		case "unsubscribed":
+			subscriptions.Add(-1)
+			close(retired)
+		case "wait":
+			waits.Add(1)
+		case "collect":
+			scans.Add(1)
+		case "signal":
+			signals.Add(1)
+		case "status":
+			statuses.Add(1)
+			if status.Exited() || status.Signaled() {
+				terminalPID.Store(int64(tid))
+				terminalStatus.Store(int64(status))
+				terminals.Add(1)
+			}
+		case "block":
+			blocks.Add(1)
+			// Never hold the owner: its actual select must run during observation.
+			select {
+			case blocked <- struct{}{}:
+			default:
+			}
+		}
+	}}
+	p, err := startProcessWithHooks(program, []string{"idle"}, t.TempDir(), os.Environ(), hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.input.Close()
+	defer p.output.Close()
+	defer p.terminate()
+	if _, err := p.input.WriteString("p"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ownedProcessLine(t, ownedProcessLines(p)); got != "idle-ready" {
+		t.Fatalf("connected tracee barrier=%q", got)
+	}
+	// One startup drain and one drain of the initial exec-stop SIGCHLD. This
+	// single-threaded tracee has no later event until stop; do not discard or
+	// retry unexplained activity to obtain a quiet interval.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-blocked:
+		case <-time.After(5 * time.Second):
+			t.Fatal("startup SIGCHLD did not drain to the idle select")
+		}
+	}
+	counts := func() [4]int64 { return [4]int64{waits.Load(), scans.Load(), signals.Load(), statuses.Load()} }
+	before := counts()
+	if blocks.Load() != 2 || subscriptions.Load() != 1 || before[0] < 3 || before[1] != 0 || before[2] != 0 || before[3] != 1 {
+		t.Fatalf("unexpected startup activity: counts=%v blocks=%d subscriptions=%d", before, blocks.Load(), subscriptions.Load())
+	}
+	if start, alive, known := probe.NewProcChecker().StartTime(p.pid); !known || !alive || start != p.start {
+		t.Fatal("idle tracee lost its live pinned identity")
+	}
+	// A bounded absence measurement, not a delay used to establish ordering.
+	// It detects polling inside this window, not every possible longer period.
+	interval := time.NewTimer(100 * time.Millisecond)
+	defer interval.Stop()
+	select {
+	case <-p.done:
+		t.Fatal("real idle owner ended without a causal event")
+	case <-interval.C:
+	}
+	if after := counts(); after != before || blocks.Load() != 2 || subscriptions.Load() != 1 {
+		t.Fatalf("real idle wait/scan/signal/status activity: %v -> %v blocks=%d subscriptions=%d", before, after, blocks.Load(), subscriptions.Load())
+	}
+	if err := p.terminate(); err != nil {
+		t.Fatalf("stop from real idle: %v", err)
+	}
+	select {
+	case <-retired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("real owner did not retire its subscription")
+	}
+	if terminals.Load() != 1 || terminalPID.Load() != int64(p.pid) || terminalStatus.Load() != int64(unix.SIGKILL) || signals.Load() != 1 || subscriptions.Load() != 0 {
+		t.Fatalf("stop lost exact kernel death: terminals=%d pid=%d status=%#x counts=%v subscriptions=%d", terminals.Load(), terminalPID.Load(), terminalStatus.Load(), counts(), subscriptions.Load())
+	}
+	awaitProcessGone(t, p.pid)
+	if err, open := <-p.done; !open || err != nil {
+		t.Fatalf("terminal publication=%v open=%t", err, open)
+	}
+	if _, open := <-p.done; open || p.terminate() != nil {
+		t.Fatal("real idle stop did not retain its single successful result")
+	}
+	t.Logf("real connected idle: 100ms counts=%v unchanged; exact pid=%d SIGKILL reaped and gone", before, p.pid)
+}
+
 func TestOwnedIdleDoesNotProbeAndStopWakes(t *testing.T) {
 	// b.x9o: run the production owner with a controlled wake channel and exact
 	// wait results. No real subscription can introduce an unrelated child hint.

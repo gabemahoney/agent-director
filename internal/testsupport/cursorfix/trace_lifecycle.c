@@ -28,6 +28,11 @@ int main(int argc, char **argv) {
     self = argv[0];
     setbuf(stdout, NULL);
     if (!strcmp(argv[1], "leaf")) return 17;
+    if (!strcmp(argv[1], "idle")) {
+        if (getchar() != 'p') return 61;
+        puts("idle-ready");
+        return getchar() == 'q' ? 0 : 62;
+    }
     if (!strcmp(argv[1], "held-child")) for (;;) pause();
     if (!strcmp(argv[1], "nonleader")) {
         pthread_t thread;
