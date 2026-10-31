@@ -102,6 +102,10 @@ type SettleFilterRow struct{ ID, Raw, Reported string }
 // So list --state waiting --limit 1 with a settle time is sf-settled, which a
 // filter applied after the limit would miss.
 func SeedSettleFilterRows(dbPath string, nowMs int64) ([]SettleFilterRow, error) {
+	live, err := ReadSurfaceProcessOptions()
+	if err != nil {
+		return nil, err
+	}
 	rows := []SettleFilterRow{
 		{"sf-unsettled-1", store.StateWaiting, store.StateWorking},
 		{"sf-unsettled-2", store.StateWaiting, store.StateWorking},
@@ -109,7 +113,7 @@ func SeedSettleFilterRows(dbPath string, nowMs int64) ([]SettleFilterRow, error)
 		{"sf-to-working", store.StateWorking, store.StateWaiting},
 	}
 	for _, r := range rows {
-		var opts []SpawnOption
+		opts := []SpawnOption{WithNoPane(), live[0], live[1]}
 		if r.Reported != r.Raw {
 			opts = append(opts, WithSettle(r.Reported, nowMs))
 		}

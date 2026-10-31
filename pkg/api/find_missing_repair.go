@@ -2,9 +2,9 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // CheckPermissionRepairStore is the store surface of find-missing's repair of
@@ -23,105 +23,82 @@ var _ CheckPermissionRepairStore = (*store.Store)(nil)
 // ad.find_missing.tick a repair of a stale check_permission row writes.
 const reasonStaleCheckPermission = "stale_check_permission"
 
-// RepairCheckPermission is find-missing's repair of stale check_permission
-// rows (b.146 rule 9, problem 3); Client.FindMissing runs it after the sweep
-// (FindMissing), on a fresh read of the live rows. A row in check_permission
-// with relay_mode on is moved out of it when none of its permission requests
-// holds it (one that still awaits an answer, not acked and not answered at
-// the pane, or, recorded before schema v7, undecided, and that Claude Code
-// has not proven gone; b.omt) and none has a relay hook that may still run:
-// to waiting when the main agent's idle-prompt Notification is the
-// last hook it recorded (idle_since set), to working otherwise; a Codex row,
-// whose agent sends no idle-prompt Notification, always to working (the store
-// statement reads the row's agent, so the choice is made under the same
-// guards). Such a row's
-// agent moved on from its last permission dialog and the hook that would have
-// moved the row was lost (a lost Stop after a delivered timeout deny, for
-// example).
-//
-// For each such row it reads every request of the row and judges, through v,
-// each request no close of the row's requests has closed (closed_at NULL;
-// b.146 rule 12) whose confirm_by has not passed (rule 14's check: a relay
-// hook past its settle instant has been killed or has ended on its own): one
-// judged alive or can't tell may still run, and the row is left as it is for
-// a later run. A closed request is not judged (mayHaveLiveHook says why), so
-// after a close and a resume a closed request whose hook cannot be checked
-// does not hold the repair off until its confirm_by. A request proven gone is
-// judged as any other no close has closed: the proof leaves it out of the
-// statement's check below only. Otherwise one guarded
-// statement (RepairCheckPermissionIfSameLife) writes the repair, only while
-// the row is in check_permission with relay_mode on, still holds the snapshot
-// read here and has no request that holds it (still awaits an answer and is
-// not proven gone), so a request recorded or a hook that wrote after this
-// read (either advances the row's snapshot) wins. The hooks are judged before
-// that statement reads the requests (the check-before-read rule).
-//
-// An applied repair writes one ad.find_missing.tick (prior_state
-// check_permission, new_state the state written, reconciliation_reason
-// stale_check_permission), fail-open. Per-row store errors, and a failed
-// live-row read, are logged on lg (a nil lg writes nothing) and never fail
-// find-missing.
+// RepairCheckPermission retains the exported, permission-only capability seam.
+// Full reads and find-missing use the same per-row repair below after their
+// fixed selection. This helper adds no process, tmux, or delivery capability.
+// It has no operation context, so its bounded recovery ticks derive from
+// Background.
 func RepairCheckPermission(s CheckPermissionRepairStore, v RelayView, lg FindMissingLogger) {
-	rows, err := s.ListLiveSpawnIdentities()
-	if err != nil {
-		logFindMissing(lg, "ListLiveSpawnIdentities", "(repair)", err)
-		return
+	var rows []Spawn
+	if selected, ok := s.(interface {
+		RecoveryRows([]string, store.SettleRead) ([]Spawn, error)
+	}); ok {
+		var err error
+		rows, err = selected.RecoveryRows(nil, store.SettleRead{})
+		if err != nil {
+			logFindMissing(lg, "RecoveryRows", "(repair)", err)
+			return
+		}
+	} else {
+		selected, err := s.ListLiveSpawnIdentities()
+		if err != nil {
+			logFindMissing(lg, "ListLiveSpawnIdentities", "(repair)", err)
+			return
+		}
+		for _, row := range selected {
+			rows = append(rows, Spawn{InstanceID: row.InstanceID, State: row.State, Snapshot: row.Snapshot})
+		}
+	}
+	read := s.PermissionRequestsForSpawn
+	if bounded, ok := s.(interface {
+		PermissionRequestsForSpawnWithin(string, time.Duration) ([]PermissionRow, error)
+	}); ok {
+		read = func(id string) ([]PermissionRow, error) { return bounded.PermissionRequestsForSpawnWithin(id, 0) }
 	}
 	j := newRelayJudge(v)
-	for _, it := range rows {
-		if it.State != store.StateCheckPermission {
+	for _, row := range rows {
+		if row.State != store.StateCheckPermission {
 			continue
 		}
-		reqs, err := s.PermissionRequestsForSpawn(it.InstanceID)
+		judged, err := readJudgedRequests(read, j, row.InstanceID)
 		if err != nil {
-			logFindMissing(lg, "PermissionRequestsForSpawn", it.InstanceID, err)
+			logFindMissing(lg, "PermissionRequestsForSpawn", row.InstanceID, err)
 			continue
 		}
-		if mayHaveLiveHook(j, reqs) {
-			continue
-		}
-		newState, res, err := s.RepairCheckPermissionIfSameLife(it.InstanceID, it.Snapshot)
+		_, _, err = repairCheckPermissionRow(recoveryTrail(context.Background()), s, row, judged, j)
 		if err != nil {
-			logFindMissing(lg, "RepairCheckPermissionIfSameLife", it.InstanceID, err)
-			continue
+			logFindMissing(lg, "RepairCheckPermission", row.InstanceID, err)
 		}
-		if res != CondApplied {
-			continue
-		}
-		_ = trail.Emit(context.Background(), findMissingTickEvent, map[string]any{
-			"instance_id":           it.InstanceID,
-			"prior_state":           store.StateCheckPermission,
-			"new_state":             newState,
-			"reconciliation_reason": reasonStaleCheckPermission,
-			"source":                findMissingTickSource,
-		})
 	}
 }
 
-// mayHaveLiveHook reports whether a request of reqs has a relay hook that may
-// still run and matter to the row: one no close has closed, whose confirm_by
-// has not passed and whose hook j does not judge gone (alive, or can't tell).
-//
-// A closed request (closed_at set, b.146 rule 12) is skipped unjudged. A
-// close closed it when the row's agent was gone or judged gone and the row
-// moved to missing or ended (or, for one an earlier release left open, when
-// the finished row was resumed), so the row is in check_permission again only
-// through a later hook (after a resume, a later life's), and the closed
-// request is not what holds it there. Its leftover relay hook cannot acquire
-// response authority: a closed request cannot be acknowledged, even if the
-// parent still lives (the mark judged wrong). Closeout's recorded verdict is
-// history only; it cannot cause a new response. The closed request no longer
-// awaits an answer, and the repair statement ignores it already
-// (holdsRowSQL). Judging it would let a hook that cannot be checked
-// (another or unreadable pid namespace, unreadable /proc) hold the row in
-// check_permission until its confirm_by, up to a relay window later.
-func mayHaveLiveHook(j relayJudge, reqs []PermissionRow) bool {
+// repairCheckPermissionRow writes its repair tick through emit.
+func repairCheckPermissionRow(emit trailEmit, s any, row Spawn, judged *judgedRequestSet, j relayJudge) (string, CondResult, error) {
+	if row.State != store.StateCheckPermission || judged == nil || mayHaveJudgedHook(j, judged) {
+		return "", CondChanged, nil
+	}
+	var state string
+	var result CondResult
+	var err error
+	if guarded, ok := s.(interface {
+		RepairCheckPermissionSample(Spawn, []PermissionRow) (string, CondResult, error)
+	}); ok {
+		state, result, err = guarded.RepairCheckPermissionSample(row, judged.rows)
+	} else if legacy, ok := s.(CheckPermissionRepairStore); ok {
+		state, result, err = legacy.RepairCheckPermissionIfSameLife(row.InstanceID, row.Snapshot)
+	} else {
+		return "", CondChanged, nil
+	}
+	if err == nil && result == CondApplied {
+		emitMarkTick(emit, row.InstanceID, row.State, state, reasonStaleCheckPermission, nil)
+	}
+	return state, result, err
+}
+
+func mayHaveJudgedHook(j relayJudge, judged *judgedRequestSet) bool {
 	now := j.now()
-	for _, pr := range reqs {
-		if pr.Closed() || !now.Before(j.confirmBy(pr)) {
-			continue
-		}
-		if j.hook(pr) != hookGone {
+	for _, pr := range judged.rows {
+		if !pr.Closed() && now.Before(j.confirmBy(pr)) && judged.verdicts[pr.RequestID] != hookGone {
 			return true
 		}
 	}

@@ -114,7 +114,7 @@ Claude Code sends a `Notification` with `notification_type`
 
 Every applied write of this Notification, the soft refresh included, sets
 the row's `idle_since` to the current time, and the agent's next applied
-hook clears it (a `SubagentStart` or `SubagentStop` leaves it). `find-missing` reads it when it repairs a relay row left in
+hook clears it (a `SubagentStart` or `SubagentStop` leaves it). Recovery reads it when repairing a relay row left in
 `check_permission`: `waiting` when it is set, `working` when it is not (see
 "PermissionRequest relay path" below).
 
@@ -253,10 +253,10 @@ No Codex tool moves a row to `ask_user`: Codex's question tools
 (`request_user_input` and `request_user_input_async`) read `working` like
 every other tool. Codex has no idle-prompt Notification either. A turn
 returns the row to `waiting` by its `Stop` or `Interrupt`, or, for a turn
-that sends neither (one that ends in an error), by a read that finds the
+that sends neither (one that ends in an error), by a recovery check that finds the
 turn's end in the rollout (see "The Codex turn" below). A Codex row left
-`working` with no such evidence is never repaired: `find-missing` repairs
-only a row stuck at `check_permission` (see "A relay row left in
+`working` with no such evidence is not moved to `waiting`; permission repair
+applies only to a row stuck at `check_permission` (see "A relay row left in
 `check_permission`" below). For action on a stale row see the [caller contract](caller-contract.md#caller-contract).
 
 `Interrupt` is Codex's Esc: it ends the turn the agent was working on. As
@@ -283,16 +283,16 @@ a `/review` thread's hooks record no turn.
 **A turn that ends in an error.** Codex sends no `Stop` for a turn that
 ends in an error (a model at capacity, for one), but its rollout, the row's
 transcript, records the end of every turn as a `task_complete` naming the
-turn. Before it reports, `status`, `get` or `list` moves a Codex row to
-`waiting` when all of these hold:
+turn. An eligible `status`, `get`, `list` or `find-missing` check can move
+a Codex row to `waiting` when all of these hold:
 
 - the row's raw state is `working`, and its current turn has not ended;
 - the last turn record in the rollout (`task_started` or `task_complete`)
   is that turn's `task_complete`, errored or not.
 
-`status` and `get` check the row and every live descendant its
-`family_state` counts; `list` checks every row, so its `--state` filter sees
-the move (after any settle time). The trail records one
+Selection and recovery limits follow the
+[caller contract](caller-contract.md#bounded-recovery-on-state-reads).
+A confirmed move writes one
 `ad.spawn.state_transition` from `working` to `waiting` with
 `triggering_event_name` `task_complete`, `cause` `codex_rollout_task_complete`
 and `soft_refresh` false.
@@ -307,9 +307,10 @@ and bumps no `last_seen_at`. What a caller does then is in the
   recorded transcript: an absolute path to a regular file, never a symlink,
   whose name carries the row's session id.
 - The check fails open and waits for no lock: a busy store, an unreadable
-  rollout or any other failure leaves the row `working` for that read,
-  which goes ahead, and a later read checks again.
-- Nothing checks between reads: a row nobody reads stays `working`.
+  rollout or stale evidence cannot confirm the move. The call goes ahead
+  with available stored facts, and a later call checks again.
+- Nothing checks between calls; a scheduled `find-missing` can recover the end
+  without an intervening state read.
 
 **Late tool hooks.** A command a turn started can finish after the turn
 ended, so its `PreToolUse` or `PostToolUse` arrives late. A main-thread tool
@@ -377,21 +378,21 @@ report into `ended` is in "How a Codex row ends" below.
 A Codex row moves to `ended` only when both hold: the agent process of its
 current launch is proven gone (judged by its recorded start time, as
 `find-missing` judges every row, with no tmux call) and the row holds an end
-report. Two verbs make the move, each through the same guarded write:
+report. These operations share the guarded move:
 
-- `find-missing`, for every live row it finds gone.
+- `status`, `get`, `list` and `find-missing`, for eligible selected rows.
 - `pause`, before it sends any key (in any live state, `pending` included) and
   in each poll while it waits for `ended`.
 
 A Codex row never reads `ended` while its agent runs. An `/exit` typed at the
 pane records the end report only, so the row stays in its last state until
-`find-missing` or `pause` sees the agent gone (what a caller does is in the
+a recovery check or `pause` sees the agent gone (what a caller does is in the
 [caller contract](caller-contract.md#when-a-codex-agent-exits)).
 
-- **Gone, no end report:** `find-missing` marks the row `missing`, as for a
+- **Gone, no end report:** recovery marks the row `missing`, as for a
   Claude row.
 - **Judged on tmux evidence alone** (the process cannot be checked, or was
-  never recorded): `find-missing` marks the row `missing`, whatever report it
+  never recorded): recovery marks the row `missing`, whatever report it
   holds.
 - **The move closes the row's requests** and its `running` subagent records, together (see "The agent's end closes its requests" below).
   The row keeps its end report.
@@ -400,7 +401,7 @@ Whichever verb makes the move, it writes `find-missing`'s records: one
 `ad.find_missing.tick` with `new_state` `ended` and `reconciliation_reason`
 `proc_absent`, and, for each request it denies, one
 `ad.row_mutation.committed` with `decision_reason` `ended` and
-`writer_process` `find_missing`, which can therefore come from `pause`. It
+`writer_process` `find_missing`, also from state reads or `pause`. It
 writes no `ad.spawn.state_transition`.
 
 ### Subagent records
@@ -517,9 +518,10 @@ time and get the hook killed without a result or trail record. See
 
 A missed or ignored SessionStart, a startup screen before the first hook,
 or a Codex launch awaiting its first prompt can leave a running agent
-`pending`. Agent-director cannot tell these from the row alone. A scheduled
-`find-missing` notes an alive, past-grace row `unreported`, once its launch
-owner no longer holds it and its pane is recorded or adopted. It keeps
+`pending`. Agent-director cannot tell these from the row alone. An eligible
+state read or a scheduled `find-missing` notes an alive, past-grace row
+`unreported`, once its launch owner no longer holds it and its pane is
+recorded or adopted. It keeps
 `launch_started_at` and the first `liveness_unverified_since` of that launch.
 An existing `provenance_conflict` note is kept. A later applied hook clears
 the note; a working move held by a permission request clears only `idle_since`.
@@ -1071,14 +1073,14 @@ Limits:
   turn has one end signal, its `Stop` or Interrupt. When that hook is lost,
   or the turn ends in an error, which sends neither, the row stays held
   until the next turn's `Stop` or Interrupt, or until `record-pane-answer`,
-  after which `find-missing` repairs it to `working`. A read does not move
-  a row in `check_permission` (see [The Codex turn](#the-codex-turn)).
+  after which a shared recovery check can repair it to `working`
+  (see [The Codex turn](#the-codex-turn)).
 - A request recorded in the same second a `Stop`, idle prompt or Codex
   Interrupt started is not proven by it, and holds until a later turn end.
 
 For a missed hook and stale `check_permission` recovery, see
 [Permissions](permissions.md) and the [caller contract](caller-contract.md#permission-relay).
-A scheduled `find-missing` repairs an eligible Claude row to `waiting`
+A selected state read or `find-missing` repairs an eligible Claude row to `waiting`
 when `idle_since` is set, otherwise `working`; a Codex row always repairs
 to `working`, since it sends no idle-prompt Notification.
 
@@ -1137,7 +1139,7 @@ the row's `ad.spawn.state_transition`. `find-missing`'s mark closes a
 and `resume`'s move to `pending` closes any request an older binary
 left open on the finished row (`decision_reason` `ended`,
 `writer_process` `resume`). The move of a Codex row to `ended` (see "How a
-Codex row ends" above), made by `find-missing` or by `pause`, closes them
+Codex row ends" above), made by a recovery check or by `pause`, closes them
 too, as the `ended` close does: `decision_reason` `ended` and
 `writer_process` `find_missing`, so `decide` on such a request returns
 `ErrNoOpenPermissionRequest`. On a non-Cursor row, each of these also

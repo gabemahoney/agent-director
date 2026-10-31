@@ -233,7 +233,7 @@ func TestIdleScreenLeavesCommandGuards(t *testing.T) {
 func TestIdleScreenFamilyIsBinaryAndDetailChildLocal(t *testing.T) {
 	t.Parallel()
 	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
-	parent, err := apitest.SeedSpawn(e.dbPath, "", store.StateWaiting, "", "off", "", false)
+	parent, err := apitest.SeedSpawn(e.dbPath, "", store.StateWaiting, "", "off", "", false, apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
 	if err != nil {
 		t.Fatal(err)
 	}

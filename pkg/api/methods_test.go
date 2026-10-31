@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,16 +51,13 @@ func newTestClientWithRows(t *testing.T, seedFn func(dbPath string)) (*api.Clien
 // insertRow inserts a relay_mode off row id at state into the store at dbPath.
 func insertRow(t *testing.T, dbPath, id, sessionName, state string) {
 	t.Helper()
-	s, err := store.OpenOrInit(dbPath)
+	live, err := apitest.ReadSurfaceProcessOptions()
 	if err != nil {
-		t.Fatalf("OpenOrInit(%q): %v", dbPath, err)
+		t.Fatal(err)
 	}
-	defer s.Close() //nolint:errcheck
-	if err := s.InsertPending(store.Spawn{InstanceID: id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: sessionName, RelayMode: "off"}); err != nil {
-		t.Fatalf("InsertPending(%s): %v", id, err)
-	}
-	if err := seedAgentState(s, dbPath, id, state); err != nil {
-		t.Fatalf("seed %s→%s: %v", id, state, err)
+	if _, err := apitest.SeedSpawn(dbPath, id, state, "/tmp", "off", "", true,
+		apitest.WithTmuxSessionName(sessionName), apitest.WithNoPane(), live[0], live[1]); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -57,6 +57,7 @@ func cmdSeedReadSurfaceStore(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("seed-read-surface-store", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	storePath := fs.String("store", "", "path for the new SQLite store file (required)")
+	writer := fs.Int("writer-pid", 0, "live surface reader process")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -64,7 +65,7 @@ func cmdSeedReadSurfaceStore(args []string, stdout, stderr io.Writer) int {
 		printError(stderr, errors.New("--store is required"))
 		return 1
 	}
-	ids, err := apitest.SeedReadSurfaceStore(*storePath)
+	ids, err := apitest.SeedReadSurfaceStore(*storePath, *writer)
 	if err != nil {
 		printError(stderr, err)
 		return 1
@@ -116,10 +117,11 @@ func cmdSetSettle(args []string, stdout, stderr io.Writer) int {
 // cmdSeedSurface seeds the shared precommitted display wire surface seed adds
 // (apitest.SeedNeedsIntelligenceSurface, apitest.SeedIdleScreenSurface) into
 // --store, for the subcommand name.
-func cmdSeedSurface(name string, seed func(string) error, args []string, stdout, stderr io.Writer) int {
+func cmdSeedSurface(name string, seed func(string, ...int) error, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	path := fs.String("store", "", "store path")
+	writer := fs.Int("writer-pid", 0, "live surface reader process")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -127,7 +129,7 @@ func cmdSeedSurface(name string, seed func(string) error, args []string, stdout,
 		printError(stderr, errors.New("--store is required"))
 		return 1
 	}
-	if err := seed(*path); err != nil {
+	if err := seed(*path, *writer); err != nil {
 		printError(stderr, err)
 		return 1
 	}

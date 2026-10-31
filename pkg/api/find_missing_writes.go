@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -72,8 +73,9 @@ type findMissingWrite struct {
 // close included), applies nothing: no tick, no permission-request close,
 // and the row is in neither result list (Listed false). A store error is
 // logged on lg (a nil lg writes nothing) and never fails the sweep. Listed is
-// true exactly when the mark applied, so the row goes in ids.
-func markMissingSameLife(s FindMissingStore, id string, examined RowSnapshot, reason string, extra map[string]any, lg FindMissingLogger) findMissingWrite {
+// true exactly when the mark applied, so the row goes in ids. The tick is
+// written through emit.
+func markMissingSameLife(emit trailEmit, s FindMissingStore, id string, examined RowSnapshot, reason string, extra map[string]any, lg FindMissingLogger) findMissingWrite {
 	prior, res, err := s.MarkMissingIfSameLife(id, examined)
 	w := findMissingWrite{Wrote: true, Res: res, Err: err}
 	if err != nil {
@@ -84,18 +86,19 @@ func markMissingSameLife(s FindMissingStore, id string, examined RowSnapshot, re
 	if res != CondApplied {
 		return w
 	}
-	emitMarkTick(id, prior, "missing", reason, extra)
+	emitMarkTick(emit, id, prior, "missing", reason, extra)
 	w.Listed = true
 	return w
 }
 
-// emitMarkTick writes the one ad.find_missing.tick of a mark or a move that
-// applied: instance_id, prior_state (the state the write replaced), new_state
-// (missing or ended), reconciliation_reason reason and source ad_find_missing,
-// plus every field of extra; extra never replaces one of those five.
-// Fail-open: a trail-write failure is discarded. The mark and the Codex end
-// (markEndedSameLife) share it, so find-missing and pause emit the same record.
-func emitMarkTick(id, prior, newState, reason string, extra map[string]any) {
+// emitMarkTick writes, through emit, the one ad.find_missing.tick of a mark
+// or a move that applied: instance_id, prior_state (the state the write
+// replaced), new_state (missing or ended), reconciliation_reason reason and
+// source ad_find_missing, plus every field of extra; extra never replaces one
+// of those five. Fail-open: a trail-write failure is discarded. The mark and
+// the Codex end (markEndedSameLife) share it, so the shared recovery checks
+// and pause emit the same record.
+func emitMarkTick(emit trailEmit, id, prior, newState, reason string, extra map[string]any) {
 	fields := make(map[string]any, len(extra)+5)
 	for k, v := range extra {
 		fields[k] = v
@@ -105,7 +108,7 @@ func emitMarkTick(id, prior, newState, reason string, extra map[string]any) {
 	fields["new_state"] = newState
 	fields["reconciliation_reason"] = reason
 	fields["source"] = findMissingTickSource
-	_ = trail.Emit(context.Background(), findMissingTickEvent, fields)
+	_ = emit(findMissingTickEvent, fields)
 }
 
 // EndedMover is the one store write the Codex end needs: the guarded move of a
@@ -146,8 +149,10 @@ type EndedMover interface {
 // A move that finds the row changed or absent, or fails in the store (its
 // closes included), applies nothing: no tick, no close. A store error is logged
 // on lg (a nil lg writes nothing) and returned in the outcome's Err. Listed is
-// always false: a row moved to ended is in neither ids nor unverified_ids.
-func markEndedSameLife(s EndedMover, id string, examined RowSnapshot, reason string, extra map[string]any, lg FindMissingLogger) findMissingWrite {
+// always false: a row moved to ended is in neither ids nor unverified_ids. The
+// tick is written through emit: the shared recovery checks pass recoveryTrail
+// and pause legacyTrail.
+func markEndedSameLife(emit trailEmit, s EndedMover, id string, examined RowSnapshot, reason string, extra map[string]any, lg FindMissingLogger) findMissingWrite {
 	prior, res, err := s.MarkEndedIfSameLife(id, examined)
 	w := findMissingWrite{Wrote: true, Res: res, Err: err}
 	if err != nil {
@@ -156,7 +161,7 @@ func markEndedSameLife(s EndedMover, id string, examined RowSnapshot, reason str
 		return w
 	}
 	if res == CondApplied {
-		emitMarkTick(id, prior, "ended", reason, extra)
+		emitMarkTick(emit, id, prior, "ended", reason, extra)
 	}
 	return w
 }
@@ -189,8 +194,9 @@ func markEndedSameLife(s EndedMover, id string, examined RowSnapshot, reason str
 //
 // The row is in neither result list whatever the outcome (Listed is always
 // false): never ids, since it is not marked, and not unverified_ids, since
-// its agent process was checked and is alive.
-func writeUnreportedNote(s FindMissingStore, id string, examined RowSnapshot, readNote string, lg FindMissingLogger) findMissingWrite {
+// its agent process was checked and is alive. The tick is written through
+// emit.
+func writeUnreportedNote(emit trailEmit, s FindMissingStore, id string, examined RowSnapshot, readNote string, lg FindMissingLogger) findMissingWrite {
 	if readNote == noteUnreported {
 		return findMissingWrite{}
 	}
@@ -200,7 +206,7 @@ func writeUnreportedNote(s FindMissingStore, id string, examined RowSnapshot, re
 		return findMissingWrite{Wrote: true, Err: err}
 	}
 	if res == CondApplied {
-		emitNoteTick(id, readNote, noteUnreported)
+		emitNoteTick(emit, id, readNote, noteUnreported)
 	}
 	return findMissingWrite{Wrote: true, Res: res}
 }
@@ -224,7 +230,9 @@ func writeUnreportedNote(s FindMissingStore, id string, examined RowSnapshot, re
 //   - a write that finds the row changed or absent, or fails in the store,
 //     applies nothing, ticks nothing, and leaves the row in neither list. A
 //     store error is logged on lg and never fails the sweep.
-func writeLivenessNote(s FindMissingStore, id string, examined RowSnapshot, readNote, note string, lg FindMissingLogger) findMissingWrite {
+//
+// The tick is written through emit.
+func writeLivenessNote(emit trailEmit, s FindMissingStore, id string, examined RowSnapshot, readNote, note string, lg FindMissingLogger) findMissingWrite {
 	if note == readNote {
 		return findMissingWrite{Listed: true}
 	}
@@ -238,21 +246,21 @@ func writeLivenessNote(s FindMissingStore, id string, examined RowSnapshot, read
 	if res != CondApplied {
 		return w
 	}
-	emitNoteTick(id, readNote, note)
+	emitNoteTick(emit, id, readNote, note)
 	w.Listed = true
 	return w
 }
 
-// emitNoteTick writes the ad.find_missing.tick of a note write that applied,
-// from readNote to note, when noteTickReason says it ticks: instance_id,
-// prior_state and new_state null, reconciliation_reason and source
-// ad_find_missing. Fail-open: a trail-write failure is discarded.
-func emitNoteTick(id, readNote, note string) {
+// emitNoteTick writes, through emit, the ad.find_missing.tick of a note write
+// that applied, from readNote to note, when noteTickReason says it ticks:
+// instance_id, prior_state and new_state null, reconciliation_reason and
+// source ad_find_missing. Fail-open: a trail-write failure is discarded.
+func emitNoteTick(emit trailEmit, id, readNote, note string) {
 	reason, ok := noteTickReason(readNote, note)
 	if !ok {
 		return
 	}
-	_ = trail.Emit(context.Background(), findMissingTickEvent, map[string]any{
+	_ = emit(findMissingTickEvent, map[string]any{
 		"instance_id":           id,
 		"prior_state":           nil,
 		"new_state":             nil,
@@ -310,5 +318,32 @@ func clearLivenessNote(s FindMissingStore, id string, examined RowSnapshot, read
 func logFindMissing(lg FindMissingLogger, call, id string, err error) {
 	if lg != nil {
 		lg.Printf("find-missing: %s(%s): %v (continuing)", call, id, err)
+	}
+}
+
+// recoveryTrailWait bounds how long a check waits for one recovery record's
+// write to the audit sink (SR-1, SR-3).
+const recoveryTrailWait = 50 * time.Millisecond
+
+// trailEmit writes one audit record for a shared writer or emitter. Recovery
+// checks pass recoveryTrail; verbs outside recovery pass legacyTrail.
+type trailEmit func(event string, fields map[string]any) error
+
+// legacyTrail is the synchronous write that verbs outside recovery (spawn,
+// reuse, kill, expire, resume, the pane-keys verbs and pause) keep.
+func legacyTrail(event string, fields map[string]any) error {
+	return trail.Emit(context.Background(), event, fields)
+}
+
+// recoveryTrail emits each record under ctx, the operation context the check
+// runs under, never a fresh Background one. recoveryTrailWait bounds the wait
+// for each record's write, so a check never waits indefinitely on the audit
+// sink; admission never waits, a full queue rejects at once, and an accepted
+// event stays with the trail worker.
+func recoveryTrail(ctx context.Context) trailEmit {
+	return func(event string, fields map[string]any) error {
+		ctx, cancel := context.WithTimeout(ctx, recoveryTrailWait)
+		defer cancel()
+		return trail.Emit(ctx, event, fields)
 	}
 }

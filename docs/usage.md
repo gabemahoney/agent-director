@@ -53,7 +53,7 @@ hooks or typing setting; an option is refused even after the `--`. The full list
 
 A row is `pending` while its launch is in progress and its agent has not
 reported in; it becomes `waiting` once it does. If the agent runs but never
-reports in, `find-missing` notes the row `unreported` (see
+reports in, the shared recovery checks can note it `unreported` (see
 [Maintenance](maintenance.md)).
 
 A Codex agent reports in at its first prompt, not when its screen opens, so
@@ -68,11 +68,11 @@ arguments, or read the pane with `read-pane` and then type with
 After the first prompt the row moves with Codex's own events: a turn's
 prompt and tools read `working`, its end (`Stop`, or Esc) reads `waiting`,
 and a permission request reads `check_permission`. A turn that ends in an
-error sends no event; a later read moves the row to `waiting` (see
+error sends no event; an eligible read or sweep can move it to `waiting` (see
 [The Codex turn](hooks.md#the-codex-turn)). No Codex tool reads `ask_user`.
 A session change in the agent (`/clear`, `/new`, `/fork`, `/resume`) shows
 from the next prompt, and the `SessionEnd` that `/exit` sends leaves the
-row's state as it is, until `find-missing` or `pause` sees the agent gone (see
+row's state as it is, until a recovery check or `pause` sees the agent gone (see
 [How a Codex row ends](hooks.md#how-a-codex-row-ends)). After Codex's `/review` the row can
 read `working` until the next prompt. The events and the limits are in
 [Hooks](hooks.md#hooks-from-a-codex-agent).
@@ -87,10 +87,10 @@ reported `pre_trust` outcome means, is in
 
 `state` is always the agent's own state. Beside it, `displayed_state` reads
 `idle_screen` while a `working` Claude or Codex agent's pane looks the same
-on every read for the
+on successive checks for the
 [configured time](configuration.md#idle-screen-timeout-state); `state` stays
-`working`. It is computed when you call `status`, `get` or `list`; nothing
-runs in the background, so an agent nobody reads never shows it. The
+`working`. Selected `status`, `get`, `list` and `find-missing` checks can
+observe it; nothing samples between calls. The
 fields, filtering and what to do are in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
 
@@ -111,7 +111,8 @@ contributors, including no live members, the aggregate is `waiting`.
 The family then [settles independently](configuration.md#settle-time-state).
 
 Each returned agent's family covers the full stored tree, including members
-hidden by list filters or limits. Resume, reuse and deletion follow the
+hidden by list filters or limits, using their stored contributions without
+checking those hidden members. Resume, reuse and deletion follow the
 stored relationships; deleted connecting rows are not reconstructed. Native
 helpers and subagent records are separate from AD child spawns and do not
 participate. Permissions remain per agent: a descendant's request affects
@@ -576,11 +577,12 @@ Every `running` record of the agent turns `lost` with `close_reason`
 - The agent exits and its row becomes `ended`. A session end that only clears
   or compacts the conversation closes nothing (see
   [Hooks](hooks.md#the-eleven-state-tracking-hooks)). A Codex row becomes
-  `ended` once `find-missing` or `pause` sees its agent gone (see
+  `ended` once a recovery check or `pause` sees its agent gone (see
   [How a Codex row ends](hooks.md#how-a-codex-row-ends)).
-- `find-missing` marks the row `missing` (see
-  [Maintenance](maintenance.md) for scheduling it). A row it leaves live, with
-  an unverified result or the `unreported` note, closes nothing.
+- A [recovery check](caller-contract.md#bounded-recovery-on-state-reads)
+  by a state read or `find-missing` marks the row `missing` (see
+  [Maintenance](maintenance.md) for scheduling the sweep). A row left live,
+  with an unverified result or the `unreported` note, closes nothing.
 - The agent begins a new launch, by `resume` or by reuse of its id. `lost_at`
   is the new launch's start, the `launch_started_at` of its `pending` row.
 

@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -28,6 +30,11 @@ import (
 // state a read can display a filtered Displayed State from. The caller
 // filters those rows on their reported or displayed state and applies Limit.
 type ListFilters struct {
+	// IDs restricts a refresh to a previously selected set. Nil selects freely;
+	// a non-nil empty slice selects nothing. No filter is reapplied by a refresh.
+	IDs []string
+	// StoredDisplay matches committed display facts before any external check.
+	StoredDisplay     bool
 	State             []string
 	Labels            map[string]string
 	Parent            string
@@ -96,7 +103,14 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 			args = append(args, st)
 		}
 		clause := stateExpr + " IN (" + strings.Join(placeholders, ",") + ")"
-		if f.DisplayCandidates {
+		if f.StoredDisplay {
+			// Retired needs_intelligence observations never match, and an
+			// ordinary row's empty display is not a replacement match.
+			clause = "(" + clause + " OR (" + committedDisplayStateSQL + " <> 'needs_intelligence' AND " + committedDisplayStateSQL + " IN (" + strings.Join(placeholders, ",") + ")))"
+			for _, st := range f.State {
+				args = append(args, st)
+			}
+		} else if f.DisplayCandidates {
 			clause = "(" + clause + " OR display_observation IS NOT NULL"
 			var raws []any
 			for _, st := range f.State {
@@ -111,6 +125,12 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 			clause += ")"
 		}
 		where = append(where, clause)
+	}
+	if f.IDs != nil {
+		where = append(where, "instance_id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(f.IDs)), ",")+")")
+		for _, id := range f.IDs {
+			args = append(args, id)
+		}
 	}
 
 	// Label filters are sorted by key so the generated SQL is
@@ -152,27 +172,35 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 		args = append(args, f.Limit)
 	}
 
-	rows, err := s.db.QueryContext(s.readContext(), q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: list spawns query: %w", err)
-	}
-	defer rows.Close()
-
 	var out []Spawn
-	for rows.Next() {
-		sp, err := scanSpawnRow(rows, listSpawnsErrs, f.Settle.on())
+	stale := &CursorMissingReadError{}
+	err = s.readWithin(0, "store: list spawns", func(ctx context.Context, conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, q, args...)
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("store: list spawns query: %w", err)
 		}
-		if err := validateCursorMissingRead(sp, proofs); err != nil {
-			return nil, err
+		defer rows.Close()
+
+		for rows.Next() {
+			sp, err := scanSpawnRow(rows, listSpawnsErrs, f.Settle.on())
+			if err != nil {
+				return err
+			}
+			if err := validateCursorMissingRead(sp, proofs); err != nil {
+				stale.InstanceIDs = append(stale.InstanceIDs, sp.InstanceID)
+				continue
+			}
+			out = append(out, sp)
 		}
-		out = append(out, sp)
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("store: list spawns iterate: %w", err)
+		}
+		return nil
+	})
+	if err == nil && len(stale.InstanceIDs) > 0 {
+		err = stale
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list spawns iterate: %w", err)
-	}
-	return out, nil
+	return out, err
 }
 
 // jsonPathFlatKey returns the SQLite JSONPath expression that matches a

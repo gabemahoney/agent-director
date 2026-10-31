@@ -16,7 +16,7 @@ const RFC3339_UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 
 test("status: happy path — returns state field for seeded spawn", async () => {
   await withTempHome(async (homeDir) => {
-    runHelper("seed-spawn", { store: homeStore(homeDir), state: "working", id: "smoke-status-id", "create-store": true });
+    runHelper("seed-spawn", { store: homeStore(homeDir), state: "working", "writer-pid": String(process.pid), id: "smoke-status-id", "create-store": true });
     using client = await openClient(homeStore(homeDir));
     const result = await client.status({ instance_id: "smoke-status-id" });
     expect(result.context).toEqual(expectedContext("unknown"));

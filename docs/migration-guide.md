@@ -642,9 +642,9 @@ the pane after its relay hook was killed, refuses plain `send-keys` to its
 agent once the store is migrated, until it is closed: with
 `record-pane-answer --request-token <T> --as unknown --expect-pane-sha256
 <H>` (H the `pane_sha256` of a `read-pane` a person or an LLM looked at),
-with a pane answer, or with its row (the agent ends, or `find-missing`
-marks it `missing`). The refusal's `err_details` name the request
-(`request_token`) and the agent's other open requests. `record-pane-answer`
+with a pane answer, or with its row (the agent ends, or shared recovery
+marks it `missing` on a state read or `find-missing`). The refusal's
+`err_details` name the request (`request_token`) and the agent's other open requests. `record-pane-answer`
 is the way out: `decide` records no verdict on such a request, and once
 the agent has left `check_permission` or recorded a later request it
 returns `ErrNoOpenPermissionRequest` for it ("do not answer it at the

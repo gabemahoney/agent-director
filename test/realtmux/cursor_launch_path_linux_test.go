@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -220,6 +221,7 @@ func TestCursorBadRuntimeDoesNotFallback(t *testing.T) {
 				}
 				caller.must(call, params) // Launch succeeds; runtime startup is asynchronous.
 				id := params["instance_id"].(string)
+				agePendingLaunch(t, f.DBPath, id, (config.Tmux{}).EffectivePendingGrace())
 				waitFor(t, "failed runtime is process-backed missing", func() bool { row, err := f.API.Get(id); return err == nil && row.State == store.StateMissing }, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
 				if !reflect.DeepEqual(frames, runtime.Frames(t)) {
 					t.Fatal("bad configured runtime fell back to PATH agent")

@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"database/sql/driver"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
@@ -83,6 +85,10 @@ const CreatedAtResolution = createdAtResolution
 
 // KillPollInterval is kill's poll interval (killPollInterval, SR-6.1), so no test spells it.
 const KillPollInterval = killPollInterval
+
+// RecoveryTrailWait bounds a recovery check's wait for each trail record's
+// write (recoveryTrailWait, SR-1, SR-3), so no test spells it.
+const RecoveryTrailWait = recoveryTrailWait
 
 // SetPauseTestKnobs lets pause_test override the polling cadence and
 // sleeper without exporting them broadly. Tests pair this with
@@ -171,4 +177,10 @@ func SetStoreContextForTest(c *Client, ctx context.Context) (restore func()) {
 	original := c.st
 	c.st = original.WithContext(ctx)
 	return func() { c.st = original }
+}
+
+// ObserveClientSQLiteForTest reuses the registered real-driver boundary on
+// this Client's owning store; no global observer or replacement store is used.
+func ObserveClientSQLiteForTest(c *Client, wrap func(driver.Driver) driver.Driver) (func(context.Context) error, error) {
+	return store.ObserveSQLiteForTest(c.st, wrap)
 }

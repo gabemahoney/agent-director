@@ -117,8 +117,10 @@ const OLD = Date.parse('2020-01-01T00:00:00.000Z');
 const OWNER = '1111111111111111';
 const EPOCH = 7;
 
+// Read observations check the actual owner, so keep this fixture process live.
+const ownerStart = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8').split(')').at(-1).trim().split(/\s+/)[19];
 function seed(id, agent, relay = 'on') {
- sql(`INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch) VALUES(${q(id)},'check_permission','check_permission',0,'/tmp',${q(agent)},${q(relay)},${q('ts-' + id)},${q(OWNER)},${EPOCH})`);
+ sql(`INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,pid,proc_starttime) VALUES(${q(id)},'check_permission','check_permission',0,'/tmp',${q(agent)},${q(relay)},${q('ts-' + id)},${q(OWNER)},${EPOCH},${process.pid},${q(ownerStart)})`);
 }
 // A request owned by the spawn's current launch and interval, its confirm_by
 // at in milliseconds, long past; stored, the fallback clock is at too, else

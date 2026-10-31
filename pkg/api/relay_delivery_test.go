@@ -659,3 +659,120 @@ func TestClientJudgesHooksInItsOwnNamespace(t *testing.T) {
 		})
 	}
 }
+
+// The original exported provider seam offers ordinary permission reads and a
+// recorder, without opting into bounded reads, display or process recovery.
+type narrowRecoveryStore struct {
+	s             *store.Store
+	beforeRefresh func()
+	recorded      [][]int64
+}
+
+func (n *narrowRecoveryStore) GetSpawn(id string) (store.Spawn, error) { return n.s.GetSpawn(id) }
+func (n *narrowRecoveryStore) ListSpawns(f api.ListFilters) ([]store.Spawn, error) {
+	if f.IDs != nil && n.beforeRefresh != nil {
+		f := n.beforeRefresh
+		n.beforeRefresh = nil
+		f()
+	}
+	return n.s.ListSpawns(f)
+}
+func (n *narrowRecoveryStore) ListSessionHistory(id string, life int64) ([]store.SessionHistoryEntry, error) {
+	return n.s.ListSessionHistory(id, life)
+}
+func (n *narrowRecoveryStore) PermissionRequestsForSpawn(id string) ([]store.PermissionRow, error) {
+	return n.s.PermissionRequestsForSpawn(id)
+}
+func (n *narrowRecoveryStore) OpenPermissionRequestsForSpawn(id string) ([]store.PermissionRow, error) {
+	return n.s.OpenPermissionRequestsForSpawn(id)
+}
+func (n *narrowRecoveryStore) RecordHookGone(at time.Time, wait time.Duration, ids ...int64) (map[int64]time.Time, error) {
+	n.recorded = append(n.recorded, append([]int64(nil), ids...))
+	return n.s.RecordHookGone(at, wait, ids...)
+}
+
+// b.x9o: active reads must preserve offered persistence on narrow providers.
+func TestRelayNarrowReadPersistsHookLoss(t *testing.T) {
+	t.Parallel()
+	for _, surface := range []string{"get", "list"} {
+		t.Run(surface, func(t *testing.T) {
+			e := newRelayEnv(t, relayEnvHook)
+			e.pc.Set(relayEnvHook.PID, procfix.Gone())
+			before := e.request(t)
+			s := &narrowRecoveryStore{s: e.s}
+			var err error
+			if surface == "get" {
+				_, err = api.Get(s, e.view(), e.id)
+			} else {
+				_, err = api.List(s, e.view(), api.ListParams{})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			after := e.request(t)
+			if !after.HookGoneAt.Equal(e.now) || after.Decision != before.Decision || !after.DeliveredAt.Equal(before.DeliveredAt) {
+				t.Fatalf("hook loss not persisted without dispatch: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+}
+
+// b.x9o R5: final stored refresh invalidates the earlier judged-request cache.
+// A newly admitted request must retain the original provider's recorder when
+// response construction first judges it. The earlier sample saw a live hook.
+func TestRelayNarrowReadPersistsLateHookLoss(t *testing.T) {
+	t.Parallel()
+	for _, surface := range []string{"get", "list"} {
+		t.Run(surface, func(t *testing.T) {
+			e := newRelayEnv(t, relayEnvHook)
+			before := map[string]store.PermissionRow{storefix.TestRequestTokenA: e.request(t)}
+			s := &narrowRecoveryStore{s: e.s}
+			admitted := false
+			s.beforeRefresh = func() {
+				if len(s.recorded) != 0 {
+					t.Fatalf("alive hook produced fallback persistence: %v", s.recorded)
+				}
+				storefix.SeedRelayRequest(t, e.s, e.id, store.RelayRequest{RequestToken: storefix.TestRequestTokenB,
+					ToolName: "Read", ToolInput: `{}`, Hook: relayEnvHook, SettledAt: e.settled})
+				request, err := e.s.GetPermissionRequest(e.id, storefix.TestRequestTokenB)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before[storefix.TestRequestTokenB] = request
+				e.pc.Set(relayEnvHook.PID, procfix.Gone())
+				admitted = true
+			}
+			var requests []api.PermissionRequestInfo
+			if surface == "get" {
+				row, err := api.Get(s, e.view(), e.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				requests = row.PermissionRequests
+			} else {
+				rows, err := api.List(s, e.view(), api.ListParams{})
+				if err != nil || len(rows.Spawns) != 1 {
+					t.Fatalf("list = %+v %v", rows, err)
+				}
+				requests = rows.Spawns[0].PermissionRequests
+			}
+			if !admitted || len(requests) != 2 || len(s.recorded) != 1 || len(s.recorded[0]) != 2 {
+				t.Fatalf("late admission=%v requests=%+v recorder calls=%v", admitted, requests, s.recorded)
+			}
+			seen := map[string]bool{}
+			for _, info := range requests {
+				prior, ok := before[info.RequestToken]
+				if !ok || seen[info.RequestToken] || info.Delivery != api.DeliveryFallenBack || aliveIs(info.HookAlive) != "false" {
+					t.Fatalf("late request projection=%+v", info)
+				}
+				seen[info.RequestToken] = true
+				after, err := e.s.GetPermissionRequest(e.id, info.RequestToken)
+				if err != nil || !after.HookGoneAt.Equal(e.now) || after.Decision != prior.Decision ||
+					!after.DecidedAt.Equal(prior.DecidedAt) || !after.DeliveredAt.Equal(prior.DeliveredAt) ||
+					!after.ProvenGoneAt.Equal(prior.ProvenGoneAt) || after.Closed() != prior.Closed() {
+					t.Fatalf("late hook loss not persisted without answer authority: before=%+v after=%+v err=%v", prior, after, err)
+				}
+			}
+		})
+	}
+}

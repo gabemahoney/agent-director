@@ -13,6 +13,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gabemahoney/agent-director/internal/config"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -70,29 +73,39 @@ func TestCursorStartupExecutableFailurePublicReads(t *testing.T) {
 		t.Fatalf("not pending with saved args before read: %+v", before)
 	}
 	t.Logf("production spawn recorded gateway=%d/%s; exact kernel verdict=gone; runtime binding absent; raw before=%+v", pid, start, before)
-	for _, verb := range []string{"Get", "Status", "List"} {
-		t.Run(verb, func(t *testing.T) {
-			for i := 0; i < 2; i++ {
-				switch verb {
-				case "Get":
-					got, err := f.API.Get(id)
-					if err != nil || got.State != store.StateMissing {
-						t.Errorf("Get after exact pre-registration death=%+v err=%v; want missing", got, err)
-					}
-				case "Status":
-					got, err := f.API.Status(id)
-					if err != nil || got.State != store.StateMissing {
-						t.Errorf("Status after exact pre-registration death=%+v err=%v; want missing", got, err)
-					}
-				case "List":
-					got, err := f.API.List(api.ListParams{})
-					if err != nil || len(got.Spawns) != 1 || got.Spawns[0].State != store.StateMissing {
-						t.Errorf("List after exact pre-registration death=%+v err=%v; want missing", got, err)
+	// b.x9o: even exact startup death is not judged inside pending grace.
+	for _, want := range []string{store.StatePending, store.StateMissing} {
+		for _, verb := range []string{"Get", "Status", "List"} {
+			t.Run(verb, func(t *testing.T) {
+				for i := 0; i < 2; i++ {
+					switch verb {
+					case "Get":
+						got, err := f.API.Get(id)
+						if err != nil || got.State != want {
+							t.Errorf("Get after exact pre-registration death=%+v err=%v; want %s", got, err, want)
+						}
+					case "Status":
+						got, err := f.API.Status(id)
+						if err != nil || got.State != want {
+							t.Errorf("Status after exact pre-registration death=%+v err=%v; want %s", got, err, want)
+						}
+					case "List":
+						got, err := f.API.List(api.ListParams{})
+						if err != nil || len(got.Spawns) != 1 || got.Spawns[0].State != want {
+							t.Errorf("List after exact pre-registration death=%+v err=%v; want %s", got, err, want)
+						}
 					}
 				}
+			})
+		}
+		if want == store.StatePending {
+			if got := readRow(t, f.DBPath, id); !reflect.DeepEqual(got, before) {
+				t.Fatalf("inside grace changed row: %+v", got)
 			}
-		})
+			agePendingLaunch(t, f.DBPath, id, (config.Tmux{}).EffectivePendingGrace()+time.Second)
+		}
 	}
+
 	after := readRow(t, f.DBPath, id)
 	if after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 {
 		t.Errorf("public reads did not persist missing exactly once: before=%+v after=%+v", before, after)

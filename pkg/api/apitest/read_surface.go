@@ -100,12 +100,23 @@ var readSurfaceSettledAt = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
 // no settle time must ignore but for get's and list's state_changed_at, the
 // stamp. It returns the row ids in seeding order and fails when a row does
 // not end in its intended raw state.
-func SeedReadSurfaceStore(dbPath string) ([]string, error) {
+func SeedReadSurfaceStore(dbPath string, writerPID ...int) ([]string, error) {
+	live, err := ReadSurfaceProcessOptions(writerPID...)
+	if err != nil {
+		return nil, err
+	}
 	rows := readSurfaceRows()
 	ids := make([]string, 0, len(rows))
 	for i, r := range rows {
 		started := readSurfaceBase.Add(time.Duration(i) * time.Minute)
-		opts := append([]SpawnOption{WithStartedAt(started)}, r.opts...)
+		opts := append([]SpawnOption{WithStartedAt(started), WithNoPane(), live[0], live[1]}, r.opts...)
+		if r.state == store.StatePending {
+			// An alive launch with a recorded pane retains its unreported note.
+			opts = append(opts, func(o *spawnOpts) {
+				o.set("pane_pid", o.cols["pid"])
+				o.set("pane_starttime", o.cols["proc_starttime"])
+			})
+		}
 		if r.finished {
 			opts = append(opts, WithEndedAt(started.Add(50*time.Second)))
 		}

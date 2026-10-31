@@ -8,6 +8,7 @@ package api_test
 // needs_intelligence display an earlier release stored.
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -27,6 +28,18 @@ import (
 // which has no effect.
 func needsIntelligenceClient(t *testing.T, e *relayEnv, settle, timeout int64) *api.Client {
 	t.Helper()
+	// These cases vary relay-hook liveness, while every agent remains alive.
+	rows, err := e.s.ListSpawns(store.ListFilters{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		writer, err := apitest.BindReadSurfaceProcess(e.dbPath, row.InstanceID, os.Getpid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.pc.Set(writer.PanePID, procfix.Alive(writer.PaneStarttime))
+	}
 	state, err := e.s.GetSpawnState(e.id)
 	if err != nil {
 		t.Fatal(err)

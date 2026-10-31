@@ -353,7 +353,7 @@ func (r *pauseRun) endIfGone(row Spawn) (res CondResult, attempted bool, err err
 	if tmux.JudgeProcess(r.procs, agentProcess(row, row.Identity).Identity) != tmux.ProcGone {
 		return 0, false, nil
 	}
-	w := markEndedSameLife(r.s, row.InstanceID, row.Snapshot, reasonProcAbsent, nil, nil)
+	w := markEndedSameLife(legacyTrail, r.s, row.InstanceID, row.Snapshot, reasonProcAbsent, nil, nil)
 	return w.Res, true, w.Err
 }
 

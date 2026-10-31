@@ -35,6 +35,9 @@ import "github.com/gabemahoney/agent-director/internal/tmux"
 // Writes not preceded by an adoption write are guarded on the snapshot the
 // sweep read.
 func (r *findMissingRun) lookupRow(it LiveSpawnIdentity, state tmux.ProcState) findMissingRow {
+	if r.t == nil {
+		return r.noteRow(findMissingRow{}, it, it.Snapshot, notCalledNote(state))
+	}
 	var (
 		row    findMissingRow
 		launch tmux.Launch
@@ -207,5 +210,5 @@ func (r *findMissingRun) emitRowNameHeld(it LiveSpawnIdentity, row findMissingRo
 	default:
 		rec.RowResult = nameHeldRowLeftChanged
 	}
-	emitNameHeld(rec)
+	writeNameHeld(r.emit, rec)
 }

@@ -378,6 +378,7 @@ describe("get", () => {
         runHelper("seed-spawn", {
           store,
           id: "id-get-1",
+          "writer-pid": String(process.pid),
           state: "waiting",
           "create-store": true,
         });
@@ -1486,6 +1487,7 @@ describe("list", () => {
         runHelper("seed-spawn", {
           store,
           id: "row-list-a",
+          "writer-pid": String(process.pid),
           state: "waiting",
           "create-store": true,
         });

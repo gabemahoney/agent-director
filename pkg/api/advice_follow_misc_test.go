@@ -6,6 +6,7 @@ package api_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -74,8 +75,12 @@ func TestAdviceFollow_F11_StateChangedAtSinceYourTime(t *testing.T) {
 	adviceAssertManifest(t, "list", "spawns", advice)
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	writer, err := apitest.ContextWriter(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
 	id, err := apitest.SeedSpawn(dbPath, "", store.StateWaiting, "", "", "", true,
-		apitest.WithSettle(store.StateWaiting, old.UnixMilli()), apitest.WithLastSeenAt(old))
+		apitest.WithSettle(store.StateWaiting, old.UnixMilli()), apitest.WithLastSeenAt(old), apitest.WithLaunchIdentity(writer))
 	if err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}

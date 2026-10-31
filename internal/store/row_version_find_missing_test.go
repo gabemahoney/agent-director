@@ -50,6 +50,76 @@ var (
 	}}
 )
 
+// b.x9o: request proof/decision facts have their own writers. A spawn-version
+// match cannot authorize a repair sampled before those facts changed. Both
+// old and new requests here permit repair, so the request comparison itself
+// must reject the stale sample; a new sample then commits exactly once.
+func TestRepairCheckPermissionSampleRejectsIndependentRequestChange(t *testing.T) {
+	for _, change := range []string{"none", "new proof", "new decision"} {
+		t.Run(change, func(t *testing.T) {
+			f := newV5Store(t)
+			parent := f.seed(store.StateWaiting, "")
+			id := f.seed(store.StateCheckPermission, "same-session", rvRelayOn, apitest.WithIdleSince(rvIdleSince))
+			if err := apitest.SeedParentChild(f.path, parent, id); err != nil {
+				t.Fatal(err)
+			}
+			at := time.UnixMilli(1790000000000)
+			pr, err := apitest.SeedPermissionRequest(f.path, id, "Bash", apitest.PermissionProof(at))
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := rvExamine(t, f, id)
+			requests, err := f.s.PermissionRequestsForSpawn(id)
+			if err != nil || len(requests) != 1 {
+				t.Fatalf("sample requests: %+v %v", requests, err)
+			}
+			switch change {
+			case "new proof":
+				err = apitest.SetPermissionFacts(f.path, pr.RequestID, apitest.PermissionProof(at.Add(time.Second)))
+			case "new decision":
+				err = apitest.SetPermissionFacts(f.path, pr.RequestID, apitest.PermissionDecision("deny", "newer decision"))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			winner := rvExamine(t, f, id)
+			if !reflect.DeepEqual(row, winner) {
+				t.Fatal("request-only race unexpectedly changed the spawn sample")
+			}
+			winningRequests, err := f.s.PermissionRequestsForSpawn(id)
+			if err != nil || (change != "none" && reflect.DeepEqual(requests, winningRequests)) {
+				t.Fatalf("request race not established: %+v %v", winningRequests, err)
+			}
+			family := func() [3]any {
+				raw, base, at := familyHistory(t, f, parent)
+				return [3]any{raw, base, at}
+			}
+			parentBefore, history := family(), f.historyAllLives(id)
+			state, result, err := f.s.RepairCheckPermissionSample(row, requests)
+			if change != "none" {
+				if !store.RecoverySampleChanged(err) || result != 0 || state != "" {
+					t.Fatalf("stale repair = %q %v %v, want sample rejection", state, result, err)
+				}
+				if !reflect.DeepEqual(winner, rvExamine(t, f, id)) || family() != parentBefore || !reflect.DeepEqual(f.historyAllLives(id), history) {
+					t.Fatal("stale repair invented a transition or changed winning row/family/history")
+				}
+				state, result, err = f.s.RepairCheckPermissionSample(winner, winningRequests)
+			}
+			if err != nil || result != store.CondApplied || state != store.StateWaiting {
+				t.Fatalf("fresh repair = %q %v %v", state, result, err)
+			}
+			after := rvExamine(t, f, id)
+			if after.State != state || after.RowVersion != row.RowVersion+1 || !after.LastSeenAt.Equal(row.LastSeenAt) || after.IdleSince != row.IdleSince || family()[0] != store.StateWaiting {
+				t.Fatalf("repair did not commit one coherent transition: before=%+v after=%+v family=%v", row, after, family())
+			}
+			finalRequests, err := f.s.PermissionRequestsForSpawn(id)
+			if err != nil || !reflect.DeepEqual(finalRequests, winningRequests) || !reflect.DeepEqual(f.historyAllLives(id), history) {
+				t.Fatalf("repair changed permission authority or session history: requests=%+v want=%+v err=%v", finalRequests, winningRequests, err)
+			}
+		})
+	}
+}
+
 // rvEndReported is the end report the move's seeds carry (Unix ms).
 const rvEndReported int64 = 1790000123456
 

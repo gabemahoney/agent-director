@@ -14,9 +14,14 @@ import (
 // list_test.go).
 func TestListCLIFlags(t *testing.T) {
 	home := t.TempDir()
+	live, err := apitest.ReadSurfaceProcessOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
 	seed := func(id, state, name, cwd string, opts ...apitest.SpawnOption) {
 		t.Helper()
-		opts = append(opts, apitest.WithTmuxSessionName(name))
+		opts = append(opts, apitest.WithTmuxSessionName(name), apitest.WithNoPane())
+		opts = append(opts, live...)
 		if _, err := apitest.SeedSpawn(stateDB(home), id, state, cwd, "", "", true, opts...); err != nil {
 			t.Fatalf("SeedSpawn %s: %v", id, err)
 		}

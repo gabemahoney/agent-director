@@ -62,8 +62,9 @@ const (
 	DefaultPipeCloseWaitMs = 100
 
 	// DefaultSweepBudgetSeconds is the default per-run tmux time budget of
-	// find-missing and expire, in whole seconds (15). No safe minimum: a
-	// value too low fails closed (SR-4.1, SR-13.5).
+	// find-missing, expire and each status, get or list check, in whole
+	// seconds (15). No safe minimum: a value too low fails closed (SR-4.1,
+	// SR-13.5).
 	DefaultSweepBudgetSeconds = 15
 
 	// DefaultKillExitWaitMs is the default kill exit wait, in milliseconds
@@ -155,9 +156,10 @@ type Tmux struct {
 	// pending grace period's minimum (SR-4.1, SR-2.4).
 	PipeCloseWaitMs int64 `toml:"pipe_close_wait_ms"`
 
-	// SweepBudgetSeconds is the per-run tmux time budget of find-missing and
-	// expire, in whole seconds. Default DefaultSweepBudgetSeconds (15);
-	// minimum none: fails closed (SR-4.1, SR-13.5).
+	// SweepBudgetSeconds is the per-run tmux time budget of find-missing,
+	// expire and each status, get or list check, in whole seconds. Default
+	// DefaultSweepBudgetSeconds (15); minimum none: fails closed (SR-4.1,
+	// SR-13.5).
 	SweepBudgetSeconds int64 `toml:"sweep_budget_seconds"`
 
 	// KillExitWaitMs is how long kill waits for the agent process to exit

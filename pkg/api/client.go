@@ -108,8 +108,9 @@ type Client struct {
 	// records no sender, and the intent is then judged by its time.
 	paneSelf func() ProcessIdentity
 	// cursorMissingDeferred observes each lost Cursor launch's missing-row
-	// save that a status, get or list defers (persistCursorMissing), with the
-	// launch's instance id and the deferred error: nil in production. Tests
+	// save that a status, get, list or find-missing check defers
+	// (activeReadStore.finish), with the launch's instance id and the deferred
+	// error: nil in production. Tests
 	// set it per Client, so a test can tell a documented deferral from a save
 	// that never ran (b.6uf). It changes nothing: the read still returns its
 	// guarded result and nothing retries the save.
@@ -118,17 +119,19 @@ type Client struct {
 	closed                bool
 }
 
-// relayView is the RelayView of the Client's reads and decide: its
-// start-time reader, its pid namespace reader, its clock, the configured
-// effective relay window and idle_screen timeout, and a pane sampler of its
-// own (paneSampler). Each call is a fresh view for one read.
+// relayView is the RelayView of the Client's reads, find-missing and decide:
+// its start-time reader, its pid namespace reader, its clock, the configured
+// effective relay window and idle_screen timeout, and the check providers
+// (tmux client, pending grace, sweep budget, logger and Cursor deferral
+// observer) from which each check pass builds its own pane sampler. Each call
+// is a fresh view for one read.
 func (c *Client) relayView() RelayView {
 	return RelayView{
+		active:            &activeCheckProviders{tmux: c.tmuxClient, pendingGrace: c.cfg.Tmux.EffectivePendingGrace(), budget: c.cfg.Tmux.EffectiveSweepBudget(), logger: c.logger, deferred: c.cursorMissingDeferred},
 		Procs:             c.procChecker,
 		PIDNamespace:      c.selfPIDNS,
 		Now:               c.now,
 		Window:            time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second,
-		samplePane:        c.paneSampler(),
 		idleScreenTimeout: time.Duration(c.cfg.State.EffectiveIdleScreenTimeoutSeconds()) * time.Second,
 	}
 }

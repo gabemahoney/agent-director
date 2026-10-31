@@ -12,9 +12,13 @@ agent-director find-missing
 agent-director expire
 ```
 
-Without `find-missing`, a killed or crashed agent's row, and the row of an
-agent lost in a reboot, stays live. Without `expire`, finished rows pile up
-past `expire_retention_days`.
+`find-missing` selects an all-agent snapshot and runs the same eligible
+[recovery checks as state reads](caller-contract.md#bounded-recovery-on-state-reads).
+It can recover missed Codex turn endings, stale permission state and display
+observations without an intervening read. Finished rows skip live-agent
+checks; late exact input proof can still be recorded without sending input.
+Scheduling covers agents that no caller reads. Without `expire`, finished
+rows pile up past `expire_retention_days`.
 
 ### Let the install schedule them
 
@@ -89,13 +93,18 @@ binary keeps its files in `$HOME/.config/agent-director`.
 
 `find-missing` marks a live row `missing` when its agent's process is gone or,
 when the process cannot be checked, when tmux shows no session of its launch;
-otherwise the row stays unverified. A Codex row whose agent reported its end
+otherwise the row stays unverified. A Cursor row with a recorded gateway is never
+looked up in tmux ([Cursor rule](caller-contract.md#cursor-operation-boundaries)).
+A Codex row whose agent reported its end
 and whose process is gone is marked `ended` instead, and is in neither `ids`,
 `count` nor `unverified_ids` (see
-[How a Codex row ends](hooks.md#how-a-codex-row-ends)). A `pending` row is not
-judged until its grace period has passed. Marked rows are in `ids`; undecided
-rows are in `unverified_ids`, each with `liveness_unverified_since` and
-`liveness_note` in `list` and `get`.
+[How a Codex row ends](hooks.md#how-a-codex-row-ends)). A `pending` row receives
+no liveness check inside its grace period or while its launch owner is alive.
+Marked rows are in `ids` (`count` is its length); unverified live rows are in
+`unverified_ids` (`unverified` is its length), with `liveness_unverified_since`
+and `liveness_note` in `list` and `get`. These are liveness results, not counts
+of all recovery work: a missed turn end or permission repair adds nothing to
+either list.
 
 Past its grace period, a `pending` row whose agent runs but has not reported
 in stays `pending` with `liveness_note` `unreported`. Read the pane, then type
@@ -109,23 +118,11 @@ agent-director send-keys --instance-id <id> --allow-pending --text "<answer>"
 A caller that cannot judge the pane follows the
 [caller contract](caller-contract.md).
 
-A row with `relay_mode=on` stays in `check_permission` until the agent's
-next hook after its last permission request. A request answered at the
-pane outside agent-director stops holding the row once the agent's hooks
-show its dialog gone: its tool runs (a Claude agent), or, for the main
-agent's request (not a subagent's), the turn ends. When the agent's next
-hook is lost (for example the end of a turn after a denied request), the
-notification Claude Code sends while the agent sits idle at its prompt moves
-the row to `waiting` once none of its requests still holds it. Failing that,
-`find-missing` moves the row out once none of its requests still holds it
-and none of its relay hooks can still run: to `waiting` when that idle
-notification was the agent's last hook, otherwise to `working`. A Codex
-row always goes to `working`, since Codex never sends the idle
-notification. Such a row
-is in neither `ids` nor `unverified_ids`. Without a scheduled
-`find-missing`, a relay row left in `check_permission` after its agent
-moved on stays there. A relayed request's delivery needs no sweep: it is
-worked out each time the request is read.
+State reads can also repair eligible stale `check_permission` rows; this
+does not require a scheduled sweep. The hold and repair conditions are in
+[Hooks](hooks.md#a-relay-row-left-in-check_permission), and response authority
+remains governed by the [permission contract](caller-contract.md#permission-relay).
+A relayed request's delivery is worked out each time the request is read.
 
 `expire` deletes a finished row (`ended` or `missing`, listed in `ids`) only
 when its agent process is not running and tmux shows no session of the agent.

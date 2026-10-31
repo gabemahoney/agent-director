@@ -147,8 +147,12 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		}
 		rec.SeedSessions(apitest.TestSocket, tmuxfix.SeedSession{Name: "smoke-other"})
 	case seedPendingLaunch:
+		live, err := apitest.ReadSurfaceProcessOptions()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "pending", "", "", "", false,
-			apitest.WithLaunchStartedAt(smokeLaunchStartMillis)); err != nil {
+			apitest.WithLaunchStartedAt(smokeLaunchStartMillis), apitest.WithNoPane(), live[0], live[1]); err != nil {
 			t.Fatalf("runVerbSubtest: seed pending %q: %v", spec.SeedID, err)
 		}
 	case seedSubagentRecord:

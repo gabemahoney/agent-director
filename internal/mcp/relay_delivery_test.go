@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -40,7 +41,11 @@ func assertMCPDeliveryKeys(t *testing.T, what string, obj map[string]json.RawMes
 // request and returns its id and the request's token.
 func (e *mcpEnv) seedRelayRequest(t *testing.T, id string) string {
 	t.Helper()
-	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false); err != nil {
+	writer, err := apitest.ContextWriter(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false, apitest.WithLaunchIdentity(writer)); err != nil {
 		t.Fatalf("SeedSpawn(%s): %v", id, err)
 	}
 	req, err := apitest.SeedPermissionRequest(e.storePath, id, "Bash")
@@ -107,7 +112,11 @@ func TestMCPErrDetails(t *testing.T) {
 func TestMCPPaneAnswerKeySent(t *testing.T) {
 	e := newEnv(t)
 	const id = "mcp-pane-answer"
-	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false); err != nil {
+	writer, err := apitest.ContextWriter(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false, apitest.WithLaunchIdentity(writer)); err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
 	req, err := apitest.SeedPermissionRequest(e.storePath, id, "Bash")
@@ -145,7 +154,11 @@ func TestMCPPaneAnswerKeySent(t *testing.T) {
 func TestMCPDialogMaybeOpen(t *testing.T) {
 	e := newEnv(t)
 	const id = "mcp-dialog-maybe-open"
-	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false); err != nil {
+	writer, err := apitest.ContextWriter(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false, apitest.WithLaunchIdentity(writer)); err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
 	req, err := apitest.SeedPermissionRequest(e.storePath, id, "Bash")

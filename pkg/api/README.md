@@ -208,6 +208,12 @@ loading or waiting at a startup prompt. A resumed `pending` row keeps its
 session id and history; a caller tells it from a fresh one by its non-empty
 `session_id`, shown by `Get`.
 
+Client `Status`, `Get`, `List` and `FindMissing` share
+[bounded recovery](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
+Single-row reads check only that row. Package-level helpers and custom stores
+run only checks their supplied capabilities support; they do not create
+missing process or tmux providers. Read success does not confirm every write.
+
 ```go
 res, err := c.Status("claude_2026-05-22T18-23-15")
 if err != nil {
@@ -261,7 +267,8 @@ Displayed State's exit settles, `Status`, `Get` and `List` retain its
 `StateChangedAt` and permission-request lists follow the live state;
 commands keep their raw-state guards. The package-level
 `api.Status`, `api.Get` and `api.List` functions use no settle time and
-sample no pane, so only a `Client` detects `idle_screen`.
+sample no pane. Package-level `FindMissing` can sample panes when its
+supplied tmux provider supports capture.
 
 For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
 launch-guarded `missing` read result even when the separate terminal write is
@@ -270,7 +277,8 @@ busy or reaches its deadline. This does not confirm durable closure;
 `ended_at` may be absent. The
 [caller contract](../../docs/caller-contract.md#cursor-operation-boundaries)
 defines caller-budget errors, request proof and recovery. Package-level
-`api.Status`, `api.Get` and `api.List` do not check gateway liveness.
+`api.Status`, `api.Get` and `api.List` can check gateway liveness when their
+store and `RelayView.Procs` supply the required capabilities.
 
 ---
 
@@ -298,6 +306,10 @@ Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`,
 encodes as `[]` when empty. The `State` filter keeps a row whose `State` or
 `DisplayedState` (see Status) is one of its values, so `"working"` keeps a
 working row that shows `"idle_screen"`; it is applied before `Limit`.
+Filters and limit select stored IDs before recovery checks. The result keeps
+those IDs even when their refreshed values no longer match, without refilling
+slots or adding newly matching rows. Recovery and family freshness follow the
+[caller contract](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
 `Limit` caps the rows returned; 0 means no cap. Sentinel errors, each returned before the store is
 read: `ErrListInvalidLabel` (label not in `key=value` form) and
 `ErrInvalidFlags` (`Limit` is negative). See `(*Client).List` godoc.
@@ -622,8 +634,8 @@ including a closed, proven-gone or obsolete request; see the
 [caller contract](../../docs/caller-contract.md#permission-relay) for handling.
 A request still awaiting
 an answer when its Spawn ended (its agent's terminal SessionEnd, or the move
-of a Codex Spawn to `ended` by `FindMissing` or by `Pause` once its agent is
-gone with an end report) or when `find-missing` marked it `missing` is closed in the same write, an
+of a Codex Spawn to `ended` by shared recovery or `Pause` once its agent is
+gone with an end report) or when shared recovery marked it `missing` is closed in the same write, an
 undecided one denied with `DecisionReason` `ended` or `find_missing`, and
 stays closed after `Resume`; `Get` and `List` no longer show it. The same
 close includes decided requests without a confirmation or completed pane

@@ -69,11 +69,13 @@ func TestLongFallenBackPaneAnswerKeepsDialogHold(t *testing.T) {
 			if _, err := p.recordPaneAnswer(p.outside(storefix.TestRequestTokenA, "unknown")); err != nil {
 				t.Fatal(err)
 			}
+			// The shared read repairs the stale permission state; the unproven
+			// dialog still forbids plain input and grants no delivery proof.
 			row, err := api.Get(p.st, p.view(), p.r.ID)
-			if err != nil || row.State != store.StateCheckPermission || row.StateDetail != (api.StateDetail{}) || len(row.UnprovenRequests) != 1 || len(row.PermissionRequests) != 0 {
+			if err != nil || row.State != store.StateWorking || row.StateDetail != (api.StateDetail{}) || len(row.UnprovenRequests) != 1 || len(row.PermissionRequests) != 0 {
 				t.Fatalf("pane answer=%+v %v", row, err)
 			}
-			assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), storefix.TestRequestTokenA, store.StateCheckPermission)
+			assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), storefix.TestRequestTokenA, store.StateWorking)
 		})
 	}
 }

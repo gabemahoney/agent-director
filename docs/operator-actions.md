@@ -557,8 +557,8 @@ The `advice` in the second record follows the row's agent. Fix it per
 
 A Codex agent reports in at its first prompt, not at its start, so a fresh
 Codex row is `pending` until then; this is not a fault. These causes leave a row
-`pending` past the pending grace period, noted `unreported` by `find-missing`
-(the agent runs but no hook reported), or `missing` (the agent's process is
+`pending` past the pending grace period, noted `unreported` (the agent runs
+but no hook reported), or `missing` (the agent's process is
 gone). The `pid_mismatch` cause has its own item above. Look at the pane
 first, read-only, as step 3 of "Inspect and end a session by hand" does: Codex
 usually says what it refuses. Whatever the cause, end and relaunch each
@@ -912,7 +912,9 @@ find-missing and expire sweeps on this machine.` It comes after `install.sh:
 done`; when the MCP registration failed (exit 6), it comes just before the last
 line, `install.sh: installed, but the MCP registration failed`. The exit status
 is unchanged and nothing is broken, but until `find-missing` runs, a row whose
-agent was killed, crashed or lost in a reboot stays live, and until `expire`
+agent was killed, crashed or lost in a reboot stays live unless a
+[state read](caller-contract.md#bounded-recovery-on-state-reads) checks it,
+and until `expire`
 runs, finished rows are never deleted.
 
 Without `--schedule`, the warning means this install's own entries for both

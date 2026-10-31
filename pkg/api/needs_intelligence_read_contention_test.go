@@ -50,7 +50,11 @@ func (s *readLeaseStore) SpawnStatusRow(id string, settle store.SettleRead) (sto
 func (s *readLeaseStore) ListSpawns(f api.ListFilters) ([]api.Spawn, error) {
 	rows, err := s.observationReader.ListSpawns(f)
 	if err == nil && s.afterRow != nil {
-		err = s.afterRow()
+		// Status now selects its fixed ID through ListSpawns as well. Lease
+		// once after that selection, before any optional observation read.
+		after := s.afterRow
+		s.afterRow = nil
+		err = after()
 	}
 	return rows, err
 }
@@ -289,7 +293,7 @@ func TestHeldWriteLockReadsWriteOnce(t *testing.T) {
 		read   func(*relayEnv, *readLeaseStore) error
 		writes []string
 	}{
-		{"get", true, get, []string{"RecordPermissionFallbacks"}},
+		{"get", true, get, []string{"ObserveNeedsIntelligence"}},
 		{"get, hook alive", false, get, []string{"ObserveNeedsIntelligence"}},
 		{"list", true, func(e *relayEnv, s *readLeaseStore) error {
 			_, err := api.List(s, e.view(), api.ListParams{})

@@ -33,6 +33,7 @@ package envelope_diff
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -151,6 +152,9 @@ var successCases = append([]successCase{
 			t.Helper()
 			_, dbPath := apitest.OpenStoreWithRow(t,
 				"id-get-1", "cd-get-1", store.StateWaiting, "off")
+			if _, err := apitest.BindReadSurfaceProcess(dbPath, "id-get-1", os.Getpid()); err != nil {
+				t.Fatal(err)
+			}
 			return filepath.Dir(dbPath), map[string]any{"id": "id-get-1"}
 		},
 		params: func(ctx map[string]any) map[string]any {
@@ -413,7 +417,7 @@ var successCases = append([]successCase{
 		verb: "list",
 		seed: func(t *testing.T) (string, map[string]any) {
 			t.Helper()
-			_, dbPath := apitest.SeedListFixture(t)
+			_, dbPath := apitest.SeedListFixture(t, os.Getpid())
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {

@@ -129,9 +129,16 @@ func (s *Store) RegisterCursorRuntime(row Spawn, b CursorRuntime) (bool, error) 
 	return s.execCursorRuntime(q, args, "store: register Cursor runtime")
 }
 
-func (s *Store) ReadCursorRuntime(id string) (b CursorRuntime, err error) {
+func (s *Store) ReadCursorRuntime(id string) (CursorRuntime, error) {
+	return s.ReadCursorRuntimeWithin(id, DefaultLockWait)
+}
+
+// ReadCursorRuntimeWithin retains bounded admission during active recovery.
+func (s *Store) ReadCursorRuntimeWithin(id string, wait time.Duration) (b CursorRuntime, err error) {
 	b.InstanceID = id
-	err = s.db.QueryRow(`SELECT bound_launch_token,bound_life_number,bound_gateway_pid,bound_gateway_start,bound_runtime_pid,bound_runtime_start,bound_connection_id,bound_input_pipe,bound_output_pipe,bound_input_fd,bound_output_fd,bound_session_id,bound_terminated FROM cursor_runtimes WHERE bound_instance_id=?`, id).Scan(&b.Token, &b.Life, &b.GatewayPID, &b.GatewayStart, &b.RuntimePID, &b.RuntimeStart, &b.Connection, &b.InputPipe, &b.OutputPipe, &b.InputFD, &b.OutputFD, &b.SessionID, &b.Terminated)
+	err = s.readWithin(wait, "store: Cursor runtime", func(ctx context.Context, conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx, `SELECT bound_launch_token,bound_life_number,bound_gateway_pid,bound_gateway_start,bound_runtime_pid,bound_runtime_start,bound_connection_id,bound_input_pipe,bound_output_pipe,bound_input_fd,bound_output_fd,bound_session_id,bound_terminated FROM cursor_runtimes WHERE bound_instance_id=?`, id).Scan(&b.Token, &b.Life, &b.GatewayPID, &b.GatewayStart, &b.RuntimePID, &b.RuntimeStart, &b.Connection, &b.InputPipe, &b.OutputPipe, &b.InputFD, &b.OutputFD, &b.SessionID, &b.Terminated)
+	})
 	return
 }
 

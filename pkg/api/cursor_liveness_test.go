@@ -1,25 +1,40 @@
 package api_test
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // Synthetic persisted bindings isolate public read behavior from protocol execution.
-func cursorReadLaunch(t *testing.T) (*killEnv, *api.Client, store.CursorRuntime, string) {
+func cursorReadLaunch(t *testing.T, existing ...*killEnv) (*killEnv, *api.Client, store.CursorRuntime, string) {
 	t.Helper()
-	e := newKillEnv(t)
+	var e *killEnv
+	pid := apitest.TestPanePID
+	if len(existing) > 0 {
+		e = existing[0]
+		pid = e.newPID()
+	} else {
+		e = newKillEnv(t)
+	}
 	id, err := apitest.SeedSpawn(e.dbPath, "", store.StatePending, "", "on", "", false,
-		apitest.WithAgent(store.AgentCursor), apitest.WithLaunchIdentity(store.LaunchIdentity{Token: trailToken, PanePID: apitest.TestPanePID, PaneStarttime: apitest.LinuxProcStarttime}))
+		apitest.WithAgent(store.AgentCursor), apitest.WithLaunchIdentity(store.LaunchIdentity{Token: strings.ReplaceAll(uuid.NewString(), "-", "")[:16], PanePID: pid, PaneStarttime: apitest.LinuxProcStarttime}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +56,7 @@ func cursorReadLaunch(t *testing.T) (*killEnv, *api.Client, store.CursorRuntime,
 	}
 	gate.Event = "PreToolUse"
 	gate.SessionStart = false
-	req := store.RelayRequest{RequestToken: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", ToolName: "Bash", ToolInput: "{}", SettledAt: time.Now().Add(time.Hour)}
+	req := store.RelayRequest{RequestToken: uuid.NewString(), ToolName: "Bash", ToolInput: "{}", SettledAt: time.Now().Add(time.Hour)}
 	if _, a, err := e.st.InsertRelayRequest(id, gate, req, 0, store.DefaultLockWait); err != nil || !a.Applied {
 		t.Fatalf("request: %+v %v", a, err)
 	}
@@ -117,8 +132,13 @@ func TestCursorReadGatewayVerdicts(t *testing.T) {
 				if after.RowVersion != before.RowVersion.(int64)+1 || pr.AwaitsAnswer() {
 					t.Fatalf("missing not a single atomic close: %+v %+v", after, pr)
 				}
+			} else if tc.name == "unknown" {
+				assertCursorRecoveryNote(t, before, after, "probe_eacces")
+				if !pr.AwaitsAnswer() {
+					t.Fatal("unknown closed request")
+				}
 			} else if !reflect.DeepEqual(before, after) || !pr.AwaitsAnswer() {
-				t.Fatal("alive/unknown mutated launch or request")
+				t.Fatal("alive mutated launch or request")
 			}
 			if !reflect.DeepEqual(siblingBefore, e.columns(t, sibling)) || !reflect.DeepEqual(sentinelBefore, e.columns(t, sentinel)) {
 				t.Fatal("read swept another row")
@@ -229,5 +249,241 @@ func TestCursorReadConcurrentLaunchChange(t *testing.T) {
 				t.Fatalf("raced request closed: %+v %v", pr, err)
 			}
 		})
+	}
+}
+
+// b.x9o: a stale sample for A must not suppress B's independent result or
+// guarded write. Failed A retains applicable stored facts without a death claim.
+func TestCursorReadIndependentRecoveryAfterStaleSample(t *testing.T) {
+	t.Parallel()
+	for _, surface := range []string{"list", "find-missing"} {
+		t.Run(surface, func(t *testing.T) {
+			e, c, a, tokenA := cursorReadLaunch(t)
+			_, _, b, tokenB := cursorReadLaunch(t, e)
+			e.pc.Set(a.GatewayPID, procfix.Gone())
+			e.pc.Set(b.GatewayPID, procfix.Gone())
+			beforeA, beforeB := e.columns(t, a.InstanceID), e.columns(t, b.InstanceID)
+			api.SetProcCheckerForTest(c, &cursorReadBarrier{pc: e.pc, once: func() {
+				cursorReadSQL(t, e.dbPath, "UPDATE spawns SET row_version=row_version+1 WHERE instance_id=?", a.InstanceID)
+			}})
+			if surface == "list" {
+				got, err := c.List(api.ListParams{})
+				if err != nil || len(got.Spawns) != 2 {
+					t.Fatalf("independent list lost selected results: %+v %v", got, err)
+				}
+				seen := map[string]bool{}
+				for _, row := range got.Spawns {
+					if seen[row.InstanceID] {
+						t.Fatalf("duplicate selected row: %+v", got)
+					}
+					seen[row.InstanceID] = true
+					switch row.InstanceID {
+					case a.InstanceID:
+						if row.State != store.StateWorking || len(row.PermissionRequests) != 1 || row.PermissionRequests[0].RequestToken != tokenA {
+							t.Fatalf("stale A lost its applicable stored projection: %+v", row)
+						}
+					case b.InstanceID:
+						if row.State != store.StateMissing || len(row.PermissionRequests) != 0 {
+							t.Fatalf("independent B result suppressed: %+v", row)
+						}
+					default:
+						t.Fatalf("list added unselected row: %+v", row)
+					}
+				}
+			} else {
+				got, err := c.FindMissing(context.Background())
+				if err != nil || got.Count != 1 || len(got.IDs) != 1 || got.IDs[0] != b.InstanceID {
+					t.Fatalf("independent sweep=%+v %v", got, err)
+				}
+			}
+			afterA, afterB := e.columns(t, a.InstanceID), e.columns(t, b.InstanceID)
+			reqA, err := e.st.GetPermissionRequest(a.InstanceID, tokenA)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reqB, err := e.st.GetPermissionRequest(b.InstanceID, tokenB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if afterA.State != beforeA.State || afterA.RowVersion != beforeA.RowVersion.(int64)+1 || !reqA.AwaitsAnswer() {
+				t.Fatalf("stale A changed: %+v %+v", afterA, reqA)
+			}
+			if afterB.State != store.StateMissing || afterB.RowVersion != beforeB.RowVersion.(int64)+1 || !reqB.Closed() || !reqB.DeliveredAt.IsZero() {
+				t.Fatalf("independent B did not recover atomically: %+v %+v", afterB, reqB)
+			}
+		})
+	}
+}
+
+// b.x9o code-review03: the late race is after guarded projection, immediately
+// before the first real deferred BEGIN. It must neither claim A missing nor
+// suppress B. The single-row surfaces retain their own conflict error.
+func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) {
+	t.Parallel()
+	for _, surface := range []string{"list", "find-missing", "get", "status"} {
+		t.Run(surface, func(t *testing.T) {
+			e, c, a, tokenA := cursorReadLaunch(t)
+			_, _, b, tokenB := cursorReadLaunch(t, e)
+			if err := apitest.SeedParentChild(e.dbPath, a.InstanceID, b.InstanceID); err != nil {
+				t.Fatal(err)
+			}
+			familyBefore := readFamilyHistories(t, e.dbPath, []string{a.InstanceID, b.InstanceID})
+			if familyBefore[a.InstanceID].state != store.StateWorking || familyBefore[b.InstanceID].state != store.StateWorking {
+				t.Fatalf("fixture must retain both live family contributions: %+v", familyBefore)
+			}
+			e.pc.Set(a.GatewayPID, procfix.Gone())
+			e.pc.Set(b.GatewayPID, procfix.Gone())
+			beforeA, beforeB := e.columns(t, a.InstanceID), e.columns(t, b.InstanceID)
+			requestA, err := e.st.GetPermissionRequest(a.InstanceID, tokenA)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestB, err := e.st.GetPermissionRequest(b.InstanceID, tokenB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			multi := surface == "list" || surface == "find-missing"
+			wantProjected := int64(1)
+			if multi {
+				wantProjected = 2
+			}
+			writer, err := sql.Open("sqlite", e.dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.Close()
+			var projected, begins atomic.Int64
+			var raced atomic.Bool
+			stop, err := api.ObserveClientSQLiteForTest(c, func(d driver.Driver) driver.Driver {
+				return sqliteobserve.Wrap(d, sqliteobserve.Hooks{
+					AfterNext: func(_ context.Context, q string, err error) {
+						if err == nil && strings.Contains(q, "AS cursor_missing_proof") {
+							projected.Add(1)
+						}
+					},
+					Before: func(ctx context.Context, q string) error {
+						if q != "BEGIN IMMEDIATE" {
+							return nil
+						}
+						begins.Add(1)
+						if !raced.CompareAndSwap(false, true) {
+							return nil
+						}
+						if projected.Load() < wantProjected {
+							return fmt.Errorf("deferred write preceded guarded projection: got %d rows, want >= %d", projected.Load(), wantProjected)
+						}
+						_, err := writer.ExecContext(ctx, "UPDATE spawns SET row_version=row_version+1 WHERE instance_id=?", a.InstanceID)
+						return err
+					},
+				})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := stop(ctx); err != nil {
+					t.Errorf("stop SQLite observer: %v", err)
+				}
+			}()
+			switch surface {
+			case "list":
+				got, err := c.List(api.ListParams{})
+				if err != nil || len(got.Spawns) != 2 {
+					t.Fatalf("late refusal lost selected results: %+v %v", got, err)
+				}
+				seen := map[string]bool{}
+				for _, row := range got.Spawns {
+					if seen[row.InstanceID] {
+						t.Fatalf("duplicate selected row: %+v", got)
+					}
+					seen[row.InstanceID] = true
+					// Family comes from the common stored snapshot, before either
+					// deferred write; no refused missing proof may remove A.
+					if row.FamilyState != store.StateWorking || row.DisplayedState != "" || row.IdleScreenAvailability != "unavailable" {
+						t.Fatalf("incoherent stored family/Cursor display: %+v", row)
+					}
+					switch row.InstanceID {
+					case a.InstanceID:
+						if row.State != store.StateWorking || row.ParentID != "" || len(row.PermissionRequests) != 1 {
+							t.Fatalf("refused A retained speculative terminal facts: %+v", row)
+						}
+						want := api.PermissionRequestInfo{RequestID: requestA.RequestID, RequestToken: tokenA, ToolName: requestA.ToolName, ToolInput: requestA.ToolInput, RequestedAt: requestA.CreatedAt,
+							RequestDelivery: api.RequestDelivery{Delivery: api.DeliveryNotConfirmed, ConfirmBy: requestA.SettledAt, PaneAnswer: "none"}}
+						gotJSON, err := json.Marshal(row.PermissionRequests[0])
+						if err != nil {
+							t.Fatal(err)
+						}
+						wantJSON, err := json.Marshal(want)
+						if err != nil || string(gotJSON) != string(wantJSON) {
+							t.Fatalf("fallback request lost coherent undecided facts: got=%s want=%s err=%v", gotJSON, wantJSON, err)
+						}
+					case b.InstanceID:
+						if row.State != store.StateMissing || row.ParentID != a.InstanceID || len(row.PermissionRequests) != 0 {
+							t.Fatalf("independent B result lost: %+v", row)
+						}
+					default:
+						t.Fatalf("unselected row added: %+v", row)
+					}
+				}
+			case "find-missing":
+				got, err := c.FindMissing(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertLists(t, got, []string{b.InstanceID}, nil)
+			case "get":
+				if _, err := c.Get(a.InstanceID); err == nil || !strings.Contains(err.Error(), "changed during reconciliation") {
+					t.Fatalf("direct Get lost its stale error: %v", err)
+				}
+			case "status":
+				if _, err := c.Status(a.InstanceID); err == nil || !strings.Contains(err.Error(), "changed during reconciliation") {
+					t.Fatalf("direct Status lost its stale error: %v", err)
+				}
+			}
+			if !raced.Load() || begins.Load() != wantProjected {
+				t.Fatalf("race/bounded writes not reached: raced=%v BEGIN=%d want=%d", raced.Load(), begins.Load(), wantProjected)
+			}
+			beforeA.RowVersion = beforeA.RowVersion.(int64) + 1
+			afterA, afterB := e.columns(t, a.InstanceID), e.columns(t, b.InstanceID)
+			afterRequestA, err := e.st.GetPermissionRequest(a.InstanceID, tokenA)
+			if err != nil || !reflect.DeepEqual(beforeA, afterA) || afterRequestA != requestA {
+				t.Fatalf("refused A changed row or request authority: row=%+v request=%+v err=%v", afterA, afterRequestA, err)
+			}
+			afterRequestB, err := e.st.GetPermissionRequest(b.InstanceID, tokenB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if multi {
+				if afterB.State != store.StateMissing || afterB.RowVersion != beforeB.RowVersion.(int64)+1 || !afterRequestB.Closed() || !afterRequestB.DeliveredAt.IsZero() || afterRequestB.ProvenGone() {
+					t.Fatalf("independent B did not close without delivery/proof: %+v %+v", afterB, afterRequestB)
+				}
+			} else if !reflect.DeepEqual(beforeB, afterB) || requestB != afterRequestB {
+				t.Fatal("single-row read changed excluded B")
+			}
+			familyAfter := readFamilyHistories(t, e.dbPath, []string{a.InstanceID, b.InstanceID})
+			if familyAfter[a.InstanceID] != familyBefore[a.InstanceID] {
+				t.Fatalf("refused A changed its family history: before=%+v after=%+v", familyBefore, familyAfter)
+			}
+			if multi && familyAfter[b.InstanceID].state != store.StateWaiting || !multi && familyAfter[b.InstanceID] != familyBefore[b.InstanceID] {
+				t.Fatalf("independent B family history: before=%+v after=%+v", familyBefore, familyAfter)
+			}
+			if calls := e.rec.SocketCalls(); len(calls) != 0 {
+				t.Errorf("recovery dispatched tmux calls: %+v", calls)
+			}
+		})
+	}
+}
+
+// A liveness note is the only permitted new fact for an uncertain live row.
+func assertCursorRecoveryNote(t *testing.T, before, after apitest.SpawnColumns, note string) {
+	t.Helper()
+	if after.LivenessNote != note || after.LivenessUnverifiedSince == nil || after.RowVersion != before.RowVersion.(int64)+1 {
+		t.Fatalf("note=%+v want %s once after %+v", after, note, before)
+	}
+	after.LivenessNote, after.LivenessUnverifiedSince, after.RowVersion = before.LivenessNote, before.LivenessUnverifiedSince, before.RowVersion
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("note changed unrelated columns: before=%+v after=%+v", before, after)
 	}
 }

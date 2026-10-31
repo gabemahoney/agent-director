@@ -191,48 +191,66 @@ type CodexOpenTurn struct {
 	Turn       string
 }
 
-// codexOpenTurnsSQL selects every CodexOpenTurn.
-const codexOpenTurnsSQL = `SELECT instance_id, COALESCE(session_id, ''), jsonl_path, codex_turn FROM spawns
- WHERE ` + codexOpenTurnSQL
+// CodexTurnSample retains the identity captured before rollout access.
+type CodexTurnSample struct {
+	CodexOpenTurn
+	Snapshot           RowSnapshot
+	Identity           LaunchIdentity
+	LifeNumber         int64
+	ObservationVersion int64
+	PermissionEpoch    int64
+}
 
-// codexFamilySQL is the CTE of one row's family: the row (its one
-// placeholder) and every descendant down stored parent links.
-const codexFamilySQL = `WITH RECURSIVE family(id) AS (
- SELECT ?
- UNION
- SELECT child.instance_id FROM family JOIN spawns AS child ON child.parent_id = family.id
-) `
+// codexOpenTurnsSQL selects every CodexOpenTurn.
+const codexOpenTurnsSQL = `SELECT instance_id, COALESCE(session_id, ''), jsonl_path, codex_turn, ` + lifeColumns + `, COALESCE(life_number, 0), observation_version, permission_epoch FROM spawns
+ WHERE ` + codexOpenTurnSQL
 
 // codexOpenTurnSQL is the condition, on a spawns row, of a CodexOpenTurn. The
 // turn end's write repeats it in its own WHERE.
 const codexOpenTurnSQL = `agent = '` + AgentCodex + `' AND state = '` + StateWorking + `'
  AND codex_turn IS NOT NULL AND codex_turn IS NOT codex_turn_ended AND COALESCE(jsonl_path, '') <> ''`
 
-// CodexOpenTurns returns the CodexOpenTurn of instanceID's row and of each of
-// its descendants, whose turns its family_state counts, or of every row when
-// instanceID is "". A row that is not one is left out. It only reads.
+// CodexOpenTurns reads only the requested row, or all rows for an explicit
+// empty scope. Family membership never grants permission to inspect a child.
 func (s *Store) CodexOpenTurns(instanceID string) ([]CodexOpenTurn, error) {
+	samples, err := s.CodexTurnSamples(instanceID)
+	var out []CodexOpenTurn
+	for _, t := range samples {
+		out = append(out, t.CodexOpenTurn)
+	}
+	return out, err
+}
+
+// CodexTurnSamples is the guarded counterpart used by active recovery.
+func (s *Store) CodexTurnSamples(instanceID string) ([]CodexTurnSample, error) {
 	q, args := codexOpenTurnsSQL, []any(nil)
 	if instanceID != "" {
-		q, args = codexFamilySQL+q+` AND instance_id IN (SELECT id FROM family)`, []any{instanceID}
+		q, args = q+` AND instance_id = ?`, []any{instanceID}
 	}
-	rows, err := s.db.QueryContext(s.readContext(), q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: codex open turns: %w", err)
-	}
-	defer rows.Close()
-	var out []CodexOpenTurn
-	for rows.Next() {
-		var t CodexOpenTurn
-		if err := rows.Scan(&t.InstanceID, &t.SessionID, &t.JSONLPath, &t.Turn); err != nil {
-			return nil, fmt.Errorf("store: codex open turns: %w", err)
+	out := []CodexTurnSample{}
+	err := s.readWithin(0, "store: recovery sample", func(ctx context.Context, conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, q, args...)
+		if err != nil {
+			return fmt.Errorf("store: codex open turns: %w", err)
 		}
-		out = append(out, t)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: codex open turns: %w", err)
-	}
-	return out, nil
+		defer rows.Close()
+		for rows.Next() {
+			var t CodexTurnSample
+			var life lifeScan
+			dest := append([]any{&t.InstanceID, &t.SessionID, &t.JSONLPath, &t.Turn}, life.dest()...)
+			dest = append(dest, &t.LifeNumber, &t.ObservationVersion, &t.PermissionEpoch)
+			if err := rows.Scan(dest...); err != nil {
+				return fmt.Errorf("store: codex open turns: %w", err)
+			}
+			t.Snapshot, t.Identity = life.result()
+			out = append(out, t)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("store: codex open turns: %w", err)
+		}
+		return nil
+	})
+	return out, err
 }
 
 // CodexTurnEndEvent is the triggering_event_name of the move EndCodexTurn
@@ -258,17 +276,36 @@ const (
 // It waits at most maxWait for the write lock (0: none, as a reading verb
 // waits). It reports whether the move applied. A row that is no longer t
 // changes nothing and reports false; so does a commit whose outcome is
-// unknown, which the read after it reports as it landed.
+// unknown, which returns an identifiable error and must not count as applied.
 func (s *Store) EndCodexTurn(t CodexOpenTurn, maxWait time.Duration) (bool, error) {
+	samples, err := s.CodexTurnSamples(t.InstanceID)
+	if err != nil {
+		return false, err
+	}
+	for _, sample := range samples {
+		if sample.CodexOpenTurn == t {
+			return s.EndCodexTurnSample(sample, maxWait)
+		}
+	}
+	return false, nil
+}
+
+// EndCodexTurnSample fences external evidence by the sampled revisions.
+// Recovery callers must retain this sample across rollout access.
+func (s *Store) EndCodexTurnSample(t CodexTurnSample, maxWait time.Duration) (bool, error) {
 	stateSet, stateArgs := s.hookWriteStateSet(StateWaiting)
 	q := `UPDATE spawns SET ` + stateSet + `, codex_turn_ended = codex_turn, ` + rowVersionAdvance + `
- WHERE instance_id = ? AND codex_turn = ? AND jsonl_path = ? AND ` + codexOpenTurnSQL
+ WHERE instance_id = ? AND codex_turn = ? AND jsonl_path = ? AND ` + codexOpenTurnSQL + ` AND ` + snapshotMatchSQL + ` AND COALESCE(life_number,0)=? AND observation_version=? AND permission_epoch=?`
 	args := append(stateArgs, t.InstanceID, t.Turn, t.JSONLPath)
+	args = append(args, snapshotMatchArgs(t.Snapshot)...)
+	args = append(args, t.LifeNumber, t.ObservationVersion, t.PermissionEpoch)
 	var (
 		moved bool
 		exits []displayTransition
 	)
-	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
+	ctx, cancel := s.operationContext(maxWait)
+	defer cancel()
+	err := s.inWriteTxContext(ctx, maxWait, func(ctx context.Context, conn *sql.Conn) error {
 		res, err := conn.ExecContext(ctx, q, args...)
 		if err != nil {
 			return err
@@ -284,17 +321,14 @@ func (s *Store) EndCodexTurn(t CodexOpenTurn, maxWait time.Duration) (bool, erro
 		exits, err = takeDisplayExits(ctx, conn, t.InstanceID)
 		return err
 	})
-	if errors.Is(err, errCommitUnconfirmed) {
-		return false, nil
-	}
 	if err != nil {
 		return false, fmt.Errorf("store: codex turn end: %w", err)
 	}
 	if !moved {
 		return false, nil
 	}
-	emitDisplayTransitions(exits)
-	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
+	emitDisplayTransitionsContext(ctx, exits)
+	_ = trail.Emit(ctx, "ad.spawn.state_transition", map[string]any{
 		"instance_id":           t.InstanceID,
 		"prior_state":           StateWorking,
 		"new_state":             StateWaiting,

@@ -147,6 +147,8 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		sessionID          = fs.String("session-id", "", "session_id; non-empty enables resume pre-flight")
 		contextFixture     = fs.String("context-fixture", "", "named sanitized context fixture; seeds its agent, session and transcript")
 		contextWriterPID   = fs.Int("context-writer-pid", 0, "live test-owned process retained by the caller for fresh Codex context")
+		writerPID          = fs.Int("writer-pid", 0, "live caller process for ordinary read-surface fixtures")
+		writerKeepPane     = fs.Bool("writer-keep-pane", false, "retain the owned pane fixture with --writer-pid for command/read composition")
 		createStore        = fs.Bool("create-store", false, "create the store if it does not exist")
 		socket             = fs.String("socket", "", "recorded tmux socket; defaults to apitest.TestSocket (a resume needs its directory to exist)")
 		noPreTrust         = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
@@ -171,6 +173,24 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		*id = uuid.NewString()
 	}
 	var opts []apitest.SpawnOption
+	if *writerPID > 0 {
+		live, err := apitest.ReadSurfaceProcessOptions(*writerPID)
+		if err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		opts = live
+		if *writerKeepPane {
+			identity, err := apitest.ContextWriter(*writerPID)
+			if err != nil {
+				printError(stderr, err)
+				return 1
+			}
+			opts = append(opts, apitest.WithLaunchIdentity(identity))
+		} else {
+			opts = append(opts, apitest.WithNoPane())
+		}
+	}
 	if *socket != "" {
 		opts = append(opts, apitest.WithTmuxSocket(*socket))
 	}

@@ -166,11 +166,13 @@ export function paneSends(logPath: string): string[][] {
  * Seeds, in homeDir's store (created if missing), relay-on row `id` in `state` on a private tmux socket under
  * homeDir, with one Bash permission request past its relay window (fallen back), its relay hook gone a minute
  * ago, and the row's own labelled session in the fake-tmux table, its pane showing "answered at tmux". Returns
- * the request's token and the pane's id.
+ * the request's token and the pane's id. writerPID optionally keeps the caller
+ * alive across active reads while retaining the command's owned pane fixture.
  */
-export function seedFallenBackRelayRow(homeDir: string, id: string, state: string): { token: string; paneId: string } {
+export function seedFallenBackRelayRow(homeDir: string, id: string, state: string, writerPID?: number): { token: string; paneId: string } {
   const store = homeStore(homeDir);
-  runHelper("seed-spawn", { store, state, id, "relay-mode": "on", "create-store": true, socket: privateTmuxSocket(homeDir) });
+  runHelper("seed-spawn", { store, state, id, "relay-mode": "on", "create-store": true, socket: privateTmuxSocket(homeDir),
+    ...(writerPID === undefined ? {} : { "writer-pid": String(writerPID), "writer-keep-pane": true as const }) });
   const token = runHelper("seed-permission-request", { store, "spawn-id": id, tool: "Bash",
     "created-ago-seconds": "172800", "hook-gone-ago-seconds": "60" })["request_token"] as string;
   const paneId = runHelper("seed-row-session", { store, id, capture: "answered at tmux\n" })["pane_id"] as string;

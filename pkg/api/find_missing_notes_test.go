@@ -84,9 +84,9 @@ type interleavedStore struct {
 	between func()
 }
 
-func (s interleavedStore) ListLiveSpawnIdentities() ([]store.LiveSpawnIdentity, error) {
-	rows, err := s.Store.ListLiveSpawnIdentities()
-	if err == nil {
+func (s interleavedStore) RecoveryRows(ids []string, settle store.SettleRead) ([]store.Spawn, error) {
+	rows, err := s.Store.RecoveryRows(ids, settle)
+	if err == nil && ids == nil {
 		s.between()
 	}
 	return rows, err

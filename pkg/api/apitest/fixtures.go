@@ -17,7 +17,8 @@ import (
 
 // SeedListFixture inserts 6 spawn rows with mixed states/labels/parents/cwds
 // into a fresh temp store and returns the open store and its DB path.
-// The store is registered for cleanup via t.Cleanup.
+// The store is registered for cleanup via t.Cleanup. An optional writerPID keeps
+// the reporting fixtures alive across external CLI and client reads.
 //
 // Layout (each row's instance id reads as a quick identity):
 //
@@ -27,7 +28,7 @@ import (
 //	row-d-ended-foo:       ended,   label  project=foo,         cwd /opt,  no parent
 //	row-e-ask:             ask_user, no labels,                 cwd /tmp,  no parent
 //	row-f-wait-no-label:   waiting, no labels,                  cwd /opt,  no parent
-func SeedListFixture(t *testing.T) (*store.Store, string) {
+func SeedListFixture(t *testing.T, writerPID ...int) (*store.Store, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	s, err := store.OpenOrInit(dbPath)
@@ -52,6 +53,11 @@ func SeedListFixture(t *testing.T) (*store.Store, string) {
 			t.Fatalf("SeedListFixture: InsertPending %s: %v", id, err)
 		}
 		seedAgentState(t, s, id, state, "SeedListFixture")
+		if len(writerPID) > 0 {
+			if _, err := BindReadSurfaceProcess(dbPath, id, writerPID[0]); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 
 	insert("row-a-wait-foo", "", store.StateWaiting, "/tmp",

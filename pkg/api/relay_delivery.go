@@ -34,6 +34,10 @@ const (
 // exported verb functions (Status, Get, List, GetPermission, Decide,
 // RepairCheckPermission) passes its own.
 type RelayView struct {
+	active          *activeCheckProviders
+	provisional     map[string]ProvisionalTranscript
+	provisionalOnly map[string]bool
+	checked         map[string]*activeCheckedRow
 	// Procs reads a recorded relay hook's start time. nil judges every hook
 	// "can't tell".
 	Procs ProcChecker
@@ -53,9 +57,10 @@ type RelayView struct {
 	NeedsIntelligenceTimeout time.Duration
 
 	// samplePane captures a working Claude or Codex row's own pane for its
-	// idle_screen observation (Client.paneSampler, one per read); nil samples
-	// no pane, as a caller of the exported verb functions, which have no tmux,
-	// does.
+	// idle_screen observation. checkActiveRows sets it for one check pass from
+	// the invocation's tmux provider, sharing that pass's sweep budget and
+	// per-socket stops (sampleActivePane); nil samples no pane, as a caller of
+	// the exported verb functions, which have no tmux, does.
 	samplePane func(Spawn) store.PaneSample
 	// idleScreenTimeout is the Client's configured idle_screen timeout for rows
 	// without their own override; only a view that samples panes uses it. Zero
@@ -430,8 +435,18 @@ const readerLockWait time.Duration = 0
 // the read that found them is answered as it is. It reports whether it
 // attempted the write, and the write's error.
 func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (bool, error) {
+	attempted, _, err := recordGoneOutcome(s, at, maxWait, slots)
+	return attempted, err
+}
+
+// recordGoneOutcome also reports whether a guarded observation was persisted;
+// an attempted write whose samples were all stale is not a committed check.
+func recordGoneOutcome(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (bool, bool, error) {
 	if len(slots) == 0 {
-		return false, nil
+		return false, false, nil
+	}
+	if checked, ok := s.(*activeReadStore); ok {
+		return checked.recordGone(at, maxWait, slots)
 	}
 	var stored map[int64]time.Time
 	var err error
@@ -449,14 +464,14 @@ func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (b
 			}
 		}
 		if len(ids) == 0 {
-			return false, nil
+			return false, false, nil
 		}
 		stored, err = r.RecordHookGone(at, maxWait, ids...)
 	} else {
-		return false, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return true, err
+		return true, false, err
 	}
 
 	for _, sl := range slots {
@@ -464,7 +479,7 @@ func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (b
 			sl.d.HookGoneAt = &t
 		}
 	}
-	return true, nil
+	return true, len(stored) > 0, nil
 }
 
 // paneAnswerOf is pr's pane_answer as the wire gives it: none for a row built
@@ -564,11 +579,20 @@ func judgedOpenInfos(r *judgedRequestSet, j relayJudge) []PermissionRequestInfo 
 // readJudgedRequests reads every permission request of instanceID through
 // read, once, by the check-before-read rule (readManyJudged).
 func readJudgedRequests(read func(string) ([]PermissionRow, error), j relayJudge, instanceID string) (*judgedRequestSet, error) {
+	if checked := j.view.checked[instanceID]; checked != nil && checked.judged != nil {
+		return checked.judged, checked.permissionErr
+	}
 	rows, verdicts, err := readManyJudged(func() ([]PermissionRow, error) { return read(instanceID) }, j)
 	if err != nil {
 		return nil, err
 	}
-	return &judgedRequestSet{rows: rows, verdicts: verdicts}, nil
+	judged := &judgedRequestSet{rows: rows, verdicts: verdicts}
+	if checked := j.view.checked[instanceID]; checked != nil {
+		// A final row refresh may have invalidated the earlier request sample.
+		// Reuse this new check-before-read sample throughout response assembly.
+		checked.judged = judged
+	}
+	return judged, nil
 }
 
 // judgedSpawnInfos projects every request of r, one read

@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -162,4 +164,169 @@ func (s *Store) DeleteSpawn(instanceID string) error {
 		return fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
 	}
 	return nil
+}
+
+// RecoveryWrites reuses the lifecycle statements with nonwaiting admission.
+// Command and hook callers keep their original lock policies.
+type RecoveryWrites struct {
+	*Store
+	samples map[string]Spawn
+}
+
+func (s *Store) RecoveryWrites(rows ...Spawn) *RecoveryWrites {
+	samples := make(map[string]Spawn, len(rows))
+	for _, row := range rows {
+		samples[row.InstanceID] = row
+	}
+	return &RecoveryWrites{Store: s, samples: samples}
+}
+
+func (s *RecoveryWrites) guard(id, statement string, args []any) (string, []any) {
+	if row, ok := s.samples[id]; ok {
+		statement += " AND observation_version=? AND permission_epoch=?"
+		args = append(args, row.ObservationVersion, row.PermissionEpoch)
+	}
+	return statement, args
+}
+
+func (s *RecoveryWrites) MarkMissingIfSameLife(id string, snapshot RowSnapshot) (string, CondResult, error) {
+	args := append(immediateStateArgs(StateMissing), id)
+	args = append(args, liveStateGuardArgs()...)
+	args = append(args, snapshotMatchArgs(snapshot)...)
+	statement, args := s.guard(id, markMissingIfSameLifeSQL, args)
+	return s.terminalMarkWithoutWait("store: recovery missing", statement, args, id, DecisionReasonFindMissing)
+}
+
+func (s *RecoveryWrites) MarkEndedIfSameLife(id string, snapshot RowSnapshot) (string, CondResult, error) {
+	args := append(immediateStateArgs(StateEnded), id)
+	args = append(args, liveStateGuardArgs()...)
+	args = append(args, snapshotMatchArgs(snapshot)...)
+	statement, args := s.guard(id, markEndedIfSameLifeSQL, args)
+	return s.terminalMarkWithoutWait("store: recovery ended", statement, args, id, DecisionReasonEnded)
+}
+
+// recoveryExec checks the no-match outcome under the same write boundary and
+// refreshes changed family contributions atomically. No follow-up read can
+// queue behind an abandoned commit.
+func (s *Store) recoveryExec(id, q string, args []any) (CondResult, error) {
+	result := CondChanged
+	var exits []displayTransition
+	ctx, cancel := s.operationContext(0)
+	defer cancel()
+	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
+		res, err := conn.ExecContext(ctx, q, args...)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			var exists bool
+			if err := conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM spawns WHERE instance_id=?)", id).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				result = CondAbsent
+			}
+			return nil
+		}
+		result = CondApplied
+		if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
+			return err
+		}
+		exits, err = takeDisplayExits(ctx, conn, id)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	emitDisplayTransitionsContext(ctx, exits)
+	return result, nil
+}
+
+func (s *RecoveryWrites) SetLivenessNoteIfSameLife(id string, snapshot RowSnapshot, note string) (CondResult, error) {
+	args := append([]any{note, id}, liveStateGuardArgs()...)
+	statement, args := s.guard(id, setLivenessNoteIfSameLifeSQL, append(args, snapshotMatchArgs(snapshot)...))
+	return s.recoveryExec(id, statement, args)
+}
+
+func (s *RecoveryWrites) ClearLivenessIfSameLife(id string, snapshot RowSnapshot) (CondResult, error) {
+	args := append([]any{id}, liveStateGuardArgs()...)
+	statement, args := s.guard(id, clearLivenessIfSameLifeSQL, append(args, snapshotMatchArgs(snapshot)...))
+	return s.recoveryExec(id, statement, args)
+}
+
+func (s *RecoveryWrites) NoteUnreportedIfSameLife(id string, snapshot RowSnapshot) (CondResult, error) {
+	args := append([]any{LivenessNoteUnreported, id, StatePending, LivenessNoteProvenanceConflict}, snapshotMatchArgs(snapshot)...)
+	statement, args := s.guard(id, noteUnreportedIfSameLifeSQL, args)
+	return s.recoveryExec(id, statement, args)
+}
+
+func (s *RecoveryWrites) AdoptIdentityIfSameLife(id string, snapshot RowSnapshot, identity LaunchIdentity) (CondResult, RowSnapshot, error) {
+	args := append(adoptIdentityArgs(identity), id)
+	args = append(args, liveStateGuardArgs()...)
+	statement, args := s.guard(id, adoptIdentityIfSameLifeSQL, append(args, snapshotMatchArgs(snapshot)...))
+	result, err := s.recoveryExec(id, statement, args)
+	if result != CondApplied || err != nil {
+		return result, RowSnapshot{}, err
+	}
+	snapshot.RowVersion++
+	return result, snapshot, nil
+}
+
+// RepairCheckPermissionSample revalidates every judged request, not just the
+// spawn's row_version: delivery/proof facts can change without a row write.
+func (s *Store) RepairCheckPermissionSample(row Spawn, sampled []PermissionRow) (string, CondResult, error) {
+	var state string
+	result := CondChanged
+	var exits []displayTransition
+	ctx, cancel := s.operationContext(0)
+	defer cancel()
+	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
+		if _, err := lockedObservationRow(ctx, conn, row); err != nil {
+			return err
+		}
+		current, err := queryPermissionRows(func(q string, args ...any) (*sql.Rows, error) { return conn.QueryContext(ctx, q, args...) },
+			"SELECT "+permissionColumns+" FROM permission_requests pr WHERE instance_id=? ORDER BY request_id", "store: recovery requests", row.InstanceID)
+		if err != nil {
+			return err
+		}
+		if len(current) != len(sampled) {
+			return errDisplaySampleChanged
+		}
+		byID := make(map[int64]PermissionRow, len(sampled))
+		for _, sample := range sampled {
+			byID[sample.RequestID] = sample
+		}
+		for _, request := range current {
+			if sample, ok := byID[request.RequestID]; !ok || sample != request {
+				return errDisplaySampleChanged
+			}
+		}
+		var args []any
+		for range 3 {
+			args = append(args, StateWaiting, StateWorking)
+		}
+		args = append(args, row.InstanceID, StateCheckPermission)
+		args = append(args, snapshotMatchArgs(row.Snapshot)...)
+		if err := conn.QueryRowContext(ctx, repairCheckPermissionSQL, args...).Scan(&state); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		result = CondApplied
+		if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
+			return err
+		}
+		exits, err = takeDisplayExits(ctx, conn, row.InstanceID)
+		return err
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	emitDisplayTransitionsContext(ctx, exits)
+	return state, result, nil
 }

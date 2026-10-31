@@ -6,7 +6,7 @@ error:
 
 - Only a GONE answer means a row's session is not there. Any other tmux error
   means "don't know", never "dead".
-- Row state, reconciled by `find-missing` and the [Cursor read checks](#cursor-operation-boundaries),
+- Row state, reconciled by the [bounded recovery checks](#bounded-recovery-on-state-reads),
   is the liveness authority. For launch readiness, poll with `status`;
   call `read-pane` only while the row is `pending`, at
   most once a second.
@@ -95,6 +95,30 @@ To end a live row (`pending` included) and relaunch its id:
 
    A caller whose ids agent-director mints spawns fresh instead.
 
+## Bounded recovery on state reads
+
+`status`, `get`, `list` and `find-missing` share eligible recovery checks.
+`status` and `get` check only the named row. `list` selects IDs using the
+stored state, displayed state, other filters and limit before checking them.
+It returns those same IDs after recovery, even if a returned value no longer
+matches the filter; it neither refills limit slots nor adds newly matching rows.
+Invalid filters are refused before checks. Reading a parent does not check
+hidden children; [family reporting](#family-reporting-limits) uses stored facts.
+
+Checks can reconcile process or gateway loss, missed Codex turn endings,
+stale permission state, display observations, newly available transcripts
+and late exact input proof. Each runs only with applicable evidence and
+available capabilities. Finished rows skip liveness, turn, permission,
+display and transcript checks; late exact input proof remains eligible.
+Pending grace and a live launch owner protect an unfinished launch.
+
+Work is bounded per call and writes recheck the sampled identity. A stale
+sample, unavailable provider or unconfirmed commit is not successful recovery;
+a successful read does not prove every check ran or committed. Checks never
+deliver input or permission answers, replay a submission, signal or restart
+an agent. Commands keep their own preconditions. Nothing runs between calls
+unless an operator [schedules the sweeps](maintenance.md#scheduling-the-sweeps).
+
 ## Experimental context fullness
 
 `status`, `get` and each visible `list-subagents` record include the same
@@ -178,7 +202,8 @@ family activity. `waiting` means neither task success nor permission or
 readiness to take an action. With [settling](configuration.md#settle-time-state),
 it can still show `waiting` briefly after work begins.
 
-Family reporting adds no liveness detection. A stopped agent still recorded
+Family freshness is unconfirmed: the value is a consistent stored projection,
+not evidence that every member was checked. A stopped agent still recorded
 as `working` keeps the raw family working until an existing detector or
 state change records otherwise. Cursor's existing per-agent read projection
 can show `missing` before its terminal write succeeds; family reporting
@@ -194,14 +219,13 @@ lock acquisition.
 ## A Codex turn that ends in an error
 
 Codex sends no hook when a turn ends in an error, such as a model at
-capacity. The row reads `working` until a read finds the turn's end in
-Codex's rollout: the next `list`, or `status` or `get` of the row or of an
-ancestor, moves it to `waiting` (shown after any
-[settle time](configuration.md#settle-time-state)), and its ancestors'
-`family_state` then counts it as `waiting`. Keep polling `status` as for
+capacity. The row reads `working` until a check finds the turn's end in
+Codex's rollout: a `status` or `get` of that row, a `list` selecting it, or
+`find-missing` can move it to `waiting` (shown after any
+[settle time](configuration.md#settle-time-state)). Keep polling `status` as for
 any turn. `waiting` does not mean the turn succeeded: read the pane for the
 error before sending more work. The row's `state_changed_at` is the time of
-that read, not of the turn's end.
+that recovery write, not of the turn's end.
 
 That move proves none of the turn's permission requests gone. On a relay-on
 row that had a request in that turn, a plain `send-keys` and `pause` can
@@ -234,7 +258,7 @@ Every row of every agent has it, `pending` rows included; it is never `null`.
   [`displayed_state`](#needs-intelligence-and-idle-screen-rows)
   dates the display, not a state change: the display never moves
   `state_changed_at`, but a raw change that ends it (the agent moving on, or
-  `find-missing`'s repair) does.
+  a recovery repair) does.
 - **Epoch.** `1970-01-01T00:00:00Z` means the raw state has not changed since
   agent-director began recording this time. It is not the time of a change,
   and reads as "no change since" any time you compare it with.
@@ -251,7 +275,7 @@ lifecycle state (`pending`, `waiting`, `working`, `ask_user`,
 a Displayed State, a report beside its state, in `displayed_state`:
 
 - `idle_screen`: a `working` Claude or Codex agent's pane has looked the same
-  on every read for [its timeout](configuration.md#idle-screen-timeout-state);
+  on successive checks for [its timeout](configuration.md#idle-screen-timeout-state);
   `state` stays `working`. The agent may be hung or working quietly: look at
   its pane before acting. See [Unchanged panes](#unchanged-panes).
 - `needs_intelligence`: an unknown prompt on the agent's screen, one that is
@@ -263,7 +287,7 @@ a Displayed State, a report beside its state, in `displayed_state`:
 Test `displayed_state`, never `state`, for `idle_screen` or
 `needs_intelligence`: `state` never holds either. `displayed_state` needs
 agent-director 0.17.1 or later. A `needs_intelligence` display already in
-the store is never reported; the first read that commits an observation of
+the store is never reported; the first check that commits an observation of
 the row ends it, with one exit trail record.
 
 Every `status`, `get` and `list` row carries `idle_screen_availability`:
@@ -280,70 +304,70 @@ only while it shows `idle_screen`.
 - **Fields.** `status`, `get` and `list` carry `displayed_state`. `status`
   and `get` also carry `since` (RFC3339 UTC with exactly millisecond
   precision) and, on `idle_screen`, `unchanged_minutes`: the whole minutes
-  (rounded down) the pane had stayed the same at the last committed read.
+  (rounded down) the pane had stayed the same at the last committed observation.
   `request_token` and `tool_name` belong to `needs_intelligence` only.
   `status` adds `tmux_session_name` only while `displayed_state` is present
   (`get` carries it always). A `list` row carries neither `since` nor the
   detail; call `get` for them.
 - **Omissions.** A field that does not apply is absent: never `null`, empty
   or zero. Test for presence, not for a value.
-- **Filtering.** `list --state` keeps a row whose `state` or
-  `displayed_state` is one of the values, before `--limit` is applied, so a
-  limit never hides a matching row behind others. So `--state working` and
-  `--state idle_screen` both list a working row that shows `idle_screen`,
-  and `--state check_permission` lists every `check_permission` row.
+- **Filtering.** `list --state` selects by stored `state` or
+  `displayed_state` before `--limit` and recovery checks. `--state working`
+  and `--state idle_screen` both match a stored working row showing
+  `idle_screen`. Returned membership follows
+  [fixed selection](#bounded-recovery-on-state-reads).
   `--state needs_intelligence` is accepted and matches only a row showing it.
-- **Detection happens on reads.** Nothing runs between your calls and
+- **Detection happens on checks.** Nothing runs between your calls and
   nothing changes on a timer. With settling off, a row shows `idle_screen`
-  from the first `status`, `get` or `list` after the timeout that commits the
+  from the first selected check after the timeout that commits the
   observation. Your usual `status` polling is enough; you need not read
-  panes yourself. A row nobody reads never shows it.
+  panes yourself. `find-missing` also samples eligible rows.
   With a positive [settle time](configuration.md#settle-time-state), entry or
-  exit starts its interval at the read that commits its candidate, not at
-  the raw-state change. A later read must commit the change once that
+  exit starts its interval at the check that commits its candidate, not at
+  the raw-state change. A later check must commit the change once that
   candidate has held for the interval. Until entry commits,
   `displayed_state` is absent.
-- **`since`.** The time of the read that committed the entry, not the moment
+- **`since`.** The time of the check that committed the entry, not the moment
   the timeout ran out. It is kept while the row clears under settling and
   when `unchanged_minutes` grows. A new working turn never inherits the
   earlier `since` or detail: if it qualifies too, that display ends at once
   and the new turn starts fresh.
-- **Skipped writes.** A read writes only to commit something new: a pane
+- **Skipped observation writes.** A check writes only a new observation: a pane
   fingerprint period started, restarted or reset, a change of
   `displayed_state` or its settling candidate, a new whole minute of
   `unchanged_minutes`, or a permission request first found fallen back.
   Otherwise it writes nothing. Its write never waits for the store's lock: a
-  read that cannot commit returns the display and detail committed before,
-  together, and a later read tries again.
+  read that cannot confirm its observation returns the earlier committed
+  display and detail together. A later check tries again.
 - **Clearing.** When its pane changes or cannot be sampled, or the agent
   moves on, the row keeps `displayed_state` until the exit candidate settles
-  and a read commits the exit. `ended`, `missing` and a state a command sets
+  and a check commits the exit. `ended`, `missing` and a state a command sets
   show at once.
 - **Trail.** Each entry and exit appends one
   `ad.spawn.displayed_state_transition` trail record with `instance_id`,
   `prior_state`, `new_state`, `event` and `ts`; the trail is audit only and a
-  failed append changes nothing. Rarely, under heavy store load, a read whose
+  failed append changes nothing. Rarely, under heavy store load, a check whose
   write is slow to commit may still show the previous display and detail and
   append no record for that change; a later read shows the committed
-  display, with `since` from the earlier read.
+  display, with `since` from the earlier check.
 - **Attaching.** A Displayed State adds no verb and no automatic answer. For
   `idle_screen`, [attach to its pane](usage.md#attach-to-a-spawns-pane).
 
 ### Unchanged panes
 
-`status`, `get` and `list` sample the pane of every `working` Claude or Codex
-row they read: the agent's own pane of the row's current launch, fingerprinted
+`status`, `get`, `list` and `find-missing` sample eligible selected `working`
+Claude or Codex rows: the agent's own pane of the current launch, fingerprinted
 as the `pane_sha256` a default `read-pane` returns. Only the fingerprint is
 kept; nothing reads what the pane says.
 
 - **The unchanged period.** The first successful sample starts it. An
   identical fingerprint keeps its start; a different one restarts it at that
-  read and clears an `idle_screen` row. A read at or after the period's
+  check and clears an `idle_screen` row. A check at or after the period's
   start plus the timeout qualifies. `check_permission`, `ask_user` and every
   other state never do, and a change of the agent's state (a new turn, a new
   launch) starts over with no earlier evidence.
-- **Only while you read.** Nothing samples between reads. The period starts
-  at the first read that saw the current pane, so infrequent reads delay
+- **Only during checks.** Nothing samples between calls. The period starts
+  at the first check that saw the current pane, so infrequent checks delay
   detection, and identical samples do not show that the pane never changed
   between them.
 - **A hint, not proof.** Healthy quiet work, such as a long tool with no
@@ -360,7 +384,7 @@ kept; nothing reads what the pane says.
 - **Time.** A sample makes up to three tmux calls (a lookup, a pane listing
   and a capture), each bounded by
   [`query_timeout_ms` or `action_timeout_ms`](configuration.md#timing-settings-tmux).
-  Within one `list`, a tmux server that does not answer a lookup or pane
+  Within one call, a tmux server that does not answer a lookup or pane
   listing is not asked again: its later rows count as failed samples.
 
 ## Ordinary text submission
@@ -858,19 +882,22 @@ This is not an intentional session end or a successful turn. Cleanup errors
 remain failures. Local `/exit` and eligible `pause` can report termination only
 after the owned runtime is confirmed gone; a stop failure cannot report success.
 
-For a live Cursor row, public `get` and `status` check only that row's recorded
-gateway process identity. Public `list` checks live Cursor candidates within its
-label, parent, working-directory and tmux-session filters before applying the
-settled-state filter and limit. Invalid filters are refused before any store
-read or mutation. A reused PID with a different start time means the
-recorded gateway is gone. A confirmed lost gateway is reported as `missing`
-without waiting for `find-missing` or the state settle delay, even if its runtime
-is still alive. Alive or unknown process evidence leaves the row unchanged.
+For a selected live Cursor row, the
+[shared checks](#bounded-recovery-on-state-reads) judge its recorded gateway
+process identity alone and never look it up in tmux. A reused PID with a
+different start time means the recorded gateway is gone. Only that exact verdict
+ends the row: a confirmed lost gateway is reported as `missing` without waiting
+for `find-missing` or the state settle delay, even if its runtime is still alive.
+Alive or unknown evidence leaves its lifecycle state unchanged; unknown evidence
+leaves the row unverified with `liveness_note` `probe_eacces`. A Cursor row with
+no recorded gateway is checked like any other agent's row.
 The result is guarded by the examined launch and runtime binding. A gateway
 lost before runtime registration can also be reported missing while no binding
 exists for that instance; a stale binding is not absence. A replacement launch
-retains its own state. An unresolved conflict on the same dead launch returns
-an error rather than reporting it as working.
+retains its own state. An unresolved same-launch conflict fails direct `get`
+or `status`. In `list`, stale proof for one row retains that row's older
+coherent stored facts and leaves independent selected results intact; those
+older facts are not fresh liveness proof.
 
 The complete read result is assembled before a separate attempt to persist
 terminal closure. That write does not wait for the store's write lock and keeps
@@ -888,9 +915,8 @@ Terminal permission lists are empty; they prove no request gone, decision,
 receipt or delivery. Terminal closure leaves Cursor request proof
 unchanged, including after `delivered`; see
 [Cursor permission lifetimes](permissions.md#cursor-spawns).
-Finished rows are not checked again. These reads do not sweep outside their
-requested scope or change other agents' read behavior; explicit `find-missing`
-remains available.
+Finished Cursor rows receive no gateway check. State reads do not check outside
+their selected IDs; `find-missing` selects all agents.
 
 A Cursor `missing` row is not proof that its runtime has exited. Resolve any
 surviving work through the existing ownership and
@@ -952,7 +978,9 @@ state, and so does a crash or a `kill` of either agent. Until something sees
 the agent gone, `send-keys` gets `ErrTmuxSendKeys` and `read-pane`
 `ErrTmuxCaptureFailed`. Run `find-missing`: it marks the row `ended` when the
 agent's end was reported, else `missing`, and an `ended` row is in neither of
-its lists (see [How a Codex row ends](hooks.md#how-a-codex-row-ends)).
+its lists (see [How a Codex row ends](hooks.md#how-a-codex-row-ends)). Selected
+state reads can make the same guarded move through
+[shared recovery](#bounded-recovery-on-state-reads).
 
 `pause` on a Codex row ends it itself:
 
@@ -962,16 +990,12 @@ its lists (see [How a Codex row ends](hooks.md#how-a-codex-row-ends)).
   returns success having sent nothing, and the row is `ended`.
 - A gone agent with no end report, or one that cannot be judged, gets today's
   outcomes: `ErrTmuxSendKeys` for a waiting row's keys, or `ErrPauseTimeout`.
-  `find-missing` then settles the row.
+  [Shared recovery](#bounded-recovery-on-state-reads) then settles the row.
 
 If a live Codex row has a draft exceeding 64 lines, `pause` submits the
 rest of the draft and the `/exit` to the agent as a prompt, the row goes
 `working`, and `pause` returns `ErrPauseTimeout`. Follow the
 [inspection procedure](#when-pause-cannot-confirm-exit) before further input.
-
-The look-and-send recovery for a held agent (send `/exit` with the pane's hash,
-poll `status` until `ended`) gains, on a Codex row, one step: once the agent has
-exited, run `find-missing` (or `pause`).
 
 ## Spawn and template input refusals
 
@@ -1183,7 +1207,8 @@ supplies neither ACP approval authority nor proof.
 - `ErrNoOpenPermissionRequest`: no eligible request by that token, including
   a closed, proven-gone or obsolete request. Do not answer it at the pane.
   A request still awaiting an answer
-  when its agent ended, or when `find-missing` marked it `missing`, is
+  when its agent ended, or when
+  [shared recovery](#bounded-recovery-on-state-reads) marked it `missing`, is
   closed, and stays closed after `resume`. A decided request without a
   relay acknowledgement or completed pane answer is also closed when its
   agent ends or is marked missing; its recorded verdict is preserved.

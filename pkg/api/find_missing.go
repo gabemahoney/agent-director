@@ -2,12 +2,10 @@ package api
 
 import (
 	"context"
-	"os"
 	"slices"
 	"sort"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -263,6 +261,7 @@ const (
 
 // findMissingRow is the outcome of judging one live row.
 type findMissingRow struct {
+	guard RowSnapshot
 	// write is the row's writer outcome (markMissingSameLife,
 	// writeLivenessNote, clearLivenessNote or writeUnreportedNote), or, for
 	// a row whose adoption write did not apply, that write's outcome (never
@@ -336,12 +335,13 @@ func findMissingAction(r findMissingRow) string {
 //
 // Behaviour (SR-11.1 to SR-11.7, SR-3.15, SR-13.3, SR-13.5):
 //
-//  1. List the live rows (every live state, pending included). A list error
+//  1. Select all stored rows in one snapshot. Finished rows admit only
+//     late native proof; live rows enter liveness checks. A selection error
 //     fails the sweep. Rows are judged in instance-id order, so the per-socket
 //     stop and the budget's cut-off fall on the same rows on every run.
 //  2. A `pending` row inside its grace period, measured from its launch
-//     start (store.InsidePendingGrace), is left untouched: no reader call, no
-//     tmux call, no write, no event, and it is in neither result list. Such a
+//     start (store.InsidePendingGrace), receives no liveness check and is in
+//     neither result list. Provisional transcript healing remains eligible. Such a
 //     row may be a spawn's, a reuse's or a resume's launch. A `pending` row
 //     with no readable launch start is past the grace period and judged at
 //     once (SR-22.8). A `pending` row past its grace period whose launch
@@ -387,7 +387,10 @@ func findMissingAction(r findMissingRow) string {
 //     and at most one pane listing per socket, taken at the first row that
 //     needs it, no more calls on a socket after an unreadable or unavailable
 //     result there, and none at all once sweepBudget is spent. tmux problems
-//     never fail the sweep.
+//     never fail the sweep. A Cursor row with a recorded gateway (pid and
+//     start time) never comes here: an unknown gateway verdict leaves it
+//     unverified (probe_eacces) with no tmux call, and only an exact gone
+//     verdict marks it missing.
 //  6. Every write is guarded on the row snapshot the sweep read, or on the
 //     one its adoption write produced (SR-11.6): a write that finds the row
 //     changed or absent, or fails in the store, leaves the row in neither
@@ -395,11 +398,12 @@ func findMissingAction(r findMissingRow) string {
 //     per-row store error are row outcomes, never a sweep error (SR-11.7,
 //     SR-5.8). A row's ad.provenance.disagree records are written once its
 //     write settled.
-//  7. Provisional transcripts of Claude rows are healed
-//     (healProvisionalTranscripts); a Codex row is never statted or healed.
+//  7. The selected live rows also receive eligible missed-turn, permission,
+//     owned-pane and provisional Claude transcript checks. Late exact native
+//     proof uses only its persistence seam; nothing sends input or answers.
 //
 // The result lists are sorted. The only error FindMissing returns is the
-// live-row read's, and (c *Client).FindMissing adds one, ErrClientClosed on a
+// selection read's, and (c *Client).FindMissing adds one, ErrClientClosed on a
 // closed Client, before it calls FindMissing. Every failure returns an empty
 // FindMissingResult (counts 0, IDs and UnverifiedIDs non-nil and empty), as
 // a sweep that judged no row does (b.hbt).
@@ -416,57 +420,64 @@ func findMissingAction(r findMissingRow) string {
 //     it: the sweep reads only process start times, and a start time it
 //     cannot read leaves that row unverified.
 func FindMissing(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc ProcChecker, pendingGrace, sweepBudget time.Duration, now func() time.Time, lg FindMissingLogger) (FindMissingResult, error) {
-	identities, err := s.ListLiveSpawnIdentities()
-	if err != nil {
-		return FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}, err
+	view := RelayView{Procs: pc, Now: now, active: &activeCheckProviders{tmux: t, pendingGrace: pendingGrace, budget: sweepBudget, logger: lg}}
+	return findMissingChecked(ctx, s, view, store.SettleRead{})
+}
+
+func findMissingChecked(ctx context.Context, s FindMissingStore, view RelayView, settle store.SettleRead) (FindMissingResult, error) {
+	empty := FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}
+	var rows []Spawn
+	var refresh func([]string, []store.CursorMissingProof) ([]Spawn, error)
+	if reader, ok := s.(interface {
+		RecoveryRows([]string, store.SettleRead) ([]Spawn, error)
+	}); ok {
+		var err error
+		rows, err = reader.RecoveryRows(nil, settle)
+		if err != nil {
+			return empty, err
+		}
+		refresh = activeRefresh(s, settle, true)
+	} else {
+		// A legacy narrow store exposes only its live identities. It cannot
+		// promise all-agent snapshot selection or the richer adapters.
+		identities, err := s.ListLiveSpawnIdentities()
+		if err != nil {
+			return empty, err
+		}
+		for _, it := range identities {
+			rows = append(rows, Spawn{InstanceID: it.InstanceID, State: it.State, ReportedState: it.State,
+				PID: it.PID, ProcStarttime: it.ProcStarttime, TmuxSessionName: it.TmuxSessionName,
+				LaunchStartedAtMillis: it.LaunchStartedAtMillis, LivenessNote: it.LivenessNote,
+				Snapshot: it.Snapshot, Identity: it.Identity, LaunchOwner: it.LaunchOwner, Agent: it.Agent, EndReportedAtMillis: it.EndReportedAtMillis})
+		}
 	}
-	identities = slices.Clone(identities)
-	sort.SliceStable(identities, func(i, j int) bool {
-		return identities[i].InstanceID < identities[j].InstanceID
-	})
-	sweepNow := now()
-	r := &findMissingRun{s: s, t: t, pc: pc, sw: tmux.NewSweep(t, pc, now, sweepBudget), lg: lg}
-
-	missing := make([]string, 0)
-	unverified := make([]string, 0)
-	for _, it := range identities {
-		if store.InsidePendingGrace(it.State, it.LaunchStartedAtMillis, pendingGrace, sweepNow) {
-			// A booting launch inside its grace period (SR-11.2): not judged.
-			continue
+	if refresh == nil {
+		// Legacy adapters expose transcript candidates separately. Capture
+		// them before external sampling and keep that fixed scope too.
+		view.provisional = map[string]ProvisionalTranscript{}
+		view.provisionalOnly = map[string]bool{}
+		present := map[string]bool{}
+		for _, row := range rows {
+			present[row.InstanceID] = true
 		}
-		if it.State == store.StatePending && spawn.LaunchOwnerAlive(pc, it.LaunchOwner) {
-			// A launch its live owner still holds (b.kdf): not judged, so a
-			// stalled spawn is neither marked nor noted under it.
-			continue
+		candidates, err := s.ListProvisionalTranscripts()
+		if err != nil {
+			logFindMissing(view.active.logger, "ListProvisionalTranscripts", "", err)
 		}
-		row := r.judgeLiveRow(it)
-		switch {
-		case !row.write.Listed:
-		case row.marked:
-			missing = append(missing, it.InstanceID)
-		default:
-			unverified = append(unverified, it.InstanceID)
+		for _, pt := range candidates {
+			view.provisional[pt.InstanceID] = pt
+			if !present[pt.InstanceID] {
+				rows = append(rows, Spawn{InstanceID: pt.InstanceID, SessionID: pt.SessionID, State: store.StateWaiting, ReportedState: store.StateWaiting})
+				view.provisionalOnly[pt.InstanceID] = true
+			}
 		}
-		r.emitDisagree(it, row)
 	}
-
-	// b.v2c AC3: lazy transcript healing. A session that started before its
-	// first user turn had no .jsonl on disk when SessionStart fired, so its row
-	// carries a NULL jsonl_path. Once the agent's first turn is written the
-	// file appears; this sweep recomposes each provisional row's path, stats it, and
-	// records it when present — no operator intervention required. Per-row
-	// errors are logged and skipped; healing never aborts the sweep.
-	healProvisionalTranscripts(s, lg)
-
-	// Stable order in the result envelope.
-	sort.Strings(missing)
-	sort.Strings(unverified)
-	return FindMissingResult{
-		Count:         len(missing),
-		IDs:           missing,
-		Unverified:    len(unverified),
-		UnverifiedIDs: unverified,
-	}, nil
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].InstanceID < rows[j].InstanceID })
+	run := checkActiveRows(ctx, s, view, settle, rows, refresh, false)
+	// A sweep returns committed counts; its per-agent errors remain in the
+	// pass and never suppress independent selected rows.
+	_ = run.finish()
+	return run.missing, nil
 }
 
 // findMissingRun is one find-missing run's state: the store, the tmux client
@@ -483,6 +494,9 @@ type findMissingRun struct {
 	// caller is the invoking process's identity, collected on first use and
 	// shared by every trail record of the run.
 	caller lazyCaller
+	// emit writes the run's trail records: recoveryTrail under the operation
+	// context of the check.
+	emit trailEmit
 }
 
 // judgeLiveRow judges one live row past its grace period by its agent process
@@ -551,6 +565,7 @@ func (r *findMissingRun) judgeLiveRow(it LiveSpawnIdentity) findMissingRow {
 // Any other row gets clearRow: a pending row that records no pane stays
 // pending, judged as before b.kdf.
 func (r *findMissingRun) aliveRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, ident LaunchIdentity) findMissingRow {
+	row.guard = guard
 	if it.State == store.StatePending && ident.PanePID > 0 {
 		if it.LivenessNote == noteProvenanceConflict {
 			row.action = findMissingActionLeftLive
@@ -564,7 +579,8 @@ func (r *findMissingRun) aliveRow(row findMissingRow, it LiveSpawnIdentity, guar
 // unreportedRow completes row with the guarded unreported note of a live
 // pending row (writeUnreportedNote), guarded on guard.
 func (r *findMissingRun) unreportedRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot) findMissingRow {
-	row.write = writeUnreportedNote(r.s, it.InstanceID, guard, it.LivenessNote, r.lg)
+	row.guard = guard
+	row.write = writeUnreportedNote(r.emit, r.s, it.InstanceID, guard, it.LivenessNote, r.lg)
 	row.action = findMissingActionUnreported
 	return row
 }
@@ -572,6 +588,7 @@ func (r *findMissingRun) unreportedRow(row findMissingRow, it LiveSpawnIdentity,
 // clearRow completes row for a row whose agent process was found alive: the
 // guarded clear of a note it carries (clearLivenessNote), guarded on guard.
 func (r *findMissingRun) clearRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot) findMissingRow {
+	row.guard = guard
 	row.write = clearLivenessNote(r.s, it.InstanceID, guard, it.LivenessNote, r.lg)
 	row.action = findMissingActionLeftLive
 	return row
@@ -580,7 +597,8 @@ func (r *findMissingRun) clearRow(row findMissingRow, it LiveSpawnIdentity, guar
 // markRow completes row with the guarded mark (markMissingSameLife), guarded
 // on guard, with tick reason reason and the tick's extra fields.
 func (r *findMissingRun) markRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, reason string, extra map[string]any) findMissingRow {
-	row.write = markMissingSameLife(r.s, it.InstanceID, guard, reason, extra, r.lg)
+	row.guard = guard
+	row.write = markMissingSameLife(r.emit, r.s, it.InstanceID, guard, reason, extra, r.lg)
 	row.marked = true
 	row.action = findMissingActionMarked
 	return row
@@ -597,10 +615,11 @@ func (r *findMissingRun) markRow(row findMissingRow, it LiveSpawnIdentity, guard
 // absent, name held, no pane) never come here and stay missing whatever the end
 // report.
 func (r *findMissingRun) goneRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot) findMissingRow {
+	row.guard = guard
 	if it.Agent != store.AgentCodex || it.EndReportedAtMillis <= 0 {
 		return r.markRow(row, it, guard, reasonProcAbsent, nil)
 	}
-	row.write = markEndedSameLife(r.s, it.InstanceID, guard, reasonProcAbsent, nil, r.lg)
+	row.write = markEndedSameLife(r.emit, r.s, it.InstanceID, guard, reasonProcAbsent, nil, r.lg)
 	row.marked = true
 	row.action = findMissingActionMarked
 	return row
@@ -609,7 +628,8 @@ func (r *findMissingRun) goneRow(row findMissingRow, it LiveSpawnIdentity, guard
 // noteRow completes row with the note write (writeLivenessNote), guarded on
 // guard: the row is left live and unverified with note.
 func (r *findMissingRun) noteRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, note string) findMissingRow {
-	row.write = writeLivenessNote(r.s, it.InstanceID, guard, it.LivenessNote, note, r.lg)
+	row.guard = guard
+	row.write = writeLivenessNote(r.emit, r.s, it.InstanceID, guard, it.LivenessNote, note, r.lg)
 	row.action = findMissingActionUnverified
 	return row
 }
@@ -653,7 +673,7 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 		if verdict == "" {
 			verdict = tmux.TokenNotRun
 		}
-		emitProvenanceDisagree(provenanceDisagree{
+		writeProvenanceDisagree(r.emit, provenanceDisagree{
 			Verb:               "find-missing",
 			Source:             findMissingTickSource,
 			InstanceID:         it.InstanceID,
@@ -666,47 +686,6 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 			Action:             action,
 			Caller:             r.caller.get(),
 		}, reason)
-	}
-}
-
-// healProvisionalTranscripts sweeps live rows whose jsonl_path is NULL (a
-// session that started before its transcript was written) and records the path
-// for any whose transcript has since appeared on disk (b.v2c AC3). Claude rows
-// only: the store's listing never yields a Codex row, so none is statted or
-// healed. The path is
-// recomposed the same way resume's fallback does: under the row's
-// CLAUDE_CONFIG_DIR when usable (spawn.ConfigDirUsable), else ~/.claude.
-// Per-row store errors are logged and skipped; a compose or stat miss is a
-// silent no-op (the row stays provisional until the transcript actually
-// appears).
-func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
-	provisional, err := s.ListProvisionalTranscripts()
-	if err != nil {
-		if lg != nil {
-			lg.Printf("find-missing: ListProvisionalTranscripts: %v (continuing)", err)
-		}
-		return
-	}
-	for _, pt := range provisional {
-		var (
-			path string
-			cerr error
-		)
-		if spawn.ConfigDirUsable(pt.ConfigDir) {
-			path, cerr = spawn.JsonlPathIn(pt.ConfigDir, pt.CWD, pt.SessionID)
-		} else {
-			path, cerr = spawn.JsonlPath(pt.CWD, pt.SessionID)
-		}
-		if cerr != nil {
-			continue
-		}
-		if _, statErr := os.Stat(path); statErr != nil {
-			// Still not written — leave the row provisional.
-			continue
-		}
-		if _, herr := s.HealJsonlPath(pt.InstanceID, pt.SessionID, path); herr != nil && lg != nil {
-			lg.Printf("find-missing: HealJsonlPath(%s): %v (continuing)", pt.InstanceID, herr)
-		}
 	}
 }
 
@@ -755,7 +734,10 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // After an unreadable or unavailable answer on a socket, no more tmux calls
 // are made on that socket, and the run's tmux time (sweep_budget_seconds
 // from the loaded configuration, 15 s by default) caps all its calls; rows
-// not reached are left unverified. tmux problems never fail the sweep.
+// not reached are left unverified. tmux problems never fail the sweep. A
+// Cursor row with a recorded gateway (pid and start time) is judged by that
+// gateway alone: one that cannot be checked is left unverified (probe_eacces)
+// with no tmux lookup, and only an exact gone verdict marks the row missing.
 //
 // missing is the sweep's judgement on the evidence available to it, not
 // proof that the agent has exited; neither ended nor missing means that the
@@ -780,12 +762,10 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // records itself on the row and ends that hold when its launch ends, and the
 // row is not judged while that process is alive in this caller's pid
 // namespace. A row noted unreported is in neither result list. Ages and tmux time are
-// read from the Client's clock. Intended for periodic cron use: recovery from
-// a row stuck pending, a stale state or a gone agent depends on find-missing
-// being scheduled.
+// read from the Client's clock. Recovery runs only when called; status/get/list
+// share the same checks for their fixed selected rows. No schedule is added.
 //
-// After the sweep it repairs stale check_permission rows (b.146 rule 9;
-// RepairCheckPermission): a row with relay_mode on in check_permission none
+// The same pass repairs stale check_permission rows (b.146 rule 9): a row with relay_mode on in check_permission none
 // of whose permission requests still awaits an answer and none of whose relay
 // hooks may still run (a request find-missing's mark closed is not judged) is
 // moved to waiting when the agent's idle-prompt Notification was the last
@@ -804,10 +784,5 @@ func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}, err
 	}
-	res, err := FindMissing(ctx, c.st, c.tmuxClient, c.procChecker, c.cfg.Tmux.EffectivePendingGrace(), c.cfg.Tmux.EffectiveSweepBudget(), c.now, c.logger)
-	if err != nil {
-		return FindMissingResult{}, err
-	}
-	RepairCheckPermission(c.st, c.relayView(), c.logger)
-	return res, nil
+	return findMissingChecked(ctx, c.st.WithContext(ctx), c.relayView(), c.settleRead())
 }

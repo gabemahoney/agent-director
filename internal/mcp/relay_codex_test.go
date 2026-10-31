@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,11 @@ import (
 // seedAgentRelayRequest is seedRelayRequest for a row of agent.
 func (e *mcpEnv) seedAgentRelayRequest(t *testing.T, id, agent string) apitest.PermissionRequestSeed {
 	t.Helper()
-	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false, apitest.WithAgent(agent)); err != nil {
+	writer, err := apitest.ContextWriter(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false, apitest.WithAgent(agent), apitest.WithLaunchIdentity(writer)); err != nil {
 		t.Fatalf("SeedSpawn(%s): %v", id, err)
 	}
 	req, err := apitest.SeedPermissionRequest(e.storePath, id, "Bash")

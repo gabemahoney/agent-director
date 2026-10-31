@@ -53,6 +53,16 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 					t.Fatal(err)
 				}
 				before := cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)
+				// b.x9o: shared checks preserve pending grace even for a known
+				// dead gateway. Advancing the clock alone performs no recovery.
+				grace, err := c.Get(row.InstanceID)
+				if err != nil || grace.State != store.StatePending || !reflect.DeepEqual(before, cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)) {
+					t.Fatalf("pending grace mutated current launch: %+v %v", grace, err)
+				}
+				e.clock.Advance(time.Minute + time.Second)
+				if !reflect.DeepEqual(before, cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)) {
+					t.Fatal("time alone performed recovery")
+				}
 				getStarted := time.Now()
 				got, err := c.Get(row.InstanceID)
 				getFinished := time.Now()
@@ -112,8 +122,19 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 					} else if !reflect.DeepEqual(before, after) {
 						t.Fatalf("best-effort missing projection partially mutated launch/binding/request: before=%+v after=%+v", before, after)
 					}
-				} else if !reflect.DeepEqual(before, after) {
-					t.Fatal("unknown/living gateway changed row")
+				} else {
+					note := "unreported"
+					if verdict == "unknown" {
+						note = "probe_eacces"
+					}
+					current := after["spawns"]
+					if current["liveness_note"] != note || current["liveness_unverified_since"] == nil || current["row_version"] != before["spawns"]["row_version"].(int64)+1 {
+						t.Fatalf("wrong pending note: %+v", current)
+					}
+					before["spawns"]["liveness_note"], before["spawns"]["liveness_unverified_since"], before["spawns"]["row_version"] = note, current["liveness_unverified_since"], current["row_version"]
+					if !reflect.DeepEqual(before, after) {
+						t.Fatalf("pending note changed unrelated row/request/runtime: before=%+v after=%+v", before, after)
+					}
 				}
 			})
 		}

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -419,11 +421,29 @@ func readSpawnSettled(s GetStore, settle store.SettleRead, instanceID string) (S
 // family_state is the stored family history, which settles
 // independently. launch_started_at, and whether the permission requests are
 // read and shown, key on the raw state (permission requests are never
-// debounced). The row, and each Codex descendant its family_state counts,
-// whose rollout records its turn's end is first moved to waiting
-// (endCodexTurns). It never waits for a state to settle.
+// debounced). Active checks inspect only this row; family state uses stored
+// contributions. It never waits for a state to settle.
 func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID string) (SpawnRow, error) {
-	endCodexTurns(s, instanceID)
+	if _, checked := s.(*activeReadStore); !checked {
+		refresh := activeRefresh(s, settle, false)
+		rows, err := refresh([]string{instanceID}, nil)
+		if err != nil {
+			return emptySpawnRow(), err
+		}
+		if len(rows) != 1 {
+			return emptySpawnRow(), fmt.Errorf("%w: %s", store.ErrSpawnNotFound, instanceID)
+		}
+		run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, true)
+		out, err := getSettled(run, run.view, settle, instanceID)
+		finishErr := run.finish()
+		if err != nil {
+			return emptySpawnRow(), err
+		}
+		if finishErr != nil {
+			return emptySpawnRow(), finishErr
+		}
+		return out, nil
+	}
 	row, reported, err := readSpawnSettled(s, settle, instanceID)
 	if err != nil {
 		return emptySpawnRow(), err
@@ -561,22 +581,7 @@ func (c *Client) Get(instanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
 		return emptySpawnRow(), err
 	}
-	proof, err := c.reconcileCursorGateway(instanceID)
-	if err != nil {
-		return emptySpawnRow(), err
-	}
-	var proofs []store.CursorMissingProof
-	if proof != nil {
-		proofs = append(proofs, *proof)
-	}
-	out, err := getSettled(c.st.WithCursorMissingReads(proofs), c.relayView(), c.settleRead(), instanceID)
-	if err != nil {
-		return emptySpawnRow(), err
-	}
-	if err := c.persistCursorMissing(proofs); err != nil {
-		return emptySpawnRow(), err
-	}
-	return out, nil
+	return getSettled(c.st, c.relayView(), c.settleRead(), instanceID)
 }
 
 // Compile-time assertion that *store.Store provides the settled read the

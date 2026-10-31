@@ -93,7 +93,12 @@ func TestCLIDeliveryFactsJudgeRealProcesses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			id, err := apitest.SeedSpawn(stateDB(home), "", store.StateCheckPermission, "", "on", "", true)
+			live, err := apitest.ReadSurfaceProcessOptions()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			id, err := apitest.SeedSpawn(stateDB(home), "", store.StateCheckPermission, "", "on", "", true, append(live, apitest.WithNoPane())...)
 			if err != nil {
 				t.Fatalf("SeedSpawn: %v", err)
 			}

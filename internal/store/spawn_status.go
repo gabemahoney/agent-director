@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -74,6 +75,10 @@ func (s *Store) spawnStatusRow(instanceID string, r SettleRead, proofs []CursorM
 // partial Spawn described above. When reported is set, two appended settled
 // columns supply ReportedState and FamilyState; otherwise ReportedState is State.
 func scanSpawnStatus(sc rowScanner, reported bool) (Spawn, error) {
+	return scanSpawnStatusExtra(sc, reported, nil)
+}
+
+func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, error) {
 	var row Spawn
 	var life lifeScan
 	var pane paneScan
@@ -83,6 +88,7 @@ func scanSpawnStatus(sc rowScanner, reported bool) (Spawn, error) {
 		&startup, &capacity, &row.PermissionEpoch, &row.ObservationVersion, &row.DisplayObservation}
 	dest = append(dest, life.dest()...)
 	dest = append(dest, pane.dest()...)
+	dest = append(dest, extra...)
 	if reported {
 		dest = append(dest, &row.ReportedState, &row.FamilyState)
 	}
@@ -104,4 +110,64 @@ func scanSpawnStatus(sc rowScanner, reported bool) (Spawn, error) {
 	row.ClaudeCapacity = decodeClaudeCapacity(capacity)
 	pane.apply(&row)
 	return row, nil
+}
+
+// RecoveryRows takes one consistent stored selection, including finished rows.
+// It uses the status projection so unrelated malformed metadata cannot hide
+// other agents. It also carries the exact stored CWD required by native input
+// proof identity. A nil IDs slice means all rows; an empty slice means none.
+func (s *Store) RecoveryRows(ids []string, settle SettleRead) ([]Spawn, error) {
+	return s.recoveryRows(ids, settle, nil)
+}
+
+func (s *Store) recoveryRows(ids []string, settle SettleRead, proofs []CursorMissingProof) ([]Spawn, error) {
+	raw, args, err := cursorMissingState("state", nil, proofs)
+	if err != nil {
+		return nil, err
+	}
+	cols := strings.Replace(statusRowColumns, ", state,", ", "+raw+",", 1)
+	reported, ra := settle.stateExpr()
+	family, fa := settle.familyExpr()
+	reported, ra, err = cursorMissingState(reported, ra, proofs)
+	if err != nil {
+		return nil, err
+	}
+	q := "SELECT " + cols + ", " + launchOwnerColumns + ", COALESCE(liveness_note, ''), cwd, " + reported + ", " + family + " FROM spawns"
+	args = append(args, ra...)
+	args = append(args, fa...)
+	if ids != nil {
+		q += " WHERE instance_id IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	out := []Spawn{}
+	stale := &CursorMissingReadError{}
+	err = s.readWithin(0, "store: recovery selection", func(ctx context.Context, conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, q, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var owner LaunchOwner
+			var note, cwd string
+			extra := append(launchOwnerDest(&owner), &note, &cwd)
+			row, err := scanSpawnStatusExtra(rows, true, extra)
+			if err != nil {
+				return err
+			}
+			if err := validateCursorMissingRead(row, proofs); err != nil {
+				stale.InstanceIDs = append(stale.InstanceIDs, row.InstanceID)
+				continue
+			}
+			row.LaunchOwner, row.LivenessNote, row.CWD = owner, note, cwd
+			out = append(out, row)
+		}
+		return rows.Err()
+	})
+	if err == nil && len(stale.InstanceIDs) > 0 {
+		err = stale
+	}
+	return out, err
 }

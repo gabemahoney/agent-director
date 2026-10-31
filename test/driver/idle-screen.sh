@@ -320,8 +320,10 @@ override)
 cursor)
     write_config 60
     old=1577836800000 # 2020-01-01, long before any timeout
-    sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,idle_screen_timeout_seconds,pane_sha256,pane_since_ms,pane_epoch)
-         VALUES('cursor-quiet','working','working',0,'/tmp','cursor','on','ts-cursor-quiet','2222222222222222',7,1,'$(printf 'ab%.0s' {1..32})',$old,7)"
+    # Keep the fixture's agent identity alive across active reads.
+    writer_start="$(python3 -c 'import pathlib,sys; print(pathlib.Path("/proc/"+sys.argv[1]+"/stat").read_text().rsplit(")",1)[1].split()[19])' "$$")"
+    sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,idle_screen_timeout_seconds,pane_sha256,pane_since_ms,pane_epoch,pid,proc_starttime)
+         VALUES('cursor-quiet','working','working',0,'/tmp','cursor','on','ts-cursor-quiet','2222222222222222',7,1,'$(printf 'ab%.0s' {1..32})',$old,7,$$,'$writer_start')"
     before="$(col cursor-quiet "observation_version || '|' || IFNULL(display_observation,'') || '|' || pane_since_ms")"
     quiet="$(read_row status cursor-quiet)"
     jq -e --argjson k "$status_plain" '.state == "working" and .idle_screen_availability == "unavailable" and keys == $k' <<<"$quiet" >/dev/null ||
@@ -332,8 +334,8 @@ cursor)
     no_old_member "$row" "Cursor quiet get"
     [[ "$(col cursor-quiet "observation_version || '|' || IFNULL(display_observation,'') || '|' || pane_since_ms")" == "$before" ]] ||
         fail "a Cursor row was observed by its pane"
-    sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch)
-         VALUES('cursor-asks','check_permission','check_permission',0,'/tmp','cursor','on','ts-cursor-asks','1111111111111111',7)"
+    sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,pid,proc_starttime)
+         VALUES('cursor-asks','check_permission','check_permission',0,'/tmp','cursor','on','ts-cursor-asks','1111111111111111',7,$$,'$writer_start')"
     sql "INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,created_at,settled_at,owner_launch_token,owner_permission_epoch,admitted_at,fallback_at,fallback_basis)
          VALUES('cursor-asks','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}','2019-12-31 23:59:00',$old,'1111111111111111',7,$((old - 1000)),$old,'deadline')"
     # b.zpv: fallen back since 2020, the request keeps its row check_permission.

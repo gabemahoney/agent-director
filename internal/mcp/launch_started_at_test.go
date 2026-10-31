@@ -37,9 +37,13 @@ func mcpVerbObject(t *testing.T, d mcp.Dispatcher, verb, id string) map[string]j
 // TestTmuxSocketStatusAndListOmit).
 func TestLaunchStartedAtAndTmuxSocketMCP(t *testing.T) {
 	e := newEnv(t)
+	live, err := apitest.ReadSurfaceProcessOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
 	custom := filepath.Join(t.TempDir(), "tmux-custom", "default")
 	for id, state := range map[string]string{"mls-pending": store.StatePending, "mls-waiting": store.StateWaiting} {
-		e.seed(t, id, state, apitest.WithLaunchStartedAt(1790000000123), apitest.WithTmuxSocket(custom))
+		e.seed(t, id, state, apitest.WithLaunchStartedAt(1790000000123), apitest.WithTmuxSocket(custom), apitest.WithNoPane(), live[0], live[1])
 	}
 	const launch = `"2026-09-21T14:13:20.123Z"`
 	cases := []struct {

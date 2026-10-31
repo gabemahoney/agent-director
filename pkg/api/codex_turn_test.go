@@ -8,10 +8,13 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -22,6 +25,8 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -33,10 +38,10 @@ const nextTurn = "019f0000-0000-7000-8000-000000000006"
 // under parent when that is not "", and then starts codexfix.ErroredTurn's
 // turn with an applied UserPromptSubmit (codexHook). The row is raw working on
 // an open turn.
-func seedCodexTurn(t *testing.T, s *store.Store, dbPath, id, path, parent string) {
+func seedCodexTurn(t *testing.T, s *store.Store, dbPath, id, path, parent string, opts ...apitest.SpawnOption) {
 	t.Helper()
 	turn := codexfix.ErroredTurn
-	if _, err := apitest.SeedSpawn(dbPath, id, store.StateWaiting, "", "off", turn.SessionID, false, codexRowOpts(apitest.WithJsonlPath(path))...); err != nil {
+	if _, err := apitest.SeedSpawn(dbPath, id, store.StateWaiting, "", "off", turn.SessionID, false, append(codexRowOpts(apitest.WithJsonlPath(path)), opts...)...); err != nil {
 		t.Fatal(err)
 	}
 	if parent != "" {
@@ -289,20 +294,20 @@ func TestCodexTurnRolloutReader(t *testing.T) {
 }
 
 // failingTurnEnder is a store whose Codex turn end fails with an error other
-// than a busy store: CodexOpenTurns when open is set, otherwise EndCodexTurn.
+// than a busy store: CodexTurnSamples when open is set, otherwise EndCodexTurnSample.
 type failingTurnEnder struct {
 	*store.Store
 	open bool
 }
 
-func (f failingTurnEnder) CodexOpenTurns(instanceID string) ([]store.CodexOpenTurn, error) {
+func (f failingTurnEnder) CodexTurnSamples(instanceID string) ([]store.CodexTurnSample, error) {
 	if f.open {
 		return nil, errors.New("injected codex open turns failure")
 	}
-	return f.Store.CodexOpenTurns(instanceID)
+	return f.Store.CodexTurnSamples(instanceID)
 }
 
-func (f failingTurnEnder) EndCodexTurn(store.CodexOpenTurn, time.Duration) (bool, error) {
+func (f failingTurnEnder) EndCodexTurnSample(store.CodexTurnSample, time.Duration) (bool, error) {
 	return false, errors.New("injected codex turn end failure")
 }
 
@@ -432,8 +437,8 @@ func TestCodexTurnStaleTurnKeepsWorking(t *testing.T) {
 
 // TestCodexTurnEndParentFamilyState (b.x72): a waiting parent whose Codex
 // child's errored turn ended reads family_state waiting through status, get
-// and list once a read applies the turn end, whichever read comes first: the
-// parent's own or the child's.
+// and list once a selected child read applies the turn end. A parent-only
+// read must leave the hidden child's turn and stored contribution unchanged.
 func TestCodexTurnEndParentFamilyState(t *testing.T) {
 	t.Parallel()
 	for _, first := range []struct {
@@ -466,8 +471,18 @@ func TestCodexTurnEndParentFamilyState(t *testing.T) {
 			if first.child {
 				id = child
 			}
-			if _, family, err := first.read.read(s, id); err != nil || family != store.StateWaiting {
-				t.Errorf("first read (%s) family_state = %q, %v; want waiting", first.name, family, err)
+			want := store.StateWaiting
+			if !first.child && first.read.name != "list" {
+				want = store.StateWorking
+			}
+			if _, family, err := first.read.read(s, id); err != nil || family != want {
+				t.Errorf("first read (%s) family_state = %q, %v; want %s", first.name, family, err, want)
+			}
+			if state := mustGetSpawnState(t, s, child); state != want {
+				t.Fatalf("child after %s = %s; want %s", first.name, state, want)
+			}
+			if _, family, err := codexTurnReads[0].read(s, child); err != nil || family != store.StateWaiting {
+				t.Fatalf("selected child read = %q, %v; want waiting", family, err)
 			}
 			for _, r := range codexTurnReads {
 				if state, family, err := r.read(s, parent); err != nil || state != store.StateWaiting || family != store.StateWaiting {
@@ -476,6 +491,119 @@ func TestCodexTurnEndParentFamilyState(t *testing.T) {
 			}
 			if row, err := s.GetSpawn(child); err != nil || row.State != store.StateWaiting {
 				t.Errorf("child raw state = %q, %v; want waiting", row.State, err)
+			}
+		})
+	}
+}
+
+// The first public call owns recovery: a confirming read must not do the work
+// on behalf of find-missing. Every case gets a fresh real SQLite store.
+func TestCodexTurnSharedRecoveryFirstCall(t *testing.T) {
+	t.Parallel()
+	for _, verb := range []string{"status", "get", "list", "find-missing"} {
+		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
+			s, path := storefix.OpenTempStore(t)
+			id := uuid.NewString()
+			rollout := codexfix.TempRolloutPath(t, codexfix.ErroredTurn.SessionID, true, codexfix.ErroredTurn.Ended())
+			seedCodexTurn(t, s, path, id, rollout, "", apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
+			rec, pc := tmuxfix.NewRecorderForReadPane(t, path, id, "idle")
+			c, err := api.New(api.Options{StorePath: path, ConfigPath: filepath.Join(t.TempDir(), "config.toml"), TmuxClient: rec})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			api.SetProcCheckerForTest(c, pc)
+			before, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch verb {
+			case "status":
+				_, err = c.Status(id)
+			case "get":
+				_, err = c.Get(id)
+			case "list":
+				var got api.ListResult
+				got, err = c.List(api.ListParams{State: []string{store.StateWorking}, Limit: 1})
+				if err == nil && (len(got.Spawns) != 1 || got.Spawns[0].InstanceID != id || got.Spawns[0].State != store.StateWaiting) {
+					t.Fatalf("selected working row must remain after recovery: %+v", got)
+				}
+			case "find-missing":
+				var got api.FindMissingResult
+				got, err = c.FindMissing(context.Background())
+				assertLists(t, got, nil, nil)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := s.GetSpawn(id)
+			if err != nil || after.State != store.StateWaiting || after.FamilyState != store.StateWaiting || !after.LastSeenAt.Equal(before.LastSeenAt) {
+				t.Fatalf("durable first-call recovery: before=%+v after=%+v err=%v", before, after, err)
+			}
+			for _, call := range rec.SocketCalls() {
+				if call.Call != tmux.CallLookup && call.Call != tmux.CallListPanes && call.Call != tmux.CallCapture {
+					t.Errorf("observation dispatched %+v", call)
+				}
+			}
+		})
+	}
+}
+
+// Fixed membership is selected from stored state before any rollout read.
+// Neither hidden children nor rows beyond the limit may be recovered.
+func TestCodexTurnListFixedMembership(t *testing.T) {
+	t.Parallel()
+	for _, limit := range []int{0, 1} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			t.Parallel()
+			s, path := storefix.OpenTempStore(t)
+			parent := uuid.NewString()
+			if _, err := apitest.SeedSpawn(path, parent, store.StateWaiting, "", "off", "", false); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 3; i++ {
+				id := fmt.Sprintf("%s-%d", parent, i)
+				rollout := codexfix.TempRolloutPath(t, codexfix.ErroredTurn.SessionID, true, codexfix.ErroredTurn.Ended())
+				seedCodexTurn(t, s, path, id, rollout, parent)
+			}
+			selected, err := s.ListSpawns(store.ListFilters{State: []string{store.StateWorking}, Limit: limit})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wanted := map[string]bool{}
+			for _, row := range selected {
+				wanted[row.InstanceID] = true
+			}
+			got, err := api.List(s, api.RelayView{}, api.ListParams{State: []string{store.StateWorking}, Limit: limit})
+			if err != nil || len(got.Spawns) != len(selected) {
+				t.Fatalf("list=%+v err=%v selected=%+v", got, err, selected)
+			}
+			for _, row := range got.Spawns {
+				if !wanted[row.InstanceID] || row.State != store.StateWaiting {
+					t.Errorf("fixed selection changed: %+v", row)
+				}
+			}
+			for i := 0; i < 3; i++ {
+				id := fmt.Sprintf("%s-%d", parent, i)
+				want := store.StateWorking
+				if wanted[id] {
+					want = store.StateWaiting
+				}
+				if got := mustGetSpawnState(t, s, id); got != want {
+					t.Errorf("%s state=%s want=%s", id, got, want)
+				}
+			}
+			before, err := s.GetSpawn(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = api.List(s, api.RelayView{}, api.ListParams{Labels: []string{"invalid"}}); !errors.Is(err, api.ErrListInvalidLabel) {
+				t.Fatalf("invalid filter: %v", err)
+			}
+			after, err := s.GetSpawn(parent)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatal("invalid list observed parent")
 			}
 		})
 	}

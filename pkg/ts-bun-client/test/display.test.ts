@@ -30,8 +30,8 @@ const LIST_KEYS = ["agent", "cwd", "family_state", "idle_screen_availability", "
 test("idle_screen shows in displayed_state beside state working, and an open permission request reads check_permission, across status/get/list and fresh clients", async () => {
   await withTempHome(async (home) => {
     const store = homeStore(home);
-    runHelper("seed-needs-intelligence-surface", { store });
-    runHelper("seed-idle-screen-surface", { store });
+    runHelper("seed-needs-intelligence-surface", { store, "writer-pid": String(process.pid) });
+    runHelper("seed-idle-screen-surface", { store, "writer-pid": String(process.pid) });
     // apitest.SeedIdleScreenSurface: a failed capture's clearing keeps the idle_screen detail under the largest settle time.
     fs.writeFileSync(path.join(home, ".config", "agent-director", "config.toml"), "[state]\nsettle_ms = 60000\n");
     for (const id of idle) {

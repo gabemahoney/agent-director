@@ -99,11 +99,49 @@ func SetPermissionFacts(dbPath string, requestID int64, opts ...PermissionOption
 	return nil
 }
 
+// ReadSurfaceProcessOptions keeps surface fixtures live while their caller inspects
+// them. A short-lived seed helper must name its long-lived caller explicitly.
+func ReadSurfaceProcessOptions(writerPID ...int) ([]SpawnOption, error) {
+	pid := os.Getpid()
+	if len(writerPID) > 0 && writerPID[0] != 0 {
+		pid = writerPID[0]
+	}
+	identity, err := ContextWriter(pid)
+	if err != nil {
+		return nil, err
+	}
+	return []SpawnOption{WithPID(pid), WithProcStarttime(identity.PaneStarttime)}, nil
+}
+
+// BindReadSurfaceProcess gives an existing reporting fixture a live agent process,
+// preserving its launch token, state, requests and clocks. A recorded pane follows
+// that same process; a row without a pane keeps none. The caller keeps writer alive.
+func BindReadSurfaceProcess(dbPath, id string, writerPID int) (store.LaunchIdentity, error) {
+	writer, err := ContextWriter(writerPID)
+	if err != nil {
+		return writer, err
+	}
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return writer, err
+	}
+	defer raw.Close()
+	_, err = raw.Exec(`UPDATE spawns SET pid=?, proc_starttime=?,
+		pane_pid=CASE WHEN pane_id IS NOT NULL THEN ? ELSE pane_pid END,
+		pane_starttime=CASE WHEN pane_id IS NOT NULL THEN ? ELSE pane_starttime END
+		WHERE instance_id=?`, writerPID, writer.PaneStarttime, writerPID, writer.PaneStarttime, id)
+	return writer, err
+}
+
 // SeedNeedsIntelligenceSurface seeds needs-intelligence-claude, -codex and
 // -cursor, check_permission rows each with one open fallen-back request (token
 // A) and the needs_intelligence display 0.16/0.17 committed for it, which no
 // read reports (b.zpv), and the ordinary row ordinary.
-func SeedNeedsIntelligenceSurface(dbPath string) error {
+func SeedNeedsIntelligenceSurface(dbPath string, writerPID ...int) error {
+	live, err := ReadSurfaceProcessOptions(writerPID...)
+	if err != nil {
+		return err
+	}
 	since := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
 	// The row's permission epoch and the observation's agree: an observation
 	// of another epoch is a finished episode, not the committed one.
@@ -114,20 +152,24 @@ func SeedNeedsIntelligenceSurface(dbPath string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := SeedSpawn(dbPath, id, store.StateCheckPermission, "/tmp", "on", "", true, WithAgent(agent), WithNoPane(), WithStartedAt(since.Add(-time.Hour)), WithPermissionEpoch(epoch), WithDisplayObservation(string(observation))); err != nil {
+		if _, err := SeedSpawn(dbPath, id, store.StateCheckPermission, "/tmp", "on", "", true, WithAgent(agent), WithNoPane(), WithStartedAt(since.Add(-time.Hour)), WithPermissionEpoch(epoch), WithDisplayObservation(string(observation)), live[0], live[1]); err != nil {
 			return err
 		}
 		if _, err := SeedPermissionRequest(dbPath, id, "Bash", PermissionToken(storefix.TestRequestTokenA), PermissionTimes(since.Add(-time.Hour), since.Add(-time.Hour), since.Add(-time.Minute), time.Time{}, since.Add(-time.Minute), store.FallbackDeadline)); err != nil {
 			return err
 		}
 	}
-	_, err := SeedSpawn(dbPath, "ordinary", store.StateWorking, "/tmp", "off", "", false)
+	_, err = SeedSpawn(dbPath, "ordinary", store.StateWorking, "/tmp", "off", "", false, WithNoPane(), live[0], live[1])
 	return err
 }
 
 // SeedIdleScreenSurface seeds idle-screen-claude and -codex, displayed since that
 // instant, and ordinary-cursor, a working Cursor row; read them under SettleOnConfig.
-func SeedIdleScreenSurface(dbPath string) error {
+func SeedIdleScreenSurface(dbPath string, writerPID ...int) error {
+	live, err := ReadSurfaceProcessOptions(writerPID...)
+	if err != nil {
+		return err
+	}
 	since := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
 	const epoch = 3
 	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
@@ -138,11 +180,11 @@ func SeedIdleScreenSurface(dbPath string) error {
 		}
 		if _, err := SeedSpawn(dbPath, "idle-screen-"+agent, store.StateWorking, "/tmp", "off", "", true, WithAgent(agent), WithStartedAt(since.Add(-time.Hour)),
 			WithPermissionEpoch(epoch), WithDisplayObservation(string(observation)),
-			WithPaneBaseline(strings.Repeat("ab", 32), since.Add(-21*time.Minute).UnixMilli(), int64(epoch))); err != nil {
+			WithPaneBaseline(strings.Repeat("ab", 32), since.Add(-21*time.Minute).UnixMilli(), int64(epoch)), WithNoPane(), live[0], live[1]); err != nil {
 			return err
 		}
 	}
-	_, err := SeedSpawn(dbPath, "ordinary-cursor", store.StateWorking, "/tmp", "off", "", true, WithAgent(store.AgentCursor), WithNoPane())
+	_, err = SeedSpawn(dbPath, "ordinary-cursor", store.StateWorking, "/tmp", "off", "", true, WithAgent(store.AgentCursor), WithNoPane(), live[0], live[1])
 	return err
 }
 

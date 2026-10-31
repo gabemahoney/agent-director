@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -92,11 +94,31 @@ func Status(s StatusStore, v RelayView, instanceID string) (StatusResult, error)
 // settle (b.3ie). With a settle time, and a store that provides the settled
 // read, the state is the settled state (store.SettleRead's derivation, in the
 // read's own statement); launch_started_at still keys on the raw state. The
-// row, and each Codex descendant its family_state counts, whose rollout
-// records its turn's end is first moved to waiting (endCodexTurns). It never
-// waits.
+// selected row alone receives active checks. Family state reads stored
+// contributions without inspecting descendants. It never waits for a change.
 func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead, instanceID string) (StatusResult, error) {
-	endCodexTurns(s, instanceID)
+	if _, checked := s.(*activeReadStore); !checked {
+		if _, rich := s.(permissionStatusReader); rich {
+			refresh := activeRefresh(s, settle, true)
+			rows, err := refresh([]string{instanceID}, nil)
+			if err != nil {
+				return StatusResult{}, err
+			}
+			if len(rows) == 0 {
+				return StatusResult{}, fmt.Errorf("%w: %s", store.ErrSpawnNotFound, instanceID)
+			}
+			run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, false)
+			out, err := statusSettledWithRelay(run, run.view, settle, instanceID)
+			finishErr := run.finish()
+			if err != nil {
+				return StatusResult{}, err
+			}
+			if finishErr != nil {
+				return StatusResult{}, finishErr
+			}
+			return out, nil
+		}
+	}
 	if r, ok := s.(permissionStatusReader); ok {
 		row, err := r.SpawnStatusRow(instanceID, settle)
 		if err != nil {
@@ -167,9 +189,10 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 // waits.
 //
 // A working Claude or Codex row's own pane is captured on each read and its
-// fingerprint compared with the previous read's: once identical samples have
+// fingerprint compared with the previous sample's: once identical samples have
 // spanned the row's idle_screen timeout, the row reads state working with
-// displayed_state idle_screen. Nothing observes panes between reads.
+// displayed_state idle_screen. Find-missing checks also sample panes;
+// nothing else observes them.
 // idle_screen_availability says whether that can apply to the row's agent
 // (unavailable for Cursor). A permission request never yields a Displayed
 // State: its row reads check_permission however long it waits.
@@ -185,22 +208,7 @@ func (c *Client) Status(instanceID string) (StatusResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return StatusResult{}, err
 	}
-	proof, err := c.reconcileCursorGateway(instanceID)
-	if err != nil {
-		return StatusResult{}, err
-	}
-	var proofs []store.CursorMissingProof
-	if proof != nil {
-		proofs = append(proofs, *proof)
-	}
-	out, err := statusSettledWithRelay(c.st.WithCursorMissingReads(proofs), c.relayView(), c.settleRead(), instanceID)
-	if err != nil {
-		return StatusResult{}, err
-	}
-	if err := c.persistCursorMissing(proofs); err != nil {
-		return StatusResult{}, err
-	}
-	return out, nil
+	return statusSettledWithRelay(c.st, c.relayView(), c.settleRead(), instanceID)
 }
 
 // Compile-time assertion that *store.Store provides every optional status

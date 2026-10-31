@@ -1,11 +1,9 @@
 package api
 
 import (
-	"context"
 	"slices"
 
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // disagreeReasons are the six ad.provenance.disagree reasons (SR-14; WD
@@ -75,8 +73,15 @@ type provenanceDisagree struct {
 // after "duplicate session" (spawnHeldName: a scope value, SR-3.16),
 // send-keys and pause (both source ad_send_keys, keysRun.emitDisagree),
 // resume, reuse's spawn, find-missing and expire (Epics 11 and 14 to 17);
-// the plain-spawn label scan never writes it (SR-9.3, SR-14).
+// the plain-spawn label scan never writes it (SR-9.3, SR-14). The verbs write
+// synchronously (legacyTrail); find-missing's shared checks write through
+// their bounded recovery emitter (writeProvenanceDisagree).
 func emitProvenanceDisagree(d provenanceDisagree, reasons ...string) {
+	writeProvenanceDisagree(legacyTrail, d, reasons...)
+}
+
+// writeProvenanceDisagree is emitProvenanceDisagree writing through emit.
+func writeProvenanceDisagree(emit trailEmit, d provenanceDisagree, reasons ...string) {
 	server := d.Server
 	if server == "" {
 		server = tmux.ServerUnknown
@@ -89,7 +94,7 @@ func emitProvenanceDisagree(d provenanceDisagree, reasons ...string) {
 		if reason == tmux.ReasonNameChanged {
 			current = d.CurrentSessionName
 		}
-		_ = trail.Emit(context.Background(), "ad.provenance.disagree", map[string]any{
+		_ = emit("ad.provenance.disagree", map[string]any{
 			"instance_id":          d.InstanceID,
 			"verb":                 d.Verb,
 			"reason":               reason,

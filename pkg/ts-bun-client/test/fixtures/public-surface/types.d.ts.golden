@@ -266,10 +266,10 @@ export interface ListRow {
     state: string;
     /**
      * The report-only Displayed State the row shows beside `state`, present only while one
-     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across reads), or
+     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across checks), or
      * `needs_intelligence` (an unknown prompt inferred on the agent's screen), which nothing
-     * shows yet. Entering or leaving it times `[state] settle_ms` from the read that commits its
-     * candidate; a later read commits the change. Live command guards follow the raw state.
+     * shows yet. Entering or leaving it times `[state] settle_ms` from the check that commits its
+     * candidate; a later check commits the change. Live command guards follow the raw state.
      */
     displayed_state?: "needs_intelligence" | "idle_screen";
     /**
@@ -487,10 +487,10 @@ export interface StatusParams {
 export interface StatusResult {
     /**
      * The report-only Displayed State the row shows beside `state`, present only while one
-     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across reads), or
+     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across checks), or
      * `needs_intelligence` (an unknown prompt inferred on the agent's screen), which nothing
-     * shows yet. Entering or leaving it times `[state] settle_ms` from the read that commits its
-     * candidate; a later read commits the change. Live command guards follow the raw state.
+     * shows yet. Entering or leaving it times `[state] settle_ms` from the check that commits its
+     * candidate; a later check commits the change. Live command guards follow the raw state.
      */
     displayed_state?: "needs_intelligence" | "idle_screen";
     /**
@@ -571,10 +571,10 @@ export interface GetParams {
 export interface GetResult {
     /**
      * The report-only Displayed State the row shows beside `state`, present only while one
-     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across reads), or
+     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across checks), or
      * `needs_intelligence` (an unknown prompt inferred on the agent's screen), which nothing
-     * shows yet. Entering or leaving it times `[state] settle_ms` from the read that commits its
-     * candidate; a later read commits the change. Live command guards follow the raw state.
+     * shows yet. Entering or leaving it times `[state] settle_ms` from the check that commits its
+     * candidate; a later check commits the change. Live command guards follow the raw state.
      */
     displayed_state?: "needs_intelligence" | "idle_screen";
     /**

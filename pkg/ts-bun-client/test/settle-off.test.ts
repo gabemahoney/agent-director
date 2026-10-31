@@ -41,7 +41,7 @@ function call(client: Client, c: ReadSurfaceCase): Promise<unknown> {
 for (const variant of table.variants) {
   test(`settle-off (${variant.name}): status, get and list match the CLI goldens byte for byte`, async () => {
     await withTempHome(async (homeDir) => {
-      runHelper("seed-read-surface-store", { store: homeStore(homeDir) });
+      runHelper("seed-read-surface-store", { store: homeStore(homeDir), "writer-pid": String(process.pid) });
       if (variant.config !== null) {
         fs.writeFileSync(path.join(homeDir, ".config", "agent-director", "config.toml"), variant.config);
       }

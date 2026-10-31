@@ -535,12 +535,9 @@ func TestCodexToolHookTurnRules(t *testing.T) {
 	}
 }
 
-// TestCodexOpenTurnsFamily (b.x72, review finding 3): CodexOpenTurns(id)
-// lists the open turn of id's row and of every descendant down stored parent
-// links, whose turns its family_state counts, but no sibling, ancestor or
-// unrelated row; "" lists every row's. A family row whose turn is not open
-// (ended by Stop) is left out.
-func TestCodexOpenTurnsFamily(t *testing.T) {
+// TestCodexOpenTurnsSelection (b.x9o): a selected id grants no descendant
+// probing authority; an empty id selects all open turns. Stopped turns stay out.
+func TestCodexOpenTurnsSelection(t *testing.T) {
 	s, _ := openTempStore(t)
 	rows := map[string]CodexOpenTurn{}
 	for _, r := range []struct{ id, parent string }{
@@ -555,11 +552,11 @@ func TestCodexOpenTurnsFamily(t *testing.T) {
 		id   string
 		want []string
 	}{
-		{"parent", []string{"parent", "child", "grandchild"}},
-		{"child", []string{"child", "grandchild"}},
+		{"parent", []string{"parent"}},
+		{"child", []string{"child"}},
 		{"grandchild", []string{"grandchild"}},
 		{"stopped-child", nil},
-		{"grandparent", []string{"grandparent", "parent", "sibling", "child", "grandchild"}},
+		{"grandparent", []string{"grandparent"}},
 		{"", []string{"grandparent", "parent", "sibling", "child", "grandchild", "unrelated"}},
 		{"no-such-row", nil},
 	} {
@@ -574,6 +571,42 @@ func TestCodexOpenTurnsFamily(t *testing.T) {
 			slices.SortFunc(want, byID)
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Errorf("CodexOpenTurns(%q) = %+v, %v; want %+v", tc.id, got, err, want)
+			}
+		})
+	}
+}
+
+// Sampled recovery must reject a newer hook even when turn/session/path text
+// repeats, and display/request revisions that move independently of row_version.
+func TestEndCodexTurnSampleRejectsNewerEvidence(t *testing.T) {
+	for _, change := range []string{"same turn hook", "new turn", "observation", "permission epoch", "new life"} {
+		t.Run(change, func(t *testing.T) {
+			s, path, id, _ := cxTurnRow(t)
+			samples, err := s.CodexTurnSamples(id)
+			if err != nil || len(samples) != 1 {
+				t.Fatalf("samples=%+v err=%v", samples, err)
+			}
+			switch change {
+			case "same turn hook":
+				cxTurnHook(t, s, id, "PostToolUse", cxTurnID)
+			case "new turn":
+				cxTurnHook(t, s, id, "UserPromptSubmit", cxNextTurn)
+			default:
+				column := map[string]string{"observation": "observation_version", "permission epoch": "permission_epoch", "new life": "life_number"}[change]
+				if _, err := s.db.Exec("UPDATE spawns SET "+column+"="+column+"+1 WHERE instance_id=?", id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := cxRawRow(t, s, path, id)
+			if applied, err := s.EndCodexTurnSample(samples[0], 0); err != nil || applied {
+				t.Fatalf("stale sample applied=%v err=%v", applied, err)
+			}
+			if after := cxRawRow(t, s, path, id); !reflect.DeepEqual(before, after) {
+				t.Fatalf("stale sample changed row: before=%v after=%v", before, after)
+			}
+			row, err := s.GetSpawn(id)
+			if err != nil || row.State != StateWorking || row.FamilyState != StateWorking {
+				t.Fatalf("stale recovery changed family/state: %+v %v", row, err)
 			}
 		})
 	}

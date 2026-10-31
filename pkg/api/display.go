@@ -59,7 +59,7 @@ type StateDetail struct {
 	// shows yet; a permission request never sets them.
 	RequestToken string `json:"request_token,omitempty"`
 	// ToolName is reserved for needs_intelligence; no current reader sets it.
-	ToolName     string `json:"tool_name,omitempty"`
+	ToolName string `json:"tool_name,omitempty"`
 	// UnchangedMinutes is the completed minutes, rounded down, of the
 	// committed unchanged observation period; only while idle_screen.
 	UnchangedMinutes *int64 `json:"unchanged_minutes,omitempty"`
@@ -118,6 +118,16 @@ func familyOf(row Spawn, families map[string]string) string {
 // display an earlier release committed is never returned: the row's reported
 // state is, and a committing observation clears it.
 func observeDisplay(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
+	if checked := v.checked[row.InstanceID]; checked != nil {
+		d := checked.display
+		if d.State == StateNeedsIntelligence {
+			d = store.DisplayDetail{State: row.ReportedState}
+		}
+		return d, nil, checked.judged, false
+	}
+	if read.outcome != nil {
+		*read.outcome = activeCheckOutcome{Adapter: "display", Result: "inapplicable"}
+	}
 	display, families, judged, busy := observeRow(s, v, settle, row, read)
 	if display.State == StateNeedsIntelligence {
 		display = store.DisplayDetail{State: row.ReportedState}
@@ -132,7 +142,7 @@ func observeRow(s any, v RelayView, settle store.SettleRead, row Spawn, read per
 	}
 	if row.PaneObservable() {
 		if r, ok := s.(idleScreenStore); ok && v.samplePane != nil {
-			display, families, busy := paneObservation(r, v, settle, row)
+			display, families, busy := paneObservation(r, v, settle, row, read.outcome)
 			return display, families, nil, busy
 		}
 		if row.IdleScreenCurrent() {
@@ -162,6 +172,7 @@ type judgedRequestSet struct {
 // in all; a list makes one per observed row and no hook_gone_at write after a
 // busy one.
 type permissionRead struct {
+	outcome   *activeCheckOutcome
 	requests  *judgedRequestSet
 	storeBusy bool
 }
@@ -184,6 +195,9 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 			return r.PermissionRequestsForSpawnWithin(id, readerLockWait)
 		}, j, row.InstanceID)
 		if err != nil {
+			if read.outcome != nil {
+				*read.outcome = activeOutcome("display", false, err)
+			}
 			return previous, nil, nil, false
 		}
 	}
@@ -198,7 +212,22 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 		}
 		samples = append(samples, sample)
 	}
-	display, families, err := r.ObserveNeedsIntelligence(row, samples, now, settle)
+	var display store.DisplayDetail
+	var families map[string]string
+	var err error
+	committed := false
+	actual, exact := r.(*store.Store)
+	if exact {
+		display, families, committed, err = actual.ObserveNeedsIntelligenceOutcome(row, samples, now, settle)
+	} else {
+		display, families, err = r.ObserveNeedsIntelligence(row, samples, now, settle)
+	}
+	if read.outcome != nil {
+		*read.outcome = activeOutcome("display", committed, err)
+		if !exact && err == nil {
+			read.outcome.Result = "observed"
+		}
+	}
 	if err != nil {
 		return previous, nil, judged, errors.Is(err, store.ErrStoreBusy)
 	}
@@ -210,7 +239,7 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 // configured timeout. A failed capture is a sample that resets the baseline;
 // an uncommitted sample returns the committed display. It also returns the
 // families its commit refreshed and whether its write found the store busy.
-func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, row Spawn) (store.DisplayDetail, map[string]string, bool) {
+func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, row Spawn, outcome *activeCheckOutcome) (store.DisplayDetail, map[string]string, bool) {
 	sample := v.samplePane(row)
 	timeout := v.idleScreenTimeout
 	if row.IdleScreenTimeoutSeconds > 0 {
@@ -218,59 +247,27 @@ func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, ro
 	} else if timeout <= 0 {
 		timeout = config.DefaultIdleScreenTimeoutSeconds * time.Second
 	}
-	display, families, err := r.ObserveIdleScreen(row, sample, relayJudge{view: v}.now(), timeout, settle)
+	var display store.DisplayDetail
+	var families map[string]string
+	var err error
+	committed := false
+	actual, exact := r.(*store.Store)
+	now := relayJudge{view: v}.now()
+	if exact {
+		display, families, committed, err = actual.ObserveIdleScreenOutcome(row, sample, now, timeout, settle)
+	} else {
+		display, families, err = r.ObserveIdleScreen(row, sample, now, timeout, settle)
+	}
+	if outcome != nil {
+		*outcome = activeOutcome("display", committed, err)
+		if !exact && err == nil {
+			outcome.Result = "observed"
+		}
+	}
 	if err != nil {
 		return row.CommittedDisplay(), nil, errors.Is(err, store.ErrStoreBusy)
 	}
 	return display, families, false
-}
-
-// paneSampler is the samplePane of one read's RelayView. Once a socket's tmux
-// stops answering a row's lookup or pane listing (tmux.Result.StopsSocket, as
-// a sweep stops), every later row of the read on that socket gets no sample,
-// the reset a failed capture persists, without another tmux call: an
-// unresponsive server costs a list one lookup or listing timeout per socket,
-// not one per row (a capture timeout does not stop the socket). Like the read, it is not for concurrent use.
-func (c *Client) paneSampler() func(Spawn) store.PaneSample {
-	stopped := map[string]bool{}
-	return func(row Spawn) store.PaneSample { return c.samplePane(row, stopped) }
-}
-
-// samplePane fingerprints row's own pane for its idle_screen observation: the
-// agent's pane of the row's current launch, found as
-// read-pane finds it and captured as read-pane's default read
-// (DefaultReadPaneLines, ANSI stripped), so the fingerprint is the
-// pane_sha256 such a read returns. Only that pane counts: a session an earlier
-// launch left behind, a gone or unreadable session, a pane not found and a
-// failed capture are no sample, and so is a row on a socket in stopped, which
-// a lookup or pane listing that stops its socket joins. It writes nothing to
-// the store and reads only the fingerprint, never what the pane says.
-func (c *Client) samplePane(row Spawn, stopped map[string]bool) store.PaneSample {
-	if unusableNameError(row.TmuxSessionName) != nil {
-		return store.PaneSample{}
-	}
-	socket, err := rowSocket(row.Identity.Socket)
-	if err != nil || stopped[socket] {
-		return store.PaneSample{}
-	}
-	r := &paneRun{t: c.tmuxClient, pc: c.procChecker, row: row, storeID: c.st.StoreID(), socket: socket,
-		gone: tmux.ErrTmuxCaptureFailed, nothing: nothingRead}
-	launch := r.launchFor(row.Identity)
-	res := tmux.Lookup(c.tmuxClient, c.procChecker, launch, "")
-	if res.Verdict != tmux.Ours {
-		stopped[socket] = res.StopsSocket()
-		return store.PaneSample{}
-	}
-	paneID, _, err := r.ours(res, launch)
-	if err != nil {
-		stopped[socket] = r.listing.StopsSocket()
-		return store.PaneSample{}
-	}
-	pane, err := c.tmuxClient.CapturePaneID(socket, paneID, DefaultReadPaneLines, false)
-	if err != nil {
-		return store.PaneSample{}
-	}
-	return store.PaneSample{SHA256: paneSHA256(tmux.StripANSI(pane))}
 }
 
 // stateDetail is d's Displayed State and detail as status and get report
@@ -302,13 +299,32 @@ func displayedState(d store.DisplayDetail) string {
 	return ""
 }
 
-// namesDisplayedState reports whether states names a Displayed State, so a
-// list filter on it must match rows by what they show.
-func namesDisplayedState(states []string) bool {
-	for _, state := range states {
-		if displayedState(store.DisplayDetail{State: state}) != "" {
-			return true
-		}
+// sampleActivePane reuses paneRun's exact ownership selection while sharing
+// the liveness pass's lookup, listing and capture budget for this invocation.
+func sampleActivePane(live *findMissingRun, capture interface {
+	CapturePaneID(string, string, int, bool) (string, error)
+}, row Spawn) store.PaneSample {
+	if unusableNameError(row.TmuxSessionName) != nil {
+		return store.PaneSample{}
 	}
-	return false
+	socket, err := rowSocket(row.Identity.Socket)
+	if err != nil {
+		return store.PaneSample{}
+	}
+	r := &paneRun{t: live.t, pc: live.pc, row: row, storeID: live.s.StoreID(), socket: socket,
+		gone: tmux.ErrTmuxCaptureFailed, nothing: nothingRead, sweep: live.sw}
+	launch := r.launchFor(row.Identity)
+	res := live.sw.Lookup(launch, "")
+	if res.Verdict != tmux.Ours {
+		return store.PaneSample{}
+	}
+	paneID, _, err := r.ours(res, launch)
+	if err != nil {
+		return store.PaneSample{}
+	}
+	pane, ok := live.sw.CapturePane(launch, func() (string, error) { return capture.CapturePaneID(socket, paneID, DefaultReadPaneLines, false) })
+	if !ok {
+		return store.PaneSample{}
+	}
+	return store.PaneSample{SHA256: paneSHA256(tmux.StripANSI(pane))}
 }

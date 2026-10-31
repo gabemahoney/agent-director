@@ -29,7 +29,7 @@ async function seedAndGet(homeDir: string, id: string, flags: Record<string, str
 
 test("get: happy path — returns full spawn row fields", async () => {
   await withTempHome(async (homeDir) => {
-    const result = await seedAndGet(homeDir, "smoke-get-id", { state: "working" });
+    const result = await seedAndGet(homeDir, "smoke-get-id", { state: "working", "writer-pid": String(process.pid) });
     expect(result).toMatchObject({ instance_id: "smoke-get-id", state: "working" });
     for (const field of ["cwd", "tmux_session_name", "relay_mode", "started_at", "last_seen_at"] as const) {
       expect(typeof result[field]).toBe("string");
@@ -73,7 +73,7 @@ test("get: row from before the release has no tmux_socket key (AC-LKP-22)", asyn
 test("get: a check_permission row carries its open requests with their delivery facts (b.146 rule 15)", async () => {
   await withTempHome(async (homeDir) => {
     const store = homeStore(homeDir);
-    runHelper("seed-spawn", { store, state: "check_permission", id: "smoke-get-cp-id", "relay-mode": "on", "create-store": true });
+    runHelper("seed-spawn", { store, state: "check_permission", "writer-pid": String(process.pid), id: "smoke-get-cp-id", "relay-mode": "on", "create-store": true });
     const token = runHelper("seed-permission-request", { store, "spawn-id": "smoke-get-cp-id", tool: "Bash" })["request_token"];
     using client = await openClient(store);
     const result = await client.get({ instance_id: "smoke-get-cp-id" });

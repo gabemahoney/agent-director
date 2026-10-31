@@ -7,14 +7,18 @@ package api_test
 // tests are needs_intelligence_test.go's.
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -50,7 +54,7 @@ func newPaneEnv(t *testing.T, spec paneSpec) *paneEnv {
 		spec.state = store.StateWorking
 	}
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	id, err := apitest.SeedSpawn(dbPath, "", spec.state, "", "off", "", true, append([]apitest.SpawnOption{apitest.WithAgent(spec.agent)}, spec.opts...)...)
+	id, err := apitest.SeedSpawn(dbPath, "", spec.state, "", "off", "", true, append([]apitest.SpawnOption{apitest.WithAgent(spec.agent), apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime)}, spec.opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +90,7 @@ func (e *paneEnv) client(t *testing.T, keys apitest.ConfigKeys) *api.Client {
 // "pane 1" and its processes alive; it returns the row's id.
 func (e *paneEnv) addRow(t *testing.T, agent, socket, paneID string, panePID int) string {
 	t.Helper()
-	id, err := apitest.SeedSpawn(e.dbPath, "", store.StateWorking, "", "off", "", false, apitest.WithAgent(agent),
+	id, err := apitest.SeedSpawn(e.dbPath, "", store.StateWorking, "", "off", "", false, apitest.WithAgent(agent), apitest.WithPID(panePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime),
 		apitest.WithLaunchIdentity(store.LaunchIdentity{Token: fmt.Sprintf("%016x", panePID), Socket: socket, PaneID: paneID, PanePID: panePID}))
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +135,50 @@ var paneReaders = []struct {
 	{"status", func(c *api.Client, id string) error { _, err := c.Status(id); return err }},
 	{"get", func(c *api.Client, id string) error { _, err := c.Get(id); return err }},
 	{"list", func(c *api.Client, _ string) error { _, err := c.List(api.ListParams{}); return err }},
+}
+
+// b.x9o: FindMissing must own both pane samples, without a public read
+// establishing the baseline or committing the threshold on its behalf.
+func TestIdleScreenSweepOnlyBaselineAndThreshold(t *testing.T) {
+	t.Parallel()
+	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+	before := e.row(t)
+	start := e.now
+	for i := 0; i < 2; i++ {
+		e.now = start.Add(time.Duration(i) * time.Minute)
+		got, err := c.FindMissing(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertLists(t, got, nil, nil)
+		// Store.GetSpawn is a SQLite read only; no Client read has run.
+		row := e.row(t)
+		if row.State != store.StateWorking || row.PaneSHA256 == "" || row.PaneSinceMillis != start.UnixMilli() || row.PaneEpoch != row.PermissionEpoch ||
+			row.ObservationVersion != before.ObservationVersion+int64(i)+1 || row.RowVersion != before.RowVersion || !row.LastSeenAt.Equal(before.LastSeenAt) {
+			t.Fatalf("sweep %d stored observation: before=%+v after=%+v", i, before, row)
+		}
+		display := row.CommittedDisplay()
+		if i == 0 && display.State != store.StateWorking {
+			t.Fatalf("baseline already displayed idle: %+v", display)
+		}
+		if i == 1 && (display.State != store.StateIdleScreen || display.UnchangedMinutes != 1 || display.SinceMillis != e.now.UnixMilli()) {
+			t.Fatalf("second sweep did not commit threshold: %+v", display)
+		}
+	}
+	captures := 0
+	for _, call := range e.rec.SocketCalls() {
+		switch call.Call {
+		case tmux.CallCapture:
+			captures++
+		case tmux.CallLookup, tmux.CallListPanes:
+		default:
+			t.Errorf("sweep dispatched %+v", call)
+		}
+	}
+	if captures != 2 {
+		t.Fatalf("sweeps captured %d panes, want exactly two", captures)
+	}
 }
 
 // TestIdleScreenObservationBoundaries: whichever surface reads first commits
@@ -462,8 +510,8 @@ func TestIdleScreenSkippedWriteKeepsBaseline(t *testing.T) {
 
 // TestIdleScreenOlderSampleNeverOverwrites: a write landing between a read's
 // capture and its commit (another reader's newer baseline or reset, a turn, a
-// new launch) refuses the older sample: the read answers its own committed
-// view, the newer write stands and no transition is emitted.
+// new launch) refuses the older sample: the newer write stands, the final
+// stored refresh can report a new launch, and no display transition is emitted.
 func TestIdleScreenOlderSampleNeverOverwrites(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -511,8 +559,12 @@ func TestIdleScreenOlderSampleNeverOverwrites(t *testing.T) {
 			})
 			mark := trailMark(t)
 			got, err := c.Status(e.id)
-			if err != nil || got.State != store.StateWorking || got.StateDetail != (api.StateDetail{}) {
-				t.Fatalf("interrupted read = %+v, %v; want its committed working view", got, err)
+			wantState := store.StateWorking
+			if tc.name == "new launch" {
+				wantState = store.StatePending
+			}
+			if err != nil || got.State != wantState || got.StateDetail != (api.StateDetail{}) {
+				t.Fatalf("interrupted read = %+v, %v; want committed %s without display detail", got, err, wantState)
 			}
 			if !fired.Load() {
 				t.Fatal("the interrupted read made no capture")
@@ -537,7 +589,7 @@ func TestIdleScreenWriteFailureIsLocalToListRow(t *testing.T) {
 	e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
 	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
 	observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
-	other, err := apitest.SeedSpawn(e.dbPath, "", store.StateCheckPermission, "", "on", "", false)
+	other, err := apitest.SeedSpawn(e.dbPath, "", store.StateCheckPermission, "", "on", "", false, apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,8 +618,8 @@ func TestIdleScreenListStopsAnUnansweringSocket(t *testing.T) {
 		{"lookup timeout", tmux.CallLookup, tmux.FailTimeout, 1},
 		{"tmux unavailable", tmux.CallLookup, tmux.FailUnavailable, 1},
 		{"unreadable pane listing", tmux.CallListPanes, tmux.FailUnrecognized, 2},
-		{"no server", tmux.CallLookup, tmux.FailNoServer, 3},
-		{"capture timeout", tmux.CallCapture, tmux.FailTimeout, 9},
+		{"no server", tmux.CallLookup, tmux.FailNoServer, 1},
+		{"capture timeout", tmux.CallCapture, tmux.FailTimeout, 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -694,6 +746,61 @@ func TestIdleScreenUnsampledReadKeepsOnlyCurrentFinding(t *testing.T) {
 					t.Fatalf("events %v, row %+v; want %s settled out with one exit", events, after, committed.State)
 				}
 			})
+		}
+	}
+}
+
+// Selection limits every adapter, including a child's ended rollout and
+// another row's permission request, before process or pane observation.
+func TestIdleScreenFilteredReadNeverProbesExcludedRows(t *testing.T) {
+	t.Parallel()
+	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+	excluded := []string{e.addRow(t, store.AgentCursor, apitest.TestSocket, "%70", 7070), e.addRow(t, store.AgentClaude, apitest.TestSocket, "%71", 7171)}
+	child := e.id + "-child"
+	path := codexfix.TempRolloutPath(t, codexfix.ErroredTurn.SessionID, true, codexfix.ErroredTurn.Ended())
+	seedCodexTurn(t, e.s, e.dbPath, child, path, e.id, apitest.WithLaunchIdentity(store.LaunchIdentity{Token: "1234567890abcdef", Socket: apitest.TestSocket, PaneID: "%72", PanePID: 7272, PaneStarttime: apitest.LinuxProcStarttime}))
+	excluded = append(excluded, child)
+	req, err := apitest.SeedPermissionRequest(e.dbPath, excluded[1], "Bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]store.Spawn{}
+	for _, id := range excluded {
+		row, err := e.s.GetSpawn(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[id] = row
+	}
+	requestBefore, err := e.s.GetPermissionRequest(excluded[1], req.RequestToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := e.row(t)
+	c := e.client(t, apitest.ConfigKeys{})
+	callsBefore := len(e.pc.StartTimeCalls())
+	got, err := c.List(api.ListParams{TmuxSessionName: row.TmuxSessionName, Limit: 1})
+	if err != nil || len(got.Spawns) != 1 || got.Spawns[0].InstanceID != e.id || got.Spawns[0].FamilyState != store.StateWorking {
+		t.Fatalf("selected list=%+v err=%v", got, err)
+	}
+	for _, id := range excluded {
+		after, err := e.s.GetSpawn(id)
+		if err != nil || !reflect.DeepEqual(after, before[id]) {
+			t.Errorf("excluded %s changed: before=%+v after=%+v err=%v", id, before[id], after, err)
+		}
+	}
+	requestAfter, err := e.s.GetPermissionRequest(excluded[1], req.RequestToken)
+	if err != nil || !reflect.DeepEqual(requestBefore, requestAfter) {
+		t.Fatal("excluded request changed")
+	}
+	for _, pid := range []int{7070, 7171, 7272} {
+		if slices.Contains(e.pc.StartTimeCalls()[callsBefore:], pid) {
+			t.Errorf("excluded process %d was probed", pid)
+		}
+	}
+	for _, call := range e.rec.SocketCalls() {
+		if call.Call == tmux.CallCapture && call.Target != row.Identity.PaneID {
+			t.Errorf("excluded pane captured: %+v", call)
 		}
 	}
 }

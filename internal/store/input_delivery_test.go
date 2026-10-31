@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/google/uuid"
 )
@@ -431,5 +433,90 @@ func TestInputDeliveryCorruptCurrentAndHistoryRefuse(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// b.x9o: the response projection must finish before native proof persistence. An
+// abandoned COMMIT still owns its connection and must not trap a later read.
+func TestInputProofSharedReadDoesNotQueueBehindNativeCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("native COMMIT abandonment bound")
+	}
+	for _, verb := range []string{"status", "get", "list", "find-missing"} {
+		t.Run(verb, func(t *testing.T) {
+			f := newInputStore(t)
+			f.save(t)
+			f.a.Phase, f.a.BytesAttempted = "text_attempted", len(f.a.Payload)
+			f.save(t)
+			f.a.Phase, f.a.EnterAttempted = "enter_attempted", true
+			f.save(t)
+			raw := f.proof()
+			if err := os.WriteFile(f.l.Capability.Transcript, append(append([]byte(nil), raw...), 10), 0600); err != nil {
+				t.Fatal(err)
+			}
+			row, err := f.s.GetSpawn(f.g.Identity.InstanceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, result, err := f.s.MarkMissingIfSameLife(row.InstanceID, row.Snapshot); err != nil || result != store.CondApplied {
+				t.Fatalf("finish fixture: %v %v", result, err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			store.ObserveDecisionBoundaryForTest(t, f.s, f.path, nil, func(context.Context) error {
+				select {
+				case <-entered:
+				default:
+					close(entered)
+				}
+				<-release
+				return nil
+			})
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				switch verb {
+				case "status":
+					_, err = api.Status(f.s, api.RelayView{}, row.InstanceID)
+				case "get":
+					_, err = api.Get(f.s, api.RelayView{}, row.InstanceID)
+				case "list":
+					_, err = api.List(f.s, api.RelayView{}, api.ListParams{})
+				case "find-missing":
+					_, err = api.FindMissing(context.Background(), f.s, nil, nil, time.Minute, time.Second, time.Now, nil)
+				}
+				done <- err
+			}()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("native proof COMMIT not reached")
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("response queued behind held native COMMIT")
+			}
+			// Inspect with an independent handle while the original remains held.
+			observer, err := store.Open(f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer observer.Close()
+			l, err := observer.ReadInputLaunch(context.Background(), f.l.Identity.Token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, err := observer.ReadInputAttempt(context.Background(), *l, f.a.RequestID)
+			if err != nil || a == nil || a.Phase != "submitted" || a.Proof == nil || !bytes.Equal(a.Proof.Raw, raw) {
+				t.Fatalf("independent exact proof=%+v err=%v", a, err)
+			}
+			unblock()
+		})
 	}
 }

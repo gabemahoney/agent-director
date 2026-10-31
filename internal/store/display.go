@@ -426,14 +426,21 @@ func planObservation(row Spawn, target DisplayDetail, extra bool, now time.Time,
 // committed), so a reader reports the display and its families from the same
 // commit.
 func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSample, now time.Time, settle SettleRead) (DisplayDetail, map[string]string, error) {
+	display, families, _, err := s.ObserveNeedsIntelligenceOutcome(examined, samples, now, settle)
+	return display, families, err
+}
+
+// ObserveNeedsIntelligenceOutcome additionally distinguishes a committed observation
+// from a no-op, including baseline-only commits with no family change.
+func (s *Store) ObserveNeedsIntelligenceOutcome(examined Spawn, samples []PermissionSample, now time.Time, settle SettleRead) (DisplayDetail, map[string]string, bool, error) {
 	previous := examined.CommittedDisplay()
 	clocks := planPermission(examined, samples, now)
 	plan, err := planObservation(examined, DisplayDetail{}, len(clocks) > 0, now, settle)
 	if err != nil {
-		return previous, nil, err
+		return previous, nil, false, err
 	}
 	if !plan.write {
-		return previous, nil, nil
+		return previous, nil, false, nil
 	}
 	var families map[string]string
 	err = s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
@@ -473,11 +480,11 @@ func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSam
 	})
 	if err != nil {
 		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, nil) {
-			return previous, nil, err
+			return previous, nil, false, err
 		}
 	}
-	emitDisplayTransitions(plan.events)
-	return plan.result, families, nil
+	s.emitObservationTransitions(plan.events)
+	return plan.result, families, true, nil
 }
 
 // ObserveIdleScreen commits one nonwaiting pane observation of examined: the
@@ -491,14 +498,21 @@ func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSam
 // the sample, so an older sample never overwrites a newer one. Its families
 // are as ObserveNeedsIntelligence returns them.
 func (s *Store) ObserveIdleScreen(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, map[string]string, error) {
+	display, families, _, err := s.ObserveIdleScreenOutcome(examined, sample, now, timeout, settle)
+	return display, families, err
+}
+
+// ObserveIdleScreenOutcome additionally distinguishes a committed observation
+// from a no-op, including baseline-only commits with no family change.
+func (s *Store) ObserveIdleScreenOutcome(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, map[string]string, bool, error) {
 	previous := examined.CommittedDisplay()
 	baseline, target := planPane(examined, sample, now, timeout)
 	plan, err := planObservation(examined, target, baseline != committedPaneBaseline(examined), now, settle)
 	if err != nil {
-		return previous, nil, err
+		return previous, nil, false, err
 	}
 	if !plan.write {
-		return previous, nil, nil
+		return previous, nil, false, nil
 	}
 	var families map[string]string
 	err = s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
@@ -516,11 +530,11 @@ func (s *Store) ObserveIdleScreen(examined Spawn, sample PaneSample, now time.Ti
 	})
 	if err != nil {
 		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, &baseline) {
-			return previous, nil, err
+			return previous, nil, false, err
 		}
 	}
-	emitDisplayTransitions(plan.events)
-	return plan.result, families, nil
+	s.emitObservationTransitions(plan.events)
+	return plan.result, families, true, nil
 }
 
 // lockedObservationRow re-reads examined's row inside an observer's write
@@ -635,6 +649,18 @@ func takeDisplayExits(ctx context.Context, conn *sql.Conn, instanceID string) ([
 
 func emitDisplayTransitions(events []displayTransition) {
 	emitDisplayTransitionsContext(context.Background(), events)
+}
+
+// observationTrailWait bounds a recovery observer's wait for its records'
+// writes, matching pkg/api's recoveryTrailWait (SR-1, SR-3).
+const observationTrailWait = 50 * time.Millisecond
+
+// emitObservationTransitions emits a recovery observer's records under a bound
+// derived from the store's call context, so a cancelled check stops waiting.
+func (s *Store) emitObservationTransitions(events []displayTransition) {
+	ctx, cancel := context.WithTimeout(s.readContext(), observationTrailWait)
+	defer cancel()
+	emitDisplayTransitionsContext(ctx, events)
 }
 
 func emitDisplayTransitionsContext(ctx context.Context, events []displayTransition) {

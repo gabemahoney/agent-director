@@ -80,8 +80,15 @@ func TestCursorStartupAbsentBindingReads(t *testing.T) {
 					if after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 || !requestAfter.Closed() || requestAfter.ProvenGone() || requestAfter.ProvenGoneHow != "" || requestAfter.Decision != "deny" || !requestAfter.DeliveredAt.IsZero() || requestAfter.PaneAnswered() {
 						t.Errorf("not a single atomic missing close: before=%+v after=%+v request=%+v", before, after, requestAfter)
 					}
-				} else if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(requestBefore, requestAfter) {
-					t.Error("alive/unknown no-binding read mutated raw row/request")
+				} else {
+					note := "probe_eacces"
+					if verdict == "alive" {
+						note = "unreported"
+					}
+					assertCursorRecoveryNote(t, before, after, note)
+					if !reflect.DeepEqual(requestBefore, requestAfter) {
+						t.Error("alive/unknown changed request")
+					}
 				}
 				if after.AgentArgs != before.AgentArgs || after.LaunchToken != before.LaunchToken || after.LifeNumber != before.LifeNumber || after.PanePID != before.PanePID || after.PaneStarttime != before.PaneStarttime || after.SessionID != before.SessionID {
 					t.Error("missing changed args or examined launch identity")

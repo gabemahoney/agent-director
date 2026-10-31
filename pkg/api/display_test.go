@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -158,13 +157,7 @@ func assertDisplayEvent(t *testing.T, ev map[string]any, prior, next string, at 
 func displaySurfaceClient(t *testing.T) *api.Client {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
-	if _, err := apitest.SeedSpawn(path, "plain", store.StateCheckPermission, "", "on", "", true); err != nil {
-		t.Fatal(err)
-	}
-	if err := apitest.SeedNeedsIntelligenceSurface(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := apitest.SeedIdleScreenSurface(path); err != nil {
+	if err := apitest.SeedDisplayedStateContract(path); err != nil {
 		t.Fatal(err)
 	}
 	cfg := filepath.Join(t.TempDir(), "config.toml")

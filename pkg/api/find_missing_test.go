@@ -248,9 +248,10 @@ const (
 )
 
 // fmSweep overrides runFindMissing's defaults: fmGrace, fmBudget, a fresh Recorder (no server: every lookup is
-// Gone), a fresh recordingLogger, and, when now is nil, clock (default: one at fmNow) as both the sweep's clock
-// and the Recorder's virtual time.
+// Gone), a fresh recordingLogger, a background context, and, when now is nil, clock (default: one at fmNow) as
+// both the sweep's clock and the Recorder's virtual time.
 type fmSweep struct {
+	ctx    context.Context
 	grace  time.Duration
 	budget time.Duration
 	now    func() time.Time
@@ -283,7 +284,10 @@ func runFindMissing(s api.FindMissingStore, pc api.ProcChecker, o fmSweep) (api.
 	if o.lg == nil {
 		o.lg = &recordingLogger{}
 	}
-	return api.FindMissing(context.Background(), s, o.tmux, pc, o.grace, o.budget, o.now, o.lg)
+	if o.ctx == nil {
+		o.ctx = context.Background()
+	}
+	return api.FindMissing(o.ctx, s, o.tmux, pc, o.grace, o.budget, o.now, o.lg)
 }
 
 // mustSweep is runFindMissing with o, failing the test on a sweep error or, on the fake store, a write not

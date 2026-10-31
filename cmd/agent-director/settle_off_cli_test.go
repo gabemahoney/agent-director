@@ -25,7 +25,10 @@ import (
 // no other byte changed. And b.zpv: a state filter naming no Displayed State
 // reads the 0.15 query again, so those two state-filtered list goldens,
 // recaptured, return to its row order (the order before the regeneration
-// above); no other byte changed.
+// above); no other byte changed. E4 shared recovery (b.x9o) fixes membership
+// before checks and uses the stored displayed-state selection query: the same
+// two goldens change row order only, matching the scheduler's captured output;
+// every row's bytes remain unchanged.
 const settleOffCaptureEnv = "AGENT_DIRECTOR_CAPTURE_SETTLE_OFF_GOLDENS"
 
 // TestSettleOffCLI: with [state] settle_ms unset or 0, status, get and list

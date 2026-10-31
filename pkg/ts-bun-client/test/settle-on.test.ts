@@ -62,7 +62,7 @@ function expected(c: ReadSurfaceCase, settled: Record<string, string>): unknown 
 
 test("settle-on: status, get and list give each golden with only the state read as settled", async () => {
   await withTempHome(async (homeDir) => {
-    const seeded = runHelper("seed-read-surface-store", { store: homeStore(homeDir) });
+    const seeded = runHelper("seed-read-surface-store", { store: homeStore(homeDir), "writer-pid": String(process.pid) });
     const settled = seeded.settled as Record<string, string>;
     writeSettleConfig(homeDir);
     using client = await openClient(homeStore(homeDir));
@@ -76,7 +76,7 @@ test("settle-on: status, get and list give each golden with only the state read 
 test("settle-on: a raw change younger than settle_ms reads the settled state, then the raw one", async () => {
   await withTempHome(async (homeDir) => {
     const store = homeStore(homeDir);
-    const id = runHelper("seed-spawn", { store, state: "waiting", "create-store": true }).instance_id as string;
+    const id = runHelper("seed-spawn", { store, state: "waiting", "create-store": true, "writer-pid": String(process.pid) }).instance_id as string;
     writeSettleConfig(homeDir);
     using client = await openClient(store);
     const listIDs = async (state: string): Promise<string[]> =>

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -182,15 +183,15 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 
 // listSettled is List with the reader's settle time and clock settle (b.3ie),
 // passed to the store as ListFilters.Settle: each row's state field is its
-// settled state. The State filter and LIMIT apply in the store's statement
-// for a store with no permission observation or a filter naming no Displayed
-// State; otherwise the statement keeps every row that may show a filtered state
-// (ListFilters.DisplayCandidates) and listFiltered keeps each row whose
-// state or displayed_state is a filter value, before the limit, so a row
-// showing a Displayed State still matches its state. launch_started_at and
-// whether a row's permission requests are read and shown key on the raw state, as
-// before (permission requests are never debounced). With no settle time it
-// is List exactly as before b.3ie. It never waits for a state to settle.
+// settled state. The filters and LIMIT apply once, in the store's statement,
+// on stored facts: a row matches a State filter by its state or its committed
+// displayed_state (ListFilters.StoredDisplay). The checks then run on those
+// fixed IDs only, and every selected row is returned even when a check changes
+// it; no filter is reapplied and no freed limit slot is filled.
+// launch_started_at and whether a row's permission requests are read and
+// shown key on the raw state, as before (permission requests are never
+// debounced). With no settle time it is List exactly as before b.3ie. It
+// never waits for a state to settle.
 func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListParams) (ListResult, error) {
 	filters, err := parseListFilters(params, settle)
 	if err != nil {
@@ -225,22 +226,42 @@ func parseListFilters(params ListParams, settle store.SettleRead) (ListFilters, 
 	}, nil
 }
 
-// listFiltered is listSettled past validation. Every Codex row whose rollout
-// records its turn's end is first moved to waiting (endCodexTurns), so the
-// State filter and the families see it.
+// listFiltered is listSettled past validation. Stored filters and limit fix
+// the returned IDs before any row is checked.
 func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, error) {
-	endCodexTurns(s, "")
-	fetch := filters
-	observer, observes := s.(needsIntelligenceStore)
-	// A filter of lifecycle states only stays in the statement with its
-	// LIMIT, as before b.ob8: such a row matches on its state alone.
-	widened := observes && namesDisplayedState(filters.State)
-	if widened {
-		// The statement keeps every row that may show a filtered state; its
-		// state or displayed state is matched, and the limit applied, below.
-		fetch.DisplayCandidates, fetch.Limit = true, 0
+	if _, checked := s.(*activeReadStore); !checked {
+		selected := filters
+		selected.StoredDisplay = true
+		rows, err := s.ListSpawns(selected)
+		if err != nil {
+			return ListResult{Spawns: []ListRow{}}, err
+		}
+		run := checkActiveRows(context.Background(), s, v, filters.Settle, rows, activeRefresh(s, filters.Settle, false), false)
+		out, err := listFiltered(run, run.view, ListFilters{Settle: filters.Settle})
+		var fallbacks map[string]cursorListFallback
+		if err == nil {
+			fallbacks = cursorListFallbacks(run)
+		}
+		finishErr := run.finish()
+		if err != nil {
+			return ListResult{Spawns: []ListRow{}}, err
+		}
+		var stale *store.CursorMissingReadError
+		if finishErr != nil && !errors.As(finishErr, &stale) {
+			return ListResult{Spawns: []ListRow{}}, finishErr
+		}
+		for i, row := range out.Spawns {
+			if fallback, ok := fallbacks[row.InstanceID]; ok && run.byID[row.InstanceID].cursorRejected {
+				if fallback.err != nil {
+					return ListResult{Spawns: []ListRow{}}, fallback.err
+				}
+				out.Spawns[i] = fallback.row
+			}
+		}
+		return out, nil
 	}
-	rows, err := s.ListSpawns(fetch)
+	observer, observes := s.(needsIntelligenceStore)
+	rows, err := s.ListSpawns(filters)
 	if err != nil {
 		return ListResult{Spawns: []ListRow{}}, err
 	}
@@ -260,13 +281,8 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 		var judged *judgedRequestSet
 		if observes {
 			var read permissionRead
-			if r.State == store.StateCheckPermission && !widened {
-				// Unless the filter is widened the row is listed, so its open
-				// requests must be read: the observation reuses that one read
-				// instead of reading again. With a widened filter the row may
-				// yet be dropped, so the observation reads without waiting, and
-				// only a listed row whose observation read nothing waits for
-				// them, below.
+			if r.State == store.StateCheckPermission {
+				// Reuse the selected row's checked requests for its projection.
 				if read.requests, err = readJudgedRequests(observer.PermissionRequestsForSpawn, j, r.InstanceID); err != nil {
 					return ListResult{Spawns: []ListRow{}}, err
 				}
@@ -279,37 +295,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 				families[id] = family
 			}
 		}
-		shown := displayedState(display)
-		if widened {
-			matched := false
-			for _, state := range filters.State {
-				matched = matched || state == reported || (shown != "" && state == shown)
-			}
-			if !matched {
-				continue
-			}
-		}
-		row := ListRow{
-			InstanceID:              r.InstanceID,
-			ParentID:                r.ParentID,
-			State:                   reported,
-			DisplayedState:          shown,
-			FamilyState:             r.FamilyState,
-			IdleScreenAvailability:  idleScreenAvailability(r.Agent),
-			CWD:                     r.CWD,
-			Agent:                   r.Agent,
-			TmuxSessionName:         r.TmuxSessionName,
-			RelayMode:               r.RelayMode,
-			Labels:                  r.Labels,
-			StartedAt:               r.StartedAt,
-			LastSeenAt:              r.LastSeenAt,
-			StateChangedAt:          millisToUTC(r.StateChangedMillis),
-			EndedAt:                 r.EndedAt,
-			LaunchStartedAt:         launchStartedAt(r.State, r.LaunchStartedAtMillis),
-			LivenessUnverifiedSince: nullableTimestamp(r.LivenessUnverifiedSince),
-			LivenessNote:            nullableString(r.LivenessNote),
-			PermissionRequests:      []PermissionRequestInfo{},
-		}
+		row := listRow(r, reported, display)
 		if r.State == store.StateCheckPermission && judged != nil {
 			row.PermissionRequests = judgedOpenInfos(judged, j)
 		} else if r.State == store.StateCheckPermission {
@@ -320,9 +306,6 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			row.PermissionRequests = infos
 		}
 		out = append(out, row)
-		if widened && filters.Limit > 0 && len(out) >= filters.Limit {
-			break
-		}
 	}
 	for i := range out {
 		if family, ok := families[out[i].InstanceID]; ok {
@@ -343,6 +326,80 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 	return ListResult{Spawns: out}, nil
 }
 
+// cursorListFallbacks assembles older stored facts before any deferred write.
+// A refused proof must not leave its speculative missing state in the result,
+// nor can its fallback read queue behind another row's abandoned COMMIT. This
+// is response projection only: it does not run recovery or persist fallback
+// clocks. A failed optional read matters only if its fallback is needed.
+func cursorListFallbacks(run *activeReadStore) map[string]cursorListFallback {
+	out := make(map[string]cursorListFallback)
+	j := newRelayJudge(run.view)
+	for _, proof := range run.cursor {
+		checked := run.byID[proof.Row.InstanceID]
+		if checked.projectionErr != nil || checked.row.State != store.StateMissing || checked.row.Snapshot != proof.Row.Snapshot {
+			// A failed projection already kept its older facts; a changed
+			// stored row (including a replacement launch) has its own facts.
+			continue
+		}
+		stored := proof.Row
+		// CursorMissingReads projects only State/ReportedState. FamilyState
+		// still comes from persisted family history, including independently
+		// committed selected-child observations. No projected missing row has
+		// yet removed a family contribution; keep that common stored view.
+		stored.FamilyState = checked.row.FamilyState
+		reported := stored.State
+		if run.settle.SettleMs > 0 {
+			reported = stored.ReportedState
+		}
+		display := stored.CommittedDisplay()
+		if display.State == StateNeedsIntelligence {
+			display = store.DisplayDetail{State: reported}
+		}
+		row := listRow(stored, reported, display)
+		var err error
+		if stored.State == store.StateCheckPermission {
+			var judged *judgedRequestSet
+			judged, err = readJudgedRequests(run.PermissionRequestsForSpawn, j, stored.InstanceID)
+			if err == nil {
+				row.PermissionRequests = judgedOpenInfos(judged, j)
+			}
+		}
+		out[stored.InstanceID] = cursorListFallback{row, err}
+	}
+	return out
+}
+
+type cursorListFallback struct {
+	row ListRow
+	err error
+}
+
+// listRow projects only stored row/display facts; request reads stay with the
+// caller so ordinary and retained Cursor responses use the same wire mapping.
+func listRow(r Spawn, reported string, display store.DisplayDetail) ListRow {
+	return ListRow{
+		InstanceID:              r.InstanceID,
+		ParentID:                r.ParentID,
+		State:                   reported,
+		DisplayedState:          displayedState(display),
+		FamilyState:             r.FamilyState,
+		IdleScreenAvailability:  idleScreenAvailability(r.Agent),
+		CWD:                     r.CWD,
+		Agent:                   r.Agent,
+		TmuxSessionName:         r.TmuxSessionName,
+		RelayMode:               r.RelayMode,
+		Labels:                  r.Labels,
+		StartedAt:               r.StartedAt,
+		LastSeenAt:              r.LastSeenAt,
+		StateChangedAt:          millisToUTC(r.StateChangedMillis),
+		EndedAt:                 r.EndedAt,
+		LaunchStartedAt:         launchStartedAt(r.State, r.LaunchStartedAtMillis),
+		LivenessUnverifiedSince: nullableTimestamp(r.LivenessUnverifiedSince),
+		LivenessNote:            nullableString(r.LivenessNote),
+		PermissionRequests:      []PermissionRequestInfo{},
+	}
+}
+
 // List enumerates Spawn rows matching the supplied filter set. All filters AND
 // together; an absent filter is permissive. State values OR together. When no
 // rows match, ListResult.Spawns is a non-nil empty slice. Returned order is
@@ -358,16 +415,16 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 // displayed_state is one of its values, so --state working lists a working
 // row that shows idle_screen. Terminal states and command-driven changes show at once.
 // family_state settles independently. The permission requests and
-// launch_started_at follow the live state. Before applying State and Limit,
-// List projects lost Cursor gateways as missing in the requested
-// label/parent/cwd/tmux scope, guarded by the
-// examined launch and binding. It then attempts the atomic terminal write.
-// Unavailable best-effort persistence leaves the read projection valid; other
-// write errors fail the read. List never waits for a state to settle or for
-// the store's write lock. Relay-delivery writes remain best effort. Like
-// [Client.Status] it samples the own pane of each working Claude or Codex row
-// it reads for idle_screen, a failure affecting only that row, and every row
-// carries idle_screen_availability.
+// launch_started_at follow the live state. Stored filters and limit select
+// the IDs before external checks. Those same rows are returned after recovery,
+// including a selected row whose state changed; no slot is filled from outside
+// the selection. Cursor loss is projected against its exact launch/binding
+// before deferred persistence. A row-local stale Cursor projection or refused
+// write retains that row's earlier stored facts without suppressing other
+// selected results or authorizing a terminal write from its rejected proof. Selection-wide
+// Cursor projection failures still fail the call. The pass never waits for a
+// state change or the store's write lock, and pane failures remain local to the
+// selected row.
 //
 // CLI: agent-director list
 //
@@ -386,34 +443,5 @@ func (c *Client) List(params ListParams) (ListResult, error) {
 	if err != nil {
 		return ListResult{Spawns: []ListRow{}}, err
 	}
-	// Reconcile the requested scope before state filtering and limit: a lost
-	// gateway must enter a missing filter and stop consuming a working limit.
-	candidates := filters
-	candidates.State = nil
-	candidates.Limit = 0
-	rows, err := c.st.ListSpawns(candidates)
-	if err != nil {
-		return ListResult{Spawns: []ListRow{}}, err
-	}
-	var proofs []store.CursorMissingProof
-	for _, row := range rows {
-		if row.Agent != store.AgentCursor || row.State == store.StateEnded || row.State == store.StateMissing {
-			continue
-		}
-		proof, err := c.reconcileCursorGateway(row.InstanceID)
-		if err != nil {
-			return ListResult{Spawns: []ListRow{}}, err
-		}
-		if proof != nil {
-			proofs = append(proofs, *proof)
-		}
-	}
-	out, err := listFiltered(c.st.WithCursorMissingReads(proofs), c.relayView(), filters)
-	if err != nil {
-		return ListResult{Spawns: []ListRow{}}, err
-	}
-	if err := c.persistCursorMissing(proofs); err != nil {
-		return ListResult{Spawns: []ListRow{}}, err
-	}
-	return out, nil
+	return listFiltered(c.st, c.relayView(), filters)
 }

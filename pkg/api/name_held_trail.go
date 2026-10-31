@@ -1,11 +1,9 @@
 package api
 
 import (
-	"context"
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // The ad.launch.name_held source values (SR-14). Plain spawn and reuse write
@@ -125,7 +123,15 @@ type nameHeld struct {
 // never in an error description (SR-1.4), are present exactly when a holder
 // was identified, whatever its class, with the socket and the holder's
 // session id each shell-quoted (shellQuote), and null otherwise.
+//
+// Spawn, reuse and resume write synchronously (legacyTrail); find-missing's
+// shared checks write through their bounded recovery emitter (writeNameHeld).
 func emitNameHeld(r nameHeld) {
+	writeNameHeld(legacyTrail, r)
+}
+
+// writeNameHeld is emitNameHeld writing through emit.
+func writeNameHeld(emit trailEmit, r nameHeld) {
 	var launch, outcome, rowResult, storeError any
 	if r.Launch != "" {
 		launch = r.Launch
@@ -182,7 +188,7 @@ func emitNameHeld(r nameHeld) {
 	if r.LeftoverCount > 0 {
 		fields["leftover_count"] = r.LeftoverCount
 	}
-	_ = trail.Emit(context.Background(), "ad.launch.name_held", fields)
+	_ = emit("ad.launch.name_held", fields)
 }
 
 // shellQuote quotes s for a POSIX shell: it wraps s in single quotes and

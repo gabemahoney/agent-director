@@ -61,6 +61,9 @@ func seedRow(s *store.Store, path, id, state string, labels map[string]string) {
 	if err := seedAgentState(s, path, id, state); err != nil {
 		panic("seedRow: seed " + id + "→" + state + ": " + err.Error())
 	}
+	if _, err := apitest.BindReadSurfaceProcess(path, id, os.Getpid()); err != nil {
+		panic(err)
+	}
 }
 
 // exampleTB is the testing.TB an Example hands to tmuxfix seeders: Helper

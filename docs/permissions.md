@@ -655,7 +655,7 @@ differences:
   start second" under [Known limitations](#known-limitations)), but does not
   close it: close it with `record-pane-answer --as deny` and the hash of a
   `read-pane` you looked at, once the hook has been gone 2 s.
-- **A row left in `check_permission`.** `find-missing` repairs a Codex row
+- **A row left in `check_permission`.** Recovery repairs a Codex row
   to `working`, never to `waiting` (see
   [A relay row left in check_permission](hooks.md#a-relay-row-left-in-check_permission)).
 
@@ -680,9 +680,9 @@ these outcomes:
 
 - No row at all → `ErrNoOpenPermissionRequest`.
 - Request has a recorded decision → `ErrAlreadyDecided` (including a
-  request the relay hook denied at its timeout, one `find-missing` denied
-  when it marked the spawn `missing`, and one closed at the pane with a
-  verdict).
+  request the relay hook denied at its timeout, one denied by
+  `find-missing`'s mark (`decision_reason` `find_missing`), and one closed
+  at the pane with a verdict).
 - Row was closed with its spawn, by `find-missing`'s mark or by the
   spawn's end, before its relay hook confirmed a verdict, with a verdict
   `find-missing` did not write (one recorded before the close, or the
@@ -706,7 +706,7 @@ error messages and can act on them programmatically.
 ### A request of a finished spawn is closed
 
 A request whose spawn is `ended` or `missing` is closed, decided or not:
-its agent is gone (or judged gone by `find-missing`), so no relay hook of
+its agent is gone (or judged gone by shared recovery), so no relay hook of
 it can deliver a verdict. `decide` records nothing for it and answers
 with an existing error name:
 
@@ -726,10 +726,10 @@ recorded. `send-keys` refuses an `ended` or
 
 A spawn's open requests close together with these changes:
 
-- `find-missing`'s mark of the spawn `missing`;
+- a recovery check's mark of the spawn `missing`;
 - the agent's terminal SessionEnd, which moves the spawn to `ended`;
 - the move of a Codex spawn to `ended` once its agent is gone with an end
-  report, made by `find-missing`, or by `pause` before its keys or while it
+  report, made by a recovery check, or by `pause` before its keys or while it
   waits (see [How a Codex row ends](hooks.md#how-a-codex-row-ends));
 - `resume`'s move of the finished spawn to `pending`, as a backstop for a
   request an older binary left open on the finished spawn.
@@ -757,8 +757,8 @@ completed pane answer, even when recorded by an older binary:
 
 Each deny is written to the trail as one `ad.row_mutation.committed`
 (`writer_process` `find_missing`, `hook` or `resume`). The mark's deny and the
-Codex move's `ended` deny both carry `find_missing`, so that writer can come
-from `pause`.
+Codex move's `ended` deny both carry `find_missing`, so that writer can also
+come from a state read or `pause`.
 
 A closed request stays closed after a `resume`: it no longer awaits an
 answer, so it is omitted from `get` and `list`'s `permission_requests` and
@@ -781,8 +781,9 @@ the only writes for them are `hook_gone_at` and the time the request fell
 back. `proven_gone_at` and
 `proven_gone_how` are written by the agent's own hooks, validated Cursor
 invocation proof or a Cursor turn's end, by the close of a non-Cursor spawn's
-requests and, for a non-Cursor spawn already finished, by the upgrade to this release, never by a
-reader (see "The dialog hold" below):
+requests above (even when a state read's recovery check makes it) and, for a
+non-Cursor spawn already finished, by the upgrade to this release; working
+out delivery never writes them (see "The dialog hold" below):
 
 The `delivery` and `confirm_by` descriptions below apply to requests
 with a settle instant. Requests recorded by an older binary retain the
@@ -921,7 +922,7 @@ waits, as on Claude, for the turn's Stop.
 A row whose Stop came while a request still held it, or whose next hook is
 lost, stays in `check_permission` until a later hook moves it (on a Cursor
 row, the next accepted prompt's `working` report once nothing holds it), or
-the idle-prompt Notification (Claude rows only) or a scheduled `find-missing`
+the idle-prompt Notification (Claude rows only) or a recovery check
 moves it to `waiting` or `working` (see
 [hooks.md](hooks.md#a-relay-row-left-in-check_permission)).
 The relay hook's timeout deny itself leaves the row's state as it is. A
@@ -957,9 +958,10 @@ that binary judged it:
 - Fallen back and still undecided, such a request is open and fallen back
   like any other: a plain `send-keys` to its spawn, and `pause`, are
   refused with `ErrRelayFallenBack` until it is closed, by a pane answer, by
-  `record-pane-answer`, or with its spawn (the spawn ends, or `find-missing`
-  marks it `missing`). This holds in every live state of the spawn, so a
-  request left open before the upgrade (its dialog answered at the pane
+  `record-pane-answer`, or with its spawn (the spawn ends, or
+  [shared recovery](caller-contract.md#bounded-recovery-on-state-reads)
+  marks it `missing` on a state read or `find-missing`). This holds in
+  every live state of the spawn, so a request left open before the upgrade (its dialog answered at the pane
   after its relay hook was killed, for example) refuses plain `send-keys`
   once you upgrade: close it with `record-pane-answer --as unknown` and the
   `pane_sha256` of a `read-pane` you looked at. `decide` does not close
@@ -1152,8 +1154,8 @@ spawn, `kill` it, or have a person or an LLM do what `pause` would:
    ```
 
 4. Poll `get` or `status` until the row reads `ended`: `send-keys` does
-   not wait for it as `pause` does. A Codex row reads `ended` only after
-   `find-missing` or `pause` sees its agent gone (see the
+   not wait for it as `pause` does. These reads can reconcile a Codex row's
+   exit once it reported its end and its agent is gone (see the
    [caller contract](caller-contract.md#when-a-codex-agent-exits)).
 
 Never pass the hash from an automatic flow (see "The look-and-send path"
@@ -1200,7 +1202,7 @@ prove it gone:
 |---|---|
 | `tool_ran` | A Claude agent's `PostToolUse` or `PostToolUseFailure` carrying the request's `tool_use_id`: the tool ran, so its dialog was answered. Any Claude request with that id, a subagent's included. Cursor requires current conversation/launch-bound invocation proof for the exact request and tool id; accepted shell and MCP output and the failed invocation's proof-only meaning are defined in [Cursor spawns](#cursor-spawns). Generic completed/failed status is insufficient. Never on a Codex row. |
 | `turn_end` | The turn of the agent that asked ended after the request was written. An owned main-agent `Stop`, Claude idle-prompt Notification or Codex/Cursor main Interrupt proves only a request durably eligible for main-turn proof, with no child id, recorded before the second the report started. Missing child identity alone never establishes eligibility. |
-| `agent_gone` | For non-Cursor spawns, `find-missing`'s mark of the spawn `missing`, the agent's terminal `SessionEnd`, or `resume`'s move of the finished spawn to `pending`: every request of the spawn. Upgrading the store proves every request of a non-Cursor spawn already `ended` or `missing` the same way. Cursor terminal closes leave proof unchanged; see [Cursor spawns](#cursor-spawns). |
+| `agent_gone` | For non-Cursor spawns, a recovery check's mark of the spawn `missing`, the agent's terminal `SessionEnd`, or `resume`'s move of the finished spawn to `pending`: every request of the spawn. Upgrading the store proves every request of a non-Cursor spawn already `ended` or `missing` the same way. Cursor terminal closes leave proof unchanged; see [Cursor spawns](#cursor-spawns). |
 
 Main-turn eligibility is stored independently of child identity and survives
 restart. Historical non-Cursor main/child behavior is preserved: main

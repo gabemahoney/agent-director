@@ -84,9 +84,13 @@ func launchShapes() []launchShape {
 // newLaunchClient returns a Client over a store seeded with every launchShape.
 func newLaunchClient(t *testing.T, shapes []launchShape) *api.Client {
 	t.Helper()
+	live, err := apitest.ReadSurfaceProcessOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
 	c, _ := newTestClientWithRows(t, func(dbPath string) {
 		for _, s := range shapes {
-			if _, err := apitest.SeedSpawn(dbPath, s.id(), s.state, "", "", "", true, s.opts...); err != nil {
+			if _, err := apitest.SeedSpawn(dbPath, s.id(), s.state, "", "", "", true, append(append([]apitest.SpawnOption{apitest.WithNoPane()}, live...), s.opts...)...); err != nil {
 				t.Fatalf("SeedSpawn %s: %v", s.name, err)
 			}
 		}
@@ -311,7 +315,11 @@ func TestStatusEmptyAgentAvailabilityDispatch(t *testing.T) {
 					}}
 				}
 				got, err := api.StatusSettledForTest(s, api.RelayView{}, settle, "empty-agent")
-				if !errors.Is(err, wantErr) || !slices.Equal(calls, []string{method}) {
+				wantCalls := []string{method}
+				if method == "SpawnStatusRow" && wantErr == nil {
+					wantCalls = append(wantCalls, method) // fixed selection, then final stored refresh
+				}
+				if !errors.Is(err, wantErr) || !slices.Equal(calls, wantCalls) {
 					t.Fatalf("dispatch calls=%v result=%+v err=%v; want %s/%v", calls, got, err, method, wantErr)
 				}
 				if err != nil {

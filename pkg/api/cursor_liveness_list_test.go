@@ -14,7 +14,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
+func TestCursorListFixedSelectionBeforeGatewayRecovery(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name       string
@@ -27,10 +27,10 @@ func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
 	}{
 		{name: "gone working", gateway: procfix.Gone(), missing: true},
 		{name: "recycled permission", gateway: procfix.Alive(apitest.DarwinProcStarttime), permission: true, missing: true},
-		{name: "missing filter includes newly missing", gateway: procfix.Gone(), state: []string{store.StateMissing}, missing: true},
-		{name: "working limit excludes newly missing", gateway: procfix.Gone(), state: []string{store.StateWorking}, limit: 1, missing: true},
+		{name: "missing filter excludes newly missing", gateway: procfix.Gone(), state: []string{store.StateMissing}, missing: true},
+		{name: "working limit retains selected newly missing", gateway: procfix.Gone(), state: []string{store.StateWorking}, limit: 1, missing: true},
 		// b.6uf: the reported subtest, with the save forced to defer on both List calls.
-		{name: "working limit excludes newly missing save deferred", gateway: procfix.Gone(), state: []string{store.StateWorking}, limit: 1, missing: true, deferSave: true},
+		{name: "working limit retains selected newly missing save deferred", gateway: procfix.Gone(), state: []string{store.StateWorking}, limit: 1, missing: true, deferSave: true},
 		{name: "alive unchanged", gateway: procfix.Alive(apitest.LinuxProcStarttime)},
 		{name: "unknown unchanged", gateway: procfix.Unreadable()},
 	} {
@@ -44,8 +44,8 @@ func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
 				}
 			}
 			cursorReadSQL(t, e.dbPath, "UPDATE spawns SET labels=? WHERE instance_id=?", `{"list-liveness":"target"}`, b.InstanceID)
-			// The in-scope survivor establishes the limit after state reconciliation.
-			survivor, err := apitest.SeedSpawn(e.dbPath, "", store.StateWorking, "", "", "", false)
+			// The survivor stays live; stored filters and limit choose membership.
+			survivor, err := apitest.SeedSpawn(e.dbPath, "", store.StateWorking, "", "", "", false, apitest.WithNoPane(), apitest.WithPID(b.RuntimePID), apitest.WithProcStarttime(b.RuntimeStart))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,6 +70,10 @@ func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
 			var deferred [2][]string
 			var ownDeadline [2]int
 			params := api.ListParams{Labels: []string{"list-liveness=target"}, State: tc.state, Limit: tc.limit}
+			if tc.limit > 0 {
+				params.TmuxSessionName = before.TmuxSessionName.(string)
+			}
+			selectedTarget := false
 			for i := 0; i < 2; i++ {
 				api.SetCursorMissingDeferredForTest(c, func(id string, err error) {
 					deferred[i] = append(deferred[i], id+": "+err.Error())
@@ -77,23 +81,25 @@ func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
 						ownDeadline[i]++
 					}
 				})
+				selected, err := e.st.ListSpawns(store.ListFilters{State: tc.state, Labels: map[string]string{"list-liveness": "target"}, Limit: tc.limit, TmuxSessionName: params.TmuxSessionName,
+					StoredDisplay: true, Settle: store.SettleRead{SettleMs: settleMax, NowMs: e.clock.Now().UnixMilli()}})
+				if err != nil {
+					t.Fatal(err)
+				}
 				got, err := c.List(params)
 				if err != nil {
 					t.Fatal(err)
 				}
-				want := map[string]string{survivor: store.StateWorking}
-				targetState := store.StateWorking
-				if tc.permission {
-					targetState = store.StateCheckPermission
-				}
-				if tc.missing {
-					targetState = store.StateMissing
-				}
-				if len(tc.state) == 0 || tc.state[0] == targetState {
-					want[b.InstanceID] = targetState
-				}
-				if len(tc.state) > 0 && tc.state[0] != store.StateWorking {
-					delete(want, survivor)
+				want := map[string]string{}
+				for _, row := range selected {
+					state := row.ReportedState
+					if row.InstanceID == b.InstanceID {
+						selectedTarget = true
+						if tc.missing {
+							state = store.StateMissing
+						}
+					}
+					want[row.InstanceID] = state
 				}
 				states := make(map[string]string)
 				for _, row := range got.Spawns {
@@ -116,7 +122,7 @@ func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
 			} else if n != ownDeadline[0]+ownDeadline[1] {
 				t.Errorf("List deferred saves other than the missing target's on a deadline: call 1 %q, call 2 %q", deferred[0], deferred[1])
 			}
-			if tc.missing {
+			if tc.missing && selectedTarget {
 				// The save is best effort: saved exactly once, or wholly unsaved
 				// with both calls having deferred it on a deadline.
 				rowSame, prSame := reflect.DeepEqual(before, after), reflect.DeepEqual(prBefore, pr)
@@ -128,8 +134,13 @@ func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
 				} else if !saved && !deferredUnsaved {
 					t.Errorf("List did not atomically mark missing once and close request: %s", observed)
 				}
+			} else if tc.name == "unknown unchanged" {
+				assertCursorRecoveryNote(t, before, after, "probe_eacces")
+				if !pr.AwaitsAnswer() {
+					t.Fatal("unknown List closed request")
+				}
 			} else if !reflect.DeepEqual(before, after) || !pr.AwaitsAnswer() {
-				t.Error("alive/unknown List mutated launch or request")
+				t.Error("unselected/alive List mutated launch or request")
 			}
 			if !reflect.DeepEqual(siblingBefore, e.columns(t, sibling)) || !reflect.DeepEqual(survivorBefore, e.columns(t, survivor)) {
 				t.Error("List changed a live Cursor bystander or non-Cursor survivor")

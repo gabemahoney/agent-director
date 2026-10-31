@@ -115,6 +115,10 @@ func TestClientSettledReads(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	nowMs := now.UnixMilli()
+	live, err := apitest.ReadSurfaceProcessOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	cases := []struct {
 		name    string
@@ -132,7 +136,7 @@ func TestClientSettledReads(t *testing.T) {
 	}
 	ids := make([]string, len(cases))
 	for i, tc := range cases {
-		id, err := apitest.SeedSpawn(dbPath, "", store.StateWorking, "", "", "", true, apitest.WithSettle(tc.settled, tc.stampMs))
+		id, err := apitest.SeedSpawn(dbPath, "", store.StateWorking, "", "", "", true, apitest.WithSettle(tc.settled, tc.stampMs), apitest.WithNoPane(), live[0], live[1])
 		if err != nil {
 			t.Fatalf("SeedSpawn: %v", err)
 		}
@@ -164,10 +168,14 @@ func TestClientSettledReadsKeepRawExtras(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	fresh := now.UnixMilli() - 1
+	live, err := apitest.ReadSurfaceProcessOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	seed := func(raw, reported string, request bool, opts ...apitest.SpawnOption) string {
 		id, err := apitest.SeedSpawn(dbPath, "", raw, "", "on", "", true,
-			append([]apitest.SpawnOption{apitest.WithSettle(reported, fresh)}, opts...)...)
+			append([]apitest.SpawnOption{apitest.WithSettle(reported, fresh), apitest.WithNoPane(), live[0], live[1]}, opts...)...)
 		if err != nil {
 			t.Fatalf("SeedSpawn: %v", err)
 		}
