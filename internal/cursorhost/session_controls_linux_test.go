@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,6 +22,51 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
+
+// b.x9o: Run must return the borrowed PTY only after its actual input decoder
+// retires. Runtime/process exit alone is not evidence of reader retirement.
+func TestCursorRunReturnsTerminalToOwner(t *testing.T) {
+	// Serial: the shared Run fixture owns HOME, reports and signal handlers.
+	ready := make(chan *os.File, 1)
+	var admissions, choices, events atomic.Int32
+	readerPane := &observedWire{}
+	starter := func(in *os.File, out io.Writer, emit func(terminalInput), admit func() bool, choose ...func(rune) (string, string, bool)) func() {
+		readerPane.observe = func(raw []byte) { out.Write(raw) }
+		wrapped := make([]func(rune) (string, string, bool), len(choose))
+		for n, f := range choose {
+			wrapped[n] = func(r rune) (string, string, bool) { choices.Add(1); return f(r) }
+		}
+		restore := terminalLoop(in, readerPane, func(v terminalInput) { events.Add(1); emit(v) }, func() bool { admissions.Add(1); return admit() }, wrapped...)
+		ready <- in
+		return restore
+	}
+	c := beginCursorSessionWithInput(t, "", openTranscript, starter)
+	var slave *os.File
+	select {
+	case slave = <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("real terminal reader did not start")
+	}
+	c.wait(t, "confirmed ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
+	c.stop(t)
+	before, paneBefore := readerPane.bytes(), c.pane.bytes()
+	counts := [3]int32{admissions.Load(), choices.Load(), events.Load()}
+	rawBefore, err := os.ReadFile(c.e.runtime.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalReadByNextOwner(t, c.master, slave)
+	rawAfter, err := os.ReadFile(c.e.runtime.Raw)
+	if err != nil || !bytes.Equal(rawBefore, rawAfter) || len(c.prompts(t)) != 0 {
+		t.Fatalf("post-Run input reached runtime: before=%q after=%q err=%v", rawBefore, rawAfter, err)
+	}
+	if !bytes.Equal(before, readerPane.bytes()) || !bytes.Equal(paneBefore, c.pane.bytes()) || counts != [3]int32{admissions.Load(), choices.Load(), events.Load()} {
+		t.Fatal("post-Run input caused retired-reader admission, choice, event or output")
+	}
+	if bytes.Count(before, []byte("\x1b[?2004l")) != 1 {
+		t.Fatalf("Run lost terminal restoration: %q", before)
+	}
+}
 
 func TestCursorFIFOExactTextAndLifecycle(t *testing.T) {
 	// Serial: verified runtime fixture sets HOME/PATH and Run owns signal handlers.

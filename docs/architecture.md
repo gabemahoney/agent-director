@@ -523,9 +523,8 @@ and release at dispatch or cancellation. Future input paths MUST reuse
 reservation, Enter can verify committed waiting through `reporter.verifyReport`
 while the hook finishes, and the saved initial prompt retains priority. Once
 startup is confirmed, eligible complete follow-ups queue in observed terminal
-order. `terminal_linux.go` preserves editable Unicode and multiline text;
-pending startup, stale or excess input is explicitly refused. Literal text and
-Enter remain separate public send-keys operations, without concurrent-caller
+order. Pending startup, stale or excess input is explicitly refused. Literal text
+and Enter remain separate public send-keys operations, without concurrent-caller
 atomicity. `/clear` and `/new` share the priority control lane and start a
 same-life conversation rotation. Old accepted queue entries are cancelled
 individually and never migrate. Ordinary input consumed during rotation captures
@@ -537,6 +536,35 @@ remains provisional until `CheckCursorPrompt` accepts every durable guard.
 `inputMailbox.promote` transfers reservation ownership and `insertSubmission`
 merges by original observation order ahead of newer accepted work. Future
 rotation/admission paths MUST reuse these components and the captured status.
+
+`terminal_linux.go` owns one decoder and a private wake pipe; input/output
+handles remain borrowed. Until cleanup returns, callers must keep those handles
+open and must not read or change termios on the input. Idle and partial UTF-8
+refills wait for input or explicit stop, without timed polling. Escape consumes
+at most eight continuation bytes, with a separate 80 ms wait for each empty
+buffer; lone Escape interrupts. The 80 ms applies per wait, not to the whole
+sequence or turn.
+Unicode editing, the 256 Ki-rune draft limit, bracketed paste, C-u/C-c and
+native choice routing remain unchanged; literal LF adds a line, while CR
+outside paste submits.
+
+Cleanup runs once, including concurrent calls: signal stop, close the owned
+wake writer, join the original decoder, then attempt bracketed-paste disablement
+and termios restoration and close the wake reader. Restoration remains
+best-effort under the no-error cleanup API. Borrowed handles stay open; the
+reader introduces no nonblocking flag change. EOF, read/decoding and setup
+errors use the same joined cleanup. After return, this reader cannot consume
+later input, admit work, emit choices/events or write output. Stop checks
+discard buffered follow-up once observed; callbacks or writes already entered
+must return before join completes. `terminalInputLoop` also selects channel
+delivery, including setup errors, against stop.
+
+In `Run`, terminal cleanup precedes request/display/protocol teardown. Its later
+controller finalizer first disables admission and stops the mailbox.
+The reader uses the existing bounded mailbox/admission/choice callbacks and
+nonblocking `paneDisplay` enqueue. Joining it does not join a late admission
+verifier (the 100 ms limit and discarded late result remain) or drain already
+queued display output; the display's bounded stop below still applies.
 
 Dispatch requires the previous turn to finish and every retained durable dialog
 hold to resolve. Future dispatch paths MUST reuse `reporter.promptEligible`
@@ -1412,6 +1440,14 @@ production terminal defaults and expose actual controller boundaries; the
 transcript opener retains protected file creation. Use these seams for causal
 ordering and complete large submissions instead of copied controllers, alternate
 runtimes or per-rune stress. They do not supply production authority.
+
+Terminal and `Run` cleanup tests MUST reuse `terminalReadByNextOwner` in
+`terminal_test.go` with the existing PTY fixtures. After cleanup, it writes
+distinct later input and checks the exact bytes through the borrowed slave as
+its legitimate owner. The caller keeps both PTY handles open and observes
+decoder output separately from terminal echo. This proves real PTY ownership;
+the accompanying `cursorfix` runtime remains synthetic evidence.
+
 Post-bootstrap rotation/capacity semantics MUST reuse the explicit
 `postBootstrapCursorSessionWithInput` family. One aggregate 45-second setup
 deadline begins before Run; retained ready observation plus independent current
