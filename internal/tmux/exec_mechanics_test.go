@@ -327,22 +327,29 @@ func (r *execCopyErrorReader) Read(p []byte) (int, error) {
 	return r.reader.Read(p[:min(len(p), 1)])
 }
 
-// Parallel: all subprocesses, output gates, files and cleanup PIDs are owned
-// by this test. b.ftd: a late copier result must not turn clean EOF into a cut.
+// Parallel: prepare scripts before the barrier so concurrent forks cannot
+// inherit writable executable descriptors. All subprocesses,
+// gates, files and cleanup PIDs belong to this test. b.ftd: a late copier
+// result must not turn clean EOF into a cut.
 func TestExecCleanEOFBeforeCopierCompletion(t *testing.T) {
-	t.Parallel()
 	closedErr := execClosedPipeStatError(t)
 	const output, diagnostic = "complete capture\n", "separate diagnostic\n"
-	for _, streams := range []struct {
+	cases := []struct {
 		name           string
 		stdout, stderr bool
 	}{
 		{name: "stdout", stdout: true},
 		{name: "stderr", stderr: true},
 		{name: "both", stdout: true, stderr: true},
-	} {
+	}
+	bins := make([]string, len(cases))
+	for i := range cases {
+		bins[i], _ = execFake(t, output, diagnostic, "cat \"$D/out\"\ncat \"$D/err\" >&2\nexit 0")
+	}
+	t.Parallel()
+	for i, streams := range cases {
 		t.Run(streams.name, func(t *testing.T) {
-			bin, _ := execFake(t, output, diagnostic, "cat \"$D/out\"\ncat \"$D/err\" >&2\nexit 0")
+			bin := bins[i]
 			var gates []*execCompletionGate
 			index := 0
 			client := tmux.NewWithOutputWrapper(bin, execCompletionTimeouts(), func(dst io.Writer) io.Writer {
@@ -358,7 +365,7 @@ func TestExecCleanEOFBeforeCopierCompletion(t *testing.T) {
 			got, err := client.CapturePaneID("/tmp/owned-synthetic-socket", "%1", 10, false)
 			for _, gate := range gates {
 				if !gate.called || !gate.closed || gate.copyErr != nil || gate.copied == 0 {
-					t.Fatalf("gate did not observe complete actual copy then descriptor close: called=%v closed=%v bytes=%d copy error=%v gate error=%v", gate.called, gate.closed, gate.copied, gate.copyErr, gate.gateErr)
+					t.Fatalf("gate did not observe complete actual copy then descriptor close: called=%v closed=%v bytes=%d copy error=%v gate error=%v got=%q err=%v err_detail=%#v", gate.called, gate.closed, gate.copied, gate.copyErr, gate.gateErr, got, err, err)
 				}
 			}
 			if err != nil || got != output {
@@ -368,16 +375,22 @@ func TestExecCleanEOFBeforeCopierCompletion(t *testing.T) {
 	}
 }
 
-// Parallel: helpers and their held writer PIDs belong only to this test.
+// Parallel: scripts are prepared before the barrier; helpers and their held
+// writer PIDs belong only to this test.
 // b.ftd: one clean stream cannot excuse the other stream's open writer.
 func TestExecOneStreamHeldStillCutsOutput(t *testing.T) {
-	t.Parallel()
-	for _, stream := range []struct{ name, hold string }{
+	cases := []struct{ name, hold string }{
 		{name: "stdout", hold: `sleep 5 2>/dev/null & echo $! >> "$D/gc"`},
 		{name: "stderr", hold: `sleep 5 >/dev/null & echo $! >> "$D/gc"`},
-	} {
+	}
+	bins := make([]string, len(cases))
+	for i, stream := range cases {
+		bins[i], _ = execFake(t, "complete-looking capture\n", "", stream.hold+"\ncat \"$D/out\"\nexit 0")
+	}
+	t.Parallel()
+	for i, stream := range cases {
 		t.Run(stream.name, func(t *testing.T) {
-			bin, _ := execFake(t, "complete-looking capture\n", "", stream.hold+"\ncat \"$D/out\"\nexit 0")
+			bin := bins[i]
 			got, err := tmux.New(bin, execCompletionTimeouts()).CapturePaneID("/tmp/owned-synthetic-socket", "%1", 10, false)
 			ce := callError(t, err)
 			if got != "" || ce.Failure != tmux.FailUnrecognized || ce.FirstLine != execCutShort || ce.ExitStatus != 0 {
@@ -387,14 +400,20 @@ func TestExecOneStreamHeldStillCutsOutput(t *testing.T) {
 	}
 }
 
-// Parallel: both the failed reader and the helper belong only to this test.
+// Parallel: scripts are prepared before the barrier; both the failed reader
+// and the helper belong only to this test.
 // b.ftd: delayed completion after a partial/error read is not clean EOF.
 func TestExecCopyErrorBeforeCompletionStillCutsOutput(t *testing.T) {
-	t.Parallel()
 	closedErr := execClosedPipeStatError(t)
-	for _, stream := range []string{"stdout", "stderr"} {
+	streams := []string{"stdout", "stderr"}
+	bins := make([]string, len(streams))
+	for i := range streams {
+		bins[i], _ = execFake(t, "complete capture\n", "diagnostic\n", "cat \"$D/out\"\ncat \"$D/err\" >&2\nexit 0")
+	}
+	t.Parallel()
+	for i, stream := range streams {
 		t.Run(stream, func(t *testing.T) {
-			bin, _ := execFake(t, "complete capture\n", "diagnostic\n", "cat \"$D/out\"\ncat \"$D/err\" >&2\nexit 0")
+			bin := bins[i]
 			var gate *execCompletionGate
 			index := 0
 			client := tmux.NewWithOutputWrapper(bin, execCompletionTimeouts(), func(dst io.Writer) io.Writer {
@@ -408,7 +427,7 @@ func TestExecCopyErrorBeforeCompletionStillCutsOutput(t *testing.T) {
 			})
 			got, err := client.CapturePaneID("/tmp/owned-synthetic-socket", "%1", 10, false)
 			if gate == nil || !gate.called || !gate.closed || gate.copied != 1 || !errors.Is(gate.copyErr, io.ErrUnexpectedEOF) {
-				t.Fatalf("partial/error gate did not execute: %+v", gate)
+				t.Fatalf("partial/error gate did not execute: %+v got=%q err=%v err_detail=%#v", gate, got, err, err)
 			}
 			ce := callError(t, err)
 			if got != "" || ce.Failure != tmux.FailUnrecognized || ce.FirstLine != execCutShort || ce.ExitStatus != 0 {

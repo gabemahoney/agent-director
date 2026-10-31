@@ -1406,6 +1406,12 @@ guarded publication, existing `rotationBarrier` before/after publication,
 Store rotation tests reuse `rotationStore`, `rotationVisibility`,
 `cursorTrailEnv` and the existing hook/store fixture
 owners rather than copying controller logic or manufacturing publication proof.
+External store tests MUST reuse `HoldConnectionForTest` in
+`internal/store/relay_writes_test.go` to hold the real pooled connection; its
+release function is idempotent and joins the holder. Rotation acquisition-boundary
+tests MUST reuse `RotateCursorSessionBeforeAcquireForTest` in
+`internal/store/cursor_trail_export_test.go`: its per-call callback runs after
+entry validation, before the real acquisition computes its remaining wait.
 
 Load tests MUST extend `beginCursorLoad`/`beginObservedCursorLoad` and the same
 peer's `LoadSupport`, `BeforeLoadReply`, `LoadReply`, `WaitForLoad` and

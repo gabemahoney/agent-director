@@ -729,6 +729,13 @@ var boundedCalls = []boundedCall{
 	}},
 }
 
+// HoldConnectionForTest shares the real pooled-connection holder with external store tests.
+// Future external store tests MUST reuse this holder.
+func HoldConnectionForTest(t *testing.T, s *Store) func() {
+	t.Helper()
+	return holdConnection(t, s)
+}
+
 // holdConnection makes another goroutine take s's one connection, as another
 // call of this process does, until release; it gives it back after 5 s
 // regardless, so a call that waits for it shows as slow instead of hanging.
