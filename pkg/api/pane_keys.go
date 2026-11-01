@@ -344,7 +344,7 @@ func (r *keysRun) target() (string, tmux.Launch, error) {
 // each entry point writes each reason at most once per call. No record
 // carries a label's value, a launch token, the typed text, a
 // session-environment value or another row's id (SR-15).
-func (r *keysRun) emitDisagree(verb, instanceID string, who caller) {
+func (r *keysRun) emitDisagree(emit trailEmit, verb, instanceID string, who caller) {
 	f := r.found
 	var reasons []string
 	var current string
@@ -364,7 +364,7 @@ func (r *keysRun) emitDisagree(verb, instanceID string, who caller) {
 	if f.FollowUp.Ran {
 		reasons = append(reasons, f.FollowUp.Result.Disagree...)
 	}
-	emitProvenanceDisagree(provenanceDisagree{
+	writeProvenanceDisagree(emit, provenanceDisagree{
 		Verb:               verb,
 		Source:             "ad_send_keys",
 		InstanceID:         instanceID,

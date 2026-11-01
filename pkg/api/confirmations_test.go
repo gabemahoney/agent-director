@@ -57,6 +57,7 @@ type mainRead struct {
 // readMain reads id through status, get and list over s with view (each a
 // checked read when view has a process reader) and returns the three. An
 // optional settle clock selects the Client's identical settled projections.
+// Tests in this package must reuse this helper for status/get/list confirmation assertions.
 func readMain(t *testing.T, s *store.Store, view api.RelayView, id string, settle ...store.SettleRead) []mainRead {
 	t.Helper()
 	status, get, listRows := api.Status, api.Get, api.List

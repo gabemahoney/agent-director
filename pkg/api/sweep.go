@@ -57,6 +57,11 @@ func Sweep(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc ProcCh
 //
 // Errors:
 //   - ErrProbeUnsupported: retained for compatibility; no longer returned.
+//   - [ErrStoreBusy]: the zero-wait store read selecting the agents did not
+//     finish within its bound: another call of this process held the store's
+//     operation slot or connection (an earlier call's operation keeps them
+//     until it is disposed), another connection held a lock the read needed,
+//     the read ran out of time, or ctx ended first. Nothing was checked.
 //
 // Nondeterminism: none.
 func (c *Client) Sweep(ctx context.Context) (SweepResult, error) {

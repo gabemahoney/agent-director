@@ -10,11 +10,12 @@
  *     envelope-diff.test.ts.
  *
  * (c) Every verb (outside the allow-list) has at least one "error path" test.
- *     Allow-list verbs have no triggerable verb-level errors:
+ *     Allow-list verbs have no deterministically triggerable verb-level error:
  *       - version      — no ErrorNames in manifest
  *       - expire       — no ErrorNames in manifest
- *       - find-missing — lists only ErrProbeUnsupported, which it no longer
- *                        returns (kept by SR-1.7)
+ *       - sweep, find-missing — list ErrProbeUnsupported, which they no longer
+ *                        return (kept by SR-1.7), and ErrStoreBusy, for which
+ *                        these tests have no deterministic fixture
  *
  * (d) nondeterministic.json contains an entry for every verb in VERBS.
  *     Catches drift when a new verb is added to the manifest.
@@ -43,8 +44,8 @@ const envelopeDiffFile = path.join(testDir, "envelope-diff.test.ts");
 const NO_ERROR_CASE_ALLOWLIST: ReadonlySet<string> = new Set([
   "version", // no ErrorNames in manifest
   "expire", // no ErrorNames in manifest
-  "sweep", // same retained, unreachable ErrProbeUnsupported
-  "find-missing", // lists only ErrProbeUnsupported; no longer returns it (kept by SR-1.7)
+  "sweep", // retained, unreachable ErrProbeUnsupported; no deterministic ErrStoreBusy fixture
+  "find-missing", // same as sweep (kept by SR-1.7)
 ]);
 
 // ── helpers ───────────────────────────────────────────────────────────────────

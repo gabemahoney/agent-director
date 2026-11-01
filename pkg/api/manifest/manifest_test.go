@@ -605,10 +605,11 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 }
 
 // TestListHasSRDErrorNames pins list's, and Client.List's "Errors:" list, to
-// exactly its label k=v parse rejection (SRD §13.1) and ErrInvalidFlags, the
-// shared layer's refusal of a negative limit (b.c4n).
+// exactly its label k=v parse rejection (SRD §13.1), ErrInvalidFlags, the
+// shared layer's refusal of a negative limit (b.c4n), and ErrStoreBusy, a
+// zero-wait selection or projection read that did not finish within its bound.
 func TestListHasSRDErrorNames(t *testing.T) {
-	assertErrorNames(t, "list", "List", true, "ErrInvalidFlags", "ErrListInvalidLabel")
+	assertErrorNames(t, "list", "List", true, "ErrInvalidFlags", "ErrListInvalidLabel", "ErrStoreBusy")
 }
 
 // TestListSubagentsHasSRDErrorNames pins list-subagents', and

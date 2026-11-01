@@ -24,7 +24,7 @@ import (
 //     that carried one, when no newer turn is current (codexTurnSet);
 //   - codex_turn_ended: the latest turn recorded as ended, by a Stop or
 //     Interrupt of the main thread, or by a read that found the rollout's
-//     task_complete for codex_turn (EndCodexTurn).
+//     task_complete for codex_turn (EndCodexTurnSample).
 //
 // Turn ids are unique, so neither is cleared: a turn recorded in an earlier
 // session never matches a later session's hook or rollout line. Only
@@ -183,7 +183,7 @@ func (s *Store) codexToolTurnLate(instanceID, turn string) (bool, error) {
 
 // CodexOpenTurn is a Codex row whose raw state is working and whose current
 // turn (codex_turn) is not recorded as ended: a read may end it from the
-// rollout at JSONLPath (EndCodexTurn).
+// rollout at JSONLPath (EndCodexTurnSample).
 type CodexOpenTurn struct {
 	InstanceID string
 	SessionID  string
@@ -210,18 +210,9 @@ const codexOpenTurnsSQL = `SELECT instance_id, COALESCE(session_id, ''), jsonl_p
 const codexOpenTurnSQL = `agent = '` + AgentCodex + `' AND state = '` + StateWorking + `'
  AND codex_turn IS NOT NULL AND codex_turn IS NOT codex_turn_ended AND COALESCE(jsonl_path, '') <> ''`
 
-// CodexOpenTurns reads only the requested row, or all rows for an explicit
-// empty scope. Family membership never grants permission to inspect a child.
-func (s *Store) CodexOpenTurns(instanceID string) ([]CodexOpenTurn, error) {
-	samples, err := s.CodexTurnSamples(instanceID)
-	var out []CodexOpenTurn
-	for _, t := range samples {
-		out = append(out, t.CodexOpenTurn)
-	}
-	return out, err
-}
-
-// CodexTurnSamples is the guarded counterpart used by active recovery.
+// CodexTurnSamples captures the requested row for active recovery, or every
+// eligible row for an explicit empty scope. Family membership grants no
+// permission to inspect a child.
 func (s *Store) CodexTurnSamples(instanceID string) ([]CodexTurnSample, error) {
 	q, args := codexOpenTurnsSQL, []any(nil)
 	if instanceID != "" {
@@ -253,14 +244,14 @@ func (s *Store) CodexTurnSamples(instanceID string) ([]CodexTurnSample, error) {
 	return out, err
 }
 
-// CodexTurnEndEvent is the triggering_event_name of the move EndCodexTurn
+// CodexTurnEndEvent is the triggering_event_name of the move EndCodexTurnSample
 // makes, and CodexTurnEndCause its cause: the rollout's task_complete.
 const (
 	CodexTurnEndEvent = "task_complete"
 	CodexTurnEndCause = "codex_rollout_task_complete"
 )
 
-// EndCodexTurn is a read's move of t's row to waiting once the caller found
+// EndCodexTurnSample is an Active Check's move of t's row to waiting once the caller found
 // t.Turn's task_complete in the rollout at t.JSONLPath (b.x72): the turn end a
 // Stop would have written, for a turn Codex ran no Stop for. One guarded
 // statement, in one transaction with the family refresh, applies only while
@@ -273,25 +264,13 @@ const (
 // to waiting, with triggering_event_name CodexTurnEndEvent and cause
 // CodexTurnEndCause.
 //
+// The caller must retain t across rollout access: the write also fences
+// the sampled launch/life, row, observation and permission revisions.
+//
 // It waits at most maxWait for the write lock (0: none, as a reading verb
 // waits). It reports whether the move applied. A row that is no longer t
 // changes nothing and reports false; so does a commit whose outcome is
 // unknown, which returns an identifiable error and must not count as applied.
-func (s *Store) EndCodexTurn(t CodexOpenTurn, maxWait time.Duration) (bool, error) {
-	samples, err := s.CodexTurnSamples(t.InstanceID)
-	if err != nil {
-		return false, err
-	}
-	for _, sample := range samples {
-		if sample.CodexOpenTurn == t {
-			return s.EndCodexTurnSample(sample, maxWait)
-		}
-	}
-	return false, nil
-}
-
-// EndCodexTurnSample fences external evidence by the sampled revisions.
-// Recovery callers must retain this sample across rollout access.
 func (s *Store) EndCodexTurnSample(t CodexTurnSample, maxWait time.Duration) (bool, error) {
 	// The rollout's task_complete is the state record's evidence (transcript).
 	stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateWaiting, EvidenceTranscript)

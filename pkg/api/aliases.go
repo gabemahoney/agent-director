@@ -144,7 +144,9 @@ var ErrPermissionRequestNotFound = store.ErrPermissionRequestNotFound
 // could not be settled within it. Nothing was recorded, so the call
 // can be retried. Once the verdict has committed, decide never returns it: a
 // bound reached during the wait for the relay hook's ack returns
-// not_confirmed instead. Without a bound decide never returns it.
+// not_confirmed instead. Without a bound decide never returns it. These
+// statements apply to decide; other verbs that list it say in their own
+// Errors when they return it.
 // Re-exported from internal/store.
 var ErrStoreBusy = store.ErrStoreBusy
 

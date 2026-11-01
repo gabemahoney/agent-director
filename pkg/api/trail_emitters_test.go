@@ -2,7 +2,7 @@ package api_test
 
 // trail_emitters_test.go: which trail emitter each caller of the shared writers uses (b.7tz cw S2). A recovery
 // check bounds each record by its own operation context (SR-1, SR-3), and so does the store's recovery observer
-// by its call context; spawn and pause, outside recovery, keep the synchronous write. Each test holds the real
+// by its call context; pause also bounds reporting, while spawn keeps the synchronous write. Each test holds the real
 // trail writer so the two emitters behave differently. TestCursorReadsWithBlockedTrail covers the bounded status,
 // get and list reads.
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -19,19 +20,40 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// trailEncodingGate blocks JSON encoding while the actual singleton owns its mutex.
+type trailEncodingGate struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *trailEncodingGate) MarshalJSON() ([]byte, error) {
+	close(g.entered)
+	<-g.release
+	return []byte(`"released"`), nil
+}
+
+// drainTrail acknowledges the existing worker's FIFO with one bounded sentinel.
+// Tests reading accepted bounded records must reuse this barrier before disk assertions.
+func drainTrail(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := trail.Emit(ctx, "ad.test.trail_emitters_drained", nil); err != nil {
+		t.Fatalf("FIFO drain: %v", err)
+	}
+}
 
 // holdTrail holds the process-wide trail writer's mutex, inside a holder record's encoding, until release (or
 // cleanup) lets it go: a synchronous write waits for the release, and a bounded one stays queued. It first drains
 // an earlier test's bounded records, still in flight on a slow disk, and fails the test unless none is then
 // pending; callers take their status baseline after it. Callers must be serial.
+// Serial trail-blocking tests must reuse this holder instead of creating inline copies.
 func holdTrail(t *testing.T) (release func()) {
 	t.Helper()
-	drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := trail.Emit(drain, "ad.test.trail_emitters_drained", nil); err != nil {
-		t.Fatalf("FIFO drain before the hold: %v", err)
-	}
+	drainTrail(t)
 	if s := trail.Default().Status(); s.Pending != 0 {
 		t.Fatalf("prior audit is still pending: %+v", s)
 	}
@@ -130,11 +152,7 @@ func TestFindMissingTickUnderCancelledContext(t *testing.T) {
 		t.Fatalf("held audit status = %+v; want exactly %d ticks pending without failures or rejections (baseline %+v)", s, sweeps, baseline)
 	}
 	release()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := trail.Emit(ctx, "ad.test.trail_emitters_drained", nil); err != nil {
-		t.Fatalf("FIFO drain: %v", err)
-	}
+	drainTrail(t)
 	if s := writer.Status(); s.Pending != 0 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
 		t.Fatalf("drained audit status = %+v", s)
 	}
@@ -229,11 +247,7 @@ func TestObserveIdleScreenUnderCancelledContext(t *testing.T) {
 			"(a record bounded by a fresh context waits out the observer bound)", fastest, api.RecoveryTrailWait)
 	}
 	release()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := trail.Emit(ctx, "ad.test.trail_emitters_drained", nil); err != nil {
-		t.Fatalf("FIFO drain: %v", err)
-	}
+	drainTrail(t)
 	if s := writer.Status(); s.Pending != 0 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
 		t.Fatalf("drained audit status = %+v", s)
 	}
@@ -250,41 +264,250 @@ func TestObserveIdleScreenUnderCancelledContext(t *testing.T) {
 	}
 }
 
-// TestPauseCodexEndTickSynchronous: pause is not a recovery check, so its Codex end tick keeps the synchronous
-// write. With the trail writer held, pause does not return until the writer is released (a bounded write returns
-// after RecoveryTrailWait with the tick still queued); once it returns, the tick is on disk and nothing is queued.
-func TestPauseCodexEndTickSynchronous(t *testing.T) {
+// TestPauseCodexEndTickBounded (b.x9o): a committed Codex end returns while
+// reporting is blocked; its accepted recovery tick survives caller cancellation.
+func TestPauseCodexEndTickBounded(t *testing.T) {
 	// Serial: it holds the process-wide trail singleton's mutex.
-	e := newKillEnv(t)
-	r := e.seedRow(t, codexSpec(store.StateWorking, agentGone, true))
-	mark := trailMark(t)
-	release := holdTrail(t)
-	baseline := trail.Default().Status()
-	done := make(chan error, 1)
-	go func() {
-		_, err := e.pause(pauseParams(r))
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		t.Fatalf("Pause returned (err %v) while the trail writer was held; want it to wait for its end tick's write", err)
-	case <-time.After(5 * api.RecoveryTrailWait):
+	for _, cancelled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancelled=%v", cancelled), func(t *testing.T) {
+			attempts := 1
+			if cancelled {
+				attempts = 5 // As for cancelled sweeps, tolerate scheduler noise.
+			}
+			fastest := time.Duration(math.MaxInt64)
+			for i := range attempts {
+				t.Run(fmt.Sprintf("sample=%d", i), func(t *testing.T) {
+					e := newKillEnv(t)
+					r := e.seedRow(t, codexSpec(store.StateWorking, agentGone, true))
+					mark := trailMark(t)
+					release := holdTrail(t)
+					baseline := trail.Default().Status()
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					var cancelledAt time.Time
+					if cancelled {
+						e.store.beforeEnded = func() {
+							cancelledAt = time.Now()
+							cancel()
+						}
+					}
+					type outcome struct {
+						err error
+						at  time.Time
+					}
+					done := make(chan outcome, 1)
+					go func() {
+						_, err := e.pauseWithin(ctx, pauseTimeoutSeconds, pauseParams(r))
+						done <- outcome{err, time.Now()}
+					}()
+					select {
+					case got := <-done:
+						if got.err != nil {
+							t.Fatalf("Pause: %v; want the row ended", got.err)
+						}
+						if cancelled {
+							took := got.at.Sub(cancelledAt)
+							t.Logf("API tick returned %v after cancellation at end-write entry", took)
+							fastest = min(fastest, took)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("Pause did not return while the trail writer was held")
+					}
+					if s := trail.Default().Status(); s.Pending != baseline.Pending+1 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
+						t.Fatalf("held audit status = %+v; want exactly one accepted tick (baseline %+v)", s, baseline)
+					}
+					pauAssertState(t, e, r.ID, store.StateEnded)
+					release()
+					drainTrail(t)
+					if s := trail.Default().Status(); s.Pending != 0 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
+						t.Errorf("drained audit status = %+v", s)
+					}
+					assertMoveRecords(t, mark, r.ID, moveWant{source: "ad_recovery", prior: store.StateWorking, now: store.StateEnded,
+						denyReason: store.DecisionReasonEnded, reason: "proc_absent"})
+				})
+			}
+			if cancelled && fastest >= api.RecoveryTrailWait/2 {
+				t.Errorf("TB1 API tick: fastest cancelled reporting took %v; want under %v", fastest, api.RecoveryTrailWait/2)
+			}
+		})
 	}
-	release()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Pause: %v; want the row ended", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Pause did not return after the trail writer was released")
+}
+
+// TestPauseCodexTerminalReportingBounded (b.x9o, a9 review B1) reaches the
+// concrete store's display exit and request closeout before the API tick.
+func TestPauseCodexTerminalReportingBounded(t *testing.T) {
+	// Serial: it holds the process-wide trail singleton's mutex.
+	for _, mode := range []string{"finite", "cancelled", "earlier-deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			attempts := 1
+			if mode != "finite" {
+				attempts = 5
+			}
+			fastest := time.Duration(math.MaxInt64)
+			for i := range attempts {
+				t.Run(fmt.Sprintf("sample=%d", i), func(t *testing.T) {
+					e := newKillEnv(t)
+					spec := codexSpec(store.StateWorking, agentAlive, false)
+					spec.RelayOn = true
+					r := e.seedRow(t, spec)
+					// Enter a real display episode, then let the hook retain it while
+					// moving the raw state into check_permission.
+					for _, at := range []time.Time{e.clock.Now(), e.clock.Now().Add(time.Minute)} {
+						row, err := e.st.GetSpawn(r.ID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						out, err := e.st.ObserveIdleScreenOutcome(row, store.PaneSample{SHA256: "same-pane"}, at, time.Minute, store.SettleRead{})
+						if err != nil || !out.Committed {
+							t.Fatalf("display setup: %+v, %v", out, err)
+						}
+					}
+					if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "PermissionRequest", r.Spawn.SessionID, apitest.HookAgent(store.AgentCodex)); !a.Applied {
+						t.Fatalf("permission hook: %+v", a)
+					}
+					tokens := pcxSeedRequests(t, e, r.ID, 1)
+					e.codexExits(t, r, nil)
+					before, err := e.st.GetSpawn(r.ID)
+					if err != nil || before.EndReportedAtMillis <= 0 || before.State != store.StateCheckPermission || before.CommittedDisplay().State != store.StateIdleScreen {
+						t.Fatalf("end report must retain the live display: %+v, %v", before, err)
+					}
+					if pr, err := e.st.GetPermissionRequest(r.ID, tokens[0]); err != nil || pr.Closed() || pr.Decision != "" {
+						t.Fatalf("end report must leave request open and undecided: %+v, %v", pr, err)
+					}
+					mark := trailMark(t)
+					release := holdTrail(t)
+					baseline := trail.Default().Status()
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					type outcome struct {
+						err error
+						at  time.Time
+					}
+					done := make(chan outcome, 1)
+					started := time.Now()
+					go func() {
+						callCtx := ctx
+						if mode == "earlier-deadline" {
+							// Start immediately before entry, not before scheduling the caller.
+							var stop context.CancelFunc
+							callCtx, stop = context.WithTimeout(ctx, api.RecoveryTrailWait/5)
+							defer stop()
+						}
+						// Pass the concrete store: the narrow killStore wrapper bypasses
+						// Pause's production reporting view and cannot cover B1.
+						_, err := api.Pause(callCtx, e.st, e.rec, api.PauseEnv{Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now}}, pauseTimeoutSeconds, pauseParams(r))
+						done <- outcome{err, time.Now()}
+					}()
+					// Read through a second connection: the terminal writer may still
+					// own its connection while reporting the already committed change.
+					limit := time.Now().Add(5 * time.Second)
+					var lastLiveRead time.Time
+					for {
+						readStarted := time.Now()
+						if e.columns(t, r.ID).State == store.StateEnded {
+							break
+						}
+						// Timestamp BEFORE a read that still sees the live row: this
+						// precedes COMMIT and therefore any fresh reporting allowance.
+						lastLiveRead = readStarted
+						if time.Now().After(limit) {
+							t.Fatal("terminal transaction did not commit")
+						}
+						runtime.Gosched()
+					}
+					if mode == "cancelled" {
+						cancel() // after entry and COMMIT, never a pre-cancelled initial read
+					}
+					returned := false
+					select {
+					case got := <-done:
+						returned = true
+						if got.err != nil {
+							t.Errorf("Pause after committed end: %v", got.err)
+						}
+						// Ignore samples with no live observation. A delayed COMMIT
+						// observer must never move the baseline past reporting entry:
+						// its delay only enlarges this conservative commit/report tail.
+						if !lastLiveRead.IsZero() {
+							took := got.at.Sub(lastLiveRead)
+							if took < 0 {
+								t.Error("return preceded the last live read")
+							} else {
+								fastest = min(fastest, took)
+							}
+							t.Logf("terminal reporting from last live read: %v; mode=%s", took, mode)
+						} else {
+							t.Log("no live observation; sample excluded from timing assertion")
+						}
+					case <-time.After(time.Second):
+						t.Error("B1: Pause committed ended but did not return while store reporting was held")
+					}
+					t.Logf("Pause returned=%v after %v; mode=%s; held status=%+v", returned, time.Since(started), mode, trail.Default().Status())
+					if returned {
+						if s := trail.Default().Status(); s.Pending != baseline.Pending+4 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
+							t.Errorf("held audit status = %+v; want exactly four accepted records (baseline %+v)", s, baseline)
+						}
+					}
+					release()
+					if !returned {
+						select {
+						case got := <-done:
+							if got.err != nil {
+								t.Errorf("Pause after release: %v", got.err)
+							}
+						case <-time.After(5 * time.Second):
+							t.Fatal("Pause did not finish after releasing the writer")
+						}
+					}
+					drainTrail(t)
+					if s := trail.Default().Status(); s.Pending != 0 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
+						t.Errorf("drained audit status = %+v", s)
+					}
+					after, err := e.st.GetSpawn(r.ID)
+					if err != nil || after.State != store.StateEnded || after.EndedAt == nil || after.DisplayObservation != "" || after.Snapshot.RowVersion != before.Snapshot.RowVersion+1 || after.Identity != before.Identity || after.LifeNumber != before.LifeNumber {
+						t.Fatalf("guarded terminal result: %+v, %v; before %+v", after, err, before)
+					}
+					pr, err := e.st.GetPermissionRequest(r.ID, tokens[0])
+					if err != nil || !pr.Closed() || pr.Decision != "deny" || pr.DecisionReason != store.DecisionReasonEnded || pr.DecisionOrigin != store.DecisionOriginObservation {
+						t.Fatalf("committed request closure: %+v, %v", pr, err)
+					}
+					e.assertKillCalls(t) // early terminal recovery never looks up or types into tmux
+					if calls := e.pc.StartTimeCalls(); !slices.Equal(calls, []int{r.AgentPID}) {
+						t.Errorf("process checks = %v; want only recorded agent %d", calls, r.AgentPID)
+					}
+					events := displayEvents(t, mark, r.ID)
+					if len(events) != 1 {
+						t.Fatalf("display exits = %v; want exactly one", events)
+					}
+					// The first row event is the display exit; the existing exact oracle
+					// checks all remaining mutation/orphan/terminal fields and ordering.
+					for i, line := range readAPITrailLines(t)[mark:] {
+						if line["instance_id"] != r.ID {
+							continue
+						}
+						if line["event"] != "ad.spawn.displayed_state_transition" {
+							t.Fatalf("first terminal record = %v; want display exit", line)
+						}
+						at, err := time.Parse(displayTS, line["ts"].(string))
+						if err != nil || at.Before(started.Truncate(time.Millisecond)) || at.After(time.Now()) {
+							t.Fatalf("display exit timestamp = %v, %v", at, err)
+						}
+						assertDisplayEvent(t, events[0], store.StateIdleScreen, store.StateEnded, at)
+						assertMoveRecords(t, mark+i+1, r.ID, moveWant{source: "ad_recovery", prior: before.State, now: store.StateEnded,
+							denyReason: store.DecisionReasonEnded, reason: "proc_absent", tokens: tokens})
+						break
+					}
+				})
+			}
+			// A fresh allowance starts after the last live read, so even a
+			// late observer cannot make that control beat the bound. Use the
+			// fastest sample, as the existing cancellation tests do, so slow
+			// scheduling cannot make an individual noisy sample fail the test.
+			if mode != "finite" && fastest >= api.RecoveryTrailWait/2 {
+				t.Errorf("TB1 terminal reporting: fastest %s reporting took %v; want under %v", mode, fastest, api.RecoveryTrailWait/2)
+			}
+		})
 	}
-	if s := trail.Default().Status(); s.Pending != 0 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
-		t.Errorf("audit status on return = %+v; want nothing queued, failed or rejected", s)
-	}
-	assertMoveRecords(t, mark, r.ID, moveWant{source: "ad_recovery", prior: store.StateWorking, now: store.StateEnded,
-		denyReason: store.DecisionReasonEnded, reason: "proc_absent"})
-	pauAssertState(t, e, r.ID, store.StateEnded)
 }
 
 // TestScanNameHeldSynchronous: spawn is not a recovery check, so its label scan's ad.launch.name_held keeps the

@@ -10,6 +10,7 @@ differs from the rules, the rules win.
 - **Run tests only as docs/engineering-guide.md §10 "Build and test commands" says**, never on the host, because they can rewrite the real agent-director store.
 - **Integration tests** are the Docker testplans "Writing Testplans" below describes.
 - **Fixtures.** Reuse the fixtures whose `docs/architecture.md` headings are marked "(reusable …)". Register a new reusable one the same way and in its doc comment.
+- **Event-driven work and recovery.** Test that time alone creates neither a job nor an idle Helper probe, while finite waits for current work retain their behavior. Choose distinct regressions for shared read/sweep recovery, fixed selection and independently guarded lifecycle/process/display evidence. Reuse existing store, tmux, native-input and Cursor fixtures, injected clocks and causal barriers; retain real process, SQLite and IPC coverage where the claim depends on them. Keep existing native-input, permission and pause authorization, ownership, dialog and ambiguity guards covered.
 - **Advice text.** Adding or changing error advice that tells a caller what to do next needs a literal-follow test that does exactly what it says.
 - **Size guards.** Don't raise a recorded baseline (such as `helpStdoutBytes`) to make a test pass. A few bytes under the hard cap is fine, with the reason in the commit; otherwise stop and ask.
 - **Regression tests** name the Bug's ID in a comment.
@@ -166,6 +167,12 @@ wire detail.
     a request, as `needs-intelligence` does.
 
   The exceptions cover those two plans only.
+- `idle-screen` obtains positive
+  pane evidence through real launches/hooks/reads, then removes only the pane
+  label while the agent stays alive to test a failed latest attempt retaining
+  its first confirmation. Integration must export
+  `/tmp/idle-screen-artifacts/public.jsonl` before container cleanup. A baseline
+  without `display_evidence` exits unavailable (77), not passed.
 - Lifecycle and read-write coverage lives in
   `internal/store/display_lifecycle_test.go` (find-missing's repair, unreadable
   display metadata, a stored `needs_intelligence` ended at the first read, an

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -34,34 +33,8 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 			before := e.columns(t, b.InstanceID)
 			mark := len(readAPITrailLines(t))
 			writer := trail.Default()
+			release := holdTrail(t)
 			baseline := writer.Status()
-			if baseline.Pending != 0 {
-				t.Fatalf("prior audit is still pending: %+v", baseline)
-			}
-			gate := &trailEncodingGate{entered: make(chan struct{}), release: make(chan struct{})}
-			var once sync.Once
-			release := func() { once.Do(func() { close(gate.release) }) }
-			holder := make(chan error, 1)
-			go func() {
-				holder <- trail.Emit(context.Background(), "ad.test.cursor_deadline_holder", map[string]any{"gate": gate})
-			}()
-			// Unblock before joining on every failure/panic path, including fixture cleanup.
-			defer func() {
-				release()
-				select {
-				case err := <-holder:
-					if err != nil {
-						t.Errorf("holder Emit: %v", err)
-					}
-				case <-time.After(5 * time.Second):
-					t.Error("holder did not finish after release")
-				}
-			}()
-			select {
-			case <-gate.entered:
-			case <-time.After(5 * time.Second):
-				t.Fatal("encoder did not acquire the real writer mutex")
-			}
 			heldAt := time.Now()
 			observer, err := store.Open(e.dbPath)
 			if err != nil {
@@ -198,11 +171,7 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 			terminal := e.columns(t, b.InstanceID)
 			t.Logf("%s returned in %v; real mutex still held for %v; pending=%d", verb, got.took, time.Since(heldAt), pending.Pending)
 			release()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := trail.Emit(ctx, "ad.test.cursor_deadline_drained", nil); err != nil {
-				t.Fatalf("FIFO drain: %v", err)
-			}
+			drainTrail(t)
 			if status := writer.Status(); status.Pending != 0 || status.Failed != baseline.Failed || status.Rejected != baseline.Rejected {
 				t.Fatalf("drained audit status: %+v", status)
 			}

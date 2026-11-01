@@ -110,11 +110,12 @@ func DescCleanupGuidance() DescCase {
 }
 
 // DescCleanupPointer is SR-18.7's cleanup guidance as the short pointer the
-// kill and find-missing Descriptions carry (Epic 15 build-lead decision 1):
+// kill and canonical sweep Descriptions carry (Epic 15 build-lead decision 1):
 // agents never run expire, an operator-scheduled finished-row cleanup. It
 // must not carry the full sentence's phrases (DescCleanupGuidance) instead or
 // as well, nor a schedule claim. Check it with AssertAgentTextCase
-// (find-missing's on FindMissingOwnText).
+// (sweep's on FindMissingOwnText; the find-missing alias has only a
+// compatibility pointer to sweep).
 func DescCleanupPointer() DescCase {
 	return DescCase{
 		Name:    "SR-18.7, cleanup guidance (pointer)",

@@ -101,10 +101,11 @@ const (
 	// context.DeadlineExceeded), 1 s each: MarkCursorMissingIfSameLaunch (whose
 	// save get, status and list then defer) and MarkFailedCursorRuntimeMissing
 	// (cursorhost's failed-launch close, which returns the error). Also
-	// matched, with no deadline, so each spins far longer before it fails:
-	// find-missing's mark (MarkMissingIfSameLife), resume's and reuse's restore
-	// of a missing row, and SeedSpawn of a missing row. Install it only where
-	// none of these runs, after seeding.
+	// matched: shared recovery's mark (RecoveryWrites.MarkMissingIfSameLife),
+	// bounded by its immediate-work budget and enclosing caller context.
+	// Other matching writes can lack that bound: the direct store mark,
+	// resume's and reuse's restore of a missing row, and SeedSpawn of a missing
+	// row. Install only where those unbounded writes do not run, after seeding.
 	MissingDeadlineOverrun Kind = 8
 	// DisplayObservation fails the final report write after request clocks are written.
 	DisplayObservation Kind = 9

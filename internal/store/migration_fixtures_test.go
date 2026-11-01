@@ -1943,9 +1943,13 @@ var v19ColumnSpecs = []columnSpec{
 }
 
 // v20ColumnSpecs is the nullable, unbackfilled display evidence column.
+// Must use: a migration test in this package seeds or names it through
+// these specs.
 var v20ColumnSpecs = []columnSpec{{"spawns", "display_evidence", "TEXT", false, ""}}
 
 // v19ColumnNames are v19ColumnSpecs' column names, in order.
+// Must use: a migration test in this package reads the v19 columns by
+// these names.
 func v19ColumnNames() []string {
 	var names []string
 	for _, c := range v19ColumnSpecs {

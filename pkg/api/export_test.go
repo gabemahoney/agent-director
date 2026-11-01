@@ -186,8 +186,20 @@ func SetStoreContextForTest(c *Client, ctx context.Context) (restore func()) {
 
 // ObserveClientSQLiteForTest reuses the registered real-driver boundary on
 // this Client's owning store; no global observer or replacement store is used.
+// Must use: a public Client boundary test observes SQLite through this seam,
+// never another observer or connection pool.
 func ObserveClientSQLiteForTest(c *Client, wrap func(driver.Driver) driver.Driver) (func(context.Context) error, error) {
 	return store.ObserveSQLiteForTest(c.st, wrap)
+}
+
+// WaitClientStoreForTest waits up to wait for this Client's own store to admit
+// a read of id (GetSpawnWithin; nothing is written), so an operation an earlier
+// call abandoned at its deadline has released the store. Must use: a test whose
+// next zero-wait call on c follows a WriteFailMissingDeadlineOverrun write waits
+// here, never on another Store's pool and never by sleeping.
+func WaitClientStoreForTest(c *Client, id string, wait time.Duration) error {
+	_, err := c.st.GetSpawnWithin(id, wait)
+	return err
 }
 
 // ActiveCheckOutcomesForTest runs the shared checks over rows as a checked

@@ -123,6 +123,13 @@ deliver input or permission answers, replay a submission, signal or restart
 an agent. Commands keep their own preconditions. Nothing runs between calls
 unless an operator [schedules the sweeps](maintenance.md#scheduling-the-sweeps).
 
+`status`, `get`, `list`, `sweep` and `find-missing` can fail with
+`ErrStoreBusy` and an empty result when one of the call's bounded store reads
+does not finish in time: other work held the store or a lock the read needed,
+or the read's time ran out. A failure while selecting rows means nothing was
+checked. A later failure of `status`, `get` or `list` leaves observations its
+checks already committed recorded.
+
 ## Sweep results
 
 Run `agent-director sweep` for one bounded all-agent pass. It selects all stored

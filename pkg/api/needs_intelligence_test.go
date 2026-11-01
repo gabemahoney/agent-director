@@ -27,6 +27,8 @@ import (
 // needsIntelligenceClient keeps every read on the same injected clock and
 // refuses sleeps; timeout is its [state] needs_intelligence_timeout_seconds,
 // which has no effect. An optional recorder exposes observational side effects.
+// Must use: a permission read or sweep test in this package that inspects
+// observational side effects passes its recorder here, never a second client.
 func needsIntelligenceClient(t *testing.T, e *relayEnv, settle, timeout int64, recorder ...*tmuxfix.Recorder) *api.Client {
 	t.Helper()
 	// These cases vary relay-hook liveness, while every agent remains alive.

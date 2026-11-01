@@ -257,30 +257,36 @@ var pauseSleep = time.Sleep
 //
 // Trail (SR-3.16, SR-14): Pause writes at most one ad.provenance.disagree
 // record per distinct reason per call (verb pause, source ad_send_keys),
-// fail-open, none in the normal case and none on a path that makes no
+// fail-open under the caller context and the finite per-record reporting bound,
+// none in the normal case and none on a path that makes no
 // lookup (a relay guard refusal included); Client.Pause writes the same
-// records through the same path. The records are written once the tmux phase
-// has decided, before the wait, so the wait's outcome neither adds nor
-// removes one. Each record's action is
+// records through the same path. Emission is attempted once the tmux phase
+// has decided, before the wait; accepted records remain with the trail worker
+// even if the bounded wait for durability ends first. The wait's outcome
+// neither adds nor removes a provenance record. Each record's action is
 // what the call typed, as for send-keys: keys_sent (`/exit` and Enter both
 // went through), text_sent (the `/exit` call timed out, or it went through
 // and the Enter call failed or timed out) or nothing_sent (a failed C-u
-// included: it types no text). Pause writes no other trail event.
+// included: it types no text). Codex end handling also emits ad.find_missing.tick
+// with source ad_recovery (proc_absent and permission_orphan_closeout),
+// ad.row_mutation.committed for denied requests, and any retained
+// ad.spawn.displayed_state_transition, all after the terminal commit.
 //
 // env carries the relay judge (its start-time reader judges the lookup's
 // server, SR-3.3, and an adopted pane, SR-3.6, too) and the intent hold.
 func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeoutSeconds int, params PauseParams) (PauseResult, error) {
 	r := &pauseRun{s: s, ctx: ctx, caller: callerIdentity(), procs: env.Relay.Procs, now: newRelayJudge(env.Relay).now}
 	delivered, err := r.exit(t, env, params)
-	// The tmux phase has decided: write its ad.provenance.disagree records
-	// now, before the wait. Source ad_send_keys, not a pause source: pause
+	// The tmux phase has decided: attempt its ad.provenance.disagree emissions
+	// before the wait, retaining accepted records with the trail worker when
+	// the bounded durability wait ends first. Source ad_send_keys: pause
 	// writes the adoption like send-keys (SR-3.6) and runs the lookup, so
 	// SR-3.16's logging rule applies; SR-3.16's verdict table and SR-7.2 give
 	// pause send-keys' cells (SR-7 covers both verbs), and SR-14's closed
 	// source list has no pause source, so pause writes the keys-sending
 	// source with verb pause and no call event of its own. Exported Pause is
-	// the path Client.Pause shares, so each reason is written once per call.
-	r.emitDisagree("pause", params.InstanceID, r.caller)
+	// the path Client.Pause shares, so each reason is emitted once per call.
+	r.emitDisagree(recoveryTrail(ctx), "pause", params.InstanceID, r.caller)
 	if err != nil || !delivered {
 		return PauseResult{}, err
 	}
@@ -361,9 +367,9 @@ func (r *pauseRun) endIfGone(row Spawn) (res CondResult, attempted bool, err err
 	}
 	s := r.s
 	if concrete, ok := s.(*store.Store); ok {
-		s = concrete.WithRecoveryTickSource("ad_recovery")
+		s = concrete.WithRecoveryTickSource("ad_recovery").WithTerminalReportingContext(r.ctx)
 	}
-	w := markEndedSameLife(recoveryTickTrail(legacyTrail, "ad_recovery"), s, row.InstanceID, row.Snapshot, provenExit(identity, clockNow(r.now)), reasonProcAbsent, nil, nil)
+	w := markEndedSameLife(recoveryTickTrail(recoveryTrail(r.ctx), "ad_recovery"), s, row.InstanceID, row.Snapshot, provenExit(identity, clockNow(r.now)), reasonProcAbsent, nil, nil)
 	return w.Res, true, w.Err
 }
 

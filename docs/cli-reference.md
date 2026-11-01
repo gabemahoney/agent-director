@@ -100,6 +100,7 @@ Check this row; report state: pending/waiting/working/ask_user/check_permission/
 ### Errors
 
 - `ErrSpawnNotFound`
+- `ErrStoreBusy`
 
 ## get
 
@@ -148,6 +149,7 @@ Check this row; return identity, state, session and tmux socket.
 ### Errors
 
 - `ErrSpawnNotFound`
+- `ErrStoreBusy`
 
 ## send-keys
 
@@ -376,7 +378,7 @@ Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: cu
 
 ## sweep
 
-One bounded check of a fixed all-agent snapshot, as status/get/list check their selected rows. checks reports three confirmations and complete/incomplete coverage, not successful observation. No input, answer, restart or signal. Liveness uses the agent process at its recorded start identity, never children or copied IDs; no process environment is read. A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux. Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded), once per recorded socket (else caller's). An owned session leaves it unverified; a row with no recorded pane instead needs the pane carrying its launch token. Absence of its session, or that pane when required, marks missing. Cursor uses its exact gateway: unknown stays unverified, without tmux fallback. Unusable tmux leaves it unverified; held names are never touched (docs/operator-actions.md). `missing` is a check's judgement on available evidence, not proof that the agent has exited. Run as the agents' user in their tmux environment: another user, root or another server can mark live rows missing; see kill. Agents never run expire (operator-scheduled finished-row cleanup). Pending launches are protected while launching or within pending_grace_seconds (default 60 s) of launch start, not started_at; an unreadable start is judged at once. Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending. To end a live row (pending included) and relaunch its id, follow the live-row sequence in kill's description.
+One bounded status/get/list check of a fixed all-agent snapshot. checks: three confirmations; complete/incomplete coverage, not observation success. No input, answer, restart or signal. Liveness uses the agent process at its recorded start identity, never children or copied IDs; no process environment is read. A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux. Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded), once per recorded socket (else caller's). An owned session leaves it unverified; a row with no recorded pane instead needs the pane carrying its launch token. Absence of its session, or that pane when required, marks missing. Cursor uses its exact gateway: unknown stays unverified, without tmux fallback. Unusable tmux leaves it unverified; held names are never touched (docs/operator-actions.md). ErrProbeUnsupported is no longer returned. `missing` is a check's judgement on available evidence, not proof that the agent has exited. Run as the agents' user in their tmux environment: another user, root or another server can mark live rows missing; see kill. Agents never run expire (operator-scheduled finished-row cleanup). Pending launches are protected while launching or within pending_grace_seconds (default 60 s) of launch start, not started_at; an unreadable start is judged at once. Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending. To end a live row (pending included) and relaunch its id, follow the live-row sequence in kill's description.
 
 ### Parameters
 
@@ -393,6 +395,7 @@ _None._
 ### Errors
 
 - `ErrProbeUnsupported`
+- `ErrStoreBusy`
 
 ## find-missing
 
@@ -413,6 +416,7 @@ _None._
 ### Errors
 
 - `ErrProbeUnsupported`
+- `ErrStoreBusy`
 
 ## expire
 
@@ -486,6 +490,7 @@ Select rows (filters AND, then limit); check fixed IDs. Unordered.
 
 - `ErrInvalidFlags`
 - `ErrListInvalidLabel`
+- `ErrStoreBusy`
 
 ## list-subagents
 

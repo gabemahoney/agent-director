@@ -24,7 +24,6 @@ type VerbDef struct {
 	// Callable is true when the verb is exposed as a synchronous method on
 	// pkg/api.Client. help (informational/CLI-side), serve (long-running MCP
 	// server), and hook (SRD §3.2 fail-open) are Callable: false.
-	// 17 verbs are Callable: true.
 	Callable bool
 
 	// HandleFree is true when the verb can be invoked without a Client handle
@@ -603,6 +602,7 @@ var Verbs = []VerbDef{
 		},
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
+			"ErrStoreBusy",
 		},
 	},
 	{
@@ -654,6 +654,7 @@ var Verbs = []VerbDef{
 		},
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
+			"ErrStoreBusy",
 		},
 	},
 	{
@@ -1072,12 +1073,12 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:          "sweep",
-		Description:   "One bounded check of a fixed all-agent snapshot, as status/get/list check their selected rows. checks reports three confirmations and complete/incomplete coverage, not successful observation. No input, answer, restart or signal. Liveness uses the agent process at its recorded start identity, never children or copied IDs; no process environment is read. A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux. Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded), once per recorded socket (else caller's). An owned session leaves it unverified; a row with no recorded pane instead needs the pane carrying its launch token. Absence of its session, or that pane when required, marks missing. Cursor uses its exact gateway: unknown stays unverified, without tmux fallback. Unusable tmux leaves it unverified; held names are never touched (docs/operator-actions.md). `missing` is a check's judgement on available evidence, not proof that the agent has exited. Run as the agents' user in their tmux environment: another user, root or another server can mark live rows missing; see kill. " + expireCleanupPointer + " Pending launches are protected while launching or within pending_grace_seconds (default 60 s) of launch start, not started_at; an unreadable start is judged at once. Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending. " + liveRowSequencePointer,
+		Description:   "One bounded status/get/list check of a fixed all-agent snapshot. checks: three confirmations; complete/incomplete coverage, not observation success. No input, answer, restart or signal. Liveness uses the agent process at its recorded start identity, never children or copied IDs; no process environment is read. A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux. Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded), once per recorded socket (else caller's). An owned session leaves it unverified; a row with no recorded pane instead needs the pane carrying its launch token. Absence of its session, or that pane when required, marks missing. Cursor uses its exact gateway: unknown stays unverified, without tmux fallback. Unusable tmux leaves it unverified; held names are never touched (docs/operator-actions.md). ErrProbeUnsupported is no longer returned. `missing` is a check's judgement on available evidence, not proof that the agent has exited. Run as the agents' user in their tmux environment: another user, root or another server can mark live rows missing; see kill. " + expireCleanupPointer + " Pending launches are protected while launching or within pending_grace_seconds (default 60 s) of launch start, not started_at; an unreadable start is judged at once. Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending. " + liveRowSequencePointer,
 		Callable:      true,
 		HandleFree:    false,
 		Params:        []ParamDef{},
 		ResultFields: sweepResultFields,
-		ErrorNames:    []string{"ErrProbeUnsupported"},
+		ErrorNames:    []string{"ErrProbeUnsupported", "ErrStoreBusy"},
 	},
 	{
 		Name:          "find-missing",
@@ -1086,7 +1087,7 @@ var Verbs = []VerbDef{
 		HandleFree:    false,
 		Params:        []ParamDef{},
 		ResultFields: sweepResultFields,
-		ErrorNames:    []string{"ErrProbeUnsupported"},
+		ErrorNames:    []string{"ErrProbeUnsupported", "ErrStoreBusy"},
 	},
 	{
 		Name:        "expire",
@@ -1298,6 +1299,7 @@ var Verbs = []VerbDef{
 		ErrorNames: []string{
 			"ErrInvalidFlags",
 			"ErrListInvalidLabel",
+			"ErrStoreBusy",
 		},
 	},
 	{

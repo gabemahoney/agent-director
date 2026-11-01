@@ -442,7 +442,7 @@ func sendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 	r := &sendKeysRun{s: s, t: t, env: env, j: newRelayJudge(env.Relay),
 		facts: sendKeysFacts{Guard: guardNotApplicable, Caller: callerIdentity()}}
 	err := r.run(params)
-	r.emitDisagree("send-keys", params.InstanceID, r.facts.Caller)
+	r.emitDisagree(legacyTrail, "send-keys", params.InstanceID, r.facts.Caller)
 	return r.facts, r.deliveryResult, err
 }
 

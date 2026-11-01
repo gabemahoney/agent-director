@@ -38,8 +38,10 @@ func DescFindMissingGrace() DescCase {
 	}
 }
 
-// FindMissingOwnText returns the part of find-missing's description before
-// LiveRowPointer, the sentence that ends it (SR-18.6). It panics when text
+// FindMissingOwnText returns the part of the canonical sweep description before
+// LiveRowPointer, the sentence that ends it (SR-18.6). Pass it sweep's text:
+// the find-missing alias carries only a compatibility pointer to sweep, with
+// no LiveRowPointer, and is checked as that pointer. It panics when text
 // does not carry the pointer, so a description that lost it fails the calling
 // test instead of being pinned whole.
 func FindMissingOwnText(text string) string {

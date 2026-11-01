@@ -3,7 +3,8 @@
  *
  * Happy path: an empty store has nothing to judge, so count 0 and no ids.
  * Error path: none; the manifest still lists ErrProbeUnsupported (SR-1.7) but
- * sweep no longer returns it (smoke-invariants allow-list).
+ * sweep no longer returns it, and the smoke suite has no deterministic
+ * ErrStoreBusy fixture (smoke-invariants allow-list).
  */
 
 import { test, expect } from "bun:test";

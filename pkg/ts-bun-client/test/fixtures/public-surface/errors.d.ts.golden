@@ -391,7 +391,8 @@ export declare class ErrAmbiguousRequest extends AgentDirectorError {
 /**
  * Mirrors ErrStoreBusy (package: store): decide's `max_wait_ms` bound was reached before its
  * verdict was recorded (another process held the store's write lock). Nothing was recorded, so
- * the call can be retried.
+ * the call can be retried. These statements apply to decide; other verbs that list it say in
+ * their own Errors when they return it.
  */
 export declare class ErrStoreBusy extends AgentDirectorError {
 }

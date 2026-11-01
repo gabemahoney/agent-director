@@ -270,6 +270,19 @@ func markEndedArgs(exit ProcessExit) []any {
 	return append(args, terminalProcessEvidenceArgs(exit)...)
 }
 
+// WithTerminalReportingContext returns a per-call view whose legacy terminal
+// writer bounds post-commit reporting by ctx and observationTrailWait. The
+// whole batch shares that finite allowance, so no record can wait longer.
+// Accepted records remain owned by the existing trail worker after the wait.
+// SQL admission, transaction waits and commit outcomes are unchanged. The
+// view shares its pool with s and must not be closed independently.
+// Callers needing bounded terminal reporting must reuse this view; do not replace the transaction or trail worker.
+func (s *Store) WithTerminalReportingContext(ctx context.Context) *Store {
+	scoped := *s
+	scoped.terminalReportingContext = ctx
+	return &scoped
+}
+
 // terminalMarkIfSameLife is the transaction MarkMissingIfSameLife and
 // MarkEndedIfSameLife share: the prior state read, the one conditional
 // statement stmt with args, and, when it applied, the close of the row's
@@ -310,9 +323,17 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
 	committed = true
-	emitDisplayTransitions(exits)
+	// Keep reporting separate from the transaction context: only callers
+	// requesting a bounded reporting view change the legacy emit policy.
+	reportCtx := ctx
+	if s.terminalReportingContext != nil {
+		var cancel context.CancelFunc
+		reportCtx, cancel = context.WithTimeout(s.terminalReportingContext, observationTrailWait)
+		defer cancel()
+	}
+	emitDisplayTransitionsContext(reportCtx, exits)
 
-	emitTerminalCloseout(ctx, closed, instanceID, reason, s.recoveryTickSource)
+	emitTerminalCloseout(reportCtx, closed, instanceID, reason, s.recoveryTickSource)
 	return prior, CondApplied, nil
 }
 

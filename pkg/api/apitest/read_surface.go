@@ -422,6 +422,8 @@ var displayAttemptRecord = regexp.MustCompile(`"displayed_state":\{"status":"not
 // Only these validated process times and failed pane-attempt times are
 // replaced by ReadSurfaceProbed; every other byte is kept. c identifies status
 // results, which do not carry instance_id themselves.
+// Must use: a Go read-surface test normalizes probe times through this,
+// never a second normalizer.
 func NormalizeReadSurfaceProbes(t testing.TB, out string, from, to time.Time, first map[string]string, c ReadSurfaceCase) string {
 	t.Helper()
 	AssertConfirmationsShape(t, out)
@@ -507,6 +509,8 @@ var (
 // null exactly when confirmed. A display source, when present, is pane.
 // No nested object (a request, a prior session, the context) carries a
 // confirmations wrapper, and family_state has no record.
+// Must use: a Go read or sweep test checks confirmations shape through this,
+// never a second shape check.
 func AssertConfirmationsShape(t testing.TB, out string) {
 	t.Helper()
 	var doc map[string]any
@@ -642,6 +646,8 @@ func sortedKeys(m map[string]any) []string {
 // time reports for row id, which shows its scrambled settled value: that
 // value's own record where the row's hooks left one (settledRecord), else
 // unknown, never the raw state's record.
+// Must use: a read-surface test expects a settled state record through this,
+// never a locally built one.
 func ReadSurfaceSettledConfirmation(id string) map[string]any {
 	for i, r := range readSurfaceRows() {
 		if r.id == id && r.settledRecord {

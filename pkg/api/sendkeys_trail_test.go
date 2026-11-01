@@ -248,6 +248,7 @@ func TestKeysVerbsTrailProvenanceDisagree(t *testing.T) {
 					mark := trailMark(t)
 					if verb == "pause" {
 						_ = ptrEntry{client: client}.pause(ptrCancelAfterEnter(t, e), t, e, r.ID)
+						drainTrail(t) // accepted bounded reports must reach disk before exact assertions
 						assertKeysDisagrees(t, e, pauseDisagrees(t, r.ID), r, "pause", other, tc.want)
 						ptrAssertOnlyDisagrees(t, mark, r.ID, false)
 						return

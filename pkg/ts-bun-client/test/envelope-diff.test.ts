@@ -1264,7 +1264,8 @@ describe("find-missing", () => {
   );
 
   // No error path: find-missing no longer returns ErrProbeUnsupported (kept by
-  // SR-1.7); it is in NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
+  // SR-1.7), and this suite has no deterministic ErrStoreBusy fixture; it is in
+  // NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
 });
 
 describe("sweep", () => {
@@ -1294,7 +1295,8 @@ describe("sweep", () => {
   );
 
   // No error path: sweep no longer returns ErrProbeUnsupported (kept by
-  // SR-1.7); it is in NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
+  // SR-1.7), and this suite has no deterministic ErrStoreBusy fixture; it is in
+  // NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
 });
 
 // ── expire ────────────────────────────────────────────────────────────────────

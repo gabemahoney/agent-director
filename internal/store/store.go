@@ -112,6 +112,10 @@ type Store struct {
 	// recoveryTickSource is invocation-only audit attribution, never stored.
 	recoveryTickSource string
 
+	// terminalReportingContext bounds only the post-commit reporting of a
+	// scoped terminal writer; nil preserves the legacy synchronous emissions.
+	terminalReportingContext context.Context
+
 	cleanup  *connectionCleanupLane
 	filePath string // actual opened database, retained for owned Cursor launch plumbing
 	db       *sql.DB

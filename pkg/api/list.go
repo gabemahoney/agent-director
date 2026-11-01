@@ -425,8 +425,8 @@ func listRow(r Spawn, reported string, display store.DisplayDetail) ListRow {
 // only once it has held that long, the last settled state until then. A row
 // that shows a Displayed State carries it in displayed_state beside its
 // state; entering, leaving or moving between Displayed States instead times
-// settle_ms from the read that commits its candidate and shows from a later
-// successful read that commits it. State keeps a row whose state or
+// settle_ms from the read or sweep check that commits its candidate and shows from a later
+// successful check that commits it. State keeps a row whose state or
 // displayed_state is one of its values, so --state working lists a working
 // row that shows idle_screen. Terminal states and command-driven changes show at once.
 // family_state settles independently. The permission requests and
@@ -446,6 +446,12 @@ func listRow(r Spawn, reported string, display store.DisplayDetail) ListRow {
 // Errors:
 //   - [ErrInvalidFlags]: Limit is negative; refused before the store is read.
 //   - [ErrListInvalidLabel]: a Labels entry is not in "key=value" form.
+//   - [ErrStoreBusy]: a zero-wait store read selecting the rows, or
+//     projecting their checked results, did not finish within its bound:
+//     another operation of this process held the store's operation slot or
+//     connection (another call's, or an earlier one of this call; an
+//     operation keeps them until it is disposed), another connection held a
+//     lock the read needed, or the read ran out of time.
 //
 // Nondeterminism: the delivery facts depend on the clock and on whether each
 // request's relay hook process runs; with a settle time, so do the states and

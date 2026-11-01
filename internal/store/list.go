@@ -23,12 +23,6 @@ import (
 // each row's ReportedState is its settled state and State filters on it; the
 // zero value is no settle time, and ListSpawns runs exactly the query it ran
 // before b.3ie, State filtering on the raw state.
-//
-// DisplayCandidates widens a State filter that names a Displayed State to
-// every row that may show one as well as every row whose reported state is
-// a filter value: one with a retained display observation, and one whose raw
-// state a read can display a filtered Displayed State from. The caller
-// filters those rows on their reported or displayed state and applies Limit.
 type ListFilters struct {
 	// IDs restricts a refresh to a previously selected set. Nil selects freely;
 	// a non-nil empty slice selects nothing. No filter is reapplied by a refresh.
@@ -42,14 +36,6 @@ type ListFilters struct {
 	TmuxSessionName   string
 	Limit             int
 	Settle            SettleRead
-	DisplayCandidates bool
-}
-
-// displayRawStates are the raw states a read can display as each Displayed
-// State a read enters: an unchanged working pane's. No read enters
-// needs_intelligence, so no raw state displays it.
-var displayRawStates = map[string]string{
-	StateIdleScreen: StateWorking,
 }
 
 // ListSpawns runs the filtered query and returns rows in unspecified
@@ -110,19 +96,6 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 			for _, st := range f.State {
 				args = append(args, st)
 			}
-		} else if f.DisplayCandidates {
-			clause = "(" + clause + " OR display_observation IS NOT NULL"
-			var raws []any
-			for _, st := range f.State {
-				if raw, ok := displayRawStates[st]; ok {
-					raws = append(raws, raw)
-				}
-			}
-			if len(raws) > 0 {
-				clause += " OR state IN (" + strings.TrimSuffix(strings.Repeat("?,", len(raws)), ",") + ")"
-				args = append(args, raws...)
-			}
-			clause += ")"
 		}
 		where = append(where, clause)
 	}

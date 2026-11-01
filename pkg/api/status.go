@@ -200,8 +200,8 @@ func withUnknownMainFields(out StatusResult, agent string) StatusResult {
 // With [state] settle_ms set, the state is the settled state: a hook-written
 // change shows only once it has held that long, the last settled state until
 // then. Entering, leaving or moving between Displayed States instead times
-// settle_ms from the read that commits its candidate and shows from a later
-// successful read that commits it; until then displayed_state, since and
+// settle_ms from the read or sweep check that commits its candidate and shows from a later
+// successful check that commits it; until then displayed_state, since and
 // detail stay the previous display's. Terminal states and command-driven
 // changes show at once. family_state settles independently. The read never
 // waits.
@@ -219,6 +219,12 @@ func withUnknownMainFields(out StatusResult, agent string) StatusResult {
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for instanceID.
+//   - [ErrStoreBusy]: a zero-wait store read selecting the row, or projecting
+//     its checked result, did not finish within its bound: another operation
+//     of this process held the store's operation slot or connection (another
+//     call's, or an earlier one of this call; an operation keeps them until it
+//     is disposed), another connection held a lock the read needed, or the
+//     read ran out of time.
 //
 // Nondeterminism: none with no settle time; with one, the state depends on
 // the clock. A Displayed State depends on the clock and on the pane samples.

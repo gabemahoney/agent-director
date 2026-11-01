@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
@@ -65,8 +66,8 @@ func TestCursorListFixedSelectionBeforeGatewayRecovery(t *testing.T) {
 			}
 			// Each List call's deferred missing-row saves, as "id: error", and how
 			// many were the target's on a deadline (context.DeadlineExceeded: its
-			// 1 s ran out, or its earlier abandoned save still held the store): the
-			// only deferral a fixture with no competing writer allows (b.6uf).
+			// own 1 s ran out): the only deferral a fixture with no competing
+			// writer allows (b.6uf).
 			var deferred [2][]string
 			var ownDeadline [2]int
 			params := api.ListParams{Labels: []string{"list-liveness=target"}, State: tc.state, Limit: tc.limit}
@@ -75,6 +76,14 @@ func TestCursorListFixedSelectionBeforeGatewayRecovery(t *testing.T) {
 			}
 			selectedTarget := false
 			for i := 0; i < 2; i++ {
+				if i > 0 {
+					// A save the previous List abandoned at its deadline may still
+					// hold c's own store (e.st is a separate pool), and this List's
+					// reads do not wait (docs/architecture.md).
+					if err := api.WaitClientStoreForTest(c, b.InstanceID, 10*time.Second); err != nil {
+						t.Fatalf("list %d: wait for the client's store: %v", i+1, err)
+					}
+				}
 				api.SetCursorMissingDeferredForTest(c, func(id string, err error) {
 					deferred[i] = append(deferred[i], id+": "+err.Error())
 					if id == b.InstanceID && errors.Is(err, context.DeadlineExceeded) {
@@ -84,11 +93,11 @@ func TestCursorListFixedSelectionBeforeGatewayRecovery(t *testing.T) {
 				selected, err := e.st.ListSpawns(store.ListFilters{State: tc.state, Labels: map[string]string{"list-liveness": "target"}, Limit: tc.limit, TmuxSessionName: params.TmuxSessionName,
 					StoredDisplay: true, Settle: store.SettleRead{SettleMs: settleMax, NowMs: e.clock.Now().UnixMilli()}})
 				if err != nil {
-					t.Fatal(err)
+					t.Fatalf("list %d: stored selection: %v", i+1, err)
 				}
 				got, err := c.List(params)
 				if err != nil {
-					t.Fatal(err)
+					t.Fatalf("list %d: %v", i+1, err)
 				}
 				want := map[string]string{}
 				for _, row := range selected {
@@ -114,7 +123,7 @@ func TestCursorListFixedSelectionBeforeGatewayRecovery(t *testing.T) {
 					}
 				}
 				if !reflect.DeepEqual(states, want) || len(got.Spawns) != len(want) {
-					t.Errorf("List states = %v (%d rows), want %v", states, len(got.Spawns), want)
+					t.Errorf("list %d: List states = %v (%d rows), want %v", i+1, states, len(got.Spawns), want)
 				}
 			}
 			after := e.columns(t, b.InstanceID)

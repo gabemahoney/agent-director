@@ -195,8 +195,8 @@ type EndedMover interface {
 // closes included), applies nothing: no tick, no close. A store error is logged
 // on lg (a nil lg writes nothing) and returned in the outcome's Err. Listed is
 // always false: a row moved to ended is in neither ids nor unverified_ids. The
-// tick is written through emit: the shared recovery checks pass recoveryTrail
-// and pause legacyTrail.
+// tick is emitted through emit: shared recovery checks and pause pass
+// recoveryTrail; an accepted record may outlive the bounded durability wait.
 //
 // exit is the agent process the caller proved gone. A store that offers
 // MarkEndedIfSameLifeFrom records its exited record in the move's statement;
@@ -391,11 +391,11 @@ func logFindMissing(lg FindMissingLogger, call, id string, err error) {
 const recoveryTrailWait = 50 * time.Millisecond
 
 // trailEmit writes one audit record for a shared writer or emitter. Recovery
-// checks pass recoveryTrail; verbs outside recovery pass legacyTrail.
+// checks and pause pass recoveryTrail; other verbs pass legacyTrail.
 type trailEmit func(event string, fields map[string]any) error
 
 // legacyTrail is the synchronous write that verbs outside recovery (spawn,
-// reuse, kill, expire, resume, the pane-keys verbs and pause) keep.
+// reuse, kill, expire, resume and send-keys) keep.
 func legacyTrail(event string, fields map[string]any) error {
 	return trail.Emit(context.Background(), event, fields)
 }

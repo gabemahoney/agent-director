@@ -1,28 +1,13 @@
 package api_test
 
 import (
-	"context"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
-	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
-
-// trailEncodingGate blocks JSON encoding while the actual singleton owns its mutex.
-type trailEncodingGate struct {
-	entered chan struct{}
-	release chan struct{}
-}
-
-func (g *trailEncodingGate) MarshalJSON() ([]byte, error) {
-	close(g.entered)
-	<-g.release
-	return []byte(`"released"`), nil
-}
 
 // TestDecideMaxWaitWithBlockedTrail keeps reporting blocked beyond the call's bound.
 func TestDecideMaxWaitWithBlockedTrail(t *testing.T) {
@@ -33,30 +18,7 @@ func TestDecideMaxWaitWithBlockedTrail(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer observer.Close()
-	gate := &trailEncodingGate{entered: make(chan struct{}), release: make(chan struct{})}
-	var once sync.Once
-	release := func() { once.Do(func() { close(gate.release) }) }
-	defer release()
-	emitted := make(chan error, 1)
-	go func() {
-		emitted <- trail.Emit(context.Background(), "ad.test.deadline_holder", map[string]any{"gate": gate})
-	}()
-	select {
-	case <-gate.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("trail encoder did not acquire the real writer mutex")
-	}
-	defer func() {
-		release()
-		select {
-		case err := <-emitted:
-			if err != nil {
-				t.Errorf("holder Emit: %v", err)
-			}
-		case <-time.After(5 * time.Second):
-			t.Error("trail holder did not finish after release")
-		}
-	}()
+	release := holdTrail(t)
 
 	type outcome struct {
 		result api.DecideResult

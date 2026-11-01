@@ -424,6 +424,11 @@ func findMissingAction(r findMissingRow) string {
 //   - ErrProbeUnsupported: listed for find-missing, which no longer returns
 //     it: the sweep reads only process start times, and a start time it
 //     cannot read leaves that row unverified.
+//   - [ErrStoreBusy]: the store's zero-wait read selecting the agents did not
+//     finish within its bound: another call of this process held the store's
+//     operation slot or connection (an earlier call's operation keeps them
+//     until it is disposed), another connection held a lock the read needed,
+//     or the read ran out of time. Nothing was checked.
 func FindMissing(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc ProcChecker, pendingGrace, sweepBudget time.Duration, now func() time.Time, lg FindMissingLogger) (FindMissingResult, error) {
 	return Sweep(ctx, s, t, pc, pendingGrace, sweepBudget, now, lg)
 }
@@ -882,6 +887,8 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 //   - ErrProbeUnsupported: listed for find-missing, which no longer returns
 //     it: the sweep reads only process start times, and a start time it
 //     cannot read leaves that row unverified.
+//   - [ErrStoreBusy]: as for [Client.Sweep], its selection read did not
+//     finish within its bound. Nothing was checked.
 //
 // Nondeterminism: none.
 func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {

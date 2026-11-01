@@ -17,6 +17,8 @@ const probedRecord =
  * has equal times; every latest check is in this call's window. After those
  * assertions only the two process times and failed pane check are normalized.
  * instanceID identifies status results, which omit the row id.
+ * Must use: a TS read-surface test normalizes probe times through this, never
+ * a second normalizer.
  */
 export function normalizeProbes(out: string, fromMs: number, toMs: number, first: Map<string, string>, instanceID: string): string {
   type Row = { instance_id?: string; confirmations: { process_liveness: {

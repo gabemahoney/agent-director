@@ -28,6 +28,7 @@ const evidenceSeedMs = int64(1_790_000_000_000)
 // state record of its raw value, interval and launch from an agent event, and,
 // where it records a pane process, that process alive (exited on a finished
 // row), and a pane confirmation of none. It returns the row as read after.
+// Store evidence-write tests in this package must reuse this seed.
 func stampEvidence(t *testing.T, f *v5Store, id string) store.Spawn {
 	t.Helper()
 	execRaw(t, f.path, `UPDATE spawns SET state_evidence = json_object('v', state, 'life', COALESCE(life_number, 0),

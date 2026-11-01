@@ -74,7 +74,7 @@ type provenanceDisagree struct {
 // send-keys and pause (both source ad_send_keys, keysRun.emitDisagree),
 // resume, reuse's spawn, find-missing and expire (Epics 11 and 14 to 17);
 // the plain-spawn label scan never writes it (SR-9.3, SR-14). The verbs write
-// synchronously (legacyTrail); find-missing's shared checks write through
+// synchronously (legacyTrail); pause and find-missing's shared checks use
 // their bounded recovery emitter (writeProvenanceDisagree).
 func emitProvenanceDisagree(d provenanceDisagree, reasons ...string) {
 	writeProvenanceDisagree(legacyTrail, d, reasons...)

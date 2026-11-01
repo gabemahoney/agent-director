@@ -101,6 +101,7 @@ func SetPermissionFacts(dbPath string, requestID int64, opts ...PermissionOption
 
 // ReadSurfaceProcessOptions keeps surface fixtures live while their caller inspects
 // them. A short-lived seed helper must name its long-lived caller explicitly.
+// Live reporting fixtures must reuse these process options.
 func ReadSurfaceProcessOptions(writerPID ...int) ([]SpawnOption, error) {
 	pid := os.Getpid()
 	if len(writerPID) > 0 && writerPID[0] != 0 {
@@ -116,6 +117,7 @@ func ReadSurfaceProcessOptions(writerPID ...int) ([]SpawnOption, error) {
 // BindReadSurfaceProcess gives an existing reporting fixture a live agent process,
 // preserving its launch token, state, requests and clocks. A recorded pane follows
 // that same process; a row without a pane keeps none. The caller keeps writer alive.
+// Reuse this helper to bind an existing reporting fixture to its live process.
 func BindReadSurfaceProcess(dbPath, id string, writerPID int) (store.LaunchIdentity, error) {
 	writer, err := ContextWriter(writerPID)
 	if err != nil {
@@ -477,6 +479,8 @@ func ObserveDisplayRead(t testing.TB, probe DisplayProbe, id, want string, commi
 // CheckPaneConfirmationWire checks a sampled row's exact display record and
 // shape. first is the stay's first confirmation (empty on its first read);
 // latest checked_at must fall inside this public call's [from,to] window.
+// Must use: a sampled pane-display test checks the display record through
+// this, never a second wire check.
 func CheckPaneConfirmationWire(t testing.TB, raw []byte, first, reason string, from, to time.Time) string {
 	t.Helper()
 	AssertConfirmationsShape(t, string(raw))

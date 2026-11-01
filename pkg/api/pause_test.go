@@ -14,6 +14,8 @@ package api_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -386,8 +389,8 @@ func ptrLineClearDisagreeCases() []keysDisagreeCase {
 	}
 }
 
-// ptrDisagreesAtFirstSleep makes the wait's first sleep read id's pause
-// disagree records; the result is nil until it slept. Knobs restored at cleanup.
+// ptrDisagreesAtFirstSleep drains accepted records at the wait's first sleep
+// before reading them; nil until then. Knobs restored at cleanup.
 func ptrDisagreesAtFirstSleep(t *testing.T, id string) func() []map[string]any {
 	t.Helper()
 	interval, sleep := api.PauseTestKnobs()
@@ -395,6 +398,7 @@ func ptrDisagreesAtFirstSleep(t *testing.T, id string) func() []map[string]any {
 	var seen []map[string]any
 	api.SetPauseTestKnobs(interval, func(d time.Duration) {
 		if seen == nil {
+			drainTrail(t)
 			seen = append([]map[string]any{}, pauseDisagrees(t, id)...)
 		}
 		sleep(d)
@@ -402,8 +406,8 @@ func ptrDisagreesAtFirstSleep(t *testing.T, id string) func() []map[string]any {
 	return func() []map[string]any { return seen }
 }
 
-// TestPauseTrailWrittenBeforeTheWait: the records are written before the wait
-// and are the same whether the row ends, the wait times out or the caller cancels.
+// TestPauseTrailWrittenBeforeTheWait: records are accepted before the wait;
+// after the FIFO drains they survive row end, timeout and caller cancellation.
 func TestPauseTrailWrittenBeforeTheWait(t *testing.T) {
 	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	var rows []keysDisagreeCase
@@ -430,21 +434,70 @@ func TestPauseTrailWrittenBeforeTheWait(t *testing.T) {
 	for _, row := range rows {
 		for _, oc := range outcomes {
 			t.Run(row.name+"/"+oc.name, func(t *testing.T) {
-				e := newKillEnv(t)
-				r, other := e.seedKeysDisagreeCase(t, row)
-				atSleep := ptrDisagreesAtFirstSleep(t, r.ID)
-				mark := trailMark(t)
-
-				_, err := e.pauseWithin(oc.prepare(t, e, r), pauseTimeoutSeconds, pauseParams(r))
-
-				if (oc.want == nil) != (err == nil) || !errors.Is(err, oc.want) {
-					t.Fatalf("err = %v; want %v", err, oc.want)
+				attempts := 1
+				if oc.want == context.Canceled {
+					attempts = 5
 				}
-				assertKeysDisagrees(t, e, pauseDisagrees(t, r.ID), r, "pause", other, row.want)
-				if oc.sleeps {
-					assertKeysDisagrees(t, e, atSleep(), r, "pause", other, row.want)
+				fastest := time.Duration(math.MaxInt64)
+				for i := range attempts {
+					t.Run(fmt.Sprintf("sample=%d", i), func(t *testing.T) {
+						e := newKillEnv(t)
+						r, other := e.seedKeysDisagreeCase(t, row)
+						atSleep := ptrDisagreesAtFirstSleep(t, r.ID)
+						mark := trailMark(t)
+
+						ctx := oc.prepare(t, e, r)
+						release := func() {}
+						var reportingAt time.Time
+						var baseline trail.DeliveryStatus
+						if oc.want == context.Canceled {
+							// Hold only after delivery, before its cancelled reporting phase.
+							e.rec.AfterCall(callEnterKey, func(tmuxfix.SocketCall, error) {
+								release = holdTrail(t)
+								baseline = trail.Default().Status()
+								reportingAt = time.Now() // after delivery, cancellation and holder admission
+							})
+						}
+						type outcome struct {
+							err error
+							at  time.Time
+						}
+						done := make(chan outcome, 1)
+						go func() {
+							_, err := e.pauseWithin(ctx, pauseTimeoutSeconds, pauseParams(r))
+							done <- outcome{err, time.Now()}
+						}()
+						var err error
+						select {
+						case got := <-done:
+							err = got.err
+							if oc.want == context.Canceled {
+								took := got.at.Sub(reportingAt)
+								fastest = min(fastest, took)
+								t.Logf("provenance returned %v after cancelled reporting entry", took)
+								if status := trail.Default().Status(); status.Pending != baseline.Pending+len(row.want) || status.Failed != baseline.Failed || status.Rejected != baseline.Rejected {
+									t.Errorf("held provenance status=%+v; want %d accepted records", status, len(row.want))
+								}
+							}
+						case <-time.After(5 * time.Second):
+							t.Fatal("Pause did not return within its bound while reporting was held")
+						}
+						release()
+
+						if (oc.want == nil) != (err == nil) || !errors.Is(err, oc.want) {
+							t.Fatalf("err = %v; want %v", err, oc.want)
+						}
+						drainTrail(t)
+						assertKeysDisagrees(t, e, pauseDisagrees(t, r.ID), r, "pause", other, row.want)
+						if oc.sleeps {
+							assertKeysDisagrees(t, e, atSleep(), r, "pause", other, row.want)
+						}
+						ptrAssertOnlyDisagrees(t, mark, r.ID, false)
+					})
 				}
-				ptrAssertOnlyDisagrees(t, mark, r.ID, false)
+				if oc.want == context.Canceled && fastest >= api.RecoveryTrailWait/2 {
+					t.Errorf("TB1 provenance: fastest cancelled reporting took %v; want under %v", fastest, api.RecoveryTrailWait/2)
+				}
 			})
 		}
 	}
