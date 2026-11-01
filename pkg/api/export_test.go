@@ -74,6 +74,11 @@ var DecideWithSleep = decide
 // StatusSettledForTest exercises optional custom-store dispatch with settling enabled.
 var StatusSettledForTest = statusSettledWithRelay
 
+// GetSettledForTest and ListSettledForTest exercise the same non-sampling
+// projections as Get and List, with the Client's explicit settle clock.
+var GetSettledForTest = getSettled
+var ListSettledForTest = listSettled
+
 // DecideWithinForTest exercises policy with an explicit controlled context;
 // physical deadline tests continue to use DecideWithSleep or the public API.
 var DecideWithinForTest = decideWithin

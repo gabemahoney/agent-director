@@ -74,10 +74,11 @@ test("settle-on: status, get and list give each golden with only the state read 
     const records = seeded.settled_confirmations as Record<string, unknown>;
     writeSettleConfig(homeDir);
     using client = await openClient(homeStore(homeDir));
+    const first = new Map<string, string>();
     for (const c of table.cases) {
       const from = Date.now();
       const result = await call(client, c);
-      const got = JSON.parse(normalizeProbes(JSON.stringify(result), from, Date.now()));
+      const got = JSON.parse(normalizeProbes(JSON.stringify(result), from, Date.now(), first, String(c.params.instance_id ?? "")));
       expect({ case: c.name, result: got }).toEqual({ case: c.name, result: expected(c, settled, records) });
     }
   });

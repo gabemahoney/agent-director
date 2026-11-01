@@ -281,17 +281,20 @@ type Spawn struct {
 	PaneSinceMillis int64
 	PaneEpoch       int64
 
-	// StateEvidence, SettledStateEvidence and ProcessEvidence are the stored
-	// main-field evidence (state_evidence, settled_evidence and
-	// process_evidence, schema v19; confirmations.go), "" for NULL or a
-	// non-text value: StateConfirmation and ProcessConfirmation decode and
-	// apply them. Full-row reads and SpawnStatusRow fill them. No write takes
-	// them from a Spawn except a failed launch's restore, which writes back
-	// only an applicable prior record (PriorStateEvidence,
-	// PriorProcessEvidence). They grant no command authority.
+	// StateEvidence, SettledStateEvidence, ProcessEvidence and
+	// DisplayEvidence are the stored main-field evidence (state_evidence,
+	// settled_evidence and process_evidence, schema v19, and
+	// display_evidence, schema v20; confirmations.go), "" for NULL or a
+	// non-text value: StateConfirmation, ProcessConfirmation and
+	// DisplayConfirmation decode and apply them. Full-row reads and
+	// SpawnStatusRow fill them. No write takes them from a Spawn except a
+	// failed launch's restore, which writes back only an applicable prior
+	// record (PriorStateEvidence, PriorProcessEvidence), and the observers'
+	// guards, which compare DisplayEvidence. They grant no command authority.
 	StateEvidence        string
 	SettledStateEvidence string
 	ProcessEvidence      string
+	DisplayEvidence      string
 
 	// ReportedState is the state status, get and list report (b.3ie): the
 	// settled state a read with a SettleRead that settles derives

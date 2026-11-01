@@ -82,10 +82,13 @@ var hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? TH
 // Its placeholders are V four times: epoch, exit, settled value and clock.
 // settled_state becomes V, so the settled record is cleared: a read of V
 // applies the raw record of V, never an earlier value's (confirmations.go).
+// Clearing the observation ends any Displayed State, and with it its display
+// record (keepDisplayEvidence).
 const immediateSettleSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
        display_exit = CASE WHEN ` + committedDisplayStateSQL + ` IS NOT NULL
          THEN json_object('prior_state', ` + committedDisplayStateSQL + `, 'new_state', ?, 'at_ms', ` + nowMsSQL + `)
          ELSE display_exit END,
+       ` + keepDisplayEvidence + `,
        display_observation = NULL,
        observation_version = observation_version + 1,
        settled_state = ?,

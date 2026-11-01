@@ -166,8 +166,8 @@ func TestObserveIdleScreenUnderCancelledContext(t *testing.T) {
 	rows := make([]store.Spawn, observations)
 	for i := range envs {
 		e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
-		if _, _, committed, err := e.s.ObserveIdleScreenOutcome(e.row(t), sample, e.now, time.Minute, store.SettleRead{}); err != nil || !committed {
-			t.Fatalf("baseline sample: committed %v, err %v", committed, err)
+		if out, err := e.s.ObserveIdleScreenOutcome(e.row(t), sample, e.now, time.Minute, store.SettleRead{}); err != nil || !out.Committed {
+			t.Fatalf("baseline sample: committed %v, err %v", out.Committed, err)
 		}
 		e.now = e.now.Add(time.Minute)
 		envs[i], rows[i] = e, e.row(t)
@@ -187,8 +187,8 @@ func TestObserveIdleScreenUnderCancelledContext(t *testing.T) {
 		}
 		done := make(chan outcome, 1)
 		go func() {
-			display, _, committed, err := e.s.WithContext(ctx).ObserveIdleScreenOutcome(rows[i], sample, e.now, time.Minute, store.SettleRead{})
-			done <- outcome{display, committed, err, time.Now()}
+			out, err := e.s.WithContext(ctx).ObserveIdleScreenOutcome(rows[i], sample, e.now, time.Minute, store.SettleRead{})
+			done <- outcome{out.Display, out.Committed, err, time.Now()}
 		}()
 		admitted := baseline.Pending + i + 1
 		deadline := time.Now().Add(5 * time.Second)

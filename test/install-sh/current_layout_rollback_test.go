@@ -55,7 +55,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10 through v18→v19, the old-layout steps below do not apply",
+		"including schema v9→v10 through v19→v20, the old-layout steps below do not apply",
 		"stop all writers and keep a copy of the actual store (`[store] db_path` when set), its existing `-wal`/`-shm`, and all legacy input evidence",
 		"Keep provider logs/transcripts outside those roots too",
 		"maintain the same exclusion, preserve the post-upgrade evidence",
@@ -68,17 +68,34 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"Never replay an attempt merely because the restored copy lacks its proof",
 		"The journal cutover creates a separate stopped-writer backup before schema changes; other installer steps do not supply this complete recovery set",
 		"A copy made after migration cannot replace the pre-upgrade set",
+		"Schema v20 display evidence has no supported reverse recipe",
 		"Schema v19 confirmation evidence has no supported reverse recipe",
 		"Schema v18 Cursor input and proof evidence has no supported reverse recipe",
 		"Schema v17 permission provenance and response claims have no supported reverse recipe",
 		"Schema v16 has no in-place downgrade or replayable file-journal export",
 		"A binary swap or version reset cannot undo these changes",
 		"Schema v15, v14 and v13 are also restore-only",
-		"The v12→v11 family-history recipe applies only to genuine family-only v12 stores; it cannot operate on v13–v19",
+		"The v12→v11 family-history recipe applies only to genuine family-only v12 stores; it cannot operate on v13–v20",
 		"Without that set, or while an uncertain attempt remains unreconciled, stop and obtain human help",
 	} {
 		if !strings.Contains(advice, phrase) {
 			t.Fatalf("rollback advice changed; recheck the literal follow: missing %q", phrase)
+		}
+	}
+	// b.x9o: the migration guide's v20 extension prescribes this same
+	// stopped-writer restore, exercised below against the current binary.
+	migration, err := os.ReadFile("../../docs/migration-guide.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phrase := range []string{
+		"**Current recovery policy.** Schemas v20, v19, v18, v17 and v16 are restore-only.",
+		"The v20 display column and v19 evidence columns have no reverse recipe: restore the stopped-writer pre-upgrade set, losing all later writes, and never drop the columns or reset the version.",
+		"This illustrates the historical pattern, not a recipe for v9 through v20. Never merely reset the version pragma.",
+		"recipe below is only for genuine family-only v12, never v13–v20 or a hand-reset store.",
+	} {
+		if !strings.Contains(strings.Join(strings.Fields(string(migration)), " "), phrase) {
+			t.Fatalf("migration recovery advice changed; recheck the literal follow: missing %q", phrase)
 		}
 	}
 	previous, script := rollbackReleasedPair(t)
@@ -132,6 +149,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			moveMustInstall(t, h)
 			if v, current := h.migStoreVersion(db), moveCurrentVersion(t, h); v != current {
 				t.Fatalf("upgrade schema = %s; want %s", v, current)
+			}
+			if got := h.Sqlite(db, "SELECT name FROM pragma_table_info('spawns') WHERE name IN ('state_evidence','settled_evidence','process_evidence','display_evidence') ORDER BY name;"); got != "display_evidence\nprocess_evidence\nsettled_evidence\nstate_evidence\n" {
+				t.Fatalf("current upgrade lacks confirmation columns: %q", got)
 			}
 			if got := h.Sqlite(db, "SELECT name FROM pragma_table_info('spawns') WHERE name IN ('codex_startup','claude_capacity') ORDER BY name;"); got != "claude_capacity\ncodex_startup\n" {
 				t.Fatalf("v13 upgrade lacks both provenance columns: %q", got)

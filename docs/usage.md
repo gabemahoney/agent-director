@@ -90,8 +90,10 @@ reported `pre_trust` outcome means, is in
 on successive checks for the
 [configured time](configuration.md#idle-screen-timeout-state); `state` stays
 `working`. Selected `status`, `get`, `list` and `find-missing` checks can
-observe it; nothing samples between calls. The
-fields, filtering and what to do are in the
+observe it; nothing samples between calls. Its separate
+[confirmation record](caller-contract.md#confirmations) reports evidence for
+the display actually returned, including no display. The fields, filtering
+and what to do are in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
 
 ## Family state

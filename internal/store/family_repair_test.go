@@ -58,6 +58,13 @@ func TestFamilyRetainedDisplayBoundedTerminalExit(t *testing.T) {
 			if tc.display == store.StateNeedsIntelligence {
 				seedStaleNeedsIntelligenceFamilies(t, e.f.path, parent, e.b.InstanceID)
 			}
+			if tc.display != "" {
+				execRaw(t, e.f.path, `UPDATE spawns SET display_evidence=json_object(
+					'v', ?, 'life', life_number, 'token', launch_token,
+					'since', json_extract(display_observation, '$.since_ms'),
+					'at', ?, 'src', 'pane', 'checked', ?, 'reason', NULL) WHERE instance_id=?`,
+					tc.display, e.until.UnixMilli(), e.until.UnixMilli(), e.b.InstanceID)
+			}
 			row := rvExamine(t, e.f, e.b.InstanceID)
 			if row.State != store.StateWaiting {
 				t.Fatalf("raw state=%s", row.State)
@@ -116,7 +123,7 @@ func TestFamilyRetainedDisplayBoundedTerminalExit(t *testing.T) {
 				assertDisplayRecords(t, mark, row.InstanceID)
 				return
 			}
-			if err != nil || result != store.CondApplied || prior != store.StateWaiting || after.State != store.StateMissing || after.DisplayObservation != "" {
+			if err != nil || result != store.CondApplied || prior != store.StateWaiting || after.State != store.StateMissing || after.DisplayObservation != "" || after.DisplayEvidence != "" {
 				t.Fatalf("terminal write=%s/%v %v row=%+v", prior, result, err, after)
 			}
 			_, _, stamp := familyHistory(t, e.f, row.InstanceID)

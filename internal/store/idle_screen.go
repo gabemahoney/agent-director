@@ -42,9 +42,22 @@ func (p *paneScan) apply(sp *Spawn) {
 }
 
 // PaneSample is one read's capture of a row's own pane: the SHA-256 of the
-// pane text, or "" when the capture failed or cannot be trusted.
+// pane text, or "" when the capture failed or cannot be trusted, with Reason
+// then the SR-4.5 reason it failed (unreadable when unset or invalid).
 type PaneSample struct {
 	SHA256 string
+	Reason string
+}
+
+// failure is why sample established no display, "" for a successful sample.
+func (p PaneSample) failure() string {
+	switch {
+	case p.SHA256 != "":
+		return ""
+	case ValidConfirmationReason(p.Reason):
+		return p.Reason
+	}
+	return ReasonUnreadable
 }
 
 // paneBaseline is a row's committed pane baseline in its current permission

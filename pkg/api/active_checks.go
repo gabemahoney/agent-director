@@ -47,12 +47,17 @@ func (checked *activeCheckedRow) record(outcome activeCheckOutcome) {
 type activeCheckedRow struct {
 	row     Spawn
 	display store.DisplayDetail
-	// state and process are this invocation's unsuccessful or uncommitted
-	// attempts for those main fields (nil when none): response-only, never a
-	// durable record. A successful committed attempt is the stored record the
-	// final projection reads instead.
-	state, process *fieldAttempt
-	judged         *judgedRequestSet
+	// displayEvidence is display_evidence of the snapshot display comes from
+	// (the row's own, or the observation's commit), so the displayed_state
+	// record describes the display returned (mainFields).
+	displayEvidence string
+	// state, process and displayAttempt are this invocation's unsuccessful or
+	// uncommitted attempts for those main fields (nil when none):
+	// response-only, never a durable record. A committed attempt, a failed
+	// pane sample's included, is the stored record the final projection reads
+	// instead.
+	state, process, displayAttempt *fieldAttempt
+	judged                         *judgedRequestSet
 	permissionErr  error
 	projectionErr  error
 	cursorRejected bool
@@ -114,15 +119,18 @@ type activeReadStore struct {
 // for a state attempt, the raw state and raw-state interval
 // (permission_epoch) it was about; for a process attempt, the process record
 // it found and the agent process identity it judged (pid 0 when it judged
-// none).
+// none); for a display attempt, the Displayed State shown ("" for none), its
+// committed entry (since) and the display record it found.
 type fieldAttempt struct {
 	atMillis int64
 	reason   string
 	life     int64
 	token    string
 	process  bool
+	display  bool
 	state    string
 	epoch    int64
+	since    int64
 	record   string
 	pid      int
 	start    string
@@ -131,12 +139,17 @@ type fieldAttempt struct {
 // describes reports whether a, an attempt for the field, was made for the
 // value and owner row returns: the same life and launch and, for a state
 // attempt, the same raw state in the same interval; for a process attempt,
-// the same stored process record and a judged identity row still records. A
-// concurrent commit that changed the value or its record has its own
-// evidence, which an older attempt must not overlay.
+// the same stored process record and a judged identity row still records;
+// for a display attempt, the same display episode and record. A concurrent
+// commit that changed the value or its record has its own evidence, which an
+// older attempt must not overlay.
 func (a *fieldAttempt) describes(row Spawn) bool {
 	if a.life != row.LifeNumber || a.token != row.Identity.Token {
 		return false
+	}
+	if a.display {
+		shown := row.CommittedDisplay()
+		return a.state == displayedState(shown) && a.since == shown.SinceMillis && a.record == row.DisplayEvidence
 	}
 	if !a.process {
 		return a.state == row.State && a.epoch == row.PermissionEpoch
@@ -337,7 +350,7 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 		byID: map[string]*activeCheckedRow{}, fallbackTried: map[int64]bool{},
 		missing: FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}}
 	for _, row := range rows {
-		checked := &activeCheckedRow{row: row, display: row.CommittedDisplay()}
+		checked := &activeCheckedRow{row: row, display: row.CommittedDisplay(), displayEvidence: row.DisplayEvidence}
 		for _, adapter := range []string{"liveness", "cursor_gateway", "codex_turn", "transcript", "permission_read", "permission_repair", "display", "permission_fallback", "native_proof"} {
 			checked.record(activeCheckOutcome{Adapter: adapter, Result: "unattempted"})
 		}
@@ -404,7 +417,7 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 						checked.judged = nil
 					}
 					checked.row = row
-					checked.display = row.CommittedDisplay()
+					checked.display, checked.displayEvidence = row.CommittedDisplay(), row.DisplayEvidence
 				}
 			}
 		} else {
@@ -432,7 +445,7 @@ func (r *activeReadStore) refreshRow(checked *activeCheckedRow) bool {
 	}
 	old := checked.row
 	checked.row = rows[0]
-	checked.display = rows[0].CommittedDisplay()
+	checked.display, checked.displayEvidence = rows[0].CommittedDisplay(), rows[0].DisplayEvidence
 	// A changed launch ends this row's pass. A later call can check it.
 	return old.Identity.Token == rows[0].Identity.Token && old.LifeNumber == rows[0].LifeNumber
 }
@@ -712,8 +725,9 @@ func (r *activeReadStore) checkPermissionDisplay(checked *activeCheckedRow) {
 	}
 	r.captureSessionHistory(checked)
 	var displayOutcome activeCheckOutcome
-	display, families, judged, busy := observeDisplay(r.source, r.view, r.settle, row, permissionRead{requests: checked.judged, outcome: &displayOutcome})
-	checked.display = display
+	var record displayRecord
+	display, families, judged, busy := observeDisplay(r.source, r.view, r.settle, row, permissionRead{requests: checked.judged, outcome: &displayOutcome, record: &record})
+	checked.display, checked.displayEvidence, checked.displayAttempt = display, record.evidence, record.attempt
 	if judged != nil {
 		checked.judged = judged
 	}

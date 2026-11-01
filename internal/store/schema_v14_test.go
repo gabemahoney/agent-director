@@ -46,6 +46,7 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 				preAddV14Columns(t, path, v15ColumnSpecs)
 				preAddV14Columns(t, path, v17ColumnSpecs)
 				preAddV14Columns(t, path, v19ColumnSpecs)
+				preAddV14Columns(t, path, v20ColumnSpecs)
 				withRaw(t, path, func(db *sql.DB) {
 					mustExec(t, db, `UPDATE spawns SET permission_epoch=8,observation_version=4,display_observation=?,display_exit=?,
 						idle_screen_timeout_seconds=90,pane_sha256=?,pane_since_ms=1792411208000,pane_epoch=8`,

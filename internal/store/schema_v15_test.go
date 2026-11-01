@@ -40,6 +40,7 @@ func TestV15MigrationPreservationAndReentry(t *testing.T) {
 			if len(tc.specs) == len(v15ColumnSpecs) {
 				// The later v19 columns after both v15 columns, in schema order.
 				preAddV14Columns(t, path, v19ColumnSpecs)
+				preAddV14Columns(t, path, v20ColumnSpecs)
 			}
 			var spawnCols []string
 			withRaw(t, path, func(db *sql.DB) {

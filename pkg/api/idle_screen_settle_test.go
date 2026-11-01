@@ -9,10 +9,15 @@ package api_test
 
 import (
 	"context"
+	"database/sql/driver"
+	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -45,23 +50,27 @@ func TestIdleScreenSettlementAndActualTransitionTime(t *testing.T) {
 			e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
 			c := e.client(t, apitest.ConfigKeys{StateSettleMs: delay.Milliseconds(), IdleScreenTimeoutSeconds: 60})
 			mark := trailMark(t)
-			observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+			baseline := observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+			assertPaneRecord(t, baseline.Confirmations.DisplayedState, e.now, e.now, "")
 			start := e.now
 			e.now = start.Add(time.Minute)
 			if delay > 0 {
-				observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced) // the entry candidate
+				candidate := observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced) // the entry candidate
+				assertPaneRecord(t, candidate.Confirmations.DisplayedState, start, start, "")
 				e.now = e.now.Add(delay - time.Millisecond)
 				assertDisplayState(t, c, e.id, store.StateWorking)
 				e.now = start.Add(time.Minute + delay + time.Hour) // a delayed first read past the deadline
 			}
 			entered := assertDisplayState(t, c, e.id, api.StateIdleScreen)
 			entryTime := e.now
+			assertPaneRecord(t, entered.Confirmations.DisplayedState, entryTime, entryTime, "")
 			if entered.Since != entryTime.Format(displayTS) || minutes(t, entered) != int64(entryTime.Sub(start)/time.Minute) {
 				t.Fatalf("entry=%+v; want since this read and the floored minutes since %s", entered, start)
 			}
 			e.show("pane 2")
 			if delay > 0 {
 				got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced) // the exit candidate keeps the detail
+				assertPaneRecord(t, got.Confirmations.DisplayedState, entryTime, entryTime, "")
 				if got.Since != entered.Since || minutes(t, got) != minutes(t, entered) {
 					t.Fatalf("clearing changed the detail: %+v; want %+v", got, entered)
 				}
@@ -69,7 +78,8 @@ func TestIdleScreenSettlementAndActualTransitionTime(t *testing.T) {
 				assertDisplayState(t, c, e.id, api.StateIdleScreen)
 				e.now = e.now.Add(time.Millisecond)
 			}
-			observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+			exited := observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+			assertPaneRecord(t, exited.Confirmations.DisplayedState, e.now, e.now, "")
 			for _, ev := range readAPITrailLines(t)[mark:] {
 				if ev["instance_id"] == e.id && ev["event"] == "ad.spawn.state_transition" {
 					t.Errorf("the report impersonated a raw transition: %v", ev)
@@ -105,6 +115,7 @@ func TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 	c := e.client(t, apitest.ConfigKeys{StateSettleMs: settle.Milliseconds(), IdleScreenTimeoutSeconds: 1})
 	old := enterIdleScreen(t, e, c, settle)
 	before := e.row(t)
+	oldAt := e.now
 	for _, state := range []string{store.StateWaiting, store.StateWorking} {
 		if err := seedAgentState(e.s, e.dbPath, e.id, state); err != nil {
 			t.Fatal(err)
@@ -122,7 +133,7 @@ func TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 	// qualify and the old episode starts settling out, still displayed.
 	start := time.UnixMilli(stamp).Add(time.Hour).UTC()
 	e.now = start
-	if got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced); got.Since != old.Since {
+	if got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced); got.Since != old.Since || conf(got.Confirmations.DisplayedState) != conf(old.Confirmations.DisplayedState) {
 		t.Fatalf("settling-out read=%+v; want the old episode %+v", got, old)
 	}
 	// The first qualifying read ends the old episode at once.
@@ -134,10 +145,17 @@ func TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 	}
 	assertDisplayEvent(t, events[0], api.StateIdleScreen, store.StateWorking, e.now)
 	candidate := e.now
+	if row := e.row(t); row.DisplayEvidence != "" {
+		t.Fatal("new candidate inherited old episode evidence")
+	}
 	e.now = candidate.Add(settle - time.Millisecond)
 	observeStatus(t, c, e.id, store.StateWorking, nil)
 	e.now = candidate.Add(settle)
 	got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced)
+	assertPaneRecord(t, got.Confirmations.DisplayedState, e.now, e.now, "")
+	if e.now.Equal(oldAt) {
+		t.Fatal("new episode clock did not move")
+	}
 	if got.Since != e.now.Format(displayTS) || minutes(t, got) != int64(e.now.Sub(start)/time.Minute) {
 		t.Fatalf("new episode inherited the old one: old=%+v new=%+v", old, got)
 	}
@@ -176,10 +194,11 @@ func TestIdleScreenTerminalExitIsImmediate(t *testing.T) {
 			before := e.row(t)
 			mark := trailMark(t)
 			tc.write(t, e)
-			if after := e.row(t); after.DisplayObservation != "" || after.ObservationVersion <= before.ObservationVersion || after.PermissionEpoch != before.PermissionEpoch+1 {
+			if after := e.row(t); after.DisplayObservation != "" || after.DisplayEvidence != "" || after.ObservationVersion <= before.ObservationVersion || after.PermissionEpoch != before.PermissionEpoch+1 {
 				t.Fatalf("the write left the episode: before=%+v after=%+v", before, after)
 			}
-			assertDisplayState(t, c, e.id, tc.state)
+			got := assertDisplayState(t, c, e.id, tc.state)
+			assertPaneRecord(t, got.Confirmations.DisplayedState, time.Time{}, time.Time{}, "")
 			assertDisplayState(t, c, e.id, tc.state)
 			_, stamp, err := apitest.ReadSettle(e.dbPath, e.id)
 			if err != nil {
@@ -259,7 +278,12 @@ func TestIdleScreenRawMoveSettlesOut(t *testing.T) {
 			t.Parallel()
 			e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
 			c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
-			enterIdleScreen(t, e, c, 0)
+			entered := enterIdleScreen(t, e, c, 0)
+			first := e.now
+			e.now = e.now.Add(time.Second)
+			entered = observeStatus(t, c, e.id, api.StateIdleScreen, func(a, b store.Spawn) bool { return a.DisplayEvidence != b.DisplayEvidence })
+			assertPaneRecord(t, entered.Confirmations.DisplayedState, first, e.now, "")
+			prior := e.row(t)
 			mark := trailMark(t)
 			if err := seedAgentState(e.s, e.dbPath, e.id, raw); err != nil {
 				t.Fatal(err)
@@ -270,11 +294,79 @@ func TestIdleScreenRawMoveSettlesOut(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if row := e.row(t); row.CommittedDisplay().State != api.StateIdleScreen {
-				t.Fatalf("the hook cleared the episode before any read: %+v", row)
+			retained := e.row(t)
+			if retained.CommittedDisplay().State != api.StateIdleScreen || retained.DisplayEvidence != prior.DisplayEvidence {
+				t.Fatalf("the hook cleared the episode before any read: %+v", retained)
 			}
 			e.now = e.now.Add(time.Second)
-			observeStatus(t, c, e.id, raw, apitest.VersionAdvanced)
+			if entered.Confirmations.DisplayedState.Status != "confirmed" {
+				t.Fatal("hook fixture has no confirmed display")
+			}
+			// fq code-review R1: these exported reads cannot sample a pane.
+			// A refused settle-out must keep the returned episode's record,
+			// as well as its durable bytes. Count the attempted transaction
+			// so skipping settlement entirely cannot make this case pass.
+			var attempts atomic.Int64
+			var refuseCommits atomic.Bool
+			var refusedCommits atomic.Int64
+			stop, err := store.ObserveSQLiteForTest(e.s, func(d driver.Driver) driver.Driver {
+				return sqliteobserve.Wrap(d, sqliteobserve.Hooks{Before: func(_ context.Context, q string) error {
+					if strings.HasPrefix(q, "BEGIN IMMEDIATE") {
+						attempts.Add(1)
+					}
+					if q == "COMMIT" && refuseCommits.Load() {
+						refusedCommits.Add(1)
+						return errors.New("injected settle-out commit failure")
+					}
+					return nil
+				}})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := stop(context.Background()); err != nil {
+					t.Error(err)
+				}
+			}()
+
+			assertRetained := func() {
+				for _, read := range readMain(t, e.s, api.RelayView{Now: func() time.Time { return e.now }}, e.id) {
+					if read.display != api.StateIdleScreen || conf(read.records.DisplayedState) != conf(entered.Confirmations.DisplayedState) {
+						t.Errorf("non-sampling %s changed retained display: %s %s; want %s %s", read.verb, read.display, conf(read.records.DisplayedState), api.StateIdleScreen, conf(entered.Confirmations.DisplayedState))
+					}
+				}
+			}
+			func() {
+				release := apitest.HoldWriteLock(t, e.dbPath, time.Minute)
+				defer release()
+				assertRetained()
+			}()
+			if attempts.Load() < 3 || e.row(t).DisplayEvidence != prior.DisplayEvidence {
+				t.Fatalf("blocked settlement was not exercised without changing evidence: attempts %d", attempts.Load())
+			}
+			refuseCommits.Store(true)
+			assertRetained()
+			refuseCommits.Store(false)
+			if refusedCommits.Load() < 3 || e.row(t).DisplayEvidence != retained.DisplayEvidence || e.row(t).DisplayObservation != retained.DisplayObservation {
+				t.Fatalf("unconfirmed settlement changed the record or missed the cut: refused commits %d", refusedCommits.Load())
+			}
+			var cleared api.StatusResult
+			observeDisplay(t, e.s, e.id, raw, apitest.VersionAdvanced, func() (string, api.StateDetail, error) {
+				var err error
+				cleared, err = api.Status(e.s, api.RelayView{Now: func() time.Time { return e.now }}, e.id)
+				return cleared.State, cleared.StateDetail, err
+			})
+			assertPaneRecord(t, cleared.Confirmations.DisplayedState, time.Time{}, time.Time{}, "")
+			if e.row(t).DisplayEvidence != "" {
+				t.Fatal("settle-out kept old evidence")
+			}
+			for _, read := range readMain(t, e.s, api.RelayView{Now: func() time.Time { return e.now }}, e.id) {
+				if read.display != "" {
+					t.Errorf("settled %s still displays %s", read.verb, read.display)
+				}
+				assertPaneRecord(t, read.records.DisplayedState, time.Time{}, time.Time{}, "")
+			}
 			exitAt := e.now
 			// A day later the row still reads its raw state, displaying nothing.
 			e.now = e.now.Add(24 * time.Hour)

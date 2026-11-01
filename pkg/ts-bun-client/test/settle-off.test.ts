@@ -48,10 +48,11 @@ for (const variant of table.variants) {
         fs.writeFileSync(path.join(homeDir, ".config", "agent-director", "config.toml"), variant.config);
       }
       using client = await openClient(homeStore(homeDir));
+      const first = new Map<string, string>();
       for (const c of table.cases) {
         const from = Date.now();
         const result = await call(client, c);
-        const got = normalizeProbes(JSON.stringify(result) + "\n", from, Date.now());
+        const got = normalizeProbes(JSON.stringify(result) + "\n", from, Date.now(), first, String(c.params.instance_id ?? ""));
         const want = fs.readFileSync(path.join(fixtureDir, "golden", `${c.name}.json`), "utf8");
         expect(`${c.name}: ${got}`).toBe(`${c.name}: ${want}`);
       }

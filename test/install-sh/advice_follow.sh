@@ -1102,7 +1102,7 @@ j6_break_hop() {
             "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_turn;
                 ALTER TABLE spawns DROP COLUMN codex_turn_ended;" || return 1
             ;;
-        16|17|18|19)
+        16|17|18|19|20)
             local installed
             installed="$("$TS_HELPER" install-write-failure --store "$1" \
                 --kind input-authority --id native_input_authority)" || return 1
@@ -1198,9 +1198,9 @@ test_J6_MigrationFailedRerunRetries() {
             || bad "corrected retry fabricated a Codex turn for the historical spawn"
     fi
     if [[ "$SCHEMA" -ge 19 ]]; then
-        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('state_evidence','settled_evidence','process_evidence') AND type='TEXT' AND \"notnull\"=0 AND dflt_value IS NULL;")" == 3 ]] \
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('state_evidence','settled_evidence','process_evidence','display_evidence') AND type='TEXT' AND \"notnull\"=0 AND dflt_value IS NULL;")" == 4 ]] \
             || bad "corrected retry did not add the three nullable evidence columns"
-        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT state_evidence IS NULL AND settled_evidence IS NULL AND process_evidence IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT state_evidence IS NULL AND settled_evidence IS NULL AND process_evidence IS NULL AND display_evidence IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated main-field evidence for the historical spawn"
     fi
     local ran="  schema  : authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA (sentinel $(sentinel "$J6H"))"

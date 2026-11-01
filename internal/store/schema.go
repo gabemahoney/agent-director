@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v19 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v20 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -103,7 +103,8 @@ import (
 // nullable codex_turn and codex_turn_ended, the Codex turns the row's hooks
 // and reads recorded (codex_turn.go), with no backfill. v19 adds the
 // nullable main-field evidence state_evidence, settled_evidence and
-// process_evidence (confirmations.go), with no backfill.
+// process_evidence (confirmations.go), with no backfill; v20 adds the
+// nullable display_evidence (confirmations.go), with no backfill.
 // The column order matches the corresponding migration steps.
 //
 // subagents holds one row per entry, a record (confirmed) or an observation
@@ -183,7 +184,8 @@ CREATE TABLE IF NOT EXISTS spawns (
     codex_turn_ended           TEXT,
     state_evidence             TEXT,
     settled_evidence           TEXT,
-    process_evidence           TEXT
+    process_evidence           TEXT,
+    display_evidence           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -331,6 +333,7 @@ var migrationSteps = []migrationStep{
 	{from: 16, apply: migrateV16toV17},
 	{from: 17, apply: migrateV17toV18},
 	{from: 18, apply: migrateV18toV19},
+	{from: 19, apply: migrateV19toV20},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.

@@ -189,6 +189,12 @@ func (st *sweepSocket) stopOn(r Result) Result {
 	return r
 }
 
+// Spent reports whether this run's budget is spent, so a skipped row or a
+// discarded call can be told from a stopped socket or a failed call.
+func (s *Sweep) Spent() bool {
+	return s.spent >= s.budget
+}
+
 // skipped is the result of a row the sweep did not call tmux for.
 func skipped() Result { return Result{Skipped: true} }
 

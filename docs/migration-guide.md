@@ -12,7 +12,7 @@ learned the hard way against the production database.
 ## 1. Architecture as it exists today
 
 Schema dispatch and fresh-store DDL live in `internal/store/schema.go`;
-`schemaVersion` in `store.go` is **19**. The twelve tables are `spawns`,
+`schemaVersion` in `store.go` is **20**. The twelve tables are `spawns`,
 `permission_requests`, `session_history`, `store_meta`, `subagents`,
 `subagent_launches`, `cursor_runtimes`, `input_launches`, `input_attempts`,
 `input_imports`, `cursor_inputs` and `cursor_proofs`.
@@ -21,7 +21,7 @@ fresh creation and the administrator import in `input_delivery_migration.go`.
 `permission_authority.go` owns the v16→v17 permission provenance step.
 `cursor_obligations_schema.go` owns the v17→v18 evidence step and its shared
 fresh-store `cursorObligationsDDL`. `confirmations_schema.go` owns the v18→v19
-main-field evidence step.
+main-field evidence step and the v19→v20 display-evidence step.
 Earlier hops retain their owning files: `cursor_runtime.go`,
 `request_eligibility.go`, `family_schema.go`, `codex_startup.go` /
 `claude_capacity.go`, `display_schema.go` and `codex_turn.go`.
@@ -30,12 +30,12 @@ Earlier hops retain their owning files: `cursor_runtime.go`,
 
 | Version on disk | Result |
 |---|---|
-| 0, empty schema | Fresh v19 DDL, store id, native-input authority and stamp commit together with FULL on the actual connection. |
+| 0, empty schema | Fresh v20 DDL, store id, native-input authority and stamp commit together with FULL on the actual connection. |
 | 0, nonempty schema | `ErrSchemaMismatch`; resetting a version is not fresh creation. |
 | 1–15 | `ErrSchemaMigrationRequired` before any hop unless both exact schema authorization and the administrator input-migration window are present. |
-| 16–18 | Exact schema authorization is required for the remaining hops to v19; no input import or input-migration window is needed. |
-| 19 | Validate the store id and native-input authority; never reimport files or replay Cursor evidence. |
-| Above 19 | `ErrSchemaMismatch`; no DDL. |
+| 16–19 | Exact schema authorization is required for the remaining hops to v20; no input import or input-migration window is needed. |
+| 20 | Validate the store id and native-input authority; never reimport files or replay Cursor evidence. |
+| Above 20 | `ErrSchemaMismatch`; no DDL. |
 
 Ordinary opens never construct the maintenance window. An exact preexisting
 sentinel therefore cannot trigger even an earlier hop on the way to v16. The
@@ -51,11 +51,12 @@ by later hops. Invalid identity refuses. The second metadata fact,
 complete v15→v16 import. Every open and input operation checks it; missing or
 wrong-store authority is corruption, not permission to use legacy files.
 
-**The registry.** Eighteen entries cover v1→v2 through v18→v19. The
+**The registry.** Nineteen entries cover v1→v2 through v19→v20. The
 `{from:15, inputCutover:true, apply:migrateV15toV16}` entry uses the administrator
 importer; `{from:16, apply:migrateV16toV17}` adds permission provenance without
 reimporting input; `{from:17, apply:migrateV17toV18}` adds Cursor evidence tables;
-`{from:18, apply:migrateV18toV19}` adds the main-field evidence columns.
+`{from:18, apply:migrateV18toV19}` adds the state/process evidence columns;
+`{from:19, apply:migrateV19toV20}` adds `display_evidence`.
 Earlier `apply` steps remain unchanged and individually
 transactional. Inspect the actual registry for later work;
 no next schema number is reserved here.
@@ -74,8 +75,8 @@ a nonempty hand-reset schema as a fresh store.
 `runMigrationChainWithInputWindow(db, from, window)` (`schema.go`) loops while `version <
 schemaVersion`, looking up the registered step for the current version
 (`migrationStepFrom`), applying it, and incrementing. It upgrades a DB across
-*multiple* versions in a single open — a v1 DB opened by the current v19 administrator
-runs v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12→v13→v14→v15→v16→v17→v18→v19 in one pass, each step its own transaction. There is no
+*multiple* versions in a single open — a v1 DB opened by the current v20 administrator
+runs v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12→v13→v14→v15→v16→v17→v18→v19→v20 in one pass, each step its own transaction. There is no
 return-after-one-hop: the loop keeps going until the DB reaches `schemaVersion`.
 If the loop finds itself below `schemaVersion` with no registered step for the
 current version, that is a gap in the registry — it fails loudly with
@@ -163,11 +164,39 @@ never touching `state.db`) — there is no logger plumbed into the store:
 
 The engine walks the actual registry; do not fold later changes into settled hops.
 
+### Current schema facts: v19 → v20
+
+`migrateV19toV20` appends nullable, default-free `spawns.display_evidence TEXT`,
+after `process_evidence` on a normal v19 store and in fresh DDL. It records
+the shown display's evidence even when no Displayed State is present; it
+does not change `display_observation` or the v18→v19 step. There is no backfill:
+a newly added column is NULL on existing rows, which then read
+`unknown`/`no_evidence` for display confirmation.
+Neither upgrade time, display `since` nor the pane baseline supplies evidence.
+
+The administrator sentinel gate applies. Before DDL, the transaction validates
+any existing column (exact name and case, TEXT, nullable, no default, not a
+primary key) and all non-null values (TEXT containing a valid JSON object).
+Incompatible shape or data returns `ErrSchemaMismatch` with
+"v19→v20 incompatible spawns.display_evidence" or
+"v19→v20 invalid spawns.display_evidence"; the v19 schema, data and stamp remain.
+A compatible partial reentry keeps the column and values in place. Semantic
+record validity and ownership are checked on read; malformed or inapplicable
+records give unknown rather than failing the read.
+
+The addition and stamp 20 commit together. Store identity, input authority,
+permission/proof tables and existing evidence columns are unchanged.
+`confirmations_schema_test.go` covers convergence, no backfill, reentry,
+refusal and reopen. Recovery is [restore-only](#emergency-downgrade-recipe):
+a v19 binary refuses a v20 store. Authorized re-migration of a restored v19
+backup adds the empty column again.
+
 ### Current schema facts: v18 → v19
 
 `migrateV18toV19` appends each missing one of three nullable, default-free
 `spawns` columns, `state_evidence TEXT`, `settled_evidence TEXT` and
-`process_evidence TEXT`, in that order; fresh DDL ends with the same three.
+`process_evidence TEXT`, in that order; fresh DDL keeps that order before
+the v20 display column.
 Each holds NULL or one JSON object (see "v19 columns" under
 [`internal/store`](architecture.md#internalstore)). There is no backfill: no
 stored timestamp establishes the exact value and owner a record names, so a
@@ -185,7 +214,8 @@ exact current value and owner. The additions and the v19 stamp share one
 transaction; refusal or rollback leaves the v18 schema, data, stamp and authorization intact. An
 unknown commit does not prove rollback: inspect the resulting version before
 reauthorization. Authorization must match the actual starting version and
-target 19. Store identity, input authority and the permission and Cursor
+the current binary's target (20); this step stamps 19 before the next hop.
+Store identity, input authority and the permission and Cursor
 tables are unchanged.
 
 Recovery is restore-only (§5). An older binary refuses a v19 store with
@@ -215,7 +245,7 @@ table additions and the final v18 stamp share one transaction; refusal or
 rollback leaves the v17 schema/data and authorization intact. An unknown commit
 does not prove rollback: inspect the resulting version before reauthorization.
 Authorization must match the actual starting version and the current target,
-19. Earlier hops, native-input authority/import and v17 permission provenance
+20. Earlier hops, native-input authority/import and v17 permission provenance
 are unchanged.
 
 Committed records retain input ordering, payload, original owner and phase
@@ -242,7 +272,7 @@ text. Compatible reentry retains values. Missing columns stay NULL, with no
 backfill from historical verdicts or pane records and no new response authority.
 The additions and stamp commit atomically; a refusal or failed hop retains v16.
 This hop stamps 17; authorization names the actual starting version and the
-current chain's target 19. The v16 input
+current chain's target 20. The v16 input
 tables, authority and import remain unchanged. Recovery is restore-only (§5).
 
 ### Worked example: v15 → v16
@@ -900,7 +930,7 @@ see §5.
 ## 4. `createSchema` must always be the latest schema
 
 Restating the two-places rule because it is the most common way a migration
-goes wrong: **fresh databases never replay hops.** The current v19 fresh DDL
+goes wrong: **fresh databases never replay hops.** The current v20 fresh DDL
 includes `cursorRuntimeDDL`, the eligibility column, the three v12
 family-history columns, nullable `spawns.codex_startup TEXT` and
 `spawns.claude_capacity TEXT`, the eight `spawns` and five
@@ -911,7 +941,8 @@ v13→v14 and v14→v15 hops use the same respective definitions; v16 shares
 `inputDeliveryDDL` and commits its input authority with fresh creation. The v17
 permission columns match `v17PermissionColumns`; v18 shares
 `cursorObligationsDDL` with its hop; the three v19 evidence columns match
-`v19EvidenceColumns`. Future changes must update
+`v19EvidenceColumns`, followed by v20's nullable `display_evidence TEXT`
+(`v20DisplayEvidenceColumn`). Future changes must update
 both fresh DDL and the next hop. The §3 step 4
 `schemaShape` comparison guards that both paths land in the same place. If you
 only touch the hop, fresh installs are stuck on the old schema; if you only
@@ -981,7 +1012,7 @@ ALTER TABLE <table> DROP COLUMN <added_col>;   -- reverse the v(N-1)→vN DDL
 PRAGMA user_version = <N-1>;      -- stamp back to the version the old binary reads
 ```
 
-This illustrates the historical pattern, not a recipe for v9 through v19. Never
+This illustrates the historical pattern, not a recipe for v9 through v20. Never
 merely reset the version pragma. Confirm the starting version and use only the
 matching tested recipe before letting an older binary open the file. The store
 does not downgrade automatically.
@@ -993,10 +1024,12 @@ the v8 → v7 recipe, then the v7 → v6 recipe, and to v5 by those two, then th
 v6 → v5 recipe. Each recipe assumes the store is at its own starting version
 and changes nothing a newer version added, so never skip one.
 
-**Current recovery policy.** Schemas v19, v18, v17 and v16 are restore-only.
-The v19 evidence columns have no reverse recipe: restore the stopped-writer
-pre-upgrade set, losing evidence written since, and never drop the columns or
-reset the version. The v18
+**Current recovery policy.** Schemas v20, v19, v18, v17 and v16 are restore-only.
+The v20 display column and v19 evidence columns have no reverse recipe:
+restore the stopped-writer pre-upgrade set, losing all later writes, and
+never drop the columns or reset the version. Display evidence is freshness
+metadata only; it carries no authority, delivery or proof fact. A v19 binary
+refuses a v20 store with `ErrSchemaMismatch`. The v18
 Cursor input/proof records preserve accepted work and uncertain issue evidence;
 dropping them cannot establish non-delivery or authorize replay. The v17
 permission origin, owner and one-use response claims have no reverse recipe;
@@ -1012,7 +1045,7 @@ operator's copies; it does not cover earlier directory/config rewrites or
 external provider evidence. Without the matching recovery set, stop for help.
 
 Schemas v15, v14 and v13 also have no supported reverse recipe. The v12→v11
-recipe below is only for genuine family-only v12, never v13–v19 or a hand-reset
+recipe below is only for genuine family-only v12, never v13–v20 or a hand-reset
 store. No supported reverse path crosses v11→v10 or v10→v9. The v8-and-older
 recipes remain limited to their stated starting versions. The complete
 current-layout and directory-move procedure is owned by
@@ -1028,11 +1061,12 @@ installing. The installer does not make that copy.
 #### v12 → v11 (reverses `migrateV11toV12`)
 
 Use this only on a genuine family-only v12 store whose `PRAGMA user_version;`
-prints `12`, to allow a schema-v11 binary to open it. A v13–v19 store cannot use
+prints `12`, to allow a schema-v11 binary to open it. A v13–v20 store cannot use
 this recipe, even if someone resets its version: the context provenance
 columns (and, from v14, the permission columns; from v15, the Codex turn
 columns, v16 input authority/tables, v17 permission provenance, v18 Cursor
-evidence tables and v19 main-field evidence columns) would remain and the result would not match schema v11. Stop every agent, server and other caller
+evidence tables, v19 state/process evidence and v20 display evidence) would
+remain and the result would not match schema v11. Stop every agent, server and other caller
 that can hold or write the store. Back up the actual configured `state.db`
 and its `-wal` and `-shm` companions before changing anything. Use SQLite
 3.35.5 or later, as required by the older `DROP COLUMN` recipes below.

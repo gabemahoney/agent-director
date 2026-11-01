@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
 import { withTempHome } from "./internal/tempHome.js";
-import { runHelper, homeStore, openClient } from "./internal/helper.js";
+import { runHelper, homeStore, openClient, withProcessEnv } from "./internal/helper.js";
 
 const fixtures = path.resolve(import.meta.dir, "../../../cmd/agent-director/testdata/display");
 const idleScreen = JSON.parse(fs.readFileSync(path.join(fixtures, "idle_screen.json"), "utf8"));
@@ -29,13 +29,15 @@ const LIST_KEYS = ["agent", "confirmations", "cwd", "family_state", "idle_screen
 const MAIN_KEYS = ["confirmations", "context", "family_state", "process_liveness"];
 
 /**
- * b.x9o: a showing Displayed State has no display provenance yet, so its
- * record is explicitly unknown with null evidence (unsupported for Cursor).
+ * b.x9o: the fixtures have no owned pane. Working rows attempt a capture;
+ * other rows have no display evidence, and Cursor remains unsupported.
  */
-function expectUnknownDisplay(read: { confirmations: { displayed_state: unknown } }, agent: string): void {
+function expectDisplayRecord(read: { state: string; confirmations: { displayed_state: unknown } }, agent: string): void {
+  const attempted = read.state === "working" && agent !== "cursor";
   expect(read.confirmations.displayed_state).toEqual({
-    status: "unknown", confirmed_at: null, source: null, checked_at: null,
-    reason: agent === "cursor" ? "unsupported" : "no_evidence",
+    status: attempted ? "not_confirmed" : "unknown", confirmed_at: null, source: null,
+    checked_at: attempted ? expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/) : null,
+    reason: agent === "cursor" ? "unsupported" : attempted ? "unreadable" : "no_evidence",
   });
 }
 
@@ -56,7 +58,7 @@ test("idle_screen shows in displayed_state beside state working, and an open per
       expect(Object.keys(status).sort()).toEqual([...MAIN_KEYS, ...Object.keys(detail)].sort());
       const get = JSON.parse(JSON.stringify(await client.get({ instance_id: id })));
       expect(get).toMatchObject(detail);
-      for (const read of [status, get]) expectUnknownDisplay(read, id.slice("idle-screen-".length));
+      for (const read of [status, get]) expectDisplayRecord(read, id.slice("idle-screen-".length));
       for (const key of ["request_token", "tool_name", "stuck_reason"]) expect(get).not.toHaveProperty(key);
       expect(get.permission_requests).toBeArray();
       expect(get.unproven_requests).toBeArray();
@@ -69,7 +71,7 @@ test("idle_screen shows in displayed_state beside state working, and an open per
       const status = JSON.parse(JSON.stringify(await client.status({ instance_id: id })));
       expect(status).toMatchObject({ state: "check_permission", idle_screen_availability: availability(agent) });
       expect(Object.keys(status).sort()).toEqual([...MAIN_KEYS, "idle_screen_availability", "state"].sort());
-      expectUnknownDisplay(status, agent);
+      expectDisplayRecord(status, agent);
       const get = JSON.parse(JSON.stringify(await client.get({ instance_id: id })));
       expect(get.state).toBe("check_permission");
       for (const key of ["displayed_state", "since", "request_token", "tool_name", "unchanged_minutes"]) expect(get).not.toHaveProperty(key);
@@ -91,7 +93,7 @@ test("idle_screen shows in displayed_state beside state working, and an open per
           // The exact key set: displayed_state and no detail.
           expect(row.displayed_state).toBe("idle_screen");
           expect(Object.keys(row).sort()).toEqual([...LIST_KEYS, "displayed_state"].sort());
-          expectUnknownDisplay(row, row.agent);
+          expectDisplayRecord(row, row.agent);
         } else {
           expect(row).not.toHaveProperty("displayed_state");
         }
@@ -102,7 +104,7 @@ test("idle_screen shows in displayed_state beside state working, and an open per
       const ordinary = await client.status({ instance_id: id });
       expect(ordinary.idle_screen_availability).toBe(availability(agent));
       expect(Object.keys(ordinary).sort()).toEqual([...MAIN_KEYS, "idle_screen_availability", "state"].sort());
-      expectUnknownDisplay(ordinary, agent);
+      expectDisplayRecord(ordinary, agent);
     }
   });
 }, 60_000);
@@ -121,3 +123,39 @@ test("the manifest declares the lifecycle states, displayed_state, the idle_scre
   expect(golden).toContain('displayed_state?: "needs_intelligence" | "idle_screen";');
   expect(golden).toContain("idle_screen_timeout_seconds?: number | null;");
 });
+
+// b.x9o: the shipped client exposes successful owned samples and keeps their
+// first confirmation when the pane becomes unreadable in a later process.
+test("display confirmation survives a later missing pane across all client reads", async () => {
+  await withTempHome(async (home) => {
+    const store = homeStore(home);
+    const id = `display-${crypto.randomUUID()}`;
+    const tables = path.join(home, "tables");
+    await withProcessEnv({ FAKE_TMUX_TABLES: tables }, async () => {
+      runHelper("seed-spawn", { store, id, state: "working", "create-store": true,
+        "writer-pid": String(process.pid), "writer-keep-pane": true });
+      const session = runHelper("seed-row-session", { store, id, capture: "pane", "tables-dir": tables });
+      using client = await openClient(store);
+      let first: string | null = null;
+      for (const failed of [false, true]) {
+        if (failed) fs.unlinkSync(session.table as string);
+        for (const verb of ["status", "get", "list"] as const) {
+          const from = Date.now();
+          const row = verb === "list" ? (await client.list({})).spawns[0]
+            : await client[verb]({ instance_id: id });
+          const to = Date.now();
+          const rec = row.confirmations.displayed_state;
+          first ??= rec.confirmed_at;
+          expect(first).not.toBeNull();
+          expect(Object.keys(row.confirmations).sort()).toEqual(["displayed_state", "process_liveness", "state"]);
+          expect(rec).toEqual({ status: failed ? "not_confirmed" : "confirmed", confirmed_at: first,
+            source: "pane", checked_at: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/), reason: failed ? "unreadable" : null });
+          const checked = Date.parse(rec.checked_at!);
+          expect(checked >= from && checked <= to && checked >= Date.parse(first!)).toBe(true);
+          expect(row.state).toBe("working");
+          expect(row.process_liveness).toBe("alive");
+        }
+      }
+    });
+  });
+}, 60_000);

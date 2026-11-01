@@ -45,9 +45,9 @@ last=""
 # Exact key sets (docs/caller-contract.md): a status row showing no Displayed
 # State and showing idle_screen; a list row's keys present on a row showing
 # idle_screen and those present only on some.
-status_plain='["context","family_state","idle_screen_availability","state"]'
-status_idle='["context","displayed_state","family_state","idle_screen_availability","since","state","tmux_session_name","unchanged_minutes"]'
-list_keys='["agent","cwd","displayed_state","family_state","idle_screen_availability","instance_id","labels","last_seen_at","permission_requests","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
+status_plain='["confirmations","context","family_state","idle_screen_availability","process_liveness","state"]'
+status_idle='["confirmations","context","displayed_state","family_state","idle_screen_availability","process_liveness","since","state","tmux_session_name","unchanged_minutes"]'
+list_keys='["agent","confirmations","cwd","displayed_state","family_state","idle_screen_availability","instance_id","labels","last_seen_at","permission_requests","process_liveness","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
 list_optional='["ended_at","launch_started_at","liveness_note","liveness_unverified_since","parent_id"]'
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -78,7 +78,7 @@ trap cleanup EXIT
 mkdir -p "$dir"
 agent-director list >/dev/null || fail "agent-director list could not open the store"
 have="$(sqlr "SELECT group_concat(name) FROM pragma_table_info('spawns');")"
-for c in observation_version display_observation display_exit idle_screen_timeout_seconds pane_sha256 pane_since_ms pane_epoch; do
+for c in display_evidence observation_version display_observation display_exit idle_screen_timeout_seconds pane_sha256 pane_since_ms pane_epoch; do
     case ",$have," in
     *",$c,"*) ;;
     *)
@@ -88,10 +88,10 @@ for c in observation_version display_observation display_exit idle_screen_timeou
     esac
 done
 
-# write_config TIMEOUT: no settling, the reader's idle_screen timeout and the
+# write_config TIMEOUT [SETTLE_MS]: the reader's idle_screen timeout and the
 # Codex stand-in as codex.
 write_config() {
-    printf '[state]\nsettle_ms = 0\nidle_screen_timeout_seconds = %s\nneeds_intelligence_timeout_seconds = 30\n[launch]\ncodex_path = "/opt/driver/stand-in-codex/codex"\n' "$1" >"$config"
+    printf '[state]\nsettle_ms = %s\nidle_screen_timeout_seconds = %s\nneeds_intelligence_timeout_seconds = 30\n[launch]\ncodex_path = "/opt/driver/stand-in-codex/codex"\n' "${2:-0}" "$1" >"$config"
 }
 
 # read_row VERB ID: the verb's JSON result for ID; the call must exit 0.
@@ -250,8 +250,11 @@ public)
     # 900 s unchanged: past the configured 600, short of the 1200 default.
     write_config 600
     minutes=() entries=()
+    mkdir -p /tmp/idle-screen-artifacts
+    evidence="/tmp/idle-screen-artifacts/public.jsonl"
+    : >"$evidence"
     for agent in claude codex; do
-        id="pane-$agent"
+        id="pane-$agent-$(cat /proc/sys/kernel/random/uuid)"
         launch "$agent" "$id"
         baseline "$id"
         backdate "$id" 900000
@@ -269,19 +272,60 @@ public)
         # Either filter, the Displayed State or the real state (b.zpv), lists the row.
         for filter in idle_screen working; do
             listed="$(agent-director list --state "$filter")" || fail "list --state $filter exited non-zero"
-            jq -e --arg id "$id" --argjson k "$list_keys" --argjson o "$list_optional" \
+            jq -e --arg id "$id" --arg first "$(jq -r .since <<<"$status")" --argjson k "$list_keys" --argjson o "$list_optional" \
                 '[.spawns[] | select(.instance_id == $id)] | length == 1 and (.[0] | .state == "working" and .displayed_state == "idle_screen"
-                and .idle_screen_availability == "available" and (keys - $o) == $k)' <<<"$listed" >/dev/null ||
+                and .idle_screen_availability == "available" and (keys - $o) == $k
+                and (.confirmations | keys == ["displayed_state","process_liveness","state"])
+                and all(.confirmations[]; keys == ["checked_at","confirmed_at","reason","source","status"])
+                and .confirmations.displayed_state.status == "confirmed" and .confirmations.displayed_state.source == "pane"
+                and .confirmations.displayed_state.confirmed_at == $first and .confirmations.displayed_state.reason == null
+                and .confirmations.displayed_state.checked_at >= $first)' <<<"$listed" >/dev/null ||
                 fail "$agent: list --state $filter row: $listed"
         done
         [[ "$(version "$id")" == "$v" ]] || fail "$agent: list re-committed the unchanged display"
         [[ "$(col "$id" state)" == working ]] || fail "$agent: the raw state moved"
         one_record "$id" working idle_screen "$(jq -r .since <<<"$status")"
         minutes+=("$(jq .unchanged_minutes <<<"$status")")
+        # b.x9o: independently launched readers report real owned samples.
+        for reading in "$status" "$get"; do
+            jq -e '.confirmations | keys == ["displayed_state","process_liveness","state"]
+                and all(.[]; keys == ["checked_at","confirmed_at","reason","source","status"])' <<<"$reading" >/dev/null || fail "confirmation shape: $reading"
+            jq -e '.confirmations.displayed_state as $d | $d.status == "confirmed" and $d.source == "pane" and $d.confirmed_at == .since
+                and $d.checked_at >= $d.confirmed_at and $d.reason == null
+                and .process_liveness == "alive" and .confirmations.process_liveness.status == "confirmed"
+                and .confirmations.state.source == "agent_event"' <<<"$reading" >/dev/null || fail "owned pane evidence: $reading"
+        done
+        owner="$(col "$id" "launch_token || '|' || pane_id || '|' || pid || '|' || proc_starttime")"
+        state_record="$(jq -c .confirmations.state <<<"$get")"
+        sock="$(col "$id" tmux_socket)"
+        pane="$(col "$id" pane_id)"
+        label="$(tmux ${sock:+-S "$sock"} show-options -p -v -t "$pane" @ad_pane)"
+        # Lose only the pane's ownership label. The actual agent process and
+        # lifecycle stay alive/working; the display's exit is still settling.
+        write_config 600 60000
+        tmux ${sock:+-S "$sock"} set-option -p -u -t "$pane" @ad_pane
+        observe "$id"
+        failed="$last"
+        jq -e --argjson prior "$get" --argjson state "$state_record" '.state == "working" and .displayed_state == "idle_screen"
+            and .process_liveness == "alive" and .confirmations.process_liveness.status == "confirmed" and .confirmations.state == $state
+            and .confirmations.displayed_state == {status:"not_confirmed", confirmed_at:$prior.confirmations.displayed_state.confirmed_at,
+                source:"pane", checked_at:.confirmations.displayed_state.checked_at, reason:"unreadable"}
+            and .confirmations.displayed_state.checked_at >= $prior.confirmations.displayed_state.checked_at' <<<"$failed" >/dev/null || fail "lost pane borrowed fresh evidence: $failed"
+        [[ "$(col "$id" "launch_token || '|' || pane_id || '|' || pid || '|' || proc_starttime")" == "$owner" ]] || fail "pane observation changed the agent identity"
+        stored="$(col "$id" display_evidence)"
+        confirmed_ms="$(date -d "$(jq -r .confirmations.displayed_state.confirmed_at <<<"$failed")" +%s%3N)"
+        checked_ms="$(date -d "$(jq -r .confirmations.displayed_state.checked_at <<<"$failed")" +%s%3N)"
+        jq -e --argjson at "$confirmed_ms" --argjson checked "$checked_ms" '.v == "idle_screen" and .reason == "unreadable" and .src == "pane"
+            and .at == $at and .since == $at and .checked == $checked' <<<"$stored" >/dev/null || fail "failed attempt not durable: $stored"
+        jq -cn --arg agent "$agent" --arg id "$id" --arg owner "$owner" --argjson success "$get" --argjson listed "$listed" --argjson failed "$failed" --argjson stored "$stored" \
+            '{agent:$agent,id:$id,owner:$owner,success:$success,listed:$listed,failed:$failed,stored:$stored}' >>"$evidence"
+        tmux ${sock:+-S "$sock"} set-option -p -t "$pane" @ad_pane "$label"
+        write_config 600
+
     done
     trail_clean
     jq -cn --argjson m "$(printf '%s\n' "${minutes[@]}" | jq -sc .)" --argjson e "$(printf '%s\n' "${entries[@]}" | jq -sc .)" \
-        '{case: "public", agents: ["claude", "codex"], timeout: 600, minutes: $m, entry_commits: $e, records: [1, 1], raw: "working"}'
+        '{case: "public", agents: ["claude", "codex"], timeout: 600, minutes: $m, entry_commits: $e, entry_records: [1, 1], pane_loss: "not_confirmed/unreadable", raw: "working"}'
     ;;
 override)
     write_config 60
@@ -296,7 +340,7 @@ override)
         [[ "$(sqlr "SELECT COUNT(*) FROM spawns WHERE instance_id = $(q "$id");")" == 0 ]] || fail "$bad: the refusal wrote a row"
         refused=$((refused + 1))
     done
-    id=override
+    id="override-$(cat /proc/sys/kernel/random/uuid)"
     launch claude "$id" --idle-screen-timeout-seconds 7200
     [[ "$(col "$id" idle_screen_timeout_seconds)" == 7200 ]] || fail "the override was not recorded"
     baseline "$id"
@@ -350,6 +394,10 @@ cursor)
         fail "availability on every row: $listed"
     [[ "$(records cursor-asks)" == "[]" ]] || fail "the fallen-back Cursor request wrote a record: $(records cursor-asks)"
     [[ "$(records cursor-quiet)" == "[]" ]] || fail "the never-sampled Cursor row wrote a record: $(records cursor-quiet)"
+    for reading in "$quiet" "$last"; do
+        jq -e '.confirmations.displayed_state == {status:"unknown",confirmed_at:null,source:null,checked_at:null,reason:"unsupported"}' <<<"$reading" >/dev/null || fail "Cursor display evidence: $reading"
+    done
+    [[ "$(col cursor-quiet 'display_evidence IS NULL')" == 1 ]] || fail "Cursor stored display evidence"
     trail_clean
     jq -cn --arg q "$(jq -r '[.state, .idle_screen_availability] | join("/")' <<<"$quiet")" \
         --arg a "$(jq -r '[.state, .idle_screen_availability] | join("/")' <<<"$last")" \

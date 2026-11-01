@@ -116,5 +116,6 @@ func (r *keysRun) sameInputPreparation(current Spawn) bool {
 	// Main-field evidence is freshness metadata a concurrent read or event may
 	// record; it grants no authority, so it never decides admission.
 	expected.StateEvidence, expected.SettledStateEvidence, expected.ProcessEvidence = current.StateEvidence, current.SettledStateEvidence, current.ProcessEvidence
+	expected.DisplayEvidence = current.DisplayEvidence
 	return reflect.DeepEqual(expected.RawFields(), current.RawFields())
 }

@@ -8,13 +8,16 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -24,7 +27,7 @@ const evidenceSeedMs = int64(1_790_000_000_000)
 // stampEvidence gives id's row applicable records made at evidenceSeedMs: a
 // state record of its raw value, interval and launch from an agent event, and,
 // where it records a pane process, that process alive (exited on a finished
-// row). It returns the row as read after.
+// row), and a pane confirmation of none. It returns the row as read after.
 func stampEvidence(t *testing.T, f *v5Store, id string) store.Spawn {
 	t.Helper()
 	execRaw(t, f.path, `UPDATE spawns SET state_evidence = json_object('v', state, 'life', COALESCE(life_number, 0),
@@ -38,6 +41,8 @@ func stampEvidence(t *testing.T, f *v5Store, id string) store.Spawn {
 	if rec, ok := sp.ProcessEvidenceAfter(store.ProcessAttempt{PID: sp.Identity.PanePID, Start: sp.Identity.PaneStarttime, Value: value}, evidenceSeedMs); ok {
 		execRaw(t, f.path, `UPDATE spawns SET process_evidence = ? WHERE instance_id = ?`, rec, id)
 	}
+	execRaw(t, f.path, `UPDATE spawns SET display_evidence=json_object('v','none','life',COALESCE(life_number,0),
+	    'token',launch_token,'at',?,'src','pane','checked',?,'reason',NULL) WHERE instance_id=?`, evidenceSeedMs, evidenceSeedMs, id)
 	sp = rvExamine(t, f, id)
 	if c := sp.StateConfirmation(store.SettleRead{}); c.Status != store.ConfirmationConfirmed {
 		t.Fatalf("seeded state record does not apply: %+v; the write checks would be vacuous", c)
@@ -108,6 +113,19 @@ func TestEvidenceEveryWrite(t *testing.T) {
 					got.ConfirmedAtMillis > to || got.CheckedAtMillis != got.ConfirmedAtMillis || got.Reason != "" {
 					t.Errorf("state record %+v; want confirmed by %s at the write's own time in [%d, %d]", got, src, from, to)
 				}
+			}
+
+			// b.x9o: none stays none across immediate writes; a new owner
+			// makes that retained record inapplicable, a restore owns it again.
+			if after.DisplayEvidence != before.DisplayEvidence {
+				t.Errorf("none display record changed across %s", writer)
+			}
+			wantDisplay := store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: evidenceSeedMs, Source: store.EvidencePane, CheckedAtMillis: evidenceSeedMs}
+			if after.LifeNumber != orig.LifeNumber || after.Identity.Token != orig.Identity.Token {
+				wantDisplay = store.UnknownConfirmation(store.ReasonNoEvidence)
+			}
+			if rec := after.DisplayConfirmation(after.CommittedDisplay(), after.DisplayEvidence); rec != wantDisplay {
+				t.Errorf("display record after %s = %+v; want %+v", writer, rec, wantDisplay)
 			}
 
 			live := store.IsLiveState
@@ -291,8 +309,8 @@ func TestTerminalMoveProcessEvidence(t *testing.T) {
 	})
 }
 
-// TestProcessEvidenceAfter: a successful attempt stamps its value with source
-// process; a failed one keeps the last applicable value, time and source and
+// TestProcessEvidenceAfter: a successful attempt keeps the first applicable
+// same-value confirmation; a failed one keeps its value, time and source and
 // records only its own time and reason. Nothing is made for a Cursor row, a
 // process the row does not record, or an alive sample of a finished row (one
 // taken before its terminal move), while exited and failed attempts there
@@ -308,7 +326,7 @@ func TestProcessEvidenceAfter(t *testing.T) {
 	}
 	working, ended, missing, cursor := row(store.StateWorking), row(store.StateEnded), row(store.StateMissing), row(store.StateWorking, apitest.WithAgent(store.AgentCursor))
 	const atMs = evidenceSeedMs + 2000
-	fresh := store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: atMs, Source: store.EvidenceProcess, CheckedAtMillis: atMs}
+	same := store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: evidenceSeedMs, Source: store.EvidenceProcess, CheckedAtMillis: atMs}
 	kept := store.Confirmation{Status: store.ConfirmationNotConfirmed, ConfirmedAtMillis: evidenceSeedMs, Source: store.EvidenceProcess, CheckedAtMillis: atMs, Reason: store.ReasonUnreadable}
 	for _, tc := range []struct {
 		name    string
@@ -317,13 +335,13 @@ func TestProcessEvidenceAfter(t *testing.T) {
 		value   string // "" when nothing may be stored
 		want    store.Confirmation
 	}{
-		{"alive on a live row", working, attempt(store.ProcessAlive, ""), store.ProcessAlive, fresh},
+		{"alive on a live row", working, attempt(store.ProcessAlive, ""), store.ProcessAlive, same},
 		{"unreadable keeps the older value and time", working, attempt(store.ProcessUnknown, store.ReasonUnreadable), store.ProcessAlive, kept},
 		{"another process", working, store.ProcessAttempt{PID: pane.PanePID + 1, Start: pane.PaneStarttime, Value: store.ProcessAlive}, "", store.Confirmation{}},
 		{"Cursor row", cursor, attempt(store.ProcessAlive, ""), "", store.Confirmation{}},
 		{"alive on an ended row", ended, attempt(store.ProcessAlive, ""), "", store.Confirmation{}},
 		{"alive on a missing row", missing, attempt(store.ProcessAlive, ""), "", store.Confirmation{}},
-		{"exited on an ended row", ended, attempt(store.ProcessExited, ""), store.ProcessExited, fresh},
+		{"exited on an ended row", ended, attempt(store.ProcessExited, ""), store.ProcessExited, same},
 		{"unreadable on a missing row", missing, attempt(store.ProcessUnknown, store.ReasonUnreadable), store.ProcessExited, kept},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -340,6 +358,316 @@ func TestProcessEvidenceAfter(t *testing.T) {
 				t.Errorf("record %s reads %s %+v; want %s %+v", rec, v, c, tc.value, tc.want)
 			}
 		})
+	}
+}
+
+// b.x9o R4: retention is bounded by the exact owner, identity and value. A
+// new confirmation then survives its next successful check. Both qualifying
+// process identities on one row must remain distinct. Persist through the
+// actual guarded writer and check its stored and public projections.
+func TestProcessEvidenceConfirmationIntervals(t *testing.T) {
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		for _, tc := range []struct {
+			name   string
+			change map[string]any
+			raw    *string
+			value  string
+			keep   bool
+		}{
+			{name: "same owner", keep: true},
+			{name: "recovered", change: map[string]any{"reason": store.ReasonUnreadable, "checked": evidenceSeedMs + 500}, keep: true},
+			{name: "original source", change: map[string]any{"src": store.EvidenceTmux}, keep: true},
+			{name: "life", change: map[string]any{"life": 6}},
+			{name: "launch", change: map[string]any{"token": "fedcba9876543210"}},
+			{name: "pid", change: map[string]any{"pid": 9981}},
+			{name: "start", change: map[string]any{"start": "other-start"}},
+			{name: "value", value: store.ProcessExited},
+			{name: "other recorded identity", change: map[string]any{"pid": 9982, "start": "session-start"}},
+			{name: "failed first attempt", change: map[string]any{"v": store.ProcessUnknown, "at": nil, "src": nil, "reason": store.ReasonUnreadable}},
+			{name: "absent", raw: new(string)},
+			{name: "malformed", raw: func() *string { s := "{"; return &s }()},
+		} {
+			t.Run(agent+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				f := newV5Store(t)
+				id := f.seed(store.StateWorking, "", append(rowVersionSeed(), apitest.WithAgent(agent), apitest.WithPID(9982), apitest.WithProcStarttime("session-start"))...)
+				sp := stampEvidence(t, f, id)
+				var prior map[string]any
+				if err := json.Unmarshal([]byte(sp.ProcessEvidence), &prior); err != nil {
+					t.Fatal(err)
+				}
+				for key, value := range tc.change {
+					prior[key] = value
+				}
+				encoded, err := json.Marshal(prior)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw := string(encoded)
+				if tc.raw != nil {
+					raw = *tc.raw
+				}
+				execRaw(t, f.path, `UPDATE spawns SET process_evidence = NULLIF(?, '') WHERE instance_id = ?`, raw, id)
+				value := tc.value
+				if value == "" {
+					value = store.ProcessAlive
+				}
+				const atMs = evidenceSeedMs + 2000
+				want := store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: atMs, Source: store.EvidenceProcess}
+				if tc.keep {
+					want.ConfirmedAtMillis, want.Source = evidenceSeedMs, prior["src"].(string)
+				}
+				for _, checked := range []int64{atMs, atMs + 1000} {
+					sp = rvExamine(t, f, id)
+					rec, ok := sp.ProcessEvidenceAfter(store.ProcessAttempt{PID: sp.Identity.PanePID, Start: sp.Identity.PaneStarttime, Value: value}, checked)
+					if !ok {
+						t.Fatal("recorded process produced no evidence")
+					}
+					if res, err := f.s.RecordProcessEvidence(sp, rec); err != nil || res != store.CondApplied {
+						t.Fatalf("RecordProcessEvidence = %v, %v", res, err)
+					}
+					sp = rvExamine(t, f, id)
+					want.CheckedAtMillis = checked
+					if v, got := sp.ProcessConfirmation(); v != value || got != want || sp.ProcessEvidence != rec {
+						t.Errorf("durable process record %s %+v; want %s %+v", v, got, value, want)
+					}
+					at, check := time.UnixMilli(want.ConfirmedAtMillis).UTC().Format("2006-01-02T15:04:05.000Z"), time.UnixMilli(checked).UTC().Format("2006-01-02T15:04:05.000Z")
+					wantPublic := api.Confirmation{Status: want.Status, ConfirmedAt: &at, Source: &want.Source, CheckedAt: &check}
+					got, err := api.Status(f.s, api.RelayView{}, id)
+					if err != nil || got.ProcessLiveness != value || !reflect.DeepEqual(got.Confirmations.ProcessLiveness, wantPublic) {
+						t.Errorf("public process record %+v, %v; want %s %+v", got.Confirmations.ProcessLiveness, err, value, wantPublic)
+					}
+				}
+			})
+		}
+	}
+}
+
+// b.x9o R5 and repair 04: a present invalid token is never a legacy null.
+// These inputs exercise the same ownership boundary for state and process.
+type evidenceOwnerCase struct {
+	name      string
+	token     any
+	tokenless bool
+	valid     bool
+}
+
+var evidenceOwners = []evidenceOwnerCase{
+	{"malformed", "not-a-launch-token", true, false},
+	{"empty", "", true, false},
+	{"uppercase", "ABCDEF0123456789", true, false},
+	{"short", "01234567", true, false},
+	{"null", nil, true, true},
+	{"matching", "0123456789abcdef", false, true},
+	{"foreign", "fedcba9876543210", false, false},
+	{"null on tokenful", nil, false, false},
+}
+
+func TestProcessEvidenceTokenOwnership(t *testing.T) {
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		for _, tc := range evidenceOwners {
+			for _, failure := range []bool{false, true} {
+				phase := "success"
+				if failure {
+					phase = "failure"
+				}
+				t.Run(agent+"/"+tc.name+"/"+phase, func(t *testing.T) {
+					t.Parallel()
+					f := newV5Store(t)
+					identity := fullIdentity()
+					identity.Token = "0123456789abcdef"
+					if tc.tokenless {
+						identity.Token = ""
+					}
+					id := f.seed(store.StateWorking, "", apitest.WithAgent(agent), apitest.WithLifeNumber(0), apitest.WithLaunchIdentity(identity))
+					stampEvidence(t, f, id)
+					execRaw(t, f.path, `UPDATE spawns SET process_evidence=json_set(process_evidence,'$.token',?,'$.src','tmux') WHERE instance_id=?`, tc.token, id)
+					before := rvExamine(t, f, id)
+					value, want := store.ProcessUnknown, store.UnknownConfirmation(store.ReasonNoEvidence)
+					prior := ""
+					if tc.valid {
+						value = store.ProcessAlive
+						want = store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: evidenceSeedMs, Source: store.EvidenceTmux, CheckedAtMillis: evidenceSeedMs}
+						prior = before.ProcessEvidence
+					}
+					if v, got := before.ProcessConfirmation(); v != value || got != want {
+						t.Errorf("stored-only process record = %s %+v; want %s %+v", v, got, value, want)
+					}
+					if got := before.PriorProcessEvidence(); got != prior {
+						t.Errorf("PriorProcessEvidence = %q; want %q", got, prior)
+					}
+					at := evidenceSeedMs + 2000
+					attempt := store.ProcessAttempt{PID: identity.PanePID, Start: identity.PaneStarttime, Value: store.ProcessAlive}
+					want = store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: at, Source: store.EvidenceProcess, CheckedAtMillis: at}
+					value = store.ProcessAlive
+					if failure {
+						attempt.Value, attempt.Reason = store.ProcessUnknown, store.ReasonUnreadable
+						value = store.ProcessUnknown
+						want = store.Confirmation{Status: store.ConfirmationNotConfirmed, CheckedAtMillis: at, Reason: store.ReasonUnreadable}
+					}
+					if tc.valid {
+						value, want.ConfirmedAtMillis, want.Source = store.ProcessAlive, evidenceSeedMs, store.EvidenceTmux
+					}
+					for _, checked := range []int64{at, at + 1000} {
+						sp := rvExamine(t, f, id)
+						rec, ok := sp.ProcessEvidenceAfter(attempt, checked)
+						if !ok {
+							t.Fatal("recorded process produced no evidence")
+						}
+						if res, err := f.s.RecordProcessEvidence(sp, rec); err != nil || res != store.CondApplied {
+							t.Fatalf("RecordProcessEvidence = %v, %v", res, err)
+						}
+						want.CheckedAtMillis = checked
+						sp = rvExamine(t, f, id)
+						if v, got := sp.ProcessConfirmation(); v != value || got != want || sp.ProcessEvidence != rec {
+							t.Errorf("durable process record = %s %+v; want %s %+v", v, got, value, want)
+						}
+						// Independently pin every stored key, including normalized owner,
+						// and null evidence on a failed first qualifying attempt.
+						var token, first, src, reason any
+						if identity.Token != "" {
+							token = identity.Token
+						}
+						if want.ConfirmedAtMillis > 0 {
+							first, src = float64(want.ConfirmedAtMillis), want.Source
+						}
+						if want.Reason != "" {
+							reason = want.Reason
+						}
+						wantRaw := map[string]any{"v": value, "life": float64(0), "token": token, "pid": float64(identity.PanePID), "start": identity.PaneStarttime, "at": first, "src": src, "checked": float64(checked), "reason": reason}
+						var gotRaw map[string]any
+						if err := json.Unmarshal([]byte(sp.ProcessEvidence), &gotRaw); err != nil || !reflect.DeepEqual(gotRaw, wantRaw) {
+							t.Errorf("raw process record = %s, %v; want %+v", sp.ProcessEvidence, err, wantRaw)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+// b.x9o repair 04: pure raw/settled reads and failed-launch restores must
+// reject invalid owners without manufacturing a new confirmation.
+func TestStateEvidenceTokenOwnership(t *testing.T) {
+	owners := append(append([]evidenceOwnerCase{}, evidenceOwners...),
+		evidenceOwnerCase{"wrong life", nil, true, false},
+		evidenceOwnerCase{"wrong epoch", nil, true, false},
+		evidenceOwnerCase{"wrong value", nil, true, false})
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex, store.AgentCursor} {
+		for _, tc := range owners {
+			for _, mode := range []string{"raw", "settled", "resume", "reuse"} {
+				if tc.name == "wrong epoch" && mode == "settled" {
+					continue
+				} // A settled record belongs to the earlier epoch.
+				t.Run(agent+"/"+tc.name+"/"+mode, func(t *testing.T) {
+					t.Parallel()
+					f := newV5Store(t)
+					identity := store.LaunchIdentity{Token: "0123456789abcdef"}
+					if tc.tokenless {
+						identity.Token = ""
+					}
+					state := store.StateWorking
+					if mode == "resume" || mode == "reuse" {
+						state = store.StateEnded
+					}
+					id := f.seed(state, "", apitest.WithAgent(agent), apitest.WithLifeNumber(0), apitest.WithLaunchIdentity(identity))
+					stampEvidence(t, f, id)
+					execRaw(t, f.path, `UPDATE spawns SET state_evidence=json_set(state_evidence,'$.token',?,'$.checked',?) WHERE instance_id=?`, tc.token, evidenceSeedMs+100, id)
+					switch tc.name {
+					case "wrong life":
+						execRaw(t, f.path, `UPDATE spawns SET state_evidence=json_set(state_evidence,'$.life',1) WHERE instance_id=?`, id)
+					case "wrong epoch":
+						execRaw(t, f.path, `UPDATE spawns SET state_evidence=json_set(state_evidence,'$.epoch',permission_epoch+1) WHERE instance_id=?`, id)
+					case "wrong value":
+						execRaw(t, f.path, `UPDATE spawns SET state_evidence=json_set(state_evidence,'$.v','pending') WHERE instance_id=?`, id)
+					}
+					before := rvExamine(t, f, id)
+					want := store.UnknownConfirmation(store.ReasonNoEvidence)
+					prior := ""
+					if tc.valid {
+						want = store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: evidenceSeedMs, Source: store.EvidenceAgentEvent, CheckedAtMillis: evidenceSeedMs + 100}
+						prior = before.StateEvidence
+					}
+					if got := before.PriorStateEvidence(); got != prior {
+						t.Errorf("PriorStateEvidence = %q; want %q", got, prior)
+					}
+					read := store.SettleRead{}
+					switch mode {
+					case "settled":
+						// The newer raw value has valid evidence with a distinct time.
+						execRaw(t, f.path, `UPDATE spawns SET settled_state=state,settled_evidence=state_evidence,state='waiting',state_changed_ms=?,
+                            state_evidence=json_object('v','waiting','life',0,'token',launch_token,'epoch',permission_epoch,'at',?,'src','store','checked',?) WHERE instance_id=?`, evidenceSeedMs+1000, evidenceSeedMs+1000, evidenceSeedMs+1100, id)
+						read = store.SettleRead{NowMs: evidenceSeedMs + 2000, SettleMs: 5000}
+					case "resume":
+						r := &rvResume{}
+						r.move(t, f, id) // production's PriorStateEvidence path
+						r.restore(store.CondApplied)(t, f, id)
+					case "reuse":
+						r := &rvReuse{}
+						r.resetNow(t, f, id) // ReadForReuse -> ResetForReuse
+						r.restore("", store.CondApplied)(t, f, id)
+					}
+					stored := rvExamine(t, f, id)
+					full, err := f.s.GetSpawnSettled(id, read)
+					if err != nil {
+						t.Fatal(err)
+					}
+					partial, err := f.s.SpawnStatusRow(id, read)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, row := range []store.Spawn{full, partial} {
+						if row.ReportedState != state || row.StateConfirmation(read) != want {
+							t.Errorf("%s state record = %s %+v; want %s %+v", mode, row.ReportedState, row.StateConfirmation(read), state, want)
+						}
+					}
+					if mode == "resume" || mode == "reuse" {
+						public, err := api.Status(f.s, api.RelayView{}, id)
+						reason := store.ReasonNoEvidence
+						wantPublic := api.Confirmation{Status: store.ConfirmationUnknown, Reason: &reason}
+						if tc.valid {
+							first := time.UnixMilli(evidenceSeedMs).UTC().Format("2006-01-02T15:04:05.000Z")
+							checked := time.UnixMilli(evidenceSeedMs + 100).UTC().Format("2006-01-02T15:04:05.000Z")
+							wantPublic = api.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAt: &first, Source: &want.Source, CheckedAt: &checked}
+						}
+						if err != nil || public.State != state || !reflect.DeepEqual(public.Confirmations.State, wantPublic) {
+							t.Errorf("restored public state record = %+v, %v; want %s %+v", public.Confirmations.State, err, state, wantPublic)
+						}
+						if stored.State != before.State || stored.LifeNumber != before.LifeNumber || stored.Identity.Token != before.Identity.Token {
+							t.Fatal("restore did not return the prior state/owner")
+						}
+						if !tc.valid {
+							if got := rrStorageClass(t, f, id, "state_evidence"); got != "null" {
+								t.Errorf("restored state evidence is not SQL NULL: %q (%s)", stored.StateEvidence, got)
+							}
+						} else {
+							var old, got map[string]any
+							if err := json.Unmarshal([]byte(prior), &old); err != nil {
+								t.Fatal(err)
+							}
+							if err := json.Unmarshal([]byte(stored.StateEvidence), &got); err != nil {
+								t.Fatal(err)
+							}
+							old["epoch"] = float64(stored.PermissionEpoch)
+							if stored.PermissionEpoch <= before.PermissionEpoch || !reflect.DeepEqual(got, old) {
+								t.Errorf("restored raw state record = %+v; want only epoch rebound: %+v", got, old)
+							}
+						}
+					}
+					if mode == "settled" {
+						read.NowMs = evidenceSeedMs + 6000
+						row, err := f.s.GetSpawnSettled(id, read)
+						rawWant := store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: evidenceSeedMs + 1000, Source: store.EvidenceStore, CheckedAtMillis: evidenceSeedMs + 1100}
+						if err != nil || row.ReportedState != store.StateWaiting || row.StateConfirmation(read) != rawWant {
+							t.Errorf("settle boundary = %s %+v, %v; want waiting %+v", row.ReportedState, row.StateConfirmation(read), err, rawWant)
+						}
+					}
+					if after := rvExamine(t, f, id); !reflect.DeepEqual(after, stored) {
+						t.Error("pure state reads changed the durable row")
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -408,5 +736,133 @@ func TestProcessEvidenceWriteOutcomes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// b.x9o: every reader returns the same durable display record. Malformed or
+// foreign metadata remains report-only and can never confer confirmation.
+func TestDisplayRecordReadersAndOwnership(t *testing.T) {
+	f := newV5Store(t)
+	id := f.seed(store.StateWorking, "", rowVersionSeed()...)
+	start := time.UnixMilli(evidenceSeedMs)
+	for _, at := range []time.Time{start, start.Add(time.Minute)} {
+		commitUnlessBusy(t, func() (store.DisplayDetail, error) {
+			out, err := f.s.ObserveIdleScreenOutcome(rvExamine(t, f, id), store.PaneSample{SHA256: "pane"}, at, time.Minute, store.SettleRead{})
+			return out.Display, err
+		})
+	}
+	original := rvExamine(t, f, id)
+	if original.DisplayEvidence == "" {
+		t.Fatal("fixture has no pane evidence")
+	}
+	for _, tc := range []struct {
+		name      string
+		alter     func(map[string]any)
+		raw       any
+		valid     bool
+		tokenless bool
+		none      bool
+	}{
+		{name: "own", valid: true},
+		{name: "tokenless null token", tokenless: true, none: true, valid: true, alter: func(m map[string]any) { m["token"] = nil }},
+		{name: "tokenless malformed token", tokenless: true, none: true, alter: func(m map[string]any) { m["token"] = "not-a-launch-token" }},
+		{name: "tokenless empty token", tokenless: true, none: true, alter: func(m map[string]any) { m["token"] = "" }},
+		{name: "tokenless uppercase token", tokenless: true, none: true, alter: func(m map[string]any) { m["token"] = "ABCDEF0123456789" }},
+		{name: "tokenless short token", tokenless: true, none: true, alter: func(m map[string]any) { m["token"] = "01234567" }},
+		{name: "null token on owned row", alter: func(m map[string]any) { m["token"] = nil }},
+		{name: "another life", alter: func(m map[string]any) { m["life"] = float64(original.LifeNumber + 1) }},
+		{name: "another launch", alter: func(m map[string]any) { m["token"] = "2222222222222222" }},
+		{name: "none value", alter: func(m map[string]any) { m["v"] = "none" }},
+		{name: "earlier episode", alter: func(m map[string]any) { m["since"] = float64(evidenceSeedMs) }},
+		{name: "needs intelligence", alter: func(m map[string]any) { m["v"] = "needs_intelligence" }},
+		{name: "no confirmation or attempt", alter: func(m map[string]any) { m["at"], m["src"] = nil, nil }},
+		{name: "malformed", raw: "{"},
+		{name: "array", raw: "[]"},
+		{name: "blob", raw: []byte(original.DisplayEvidence)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := tc.raw
+			if raw == nil {
+				var m map[string]any
+				if err := json.Unmarshal([]byte(original.DisplayEvidence), &m); err != nil {
+					t.Fatal(err)
+				}
+				if tc.alter != nil {
+					tc.alter(m)
+				}
+				if tc.none {
+					m["v"] = "none"
+				}
+				data, err := json.Marshal(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw = string(data)
+			}
+			var token any = original.Identity.Token
+			if tc.tokenless {
+				token = nil
+			}
+			var observation any = original.DisplayObservation
+			if tc.none {
+				observation = nil
+			}
+			execRaw(t, f.path, `UPDATE spawns SET display_evidence=?,launch_token=?,display_observation=? WHERE instance_id=?`, raw, token, observation, id)
+			full := rvExamine(t, f, id)
+			partial, err := f.s.SpawnStatusRow(id, store.SettleRead{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, err := f.s.RecoveryRows([]string{id}, store.SettleRead{})
+			if err != nil || len(rows) != 1 {
+				t.Fatalf("recovery read: %+v %v", rows, err)
+			}
+			want := store.UnknownConfirmation(store.ReasonNoEvidence)
+			if tc.valid {
+				want = store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: start.Add(time.Minute).UnixMilli(), Source: store.EvidencePane, CheckedAtMillis: start.Add(time.Minute).UnixMilli()}
+			}
+			// fq code-review R2: the public non-sampling reader must reject
+			// malformed non-null ownership, including on a tokenless row.
+			if !tc.valid {
+				public, err := api.Status(f.s, api.RelayView{}, id)
+				reason := store.ReasonNoEvidence
+				wantPublic := api.Confirmation{Status: store.ConfirmationUnknown, Reason: &reason}
+				if err != nil || !reflect.DeepEqual(public.Confirmations.DisplayedState, wantPublic) {
+					t.Fatalf("public invalid display record: %+v %v; want %+v", public.Confirmations.DisplayedState, err, wantPublic)
+				}
+			}
+			for _, row := range []store.Spawn{full, partial, rows[0]} {
+				if row.DisplayEvidence != full.DisplayEvidence {
+					t.Fatal("partial and full records differ")
+				}
+				if rec := row.DisplayConfirmation(row.CommittedDisplay(), row.DisplayEvidence); rec != want {
+					t.Fatalf("display record %+v; want %+v", rec, want)
+				}
+			}
+		})
+	}
+}
+
+// b.x9o: anonymous and invalid sample failures keep the documented
+// unreadable classification, and no older confirmation is invented.
+func TestDisplayRecordFailureReasons(t *testing.T) {
+	for _, reason := range []string{"", "invalid-reason", store.ReasonDeadline} {
+		t.Run(reason, func(t *testing.T) {
+			f := newV5Store(t)
+			id := f.seed(store.StateWorking, "", rowVersionSeed()...)
+			row := rvExamine(t, f, id)
+			out, err := f.s.ObserveIdleScreenOutcome(row, store.PaneSample{Reason: reason}, time.UnixMilli(evidenceSeedMs), time.Minute, store.SettleRead{})
+			if err != nil || !out.Committed {
+				t.Fatalf("failure observation: %+v %v", out, err)
+			}
+			wantReason := store.ReasonUnreadable
+			if reason == store.ReasonDeadline {
+				wantReason = reason
+			}
+			want := store.Confirmation{Status: store.ConfirmationNotConfirmed, CheckedAtMillis: evidenceSeedMs, Reason: wantReason}
+			if rec := row.DisplayConfirmation(out.Display, out.Evidence); rec != want {
+				t.Fatalf("failed display record %+v; want %+v", rec, want)
+			}
+		})
 	}
 }

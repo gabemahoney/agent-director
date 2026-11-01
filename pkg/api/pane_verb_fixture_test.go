@@ -607,8 +607,8 @@ func (e *killEnv) rowWriteAfter(t *testing.T, call tmux.Call, r killRow) {
 		if err != nil || res != store.CondApplied {
 			return false, fmt.Sprintf("condition result %d (CondApplied %d), %v", res, store.CondApplied, err)
 		}
-		// b.x9o: a concurrent read's process record, freshness metadata the
-		// send's preparation never compares, lands in the same window.
+		// b.x9o: a concurrent read's process and display records, freshness
+		// metadata the send's preparation never compares, land in the same window.
 		if row, err = e.st.GetSpawn(r.ID); err != nil {
 			return false, err.Error()
 		}
@@ -618,6 +618,14 @@ func (e *killEnv) rowWriteAfter(t *testing.T, call tmux.Call, r killRow) {
 			if res, err := e.st.RecordProcessEvidence(row, rec); err != nil || res != store.CondApplied {
 				return false, fmt.Sprintf("process record %d, %v", res, err)
 			}
+		}
+		cursorReadSQL(t, e.dbPath, `UPDATE spawns SET display_evidence=json_object(
+			'v','none','life',life_number,'token',launch_token,
+			'at',?,'src','pane','checked',?,'reason',NULL) WHERE instance_id=?`,
+			e.clock.Now().UnixMilli(), e.clock.Now().UnixMilli(), r.ID)
+		changed, err := e.st.GetSpawn(r.ID)
+		if err != nil || changed.DisplayEvidence == row.DisplayEvidence {
+			return false, fmt.Sprintf("display record was not changed: %v", err)
 		}
 		return true, ""
 	})

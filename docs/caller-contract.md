@@ -146,16 +146,24 @@ recorded as `working` stays `working`. Cursor always reports `unknown`, reason
 | `reason` | `null` when `confirmed`; otherwise `no_evidence`, `unreadable`, `busy`, `stale_observation`, `deadline`, `operation_pending`, `pending_grace`, `unsupported` or `commit_unconfirmed`. Errors keep their own detailed causes. |
 
 - `confirmed`: evidence supported the value at `confirmed_at` and no later
-  attempt failed. It is a fact at that instant, not proof that the value
-  held since.
+  failed attempt remains unresolved. It is a fact at that instant, not proof
+  that the value held since.
 - `not_confirmed`: the latest attempt failed. `confirmed_at` and `source` keep
-  the last applicable confirmation, if any, and `process_liveness` keeps the
-  value it confirmed. An old time never makes a failed attempt `confirmed`.
+  the first applicable confirmation, if any, and `process_liveness` keeps the
+  value it confirmed. Without an earlier confirmation, both are `null`.
+  An old time never makes a failed attempt `confirmed`.
 - `unknown`: no applicable evidence; `confirmed_at` and `source` are `null`.
+  `checked_at` is also null when no attempt is known.
 - `pending`: a still-owned operation (`operation_pending`) or a launch's
   pending grace (`pending_grace`) stopped the check. Nothing retries it on a
   schedule. The lifecycle state `pending` is different: its admission by
   `spawn`, reuse or `resume` is itself confirmed (`caller_command`).
+
+For all three records, later evidence of the same value and owner keeps
+`confirmed_at`; a new check advances only `checked_at`. Stored reads,
+settlement, age projection and passing time create no evidence or attempt.
+Historical or malformed evidence that
+cannot establish the exact value and owner leaves an unknown record.
 
 What confirms each field:
 
@@ -171,25 +179,38 @@ What confirms each field:
   [settle time](configuration.md#settle-time-state), the record is the shown
   settled value's.
 - **Process.** State reads and `find-missing` check the recorded process of
-  the live rows they select; `alive` and `exited` carry the time of that
-  judgement. A move to `ended` or `missing` proven by that process being gone
+  the live rows they select. Repeated successful probes of the same value
+  and process identity keep its first confirmation time. A move to `ended`
+  or `missing` proven by that process being gone
   records `exited` with the move. Any other terminal move (a session end, a
   tmux finding, a Cursor gateway loss) leaves `unknown`, so a finished row
   never reports its last `alive`. A check that cannot read the recorded start
   time, a pid-only identity included, is `unreadable`, never `exited`; a row
   with no recorded process is `no_evidence`.
-- **Display.** The `displayed_state` record is always `unknown` with `null`
-  evidence: reason `unsupported` for Cursor, otherwise `no_evidence`, whether
-  or not a Displayed State shows. The display and its detail stay as
-  [described below](#needs-intelligence-and-idle-screen-rows).
+- **Display.** A successful sample of the current launch's own pane confirms
+  the display it establishes, with source `pane`: `idle_screen`, or no
+  Displayed State (`displayed_state` omitted). The record belongs to that
+  exact display episode, including an earlier episode still shown while
+  entry or exit settles. A new episode or launch never inherits the old
+  record. A successful sample of a different settling
+  candidate leaves the shown record unchanged. A non-sampling settle-out
+  attempt also leaves it unchanged, even if the write fails; a committed
+  exit without a pane sample clears it to `unknown`/`no_evidence`.
+  With no applicable display evidence or attempt, both times and source are null.
+  Cursor always reports `unknown`/`unsupported`, with null evidence.
 
-A busy store, deadline, stale sample or unconfirmed commit shows only in the
-response of the call that met it, as `not_confirmed` with its own
-`checked_at` and `reason`, and only while the row still holds the value and
-launch that attempt examined; a value committed meanwhile shows its own
-record. Such a response claims no commit. Only an `unreadable` check of a
-process recorded with its pid and start time, once its write commits, is kept
-for later reads; a pid-only `unreadable` check is response-only.
+A failed pane sample records `not_confirmed`, its `checked_at` and reason:
+`unreadable` for failed capture or ownership lookup, `deadline` when the
+call's tmux budget is spent. Once committed, that attempt survives later
+stored reads, retaining any applicable earlier confirmation. An `unreadable`
+check of a process recorded with its pid and start time is also retained;
+a pid-only check is response-only.
+
+A prevented or uncommitted check (`busy`, `stale_observation`,
+`commit_unconfirmed`, or a write's `deadline`) appears only in that call's
+response, with its own `checked_at`. It claims no commit and applies only
+while the returned value, owner and stored record still match the attempt;
+concurrently committed newer evidence keeps its own record.
 
 `state_changed_at`, `last_seen_at`, a display's `since`, request times and
 `context.as_of` keep their own meanings; none of them, and no response time,
@@ -397,7 +418,9 @@ only while it shows `idle_screen`.
   (`get` carries it always). A `list` row carries neither `since` nor the
   detail; call `get` for them.
 - **Omissions.** A field that does not apply is absent: never `null`, empty
-  or zero. Test for presence, not for a value.
+  or zero. Test for presence, not for a value. The
+  [`confirmations.displayed_state` record](#confirmations) is always present,
+  even when the display is omitted or unavailable; its nullable keys remain.
 - **Filtering.** `list --state` selects by stored `state` or
   `displayed_state` before `--limit` and recovery checks. `--state working`
   and `--state idle_screen` both match a stored working row showing
@@ -419,13 +442,12 @@ only while it shows `idle_screen`.
   when `unchanged_minutes` grows. A new working turn never inherits the
   earlier `since` or detail: if it qualifies too, that display ends at once
   and the new turn starts fresh.
-- **Skipped observation writes.** A check writes only a new observation: a pane
-  fingerprint period started, restarted or reset, a change of
-  `displayed_state` or its settling candidate, a new whole minute of
-  `unchanged_minutes`, or a permission request first found fallen back.
-  Otherwise it writes nothing. Its write never waits for the store's lock: a
-  read that cannot confirm its observation returns the earlier committed
-  display and detail together. A later check tries again.
+- **Observation writes.** A check writes changed observations and evidence
+  together. Even when the display, candidate and whole-minute detail are
+  unchanged, a new pane attempt can update its confirmation record alone.
+  Writes never wait for the store's lock. An unconfirmed observation returns
+  the earlier committed display and detail, with any applicable
+  [failed attempt](#confirmations). A later eligible check can try again.
 - **Clearing.** When its pane changes or cannot be sampled, or the agent
   moves on, the row keeps `displayed_state` until the exit candidate settles
   and a check commits the exit. `ended`, `missing` and a state a command sets
@@ -447,16 +469,16 @@ Claude or Codex rows: the agent's own pane of the current launch, fingerprinted
 as the `pane_sha256` a default `read-pane` returns. Only the fingerprint is
 kept; nothing reads what the pane says.
 
-- **The unchanged period.** The first successful sample starts it. An
-  identical fingerprint keeps its start; a different one restarts it at that
-  check and clears an `idle_screen` row. A check at or after the period's
-  start plus the timeout qualifies. `check_permission`, `ask_user` and every
-  other state never do, and a change of the agent's state (a new turn, a new
-  launch) starts over with no earlier evidence.
+- **The unchanged period.** At least two successful matching captures of the
+  current launch's own pane must span the effective timeout. The first starts
+  the period; matching captures keep its start. A different fingerprint
+  restarts it and begins clearing a shown `idle_screen` under settling.
+  `check_permission`, `ask_user` and every other state never qualify.
+  An intervening turn, launch or ownership change invalidates the baseline.
 - **Only during checks.** Nothing samples between calls. The period starts
   at the first check that saw the current pane, so infrequent checks delay
-  detection, and identical samples do not show that the pane never changed
-  between them.
+  detection. Identical samples prove neither continuous inactivity between
+  them nor agent exit.
 - **A hint, not proof.** Healthy quiet work, such as a long tool with no
   output, can qualify. Look before acting, and give such work a longer
   [timeout](configuration.md#idle-screen-timeout-state), configured or per

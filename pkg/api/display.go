@@ -116,7 +116,8 @@ func familyOf(row Spawn, families map[string]string) string {
 // requests (those in read when the reader gives them), which also settles out
 // a display of either state left by an earlier interval. A needs_intelligence
 // display an earlier release committed is never returned: the row's reported
-// state is, and a committing observation clears it.
+// state is, and a committing observation clears it. read.record, when set,
+// receives the returned display's record (displayRecord).
 func observeDisplay(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
 	if checked := v.checked[row.InstanceID]; checked != nil {
 		d := checked.display
@@ -136,13 +137,20 @@ func observeDisplay(s any, v RelayView, settle store.SettleRead, row Spawn, read
 }
 
 // observeRow is observeDisplay's dispatch, before it drops needs_intelligence.
+// Until an observation commits, the display it returns is the row's committed
+// one with the row's own record (read.record). A pane-observed row whose
+// sample a busy store prevented has that as its latest attempt.
 func observeRow(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
+	read.noteRecord(row.DisplayEvidence, nil)
 	if read.storeBusy {
+		if row.PaneObservable() {
+			read.noteRecord(row.DisplayEvidence, displayAttempt(row, relayJudge{view: v}.now(), store.ReasonBusy))
+		}
 		return row.CommittedDisplay(), nil, read.requests, true
 	}
 	if row.PaneObservable() {
 		if r, ok := s.(idleScreenStore); ok && v.samplePane != nil {
-			display, families, busy := paneObservation(r, v, settle, row, read.outcome)
+			display, families, busy := paneObservation(r, v, settle, row, read)
 			return display, families, nil, busy
 		}
 		if row.IdleScreenCurrent() {
@@ -170,16 +178,49 @@ type judgedRequestSet struct {
 // momentary), so it answers the committed display without attempting one and
 // the next read writes. Under a held write lock a get makes one write attempt
 // in all; a list makes one per observed row and no hook_gone_at write after a
-// busy one.
+// busy one. record, when set, receives the returned display's record.
 type permissionRead struct {
 	outcome   *activeCheckOutcome
+	record    *displayRecord
 	requests  *judgedRequestSet
 	storeBusy bool
 }
 
+// displayRecord is what an observation returns beside its display for the
+// displayed_state record: evidence, the display_evidence of the snapshot the
+// display comes from (an exact store's committed DisplayOutcome, else the
+// examined row's own), and attempt, this observation's unsuccessful attempt
+// when it committed none (response-only, never a durable record).
+type displayRecord struct {
+	evidence string
+	attempt  *fieldAttempt
+}
+
+// noteRecord gives read's caller evidence and attempt as the display's
+// record; a read without a receiver notes nothing.
+func (read permissionRead) noteRecord(evidence string, attempt *fieldAttempt) {
+	if read.record != nil {
+		*read.record = displayRecord{evidence: evidence, attempt: attempt}
+	}
+}
+
+// displayAttempt is an unsuccessful displayed_state attempt on examined at
+// at, describing the display and record examined shows (fieldAttempt.describes);
+// an empty reason is no attempt.
+func displayAttempt(examined Spawn, at time.Time, reason string) *fieldAttempt {
+	if reason == "" {
+		return nil
+	}
+	shown := examined.CommittedDisplay()
+	return &fieldAttempt{atMillis: at.UnixMilli(), reason: reason, life: examined.LifeNumber, token: examined.Identity.Token,
+		display: true, state: displayedState(shown), since: shown.SinceMillis, record: examined.DisplayEvidence}
+}
+
 // permissionObservation observes row by its permission requests, also
 // returning the families its commit refreshed, the requests it observed (nil
-// when none) and whether its write found the store busy.
+// when none) and whether its write found the store busy. It samples no pane,
+// so it makes no display confirmation attempt. A failed settle-out keeps the
+// shown display's record unchanged; a committed exit clears it.
 func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
 	previous := row.CommittedDisplay()
 	r, ok := s.(needsIntelligenceStore)
@@ -188,6 +229,11 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 		return previous, nil, read.requests, false
 	}
 	j := newRelayJudge(v)
+	failed := func(outcome activeCheckOutcome) {
+		if read.outcome != nil {
+			*read.outcome = outcome
+		}
+	}
 	judged := read.requests
 	if judged == nil {
 		var err error
@@ -195,9 +241,7 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 			return r.PermissionRequestsForSpawnWithin(id, readerLockWait)
 		}, j, row.InstanceID)
 		if err != nil {
-			if read.outcome != nil {
-				*read.outcome = activeOutcome("display", false, err)
-			}
+			failed(activeOutcome("display", false, err))
 			return previous, nil, nil, false
 		}
 	}
@@ -212,34 +256,49 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 		}
 		samples = append(samples, sample)
 	}
-	var display store.DisplayDetail
-	var families map[string]string
+	var out store.DisplayOutcome
 	var err error
-	committed := false
 	actual, exact := r.(*store.Store)
 	if exact {
-		display, families, committed, err = actual.ObserveNeedsIntelligenceOutcome(row, samples, now, settle)
+		out, err = actual.ObserveNeedsIntelligenceOutcome(row, samples, now, settle)
 	} else {
-		display, families, err = r.ObserveNeedsIntelligence(row, samples, now, settle)
+		out.Display, out.Families, err = r.ObserveNeedsIntelligence(row, samples, now, settle)
+		out.Evidence = row.DisplayEvidence
 	}
-	if read.outcome != nil {
-		*read.outcome = activeOutcome("display", committed, err)
-		if !exact && err == nil {
-			read.outcome.Result = "observed"
-		}
+	outcome := activeOutcome("display", out.Committed, err)
+	if !exact && err == nil {
+		outcome.Result = "observed"
 	}
 	if err != nil {
+		failed(outcome)
 		return previous, nil, judged, errors.Is(err, store.ErrStoreBusy)
 	}
-	return display, families, judged, false
+	if read.outcome != nil {
+		*read.outcome = outcome
+	}
+	read.noteRecord(observedEvidence(row, out, exact), nil)
+	return out.Display, out.Families, judged, false
+}
+
+// observedEvidence is the record of an observation's returned display: an
+// exact store's committed record, else (a narrow store, which reports none)
+// the examined row's own while the display is still the one it committed,
+// and none for any other.
+func observedEvidence(row Spawn, out store.DisplayOutcome, exact bool) string {
+	if exact || out.Display == row.CommittedDisplay() {
+		return out.Evidence
+	}
+	return ""
 }
 
 // paneObservation observes a working Claude or Codex row by one sample of its
 // own pane, against the row's own timeout override or else the reader's
-// configured timeout. A failed capture is a sample that resets the baseline;
-// an uncommitted sample returns the committed display. It also returns the
-// families its commit refreshed and whether its write found the store busy.
-func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, row Spawn, outcome *activeCheckOutcome) (store.DisplayDetail, map[string]string, bool) {
+// configured timeout. A failed capture is a sample that resets the baseline
+// and is recorded, with its reason, as the display's latest attempt; an
+// uncommitted sample returns the committed display with this response's
+// attempt. It also returns the families its commit refreshed and whether its
+// write found the store busy.
+func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, bool) {
 	sample := v.samplePane(row)
 	timeout := v.idleScreenTimeout
 	if row.IdleScreenTimeoutSeconds > 0 {
@@ -247,27 +306,29 @@ func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, ro
 	} else if timeout <= 0 {
 		timeout = config.DefaultIdleScreenTimeoutSeconds * time.Second
 	}
-	var display store.DisplayDetail
-	var families map[string]string
+	var out store.DisplayOutcome
 	var err error
-	committed := false
 	actual, exact := r.(*store.Store)
 	now := relayJudge{view: v}.now()
 	if exact {
-		display, families, committed, err = actual.ObserveIdleScreenOutcome(row, sample, now, timeout, settle)
+		out, err = actual.ObserveIdleScreenOutcome(row, sample, now, timeout, settle)
 	} else {
-		display, families, err = r.ObserveIdleScreen(row, sample, now, timeout, settle)
+		out.Display, out.Families, err = r.ObserveIdleScreen(row, sample, now, timeout, settle)
+		out.Evidence = row.DisplayEvidence
 	}
-	if outcome != nil {
-		*outcome = activeOutcome("display", committed, err)
-		if !exact && err == nil {
-			outcome.Result = "observed"
-		}
+	outcome := activeOutcome("display", out.Committed, err)
+	if !exact && err == nil {
+		outcome.Result = "observed"
+	}
+	if read.outcome != nil {
+		*read.outcome = outcome
 	}
 	if err != nil {
+		read.noteRecord(row.DisplayEvidence, displayAttempt(row, now, outcomeReason(outcome.Result)))
 		return row.CommittedDisplay(), nil, errors.Is(err, store.ErrStoreBusy)
 	}
-	return display, families, false
+	read.noteRecord(observedEvidence(row, out, exact), nil)
+	return out.Display, out.Families, false
 }
 
 // stateDetail is d's Displayed State and detail as status and get report
@@ -301,56 +362,75 @@ func displayedState(d store.DisplayDetail) string {
 
 // sampleActivePane reuses paneRun's exact ownership selection while sharing
 // the liveness pass's lookup, listing and capture budget for this invocation.
+// A sample it cannot take keeps its reason (failedPaneSample) rather than
+// reading as an anonymous empty capture.
 func sampleActivePane(live *findMissingRun, capture interface {
 	CapturePaneID(string, string, int, bool) (string, error)
 }, row Spawn) store.PaneSample {
 	if unusableNameError(row.TmuxSessionName) != nil {
-		return store.PaneSample{}
+		return failedPaneSample(live)
 	}
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
-		return store.PaneSample{}
+		return failedPaneSample(live)
 	}
 	r := &paneRun{t: live.t, pc: live.pc, row: row, storeID: live.s.StoreID(), socket: socket,
 		gone: tmux.ErrTmuxCaptureFailed, nothing: nothingRead, sweep: live.sw}
 	launch := r.launchFor(row.Identity)
 	res := live.sw.Lookup(launch, "")
 	if res.Verdict != tmux.Ours {
-		return store.PaneSample{}
+		return failedPaneSample(live)
 	}
 	paneID, _, err := r.ours(res, launch)
 	if err != nil {
-		return store.PaneSample{}
+		return failedPaneSample(live)
 	}
 	pane, ok := live.sw.CapturePane(launch, func() (string, error) { return capture.CapturePaneID(socket, paneID, DefaultReadPaneLines, false) })
 	if !ok {
-		return store.PaneSample{}
+		return failedPaneSample(live)
 	}
 	return store.PaneSample{SHA256: paneSHA256(tmux.StripANSI(pane))}
 }
 
+// failedPaneSample is a sample this invocation could not take: deadline once
+// its shared tmux budget is spent (the sweep made no call, or discarded the
+// one that spent it), else unreadable (an unusable name or socket, a pane
+// that is not the launch's own, a failed lookup or capture). Either resets the
+// baseline like any failed capture.
+func failedPaneSample(live *findMissingRun) store.PaneSample {
+	if live.sw.Spent() {
+		return store.PaneSample{Reason: store.ReasonDeadline}
+	}
+	return store.PaneSample{Reason: store.ReasonUnreadable}
+}
+
 // mainFields projects row's process_liveness and its three confirmation
 // records from the evidence the store returned with row and, for a row the
-// shared checker examined in this invocation, that checker's own attempts.
-// It starts no check, reads nothing and never stamps the response clock.
-// A narrow store that returns no evidence yields honest unknown records.
+// shared checker examined in this invocation, that checker's own attempts and
+// the display it returns with that display's record. It starts no check,
+// reads nothing and never stamps the response clock. A narrow store that
+// returns no evidence yields honest unknown records.
 func mainFields(s any, row Spawn, settle store.SettleRead) (string, Confirmations) {
 	process, processRecord := row.ProcessConfirmation()
 	stateRecord := row.StateConfirmation(settle)
+	display, evidence := row.CommittedDisplay(), row.DisplayEvidence
+	var attempt *fieldAttempt
 	if checked := checkedRowOf(s, row.InstanceID); checked != nil {
 		stateRecord = withAttempt(stateRecord, checked.state, row)
 		processRecord = withAttempt(processRecord, checked.process, row)
+		display, evidence, attempt = checked.display, checked.displayEvidence, checked.displayAttempt
 	}
+	displayRecord := withAttempt(row.DisplayConfirmation(display, evidence), attempt, row)
 	if row.Agent == store.AgentCursor {
 		// Only the Cursor Helper's gateway is probed, which is no evidence
 		// about the agent's runtime process: whatever the row records,
 		// process_liveness is unknown and unsupported.
 		process, processRecord = store.ProcessUnknown, store.UnknownConfirmation(store.ReasonUnsupported)
 	}
-	display := store.UnknownConfirmation(store.ReasonNoEvidence)
 	if idleScreenAvailability(row.Agent) == IdleScreenUnavailable {
-		display.Reason = store.ReasonUnsupported
+		// No pane of an agent idle_screen never applies to is sampled.
+		displayRecord = store.UnknownConfirmation(store.ReasonUnsupported)
 	}
 	return process, Confirmations{State: publicConfirmation(stateRecord),
-		ProcessLiveness: publicConfirmation(processRecord), DisplayedState: publicConfirmation(display)}
+		ProcessLiveness: publicConfirmation(processRecord), DisplayedState: publicConfirmation(displayRecord)}
 }

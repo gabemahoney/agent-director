@@ -616,7 +616,7 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 // it advances permission_epoch, advances observation_version, clears the
 // display observation and, when the row showed either Displayed State as
 // committed, records the display exit that the transaction drains and emits
-// after commit. The durable request records that no longer hold the row
+// after commit, and clears that display's record (keepDisplayEvidence). The durable request records that no longer hold the row
 // are its state record's evidence (source store, confirmations.go).
 var repairCheckPermissionSQL = `UPDATE spawns
     SET state = ` + repairNewStateSQL + `,
@@ -624,6 +624,7 @@ var repairCheckPermissionSQL = `UPDATE spawns
         display_exit = CASE WHEN ` + committedDisplayStateSQL + ` IS NOT NULL
           THEN json_object('prior_state', ` + committedDisplayStateSQL + `, 'new_state', ` + repairNewStateSQL + `, 'at_ms', ` + nowMsSQL + `)
           ELSE display_exit END,
+        ` + keepDisplayEvidence + `,
         display_observation = NULL,
         observation_version = observation_version + 1,
         settled_state = ` + repairNewStateSQL + `,

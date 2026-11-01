@@ -39,10 +39,11 @@ func TestSettleOnMCP(t *testing.T) {
 		t.Fatalf("SeedReadSurfaceStore: %v", err)
 	}
 	d := settleDispatcher(t, storePath, &apitest.SettleOnConfig)
+	first := make(map[string]string)
 	for _, c := range cases.Cases {
 		from := time.Now()
 		got := toolText(t, callTool(t, d, c.Verb, paramJSON(t, c.Params)))
-		cases.CheckSettleOn(t, c, apitest.NormalizeReadSurfaceProbes(t, got, from, time.Now()))
+		cases.CheckSettleOn(t, c, apitest.NormalizeReadSurfaceProbes(t, got, from, time.Now(), first, c))
 	}
 }
 

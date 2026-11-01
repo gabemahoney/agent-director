@@ -260,8 +260,10 @@ They also expose `ProcessLiveness string` (JSON `process_liveness`:
 never null, and the nullable `*string` fields `ConfirmedAt`, `Source`,
 `CheckedAt` and `Reason` (nil is JSON `null`, never omitted). The
 [caller contract](../../docs/caller-contract.md#confirmations) defines the
-values and when each is `null`. A store that supplies no evidence, such as a custom store or a narrow
-status fallback, gets `"unknown"` and unknown records. With a non-nil error,
+values and when each is `null`. `Confirmations.DisplayedState` describes the
+returned display, including an omitted `DisplayedState`; Cursor's record is
+`unknown`/`unsupported`. A store that supplies no evidence, such as a custom
+store or a narrow status fallback, gets `"unknown"` and unknown records. With a non-nil error,
 the zero result's `ProcessLiveness` and each `Status` are empty strings, outside
 their value sets.
 
@@ -275,11 +277,14 @@ defines it and how it differs from `LastSeenAt`, the settled `State` and
 the client was built for [independent state and family
 settling](../../docs/configuration.md#settle-time-state). While a
 Displayed State's exit settles, `Status`, `Get` and `List` retain its
-`DisplayedState`, and `Status` and `Get` its committed `Since` and detail.
+`DisplayedState` and applicable confirmation, and `Status` and `Get` its
+committed `Since` and detail.
 `StateChangedAt` and permission-request lists follow the live state;
 commands keep their raw-state guards. The package-level
 `api.Status`, `api.Get` and `api.List` functions use no settle time and
-sample no pane. Package-level `FindMissing` can sample panes when its
+sample no pane: they report stored display evidence without advancing either
+confirmation time. A committed non-sampling exit clears that evidence.
+Package-level `FindMissing` can sample panes when its
 supplied tmux provider supports capture.
 
 For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a

@@ -406,31 +406,84 @@ func (c ReadSurfaceCase) CLIArgs() []string {
 }
 
 // ReadSurfaceProbed stands in, in the goldens, for both times of a live row's
-// alive process record: the read's own probe of the test's process confirmed
-// it, at the read's clock, which no golden can pin.
+// alive process record and the checked_at of a working row's failed pane
+// attempt: the first confirmation and latest check use runtime clocks.
 const ReadSurfaceProbed = "probed-by-this-read"
 
 // probedRecord is a process record its own read confirmed by probing.
 var probedRecord = regexp.MustCompile(`"process_liveness":\{"status":"confirmed","confirmed_at":"([^"]*)","source":"process","checked_at":"([^"]*)","reason":null\}`)
 
-// NormalizeReadSurfaceProbes returns out, a status, get or list output over
-// SeedReadSurfaceStore's store, with each probed process record's two times
-// replaced by ReadSurfaceProbed, failing t unless they are one RFC3339 UTC
-// millisecond instant within [from, to], the read's own call, and unless out
-// has the exact confirmations shape (AssertConfirmationsShape). Every other
-// byte is kept.
-func NormalizeReadSurfaceProbes(t testing.TB, out string, from, to time.Time) string {
+var displayAttemptRecord = regexp.MustCompile(`"displayed_state":\{"status":"not_confirmed","confirmed_at":null,"source":null,"checked_at":"([^"]*)","reason":"unreadable"\}`)
+
+// NormalizeReadSurfaceProbes validates the exact record shape and pins each
+// row's first process confirmation in first (one map per seeded store). The
+// first confirmation must equal its first checked_at; every checked_at must
+// fall within this call's [from, to]. Later reads retain the pinned time.
+// Only these validated process times and failed pane-attempt times are
+// replaced by ReadSurfaceProbed; every other byte is kept. c identifies status
+// results, which do not carry instance_id themselves.
+func NormalizeReadSurfaceProbes(t testing.TB, out string, from, to time.Time, first map[string]string, c ReadSurfaceCase) string {
 	t.Helper()
 	AssertConfirmationsShape(t, out)
-	return probedRecord.ReplaceAllStringFunc(out, func(rec string) string {
+	type row struct {
+		ID            string `json:"instance_id"`
+		Confirmations struct {
+			Process struct {
+				Status    string `json:"status"`
+				Confirmed string `json:"confirmed_at"`
+				Source    string `json:"source"`
+				Checked   string `json:"checked_at"`
+			} `json:"process_liveness"`
+		} `json:"confirmations"`
+	}
+	var doc struct {
+		row
+		Spawns []row `json:"spawns"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatal(err)
+	}
+	rows := doc.Spawns
+	if rows == nil {
+		rows = []row{doc.row}
+		if rows[0].ID == "" {
+			rows[0].ID, _ = c.Params["instance_id"].(string)
+		}
+	}
+	for _, r := range rows {
+		rec := r.Confirmations.Process
+		if rec.Status != "confirmed" || rec.Source != "process" {
+			continue // the unchanged golden checks every other record exactly
+		}
+		checked, err := time.Parse("2006-01-02T15:04:05.000Z", rec.Checked)
+		if err != nil || checked.Before(from.Truncate(time.Millisecond)) || checked.After(to) {
+			t.Errorf("%s process checked_at %q: want a millisecond UTC time within the read [%s, %s]", r.ID, rec.Checked, from, to)
+		}
+		if r.ID == "" {
+			t.Fatal("probed process record has no fixture row identity")
+		}
+		want, seen := first[r.ID]
+		if !seen {
+			want = rec.Checked
+			first[r.ID] = want
+		}
+		if rec.Confirmed != want {
+			t.Errorf("%s process confirmed_at %q; want first confirmation %q", r.ID, rec.Confirmed, want)
+		}
+	}
+	out = probedRecord.ReplaceAllStringFunc(out, func(rec string) string {
 		m := probedRecord.FindStringSubmatch(rec)
+		return strings.NewReplacer(m[1], ReadSurfaceProbed, m[2], ReadSurfaceProbed).Replace(rec)
+	})
+	// A working fixture has no pane: its own attempted capture is unreadable.
+	return displayAttemptRecord.ReplaceAllStringFunc(out, func(rec string) string {
+		m := displayAttemptRecord.FindStringSubmatch(rec)
 		at, err := time.Parse("2006-01-02T15:04:05.000Z", m[1])
-		if err != nil || m[1] != m[2] || at.Before(from.Truncate(time.Millisecond)) || at.After(to) {
-			t.Errorf("probed process record %s: want confirmed_at equal to checked_at, a millisecond UTC time within the read [%s, %s]",
-				rec, from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano))
+		if err != nil || at.Before(from.Truncate(time.Millisecond)) || at.After(to) {
+			t.Errorf("display attempt %s: checked_at must be within the read [%s, %s]", rec, from, to)
 			return rec
 		}
-		return strings.NewReplacer(m[1], ReadSurfaceProbed).Replace(rec)
+		return strings.ReplaceAll(rec, m[1], ReadSurfaceProbed)
 	})
 }
 
@@ -451,7 +504,7 @@ var (
 // exactly status, confirmed_at, source, checked_at and reason, every one
 // present: statuses, sources and reasons from their enums, times RFC3339 UTC
 // with milliseconds or null, source null exactly when confirmed_at is, reason
-// null exactly when confirmed, and displayed_state unknown with null evidence.
+// null exactly when confirmed. A display source, when present, is pane.
 // No nested object (a request, a prior session, the context) carries a
 // confirmations wrapper, and family_state has no record.
 func AssertConfirmationsShape(t testing.TB, out string) {
@@ -495,8 +548,12 @@ func AssertConfirmationsShape(t testing.TB, out string) {
 				t.Errorf("%s record source %v with confirmed_at %v; want a known source exactly when confirmed_at is set", field, source, confirmedAt)
 			case (status == "confirmed") != (reason == nil) || (reason != nil && !slices.Contains(confirmationReasons, fmt.Sprint(reason))):
 				t.Errorf("%s record %s with reason %v; want a known reason exactly when not confirmed", field, status, reason)
-			case field == "displayed_state" && (status != "unknown" || confirmedAt != nil || checkedAt != nil):
-				t.Errorf("displayed_state record %v; want unknown with null evidence in this release", rec)
+			case field == "displayed_state" && source != nil && source != "pane":
+				t.Errorf("displayed_state source %v; want pane", source)
+			case status == "confirmed" && (confirmedAt == nil || checkedAt == nil):
+				t.Errorf("confirmed record lacks evidence: %v", rec)
+			case confirmedAt != nil && checkedAt != nil && fmt.Sprint(checkedAt) < fmt.Sprint(confirmedAt):
+				t.Errorf("check predates confirmation: %v", rec)
 			}
 		}
 		for k, v := range row {

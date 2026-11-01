@@ -11,17 +11,17 @@ import (
 // field is always present; an unknown value is null, never omitted.
 type Confirmation struct {
 	// Status is confirmed (the returned value is supported at ConfirmedAt and
-	// no later attempt for the field failed), not_confirmed (a later attempt
+	// no later failed attempt remains unresolved), not_confirmed (a later attempt
 	// could not confirm it; ConfirmedAt keeps the older applicable
 	// confirmation, if any), unknown (no applicable evidence establishes the
 	// value) or pending (a known, still-owned operation or pending-launch
 	// protection prevented the attempt; no retry is scheduled). Confirmed
 	// never means continuously true since ConfirmedAt.
 	Status string `json:"status"`
-	// ConfirmedAt is when the last evidence confirming this exact returned
-	// value and owner was taken, RFC3339 UTC with millisecond precision; null
-	// when none is known. A response clock, a settle projection or a pure
-	// read never supplies it.
+	// ConfirmedAt is the first confirmation of this exact returned value and
+	// owner in its current stay, RFC3339 UTC with millisecond precision; null
+	// when none is known. Later same-value evidence advances only CheckedAt.
+	// A response clock, a settle projection or a pure read never supplies it.
 	ConfirmedAt *string `json:"confirmed_at"`
 	// Source is that evidence's kind: agent_event, caller_command, process,
 	// tmux, pane, transcript or store (a durable agent-director record or
@@ -50,10 +50,17 @@ type Confirmations struct {
 	// ProcessLiveness confirms process_liveness: the recorded agent process
 	// at its recorded start identity, never a Helper, tmux or a descendant.
 	ProcessLiveness Confirmation `json:"process_liveness"`
-	// DisplayedState is present whether or not a Displayed State shows. This
-	// release keeps no display provenance, so it is unknown with null
-	// evidence: no_evidence, or unsupported where idle_screen is unavailable
-	// (Cursor).
+	// DisplayedState confirms the display returned: the Displayed State
+	// shown, or none when displayed_state is omitted, for the row's current
+	// life and launch. Only a successful sample of the row's own pane
+	// confirms it (source pane), and a failed one is its latest attempt;
+	// while an exit or entry settles, the shown display keeps its own record.
+	// ConfirmedAt is the first confirmation in its current stay; later
+	// same-value samples advance only CheckedAt. No applicable evidence or
+	// attempt is unknown, no_evidence. A failed latest attempt is
+	// not_confirmed with its reason, even without an earlier confirmation
+	// (ConfirmedAt and Source then stay null). Where idle_screen is
+	// unavailable (Cursor) it is always unknown, unsupported.
 	DisplayedState Confirmation `json:"displayed_state"`
 }
 

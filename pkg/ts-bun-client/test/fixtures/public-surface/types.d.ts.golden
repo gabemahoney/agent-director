@@ -249,12 +249,13 @@ export type ConfirmationSource = "agent_event" | "caller_command" | "process" | 
 export type ConfirmationReason = "no_evidence" | "unreadable" | "busy" | "stale_observation" | "deadline" | "operation_pending" | "pending_grace" | "unsupported" | "commit_unconfirmed";
 /**
  * One main field's last-confirmed evidence. Every key is always present; unknown values are null.
+ * `confirmed` means the value has supporting evidence with no later unresolved failed attempt.
  * A failed latest attempt is `not_confirmed` (or `pending` for a still-owned operation or a
  * pending-launch protection) and keeps only an older applicable `confirmed_at`.
  */
 export interface Confirmation {
     status: ConfirmationStatus;
-    /** Last evidence confirming this exact returned value and owner, RFC3339 UTC milliseconds; null when none is known. */
+    /** First confirmation of this exact returned value and owner in its current stay, RFC3339 UTC milliseconds; null when none is known. Later same-value evidence advances only `checked_at`. */
     confirmed_at: string | null;
     /** That evidence's kind; null exactly when `confirmed_at` is. */
     source: ConfirmationSource | null;
@@ -264,9 +265,14 @@ export interface Confirmation {
     reason: ConfirmationReason | null;
 }
 /**
- * Exactly the three main-field records. `displayed_state` is unknown with null evidence in this
- * release (reason `unsupported` for Cursor). `family_state` has no record: its freshness is
- * unconfirmed. Freshness never authorizes a command.
+ * Exactly the three main-field records. `displayed_state` covers the display returned, a
+ * Displayed State or none (`displayed_state` omitted): only a successful sample of the row's own
+ * pane confirms it (source `pane`), and the display shown while an entry or exit settles keeps its
+ * own record. `confirmed_at` is the first confirmation in its current stay; later same-value
+ * samples advance only `checked_at`. No applicable evidence or attempt is `unknown`/`no_evidence`.
+ * A failed latest attempt is `not_confirmed` with its reason, even without an earlier confirmation
+ * (`confirmed_at` and `source` then stay null). Cursor's is always unknown (reason `unsupported`).
+ * `family_state` has no record: its freshness is unconfirmed. Freshness never authorizes a command.
  */
 export interface Confirmations {
     state: Confirmation;

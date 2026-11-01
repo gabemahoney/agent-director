@@ -24,6 +24,7 @@
   "list": [
     ".spawns[*].confirmations.process_liveness.checked_at",
     ".spawns[*].confirmations.process_liveness.confirmed_at",
+    ".spawns[*].confirmations.displayed_state.checked_at",
     ".spawns[*].permission_requests[*].attempted_at",
     ".spawns[*].permission_requests[*].hook_gone_at"
   ],

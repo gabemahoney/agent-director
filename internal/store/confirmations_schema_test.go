@@ -64,8 +64,8 @@ func TestV19MigrationPreservationAndReentry(t *testing.T) {
 				// The partial run's column stays where it was added.
 				got, want = columnsByName(got), columnsByName(want)
 			}
-			if !reflect.DeepEqual(got, want) || s.StoreID() != id || userVersion(t, s.db) != 19 {
-				t.Fatal("migration diverged from the fresh schema, replaced the store id or did not stamp v19")
+			if !reflect.DeepEqual(got, want) || s.StoreID() != id || userVersion(t, s.db) != schemaVersion {
+				t.Fatal("migration diverged from the fresh schema, replaced the store id or did not stamp the current version")
 			}
 			assertSentinel(t, dir, false)
 			if !reflect.DeepEqual(prior, readRawSpawn(t, path, "pre", cols)) {
@@ -104,8 +104,10 @@ func TestV19MigrationPreservationAndReentry(t *testing.T) {
 			}
 			// Reentry of the hop and a plain reopen change nothing.
 			withRaw(t, path, func(db *sql.DB) {
-				if err := migrateV18toV19(db); err != nil {
-					t.Fatal(err)
+				for _, hop := range []func(*sql.DB) error{migrateV18toV19, migrateV19toV20} {
+					if err := hop(db); err != nil {
+						t.Fatal(err)
+					}
 				}
 			})
 			if s, err = Open(path); err != nil {
@@ -238,4 +240,134 @@ func TestV19MigrationRollbackRetryAndRestore(t *testing.T) {
 			t.Errorf("remigrated %s = %s; want NULL", c, v)
 		}
 	}
+}
+
+// b.x9o: v20 adds no proof to historical displays; compatible partial
+// reentry retains exact evidence and the fresh column order.
+func TestV20DisplayMigration(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(map[bool]string{false: "historical", true: "partial reentry"}[present], func(t *testing.T) {
+			dir := t.TempDir()
+			path := seedV18Store(t, dir)
+			withRaw(t, path, func(db *sql.DB) {
+				if err := migrateV18toV19(db); err != nil {
+					t.Fatal(err)
+				}
+				mustExec(t, db, `UPDATE spawns SET state='working', settled_state='working', display_observation='{"state":"idle_screen","since_ms":1792411208000,"unchanged_minutes":20,"candidate":"idle_screen","candidate_since_ms":1792411208000,"observed_at_ms":1792411208000,"permission_epoch":3}',pane_since_ms=1792410008000,pane_sha256='abc',pane_epoch=3`)
+			})
+			const record = `{"v":"idle_screen","life":2,"token":"0123456789abcdef","since":1792411208000,"at":1792411208000,"src":"pane","checked":1792411210000,"reason":null}`
+			if present {
+				preAddV14Columns(t, path, v20ColumnSpecs)
+				withRaw(t, path, func(db *sql.DB) { mustExec(t, db, `UPDATE spawns SET display_evidence=?`, record) })
+			}
+			var cols []string
+			withRaw(t, path, func(db *sql.DB) { cols = tableColumnNames(t, db, "spawns") })
+			before, id := readRawSpawn(t, path, "pre", cols), assertOneStoreID(t, path)
+			if opened, err := Open(path); !errors.Is(err, ErrSchemaMigrationRequired) {
+				if opened != nil {
+					opened.Close()
+				}
+				t.Fatalf("v19 opened without authorization: %v", err)
+			}
+			writeSentinel(t, dir, 19, schemaVersion)
+			s, err := openMigrationTestStore(t, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fresh, _ := openTempStore(t)
+			if !reflect.DeepEqual(schemaShape(t, s.db), schemaShape(t, fresh.db)) || s.StoreID() != id || userVersion(t, s.db) != 20 {
+				t.Fatal("v20 migration changed identity, column shape/order or version")
+			}
+			if !reflect.DeepEqual(before, readRawSpawn(t, path, "pre", cols)) {
+				t.Fatal("v20 changed historical facts")
+			}
+			row, err := s.GetSpawn("pre")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := UnknownConfirmation(ReasonNoEvidence)
+			if present {
+				want = Confirmation{Status: ConfirmationConfirmed, ConfirmedAtMillis: 1792411208000, Source: EvidencePane, CheckedAtMillis: 1792411210000}
+			}
+			if got := row.DisplayConfirmation(row.CommittedDisplay(), row.DisplayEvidence); got != want {
+				t.Fatalf("migrated display record %+v; want %+v", got, want)
+			}
+			if !present && row.DisplayEvidence != "" {
+				t.Fatal("migration backfilled display evidence")
+			}
+			s.Close()
+			after := dbDump(t, path)
+			withRaw(t, path, func(db *sql.DB) {
+				if err := migrateV19toV20(db); err != nil {
+					t.Fatal(err)
+				}
+			})
+			reopened, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reopened.Close()
+			if !reflect.DeepEqual(after, dbDump(t, path)) {
+				t.Fatal("reentry/reopen changed display evidence")
+			}
+		})
+	}
+}
+
+// b.x9o: validate before adding/stamping; incompatible schema or values
+// leave the v19 store and its authorization intact.
+func TestV20DisplayMigrationRefusesInvalidEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name, ddl, value, kind string
+		bare                   bool
+	}{
+		{"case", "Display_Evidence TEXT", "", "incompatible", false},
+		{"type", "display_evidence BLOB", "", "incompatible", false},
+		{"not null", "display_evidence TEXT NOT NULL", "", "incompatible", true},
+		{"default", "display_evidence TEXT DEFAULT '{}'", "", "incompatible", false},
+		{"blob", "display_evidence TEXT", "x'7b7d'", "invalid", false},
+		{"malformed", "display_evidence TEXT", "'{'", "invalid", false},
+		{"array", "display_evidence TEXT", "'[]'", "invalid", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := makeVersionedDB(t, dir, 19)
+			if !tc.bare {
+				seedV16PermissionHistory(t, path)
+			}
+			withRaw(t, path, func(db *sql.DB) {
+				mustExec(t, db, `ALTER TABLE spawns ADD COLUMN `+tc.ddl)
+				if tc.value != "" {
+					mustExec(t, db, `UPDATE spawns SET display_evidence=`+tc.value)
+				}
+			})
+			before := dbDump(t, path)
+			writeSentinel(t, dir, 19, schemaVersion)
+			s, err := openMigrationTestStore(t, path)
+			if s != nil {
+				s.Close()
+			}
+			if !errors.Is(err, ErrSchemaMismatch) || !strings.Contains(err.Error(), "v19→v20 "+tc.kind+" spawns.display_evidence") {
+				t.Fatalf("refusal = %v", err)
+			}
+			if readUserVersion(t, path) != 19 || !reflect.DeepEqual(before, dbDump(t, path)) {
+				t.Fatal("refused v20 changed schema/data/stamp")
+			}
+			assertSentinel(t, dir, true)
+		})
+	}
+	// SQLite cannot ALTER ADD a primary key, so this shape-only refusal
+	// starts from the minimal partial table the hop itself validates.
+	t.Run("primary key", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.db")
+		db := openRaw(t, path)
+		mustExec(t, db, `CREATE TABLE spawns (display_evidence TEXT PRIMARY KEY)`)
+		mustExec(t, db, `PRAGMA user_version=19`)
+		if err := migrateV19toV20(db); !errors.Is(err, ErrSchemaMismatch) {
+			t.Fatalf("primary key accepted: %v", err)
+		}
+		if userVersion(t, db) != 19 {
+			t.Fatal("refusal changed version")
+		}
+	})
 }

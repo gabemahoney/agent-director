@@ -167,7 +167,10 @@ They also carry `process_liveness: ProcessLiveness` (`"alive" | "exited" |
 `status` (`ConfirmationStatus`) and the nullable `confirmed_at`, `source`
 (`ConfirmationSource`), `checked_at` and `reason` (`ConfirmationReason`), all
 five always present. The [caller contract](../../docs/caller-contract.md#confirmations)
-defines the values and when each is `null`.
+defines the values and when each is `null`. `confirmations.displayed_state`
+describes the returned display, including an omitted `displayed_state` or a
+retained display whose exit is settling. Cursor's record is
+`unknown`/`unsupported`.
 
 `state` is always the lifecycle state. While a row shows a
 Displayed State, `StatusResult`, `GetResult` and each `ListRow` carry it in

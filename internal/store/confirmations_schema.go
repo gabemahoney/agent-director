@@ -84,3 +84,70 @@ func migrateV18toV19(db *sql.DB) error {
 	}
 	return tx.Commit()
 }
+
+// v20DisplayEvidenceColumn is the displayed_state evidence column
+// (confirmations.go): nullable TEXT without a default, like the v19 columns.
+// Migration backfills nothing: no stored display, since or pane baseline
+// records the exact value, owner and attempt a record names, so every
+// existing row reads its displayed_state unknown until a pane sample
+// establishes it.
+const v20DisplayEvidenceColumn = "display_evidence"
+
+// migrateV19toV20 follows the v19 main-field evidence step without modifying
+// its columns, with the same validate-first rule: an already-present column
+// of the exact shape whose values are all JSON objects is kept with its
+// values, any other shape or value refuses with the previous schema and data
+// intact, and the addition commits with the stamp. Recovery to an older
+// binary requires the stopped-writer pre-upgrade backup; display evidence
+// written after the upgrade is lost with it.
+func migrateV19toV20(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	found := false
+	rows, err := tx.Query(`PRAGMA table_info(spawns)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, nn, pk int
+		var name, kind string
+		var def sql.NullString
+		if err := rows.Scan(&cid, &name, &kind, &nn, &def, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if !strings.EqualFold(name, v20DisplayEvidenceColumn) {
+			continue
+		}
+		if name != v20DisplayEvidenceColumn || kind != "TEXT" || nn != 0 || pk != 0 || def.Valid {
+			rows.Close()
+			return fmt.Errorf("%w: store: v19→v20 incompatible spawns.%s", ErrSchemaMismatch, v20DisplayEvidenceColumn)
+		}
+		found = true
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if found {
+		var invalid bool
+		// CASE keeps json_type from ever reading malformed text.
+		if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM spawns WHERE display_evidence IS NOT NULL AND CASE WHEN typeof(display_evidence) <> 'text' THEN 1
+			WHEN NOT json_valid(display_evidence) THEN 1 WHEN json_type(display_evidence) <> 'object' THEN 1 ELSE 0 END)`).Scan(&invalid); err != nil {
+			return err
+		}
+		if invalid {
+			return fmt.Errorf("%w: store: v19→v20 invalid spawns.%s", ErrSchemaMismatch, v20DisplayEvidenceColumn)
+		}
+	} else if _, err := tx.Exec(`ALTER TABLE spawns ADD COLUMN ` + v20DisplayEvidenceColumn + ` TEXT`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`PRAGMA user_version = 20`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

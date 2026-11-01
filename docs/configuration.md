@@ -71,9 +71,9 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[pre_trust] lock_wait_seconds` | 1 to 9223372036 | 12 | How long `spawn` and `resume` of a Claude agent wait for Claude Code's lock on `.claude.json`. On timeout the launch goes ahead with `pre_trust` `failed`. Codex pre-trust takes no lock, so a Codex launch never waits and ignores this key. |
 | `[store] db_path` | path | `~/.config/agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores); a relative path is joined onto `~/.config/agent-director`. Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
 | `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | A call's locked-store wait, and each Cursor tool proof's fixed window from its first persistence attempt. Retries do not renew that window; [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries) define control and exit precedence. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
-| `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new `state` or raw family aggregate must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
+| `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. Hold time for a new `state`, raw family aggregate or observed display candidate; it creates no confirmation evidence (see [Settle time](#settle-time-state)). |
 | `[state] needs_intelligence_timeout_seconds` | 1 to 9223372036 | 30 | Nothing: accepted and range-checked, so existing files keep loading (see [Needs-intelligence timeout](#needs-intelligence-timeout-state)). |
-| `[state] idle_screen_timeout_seconds` | 1 to 9223372036 | 1200 | How long a `working` Claude or Codex agent's pane must look the same across eligible checks before `status`, `get` and `list` can show `displayed_state` `idle_screen` (see [Idle-screen timeout](#idle-screen-timeout-state)). |
+| `[state] idle_screen_timeout_seconds` | 1 to 9223372036 | 1200 | Minimum span between matching owned-pane captures for a `working` Claude or Codex row to qualify for `idle_screen`; not a sampling schedule (see [Idle-screen timeout](#idle-screen-timeout-state)). |
 | `[launch] claude_path` | absolute path or `~/` path | unset | The program a `claude` spawn, reuse or resume runs; a `~/` path is joined onto `HOME` at load. Empty or unset runs `claude` from the `PATH` of the agents' tmux server; set it when that `PATH` differs from the caller's. A set path runs as written: no `PATH` lookup and no shell parsing, and agent-director does not check the program. A change takes effect at the next launch (spawn, reuse or resume). Keep it on one line (`claude_path = "<path>"`, or single quotes, no backslash): `install.sh` refuses anything else (see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template)). When it names an executable file, `install.sh` runs it for every Claude Code command it issues. |
 | `[launch] codex_path` | absolute path or `~/` path | unset | The program a `codex` spawn, reuse or resume runs, in the same form and under the same refusals as `claude_path`: empty or unset runs `codex` from the `PATH` of the agents' tmux server, a set path runs as written with no `PATH` lookup and no shell parsing, and a change takes effect at the next launch. One line, as for `claude_path`. When it names an executable file, `install.sh` counts Codex as installed; it never runs it. Codex installed with npm needs the native program here: see [Requirements](install.md#requirements). |
 | `[launch] cursor_path` | absolute path or `~/` path | unset | The Cursor runtime program for a `cursor` spawn, reuse or resume. Empty or unset runs `agent` from the agents' tmux server `PATH`. A `~/` path expands against `HOME` at config load. A set value is one whole executable path, with no shell parsing, `PATH` lookup or fallback, not a command plus arguments. It has the same config-value refusals as the other launch paths; agent-director does not check the executable in advance. The current loaded setting takes effect at the next launch (spawn, reuse or resume); changing it does not overwrite saved cwd, arguments, environment or group configuration. Installer presence discovery does not change this setting. Cursor lifecycle limits are in [Usage](usage.md#fresh-cursor-use). |
@@ -191,6 +191,10 @@ on CLI, MCP and the Go and TypeScript clients:
   change, a reported value can have held for less than the new interval.
   A wall-clock step back delays settling; a jump forward can settle early.
 
+Settling preserves the shown value's [confirmation](caller-contract.md#confirmations).
+It creates neither evidence nor attempt times. A retained display keeps its
+own record until its exit commits; `since` still dates committed display entry.
+
 ## Needs-intelligence timeout (`[state]`)
 
 `[state] needs_intelligence_timeout_seconds` is accepted with whole seconds
@@ -201,10 +205,11 @@ value or one above the maximum is refused (see
 
 ## Idle-screen timeout (`[state]`)
 
-`[state] idle_screen_timeout_seconds` is how long a `working` Claude or
-Codex agent's pane must look the same across eligible checks by `status`,
-`get`, `list` and `find-missing` before state reads show `displayed_state`
-`idle_screen` (its `state` stays `working`). How panes are sampled is in the
+`[state] idle_screen_timeout_seconds` is the minimum span of matching
+owned-pane captures that qualifies a `working` Claude or Codex row for
+`idle_screen`. Eligible `status`, `get`, `list` and `find-missing` checks
+sample it; the timeout schedules no check and confirms nothing by itself.
+Sampling and baseline resets are defined in the
 [caller contract](caller-contract.md#unchanged-panes).
 
 - **Range.** Whole seconds from 1 to 9223372036. A missing key, or 0, reads

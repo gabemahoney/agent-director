@@ -8,8 +8,8 @@ import (
 )
 
 // confirmations.go — the bounded main-field evidence of SR-4.1 to SR-4.8
-// (schema v19). Three nullable JSON columns of a spawns row hold it, and no
-// other table, history or per-member record does:
+// (schema v19 and v20). Four nullable JSON columns of a spawns row hold it,
+// and no other table, history or per-member record does:
 //
 //   - state_evidence: the evidence that established the raw state in its
 //     current raw-state interval (permission_epoch) of the row's current life
@@ -20,15 +20,23 @@ import (
 //     reports the time of the value it actually shows;
 //   - process_evidence: the latest process-liveness attempt for the recorded
 //     agent process at its recorded start identity (ProcessEvidenceAfter),
-//     with the time and source of the last attempt that established its value.
+//     with the time and source that first confirmed its current value.
 //     A terminal move writes it in its own statement: the exited record of
 //     the process whose proven exit it acted on, NULL otherwise
-//     (terminalProcessEvidenceSet, clearProcessEvidence).
+//     (terminalProcessEvidenceSet, clearProcessEvidence);
+//   - display_evidence: the record of the display the row shows, a Displayed
+//     State episode or none (displayed_state omitted), written only by a pane
+//     sample of the row's own pane, in the observer's own statement
+//     (displayEvidenceAfter). Settling keeps the shown display's record until
+//     the candidate enters, and a write that changes the shown display without
+//     a sample of it (a settling out on a non-working row, an immediate write
+//     ending a Displayed State) clears it (keepDisplayEvidence).
 //
 // Each record names the life, launch token and, for state, the permission
-// epoch, value or process identity it was made for. A read applies a record
-// only to that exact owner and value (Spawn.StateConfirmation,
-// Spawn.ProcessConfirmation), so a writer that records no evidence leaves the
+// epoch, value, process identity or display episode it was made for. A read
+// applies a record only to that exact owner and value
+// (Spawn.StateConfirmation, Spawn.ProcessConfirmation,
+// Spawn.DisplayConfirmation), so a writer that records no evidence leaves the
 // field honestly unknown rather than inheriting an earlier value's time. A
 // same-value write keeps an applicable record as it is (a soft refresh, a held
 // transition or a reread of old hook bytes never redates it), and nothing
@@ -95,9 +103,9 @@ func ValidConfirmationReason(r string) bool {
 	return false
 }
 
-// Confirmation is one main field's record: its SR-4.6 status, the last
-// evidence confirming the returned value and owner (ConfirmedAtMillis and
-// Source, 0 and "" when none is known), the latest attempt for the field
+// Confirmation is one main field's record: its SR-4.6 status, the first
+// evidence confirming the returned value and owner in its current stay
+// (ConfirmedAtMillis and Source, 0 and "" when none is known), the latest attempt for the field
 // (CheckedAtMillis, 0 when none is known) and, unless that attempt
 // confirmed it, why not (Reason). Times are milliseconds since the epoch.
 type Confirmation struct {
@@ -115,7 +123,9 @@ func UnknownConfirmation(r string) Confirmation {
 }
 
 // fieldEvidence is one stored record, decoded tolerantly: anything malformed
-// is no evidence, so no stored value fails a read.
+// is no evidence, so no stored value fails a read. Since is a display
+// record's episode: the committed entry of the Displayed State it was made
+// for, 0 for none.
 type fieldEvidence struct {
 	Value   string  `json:"v"`
 	Life    *int64  `json:"life"`
@@ -123,6 +133,7 @@ type fieldEvidence struct {
 	Epoch   *int64  `json:"epoch"`
 	PID     int     `json:"pid"`
 	Start   string  `json:"start"`
+	Since   int64   `json:"since"`
 	At      int64   `json:"at"`
 	Source  string  `json:"src"`
 	Checked int64   `json:"checked"`
@@ -148,6 +159,10 @@ func (ev fieldEvidence) owns(sp Spawn) bool {
 	token := ""
 	if ev.Token != nil {
 		token = decodeLaunchToken(*ev.Token)
+		// Only a null token may qualify a tokenless legacy row.
+		if token == "" {
+			return false
+		}
 	}
 	return *ev.Life == sp.LifeNumber && token == sp.Identity.Token
 }
@@ -194,6 +209,15 @@ func (sp Spawn) ProcessConfirmation() (string, Confirmation) {
 	if !ok {
 		return ProcessUnknown, UnknownConfirmation(ReasonNoEvidence)
 	}
+	return ev.Value, attemptRecordFor(ev)
+}
+
+// attemptRecordFor returns the record of an applicable process or display
+// evidence, which also keeps its latest attempt: confirmed after a successful
+// one; after a failed one not_confirmed with its reason, keeping the last
+// confirmed time and source, or unknown when no evidence was found and none
+// was ever confirmed.
+func attemptRecordFor(ev fieldEvidence) Confirmation {
 	c := Confirmation{Status: ConfirmationConfirmed, ConfirmedAtMillis: ev.At, Source: ev.Source, CheckedAtMillis: max(ev.Checked, ev.At), Reason: ev.Reason}
 	if ev.Reason != "" {
 		c.Status = ConfirmationNotConfirmed
@@ -201,25 +225,159 @@ func (sp Spawn) ProcessConfirmation() (string, Confirmation) {
 			c.Status = ConfirmationUnknown
 		}
 	}
-	return ev.Value, c
+	return c
 }
+
+// displayNone is the displayed_state value of a row that shows no Displayed
+// State (displayed_state omitted), as display_evidence records it.
+const displayNone = "none"
+
+// displayValue is the displayed_state value d shows: its Displayed State, or
+// displayNone for an ordinary state.
+func displayValue(d DisplayDetail) string {
+	if isDisplayedState(d.State) {
+		return d.State
+	}
+	return displayNone
+}
+
+// applicableDisplayEvidence is the record raw holds when it was made for sp's
+// current life and launch and for d, the display the same snapshot shows: the
+// same value and, for a Displayed State, the same episode (its committed
+// entry, since). A needs_intelligence display, which no read enters and no
+// sample records, never has one.
+func (sp Spawn) applicableDisplayEvidence(d DisplayDetail, raw string) (fieldEvidence, bool) {
+	ev, ok := decodeFieldEvidence(raw)
+	v := displayValue(d)
+	if !ok || !ev.owns(sp) || ev.Value != v || v == StateNeedsIntelligence ||
+		(v == StateIdleScreen && ev.Since != d.SinceMillis) || (ev.Reason == "" && ev.At == 0) {
+		return fieldEvidence{}, false
+	}
+	return ev, true
+}
+
+// DisplayConfirmation is the displayed_state record of d, the display a read
+// returns, from evidence, the display_evidence of the same row snapshot
+// (sp.CommittedDisplay() with sp.DisplayEvidence, or an observer's
+// DisplayOutcome). A record applies only to sp's current life and launch and
+// to d's exact value and episode, so a settled earlier display keeps its own
+// record while it shows and a new episode never inherits one; a latest pane
+// sample that failed keeps the last confirmed time as not_confirmed with its
+// reason; no applicable record is unknown. Settling and the passing of time
+// never make or redate one.
+func (sp Spawn) DisplayConfirmation(d DisplayDetail, evidence string) Confirmation {
+	ev, ok := sp.applicableDisplayEvidence(d, evidence)
+	if !ok {
+		return UnknownConfirmation(ReasonNoEvidence)
+	}
+	return attemptRecordFor(ev)
+}
+
+// displayEvidenceAfter returns display_evidence after one pane sample of sp
+// whose observation leaves shown, the display sp then shows. established is
+// the display value a successful sample establishes (planPane's target, none
+// below the timeout) and failure, when set, why the sample established
+// nothing (PaneSample.failure). A sample confirms only the display it
+// establishes, and only while that display shows: the first success in a stay
+// stamps it from source pane at nowMs, a later one keeps that time (the
+// display's first confirmation in its current stay) and advances only the
+// check, and a failure records its own check and reason, keeping only an
+// applicable older confirmation. A success establishing a settling candidate
+// leaves the shown display's record as it is: settling never confirms or
+// redates the display it keeps showing. A row that is not observed keeps its
+// record.
+func (sp Spawn) displayEvidenceAfter(shown DisplayDetail, established, failure string, nowMs int64) string {
+	if !sp.PaneObservable() || nowMs <= 0 {
+		return sp.DisplayEvidence
+	}
+	if shown.State == StateNeedsIntelligence {
+		// No sample establishes it, and a committing observation ends it.
+		return ""
+	}
+	prior, applies := sp.applicableDisplayEvidence(shown, sp.DisplayEvidence)
+	if failure == "" && established != displayValue(shown) {
+		if applies {
+			return sp.DisplayEvidence
+		}
+		return ""
+	}
+	life := sp.LifeNumber
+	next := fieldEvidence{Value: displayValue(shown), Life: &life, Checked: nowMs, Reason: failure}
+	if sp.Identity.Token != "" {
+		next.Token = &sp.Identity.Token
+	}
+	if next.Value == StateIdleScreen {
+		next.Since = shown.SinceMillis
+	}
+	switch {
+	case applies && prior.At > 0:
+		next.At, next.Source = prior.At, prior.Source
+	case failure == "":
+		next.At, next.Source = nowMs, EvidencePane
+	}
+	raw, ok := encodeFieldEvidence(next)
+	if !ok {
+		return sp.DisplayEvidence
+	}
+	return raw
+}
+
+// encodeFieldEvidence is ev as a stored process or display record: every
+// key present, an absent time, source and reason as null, and pid, start and
+// since only when set.
+func encodeFieldEvidence(ev fieldEvidence) (string, bool) {
+	type stored struct {
+		Value   string  `json:"v"`
+		Life    *int64  `json:"life"`
+		Token   *string `json:"token"`
+		PID     int     `json:"pid,omitempty"`
+		Start   string  `json:"start,omitempty"`
+		Since   int64   `json:"since,omitempty"`
+		At      *int64  `json:"at"`
+		Source  *string `json:"src"`
+		Checked int64   `json:"checked"`
+		Reason  *string `json:"reason"`
+	}
+	out := stored{Value: ev.Value, Life: ev.Life, Token: ev.Token, PID: ev.PID, Start: ev.Start, Since: ev.Since, Checked: ev.Checked}
+	if ev.At > 0 {
+		out.At, out.Source = &ev.At, &ev.Source
+	}
+	if ev.Reason != "" {
+		out.Reason = &ev.Reason
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return "", false
+	}
+	return string(raw), true
+}
+
+// keepDisplayEvidence is the display_evidence assignment of a write that
+// clears the display observation (every immediate write, the check_permission
+// repair). A row that showed no Displayed State still shows none, so its
+// record is kept, and read only while it owns the row's life and launch
+// (DisplayConfirmation); a row that showed one ends that episode with no
+// sample of the none it now shows, so its record is cleared. SET sees the row
+// before the statement.
+const keepDisplayEvidence = `display_evidence = CASE WHEN ` + committedDisplayStateSQL + ` IS NULL THEN display_evidence END`
 
 // The evidence column fragment every full-row and status-row read selects,
 // last before any reported columns, in evidenceScan.dest's order.
-const evidenceColumns = `state_evidence, settled_evidence, process_evidence`
+const evidenceColumns = `state_evidence, settled_evidence, process_evidence, display_evidence`
 
 // evidenceScan receives one row's evidenceColumns; every stored value reads,
 // a non-text one as none.
 type evidenceScan struct {
-	state, settled, process any
+	state, settled, process, display any
 }
 
-func (e *evidenceScan) dest() []any { return []any{&e.state, &e.settled, &e.process} }
+func (e *evidenceScan) dest() []any { return []any{&e.state, &e.settled, &e.process, &e.display} }
 
 func (e *evidenceScan) apply(sp *Spawn) {
 	sp.StateEvidence, _ = e.state.(string)
 	sp.SettledStateEvidence, _ = e.settled.(string)
 	sp.ProcessEvidence, _ = e.process.(string)
+	sp.DisplayEvidence, _ = e.display.(string)
 }
 
 // evidenceText is col's text, NULL for any other storage class, so the JSON
@@ -321,10 +479,12 @@ type ProcessAttempt struct {
 }
 
 // ProcessEvidenceAfter returns the record sp holds after attempt, made at
-// atMillis: a successful attempt stamps its value with source process; a
-// failed one keeps the last applicable value, time and source and records
-// only its own time and reason. ok is false when the attempt names no
-// process the row records, so nothing may be stored; for a Cursor row,
+// atMillis: a successful attempt keeps an applicable confirmation of the same
+// value and exact process identity, advancing only the check and clearing any
+// failure reason; otherwise it stamps a new confirmation from source process.
+// A failed attempt keeps the applicable value, time and source for that exact
+// process identity and records only its own time and reason. ok is false when
+// the attempt names no process the row records, so nothing may be stored; for a Cursor row,
 // whose runtime process no check observes (process_liveness unsupported);
 // and for an alive attempt on a finished row, which only a sample taken
 // before the row's terminal move can be (a finished row never reports its
@@ -343,34 +503,15 @@ func (sp Spawn) ProcessEvidenceAfter(attempt ProcessAttempt, atMillis int64) (st
 		token = &sp.Identity.Token
 	}
 	next := fieldEvidence{Value: attempt.Value, Life: &life, Token: token, PID: attempt.PID, Start: attempt.Start, Checked: atMillis, Reason: attempt.Reason}
-	if attempt.Reason == "" {
-		next.At, next.Source = atMillis, EvidenceProcess
-	} else if old, ok := sp.applicableProcessEvidence(); ok && old.PID == attempt.PID && old.Start == attempt.Start && old.At > 0 {
+	old, applies := sp.applicableProcessEvidence()
+	switch {
+	case applies && old.PID == attempt.PID && old.Start == attempt.Start && old.At > 0 &&
+		(attempt.Reason != "" || old.Value == attempt.Value):
 		next.Value, next.At, next.Source = old.Value, old.At, old.Source
+	case attempt.Reason == "":
+		next.At, next.Source = atMillis, EvidenceProcess
 	}
-	type stored struct {
-		Value   string  `json:"v"`
-		Life    *int64  `json:"life"`
-		Token   *string `json:"token"`
-		PID     int     `json:"pid"`
-		Start   string  `json:"start"`
-		At      *int64  `json:"at"`
-		Source  *string `json:"src"`
-		Checked int64   `json:"checked"`
-		Reason  *string `json:"reason"`
-	}
-	out := stored{Value: next.Value, Life: next.Life, Token: next.Token, PID: next.PID, Start: next.Start, Checked: next.Checked}
-	if next.At > 0 {
-		out.At, out.Source = &next.At, &next.Source
-	}
-	if next.Reason != "" {
-		out.Reason = &next.Reason
-	}
-	raw, err := json.Marshal(out)
-	if err != nil {
-		return "", false
-	}
-	return string(raw), true
+	return encodeFieldEvidence(next)
 }
 
 // ProcessExit names the recorded agent process whose proven exit a terminal

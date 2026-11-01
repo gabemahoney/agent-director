@@ -415,6 +415,26 @@ func planObservation(row Spawn, target DisplayDetail, extra bool, now time.Time,
 	return p, nil
 }
 
+// DisplayOutcome is one observer's result: the display it returns with the
+// display_evidence of the same snapshot (Spawn.DisplayConfirmation), the
+// families its commit refreshed, by instance id under the reader's settle
+// (nil when the commit changed no contribution, or nothing committed), and
+// whether it committed anything, a display record alone included. An
+// observer that commits nothing returns examined's committed display and
+// record.
+type DisplayOutcome struct {
+	Display   DisplayDetail
+	Evidence  string
+	Families  map[string]string
+	Committed bool
+}
+
+// committedOutcome is examined's committed display and record, what an
+// observer that commits nothing returns.
+func committedOutcome(examined Spawn) DisplayOutcome {
+	return DisplayOutcome{Display: examined.CommittedDisplay(), Evidence: examined.DisplayEvidence}
+}
+
 // ObserveNeedsIntelligence commits one nonwaiting observation of examined by
 // its permission requests: the fallback clocks samples establish (planPermission)
 // and the settling out of any display the row keeps, a needs_intelligence an
@@ -426,21 +446,29 @@ func planObservation(row Spawn, target DisplayDetail, extra bool, now time.Time,
 // committed), so a reader reports the display and its families from the same
 // commit.
 func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSample, now time.Time, settle SettleRead) (DisplayDetail, map[string]string, error) {
-	display, families, _, err := s.ObserveNeedsIntelligenceOutcome(examined, samples, now, settle)
-	return display, families, err
+	out, err := s.ObserveNeedsIntelligenceOutcome(examined, samples, now, settle)
+	return out.Display, out.Families, err
 }
 
-// ObserveNeedsIntelligenceOutcome additionally distinguishes a committed observation
-// from a no-op, including baseline-only commits with no family change.
-func (s *Store) ObserveNeedsIntelligenceOutcome(examined Spawn, samples []PermissionSample, now time.Time, settle SettleRead) (DisplayDetail, map[string]string, bool, error) {
-	previous := examined.CommittedDisplay()
+// ObserveNeedsIntelligenceOutcome additionally distinguishes a committed
+// observation from a no-op and returns the display's record. It samples no
+// pane, so it confirms no display: an observation that changes the display
+// the row shows (a settling out, the end of a needs_intelligence) clears the
+// record, since nothing sampled the display it now shows, and any other
+// keeps it.
+func (s *Store) ObserveNeedsIntelligenceOutcome(examined Spawn, samples []PermissionSample, now time.Time, settle SettleRead) (DisplayOutcome, error) {
+	previous := committedOutcome(examined)
 	clocks := planPermission(examined, samples, now)
 	plan, err := planObservation(examined, DisplayDetail{}, len(clocks) > 0, now, settle)
 	if err != nil {
-		return previous, nil, false, err
+		return previous, err
 	}
 	if !plan.write {
-		return previous, nil, false, nil
+		return previous, nil
+	}
+	evidence := examined.DisplayEvidence
+	if displayValue(plan.result) != displayValue(previous.Display) || plan.result.SinceMillis != previous.Display.SinceMillis {
+		evidence = ""
 	}
 	var families map[string]string
 	err = s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
@@ -471,7 +499,8 @@ func (s *Store) ObserveNeedsIntelligenceOutcome(examined Spawn, samples []Permis
 				return err
 			}
 		}
-		_, err = conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1 WHERE instance_id=?`, plan.raw, row.InstanceID)
+		_, err = conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1,display_evidence=? WHERE instance_id=?`,
+			plan.raw, nullableStringArg(evidence), row.InstanceID)
 		if err != nil {
 			return err
 		}
@@ -479,12 +508,12 @@ func (s *Store) ObserveNeedsIntelligenceOutcome(examined Spawn, samples []Permis
 		return err
 	})
 	if err != nil {
-		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, nil) {
-			return previous, nil, false, err
+		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, nil, evidence) {
+			return previous, err
 		}
 	}
 	s.emitObservationTransitions(plan.events)
-	return plan.result, families, true, nil
+	return DisplayOutcome{Display: plan.result, Evidence: evidence, Families: families, Committed: true}, nil
 }
 
 // ObserveIdleScreen commits one nonwaiting pane observation of examined: the
@@ -494,34 +523,43 @@ func (s *Store) ObserveNeedsIntelligenceOutcome(examined Spawn, samples []Permis
 // the write lock: a sample that cannot commit, a failed sample's reset
 // included, changes nothing and returns the previously committed display, so
 // a later sample may continue the committed baseline. A row changed since
-// examined (its launch, turn, pane ownership or stored observations) refuses
-// the sample, so an older sample never overwrites a newer one. Its families
-// are as ObserveNeedsIntelligence returns them.
+// examined (its launch, turn, pane ownership, stored observations or display
+// record) refuses the sample, so an older sample never overwrites a newer
+// one. Its families are as ObserveNeedsIntelligence returns them.
 func (s *Store) ObserveIdleScreen(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, map[string]string, error) {
-	display, families, _, err := s.ObserveIdleScreenOutcome(examined, sample, now, timeout, settle)
-	return display, families, err
+	out, err := s.ObserveIdleScreenOutcome(examined, sample, now, timeout, settle)
+	return out.Display, out.Families, err
 }
 
 // ObserveIdleScreenOutcome additionally distinguishes a committed observation
-// from a no-op, including baseline-only commits with no family change.
-func (s *Store) ObserveIdleScreenOutcome(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, map[string]string, bool, error) {
-	previous := examined.CommittedDisplay()
+// from a no-op and returns the display's record, which the sample's attempt
+// updates in the same commit (Spawn.displayEvidenceAfter). A sample that
+// changes no observation, baseline or display still commits its attempt to
+// the record alone, with no version advance, so the record's checked time is
+// the latest sample a later read can rely on.
+func (s *Store) ObserveIdleScreenOutcome(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayOutcome, error) {
+	previous := committedOutcome(examined)
 	baseline, target := planPane(examined, sample, now, timeout)
 	plan, err := planObservation(examined, target, baseline != committedPaneBaseline(examined), now, settle)
 	if err != nil {
-		return previous, nil, false, err
+		return previous, err
 	}
-	if !plan.write {
-		return previous, nil, false, nil
+	evidence := examined.displayEvidenceAfter(plan.result, displayValue(target), sample.failure(), now.UnixMilli())
+	if !plan.write && evidence == examined.DisplayEvidence {
+		return previous, nil
 	}
 	var families map[string]string
 	err = s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
 		if _, err := lockedObservationRow(ctx, conn, examined); err != nil {
 			return err
 		}
+		if !plan.write {
+			_, err := conn.ExecContext(ctx, `UPDATE spawns SET display_evidence=? WHERE instance_id=?`, nullableStringArg(evidence), examined.InstanceID)
+			return err
+		}
 		args := append([]any{plan.raw}, paneBaselineArgs(baseline, examined.PermissionEpoch)...)
 		_, err := conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1,
- pane_sha256=?,pane_since_ms=?,pane_epoch=? WHERE instance_id=?`, append(args, examined.InstanceID)...)
+ pane_sha256=?,pane_since_ms=?,pane_epoch=?,display_evidence=? WHERE instance_id=?`, append(args, nullableStringArg(evidence), examined.InstanceID)...)
 		if err != nil {
 			return err
 		}
@@ -529,24 +567,26 @@ func (s *Store) ObserveIdleScreenOutcome(examined Spawn, sample PaneSample, now 
 		return err
 	})
 	if err != nil {
-		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, &baseline) {
-			return previous, nil, false, err
+		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, &baseline, evidence) {
+			return previous, err
 		}
 	}
 	s.emitObservationTransitions(plan.events)
-	return plan.result, families, true, nil
+	return DisplayOutcome{Display: plan.result, Evidence: evidence, Families: families, Committed: true}, nil
 }
 
 // lockedObservationRow re-reads examined's row inside an observer's write
 // transaction, refusing with errDisplaySampleChanged when anything the plan
 // was made from has changed since: its snapshot, launch identity, agent, raw
-// state, permission epoch or stored observations (observation_version).
+// state, permission epoch, stored observations (observation_version) or
+// display record, which a record-only commit changes without a version.
 func lockedObservationRow(ctx context.Context, conn *sql.Conn, examined Spawn) (Spawn, error) {
 	row, err := scanSpawnStatus(conn.QueryRowContext(ctx, `SELECT `+statusRowColumns+` FROM spawns WHERE instance_id=?`, examined.InstanceID), false)
 	if err != nil {
 		return Spawn{}, err
 	}
-	if row.Snapshot != examined.Snapshot || row.Identity != examined.Identity || row.Agent != examined.Agent || row.PermissionEpoch != examined.PermissionEpoch || row.ObservationVersion != examined.ObservationVersion || row.State != examined.State {
+	if row.Snapshot != examined.Snapshot || row.Identity != examined.Identity || row.Agent != examined.Agent || row.PermissionEpoch != examined.PermissionEpoch ||
+		row.ObservationVersion != examined.ObservationVersion || row.State != examined.State || row.DisplayEvidence != examined.DisplayEvidence {
 		return Spawn{}, errDisplaySampleChanged
 	}
 	return row, nil
@@ -554,22 +594,28 @@ func lockedObservationRow(ctx context.Context, conn *sql.Conn, examined Spawn) (
 
 // observationLanded is the one nonwaiting re-read after an unconfirmed COMMIT
 // (errCommitUnconfirmed): whether this plan's write, with baseline when the
-// observer stored one, is what the row now holds. Any doubt, a busy store
-// included, answers false, and the caller keeps the previous view. It does not
-// wait for the write's own abandoned operation either: a caller released at
-// its deadline while the COMMIT still runs (runConnectionOperation's
+// observer stored one and evidence, its display record, is what the row now
+// holds; for a record-only commit (plan.write false), the record over the
+// unchanged observation and version. Any doubt, a busy store included,
+// answers false, and the caller keeps the previous view. It does not wait for
+// the write's own abandoned operation either: a caller released at its
+// deadline while the COMMIT still runs (runConnectionOperation's
 // operation_guard branch) usually finds that operation still holding the
 // store's operation slot, so a COMMIT that lands is then answered as not
 // landed and its transitions are not emitted by this read.
-func (s *Store) observationLanded(examined Spawn, plan observationPlan, baseline *paneBaseline) bool {
+func (s *Store) observationLanded(examined Spawn, plan observationPlan, baseline *paneBaseline, evidence string) bool {
 	var row Spawn
 	err := s.readWithin(0, "", func(ctx context.Context, conn *sql.Conn) error {
 		var err error
 		row, err = scanSpawnStatus(conn.QueryRowContext(ctx, `SELECT `+statusRowColumns+` FROM spawns WHERE instance_id=?`, examined.InstanceID), false)
 		return err
 	})
+	version, text := examined.ObservationVersion, examined.DisplayObservation
+	if plan.write {
+		version, text = version+1, plan.text
+	}
 	return err == nil && row.Snapshot == examined.Snapshot && row.PermissionEpoch == examined.PermissionEpoch &&
-		row.ObservationVersion == examined.ObservationVersion+1 && row.DisplayObservation == plan.text &&
+		row.ObservationVersion == version && row.DisplayObservation == text && row.DisplayEvidence == evidence &&
 		(baseline == nil || committedPaneBaseline(row) == *baseline)
 }
 

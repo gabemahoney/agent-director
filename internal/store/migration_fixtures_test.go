@@ -1942,6 +1942,9 @@ var v19ColumnSpecs = []columnSpec{
 	{"spawns", "process_evidence", "TEXT", false, ""},
 }
 
+// v20ColumnSpecs is the nullable, unbackfilled display evidence column.
+var v20ColumnSpecs = []columnSpec{{"spawns", "display_evidence", "TEXT", false, ""}}
+
 // v19ColumnNames are v19ColumnSpecs' column names, in order.
 func v19ColumnNames() []string {
 	var names []string

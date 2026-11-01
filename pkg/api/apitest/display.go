@@ -473,3 +473,48 @@ func ObserveDisplayRead(t testing.TB, probe DisplayProbe, id, want string, commi
 	}
 	return got
 }
+
+// CheckPaneConfirmationWire checks a sampled row's exact display record and
+// shape. first is the stay's first confirmation (empty on its first read);
+// latest checked_at must fall inside this public call's [from,to] window.
+func CheckPaneConfirmationWire(t testing.TB, raw []byte, first, reason string, from, to time.Time) string {
+	t.Helper()
+	AssertConfirmationsShape(t, string(raw))
+	var row struct {
+		State         string `json:"state"`
+		Confirmations map[string]struct {
+			Status  string  `json:"status"`
+			At      *string `json:"confirmed_at"`
+			Source  *string `json:"source"`
+			Checked *string `json:"checked_at"`
+			Reason  *string `json:"reason"`
+		} `json:"confirmations"`
+	}
+	if err := json.Unmarshal(raw, &row); err != nil {
+		t.Fatal(err)
+	}
+	rec := row.Confirmations["displayed_state"]
+	if rec.At == nil || rec.Checked == nil || rec.Source == nil {
+		t.Fatalf("pane record lacks its evidence: %s", raw)
+	}
+	if first == "" {
+		first = *rec.At
+		if first != *rec.Checked {
+			t.Fatalf("first sample timestamps differ: %s", raw)
+		}
+	}
+	status := "confirmed"
+	if reason != "" {
+		status = "not_confirmed"
+	}
+	why := ""
+	if rec.Reason != nil {
+		why = *rec.Reason
+	}
+	at, err := time.Parse("2006-01-02T15:04:05.000Z", *rec.Checked)
+	if row.State != "working" || rec.Status != status || *rec.Source != "pane" || *rec.At != first || why != reason ||
+		err != nil || at.Before(from.Truncate(time.Millisecond)) || at.After(to) || *rec.Checked < first {
+		t.Fatalf("pane wire record %+v; want %s, first %s, source pane, check in [%s,%s], reason %q", rec, status, first, from, to, reason)
+	}
+	return first
+}

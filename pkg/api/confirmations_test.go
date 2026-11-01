@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -47,32 +48,45 @@ func confirmed(at time.Time, src string) string {
 
 func unknownRecord(reason string) string { return "unknown|-|-|-|" + reason }
 
-// mainRead is one verb's state, process_liveness and records for a row.
+// mainRead is one verb's state, display, process_liveness and records for a row.
 type mainRead struct {
-	verb, state, process string
-	records              api.Confirmations
+	verb, state, display, process string
+	records                       api.Confirmations
 }
 
 // readMain reads id through status, get and list over s with view (each a
-// checked read when view has a process reader) and returns the three.
-func readMain(t *testing.T, s *store.Store, view api.RelayView, id string) []mainRead {
+// checked read when view has a process reader) and returns the three. An
+// optional settle clock selects the Client's identical settled projections.
+func readMain(t *testing.T, s *store.Store, view api.RelayView, id string, settle ...store.SettleRead) []mainRead {
 	t.Helper()
-	st, err := api.Status(s, view, id)
+	status, get, listRows := api.Status, api.Get, api.List
+	if len(settle) > 0 {
+		status = func(s api.StatusStore, v api.RelayView, id string) (api.StatusResult, error) {
+			return api.StatusSettledForTest(s, v, settle[0], id)
+		}
+		get = func(s api.GetStore, v api.RelayView, id string) (api.SpawnRow, error) {
+			return api.GetSettledForTest(s, v, settle[0], id)
+		}
+		listRows = func(s api.ListStore, v api.RelayView, p api.ListParams) (api.ListResult, error) {
+			return api.ListSettledForTest(s, v, settle[0], p)
+		}
+	}
+	st, err := status(s, view, id)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	got, err := api.Get(s, view, id)
+	got, err := get(s, view, id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	reads := []mainRead{{"status", st.State, st.ProcessLiveness, st.Confirmations}, {"get", got.State, got.ProcessLiveness, got.Confirmations}}
-	list, err := api.List(s, view, api.ListParams{})
+	reads := []mainRead{{"status", st.State, st.DisplayedState, st.ProcessLiveness, st.Confirmations}, {"get", got.State, got.DisplayedState, got.ProcessLiveness, got.Confirmations}}
+	list, err := listRows(s, view, api.ListParams{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	for _, row := range list.Spawns {
 		if row.InstanceID == id {
-			reads = append(reads, mainRead{"list", row.State, row.ProcessLiveness, row.Confirmations})
+			reads = append(reads, mainRead{"list", row.State, row.DisplayedState, row.ProcessLiveness, row.Confirmations})
 		}
 	}
 	if len(reads) != 3 {
@@ -181,7 +195,9 @@ func TestProcessLivenessOnCheckedReads(t *testing.T) {
 		},
 			after: func(t *testing.T, e *killEnv, r killRow) {
 				cursorReadSQL(t, e.dbPath, `UPDATE spawns SET process_evidence = json_object('v','alive','life',life_number,'token',launch_token,
-				    'pid',pane_pid,'start',pane_starttime,'at',1,'src','process','checked',1,'reason',NULL) WHERE instance_id = ?`, r.ID)
+				    'pid',pane_pid,'start',pane_starttime,'at',1,'src','process','checked',1,'reason',NULL),
+                    display_evidence=json_object('v','none','life',life_number,'token',launch_token,
+                    'at',1,'src','pane','checked',1,'reason',NULL) WHERE instance_id = ?`, r.ID)
 			},
 			state: store.StateWorking, value: store.ProcessUnknown, record: func(time.Time) string { return unsupported }},
 	} {
@@ -230,6 +246,11 @@ func TestProcessLivenessOnCheckedReads(t *testing.T) {
 				assertProcess(t, after, tc.state, tc.value, tc.record(now))
 			case tc.record(now) == unsupported:
 				assertProcess(t, after, tc.state, tc.value, unsupported)
+				for _, read := range append(reads, after...) {
+					if conf(read.records.DisplayedState) != unsupported {
+						t.Errorf("Cursor display record %s; want unsupported despite stored evidence", conf(read.records.DisplayedState))
+					}
+				}
 			default:
 				assertProcess(t, after, tc.state, store.ProcessUnknown, unknownRecord(store.ReasonNoEvidence))
 			}
@@ -242,20 +263,200 @@ var noted = []apitest.SpawnOption{apitest.WithLivenessUnverifiedSince("2026-01-0
 
 // TestProcessRecordKeepsTheLastValueAcrossAnUnreadableCheck: a later check
 // that cannot read the start identity persists its time and reason over the
-// older value and time, reading not_confirmed, never unknown or a new
-// confirmation.
+// older value and time. Success before and after that failure, including
+// find-missing, keeps the first confirmation and advances only checked_at.
 func TestProcessRecordKeepsTheLastValueAcrossAnUnreadableCheck(t *testing.T) {
 	t.Parallel()
-	e := newKillEnv(t)
-	r := e.seedRow(t, killRowSpec{State: store.StateWorking})
-	first := e.clock.Now()
-	readMain(t, e.st, api.RelayView{Procs: e.pc, Now: func() time.Time { return first }}, r.ID)
-	e.pc.Set(r.AgentPID, procfix.Unreadable())
-	later := first.Add(time.Minute)
-	reads := readMain(t, e.st, api.RelayView{Procs: e.pc, Now: func() time.Time { return later }}, r.ID)
-	want := "not_confirmed|" + confAt(first) + "|process|" + confAt(later) + "|unreadable"
-	assertProcess(t, reads, store.StateWorking, store.ProcessAlive, want)
-	assertProcess(t, readMain(t, e.st, api.RelayView{}, r.ID), store.StateWorking, store.ProcessAlive, want)
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		t.Run(agent, func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			spec := killRowSpec{State: store.StateWorking}
+			if agent == store.AgentCodex {
+				spec = codexSpec(store.StateWorking, agentAlive, false)
+			}
+			r := e.seedRow(t, spec)
+			first := e.clock.Now()
+			for i, phase := range []string{"first", "same owner", "unreadable", "recovered", "find-missing"} {
+				t.Run(phase, func(t *testing.T) {
+					now := first.Add(time.Duration(i) * time.Minute)
+					status, reason, why := store.ConfirmationConfirmed, "", "-"
+					e.pc.Set(r.AgentPID, procfix.Alive(r.AgentStart))
+					if phase == "unreadable" {
+						e.pc.Set(r.AgentPID, procfix.Unreadable())
+						status, reason, why = store.ConfirmationNotConfirmed, store.ReasonUnreadable, store.ReasonUnreadable
+					}
+					want := status + "|" + confAt(first) + "|process|" + confAt(now) + "|" + why
+					if phase == "find-missing" {
+						if _, err := api.FindMissing(context.Background(), e.st, e.rec, e.pc, time.Second, time.Minute, func() time.Time { return now }, nil); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						assertProcess(t, readMain(t, e.st, api.RelayView{Procs: e.pc, Now: func() time.Time { return now }}, r.ID), store.StateWorking, store.ProcessAlive, want)
+					}
+					sp, err := e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantStored := store.Confirmation{Status: status, ConfirmedAtMillis: first.UnixMilli(), Source: store.EvidenceProcess, CheckedAtMillis: now.UnixMilli(), Reason: reason}
+					if value, rec := sp.ProcessConfirmation(); value != store.ProcessAlive || rec != wantStored {
+						t.Errorf("durable process record %s %+v; want alive %+v", value, rec, wantStored)
+					}
+					// Stored-only reads at a later clock neither probe nor redate either time.
+					before := sp.ProcessEvidence
+					assertProcess(t, readMain(t, e.st, api.RelayView{Now: func() time.Time { return now.Add(time.Hour) }}, r.ID), store.StateWorking, store.ProcessAlive, want)
+					if after := storedProcess(t, e.st, r.ID); after != before {
+						t.Errorf("stored-only read changed process evidence: %s -> %s", before, after)
+					}
+				})
+			}
+		})
+	}
+}
+
+// b.x9o R5: an invalid present token lends neither its first time nor its
+// source to a successful or failed real checked read (including find-missing).
+func TestProcessRecordTokenOwnershipOnCheckedReads(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		for _, tc := range []struct {
+			name             string
+			token            any
+			tokenless, valid bool
+		}{
+			{"malformed", "not-a-launch-token", true, false},
+			{"empty", "", true, false},
+			{"null", nil, true, true},
+			{"matching", "0123456789abcdef", false, true},
+			{"foreign", "fedcba9876543210", false, false},
+		} {
+			t.Run(agent+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				e := newKillEnv(t)
+				spec := killRowSpec{State: store.StateWorking, Opts: []apitest.SpawnOption{apitest.WithAgent(agent), apitest.WithLifeNumber(0)}}
+				r := e.seedRow(t, spec)
+				var owner any = "0123456789abcdef"
+				if tc.tokenless {
+					owner = nil
+				}
+				cursorReadSQL(t, e.dbPath, `UPDATE spawns SET launch_token=? WHERE instance_id=?`, owner, r.ID)
+				first := e.clock.Now()
+				for _, phase := range []string{"success", "failure", "find-missing"} {
+					t.Run(phase, func(t *testing.T) {
+						cursorReadSQL(t, e.dbPath, `UPDATE spawns SET process_evidence=json_object('v','alive','life',0,'token',?,
+                            'pid',?,'start',?,'at',?,'src','tmux','checked',?,'reason',NULL) WHERE instance_id=?`, tc.token, r.AgentPID, r.AgentStart, first.UnixMilli(), first.UnixMilli(), r.ID)
+						before := storedProcess(t, e.st, r.ID)
+						value, record := store.ProcessUnknown, unknownRecord(store.ReasonNoEvidence)
+						if tc.valid {
+							value, record = store.ProcessAlive, confirmed(first, store.EvidenceTmux)
+						}
+						assertProcess(t, readMain(t, e.st, api.RelayView{}, r.ID), store.StateWorking, value, record)
+						if storedProcess(t, e.st, r.ID) != before {
+							t.Error("stored-only reads changed the prior record")
+						}
+						now := first.Add(time.Minute)
+						e.pc.Set(r.AgentPID, procfix.Alive(r.AgentStart))
+						value = store.ProcessAlive
+						want := store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: now.UnixMilli(), Source: store.EvidenceProcess, CheckedAtMillis: now.UnixMilli()}
+						if phase == "failure" {
+							e.pc.Set(r.AgentPID, procfix.Unreadable())
+							value = store.ProcessUnknown
+							want = store.Confirmation{Status: store.ConfirmationNotConfirmed, CheckedAtMillis: now.UnixMilli(), Reason: store.ReasonUnreadable}
+						}
+						if tc.valid {
+							value, want.ConfirmedAtMillis, want.Source = store.ProcessAlive, first.UnixMilli(), store.EvidenceTmux
+						}
+						at, checked, source, why := "-", confAt(now), "-", "-"
+						if want.ConfirmedAtMillis > 0 {
+							at, source = confAt(time.UnixMilli(want.ConfirmedAtMillis)), want.Source
+						}
+						if want.Reason != "" {
+							why = want.Reason
+						}
+						record = strings.Join([]string{want.Status, at, source, checked, why}, "|")
+						if phase == "find-missing" {
+							if _, err := api.FindMissing(context.Background(), e.st, e.rec, e.pc, time.Second, time.Minute, func() time.Time { return now }, nil); err != nil {
+								t.Fatal(err)
+							}
+						} else {
+							assertProcess(t, readMain(t, e.st, api.RelayView{Procs: e.pc, Now: func() time.Time { return now }}, r.ID), store.StateWorking, value, record)
+						}
+						sp, err := e.st.GetSpawn(r.ID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if v, got := sp.ProcessConfirmation(); v != value || got != want {
+							t.Errorf("durable checked process record = %s %+v; want %s %+v", v, got, value, want)
+						}
+						assertProcess(t, readMain(t, e.st, api.RelayView{Now: func() time.Time { return now.Add(time.Hour) }}, r.ID), store.StateWorking, value, record)
+						if storedProcess(t, e.st, r.ID) != sp.ProcessEvidence {
+							t.Error("later stored-only reads changed process evidence")
+						}
+					})
+				}
+			})
+		}
+	}
+}
+
+// b.x9o repair 04: each public non-sampling projection keeps the lifecycle
+// value, rejects malformed owners, and neither normalizes nor redates storage.
+func TestStateRecordTokenOwnershipOnStoredReads(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex, store.AgentCursor} {
+		for _, tc := range []struct {
+			name             string
+			token            any
+			tokenless, valid bool
+		}{
+			{"malformed", "not-a-launch-token", true, false},
+			{"empty", "", true, false},
+			{"null", nil, true, true},
+			{"matching", "0123456789abcdef", false, true},
+			{"foreign", "fedcba9876543210", false, false},
+		} {
+			for _, settled := range []bool{false, true} {
+				mode := "raw"
+				if settled {
+					mode = "settled"
+				}
+				t.Run(agent+"/"+tc.name+"/"+mode, func(t *testing.T) {
+					t.Parallel()
+					e := newKillEnv(t)
+					r := e.seedRow(t, killRowSpec{State: store.StateWorking, Opts: []apitest.SpawnOption{apitest.WithAgent(agent), apitest.WithLifeNumber(0)}})
+					var owner any = "0123456789abcdef"
+					if tc.tokenless {
+						owner = nil
+					}
+					first := e.clock.Now()
+					cursorReadSQL(t, e.dbPath, `UPDATE spawns SET launch_token=?,state_evidence=json_object('v','working','life',0,'token',?,
+                        'epoch',permission_epoch,'at',?,'src','agent_event','checked',?,'reason',NULL) WHERE instance_id=?`, owner, tc.token, first.UnixMilli(), first.Add(time.Second).UnixMilli(), r.ID)
+					var settle []store.SettleRead
+					if settled {
+						cursorReadSQL(t, e.dbPath, `UPDATE spawns SET settled_state=state,settled_evidence=state_evidence,state='waiting',state_changed_ms=?,
+                            state_evidence=json_object('v','waiting','life',0,'token',launch_token,'epoch',permission_epoch,'at',?,'src','store','checked',?) WHERE instance_id=?`, first.Add(2*time.Second).UnixMilli(), first.Add(2*time.Second).UnixMilli(), first.Add(2*time.Second).UnixMilli(), r.ID)
+						settle = []store.SettleRead{{NowMs: first.Add(3 * time.Second).UnixMilli(), SettleMs: 5000}}
+					}
+					before, err := e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := unknownRecord(store.ReasonNoEvidence)
+					if tc.valid {
+						want = "confirmed|" + confAt(first) + "|agent_event|" + confAt(first.Add(time.Second)) + "|-"
+					}
+					for _, read := range readMain(t, e.st, api.RelayView{}, r.ID, settle...) {
+						if read.state != store.StateWorking || conf(read.records.State) != want {
+							t.Errorf("%s stored state record = %s %s; want working %s", read.verb, read.state, conf(read.records.State), want)
+						}
+					}
+					if after, err := e.st.GetSpawn(r.ID); err != nil || !reflect.DeepEqual(after, before) {
+						t.Errorf("pure public state reads changed the durable row: %v", err)
+					}
+				})
+			}
+		}
+	}
 }
 
 // markThenLockStore makes the shared checks' terminal moves through the

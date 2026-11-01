@@ -47,6 +47,7 @@ func TestSettleOffCLI(t *testing.T) {
 				t.Fatalf("SeedReadSurfaceStore: %v", err)
 			}
 			v.WriteConfig(t, filepath.Join(directorDir(home), "config.toml"))
+			first := make(map[string]string)
 			for _, c := range cases.Cases {
 				from := time.Now()
 				stdout, stderr, code := runCLIWithHome(t, home, c.CLIArgs()...)
@@ -54,7 +55,7 @@ func TestSettleOffCLI(t *testing.T) {
 					t.Errorf("%s %q: exit %d, stderr %q; want 0 and empty", c.Name, c.CLIArgs(), code, stderr)
 					continue
 				}
-				stdout = apitest.NormalizeReadSurfaceProbes(t, stdout, from, time.Now())
+				stdout = apitest.NormalizeReadSurfaceProbes(t, stdout, from, time.Now(), first, c)
 				if capture && v.Name == "unset" {
 					if err := os.WriteFile(cases.GoldenPath(c.Name), []byte(stdout), 0o644); err != nil {
 						t.Fatalf("capture %s: %v", c.Name, err)
