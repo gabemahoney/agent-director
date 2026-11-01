@@ -229,6 +229,7 @@ func cxSeedIn(t *testing.T, dbPath string, create bool, id, agent, state, cwd, s
 // reached, the decision_reason of the denies, the proc_absent tick's reason and the tokens of the requests it closed.
 type moveWant struct {
 	prior, now string
+	source     string // empty retains the released sweep/find-missing source
 	denyReason string
 	reason     string
 	tokens     []string // in request-id order
@@ -240,6 +241,10 @@ type moveWant struct {
 // state, reason, source ad_find_missing); and nothing else (no ad.spawn.state_transition, no other event).
 func assertMoveRecords(t *testing.T, mark int, id string, w moveWant) {
 	t.Helper()
+	source := w.source
+	if source == "" {
+		source = "ad_find_missing"
+	}
 	var got, want []string
 	var lines []map[string]any
 	for _, l := range readAPITrailLines(t)[mark:] {
@@ -265,12 +270,12 @@ func assertMoveRecords(t *testing.T, mark int, id string, w moveWant) {
 			}
 		case l["request_token"] != nil:
 			assertAPITrailStr(t, l, "reconciliation_reason", "permission_orphan_closeout")
-			assertAPITrailStr(t, l, "source", "ad_find_missing")
+			assertAPITrailStr(t, l, "source", source)
 		default:
 			assertAPITrailStr(t, l, "prior_state", w.prior)
 			assertAPITrailStr(t, l, "new_state", w.now)
 			assertAPITrailStr(t, l, "reconciliation_reason", w.reason)
-			assertAPITrailStr(t, l, "source", "ad_find_missing")
+			assertAPITrailStr(t, l, "source", source)
 		}
 	}
 }

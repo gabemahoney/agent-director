@@ -141,7 +141,7 @@ var paneReaders = []struct {
 	{"list", func(c *api.Client, _ string) error { _, err := c.List(api.ListParams{}); return err }},
 }
 
-// b.x9o: FindMissing must own both pane samples, without a public read
+// b.x9o: Sweep must own both pane samples, without a public read
 // establishing the baseline or committing the threshold on its behalf.
 func TestIdleScreenSweepOnlyBaselineAndThreshold(t *testing.T) {
 	t.Parallel()
@@ -151,11 +151,24 @@ func TestIdleScreenSweepOnlyBaselineAndThreshold(t *testing.T) {
 	start := e.now
 	for i := 0; i < 2; i++ {
 		e.now = start.Add(time.Duration(i) * time.Minute)
-		got, err := c.FindMissing(context.Background())
+		got, err := c.Sweep(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertLists(t, got, nil, nil)
+		apitest.AssertConfirmationsShape(t, jsonOf(t, got))
+		if len(got.Checks) != 1 {
+			t.Fatalf("checks=%+v; want the sampled row", got.Checks)
+		}
+		check := got.Checks[0]
+		wantDisplay := ""
+		if i == 1 {
+			wantDisplay = store.StateIdleScreen
+		}
+		if check.InstanceID != e.id || check.State != store.StateWorking || check.DisplayedState != wantDisplay || check.Completion != "complete" || check.Reason != nil {
+			t.Errorf("sweep %d check=%+v", i, check)
+		}
+		assertPaneRecord(t, check.Confirmations.DisplayedState, e.now, e.now, "")
 		// Store.GetSpawn is a SQLite read only; no Client read has run.
 		row := e.row(t)
 		if row.State != store.StateWorking || row.PaneSHA256 == "" || row.PaneSinceMillis != start.UnixMilli() || row.PaneEpoch != row.PermissionEpoch ||
@@ -1099,5 +1112,91 @@ func TestIdleScreenDeadlineRecord(t *testing.T) {
 	want := store.Confirmation{Status: store.ConfirmationNotConfirmed, ConfirmedAtMillis: start.UnixMilli(), Source: store.EvidencePane, CheckedAtMillis: clock.Now().UnixMilli(), Reason: store.ReasonDeadline}
 	if rec := row.DisplayConfirmation(row.CommittedDisplay(), row.DisplayEvidence); rec != want || row.PaneSHA256 != "" {
 		t.Fatalf("deadline record/reset not durable: %+v %+v", rec, row)
+	}
+}
+
+// b.x9o cb review B2: stopped-socket suppression is incomplete coverage;
+// an actual unreadable capture is covered. Live processes bypass liveness tmux.
+func TestSweepStoppedPaneSocketCoverage(t *testing.T) {
+	t.Parallel()
+	for _, fault := range []tmux.Call{tmux.CallLookup, tmux.CallCapture} {
+		t.Run(string(fault), func(t *testing.T) {
+			e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+			second := e.addRow(t, store.AgentClaude, apitest.TestSocket, "%82", apitest.TestPanePID+82)
+			independent := e.addRow(t, store.AgentClaude, apitest.TestSocket+"-independent", "%83", apitest.TestPanePID+83)
+			shared := []string{e.id, second}
+			slices.Sort(shared)
+			c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+			first, err := c.Sweep(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			prior := map[string]api.Confirmation{}
+			for _, row := range first.Checks {
+				if row.Completion != "complete" || row.Confirmations.DisplayedState.Status != "confirmed" {
+					t.Fatalf("baseline = %+v", row)
+				}
+				prior[row.InstanceID] = row.Confirmations.DisplayedState
+			}
+			e.rec.Reset()
+			e.rec.Script(apitest.TestSocket, tmuxfix.Script{Failure: tmux.FailUnavailable, Times: 1}, fault)
+			e.now = e.now.Add(time.Minute)
+			got, err := c.Sweep(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertLists(t, got, nil, nil)
+			apitest.AssertConfirmationsShape(t, jsonOf(t, got))
+			if len(got.Checks) != 3 {
+				t.Fatalf("checks = %+v", got.Checks)
+			}
+			for _, row := range got.Checks {
+				skipped := fault == tmux.CallLookup && row.InstanceID == shared[1]
+				if skipped {
+					if row.Completion != "incomplete" || row.Reason == nil || *row.Reason != "unreadable" {
+						t.Errorf("skipped pane = %+v; want incomplete/unreadable", row)
+					}
+				} else if row.Completion != "complete" || row.Reason != nil {
+					t.Errorf("attempted/independent pane = %+v; want complete", row)
+				}
+				if row.ProcessLiveness != "alive" || row.Confirmations.ProcessLiveness.Status != "confirmed" {
+					t.Errorf("liveness must not use failed socket: %+v", row)
+				}
+				if row.InstanceID != independent && (fault == tmux.CallLookup || row.InstanceID == shared[0]) {
+					old, current := prior[row.InstanceID], row.Confirmations.DisplayedState
+					if current.ConfirmedAt == nil || old.ConfirmedAt == nil || *current.ConfirmedAt != *old.ConfirmedAt || current.Source == nil || *current.Source != "pane" || current.Status != "not_confirmed" {
+						t.Errorf("unsampled pane gained/lost evidence: old=%+v current=%+v", old, current)
+					}
+				}
+				if row.InstanceID == independent && (row.DisplayedState != api.StateIdleScreen || conf(row.Confirmations.DisplayedState) != confirmed(e.now, "pane")) {
+					t.Errorf("independent socket did not progress: %+v", row)
+				}
+			}
+			lookups, captures, otherCaptures := 0, 0, 0
+			for _, call := range e.rec.SocketCalls() {
+				switch call.Call {
+				case tmux.CallLookup:
+					if call.Socket == apitest.TestSocket {
+						lookups++
+					}
+				case tmux.CallCapture:
+					if call.Socket == apitest.TestSocket {
+						captures++
+					} else {
+						otherCaptures++
+					}
+				case tmux.CallListPanes:
+				default:
+					t.Errorf("sweep dispatched action: %+v", call)
+				}
+			}
+			wantCaptures := 2
+			if fault == tmux.CallLookup {
+				wantCaptures = 0
+			}
+			if lookups != 1 || captures != wantCaptures || otherCaptures != 1 {
+				t.Errorf("lookup/shared captures/independent captures=%d/%d/%d; want 1/%d/1", lookups, captures, otherCaptures, wantCaptures)
+			}
+		})
 	}
 }

@@ -908,20 +908,25 @@ Then either:
 ## `install.sh` warns that nothing schedules the sweeps
 
 `install.sh` ended with `install.sh: WARNING: nothing schedules agent-director's
-find-missing and expire sweeps on this machine.` It comes after `install.sh:
+sweep and expire jobs on this machine.` (`find-missing` replaces `sweep` when
+the target binary's help does not advertise it.) It comes after `install.sh:
 done`; when the MCP registration failed (exit 6), it comes just before the last
 line, `install.sh: installed, but the MCP registration failed`. The exit status
-is unchanged and nothing is broken, but until `find-missing` runs, a row whose
-agent was killed, crashed or lost in a reboot stays live unless a
-[state read](caller-contract.md#bounded-recovery-on-state-reads) checks it,
-and until `expire`
-runs, finished rows are never deleted.
+is unchanged. Absent or failed checks leave observations old; reads also
+perform the shared checks on supporting versions. `expire` separately removes
+eligible finished rows. See [Maintenance](maintenance.md#scheduling-the-sweeps)
+for cadence and evidence limits.
 
 Without `--schedule`, the warning means this install's own entries for both
 sweeps are not there: no tagged cron lines for both with a cron daemon running,
 and not all four units. With `--schedule`, it adds a line, `--schedule was asked
 for and installed nothing:` (or `could not schedule the sweeps:` when it put the
 cron lines in anyway), that gives the reason.
+
+Copy the rendered cron lines from the warning. For manual units, fill the
+placeholders and use the recovery verb it names in `ExecStart`, keeping the
+`agent-director-find-missing` filenames. Raw templates may use `find-missing`
+even when rendered advice uses `sweep`.
 
 The warning, with or without `--schedule`, also prints the exact command to run
 again: `cd <the directory the install ran in> && bash <script> <the original

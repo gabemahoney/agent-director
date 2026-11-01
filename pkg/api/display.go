@@ -363,33 +363,34 @@ func displayedState(d store.DisplayDetail) string {
 // sampleActivePane reuses paneRun's exact ownership selection while sharing
 // the liveness pass's lookup, listing and capture budget for this invocation.
 // A sample it cannot take keeps its reason (failedPaneSample) rather than
-// reading as an anonymous empty capture.
+// reading as an anonymous empty capture. skipped distinguishes work suppressed
+// by the shared sweep from an attempted lookup, listing or capture failure.
 func sampleActivePane(live *findMissingRun, capture interface {
 	CapturePaneID(string, string, int, bool) (string, error)
-}, row Spawn) store.PaneSample {
+}, row Spawn) (sample store.PaneSample, skipped bool) {
 	if unusableNameError(row.TmuxSessionName) != nil {
-		return failedPaneSample(live)
+		return failedPaneSample(live), false
 	}
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
-		return failedPaneSample(live)
+		return failedPaneSample(live), false
 	}
 	r := &paneRun{t: live.t, pc: live.pc, row: row, storeID: live.s.StoreID(), socket: socket,
 		gone: tmux.ErrTmuxCaptureFailed, nothing: nothingRead, sweep: live.sw}
 	launch := r.launchFor(row.Identity)
 	res := live.sw.Lookup(launch, "")
 	if res.Verdict != tmux.Ours {
-		return failedPaneSample(live)
+		return failedPaneSample(live), res.Skipped
 	}
 	paneID, _, err := r.ours(res, launch)
 	if err != nil {
-		return failedPaneSample(live)
+		return failedPaneSample(live), r.listing.Skipped
 	}
 	pane, ok := live.sw.CapturePane(launch, func() (string, error) { return capture.CapturePaneID(socket, paneID, DefaultReadPaneLines, false) })
 	if !ok {
-		return failedPaneSample(live)
+		return failedPaneSample(live), live.sw.Spent()
 	}
-	return store.PaneSample{SHA256: paneSHA256(tmux.StripANSI(pane))}
+	return store.PaneSample{SHA256: paneSHA256(tmux.StripANSI(pane))}, false
 }
 
 // failedPaneSample is a sample this invocation could not take: deadline once

@@ -17,7 +17,7 @@ import (
 const (
 	// schedNoDaemonStderr is the line a --schedule that put the cron lines in
 	// with no cron daemon running prints on stderr.
-	schedNoDaemonStderr = "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # " + schedMark + ", but NO CRON DAEMON (a process named cron or crond) is running on this machine, so they do not run; start the cron service"
+	schedNoDaemonStderr = "  schedule: cron: sweep every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # " + schedMark + ", but NO CRON DAEMON (a process named cron or crond) is running on this machine, so they do not run; start the cron service"
 	// schedNoDaemonWhy is the start of the reason the warning gives for it.
 	schedNoDaemonWhy = "no cron daemon (a process named cron or crond) is running on this machine, so the crontab lines just added do not run until one is started; systemd: "
 	// schedNoDaemonCron is why cron was not used when it could not be (the
@@ -76,7 +76,7 @@ func schedUnitsWantIn(t *testing.T, h *moveHome, dir, env string) {
 			t.Errorf("%s lacks the marker:\n%s", f, body)
 		}
 	}
-	for sweep, f := range map[string]string{"find-missing": "agent-director-find-missing.service", "expire": "agent-director-expire.service"} {
+	for sweep, f := range map[string]string{"sweep": "agent-director-find-missing.service", "expire": "agent-director-expire.service"} {
 		if body := units[f]; !strings.Contains(body, "Type=oneshot\n"+env+"ExecStart="+canon+" "+sweep+"\n") {
 			t.Errorf("%s wants Type=oneshot, then\n%sExecStart=%s %s; got:\n%s", f, env, canon, sweep, body)
 		}
@@ -117,7 +117,8 @@ func schedEdit(t *testing.T, script, name string, edit func(string) string) {
 
 // schedRenderWant is a schedule file as it is installed: the notes (lines
 // starting with two #) dropped, @@AGENT_DIRECTOR@@ and, in a cron file, @@ENV_PREFIX@@ or,
-// in a unit, a line of just @@ENV_LINES@@ replaced.
+// in a unit, a line of just @@ENV_LINES@@ replaced. The current target supports
+// sweep, so either recovery template spelling is promoted before substitution.
 func schedRenderWant(text, envOrPrefix, bin string, cron bool) string {
 	out := ""
 	for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
@@ -130,6 +131,7 @@ func schedRenderWant(text, envOrPrefix, bin string, cron bool) string {
 			out += envOrPrefix
 			continue
 		}
+		l = strings.ReplaceAll(l, "@@AGENT_DIRECTOR@@ find-missing", "@@AGENT_DIRECTOR@@ sweep")
 		out += strings.ReplaceAll(l, "@@AGENT_DIRECTOR@@", bin) + "\n"
 	}
 	return out
@@ -235,7 +237,7 @@ func TestScheduleNoDaemon(t *testing.T) {
 			"  This user's crontab holds this install's lines for both sweeps, but no cron daemon (a process named",
 			"  cron or crond) is running on this machine, so they never run: start the cron service, or use systemd",
 			"  user timers (the files below).",
-			"  Schedule both now, as the agents' user (the user the agents run as, in their tmux environment). Run as")
+			"  To schedule them, run as the agents' user (the user the agents run as, in their tmux environment). Run as")
 		if strings.Contains(res.Stderr, "--schedule was asked for") {
 			t.Errorf("a plain install says --schedule was asked for:\n%s", res.Stderr)
 		}

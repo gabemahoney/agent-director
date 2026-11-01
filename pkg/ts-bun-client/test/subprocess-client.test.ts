@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import type { SweepCheck, SweepResult, Confirmation } from "../src/types.js";
 import { ErrCallTimeout, ErrConsumerSignal, ErrStoreBusy } from "../src/errors.js";
 import { PKG_VERSION, openClient, rejection, withProcessEnv } from "./internal/helper.js";
 
@@ -107,3 +108,30 @@ esac
   expect(performance.now() - started).toBeGreaterThanOrEqual(30_000);
   expect(performance.now() - started).toBeLessThan(45_000);
 }, 50_000);
+
+// b.x9o cb: both queued methods preserve partial results and the three records;
+// timeout_ms remains an ignored legacy parameter, never an argv/timeout override.
+test("sweep and findMissing preserve incomplete checks and queue order", async () => {
+  const unknown: Confirmation = {status: "unknown", confirmed_at: null, source: null, checked_at: null, reason: "no_evidence"};
+  const check = (completion: "complete" | "incomplete", reason: SweepCheck["reason"]): SweepCheck => ({
+    instance_id: completion, state: "working", family_state: "working", idle_screen_availability: "available",
+    process_liveness: "unknown", completion, reason,
+    confirmations: {state: unknown, process_liveness: unknown, displayed_state: unknown},
+  });
+  const result: SweepResult = {checks: [check("complete", null), check("incomplete", "deadline")], count: 0, ids: [], unverified: 0, unverified_ids: []};
+  const cli = path.join(tmp, `${crypto.randomUUID()}-sweep.sh`);
+  const argvFile = path.join(tmp, `${crypto.randomUUID()}-sweep-argv`);
+  fs.writeFileSync(cli, `#!/bin/sh
+case " $* " in
+  *" version "*) printf '{"version":"0.0.0-dev","commit":"sweep-fixture"}\\n'; exit 0;;
+esac
+printf '%s\\n' "$*" >> '${argvFile}'
+printf '%s\\n' '${JSON.stringify(result)}'
+`, {mode: 0o700});
+  const storePath = path.join(tmp, `${crypto.randomUUID()}.db`);
+  using client = await openClient(storePath, {_cliPath: cli, callTimeoutMs: 5000, tmuxCommand: "/sweep-fixture/tmux"});
+  const results = await Promise.all([client.sweep({timeout_ms: 1}), client.findMissing({timeout_ms: -1}), client.sweep()]);
+  expect(results).toEqual([result, result, result]);
+  expect(fs.readFileSync(argvFile, "utf8").trim().split("\n")).toEqual(
+    ["sweep", "find-missing", "sweep"].map((verb) => `--store-path ${storePath} --tmux-command /sweep-fixture/tmux ${verb}`));
+});

@@ -23,9 +23,8 @@ import (
 // compare or write (SR-11.4, SR-14).
 const (
 	findMissingTickEvent = "ad.find_missing.tick"
-	// findMissingTickSource is the sweep's one source value
-	// (nameHeldSourceFindMissing), shared by its ticks, its
-	// ad.provenance.disagree records and its ad.launch.name_held records.
+	// findMissingTickSource preserves the released sweep/find-missing source.
+	// Read and pause emitters replace only this tick source with ad_recovery.
 	findMissingTickSource = nameHeldSourceFindMissing
 	// noteProvenanceConflict is the liveness note whose every entry, from no
 	// note or from a different one, ticks (SR-11.4). The unreported note never
@@ -73,8 +72,8 @@ type findMissingWrite struct {
 //     transaction commits;
 //  2. when it applied, exactly one ad.find_missing.tick: instance_id,
 //     prior_state (the state the mark replaced), new_state missing,
-//     reconciliation_reason reason and source ad_find_missing, plus every
-//     field of extra (Task 2 passes lookup_outcome, and tmux_session_name for
+//     reconciliation_reason reason and source ad_find_missing (ad_recovery
+//     for reads and pause), plus every field of extra (Task 2 passes lookup_outcome, and tmux_session_name for
 //     tmux_name_held); extra never replaces one of those five. Fail-open: a
 //     trail-write failure is discarded.
 //
@@ -137,8 +136,8 @@ func markEvidenceSource(reason string) string {
 // emitMarkTick writes, through emit, the one ad.find_missing.tick of a mark
 // or a move that applied: instance_id, prior_state (the state the write
 // replaced), new_state (missing or ended), reconciliation_reason reason and
-// source ad_find_missing, plus every field of extra; extra never replaces one
-// of those five. Fail-open: a trail-write failure is discarded. The mark and
+// source ad_find_missing (ad_recovery for reads and pause), plus every field
+// of extra; extra never replaces one of those five. Fail-open: a trail-write failure is discarded. The mark and
 // the Codex end (markEndedSameLife) share it, so the shared recovery checks
 // and pause emit the same record.
 func emitMarkTick(emit trailEmit, id, prior, newState, reason string, extra map[string]any) {
@@ -188,8 +187,8 @@ type EndedMover interface {
 //     request's permission_orphan_closeout tick;
 //  2. when it applied, exactly one ad.find_missing.tick: instance_id,
 //     prior_state (the state the move replaced), new_state ended,
-//     reconciliation_reason reason (proc_absent), source ad_find_missing, plus
-//     every field of extra. It emits no subagent record (the close writes
+//     reconciliation_reason reason (proc_absent), source ad_find_missing
+//     (ad_recovery for reads and pause), plus every field of extra. It emits no subagent record (the close writes
 //     none) and no ad.spawn.state_transition.
 //
 // A move that finds the row changed or absent, or fails in the store (its
@@ -319,7 +318,8 @@ func writeLivenessNote(emit trailEmit, s FindMissingStore, id string, examined R
 // emitNoteTick writes, through emit, the ad.find_missing.tick of a note write
 // that applied, from readNote to note, when noteTickReason says it ticks:
 // instance_id, prior_state and new_state null, reconciliation_reason and
-// source ad_find_missing. Fail-open: a trail-write failure is discarded.
+// source ad_find_missing (ad_recovery for reads and pause). Fail-open: a
+// trail-write failure is discarded.
 func emitNoteTick(emit trailEmit, id, readNote, note string) {
 	reason, ok := noteTickReason(readNote, note)
 	if !ok {
@@ -410,5 +410,18 @@ func recoveryTrail(ctx context.Context) trailEmit {
 		ctx, cancel := context.WithTimeout(ctx, recoveryTrailWait)
 		defer cancel()
 		return trail.Emit(ctx, event, fields)
+	}
+}
+
+// recoveryTickTrail changes only the source attribution of legacy recovery
+// ticks. It preserves the wrapped emitter's context, bounds and other events.
+// Recovery paths must reuse this wrapper for API ticks and pair it with
+// Store.WithRecoveryTickSource for orphan-closeout ticks.
+func recoveryTickTrail(emit trailEmit, source string) trailEmit {
+	return func(event string, fields map[string]any) error {
+		if event == findMissingTickEvent {
+			fields["source"] = source
+		}
+		return emit(event, fields)
 	}
 }

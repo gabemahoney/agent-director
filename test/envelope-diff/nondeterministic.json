@@ -8,6 +8,7 @@
     ".ids"
   ],
   "find-missing": [],
+  "sweep": [],
   "get": [
     ".confirmations.process_liveness.checked_at",
     ".confirmations.process_liveness.confirmed_at",

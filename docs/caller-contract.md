@@ -99,7 +99,8 @@ To end a live row (`pending` included) and relaunch its id:
 
 ## Bounded recovery on state reads
 
-`status`, `get`, `list` and `find-missing` share eligible recovery checks.
+`status`, `get`, `list` and `sweep` share eligible recovery checks.
+`find-missing` remains a supported alias of `sweep` on CLI and MCP.
 `status` and `get` check only the named row. `list` selects IDs using the
 stored state, displayed state, other filters and limit before checking them.
 It returns those same IDs after recovery, even if a returned value no longer
@@ -122,11 +123,66 @@ deliver input or permission answers, replay a submission, signal or restart
 an agent. Commands keep their own preconditions. Nothing runs between calls
 unless an operator [schedules the sweeps](maintenance.md#scheduling-the-sweeps).
 
+## Sweep results
+
+Run `agent-director sweep` for one bounded all-agent pass. It selects all stored
+rows once, sorted by `instance_id`. Each selected identity remains in `checks`,
+including finished, changed, removed and unattempted rows; rows created later
+are not added. A per-agent failure does not suppress independent agents.
+
+The result has `checks`, `count`, `ids`, `unverified` and `unverified_ids`.
+All three arrays are non-null, including on an empty store. Each `checks` entry
+has these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `instance_id` | Selected row's identity. |
+| `state` | Lifecycle state, using the configured settle time. |
+| `displayed_state` | `idle_screen` when shown; otherwise omitted, never `needs_intelligence`. |
+| `family_state` | `working` or `waiting`, from the consistent stored projection; freshness is unconfirmed. |
+| `idle_screen_availability` | `available` for Claude/Codex, `unavailable` for Cursor. |
+| `process_liveness` | `alive`, `exited` or `unknown`. |
+| `confirmations` | Exactly the three five-key records described under [Confirmations](#confirmations). |
+| `completion` | `complete` or `incomplete`, describing coverage, not confirmed facts. |
+| `reason` | `null` for `complete`; otherwise `deadline`, `busy`, `unreadable`, `stale_observation`, `no_evidence`, `commit_unconfirmed`, `unsupported` or `unattempted`. |
+
+`complete` means every eligible check was attempted or found inapplicable.
+Failed observations or writes can still leave a complete entry with unknown or
+`not_confirmed` fields. Skipped pane work and missing optional capabilities are
+incomplete; an attempted unreadable capture can be complete. A protected pending
+row can be complete while its evidence remains pending. Cancellation or budget
+exhaustion leaves interrupted and remaining work incomplete with reason
+`deadline`. Otherwise, an incomplete entry uses its last specific failed
+check reason, or `unsupported` for an unavailable capability, or `unattempted`
+for other work left undone.
+
+Unattempted work keeps applicable stored evidence without new confirmation or
+attempt timestamps. Actual failed attempts retain their metadata, matched to
+the returned value and owner. Observation alone does not confirm a guarded
+write committed. Cursor terminal projection remains conservative: a successful
+deferred write need not yield freshly confirmed state in this response, and a
+refused write does not retain speculative `missing`.
+
+`count` and sorted `ids` count only applied missing marks. `unverified` and
+sorted `unverified_ids` count eligible live rows left with a liveness note,
+including an already-current note. Neither list includes Codex moves to `ended`,
+failed or refused writes, rows changed before their guarded write, or live
+pending rows noted `unreported`. These counters measure neither coverage nor
+confirmation.
+
+A failed initial selection or closed client is an error, not a successful empty
+sweep. After selection, interrupted work remains in a returned result; a
+terminated transport need not return one. A timeout proves neither rollback
+nor completion. Results grant no input, answer, restart, reuse or deletion
+authority. Follow the existing command guards and live-row sequence above;
+[Maintenance](maintenance.md#scheduling-the-sweeps) owns cadence and the separate,
+operator-owned `expire` schedule.
+
 ## Confirmations
 
-`status`, `get` and every `list` row carry `process_liveness` and
-`confirmations` on the Go, CLI, MCP and TypeScript surfaces. They report
-evidence and authorize nothing.
+`status`, `get`, every `list` row and every `sweep` check carry
+`process_liveness` and `confirmations` on the Go, CLI, MCP and TypeScript
+surfaces. They report evidence and authorize nothing.
 
 `process_liveness` is `alive`, `exited` or `unknown`: the row's recorded agent
 process at its recorded start time, never a gateway, tmux session or child
@@ -155,8 +211,9 @@ recorded as `working` stays `working`. Cursor always reports `unknown`, reason
 - `unknown`: no applicable evidence; `confirmed_at` and `source` are `null`.
   `checked_at` is also null when no attempt is known.
 - `pending`: a still-owned operation (`operation_pending`) or a launch's
-  pending grace (`pending_grace`) stopped the check. Nothing retries it on a
-  schedule. The lifecycle state `pending` is different: its admission by
+  pending grace (`pending_grace`) stopped the check. A later eligible event,
+  command or check must supply evidence; elapsed time alone does not retry it.
+  The lifecycle state `pending` is different: its admission by
   `spawn`, reuse or `resume` is itself confirmed (`caller_command`).
 
 For all three records, later evidence of the same value and owner keeps
@@ -178,7 +235,7 @@ What confirms each field:
   time add nothing. With a
   [settle time](configuration.md#settle-time-state), the record is the shown
   settled value's.
-- **Process.** State reads and `find-missing` check the recorded process of
+- **Process.** State reads and `sweep` check the recorded process of
   the live rows they select. Repeated successful probes of the same value
   and process identity keep its first confirmation time. A move to `ended`
   or `missing` proven by that process being gone
@@ -431,7 +488,7 @@ only while it shows `idle_screen`.
   nothing changes on a timer. With settling off, a row shows `idle_screen`
   from the first selected check after the timeout that commits the
   observation. Your usual `status` polling is enough; you need not read
-  panes yourself. `find-missing` also samples eligible rows.
+  panes yourself. `sweep` also samples eligible rows.
   With a positive [settle time](configuration.md#settle-time-state), entry or
   exit starts its interval at the check that commits its candidate, not at
   the raw-state change. A later check must commit the change once that
@@ -464,7 +521,7 @@ only while it shows `idle_screen`.
 
 ### Unchanged panes
 
-`status`, `get`, `list` and `find-missing` sample eligible selected `working`
+`status`, `get`, `list` and `sweep` sample eligible selected `working`
 Claude or Codex rows: the agent's own pane of the current launch, fingerprinted
 as the `pane_sha256` a default `read-pane` returns. Only the fingerprint is
 kept; nothing reads what the pane says.
@@ -494,7 +551,8 @@ kept; nothing reads what the pane says.
   and a capture), each bounded by
   [`query_timeout_ms` or `action_timeout_ms`](configuration.md#timing-settings-tmux).
   Within one call, a tmux server that does not answer a lookup or pane
-  listing is not asked again: its later rows count as failed samples.
+  listing is not asked again: its later rows count as failed samples for
+  baseline handling, but their skipped work makes sweep coverage incomplete.
 
 ## Ordinary text submission
 

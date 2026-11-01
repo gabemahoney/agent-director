@@ -21,22 +21,22 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstat"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // findMissingResult is the find-missing CLI stdout envelope.
-type findMissingResult struct {
-	Count         int      `json:"count"`
-	IDs           []string `json:"ids"`
-	Unverified    int      `json:"unverified"`
-	UnverifiedIDs []string `json:"unverified_ids"`
-}
+type findMissingResult = api.SweepResult
 
 // runFindMissing runs find-missing under home with the fake tmux first on
 // PATH and extraEnv, requires exit 0 and returns the parsed envelope.
-func runFindMissing(t *testing.T, home string, extraEnv map[string]string) findMissingResult {
+func runFindMissing(t *testing.T, home string, extraEnv map[string]string, verbs ...string) findMissingResult {
 	t.Helper()
-	stdout, stderr, code := runSpawnCLIEnv(t, home, buildFakeTmux(t), extraEnv, "find-missing")
+	verb := "find-missing"
+	if len(verbs) > 0 {
+		verb = verbs[0]
+	}
+	stdout, stderr, code := runSpawnCLIEnv(t, home, buildFakeTmux(t), extraEnv, verb)
 	if code != 0 {
 		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
 	}
@@ -44,7 +44,8 @@ func runFindMissing(t *testing.T, home string, extraEnv map[string]string) findM
 	if err := json.Unmarshal([]byte(stdout), &r); err != nil {
 		t.Fatalf("find-missing stdout is not JSON-parseable: %v\nstdout=%q", err, stdout)
 	}
-	if r.IDs == nil || r.UnverifiedIDs == nil || !strings.Contains(stdout, `"count":`) || !strings.Contains(stdout, `"unverified":`) {
+	apitest.AssertConfirmationsShape(t, stdout)
+	if r.Checks == nil || r.IDs == nil || r.UnverifiedIDs == nil || !strings.Contains(stdout, `"count":`) || !strings.Contains(stdout, `"unverified":`) {
 		t.Errorf("stdout = %s; want count and unverified keys even at 0, and ids and unverified_ids arrays, never null", stdout)
 	}
 	return r
@@ -63,6 +64,12 @@ func seedFindMissingRow(t *testing.T, home, id, state string, opts ...apitest.Sp
 // is marked missing with one proc_absent tick, even though the live twin
 // carries the reaped row's id in its environment; the live twin's stays working.
 func TestFindMissingCLIArgvTwinDiscrimination(t *testing.T) {
+	testRecoveryCLIArgvTwinDiscrimination(t, "find-missing")
+}
+func TestSweepCLIArgvTwinDiscrimination(t *testing.T) {
+	testRecoveryCLIArgvTwinDiscrimination(t, "sweep")
+}
+func testRecoveryCLIArgvTwinDiscrimination(t *testing.T, verb string) {
 	home := t.TempDir()
 	const killedID, liveID = "id-twin-killed", "id-twin-live"
 	var killed *exec.Cmd
@@ -89,9 +96,22 @@ func TestFindMissingCLIArgvTwinDiscrimination(t *testing.T) {
 	}
 	_, _ = killed.Process.Wait() // reaped: the pid is gone, not a zombie
 
-	res := runFindMissing(t, home, nil)
+	res := runFindMissing(t, home, nil, verb)
 	if !slices.Equal(res.IDs, []string{killedID}) || res.Count != 1 || res.Unverified != 0 {
 		t.Fatalf("find-missing = %+v; want exactly [%s] marked, none unverified", res, killedID)
+	}
+	if len(res.Checks) != 2 {
+		t.Fatalf("checks = %+v; want both selected twins", res.Checks)
+	}
+	for i, id := range []string{killedID, liveID} {
+		check := res.Checks[i]
+		state, process := store.StateMissing, "exited"
+		if id == liveID {
+			state, process = store.StateWorking, "alive"
+		}
+		if check.InstanceID != id || check.State != state || check.ProcessLiveness != process || check.Completion != "complete" || check.Reason != nil || check.Confirmations.ProcessLiveness.Status != "confirmed" || check.Confirmations.ProcessLiveness.Source == nil || *check.Confirmations.ProcessLiveness.Source != "process" {
+			t.Errorf("twin check = %+v; want %s/%s/%s with process evidence", check, id, state, process)
+		}
 	}
 	for id, want := range map[string]string{killedID: store.StateMissing, liveID: store.StateWorking} {
 		if got := rowColumns(t, home, id).State; got != want {
@@ -110,7 +130,9 @@ func TestFindMissingCLIArgvTwinDiscrimination(t *testing.T) {
 // their socket: Gone marks each tmux_absent; tmux unavailable (the socket's
 // permission-denied reply) marks none and notes each
 // process_not_seen_tmux_unchecked.
-func TestFindMissingCLITmuxAnswers(t *testing.T) {
+func TestFindMissingCLITmuxAnswers(t *testing.T) { testRecoveryCLITmuxAnswers(t, "find-missing") }
+func TestSweepCLITmuxAnswers(t *testing.T)       { testRecoveryCLITmuxAnswers(t, "sweep") }
+func testRecoveryCLITmuxAnswers(t *testing.T, verb string) {
 	const workingID, pendingID = "id-fm-tmux-a-working", "id-fm-tmux-b-pending"
 	rowIDs := []string{workingID, pendingID}
 	for _, tc := range []struct {
@@ -134,7 +156,7 @@ func TestFindMissingCLITmuxAnswers(t *testing.T) {
 			seedFindMissingRow(t, home, pendingID, store.StatePending,
 				apitest.WithNoPane(), apitest.WithLaunchStartedAt(pastGrace.UnixMilli()))
 
-			res := runFindMissing(t, home, map[string]string{faketmuxfix.EnvTables: tables.Dir})
+			res := runFindMissing(t, home, map[string]string{faketmuxfix.EnvTables: tables.Dir}, verb)
 			assertInvocationKinds(t, home, "list-sessions") // one lookup, one socket
 
 			marked, unverified := rowIDs, []string{}

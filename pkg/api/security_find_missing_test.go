@@ -21,6 +21,10 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
+func securitySweepCall(_ *testing.T, c *api.Client, _ *securityScene) (any, error) {
+	return c.Sweep(context.Background())
+}
+
 // securityFindMissingCall runs one find-missing sweep through the Client.
 func securityFindMissingCall(_ *testing.T, c *api.Client, _ *securityScene) (any, error) {
 	return c.FindMissing(context.Background())

@@ -359,7 +359,11 @@ func (r *pauseRun) endIfGone(row Spawn) (res CondResult, attempted bool, err err
 	if tmux.JudgeProcess(r.procs, identity) != tmux.ProcGone {
 		return 0, false, nil
 	}
-	w := markEndedSameLife(legacyTrail, r.s, row.InstanceID, row.Snapshot, provenExit(identity, clockNow(r.now)), reasonProcAbsent, nil, nil)
+	s := r.s
+	if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithRecoveryTickSource("ad_recovery")
+	}
+	w := markEndedSameLife(recoveryTickTrail(legacyTrail, "ad_recovery"), s, row.InstanceID, row.Snapshot, provenExit(identity, clockNow(r.now)), reasonProcAbsent, nil, nil)
 	return w.Res, true, w.Err
 }
 

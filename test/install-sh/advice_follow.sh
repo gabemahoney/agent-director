@@ -4307,8 +4307,8 @@ test_G8_OldLayoutRunInstallShThenVerbSucceeds() {
 
 # J33: an install that sets no schedule up ends with a warning on stderr: "These
 # crontab lines (crontab -e, as that user) run this install's binary:" and the
-# two lines, then "Copy them by hand (...), or let the install script install
-# them, as the user the agents run as:" and the command that does it: `cd <the
+# two lines, then "Copy the rendered cron lines above" and the supported unit
+# recovery verb, followed by the command that installs them: `cd <the
 # directory the install ran in> && bash <this script> <its arguments...>
 # --schedule`, every word shell-quoted (here a script path and a directory with a
 # space, and relative --binary and --admin-binary paths that only resolve in that
@@ -4346,15 +4346,15 @@ EOF
     local -a argv=(--binary ./ad-main --admin-binary ./ad-admin --no-hooks --no-symlink)
     run_in "$h" "$d" bash "$sh" "${argv[@]}"
     expect_rc 0 "a plain install with nothing scheduled" || return
-    grep -qxF "install.sh: WARNING: nothing schedules agent-director's find-missing and expire sweeps on this machine." "$ERR" \
+    grep -qxF "install.sh: WARNING: nothing schedules agent-director's sweep and expire jobs on this machine." "$ERR" \
         || bad "no schedule warning: $(flat "$ERR")"
     # The lines, as printed: the tmux directory in PATH, the installed binary,
     # the marker; no HOME (it is the passwd home here).
     l1="$(line_after "These crontab lines (crontab -e, as that user) run this install's binary:")"
     l2="$(grep -m1 -F -A2 -- "These crontab lines (crontab -e, as that user) run this install's binary:" "$ERR" | tail -n1)"
     l2="${l2#"${l2%%[![:space:]]*}"}"
-    [[ "$l1" == "*/2 * * * * PATH="*":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin $canon find-missing >/dev/null # agent-director-schedule" ]] \
-        || bad "the find-missing line is \"$l1\""
+    [[ "$l1" == "*/2 * * * * PATH="*":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin $canon sweep >/dev/null # agent-director-schedule" ]] \
+        || bad "the sweep line is \"$l1\""
     [[ "$l2" == "17 3 * * * PATH="*":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin $canon expire >/dev/null # agent-director-schedule" ]] \
         || bad "the expire line is \"$l2\""
     [[ "$l1" != *" HOME="* ]] || bad "the lines carry HOME, which is the passwd entry's: $l1"
@@ -4378,11 +4378,11 @@ EOF
     expect_rc 0 "the advised command: $cmd" || return
     expect_installed "$h" "$BIN" "$ADMIN"
     ! grep -q 'WARNING' "$ERR" || bad "the advised install still warns: $(flat "$ERR")"
-    grep -qF "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # agent-director-schedule." "$OUT" \
+    grep -qF "  schedule: cron: sweep every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # agent-director-schedule." "$OUT" \
         || bad "stdout does not say the schedule was added: $(flat "$OUT")"
     [[ -f "$crontab_file" ]] || { bad "the advised command wrote no crontab"; return; }
     text="$(<"$crontab_file")"
-    grep -qxF "$l1" "$crontab_file" || bad "the crontab lacks the find-missing line the warning printed: $text"
+    grep -qxF "$l1" "$crontab_file" || bad "the crontab lacks the sweep line the warning printed: $text"
     grep -qxF "$l2" "$crontab_file" || bad "the crontab lacks the expire line the warning printed: $text"
     n="$(grep -c 'agent-director-schedule' "$crontab_file")"
     [[ "$n" == 3 ]] || bad "$n lines carry the marker (the two jobs and the header comment); want 3: $text"

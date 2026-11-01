@@ -65,17 +65,18 @@ func RepairCheckPermission(s CheckPermissionRepairStore, v RelayView, lg FindMis
 			logFindMissing(lg, "PermissionRequestsForSpawn", row.InstanceID, err)
 			continue
 		}
-		_, _, err = repairCheckPermissionRow(recoveryTrail(context.Background()), s, row, judged, j)
-		if err != nil {
-			logFindMissing(lg, "RepairCheckPermission", row.InstanceID, err)
+		_, _, outcome := repairCheckPermissionRow(recoveryTrail(context.Background()), s, row, judged, j)
+		if outcome.Err != nil {
+			logFindMissing(lg, "RepairCheckPermission", row.InstanceID, outcome.Err)
 		}
 	}
 }
 
-// repairCheckPermissionRow writes its repair tick through emit.
-func repairCheckPermissionRow(emit trailEmit, s any, row Spawn, judged *judgedRequestSet, j relayJudge) (string, CondResult, error) {
+// repairCheckPermissionRow writes its repair tick through emit and distinguishes
+// inapplicable or unavailable work from an attempted, unchanged repair.
+func repairCheckPermissionRow(emit trailEmit, s any, row Spawn, judged *judgedRequestSet, j relayJudge) (string, CondResult, activeCheckOutcome) {
 	if row.State != store.StateCheckPermission || judged == nil || mayHaveJudgedHook(j, judged) {
-		return "", CondChanged, nil
+		return "", CondChanged, activeCheckOutcome{Adapter: "permission_repair", Result: "inapplicable"}
 	}
 	var state string
 	var result CondResult
@@ -87,12 +88,12 @@ func repairCheckPermissionRow(emit trailEmit, s any, row Spawn, judged *judgedRe
 	} else if legacy, ok := s.(CheckPermissionRepairStore); ok {
 		state, result, err = legacy.RepairCheckPermissionIfSameLife(row.InstanceID, row.Snapshot)
 	} else {
-		return "", CondChanged, nil
+		return "", CondChanged, activeCheckOutcome{Adapter: "permission_repair", Result: "unavailable"}
 	}
 	if err == nil && result == CondApplied {
 		emitMarkTick(emit, row.InstanceID, row.State, state, reasonStaleCheckPermission, nil)
 	}
-	return state, result, err
+	return state, result, activeOutcome("permission_repair", result == CondApplied, err)
 }
 
 func mayHaveJudgedHook(j relayJudge, judged *judgedRequestSet) bool {

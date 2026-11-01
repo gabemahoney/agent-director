@@ -146,7 +146,7 @@ handling are in the [caller contract](../../docs/caller-contract.md#cursor-opera
 
 Get the current lifecycle state of a Spawn.
 
-`status`, `get`, `list` and `findMissing` share
+`status`, `get`, `list` and `sweep` (also `findMissing`) share
 [bounded recovery](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
 Single-row reads check only that row; read success does not confirm every write.
 
@@ -341,6 +341,21 @@ retry later), `ErrTmuxSessionConflict` (CONFLICT),
 `ErrTmuxNotAvailable` (ENVIRONMENT) and
 `ErrSpawnNotFound`. None of these proves exit. See the [caller contract](../../docs/caller-contract.md#caller-contract)
 for the live-row sequence and finished-row limits.
+
+### sweep
+
+`client.sweep()` returns `Promise<SweepResult>` for one bounded all-agent pass.
+`checks: SweepCheck[]` carries each selected identity's values, three
+confirmation records and independent `completion`/`reason`. Legacy counters
+remain in the same result. See [Sweep results](../../docs/caller-contract.md#sweep-results)
+for membership, coverage and failure handling.
+
+`findMissing()` remains supported and invokes the CLI's `find-missing` alias;
+`sweep()` invokes `sweep`. `SweepParams`, `SweepResult` and `SweepCheck` are
+exported alongside the retained `FindMissingParams` and `FindMissingResult`
+types. Both parameter types accept `timeout_ms` but ignore it: neither command
+receives that flag. `callTimeoutMs` bounds the transport call; timeout proves
+neither rollback nor completion and need not return partial checks.
 
 ### pause
 
@@ -725,7 +740,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 | `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
 | `ErrInvalidDecision` | `decision` was neither `allow` nor `deny`. |
 | `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
-| `ErrNoOpenPermissionRequest` | No eligible permission request matches the `(instance_id, request_token)` pair, including a closed, proven-gone or obsolete request. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or shared recovery or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when shared recovery marked it `missing`) before the request relay acknowledged its recorded verdict, `find-missing`'s own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (for a request with a settle instant, `"delivered"` requires durable relay acknowledgement; requests recorded by an older binary retain the [legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary), including derived delivery after expiry even when closed). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
+| `ErrNoOpenPermissionRequest` | No eligible permission request matches the `(instance_id, request_token)` pair, including a closed, proven-gone or obsolete request. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or shared recovery or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when shared recovery marked it `missing`) before the request relay acknowledged its recorded verdict, the missing mark's own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (for a request with a settle instant, `"delivered"` requires durable relay acknowledgement; requests recorded by an older binary retain the [legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary), including derived delivery after expiry even when closed). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
 | `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the recorded decision and acknowledgement prevent a second API answer. Acknowledgement does not establish agent receipt or dialog closure; see [Permission relay](../../docs/caller-contract.md#permission-relay). It also includes a request shared recovery denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`), and one closed at the pane (`pane_answer` `"sent"`, `"outside"` or `"tool_ran"`, with a `decision` or, for an `"unknown"` claim, none): `decide` on it records nothing, not even `attempted_decision`. A pane answer or `recordPaneAnswer` on a request its relay acknowledged, or one already closed at the pane, throws it too. |
 | `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and its precommit budget ran out, including acquisition or SQL work. It does not establish another process held the store. Once the verdict is confirmed committed, `decide` never throws it: a bound reached while it waits for confirmation resolves with `delivery` `"not_confirmed"`. An unconfirmed commit is an internal error instead. Without `max_wait_ms`, `decide` never throws `ErrStoreBusy`. A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` throws it when the store's write lock was not taken within its busy timeout. Recovery and zero-wait semantics are in the [caller contract](../../docs/caller-contract.md#permission-relay). |
 | `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |

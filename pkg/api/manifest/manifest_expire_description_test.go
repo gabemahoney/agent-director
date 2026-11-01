@@ -37,7 +37,7 @@ func TestCleanupGuidanceInDescriptions(t *testing.T) {
 	}{
 		{"expire", false, apitest.DescCleanupGuidance()},
 		{"kill", false, apitest.DescCleanupPointer()},
-		{"find-missing", true, apitest.DescCleanupPointer()},
+		{"sweep", true, apitest.DescCleanupPointer()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.verb, func(t *testing.T) {

@@ -252,8 +252,8 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		}
 		return d.client.MakeTemplate(p)
 
-	case "find-missing":
-		return d.client.FindMissing(ctx)
+	case "sweep", "find-missing":
+		return d.client.Sweep(ctx)
 
 	case "expire":
 		var raw struct {

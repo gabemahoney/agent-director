@@ -30,7 +30,7 @@ type fmSweep struct {
 // findMissing runs find-missing through a client from open, with the grace
 // period and sweep budget at config defaults; recorded runs tmux through the
 // harness's recording wrapper (/bin/sh, so not for locale cases).
-func (f *killFix) findMissing(t testing.TB, recorded bool) fmSweep {
+func (f *killFix) findMissing(t testing.TB, recorded bool, canonical ...bool) fmSweep {
 	t.Helper()
 	bin, log := "", (*callLog)(nil)
 	if recorded {
@@ -39,7 +39,13 @@ func (f *killFix) findMissing(t testing.TB, recorded bool) fmSweep {
 	}
 	c := f.open(t, 0, bin)
 	defer c.Close() //nolint:errcheck
-	res, err := c.FindMissing(context.Background())
+	var res api.SweepResult
+	var err error
+	if len(canonical) > 0 && canonical[0] {
+		res, err = c.Sweep(context.Background())
+	} else {
+		res, err = c.FindMissing(context.Background())
+	}
 	if err != nil {
 		t.Fatalf("find-missing: %s", describe(err))
 	}
@@ -87,6 +93,12 @@ func (f *killFix) assertStateNote(t testing.TB, id, state, note string) {
 // surviving session and a descendant the agent left running never make it
 // alive. The public results agree with the store reopened.
 func TestFindMissingRemainOnExitDeadAgentMarked(t *testing.T) {
+	testRecoveryRemainOnExitDeadAgentMarked(t, false)
+}
+func TestSweepRemainOnExitDeadAgentMarked(t *testing.T) {
+	testRecoveryRemainOnExitDeadAgentMarked(t, true)
+}
+func testRecoveryRemainOnExitDeadAgentMarked(t *testing.T, canonical bool) {
 	f := newKillFix(t)
 	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
 	// The descendant ignores the SIGHUP its terminal's end sends, so it
@@ -114,7 +126,14 @@ func TestFindMissingRemainOnExitDeadAgentMarked(t *testing.T) {
 		func() bool { return f.format(t, r.Reply.PaneID, "#{pane_dead}") == "1" },
 		func() string { return "pane_dead " + f.format(t, r.Reply.PaneID, "#{pane_dead}") })
 
-	s := f.findMissing(t, true)
+	s := f.findMissing(t, true, canonical)
+	if len(s.Res.Checks) != 1 {
+		t.Fatalf("checks = %+v; want one selected row", s.Res.Checks)
+	}
+	check := s.Res.Checks[0]
+	if check.InstanceID != r.InstanceID || check.State != store.StateMissing || check.ProcessLiveness != store.ProcessExited || check.Completion != "complete" || check.Reason != nil || !confirmedBy(check.Confirmations.ProcessLiveness, store.EvidenceProcess) {
+		t.Errorf("sweep check = %+v; want complete missing/exited process proof", check)
+	}
 	s.assertListed(t, r.InstanceID, "ids")
 	f.assertStateNote(t, r.InstanceID, "missing", "")
 	if len(s.Calls) != 0 { // proc_absent is decided on the process alone (SR-11.1)

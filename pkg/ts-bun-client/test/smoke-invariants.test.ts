@@ -12,7 +12,7 @@ import { VERBS } from "../src/internal/verbs.js";
 
 // Verbs with no triggerable verb-level error: version and expire declare no
 // ErrorNames; find-missing's ErrProbeUnsupported is never returned (SR-1.7).
-const NO_ERROR_CASE_ALLOWLIST = new Set(["version", "expire", "find-missing"]);
+const NO_ERROR_CASE_ALLOWLIST = new Set(["version", "expire", "find-missing", "sweep"]);
 
 const smokeDir = path.resolve(import.meta.dir, "smoke");
 const read = (file: string) => fs.readFileSync(path.join(smokeDir, file), "utf-8");

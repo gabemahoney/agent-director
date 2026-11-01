@@ -282,7 +282,9 @@ test("public-surface: extra_env is INPUT-only — absent from GetResult & ListRo
 });
 
 test("public-surface: FindMissingResult carries unverified count and ids (SR-8)", () => {
-  const body = interfaceBody(typesGolden(), "FindMissingResult");
+  expect(typesGolden()).toMatch(/interface FindMissingResult extends SweepResult/);
+  const body = interfaceBody(typesGolden(), "SweepResult");
+  expect(body).toMatch(/\bchecks\s*:\s*SweepCheck\[\]/);
   expect(body, "FindMissingResult must declare a numeric unverified count").toMatch(
     /\bunverified\s*:\s*number/
   );
@@ -307,7 +309,7 @@ test("public-surface: state stays a plain string — no union/enum (SR-8.3 guard
     // (a plain array of strings). Anything containing `|` (a union) or a quote
     // (a string-literal enum member) is a forbidden state-enum widening.
     expect(
-      rhs === "string" || rhs === "string[]",
+      rhs === "string" || rhs === "string[]" || rhs === 'StatusResult["state"]',
       `state must stay a plain string / string[], got \`${decl.trim()}\` — SR-8.3 forbids a union/enum`
     ).toBe(true);
   }
@@ -367,7 +369,7 @@ test.each(["StatusResult", "GetResult", "ListRow"])(
   }
 );
 
-test.each(["StatusResult", "GetResult", "ListRow"])(
+test.each(["StatusResult", "GetResult", "ListRow", "SweepCheck"])(
   "public-surface: %s requires process_liveness and confirmations (b.x9o)", (iface) => {
     const body = interfaceBody(typesGolden(), iface);
     expect(body).toMatch(/\bprocess_liveness\s*:\s*ProcessLiveness\s*;/);
@@ -392,7 +394,7 @@ test("public-surface: Confirmations holds exactly three records of exactly five 
 
 test("public-surface: only status, get and list agent results carry confirmations or process_liveness (b.x9o)", () => {
   const golden = typesGolden();
-  const carriers = new Set(["StatusResult", "GetResult", "ListRow", "Confirmations"]);
+  const carriers = new Set(["StatusResult", "GetResult", "ListRow", "SweepCheck", "Confirmations"]);
   for (const [, name] of golden.matchAll(/^export interface (\w+)/gm)) {
     if (carriers.has(name!)) continue;
     // Nested requests, subagents, receipts, details and errors gain no wrapper.

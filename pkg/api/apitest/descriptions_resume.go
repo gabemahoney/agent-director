@@ -124,7 +124,7 @@ const (
 )
 
 func noSessionStep(agent string) string {
-	return "the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with " + reuseSpawn(agent)
+	return "the row has no session id, so there is no conversation to resume: once a shared check marks it missing, if get still shows no session id, spawn the id again with " + reuseSpawn(agent)
 }
 
 // DescResumeLaunchInProgress is ErrSpawnNotResumable for a resume of a

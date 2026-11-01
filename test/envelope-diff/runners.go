@@ -78,6 +78,7 @@ var dispatch = map[string]clientDispatchFn{
 	"get-permission":     dispatchGetPermission,
 	"record-pane-answer": dispatchRecordPaneAnswer,
 	"resume":             dispatchResume,
+	"sweep":              dispatchSweep,
 	"find-missing":       dispatchFindMissing,
 	"expire":             dispatchExpire,
 	"make-template":      dispatchMakeTemplate,
@@ -455,6 +456,14 @@ func dispatchResume(c *api.Client, params map[string]any) ([]byte, bool) {
 		return marshalErrEnvelope(err), true
 	}
 	res, err := c.Resume(p)
+	if err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	return successEnvelope(res)
+}
+
+func dispatchSweep(c *api.Client, _ map[string]any) ([]byte, bool) {
+	res, err := c.Sweep(context.Background())
 	if err != nil {
 		return marshalErrEnvelope(err), true
 	}

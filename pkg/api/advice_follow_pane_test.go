@@ -802,7 +802,7 @@ func TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded(t *testing.T) {
 			t.Fatalf("decide A = %v, %v", ok, err)
 		}
 	}
-	const closedBeforeDelivery = "its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict"
+	const closedBeforeDelivery = "its spawn ended, or a shared check marked it missing, before the request's relay hook delivered a verdict"
 	cases := []struct {
 		name         string
 		steps        []decideStep // in order, before decide

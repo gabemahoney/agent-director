@@ -44,6 +44,13 @@ func (checked *activeCheckedRow) record(outcome activeCheckOutcome) {
 	checked.outcomes = append(checked.outcomes, outcome)
 }
 
+// inapplicable records eligibility decisions, not successful observations.
+func (checked *activeCheckedRow) inapplicable(adapters ...string) {
+	for _, adapter := range adapters {
+		checked.record(activeCheckOutcome{Adapter: adapter, Result: "inapplicable"})
+	}
+}
+
 type activeCheckedRow struct {
 	row     Spawn
 	display store.DisplayDetail
@@ -58,13 +65,13 @@ type activeCheckedRow struct {
 	// instead.
 	state, process, displayAttempt *fieldAttempt
 	judged                         *judgedRequestSet
-	permissionErr  error
-	projectionErr  error
-	cursorRejected bool
-	outcomes       []activeCheckOutcome
-	proofRow       *Spawn
-	proof          *InputProofResult
-	history        *activeSessionHistory
+	permissionErr                  error
+	projectionErr                  error
+	cursorRejected                 bool
+	outcomes                       []activeCheckOutcome
+	proofRow                       *Spawn
+	proof                          *InputProofResult
+	history                        *activeSessionHistory
 }
 
 // Get captures validated history after recovery refreshes and before display
@@ -87,6 +94,8 @@ type sessionHistorySnapshotReader interface {
 // activeCheckProviders is invocation-owned. Narrow exported helpers have no
 // tmux provider and do not manufacture one from the host environment.
 type activeCheckProviders struct {
+	// tickSource changes reporting only; sweep retains its released source.
+	tickSource   string
 	tmux         FindMissingTmux
 	pendingGrace time.Duration
 	budget       time.Duration
@@ -270,13 +279,19 @@ func (r *activeReadStore) recordProcess(checked *activeCheckedRow, probe process
 		r.processAttempt(checked, probe, store.ReasonStaleObservation)
 		return
 	case !writes:
+		checked.record(activeCheckOutcome{Adapter: "process_evidence", Result: "unavailable"})
 		r.processAttempt(checked, probe, store.ReasonUnsupported)
 		return
 	}
 	res, err := s.RecordProcessEvidence(row, record)
 	outcome := activeOutcome("process_evidence", res == CondApplied, err)
-	if err == nil && res == CondChanged {
-		outcome.Result = "stale"
+	if err == nil {
+		switch res {
+		case CondChanged:
+			outcome.Result = "stale"
+		case CondAbsent:
+			outcome.Result = "absent"
+		}
 	}
 	checked.record(outcome)
 	if err == nil && res == CondApplied {
@@ -346,9 +361,13 @@ func liveIdentity(row Spawn) LiveSpawnIdentity {
 // refresh callback is a stored projection only, never another check pass.
 func checkActiveRows(ctx context.Context, source any, view RelayView, settle store.SettleRead, rows []Spawn,
 	refresh func([]string, []store.CursorMissingProof) ([]Spawn, error), includeHistory bool) *activeReadStore {
-	r := &activeReadStore{source: source, view: view, settle: settle, refresh: refresh, ctx: ctx, emit: recoveryTrail(ctx), withHistory: includeHistory,
+	tickSource := "ad_recovery"
+	if view.active != nil && view.active.tickSource != "" {
+		tickSource = view.active.tickSource
+	}
+	r := &activeReadStore{source: source, view: view, settle: settle, refresh: refresh, ctx: ctx, emit: recoveryTickTrail(recoveryTrail(ctx), tickSource), withHistory: includeHistory,
 		byID: map[string]*activeCheckedRow{}, fallbackTried: map[int64]bool{},
-		missing: FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}}
+		missing: emptySweepResult()}
 	for _, row := range rows {
 		checked := &activeCheckedRow{row: row, display: row.CommittedDisplay(), displayEvidence: row.DisplayEvidence}
 		for _, adapter := range []string{"liveness", "cursor_gateway", "codex_turn", "transcript", "permission_read", "permission_repair", "display", "permission_fallback", "native_proof"} {
@@ -373,7 +392,15 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 			if capture, ok := p.tmux.(interface {
 				CapturePaneID(string, string, int, bool) (string, error)
 			}); ok {
-				r.view.samplePane = func(row Spawn) store.PaneSample { return sampleActivePane(live, capture, row) }
+				r.view.samplePane = func(row Spawn) store.PaneSample {
+					sample, skipped := sampleActivePane(live, capture, row)
+					if sample.Reason == store.ReasonDeadline {
+						r.byID[row.InstanceID].record(activeOutcome("pane_budget", false, context.DeadlineExceeded))
+					} else if skipped {
+						r.byID[row.InstanceID].record(activeCheckOutcome{Adapter: "pane_budget", Result: "unattempted", Err: tmux.ErrTmuxUnresponsive})
+					}
+					return sample
+				}
 			}
 		}
 	}
@@ -411,13 +438,20 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 			}
 		}
 		if err == nil || rowFailures {
+			present := make(map[string]bool, len(current))
 			for _, row := range current {
+				present[row.InstanceID] = true
 				if checked := r.byID[row.InstanceID]; checked != nil {
 					if checked.row.Snapshot != row.Snapshot || checked.row.PermissionEpoch != row.PermissionEpoch {
 						checked.judged = nil
 					}
 					checked.row = row
 					checked.display, checked.displayEvidence = row.CommittedDisplay(), row.DisplayEvidence
+				}
+			}
+			for _, checked := range r.rows {
+				if !present[checked.row.InstanceID] && checked.projectionErr == nil {
+					checked.record(activeCheckOutcome{Adapter: "projection", Result: "unattempted", Err: store.ErrSpawnNotFound})
 				}
 			}
 		} else {
@@ -439,7 +473,11 @@ func (r *activeReadStore) refreshRow(checked *activeCheckedRow) bool {
 		return false
 	}
 	rows, err := r.refresh([]string{checked.row.InstanceID}, nil)
-	checked.record(activeOutcome("refresh", false, err))
+	outcome := activeOutcome("refresh", false, err)
+	if err == nil && len(rows) != 1 {
+		outcome.Result = "absent"
+	}
+	checked.record(outcome)
 	if err != nil || len(rows) != 1 {
 		return false
 	}
@@ -447,12 +485,17 @@ func (r *activeReadStore) refreshRow(checked *activeCheckedRow) bool {
 	checked.row = rows[0]
 	checked.display, checked.displayEvidence = rows[0].CommittedDisplay(), rows[0].DisplayEvidence
 	// A changed launch ends this row's pass. A later call can check it.
-	return old.Identity.Token == rows[0].Identity.Token && old.LifeNumber == rows[0].LifeNumber
+	same := old.Identity.Token == rows[0].Identity.Token && old.LifeNumber == rows[0].LifeNumber
+	if !same {
+		checked.record(activeCheckOutcome{Adapter: "refresh", Result: "stale"})
+	}
+	return same
 }
 
 func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingRun) {
 	row := checked.row
 	if r.view.provisionalOnly[row.InstanceID] {
+		checked.inapplicable("liveness", "cursor_gateway", "codex_turn", "permission_read", "permission_repair", "display", "permission_fallback", "native_proof")
 		r.checkTranscript(checked)
 		return
 	}
@@ -469,6 +512,7 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 		inside := store.InsidePendingGrace(row.State, row.LaunchStartedAtMillis, p.pendingGrace, now)
 		if inside || (row.State == store.StatePending && r.view.Procs != nil && spawn.LaunchOwnerAlive(r.view.Procs, row.LaunchOwner)) {
 			checked.record(activeCheckOutcome{Adapter: "pending", Result: "inapplicable"})
+			checked.inapplicable("liveness", "cursor_gateway", "codex_turn", "permission_read", "permission_repair", "display", "permission_fallback", "native_proof")
 			// The pending-launch protection, not missing evidence, keeps the
 			// process unchecked; its lifecycle admission keeps its own record.
 			if r.view.Procs != nil && row.Agent != store.AgentCursor {
@@ -494,13 +538,17 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 		if proof != nil {
 			r.cursor = append(r.cursor, *proof)
 			checked.outcomes[len(checked.outcomes)-1].Result = "observed"
+			checked.record(activeCheckOutcome{Adapter: "cursor_commit", Result: "unattempted"})
 			// The projected missing has no durable record until the deferred
 			// terminal write, which this invocation still owns, commits. The
 			// attempt is for that projected value in the examined interval.
 			r.stateAttempt(checked, row, store.StateMissing, store.ReasonOperationPending)
+			checked.inapplicable("liveness", "codex_turn", "transcript", "permission_read", "permission_repair", "display", "permission_fallback", "native_proof")
 			return // project the exact loss before the deferred terminal write
 		}
 		cursorProcess = outcome.Evidence
+	} else {
+		checked.inapplicable("cursor_gateway")
 	}
 	if live != nil {
 		// The probe examines this row; a refresh after the liveness write may
@@ -521,6 +569,13 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 			result = live.judgeLiveRow(liveIdentity(row))
 		}
 		live.emitDisagree(liveIdentity(row), result)
+		if result.res.Skipped || result.listing.Skipped {
+			if live.sw.Spent() {
+				checked.record(activeOutcome("liveness_budget", false, context.DeadlineExceeded))
+			} else {
+				checked.record(activeCheckOutcome{Adapter: "liveness_budget", Result: "unattempted", Err: tmux.ErrTmuxUnresponsive})
+			}
+		}
 		outcome := activeOutcome("liveness", result.write.Wrote && result.write.Res == CondApplied, result.write.Err)
 		outcome.Evidence = result.action
 		if result.write.Wrote && result.write.Res != CondApplied && result.write.Err == nil {
@@ -581,6 +636,7 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 		}
 		row = checked.row
 		if !store.IsLiveState(row.State) {
+			checked.inapplicable("cursor_gateway", "codex_turn", "transcript", "permission_read", "permission_repair", "display", "permission_fallback")
 			checked.proofRow = &row
 			return
 		}
@@ -601,7 +657,12 @@ func (r *activeReadStore) checkTurn(checked *activeCheckedRow) bool {
 		CodexTurnSamples(string) ([]store.CodexTurnSample, error)
 		EndCodexTurnSample(store.CodexTurnSample, time.Duration) (bool, error)
 	})
-	if !ok || row.Agent != store.AgentCodex || row.State != store.StateWorking {
+	if row.Agent != store.AgentCodex || row.State != store.StateWorking {
+		checked.inapplicable("codex_turn")
+		return true
+	}
+	if !ok {
+		checked.record(activeCheckOutcome{Adapter: "codex_turn", Result: "unavailable"})
 		return true
 	}
 	samples, err := s.CodexTurnSamples(row.InstanceID)
@@ -611,6 +672,7 @@ func (r *activeReadStore) checkTurn(checked *activeCheckedRow) bool {
 		r.attempt(checked, outcomeReason(outcome.Result))
 		return false
 	}
+	checked.record(activeOutcome("codex_turn", false, nil))
 	for _, sample := range samples {
 		if sample.Snapshot != row.Snapshot || sample.ObservationVersion != row.ObservationVersion {
 			checked.record(activeCheckOutcome{Adapter: "codex_turn", Result: "stale"})
@@ -651,20 +713,23 @@ func (r *activeReadStore) checkTranscript(checked *activeCheckedRow) bool {
 				_, err = os.Stat(path)
 			}
 			if err != nil {
+				checked.record(activeOutcome("transcript", false, err))
 				return true
 			}
 			applied, err := r.source.(FindMissingStore).HealJsonlPath(pt.InstanceID, pt.SessionID, path)
 			checked.record(activeOutcome("transcript", applied, err))
 			return err == nil
 		}
+		checked.record(activeCheckOutcome{Adapter: "transcript", Result: "unavailable"})
 		return true
 	}
 	if (row.Agent != "" && row.Agent != store.AgentClaude) || row.JSONLPath != "" || row.SessionID == "" {
+		checked.inapplicable("transcript")
 		return true
 	}
 	samples, err := s.ProvisionalTranscriptsFor(row.InstanceID)
+	checked.record(activeOutcome("transcript", false, err))
 	if err != nil {
-		checked.record(activeOutcome("transcript", false, err))
 		return false
 	}
 	for _, sample := range samples {
@@ -703,14 +768,16 @@ func (r *activeReadStore) checkPermissionDisplay(checked *activeCheckedRow) {
 	if reader := activePermissionReader(r.source); reader != nil {
 		checked.judged, checked.permissionErr = readJudgedRequests(reader, j, row.InstanceID)
 		checked.record(activeOutcome("permission_read", false, checked.permissionErr))
+	} else {
+		checked.record(activeCheckOutcome{Adapter: "permission_read", Result: "unavailable"})
 	}
 	if checked.permissionErr != nil {
 		return
 	}
 	if row.State == store.StateCheckPermission && checked.judged != nil {
-		_, result, err := repairCheckPermissionRow(r.emit, r.source, row, checked.judged, j)
-		repair := activeOutcome("permission_repair", result == CondApplied, err)
+		_, result, repair := repairCheckPermissionRow(r.emit, r.source, row, checked.judged, j)
 		checked.record(repair)
+		err := repair.Err
 		if err != nil {
 			r.attempt(checked, outcomeReason(repair.Result))
 			r.fallbackBusy = r.fallbackBusy || errors.Is(err, store.ErrStoreBusy)
@@ -722,6 +789,8 @@ func (r *activeReadStore) checkPermissionDisplay(checked *activeCheckedRow) {
 			}
 			row = checked.row
 		}
+	} else {
+		checked.inapplicable("permission_repair")
 	}
 	r.captureSessionHistory(checked)
 	var displayOutcome activeCheckOutcome
@@ -740,11 +809,27 @@ func (r *activeReadStore) checkPermissionDisplay(checked *activeCheckedRow) {
 		}
 	}
 	checked.record(displayOutcome)
+	_, canObservePane := r.source.(idleScreenStore)
+	if row.PaneObservable() && (r.view.samplePane == nil || !canObservePane) {
+		checked.record(activeCheckOutcome{Adapter: "display", Result: "unavailable"})
+	}
 	r.fallbackBusy = r.fallbackBusy || busy
-	if !busy && checked.judged != nil {
+	if checked.judged == nil {
+		checked.record(activeCheckOutcome{Adapter: "permission_fallback", Result: "unavailable"})
+	}
+	if checked.judged != nil {
 		open, unproven := judgedSpawnInfos(checked.judged, j, row)
 		slots := goneSlotsOf(nil, open, row.Agent, row.RelayMode, j.now())
-		attempted, _, err := r.recordGone(j.now(), readerLockWait, goneSlotsOf(slots, unproven, row.Agent, row.RelayMode, j.now()))
+		slots = goneSlotsOf(slots, unproven, row.Agent, row.RelayMode, j.now())
+		if len(slots) == 0 {
+			checked.inapplicable("permission_fallback")
+		} else if r.fallbackBusy {
+			checked.record(activeCheckOutcome{Adapter: "permission_fallback", Result: "unattempted", Err: store.ErrStoreBusy})
+		}
+		attempted, _, err := r.recordGone(j.now(), readerLockWait, slots)
+		if len(slots) > 0 && !attempted && !r.fallbackBusy {
+			checked.record(activeCheckOutcome{Adapter: "permission_fallback", Result: "unavailable"})
+		}
 		if attempted && err == nil {
 			gone := map[int64]*time.Time{}
 			for _, info := range open {
@@ -823,6 +908,7 @@ func (r *activeReadStore) finish() error {
 			CanDeferCursorMissingWrite(error) bool
 		})
 		if !ok {
+			checked.record(activeCheckOutcome{Adapter: "cursor_commit", Result: "unavailable"})
 			continue
 		}
 		_, result, err := s.MarkCursorMissingIfSameLaunch(proof.Row, proof.Binding)
@@ -845,6 +931,7 @@ func (r *activeReadStore) finish() error {
 			r.stateAttempt(checked, proof.Row, proof.Row.State, outcomeReason(outcome.Result))
 		}
 		if err != nil {
+			r.stateAttempt(checked, proof.Row, store.StateMissing, outcomeReason(outcome.Result))
 			if s.CanDeferCursorMissingWrite(err) {
 				if p := r.view.active; p != nil && p.deferred != nil {
 					p.deferred(proof.Row.InstanceID, err)
@@ -879,11 +966,22 @@ func (r *activeReadStore) finish() error {
 			}
 			row := *checked.proofRow
 			if row.Agent == store.AgentCursor || row.Identity.Token == "" {
+				checked.inapplicable("native_proof")
 				continue
 			}
 			proof, committed, err := reconcileInputProof(r.ctx, s, row)
 			checked.proof = &proof
 			checked.record(activeOutcome("native_proof", committed, err))
+		}
+	} else {
+		for _, checked := range r.rows {
+			if row := checked.proofRow; row != nil {
+				if row.Agent == store.AgentCursor || row.Identity.Token == "" {
+					checked.inapplicable("native_proof")
+				} else {
+					checked.record(activeCheckOutcome{Adapter: "native_proof", Result: "unavailable"})
+				}
+			}
 		}
 	}
 	sort.Strings(r.missing.IDs)

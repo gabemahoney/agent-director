@@ -95,16 +95,18 @@
 #                        move" below) nothing is snapshotted: the new bin
 #                        and admin directories hold no earlier binary, and
 #                        the install says so.
-#   --schedule           Schedule the find-missing and expire sweeps for the
+#   --schedule           Schedule recovery and separate expire jobs for the
 #                        user running this script, who must be the agents'
 #                        user (see "The schedule" below). Default OFF: without
 #                        it, an install with no schedule set up ends with a
 #                        warning on stderr naming the lines to add.
 #
-# The schedule (b.wur). The README's sweep verbs, find-missing (every 2
-# minutes) and expire (daily), keep the row states honest, and nothing runs
-# them until they are scheduled: a live row whose agent is gone stays live. The
-# install ships the schedule as files in schedule/ beside this script (a crontab
+# The schedule (b.wur). sweep runs shared recovery checks every 2 minutes;
+# expire runs separate retention cleanup daily. State reads share the checks;
+# absent or failed calls leave observations old. The installed binary's help
+# selects sweep when supported, otherwise find-missing, without running either.
+# Without --schedule, existing commands, cadence and enablement stay unchanged.
+# The install ships the schedule as files in schedule/ beside this script (a crontab
 # file, agent-director.cron, and a systemd user .service and .timer for each
 # sweep; a note in each says how to copy it by hand), with placeholders for the
 # binary's absolute path and for PATH, TMUX_TMPDIR (when set) and HOME (when it
@@ -5542,17 +5544,17 @@ ad_mcp_step
 # --------------------------------------------------------------------
 # The schedule for the sweeps (b.wur)
 #
-# agent-director's two sweep verbs keep the row states honest, and nothing
-# runs them unless they are scheduled: find-missing marks a live row whose
-# agent is gone `missing` (a killed or crashed agent, a reboot), moves a relay
-# row out of check_permission and, through the row, turns a killed agent's
-# running subagent records `lost`; expire deletes finished rows past
-# expire_retention_days. The schedule ships as files, in schedule/ beside this
-# script (the install skill's directory, installed with the skill): a crontab
-# file (agent-director.cron) and a systemd user .service and .timer for each
-# sweep. This script installs from those files and from nothing else, and its
-# warning prints the cron lines from the file, so what is installed, what is
-# warned about and what an operator copies by hand cannot drift apart.
+# sweep runs the same shared checks as state reads, across all agents. An
+# external cadence can refresh rows even when no caller reads them; failed or
+# absent runs leave observations old. expire is separate, operator-selected
+# cleanup of finished rows past expire_retention_days. The schedule ships as
+# files in schedule/ beside this script: a crontab file and a systemd user
+# .service/.timer pair for each command. The installed recovery unit filenames
+# stay agent-director-find-missing.* for upgrade and uninstall compatibility.
+# Rendering chooses sweep only when the installed binary's help advertises it,
+# otherwise find-missing; it never runs recovery to discover support. This also
+# handles older release assets and the fallback to main for older binaries.
+# Printed cron advice uses that same renderer.
 #
 # Where the files come from. Beside this script when it is a file on disk (the
 # skill's directory, a checkout) and schedule/ there holds all five. Otherwise
@@ -5688,6 +5690,7 @@ SCHED_REASON=""
 SCHED_NODAEMON=0     # 1: this install's cron lines are in the crontab and no cron daemon runs
 SCHED_CRON_PUT=0     # 1: ad_sched_install put the cron lines in with no daemon running
 SCHED_RENDERED=""    # ad_sched_render's output
+SCHED_VERB=""        # recovery verb supported by the installed executable
 SUBST=""
 
 ad_sched_crontab_cmd() { printf '%s' "${INSTALL_SH_TEST_CRONTAB:-crontab}"; }
@@ -5872,6 +5875,20 @@ ad_sched_env() {
     ad_sched_unit_exec "$CANONICAL"; SCHED_UNIT_BIN="$SUBST"
 }
 
+# Help is store-free. Probe once only when rendering or warning is needed;
+# an existing schedule without --schedule needs neither a probe nor a fetch.
+# Older binaries and unusable help retain the supported legacy command.
+ad_sched_verb() {
+    local help support
+    [[ -z "$SCHED_VERB" ]] || return 0
+    SCHED_VERB=find-missing
+    if help="$("$CANONICAL" help 2>/dev/null </dev/null)" &&
+        support="$(jq -e 'any(.verbs[]?; .name == "sweep")' <<<"$help" 2>/dev/null)" &&
+        [[ "$support" == true ]]; then
+        SCHED_VERB=sweep
+    fi
+}
+
 # ad_sched_render <file> <cron|unit> — set SCHED_RENDERED to the shipped file as
 # it is installed: its notes (lines starting with two #) dropped, the
 # placeholders filled. Returns 1, with SCHED_WHY, when a line still holds an @@
@@ -5879,6 +5896,7 @@ ad_sched_env() {
 # than this script); SCHED_RENDERED is then empty.
 ad_sched_render() {
     local line bin left known out=""
+    ad_sched_verb
     SCHED_RENDERED=""
     while IFS= read -r line || [[ -n "$line" ]]; do
         case "$line" in
@@ -5901,6 +5919,11 @@ ad_sched_render() {
             SCHED_WHY="${1##*/} still holds an unfilled @@ placeholder once ${known} are filled, so it comes from another version than this install.sh: ${line}"
             return 1
         fi
+        # Change only the template command, before inserting any user path or
+        # environment. Keep the three-placeholder format and stable unit names.
+        ad_sched_subst "$line" "@@AGENT_DIRECTOR@@ find-missing" "@@AGENT_DIRECTOR@@ ${SCHED_VERB}"
+        ad_sched_subst "$SUBST" "@@AGENT_DIRECTOR@@ sweep" "@@AGENT_DIRECTOR@@ ${SCHED_VERB}"
+        line="$SUBST"
         if [[ "$2" == cron ]]; then
             bin="$SCHED_CRON_BIN"
             ad_sched_subst "$line" "@@ENV_PREFIX@@" "$SCHED_CRON_PREFIX"
@@ -6073,17 +6096,20 @@ ad_sched_cron_read() {
     return 0
 }
 
-# ad_sched_cron_has <sweep> — 0 when SCHED_CRON_TEXT holds this install's
-# marked line for <sweep>.
+# ad_sched_cron_has <verb> — 0 for this install's marked line. The recovery
+# entry accepts either released spelling; expire remains a separate entry.
 ad_sched_cron_has() {
     local l
     while IFS= read -r l; do
         case "$l" in
             "#"*) continue ;;
         esac
-        if [[ "$l" == *"$SCHEDULE_MARK"* && "$l" == *" $1 "* ]]; then
-            return 0
-        fi
+        [[ "$l" == *"$SCHEDULE_MARK"* ]] || continue
+        case "$1" in
+            sweep|find-missing)
+                if [[ "$l" == *" sweep "* || "$l" == *" find-missing "* ]]; then return 0; fi ;;
+            *) if [[ "$l" == *" $1 "* ]]; then return 0; fi ;;
+        esac
     done <<<"$SCHED_CRON_TEXT"
     return 1
 }
@@ -6442,12 +6468,13 @@ ad_sched_rerun_cmd() {
 # repository.
 ad_sched_warn() {
     local l ref
+    ad_sched_verb
     {
         echo
-        echo "install.sh: WARNING: nothing schedules agent-director's find-missing and expire sweeps on this machine."
-        echo "  Until they run, a live row whose agent is gone (killed, crashed, rebooted) stays live, a relay row"
-        echo "  left in check_permission stays there, a killed agent's running subagent records are not turned lost,"
-        echo "  and finished rows are never expired. find-missing is what keeps the row states honest."
+        echo "install.sh: WARNING: nothing schedules agent-director's ${SCHED_VERB} and expire jobs on this machine."
+        echo "  Recovery runs only when called; state reads also perform the shared checks on supporting versions."
+        echo "  Absent or failed checks leave observations old. expire separately removes eligible finished rows."
+        echo "  Choose an external cadence for recovery and retention cleanup; neither runs an internal daemon."
         if [[ "$SCHED_CRON_PUT" -eq 1 ]]; then
             echo "  --schedule was asked for and could not schedule the sweeps: $1"
         elif [[ -n "$1" ]]; then
@@ -6457,7 +6484,7 @@ ad_sched_warn() {
             echo "  cron or crond) is running on this machine, so they never run: start the cron service, or use systemd"
             echo "  user timers (the files below)."
         fi
-        echo "  Schedule both now, as the agents' user (the user the agents run as, in their tmux environment). Run as"
+        echo "  To schedule them, run as the agents' user (the user the agents run as, in their tmux environment). Run as"
         echo "  another user, as root or against another tmux server, a sweep can wrongly mark live rows missing or"
         echo "  delete rows whose agent still runs."
         if ad_sched_files_ok && ad_sched_env && ad_sched_render "${SCHEDULE_DIR}/agent-director.cron" cron; then
@@ -6475,9 +6502,9 @@ ad_sched_warn() {
                 echo "  This script was not run from a file, so it fetched them from the repository at ${SCHED_REF}"
                 echo "  (skills/install-agent-director/schedule/ at ${SCHEDULE_RAW_BASE}/${SCHED_REF}/) and kept the copy there.${SCHED_FETCH_NOTE:+ (${SCHED_FETCH_NOTE})}"
             fi
-            echo "  Copy them by hand (the lines above are the cron file's with its placeholders filled in: copy those; a unit"
-            echo "  file's notes say how to fill its placeholders), or let the install script install them, as the user the"
-            echo "  agents run as:"
+            echo "  Copy the rendered cron lines above. For a unit, fill its placeholders and use ${SCHED_VERB} as the"
+            echo "  recovery command in ExecStart (keep the agent-director-find-missing filenames). Or let this install"
+            echo "  script install them, as the user the agents run as:"
             if [[ "$SCRIPT_REAL" -eq 1 ]]; then
                 ad_sched_rerun_cmd
                 echo "    ${SUBST}"
@@ -6496,7 +6523,8 @@ ad_sched_warn() {
             echo "  agent-director repository, in skills/install-agent-director/schedule/"
             echo "  (https://github.com/${RELEASE_REPO_SLUG}/tree/${ref}/skills/install-agent-director/schedule),"
             echo "  and in the install skill's directory. Copy them by hand as the agents' user (fill the @@...@@"
-            echo "  placeholders: the notes in each file say how), or run an install.sh that has them beside it with"
+            echo "  placeholders: the notes in each file say how), using ${SCHED_VERB} as the recovery command, or run"
+            echo "  an install.sh that has them beside it with"
             echo "  --schedule, as that user."
         fi
         echo "  Already scheduled another way (launchd, your own cron line or unit)? This check sees only the entries"
@@ -6525,9 +6553,9 @@ ad_sched_step() {
         if ad_sched_install; then
             if [[ "$SCHED_HOW" == cron ]]; then
                 if [[ "$SCHED_RESULT" == unchanged ]]; then
-                    echo "  schedule: cron: this user's crontab already holds these entries (find-missing every 2 minutes, expire daily at 03:17); nothing changed. The cron daemon must be running."
+                    echo "  schedule: cron: this user's crontab already holds these entries (${SCHED_VERB} every 2 minutes, expire daily at 03:17); nothing changed. The cron daemon must be running."
                 else
-                    echo "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # $SCHEDULE_MARK. The cron daemon must be running."
+                    echo "  schedule: cron: ${SCHED_VERB} every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # $SCHEDULE_MARK. The cron daemon must be running."
                 fi
             else
                 if [[ "$SCHED_RESULT" == unchanged ]]; then
@@ -6541,11 +6569,11 @@ ad_sched_step() {
         fi
         SCHED_REASON="$SCHED_WHY"
         if [[ "$SCHED_CRON_PUT" -eq 1 ]]; then
-            echo "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # $SCHEDULE_MARK, but NO CRON DAEMON (a process named cron or crond) is running on this machine, so they do not run; start the cron service" >&2
+            echo "  schedule: cron: ${SCHED_VERB} every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # $SCHEDULE_MARK, but NO CRON DAEMON (a process named cron or crond) is running on this machine, so they do not run; start the cron service" >&2
         fi
     fi
     if ad_sched_present; then
-        echo "  schedule: found this install's ${SCHED_FOUND} entries for find-missing and expire; left as they are"
+        echo "  schedule: found this install's ${SCHED_FOUND} entries for recovery and expire; left as they are"
         if [[ -n "$SCHED_REASON" ]]; then
             echo "  schedule: --schedule could not re-point them at this install: $SCHED_REASON" >&2
         fi

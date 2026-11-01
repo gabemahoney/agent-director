@@ -16,6 +16,7 @@ processes.
   - [SendKeys](#sendkeys)
   - [ReadPane](#readpane)
   - [Kill](#kill)
+  - [Sweep](#sweep)
 - [Permission relay](#permission-relay)
 - [Version mapping](#version-mapping)
 - [Errors](#errors)
@@ -208,7 +209,7 @@ loading or waiting at a startup prompt. A resumed `pending` row keeps its
 session id and history; a caller tells it from a fresh one by its non-empty
 `session_id`, shown by `Get`.
 
-Client `Status`, `Get`, `List` and `FindMissing` share
+Client `Status`, `Get`, `List` and `Sweep` (also `FindMissing`) share
 [bounded recovery](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
 Single-row reads check only that row. Package-level helpers and custom stores
 run only checks their supplied capabilities support; they do not create
@@ -617,6 +618,23 @@ in
 godoc.
 
 ---
+
+### Sweep
+
+`Client.Sweep(ctx)` returns `(SweepResult, error)` for one bounded all-agent
+pass. `SweepResult.Checks` contains a `SweepCheck` per selected identity, with
+values, three confirmation records and independent `Completion`/`Reason` fields.
+The result also retains `Count`, `IDs`, `Unverified` and `UnverifiedIDs`. See
+[Sweep results](../../docs/caller-contract.md#sweep-results) for membership,
+coverage, counters and failure handling.
+
+The exported `Sweep` function accepts the same store, tmux, process checker,
+grace, budget, clock and logger arguments as `FindMissing`. `FindMissing` and
+`Client.FindMissing` remain supported delegating aliases; `SweepResult` aliases
+`FindMissingResult`. Existing `FindMissingStore`, `FindMissingTmux` and
+`FindMissingLogger` interfaces remain accepted. A narrow store can supply only
+live identities and its available checks, so it cannot promise an all-agent
+snapshot and reports unsupported coverage explicitly.
 
 ## Permission relay
 

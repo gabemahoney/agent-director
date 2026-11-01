@@ -136,7 +136,7 @@ func TestSendKeysRule7(t *testing.T) {
 		{"A's token, A answered outside agent-director", []r7Step{r7Outside}, tokA, store.ErrAlreadyDecided, `pane_answer "outside"`},
 		{"A's token, A closed by find-missing's mark, the row resumed", []r7Step{r7Mark, r7Resume}, tokA, store.ErrAlreadyDecided, `"find_missing"`},
 		{"A's token, A open when the row ended, the row resumed", []r7Step{r7End, r7Resume}, tokA, store.ErrNoOpenPermissionRequest,
-			"its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict"},
+			"its spawn ended, or a shared check marked it missing, before the request's relay hook delivered a verdict"},
 		{"an unknown token", nil, "dddddddd-dddd-4ddd-addd-dddddddddddd", store.ErrNoOpenPermissionRequest, "has no permission request"},
 		{"A's token, A fallen back", nil, tokA, nil, ""},
 	}

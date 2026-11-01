@@ -320,7 +320,7 @@ func TestCursorReadIndependentRecoveryAfterStaleSample(t *testing.T) {
 // suppress B. The single-row surfaces retain their own conflict error.
 func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) {
 	t.Parallel()
-	for _, surface := range []string{"list", "find-missing", "get", "status"} {
+	for _, surface := range []string{"list", "find-missing", "sweep", "get", "status"} {
 		t.Run(surface, func(t *testing.T) {
 			e, c, a, tokenA := cursorReadLaunch(t)
 			_, _, b, tokenB := cursorReadLaunch(t, e)
@@ -342,7 +342,7 @@ func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			multi := surface == "list" || surface == "find-missing"
+			multi := surface == "list" || surface == "find-missing" || surface == "sweep"
 			wantProjected := int64(1)
 			if multi {
 				wantProjected = 2
@@ -445,12 +445,37 @@ func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) 
 						t.Fatalf("unselected row added: %+v", row)
 					}
 				}
-			case "find-missing":
-				got, err := c.FindMissing(context.Background())
+			case "find-missing", "sweep":
+				var got api.SweepResult
+				var err error
+				if surface == "sweep" {
+					got, err = c.Sweep(context.Background())
+				} else {
+					got, err = c.FindMissing(context.Background())
+				}
 				if err != nil {
 					t.Fatal(err)
 				}
 				assertLists(t, got, []string{b.InstanceID}, nil)
+				apitest.AssertConfirmationsShape(t, jsonOf(t, got))
+				if len(got.Checks) != 2 {
+					t.Fatalf("checks = %+v; want both selected rows", got.Checks)
+				}
+				for _, row := range got.Checks {
+					if row.Completion != "complete" || row.Reason != nil || row.FamilyState != store.StateWorking || row.IdleScreenAvailability != "unavailable" || row.DisplayedState != "" {
+						t.Errorf("attempted Cursor check lost coverage/stored family: %+v", row)
+					}
+					if conf(row.Confirmations.ProcessLiveness) != unknownRecord(store.ReasonUnsupported) || conf(row.Confirmations.DisplayedState) != unknownRecord(store.ReasonUnsupported) {
+						t.Errorf("Cursor acquired unsupported confirmation: %+v", row)
+					}
+					wantState, wantRecord := store.StateMissing, "pending|-|-|"+confAt(e.clock.Now())+"|operation_pending"
+					if row.InstanceID == a.InstanceID {
+						wantState, wantRecord = store.StateWorking, "not_confirmed|-|-|"+confAt(e.clock.Now())+"|stale_observation"
+					}
+					if row.State != wantState || conf(row.Confirmations.State) != wantRecord {
+						t.Errorf("Cursor returned-value record mismatch: %+v; want %s %s", row, wantState, wantRecord)
+					}
+				}
 			case "get":
 				if _, err := c.Get(a.InstanceID); err == nil || !strings.Contains(err.Error(), "changed during reconciliation") {
 					t.Fatalf("direct Get lost its stale error: %v", err)

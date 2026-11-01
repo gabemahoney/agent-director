@@ -312,7 +312,7 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 	committed = true
 	emitDisplayTransitions(exits)
 
-	emitTerminalCloseout(ctx, closed, instanceID, reason)
+	emitTerminalCloseout(ctx, closed, instanceID, reason, s.recoveryTickSource)
 	return prior, CondApplied, nil
 }
 
@@ -343,7 +343,7 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	}
 	if res == CondApplied {
 		emitDisplayTransitionsContext(ctx, exits)
-		emitTerminalCloseout(ctx, closed, instanceID, reason)
+		emitTerminalCloseout(ctx, closed, instanceID, reason, s.recoveryTickSource)
 	}
 	return prior, res, nil
 }
@@ -393,10 +393,10 @@ func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt str
 	return prior, CondApplied, closed, nil
 }
 
-func emitTerminalCloseout(ctx context.Context, closed []closedRequest, instanceID, reason string) {
+func emitTerminalCloseout(ctx context.Context, closed []closedRequest, instanceID, reason string, sources ...string) {
 	for _, c := range closed {
 		c.emitDenyContext(ctx, instanceID, reason, WriterProcessFindMissing)
-		emitOrphanCloseoutTickContext(ctx, instanceID, c.token)
+		emitOrphanCloseoutTickContext(ctx, instanceID, c.token, sources...)
 	}
 }
 

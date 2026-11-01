@@ -484,9 +484,9 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 // can wrongly delete rows whose agent still runs. Agents never run expire,
 // least of all with a zero window.
 //
-// A finished row is not proof that its agent is dead: missing is the sweep's
-// judgement on the evidence available to it, not proof that the agent has
-// exited, and neither ended nor missing means that the agent is dead or that
+// A finished row is not proof that its agent is dead: missing is a check's
+// judgement on available evidence, not proof that the agent has exited,
+// and neither ended nor missing means that the agent is dead or that
 // its row is safe to delete.
 //
 // CLI: agent-director expire

@@ -224,7 +224,7 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     began (or that no launch start is recorded), that resume applies only
 //     to an ended or missing row, and what happens next; for a row with no
 //     session id (typically a spawn's or reuse's launch), whose resume once
-//     missing guard 3 refuses, that once find-missing marks it missing, if
+//     missing guard 3 refuses, that once a shared check marks it missing, if
 //     get still shows no session id, the step is a spawn of the id with the
 //     reuse opt-in and the row's agent.
 //  3. `session_id` must be populated → otherwise
@@ -724,9 +724,9 @@ const cursorFreshRecovery = `preserve the original row, session, transcript and 
 
 func launchInProgressNoSessionStep(agent string) string {
 	if agent == config.AgentCursor {
-		return "the row has no session id: once find-missing marks it missing, if get still shows no session id, " + cursorFreshRecovery
+		return "the row has no session id: once a shared check marks it missing, if get still shows no session id, " + cursorFreshRecovery
 	}
-	return "the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with " + spawn.ReuseSpawn(agent)
+	return "the row has no session id, so there is no conversation to resume: once a shared check marks it missing, if get still shows no session id, spawn the id again with " + spawn.ReuseSpawn(agent)
 }
 
 // launchInProgressError is resume's refusal of a pending row (SR-8.4,
@@ -758,9 +758,8 @@ func launchInProgressError(row Spawn) error {
 // returning does not confirm runtime, load or requested mode success.
 // The instance_id is preserved; the result returns it and
 // pre_trust (what the launch's pre-trust did: ok, skipped or failed). A
-// finished row is not proof that its agent is dead: missing is the sweep's
-// judgement on the evidence available to it, not proof that the agent has
-// exited.
+// finished row is not proof that its agent is dead: missing is a check's
+// judgement on available evidence, not proof that the agent has exited.
 //
 // Before anything is written, Resume looks the row up once on its recorded
 // tmux socket (SR-8.2) and refuses when a session is in the way, touching no

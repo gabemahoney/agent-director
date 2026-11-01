@@ -124,21 +124,25 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 }
 
 // emitOrphanCloseoutTick emits the one ad.find_missing.tick of a permission
-// request find-missing closed with its row's mark (SR-A-2.5): reconciliation
+// request shared recovery closed with its row's mark (SR-A-2.5): reconciliation
 // reason permission_orphan_closeout, carrying the request's token. A
 // trail-emit failure must not fail the store call (SR-A-3.2).
 func emitOrphanCloseoutTick(instanceID, requestToken string) {
 	emitOrphanCloseoutTickContext(context.Background(), instanceID, requestToken)
 }
 
-func emitOrphanCloseoutTickContext(ctx context.Context, instanceID, requestToken string) {
+func emitOrphanCloseoutTickContext(ctx context.Context, instanceID, requestToken string, sources ...string) {
+	source := "ad_find_missing"
+	if len(sources) > 0 && sources[0] == "ad_recovery" {
+		source = sources[0]
+	}
 	_ = trail.Emit(ctx, "ad.find_missing.tick", map[string]any{
 		"instance_id":           instanceID,
 		"request_token":         requestToken,
 		"prior_state":           nil,
 		"new_state":             nil,
 		"reconciliation_reason": "permission_orphan_closeout",
-		"source":                "ad_find_missing",
+		"source":                source,
 	})
 }
 
@@ -347,4 +351,15 @@ func (s *Store) RepairCheckPermissionSample(row Spawn, sampled []PermissionRow) 
 	}
 	emitDisplayTransitionsContext(ctx, exits)
 	return state, result, nil
+}
+
+// WithRecoveryTickSource returns an immutable per-call audit view. This changes
+// no write policy, evidence, permission reason or event name. Legacy callers
+// retain ad_find_missing; reads and pause explicitly select ad_recovery.
+// Recovery paths must reuse this view for orphan-closeout tick attribution
+// and pair it with the API recoveryTickTrail wrapper for the same source.
+func (s *Store) WithRecoveryTickSource(source string) *Store {
+	scoped := *s
+	scoped.recoveryTickSource = source
+	return &scoped
 }

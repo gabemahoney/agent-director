@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 )
 
 // Set with -ldflags "-X main.<name>=<value>"; configDir is left out of the
@@ -26,6 +27,41 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "standin: no verb")
 		os.Exit(2)
+	}
+	// Scheduling cases inspect every invocation, including accidental recovery
+	// probes. All other move-fixture consumers retain their original behavior.
+	if path := os.Getenv("SCHED_TEST_LOG"); path != "" {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Fprintln(f, os.Args[1])
+		f.Close()
+	}
+	if os.Args[1] == "help" {
+		switch os.Getenv("SCHED_TEST_HELP") {
+		case "new":
+			fmt.Println(`{"verbs":[{"name":"sweep"},{"name":"find-missing"}]}`)
+		case "legacy":
+			fmt.Println(`{"verbs":[{"name":"find-missing"}]}`)
+		case "malformed":
+			fmt.Println(`{"verbs":[{"name":"sweep"}]`)
+		case "failed":
+			fmt.Println(`{"verbs":[{"name":"sweep"}]}`)
+			os.Exit(1)
+		}
+		return
+	}
+	if delegate := os.Getenv("SCHED_TEST_DELEGATE"); delegate != "" {
+		cmd := exec.Command(delegate, os.Args[1:]...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			if e, ok := err.(*exec.ExitError); ok {
+				os.Exit(e.ExitCode())
+			}
+			panic(err)
+		}
+		return
 	}
 	switch os.Args[1] {
 	case "version", "--version", "-v":

@@ -1,8 +1,8 @@
 package installsh_test
 
-// install.sh's schedule step (b.wur): the find-missing and expire sweeps have
-// to be scheduled for the row states to stay honest, and an install that sets
-// none up says so. The cases drive install.sh against stand-ins for crontab,
+// install.sh's schedule step (b.wur): recovery and retention have separate
+// operator-selected schedules, and an install that sets none up says so.
+// The cases drive install.sh against stand-ins for crontab,
 // systemctl and curl (the INSTALL_SH_TEST_CRONTAB, _SYSTEMCTL and
 // _CURL_OVERRIDE switches) and read what it prints and writes: the stand-ins'
 // state and logs, the unit files, stdout and stderr. The uninstall side is in
@@ -10,6 +10,7 @@ package installsh_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,22 +18,387 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 )
 
+// TestScheduleCapability pins discovery independently of release labels. A
+// successful install must inspect help, never execute recovery to choose a verb.
+func TestScheduleCapability(t *testing.T) {
+	for _, tc := range []struct{ mode, assetVerb string }{
+		{"new", "find-missing"}, {"legacy", "find-missing"},
+		{"empty", "find-missing"}, {"malformed", "find-missing"}, {"failed", "find-missing"},
+		{"new", "sweep"}, {"legacy", "sweep"},
+	} {
+		mode := tc.mode
+		t.Run(mode+"/"+tc.assetVerb, func(t *testing.T) {
+			t.Parallel()
+			h := newMoveHome(t)
+			h.Pair = h.S.ScheduleProbe
+			h.Env["SCHED_TEST_HELP"] = mode
+			h.Env["SCHED_TEST_DELEGATE"] = h.S.Current.Main
+			h.Env["SCHED_TEST_LOG"] = filepath.Join(h.Root, "binary.log")
+			stub := schedStub{h}
+			stub.Cron("")
+			script := schedScript(t, h, true)
+			wantVerb := "find-missing"
+			if mode == "new" {
+				wantVerb = "sweep"
+			}
+			// Exercise both published legacy assets and the earlier sweep-form
+			// assets: target capability, not the raw literal, selects the verb.
+			for _, name := range []string{"agent-director.cron", "agent-director-find-missing.service"} {
+				schedEdit(t, script, name, func(s string) string {
+					s = strings.ReplaceAll(s, "@@AGENT_DIRECTOR@@ sweep", "@@AGENT_DIRECTOR@@ find-missing")
+					return strings.ReplaceAll(s, "@@AGENT_DIRECTOR@@ find-missing", "@@AGENT_DIRECTOR@@ "+tc.assetVerb)
+				})
+			}
+			// First inspect the manual advice, without enabling scheduling.
+			res := schedRun(t, h, script, false)
+			if res.Code != 0 || stub.CronWrites() != 0 {
+				t.Fatalf("plain install: %+v, writes %d", res, stub.CronWrites())
+			}
+			want := strings.ReplaceAll(schedCronLines(h, "")[0], " sweep ", " "+wantVerb+" ")
+			wantLines(t, "warning", res.Stderr,
+				"install.sh: WARNING: nothing schedules agent-director's "+wantVerb+" and expire jobs on this machine.",
+				"    "+want,
+				"  Copy the rendered cron lines above. For a unit, fill its placeholders and use "+wantVerb+" as the")
+			// Follow exactly the printed rerun. The capability stand-in uses
+			// the matching current admin, including snapshot-store support;
+			// actual released pairs are checked separately on fresh installs.
+			rerun := ""
+			for _, line := range strings.Split(res.Stderr, "\n") {
+				if strings.HasPrefix(line, "    cd ") {
+					rerun = strings.TrimSpace(line)
+				}
+			}
+			if rerun == "" {
+				t.Fatal("missing printed rerun")
+			}
+			cmd := h.command()
+			cmd.Dir = h.Root
+			cmd.Args = []string{h.S.Bash, "-c", rerun}
+			res = schedExec(t, cmd)
+			if res.Code != 0 {
+				t.Fatalf("opt-in: %+v", res)
+			}
+			cron, _ := stub.Crontab()
+			wantLines(t, "crontab", cron, want, schedCronLines(h, "")[1])
+			wantHelps := 2
+			if mode == "legacy" || mode == "new" {
+				// The service renderer must choose the same compatible command.
+				h.Env["INSTALL_SH_TEST_CRON_RUNNING"] = "0"
+				stub.Systemctl(0)
+				res = schedRun(t, h, script, false, "--schedule")
+				if res.Code != 0 {
+					t.Fatalf("service install: %+v", res)
+				}
+				units := schedUnitsWritten(t, h)
+				wantLines(t, "recovery service", units["agent-director-find-missing.service"], "Type=oneshot", "ExecStart="+ownedCanonical(h)+" "+wantVerb)
+				wantLines(t, "expire service", units["agent-director-expire.service"], "ExecStart="+ownedCanonical(h)+" expire")
+				wantHelps++
+			}
+			calls := stub.calls("binary.log")
+			helps := 0
+			for _, call := range calls {
+				switch call {
+				case "help":
+					helps++
+				case "sweep", "find-missing", "expire":
+					t.Errorf("discovery executed %s: %v", call, calls)
+				}
+			}
+			if helps != wantHelps {
+				t.Errorf("want one cached help probe per install, got %v", calls)
+			}
+		})
+	}
+}
+
+// TestSchedulePreservesExisting covers custom cadence and disabled units,
+// including unavailable infrastructure. No opt-in means byte-for-byte retention.
+func TestSchedulePreservesExisting(t *testing.T) {
+	for _, verb := range []string{"find-missing", "sweep"} {
+		for _, backend := range []string{"cron", "cron-down", "systemd", "systemd-down"} {
+			t.Run(verb+"/"+backend, func(t *testing.T) {
+				t.Parallel()
+				h := newMoveHome(t)
+				h.Pair = h.S.ScheduleProbe
+				h.Env["SCHED_TEST_HELP"] = "new"
+				h.Env["SCHED_TEST_DELEGATE"] = h.S.Current.Main
+				h.Env["SCHED_TEST_LOG"] = filepath.Join(h.Root, "binary.log")
+				stub := schedStub{h}
+				stub.Curl()
+				stub.Systemctl(0)
+				cron := "MAILTO=operator\n9 7 * * * /custom/agent-director " + verb + " # " + schedMark + "\n11 5 * * 3 /custom/agent-director expire # " + schedMark + "\n"
+				body := "# " + schedMark + "\n[Service]\nExecStart=/custom/agent-director " + verb + "\n[Timer]\nOnCalendar=*:0/19\n"
+				if strings.HasPrefix(backend, "cron") {
+					stub.Cron(cron)
+				} else {
+					stub.Cron("")
+					schedSeedUnits(h, body)
+					h.Write(filepath.Join(schedUnitDir(h), "operator.timer"), "unrelated\n", 0o644)
+				}
+				if strings.HasSuffix(backend, "-down") {
+					h.Env["INSTALL_SH_TEST_CRON_RUNNING"] = "0"
+					h.Env["SYSCTL_STUB_SHOW_RC"] = "1"
+				}
+				res := schedRun(t, h, schedScript(t, h, true), false)
+				if res.Code != 0 || stub.CronWrites() != 0 || slicesContainEnable(stub.SystemctlCalls()) {
+					t.Fatalf("no-opt-in mutated scheduling: %+v cron=%v units=%v", res, stub.CronCalls(), stub.SystemctlCalls())
+				}
+				if strings.HasPrefix(backend, "cron") {
+					if got, _ := stub.Crontab(); got != cron {
+						t.Errorf("crontab changed: %q", got)
+					}
+				} else {
+					for name, got := range schedUnitsWritten(t, h) {
+						if got != body {
+							t.Errorf("%s changed: %q", name, got)
+						}
+					}
+					if _, err := os.Stat(filepath.Join(schedUnitDir(h), "timers.target.wants")); !os.IsNotExist(err) {
+						t.Errorf("disabled timers became enabled: %v", err)
+					}
+					if got := h.migRead(filepath.Join(schedUnitDir(h), "operator.timer")); got != "unrelated\n" {
+						t.Errorf("operator timer changed: %q", got)
+					}
+				}
+				if len(stub.CurlURLs()) != 0 {
+					t.Errorf("existing schedule fetched assets: %v", stub.CurlURLs())
+				}
+				if !strings.HasSuffix(backend, "-down") {
+					for _, call := range stub.calls("binary.log") {
+						if call == "help" || call == "sweep" || call == "find-missing" || call == "expire" {
+							t.Errorf("existing schedule probed binary: %s", call)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+// schedRunRecovery executes only a rendered recovery command, with cron's five
+// calendar fields removed. Expire is deliberately never executed by this fixture.
+// Schedule tests must reuse this helper for rendered recovery commands;
+// adapt service payloads to cron form before calling it.
+func schedRunRecovery(t *testing.T, h *moveHome, line string) {
+	t.Helper()
+	command := regexp.MustCompile(`^(?:\S+\s+){5}`).ReplaceAllString(line, "")
+	// cron unescapes percent before invoking the shell.
+	command = strings.ReplaceAll(command, `\%`, "%")
+	command = strings.Replace(command, " >/dev/null", "", 1)
+	if !strings.Contains(command, " sweep ") && !strings.Contains(command, " find-missing ") {
+		t.Fatalf("not a recovery command: %s", command)
+	}
+	cmd := h.command()
+	cmd.Args = []string{h.S.Bash, "-c", command}
+	res := schedExec(t, cmd)
+	var result struct {
+		Count int      `json:"count"`
+		IDs   []string `json:"ids"`
+	}
+	if res.Code != 0 || json.Unmarshal([]byte(res.Stdout), &result) != nil || result.Count != 0 || result.IDs == nil || len(result.IDs) != 0 {
+		t.Fatalf("rendered recovery failed: %s => %+v", command, res)
+	}
+}
+
+// TestScheduleRenderedRecovery runs the actual installed binary through cron's
+// printed command and the service payload, with scheduler-like environment loss.
+func TestScheduleRenderedRecovery(t *testing.T) {
+	for _, backend := range []string{"cron", "systemd"} {
+		t.Run(backend, func(t *testing.T) {
+			t.Parallel()
+			h := newMoveHome(t)
+			stub := schedStub{h}
+			if backend == "cron" {
+				stub.Cron("")
+			} else {
+				stub.Systemctl(0)
+			}
+			h.Env["INSTALL_SH_TEST_PASSWD_HOME"] = "/different-home"
+			tmuxDir := filepath.Join(h.Root, "find-missing sweep it's 50%")
+			h.Env["TMUX_TMPDIR"] = tmuxDir
+			script := schedScript(t, h, true)
+			res := schedRun(t, h, script, false, "--schedule")
+			if res.Code != 0 {
+				t.Fatalf("install: %+v", res)
+			}
+			// Record the environment at the exact installed executable, then
+			// delegate to the real binary. This never executes expire.
+			canon := ownedCanonical(h)
+			real := canon + ".real"
+			if err := os.Rename(canon, real); err != nil {
+				t.Fatal(err)
+			}
+			log := filepath.Join(h.Root, "recovery-env")
+			h.Write(canon, "#!/bin/bash\nprintf '%s\\n' \"$HOME\" \"$TMUX_TMPDIR\" \"$PATH\" \"$(id -u)\" >"+moveQuote(log)+"\nexec "+moveQuote(real)+" \"$@\"\n", 0o755)
+			// The scheduler starts with the wrong home and no tmux directory.
+			h.Env["HOME"] = filepath.Join(h.Root, "wrong-home")
+			h.Env["TMUX_TMPDIR"] = ""
+			if backend == "cron" {
+				cron, _ := stub.Crontab()
+				for _, line := range strings.Split(cron, "\n") {
+					if strings.HasPrefix(line, "*/2 ") {
+						schedRunRecovery(t, h, line)
+					}
+				}
+			} else {
+				unit := schedUnitsWritten(t, h)["agent-director-find-missing.service"]
+				var argv, env []string
+				for _, line := range strings.Split(unit, "\n") {
+					if strings.HasPrefix(line, "Environment=") {
+						value, err := strconv.Unquote(strings.TrimPrefix(line, "Environment="))
+						if err != nil {
+							t.Fatal(err)
+						}
+						env = append(env, strings.ReplaceAll(value, "%%", "%"))
+					}
+					if strings.HasPrefix(line, "ExecStart=") {
+						argv = strings.Fields(strings.TrimPrefix(line, "ExecStart="))
+					}
+				}
+				if len(argv) != 2 || argv[0] != canon || argv[1] != "sweep" {
+					t.Fatalf("service argv: %v", argv)
+				}
+				cmd := exec.Command(argv[0], argv[1:]...)
+				cmd.Env = env
+				res = schedExec(t, cmd)
+				if res.Code != 0 || !json.Valid([]byte(res.Stdout)) {
+					t.Fatalf("service payload: %+v", res)
+				}
+			}
+			want := h.Home + "\n" + tmuxDir + "\n" + h.S.Toolbox + ":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin\n" + strconv.Itoa(os.Getuid()) + "\n"
+			if got := h.migRead(log); got != want {
+				t.Errorf("effective environment = %q, want %q", got, want)
+			}
+			// Both supported spellings must remain executable on this install.
+			cmd := exec.Command(real, "find-missing")
+			cmd.Env = []string{"HOME=" + h.Home, "PATH=" + h.S.Toolbox}
+			if res := schedExec(t, cmd); res.Code != 0 || !json.Valid([]byte(res.Stdout)) {
+				t.Fatalf("legacy alias: %+v", res)
+			}
+		})
+	}
+}
+
+// TestScheduleReleasedCompatibility pins B1 with the unchanged v0.12.0
+// installer/renderer/verifier and binary, including piped release 404-to-main.
+func TestScheduleReleasedCompatibility(t *testing.T) {
+	pair, oldScript := rollbackReleasedPair(t)
+	for _, installer := range []string{"current", "released"} {
+		for _, backend := range []string{"cron", "systemd", "manual"} {
+			t.Run(installer+"-installer-new-main-assets/"+backend, func(t *testing.T) {
+				h := newMoveHome(t)
+				h.Pair = pair
+				stub := schedStub{h}
+				stub.Cron("")
+				if backend == "systemd" {
+					h.Env["INSTALL_SH_TEST_CRON_RUNNING"] = "0"
+					stub.Systemctl(0)
+				}
+				stub.Curl()
+				// Release preflight requires curl on PATH as well as its override.
+				h.Write(filepath.Join(h.Tools, "curl"), "#!/bin/bash\nexec "+moveQuote(filepath.Join(h.Tools, "curl-stub"))+` "$@"`+"\n", 0o755)
+				h.Env["CURL_STUB_404_REFS"] = "v0.12.0"
+				script := schedScript(t, h, false)
+				if installer == "released" {
+					b, err := os.ReadFile(oldScript)
+					if err != nil {
+						t.Fatal(err)
+					}
+					h.Write(script, string(b), 0o755)
+				}
+				argv := append([]string{"--from-release", "v0.12.0"}, h.Flags...)
+				if backend != "manual" {
+					argv = append(argv, "--schedule")
+				}
+				res := schedRunArgv(t, h, script, true, argv)
+				if res.Code != 0 {
+					t.Fatalf("install: %+v", res)
+				}
+				var urls []string
+				for _, url := range stub.CurlURLs() {
+					if strings.HasPrefix(url, schedRawBase) {
+						urls = append(urls, url)
+					}
+				}
+				wantURLs := []string{schedURL("v0.12.0", schedFiles[0])}
+				for _, name := range schedFiles {
+					wantURLs = append(wantURLs, schedURL("main", name))
+				}
+				if strings.Join(urls, "\n") != strings.Join(wantURLs, "\n") {
+					t.Fatalf("release-ref 404 to new main: %v, want %v", urls, wantURLs)
+				}
+				want := strings.ReplaceAll(schedCronLines(h, "")[0], " sweep ", " find-missing ")
+				switch backend {
+				case "cron":
+					// Exit zero alone is insufficient: old install.sh warns but
+					// still exits zero if its post-write verifier rejects cron.
+					if strings.Contains(res.Stderr, "schedule") || !strings.Contains(res.Stdout, "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added") {
+						t.Fatalf("post-write cron verification did not succeed: %+v", res)
+					}
+					if stub.CronWrites() != 1 {
+						t.Fatalf("cron writes: %v", stub.CronCalls())
+					}
+					cron, _ := stub.Crontab()
+					wantLines(t, "compatible recovery and separate expire", cron, want, schedCronLines(h, "")[1])
+					for _, line := range strings.Split(cron, "\n") {
+						if strings.HasPrefix(line, "*/2 ") {
+							schedRunRecovery(t, h, line)
+						}
+					}
+				case "systemd":
+					units := schedUnitsWritten(t, h)
+					wantLines(t, "recovery service", units["agent-director-find-missing.service"], "Type=oneshot", "ExecStart="+ownedCanonical(h)+" find-missing")
+					wantLines(t, "separate expire", units["agent-director-expire.service"], "ExecStart="+ownedCanonical(h)+" expire")
+					wantLines(t, "recovery cadence", units["agent-director-find-missing.timer"], "OnCalendar=*:0/2")
+					wantLines(t, "retention cadence", units["agent-director-expire.timer"], "OnCalendar=*-*-* 03:17:00")
+					if !slicesContainEnable(stub.SystemctlCalls()) {
+						t.Fatalf("timers were not enabled: %v", stub.SystemctlCalls())
+					}
+					// Execute the installed service payload with the actual old
+					// binary in this disposable home; never execute expire.
+					for _, line := range strings.Split(units["agent-director-find-missing.service"], "\n") {
+						if strings.HasPrefix(line, "ExecStart=") {
+							schedRunRecovery(t, h, "*/2 * * * * "+strings.TrimPrefix(line, "ExecStart=")+" >/dev/null # service payload")
+						}
+					}
+				case "manual":
+					if stub.CronWrites() != 0 {
+						t.Fatal("manual advice installed a schedule")
+					}
+					wantLines(t, "old-binary advice", res.Stderr, "    "+want, "    "+schedCronLines(h, "")[1])
+					followed := false
+					for _, line := range strings.Split(res.Stderr, "\n") {
+						if strings.HasPrefix(strings.TrimSpace(line), "*/2 ") {
+							schedRunRecovery(t, h, strings.TrimSpace(line))
+							followed = true
+						}
+					}
+					if !followed {
+						t.Fatal("missing manual recovery advice")
+					}
+				}
+			})
+		}
+	}
+}
+
 const (
 	schedMark = "agent-director-schedule"
 	// schedWarnHead is the first line of the warning an install ends with when
 	// none of its entries is scheduled.
-	schedWarnHead = "install.sh: WARNING: nothing schedules agent-director's find-missing and expire sweeps on this machine."
+	schedWarnHead = "install.sh: WARNING: nothing schedules agent-director's sweep and expire jobs on this machine."
 	schedRawBase  = "https://raw.githubusercontent.com/gabemahoney/agent-director/"
 	// schedFoundCron and schedFoundSystemd are the stdout lines of an install
 	// that finds its entries in place and leaves them.
-	schedFoundCron    = "  schedule: found this install's cron entries for find-missing and expire; left as they are"
-	schedFoundSystemd = "  schedule: found this install's systemd entries for find-missing and expire; left as they are"
+	schedFoundCron    = "  schedule: found this install's cron entries for recovery and expire; left as they are"
+	schedFoundSystemd = "  schedule: found this install's systemd entries for recovery and expire; left as they are"
 )
 
 var schedFiles = []string{
@@ -323,7 +689,7 @@ func schedCronLinesHome(h *moveHome, tmuxTmp, home string) []string {
 	env := schedCronPrefix(h, tmuxTmp, home)
 	canon := ownedCanonical(h)
 	return []string{
-		"*/2 * * * * " + env + " " + canon + " find-missing >/dev/null # " + schedMark,
+		"*/2 * * * * " + env + " " + canon + " sweep >/dev/null # " + schedMark,
 		"17 3 * * * " + env + " " + canon + " expire >/dev/null # " + schedMark,
 	}
 }
@@ -334,7 +700,7 @@ func schedCronBlock(h *moveHome, tmuxTmp string) string { return schedCronBlockH
 
 // schedCronBlockHome is schedCronBlock for an install that carries HOME home.
 func schedCronBlockHome(h *moveHome, tmuxTmp, home string) string {
-	return "# " + schedMark + ": the find-missing and expire sweeps (install-agent-director skill, schedule/agent-director.cron)\n" +
+	return "# " + schedMark + ": the recovery and expire jobs (install-agent-director skill, schedule/agent-director.cron)\n" +
 		strings.Join(schedCronLinesHome(h, tmuxTmp, home), "\n") + "\n"
 }
 
@@ -419,10 +785,10 @@ func TestScheduleWarning(t *testing.T) {
 		want := strings.Join([]string{
 			"",
 			schedWarnHead,
-			"  Until they run, a live row whose agent is gone (killed, crashed, rebooted) stays live, a relay row",
-			"  left in check_permission stays there, a killed agent's running subagent records are not turned lost,",
-			"  and finished rows are never expired. find-missing is what keeps the row states honest.",
-			"  Schedule both now, as the agents' user (the user the agents run as, in their tmux environment). Run as",
+			"  Recovery runs only when called; state reads also perform the shared checks on supporting versions.",
+			"  Absent or failed checks leave observations old. expire separately removes eligible finished rows.",
+			"  Choose an external cadence for recovery and retention cleanup; neither runs an internal daemon.",
+			"  To schedule them, run as the agents' user (the user the agents run as, in their tmux environment). Run as",
 			"  another user, as root or against another tmux server, a sweep can wrongly mark live rows missing or",
 			"  delete rows whose agent still runs.",
 			"  These crontab lines (crontab -e, as that user) run this install's binary:",
@@ -431,9 +797,9 @@ func TestScheduleWarning(t *testing.T) {
 			"  They ship, with a systemd user timer and service for each sweep, as files in:",
 			"    " + filepath.Dir(script) + "/schedule/",
 			"    (agent-director.cron, agent-director-find-missing.service and .timer, agent-director-expire.service and .timer)",
-			"  Copy them by hand (the lines above are the cron file's with its placeholders filled in: copy those; a unit",
-			"  file's notes say how to fill its placeholders), or let the install script install them, as the user the",
-			"  agents run as:",
+			"  Copy the rendered cron lines above. For a unit, fill its placeholders and use sweep as the",
+			"  recovery command in ExecStart (keep the agent-director-find-missing filenames). Or let this install",
+			"  script install them, as the user the agents run as:",
 			"    " + rerun,
 			"  (--schedule uses cron when crontab works here and a cron daemon runs, else systemd user timers, else it installs nothing.)",
 			"  Already scheduled another way (launchd, your own cron line or unit)? This check sees only the entries",
@@ -510,8 +876,8 @@ func slicesContainEnable(calls []string) bool {
 
 // schedScheduleOut is the stdout line --schedule prints for a fresh cron install.
 const (
-	schedCronAdded     = "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # " + schedMark + ". The cron daemon must be running."
-	schedCronUnchanged = "  schedule: cron: this user's crontab already holds these entries (find-missing every 2 minutes, expire daily at 03:17); nothing changed. The cron daemon must be running."
+	schedCronAdded     = "  schedule: cron: sweep every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # " + schedMark + ". The cron daemon must be running."
+	schedCronUnchanged = "  schedule: cron: this user's crontab already holds these entries (sweep every 2 minutes, expire daily at 03:17); nothing changed. The cron daemon must be running."
 )
 
 // TestScheduleCron: --schedule with a working crontab adds the two tagged

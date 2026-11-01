@@ -20,8 +20,7 @@ import (
 // read-pane reads its pane, and send-keys with allow_pending delivers the text and Enter into that pane.
 func TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys(t *testing.T) {
 	t.Parallel()
-	adviceAssertManifest(t, "find-missing", "", "Past its grace, a pending row whose agent runs but no hook reported "+
-		"gets liveness_note unreported: read-pane, and only having looked, send-keys with allow_pending.")
+	adviceAssertManifest(t, "sweep", "", "Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending.")
 	for _, rf := range []struct{ verb, field, advice string }{
 		{"get", "liveness_note", "To act on it: read-pane, then send-keys with allow_pending (--allow-pending on the CLI); " +
 			"only a caller that looked should type."},

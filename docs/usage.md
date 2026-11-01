@@ -89,7 +89,7 @@ reported `pre_trust` outcome means, is in
 `idle_screen` while a `working` Claude or Codex agent's pane looks the same
 on successive checks for the
 [configured time](configuration.md#idle-screen-timeout-state); `state` stays
-`working`. Selected `status`, `get`, `list` and `find-missing` checks can
+`working`. Selected `status`, `get`, `list` and `sweep` checks can
 observe it; nothing samples between calls. Its separate
 [confirmation record](caller-contract.md#confirmations) reports evidence for
 the display actually returned, including no display. The fields, filtering
@@ -582,7 +582,7 @@ Every `running` record of the agent turns `lost` with `close_reason`
   `ended` once a recovery check or `pause` sees its agent gone (see
   [How a Codex row ends](hooks.md#how-a-codex-row-ends)).
 - A [recovery check](caller-contract.md#bounded-recovery-on-state-reads)
-  by a state read or `find-missing` marks the row `missing` (see
+  by a state read or `sweep` marks the row `missing` (see
   [Maintenance](maintenance.md) for scheduling the sweep). A row left live,
   with an unverified result or the `unreported` note, closes nothing.
 - The agent begins a new launch, by `resume` or by reuse of its id. `lost_at`

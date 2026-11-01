@@ -570,6 +570,28 @@ var errorCases = append(append(append(append(append([]errorCase{
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"find-missing"}
 		},
+	}, // ── sweep / ErrProbeUnsupported ───────────────────────────────
+	// No verb returns ErrProbeUnsupported any more, but the manifest still
+	// lists it for sweep (SR-1.7). The row must exist for
+	// TestErrorTableCoverage; the skip hook skips it on every platform.
+	{
+		verb:    "sweep",
+		errName: "ErrProbeUnsupported",
+		skip: func(t *testing.T) {
+			t.Helper()
+			t.Skip("sweep no longer returns it; kept by SR-1.7")
+		},
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			dbPath := apitest.SeedEmptyStore(t)
+			return filepath.Dir(dbPath), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"sweep"}
+		},
 	},
 }, spawnTmuxErrorCases...), killTmuxErrorCases...), paneTmuxErrorCases...),
 	keysTmuxErrorCases...), resumeTmuxErrorCases...)

@@ -186,7 +186,7 @@ func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
+	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -233,7 +233,7 @@ func TestCallableVerbsExcludesNonCallable(t *testing.T) {
 func TestCallableVerbsOrder(t *testing.T) {
 	want := []string{
 		"spawn", "status", "get", "send-keys", "read-pane", "kill",
-		"decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire",
+		"decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire",
 		"make-template", "list", "list-subagents", "pause", "version",
 	}
 	got := manifest.CallableVerbs()
@@ -808,5 +808,27 @@ func TestExperimentalContextContract(t *testing.T) {
 		if !strings.Contains(text, phrase) {
 			t.Errorf("subagent context description lacks %q", phrase)
 		}
+	}
+}
+
+// Both public spellings share fields and flags; the short legacy description
+// points to the canonical safety contract rather than duplicating help text.
+func TestSweepAliasManifest(t *testing.T) {
+	canonical, ok := manifest.Lookup("sweep")
+	if !ok {
+		t.Fatal("missing sweep")
+	}
+	alias, ok := manifest.Lookup("find-missing")
+	if !ok {
+		t.Fatal("missing find-missing")
+	}
+	if alias.Description != "Compatibility alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety." {
+		t.Errorf("alias description = %q", alias.Description)
+	}
+	if len(canonical.Params) != 0 || len(alias.Params) != 0 {
+		t.Error("recovery gained verb-specific parameters")
+	}
+	if !reflect.DeepEqual(canonical.ResultFields, alias.ResultFields) || !reflect.DeepEqual(canonical.ErrorNames, alias.ErrorNames) {
+		t.Error("alias contract differs from sweep")
 	}
 }

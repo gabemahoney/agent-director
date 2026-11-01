@@ -179,8 +179,10 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
       return buildRecordPaneAnswer(params as RecordPaneAnswerParams);
     case "resume":
       return buildResume(params as ResumeParams);
+    case "sweep":
     case "find-missing":
-      return buildFindMissing();
+      // Both spellings take no flags; timeout_ms remains accepted but ignored.
+      return [verb];
     case "expire":
       return buildExpire(params as ExpireParams);
     case "make-template":
@@ -391,11 +393,6 @@ function buildRecordPaneAnswer(p: RecordPaneAnswerParams): string[] {
 
 function buildResume(p: ResumeParams): string[] {
   return ["resume", "--instance-id", p.instance_id];
-}
-
-function buildFindMissing(): string[] {
-  // The CLI exposes no flags for find-missing; timeout_ms is not a CLI flag.
-  return ["find-missing"];
 }
 
 function buildExpire(p: ExpireParams): string[] {

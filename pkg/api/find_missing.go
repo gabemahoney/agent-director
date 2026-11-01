@@ -122,6 +122,8 @@ type ProvisionalTranscript = store.ProvisionalTranscript
 // JSON envelope is deterministic across runs). A Codex row the sweep moved to
 // `ended` (its agent process gone, with an end report) is in neither.
 type FindMissingResult struct {
+	// Checks retains every selected agent, with independent evidence and coverage.
+	Checks []SweepCheck `json:"checks"`
 	// Count is the number of rows this sweep marked missing: the length of
 	// IDs. A Codex row moved to ended is not counted.
 	Count int `json:"count"`
@@ -133,8 +135,8 @@ type FindMissingResult struct {
 	// launch; a pending row only past the pending grace period, never while
 	// its launch owner holds it, and never for being noted unreported. A row
 	// whose guarded mark found it changed or absent, or failed in the store,
-	// is not listed. missing is the sweep's judgement on the evidence available to
-	// it, not proof that the agent has exited. Always non-nil — encodes as []
+	// is not listed. missing is a check's judgement on available evidence,
+	// not proof that the agent has exited. Always non-nil — encodes as []
 	// when no rows were marked.
 	IDs []string `json:"ids"`
 	// Unverified is the number of live rows this sweep left live with a
@@ -316,9 +318,8 @@ func findMissingAction(r findMissingRow) string {
 	return r.action
 }
 
-// FindMissing is the find-missing verb (SR-11, SR-16.2 item 5; Appendix
-// F.4; LFR G5); (c *Client).FindMissing calls it with the Client's store,
-// tmux client, start-time reader, effective settings, clock and logger.
+// FindMissing is the compatibility alias of Sweep (SR-11, SR-16.2 item 5;
+// Appendix F.4; LFR G5). Both use the same checker and result contract.
 //
 // The start-time reader pc (SR-3.8; LFR C1) is the only source of liveness,
 // and the sweep never reads a process environment. t is the lookup and the pane listing (FindMissingTmux), called
@@ -412,8 +413,8 @@ func findMissingAction(r findMissingRow) string {
 // FindMissingResult (counts 0, IDs and UnverifiedIDs non-nil and empty), as
 // a sweep that judged no row does (b.hbt).
 //
-// A row marked missing is the sweep's judgement on the evidence available to
-// it, not proof that the agent has exited; neither ended nor missing means
+// A row marked missing is a check's judgement on available evidence,
+// not proof that the agent has exited; neither ended nor missing means
 // that the agent is dead or that its row is safe to delete (SR-18.2). The
 // caller must run as the agents' user, in their tmux environment: run as
 // another user, as root or against another tmux server, the sweep can mark
@@ -424,12 +425,21 @@ func findMissingAction(r findMissingRow) string {
 //     it: the sweep reads only process start times, and a start time it
 //     cannot read leaves that row unverified.
 func FindMissing(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc ProcChecker, pendingGrace, sweepBudget time.Duration, now func() time.Time, lg FindMissingLogger) (FindMissingResult, error) {
-	view := RelayView{Procs: pc, Now: now, active: &activeCheckProviders{tmux: t, pendingGrace: pendingGrace, budget: sweepBudget, logger: lg}}
-	return findMissingChecked(ctx, s, view, store.SettleRead{})
+	return Sweep(ctx, s, t, pc, pendingGrace, sweepBudget, now, lg)
 }
 
 func findMissingChecked(ctx context.Context, s FindMissingStore, view RelayView, settle store.SettleRead) (FindMissingResult, error) {
-	empty := FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}
+	if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithRecoveryTickSource(findMissingTickSource)
+	}
+	// Copy invocation providers: reporting must not mutate a caller-shared view.
+	providers := activeCheckProviders{}
+	if view.active != nil {
+		providers = *view.active
+	}
+	providers.tickSource = findMissingTickSource
+	view.active = &providers
+	empty := emptySweepResult()
 	var rows []Spawn
 	var refresh func([]string, []store.CursorMissingProof) ([]Spawn, error)
 	if reader, ok := s.(interface {
@@ -481,6 +491,18 @@ func findMissingChecked(ctx context.Context, s FindMissingStore, view RelayView,
 	// A sweep returns committed counts; its per-agent errors remain in the
 	// pass and never suppress independent selected rows.
 	_ = run.finish()
+	for _, proof := range run.cursor {
+		checked := run.byID[proof.Row.InstanceID]
+		if checked.cursorRejected && checked.projectionErr == nil && checked.row.State == store.StateMissing && checked.row.Snapshot == proof.Row.Snapshot {
+			// Retain the selected stored value on a refused terminal write,
+			// with its own evidence rather than the rejected projection.
+			family := checked.row.FamilyState
+			checked.row = proof.Row
+			checked.row.FamilyState = family
+			checked.display, checked.displayEvidence = proof.Row.CommittedDisplay(), proof.Row.DisplayEvidence
+		}
+	}
+	run.missing.Checks = run.sweepChecks()
 	return run.missing, nil
 }
 
@@ -755,7 +777,7 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 		}
 		writeProvenanceDisagree(r.emit, provenanceDisagree{
 			Verb:               "find-missing",
-			Source:             findMissingTickSource,
+			Source:             nameHeldSourceFindMissing,
 			InstanceID:         it.InstanceID,
 			Socket:             socket,
 			SessionName:        it.TmuxSessionName,
@@ -769,7 +791,9 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 	}
 }
 
-// FindMissing reconciles live rows against their agents' processes and,
+// FindMissing delegates to Client.Sweep, including its fixed all-agent
+// checks and completeness contract. Its legacy counters reconcile live rows
+// against their agents' processes and,
 // where a process cannot be checked, against tmux. Each live row's liveness
 // comes only from its agent process, checked by its recorded start time: the
 // SessionStart identity, else the recorded pane process, and the pane
@@ -819,7 +843,7 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 // gateway alone: one that cannot be checked is left unverified (probe_eacces)
 // with no tmux lookup, and only an exact gone verdict marks the row missing.
 //
-// missing is the sweep's judgement on the evidence available to it, not
+// missing is a check's judgement on available evidence, not
 // proof that the agent has exited; neither ended nor missing means that the
 // agent is dead or that its row is safe to delete (SR-18.2). The caller must
 // run as the same user and in the same tmux environment as the agents (the
@@ -861,8 +885,5 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 //
 // Nondeterminism: none.
 func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {
-	if err := c.checkClosed(); err != nil {
-		return FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}, err
-	}
-	return findMissingChecked(ctx, c.st.WithContext(ctx), c.relayView(), c.settleRead())
+	return c.Sweep(ctx)
 }

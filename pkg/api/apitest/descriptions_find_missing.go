@@ -29,10 +29,10 @@ func DescFindMissingGrace() DescCase {
 	return DescCase{
 		Name: "find-missing manifest, pending grace statement",
 		Require: []string{
-			"is not judged inside the pending grace period",
-			fmt.Sprintf("pending_grace_seconds, %d s by default", config.DefaultPendingGraceSeconds),
-			"measured from its launch start, not its started_at",
-			"resume's launch",
+			"Pending launches are protected while launching or within",
+			fmt.Sprintf("pending_grace_seconds (default %d s)", config.DefaultPendingGraceSeconds),
+			"of launch start, not started_at",
+			"an unreadable start is judged at once",
 		},
 		MustNot: []string{"live-state rows (including pending)"},
 	}
@@ -53,7 +53,7 @@ func FindMissingOwnText(text string) string {
 // findMissingKillPointer is find-missing's pointer to kill for SR-18.7's two
 // consequences of a run in the wrong environment, which kill's manifest
 // description states in full (SR-18.7 amendment, b.ssz Epic 4).
-const findMissingKillPointer = "See kill for what a wrong server leads to."
+const findMissingKillPointer = "see kill."
 
 // DescFindMissingManifest is find-missing's liveness and same-environment
 // rules as its manifest description states them (SR-18.9, SR-18.7, SR-3.8),
@@ -72,11 +72,11 @@ func DescFindMissingManifest() DescCase {
 	return DescCase{
 		Name: "find-missing manifest, liveness and same environment",
 		Require: []string{
-			"liveness comes only from its agent process",
-			"whose process cannot be checked or was never recorded is looked up in tmux",
-			"on its recorded socket",
-			"same user", "same tmux environment",
-			"another user", "as root", "another tmux server", "can mark live rows `missing`",
+			"Liveness uses the agent process at its recorded start identity, never children or copied IDs",
+			"Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded)",
+			"once per recorded socket (else caller's)",
+			"Run as the agents' user in their tmux environment",
+			"another user, root or another server can mark live rows missing",
 			findMissingKillPointer,
 		},
 		MustNot: []string{"probe-set", "environ probe", "environment scan", "on ambiguous evidence"},
@@ -132,7 +132,7 @@ func DescFindMissingField(f FindMissingField) DescCase {
 
 // missingNotProofFull is SR-18.2's full statement, by its two key phrases.
 var missingNotProofFull = []string{
-	"is the sweep's judgement on the evidence available to it",
+	"is a check's judgement on available evidence",
 	"not proof that the agent has exited",
 }
 

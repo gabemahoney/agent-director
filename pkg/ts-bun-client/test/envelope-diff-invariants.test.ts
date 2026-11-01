@@ -43,6 +43,7 @@ const envelopeDiffFile = path.join(testDir, "envelope-diff.test.ts");
 const NO_ERROR_CASE_ALLOWLIST: ReadonlySet<string> = new Set([
   "version", // no ErrorNames in manifest
   "expire", // no ErrorNames in manifest
+  "sweep", // same retained, unreachable ErrProbeUnsupported
   "find-missing", // lists only ErrProbeUnsupported; no longer returns it (kept by SR-1.7)
 ]);
 

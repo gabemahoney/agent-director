@@ -497,9 +497,9 @@ var (
 	confirmationTime = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$`)
 )
 
-// AssertConfirmationsShape fails t unless out, one status, get or list
+// AssertConfirmationsShape fails t unless out, one status, get, list or sweep
 // result (b.x9o), gives every agent result (the result itself, or each of
-// list's spawns) process_liveness alive, exited or unknown and confirmations
+// list's spawns or sweep's checks) process_liveness alive, exited or unknown and confirmations
 // of exactly the state, process_liveness and displayed_state records, each of
 // exactly status, confirmed_at, source, checked_at and reason, every one
 // present: statuses, sources and reasons from their enums, times RFC3339 UTC
@@ -517,8 +517,50 @@ func AssertConfirmationsShape(t testing.TB, out string) {
 	if spawns, ok := doc["spawns"].([]any); ok {
 		results = spawns
 	}
+	checks, sweep := doc["checks"]
+	if sweep {
+		var ok bool
+		results, ok = checks.([]any)
+		if !ok {
+			t.Fatalf("checks must be a non-null array: %v", checks)
+		}
+	}
 	for _, r := range results {
 		row, _ := r.(map[string]any)
+		if sweep {
+			keys := []string{"completion", "confirmations", "family_state", "idle_screen_availability", "instance_id", "process_liveness", "reason", "state"}
+			if _, ok := row["displayed_state"]; ok {
+				keys = append(keys, "displayed_state")
+				slices.Sort(keys)
+			}
+			if got := sortedKeys(row); !slices.Equal(got, keys) {
+				t.Errorf("check keys %v; want %v", got, keys)
+			}
+			if id, ok := row["instance_id"].(string); !ok || id == "" {
+				t.Errorf("check instance_id = %v", row["instance_id"])
+			}
+			if !slices.Contains([]string{"pending", "working", "waiting", "ask_user", "check_permission", "ended", "missing"}, fmt.Sprint(row["state"])) {
+				t.Errorf("check state = %v", row["state"])
+			}
+			if !slices.Contains([]string{"working", "waiting"}, fmt.Sprint(row["family_state"])) {
+				t.Errorf("check family_state = %v", row["family_state"])
+			}
+			if !slices.Contains([]string{"available", "unavailable"}, fmt.Sprint(row["idle_screen_availability"])) {
+				t.Errorf("check idle_screen_availability = %v", row["idle_screen_availability"])
+			}
+			switch row["completion"] {
+			case "complete":
+				if row["reason"] != nil {
+					t.Errorf("complete check has reason %v", row["reason"])
+				}
+			case "incomplete":
+				if !slices.Contains([]string{"deadline", "busy", "unreadable", "stale_observation", "no_evidence", "commit_unconfirmed", "unsupported", "unattempted"}, fmt.Sprint(row["reason"])) {
+					t.Errorf("incomplete check reason = %v", row["reason"])
+				}
+			default:
+				t.Errorf("check completion = %v", row["completion"])
+			}
+		}
 		records, ok := row["confirmations"].(map[string]any)
 		if !ok || !slices.Contains([]string{"alive", "exited", "unknown"}, fmt.Sprint(row["process_liveness"])) {
 			t.Errorf("agent result %v: want process_liveness alive, exited or unknown and a confirmations object", row)

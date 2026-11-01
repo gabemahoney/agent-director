@@ -55,12 +55,12 @@ func preTrustField(skippedWhy string) apitest.DescCase {
 // a negative value is refused (b.c4n).
 func manifestTextCases() []textCase {
 	cases := []textCase{
-		{verb: "find-missing", own: true, c: apitest.DescFindMissingGrace()},
-		{verb: "find-missing", own: true, c: apitest.DescFindMissingManifest()},
+		{verb: "sweep", own: true, c: apitest.DescFindMissingGrace()},
+		{verb: "sweep", own: true, c: apitest.DescFindMissingManifest()},
 		{verb: "find-missing", field: "ids", c: apitest.DescFindMissingField(apitest.FindMissingIDs)},
 		{verb: "find-missing", field: "unverified_ids", c: apitest.DescFindMissingField(apitest.FindMissingUnverifiedIDs)},
-		{verb: "find-missing", own: true, c: tokens("Codex end report, dead process",
-			"A dead agent process marks the row `missing` (a Codex row with an end report: `ended`, not in ids) whatever tmux shows, with no tmux call.")},
+		{verb: "sweep", own: true, c: tokens("Codex end report, dead process",
+			"A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux.")},
 		{verb: "find-missing", field: "count", c: tokens("Codex ended transitions and other repairs not counted",
 			"Codex rows moved to `ended` and other repairs do not increment this count")},
 		{verb: "find-missing", field: "ids", c: tokens("Codex row moved to ended not listed",
@@ -129,7 +129,7 @@ func manifestTextCases() []textCase {
 			Require: []string{"in any state but ended and missing ([] on those)", "with [state] settle_ms set", "for up to settle_ms"},
 			MustNot: []string{"the agent is gone"}}},
 		{verb: "get", c: tokens("tmux socket", "tmux socket")},
-		{verb: "find-missing", c: apitest.DescMissingNotProof()},
+		{verb: "sweep", c: apitest.DescMissingNotProof()},
 		{verb: "find-missing", field: "ids", c: apitest.DescMissingNotProof()},
 		{verb: "make-template", param: "relay_mode", c: tokens("per-call spelling", "Per-call relay_mode (--relay-mode on the CLI) overrides.")},
 		{verb: "make-template", param: "extra_env", c: tokens("per-call spelling",
@@ -374,9 +374,9 @@ var liveRowWants = map[string]struct {
 	sequences, pointers int
 	desc                func() apitest.DescCase
 }{
-	"kill":         {sequences: 1, desc: apitest.DescLiveRowSequence},
-	"find-missing": {pointers: 1, desc: apitest.DescLiveRowPointer},
-	"spawn":        {pointers: 1, desc: apitest.DescLiveRowPointer},
+	"kill":  {sequences: 1, desc: apitest.DescLiveRowSequence},
+	"sweep": {pointers: 1, desc: apitest.DescLiveRowPointer},
+	"spawn": {pointers: 1, desc: apitest.DescLiveRowPointer},
 }
 
 // TestLiveRowSequencePerVerb pins SR-18.6 (AC-DOC-05) on every verb: only kill

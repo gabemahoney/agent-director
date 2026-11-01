@@ -85,7 +85,7 @@ func resumeFinishedRow(t *testing.T, s *store.Store, dbPath, id string) {
 // ErrAlreadyDecided.
 func TestDecideRefusesAClosedRequest(t *testing.T) {
 	t.Parallel()
-	const closedText = "its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict, so nothing was recorded; do not answer it at the pane"
+	const closedText = "its spawn ended, or a shared check marked it missing, before the request's relay hook delivered a verdict, so nothing was recorded; do not answer it at the pane"
 	cases := []struct {
 		name             string
 		steps            []closeStep

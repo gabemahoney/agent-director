@@ -149,6 +149,7 @@ export type {
   RecordPaneAnswerParams, RecordPaneAnswerResult,
   ResumeParams, ResumeResult,
   FindMissingParams, FindMissingResult,
+  SweepParams, SweepResult, SweepCheck,
   ExpireParams, ExpireResult,
   MakeTemplateParams, MakeTemplateResult,
   ListParams, ListResult,

@@ -79,7 +79,8 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 		"Get":           emptyGetJSON,
 		"List":          `{"spawns":[]}`,
 		"ListSubagents": emptySubagentsJSON,
-		"FindMissing":   `{"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
+		"Sweep":         `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
+		"FindMissing":   `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
 		"Expire":        `{"count":0,"ids":[],"kept":0,"kept_ids":[]}`,
 		"Delete":        `{"results":{}}`,
 	}
@@ -96,6 +97,7 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 		"Pause":         func() (any, error) { return c.Pause(ctx, api.PauseParams{}) },
 		"Decide":        func() (any, error) { return c.Decide(api.DecideParams{}) },
 		"Resume":        func() (any, error) { return c.Resume(api.ResumeParams{}) },
+		"Sweep":         func() (any, error) { return c.Sweep(ctx) },
 		"FindMissing":   func() (any, error) { return c.FindMissing(ctx) },
 		"Expire":        func() (any, error) { return c.Expire(nil) },
 		"Delete":        func() (any, error) { return adminapi.Delete(c, nil) },

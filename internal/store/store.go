@@ -108,9 +108,13 @@ type Store struct {
 	// callContext is immutable on a scoped handle; the pool is shared with its
 	// owner. It carries the original caller deadline through every statement.
 	callContext context.Context
-	cleanup     *connectionCleanupLane
-	filePath    string // actual opened database, retained for owned Cursor launch plumbing
-	db          *sql.DB
+
+	// recoveryTickSource is invocation-only audit attribution, never stored.
+	recoveryTickSource string
+
+	cleanup  *connectionCleanupLane
+	filePath string // actual opened database, retained for owned Cursor launch plumbing
+	db       *sql.DB
 	// storeID is store_meta's store_id, read once at open (SR-5.1); see
 	// StoreID.
 	storeID string

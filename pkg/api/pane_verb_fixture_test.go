@@ -898,6 +898,11 @@ func (e *killEnv) pause(p api.PauseParams) (api.PauseResult, error) {
 // pauseWithin is pause with ctx and the wait's timeout given.
 func (e *killEnv) pauseWithin(ctx context.Context, timeoutSeconds int, p api.PauseParams) (api.PauseResult, error) {
 	now := e.clock.Now()
+	// Retain this narrow fixture's counters and injected failures while giving
+	// its delegated writes the same attribution as production Pause.
+	original := e.store.st
+	e.store.st = original.WithRecoveryTickSource("ad_recovery")
+	defer func() { e.store.st = original }()
 	return api.Pause(ctx, e.store, e.rec, api.PauseEnv{
 		Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return now }, Window: sendKeysWindow()},
 	}, timeoutSeconds, p)

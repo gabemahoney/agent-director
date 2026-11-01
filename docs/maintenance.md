@@ -2,29 +2,39 @@
 
 ## Scheduling the sweeps
 
-Nothing runs the two sweep verbs until they are scheduled:
+Choose an external cadence for recovery and separate retention cleanup.
+Neither command runs an internal scheduler:
 
 ```sh
-# Mark live rows whose agent is gone `missing` (`ended` if it reported its end);
-# run often (e.g. every 2 min):
-agent-director find-missing
+# Check all agents once; run often (e.g. every 2 min):
+agent-director sweep
 # Delete finished rows older than expire_retention_days that nothing runs:
 agent-director expire
 ```
 
-`find-missing` selects an all-agent snapshot and runs the same eligible
+`sweep` selects an all-agent snapshot and runs the same eligible
 [recovery checks as state reads](caller-contract.md#bounded-recovery-on-state-reads).
 It can recover missed Codex turn endings, stale permission state and display
 observations without an intervening read. Finished rows skip live-agent
 checks; late exact input proof can still be recorded without sending input.
-Scheduling covers agents that no caller reads. Without `expire`, finished
-rows pile up past `expire_retention_days`.
+`status`, `get` and `list` run those checks for their returned agents. Existing
+`find-missing` schedules keep working: it is an alias of `sweep`.
+
+Scheduling covers agents that no caller reads. Absent or failed checks can
+leave facts old until a later eligible event, command or check. An installed
+cron entry or enabled timer does not prove a check ran or confirmed anything.
+Equal pane samples do not prove continuous inactivity; unknown or pending
+results need later evidence. See the [caller contract](caller-contract.md)
+for confirmation and completeness semantics. Without `expire`, finished rows
+pile up past `expire_retention_days`.
 
 ### Let the install schedule them
 
 Run `install.sh --schedule` as the agents' user (see [install](install.md)).
-It schedules `find-missing` every 2 minutes and `expire` daily at 03:17, for the
-user running it, from the files below:
+It schedules recovery every 2 minutes and `expire` daily at 03:17, for the
+user running it. Choose these defaults or [set your own cadence](#schedule-them-by-hand).
+The [installer selects a supported recovery command](install.md#schedule-the-sweeps)
+and uses one of these backends:
 
 - **cron**, when `crontab -l` works and a cron daemon (a process named `cron`
   or `crond`; checked on Linux only) is running: two job lines and a header
@@ -42,9 +52,10 @@ user running it, from the files below:
   too, it still adds the two cron lines (they run once a cron daemon starts),
   says on stderr that no cron daemon runs, and ends with the warning.
 
-Running it again replaces its own entries, so there is never a second copy,
-and points them at the current binary; every other crontab line is kept. It
-never schedules as another user.
+Running it again with `--schedule` replaces its own entries with the template
+cadence and current binary; every other crontab line is kept. Without that
+flag, existing commands, cadence and timer enablement stay unchanged. It never
+schedules as another user.
 
 An install that does not find entries for both sweeps, with or without
 `--schedule` (both tagged cron lines with a cron daemon running, or all four
@@ -67,12 +78,18 @@ install (`curl ... | bash`) that fetched them:
 | File | Holds |
 |---|---|
 | `agent-director.cron` | the two crontab lines |
-| `agent-director-find-missing.service`, `.timer` | `find-missing` every 2 minutes |
+| `agent-director-find-missing.service`, `.timer` | recovery every 2 minutes |
 | `agent-director-expire.service`, `.timer` | `expire` daily at 03:17 |
 
-Lines starting with `##` are notes, not part of the schedule. Fill the
-placeholders, then add the cron lines with `crontab -e`, or put the four unit
-files in `~/.config/systemd/user/` and run:
+Raw templates use `find-missing` for compatibility with older installers and
+binaries. For a binary whose `help` advertises `sweep`, use `sweep` in the cron
+recovery line and service `ExecStart`; otherwise keep `find-missing`. Keep the
+`agent-director-find-missing` filenames and `agent-director-schedule` markers.
+
+Lines starting with `##` are notes, not part of the schedule. Choose the cron
+times or timers' `OnCalendar` values and fill the placeholders. Add the cron
+lines with `crontab -e`, or put the four unit files in the user manager's unit
+directory described above and run:
 
 ```sh
 systemctl --user daemon-reload
@@ -91,20 +108,9 @@ lines carry `PATH` and `TMUX_TMPDIR`: the sweep must reach the tmux server the
 agents use. `HOME` is carried when it differs from the passwd home because the
 binary keeps its files in `$HOME/.config/agent-director`.
 
-`find-missing` marks a live row `missing` when its agent's process is gone or,
-when the process cannot be checked, when tmux shows no session of its launch;
-otherwise the row stays unverified. A Cursor row with a recorded gateway is never
-looked up in tmux ([Cursor rule](caller-contract.md#cursor-operation-boundaries)).
-A Codex row whose agent reported its end
-and whose process is gone is marked `ended` instead, and is in neither `ids`,
-`count` nor `unverified_ids` (see
-[How a Codex row ends](hooks.md#how-a-codex-row-ends)). A `pending` row receives
+See [Sweep results](caller-contract.md#sweep-results) for liveness outcomes,
+counters and check coverage. A `pending` row receives
 no liveness check inside its grace period or while its launch owner is alive.
-Marked rows are in `ids` (`count` is its length); unverified live rows are in
-`unverified_ids` (`unverified` is its length), with `liveness_unverified_since`
-and `liveness_note` in `list` and `get`. These are liveness results, not counts
-of all recovery work: a missed turn end or permission repair adds nothing to
-either list.
 
 Past its grace period, a `pending` row whose agent runs but has not reported
 in stays `pending` with `liveness_note` `unreported`. Read the pane, then type
@@ -118,8 +124,7 @@ agent-director send-keys --instance-id <id> --allow-pending --text "<answer>"
 A caller that cannot judge the pane follows the
 [caller contract](caller-contract.md).
 
-State reads can also repair eligible stale `check_permission` rows; this
-does not require a scheduled sweep. The hold and repair conditions are in
+The hold and repair conditions for stale `check_permission` rows are in
 [Hooks](hooks.md#a-relay-row-left-in-check_permission), and response authority
 remains governed by the [permission contract](caller-contract.md#permission-relay).
 A relayed request's delivery is worked out each time the request is read.
@@ -138,15 +143,16 @@ agents' user, in their tmux environment, against their
 ## Recovering after a reboot
 
 A reboot kills every agent and tmux server; the rows survive. Run
-`find-missing` for all rows, then resume each wanted latest session. Run these
-two steps in order from a startup script:
+`sweep` for all rows, then resume each wanted latest session. Run these
+two steps in order from a startup script (use `find-missing` if the installed
+binary's `help` does not advertise `sweep`):
 
 ```sh
-agent-director find-missing                       # end or mark dead rows `missing`
+agent-director sweep                     # end or mark dead rows `missing`
 agent-director resume --instance-id <id>   # relaunch the latest reported session
 ```
 
-`resume` acts on a finished row (`ended` or `missing`); `find-missing` first
+`resume` acts on a finished row (`ended` or `missing`); `sweep` first
 makes a dead live row `missing` (or `ended`, for a Codex row that reported its
 end). Cursor loads only its saved latest session and protected transcript;
 load may leave it `pending` until a real first prompt. Missing native session

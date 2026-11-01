@@ -1,6 +1,6 @@
 ---
 name: install-agent-director
-description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin (an upgrade from a release that kept its files in the old directory moves that directory first), migrates and opens state.db (requiring an operator-maintained maintenance window for the native-input cutover), migrates config.toml and the templates to the agent names, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up the find-missing and expire sweeps (cron, else systemd user timers; otherwise it warns that nothing schedules them). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
+description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin (an upgrade from a release that kept its files in the old directory moves that directory first), migrates and opens state.db (requiring an operator-maintained maintenance window for the native-input cutover), migrates config.toml and the templates to the agent names, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up recovery (sweep when supported, otherwise find-missing) and separate expire cleanup (cron, else systemd user timers; otherwise it warns that nothing schedules them). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
 ---
 
 ## First-time install on a brand-new machine
@@ -416,20 +416,20 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      Re-injecting later is a re-run of `install.sh` without
      `--no-hooks`.
 
-5. **Set up the find-missing and expire schedule now? (`--schedule`)**
+5. **Schedule recovery every 2 minutes and expire daily at 03:17? (`--schedule`)**
 
-   - *What this is:* agent-director keeps its rows honest with two
-     sweeps that nothing runs on its own: `agent-director find-missing`
-     (every 2 minutes) marks a row whose agent is gone (killed, crashed,
-     rebooted) as missing, and `agent-director expire` (daily at 03:17)
-     deletes finished rows past their retention. Without a schedule a
-     dead agent's row stays live, a relay row stays in
-     `check_permission`, a killed agent's running subagent records are
-     never turned lost, and finished rows are never expired. The skill
+   - *What this is:* `agent-director sweep` checks all agents once,
+     recovering missed state changes and refreshing observations without
+     a read. On supporting versions, `status`, `get` and `list` run the
+     same checks for returned agents. Absent or failed checks can leave
+     facts old until later evidence arrives. `agent-director expire`
+     separately deletes eligible finished rows past their retention. The skill
      ships ready-made schedule files in `schedule/` beside this
      SKILL.md (a cron file, and a systemd user `.service` and `.timer`
      for each sweep); `--schedule` installs them for the user running
-     the script.
+     the script. The operator chooses the cadence: accept the defaults
+     in this question or choose no and arrange a custom schedule using
+     [Maintenance](https://github.com/gabemahoney/agent-director/blob/main/docs/maintenance.md#scheduling-the-sweeps).
    - *Who must run it:* the sweeps must run as the agents' user, in the
      agents' tmux environment, against the agents' `~/.config/agent-director`.
      Run as another user, as root or against another tmux server, a
@@ -452,20 +452,22 @@ previous release". The current installer refuses pre-move binaries with exit 3.
        run once a cron daemon starts), with a note on stderr and the
        warning below. Re-running replaces
        the entries it added and points them at the current binary, so it
-       never doubles them.
-     - **(b) No: leave it (no flag).** The install ends with a loud
-       warning on stderr that names the exact crontab lines for this
-       install's binary, the shipped files and the full command (this
-       install's own arguments plus `--schedule`) to schedule later. Pick this when the schedule is managed another
-       way (launchd, your own cron line or unit, a config-management
+       never doubles them. It uses the template cadence, replacing any
+       customized cadence in those entries.
+     - **(b) No: leave it (no flag).** Existing commands, cadence and
+       timer enablement stay unchanged. If it does not recognize a schedule,
+       the install warns on stderr and names the exact crontab lines
+       for this install's binary, the shipped files and the full command (this
+       install's own arguments plus `--schedule`) to schedule later. Pick this
+       when the schedule is managed another way (launchd, your own cron line or unit, a config-management
        tool): the install's check sees only the entries `--schedule`
        adds, so it warns anyway; ignore it.
    - *Default:* (a) when the agents run as the user doing the install
-     and nothing already schedules the sweeps; it is the only way the
-     rows stay accurate. (b) when the agents run as another user or
-     the operator schedules another way. The flag is OFF in
-     `install.sh` itself, so the question is where the schedule is
-     decided.
+     and the operator wants the default cadence with no existing schedule.
+     (b) when a schedule already exists, the agents run as another user,
+     or the operator wants a custom cadence or schedules another way.
+     The flag is OFF in `install.sh` itself; pass it only when the operator
+     opts in.
    - *Reversibility:* fully reversible. `uninstall.sh` removes exactly
      the entries `--schedule` added (the tagged crontab lines, or the
      systemd units and their enable links) and does nothing when none are
@@ -478,8 +480,12 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      warning use that copy. A release tag older than the `schedule/`
      directory (a 404; for example `--from-release` on an older tag, or
      the latest release before it shipped) is retried once at `main`, and
-     the `schedule:` fetch line says so. When the fetch fails (no
-     network, no reliable ref, or `main` answers no better), `--schedule`
+     the `schedule:` fetch line says so. Raw templates keep `find-missing`
+     for released installers. The current installer renders `sweep` only
+     when the target binary's `help` advertises it; otherwise, including
+     failed or unreadable help, it uses `find-missing`. Detection never
+     runs recovery. When the fetch fails (no network, no reliable ref, or
+     `main` answers no better), `--schedule`
      installs nothing and says why, the warning points at the files on
      `main`, and the rest of the install and its exit status are
      unaffected.
@@ -1161,7 +1167,15 @@ This skill runs `install.sh` from the same directory. The script:
    says the files came from `main`. A failed fetch changes no exit
    status.
 
-   With `--schedule` the script installs from those files and nothing
+   Raw templates retain `find-missing`; the current installer renders
+   `sweep` only when the target binary advertises it in `help`, otherwise
+   `find-missing`. Its warning prints rendered commands, which may differ
+   from the raw files. For manual units use the recovery verb the warning
+   names in `ExecStart`, keeping the `agent-director-find-missing` filenames.
+   Existing `find-missing` schedules remain supported.
+
+   Without `--schedule`, existing commands, cadence and timer enablement
+   stay unchanged. With it, the script installs from those files and nothing
    else, for the user running it, who must own `HOME` and be the agents'
    user:
    - **cron**, when `crontab` works and a cron daemon is running (on
@@ -1199,7 +1213,7 @@ This skill runs `install.sh` from the same directory. The script:
    Installing through cron removes this install's systemd units, and
    installing through systemd removes this install's cron lines (systemd
    is used only where cron is not), so a host is never scheduled twice. A re-run re-points the entries at the
-   current binary and changes nothing already right; an upgrade needs
+   current binary and template cadence; an upgrade needs
    nothing, since the binary's path does not change. A successful step
    prints its `  schedule: ...` lines on stdout, before the `admin   :`
    line (a systemd install adds a second one about `loginctl
@@ -1207,14 +1221,14 @@ This skill runs `install.sh` from the same directory. The script:
    saying a piped run fetched the schedule files. Crontab lines
    whose cron daemon is not running do not count as a schedule.
 
-   When, after all that, no entry of the install's own is present (no
-   tagged crontab line for both sweeps with a cron daemon running, and no
-   installed unit), the script ends with a
-   warning on stderr, after `install.sh: done` (on exit 6, just before
+   When, after all that, the install's entries for both jobs are not found
+   (both tagged cron lines with a running daemon, or all four units), it ends
+   with a warning on stderr, after `install.sh: done` (on exit 6, just before
    the final MCP-failed line). It is not an error and changes no exit
-   status. It says the sweeps are not scheduled and what that costs,
-   names the two crontab lines with this install's binary and
-   environment (the shipped file's, filled in: copy those), says to run
+   status. It explains shared read recovery, stale observations after absent
+   or failed checks, and separate retention cleanup. Schedule presence is
+   not proof that checks ran or confirmed anything. It names the two rendered
+   crontab lines with this install's binary and environment (copy those), says to run
    them as the agents' user, names the shipped files, and gives the
    command to schedule: this run's own command line, each argument
    shell-quoted, with `--schedule` added, after a `cd` to the directory the
@@ -1265,7 +1279,7 @@ umask.
   than `HOME`'s owner.
   It does not touch a launchd job, a Windows task or a cron line or
   unit it did not add (they lack the `agent-director-schedule` tag).
-  It never changes what `find-missing` or `expire` do.
+  It never changes what `sweep`, `find-missing` or `expire` do.
 
 ## When install.sh fails
 

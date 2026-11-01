@@ -13,6 +13,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 func TestInputProofOnePassKeepsExactCapturedProvenance(t *testing.T) {
@@ -146,7 +147,7 @@ func TestInputProofRejectsStaleCaptureAndNeverStartsWork(t *testing.T) {
 // including cwd, and record late proof without reacquiring input authority.
 func TestInputProofSharedFirstRead(t *testing.T) {
 	t.Parallel()
-	for _, surface := range []string{"status", "get", "list", "find-missing"} {
+	for _, surface := range []string{"status", "get", "list", "find-missing", "sweep"} {
 		for _, finished := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/finished=%v", surface, finished), func(t *testing.T) {
 				e, r, launch := sqliteSubmission(t)
@@ -179,8 +180,20 @@ func TestInputProofSharedFirstRead(t *testing.T) {
 					_, err = c.Get(r.ID)
 				case "list":
 					_, err = c.List(api.ListParams{})
-				case "find-missing":
-					_, err = c.FindMissing(context.Background())
+				case "find-missing", "sweep":
+					var result api.SweepResult
+					if surface == "sweep" {
+						result, err = c.Sweep(context.Background())
+					} else {
+						result, err = c.FindMissing(context.Background())
+					}
+					if err == nil {
+						apitest.AssertConfirmationsShape(t, jsonOf(t, result))
+						assertLists(t, result, nil, nil)
+						if len(result.Checks) != 1 || result.Checks[0].InstanceID != r.ID || result.Checks[0].Completion != "complete" || result.Checks[0].Reason != nil {
+							t.Fatalf("proof recovery check = %+v", result)
+						}
+					}
 				}
 				if err != nil {
 					t.Fatal(err)

@@ -122,6 +122,9 @@ var securityVerbs = slices.Concat([]securityVerb{{
 			TmuxSessionName: s.target.Name, TmuxSessionNameSupplied: true})
 	},
 }, {
+	verb: "sweep", event: "ad.launch.name_held", call: securitySweepCall,
+	record: securityFindMissingRecord, cases: securityFindMissingCases,
+}, {
 	verb: "find-missing", event: "ad.launch.name_held", call: securityFindMissingCall,
 	record: securityFindMissingRecord, cases: securityFindMissingCases,
 }, {
@@ -345,7 +348,29 @@ func runSecurityVerbs(t *testing.T, verbs []securityVerb) {
 				if jerr != nil {
 					t.Fatalf("marshal result: %v", jerr)
 				}
-				securityAbsent(t, "result", string(out), s)
+				if v.verb == "sweep" || v.verb == "find-missing" {
+					// SR-7.5 deliberately names every agent in this store, including
+					// the other fixture row. Only checks[].instance_id is exempt;
+					// secrets, foreign-store IDs and every other field stay protected.
+					result := res.(api.SweepResult)
+					result.Checks = slices.Clone(result.Checks)
+					var ids []string
+					for i := range result.Checks {
+						ids = append(ids, result.Checks[i].InstanceID)
+						if result.Checks[i].InstanceID == s.other.ID {
+							result.Checks[i].InstanceID = ""
+						}
+					}
+					slices.Sort(ids)
+					want := []string{s.target.ID, s.other.ID}
+					slices.Sort(want)
+					if !slices.Equal(ids, want) {
+						t.Fatalf("all-agent checks = %v; want only store-owned rows %v", ids, want)
+					}
+					securityAbsent(t, "result", jsonOf(t, result), s)
+				} else {
+					securityAbsent(t, "result", string(out), s)
+				}
 				securityAbsent(t, "client log", logs.String(), s)
 				if c.check != nil {
 					c.check(t, s, res)

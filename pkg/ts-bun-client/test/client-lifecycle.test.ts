@@ -18,6 +18,8 @@ test("close() is idempotent and a closed Client refuses calls with ErrClientClos
     expect(() => client.close()).not.toThrow();
     expect(() => client._assertOpenForTests()).toThrow(ErrClientClosed);
     await expect(client.version({})).rejects.toBeInstanceOf(ErrClientClosed);
+    await expect(client.sweep()).rejects.toBeInstanceOf(ErrClientClosed);
+    await expect(client.findMissing({ timeout_ms: 1 })).rejects.toBeInstanceOf(ErrClientClosed);
   }));
 
 test("a `using` block closes the Client at scope exit", () =>

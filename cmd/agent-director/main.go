@@ -114,6 +114,7 @@ func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) ma
 		"get-permission":     func(args []string) error { return getPermissionHandlerWith(client, args) },
 		"record-pane-answer": func(args []string) error { return recordPaneAnswerHandlerWith(client, args) },
 		"resume":             func(args []string) error { return resumeHandlerWith(client, args) },
+		"sweep":              func(args []string) error { return sweepHandlerWith(client, args) },
 		"find-missing":       func(args []string) error { return findMissingHandlerWith(client, args) },
 		"expire":             func(args []string) error { return expireHandlerWith(client, args) },
 		"serve":              func(args []string) error { return serveHandlerWith(cfg, o, pkgapi.New, args) },

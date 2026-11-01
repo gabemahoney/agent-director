@@ -293,7 +293,7 @@ var settledReadNames = map[string]bool{"ReportedState": true, "GetSpawnSettled":
 // derivation and the store reads, and status, get and list.
 var settledReadFiles = []string{"internal/store/settle.go", "internal/store/family.go", "internal/store/spawns.go", "internal/store/spawn_status.go", "internal/store/list.go", "internal/store/cursor_missing_read.go", "internal/store/display.go", "pkg/api/display.go",
 	"pkg/api/client.go", "pkg/api/status.go", "pkg/api/get.go", "pkg/api/list.go",
-	"pkg/api/active_checks.go", "pkg/api/find_missing.go", "pkg/api/find_missing_repair.go"}
+	"pkg/api/active_checks.go", "pkg/api/sweep.go", "pkg/api/find_missing.go", "pkg/api/find_missing_repair.go"}
 
 // TestOnlyTheReadSurfacesReadTheSettledState: no production file outside
 // settledReadFiles names the settled read, so no guard can act on the

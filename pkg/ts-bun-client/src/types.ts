@@ -327,7 +327,7 @@ export interface ListRow {
    * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
    * off), this is the settled state: a state a hook wrote shows only once it has held for
    * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
-   * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+   * shows; ended, missing and a state a command wrote (spawn, resume, sweep/find-missing) show at once.
    * Nothing marks a state as late. `family_state` settles independently. Fields such as
    * `state_changed_at` and `permission_requests`, and the verbs that act on the row, follow its
    * live state, which can be newer: a refusal can name a state this field does not show yet.
@@ -386,22 +386,22 @@ export interface ListRow {
    */
   launch_started_at?: string | null;
   /**
-   * RFC3339 timestamp of the first sweep that noted this live row (left it
-   * unverified, or noted it `unreported`); kept while later sweeps change
+   * RFC3339 timestamp of the first check that noted this live row (left it
+   * unverified, or noted it `unreported`); kept while later checks change
    * `liveness_note`, `unreported` included. Cleared together with
-   * `liveness_note` when a sweep finds the agent process alive, except on a
+   * `liveness_note` when a check finds the agent process alive, except on a
    * pending row it notes `unreported` and a pending row noted
    * `provenance_conflict`, which keeps it; omitted/null while the row has no
    * note.
    */
   liveness_unverified_since?: string | null;
   /**
-   * Reason token of the latest sweep that left this live row unverified (its
+   * Reason token of the latest check that left this live row unverified (its
    * agent process could not be checked and tmux did not settle it), for
    * example `process_not_seen_session_present`,
    * `process_not_seen_tmux_unchecked`, `probe_eacces`, `tmux_server_changed`
    * or `provenance_conflict`; overwritten when the reason changes. Cleared
-   * together with `liveness_unverified_since` when a sweep finds the agent
+   * together with `liveness_unverified_since` when a check finds the agent
    * process alive, except on a pending row it notes `unreported` and a
    * pending row noted `provenance_conflict`, which keeps it; omitted/null
    * while the row has no note. Or `unreported`, on a pending row past the
@@ -409,7 +409,7 @@ export interface ListRow {
    * its launch, so it may sit at an agent startup screen or idle at its
    * prompt. The row stays pending. To act on it: `readPane`, then `sendKeys`
    * with `allow_pending`; only a caller that looked should type. A later
-   * sweep that finds the agent alive keeps the note; the agent's next hook
+   * check that finds the agent alive keeps the note; the agent's next hook
    * clears it. `unreported` never replaces `provenance_conflict`.
    */
   liveness_note?: string | null;
@@ -612,7 +612,7 @@ export interface StatusResult {
    * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
    * off), this is the settled state: a state a hook wrote shows only once it has held for
    * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
-   * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+   * shows; ended, missing and a state a command wrote (spawn, resume, sweep/find-missing) show at once.
    * Nothing marks a state as late. The verbs that act on the Spawn follow its live state, which
    * can be newer: a refusal can name a state status does not show yet.
    */
@@ -704,7 +704,7 @@ export interface GetResult {
    * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
    * off), this is the settled state: a state a hook wrote shows only once it has held for
    * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
-   * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+   * shows; ended, missing and a state a command wrote (spawn, resume, sweep/find-missing) show at once.
    * Nothing marks a state as late. While a `displayed_state` exit settles, it, `since` and its
    * detail keep the previous display's committed values, and `family_state` settles
    * independently. Fields such as `state_changed_at` and `permission_requests`, and the verbs
@@ -765,22 +765,22 @@ export interface GetResult {
    */
   launch_started_at?: string | null;
   /**
-   * RFC3339 timestamp of the first sweep that noted this live row (left it
-   * unverified, or noted it `unreported`); kept while later sweeps change
+   * RFC3339 timestamp of the first check that noted this live row (left it
+   * unverified, or noted it `unreported`); kept while later checks change
    * `liveness_note`, `unreported` included. Cleared together with
-   * `liveness_note` when a sweep finds the agent process alive, except on a
+   * `liveness_note` when a check finds the agent process alive, except on a
    * pending row it notes `unreported` and a pending row noted
    * `provenance_conflict`, which keeps it; omitted/null while the row has no
    * note.
    */
   liveness_unverified_since?: string | null;
   /**
-   * Reason token of the latest sweep that left this live row unverified (its
+   * Reason token of the latest check that left this live row unverified (its
    * agent process could not be checked and tmux did not settle it), for
    * example `process_not_seen_session_present`,
    * `process_not_seen_tmux_unchecked`, `probe_eacces`, `tmux_server_changed`
    * or `provenance_conflict`; overwritten when the reason changes. Cleared
-   * together with `liveness_unverified_since` when a sweep finds the agent
+   * together with `liveness_unverified_since` when a check finds the agent
    * process alive, except on a pending row it notes `unreported` and a
    * pending row noted `provenance_conflict`, which keeps it; omitted/null
    * while the row has no note. Or `unreported`, on a pending row past the
@@ -788,7 +788,7 @@ export interface GetResult {
    * its launch, so it may sit at an agent startup screen or idle at its
    * prompt. The row stays pending. To act on it: `readPane`, then `sendKeys`
    * with `allow_pending`; only a caller that looked should type. A later
-   * sweep that finds the agent alive keeps the note; the agent's next hook
+   * check that finds the agent alive keeps the note; the agent's next hook
    * clears it. `unreported` never replaces `provenance_conflict`.
    */
   liveness_note?: string | null;
@@ -976,7 +976,7 @@ export interface GetPermissionResult extends RequestDelivery {
   decision?: "allow" | "deny" | null;
   /**
    * Canonical decision-reason string: "operator" | "timeout" | "find_missing" | "ended" for deny
-   * rows ("find_missing" / "ended": still undecided when find-missing marked its spawn missing, or
+   * rows ("find_missing" / "ended": still undecided when a shared check marked its spawn missing, or
    * when its spawn ended or was resumed, and closed); "pane" | "pane_outside" | "tool_ran" for a
    * request answered through sendKeys or a Cursor native choice ("pane"), recorded outside
    * ("pane_outside"), or carrying tool execution evidence ("tool_ran"). Pane claims do not establish
@@ -1181,18 +1181,41 @@ export interface ResumeResult {
   pre_trust: "ok" | "skipped" | "failed";
 }
 
-/** Params for the `find-missing` verb, which takes no CLI flags. */
-export interface FindMissingParams {
+/** Params for sweep and its find-missing alias; neither takes CLI flags. */
+export interface SweepParams {
   /**
-   * Accepted but not sent: the `find-missing` CLI verb takes no flags, so
+   * Accepted but not sent: neither CLI spelling takes flags, so
    * this value has no effect. The call is bounded by the Client's
    * `callTimeoutMs` like every other verb.
    */
   timeout_ms?: number;
 }
 
-/** Rows marked missing, ended or left unverified by the sweep. */
-export interface FindMissingResult {
+/** Retained compatibility name for sweep parameters. */
+export interface FindMissingParams extends SweepParams {}
+
+/** A fixed-snapshot agent, including finished and unattempted rows. */
+export interface SweepCheck {
+  instance_id: string;
+  state: StatusResult["state"];
+  displayed_state?: StatusResult["displayed_state"];
+  /** Stored family projection; its freshness is unconfirmed. */
+  family_state: "working" | "waiting";
+  idle_screen_availability: IdleScreenAvailability;
+  process_liveness: ProcessLiveness;
+  /** Exactly the three independent main-field records, including unknowns. */
+  confirmations: Confirmations;
+  /** Coverage: eligible adapters attempted or inapplicable, not fields confirmed. */
+  completion: "complete" | "incomplete";
+  /** Null when complete. Unattempted work adds no evidence timestamps. */
+  reason: "deadline" | "busy" | "unreadable" | "stale_observation" | "no_evidence" |
+    "commit_unconfirmed" | "unsupported" | "unattempted" | null;
+}
+
+/** One bounded shared check pass; no input, answer, restart or signal authority. */
+export interface SweepResult {
+  /** Sorted fixed all-agent selection; never null. Failed/remaining rows stay represented. */
+  checks: SweepCheck[];
   /**
    * Number of rows this sweep marked `missing` (the length of `ids`); a Codex
    * row it moved to `ended` is not counted. Zero is a normal result when
@@ -1209,7 +1232,7 @@ export interface FindMissingResult {
    * gone, or failed, is in neither list, and so is a Codex row the sweep moved
    * to `ended` (its agent process gone and an end report held) and a pending
    * row the sweep notes `unreported` (its agent alive) or finds already noted
-   * so. `missing` is the sweep's judgement on the evidence available to it, not
+   * so. `missing` is a check's judgement on available evidence, not
    * proof that the agent has exited. Never null; [] when none.
    */
   ids: string[];
@@ -1229,6 +1252,9 @@ export interface FindMissingResult {
    */
   unverified_ids: string[];
 }
+
+/** Retained compatibility name for the common sweep result. */
+export interface FindMissingResult extends SweepResult {}
 
 /** The minimum finished-row age for cleanup. */
 export interface ExpireParams {

@@ -160,7 +160,7 @@ on CLI, MCP and the Go and TypeScript clients:
 - **Flaps never show.** A change that comes back within T is never seen: a
   working agent that reads `waiting` for a moment reads `working` throughout.
 - **Own state at once.** `ended` and `missing`, and a state a command or
-  recovery check sets (`spawn`, `resume`, a state read or `find-missing`),
+  recovery check sets (`spawn`, `resume`, a state read or `sweep`),
   show at once. A row that its own agent moves
   out of `missing` or `ended` waits like any other change: it reads
   `missing` or `ended` for T, then the new state.
@@ -176,7 +176,7 @@ on CLI, MCP and the Go and TypeScript clients:
   instead settles through successful observations; T does not bound its
   delay from a raw-state change.
 - **Verbs act on the live state.** `send-keys`, `decide`, `pause`,
-  `resume`, `kill`, `find-missing`, `expire` and `spawn` judge a row's
+  `resume`, `kill`, `sweep`, `expire` and `spawn` judge a row's
   latest state, which can be newer than what `status` shows, so a verb can
   refuse on a state `status` does not show yet; the refusal is a named
   error. Permission requests are never delayed. Ordinary raw-state reporting
@@ -207,7 +207,7 @@ value or one above the maximum is refused (see
 
 `[state] idle_screen_timeout_seconds` is the minimum span of matching
 owned-pane captures that qualifies a `working` Claude or Codex row for
-`idle_screen`. Eligible `status`, `get`, `list` and `find-missing` checks
+`idle_screen`. Eligible `status`, `get`, `list` and `sweep` checks
 sample it; the timeout schedules no check and confirms nothing by itself.
 Sampling and baseline resets are defined in the
 [caller contract](caller-contract.md#unchanged-panes).
@@ -246,7 +246,7 @@ Whole integers, never below the safe minimum.
 | `action_timeout_ms` | ms | 2000 | none | Each tmux kill, key send and pane capture. |
 | `create_timeout_ms` | ms | 5000 | none | The tmux call that creates a session. |
 | `pipe_close_wait_ms` | ms | 100 | none | How long a tmux call waits for its output pipes after its process exits. |
-| `sweep_budget_seconds` | s | 15 | none | Total tmux time per `find-missing`, `expire` or shared state-read check invocation; see [bounded recovery](caller-contract.md#bounded-recovery-on-state-reads). |
+| `sweep_budget_seconds` | s | 15 | none | Total tmux time per `sweep`, `expire` or shared state-read check invocation; see [bounded recovery](caller-contract.md#bounded-recovery-on-state-reads). |
 | `kill_exit_wait_ms` | ms | 5000 | none | How long `kill` waits for the agent process to exit. |
 
 - **Grace period minimum.** 30 s, or `create_timeout_ms` + `pipe_close_wait_ms`

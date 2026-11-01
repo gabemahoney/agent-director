@@ -1242,14 +1242,16 @@ describe("find-missing", () => {
     "success path",
     async () => {
       const { homeA, storeB, cleanup } = prepareStores((store) => {
-        runHelper("seed-empty-store", { store });
+        runHelper("seed-spawn", { store, id: "finished", state: "ended", "create-store": true });
       });
       try {
         const cli = runCli(["find-missing"], cliEnv(homeA));
         expect(cli.exitCode).toBe(0);
 
         using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
-        const ts = await client.findMissing({});
+        const ts = await client.findMissing({ timeout_ms: 1 });
+        const unknown = {status: "unknown", confirmed_at: null, source: null, checked_at: null, reason: "no_evidence"} as const;
+        expect(ts).toEqual({checks: [{instance_id: "finished", state: "ended", family_state: "waiting", idle_screen_availability: "available", process_liveness: "unknown", completion: "complete", reason: null, confirmations: {state: unknown, process_liveness: unknown, displayed_state: unknown}}], count: 0, ids: [], unverified: 0, unverified_ids: []});
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("find-missing"),
@@ -1262,6 +1264,36 @@ describe("find-missing", () => {
   );
 
   // No error path: find-missing no longer returns ErrProbeUnsupported (kept by
+  // SR-1.7); it is in NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
+});
+
+describe("sweep", () => {
+  test(
+    "success path",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id: "finished", state: "ended", "create-store": true });
+      });
+      try {
+        const cli = runCli(["sweep"], cliEnv(homeA));
+        expect(cli.exitCode).toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        const ts = await client.sweep({ timeout_ms: 1 });
+        const unknown = {status: "unknown", confirmed_at: null, source: null, checked_at: null, reason: "no_evidence"} as const;
+        expect(ts).toEqual({checks: [{instance_id: "finished", state: "ended", family_state: "waiting", idle_screen_availability: "available", process_liveness: "unknown", completion: "complete", reason: null, confirmations: {state: unknown, process_liveness: unknown, displayed_state: unknown}}], count: 0, ids: [], unverified: 0, unverified_ids: []});
+
+        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+          ignorePaths: loadIgnorePathsForVerb("sweep"),
+        });
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  // No error path: sweep no longer returns ErrProbeUnsupported (kept by
   // SR-1.7); it is in NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
 });
 

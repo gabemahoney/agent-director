@@ -665,7 +665,7 @@ func closedRequestError(params DecideParams, state string) error {
 func recordedRefusal(params DecideParams, pr PermissionRow) error {
 	switch {
 	case pr.Closed() && pr.DeliveredAt.IsZero() && pr.DecisionReason != store.DecisionReasonFindMissing:
-		return fmt.Errorf("%w: %s request %s is closed: its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict, so nothing was recorded; do not answer it at the pane",
+		return fmt.Errorf("%w: %s request %s is closed: its spawn ended, or a shared check marked it missing, before the request's relay hook delivered a verdict, so nothing was recorded; do not answer it at the pane",
 			store.ErrNoOpenPermissionRequest, params.InstanceID, params.RequestToken)
 	case pr.PaneAnswered():
 		return paneAnsweredError(params.InstanceID, pr, "nothing was recorded")

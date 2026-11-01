@@ -359,7 +359,7 @@ var successCases = append([]successCase{
 	},
 
 	// ── find-missing ──────────────────────────────────────────────────────
-	// An empty store has no live rows; find-missing returns {count:0,ids:null}
+	// A finished row is still selected; find-missing returns an unknown, complete check and empty counters
 	// on both CLI and Client without touching tmux.
 	{
 		verb: "find-missing",
@@ -367,6 +367,9 @@ var successCases = append([]successCase{
 			t.Helper()
 			dir := t.TempDir()
 			apitest.SeedStore(t, filepath.Join(dir, "state.db"))
+			if _, err := apitest.SeedSpawn(filepath.Join(dir, "state.db"), "finished", "ended", "/tmp", "off", "", false, apitest.WithNoPane()); err != nil {
+				t.Fatal(err)
+			}
 			return dir, nil
 		},
 		params: func(_ map[string]any) map[string]any {
@@ -374,6 +377,27 @@ var successCases = append([]successCase{
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"find-missing"}
+		},
+	},
+	// ── sweep ──────────────────────────────────────────────────────
+	// A finished row is still selected; sweep returns an unknown, complete check and empty counters
+	// on both CLI and Client without touching tmux.
+	{
+		verb: "sweep",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			dir := t.TempDir()
+			apitest.SeedStore(t, filepath.Join(dir, "state.db"))
+			if _, err := apitest.SeedSpawn(filepath.Join(dir, "state.db"), "finished", "ended", "/tmp", "off", "", false, apitest.WithNoPane()); err != nil {
+				t.Fatal(err)
+			}
+			return dir, nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"sweep"}
 		},
 	},
 

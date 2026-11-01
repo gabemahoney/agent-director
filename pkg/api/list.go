@@ -114,18 +114,18 @@ type ListRow struct {
 	// omitted from JSON) otherwise (SR-22.2).
 	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
 	// LivenessUnverifiedSince is, as SpawnRow.LivenessUnverifiedSince, the
-	// RFC3339 timestamp of the first sweep that noted this live row (left it
-	// unverified, or noted it unreported, b.kdf), kept while later sweeps
+	// RFC3339 timestamp of the first check that noted this live row (left it
+	// unverified, or noted it unreported, b.kdf), kept while later checks
 	// change LivenessNote, unreported included. Nil (omitted from JSON) when
-	// NULL in the store: a sweep that finds the agent process alive clears it
+	// NULL in the store: a check that finds the agent process alive clears it
 	// together with LivenessNote, except on a pending row it notes unreported
 	// and a pending row noted provenance_conflict, which keeps it. The store
 	// carries it as a COALESCE-scanned string ("" == NULL); List maps "" to
 	// nil per the ended_at nullable precedent.
 	LivenessUnverifiedSince *string `json:"liveness_unverified_since,omitempty"`
 	// LivenessNote is, as SpawnRow.LivenessNote, either the reason token of
-	// the latest sweep that left this live row unverified (overwritten when
-	// the reason changes, cleared when a sweep finds the agent process alive,
+	// the latest check that left this live row unverified (overwritten when
+	// the reason changes, cleared when a check finds the agent process alive,
 	// except on a pending row it notes unreported and a pending row noted
 	// provenance_conflict, which keeps it) or unreported, on a pending row
 	// whose agent is alive but has not reported through any hook since its
@@ -236,6 +236,9 @@ func parseListFilters(params ListParams, settle store.SettleRead) (ListFilters, 
 // listFiltered is listSettled past validation. Stored filters and limit fix
 // the returned IDs before any row is checked.
 func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, error) {
+	if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithRecoveryTickSource("ad_recovery")
+	}
 	if _, checked := s.(*activeReadStore); !checked {
 		selected := filters
 		selected.StoredDisplay = true

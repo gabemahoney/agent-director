@@ -232,10 +232,10 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 					}
 				case "ad.find_missing.tick":
 					if liveness {
-						if row["source"] != "ad_find_missing" || row["prior_state"] != store.StateCheckPermission || row["new_state"] != store.StateMissing {
+						if row["source"] != "ad_recovery" || row["prior_state"] != store.StateCheckPermission || row["new_state"] != store.StateMissing {
 							t.Errorf("liveness tick fields: %+v", row)
 						}
-					} else if row["reconciliation_reason"] != "permission_orphan_closeout" || row["source"] != "ad_find_missing" || row["prior_state"] != nil || row["new_state"] != nil {
+					} else if row["reconciliation_reason"] != "permission_orphan_closeout" || row["source"] != "ad_recovery" || row["prior_state"] != nil || row["new_state"] != nil {
 						t.Errorf("orphan tick fields: %+v", row)
 					}
 				}

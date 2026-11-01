@@ -96,6 +96,11 @@ type moveShared struct {
 	// stand-in pairs of an earlier release: its version result has no
 	// config_dir, or names moveOtherDir. All three carry one version stamp.
 	Current, NoConfigDir, OtherDir movePair
+	// ScheduleProbe is a synthetic capability target, with the current layout.
+	// SCHED_TEST_HELP selects its help response; it is not a released binary.
+	// Schedule capability tests must reuse this pair; use actual released pairs
+	// for release-compatibility coverage.
+	ScheduleProbe movePair
 	// OldBinary is the stand-in an old install keeps at bin/agent-director
 	// (and admin/agent-director-admin): it runs `serve` until stdin closes.
 	OldBinary string
@@ -200,6 +205,11 @@ func moveBuildShared() (*moveShared, error) {
 		return nil, err
 	}
 	s.OtherDir = movePair{other, other}
+	probe, err := standin("schedule-probe", "~/.config/agent-director")
+	if err != nil {
+		return nil, err
+	}
+	s.ScheduleProbe = movePair{probe, s.Current.Admin}
 
 	return s, moveBuildToolbox(s.Toolbox)
 }

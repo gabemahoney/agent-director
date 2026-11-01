@@ -101,8 +101,9 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   [settings](settings.md#defaultsinject_help_hook-config)), which is also what
   enables Codex help entries and Cursor session guidance. It does not skip the [rename
   migration](#upgrade).
-- `--schedule`: schedule the `find-missing` and `expire` sweeps for the user
-  running the script, who must be the agents' user. Off by default. See
+- `--schedule`: schedule recovery (`sweep` when supported) and separate
+  `expire` cleanup for the user running the script, who must be the agents'
+  user. Off by default. See
   [Schedule the sweeps](#schedule-the-sweeps).
 - `--symlink-dir <dir>`: PATH symlink dir (default `~/.local/bin`, if on PATH).
 - `--no-symlink`: create no PATH symlink.
@@ -236,11 +237,16 @@ bash skills/install-agent-director/install.sh --binary ./bin/agent-director --ad
 
 ## Schedule the sweeps
 
-`--schedule` schedules the two sweeps:
+`--schedule` opts in to scheduling recovery and separate `expire` cleanup:
 
 ```sh
 bash skills/install-agent-director/install.sh --schedule
 ```
+
+Without the flag, an install or upgrade preserves existing schedule commands,
+cadence and timer enablement. With it, the installer replaces its own entries
+using the template cadence. Choose the defaults or set your own cadence in
+[Maintenance](maintenance.md#schedule-them-by-hand).
 
 What it installs, how to do it by hand and the same-environment rule are in
 [Maintenance](maintenance.md#scheduling-the-sweeps). An install that finds no
@@ -254,6 +260,14 @@ files from `raw.githubusercontent.com` at the release tag (with
 all or none, and keeps them in `~/.config/agent-director/schedule/`. When the
 release tag or commit has no `schedule/` (an older release: HTTP 404), it tries
 once more at `main`, and the `schedule:` line says so.
+
+Raw downloadable templates use `find-missing`, so released installers can use
+them with older binaries, including after a 404 fallback to `main`. The current
+installer checks only the target binary's `help`: if it advertises `sweep`,
+rendered cron lines, services and advice use `sweep`; otherwise they use
+`find-missing`. Failed or unreadable help also keeps `find-missing`. It never
+runs recovery to discover support. Existing `find-missing` schedules remain
+valid aliases on a supporting binary; an upgrade needs no schedule rewrite.
 
 ## Upgrade
 
@@ -421,10 +435,12 @@ folder](settings.md#set-up-agent-director-in-a-codex-folder) says.
 
 It also removes the schedule `--schedule` added and nothing else: the crontab
 lines tagged `agent-director-schedule` (the crontab itself only when nothing
-else is left in it), the tagged systemd user units with their timers, and the
+else is left in it), the tagged `agent-director-find-missing` and
+`agent-director-expire` systemd user services and timers, and the
 schedule files a piped install kept in `~/.config/agent-director/schedule/`
 (the directory stays, with a note, when it holds other files). With no schedule
-present it prints nothing about it.
+present it prints nothing about it. Cleanup recognizes the same markers and
+unit names whether the recovery command is `sweep` or `find-missing`.
 
 `--purge` also removes every directory the upgrade or the way back left:
 each `~/.agent-director.pre-move-*`, `~/.config/agent-director.after-upgrade-*`

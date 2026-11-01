@@ -4,7 +4,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -37,8 +39,44 @@ func TestREADMEExamplesStayInSync(t *testing.T) {
 	}
 }
 
-// readmeGoBlocks maps ExampleClient_<Verb> to the first ```go block after
+func TestREADMEGoBlocks(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		text string
+		want map[string]string
+	}{
+		{
+			name: "level two ends verb scope",
+			text: "### X\nNo example.\n## Y\n```go\noutside()\n```\n",
+			want: map[string]string{},
+		},
+		{
+			name: "first block and spaces in verb",
+			text: "### X Y\n```go\nfirst()\n```\n```go\nsecond()\n```\n",
+			want: map[string]string{"ExampleClient_XY": "first()"},
+		},
+		{
+			name: "next verb starts its own scope",
+			text: "### X\nNo example.\n## Y\n```go\noutside()\n```\n### Z\n```go\ninside()\n```\n",
+			want: map[string]string{"ExampleClient_Z": "inside()"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filename := filepath.Join(t.TempDir(), "README.md")
+			if err := os.WriteFile(filename, []byte(tc.text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if got := readmeGoBlocks(t, filename); !maps.Equal(got, tc.want) {
+				t.Errorf("readmeGoBlocks() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// readmeGoBlocks maps ExampleClient_<Verb> to the first ```go block under
 // each "### <Verb>" heading of filename (spaces dropped from the verb).
+// A "## " heading ends the current verb's scope.
 func readmeGoBlocks(t *testing.T, filename string) map[string]string {
 	t.Helper()
 	data, err := os.ReadFile(filename)
@@ -50,6 +88,8 @@ func readmeGoBlocks(t *testing.T, filename string) map[string]string {
 	var lines []string
 	for _, line := range strings.Split(string(data), "\n") {
 		switch {
+		case strings.HasPrefix(line, "## "):
+			heading = ""
 		case strings.HasPrefix(line, "### "):
 			heading = strings.TrimSpace(strings.TrimPrefix(line, "### "))
 		case line == "```go" && heading != "" && !in:

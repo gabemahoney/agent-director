@@ -1,4 +1,9 @@
-## systemd user service: one run of the find-missing sweep. The timer
+## Raw templates keep find-missing for released installers that fetch them.
+## New install.sh promotes it to sweep when the binary advertises it in `help`,
+## without running recovery. Manual installation may keep find-missing.
+## Reads share recovery checks on supporting versions; absent or failed checks
+## leave observations old. expire is separate, operator-selected cleanup.
+## systemd user service: one run of sweep. The timer
 ## agent-director-find-missing.timer starts it every 2 minutes. install.sh
 ## --schedule fills the placeholders and writes it to ~/.config/systemd/user/
 ## (or $XDG_CONFIG_HOME/systemd/user/ when that is set to an absolute path),
@@ -35,16 +40,16 @@
 ##                       write %% for % and \" for "; a $ stays as it is
 ##                       (Environment= does no variable expansion). The result
 ##                       is never empty.
-## Run as the agents' user, in the agents' tmux environment: find-missing run as
+## Run as the agents' user, in the agents' tmux environment: sweep run as
 ## another user, as root or against another tmux server can wrongly mark live
 ## rows missing. The config directory is $HOME/.config/agent-director, so the
 ## sweep needs the install's HOME (see HOME above).
 ## A user timer runs only while the user's systemd manager does (while the user is
 ## logged in, or always after loginctl enable-linger <user>).
 ##
-# agent-director-schedule: the find-missing sweep (install-agent-director skill, schedule/)
+# agent-director-schedule: the recovery sweep (install-agent-director skill, schedule/)
 [Unit]
-Description=agent-director find-missing sweep
+Description=agent-director sweep
 
 [Service]
 Type=oneshot

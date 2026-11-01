@@ -139,29 +139,29 @@ type SpawnRow struct {
 	// with millisecond precision. Present only on a pending row; nil (and
 	// omitted from JSON) otherwise (SR-22.2).
 	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
-	// LivenessUnverifiedSince is the RFC3339 timestamp of the first sweep that
+	// LivenessUnverifiedSince is the RFC3339 timestamp of the first check that
 	// noted this live row (left it unverified, or noted it unreported,
-	// b.kdf); it is kept while later sweeps change LivenessNote, unreported
+	// b.kdf); it is kept while later checks change LivenessNote, unreported
 	// included. Nil (and omitted from JSON) when NULL in the store — i.e. no
-	// note: a sweep that finds the agent process alive clears it together
+	// note: a check that finds the agent process alive clears it together
 	// with LivenessNote, except on a pending row it notes unreported and a
 	// pending row noted provenance_conflict, which keeps it. The store
 	// carries it as a COALESCE-scanned string ("" == NULL); Get maps "" to nil
 	// per the ended_at nullable precedent.
 	LivenessUnverifiedSince *string `json:"liveness_unverified_since,omitempty"`
-	// LivenessNote is the reason token of the latest sweep that left this
+	// LivenessNote is the reason token of the latest check that left this
 	// live row unverified (its agent process could not be checked and tmux
 	// did not settle it), for example process_not_seen_session_present,
 	// process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or
-	// provenance_conflict; a later sweep overwrites it when the reason
-	// changes, and a sweep that finds the agent process alive clears it
+	// provenance_conflict; a later check overwrites it when the reason
+	// changes, and a check that finds the agent process alive clears it
 	// together with LivenessUnverifiedSince, except on a pending row it notes
 	// unreported and a pending row noted provenance_conflict, which keeps it.
 	// Or it is unreported, on a pending row past the pending grace period
 	// (b.kdf): its agent is alive, but no hook has reported since its launch,
 	// so it may sit at a Claude Code startup screen or idle at its prompt.
 	// The row stays pending; the caller reads its pane and, only having
-	// looked, sends keys with allow_pending. A later sweep that finds the
+	// looked, sends keys with allow_pending. A later check that finds the
 	// agent alive keeps the note, and the agent's next hook clears it.
 	// unreported never replaces provenance_conflict. Nil (omitted) when NULL
 	// in the store. Same "" == NULL mapping.
@@ -431,6 +431,9 @@ func readSpawnSettled(s GetStore, settle store.SettleRead, instanceID string) (S
 // debounced). Active checks inspect only this row; family state uses stored
 // contributions. It never waits for a state to settle.
 func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID string) (SpawnRow, error) {
+	if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithRecoveryTickSource("ad_recovery")
+	}
 	if _, checked := s.(*activeReadStore); !checked {
 		refresh := activeRefresh(s, settle, false)
 		rows, err := refresh([]string{instanceID}, nil)

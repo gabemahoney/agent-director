@@ -69,7 +69,7 @@ func TestFindMissingListErrorAborts(t *testing.T) {
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("FindMissing err = %v; want the list error %v to bubble up", err, errSentinel)
 	}
-	if got, want := jsonOf(t, res), `{"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`; got != want {
+	if got, want := jsonOf(t, res), `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`; got != want {
 		t.Errorf("FindMissing = %s; want %s", got, want)
 	}
 	if got := pc.StartTimeCalls(); len(got) != 0 {

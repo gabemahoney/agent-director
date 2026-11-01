@@ -104,6 +104,9 @@ func Status(s StatusStore, v RelayView, instanceID string) (StatusResult, error)
 // selected row alone receives active checks. Family state reads stored
 // contributions without inspecting descendants. It never waits for a change.
 func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead, instanceID string) (StatusResult, error) {
+	if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithRecoveryTickSource("ad_recovery")
+	}
 	if _, checked := s.(*activeReadStore); !checked {
 		if _, rich := s.(permissionStatusReader); rich {
 			refresh := activeRefresh(s, settle, true)

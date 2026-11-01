@@ -274,7 +274,7 @@ spawner's. The spawn picks the server by `$TMUX`, else by `TMUX_TMPDIR`
 
 When the two stores differ, the agent's hook events go to the other
 store and the row stays `pending`, with no error to the caller:
-`find-missing` notes it `unreported` while the agent runs and marks it
+a shared check notes it `unreported` while the agent runs and marks it
 `missing` once the agent's process is gone. If no server was running, a
 spawn with an alternate `HOME` (or `--home`) starts the shared server
 with that `HOME`, and every later Spawn on that server sends its hook
@@ -681,11 +681,11 @@ these outcomes:
 - No row at all → `ErrNoOpenPermissionRequest`.
 - Request has a recorded decision → `ErrAlreadyDecided` (including a
   request the relay hook denied at its timeout, one denied by
-  `find-missing`'s mark (`decision_reason` `find_missing`), and one closed
+  shared recovery's mark (`decision_reason` `find_missing`), and one closed
   at the pane with a verdict).
-- Row was closed with its spawn, by `find-missing`'s mark or by the
+- Row was closed with its spawn, by shared recovery's mark or by the
   spawn's end, before its relay hook confirmed a verdict, with a verdict
-  `find-missing` did not write (one recorded before the close, or the
+  the missing mark did not write (one recorded before the close, or the
   `ended` deny) → `ErrNoOpenPermissionRequest`, whether or not the spawn
   was resumed since (see "A request of a finished spawn is closed" below).
 - Row is still open but its spawn is `ended` or `missing` →
@@ -711,7 +711,7 @@ it can deliver a verdict. `decide` records nothing for it and answers
 with an existing error name:
 
 - a decided request → `ErrAlreadyDecided`, except one closed (see below)
-  before its relay hook confirmed a verdict that `find-missing` did not
+  before its relay hook confirmed a verdict that the missing mark did not
   write → `ErrNoOpenPermissionRequest`;
 - an open request (one an earlier release left open) →
   `ErrNoOpenPermissionRequest`, whose message says the request is closed
@@ -750,7 +750,7 @@ completed pane answer, even when recorded by an older binary:
 - a decided request whose relay hook had not confirmed the verdict keeps
   it, without permission for a later acknowledgement or response;
   `decide` on it returns `ErrNoOpenPermissionRequest`, whose message
-  says the request is closed (its spawn ended, or `find-missing` marked it
+  says the request is closed (its spawn ended, or a shared check marked it
   missing, before its relay hook delivered a verdict), nothing was
   recorded, and not to answer it at the pane. An acknowledgement recorded
   before closure retains `ErrAlreadyDecided`.
@@ -960,7 +960,7 @@ that binary judged it:
   refused with `ErrRelayFallenBack` until it is closed, by a pane answer, by
   `record-pane-answer`, or with its spawn (the spawn ends, or
   [shared recovery](caller-contract.md#bounded-recovery-on-state-reads)
-  marks it `missing` on a state read or `find-missing`). This holds in
+  marks it `missing` on a state read or `sweep`). This holds in
   every live state of the spawn, so a request left open before the upgrade (its dialog answered at the pane
   after its relay hook was killed, for example) refuses plain `send-keys`
   once you upgrade: close it with `record-pane-answer --as unknown` and the
@@ -1461,7 +1461,7 @@ processes, never the agent's screen. These cases are not covered:
   `PostToolUse`; on a Codex row its `Stop` or Interrupt), the spawn stays in
   `check_permission` until a later hook
   moves it out (`Stop` on Claude/Codex, or Claude's `AskUserQuestion`), its moves to
-  `working` are held, and `find-missing` does not repair the row; after a
+  `working` are held, and shared checks do not repair the row; after a
   deny at a Claude pane that interrupts the turn (Claude Code sends no `Stop`
   then), that lasts until the idle-prompt Notification or the next turn's
   `Stop`. Once it is closed, a plain `send-keys` without a pane hash stays

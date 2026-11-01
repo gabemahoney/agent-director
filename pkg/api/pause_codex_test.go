@@ -117,7 +117,7 @@ func TestPauseCodexExitedBeforePause(t *testing.T) {
 				}
 				e.assertNoTmuxCall(t)
 				pauAssertState(t, e, r.ID, store.StateEnded)
-				assertMoveRecords(t, mark, r.ID, moveWant{prior: tc.state, now: store.StateEnded,
+				assertMoveRecords(t, mark, r.ID, moveWant{source: "ad_recovery", prior: tc.state, now: store.StateEnded,
 					denyReason: store.DecisionReasonEnded, reason: "proc_absent", tokens: tokens})
 				pcxAssertNoCallEvent(t, mark, r.ID)
 				for _, tok := range tokens {
@@ -259,7 +259,7 @@ func TestPauseCodexWait(t *testing.T) {
 				// written before the wait): not part of the move's records.
 				mark = pcxAfterLastDisagree(t, mark, r.ID)
 			}
-			assertMoveRecords(t, mark, r.ID, moveWant{prior: store.StateWaiting, now: store.StateEnded,
+			assertMoveRecords(t, mark, r.ID, moveWant{source: "ad_recovery", prior: store.StateWaiting, now: store.StateEnded,
 				denyReason: store.DecisionReasonEnded, reason: "proc_absent"})
 			pcxAssertNoCallEvent(t, 0, r.ID)
 		})

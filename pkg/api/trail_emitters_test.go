@@ -282,7 +282,7 @@ func TestPauseCodexEndTickSynchronous(t *testing.T) {
 	if s := trail.Default().Status(); s.Pending != 0 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
 		t.Errorf("audit status on return = %+v; want nothing queued, failed or rejected", s)
 	}
-	assertMoveRecords(t, mark, r.ID, moveWant{prior: store.StateWorking, now: store.StateEnded,
+	assertMoveRecords(t, mark, r.ID, moveWant{source: "ad_recovery", prior: store.StateWorking, now: store.StateEnded,
 		denyReason: store.DecisionReasonEnded, reason: "proc_absent"})
 	pauAssertState(t, e, r.ID, store.StateEnded)
 }
