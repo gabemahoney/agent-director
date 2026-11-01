@@ -37,6 +37,10 @@ func TestV15MigrationPreservationAndReentry(t *testing.T) {
 			// Later permission columns are present so the full-row comparison
 			// isolates this hop's preservation contract.
 			preAddV14Columns(t, path, v17ColumnSpecs)
+			if len(tc.specs) == len(v15ColumnSpecs) {
+				// The later v19 columns after both v15 columns, in schema order.
+				preAddV14Columns(t, path, v19ColumnSpecs)
+			}
 			var spawnCols []string
 			withRaw(t, path, func(db *sql.DB) {
 				if len(tc.specs) > 0 {

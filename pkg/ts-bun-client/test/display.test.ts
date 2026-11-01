@@ -23,8 +23,21 @@ const realState: Record<string, string> = {
   ordinary: "working",
   "ordinary-cursor": "working",
 };
-const LIST_KEYS = ["agent", "cwd", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at",
-  "permission_requests", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"];
+const LIST_KEYS = ["agent", "confirmations", "cwd", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at",
+  "permission_requests", "process_liveness", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"];
+/** Every status result's main-field keys beside context and family_state. */
+const MAIN_KEYS = ["confirmations", "context", "family_state", "process_liveness"];
+
+/**
+ * b.x9o: a showing Displayed State has no display provenance yet, so its
+ * record is explicitly unknown with null evidence (unsupported for Cursor).
+ */
+function expectUnknownDisplay(read: { confirmations: { displayed_state: unknown } }, agent: string): void {
+  expect(read.confirmations.displayed_state).toEqual({
+    status: "unknown", confirmed_at: null, source: null, checked_at: null,
+    reason: agent === "cursor" ? "unsupported" : "no_evidence",
+  });
+}
 
 // b.zpv: state is the real state on every read, and a Displayed State shows only in displayed_state.
 test("idle_screen shows in displayed_state beside state working, and an open permission request reads check_permission, across status/get/list and fresh clients", async () => {
@@ -40,9 +53,10 @@ test("idle_screen shows in displayed_state beside state working, and an open per
       const status = JSON.parse(JSON.stringify(await client.status({ instance_id: id })));
       expect(status).toMatchObject(detail);
       // The exact key set: no request detail and no state_changed_at.
-      expect(Object.keys(status).sort()).toEqual(["context", "family_state", ...Object.keys(detail)].sort());
+      expect(Object.keys(status).sort()).toEqual([...MAIN_KEYS, ...Object.keys(detail)].sort());
       const get = JSON.parse(JSON.stringify(await client.get({ instance_id: id })));
       expect(get).toMatchObject(detail);
+      for (const read of [status, get]) expectUnknownDisplay(read, id.slice("idle-screen-".length));
       for (const key of ["request_token", "tool_name", "stuck_reason"]) expect(get).not.toHaveProperty(key);
       expect(get.permission_requests).toBeArray();
       expect(get.unproven_requests).toBeArray();
@@ -54,7 +68,8 @@ test("idle_screen shows in displayed_state beside state working, and an open per
       const agent = id.slice("needs-intelligence-".length);
       const status = JSON.parse(JSON.stringify(await client.status({ instance_id: id })));
       expect(status).toMatchObject({ state: "check_permission", idle_screen_availability: availability(agent) });
-      expect(Object.keys(status).sort()).toEqual(["context", "family_state", "idle_screen_availability", "state"]);
+      expect(Object.keys(status).sort()).toEqual([...MAIN_KEYS, "idle_screen_availability", "state"].sort());
+      expectUnknownDisplay(status, agent);
       const get = JSON.parse(JSON.stringify(await client.get({ instance_id: id })));
       expect(get.state).toBe("check_permission");
       for (const key of ["displayed_state", "since", "request_token", "tool_name", "unchanged_minutes"]) expect(get).not.toHaveProperty(key);
@@ -76,6 +91,7 @@ test("idle_screen shows in displayed_state beside state working, and an open per
           // The exact key set: displayed_state and no detail.
           expect(row.displayed_state).toBe("idle_screen");
           expect(Object.keys(row).sort()).toEqual([...LIST_KEYS, "displayed_state"].sort());
+          expectUnknownDisplay(row, row.agent);
         } else {
           expect(row).not.toHaveProperty("displayed_state");
         }
@@ -85,7 +101,8 @@ test("idle_screen shows in displayed_state beside state working, and an open per
     for (const [id, agent] of [["ordinary", "claude"], ["ordinary-cursor", "cursor"]]) {
       const ordinary = await client.status({ instance_id: id });
       expect(ordinary.idle_screen_availability).toBe(availability(agent));
-      expect(Object.keys(ordinary).sort()).toEqual(["context", "family_state", "idle_screen_availability", "state"]);
+      expect(Object.keys(ordinary).sort()).toEqual([...MAIN_KEYS, "idle_screen_availability", "state"].sort());
+      expectUnknownDisplay(ordinary, agent);
     }
   });
 }, 60_000);

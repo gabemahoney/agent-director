@@ -104,6 +104,11 @@ func TestCursorListFixedSelectionBeforeGatewayRecovery(t *testing.T) {
 				states := make(map[string]string)
 				for _, row := range got.Spawns {
 					states[row.InstanceID] = row.State
+					// b.x9o: list builds its response before the deferred save, so
+					// the target shows the projection's own operation_pending attempt.
+					if rec := "pending|-|-|" + e.clock.Now().UTC().Format(displayTS) + "|operation_pending"; tc.deferSave && row.InstanceID == b.InstanceID && conf(row.Confirmations.State) != rec {
+						t.Errorf("list %d: deferred target's state record %s; want %s", i+1, conf(row.Confirmations.State), rec)
+					}
 					if row.State == store.StateMissing && len(row.PermissionRequests) != 0 {
 						t.Error("missing row exposes open permission requests")
 					}

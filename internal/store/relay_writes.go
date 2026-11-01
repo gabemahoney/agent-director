@@ -121,7 +121,7 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 	)
 	// check_permission with its settle columns (b.146's request rows are
 	// never debounced; only the row's reported state settles, b.3ie).
-	stateSet, stateArgs := s.hookWriteStateSet(StateCheckPermission)
+	stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateCheckPermission, EvidenceAgentEvent)
 	q, args := gatedHookUpdate(instanceID, gate,
 		stateSet+`, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, `+launchStartClear+`, `+idleClear,
 		stateArgs, req.TranscriptPath, req.TranscriptPresent)

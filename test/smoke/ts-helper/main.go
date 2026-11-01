@@ -611,8 +611,9 @@ var resultSchemas = map[string]map[string]string{
 	"seed-needs-intelligence-surface": {"seeded": "boolean"},
 	"seed-idle-screen-surface":        {"seeded": "boolean"},
 	"seed-read-surface-store": {
-		"ids":     "array",
-		"settled": "object",
+		"ids":                   "array",
+		"settled":               "object",
+		"settled_confirmations": "object",
 	},
 	"set-settle": {
 		"instance_id": "string",

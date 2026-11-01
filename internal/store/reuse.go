@@ -89,6 +89,9 @@ type RawLife struct {
 	codexStartup            rawValue
 	claudeCapacity          rawValue
 	idleScreenTimeout       rawValue
+	processEvidence         rawValue
+	stateEvidence           rawValue
+	permissionEpoch         rawValue
 }
 
 // rawValue is one column's value exactly as stored: class is the column's
@@ -163,6 +166,9 @@ var rawLifeColumns = []rawLifeColumn{
 	{"codex_startup", func(l *RawLife) *rawValue { return &l.codexStartup }},
 	{"claude_capacity", func(l *RawLife) *rawValue { return &l.claudeCapacity }},
 	{"idle_screen_timeout_seconds", func(l *RawLife) *rawValue { return &l.idleScreenTimeout }},
+	{"process_evidence", func(l *RawLife) *rawValue { return &l.processEvidence }},
+	{"state_evidence", func(l *RawLife) *rawValue { return &l.stateEvidence }},
+	{"permission_epoch", func(l *RawLife) *rawValue { return &l.permissionEpoch }},
 }
 
 // rawLifeSelect is the column fragment that reads rawLifeColumns, each as
@@ -238,13 +244,25 @@ const resetForReuseReadSQL = `SELECT COALESCE(session_id, ''), COALESCE(jsonl_pa
    FROM spawns
   WHERE instance_id = ?`
 
+// resetEvidenceSet is the reset's state record: the reuse command's durable
+// admission of pending, for the life and launch token the reset writes.
+func resetEvidenceSet(agent, token string) (string, []any) {
+	return stateEvidenceSet(StatePending, EvidenceCallerCommand,
+		`life_number + CASE WHEN `+reuseAgentTextSQL+` = ? THEN 0 ELSE 1 END`, `?`,
+		[]any{agent}, []any{nullableStringArg(token)})
+}
+
+var resetForReuseEvidence, _ = resetEvidenceSet("", "")
+
 // resetForReuseSQL is ResetForReuse's reset: the finished row set to pending
 // in its retained life or a new life on an agent switch, guarded by the
 // finished state, examined snapshot and exact text-or-empty agent
 // (SR-10.3, SR-5.3). pending is an immediate write (immediateStateSet,
 // b.3ie): it reports at once.
-const resetForReuseSQL = `UPDATE spawns
+var resetForReuseSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
+        ` + resetForReuseEvidence + `,
+        process_evidence          = NULL,
         session_id                = NULL,
         jsonl_path                = NULL,
         pid                       = NULL,
@@ -336,7 +354,10 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     life_number advanced by one only if the exact stored agent differs
 //     from fresh.Agent. Same-agent reuse keeps the life. The store reads no
 //     clock: the caller supplies
-//     fresh.StartedAt and fresh.LaunchStartedAtMillis.
+//     fresh.StartedAt and fresh.LaunchStartedAtMillis. The reuse command's
+//     admission becomes the state record (pending, caller_command, for the
+//     life and token it writes) and the old life's process record is
+//     cleared, so no earlier launch's evidence applies to the new one.
 //   - Permission requests: every request of the id, decided or not, is
 //     deleted. Children keep their parent_id; no other row changes.
 //   - Subagent close (closeSubagentsAgentGone, SR-8.1, SR-10.3): every running
@@ -429,7 +450,9 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 	}
 
 	startedAt := storeTimestamp(fresh.StartedAt)
-	resetArgs := append(immediateStateArgs(StatePending),
+	_, evidenceArgs := resetEvidenceSet(fresh.Agent, fresh.Identity.Token)
+	resetArgs := append(immediateStateArgs(StatePending), evidenceArgs...)
+	resetArgs = append(resetArgs,
 		startedAt, startedAt,
 		positiveInt64Arg(fresh.LaunchStartedAtMillis),
 		fresh.CWD, fresh.TmuxSessionName,
@@ -480,9 +503,22 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 }
 
 // restoredVerbatim reports whether the restore writes a RawLife column back
-// exactly as stored; ended_at and parent_id have their own rules.
+// exactly as stored; ended_at, parent_id and the state record have their own
+// rules, and permission_epoch is read only to judge that record (the
+// restore's immediate write advances it as every raw-state change does).
 func restoredVerbatim(name string) bool {
-	return name != "ended_at" && name != "parent_id"
+	return name != "ended_at" && name != "parent_id" && name != "state_evidence" && name != "permission_epoch"
+}
+
+// priorStateRecord is the old life's state record when it applied to that
+// life's raw state, interval and launch, "" otherwise (Spawn.PriorStateEvidence).
+func (l RawLife) priorStateRecord() string {
+	raw, _ := l.stateEvidence.v.(string)
+	state, _ := l.state.v.(string)
+	epoch, _ := l.permissionEpoch.v.(int64)
+	life, _ := l.lifeNumber.v.(int64)
+	sp := Spawn{StateEvidence: raw, State: state, PermissionEpoch: epoch, LifeNumber: life, Identity: LaunchIdentity{Token: decodeLaunchToken(l.launchToken.v)}}
+	return sp.PriorStateEvidence()
 }
 
 // restoreAfterFailedReuseSQL is RestoreAfterFailedReuse's one statement
@@ -506,10 +542,16 @@ var restoreAfterFailedReuseSQL = func() string {
         ended_at  = ?,
         parent_id = (SELECT instance_id FROM spawns WHERE instance_id = ?),
         ` + immediateSettleSet + `,
+        ` + restoredStateEvidence + `,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
   WHERE instance_id = ? AND state = ? AND row_version = ?`
 }()
+
+// restoredStateEvidence is the restores' state record assignment
+// (restoredStateEvidenceSet), whose placeholders are the record twice and
+// the prior state.
+var restoredStateEvidence, _ = restoredStateEvidenceSet("", "")
 
 // RestoreAfterFailedReuse undoes reuse's change after a launch that failed
 // other than by a timeout (SR-10.4, SR-5.2, SR-5.3, SR-5.9; Appendix F.4). It
@@ -523,7 +565,8 @@ var restoreAfterFailedReuseSQL = func() string {
 // tmux_session_name, agent_args, relay_mode, labels, extra_env,
 // launch_token, tmux_socket, the six server and pane identity columns, the
 // three launch-owner columns, agent, end_reported_at, subagent_tracking and
-// the timeout override), so the row returns to its pre-reuse life and
+// the timeout override, and the old life's process record), so the row
+// returns to its pre-reuse life and
 // that life's history is visible again (SR-5.9). ended_at is prior's as stored, or failedAt in the store's
 // CURRENT_TIMESTAMP layout when it was NULL. parent_id is prior's only while a
 // row with that id still exists, otherwise NULL, decided in the same
@@ -535,7 +578,10 @@ var restoreAfterFailedReuseSQL = func() string {
 // stays, and the deleted requests stay deleted. It closes no subagent entry and
 // deletes no claimable launch (SR-8.1): the reset already closed the earlier
 // life's running entries, and the restored life does not reopen a closed entry
-// (only a SubagentStart does). It emits no trail event.
+// (only a SubagentStart does). It emits no trail event. The old life's state
+// record comes back only when it applied to that life's raw state, interval
+// and launch, rebound to the restore's interval; otherwise the restored state
+// has no record (confirmations.go).
 //
 // A prior not produced by ReadForReuse (the zero RawLife), or whose state is
 // not ended or missing, is a caller error: an error is returned and nothing
@@ -563,8 +609,10 @@ func (s *Store) RestoreAfterFailedReuse(instanceID string, resetVersion int64, p
 	if prior.endedAt.class == "null" {
 		endedAt = storeTimestamp(failedAt)
 	}
-	args = append(args, endedAt, prior.parentID.arg(), prior.state.arg(), prior.state.arg(), prior.state.arg(), prior.state.arg(),
-		instanceID, StatePending, resetVersion)
+	args = append(args, endedAt, prior.parentID.arg(), prior.state.arg(), prior.state.arg(), prior.state.arg(), prior.state.arg())
+	_, evidenceArgs := restoredStateEvidenceSet(prior.priorStateRecord(), prior.state.v.(string))
+	args = append(args, evidenceArgs...)
+	args = append(args, instanceID, StatePending, resetVersion)
 	applied, err := s.execGuarded(instanceID, restoreAfterFailedReuseSQL, args, errPrefix)
 	if err != nil {
 		return 0, err

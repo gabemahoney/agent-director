@@ -113,5 +113,8 @@ func (r *keysRun) sameInputPreparation(current Spawn) bool {
 	}
 	expected.RowVersion, expected.Snapshot.RowVersion = current.RowVersion, current.Snapshot.RowVersion
 	expected.LivenessNote, expected.LivenessUnverifiedSince = current.LivenessNote, current.LivenessUnverifiedSince
+	// Main-field evidence is freshness metadata a concurrent read or event may
+	// record; it grants no authority, so it never decides admission.
+	expected.StateEvidence, expected.SettledStateEvidence, expected.ProcessEvidence = current.StateEvidence, current.SettledStateEvidence, current.ProcessEvidence
 	return reflect.DeepEqual(expected.RawFields(), current.RawFields())
 }

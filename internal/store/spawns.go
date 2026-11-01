@@ -281,6 +281,18 @@ type Spawn struct {
 	PaneSinceMillis int64
 	PaneEpoch       int64
 
+	// StateEvidence, SettledStateEvidence and ProcessEvidence are the stored
+	// main-field evidence (state_evidence, settled_evidence and
+	// process_evidence, schema v19; confirmations.go), "" for NULL or a
+	// non-text value: StateConfirmation and ProcessConfirmation decode and
+	// apply them. Full-row reads and SpawnStatusRow fill them. No write takes
+	// them from a Spawn except a failed launch's restore, which writes back
+	// only an applicable prior record (PriorStateEvidence,
+	// PriorProcessEvidence). They grant no command authority.
+	StateEvidence        string
+	SettledStateEvidence string
+	ProcessEvidence      string
+
 	// ReportedState is the state status, get and list report (b.3ie): the
 	// settled state a read with a SettleRead that settles derives
 	// (SettleRead.stateExpr; SpawnStatusRow, GetSpawnSettled, ListSpawns with
@@ -360,7 +372,11 @@ func boolInt(b bool) int {
 // the settle time. It also writes subagent_tracking (SR-9), the flag of the
 // launch it begins, from sp.Agent: 1 for claude, 0 for codex or cursor
 // (subagentTrackedParamSQL), and the timeout override from
-// sp.IdleScreenTimeoutSeconds (0 as NULL).
+// sp.IdleScreenTimeoutSeconds (0 as NULL). The spawn command's durable
+// admission is the new row's state record (confirmations.go): pending,
+// source caller_command, for life 0, the launch token it writes and the
+// initial permission epoch, stamped with the statement's clock. It records
+// no process evidence: nothing has probed the agent yet.
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -387,8 +403,9 @@ func (s *Store) InsertPending(sp Spawn) error {
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
             launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
             settled_state, state_changed_ms, agent, subagent_tracking,
-            idle_screen_timeout_seconds
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `, ?)
+            idle_screen_timeout_seconds, state_evidence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `, ?,
+            json_object('v', ?, 'life', 0, 'token', ?, 'epoch', 0, 'at', ` + nowMsSQL + `, 'src', ?, 'checked', ` + nowMsSQL + `))
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -409,7 +426,8 @@ func (s *Store) InsertPending(sp Spawn) error {
 		noPreTrust,
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
-	args = append(args, StatePending, sp.Agent, sp.Agent, positiveIntArg(sp.IdleScreenTimeoutSeconds))
+	args = append(args, StatePending, sp.Agent, sp.Agent, positiveIntArg(sp.IdleScreenTimeoutSeconds),
+		StatePending, nullableStringArg(sp.Identity.Token), EvidenceCallerCommand)
 	_, err = s.execFamily(sp.InstanceID, stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
@@ -520,8 +538,8 @@ func (s *Store) getSpawnSettled(instanceID string, r SettleRead, proofs []Cursor
 // other stored value scans normally). The v6 launch-owner columns
 // (launchOwnerColumns) come after lifeColumns, by the same rule, and the v7
 // idle_since, then the v9 agent, end_reported_at and subagent_tracking, and
-// the later columns after them, state_changed_ms and then the pane
-// observation columns (paneColumns) last.
+// the later columns after them, state_changed_ms, the pane observation
+// columns (paneColumns) and the main-field evidence (evidenceColumns) last.
 const spawnColumns = `
         instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, agent_args, relay_mode,
@@ -533,7 +551,8 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, observation_version, COALESCE(display_observation, ''), state_changed_ms, ` + paneColumns
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, observation_version, COALESCE(display_observation, ''), state_changed_ms, ` + paneColumns + `,
+        ` + evidenceColumns
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -582,6 +601,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		claudeCapacity  any
 		life            lifeScan
 		pane            paneScan
+		evidence        evidenceScan
 	)
 	dest := append([]any{
 		&sp.InstanceID, &sp.ParentID, &sp.State, &sp.CWD,
@@ -596,6 +616,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
 	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.ObservationVersion, &sp.DisplayObservation, &sp.StateChangedMillis)
 	dest = append(dest, pane.dest()...)
+	dest = append(dest, evidence.dest()...)
 	if reported {
 		dest = append(dest, &sp.ReportedState, &sp.FamilyState)
 	}
@@ -629,6 +650,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	sp.Snapshot, sp.Identity = life.result()
 	sp.RowVersion = sp.Snapshot.RowVersion
 	pane.apply(&sp)
+	evidence.apply(&sp)
 	return sp, nil
 }
 
@@ -958,12 +980,19 @@ func storeTimestamp(t time.Time) string {
 	return t.UTC().Format(storeTimestampLayout)
 }
 
+// endHeldLaunchEvidence is EndHeldLaunch's state record: tmux's answer
+// establishes ended.
+var endHeldLaunchEvidence, endHeldLaunchEvidenceArgs = currentStateEvidenceSet(StateEnded, EvidenceTmux)
+
 // endHeldLaunchSQL is EndHeldLaunch's one statement: the move to ended, an
 // immediate write (immediateStateSet, b.3ie), the launch start cleared and the
 // version advance, guarded by the insert's state, version and launch start
-// (SR-5.3, SR-5.6, SR-22.3).
-const endHeldLaunchSQL = `UPDATE spawns
+// (SR-5.3, SR-5.6, SR-22.3). tmux's answer proves nothing about an agent
+// process, so the process record is cleared.
+var endHeldLaunchSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
+        ` + endHeldLaunchEvidence + `,
+        ` + clearProcessEvidence + `,
         ended_at = ?,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
@@ -1008,8 +1037,11 @@ const endHeldLaunchSQL = `UPDATE spawns
 // It emits no trail event (no ad.spawn.state_transition: only hook-driven
 // writes emit one, SR-14) and makes no tmux call. It is on the concrete
 // *Store only, like InsertPending and RecordLaunchIdentity (Appendix F.4).
+// tmux's duplicate-session answer is the evidence of ended it records
+// (source tmux, confirmations.go).
 func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int64, endedAt time.Time) (CondResult, error) {
-	args := append(immediateStateArgs(StateEnded), storeTimestamp(endedAt),
+	args := append(immediateStateArgs(StateEnded), endHeldLaunchEvidenceArgs...)
+	args = append(args, storeTimestamp(endedAt),
 		instanceID, StatePending, insertLaunchStartedAtMillis)
 	res, err := s.execFamily(instanceID, endHeldLaunchSQL, args...)
 	if err != nil {

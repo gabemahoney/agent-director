@@ -598,6 +598,18 @@ func TestFindMissingCursorPermissionWithoutDispatch(t *testing.T) {
 	if row := readRow(t, f.DBPath, launch.ID); row.State != store.StateMissing {
 		t.Fatalf("not durably missing: %+v", row)
 	}
+	// b.x9o: the exact gateway loss confirms missing (process) but is no
+	// evidence about the runtime, so no process record is stored and
+	// process_liveness stays unknown; the public read agrees with the store.
+	got2, err := f.API.Get(launch.ID)
+	if err != nil || got2.ProcessLiveness != store.ProcessUnknown || got2.Confirmations.ProcessLiveness.Status != store.ConfirmationUnknown ||
+		got2.Confirmations.State.Source == nil || *got2.Confirmations.State.Source != store.EvidenceProcess {
+		t.Fatalf("get after the sweep: %s %+v, state record %+v, %v; want unknown runtime, missing confirmed by process",
+			got2.ProcessLiveness, got2.Confirmations.ProcessLiveness, got2.Confirmations.State, err)
+	}
+	if row, err := st.GetSpawn(launch.ID); err != nil || row.ProcessEvidence != "" || row.StateConfirmation(store.SettleRead{}).Source != store.EvidenceProcess {
+		t.Fatalf("stored records %q, %+v, %v; want no process record and the missing value's process record", row.ProcessEvidence, row.StateConfirmation(store.SettleRead{}), err)
+	}
 	if !reflect.DeepEqual(before, rawInput(t, peer)) || len(relayReplies(t, peer)) != 0 {
 		t.Fatal("observational sweep dispatched ACP bytes")
 	}

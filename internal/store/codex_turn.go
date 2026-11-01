@@ -293,7 +293,8 @@ func (s *Store) EndCodexTurn(t CodexOpenTurn, maxWait time.Duration) (bool, erro
 // EndCodexTurnSample fences external evidence by the sampled revisions.
 // Recovery callers must retain this sample across rollout access.
 func (s *Store) EndCodexTurnSample(t CodexTurnSample, maxWait time.Duration) (bool, error) {
-	stateSet, stateArgs := s.hookWriteStateSet(StateWaiting)
+	// The rollout's task_complete is the state record's evidence (transcript).
+	stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateWaiting, EvidenceTranscript)
 	q := `UPDATE spawns SET ` + stateSet + `, codex_turn_ended = codex_turn, ` + rowVersionAdvance + `
  WHERE instance_id = ? AND codex_turn = ? AND jsonl_path = ? AND ` + codexOpenTurnSQL + ` AND ` + snapshotMatchSQL + ` AND COALESCE(life_number,0)=? AND observation_version=? AND permission_epoch=?`
 	args := append(stateArgs, t.InstanceID, t.Turn, t.JSONLPath)

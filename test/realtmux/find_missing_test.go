@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -80,11 +82,31 @@ func (f *killFix) assertStateNote(t testing.TB, id, state, note string) {
 
 // TestFindMissingRemainOnExitDeadAgentMarked: a dead agent whose session
 // remain-on-exit keeps is marked missing with no tmux call; the session stays.
+// b.x9o: a public read's own probe confirms the running agent alive; once it
+// is gone the mark commits its exited record in the same write, while the
+// surviving session and a descendant the agent left running never make it
+// alive. The public results agree with the store reopened.
 func TestFindMissingRemainOnExitDeadAgentMarked(t *testing.T) {
 	f := newKillFix(t)
-	r := f.liveRow(t, killRowSpec{})
+	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+	// The descendant ignores the SIGHUP its terminal's end sends, so it
+	// outlives the agent.
+	r := f.liveRow(t, killRowSpec{Command: []string{"sh", "-c", "(trap '' HUP; exec sleep 3600) & echo $! > '" + pidFile + "'; exec sleep 3600"}})
+	var descendant int
+	waitFor(t, "the agent's descendant records its pid", func() bool {
+		data, err := os.ReadFile(pidFile)
+		descendant, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+		return err == nil && descendant > 0
+	}, func() string { return "no pid file yet" })
+	endAtCleanup(t, descendant)
 	f.must(t, "set-option", "-w", "-t", r.Reply.SessionID, "remain-on-exit", "on")
 	label := f.label(t, r.Reply.SessionID)
+	c := f.open(t, 0, "")
+	defer c.Close() //nolint:errcheck
+	alive, err := c.Status(r.InstanceID)
+	if err != nil || alive.ProcessLiveness != store.ProcessAlive || !confirmedBy(alive.Confirmations.ProcessLiveness, store.EvidenceProcess) {
+		t.Fatalf("status of the running agent: %+v, %v; want alive, confirmed by its own probe", alive.Confirmations.ProcessLiveness, err)
+	}
 	if err := syscallKill(r.Reply.PanePID); err != nil {
 		t.Fatalf("end the agent's pane process %d: %v", r.Reply.PanePID, err)
 	}
@@ -105,6 +127,36 @@ func TestFindMissingRemainOnExitDeadAgentMarked(t *testing.T) {
 	if got := f.format(t, r.Reply.PaneID, "#{pane_dead}"); got != "1" {
 		t.Errorf("agent's pane after the sweep: pane_dead %s, want 1 (left in place)", got)
 	}
+	if pidGone(descendant) {
+		t.Fatalf("descendant %d exited; the decoy check would be vacuous", descendant)
+	}
+	got, err := c.Get(r.InstanceID)
+	exited := got.Confirmations.ProcessLiveness
+	if err != nil || got.State != store.StateMissing || got.ProcessLiveness != store.ProcessExited || !confirmedBy(exited, store.EvidenceProcess) ||
+		*exited.ConfirmedAt < *alive.Confirmations.ProcessLiveness.ConfirmedAt || !confirmedBy(got.Confirmations.State, store.EvidenceProcess) {
+		t.Errorf("get after the sweep: %s %s %+v, state record %+v, %v; want missing and exited, both confirmed by process",
+			got.State, got.ProcessLiveness, exited, got.Confirmations.State, err)
+	}
+	reopened, err := store.Open(f.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	row, err := reopened.GetSpawn(r.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, rec := row.ProcessConfirmation(); v != store.ProcessExited || exited.ConfirmedAt == nil ||
+		time.UnixMilli(rec.ConfirmedAtMillis).UTC().Format("2006-01-02T15:04:05.000Z") != *exited.ConfirmedAt {
+		t.Errorf("stored process record %s %+v; want the exited record get returned, %+v", v, rec, exited)
+	}
+}
+
+// confirmedBy reports whether c is a confirmed record from source, its
+// confirmation and latest check one instant.
+func confirmedBy(c api.Confirmation, source string) bool {
+	return c.Status == store.ConfirmationConfirmed && c.Source != nil && *c.Source == source && c.ConfirmedAt != nil &&
+		c.CheckedAt != nil && *c.CheckedAt == *c.ConfirmedAt && c.Reason == nil
 }
 
 // TestFindMissingNonASCIIRowsUnderHostileLocale: under LC_ALL=C and with no locale variables, lost-reply

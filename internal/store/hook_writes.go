@@ -167,7 +167,7 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		// today) leaves it (SR-5.2). The state is written with its settle
 		// columns (hookWriteStateSet, b.3ie): decided in this one statement,
 		// never from priorState, which feeds the trail only.
-		stateSet, stateArgs := s.hookWriteStateSet(newState)
+		stateSet, stateArgs := s.hookWriteStateEvidenceSet(newState, EvidenceAgentEvent)
 		set = stateSet + `, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + idleClear
 		if newState != StatePending {
 			set += `, ` + launchStartClear
@@ -370,9 +370,14 @@ const noRequestHoldsRowSQL = `NOT EXISTS (SELECT 1 FROM permission_requests pr
 // state as an immediate write (immediateStateSet, its placeholders
 // immediateStateArgs(StateEnded); b.3ie: a terminal state reports at once),
 // last_seen_at and ended_at to CURRENT_TIMESTAMP, and the launch-start and
-// idle clears.
-const endedTransitionSet = immediateStateSet + `, last_seen_at = CURRENT_TIMESTAMP,
+// idle clears. The agent's SessionEnd is the state record's evidence
+// (agent_event, endedTransitionEvidence; confirmations.go). It proves nothing
+// about the agent process, so the process record is cleared: the ended row
+// reads process_liveness unknown, never its last alive record.
+var endedTransitionSet = immediateStateSet + `, ` + endedTransitionEvidence + `, ` + clearProcessEvidence + `, last_seen_at = CURRENT_TIMESTAMP,
        ended_at = CURRENT_TIMESTAMP, ` + launchStartClear + `, ` + idleClear
+
+var endedTransitionEvidence, endedTransitionEvidenceArgs = currentStateEvidenceSet(StateEnded, EvidenceAgentEvent)
 
 // errEndedNotApplied rolls applyEndedTransition's transaction back when its
 // gated write matched no row; the caller then reads why.
@@ -423,7 +428,7 @@ var errEndedNotApplied = errors.New("store: ended transition not applied")
 // ad.spawn.state_transition (the prior state to ended), fail-open.
 func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
 	const errPrefix = "store: ended transition"
-	q, args := gatedHookUpdate(instanceID, gate, endedTransitionSet, immediateStateArgs(StateEnded), jsonlPath, jsonlPresent)
+	q, args := gatedHookUpdate(instanceID, gate, endedTransitionSet, append(immediateStateArgs(StateEnded), endedTransitionEvidenceArgs...), jsonlPath, jsonlPresent)
 	var (
 		prior  string
 		closed []closedRequest
@@ -531,7 +536,7 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 	const errPrefix = "store: waiting-if-working transition"
 	// Each statement writes waiting with its settle columns (b.3ie); its
 	// WHERE already guarantees a change of value.
-	stateSet, stateArgs := s.hookWriteStateSet(StateWaiting)
+	stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateWaiting, EvidenceAgentEvent)
 	set := stateSet + `, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + launchStartClear + `, ` + idleSet
 	for _, from := range []struct{ state, cond string }{
 		{StateWorking, `state = '` + StateWorking + `'`},
@@ -728,7 +733,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	}
 	// waiting with its settle columns (b.3ie): a hook write, so a move out of
 	// any prior state, pending, missing and ended included, settles.
-	stateSet, stateArgs := s.hookWriteStateSet(StateWaiting)
+	stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateWaiting, EvidenceAgentEvent)
 	q := `UPDATE spawns
 	         SET ` + stateSet + `,
 	             last_seen_at              = CURRENT_TIMESTAMP,

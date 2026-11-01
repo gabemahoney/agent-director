@@ -75,6 +75,13 @@ type ListRow struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// ProcessLiveness is alive, exited or unknown: the recorded agent
+	// process at its recorded start identity, never its Helper, tmux session
+	// or descendants (Cursor: unknown, unsupported). Present on every row.
+	ProcessLiveness string `json:"process_liveness"`
+	// Confirmations is exactly the state, process_liveness and
+	// displayed_state records (Confirmation). family_state has none.
+	Confirmations Confirmations `json:"confirmations"`
 	// IdleScreenAvailability is, as StatusResult's, available for Claude and
 	// Codex or an absent agent and unavailable for Cursor. Present on every row.
 	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
@@ -256,6 +263,9 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 					return ListResult{Spawns: []ListRow{}}, fallback.err
 				}
 				out.Spawns[i] = fallback.row
+				// The retained older facts carry their own records, with the
+				// rejected terminal write as this read's latest attempt.
+				out.Spawns[i].ProcessLiveness, out.Spawns[i].Confirmations = mainFields(run, fallback.stored, filters.Settle)
 			}
 		}
 		return out, nil
@@ -296,6 +306,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			}
 		}
 		row := listRow(r, reported, display)
+		row.ProcessLiveness, row.Confirmations = mainFields(s, r, filters.Settle)
 		if r.State == store.StateCheckPermission && judged != nil {
 			row.PermissionRequests = judgedOpenInfos(judged, j)
 		} else if r.State == store.StateCheckPermission {
@@ -364,14 +375,15 @@ func cursorListFallbacks(run *activeReadStore) map[string]cursorListFallback {
 				row.PermissionRequests = judgedOpenInfos(judged, j)
 			}
 		}
-		out[stored.InstanceID] = cursorListFallback{row, err}
+		out[stored.InstanceID] = cursorListFallback{row, err, stored}
 	}
 	return out
 }
 
 type cursorListFallback struct {
-	row ListRow
-	err error
+	row    ListRow
+	err    error
+	stored Spawn
 }
 
 // listRow projects only stored row/display facts; request reads stay with the

@@ -66,7 +66,7 @@ func (s *Store) InsertCursorRequest(b CursorRuntime, req RelayRequest, cap int, 
 			return e
 		}
 		prior = row.State
-		set, args := s.hookWriteStateSet(StateCheckPermission)
+		set, args := s.hookWriteStateEvidenceSet(StateCheckPermission, EvidenceAgentEvent)
 		args = append(args, b.InstanceID)
 		if _, e = conn.ExecContext(ctx, `UPDATE spawns SET `+set+`, last_seen_at=CURRENT_TIMESTAMP, ended_at=NULL, `+launchStartClear+`, `+idleClear+`, liveness_unverified_since=NULL,liveness_note=NULL, `+rowVersionAdvance+` WHERE instance_id=?`, args...); e != nil {
 			return e
@@ -349,7 +349,7 @@ func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOp
 		if !turnOpen || decision == "deny" {
 			return nil
 		}
-		stateSet, stateArgs := s.hookWriteStateSet(StateWorking)
+		stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateWorking, EvidenceAgentEvent)
 		stateArgs = append(stateArgs, b.InstanceID)
 		result, e := conn.ExecContext(ctx, `UPDATE spawns SET `+stateSet+`, last_seen_at=CURRENT_TIMESTAMP, ended_at=NULL, `+launchStartClear+`, `+idleClear+`, liveness_unverified_since=NULL,liveness_note=NULL, `+rowVersionAdvance+`
  WHERE instance_id=? AND state='`+StateCheckPermission+`' AND `+noRequestHoldsRowSQL, stateArgs...)

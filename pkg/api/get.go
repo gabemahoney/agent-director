@@ -74,6 +74,13 @@ type SpawnRow struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// ProcessLiveness is alive, exited or unknown: the recorded agent
+	// process at its recorded start identity, never its Helper, tmux session
+	// or descendants (Cursor: unknown, unsupported). Present on every row.
+	ProcessLiveness string `json:"process_liveness"`
+	// Confirmations is exactly the state, process_liveness and
+	// displayed_state records (Confirmation). family_state has none.
+	Confirmations Confirmations `json:"confirmations"`
 	// IdleScreenAvailability is, as StatusResult's, available for Claude and
 	// Codex or an absent agent and unavailable for Cursor. Present on every row;
 	// omitted only from the empty result of a failed call.
@@ -475,6 +482,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		UnprovenRequests:        []PermissionRequestInfo{},
 		PriorSessions:           []PriorSession{},
 	}
+	out.ProcessLiveness, out.Confirmations = mainFields(s, row, settle)
 
 	// b.v2c AC6/AC8: surface the visible history (the current life's archived
 	// sessions minus the entry for the row's current session id) and derive

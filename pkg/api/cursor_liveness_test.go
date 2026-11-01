@@ -387,8 +387,17 @@ func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) 
 					t.Errorf("stop SQLite observer: %v", err)
 				}
 			}()
+			// B's write stamps the store's own SQL clock, so its record time is
+			// checked against wall-clock bounds around the read.
+			from := time.Now().UnixMilli()
 			switch surface {
 			case "list":
+				// b.x9o: A's reported (settled) value has no stored record, so the
+				// rejected write's attempt shows alone.
+				settle := store.SettleRead{SettleMs: settleMax, NowMs: e.clock.Now().UnixMilli()}
+				if sp, err := e.st.GetSpawnSettled(a.InstanceID, settle); err != nil || sp.StateConfirmation(settle) != store.UnknownConfirmation(store.ReasonNoEvidence) {
+					t.Fatalf("fixture: A's stored state record %+v, %v; want none", sp.StateConfirmation(settle), err)
+				}
 				got, err := c.List(api.ListParams{})
 				if err != nil || len(got.Spawns) != 2 {
 					t.Fatalf("late refusal lost selected results: %+v %v", got, err)
@@ -409,6 +418,11 @@ func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) 
 						if row.State != store.StateWorking || row.ParentID != "" || len(row.PermissionRequests) != 1 {
 							t.Fatalf("refused A retained speculative terminal facts: %+v", row)
 						}
+						// b.x9o: the rejected write is this read's latest attempt for
+						// the stored value list falls back to, never for missing.
+						if want := "not_confirmed|-|-|" + e.clock.Now().UTC().Format(displayTS) + "|stale_observation"; conf(row.Confirmations.State) != want {
+							t.Fatalf("refused A state record %s; want %s", conf(row.Confirmations.State), want)
+						}
 						want := api.PermissionRequestInfo{RequestID: requestA.RequestID, RequestToken: tokenA, ToolName: requestA.ToolName, ToolInput: requestA.ToolInput, RequestedAt: requestA.CreatedAt,
 							RequestDelivery: api.RequestDelivery{Delivery: api.DeliveryNotConfirmed, ConfirmBy: requestA.SettledAt, PaneAnswer: "none"}}
 						gotJSON, err := json.Marshal(row.PermissionRequests[0])
@@ -422,6 +436,10 @@ func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) 
 					case b.InstanceID:
 						if row.State != store.StateMissing || row.ParentID != a.InstanceID || len(row.PermissionRequests) != 0 {
 							t.Fatalf("independent B result lost: %+v", row)
+						}
+						// b.x9o: list projects B before its deferred write commits.
+						if want := "pending|-|-|" + e.clock.Now().UTC().Format(displayTS) + "|operation_pending"; conf(row.Confirmations.State) != want {
+							t.Fatalf("projected B state record %s; want %s", conf(row.Confirmations.State), want)
 						}
 					default:
 						t.Fatalf("unselected row added: %+v", row)
@@ -458,6 +476,18 @@ func TestCursorReadIndependentRecoveryAfterDeferredWriteRejection(t *testing.T) 
 			if multi {
 				if afterB.State != store.StateMissing || afterB.RowVersion != beforeB.RowVersion.(int64)+1 || !afterRequestB.Closed() || !afterRequestB.DeliveredAt.IsZero() || afterRequestB.ProvenGone() {
 					t.Fatalf("independent B did not close without delivery/proof: %+v %+v", afterB, afterRequestB)
+				}
+				// b.x9o: the exact gateway loss B's write acted on is its durable
+				// missing record, confirmed and checked at the write's own time.
+				to := time.Now().UnixMilli()
+				sp, err := e.st.GetSpawn(b.InstanceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := sp.StateConfirmation(store.SettleRead{})
+				if want := (store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: rec.ConfirmedAtMillis, Source: store.EvidenceProcess,
+					CheckedAtMillis: rec.ConfirmedAtMillis}); rec != want || rec.ConfirmedAtMillis < from || rec.ConfirmedAtMillis > to {
+					t.Fatalf("B's stored state record %+v; want missing confirmed by process at one time in [%d, %d], no reason", rec, from, to)
 				}
 			} else if !reflect.DeepEqual(beforeB, afterB) || requestB != afterRequestB {
 				t.Fatal("single-row read changed excluded B")

@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -20,7 +21,9 @@ func TestSettleOffMCP(t *testing.T) {
 			}
 			d := settleDispatcher(t, storePath, v.Config)
 			for _, c := range cases.Cases {
+				from := time.Now()
 				got := toolText(t, callTool(t, d, c.Verb, paramJSON(t, c.Params))) + "\n"
+				got = apitest.NormalizeReadSurfaceProbes(t, got, from, time.Now())
 				if want := cases.Golden(t, c.Name); got != want {
 					t.Errorf("%s: text result differs from its golden\n got: %s\nwant: %s", c.Name, got, want)
 				}

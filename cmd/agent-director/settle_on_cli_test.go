@@ -30,12 +30,13 @@ func TestSettleOnCLI(t *testing.T) {
 	}
 	apitest.SettleVariant{Config: &apitest.SettleOnConfig}.WriteConfig(t, filepath.Join(directorDir(home), "config.toml"))
 	for _, c := range cases.Cases {
+		from := time.Now()
 		stdout, stderr, code := runCLIWithHome(t, home, c.CLIArgs()...)
 		if code != 0 || stderr != "" {
 			t.Errorf("%s %q: exit %d, stderr %q; want 0 and empty", c.Name, c.CLIArgs(), code, stderr)
 			continue
 		}
-		cases.CheckSettleOn(t, c, stdout)
+		cases.CheckSettleOn(t, c, apitest.NormalizeReadSurfaceProbes(t, stdout, from, time.Now()))
 	}
 }
 

@@ -239,6 +239,40 @@ export interface PermissionRequestInfo extends RequestDelivery {
  * `"unavailable"` for Cursor. A capability outcome, never a state.
  */
 export type IdleScreenAvailability = "available" | "unavailable";
+/** The recorded agent process at its recorded start identity; never a Helper, tmux or a descendant. */
+export type ProcessLiveness = "alive" | "exited" | "unknown";
+/** A main-field confirmation's status. `confirmed` never means continuously true since `confirmed_at`. */
+export type ConfirmationStatus = "confirmed" | "not_confirmed" | "unknown" | "pending";
+/** The kind of evidence behind `confirmed_at`; `store` is a durable agent-director record, never provider receipt. */
+export type ConfirmationSource = "agent_event" | "caller_command" | "process" | "tmux" | "pane" | "transcript" | "store";
+/** Why the latest attempt did not confirm the field. */
+export type ConfirmationReason = "no_evidence" | "unreadable" | "busy" | "stale_observation" | "deadline" | "operation_pending" | "pending_grace" | "unsupported" | "commit_unconfirmed";
+/**
+ * One main field's last-confirmed evidence. Every key is always present; unknown values are null.
+ * A failed latest attempt is `not_confirmed` (or `pending` for a still-owned operation or a
+ * pending-launch protection) and keeps only an older applicable `confirmed_at`.
+ */
+export interface Confirmation {
+    status: ConfirmationStatus;
+    /** Last evidence confirming this exact returned value and owner, RFC3339 UTC milliseconds; null when none is known. */
+    confirmed_at: string | null;
+    /** That evidence's kind; null exactly when `confirmed_at` is. */
+    source: ConfirmationSource | null;
+    /** Latest attempt, an unsuccessful one included; null when none is known. Reading stored facts never advances it. */
+    checked_at: string | null;
+    /** Null when confirmed; otherwise why not. */
+    reason: ConfirmationReason | null;
+}
+/**
+ * Exactly the three main-field records. `displayed_state` is unknown with null evidence in this
+ * release (reason `unsupported` for Cursor). `family_state` has no record: its freshness is
+ * unconfirmed. Freshness never authorizes a command.
+ */
+export interface Confirmations {
+    state: Confirmation;
+    process_liveness: Confirmation;
+    displayed_state: Confirmation;
+}
 /** One Spawn row returned by the list verb. */
 export interface ListRow {
     /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
@@ -281,6 +315,10 @@ export interface ListRow {
      * task success.
      */
     family_state: "working" | "waiting";
+    /** The recorded agent process at its recorded start identity; Cursor is `"unknown"` (unsupported). Never refreshes `state`. */
+    process_liveness: ProcessLiveness;
+    /** Exactly the `state`, `process_liveness` and `displayed_state` records. */
+    confirmations: Confirmations;
     /** Canonicalized working directory. */
     cwd: string;
     /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
@@ -536,6 +574,10 @@ export interface StatusResult {
      * task success.
      */
     family_state: "working" | "waiting";
+    /** The recorded agent process at its recorded start identity; Cursor is `"unknown"` (unsupported). Never refreshes `state`. */
+    process_liveness: ProcessLiveness;
+    /** Exactly the `state`, `process_liveness` and `displayed_state` records. */
+    confirmations: Confirmations;
     /**
      * Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a
      * pending row, omitted otherwise. It follows the row's live state: with `[state] settle_ms`
@@ -623,6 +665,10 @@ export interface GetResult {
      * task success.
      */
     family_state: "working" | "waiting";
+    /** The recorded agent process at its recorded start identity; Cursor is `"unknown"` (unsupported). Never refreshes `state`. */
+    process_liveness: ProcessLiveness;
+    /** Exactly the `state`, `process_liveness` and `displayed_state` records. */
+    confirmations: Confirmations;
     cwd: string;
     /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
     agent: string;

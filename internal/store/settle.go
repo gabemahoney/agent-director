@@ -39,9 +39,11 @@ const committedDisplayStateSQL = committedDisplayStateFunc + `(CAST(state AS BLO
 
 // hookStateSet is the SET fragment of a hook's write of a non-terminal value
 // V, written by the hook process whose settle time is Tw (Store.settleMs). Its
-// placeholders are V, V, V, V, Tw, Tw, V, V (hookWriteStateSet): the epoch, the
-// observation, the version, the settled value, the two settle tests, the clock
-// and the state. SET sees the row as it was before the statement, so the
+// placeholders are V, V, V, V, Tw, Tw, V, V, V, Tw, Tw (hookWriteStateSet): the
+// epoch, the observation, the version, the settled value, the two settle
+// tests, the clock and the state, then the settled value's record
+// (settledEvidenceMove, confirmations.go), which follows settled_state
+// exactly. SET sees the row as it was before the statement, so the
 // same-value test and the base are decided in this one statement. A raw
 // change also advances permission_epoch and observation_version; it keeps an
 // observation the row shows as a committed display of either Displayed State
@@ -60,7 +62,7 @@ const committedDisplayStateSQL = committedDisplayStateFunc + `(CAST(state AS BLO
 // decoder accepts only flat RFC 8259 objects; json_valid guards it as well,
 // so json_set cannot fail the write even where SQLite's JSON functions read
 // a value differently from that decoder (a BLOB, say).
-const hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
+var hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
        display_observation = CASE WHEN state = ? THEN display_observation
          WHEN json_valid(display_observation) AND ` + committedDisplayStateSQL + ` IS NOT NULL
          THEN json_set(display_observation, '$.candidate', '', '$.candidate_since_ms', 0)
@@ -70,13 +72,16 @@ const hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? 
                             WHEN ? = 0 OR ` + nowMsSQL + ` - state_changed_ms >= ? THEN state
                             ELSE COALESCE(NULLIF(settled_state, ''), state) END,
        state_changed_ms = CASE WHEN state = ? THEN state_changed_ms ELSE ` + nowMsSQL + ` END,
-       state = ?`
+       state = ?,
+       ` + settledEvidenceMove
 
 // immediateSettleSet is the settle-column SET fragment of an immediate write
 // of V, for a statement whose own SET writes state = V elsewhere (the reuse
 // restore's generated list): settled_state V, so V reports at once, and
 // state_changed_ms now when V is not the raw state already (kept when it is).
 // Its placeholders are V four times: epoch, exit, settled value and clock.
+// settled_state becomes V, so the settled record is cleared: a read of V
+// applies the raw record of V, never an earlier value's (confirmations.go).
 const immediateSettleSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
        display_exit = CASE WHEN ` + committedDisplayStateSQL + ` IS NOT NULL
          THEN json_object('prior_state', ` + committedDisplayStateSQL + `, 'new_state', ?, 'at_ms', ` + nowMsSQL + `)
@@ -84,6 +89,7 @@ const immediateSettleSet = `permission_epoch = permission_epoch + CASE WHEN stat
        display_observation = NULL,
        observation_version = observation_version + 1,
        settled_state = ?,
+       settled_evidence = NULL,
        state_changed_ms = CASE WHEN state = ? THEN state_changed_ms ELSE ` + nowMsSQL + ` END`
 
 // immediateStateSet is the SET fragment of an immediate write of V: any
@@ -112,7 +118,20 @@ func (s *Store) hookWriteStateSet(v string) (string, []any) {
 	if isTerminalState(v) {
 		return immediateStateSet, immediateStateArgs(v)
 	}
-	return hookStateSet, []any{v, v, v, v, s.settleMs, s.settleMs, v, v}
+	return hookStateSet, []any{v, v, v, v, s.settleMs, s.settleMs, v, v, v, s.settleMs, s.settleMs}
+}
+
+// hookWriteStateEvidenceSet is hookWriteStateSet followed by the state
+// record of the event that writes v (currentStateEvidenceSet), from src: the
+// SET list and its arguments, in order. A terminal v also clears the process
+// record (clearProcessEvidence): an event proves nothing about the process.
+func (s *Store) hookWriteStateEvidenceSet(v, src string) (string, []any) {
+	set, args := s.hookWriteStateSet(v)
+	evidence, evidenceArgs := currentStateEvidenceSet(v, src)
+	if isTerminalState(v) {
+		evidence += ",\n       " + clearProcessEvidence
+	}
+	return set + ",\n       " + evidence, append(args, evidenceArgs...)
 }
 
 // SetSettleMs sets the settle time, in whole milliseconds, with which this
@@ -160,4 +179,24 @@ func (r SettleRead) stateExpr() (string, []any) {
 	}
 	return "CASE WHEN ? - state_changed_ms >= ? THEN state ELSE COALESCE(NULLIF(settled_state, ''), state) END",
 		[]any{r.NowMs, r.SettleMs}
+}
+
+// StateConfirmation is the stored record of the lifecycle value this row's
+// read reported (ReportedState) under r, the SettleRead the read used. The
+// raw record applies to the raw state of its own interval; while a younger
+// raw change is still settling, the settled record applies to the settled
+// value shown. Any other value, owner or interval has no applicable evidence:
+// unknown with no_evidence. A pure read or the passing of time never makes
+// a record. Partial readers that select no evidence columns read unknown.
+func (sp Spawn) StateConfirmation(r SettleRead) Confirmation {
+	if ev, ok := decodeFieldEvidence(sp.StateEvidence); ok && sp.ReportedState == sp.State && ev.Value == sp.State &&
+		ev.Epoch != nil && *ev.Epoch == sp.PermissionEpoch && ev.owns(sp) && ev.Reason == "" && ev.At > 0 {
+		return stateRecordFor(ev)
+	}
+	settling := r.on() && r.NowMs-sp.StateChangedMillis < r.SettleMs
+	if ev, ok := decodeFieldEvidence(sp.SettledStateEvidence); ok && settling && ev.Value == sp.ReportedState &&
+		ev.owns(sp) && ev.Reason == "" && ev.At > 0 {
+		return stateRecordFor(ev)
+	}
+	return UnknownConfirmation(ReasonNoEvidence)
 }

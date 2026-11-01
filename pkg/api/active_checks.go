@@ -45,8 +45,13 @@ func (checked *activeCheckedRow) record(outcome activeCheckOutcome) {
 }
 
 type activeCheckedRow struct {
-	row            Spawn
-	display        store.DisplayDetail
+	row     Spawn
+	display store.DisplayDetail
+	// state and process are this invocation's unsuccessful or uncommitted
+	// attempts for those main fields (nil when none): response-only, never a
+	// durable record. A successful committed attempt is the stored record the
+	// final projection reads instead.
+	state, process *fieldAttempt
 	judged         *judgedRequestSet
 	permissionErr  error
 	projectionErr  error
@@ -101,6 +106,197 @@ type activeReadStore struct {
 	fallbackBusy  bool
 	fallbackTried map[int64]bool
 	withHistory   bool
+}
+
+// fieldAttempt is one main-field attempt that did not durably confirm its
+// field: when it ran, why not (an SR-4.5 reason) and what it examined, so it
+// describes only that value and owner (withAttempt): the life and launch;
+// for a state attempt, the raw state and raw-state interval
+// (permission_epoch) it was about; for a process attempt, the process record
+// it found and the agent process identity it judged (pid 0 when it judged
+// none).
+type fieldAttempt struct {
+	atMillis int64
+	reason   string
+	life     int64
+	token    string
+	process  bool
+	state    string
+	epoch    int64
+	record   string
+	pid      int
+	start    string
+}
+
+// describes reports whether a, an attempt for the field, was made for the
+// value and owner row returns: the same life and launch and, for a state
+// attempt, the same raw state in the same interval; for a process attempt,
+// the same stored process record and a judged identity row still records. A
+// concurrent commit that changed the value or its record has its own
+// evidence, which an older attempt must not overlay.
+func (a *fieldAttempt) describes(row Spawn) bool {
+	if a.life != row.LifeNumber || a.token != row.Identity.Token {
+		return false
+	}
+	if !a.process {
+		return a.state == row.State && a.epoch == row.PermissionEpoch
+	}
+	if a.record != row.ProcessEvidence {
+		return false
+	}
+	return a.pid == 0 || (a.pid == row.PID && a.start == row.ProcStarttime) ||
+		(a.pid == row.Identity.PanePID && a.start == row.Identity.PaneStarttime)
+}
+
+// outcomeReason is the SR-4.5 reason of an unsuccessful outcome result, ""
+// for any other result.
+func outcomeReason(result string) string {
+	switch result {
+	case "stale":
+		return store.ReasonStaleObservation
+	case "unconfirmed":
+		return store.ReasonCommitUnconfirmed
+	case "cancelled":
+		return store.ReasonDeadline
+	case "busy":
+		return store.ReasonBusy
+	case "absent":
+		return store.ReasonNoEvidence
+	case "unreadable":
+		return store.ReasonUnreadable
+	}
+	return ""
+}
+
+// attempt notes that this invocation's attempt for checked's lifecycle state,
+// as checked's current row holds it, ended with reason; an empty reason notes
+// nothing. A later attempt for the same field replaces it.
+func (r *activeReadStore) attempt(checked *activeCheckedRow, reason string) {
+	r.stateAttempt(checked, checked.row, checked.row.State, reason)
+}
+
+// stateAttempt is attempt for value state on examined, the row the attempt
+// examined: an attempt for a projected value (a Cursor row's projected
+// missing) names the value it would establish, and a deferred write names the
+// stored row it examined.
+func (r *activeReadStore) stateAttempt(checked *activeCheckedRow, examined Spawn, state, reason string) {
+	if reason == "" {
+		return
+	}
+	checked.state = &fieldAttempt{atMillis: newRelayJudge(r.view).now().UnixMilli(), reason: reason,
+		life: examined.LifeNumber, token: examined.Identity.Token, state: state, epoch: examined.PermissionEpoch}
+}
+
+// processAttempt notes that this invocation's process_liveness attempt for
+// checked's current row, judging probe's identity (none when probe ran no
+// judgement), ended with reason; an empty reason notes nothing.
+func (r *activeReadStore) processAttempt(checked *activeCheckedRow, probe processProbe, reason string) {
+	r.processAttemptOn(checked, checked.row, probe, reason)
+}
+
+// processAttemptOn is processAttempt for examined, the row the attempt
+// examined when a later read replaced checked's row: the attempt describes
+// examined's process record, never one a concurrent writer committed since.
+func (r *activeReadStore) processAttemptOn(checked *activeCheckedRow, examined Spawn, probe processProbe, reason string) {
+	if reason == "" {
+		return
+	}
+	a := &fieldAttempt{atMillis: r.probeMillis(probe), reason: reason,
+		life: examined.LifeNumber, token: examined.Identity.Token, process: true, record: examined.ProcessEvidence}
+	if probe.judged && probe.identity.PID > 0 {
+		a.pid, a.start = probe.identity.PID, probe.identity.Starttime
+	}
+	checked.process = a
+}
+
+// probeMillis is the time of probe's evidence: its judgement's instant, or
+// the relay clock's now for an attempt that judged nothing, or for a
+// judgement the clock gave no time (a run with no clock, which only tests use).
+func (r *activeReadStore) probeMillis(probe processProbe) int64 {
+	if probe.judged && !probe.at.IsZero() {
+		return probe.at.UnixMilli()
+	}
+	return newRelayJudge(r.view).now().UnixMilli()
+}
+
+// recordProcess commits this invocation's process_liveness attempt for the
+// recorded agent process of checked's current row, under the sampled
+// snapshot, life, launch, interval, observations and earlier record
+// (store.RecordProcessEvidence). A committed record, successful or not, is
+// what the final projection reads. An attempt the store cannot hold (a narrow
+// store, a process the row no longer records), a stale sample, a busy store,
+// a deadline or an unconfirmed COMMIT stays response-only and never reads as
+// a new confirmation. reason, when set, is why the attempt could not run to a
+// durable write at all (the liveness write before it failed). A Cursor row
+// records nothing: no check observes its runtime process, so its
+// process_liveness is always unknown with reason unsupported (mainFields).
+func (r *activeReadStore) recordProcess(checked *activeCheckedRow, probe processProbe, reason string) {
+	if !probe.judged || checked.row.Agent == store.AgentCursor {
+		return
+	}
+	attempt := probe.attempt()
+	if reason != "" {
+		r.processAttempt(checked, probe, reason)
+		return
+	}
+	row := checked.row
+	// The record is stamped with the judgement's time, the time of its
+	// evidence (SR-4.5), not the time it is built.
+	record, ok := row.ProcessEvidenceAfter(attempt, r.probeMillis(probe))
+	s, writes := r.source.(interface {
+		RecordProcessEvidence(Spawn, string) (CondResult, error)
+	})
+	switch {
+	case !ok && attempt.Reason != "":
+		r.processAttempt(checked, probe, attempt.Reason)
+		return
+	case !ok:
+		// The judged identity is not a process the current row records, an
+		// alive sample meets a finished row, or the clock gave no time (a
+		// zero clock, which only tests use).
+		r.processAttempt(checked, probe, store.ReasonStaleObservation)
+		return
+	case !writes:
+		r.processAttempt(checked, probe, store.ReasonUnsupported)
+		return
+	}
+	res, err := s.RecordProcessEvidence(row, record)
+	outcome := activeOutcome("process_evidence", res == CondApplied, err)
+	if err == nil && res == CondChanged {
+		outcome.Result = "stale"
+	}
+	checked.record(outcome)
+	if err == nil && res == CondApplied {
+		checked.row.ProcessEvidence = record
+		return
+	}
+	r.processAttempt(checked, probe, outcomeReason(outcome.Result))
+}
+
+// staleProcess notes, response-only, that probe's process_liveness attempt
+// for examined, the row it examined, became a stale sample: the row moved on
+// before its record could be committed. Like recordProcess, it notes nothing
+// without a judgement or for a Cursor row.
+func (r *activeReadStore) staleProcess(checked *activeCheckedRow, examined Spawn, probe processProbe) {
+	if !probe.judged || examined.Agent == store.AgentCursor {
+		return
+	}
+	r.processAttemptOn(checked, examined, probe, store.ReasonStaleObservation)
+}
+
+// probeStillApplies reports whether current, the row read after this
+// invocation's liveness write, is still the row the probe examined as that
+// write left it: after this invocation's own mark, which stored no process
+// record (ProcessRecorded false), a row with none; after any other write (a
+// note, a clear, which never touch process_evidence) or none, a live row with
+// examined's process record. Anything else is a concurrent writer's commit,
+// a terminal move with its own record or a SessionEnd among them, which a
+// sample taken before it must never overwrite (SR-4.7).
+func probeStillApplies(examined, current Spawn, result findMissingRow) bool {
+	if result.marked && result.write.Wrote && result.write.Err == nil && result.write.Res == CondApplied {
+		return current.ProcessEvidence == ""
+	}
+	return store.IsLiveState(current.State) && current.ProcessEvidence == examined.ProcessEvidence
 }
 
 func activeOutcome(adapter string, applied bool, err error) activeCheckOutcome {
@@ -160,7 +356,7 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 				s = bounded.RecoveryWrites(rows...)
 			}
 			now := newRelayJudge(view).now
-			live = &findMissingRun{s: s, t: p.tmux, pc: view.Procs, sw: tmux.NewSweep(p.tmux, view.Procs, now, p.budget), lg: p.logger, emit: r.emit}
+			live = &findMissingRun{s: s, t: p.tmux, pc: view.Procs, sw: tmux.NewSweep(p.tmux, view.Procs, now, p.budget), lg: p.logger, emit: r.emit, now: now}
 			if capture, ok := p.tmux.(interface {
 				CapturePaneID(string, string, int, bool) (string, error)
 			}); ok {
@@ -196,6 +392,8 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 				if checked := r.byID[id]; checked != nil {
 					checked.projectionErr = err
 					checked.record(activeOutcome("projection", false, err))
+					// The retained older facts carry no fresh lifecycle proof.
+					r.attempt(checked, store.ReasonStaleObservation)
 				}
 			}
 		}
@@ -246,15 +444,27 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 		return
 	}
 	if !store.IsLiveState(row.State) {
-		checked.record(activeCheckOutcome{Adapter: "liveness/display/permission/turn/path", Result: "inapplicable"})
+		// Each adapter a finished row admits none of is recorded on its own.
+		for _, adapter := range []string{"liveness", "cursor_gateway", "codex_turn", "transcript", "permission_read", "permission_repair", "display", "permission_fallback"} {
+			checked.record(activeCheckOutcome{Adapter: adapter, Result: "inapplicable"})
+		}
 		checked.proofRow = &row
 		return
 	}
 	if p := r.view.active; p != nil {
 		now := newRelayJudge(r.view).now()
-		if store.InsidePendingGrace(row.State, row.LaunchStartedAtMillis, p.pendingGrace, now) ||
-			(row.State == store.StatePending && r.view.Procs != nil && spawn.LaunchOwnerAlive(r.view.Procs, row.LaunchOwner)) {
+		inside := store.InsidePendingGrace(row.State, row.LaunchStartedAtMillis, p.pendingGrace, now)
+		if inside || (row.State == store.StatePending && r.view.Procs != nil && spawn.LaunchOwnerAlive(r.view.Procs, row.LaunchOwner)) {
 			checked.record(activeCheckOutcome{Adapter: "pending", Result: "inapplicable"})
+			// The pending-launch protection, not missing evidence, keeps the
+			// process unchecked; its lifecycle admission keeps its own record.
+			if r.view.Procs != nil && row.Agent != store.AgentCursor {
+				reason := store.ReasonOperationPending
+				if inside {
+					reason = store.ReasonPendingGrace
+				}
+				r.processAttempt(checked, processProbe{}, reason)
+			}
 			r.checkTranscript(checked)
 			return
 		}
@@ -265,16 +475,24 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 		checked.record(outcome)
 		err := outcome.Err
 		if err != nil {
+			r.attempt(checked, outcomeReason(outcome.Result))
 			return
 		}
 		if proof != nil {
 			r.cursor = append(r.cursor, *proof)
 			checked.outcomes[len(checked.outcomes)-1].Result = "observed"
+			// The projected missing has no durable record until the deferred
+			// terminal write, which this invocation still owns, commits. The
+			// attempt is for that projected value in the examined interval.
+			r.stateAttempt(checked, row, store.StateMissing, store.ReasonOperationPending)
 			return // project the exact loss before the deferred terminal write
 		}
 		cursorProcess = outcome.Evidence
 	}
 	if live != nil {
+		// The probe examines this row; a refresh after the liveness write may
+		// read a later one.
+		examined := checked.row
 		var result findMissingRow
 		switch cursorProcess {
 		case "alive":
@@ -297,6 +515,10 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 		}
 		checked.record(outcome)
 		if result.write.Err != nil || (result.write.Wrote && result.write.Res != CondApplied) {
+			if result.marked {
+				r.attempt(checked, outcomeReason(outcome.Result))
+			}
+			r.recordProcess(checked, result.probe, outcomeReason(outcome.Result))
 			return
 		}
 		// A no-write note still needs current identity before entering counters.
@@ -311,6 +533,7 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 						outcome.Result = "stale"
 					}
 					checked.record(outcome)
+					r.recordProcess(checked, result.probe, outcomeReason(outcome.Result))
 					return
 				}
 				// This projection validates evidence only. Keep the complete
@@ -325,7 +548,23 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 			}
 		}
 		if result.write.Wrote && !r.refreshRow(checked) {
+			r.staleProcess(checked, examined, result.probe)
 			return
+		}
+		// The mark, when one applied, already committed its state record, and
+		// a From-form mark on a proven exit its process record too
+		// (ProcessRecorded). A store without MarkMissingIfSameLifeFrom or
+		// MarkEndedIfSameLifeFrom makes the plain mark, which records no
+		// process record, so the switch below follows it up. Any other
+		// follow-up record is bound to the row the probe examined: the
+		// refreshed row must still be what this invocation's own write left
+		// of it.
+		switch {
+		case result.write.ProcessRecorded:
+		case probeStillApplies(examined, checked.row, result):
+			r.recordProcess(checked, result.probe, "")
+		default:
+			r.staleProcess(checked, examined, result.probe)
 		}
 		row = checked.row
 		if !store.IsLiveState(row.State) {
@@ -354,12 +593,15 @@ func (r *activeReadStore) checkTurn(checked *activeCheckedRow) bool {
 	}
 	samples, err := s.CodexTurnSamples(row.InstanceID)
 	if err != nil {
-		checked.record(activeOutcome("codex_turn", false, err))
+		outcome := activeOutcome("codex_turn", false, err)
+		checked.record(outcome)
+		r.attempt(checked, outcomeReason(outcome.Result))
 		return false
 	}
 	for _, sample := range samples {
 		if sample.Snapshot != row.Snapshot || sample.ObservationVersion != row.ObservationVersion {
 			checked.record(activeCheckOutcome{Adapter: "codex_turn", Result: "stale"})
+			r.attempt(checked, store.ReasonStaleObservation)
 			return false
 		}
 		if !codexRolloutEndsTurn(sample.SessionID, sample.JSONLPath, sample.Turn) {
@@ -374,6 +616,8 @@ func (r *activeReadStore) checkTurn(checked *activeCheckedRow) bool {
 		}
 		checked.record(outcome)
 		if err != nil || !applied {
+			// The rollout established the end, but no durable record did.
+			r.attempt(checked, outcomeReason(outcome.Result))
 			return false
 		}
 		return r.refreshRow(checked)
@@ -452,8 +696,10 @@ func (r *activeReadStore) checkPermissionDisplay(checked *activeCheckedRow) {
 	}
 	if row.State == store.StateCheckPermission && checked.judged != nil {
 		_, result, err := repairCheckPermissionRow(r.emit, r.source, row, checked.judged, j)
-		checked.record(activeOutcome("permission_repair", result == CondApplied, err))
+		repair := activeOutcome("permission_repair", result == CondApplied, err)
+		checked.record(repair)
 		if err != nil {
+			r.attempt(checked, outcomeReason(repair.Result))
 			r.fallbackBusy = r.fallbackBusy || errors.Is(err, store.ErrStoreBusy)
 			return
 		}
@@ -576,6 +822,14 @@ func (r *activeReadStore) finish() error {
 		}
 		checked.record(outcome)
 		checked.outcomes[len(checked.outcomes)-1].Sample = activeCheckSample{proof.Row.Snapshot, proof.Row.Identity, proof.Row.LifeNumber, proof.Row.ObservationVersion, proof.Row.PermissionEpoch, proof.Row.JSONLPath}
+		// A rejected terminal write is the latest attempt for the stored row
+		// list reports in place of the projected missing (cursorListFallbacks);
+		// an applied one committed its own record. A failed write notes
+		// nothing: status and get already projected, and list falls back only
+		// after a rejection.
+		if err == nil && result != CondApplied {
+			r.stateAttempt(checked, proof.Row, proof.Row.State, outcomeReason(outcome.Result))
+		}
 		if err != nil {
 			if s.CanDeferCursorMissingWrite(err) {
 				if p := r.view.active; p != nil && p.deferred != nil {

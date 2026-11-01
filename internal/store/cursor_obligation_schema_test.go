@@ -16,6 +16,9 @@ func TestCursorObligationMigrationPreservesPartialRecords(t *testing.T) {
 			dir := t.TempDir()
 			path := makeVersionedDB(t, dir, 17)
 			seedV16PermissionHistory(t, path)
+			// The later v19 columns too, so the whole-store comparison below
+			// sees only what the v18 hop kept.
+			preAddV14Columns(t, path, v19ColumnSpecs)
 			for _, table := range []string{"cursor_inputs", "cursor_proofs"} {
 				if partial == table || partial == "both" {
 					seedV18Obligation(t, path, table)
@@ -61,8 +64,12 @@ func TestCursorObligationMigrationPreservesPartialRecords(t *testing.T) {
 			}
 			s.Close()
 			withRaw(t, path, func(db *sql.DB) {
-				if err := migrateV17toV18(db); err != nil {
-					t.Fatal(err)
+				// Re-running the hop stamps v18; the later hop's reentry
+				// returns the store to the current version.
+				for _, hop := range []func(*sql.DB) error{migrateV17toV18, migrateV18toV19} {
+					if err := hop(db); err != nil {
+						t.Fatal(err)
+					}
 				}
 			})
 			s, err = Open(path)

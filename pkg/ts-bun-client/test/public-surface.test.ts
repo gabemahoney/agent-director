@@ -297,7 +297,8 @@ test("public-surface: state stays a plain string — no union/enum (SR-8.3 guard
   // types must resolve to the bare `string` type — never `state: "pending" |
   // …` and never an enum reference. This is the TS twin of the Go
   // TestStateEnumByteIdentity named pin.
-  const golden = typesGolden();
+  // Confirmations' `state` is the lifecycle field's record (b.x9o), not the field.
+  const golden = typesGolden().replace(interfaceBody(typesGolden(), "Confirmations"), "");
   const stateDecls = golden.match(/^\s*state\s*[?]?\s*:\s*[^;]+;/gm) ?? [];
   expect(stateDecls.length, "expected at least one `state:` declaration").toBeGreaterThan(0);
   for (const decl of stateDecls) {
@@ -365,3 +366,37 @@ test.each(["StatusResult", "GetResult", "ListRow"])(
     }
   }
 );
+
+test.each(["StatusResult", "GetResult", "ListRow"])(
+  "public-surface: %s requires process_liveness and confirmations (b.x9o)", (iface) => {
+    const body = interfaceBody(typesGolden(), iface);
+    expect(body).toMatch(/\bprocess_liveness\s*:\s*ProcessLiveness\s*;/);
+    expect(body).toMatch(/\bconfirmations\s*:\s*Confirmations\s*;/);
+  }
+);
+
+test("public-surface: Confirmations holds exactly three records of exactly five nullable keys (b.x9o)", () => {
+  const golden = typesGolden();
+  // Member declarations only: JSDoc lines start with "*" or "/".
+  const members = (iface: string) => interfaceBody(golden, iface).split("\n").map((l) => l.trim())
+    .filter((l) => l !== "" && !l.startsWith("*") && !l.startsWith("/"));
+  expect(members("Confirmations")).toEqual(["state: Confirmation;", "process_liveness: Confirmation;", "displayed_state: Confirmation;"]);
+  expect(members("Confirmation")).toEqual(["status: ConfirmationStatus;", "confirmed_at: string | null;",
+    "source: ConfirmationSource | null;", "checked_at: string | null;", "reason: ConfirmationReason | null;"]);
+  const union = (name: string) => golden.match(new RegExp(`export type ${name} = ([^;]+);`))?.[1].replace(/\s+/g, " ").trim();
+  expect(union("ProcessLiveness")).toBe(`"alive" | "exited" | "unknown"`);
+  expect(union("ConfirmationStatus")).toBe(`"confirmed" | "not_confirmed" | "unknown" | "pending"`);
+  expect(union("ConfirmationSource")).toBe(`"agent_event" | "caller_command" | "process" | "tmux" | "pane" | "transcript" | "store"`);
+  expect(union("ConfirmationReason")).toBe(`"no_evidence" | "unreadable" | "busy" | "stale_observation" | "deadline" | "operation_pending" | "pending_grace" | "unsupported" | "commit_unconfirmed"`);
+});
+
+test("public-surface: only status, get and list agent results carry confirmations or process_liveness (b.x9o)", () => {
+  const golden = typesGolden();
+  const carriers = new Set(["StatusResult", "GetResult", "ListRow", "Confirmations"]);
+  for (const [, name] of golden.matchAll(/^export interface (\w+)/gm)) {
+    if (carriers.has(name!)) continue;
+    // Nested requests, subagents, receipts, details and errors gain no wrapper.
+    expect(interfaceBody(golden, name!), `${name} must not declare confirmations or process_liveness`).not.toMatch(
+      /^\s*(confirmations|process_liveness)\??\s*:/m);
+  }
+});

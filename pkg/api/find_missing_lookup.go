@@ -155,7 +155,7 @@ func (r *findMissingRun) adoptedPaneRow(row findMissingRow, it LiveSpawnIdentity
 	case tmux.ProcAlive:
 		return r.aliveRow(row, it, sa.Guard, sa.Identity)
 	case tmux.ProcGone:
-		return r.goneRow(row, it, sa.Guard)
+		return r.goneRow(row, it, sa.Guard, agent.Identity, clockNow(r.now))
 	case tmux.ProcUnknown:
 		return r.noteRow(row, it, sa.Guard, noteProbeEACCES)
 	}

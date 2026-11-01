@@ -37,6 +37,13 @@ type StatusResult struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// ProcessLiveness is alive, exited or unknown: the recorded agent
+	// process at its recorded start identity, never its Helper, tmux session
+	// or descendants (Cursor: unknown, unsupported). Present on every result.
+	ProcessLiveness string `json:"process_liveness"`
+	// Confirmations is exactly the state, process_liveness and
+	// displayed_state records (Confirmation). family_state has none.
+	Confirmations Confirmations `json:"confirmations"`
 	// IdleScreenAvailability is whether idle_screen can apply to the row's
 	// agent: available for Claude, Codex or an absent agent, unavailable for Cursor
 	// (IdleScreenAvailable, IdleScreenUnavailable). Present on every result;
@@ -128,6 +135,7 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		out := StatusResult{State: row.ReportedState, StateDetail: stateDetail(display), FamilyState: family,
 			IdleScreenAvailability: idleScreenAvailability(row.Agent),
 			LaunchStartedAt:        launchStartedAt(row.State, row.LaunchStartedAtMillis), Context: contextOf(row.ContextEvidence())}
+		out.ProcessLiveness, out.Confirmations = mainFields(s, row, settle)
 		if out.DisplayedState != "" {
 			out.TmuxSessionName = row.TmuxSessionName
 		}
@@ -142,16 +150,16 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: reported, FamilyState: evidence.FamilyState, LaunchStartedAt: launchStartedAt(raw, launchMillis),
-			IdleScreenAvailability: idleScreenAvailability(evidence.Agent), Context: contextOf(evidence)}, nil
+		return withUnknownMainFields(StatusResult{State: reported, FamilyState: evidence.FamilyState, LaunchStartedAt: launchStartedAt(raw, launchMillis),
+			IdleScreenAvailability: idleScreenAvailability(evidence.Agent), Context: contextOf(evidence)}, evidence.Agent), nil
 	}
 	if sr, ok := s.(familyStatusReader); ok {
 		reported, raw, family, launchMillis, err := sr.SpawnStatusWithFamily(instanceID, settle)
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: reported, FamilyState: family, LaunchStartedAt: launchStartedAt(raw, launchMillis),
-			IdleScreenAvailability: idleScreenAvailability("")}, nil
+		return withUnknownMainFields(StatusResult{State: reported, FamilyState: family, LaunchStartedAt: launchStartedAt(raw, launchMillis),
+			IdleScreenAvailability: idleScreenAvailability("")}, ""), nil
 	}
 
 	if sr, ok := s.(settledStatusReader); ok && settle.SettleMs > 0 {
@@ -159,20 +167,27 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, nil
+		return withUnknownMainFields(StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, ""), nil
 	}
 	if r, ok := s.(statusReader); ok {
 		state, launchMillis, err := r.SpawnStatus(instanceID)
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: state, LaunchStartedAt: launchStartedAt(state, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, nil
+		return withUnknownMainFields(StatusResult{State: state, LaunchStartedAt: launchStartedAt(state, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, ""), nil
 	}
 	state, err := s.GetSpawnState(instanceID)
 	if err != nil {
 		return StatusResult{}, err
 	}
-	return StatusResult{State: state, IdleScreenAvailability: idleScreenAvailability("")}, nil
+	return withUnknownMainFields(StatusResult{State: state, IdleScreenAvailability: idleScreenAvailability("")}, ""), nil
+}
+
+// withUnknownMainFields gives a narrow store's result, which reads no
+// evidence, its explicit unknown process_liveness and records.
+func withUnknownMainFields(out StatusResult, agent string) StatusResult {
+	out.ProcessLiveness, out.Confirmations = mainFields(nil, Spawn{Agent: agent}, store.SettleRead{})
+	return out
 }
 
 // Status returns the current state (pending/waiting/working/ask_user/

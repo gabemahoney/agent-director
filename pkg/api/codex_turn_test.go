@@ -357,10 +357,45 @@ func TestCodexTurnEndFailsOpen(t *testing.T) {
 				if n := turnEnds(t, mark, id); n != 0 {
 					t.Errorf("working->waiting lines while failing = %d; want 0", n)
 				}
+				// b.x9o: the failed end is this read's latest state attempt; the
+				// stored working record, if any, stays its confirmation.
+				got, err := api.Status(failing, api.RelayView{}, id)
+				if err != nil {
+					t.Fatalf("status while failing: %v", err)
+				}
+				sp, err := s.GetSpawn(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reason := store.ReasonUnreadable
+				if f.name == "busy store" {
+					reason = store.ReasonBusy
+				}
+				stored, rec := sp.StateConfirmation(store.SettleRead{}), got.Confirmations.State
+				confirmedAt, source := "-", "-"
+				if stored.ConfirmedAtMillis > 0 {
+					confirmedAt, source = time.UnixMilli(stored.ConfirmedAtMillis).UTC().Format(displayTS), stored.Source
+				}
+				if fields := strings.Split(conf(rec), "|"); fields[0] != store.ConfirmationNotConfirmed || fields[1] != confirmedAt ||
+					fields[2] != source || fields[3] == "-" || fields[4] != reason {
+					t.Errorf("state record while failing = %s; want not_confirmed|%s|%s|<this read>|%s", conf(rec), confirmedAt, source, reason)
+				}
 				release()
 
+				// The turn end stamps the store's own SQL clock, so its record
+				// time is checked against wall-clock bounds around the read.
+				from := time.Now().UnixMilli()
 				if state, _, err := r.read(s, id); err != nil || state != store.StateWaiting {
 					t.Errorf("%s after the failure = %q, %v; want waiting", r.name, state, err)
+				}
+				to := time.Now().UnixMilli()
+				sp, err = s.GetSpawn(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ended := sp.StateConfirmation(store.SettleRead{}); ended != (store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: ended.ConfirmedAtMillis,
+					Source: store.EvidenceTranscript, CheckedAtMillis: ended.ConfirmedAtMillis}) || ended.ConfirmedAtMillis < from || ended.ConfirmedAtMillis > to {
+					t.Errorf("waiting record after the turn end = %+v; want the rollout's task_complete (transcript) at one time in [%d, %d], no reason", ended, from, to)
 				}
 				if n := turnEnds(t, mark, id); n != 1 {
 					t.Errorf("working->waiting lines = %d; want 1", n)

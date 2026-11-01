@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +35,10 @@ type readSurfaceRow struct {
 	finished                        bool // ended or missing: ended_at is pinned
 	opts                            []SpawnOption
 	hooks                           []string
+	// settledRecord: the hooks' last raw change moved the record of the value
+	// the scramble makes settled (ReadSurfaceSettled) to settled_evidence, so a
+	// settling read confirms it (ReadSurfaceSettledConfirmation).
+	settledRecord bool
 }
 
 // readSurfaceRows are the fixed rows, in seeding order: one per state, plus
@@ -52,7 +58,7 @@ func readSurfaceRows() []readSurfaceRow {
 			WithSessionHistory(SessionHistorySeed{SessionID: "sess-rs-ended-1", JSONLPath: ended + "sess-rs-ended-1.jsonl",
 				RecordedAt: readSurfaceBase.Add(5*time.Minute + 20*time.Second)})}},
 		{id: "rs-missing", state: store.StateMissing, finished: true, opts: []SpawnOption{WithNoLaunchToken()}},
-		{id: "rs-flap-waiting", state: store.StateWaiting, hooks: []string{"PreToolUse", "Stop", "PreToolUse", "Stop"}},
+		{id: "rs-flap-waiting", state: store.StateWaiting, hooks: []string{"PreToolUse", "Stop", "PreToolUse", "Stop"}, settledRecord: true},
 		{id: "rs-flap-working", state: store.StateWorking, hooks: []string{"Stop", "PreToolUse"}},
 		{id: "rs-flap-check-permission", state: store.StateCheckPermission, hooks: []string{"PostToolUse", "PermissionRequest"}},
 		{id: "rs-family-parent", state: store.StateWaiting},
@@ -94,8 +100,9 @@ var readSurfaceSettledAt = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
 // session history; missing from before the release), plus three rows whose
 // raw state flapped through hooks and came back. Every time the read surfaces
 // show is pinned last (started_at, last_seen_at, ended_at, requested_at,
-// hook_gone_at), and no read of the store writes, so each read gives the same
-// bytes on every run. Last, every row's settle columns are scrambled
+// hook_gone_at, the state records' times), and a read writes only its own
+// probe's process record, whose times NormalizeReadSurfaceProbes stands in
+// for, so each read gives the same bytes on every run. Last, every row's settle columns are scrambled
 // (ReadSurfaceSettled, ReadSurfaceStampMs), which status, get and list with
 // no settle time must ignore but for get's and list's state_changed_at, the
 // stamp. It returns the row ids in seeding order and fails when a row does
@@ -253,9 +260,21 @@ func recordReadSurfaceRequest(s *store.Store, dbPath string, req readSurfaceRequ
 	return nil
 }
 
+// readSurfaceSeen is the last_seen_at pinReadSurfaceTimes gives row i, and
+// the time of its state record; readSurfaceSettledAt is its settled record's.
+func readSurfaceSeen(i int) time.Time {
+	return readSurfaceBase.Add(time.Duration(i)*time.Minute + 30*time.Second)
+}
+
+func readSurfaceSettledRecordAt(i int) time.Time {
+	return readSurfaceBase.Add(time.Duration(i)*time.Minute + 20*time.Second)
+}
+
 // pinReadSurfaceTimes writes, in one transaction, every time the hook and
 // request writes stamped with the clock: each row's last_seen_at (30 s after
-// its started_at) and each request's created_at and hook_gone_at.
+// its started_at), the at and checked of its state record (the same instant)
+// and of its settled record (10 s earlier), and each request's created_at and
+// hook_gone_at.
 func pinReadSurfaceTimes(dbPath string, rows []readSurfaceRow) error {
 	raw, err := openRawStore(dbPath)
 	if err != nil {
@@ -268,9 +287,12 @@ func pinReadSurfaceTimes(dbPath string, rows []readSurfaceRow) error {
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after Commit
 	for i, r := range rows {
-		seen := readSurfaceBase.Add(time.Duration(i)*time.Minute + 30*time.Second)
-		if _, err := tx.Exec(`UPDATE spawns SET last_seen_at = ? WHERE instance_id = ?`,
-			seen.Format(storeTimestampLayout), r.id); err != nil {
+		seen, settled := readSurfaceSeen(i), readSurfaceSettledRecordAt(i).UnixMilli()
+		if _, err := tx.Exec(`UPDATE spawns SET last_seen_at = ?,
+		    state_evidence = CASE WHEN json_valid(state_evidence) THEN json_set(state_evidence, '$.at', ?, '$.checked', ?) END,
+		    settled_evidence = CASE WHEN json_valid(settled_evidence) THEN json_set(settled_evidence, '$.at', ?, '$.checked', ?) END
+		  WHERE instance_id = ?`,
+			seen.Format(storeTimestampLayout), seen.UnixMilli(), seen.UnixMilli(), settled, settled, r.id); err != nil {
 			return fmt.Errorf("SeedReadSurfaceStore: pin last_seen_at of %s: %w", r.id, err)
 		}
 	}
@@ -381,6 +403,154 @@ func (c ReadSurfaceCase) CLIArgs() []string {
 		args = append(args, "--"+strings.ReplaceAll(k, "_", "-"), v)
 	}
 	return args
+}
+
+// ReadSurfaceProbed stands in, in the goldens, for both times of a live row's
+// alive process record: the read's own probe of the test's process confirmed
+// it, at the read's clock, which no golden can pin.
+const ReadSurfaceProbed = "probed-by-this-read"
+
+// probedRecord is a process record its own read confirmed by probing.
+var probedRecord = regexp.MustCompile(`"process_liveness":\{"status":"confirmed","confirmed_at":"([^"]*)","source":"process","checked_at":"([^"]*)","reason":null\}`)
+
+// NormalizeReadSurfaceProbes returns out, a status, get or list output over
+// SeedReadSurfaceStore's store, with each probed process record's two times
+// replaced by ReadSurfaceProbed, failing t unless they are one RFC3339 UTC
+// millisecond instant within [from, to], the read's own call, and unless out
+// has the exact confirmations shape (AssertConfirmationsShape). Every other
+// byte is kept.
+func NormalizeReadSurfaceProbes(t testing.TB, out string, from, to time.Time) string {
+	t.Helper()
+	AssertConfirmationsShape(t, out)
+	return probedRecord.ReplaceAllStringFunc(out, func(rec string) string {
+		m := probedRecord.FindStringSubmatch(rec)
+		at, err := time.Parse("2006-01-02T15:04:05.000Z", m[1])
+		if err != nil || m[1] != m[2] || at.Before(from.Truncate(time.Millisecond)) || at.After(to) {
+			t.Errorf("probed process record %s: want confirmed_at equal to checked_at, a millisecond UTC time within the read [%s, %s]",
+				rec, from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano))
+			return rec
+		}
+		return strings.NewReplacer(m[1], ReadSurfaceProbed).Replace(rec)
+	})
+}
+
+// The SR-4.5 record enums, and the record time form.
+var (
+	confirmationKeys     = []string{"checked_at", "confirmed_at", "reason", "source", "status"}
+	confirmationStatuses = []string{"confirmed", "not_confirmed", "unknown", "pending"}
+	confirmationSources  = []string{"agent_event", "caller_command", "process", "tmux", "pane", "transcript", "store"}
+	confirmationReasons  = []string{"no_evidence", "unreadable", "busy", "stale_observation", "deadline",
+		"operation_pending", "pending_grace", "unsupported", "commit_unconfirmed"}
+	confirmationTime = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$`)
+)
+
+// AssertConfirmationsShape fails t unless out, one status, get or list
+// result (b.x9o), gives every agent result (the result itself, or each of
+// list's spawns) process_liveness alive, exited or unknown and confirmations
+// of exactly the state, process_liveness and displayed_state records, each of
+// exactly status, confirmed_at, source, checked_at and reason, every one
+// present: statuses, sources and reasons from their enums, times RFC3339 UTC
+// with milliseconds or null, source null exactly when confirmed_at is, reason
+// null exactly when confirmed, and displayed_state unknown with null evidence.
+// No nested object (a request, a prior session, the context) carries a
+// confirmations wrapper, and family_state has no record.
+func AssertConfirmationsShape(t testing.TB, out string) {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("result is not a JSON object: %v: %q", err, out)
+	}
+	results := []any{doc}
+	if spawns, ok := doc["spawns"].([]any); ok {
+		results = spawns
+	}
+	for _, r := range results {
+		row, _ := r.(map[string]any)
+		records, ok := row["confirmations"].(map[string]any)
+		if !ok || !slices.Contains([]string{"alive", "exited", "unknown"}, fmt.Sprint(row["process_liveness"])) {
+			t.Errorf("agent result %v: want process_liveness alive, exited or unknown and a confirmations object", row)
+			continue
+		}
+		if keys := sortedKeys(records); !slices.Equal(keys, []string{"displayed_state", "process_liveness", "state"}) {
+			t.Errorf("confirmations keys %v; want exactly displayed_state, process_liveness and state", keys)
+		}
+		for field, v := range records {
+			rec, _ := v.(map[string]any)
+			if keys := sortedKeys(rec); !slices.Equal(keys, confirmationKeys) {
+				t.Errorf("%s record keys %v; want exactly %v", field, keys, confirmationKeys)
+				continue
+			}
+			status, _ := rec["status"].(string)
+			confirmedAt, checkedAt := rec["confirmed_at"], rec["checked_at"]
+			for _, at := range []any{confirmedAt, checkedAt} {
+				if s, isString := at.(string); at != nil && (!isString || !confirmationTime.MatchString(s)) {
+					t.Errorf("%s record time %v; want null or RFC3339 UTC milliseconds", field, at)
+				}
+			}
+			source, reason := rec["source"], rec["reason"]
+			switch {
+			case !slices.Contains(confirmationStatuses, status):
+				t.Errorf("%s record status %q is not one of %v", field, status, confirmationStatuses)
+			case (confirmedAt == nil) != (source == nil) || (source != nil && !slices.Contains(confirmationSources, fmt.Sprint(source))):
+				t.Errorf("%s record source %v with confirmed_at %v; want a known source exactly when confirmed_at is set", field, source, confirmedAt)
+			case (status == "confirmed") != (reason == nil) || (reason != nil && !slices.Contains(confirmationReasons, fmt.Sprint(reason))):
+				t.Errorf("%s record %s with reason %v; want a known reason exactly when not confirmed", field, status, reason)
+			case field == "displayed_state" && (status != "unknown" || confirmedAt != nil || checkedAt != nil):
+				t.Errorf("displayed_state record %v; want unknown with null evidence in this release", rec)
+			}
+		}
+		for k, v := range row {
+			if k != "confirmations" && nestedConfirmations(v) {
+				t.Errorf("agent result field %s nests a confirmations wrapper: %v", k, v)
+			}
+		}
+	}
+}
+
+// nestedConfirmations reports whether v holds, at any depth, an object with a
+// confirmations key.
+func nestedConfirmations(v any) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		if _, ok := x["confirmations"]; ok {
+			return true
+		}
+		for _, e := range x {
+			if nestedConfirmations(e) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range x {
+			if nestedConfirmations(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ReadSurfaceSettledConfirmation is the state record a read with a settle
+// time reports for row id, which shows its scrambled settled value: that
+// value's own record where the row's hooks left one (settledRecord), else
+// unknown, never the raw state's record.
+func ReadSurfaceSettledConfirmation(id string) map[string]any {
+	for i, r := range readSurfaceRows() {
+		if r.id == id && r.settledRecord {
+			at := readSurfaceSettledRecordAt(i).Format("2006-01-02T15:04:05.000Z")
+			return map[string]any{"status": "confirmed", "confirmed_at": at, "source": "agent_event", "checked_at": at, "reason": nil}
+		}
+	}
+	return map[string]any{"status": "unknown", "confirmed_at": nil, "source": nil, "checked_at": nil, "reason": "no_evidence"}
 }
 
 // WriteConfig writes the variant's config.toml to path, creating its

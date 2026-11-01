@@ -209,8 +209,8 @@ func TestListRowKeySet(t *testing.T) {
 		got = append(got, k)
 	}
 	sort.Strings(got)
-	want := []string{"agent", "cwd", "ended_at", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at", "liveness_note",
-		"liveness_unverified_since", "parent_id", "permission_requests", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"}
+	want := []string{"agent", "confirmations", "cwd", "ended_at", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at", "liveness_note",
+		"liveness_unverified_since", "parent_id", "permission_requests", "process_liveness", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"}
 	if !equalStrings(got, want) {
 		t.Errorf("ListRow keys = %v; want exactly %v", got, want)
 	}
@@ -276,7 +276,18 @@ func TestListFinalRefreshBusyKeepsCompleteRow(t *testing.T) {
 	pc.Set(raw.PID, procfix.Alive(raw.ProcStarttime))
 	s := &finalRefreshBusyStore{Store: base}
 	got, err := api.List(s, api.RelayView{Procs: pc}, api.ListParams{})
-	if err != nil || s.refreshes != 1 || !reflect.DeepEqual(got, expected) {
-		t.Fatalf("partial successful response: got=%+v err=%v refreshes=%d want=%+v", got, err, s.refreshes, expected)
+	if err != nil || s.refreshes != 1 || len(got.Spawns) != 1 {
+		t.Fatalf("List = %+v, %v, refreshes %d; want the one row after one refresh", got, err, s.refreshes)
+	}
+	// The checked read's live probe committed its process record before the
+	// busy refresh; the retained row carries it and nothing else changed.
+	process := got.Spawns[0].Confirmations.ProcessLiveness
+	if got.Spawns[0].ProcessLiveness != "alive" || process.Status != "confirmed" || process.Source == nil || *process.Source != "process" ||
+		process.ConfirmedAt == nil || process.CheckedAt == nil || *process.ConfirmedAt != *process.CheckedAt || process.Reason != nil {
+		t.Fatalf("process_liveness %q %s; want alive, confirmed by process at its check", got.Spawns[0].ProcessLiveness, jsonOf(t, process))
+	}
+	expected.Spawns[0].ProcessLiveness, expected.Spawns[0].Confirmations.ProcessLiveness = got.Spawns[0].ProcessLiveness, process
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("partial successful response: got=%+v want=%+v", got, expected)
 	}
 }

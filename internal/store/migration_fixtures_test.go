@@ -1933,6 +1933,24 @@ func assertV15Defaults(t *testing.T, path, id string) {
 	}
 }
 
+// v19ColumnSpecs are the three spawns evidence columns the v18→v19 hop adds,
+// in schema order: nullable TEXT, no default, no backfill. Must use: a
+// migration test seeds or names them through these specs.
+var v19ColumnSpecs = []columnSpec{
+	{"spawns", "state_evidence", "TEXT", false, ""},
+	{"spawns", "settled_evidence", "TEXT", false, ""},
+	{"spawns", "process_evidence", "TEXT", false, ""},
+}
+
+// v19ColumnNames are v19ColumnSpecs' column names, in order.
+func v19ColumnNames() []string {
+	var names []string
+	for _, c := range v19ColumnSpecs {
+		names = append(names, c.name)
+	}
+	return names
+}
+
 // seedV13PermissionFixture retains lifecycle/runtime history and independent
 // unanswered, answered and proven requests, with distinct trustworthy clocks.
 func seedV13PermissionFixture(t *testing.T, path string) {

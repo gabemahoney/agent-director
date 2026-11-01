@@ -184,3 +184,25 @@ func SetStoreContextForTest(c *Client, ctx context.Context) (restore func()) {
 func ObserveClientSQLiteForTest(c *Client, wrap func(driver.Driver) driver.Driver) (func(context.Context) error, error) {
 	return store.ObserveSQLiteForTest(c.st, wrap)
 }
+
+// ActiveCheckOutcomesForTest runs the shared checks over rows as a checked
+// read does, with no final projection, and returns each row's outcome log in
+// order as "adapter=result" entries (b.x9o cw deferral S3).
+func ActiveCheckOutcomesForTest(ctx context.Context, source any, view RelayView, rows []Spawn) map[string][]string {
+	run := checkActiveRows(ctx, source, view, store.SettleRead{}, rows, nil, false)
+	out := map[string][]string{}
+	for _, checked := range run.rows {
+		for _, o := range checked.outcomes {
+			out[checked.row.InstanceID] = append(out[checked.row.InstanceID], o.Adapter+"="+o.Result)
+		}
+	}
+	return out
+}
+
+// CheckOutcomeForTest is the outcome result a checked write's error (or, with
+// none, whether it applied) records, and the SR-4.5 reason a failed one gives
+// its field's attempt.
+func CheckOutcomeForTest(err error, applied bool) (result, reason string) {
+	o := activeOutcome("test", applied, err)
+	return o.Result, outcomeReason(o.Result)
+}

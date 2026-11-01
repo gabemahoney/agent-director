@@ -115,6 +115,12 @@ export type {
   PaneAnswer,
   ProvenGoneHow,
   IdleScreenAvailability,
+  ProcessLiveness,
+  Confirmation,
+  Confirmations,
+  ConfirmationStatus,
+  ConfirmationSource,
+  ConfirmationReason,
 } from "./types.js";
 
 // err_details shapes (b.146 rule 15), the values of AgentDirectorError.errDetails.

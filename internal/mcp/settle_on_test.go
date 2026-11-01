@@ -40,7 +40,9 @@ func TestSettleOnMCP(t *testing.T) {
 	}
 	d := settleDispatcher(t, storePath, &apitest.SettleOnConfig)
 	for _, c := range cases.Cases {
-		cases.CheckSettleOn(t, c, toolText(t, callTool(t, d, c.Verb, paramJSON(t, c.Params))))
+		from := time.Now()
+		got := toolText(t, callTool(t, d, c.Verb, paramJSON(t, c.Params)))
+		cases.CheckSettleOn(t, c, apitest.NormalizeReadSurfaceProbes(t, got, from, time.Now()))
 	}
 }
 

@@ -190,19 +190,37 @@ func (s *RecoveryWrites) guard(id, statement string, args []any) (string, []any)
 }
 
 func (s *RecoveryWrites) MarkMissingIfSameLife(id string, snapshot RowSnapshot) (string, CondResult, error) {
-	args := append(immediateStateArgs(StateMissing), id)
+	prior, res, _, err := s.MarkMissingIfSameLifeFrom(id, snapshot, "", ProcessExit{})
+	return prior, res, err
+}
+
+// MarkMissingIfSameLifeFrom is the nonwaiting mark recording, in the mark's
+// own statement, the state record of missing from src (EvidenceProcess for a
+// gone agent process, EvidenceTmux for a session lookup; "" records none) and
+// the process record: exit's exited record when the mark acted on that
+// process's proven exit, otherwise NULL (terminalProcessEvidenceSet).
+// recorded reports that the mark applied and stored that exited record.
+func (s *RecoveryWrites) MarkMissingIfSameLifeFrom(id string, snapshot RowSnapshot, src string, exit ProcessExit) (prior string, res CondResult, recorded bool, err error) {
+	args := append(markMissingArgs(src, exit), id)
 	args = append(args, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(snapshot)...)
 	statement, args := s.guard(id, markMissingIfSameLifeSQL, args)
-	return s.terminalMarkWithoutWait("store: recovery missing", statement, args, id, DecisionReasonFindMissing)
+	prior, res, err = s.terminalMarkWithoutWait("store: recovery missing", statement, args, id, DecisionReasonFindMissing, &recorded)
+	return prior, res, recorded && err == nil && res == CondApplied, err
 }
 
 func (s *RecoveryWrites) MarkEndedIfSameLife(id string, snapshot RowSnapshot) (string, CondResult, error) {
-	args := append(immediateStateArgs(StateEnded), id)
-	args = append(args, liveStateGuardArgs()...)
-	args = append(args, snapshotMatchArgs(snapshot)...)
-	statement, args := s.guard(id, markEndedIfSameLifeSQL, args)
-	return s.terminalMarkWithoutWait("store: recovery ended", statement, args, id, DecisionReasonEnded)
+	prior, res, _, err := s.MarkEndedIfSameLifeFrom(id, snapshot, ProcessExit{})
+	return prior, res, err
+}
+
+// MarkEndedIfSameLifeFrom is the nonwaiting move to ended recording exit's
+// exited record in the move's own statement (Store.MarkEndedIfSameLifeFrom);
+// recorded reports that the move applied and stored it.
+func (s *RecoveryWrites) MarkEndedIfSameLifeFrom(id string, snapshot RowSnapshot, exit ProcessExit) (prior string, res CondResult, recorded bool, err error) {
+	statement, args := s.guard(id, markEndedIfSameLifeSQL, endedIfSameLifeArgs(id, snapshot, exit))
+	prior, res, err = s.terminalMarkWithoutWait("store: recovery ended", statement, args, id, DecisionReasonEnded, &recorded)
+	return prior, res, recorded && err == nil && res == CondApplied, err
 }
 
 // recoveryExec checks the no-match outcome under the same write boundary and
@@ -306,7 +324,7 @@ func (s *Store) RepairCheckPermissionSample(row Spawn, sampled []PermissionRow) 
 			}
 		}
 		var args []any
-		for range 3 {
+		for range 4 {
 			args = append(args, StateWaiting, StateWorking)
 		}
 		args = append(args, row.InstanceID, StateCheckPermission)

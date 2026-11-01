@@ -253,6 +253,18 @@ sampling. Only Claude and Codex are eligible for sampling.
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 
+They also expose `ProcessLiveness string` (JSON `process_liveness`:
+`"alive"`, `"exited"` or `"unknown"`) and `Confirmations` (JSON
+`confirmations`), an `api.Confirmations` holding exactly `State`,
+`ProcessLiveness` and `DisplayedState`. Each is an `api.Confirmation`: `Status`,
+never null, and the nullable `*string` fields `ConfirmedAt`, `Source`,
+`CheckedAt` and `Reason` (nil is JSON `null`, never omitted). The
+[caller contract](../../docs/caller-contract.md#confirmations) defines the
+values and when each is `null`. A store that supplies no evidence, such as a custom store or a narrow
+status fallback, gets `"unknown"` and unknown records. With a non-nil error,
+the zero result's `ProcessLiveness` and each `Status` are empty strings, outside
+their value sets.
+
 `Get`'s `SpawnRow` and each `ListRow` expose `StateChangedAt time.Time` (JSON
 `state_changed_at`), when the raw state last changed; `StatusResult` does
 not. The [caller contract](../../docs/caller-contract.md#state-change-time)

@@ -52,7 +52,9 @@ func cmdWriteFamilyTransition(args []string, stdout, stderr io.Writer) int {
 // the settle-off goldens pin status, get and list on
 // (apitest.SeedReadSurfaceStore, b.3ie), and prints their ids in seeding order
 // and, for each raw state, the settled state its rows were scrambled to
-// (apitest.ReadSurfaceSettled), which a read with a settle time reports.
+// (apitest.ReadSurfaceSettled), which a read with a settle time reports, and
+// for each row the state record that read reports
+// (apitest.ReadSurfaceSettledConfirmation).
 func cmdSeedReadSurfaceStore(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("seed-read-surface-store", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -75,7 +77,11 @@ func cmdSeedReadSurfaceStore(args []string, stdout, stderr io.Writer) int {
 		store.StateCheckPermission, store.StateEnded, store.StateMissing} {
 		settled[s] = apitest.ReadSurfaceSettled(s)
 	}
-	if err := printResult(stdout, map[string]any{"ids": ids, "settled": settled}); err != nil {
+	confirmations := map[string]any{}
+	for _, id := range ids {
+		confirmations[id] = apitest.ReadSurfaceSettledConfirmation(id)
+	}
+	if err := printResult(stdout, map[string]any{"ids": ids, "settled": settled, "settled_confirmations": confirmations}); err != nil {
 		printError(stderr, err)
 		return 1
 	}

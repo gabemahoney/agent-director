@@ -604,10 +604,22 @@ func (e *killEnv) rowWriteAfter(t *testing.T, call tmux.Call, r killRow) {
 			return false, err.Error()
 		}
 		res, err := e.st.SetLivenessNoteIfSameLife(r.ID, row.Snapshot, "changed between the row read and the send")
-		if err != nil {
+		if err != nil || res != store.CondApplied {
+			return false, fmt.Sprintf("condition result %d (CondApplied %d), %v", res, store.CondApplied, err)
+		}
+		// b.x9o: a concurrent read's process record, freshness metadata the
+		// send's preparation never compares, lands in the same window.
+		if row, err = e.st.GetSpawn(r.ID); err != nil {
 			return false, err.Error()
 		}
-		return res == store.CondApplied, fmt.Sprintf("condition result %d (CondApplied %d)", res, store.CondApplied)
+		agent := tmux.SelectAgentProcess(tmux.ProcIdentity{PID: row.PID, Starttime: row.ProcStarttime},
+			tmux.ProcIdentity{PID: row.Identity.PanePID, Starttime: row.Identity.PaneStarttime}).Identity
+		if rec, ok := row.ProcessEvidenceAfter(store.ProcessAttempt{PID: agent.PID, Start: agent.Starttime, Value: store.ProcessAlive}, e.clock.Now().UnixMilli()); ok {
+			if res, err := e.st.RecordProcessEvidence(row, rec); err != nil || res != store.CondApplied {
+				return false, fmt.Sprintf("process record %d, %v", res, err)
+			}
+		}
+		return true, ""
 	})
 }
 

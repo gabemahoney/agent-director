@@ -55,7 +55,7 @@ func (s *Store) rotateCursorSession(examined Spawn, gate HookGate, next, path st
 		if held {
 			state = StateCheckPermission
 		}
-		set, args := s.hookWriteStateSet(state)
+		set, args := s.hookWriteStateEvidenceSet(state, EvidenceAgentEvent)
 		args = append(args, next, path, b.InstanceID)
 		args = append(args, hookGateArgs(gate)...)
 		args = append(args, snapshotMatchArgs(examined.Snapshot)...)

@@ -129,6 +129,14 @@ func TestProvisionalTranscriptSharedFirstCall(t *testing.T) {
 					want.Snapshot.RowVersion++
 				}
 				got, err := e.s.GetSpawn(id)
+				if want.State != store.StateEnded && (verb == "find-missing" || id == e.id) {
+					// The checked read's live probe committed the process record.
+					if v, c := got.ProcessConfirmation(); v != store.ProcessAlive || c.Status != store.ConfirmationConfirmed ||
+						c.Source != store.EvidenceProcess || c.ConfirmedAtMillis <= 0 || c.CheckedAtMillis != c.ConfirmedAtMillis {
+						t.Errorf("%s process record %q %+v; want alive, confirmed by its probe", id, v, c)
+					}
+					want.ProcessEvidence = got.ProcessEvidence
+				}
 				if err != nil || !reflect.DeepEqual(got, want) {
 					t.Errorf("first-call stored result %s: got=%+v want=%+v err=%v", id, got, want, err)
 				}

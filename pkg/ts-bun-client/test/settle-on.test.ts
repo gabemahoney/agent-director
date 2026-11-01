@@ -2,8 +2,9 @@
  * settle-on.test.ts — b.3ie: with [state] settle_ms set, the TS client's
  * status, get and list report the settled state and nothing else changes: over
  * ts-helper's read-surface store (rows scrambled to read as `settled[state]`)
- * every result is its settle-off golden with only `state` read as settled (no
- * new field, no new state value), and list's state filter and limit apply to
+ * every result is its settle-off golden with only `state` read as settled and
+ * its state record that settled value's (no new field, no new state value; a
+ * raw value's record never follows it), and list's state filter and limit apply to
  * the settled state. A row's settle columns placed by ts-helper set-settle read
  * the settled state until the raw one has held settle_ms.
  */
@@ -14,6 +15,7 @@ import * as path from "path";
 import type { Client } from "../src/index.js";
 import { withTempHome } from "./internal/tempHome.js";
 import { runHelper, homeStore, openClient } from "./internal/helper.js";
+import { normalizeProbes } from "./internal/readSurface.js";
 
 const fixtureDir = path.resolve(import.meta.dir, "../../../cmd/agent-director/testdata/settle_off");
 const SETTLE_MS = 60_000; // MaxStateSettleMs
@@ -47,15 +49,20 @@ function call(client: Client, c: ReadSurfaceCase): Promise<unknown> {
   }
 }
 
-/** What the settle time makes of case c's golden, given the scramble's settled state per raw state. */
-function expected(c: ReadSurfaceCase, settled: Record<string, string>): unknown {
-  const asSettled = (row: Row): Row => {
+/**
+ * What the settle time makes of case c's golden, given the scramble's settled
+ * state per raw state and each row's state record for that settled value.
+ */
+function expected(c: ReadSurfaceCase, settled: Record<string, string>, records: Record<string, unknown>): unknown {
+  const asSettled = (row: Row, id = String(row.instance_id)): Row => {
     expect(Object.keys(settled)).toContain(row.state);
     expect(["working", "waiting"]).toContain(String(row.family_state));
-    return { ...row, state: settled[row.state]!, family_state: row.family_state === "working" ? "waiting" : "working" };
+    expect(Object.keys(records)).toContain(id);
+    const confirmations = { ...(row.confirmations as Record<string, unknown>), state: records[id] };
+    return { ...row, state: settled[row.state]!, family_state: row.family_state === "working" ? "waiting" : "working", confirmations };
   };
-  if (c.verb !== "list") return asSettled(golden(c.name) as Row);
-  const all = (golden("list") as { spawns: Row[] }).spawns.map(asSettled);
+  if (c.verb !== "list") return asSettled(golden(c.name) as Row, String(c.params.instance_id));
+  const all = (golden("list") as { spawns: Row[] }).spawns.map((row) => asSettled(row));
   const matching = all.filter((r) => c.params.state === undefined || c.params.state.includes(r.state));
   return { spawns: matching.slice(0, c.params.limit ?? matching.length) };
 }
@@ -64,11 +71,14 @@ test("settle-on: status, get and list give each golden with only the state read 
   await withTempHome(async (homeDir) => {
     const seeded = runHelper("seed-read-surface-store", { store: homeStore(homeDir), "writer-pid": String(process.pid) });
     const settled = seeded.settled as Record<string, string>;
+    const records = seeded.settled_confirmations as Record<string, unknown>;
     writeSettleConfig(homeDir);
     using client = await openClient(homeStore(homeDir));
     for (const c of table.cases) {
-      const got = JSON.parse(JSON.stringify(await call(client, c)));
-      expect({ case: c.name, result: got }).toEqual({ case: c.name, result: expected(c, settled) });
+      const from = Date.now();
+      const result = await call(client, c);
+      const got = JSON.parse(normalizeProbes(JSON.stringify(result), from, Date.now()));
+      expect({ case: c.name, result: got }).toEqual({ case: c.name, result: expected(c, settled, records) });
     }
   });
 }, 60_000);

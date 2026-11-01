@@ -290,6 +290,10 @@ type findMissingRow struct {
 	// res is the row's lookup Result; the zero Result when the row was judged
 	// without a lookup.
 	res tmux.Result
+	// probe is the row's one judgement of its recorded agent process at its
+	// recorded start identity (judgeLiveRow), the process_liveness attempt the
+	// shared checks record; the zero probe when no judgement ran.
+	probe processProbe
 	// listing is the Result of the row's adoption pane listing when it did
 	// not answer (sweepAdoption.Listing); the zero Result otherwise. Its
 	// Disagree reasons (for example server_mismatch on a no-server reply
@@ -497,6 +501,9 @@ type findMissingRun struct {
 	// emit writes the run's trail records: recoveryTrail under the operation
 	// context of the check.
 	emit trailEmit
+	// now is the run's clock, the time of a proven exit's process record
+	// (provenExit); nil records none.
+	now func() time.Time
 }
 
 // judgeLiveRow judges one live row past its grace period by its agent process
@@ -527,17 +534,79 @@ func (r *findMissingRun) judgeLiveRow(it LiveSpawnIdentity) findMissingRow {
 		tmux.ProcIdentity{PID: it.PID, Starttime: it.ProcStarttime},
 		tmux.ProcIdentity{PID: it.Identity.PanePID, Starttime: it.Identity.PaneStarttime},
 	)
-	switch state := tmux.JudgeProcess(r.pc, agent.Identity); state {
+	state := tmux.JudgeProcess(r.pc, agent.Identity)
+	// One instant stamps the judgement: the probe's evidence time and a gone
+	// process's exited record.
+	at := clockNow(r.now)
+	var out findMissingRow
+	switch state {
 	case tmux.ProcAlive:
-		return r.aliveRow(findMissingRow{}, it, it.Snapshot, it.Identity)
+		out = r.aliveRow(findMissingRow{}, it, it.Snapshot, it.Identity)
 	case tmux.ProcGone:
-		return r.goneRow(findMissingRow{}, it, it.Snapshot)
+		out = r.goneRow(findMissingRow{}, it, it.Snapshot, agent.Identity, at)
 	default: // tmux.ProcUnknown, tmux.ProcNone
 		if note := unusableNameNote(tmux.Unusable(it.TmuxSessionName)); note != "" {
-			return r.noteRow(findMissingRow{}, it, it.Snapshot, note)
+			out = r.noteRow(findMissingRow{}, it, it.Snapshot, note)
+		} else {
+			out = r.lookupRow(it, state)
 		}
-		return r.lookupRow(it, state)
 	}
+	// tmux's later verdict never changes what the process judgement found.
+	out.probe = processProbe{judged: true, state: state, identity: agent.Identity, at: at}
+	return out
+}
+
+// processProbe is one judgement of a row's recorded agent process
+// (tmux.JudgeProcess on the identity tmux.SelectAgentProcess chose), made at
+// at on the run's clock (zero when the run has none): the time of its
+// evidence, however late the record of it is built.
+type processProbe struct {
+	judged   bool
+	state    tmux.ProcState
+	identity tmux.ProcIdentity
+	at       time.Time
+}
+
+// attempt is the probe as a process_liveness attempt: alive or exited when
+// the judgement established it at the recorded start identity, otherwise
+// unknown with unreadable (a start time that could not be read, or a pid-only
+// identity, whatever its pid showed: SR-4.8) or no_evidence (none recorded).
+// A Helper, tmux or a descendant never stands in for it.
+func (p processProbe) attempt() store.ProcessAttempt {
+	a := store.ProcessAttempt{PID: p.identity.PID, Start: p.identity.Starttime, Value: store.ProcessUnknown}
+	switch {
+	case p.state == tmux.ProcNone:
+		a.Reason = store.ReasonNoEvidence
+	case p.identity.Starttime == "":
+		a.Reason = store.ReasonUnreadable
+	case p.state == tmux.ProcAlive:
+		a.Value = store.ProcessAlive
+	case p.state == tmux.ProcGone:
+		a.Value = store.ProcessExited
+	default:
+		a.Reason = store.ReasonUnreadable
+	}
+	return a
+}
+
+// provenExit is the exited process a move on a gone agent process acts on:
+// identity, judged gone at at, recorded in the move's own statement
+// (store.ProcessExit). A pid-only identity, which cannot establish the exit of
+// the recorded start identity (SR-4.8), and a judgement with no time (a run
+// with no clock) name none, so the move clears the process record instead.
+func provenExit(identity tmux.ProcIdentity, at time.Time) store.ProcessExit {
+	if at.IsZero() || identity.PID <= 0 || identity.Starttime == "" {
+		return store.ProcessExit{}
+	}
+	return store.ProcessExit{PID: identity.PID, Start: identity.Starttime, AtMillis: at.UnixMilli()}
+}
+
+// clockNow is now's time, the zero time for no clock.
+func clockNow(now func() time.Time) time.Time {
+	if now == nil {
+		return time.Time{}
+	}
+	return now()
 }
 
 // aliveRow completes row for a row whose agent process was found alive,
@@ -597,8 +666,14 @@ func (r *findMissingRun) clearRow(row findMissingRow, it LiveSpawnIdentity, guar
 // markRow completes row with the guarded mark (markMissingSameLife), guarded
 // on guard, with tick reason reason and the tick's extra fields.
 func (r *findMissingRun) markRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, reason string, extra map[string]any) findMissingRow {
+	return r.markRowFrom(row, it, guard, reason, extra, store.ProcessExit{})
+}
+
+// markRowFrom is markRow for a mark that acted on exit, the proven exit of
+// the row's recorded agent process (goneRow), the zero ProcessExit for none.
+func (r *findMissingRun) markRowFrom(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, reason string, extra map[string]any, exit store.ProcessExit) findMissingRow {
 	row.guard = guard
-	row.write = markMissingSameLife(r.emit, r.s, it.InstanceID, guard, reason, extra, r.lg)
+	row.write = markMissingSameLife(r.emit, r.s, it.InstanceID, guard, reason, extra, exit, r.lg)
 	row.marked = true
 	row.action = findMissingActionMarked
 	return row
@@ -614,12 +689,17 @@ func (r *findMissingRun) markRow(row findMissingRow, it LiveSpawnIdentity, guard
 // missing (markRow), exactly as before. Marks on tmux evidence alone (tmux
 // absent, name held, no pane) never come here and stay missing whatever the end
 // report.
-func (r *findMissingRun) goneRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot) findMissingRow {
+//
+// gone is the agent process identity judged gone at at: the move records its
+// exited record in the same statement (provenExit), so the row's
+// process_liveness and its terminal state commit together (SR-4.7).
+func (r *findMissingRun) goneRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, gone tmux.ProcIdentity, at time.Time) findMissingRow {
 	row.guard = guard
+	exit := provenExit(gone, at)
 	if it.Agent != store.AgentCodex || it.EndReportedAtMillis <= 0 {
-		return r.markRow(row, it, guard, reasonProcAbsent, nil)
+		return r.markRowFrom(row, it, guard, reasonProcAbsent, nil, exit)
 	}
-	row.write = markEndedSameLife(r.emit, r.s, it.InstanceID, guard, reasonProcAbsent, nil, r.lg)
+	row.write = markEndedSameLife(r.emit, r.s, it.InstanceID, guard, exit, reasonProcAbsent, nil, r.lg)
 	row.marked = true
 	row.action = findMissingActionMarked
 	return row

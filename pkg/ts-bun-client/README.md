@@ -161,6 +161,14 @@ console.log(result.state);
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 
+They also carry `process_liveness: ProcessLiveness` (`"alive" | "exited" |
+"unknown"`) and `confirmations: Confirmations`, with exactly `state`,
+`process_liveness` and `displayed_state`. Each is a `Confirmation`: a non-null
+`status` (`ConfirmationStatus`) and the nullable `confirmed_at`, `source`
+(`ConfirmationSource`), `checked_at` and `reason` (`ConfirmationReason`), all
+five always present. The [caller contract](../../docs/caller-contract.md#confirmations)
+defines the values and when each is `null`.
+
 `state` is always the lifecycle state. While a row shows a
 Displayed State, `StatusResult`, `GetResult` and each `ListRow` carry it in
 `displayed_state` (`"idle_screen"`; `"needs_intelligence"` is defined, but

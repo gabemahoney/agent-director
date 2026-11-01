@@ -9,6 +9,8 @@
   ],
   "find-missing": [],
   "get": [
+    ".confirmations.process_liveness.checked_at",
+    ".confirmations.process_liveness.confirmed_at",
     ".permission_requests[*].attempted_at",
     ".permission_requests[*].hook_gone_at"
   ],
@@ -20,6 +22,8 @@
   ],
   "kill": [],
   "list": [
+    ".spawns[*].confirmations.process_liveness.checked_at",
+    ".spawns[*].confirmations.process_liveness.confirmed_at",
     ".spawns[*].permission_requests[*].attempted_at",
     ".spawns[*].permission_requests[*].hook_gone_at"
   ],
@@ -35,7 +39,11 @@
   "spawn": [
     ".instance_id"
   ],
-  "status": [],
+  "status": [
+    ".confirmations.process_liveness.checked_at",
+    ".confirmations.state.checked_at",
+    ".confirmations.state.confirmed_at"
+  ],
   "version": [
     ".commit",
     ".version"

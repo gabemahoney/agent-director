@@ -332,6 +332,14 @@ func TestStatusEmptyAgentAvailabilityDispatch(t *testing.T) {
 					t.Errorf("no-observer result changed state/detail/family: %+v", got)
 				}
 				assertIdleAvailability(t, got, got.IdleScreenAvailability, api.IdleScreenAvailable)
+				// b.x9o: a store that reads no evidence gives every main field
+				// an explicit unknown record, never an omitted or empty one.
+				unknown := unknownRecord(store.ReasonNoEvidence)
+				if got.ProcessLiveness != store.ProcessUnknown || conf(got.Confirmations.State) != unknown ||
+					conf(got.Confirmations.ProcessLiveness) != unknown || conf(got.Confirmations.DisplayedState) != unknown {
+					t.Errorf("records %s %s / %s / %s; want unknown with every record %s", got.ProcessLiveness, conf(got.Confirmations.State),
+						conf(got.Confirmations.ProcessLiveness), conf(got.Confirmations.DisplayedState), unknown)
+				}
 			})
 		}
 	}

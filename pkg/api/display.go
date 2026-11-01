@@ -328,3 +328,29 @@ func sampleActivePane(live *findMissingRun, capture interface {
 	}
 	return store.PaneSample{SHA256: paneSHA256(tmux.StripANSI(pane))}
 }
+
+// mainFields projects row's process_liveness and its three confirmation
+// records from the evidence the store returned with row and, for a row the
+// shared checker examined in this invocation, that checker's own attempts.
+// It starts no check, reads nothing and never stamps the response clock.
+// A narrow store that returns no evidence yields honest unknown records.
+func mainFields(s any, row Spawn, settle store.SettleRead) (string, Confirmations) {
+	process, processRecord := row.ProcessConfirmation()
+	stateRecord := row.StateConfirmation(settle)
+	if checked := checkedRowOf(s, row.InstanceID); checked != nil {
+		stateRecord = withAttempt(stateRecord, checked.state, row)
+		processRecord = withAttempt(processRecord, checked.process, row)
+	}
+	if row.Agent == store.AgentCursor {
+		// Only the Cursor Helper's gateway is probed, which is no evidence
+		// about the agent's runtime process: whatever the row records,
+		// process_liveness is unknown and unsupported.
+		process, processRecord = store.ProcessUnknown, store.UnknownConfirmation(store.ReasonUnsupported)
+	}
+	display := store.UnknownConfirmation(store.ReasonNoEvidence)
+	if idleScreenAvailability(row.Agent) == IdleScreenUnavailable {
+		display.Reason = store.ReasonUnsupported
+	}
+	return process, Confirmations{State: publicConfirmation(stateRecord),
+		ProcessLiveness: publicConfirmation(processRecord), DisplayedState: publicConfirmation(display)}
+}

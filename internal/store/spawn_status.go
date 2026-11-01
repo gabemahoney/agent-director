@@ -15,7 +15,8 @@ import (
 const statusRowColumns = `instance_id, state, launch_started_at, family_state,
  relay_mode, COALESCE(life_number, 0), agent, jsonl_path, end_reported_at,
  codex_startup, claude_capacity, permission_epoch, observation_version,
- COALESCE(display_observation, ''), ` + lifeColumns + `, ` + paneColumns
+ COALESCE(display_observation, ''), ` + lifeColumns + `, ` + paneColumns + `,
+ state_changed_ms, ` + evidenceColumns
 
 // SpawnStatusRow is the partial Spawn reader: it reads only status, context
 // and display-observation evidence in one snapshot. It fills InstanceID,
@@ -25,10 +26,12 @@ const statusRowColumns = `instance_id, state, launch_started_at, family_state,
 // (Snapshot.StartedAt as stored text), with RowVersion, SessionID, PID,
 // ProcStarttime and TmuxSessionName taken from Snapshot; PermissionEpoch,
 // ObservationVersion and DisplayObservation; and the idle_screen timeout
-// override and committed pane baseline (paneColumns).
+// override and committed pane baseline (paneColumns); and StateChangedMillis
+// with the main-field evidence (evidenceColumns), which StateConfirmation
+// applies to the reported state.
 //
 // All other fields stay unpopulated; their zero values do not establish stored
-// absence. These include LaunchOwner, IdleSince, StateChangedMillis,
+// absence. These include LaunchOwner, IdleSince,
 // SubagentTracking, NoPreTrust, EndedAtText, the parsed StartedAt, LastSeenAt
 // and EndedAt, Labels, AgentArgs, ExtraEnv and the other unselected metadata.
 // Because labels, arguments and environment are never read, malformed values
@@ -82,12 +85,15 @@ func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, err
 	var row Spawn
 	var life lifeScan
 	var pane paneScan
+	var evidence evidenceScan
 	var launch, agent, path, endReport, startup, capacity any
 	dest := []any{&row.InstanceID, &row.State, &launch, &row.FamilyState,
 		&row.RelayMode, &row.LifeNumber, &agent, &path, &endReport,
 		&startup, &capacity, &row.PermissionEpoch, &row.ObservationVersion, &row.DisplayObservation}
 	dest = append(dest, life.dest()...)
 	dest = append(dest, pane.dest()...)
+	dest = append(dest, &row.StateChangedMillis)
+	dest = append(dest, evidence.dest()...)
 	dest = append(dest, extra...)
 	if reported {
 		dest = append(dest, &row.ReportedState, &row.FamilyState)
@@ -109,6 +115,7 @@ func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, err
 	row.CodexStartup = decodeCodexStartup(startup)
 	row.ClaudeCapacity = decodeClaudeCapacity(capacity)
 	pane.apply(&row)
+	evidence.apply(&row)
 	return row, nil
 }
 

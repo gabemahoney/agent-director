@@ -49,12 +49,21 @@ type findMissingWrite struct {
 	// Err is the guarded write's store error, already logged on the
 	// FindMissingLogger; nil otherwise.
 	Err error
+	// ProcessRecorded reports that a mark or move which applied stored, in
+	// its own statement, the exited record of the agent process whose proven
+	// exit it acted on, so that field's attempt is already committed. The
+	// store reports it from what the statement stored, never from the exit it
+	// was given: a statement that stored NULL (a Cursor row, an exit naming no
+	// process the row records) leaves it false.
+	ProcessRecorded bool
 }
 
 // markMissingSameLife is find-missing's mark of one row (SR-11.3, SR-11.6,
 // SR-5.8), in the order SR-11.3 pins:
 //
-//  1. the guarded mark (FindMissingStore.MarkMissingIfSameLife), which
+//  1. the guarded mark (the store's MarkMissingIfSameLifeFrom when it has
+//     one and the mark names its evidence, otherwise
+//     FindMissingStore.MarkMissingIfSameLife), which
 //     applies only while the row is live and still holds examined, the
 //     snapshot the sweep read or the one its adoption produced, and folds in
 //     the liveness clear and the launch-start clear; in the same transaction
@@ -75,9 +84,31 @@ type findMissingWrite struct {
 // logged on lg (a nil lg writes nothing) and never fails the sweep. Listed is
 // true exactly when the mark applied, so the row goes in ids. The tick is
 // written through emit.
-func markMissingSameLife(emit trailEmit, s FindMissingStore, id string, examined RowSnapshot, reason string, extra map[string]any, lg FindMissingLogger) findMissingWrite {
-	prior, res, err := s.MarkMissingIfSameLife(id, examined)
-	w := findMissingWrite{Wrote: true, Res: res, Err: err}
+//
+// exit is the agent process whose proven exit the mark acts on (reason
+// proc_absent), the zero ProcessExit for any other mark.
+func markMissingSameLife(emit trailEmit, s FindMissingStore, id string, examined RowSnapshot, reason string, extra map[string]any, exit store.ProcessExit, lg FindMissingLogger) findMissingWrite {
+	var (
+		prior    string
+		res      CondResult
+		err      error
+		recorded bool
+	)
+	// The shared checks' nonwaiting writer names what the mark acted on: the
+	// gone agent process, with its exited record, or tmux's session lookup.
+	// Any other store records none: the missing value then has no
+	// confirmation and the store's mark clears the process record. A wrapper
+	// that embeds a store with the From form and overrides only
+	// MarkMissingIfSameLife still reaches the promoted From form here, so it
+	// must override that form too to keep its seam.
+	if from, ok := s.(interface {
+		MarkMissingIfSameLifeFrom(string, RowSnapshot, string, store.ProcessExit) (string, CondResult, bool, error)
+	}); ok && markEvidenceSource(reason) != "" {
+		prior, res, recorded, err = from.MarkMissingIfSameLifeFrom(id, examined, markEvidenceSource(reason), exit)
+	} else {
+		prior, res, err = s.MarkMissingIfSameLife(id, examined)
+	}
+	w := findMissingWrite{Wrote: true, Res: res, Err: err, ProcessRecorded: recorded && err == nil && res == CondApplied}
 	if err != nil {
 		w.Res = 0
 		logFindMissing(lg, "MarkMissingIfSameLife", id, err)
@@ -89,6 +120,18 @@ func markMissingSameLife(emit trailEmit, s FindMissingStore, id string, examined
 	emitMarkTick(emit, id, prior, "missing", reason, extra)
 	w.Listed = true
 	return w
+}
+
+// markEvidenceSource is the state record source of a mark for reason:
+// process for a gone agent process, tmux for a session lookup, "" for none.
+func markEvidenceSource(reason string) string {
+	switch reason {
+	case reasonProcAbsent:
+		return store.EvidenceProcess
+	case reasonTmuxAbsent, reasonTmuxNameHeld:
+		return store.EvidenceTmux
+	}
+	return ""
 }
 
 // emitMarkTick writes, through emit, the one ad.find_missing.tick of a mark
@@ -115,7 +158,9 @@ func emitMarkTick(emit trailEmit, id, prior, newState, reason string, extra map[
 // live Codex row holding an end report to ended (store.MarkEndedIfSameLife).
 // FindMissingStore and PauseStore both carry it, so find-missing's sweep and
 // pause's pre-check and wait polls make the one move through one writer
-// (markEndedSameLife).
+// (markEndedSameLife). That writer prefers the store's
+// MarkEndedIfSameLifeFrom, which also records the gone process's exited
+// record, and uses MarkEndedIfSameLife only on a store without it.
 type EndedMover interface {
 	// MarkEndedIfSameLife moves a live Codex row that holds an end report to
 	// ended in one write guarded on examined, the row snapshot the caller
@@ -131,8 +176,9 @@ type EndedMover interface {
 
 // markEndedSameLife is the shared outcome writer of the Codex end (SR-6.5,
 // SR-7.3, SR-7.5): the guarded move of one live Codex row, whose agent process
-// the caller proved gone and which holds an end report, to ended
-// (EndedMover.MarkEndedIfSameLife), guarded on examined. Find-missing's two
+// the caller proved gone and which holds an end report, to ended (the
+// store's MarkEndedIfSameLifeFrom, or EndedMover.MarkEndedIfSameLife on a
+// store without it), guarded on examined. Find-missing's two
 // gone-process paths and pause (before its state rules and in each wait poll)
 // call it, so each emits the same records, in order:
 //
@@ -152,9 +198,28 @@ type EndedMover interface {
 // always false: a row moved to ended is in neither ids nor unverified_ids. The
 // tick is written through emit: the shared recovery checks pass recoveryTrail
 // and pause legacyTrail.
-func markEndedSameLife(emit trailEmit, s EndedMover, id string, examined RowSnapshot, reason string, extra map[string]any, lg FindMissingLogger) findMissingWrite {
-	prior, res, err := s.MarkEndedIfSameLife(id, examined)
-	w := findMissingWrite{Wrote: true, Res: res, Err: err}
+//
+// exit is the agent process the caller proved gone. A store that offers
+// MarkEndedIfSameLifeFrom records its exited record in the move's statement;
+// any other makes the plain move, which clears the process record. A wrapper
+// that embeds a store with the From form (*store.Store) and overrides only
+// MarkEndedIfSameLife still reaches the promoted From form here, so it must
+// override that form too to keep its seam.
+func markEndedSameLife(emit trailEmit, s EndedMover, id string, examined RowSnapshot, exit store.ProcessExit, reason string, extra map[string]any, lg FindMissingLogger) findMissingWrite {
+	var (
+		prior    string
+		res      CondResult
+		err      error
+		recorded bool
+	)
+	if from, ok := s.(interface {
+		MarkEndedIfSameLifeFrom(string, RowSnapshot, store.ProcessExit) (string, CondResult, bool, error)
+	}); ok {
+		prior, res, recorded, err = from.MarkEndedIfSameLifeFrom(id, examined, exit)
+	} else {
+		prior, res, err = s.MarkEndedIfSameLife(id, examined)
+	}
+	w := findMissingWrite{Wrote: true, Res: res, Err: err, ProcessRecorded: recorded && err == nil && res == CondApplied}
 	if err != nil {
 		w.Res = 0
 		logFindMissing(lg, "MarkEndedIfSameLife", id, err)

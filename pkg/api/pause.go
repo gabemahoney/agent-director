@@ -270,7 +270,7 @@ var pauseSleep = time.Sleep
 // env carries the relay judge (its start-time reader judges the lookup's
 // server, SR-3.3, and an adopted pane, SR-3.6, too) and the intent hold.
 func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeoutSeconds int, params PauseParams) (PauseResult, error) {
-	r := &pauseRun{s: s, ctx: ctx, caller: callerIdentity(), procs: env.Relay.Procs}
+	r := &pauseRun{s: s, ctx: ctx, caller: callerIdentity(), procs: env.Relay.Procs, now: newRelayJudge(env.Relay).now}
 	delivered, err := r.exit(t, env, params)
 	// The tmux phase has decided: write its ad.provenance.disagree records
 	// now, before the wait. Source ad_send_keys, not a pause source: pause
@@ -331,6 +331,9 @@ type pauseRun struct {
 	// procs is the start-time reader the Codex end check judges the agent
 	// process with (the relay view's); nil makes no move.
 	procs ProcChecker
+	// now is the relay view's clock, the time of the exited process record
+	// the Codex end's move commits with it (provenExit).
+	now func() time.Time
 	// codex reports that the row is a Codex row whose keys were sent, so the
 	// wait makes the end check; launch is the launch it sent them to.
 	codex  bool
@@ -345,15 +348,18 @@ type pauseRun struct {
 // (markEndedSameLife, reason proc_absent), guarded on the snapshot row holds.
 // attempted is false when no move was made (not a live Codex row, no end
 // report, no reader, or an agent alive, unknown or not recorded); res is the
-// move's result when it was. A store error from the move is err.
+// move's result when it was. A store error from the move is err. The move
+// records the gone process's exited record in its own statement (provenExit),
+// so the ended row never keeps an earlier alive record of it.
 func (r *pauseRun) endIfGone(row Spawn) (res CondResult, attempted bool, err error) {
 	if row.Agent != store.AgentCodex || row.EndReportedAtMillis <= 0 || !store.IsLiveState(row.State) || r.procs == nil {
 		return 0, false, nil
 	}
-	if tmux.JudgeProcess(r.procs, agentProcess(row, row.Identity).Identity) != tmux.ProcGone {
+	identity := agentProcess(row, row.Identity).Identity
+	if tmux.JudgeProcess(r.procs, identity) != tmux.ProcGone {
 		return 0, false, nil
 	}
-	w := markEndedSameLife(legacyTrail, r.s, row.InstanceID, row.Snapshot, reasonProcAbsent, nil, nil)
+	w := markEndedSameLife(legacyTrail, r.s, row.InstanceID, row.Snapshot, provenExit(identity, clockNow(r.now)), reasonProcAbsent, nil, nil)
 	return w.Res, true, w.Err
 }
 

@@ -221,10 +221,13 @@ func (s *Store) MarkCursorMissingIfSameLaunch(row Spawn, b CursorRuntime) (strin
 	if guard == "" {
 		return "", CondChanged, nil
 	}
-	args := append(immediateStateArgs(StateMissing), guardArgs...)
+	// The exact gateway or owned runtime loss is the state record's evidence
+	// (process); it is no process_liveness evidence about the runtime (SR-3.3),
+	// so the process record is cleared.
+	args := append(markMissingArgs(EvidenceProcess, ProcessExit{}), guardArgs...)
 	stmt := markMissingSetSQL + ` WHERE ` + guard
 
-	return s.terminalMarkWithoutWait("store: close lost Cursor launch", stmt, args, row.InstanceID, DecisionReasonFindMissing)
+	return s.terminalMarkWithoutWait("store: close lost Cursor launch", stmt, args, row.InstanceID, DecisionReasonFindMissing, nil)
 }
 
 // MarkFailedCursorRuntimeMissing closes a failed gateway after its caller has
@@ -248,9 +251,12 @@ func (s *Store) MarkFailedCursorRuntimeMissing(row Spawn, b CursorRuntime) (stri
 		guard = "(" + guard + ") OR (" + retiredGuard + ")"
 		guardArgs = append(guardArgs, retiredArgs...)
 	}
-	args := append(immediateStateArgs(StateMissing), guardArgs...)
+	// The exact gateway or owned runtime loss is the state record's evidence
+	// (process); it is no process_liveness evidence about the runtime (SR-3.3),
+	// so the process record is cleared.
+	args := append(markMissingArgs(EvidenceProcess, ProcessExit{}), guardArgs...)
 	stmt := markMissingSetSQL + ` WHERE ` + guard
-	return s.terminalMarkWithoutWait("store: close failed Cursor runtime", stmt, args, row.InstanceID, DecisionReasonFindMissing)
+	return s.terminalMarkWithoutWait("store: close failed Cursor runtime", stmt, args, row.InstanceID, DecisionReasonFindMissing, nil)
 }
 
 // ReadLiveCursorSpawn confines liveness reconciliation to one live Cursor row.

@@ -666,6 +666,8 @@ func resumePriorOf(row Spawn) ResumePrior {
 		EndReportedAtMillis:     row.EndReportedAtMillis,
 		SubagentTracking:        row.SubagentTracking,
 		Identity:                row.Identity,
+		StateEvidence:           row.PriorStateEvidence(),
+		ProcessEvidence:         row.PriorProcessEvidence(),
 	}
 }
 

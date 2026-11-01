@@ -7,7 +7,9 @@ error:
 - Only a GONE answer means a row's session is not there. Any other tmux error
   means "don't know", never "dead".
 - Row state, reconciled by the [bounded recovery checks](#bounded-recovery-on-state-reads),
-  is the liveness authority. For launch readiness, poll with `status`;
+  is the liveness authority. `process_liveness` and `displayed_state` are
+  separate reports that never change it (see [Confirmations](#confirmations)).
+  For launch readiness, poll with `status`;
   call `read-pane` only while the row is `pending`, at
   most once a second.
 - Run as the same user, in the same tmux environment, as the agents.
@@ -107,7 +109,8 @@ hidden children; [family reporting](#family-reporting-limits) uses stored facts.
 
 Checks can reconcile process or gateway loss, missed Codex turn endings,
 stale permission state, display observations, newly available transcripts
-and late exact input proof. Each runs only with applicable evidence and
+and late exact input proof; a check of the agent process also records
+[`process_liveness`](#confirmations). Each runs only with applicable evidence and
 available capabilities. Finished rows skip liveness, turn, permission,
 display and transcript checks; late exact input proof remains eligible.
 Pending grace and a live launch owner protect an unfinished launch.
@@ -118,6 +121,85 @@ a successful read does not prove every check ran or committed. Checks never
 deliver input or permission answers, replay a submission, signal or restart
 an agent. Commands keep their own preconditions. Nothing runs between calls
 unless an operator [schedules the sweeps](maintenance.md#scheduling-the-sweeps).
+
+## Confirmations
+
+`status`, `get` and every `list` row carry `process_liveness` and
+`confirmations` on the Go, CLI, MCP and TypeScript surfaces. They report
+evidence and authorize nothing.
+
+`process_liveness` is `alive`, `exited` or `unknown`: the row's recorded agent
+process at its recorded start time, never a gateway, tmux session or child
+process. `alive` never confirms or refreshes `state`: a stopped turn still
+recorded as `working` stays `working`. Cursor always reports `unknown`, reason
+`unsupported`.
+
+`confirmations` holds exactly three records, `state`, `process_liveness` and
+`displayed_state`, each with these five keys, always present:
+
+| Key | Meaning |
+| --- | --- |
+| `status` | `confirmed`, `not_confirmed`, `unknown` or `pending` (below). |
+| `confirmed_at` | When evidence first confirmed this exact returned value in its current continuous stay for the row's current launch, RFC3339 UTC with millisecond precision; `null` when none is known. |
+| `source` | That evidence's kind, `null` exactly when `confirmed_at` is: `agent_event`, `caller_command`, `process`, `tmux`, `pane`, `transcript` or `store` (a durable agent-director record or intent, never provider receipt). |
+| `checked_at` | The latest attempt to confirm the field, an unsuccessful one included; `null` when none is known. Reading stored values never advances it. |
+| `reason` | `null` when `confirmed`; otherwise `no_evidence`, `unreadable`, `busy`, `stale_observation`, `deadline`, `operation_pending`, `pending_grace`, `unsupported` or `commit_unconfirmed`. Errors keep their own detailed causes. |
+
+- `confirmed`: evidence supported the value at `confirmed_at` and no later
+  attempt failed. It is a fact at that instant, not proof that the value
+  held since.
+- `not_confirmed`: the latest attempt failed. `confirmed_at` and `source` keep
+  the last applicable confirmation, if any, and `process_liveness` keeps the
+  value it confirmed. An old time never makes a failed attempt `confirmed`.
+- `unknown`: no applicable evidence; `confirmed_at` and `source` are `null`.
+- `pending`: a still-owned operation (`operation_pending`) or a launch's
+  pending grace (`pending_grace`) stopped the check. Nothing retries it on a
+  schedule. The lifecycle state `pending` is different: its admission by
+  `spawn`, reuse or `resume` is itself confirmed (`caller_command`).
+
+What confirms each field:
+
+- **State.** Only the event or command that set the value, or a check that
+  established it independently (a gone process, a Codex turn's end found in
+  its rollout). A record belongs to one value in one continuous stay of the
+  current launch; a later stay, launch or value never inherits it.
+  A same-value report keeps an existing record, so a long `working` turn
+  keeps the time it was reported; where the value has no record yet (as on a
+  row from before confirmations existed), the row's own same-value event may
+  make its first one. Re-read hook or transcript data, settling and passing
+  time add nothing. With a
+  [settle time](configuration.md#settle-time-state), the record is the shown
+  settled value's.
+- **Process.** State reads and `find-missing` check the recorded process of
+  the live rows they select; `alive` and `exited` carry the time of that
+  judgement. A move to `ended` or `missing` proven by that process being gone
+  records `exited` with the move. Any other terminal move (a session end, a
+  tmux finding, a Cursor gateway loss) leaves `unknown`, so a finished row
+  never reports its last `alive`. A check that cannot read the recorded start
+  time, a pid-only identity included, is `unreadable`, never `exited`; a row
+  with no recorded process is `no_evidence`.
+- **Display.** The `displayed_state` record is always `unknown` with `null`
+  evidence: reason `unsupported` for Cursor, otherwise `no_evidence`, whether
+  or not a Displayed State shows. The display and its detail stay as
+  [described below](#needs-intelligence-and-idle-screen-rows).
+
+A busy store, deadline, stale sample or unconfirmed commit shows only in the
+response of the call that met it, as `not_confirmed` with its own
+`checked_at` and `reason`, and only while the row still holds the value and
+launch that attempt examined; a value committed meanwhile shows its own
+record. Such a response claims no commit. Only an `unreadable` check of a
+process recorded with its pid and start time, once its write commits, is kept
+for later reads; a pid-only `unreadable` check is response-only.
+
+`state_changed_at`, `last_seen_at`, a display's `since`, request times and
+`context.as_of` keep their own meanings; none of them, and no response time,
+is a confirmation. `family_state` has no record (see
+[Family reporting limits](#family-reporting-limits)), and nested permission
+requests, subagent records, delivery receipts and errors carry none.
+Commands still make their own ownership and safety checks: no confirmation
+authorizes input, a permission answer or a kill, `delivered` keeps its
+acknowledgement meaning, and a timeout still proves neither rollback,
+non-delivery nor exit.
 
 ## Experimental context fullness
 
@@ -203,7 +285,9 @@ readiness to take an action. With [settling](configuration.md#settle-time-state)
 it can still show `waiting` briefly after work begins.
 
 Family freshness is unconfirmed: the value is a consistent stored projection,
-not evidence that every member was checked. A stopped agent still recorded
+not evidence that every member was checked. It has no
+[confirmation](#confirmations) record, and the row's own confirmed records
+say nothing about its descendants. A stopped agent still recorded
 as `working` keeps the raw family working until an existing detector or
 state change records otherwise. Cursor's existing per-agent read projection
 can show `missing` before its terminal write succeeds; family reporting
@@ -259,6 +343,9 @@ Every row of every agent has it, `pending` rows included; it is never `null`.
   dates the display, not a state change: the display never moves
   `state_changed_at`, but a raw change that ends it (the agent moving on, or
   a recovery repair) does.
+- **Not evidence.** It dates the raw change only. When evidence first
+  confirmed the `state` shown in its current stay is `confirmations.state.confirmed_at` (see
+  [Confirmations](#confirmations)).
 - **Epoch.** `1970-01-01T00:00:00Z` means the raw state has not changed since
   agent-director began recording this time. It is not the time of a change,
   and reads as "no change since" any time you compare it with.
@@ -911,6 +998,8 @@ A successful read does not confirm whether terminal closure committed.
 Only state is projected: `ended_at`, `state_changed_at` and other timestamps
 remain the stored facts read, so the first missing result may omit `ended_at`
 and show the earlier `state_changed_at` even if closure subsequently commits.
+Until closure commits, the projected `missing` reads
+`confirmations.state.status` `pending` (`operation_pending`).
 Terminal permission lists are empty; they prove no request gone, decision,
 receipt or delivery. Terminal closure leaves Cursor request proof
 unchanged, including after `delivered`; see
