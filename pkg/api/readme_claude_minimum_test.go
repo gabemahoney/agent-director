@@ -9,7 +9,9 @@ package api_test
 // one place the source records it, so a raise there fails these tests until the
 // docs follow. TestReadmeTimingValuesAgentMinimum checks the two minimum
 // statements agree and equal it (through claudeCodeVerifiedMinimum); this file
-// checks the idle-prompt limit. Run with -run TestReadmeClaudeCode.
+// checks the idle-prompt limit, and that the README's Prerequisites and
+// install.md's Requirements recommend Claude Code's feedbackDrafts setting be
+// "off" (b.h7b). Run with -run TestReadmeClaudeCode.
 
 import (
 	"go/ast"
@@ -35,6 +37,10 @@ const (
 	srcClaudeOptions = "../../internal/spawn/claudeoptions.go"
 	claudeOptionVar  = "claudeOptionTable"
 )
+
+// feedbackDraftsOffRe ties Claude Code's feedbackDrafts setting to the
+// recommendation to turn it off, so a mere list of its values does not match.
+var feedbackDraftsOffRe = regexp.MustCompile(`feedbackDrafts.{0,400}?setting it to "off"`)
 
 // claudeCodeVerifiedMinimumRe finds the verified minimum in the doc comment:
 // "...verified independently at minimum 2.1.280."
@@ -109,5 +115,23 @@ func TestReadmeClaudeCodeIdlePromptLimit(t *testing.T) {
 	if regexp.MustCompile(`The idle-prompt Notification waits until background subagents finish\.`).MatchString(body) {
 		t.Errorf("%s section %q states the idle-prompt Notification always waits for background subagents; it does not before %s",
 			mdHooks, idlePromptTitle, claudeCodeIdlePromptFixed)
+	}
+}
+
+// TestReadmeClaudeCodeFeedbackDraftsOff: the README's Prerequisites and
+// install.md's Requirements each recommend setting Claude Code's
+// feedbackDrafts to "off", since its feedback-draft menu can block a driven
+// pane's input (b.h7b).
+func TestReadmeClaudeCodeFeedbackDraftsOff(t *testing.T) {
+	t.Parallel()
+	for _, s := range []struct{ path, section string }{
+		{mdTopREADME, prerequisitesTitle},
+		{mdInstall, requirementsTitle},
+	} {
+		body := normalised(sectionBody(t, readMD(t, s.path), s.section))
+		if !feedbackDraftsOffRe.MatchString(body) {
+			t.Errorf("%s section %q does not match %q; it should recommend setting Claude Code's feedbackDrafts to \"off\"",
+				s.path, s.section, feedbackDraftsOffRe)
+		}
 	}
 }

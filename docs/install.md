@@ -21,7 +21,11 @@
   [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries).
 - For Claude Code: `claude` (Claude Code) 2.1.280 or later
   (<https://claude.com/claude-code>): its native binary, or a wrapper that
-  `exec`s it, not a shim that runs it as a child.
+  `exec`s it, not a shim that runs it as a child. Its `feedbackDrafts` user
+  setting, shown in `/config` as "Claude-drafted feedback", defaults to
+  "notify", which can put a feedback-draft menu in a driven agent's pane that
+  may stop agent-director's input reaching the agent; we suggest
+  setting it to "off".
 - For Codex: `codex` (Codex) 0.159.2 or later, the native Codex program, not a
   launcher that runs it as a child. Codex installed with npm puts a node
   launcher script on PATH: set `[launch] codex_path` to the native program

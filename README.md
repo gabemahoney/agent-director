@@ -25,10 +25,14 @@ file, and tmux.
   Cursor needs its standalone `agent` program, not the editor's `cursor`
   command; its gateway currently supports Linux only, with no established
   minimum Cursor version. For Claude Code, `claude` (Claude
-  Code) 2.1.280 or later: the native binary, or a wrapper that `exec`s it. For
-  Codex, `codex` (Codex) 0.159.2 or later: its native program, or a wrapper that
-  `exec`s it. An npm-installed `codex` does not qualify: set `[launch]
-  codex_path` in `~/.config/agent-director/config.toml` to the native program.
+  Code) 2.1.280 or later: the native binary, or a wrapper that `exec`s it.
+  Claude Code's `feedbackDrafts` user setting ("Claude-drafted feedback" in
+  `/config`) defaults to "notify", which can put a feedback-draft menu in a
+  driven agent's pane that may stop agent-director's input reaching the agent;
+  we suggest setting it to "off". For Codex, `codex` (Codex) 0.159.2 or later:
+  its native program, or a wrapper that `exec`s it. An npm-installed `codex`
+  does not qualify: set `[launch] codex_path` in
+  `~/.config/agent-director/config.toml` to the native program.
 - `tmux` 3.2 or later on PATH.
 - `jq`, `sqlite3` and `file` on PATH.
 
