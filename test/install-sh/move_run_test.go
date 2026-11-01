@@ -200,18 +200,43 @@ func moveRichOld(t *testing.T, h *moveHome, opts ...moveOldOpt) {
 	h.Link(filepath.Join(h.Home, "elsewhere", "note"), filepath.Join(h.Old, "note-link"))
 }
 
+// moveAppleSQLite is a WrapTool preamble for Apple's sqlite3 3.51.0 (b.up4): a
+// -readonly open of a WAL-mode file with no -wal and no -shm fails with error 14.
+const moveAppleSQLite = `ro= db=
+for ((i = 1; i <= $#; i++)); do
+    case "${!i}" in
+        -readonly) ro=1 ;;
+        -init|-cmd|-separator|-newline|-nullvalue|-vfs) i=$((i + 1)) ;;
+        -*) ;;
+        *) db="${!i}"; break ;;
+    esac
+done
+hex() { od -An -tx1 -j "$1" -N "$2" "$db" | tr -d ' \n'; }
+if [[ -n "$ro" && -f "$db" && "$(hex 0 16)" == 53514c69746520666f726d6174203300 &&
+    ( "$(hex 18 1)" == 02 || "$(hex 19 1)" == 02 ) && ! -e "$db-wal" && ! -e "$db-shm" ]]; then
+    echo 'Error: in prepare, unable to open database file (14)' >&2
+    exit 1
+fi`
+
 func TestMoveSuccessful(t *testing.T) {
 	rows := []struct {
-		name  string
-		args  []string
-		prior bool
+		name    string
+		args    []string
+		prior   bool
+		sqlite3 string // a WrapTool preamble for sqlite3, if any
 	}{
 		{name: "plain"},
 		{name: "keep-prior", args: []string{"--keep-prior"}, prior: true},
+		// b.up4: SQLite's backup of a WAL-mode store is a WAL-mode copy with no
+		// -wal and no -shm, which Apple's sqlite3 cannot open read-only.
+		{name: "apple-sqlite3", sqlite3: moveAppleSQLite},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			h := newMoveHome(t)
+			if row.sqlite3 != "" {
+				h.WrapTool("sqlite3", row.sqlite3)
+			}
 			moveRichOld(t, h)
 			before := h.Snapshot()
 			res := moveMustInstall(t, h, row.args...)

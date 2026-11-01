@@ -3732,8 +3732,8 @@ fi
 #      socket, a device) fails the move, named.
 #   5. The store inside the old directory is copied with SQLite's backup,
 #      from the original opened with sqlite3 -readonly, its -wal and -shm
-#      never copied as files; the copy must have the same user_version and
-#      .sha3sum --schema.
+#      never copied as files; the copy, read through a read-write connection
+#      (b.up4), must have the same user_version and .sha3sum --schema.
 #   6. Every other copied file is checked byte for byte.
 #   7. The path keys in the new config.toml are rewritten (SR-11.7 "Path
 #      keys"); only the new copy is changed.
@@ -3968,6 +3968,14 @@ ad_move_walk() {
 # name beside the new directory's top, then a rename), give the copy the
 # original's mode, and check that it has the same user_version and
 # .sha3sum --schema. Sets MOVE_CAUSE and fails when it cannot.
+#
+# <source> is only ever opened with sqlite3 -readonly (SR-11.7). The copy is
+# read through a read-write connection instead (b.up4): it is the installer's
+# own new file, and the reads change none of its content. A WAL-mode store's
+# backup is a WAL-mode file with no -wal or -shm, which a read-only
+# connection on some SQLite builds, Apple's 3.51.0 among them, cannot open
+# ("unable to open database file (14)"); a read-write connection makes them
+# on a copy its owner can write (it has the original's mode by then).
 ad_move_backup_store() {
     local src="$1" dst="$2" tmp="${DEFAULT_INSTALL_ROOT}/.state-backup.$$" out v_src v_dst h_src h_dst
     if [[ "$tmp" == *[\"\\]* ]]; then
@@ -3992,13 +4000,13 @@ ad_move_backup_store() {
         return 1
     }
     v_src="$(sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$src" "PRAGMA user_version;" 2>&1)" || true
-    v_dst="$(sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$dst" "PRAGMA user_version;" 2>&1)" || true
+    v_dst="$(sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$dst" "PRAGMA user_version;" 2>&1)" || true
     if [[ ! "$v_src" =~ ^[0-9]+$ || "$v_src" != "$v_dst" ]]; then
         MOVE_CAUSE="the copy $dst of the store has user_version '${v_dst}', the original's is '${v_src}'"
         return 1
     fi
     h_src="$(sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$src" ".sha3sum --schema" 2>&1)" || true
-    h_dst="$(sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$dst" ".sha3sum --schema" 2>&1)" || true
+    h_dst="$(sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$dst" ".sha3sum --schema" 2>&1)" || true
     if [[ ! "$h_src" =~ ^[0-9a-f]{40,}$ || "$h_src" != "$h_dst" ]]; then
         MOVE_CAUSE="the schema of the copy $dst of the store could not be shown to match the original's (.sha3sum --schema gave '${h_dst}' for the copy and '${h_src}' for the original)"
         return 1

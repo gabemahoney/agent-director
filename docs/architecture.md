@@ -11502,7 +11502,11 @@ installed (also with `--from-release`). Then:
 5. The store is copied by SQLite's backup from the original opened
    `-readonly`, its `-wal` and `-shm` never copied as files, and the copy is
    checked for the same `user_version` and `.sha3sum --schema`
-   (`ad_move_backup_store`).
+   (`ad_move_backup_store`). The copy, the installer's own new file, is read
+   through a read-write connection (b.up4): a WAL-mode store's copy is a
+   WAL-mode file with no `-wal` or `-shm`, which a read-only connection on
+   some builds, Apple's `sqlite3` 3.51.0 among them, cannot open; a
+   read-write one makes them on a copy its owner can write.
 6. Every other copied file is compared byte for byte
    (`ad_move_walk verify`).
 7. The path keys in the new `config.toml` are rewritten (below).
