@@ -349,7 +349,7 @@ is already typed. `Key` sends one key alone instead (a named key `Escape`,
 `Enter`, `Up`, `Down`, `Tab`, or one character), with no Enter. With
 `ExpectPaneSHA256` (the `PaneSHA256` of the `ReadPane` you looked at, with
 its `NLines`) the pane is checked first and nothing is sent if it changed
-(`ErrPaneChanged`); on a relayed Spawn a match also passes the dialog hold
+(`ErrPaneChanged`); on a relayed Spawn a match also passes the API's dialog hold
 (`ErrDialogMaybeOpen`, below). Set it only for a pane a person or an LLM
 judged, never from an automatic flow. There is no flag to suppress CR
 stripping; it applies to every call.
@@ -379,6 +379,9 @@ empty result on success; input-ownership refusals, including those from
 Supported launches, Codex fallback paste and input restrictions, omitted-ID
 behavior, structured outcomes and recovery are in
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
+Cursor sends with Enter can return `ErrSubmissionUnconfirmed` with
+`Outcome: "gateway_refused"`; see
+[Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes).
 
 Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
 `ErrSubmissionUnconfirmed`, `ErrInvalidFlags`, `ErrSendKeysWhileRelayed`,
@@ -441,8 +444,9 @@ func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 
 `SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity,
 `IntentHold`, optional `Input` (`InputDeliveryBackend`, nil uses native
-delivery), and optional `Sleep` for readiness, drain and submission checks
-(nil uses `time.Sleep`). Most callers use the Client method, which supplies these.
+delivery), and optional `Sleep` for native readiness, drain and submission
+checks, the pending-Codex check and the Cursor gateway verdict (nil uses
+`time.Sleep`). Most callers use the Client method, which supplies these.
 Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
 bounding connection and lock waits by the supplied duration.
 Custom tmux adapters supplied to this function or through `Options.TmuxClient`

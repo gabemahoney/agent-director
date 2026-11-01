@@ -38,13 +38,20 @@ var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 // ErrSubmissionUnconfirmed means ordinary delivery was refused or remains
 // unconfirmed. SubmissionUnconfirmedDetails distinguishes not_started,
 // partial_input_unconfirmed and submission_unconfirmed for both native delivery
-// and Codex fallback paste. Native delivery requires durable exact transcript
+// and Codex fallback paste, and gateway_refused for a Cursor row's gateway
+// refusing the submission. Native delivery requires durable exact transcript
 // proof; pending Codex fallback uses bounded hook observation, whose failure
 // carries only KeysSent, SubmissionConfirmed and RowState. Partial or uncertain
 // input may still submit later; never replay text or Enter automatically.
 // Only native attempts support passive reconciliation by repeating the original
 // delivery_request_id after the state, relay and dialog guards pass. For fallback,
 // inspect hook-derived get or status and escalate if submission remains unknown.
+//
+// gateway_refused means a Cursor row's gateway recorded that it refused the
+// submission the call's Enter made (b.bqd): nothing reached Cursor and the
+// gateway discarded the text, so the text is not pending. Read the pane and
+// get, answer or clear what holds the input before sending again, or kill and
+// resume the row.
 var ErrSubmissionUnconfirmed = errors.New("ErrSubmissionUnconfirmed")
 
 // ErrSpawnNotPausable is returned by the pause verb when the target
