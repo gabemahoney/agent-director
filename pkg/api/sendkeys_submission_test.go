@@ -432,7 +432,7 @@ func TestSendKeysCodexSubmissionTmuxFailurePrecedence(t *testing.T) {
 // E10: "check hook-derived get or status" after keys were accepted.
 func TestAdviceFollow_E10_SubmissionUnconfirmedInspectGet(t *testing.T) {
 	t.Parallel()
-	adviceAssertManifest(t, "send-keys", "", "no auto-retry text/Enter; see hook-derived get/status, escalate if unknown.")
+	adviceAssertManifest(t, "send-keys", "", "ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else get/status, escalate if unknown.")
 	e := newSubmissionEnv(t)
 	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 	err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})

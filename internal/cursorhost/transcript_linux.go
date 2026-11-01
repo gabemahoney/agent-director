@@ -145,7 +145,7 @@ func (t *transcript) record(kind string, data any) error {
 			record["session_id"] = session
 		}
 	}
-	if kind == "input_held" || kind == "held_input_refused" {
+	if kind == cursortranscript.KindInputHeld || kind == cursortranscript.KindHeldInputRefused {
 		// Provisional input has no admitted conversation identity.
 		record["session_id"] = ""
 	}
