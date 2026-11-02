@@ -2,6 +2,8 @@ package realtmux_test
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -231,143 +234,255 @@ func TestSendKeysCodexFallbackPasteRealTmux(t *testing.T) {
 	}
 }
 
-// b.qcf: a pending Claude row without native delivery (any Claude Code but
-// 2.1.280) takes literal text then Enter. Typed while Claude Code was still
-// starting, in the tty's cooked mode, the Enter reached it as LF (ICRNL), a
-// newline in its input box, and send-keys returned success. Fallback must type
-// only once the pane's tty is raw, and report what it can't confirm. The pane
-// runs a byte sink, not a Claude Code stand-in.
+// b.qcf: pending Claude fallback must wait for raw input, SessionStart, and
+// a 1.5 s settle before typing literal text and one Enter. The pane records
+// bytes and fires the real hook; it does not emulate Claude's composer.
 func TestSendKeysClaudeFallbackWaitsForRawModeRealTmux(t *testing.T) {
 	const prompt = "Read worker-prompt.md first. Then read and follow brief-test-writer-regression.md"
-	// row seeds a pending Claude row whose pane runs script, then copies every
-	// byte its program reads to received ($1); $2 is a marker it may print.
-	row := func(t *testing.T, script string) (f *killFix, r killRow, received, ready string) {
-		t.Helper()
-		f = newKillFix(t)
-		received = filepath.Join(t.TempDir(), "terminal-input")
-		ready = newInstanceID("raw-ready")
-		r = f.liveRow(t, killRowSpec{
-			State:   store.StatePending,
-			Opts:    []apitest.SpawnOption{apitest.WithAgent("claude")},
-			Command: []string{"sh", "-c", script + `exec cat > "$1"`, "capture", received, ready},
-		})
-		return f, r, received, ready
+	bin := buildHookCLI(t, t.TempDir())
+	payload, err := filepath.Abs(sessionStartFixture)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	t.Run("cooked-then-raw", func(t *testing.T) {
-		// Only the test releases raw mode; scheduler delays cannot skip the
-		// cooked precondition. Polling the file does not decide the ordering.
-		f, r, received, ready := row(t, `while [ ! -e "$1.raw" ]; do sleep 0.02; done; stty raw -echo; printf '\033[?2004h%s\r\n' "$2"; `)
-		_, log := newRecordingClient(t)
-		c := f.open(t, 0, filepath.Join(log.dir, "tmux-recorder"))
-		t.Cleanup(func() { _ = c.Close() })
-		var result api.SendKeysResult
-		var err error
-		done := make(chan struct{})
-		go func() {
-			result, err = c.SendKeys(api.SendKeysParams{InstanceID: r.InstanceID, Text: prompt, AllowPending: true})
-			close(done)
-		}()
-		finished := func() bool {
-			select {
-			case <-done:
-				return true
-			default:
-				return false
-			}
-		}
-		t.Cleanup(func() {
-			waitFor(t, "send-keys goroutine exits", finished, nil)
-		})
-		terminalReads := 0
-		waitFor(t, "send-keys observes the cooked terminal", func() bool {
-			pane, captureErr := newClient().CapturePaneID(r.RT.Socket, r.Reply.PaneID, sendKeysCapLines, false)
-			if captureErr != nil {
-				t.Fatalf("capture cooked pane: %s", describe(captureErr))
-			}
-			if strings.TrimSpace(pane) != "" {
-				t.Errorf("input arrived while the terminal was still cooked: %q", pane)
-				return true // Release raw mode to inspect the bytes, even on old code.
-			}
-			// A second probe proves the first termios read finished while
-			// cooked. Read argv files directly: calls() requires every call
-			// to have finished, but send-keys is still running here.
-			paths, globErr := filepath.Glob(filepath.Join(log.dir, "*.args"))
-			if globErr != nil {
-				t.Fatal(globErr)
-			}
-			terminalReads = 0
-			for _, path := range paths {
-				args, readErr := os.ReadFile(path)
-				if readErr != nil {
-					t.Fatal(readErr)
-				}
-				if strings.HasSuffix(string(args), "\x00#{pane_tty}\x00") {
-					terminalReads++
-				}
-			}
-			if terminalReads >= 2 {
-				return true
-			}
-			return false
-		}, func() string { return fmt.Sprintf("terminal probes=%d", terminalReads) })
-		if err := os.WriteFile(received+".raw", nil, 0o600); err != nil {
+	// The reader stays active during the hook, so early input cannot acquire
+	// an artificially late timestamp. Both timestamps use Python's monotonic
+	// clock. hook.start is a conservative lower bound on the state transition;
+	// using hook completion would race send-keys observing the committed row.
+	const recorder = `import json, os, pathlib, subprocess, sys, threading, time, tty
+control = pathlib.Path(sys.argv[1])
+mode, binary, payload = sys.argv[2:]
+def wait_file(name):
+    end = time.monotonic() + 30
+    while not (control / name).exists():
+        if time.monotonic() >= end:
+            raise TimeoutError(name)
+        time.sleep(0.01)
+reads = open(control / "reads", "w", buffering=1)
+def record():
+    while True:
+        data = os.read(0, 65536)
+        if not data:
+            return
+        reads.write(json.dumps({"t": time.monotonic_ns(), "hex": data.hex()}) + "\n")
+if mode == "raw-before-session-start":
+    tty.setraw(0, when=0)
+threading.Thread(target=record, daemon=True).start()
+(control / "ready").touch()
+if mode == "cooked-then-raw":
+    wait_file("raw")
+    tty.setraw(0, when=0)
+(control / "raw-ready").touch()
+wait_file("session-start")
+with open(payload, "rb") as source:
+    started = time.monotonic_ns()
+    result = subprocess.run([binary, "hook"], stdin=source, capture_output=True, timeout=10)
+finished = {"start": started, "end": time.monotonic_ns(), "exit": result.returncode,
+            "stdout": result.stdout.decode(), "stderr": result.stderr.decode(), "parent": os.getpid()}
+(control / "hook.tmp").write_text(json.dumps(finished))
+os.replace(control / "hook.tmp", control / "hook.json")
+threading.Event().wait(30)
+`
+	readBytes := func(t *testing.T, dir string) (first int64, data []byte) {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(dir, "reads"))
+		if err != nil {
 			t.Fatal(err)
 		}
-		waitFor(t, "send-keys returns after raw mode", finished, nil)
-		// No hook fires, so nothing confirms the submission.
-		want := api.SubmissionUnconfirmedDetails{KeysSent: true, SubmissionConfirmed: false, RowState: store.StatePending}
-		if got := api.ErrDetails(err); !errors.Is(err, api.ErrSubmissionUnconfirmed) || got != want {
-			t.Errorf("send-keys to a starting agent: result=%+v err=%v details=%+v; want ErrSubmissionUnconfirmed with details %+v", result, err, got, want)
+		// The last record may still be in flight; parse only complete lines.
+		for _, line := range strings.Split(string(raw[:strings.LastIndexByte(string(raw), '\n')+1]), "\n") {
+			if line == "" {
+				continue
+			}
+			var chunk struct {
+				T   int64  `json:"t"`
+				Hex string `json:"hex"`
+			}
+			if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+				t.Fatal(err)
+			}
+			b, err := hex.DecodeString(chunk.Hex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first == 0 {
+				first = chunk.T
+			}
+			data = append(data, b...)
 		}
-		var got []byte
-		waitFor(t, "program reads the prompt and its Enter", func() bool {
-			got, _ = os.ReadFile(received)
-			return len(got) > len(prompt)
-		}, func() string { return fmt.Sprintf("read %q", got) })
-		if string(got) != prompt+"\r" {
-			t.Errorf("program read %d bytes ending %q; want the prompt's %d bytes then one CR, no LF", len(got), got[max(0, len(got)-8):], len(prompt))
-		}
-		var pane string
-		waitFor(t, "pane shows the raw-mode marker", func() bool {
-			pane, _ = newClient().CapturePaneID(r.RT.Socket, r.Reply.PaneID, sendKeysCapLines, false)
-			return strings.Contains(pane, ready)
-		}, func() string { return pane })
-		if strings.TrimRight(pane, "\n") != ready {
-			t.Errorf("pane shows %q; want only the marker %q, nothing echoed by the cooked tty", pane, ready)
-		}
-	})
+		return first, data
+	}
+	for _, name := range []string{"cooked-then-raw", "raw-before-session-start"} {
+		t.Run(name, func(t *testing.T) {
+			f := newKillFix(t)
+			dir := t.TempDir()
+			mark := func(name string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitFile := func(name string) {
+				t.Helper()
+				waitFor(t, "recorder writes "+name, func() bool {
+					_, err := os.Stat(filepath.Join(dir, name))
+					return err == nil
+				}, nil)
+			}
+			r := f.liveRow(t, killRowSpec{
+				State:   store.StatePending,
+				Opts:    []apitest.SpawnOption{apitest.WithAgent("claude")},
+				Command: []string{"python3", "-c", recorder, dir, name, bin, payload},
+			})
+			waitFile("ready")
+			_, log := newRecordingClient(t)
+			c := f.open(t, 0, filepath.Join(log.dir, "tmux-recorder"))
+			t.Cleanup(func() { _ = c.Close() })
+			var result api.SendKeysResult
+			var sendErr error
+			done := make(chan struct{})
+			go func() {
+				result, sendErr = c.SendKeys(api.SendKeysParams{InstanceID: r.InstanceID, Text: prompt, AllowPending: true})
+				close(done)
+			}()
+			finished := func() bool {
+				select {
+				case <-done:
+					return true
+				default:
+					return false
+				}
+			}
+			t.Cleanup(func() {
+				waitForObserved(t, 30*time.Second, "send-keys goroutine exits", finished, nil)
+			})
+			terminalReads := 0
+			wantReads := 1
+			if name == "cooked-then-raw" {
+				wantReads = 2 // The second probe proves the first read finished cooked.
+			}
+			waitFor(t, "send-keys reads the pane terminal", func() bool {
+				// Read argv files directly: calls() requires all calls to have
+				// finished, but send-keys is still running here.
+				paths, err := filepath.Glob(filepath.Join(log.dir, "*.args"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				terminalReads = 0
+				for _, path := range paths {
+					args, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.HasSuffix(string(args), "\x00#{pane_tty}\x00") {
+						terminalReads++
+					}
+				}
+				return terminalReads >= wantReads || finished()
+			}, func() string { return fmt.Sprintf("terminal probes=%d", terminalReads) })
+			if terminalReads < wantReads {
+				t.Errorf("send-keys returned before observing terminal: probes=%d, want >=%d", terminalReads, wantReads)
+			}
+			mark("raw")
+			waitFile("raw-ready")
+			// Hold SessionStart back after a terminal probe. This interval is
+			// the behaviour under test; barriers establish ordering under load.
+			holdUntil := time.Now().Add(400 * time.Millisecond)
+			waitFor(t, "pending observation interval", func() bool { return !time.Now().Before(holdUntil) }, nil)
+			if _, got := readBytes(t, dir); len(got) != 0 {
+				t.Errorf("input reached raw program before SessionStart while row pending: %q", got)
+			}
+			f.assertRowUnchanged(t, r.InstanceID, r.Before)
+			mark("session-start")
+			waitFile("hook.json")
+			var hook struct {
+				Start, End     int64
+				Exit, Parent   int
+				Stdout, Stderr string
+			}
+			if err := json.Unmarshal([]byte(readFileTrim(t, filepath.Join(dir, "hook.json"))), &hook); err != nil {
+				t.Fatal(err)
+			}
+			if hook.Exit != 0 || hook.Parent != r.Reply.PanePID || hook.Start <= 0 || hook.End < hook.Start {
+				t.Fatalf("SessionStart did not run from the pane: %+v", hook)
+			}
+			row := readRow(t, f.DBPath, r.InstanceID)
+			if row.State != store.StateWaiting || fmt.Sprint(row.PID) != fmt.Sprint(r.Reply.PanePID) || row.SessionID == nil {
+				t.Fatalf("SessionStart not applied: state=%v pid=%v session=%v hook=%+v", row.State, row.PID, row.SessionID, hook)
+			}
+			waitForObserved(t, 30*time.Second, "send-keys returns after SessionStart and settle", finished, nil)
+			// SessionStart fired, but no UserPromptSubmit confirms submission.
+			want := api.SubmissionUnconfirmedDetails{KeysSent: true, SubmissionConfirmed: false, RowState: store.StateWaiting}
+			if got := api.ErrDetails(sendErr); !errors.Is(sendErr, api.ErrSubmissionUnconfirmed) || got != want || result != (api.SendKeysResult{}) {
+				t.Errorf("send-keys: result=%+v err=%v details=%+v; want ErrSubmissionUnconfirmed with details %+v", result, sendErr, got, want)
+			}
+			// Drain a test-owned barrier after SendKeys has returned, proving
+			// there is no extra queued input beyond exactly prompt + one CR.
+			barrier := newInstanceID("barrier")
+			if err := newClient().SendKeysPane(r.RT.Socket, r.Reply.PaneID, barrier, true); err != nil {
+				t.Fatal(err)
+			}
+			var first int64
+			var got []byte
+			waitFor(t, "program reads the barrier", func() bool {
+				first, got = readBytes(t, dir)
+				return strings.HasSuffix(string(got), barrier+"\r")
+			}, func() string { return fmt.Sprintf("read %q", got) })
+			if string(got) != prompt+"\r"+barrier+"\r" {
+				t.Errorf("program read %q; want exactly the prompt then one CR before the barrier", got)
+			}
+			delay := time.Duration(first - hook.Start)
+			t.Logf("first byte relative to SessionStart invocation: %s; hook duration=%s; details=%+v", delay, time.Duration(hook.End-hook.Start), api.ErrDetails(sendErr))
+			if delay < 1500*time.Millisecond {
+				t.Errorf("first byte arrived %s after SessionStart invocation; want at least 1.5s", delay)
+			}
+		})
+	}
 
-	t.Run("never-raw", func(t *testing.T) {
-		if testing.Short() {
-			t.Skip("waits about 12 s for raw mode")
-		}
-		f, r, received, _ := row(t, "")
-		waitExeced(t, r.Reply.PanePID, "cat")
-		c := f.open(t, 0, "")
-		t.Cleanup(func() { _ = c.Close() })
-		result, err := c.SendKeys(api.SendKeysParams{InstanceID: r.InstanceID, Text: prompt, AllowPending: true})
-		details, _ := api.ErrDetails(err).(api.SubmissionUnconfirmedDetails)
-		want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StatePending, Reason: details.Reason}
-		if !errors.Is(err, api.ErrSubmissionUnconfirmed) || details != want {
-			t.Errorf("send-keys to a tty that stays cooked: result=%+v err=%v details=%+v; want ErrSubmissionUnconfirmed with details %+v", result, err, api.ErrDetails(err), want)
-		}
-		f.assertRowUnchanged(t, r.InstanceID, r.Before)
-		// Typed after send-keys returned, a barrier line reaches the program
-		// and the pane after anything send-keys typed.
-		barrier := newInstanceID("barrier")
-		if err := newClient().SendKeysPane(r.RT.Socket, r.Reply.PaneID, barrier, true); err != nil {
-			t.Fatalf("type the barrier: %s", describe(err))
-		}
-		var got []byte
-		var pane string
-		waitFor(t, "program reads the barrier and the pane echoes it", func() bool {
-			got, _ = os.ReadFile(received)
-			pane, _ = newClient().CapturePaneID(r.RT.Socket, r.Reply.PaneID, sendKeysCapLines, false)
-			return strings.HasSuffix(string(got), barrier+"\n") && strings.Contains(pane, barrier)
-		}, func() string { return fmt.Sprintf("read %q, pane %q", got, pane) })
-		if string(got) != barrier+"\n" || strings.TrimRight(pane, "\n") != barrier {
-			t.Errorf("input reached the terminal: program read %d bytes before the barrier; pane %q", len(got)-len(barrier)-1, pane)
-		}
-	})
+	for _, tc := range []struct{ name, script, enter string }{
+		{"never-raw", "", "\n"},
+		{"never-session-start", "stty raw -echo; ", "\r"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if testing.Short() {
+				t.Skip("waits about 12 s for pending Claude readiness")
+			}
+			f := newKillFix(t)
+			received := filepath.Join(t.TempDir(), "terminal-input")
+			r := f.liveRow(t, killRowSpec{
+				State:   store.StatePending,
+				Opts:    []apitest.SpawnOption{apitest.WithAgent("claude")},
+				Command: []string{"sh", "-c", tc.script + `exec cat > "$1"`, "capture", received},
+			})
+			waitExeced(t, r.Reply.PanePID, "cat")
+			c := f.open(t, 0, "")
+			t.Cleanup(func() { _ = c.Close() })
+			started := time.Now()
+			result, err := c.SendKeys(api.SendKeysParams{InstanceID: r.InstanceID, Text: prompt, AllowPending: true})
+			elapsed := time.Since(started)
+			details, _ := api.ErrDetails(err).(api.SubmissionUnconfirmedDetails)
+			want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StatePending, Reason: details.Reason}
+			if !errors.Is(err, api.ErrSubmissionUnconfirmed) || details != want || details.Reason == "" || result != (api.SendKeysResult{}) {
+				t.Errorf("send-keys without readiness: result=%+v err=%v details=%+v; want ErrSubmissionUnconfirmed with details %+v", result, err, api.ErrDetails(err), want)
+			}
+			if tc.name == "never-session-start" && elapsed < 12*time.Second {
+				t.Errorf("send-keys returned after %s; want readiness refusal after the 12s bound", elapsed)
+			}
+			f.assertRowUnchanged(t, r.InstanceID, r.Before)
+			// The barrier follows everything send-keys typed. It detects both
+			// cooked queued input and raw input, without looking at screen text.
+			barrier := newInstanceID("barrier")
+			if err := newClient().SendKeysPane(r.RT.Socket, r.Reply.PaneID, barrier, true); err != nil {
+				t.Fatalf("type the barrier: %s", describe(err))
+			}
+			var got []byte
+			waitFor(t, "program reads the barrier", func() bool {
+				got, _ = os.ReadFile(received)
+				return strings.HasSuffix(string(got), barrier+tc.enter)
+			}, func() string { return fmt.Sprintf("read %q", got) })
+			if string(got) != barrier+tc.enter {
+				t.Errorf("input reached the terminal: program read %d bytes before the barrier: %q", len(got)-len(barrier)-1, got)
+			}
+			t.Logf("send-keys elapsed=%s details=%+v bytes before barrier=%d", elapsed, api.ErrDetails(err), len(got)-len(barrier)-1)
+		})
+	}
 }

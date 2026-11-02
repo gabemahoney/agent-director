@@ -161,9 +161,9 @@ type SendKeysEnv struct {
 	// checked counts as in progress (paneIntentHold).
 	IntentHold time.Duration
 	// Sleep pauses between native readiness, drain and submission checks,
-	// pending Claude fallback's terminal-mode reads, pending-Codex and
-	// pending-Claude hook checks and Cursor gateway verdict reads. Nil uses
-	// time.Sleep.
+	// pending Claude fallback's terminal/SessionStart readiness and settle,
+	// pending-Codex and pending-Claude hook checks and Cursor gateway verdict
+	// reads. Nil uses time.Sleep.
 	Sleep func(time.Duration)
 }
 
@@ -245,13 +245,15 @@ type sendKeysGuard struct {
 // transcript proof nor native request deduplication.
 // Ordinary unsupported Claude input on a pending row first waits, reading
 // every 100 ms for up to 12 s, for the agent's terminal to take raw input
-// (canonical mode, echo and CR-to-NL translation off), because typed earlier
-// its Enter reaches a starting agent as LF, a newline rather than a submit
-// (b.qcf). It requires a PaneTerminalTmux adapter. Not raw by then, a failed
-// read, an adapter without the capability, or a changed launch, pane or guard
-// is ErrSubmissionUnconfirmed
-// with outcome not_started and nothing typed, so the same call can be made
-// again later. Once raw, it revalidates the row, server, session, pane and
+// (canonical mode, echo and CR-to-NL translation off), the same launch to
+// report waiting through SessionStart, and a 1.5 s settle since this call
+// first observed waiting. A cooked terminal turns Enter into LF, and raw mode
+// or SessionStart alone can still precede the composer accepting input (b.qcf).
+// It requires a PaneTerminalTmux adapter. Any unmet readiness condition by the
+// deadline, a failed read, a missing capability, or a changed launch, state,
+// pane or guard is ErrSubmissionUnconfirmed with outcome not_started and
+// nothing typed, so the same call can be made again later. The row must remain
+// waiting after SessionStart. It then revalidates the server, session, pane and
 // relay/dialog guards within the same 12 s budget before journalling or typing
 // the literal text and one Enter.
 // Pending Codex and Claude fallback input gets bounded hook observation. An
@@ -283,8 +285,9 @@ type sendKeysGuard struct {
 // label and launch token and the agent's pane is found; a leftover found for
 // a pending row is refused with ErrSpawnNotInteractive (Leftover, below). A
 // row that turns live between the read and the send still gets the keys in
-// the same pane; without expect_pane_sha256 agent-director does not guarantee
-// that the prompt the caller saw is still showing (SR-22.7).
+// the same pane, subject to the pending-Claude ordinary-input gate above;
+// without expect_pane_sha256 agent-director does not guarantee that the prompt
+// the caller saw is still showing (SR-22.7).
 //
 // Relay guard (b.146 rule 7; evaluateRelayGuard): on a row with relay_mode
 // on, in any live state, the row's permission requests are read by the
@@ -447,7 +450,7 @@ type sendKeysRun struct {
 	paste          PasteKeysTmux
 	terminal       PaneTerminalTmux
 	deliveryResult SendKeysResult
-	// terminalState carries the last raw state read during pending Claude
+	// terminalState carries the last row state read during pending Claude
 	// readiness into later refusals and hook observation. It never changes
 	// the row or launch identity used to authorize input.
 	terminalState string
@@ -542,7 +545,7 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	if !r.automatic && row.Agent == store.AgentClaude && row.State == store.StatePending && ordinary {
 		terminal, ok := r.t.(PaneTerminalTmux)
 		if !ok {
-			return deliveryNotStarted(row, "the tmux adapter cannot read the agent's terminal mode, which pending Claude fallback input waits on; use an adapter with that capability, or send once the row is no longer pending")
+			return deliveryNotStarted(row, "the tmux adapter cannot read the agent's terminal mode, which pending Claude fallback input waits on; nothing was typed, so the same send-keys can be retried later; use an adapter with that capability, or send once the row is no longer pending")
 		}
 		r.terminal = terminal
 	}
@@ -568,9 +571,10 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 // send is the tmux phase: the agent's pane, then native ordinary delivery,
 // a pane answer (paneAnswer), or the hash check when asked (paneMatches)
 // followed by a key, fallback paste or literal text; pending Claude fallback
-// text first waits for a raw terminal and revalidates its launch and guards
-// within the readiness budget (waitTerminalRaw), and a Cursor row's
-// text with Enter also reads its gateway's verdict (typeCursorText).
+// text first waits for a raw terminal, SessionStart and its settle, then
+// revalidates its launch and guards within the readiness budget
+// (waitTerminalRaw). A Cursor row's text with Enter also reads its gateway's
+// verdict (typeCursorText).
 func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	paneID, launch, err := r.targetPane()
 	if err != nil {
@@ -943,11 +947,13 @@ func isInteractiveState(state string) bool {
 //     was launched on.
 //   - [ErrSubmissionUnconfirmed]: native delivery lacks exact proof, or Codex
 //     fallback was refused before input or had a paste transport failure, or
-//     pending Claude fallback found the agent's terminal not taking raw input
-//     within 12 s, could not read its mode, or has an adapter without
-//     PaneTerminalTmux (outcome not_started: nothing was typed, so the same
-//     call can be made again later), or pending Codex or Claude fallback
-//     lacks bounded hook-derived submission observation, or a Cursor row's
+//     pending Claude fallback did not observe raw input, SessionStart and a
+//     1.5 s settle after first observing waiting within 12 s, could not read
+//     readiness, lost its launch, waiting state, pane ownership or guards, or
+//     has an adapter without PaneTerminalTmux (outcome not_started: nothing
+//     was typed, so the same call can be made again later), or pending Codex
+//     or Claude fallback lacks bounded hook-derived submission observation,
+//     or a Cursor row's
 //     gateway refused the submission (outcome gateway_refused). Structured
 //     outcomes distinguish no input, partial text, possible Enter delivery and
 //     a gateway refusal; failed hook observation carries only keys_sent,
@@ -960,7 +966,7 @@ func isInteractiveState(state string) bool {
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs; pending Claude fallback on
-// when the agent's terminal takes raw input.
+// when the agent's terminal takes raw input and this call observes SessionStart.
 func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SendKeysResult{}, err

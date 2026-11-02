@@ -7,10 +7,10 @@ import (
 )
 
 // PaneTerminalRaw reports whether the terminal of the pane paneID on socket
-// takes raw input: canonical mode, echo and CR-to-NL translation all off, as
-// a full-screen program sets them once it reads keys itself (b.qcf). Keys
-// typed before then are echoed and line-edited by the terminal, and an Enter
-// reaches the program as LF. It reads the pane's terminal device,
+// takes raw input: canonical mode, echo and CR-to-NL translation all off
+// (b.qcf). Raw mode alone does not show that the program is ready for input.
+// With those flags set, keys are echoed and line-edited by the terminal, and
+// an Enter reaches the program as LF. It reads the pane's terminal device,
 // display-message -p -t <pane id> '#{pane_tty}', then that device's mode,
 // opened read-only without becoming this process's controlling terminal; it
 // never reads from or writes to the terminal. maxWait bounds the tmux call,

@@ -6,7 +6,7 @@ package api_test
 // the current launch's own pane by id, the refusals with nothing sent, the
 // no-launch-identity refusals with no tmux call, a row change between the read
 // and the send, and a reuse's read-pane and allow_pending halves. send-keys
-// now waits on raw mode and bounded hook evidence for pending Claude (b.qcf).
+// now waits on raw mode, SessionStart and its settle for pending Claude (b.qcf).
 
 import (
 	"testing"
@@ -108,19 +108,26 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 				r := tc.seed(t, e, k)
 				pane := pane(t, r, tc.lostReply)
 				cols, before := e.columns(t, r.ID), e.adoption(t, r.ID)
+				e.sessionStartsWhenPolled(t, r, func() { cols = e.columns(t, r.ID) })
 
-				assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StatePending)
-				e.assertDelivered(t, r.Socket, pane, skpText, 1)
+				assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StateWaiting)
+				e.assertDelivered(t, r.Socket, pane, skpText, 2)
 				if !tc.lostReply {
 					e.assertRowUnchanged(t, r.ID, cols)
 					return
 				}
 				after := e.adoption(t, r.ID)
-				skpAssertAdoptedOnce(t, before, after, pane)
+				// b.qcf: SessionStart adds one versioned write after adoption.
+				adopted := after
+				adopted.RowVersion--
+				skpAssertAdoptedOnce(t, before, adopted, pane)
 
 				e.rec.Reset()
-				assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StatePending)
-				e.assertDelivered(t, r.Socket, pane, skpText, 1)
+				if err := skpSend(e, r.ID); err != nil {
+					t.Fatal(err)
+				} // Now waiting: the established route.
+				e.assertDelivered(t, r.Socket, pane, skpText)
+				e.assertRowUnchanged(t, r.ID, cols)
 				if again := e.adoption(t, r.ID); again != after {
 					t.Errorf("adoption after the second call = %+v; want no further write %+v", again, after)
 				}
@@ -257,7 +264,7 @@ func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 // pending launch, a gated SessionStart, or a versioned write on a lost reply
 // (the adoption then not applied), between the row read and the send (after
 // the listing, which is all the adoption write follows) still sends to the
-// same pane.
+// same pane after SessionStart; a lost reply with no report now refuses (b.qcf).
 func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 	t.Parallel()
 	for _, k := range skpKinds {
@@ -268,7 +275,7 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 			e.sessionStartAfter(t, tmux.CallListPanes, r, "sess-start-"+uuid.NewString()[:8])
 
 			assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StateWaiting)
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 1)
+			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 2)
 			if got := e.columns(t, r.ID).State; got == store.StatePending {
 				t.Errorf("state after the SessionStart = %v; want the row turned live", got)
 			}
@@ -277,12 +284,10 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedPending(t, k, pendingLostReply)
-			pane := labelledPane(t, r.Session, r.Token)
 			before := e.adoption(t, r.ID)
 			e.rowWriteAfter(t, tmux.CallListPanes, r)
 
-			assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StatePending)
-			e.assertDelivered(t, r.Socket, pane, skpText, 1)
+			e.assertSessionStartMissing(t, skpSend(e, r.ID))
 			want := before
 			want.RowVersion++
 			if after := e.adoption(t, r.ID); after != want {
@@ -297,8 +302,9 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 
 // b.qcf: a liveness note does not confirm submission.
 // TestSendKeysNotedUnreportedRow (b.kdf, CSCB): a pending row find-missing noted unreported is still a pending row
-// to send-keys: refused without allow_pending (ErrSpawnNotInteractive, no tmux call), delivered into its own pane
-// with it; neither call changes the row or its note.
+// to send-keys: refused without allow_pending (ErrSpawnNotInteractive, no tmux call);
+// with it, ordinary text waits for SessionStart then refuses without input (b.qcf).
+// Neither call changes the row or its note.
 func TestSendKeysNotedUnreportedRow(t *testing.T) {
 	t.Parallel()
 	for _, allow := range []bool{false, true} {
@@ -312,8 +318,7 @@ func TestSendKeysNotedUnreportedRow(t *testing.T) {
 			_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: allow})
 
 			if allow {
-				assertSubmissionUnconfirmed(t, err, store.StatePending)
-				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 1)
+				e.assertSessionStartMissing(t, err)
 			} else {
 				assertOneName(t, err, "ErrSpawnNotInteractive")
 				e.assertNoTmuxCall(t)

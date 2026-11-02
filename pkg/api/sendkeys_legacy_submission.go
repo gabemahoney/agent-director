@@ -7,10 +7,12 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// Compatibility delivery on a pending Codex row, and on a pending Claude row
-// once its terminal is raw (b.qcf), checks hooks briefly for the turn
-// starting. It makes no exact native-proof claim, and never retries either
-// text or Enter.
+// Compatibility delivery on a pending Codex row, and on a Claude row read as
+// pending, checks hooks briefly for the turn starting. For Claude this follows
+// waitTerminalRaw: the terminal takes raw input, SessionStart has made the same
+// launch waiting, and claudeSessionStartSettle has passed since this call first
+// saw waiting (b.qcf). It makes no exact native-proof claim, and never retries
+// either text or Enter.
 func (r *sendKeysRun) confirmLegacySubmission(sent Spawn) error {
 	const timeout = 2 * time.Second
 	agent := "Codex"

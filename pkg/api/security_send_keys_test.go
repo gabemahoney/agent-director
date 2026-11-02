@@ -24,6 +24,7 @@ const skSecText = "status please"
 func securitySendKeysCall(allowPending bool) func(*testing.T, *api.Client, *securityScene) (any, error) {
 	return func(t *testing.T, c *api.Client, s *securityScene) (any, error) {
 		if allowPending {
+			s.e.sessionStartsWhenPolled(t, s.target, nil)
 			s.e.turnStartsAfterEnter(t, s.target) // b.qcf: confirm only after the owned pane takes Enter.
 		}
 		return c.SendKeys(api.SendKeysParams{InstanceID: s.subject, Text: skSecText, AllowPending: allowPending})
@@ -52,7 +53,7 @@ func skSecSends(delivered bool) func(*testing.T, *securityScene, any) {
 		if delivered {
 			reads := 0
 			if s.target.Spawn.State == store.StatePending {
-				reads = 1
+				reads = 2
 			}
 			s.e.assertDelivered(t, s.target.Socket, s.target.Spawn.Identity.PaneID, skSecText, reads)
 			return

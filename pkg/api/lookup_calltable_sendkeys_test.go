@@ -98,11 +98,12 @@ func callTableSendKeysPending() callTableVerb {
 	v := callTableSendKeys()
 	v.name = "send-keys, pending with allow_pending"
 	v.invoke = sendKeysCallTableInvoke(true)
+	v.startBeforeInput = true
 	v.cells = maps.Clone(v.cells)
 	// b.qcf: pending Claude reads terminal mode and rechecks ownership before input.
 	for _, outcome := range []callTableOutcome{ctOurs, ctActionRecognised, ctActionTimeout} {
 		cell := v.cells[outcome]
-		cell.calls = slices.Insert(slices.Clone(cell.calls), 2, tmux.CallPaneTerminal, tmux.CallLookup, tmux.CallListPanes)
+		cell.calls = slices.Insert(slices.Clone(cell.calls), 2, tmux.CallPaneTerminal, tmux.CallPaneTerminal, tmux.CallLookup, tmux.CallListPanes)
 		if outcome == ctOurs {
 			cell.errName = "ErrSubmissionUnconfirmed"
 			cell.desc = func(_ *killEnv, r killRow) apitest.DescCase {

@@ -9435,7 +9435,8 @@ are in `pkg/api/pane_answer.go`, and the relay guard in
 `pkg/api/sendkeys_relay.go`; `pkg/api/sendkeys_submission.go` coordinates
 native ordinary delivery through `internal/inputdelivery`, described below;
 `pkg/api/sendkeys_paste.go` handles ordinary Codex fallback paste;
-`pkg/api/sendkeys_terminal.go` waits for pending Claude fallback's raw terminal;
+`pkg/api/sendkeys_terminal.go` handles pending Claude fallback's
+[readiness wait](#ordinary-input-delivery);
 `pkg/api/sendkeys_cursor_gateway.go` reads a Cursor row's
 [gateway verdict](#cursor-gateway-verdict);
 `pkg/api/sendkeys_legacy_submission.go` checks pending Codex and Claude
@@ -9532,7 +9533,10 @@ after which the row is reachable without the flag. A `pending` row that
 is still `pending`: the note does not relax the guard, and `send-keys`
 refuses it without `allow_pending` like any other `pending` row. For such
 a row the caller reads the pane first and sends with the flag only having
-looked.
+looked. Ordinary pending Claude fallback takes the
+[readiness wait](#ordinary-input-delivery); a never-reported Claude row gets
+`not_started` when that wait expires. Startup choices use `key`
+or Claude Enter-only input, bypassing readiness and hook observation.
 
 `allow_pending` opt-in (SR-18.14): the flag also allows a `pending` row: a
 launch (spawn, reuse or resume) whose agent has not reported in yet. Keys
@@ -9565,17 +9569,15 @@ a launching session (SR-22.7):
 - **Guaranteed.** The keys go only to the current launch's agent pane,
   found by the lookup and the pane listing for the row as `send-keys` read
   it. A SessionStart between that read and the send changes neither the
-  session nor the pane, so the keys still land there, whatever the state
-  by the time they arrive. Native delivery and pending Claude fallback also
-  recheck the row and pane ownership before typing.
+  session nor the pane. Native delivery and pending Claude fallback also
+  recheck the row and pane ownership, and may refuse before typing.
 - **Not guaranteed.** That the prompt the caller saw is still showing.
   The agent can report in between the caller's `read-pane` and its
   `send-keys`, or between the text and the Enter of one `send-keys`,
   which are not one atomic step. Text meant for a prompt can then land in
   the agent's input line, and with the Enter it is submitted as a user
   turn. Whether and what to answer is the caller's business: no option
-  types only while a row is `pending`, and no verb blocks until the agent
-  reports in.
+  types only while a row is `pending`.
 
 Outcomes on a live row, and on a `pending` row past the checks above (the
 full table is SRD SR-7.2; the failure rules SR-7.3):
@@ -9698,22 +9700,34 @@ resends text or Enter.
 
 **Must use:** ordinary Claude fallback read as `pending` goes through
 `sendKeysRun.waitTerminalRaw` in `pkg/api/sendkeys_terminal.go` and the optional
-`PaneTerminalTmux` capability. It polls the owned pane every 100 ms for up to
-12 s on the injected clock. Readiness and revalidation share that deadline:
-the same life, launch, socket and pane ownership must hold, the row must be
-`pending` or `waiting`, and relay/dialog guards must pass. Late evidence never
-authorizes input. Ownership and guard calls retain their own bounds, so the
-call can return after 12 s. Unlike native delivery, the recheck needs no OS
-process evidence.
+`PaneTerminalTmux` capability. Within 12 s on the injected clock it requires
+raw input, SessionStart making the same launch `waiting`, and a 1.5 s settle
+from when this call first observes `waiting`. Every 100 ms it revalidates the
+row, even while cooked; row reads take at most one second, capped by the
+remaining budget. After the first raw sample, only the row is polled until the settle
+can finish. A fresh raw sample, another row validation, then server, session,
+pane ownership and relay/dialog checks must pass before typing. The same life,
+launch and socket must hold throughout; the row must stay `pending` or
+`waiting`, and `waiting` once observed. All checks share the readiness deadline.
+Ownership and guard calls retain their own bounds, so the call can return after
+the deadline, but late evidence never authorizes input. Unlike native delivery,
+the recheck needs no OS process evidence.
+
+The settle allows Claude's composer to start accepting input: b.qcf's live
+Claude Code 2.1.309 measurements (2026-11-02) submitted 0/6 prompts at raw
+onset or within 30 ms of SessionStart, and 6/6 at 0.59–3.5 s after SessionStart.
+The chosen settle then submitted 3/3 in live confirmation; it is a timing
+margin, not proof of submission.
 
 A failed check or terminal read, missing capability or missed deadline returns
 `ErrSubmissionUnconfirmed` with `not_started`/`pre_input`, before input journalling
-or typing. Refusals during and after readiness, including a failed hook check,
-report the last successfully read `row_state`; a read failure keeps the prior
+or typing; `reason` names the unmet condition. Refusals during and after
+readiness, including a failed hook check, report the last successfully read
+`row_state`; a read failure keeps the prior
 observation, with the original launch and adopted identity still pinned.
 Literal text and one Enter follow successful checks, then hook observation
-runs as above. Claude rows read in a live state, Enter-only, `no_enter`, key,
-pane-hash and permission-answer sends retain their existing routes.
+runs as above. Claude rows read in any state other than `pending`, Enter-only,
+`no_enter`, key, pane-hash and permission-answer sends retain their existing routes.
 
 `tmux.Client.PaneTerminalRaw(socket, paneID, maxWait)`
 (`internal/tmux/terminal*.go`) reads `#{pane_tty}` by pane id through
@@ -16599,8 +16613,8 @@ and not `unverified_ids`, since its agent process was checked and is
 alive; `get` and `list` show the note. The
 row's `ad.provenance.disagree` records, if any, carry `action`
 `left_unreported`. To act on the row, the caller reads the pane
-(`read-pane`, which reads a row in any state), then types with
-`send-keys`'s `allow_pending`; only a caller that looked types. A caller
+(`read-pane`, which reads a row in any state), then answers with
+`send-keys`'s `allow_pending`; only a caller that looked answers. A caller
 that cannot judge the pane ends the launch with the
 [live-row sequence](#live-row-sequence) (`kill`, `find-missing`, then a
 check that the row is `ended` or `missing`) or hands it to a human. The note does not relax
@@ -17639,8 +17653,10 @@ adds it here.
   hook since its launch: it may sit at a Claude Code startup screen or
   idle at its prompt, and agent-director cannot tell which. The row stays
   `pending`. To act on it, the caller reads the pane (`read-pane`), then
-  types with `send-keys` and `allow_pending`; only a caller that looked
-  should type, since a blind text plus Enter can answer a startup screen.
+  answers with `send-keys` and `allow_pending` (`key` or Enter-only for a
+  startup choice; ordinary pending Claude fallback text takes the
+  [readiness wait](#ordinary-input-delivery)). Only a caller that looked
+  should answer, since a blind key or Enter can answer a startup screen.
   A caller that cannot judge the pane ends the launch with the
   [live-row sequence](#live-row-sequence) or hands it to a human.
   `send-keys` still refuses the row without `allow_pending`, noted
@@ -18132,7 +18148,7 @@ the section that describes it in detail.
     otherwise lost leaves its agent's row `pending` until the agent's next
     hook; `find-missing` notes it `unreported` within the pending grace
     period plus one `find-missing` period, and the caller reads the pane
-    and types with `allow_pending`; recovery from `pending`, stale states and gone
+    and answers with `allow_pending`; recovery from `pending`, stale states and gone
     agents depends on `find-missing` being scheduled (see "The cap and the
     hook timeout" under
     [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent));
@@ -21039,9 +21055,8 @@ shared packages rebuilds it.
 
 **Must use:** tests needing a real terminal use `internal/testsupport/ptyfix`.
 `Open(t)` opens a Linux PTY pair, verifies the slave's termios and closes both
-ends at test cleanup. `SetRaw(t, slave)` clears `ICANON`, `ECHO` and `ICRNL`;
-both helpers skip on other platforms. CLI terminal-stdin tests, pending-Claude
-CLI sends and terminal-mode tests share it.
+ends at test cleanup. It skips on other platforms. CLI terminal-stdin tests and
+the `internal/tmux` terminal-mode tests share it.
 
 ### test/realtmux: real-tmux proof of the client (reusable test fixtures)
 

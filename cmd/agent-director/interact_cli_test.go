@@ -11,19 +11,18 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
-	"github.com/gabemahoney/agent-director/internal/testsupport/ptyfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // TestSendKeysCLIDeliversByPaneID: send-keys' --text, --allow-pending,
 // --no-enter and --key reach the verb: after one lookup and one pane listing,
-// a live row, and a pending row with --allow-pending, get the text and Enter
-// in the agent's pane by id; --text "" presses Enter only (b.9o4); --no-enter
-// types the text alone; --key sends that one key alone, a named key by name
-// and one character literally (b.146 rule 8). b.qcf: pending Claude checks
-// its tty first, then reports unconfirmed keys when no hook fires; an
-// unreadable tty refuses before typing and exposes not_started on stderr.
+// a live row gets text and Enter in the agent's pane by id; a pending row
+// with --allow-pending accepts Enter-only (b.9o4); --no-enter types text alone.
+// --key sends one key, a named key by name or one character literally (b.146).
+// b.qcf: pending Claude ordinary text waits for SessionStart; Enter-only drives
+// an unreported row. An unreadable tty refuses before typing and exposes
+// not_started on stderr.
 func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	typed := func(text string) []string { return []string{"-l", "--", text} }
@@ -34,8 +33,7 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 		sends       [][]string // each send-keys call's arguments after its -t target
 	}{
 		{"live row", store.StateWaiting, []string{"--text", "hello world"}, [][]string{typed("hello world"), enter}},
-		{"pending row with allow pending", store.StatePending, []string{"--text", "hello world", "--allow-pending"},
-			[][]string{typed("hello world"), enter}},
+		{"pending row with allow pending", store.StatePending, []string{"--text", "", "--allow-pending"}, [][]string{enter}},
 		{"pending row unreadable terminal", store.StatePending, []string{"--text", "hello world", "--allow-pending"}, nil},
 		{"empty text presses Enter only", store.StateWaiting, []string{"--text", ""}, [][]string{enter}},
 		{"no enter types the text alone", store.StateWaiting, []string{"--text", "hi", "--no-enter"}, [][]string{typed("hi")}},
@@ -45,32 +43,25 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home, id, socket := seedRowOnSocket(t, tc.state)
 			session := ownSession(t, home, id, "")
-			if tc.state == store.StatePending && len(tc.sends) > 0 {
-				_, slave := ptyfix.Open(t)
-				ptyfix.SetRaw(t, slave)
-				session.Panes[0].TTY = slave.Name()
-			}
 			faketmuxfix.Tables{}.Write(t, socket, fakeTable(session))
 
 			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"send-keys", "--instance-id", id}, tc.args...)...)
 
 			outcome := "ok"
-			if tc.state == store.StatePending {
+			if tc.state == store.StatePending && len(tc.sends) == 0 {
 				outcome = "ErrSubmissionUnconfirmed"
 				assertOnlyEnvelope(t, stdout, stderr, code, outcome)
 				var got struct {
 					Details map[string]any `json:"err_details"`
 				}
-				want := map[string]any{"keys_sent": true, "submission_confirmed": false, "row_state": tc.state}
-				if len(tc.sends) == 0 {
-					want = map[string]any{
-						"outcome": "not_started", "phase": "pre_input", "bytes_attempted": float64(0),
-						"enter_may_have_been_sent": false, "keys_sent": false, "submission_confirmed": false,
-						"row_state": tc.state,
-						"reason": "the agent's terminal mode could not be read: read the terminal mode of /dev/null: " + syscall.ENOTTY.Error() +
-							"; nothing was typed, so the same send-keys can be retried later",
-					}
+				want := map[string]any{
+					"outcome": "not_started", "phase": "pre_input", "bytes_attempted": float64(0),
+					"enter_may_have_been_sent": false, "keys_sent": false, "submission_confirmed": false,
+					"row_state": tc.state,
+					"reason": "the agent's terminal mode could not be read: read the terminal mode of /dev/null: " + syscall.ENOTTY.Error() +
+						"; nothing was typed, so the same send-keys can be retried later",
 				}
+
 				if err := json.Unmarshal([]byte(stderr), &got); err != nil || !reflect.DeepEqual(got.Details, want) {
 					t.Errorf("err_details = %v (%v); want %v", got.Details, err, want)
 				}
@@ -88,12 +79,8 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 				t.Fatalf("fake-tmux invocations = %q; want initial lookup and pane listing", invs)
 			}
 			var want [][]string
-			if tc.state == store.StatePending {
+			if tc.state == store.StatePending && len(tc.sends) == 0 {
 				want = append(want, []string{"-u", "-S", socket, "display-message", "-p", "-t", apitest.TestPaneID, "#{pane_tty}"})
-				if len(tc.sends) > 0 {
-					// b.qcf: repeat the same ownership queries after raw mode, before text.
-					want = append(want, slices.Clone(invs[0]), slices.Clone(invs[1]))
-				}
 			}
 			for _, s := range tc.sends {
 				want = append(want, append(slices.Clone(target), s...))

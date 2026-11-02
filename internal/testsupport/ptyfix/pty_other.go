@@ -13,9 +13,3 @@ func Open(t testing.TB) (master, slave *os.File) {
 	t.Skip("real pseudo-terminal case runs on Linux only")
 	return nil, nil
 }
-
-// SetRaw skips the test: terminal-mode setup runs on Linux only.
-func SetRaw(t testing.TB, slave *os.File) {
-	t.Helper()
-	t.Skip("real pseudo-terminal case runs on Linux only")
-}

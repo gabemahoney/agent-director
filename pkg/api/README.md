@@ -420,8 +420,9 @@ arrive.
 
 `AllowPending` preserves native readiness and transcript requirements on
 supported launches; it does not make a startup dialog an ordinary composer.
-For pending Codex fallback and ordinary pending Claude fallback, the bounded
-hook observation and unconfirmed result are described in the caller contract.
+Ordinary pending Claude fallback has a readiness wait, and pending Claude and
+Codex fallback have a hook check; see
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
 `ErrSubmissionUnconfirmed` carries `SubmissionUnconfirmedDetails` through
 `api.ErrDetails(err)`: `RequestID`, `Outcome`, `Phase`, `BytesAttempted`,
 `EnterMayHaveBeenSent`, optional `LastQueue`, `Reason`, `KeysSent`,
@@ -447,9 +448,9 @@ func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 `SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity,
 `IntentHold`, optional `Input` (`InputDeliveryBackend`, nil uses native
 delivery), and optional `Sleep` for native readiness, drain and submission
-checks, pending Claude terminal-mode reads, pending Codex and Claude hook checks,
-and Cursor gateway verdict reads (nil uses `time.Sleep`). Most callers use the
-Client method, which supplies these.
+checks, pending Claude readiness and settle, pending Codex and Claude hook
+checks, and Cursor gateway verdict reads (nil uses `time.Sleep`). Most callers
+use the Client method, which supplies these.
 Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
 bounding connection and lock waits by the supplied duration.
 Custom tmux adapters supplied to this function or through `Options.TmuxClient`

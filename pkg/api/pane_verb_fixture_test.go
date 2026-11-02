@@ -154,6 +154,49 @@ func (e *killEnv) sendKeysAt(window time.Duration, now time.Time, p api.SendKeys
 	}, p)
 }
 
+// sessionStartsWhenPolled supplies b.qcf's real SessionStart on the first
+// terminal poll. Refused lookups never report in; after observes only the hook's
+// write, so callers can retain their full-row no-write assertions.
+func (e *killEnv) sessionStartsWhenPolled(t *testing.T, r killRow, after func()) {
+	t.Helper()
+	done := false
+	e.rec.AfterCall(tmux.CallPaneTerminal, func(c tmuxfix.SocketCall, err error) {
+		if done || err != nil || c.Socket != r.Socket {
+			return
+		}
+		done = true
+		row, err := e.st.GetSpawn(r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Target != row.Identity.PaneID {
+			t.Fatalf("terminal poll targets %s; want owned pane %s", c.Target, row.Identity.PaneID)
+		}
+		if row.State != store.StatePending {
+			return
+		}
+		if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", "ready-"+r.ID); !a.Applied {
+			t.Fatalf("SessionStart during readiness: %+v", a)
+		}
+		if after != nil {
+			after()
+		}
+	})
+}
+
+// assertSessionStartMissing pins b.qcf's never-reported refusal and no input.
+func (e *killEnv) assertSessionStartMissing(t *testing.T, err error) {
+	t.Helper()
+	assertOneName(t, err, "ErrSubmissionUnconfirmed")
+	want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StatePending,
+		Reason: "the agent did not report in with SessionStart within 12 seconds; nothing was typed, so the same send-keys can be retried later"}
+	if got := api.ErrDetails(err); got != want {
+		t.Fatalf("refusal=%+v; want %+v", got, want)
+	}
+	e.assertNothingSent(t)
+	e.assertNoCalls(t, tmux.CallSendKey)
+}
+
 // RecordHookGone delegates.
 func (w *killStore) RecordHookGone(at time.Time, maxWait time.Duration, ids ...int64) (map[int64]time.Time, error) {
 	return w.st.RecordHookGone(at, maxWait, ids...)

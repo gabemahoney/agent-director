@@ -52,6 +52,9 @@ func TestSendKeysPendingSubmissionUnconfirmed(t *testing.T) {
 					e := newSubmissionEnv(t)
 					r := e.seedRow(t, killRowSpec{State: store.StatePending, Opts: agentRowOpts(agent)})
 					before := e.columns(t, r.ID)
+					if agent == "claude" {
+						e.sessionStartsWhenPolled(t, r, func() { before = e.columns(t, r.ID) })
+					}
 					e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) { row.State = state; return row, nil }
 
 					err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text, AllowPending: true})
@@ -74,7 +77,7 @@ func TestSendKeysPendingSubmissionUnconfirmed(t *testing.T) {
 					if text == "" {
 						e.assertEnterOnly(t, r.Socket, r.Spawn.Identity.PaneID)
 					} else {
-						e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text, map[string]int{"codex": 0, "claude": 1}[agent])
+						e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text, map[string]int{"codex": 0, "claude": 2}[agent])
 					}
 					e.assertNoCalls(t, tmux.CallCapture)
 					e.assertRowUnchanged(t, r.ID, before)
@@ -107,7 +110,7 @@ func TestSendKeysPendingSubmissionActivity(t *testing.T) {
 					if e.waits != delay {
 						t.Errorf("waits = %d; want %d", e.waits, delay)
 					}
-					e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, map[string]int{"codex": 0, "claude": 1}[agent])
+					e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, map[string]int{"codex": 0, "claude": 2}[agent])
 					e.assertNoCalls(t, tmux.CallCapture)
 				})
 			}
@@ -255,7 +258,7 @@ func TestSendKeysPendingSubmissionActivityReadDeadline(t *testing.T) {
 				if e.s.reads != 1 || e.waits != 0 {
 					t.Errorf("submission reads/waits = %d/%d; want 1/0", e.s.reads, e.waits)
 				}
-				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, map[string]int{"codex": 0, "claude": 1}[agent])
+				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, map[string]int{"codex": 0, "claude": 2}[agent])
 			})
 		}
 	}
@@ -360,7 +363,11 @@ func TestSendKeysSubmissionApplicability(t *testing.T) {
 			p.InstanceID, p.AllowPending = r.ID, true
 			err := e.send(p)
 			if tc.hook {
-				assertSubmissionUnconfirmed(t, err, store.StatePending)
+				wantState := store.StatePending
+				if tc.terminal {
+					wantState = store.StateWaiting
+				} // b.qcf: SessionStart precedes input.
+				assertSubmissionUnconfirmed(t, err, wantState)
 				if e.s.reads != 20 || e.slept != 2*time.Second {
 					t.Errorf("hook reads/sleep=%d/%v; want 20/2s", e.s.reads, e.slept)
 				}
@@ -372,7 +379,7 @@ func TestSendKeysSubmissionApplicability(t *testing.T) {
 					t.Errorf("submission reads/waits = %d/%d; want none", e.s.reads, e.waits)
 				}
 			}
-			if reads := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)); reads != map[bool]int{false: 0, true: 1}[tc.terminal] {
+			if reads := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)); reads != map[bool]int{false: 0, true: 2}[tc.terminal] {
 				t.Errorf("terminal reads=%d; want selected=%v", reads, tc.terminal)
 			}
 			pastes := 0

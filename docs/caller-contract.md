@@ -93,19 +93,22 @@ To end a live row (`pending` included) and relaunch its id:
 ## Pending rows and startup screens
 
 A pending row noted `unreported` has an alive agent with no applied hook
-since launch. Read its pane, then type with `allow_pending` only after a
-person or an LLM judged that screen. A caller that cannot judge it uses the
-live-row sequence or hands it to a human. Cursor admits no prompt until its conversation is confirmed; `allow_pending`
-does not override that admission rule. Hook configuration diagnosis is
-in [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
+since launch. Read its pane, then answer with `allow_pending` only after a
+person or an LLM judged that screen. Ordinary pending Claude fallback text
+waits for the agent to be ready; see [Ordinary text submission](#ordinary-text-submission).
+Such a Claude row that never reports in gets
+`ErrSubmissionUnconfirmed` with `outcome: "not_started"` after that wait,
+with nothing typed. Use `key` (including `key: "Enter"`) for startup choices,
+or a Claude Enter-only send; these take neither the readiness wait nor the
+hook check. For Codex Enter-only sends, see [Manual input ownership](#manual-input-ownership).
 
-On a `pending` Claude or Codex row using fallback delivery, text with Enter
-that answers a startup screen starts no turn. The call returns
+A pending Codex fallback text answer that starts no turn returns
 `ErrSubmissionUnconfirmed` with `keys_sent: true` even when the screen accepted
-it: read the pane and `status` instead of resending. Answer single-key choices
-with `key` (including `key: "Enter"`), which takes neither the readiness wait
-nor the hook check. A Claude Enter-only send also bypasses both.
-For Codex Enter-only sends, see [Manual input ownership](#manual-input-ownership).
+it: read the pane and `status` instead of resending. A caller that cannot judge
+the pane uses the live-row sequence or hands it to a human. Cursor admits no
+prompt until its conversation is confirmed; `allow_pending` does not override
+that rule. Hook configuration diagnosis is in
+[Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
 
 ## Experimental context fullness
 
@@ -401,15 +404,17 @@ Enter. Paste framing requires the application to have enabled bracketed paste;
 it does not establish composer readiness.
 
 For ordinary Claude fallback input read as `pending`, `send-keys` waits for the
-agent's terminal to take raw input. After readiness, it rechecks the same launch,
-a `pending` or `waiting` state, ownership of the tmux server, session and pane,
-and permission-relay and dialog guards. Readiness and revalidation share one
-12 s deadline; an in-flight check can make the call return later.
+agent's terminal to take raw input, SessionStart to move the same launch to
+`waiting`, and 1.5 s from when the call first observes `waiting`. The row is
+polled throughout and must remain `waiting` once observed. After the settle,
+the call rechecks raw input, the row, ownership of the tmux server, session and
+pane, and permission-relay and dialog guards. Readiness and revalidation share
+one 12 s deadline; an in-flight check can make the call return later.
 An unavailable terminal-mode capability, a failed read or check, or a missed
 deadline returns `ErrSubmissionUnconfirmed` with `outcome: "not_started"`:
-nothing was typed.
-Claude fallback sends read in a live state, Enter-only, `no_enter`, `key` and
-pane-hash sends do not take this readiness path.
+nothing was typed, and `reason` names the unmet condition.
+Claude fallback sends read in any state other than `pending`, Enter-only,
+`no_enter`, `key` and pane-hash sends do not take this readiness path.
 
 After a successful transport, pending Codex fallback and the pending Claude
 path above are observed for up to 2 s for hook-derived `working`, `ask_user`

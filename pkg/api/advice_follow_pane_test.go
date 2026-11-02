@@ -901,8 +901,9 @@ func TestAdviceFollow_E8_PauseTimeoutInspectBeforeInput(t *testing.T) {
 
 // TestAdviceFollow_E9_SendKeysPendingAllowPending: E9 a pending row's
 // "state=pending" refusal, followed by the allow_pending text ("When true,
-// also allows a pending row"); re-issued with it, the keys reach the launch's pane.
-// b.qcf: without a turn hook their submission remains explicitly unconfirmed.
+// also allows a pending row"); re-issued with it, the call passes the pending-row
+// eligibility guard, then refuses ordinary text because SessionStart is still
+// missing, without typing (b.qcf).
 func TestAdviceFollow_E9_SendKeysPendingAllowPending(t *testing.T) {
 	t.Parallel()
 	adviceAssertManifest(t, "send-keys", "allow_pending", "When true, also allows a pending row")
@@ -916,8 +917,7 @@ func TestAdviceFollow_E9_SendKeysPendingAllowPending(t *testing.T) {
 	p := skaParams(r)
 	p.AllowPending = true
 	_, err = e.sendKeys(p)
-	assertSubmissionUnconfirmed(t, err, store.StatePending)
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skaText, 1)
+	e.assertSessionStartMissing(t, err)
 }
 
 // E15 (b.qcr): "put the prompt in a file and send a short instruction to read it".
@@ -1068,7 +1068,7 @@ func TestAdviceFollow_E19_ClaudeFallbackTerminalRetry(t *testing.T) {
 			e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
 			var adapter api.SendKeysTmux = e.rec
 			advice := "nothing was typed, so the same send-keys can be retried later"
-			reason := "the agent's terminal did not take raw input with its launch and guards verified within 12 seconds; " + advice
+			reason := "the agent's terminal did not take raw input within 12 seconds; " + advice
 			var readError error
 			e.rec.AfterCall(tmux.CallPaneTerminal, func(_ tmuxfix.SocketCall, err error) { readError = err })
 			switch mode {
@@ -1079,7 +1079,7 @@ func TestAdviceFollow_E19_ClaudeFallbackTerminalRetry(t *testing.T) {
 			case "no capability":
 				adapter = struct{ api.SendKeysTmux }{e.rec}
 				advice = "use an adapter with that capability, or send once the row is no longer pending"
-				reason = "the tmux adapter cannot read the agent's terminal mode, which pending Claude fallback input waits on; " + advice
+				reason = "the tmux adapter cannot read the agent's terminal mode, which pending Claude fallback input waits on; nothing was typed, so the same send-keys can be retried later; " + advice
 			}
 			waits := 0
 			sleep := e.env.Sleep
@@ -1132,12 +1132,14 @@ func TestAdviceFollow_E19_ClaudeFallbackTerminalRetry(t *testing.T) {
 			e.clock.Advance(time.Second)
 			e.rec.Reset()
 			e.rec.SetTerminalRaw(r.Socket, r.Spawn.Identity.PaneID, true)
+			e.sessionStartsWhenPolled(t, r, nil)
+			e.env.Sleep = sleep // Each retry has a fresh readiness budget.
 			e.turnStartsAfterEnter(t, r)
 			result, err := e.send(params)
 			if err != nil || result != (api.SendKeysResult{}) {
 				t.Fatalf("same send after condition clears: %+v, %v", result, err)
 			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 1)
+			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 2)
 		})
 	}
 }

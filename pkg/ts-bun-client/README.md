@@ -268,8 +268,9 @@ only a session an earlier launch left behind is found, gets
 
 `allow_pending` preserves native readiness and transcript requirements on
 supported launches; it does not make a startup dialog an ordinary composer.
-For pending Codex fallback and ordinary pending Claude fallback, the bounded
-hook observation and unconfirmed result are described in the caller contract.
+Ordinary pending Claude fallback has a readiness wait, and pending Claude and
+Codex fallback have a hook check; see
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
 `SubmissionUnconfirmedDetails` describes only a failed fallback hook observation:
 `keys_sent: true`, `submission_confirmed: false` and `row_state`. Native
 uncertainty, Claude fallback's `not_started` refusals, Codex fallback failures

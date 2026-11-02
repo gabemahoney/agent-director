@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -216,6 +217,7 @@ func (s *submissionStore) GetSpawnWithin(id string, maxWait time.Duration) (api.
 // submissionEnv extends the shared real-store fixture with an advancing poll clock.
 type submissionEnv struct {
 	*killEnv
+	t     *testing.T
 	s     *submissionStore
 	env   api.SendKeysEnv
 	slept time.Duration
@@ -224,12 +226,17 @@ type submissionEnv struct {
 
 func newSubmissionEnv(t *testing.T) *submissionEnv {
 	t.Helper()
-	e := &submissionEnv{killEnv: newKillEnv(t)}
+	e := &submissionEnv{killEnv: newKillEnv(t), t: t}
 	e.s = &submissionStore{SendKeysStore: e.store}
 	e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) { e.s.sent = true })
 	e.env = api.SendKeysEnv{
 		Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()},
 		Sleep: func(d time.Duration) {
+			// b.qcf: readiness has its own 12s budget; these counters cover only post-Enter observation.
+			if !e.s.sent {
+				e.clock.Advance(d)
+				return
+			}
 			e.waits++
 			e.slept += d
 			if d <= 0 || d > 100*time.Millisecond || e.waits > 20 {
@@ -242,6 +249,14 @@ func newSubmissionEnv(t *testing.T) *submissionEnv {
 }
 
 func (e *submissionEnv) send(p api.SendKeysParams) error {
-	_, err := api.SendKeys(e.s, e.rec, e.env, p)
+	// b.qcf: hook-observation tests first let pending Claude reach its composer.
+	row, err := e.st.GetSpawn(p.InstanceID)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if row.Agent == store.AgentClaude && row.State == store.StatePending && p.Text != "" && !p.NoEnter && p.Key == "" && p.ExpectPaneSHA256 == "" {
+		e.sessionStartsWhenPolled(e.t, killRow{ID: row.InstanceID, Socket: row.Identity.Socket}, nil)
+	}
+	_, err = api.SendKeys(e.s, e.rec, e.env, p)
 	return err
 }

@@ -76,6 +76,7 @@ func legacyRecoveryRead(t *testing.T, s *store.Store, id, token string) store.Pe
 
 func legacyRecoverySend(t *testing.T, e *killEnv, r killRow, now time.Time, token string) verbRun[api.SendKeysResult] {
 	if token == "" && r.Spawn.State == store.StatePending {
+		e.sessionStartsWhenPolled(t, r, nil) // b.qcf: reach the composer before the recovery send.
 		e.turnStartsAfterEnter(t, r)
 	}
 	return runVerb(e, func() (api.SendKeysResult, error) {
@@ -84,9 +85,9 @@ func legacyRecoverySend(t *testing.T, e *killEnv, r killRow, now time.Time, toke
 			params.RequestToken, params.As, params.Key, params.Text = token, "allow", "1", ""
 			params.ExpectPaneSHA256 = api.PaneSHA256("startup dialog\n")
 		}
-		return api.SendKeys(e.store, e.rec, api.SendKeysEnv{Relay: api.RelayView{
+		return api.SendKeys(&submissionStore{SendKeysStore: e.store}, e.rec, api.SendKeysEnv{Relay: api.RelayView{
 			Procs: e.pc, PIDNamespace: func() (string, bool) { return relayNS, true },
-			Now: func() time.Time { return now }, Window: legacyRecoveryWindow}, Sleep: e.sleep}, params)
+			Now: func() time.Time { return now }, Window: legacyRecoveryWindow}, Sleep: func(d time.Duration) { now = now.Add(d); e.sleep(d) }}, params)
 	})
 }
 
@@ -99,8 +100,8 @@ func legacyRecoveryAssertTyped(t *testing.T, e *killEnv, r killRow, run verbRun[
 	reads := 0
 	want := paneSendCalls
 	if r.Spawn.State == store.StatePending {
-		reads = 1
-		want = slices.Insert(slices.Clone(want), 2, tmux.CallPaneTerminal, tmux.CallLookup, tmux.CallListPanes)
+		reads = 2
+		want = slices.Insert(slices.Clone(want), 2, tmux.CallPaneTerminal, tmux.CallPaneTerminal, tmux.CallLookup, tmux.CallListPanes)
 	}
 	if !slices.Equal(paKinds(run.calls), want) {
 		t.Fatalf("plain send calls = %v; want %v", paKinds(run.calls), want)

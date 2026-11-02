@@ -39,17 +39,3 @@ func Open(t testing.TB) (master, slave *os.File) {
 	}
 	return master, slave
 }
-
-// SetRaw disables canonical input, echo and CR-to-NL conversion on slave.
-func SetRaw(t testing.TB, slave *os.File) {
-	t.Helper()
-	term, err := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
-	if err != nil {
-		t.Fatalf("read pty mode: %v", err)
-	}
-	term.Lflag &^= unix.ICANON | unix.ECHO
-	term.Iflag &^= unix.ICRNL
-	if err := unix.IoctlSetTermios(int(slave.Fd()), unix.TCSETS, term); err != nil {
-		t.Fatalf("set raw pty mode: %v", err)
-	}
-}
