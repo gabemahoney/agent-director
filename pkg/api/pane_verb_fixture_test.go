@@ -141,12 +141,16 @@ func (e *killEnv) sendKeys(p api.SendKeysParams) (api.SendKeysResult, error) {
 }
 
 // sendKeysAt is sendKeys with the relay window and guard clock given, for a
-// relay guard judged against permission requests stored at wall-clock time.
+// relay guard judged against permission requests stored at wall-clock time;
+// injected poll sleeps advance that clock without charging tmux fixture costs.
+// The submission-store wrapper keeps virtual poll budgets out of real SQL
+// deadlines; dedicated bounded-read tests opt into those separately.
 // The pid namespace reader is unset, so every relay hook is judged "can't
 // tell" (by its confirm_by), as before relay hooks were judged by process.
 func (e *killEnv) sendKeysAt(window time.Duration, now time.Time, p api.SendKeysParams) (api.SendKeysResult, error) {
-	return api.SendKeys(e.store, e.rec, api.SendKeysEnv{
+	return api.SendKeys(&submissionStore{SendKeysStore: e.store}, e.rec, api.SendKeysEnv{
 		Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return now }, Window: window},
+		Sleep: func(d time.Duration) { now = now.Add(d); e.sleep(d) },
 	}, p)
 }
 
@@ -654,11 +658,22 @@ func assertEnterSent(t *testing.T, rec *tmuxfix.Recorder, socket, paneID string)
 	}
 }
 
-// assertDelivered fails unless the calls were exactly paneSendCalls: text
-// typed into paneID on socket (assertTextSent), then one Enter to paneID.
-func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string) {
+// assertDelivered checks lookup, listing, the specified number of terminal reads
+// (default zero), post-wait ownership checks, literal text, and exactly one
+// Enter to the owned pane. The second lookup/listing is pending Claude's b.qcf guard.
+func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string, terminalReads ...int) {
 	t.Helper()
-	e.assertPaneCalls(t, paneSendCalls...)
+	calls := slices.Clone(paneListedCalls)
+	if len(terminalReads) > 0 {
+		for range terminalReads[0] {
+			calls = append(calls, tmux.CallPaneTerminal)
+		}
+		if terminalReads[0] > 0 {
+			calls = append(calls, paneListedCalls...)
+		}
+	}
+	calls = append(calls, tmux.CallSendText, tmux.CallSendEnter)
+	e.assertPaneCalls(t, calls...)
 	assertTextSent(t, e.rec, socket, paneID, text)
 	assertEnterSent(t, e.rec, socket, paneID)
 }
@@ -998,4 +1013,20 @@ func (e *killEnv) codexExitsAfterEnter(t *testing.T, r killRow, mark *int, sessi
 func pauseDisagrees(t *testing.T, id string) []map[string]any {
 	t.Helper()
 	return verbDisagrees(t, "pause", id)
+}
+
+// turnStartsAfterEnter models Claude's UserPromptSubmit on a successful Enter
+// for tests whose purpose needs a successful pending send (b.qcf).
+func (e *killEnv) turnStartsAfterEnter(t *testing.T, r killRow) {
+	t.Helper()
+	done := false
+	e.rec.AfterCall(tmux.CallSendEnter, func(c tmuxfix.SocketCall, err error) {
+		if done || err != nil || c.Socket != r.Socket || c.Target != r.Spawn.Identity.PaneID {
+			return
+		}
+		done = true
+		if applied := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "UserPromptSubmit", ""); !applied.Applied {
+			t.Fatalf("UserPromptSubmit after Enter: %+v", applied)
+		}
+	})
 }

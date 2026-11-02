@@ -98,6 +98,8 @@ type nativeSubmissionStore struct {
 	sent bool
 	read func(api.Spawn) (api.Spawn, error)
 	get  func(api.Spawn) api.Spawn
+	// reread injects a change at pre-input revalidation, leaving post-Enter reads separate.
+	reread func(api.Spawn) (api.Spawn, error)
 }
 
 func (s *nativeSubmissionStore) GetSpawn(id string) (api.Spawn, error) {
@@ -113,6 +115,9 @@ func (s *nativeSubmissionStore) GetSpawnWithin(id string, _ time.Duration) (api.
 	row, err := s.SendKeysStore.GetSpawn(id)
 	if err == nil && s.sent && s.read != nil {
 		return s.read(row)
+	}
+	if err == nil && !s.sent && s.reread != nil {
+		return s.reread(row)
 	}
 	return row, err
 }
@@ -130,8 +135,8 @@ func newNativeSubmissionEnv(t *testing.T) *nativeSubmissionEnv {
 	e := &nativeSubmissionEnv{killEnv: newKillEnv(t), b: &deliveryBackend{}}
 	e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: time.Nanosecond, Action: time.Nanosecond})
 	e.s = &nativeSubmissionStore{SendKeysStore: e.store}
-	e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
-		if c.Key == "Enter" {
+	e.rec.AfterCall(tmuxfix.AnyCall, func(c tmuxfix.SocketCall, err error) {
+		if err == nil && (c.Call == tmux.CallSendEnter || c.Call == tmux.CallSendKey && c.Key == "Enter") {
 			e.s.sent = true
 		}
 	})
@@ -178,4 +183,65 @@ func ordinaryEnters(e *killEnv) []tmuxfix.SocketCall {
 		}
 	}
 	return result
+}
+
+// submissionStore injects hook/read races only after the keys have been sent.
+type submissionStore struct {
+	api.SendKeysStore
+	sent         bool
+	reads        int
+	read         func(int, api.Spawn) (api.Spawn, error)
+	waits        []time.Duration
+	boundedReads bool
+}
+
+func (s *submissionStore) GetSpawnWithin(id string, maxWait time.Duration) (api.Spawn, error) {
+	s.waits = append(s.waits, maxWait)
+	// Virtual poll budgets must not become real SQL deadlines in semantic tests.
+	read := s.SendKeysStore.GetSpawn
+	if s.boundedReads {
+		read = func(id string) (api.Spawn, error) { return s.SendKeysStore.GetSpawnWithin(id, maxWait) }
+	}
+	row, err := read(id)
+	if err != nil || !s.sent {
+		return row, err
+	}
+	s.reads++
+	if s.read != nil {
+		return s.read(s.reads, row)
+	}
+	return row, nil
+}
+
+// submissionEnv extends the shared real-store fixture with an advancing poll clock.
+type submissionEnv struct {
+	*killEnv
+	s     *submissionStore
+	env   api.SendKeysEnv
+	slept time.Duration
+	waits int
+}
+
+func newSubmissionEnv(t *testing.T) *submissionEnv {
+	t.Helper()
+	e := &submissionEnv{killEnv: newKillEnv(t)}
+	e.s = &submissionStore{SendKeysStore: e.store}
+	e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) { e.s.sent = true })
+	e.env = api.SendKeysEnv{
+		Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()},
+		Sleep: func(d time.Duration) {
+			e.waits++
+			e.slept += d
+			if d <= 0 || d > 100*time.Millisecond || e.waits > 20 {
+				t.Fatalf("submission wait %d = %v; want at most twenty positive waits <= 100ms", e.waits, d)
+			}
+			e.clock.Advance(d)
+		},
+	}
+	return e
+}
+
+func (e *submissionEnv) send(p api.SendKeysParams) error {
+	_, err := api.SendKeys(e.s, e.rec, e.env, p)
+	return err
 }

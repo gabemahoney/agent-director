@@ -87,7 +87,9 @@ func TestPaneVerbBaseIndexOneReachesPaneByID(t *testing.T) {
 		state string
 	}{
 		{apitest.PaneReadPane, "pending"},
-		{apitest.PaneSendKeys, "pending"},
+		// b.qcf: use a live row for targeting/adoption; pending Claude's
+		// raw-mode wait is covered by the send-keys regression test.
+		{apitest.PaneSendKeys, "waiting"},
 		{apitest.PanePause, "waiting"},
 	}
 	for _, tc := range cases {

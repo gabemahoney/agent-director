@@ -252,22 +252,42 @@ func (r *sendKeysRun) stopDelivery(a *inputdelivery.Attempt, reason string) erro
 }
 
 func (r *sendKeysRun) revalidateInput(id inputdelivery.Identity, paneID string, params SendKeysParams) error {
-	row, err := r.s.GetSpawnWithin(id.InstanceID, time.Second)
+	row, err := r.revalidateInputRow(id, time.Second)
 	if err != nil {
-		return fmt.Errorf("launch cannot be reread")
-	}
-	if row.LifeNumber != r.row.LifeNumber || row.Identity.Token != id.Token || row.Identity.Socket != id.Socket {
-		return fmt.Errorf("launch identity changed")
-	}
-	if row.State != store.StatePending && row.State != store.StateWaiting {
-		return fmt.Errorf("ordinary composer is not waiting (state=%s)", row.State)
-	}
-	if row.Identity.PaneID != "" && (row.Identity.PaneID != id.PaneID || row.Identity.PanePID != id.PID || row.Identity.PaneStarttime != id.Starttime) {
-		return fmt.Errorf("native process identity changed")
+		return err
 	}
 	if id.Starttime == "" || r.pc == nil || tmux.JudgeProcess(r.pc, tmux.ProcIdentity{PID: id.PID, Starttime: id.Starttime}) != tmux.ProcAlive {
 		return fmt.Errorf("native process ownership unavailable")
 	}
+	return r.revalidateInputPane(row, paneID, id.PID, params)
+}
+
+// revalidateInputRow is shared by native input and pending Claude fallback:
+// the same life, launch and pane must still have an ordinary composer. It
+// does not require the native adapter's OS process evidence. A successful
+// read returns the observed row even when validation fails; only a failed
+// read returns a zero row, so callers can retain their previous observation.
+func (r *sendKeysRun) revalidateInputRow(id inputdelivery.Identity, maxWait time.Duration) (Spawn, error) {
+	row, err := r.s.GetSpawnWithin(id.InstanceID, maxWait)
+	if err != nil {
+		return Spawn{}, fmt.Errorf("launch cannot be reread")
+	}
+	if row.LifeNumber != r.row.LifeNumber || row.Identity.Token != id.Token || row.Identity.Socket != id.Socket {
+		return row, fmt.Errorf("launch identity changed")
+	}
+	if row.State != store.StatePending && row.State != store.StateWaiting {
+		return row, fmt.Errorf("ordinary composer is not waiting (state=%s)", row.State)
+	}
+	if row.Identity.PaneID != "" && (row.Identity.PaneID != id.PaneID || row.Identity.PanePID != id.PID || row.Identity.PaneStarttime != id.Starttime) {
+		return row, fmt.Errorf("pane process identity changed")
+	}
+	return row, nil
+}
+
+// revalidateInputPane shares the tmux ownership and relay/dialog checks across
+// native input and pending Claude fallback. The caller supplies the launch
+// identity already selected for this send, including any adopted identity.
+func (r *sendKeysRun) revalidateInputPane(row Spawn, paneID string, pid int, params SendKeysParams) error {
 	res := tmux.Lookup(r.t, r.pc, r.launchFor(row.Identity), row.TmuxSessionName)
 	if res.Verdict != tmux.Ours {
 		return fmt.Errorf("exact launch socket/label no longer verified")
@@ -276,7 +296,7 @@ func (r *sendKeysRun) revalidateInput(id inputdelivery.Identity, paneID string, 
 	if err != nil {
 		return fmt.Errorf("pane ownership query failed")
 	}
-	if _, ok := agentPane(panes, paneID, id.PID); !ok {
+	if _, ok := agentPane(panes, paneID, pid); !ok {
 		return fmt.Errorf("owned pane changed")
 	}
 	guard, err := evaluateRelayGuard(r.s, r.j, r.env.IntentHold, row, params)
@@ -400,7 +420,11 @@ func confirmedDelivery(a *inputdelivery.Attempt) SendKeysResult {
 
 func (r *sendKeysRun) recordManualInput() error {
 	if err := recordManualDelivery(r.input, deliveryIdentity(r.row, r.s.StoreID())); err != nil {
-		return deliveryNotStarted(r.row, err.Error())
+		row := r.row
+		if r.terminal != nil {
+			row.State = r.terminalState
+		}
+		return deliveryNotStarted(row, err.Error())
 	}
 	return nil
 }

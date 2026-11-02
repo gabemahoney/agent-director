@@ -151,7 +151,8 @@ type sessionState struct {
 	panes    []SeedPane
 }
 
-// paneKey identifies a capture text: a socket and a pane id.
+// paneKey identifies a capture text or terminal answers: a socket and a pane
+// id.
 type paneKey struct{ socket, pane string }
 
 // autoPIDBase is where auto-assigned pids start: above Linux's
@@ -443,6 +444,23 @@ func (r *Recorder) SetCapture(socket, paneID, text string) *Recorder {
 		r.captures = make(map[paneKey]string)
 	}
 	r.captures[paneKey{socket, paneID}] = text
+	return r
+}
+
+// SetTerminalRaw sets what PaneTerminalRaw answers for paneID on socket: the
+// answers in order, one per call, the last repeating. With none it answers
+// raw (true) on every call, as by default.
+func (r *Recorder) SetTerminalRaw(socket, paneID string, answers ...bool) *Recorder {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.terminals == nil {
+		r.terminals = make(map[paneKey][]bool)
+	}
+	if len(answers) == 0 {
+		delete(r.terminals, paneKey{socket, paneID})
+		return r
+	}
+	r.terminals[paneKey{socket, paneID}] = append([]bool(nil), answers...)
 	return r
 }
 

@@ -6,8 +6,7 @@ package api_test
 // the current launch's own pane by id, the refusals with nothing sent, the
 // no-launch-identity refusals with no tmux call, a row change between the read
 // and the send, and a reuse's read-pane and allow_pending halves. send-keys
-// reads no clock on a pending row (the relay guard alone does, on
-// check_permission), so no case steps it.
+// now waits on raw mode and bounded hook evidence for pending Claude (b.qcf).
 
 import (
 	"testing"
@@ -53,6 +52,7 @@ func skpAssertAdoptedOnce(t *testing.T, before, after adoptionColumns, pane any)
 	}
 }
 
+// b.qcf: delivery without a turn hook is unconfirmed; adoption and targeting stay unchanged.
 // TestSendKeysPendingDelivered: a pending launch of a fresh spawn or a reuse
 // gets the text and Enter in its own pane by id; a lost reply's adoption is
 // written once, and a second send writes nothing more. For a reuse
@@ -109,10 +109,8 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 				pane := pane(t, r, tc.lostReply)
 				cols, before := e.columns(t, r.ID), e.adoption(t, r.ID)
 
-				if err := skpSend(e, r.ID); err != nil {
-					t.Fatalf("SendKeys: %v", err)
-				}
-				e.assertDelivered(t, r.Socket, pane, skpText)
+				assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StatePending)
+				e.assertDelivered(t, r.Socket, pane, skpText, 1)
 				if !tc.lostReply {
 					e.assertRowUnchanged(t, r.ID, cols)
 					return
@@ -121,10 +119,8 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 				skpAssertAdoptedOnce(t, before, after, pane)
 
 				e.rec.Reset()
-				if err := skpSend(e, r.ID); err != nil {
-					t.Fatalf("second SendKeys: %v", err)
-				}
-				e.assertDelivered(t, r.Socket, pane, skpText)
+				assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StatePending)
+				e.assertDelivered(t, r.Socket, pane, skpText, 1)
 				if again := e.adoption(t, r.ID); again != after {
 					t.Errorf("adoption after the second call = %+v; want no further write %+v", again, after)
 				}
@@ -256,6 +252,7 @@ func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 	}
 }
 
+// b.qcf: SessionStart alone does not confirm submission.
 // TestSendKeysPendingRowChangesBeforeSend: on a fresh spawn's or a reuse's
 // pending launch, a gated SessionStart, or a versioned write on a lost reply
 // (the adoption then not applied), between the row read and the send (after
@@ -270,10 +267,8 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 			r := e.seedPending(t, k, pendingOurs)
 			e.sessionStartAfter(t, tmux.CallListPanes, r, "sess-start-"+uuid.NewString()[:8])
 
-			if err := skpSend(e, r.ID); err != nil {
-				t.Fatalf("SendKeys: %v", err)
-			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+			assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StateWaiting)
+			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 1)
 			if got := e.columns(t, r.ID).State; got == store.StatePending {
 				t.Errorf("state after the SessionStart = %v; want the row turned live", got)
 			}
@@ -286,10 +281,8 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 			before := e.adoption(t, r.ID)
 			e.rowWriteAfter(t, tmux.CallListPanes, r)
 
-			if err := skpSend(e, r.ID); err != nil {
-				t.Fatalf("SendKeys: %v", err)
-			}
-			e.assertDelivered(t, r.Socket, pane, skpText)
+			assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StatePending)
+			e.assertDelivered(t, r.Socket, pane, skpText, 1)
 			want := before
 			want.RowVersion++
 			if after := e.adoption(t, r.ID); after != want {
@@ -302,6 +295,7 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 	}
 }
 
+// b.qcf: a liveness note does not confirm submission.
 // TestSendKeysNotedUnreportedRow (b.kdf, CSCB): a pending row find-missing noted unreported is still a pending row
 // to send-keys: refused without allow_pending (ErrSpawnNotInteractive, no tmux call), delivered into its own pane
 // with it; neither call changes the row or its note.
@@ -318,10 +312,8 @@ func TestSendKeysNotedUnreportedRow(t *testing.T) {
 			_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: allow})
 
 			if allow {
-				if err != nil {
-					t.Fatalf("SendKeys: %v", err)
-				}
-				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+				assertSubmissionUnconfirmed(t, err, store.StatePending)
+				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 1)
 			} else {
 				assertOneName(t, err, "ErrSpawnNotInteractive")
 				e.assertNoTmuxCall(t)

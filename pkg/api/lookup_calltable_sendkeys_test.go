@@ -99,6 +99,19 @@ func callTableSendKeysPending() callTableVerb {
 	v.name = "send-keys, pending with allow_pending"
 	v.invoke = sendKeysCallTableInvoke(true)
 	v.cells = maps.Clone(v.cells)
+	// b.qcf: pending Claude reads terminal mode and rechecks ownership before input.
+	for _, outcome := range []callTableOutcome{ctOurs, ctActionRecognised, ctActionTimeout} {
+		cell := v.cells[outcome]
+		cell.calls = slices.Insert(slices.Clone(cell.calls), 2, tmux.CallPaneTerminal, tmux.CallLookup, tmux.CallListPanes)
+		if outcome == ctOurs {
+			cell.errName = "ErrSubmissionUnconfirmed"
+			cell.desc = func(_ *killEnv, r killRow) apitest.DescCase {
+				return apitest.DescCase{Name: "pending Claude submission", Require: []string{r.ID,
+					"Claude Code submission could not be confirmed", "no turn activity was observed within 2 seconds"}}
+			}
+		}
+		v.cells[outcome] = cell
+	}
 	v.cells[ctLeftover] = callTableCell{errName: "ErrSpawnNotInteractive", calls: []tmux.Call{tmux.CallLookup},
 		desc: func(_ *killEnv, r killRow) apitest.DescCase {
 			return apitest.DescSendKeysPendingLeftover(r.ID, []apitest.DescSession{{Name: r.Session.Name, ID: r.Session.ID}})

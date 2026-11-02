@@ -12,6 +12,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 func TestSendKeysPlainLaunchRetainsEstablishedInput(t *testing.T) {
@@ -175,31 +176,274 @@ func TestSendKeysCapabilityLossNeverReplaysNativeAttempt(t *testing.T) {
 	}
 }
 
-func TestSendKeysPendingCodexFallbackKeepsBoundedHookCheck(t *testing.T) {
+// b.qcf: raw mode alone cannot authorize input after the launch or its guards change.
+// Refusals report the last row read, even after readiness succeeds.
+func TestSendKeysPendingClaudeWaitsForRawMode(t *testing.T) {
 	t.Parallel()
-	for _, state := range []string{store.StatePending, store.StateWorking, store.StateEnded} {
-		t.Run(state, func(t *testing.T) {
+	for _, tc := range []struct{ change, state string }{
+		{"unchanged", store.StatePending}, {"waiting", store.StateWaiting},
+		{"life", store.StatePending}, {"token", store.StatePending},
+		{"ended", store.StateEnded}, {"working", store.StateWorking},
+		{"replacement server", store.StateWaiting}, {"relay", store.StateWaiting}, {"dialog", store.StateWaiting},
+		{"reread failure", store.StatePending},
+		{"journal write failure", store.StateWaiting}, {"hook read failure", store.StateWaiting},
+	} {
+		t.Run(tc.change, func(t *testing.T) {
+			t.Parallel()
+			change := tc.change
 			e := newNativeSubmissionEnv(t)
-			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-			e.env.Input = nil
-			e.rec.AfterCall(tmux.CallSendEnter, func(_ tmuxfix.SocketCall, _ error) { e.s.sent = true })
-			e.s.read = func(row api.Spawn) (api.Spawn, error) { row.State = state; return row, nil }
+			r := e.seedRow(t, killRowSpec{State: store.StatePending, RelayOn: change == "relay" || change == "dialog"})
+			e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
+			// A finished earlier attempt makes premature manual journalling observable.
+			if change != "unchanged" {
+				e.b.current = &api.InputDeliveryAttempt{RequestID: "earlier", Phase: "not_started"}
+			}
+			prior := cloneAttempt(e.b.current)
+			e.rec.SetTerminalRaw(r.Socket, r.Spawn.Identity.PaneID, false, false, true)
+			reads := 0
+			e.rec.AfterCall(tmux.CallPaneTerminal, func(c tmuxfix.SocketCall, err error) {
+				reads++
+				if err != nil || c.Socket != r.Socket || c.Target != r.Spawn.Identity.PaneID {
+					t.Fatalf("terminal read = %+v, %v; want the selected pane", c, err)
+				}
+				e.assertNothingSent(t)
+				if !reflect.DeepEqual(e.b.current, prior) || len(e.b.history) != 0 {
+					t.Fatal("input journalled before raw mode")
+				}
+			})
+			e.rec.AfterCall(tmux.CallSendText, func(_ tmuxfix.SocketCall, _ error) {
+				if reads != 3 {
+					t.Fatalf("text sent after %d terminal reads; want the first raw answer", reads)
+				}
+			})
+			before := e.columns(t, r.ID)
+			sleep := e.env.Sleep
+			changed := false
+			reason := ""
+			journalWrites, hookReads, waitingReads := 0, 0, 0
+			e.env.Sleep = func(d time.Duration) {
+				sleep(d)
+				if changed {
+					return
+				}
+				changed = true
+				if tc.state == store.StateWaiting {
+					if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", "raw-wait-session"); !a.Applied {
+						t.Fatalf("SessionStart during wait: %+v", a)
+					}
+				}
+				switch change {
+				case "life", "token":
+					e.s.reread = func(row api.Spawn) (api.Spawn, error) {
+						if change == "life" {
+							row.LifeNumber++
+						} else {
+							row.Identity.Token = tmuxfix.OtherToken
+						}
+						return row, nil
+					}
+					reason = "launch identity changed"
+				case "ended", "working":
+					event := "SessionEnd"
+					if change == "working" {
+						event = "UserPromptSubmit"
+					}
+					if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, event, "raw-wait-session"); !a.Applied {
+						t.Fatalf("%s during wait: %+v", event, a)
+					}
+					reason = "ordinary composer is not waiting (state=" + tc.state + ")"
+				case "reread failure":
+					e.s.reread = func(row api.Spawn) (api.Spawn, error) {
+						row.State = store.StateWaiting // Data accompanying a failed read is not an observation.
+						return row, errors.New("injected read failure")
+					}
+					reason = "launch cannot be reread"
+				case "journal write failure", "hook read failure":
+					// b.qcf: both failures must retain waiting from this successful reread.
+					e.s.reread = func(row api.Spawn) (api.Spawn, error) {
+						if row.State != store.StateWaiting {
+							t.Fatalf("readiness reread state=%q; want waiting", row.State)
+						}
+						waitingReads++
+						return row, nil
+					}
+					if change == "journal write failure" {
+						e.b.save = func(*api.InputDeliveryAttempt) error {
+							journalWrites++
+							return errors.New("injected journal write failure")
+						}
+					}
+				case "replacement server":
+					e.rec.RestartServer(r.Socket, tmuxfix.Server{})
+					e.syncServers()
+					e.seedOther(t, r.Socket, tmuxfix.SeedSession{
+						Name: "unrelated-after-restart", Label: r.otherStore(tmuxfix.OtherToken),
+						Panes: []tmuxfix.SeedPane{{ID: r.Spawn.Identity.PaneID, PID: e.newPID()}},
+					})
+					reason = "exact launch socket/label no longer verified"
+				case "relay", "dialog":
+					opts := []apitest.PermissionOption{apitest.PermissionTimes(e.clock.Now(), time.Time{}, time.Time{}, time.Time{}, time.Time{}, "")}
+					want := api.ErrSendKeysWhileRelayed
+					if change == "dialog" {
+						opts = append(opts, apitest.PermissionAnswer(store.PaneAnswerOutside))
+						want = api.ErrDialogMaybeOpen
+					}
+					if _, err := apitest.SeedPermissionRequest(e.dbPath, r.ID, "Bash", opts...); err != nil {
+						t.Fatal(err)
+					}
+					_, refusal, err := api.EvaluateRelayGuardForTest(e.store, e.env.Relay, 0, r.Spawn, api.SendKeysParams{InstanceID: r.ID})
+					if err != nil || !errors.Is(refusal, want) {
+						t.Fatalf("new guard = %v, %v; want %v", refusal, err, want)
+					}
+					reason = "permission or dialog guard no longer permits ordinary input"
+				}
+				before = e.columns(t, r.ID)
+			}
+			if change == "hook read failure" {
+				e.s.read = func(api.Spawn) (api.Spawn, error) {
+					hookReads++
+					return api.Spawn{}, errors.New("injected post-Enter read failure")
+				}
+			} else {
+				e.turnStartsAfterEnter(t, r)
+			}
 			result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-			if state == store.StateWorking {
-				if err != nil || result != (api.SendKeysResult{}) {
-					t.Fatalf("hook activity result=%+v err=%v", result, err)
+			if !changed || reads != 3 || e.slept != 200*time.Millisecond {
+				t.Fatalf("changed=%v reads=%d waits=%v; want a change during two polls then raw", changed, reads, e.slept)
+			}
+			if change == "journal write failure" || change == "hook read failure" {
+				if waitingReads != 1 {
+					t.Fatalf("waiting rereads=%d; want one successful readiness reread", waitingReads)
+				}
+			}
+			if change == "unchanged" || change == "waiting" || change == "hook read failure" {
+				if change == "hook read failure" {
+					assertSubmissionUnconfirmed(t, err, store.StateWaiting)
+					if hookReads != 1 {
+						t.Fatalf("hook reads=%d; want failure on the first post-Enter read", hookReads)
+					}
+					e.assertRowUnchanged(t, r.ID, before)
+				} else if err != nil {
+					t.Fatalf("fallback failed: %v", err)
+				}
+				if result != (api.SendKeysResult{}) {
+					t.Fatalf("fallback result=%+v err=%v", result, err)
+				}
+				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 3)
+				if change != "unchanged" && (e.b.current == nil || e.b.current.Phase != "manual_input" || len(e.b.history) != 1) {
+					t.Fatalf("ready fallback did not journal manual input: current=%+v history=%+v", e.b.current, e.b.history)
+				}
+				for _, call := range e.rec.SocketCallsOf(tmux.CallSendText) {
+					if call.Paste {
+						t.Fatal("Claude fallback changed literal transport to paste")
+					}
 				}
 			} else {
 				assertOneName(t, err, "ErrSubmissionUnconfirmed")
-				d, ok := api.ErrDetails(err).(api.SubmissionUnconfirmedDetails)
-				if !ok || !d.KeysSent || d.SubmissionConfirmed || d.RowState != state {
-					t.Fatalf("legacy uncertainty details=%+v err=%v", api.ErrDetails(err), err)
+				want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: tc.state,
+					Reason: reason + "; nothing was typed, so the same send-keys can be retried later"}
+				if change == "journal write failure" {
+					want.Reason = "cannot persist manual input intent"
+					if journalWrites != 1 {
+						t.Fatalf("journal writes=%d; want one failed post-readiness write", journalWrites)
+					}
+				}
+				e.assertNothingSent(t)
+				e.assertNoCalls(t, tmux.CallSendKey)
+				if !reflect.DeepEqual(e.b.current, prior) || len(e.b.history) != 0 || e.s.sent {
+					t.Fatal("refusal journalled or sent input")
+				}
+				e.assertRowUnchanged(t, r.ID, before)
+				if got := api.ErrDetails(err); got != want {
+					t.Fatalf("refusal=%+v; want %+v", got, want)
 				}
 			}
-			if state == store.StatePending && e.slept != 2*time.Second {
-				t.Fatalf("hook observation bound=%v; want 2s", e.slept)
-			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
 		})
+	}
+}
+
+// b.qcf: neither a late raw reply nor slow revalidation may authorize input.
+// Each terminal read receives what remains of the original 12-second budget.
+func TestSendKeysPendingClaudeReadinessDeadline(t *testing.T) {
+	t.Parallel()
+	for _, stage := range []string{"raw reply", "row reread", "ownership lookup"} {
+		for _, elapsed := range []time.Duration{12 * time.Second, 12500 * time.Millisecond} {
+			t.Run(stage+"/"+elapsed.String(), func(t *testing.T) {
+				t.Parallel()
+				e := newNativeSubmissionEnv(t)
+				r := e.seedRow(t, killRowSpec{State: store.StatePending})
+				before := e.columns(t, r.ID)
+				e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
+				e.b.current = &api.InputDeliveryAttempt{RequestID: "earlier", Phase: "not_started"}
+				prior := cloneAttempt(e.b.current)
+				e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: time.Nanosecond, Action: 2 * time.Second})
+				e.rec.SetTerminalRaw(r.Socket, r.Spawn.Identity.PaneID, false, false, false, false, false, true)
+				// A late raw reply never rereads the row; later refusals have observed waiting.
+				sleep := e.env.Sleep
+				changed := false
+				e.env.Sleep = func(d time.Duration) {
+					sleep(d)
+					if !changed {
+						changed = true
+						if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", "raw-wait-session"); !a.Applied {
+							t.Fatalf("SessionStart during wait: %+v", a)
+						}
+						before = e.columns(t, r.ID)
+					}
+				}
+				var start time.Time
+				reads := 0
+				e.rec.AfterCall(tmux.CallPaneTerminal, func(c tmuxfix.SocketCall, err error) {
+					if start.IsZero() {
+						start = e.clock.Now().Add(-2 * time.Second)
+					}
+					wantBudget := 12*time.Second - time.Duration(reads)*2100*time.Millisecond
+					if err != nil || c.MaxWait != wantBudget || c.MaxWait <= 0 {
+						t.Fatalf("read %d: %+v, %v; want allowance %v", reads+1, c, err, wantBudget)
+					}
+					reads++
+					if reads == 5 {
+						cost := 500 * time.Millisecond // raw at 11s, leaving time for revalidation
+						if stage == "raw reply" {
+							cost = elapsed - 10500*time.Millisecond
+						}
+						e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: time.Nanosecond, Action: cost})
+					}
+				})
+				if stage == "row reread" {
+					e.s.reread = func(row api.Spawn) (api.Spawn, error) {
+						e.clock.Advance(start.Add(elapsed).Sub(e.clock.Now()))
+						return row, nil
+					}
+				}
+				if stage == "ownership lookup" {
+					e.rec.AfterCall(tmux.CallLookup, func(_ tmuxfix.SocketCall, _ error) {
+						if reads == 6 {
+							e.clock.Advance(start.Add(elapsed).Sub(e.clock.Now()))
+						}
+					})
+				}
+				_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+				assertOneName(t, err, "ErrSubmissionUnconfirmed")
+				lastState := store.StateWaiting
+				if stage == "raw reply" {
+					lastState = store.StatePending
+				}
+				want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: lastState,
+					Reason: "the agent's terminal did not take raw input with its launch and guards verified within 12 seconds; nothing was typed, so the same send-keys can be retried later"}
+				if got := api.ErrDetails(err); got != want {
+					t.Fatalf("refusal=%+v; want %+v", got, want)
+				}
+				if reads != 6 {
+					t.Fatalf("terminal reads=%d; want six", reads)
+				}
+				e.assertNothingSent(t)
+				e.assertNoCalls(t, tmux.CallSendKey)
+				if !reflect.DeepEqual(e.b.current, prior) || len(e.b.history) != 0 || e.s.sent {
+					t.Fatal("late readiness journalled or sent input")
+				}
+				e.assertRowUnchanged(t, r.ID, before)
+			})
+		}
 	}
 }

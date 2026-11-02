@@ -68,13 +68,6 @@ finished-row call is a no-op without checking the process; it is not proof
 of exit. `missing` is a judgement on available evidence, not an
 exit proof. Follow the sequence below before relaunching an id.
 
-A pending row noted `unreported` has an alive agent with no applied hook
-since launch. Read its pane, then type with `allow_pending` only after a
-person or an LLM judged that screen. A caller that cannot judge it uses the
-live-row sequence or hands it to a human. Cursor admits no prompt until its conversation is confirmed; `allow_pending`
-does not override that admission rule. Hook configuration diagnosis is
-in [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
-
 To end a live row (`pending` included) and relaunch its id:
 
 1. `agent-director kill --instance-id <id>`; on an error follow its
@@ -96,6 +89,23 @@ To end a live row (`pending` included) and relaunch its id:
      `agent-director spawn --instance-id <id> --reuse-finished --agent <agent> --cwd <dir>`
 
    A caller whose ids agent-director mints spawns fresh instead.
+
+## Pending rows and startup screens
+
+A pending row noted `unreported` has an alive agent with no applied hook
+since launch. Read its pane, then type with `allow_pending` only after a
+person or an LLM judged that screen. A caller that cannot judge it uses the
+live-row sequence or hands it to a human. Cursor admits no prompt until its conversation is confirmed; `allow_pending`
+does not override that admission rule. Hook configuration diagnosis is
+in [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
+
+On a `pending` Claude or Codex row using fallback delivery, text with Enter
+that answers a startup screen starts no turn. The call returns
+`ErrSubmissionUnconfirmed` with `keys_sent: true` even when the screen accepted
+it: read the pane and `status` instead of resending. Answer single-key choices
+with `key` (including `key: "Enter"`), which takes neither the readiness wait
+nor the hook check. A Claude Enter-only send also bypasses both.
+For Codex Enter-only sends, see [Manual input ownership](#manual-input-ownership).
 
 ## Experimental context fullness
 
@@ -388,13 +398,31 @@ When native capability is unavailable, including other versions, platforms,
 resumed conversations or unsupported launch arguments, ordinary Codex input
 uses one paste followed by one Enter; other agents retain literal text plus
 Enter. Paste framing requires the application to have enabled bracketed paste;
-it does not establish composer readiness. Fallback success returns an empty
-object, without exact transcript confirmation. A pending Codex row is
-observed for up to 2 s for hook-derived `working`, `ask_user` or
-`check_permission` state. If that activity is not observed, the call returns
+it does not establish composer readiness.
+
+For ordinary Claude fallback input read as `pending`, `send-keys` waits for the
+agent's terminal to take raw input. After readiness, it rechecks the same launch,
+a `pending` or `waiting` state, ownership of the tmux server, session and pane,
+and permission-relay and dialog guards. Readiness and revalidation share one
+12 s deadline; an in-flight check can make the call return later.
+An unavailable terminal-mode capability, a failed read or check, or a missed
+deadline returns `ErrSubmissionUnconfirmed` with `outcome: "not_started"`:
+nothing was typed.
+Claude fallback sends read in a live state, Enter-only, `no_enter`, `key` and
+pane-hash sends do not take this readiness path.
+
+After a successful transport, pending Codex fallback and the pending Claude
+path above are observed for up to 2 s for hook-derived `working`, `ask_user`
+or `check_permission` state on the same launch. Success returns `{}`: a turn
+was seen to start, without exact transcript confirmation. If that activity
+is not observed, the call returns
 `ErrSubmissionUnconfirmed` with `keys_sent: true`,
 `submission_confirmed: false` and `row_state`, without an `outcome`.
+For these refusals and failed hook observations, `row_state` is the last state
+the call read successfully, even when that state caused the refusal.
 Missing hooks can leave submission unknown even when input reached the agent.
+Other fallback success returns `{}` without this hook confirmation; Cursor's
+verdict is described below.
 
 Codex fallback accepts literal TAB and LF inside the paste. Codex may trim
 trailing whitespace, including TAB, before submission. It refuses invalid
@@ -448,8 +476,9 @@ request discovers late proof for its predecessor,
 it reports `not_started`; re-issue the new request only after the predecessor
 has settled.
 
-Native delivery, Codex fallback refusals or paste-transport failures, and
-Cursor gateway refusals use these `ErrSubmissionUnconfirmed` details:
+Native delivery, Claude fallback refusals before input, Codex fallback refusals
+or paste-transport failures, and Cursor gateway refusals use these
+`ErrSubmissionUnconfirmed` details:
 
 | Field | Meaning |
 |---|---|

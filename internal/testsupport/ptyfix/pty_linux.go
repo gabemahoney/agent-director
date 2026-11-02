@@ -1,6 +1,8 @@
 //go:build linux
 
-package main_test
+// Package ptyfix provides real pseudo-terminals for CLI and terminal-mode
+// tests (reusable test fixture), extracted from the CLI's openPTY for b.qcf.
+package ptyfix
 
 import (
 	"fmt"
@@ -11,9 +13,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// openPTY opens a real pseudo-terminal pair through /dev/ptmx and fails the
+// Open opens a real pseudo-terminal pair through /dev/ptmx and fails the
 // test unless the slave reads as a terminal; both ends close at cleanup.
-func openPTY(t *testing.T) (master, slave *os.File) {
+func Open(t testing.TB) (master, slave *os.File) {
 	t.Helper()
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
 	if err != nil {
@@ -36,4 +38,18 @@ func openPTY(t *testing.T) (master, slave *os.File) {
 		t.Fatalf("pty slave is not a terminal: %v", err)
 	}
 	return master, slave
+}
+
+// SetRaw disables canonical input, echo and CR-to-NL conversion on slave.
+func SetRaw(t testing.TB, slave *os.File) {
+	t.Helper()
+	term, err := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
+	if err != nil {
+		t.Fatalf("read pty mode: %v", err)
+	}
+	term.Lflag &^= unix.ICANON | unix.ECHO
+	term.Iflag &^= unix.ICRNL
+	if err := unix.IoctlSetTermios(int(slave.Fd()), unix.TCSETS, term); err != nil {
+		t.Fatalf("set raw pty mode: %v", err)
+	}
 }

@@ -56,6 +56,7 @@ type Recorder struct {
 	changes     []*sessionChange
 	afterHooks  []afterHook
 	captures    map[paneKey]string
+	terminals   map[paneKey][]bool
 	clock       *Clock
 	timeouts    tmux.Timeouts
 	nextPID     int // last auto-assigned server or pane pid
@@ -90,7 +91,8 @@ func (r *Recorder) CallsOfKind(kind CallKind) []Call {
 }
 
 // Reset discards all recorded calls (name-based and socket-taking) and every
-// scripted typed result. Session tables, capture texts, hooks and virtual time stay.
+// scripted typed result. Session tables, capture texts, terminal answers,
+// hooks and virtual time stay.
 func (r *Recorder) Reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

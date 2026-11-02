@@ -62,8 +62,9 @@ func TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys(t *testing.T) {
 		t.Fatalf("ReadPane = %q, %v; want the row's pane %q", got.Pane, err, paneText(r.Socket, pane))
 	}
 	e.rec.Reset()
+	e.turnStartsAfterEnter(t, r) // b.qcf: the inspected worker accepts its prompt.
 	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}); err != nil {
 		t.Fatalf("SendKeys with allow_pending: %v", err)
 	}
-	e.assertDelivered(t, r.Socket, pane, skpText)
+	e.assertDelivered(t, r.Socket, pane, skpText, 1)
 }

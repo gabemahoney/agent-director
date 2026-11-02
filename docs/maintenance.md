@@ -106,8 +106,10 @@ agent-director read-pane --instance-id <id>
 agent-director send-keys --instance-id <id> --allow-pending --text "<answer>"
 ```
 
-A caller that cannot judge the pane follows the
-[caller contract](caller-contract.md).
+A text answer to a Claude or Codex fallback startup screen returns
+`ErrSubmissionUnconfirmed`; for startup-screen answers and callers that cannot
+judge the pane, follow the
+[pending-row recovery](caller-contract.md#pending-rows-and-startup-screens).
 
 A row with `relay_mode=on` stays in `check_permission` until the agent's
 next hook after its last permission request. A request answered at the

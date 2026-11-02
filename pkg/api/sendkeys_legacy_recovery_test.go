@@ -14,6 +14,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -73,7 +74,10 @@ func legacyRecoveryRead(t *testing.T, s *store.Store, id, token string) store.Pe
 	return pr
 }
 
-func legacyRecoverySend(e *killEnv, r killRow, now time.Time, token string) verbRun[api.SendKeysResult] {
+func legacyRecoverySend(t *testing.T, e *killEnv, r killRow, now time.Time, token string) verbRun[api.SendKeysResult] {
+	if token == "" && r.Spawn.State == store.StatePending {
+		e.turnStartsAfterEnter(t, r)
+	}
 	return runVerb(e, func() (api.SendKeysResult, error) {
 		params := api.SendKeysParams{InstanceID: r.ID, Text: "continue", AllowPending: r.Spawn.State == store.StatePending}
 		if token != "" {
@@ -82,7 +86,7 @@ func legacyRecoverySend(e *killEnv, r killRow, now time.Time, token string) verb
 		}
 		return api.SendKeys(e.store, e.rec, api.SendKeysEnv{Relay: api.RelayView{
 			Procs: e.pc, PIDNamespace: func() (string, bool) { return relayNS, true },
-			Now: func() time.Time { return now }, Window: legacyRecoveryWindow}}, params)
+			Now: func() time.Time { return now }, Window: legacyRecoveryWindow}, Sleep: e.sleep}, params)
 	})
 }
 
@@ -92,10 +96,16 @@ func legacyRecoveryAssertTyped(t *testing.T, e *killEnv, r killRow, run verbRun[
 		t.Fatalf("b.w21 plain send must recover automatically: %v (ErrSendKeysWhileRelayed=%v ErrRelayFallenBack=%v)",
 			run.err, errors.Is(run.err, api.ErrSendKeysWhileRelayed), errors.Is(run.err, api.ErrRelayFallenBack))
 	}
-	if !slices.Equal(paKinds(run.calls), paneSendCalls) {
-		t.Fatalf("plain send calls = %v; want %v", paKinds(run.calls), paneSendCalls)
+	reads := 0
+	want := paneSendCalls
+	if r.Spawn.State == store.StatePending {
+		reads = 1
+		want = slices.Insert(slices.Clone(want), 2, tmux.CallPaneTerminal, tmux.CallLookup, tmux.CallListPanes)
 	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "continue")
+	if !slices.Equal(paKinds(run.calls), want) {
+		t.Fatalf("plain send calls = %v; want %v", paKinds(run.calls), want)
+	}
+	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "continue", reads)
 }
 
 func legacyRecoveryAssertVerdict(t *testing.T, before, after store.PermissionRow) {
@@ -120,7 +130,7 @@ func TestLegacyRecoveryAlreadyStuckStore(t *testing.T) {
 				r := e.seedRow(t, killRowSpec{State: state, RelayOn: true})
 				token := legacyRecoveryRequest(t, e, r.ID, v.decision, v.reason, store.ProvenGoneAgentGone)
 				before := legacyRecoveryRead(t, e.st, r.ID, token)
-				legacyRecoveryAssertTyped(t, e, r, legacyRecoverySend(e, r, e.clock.Now(), ""))
+				legacyRecoveryAssertTyped(t, e, r, legacyRecoverySend(t, e, r, e.clock.Now(), ""))
 				legacyRecoveryAssertVerdict(t, before, legacyRecoveryRead(t, e.st, r.ID, token))
 			})
 		}
@@ -141,7 +151,7 @@ func TestLegacyRecoveryExpiredVerdicts(t *testing.T) {
 				token := legacyRecoveryRequest(t, e, r.ID, v.decision, v.reason, store.ProvenGoneAgentGone)
 				before := legacyRecoveryRead(t, e.st, r.ID, token)
 				now := before.CreatedAt.Add(legacyRecoveryWindow + 2*time.Second + beyond)
-				legacyRecoveryAssertTyped(t, e, r, legacyRecoverySend(e, r, now, ""))
+				legacyRecoveryAssertTyped(t, e, r, legacyRecoverySend(t, e, r, now, ""))
 				legacyRecoveryAssertVerdict(t, before, legacyRecoveryRead(t, e.st, r.ID, token))
 			})
 		}
@@ -165,7 +175,7 @@ func TestLegacyRecoveryTokenCannotAnswerGoneAgent(t *testing.T) {
 			token := legacyRecoveryRequest(t, e, r.ID, v.decision, v.reason, store.ProvenGoneAgentGone)
 			before := legacyRecoveryRead(t, e.st, r.ID, token)
 			e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "startup dialog\n")
-			run := legacyRecoverySend(e, r, before.CreatedAt.Add(legacyRecoveryWindow+3*time.Second), token)
+			run := legacyRecoverySend(t, e, r, before.CreatedAt.Add(legacyRecoveryWindow+3*time.Second), token)
 			if !errors.Is(run.err, v.want) || len(run.calls) != 0 {
 				t.Fatalf("gone-agent token send = %v, calls %v; want %v, zero keys", run.err, paKinds(run.calls), v.want)
 			}
@@ -223,7 +233,7 @@ func TestLegacyRecoveryKeepsCurrentRequestHeld(t *testing.T) {
 				if named {
 					sendToken = token
 				}
-				run := legacyRecoverySend(e, r, e.clock.Now(), sendToken)
+				run := legacyRecoverySend(t, e, r, e.clock.Now(), sendToken)
 				if !errors.Is(run.err, api.ErrSendKeysWhileRelayed) || !strings.Contains(errText(run.err), token) || len(run.calls) != 0 {
 					t.Fatalf("current request named=%v: %v, calls %v; want ErrSendKeysWhileRelayed naming %s, zero keys", named, run.err, paKinds(run.calls), token)
 				}
@@ -287,7 +297,7 @@ func TestLegacyRecoveryCloseResumeAndSessionStart(t *testing.T) {
 					}
 					r.Spawn.State = state
 					e.rec.Reset()
-					legacyRecoveryAssertTyped(t, e, r, legacyRecoverySend(e, r, e.clock.Now(), ""))
+					legacyRecoveryAssertTyped(t, e, r, legacyRecoverySend(t, e, r, e.clock.Now(), ""))
 					after := legacyRecoveryRead(t, e.st, r.ID, token)
 					legacyRecoveryAssertVerdict(t, before, after)
 					if !after.Closed() || !after.ClosedAt.Equal(closed.ClosedAt) {
@@ -309,7 +319,7 @@ func TestLegacyRecoveryPreservesCurrentFallback(t *testing.T) {
 		ToolName: "Bash", ToolInput: `{}`, Hook: relayEnvHook, SettledAt: e.clock.Now().Add(time.Hour)})
 	e.pc.Set(relayEnvHook.PID, procfix.Gone())
 	now := legacyRecoveryRead(t, e.st, r.ID, old).CreatedAt.Add(legacyRecoveryWindow + 2*time.Second)
-	run := legacyRecoverySend(e, r, now, "")
+	run := legacyRecoverySend(t, e, r, now, "")
 	if !errors.Is(run.err, api.ErrRelayFallenBack) || len(run.calls) != 0 {
 		t.Fatalf("current fallback = %v, calls %v; want ErrRelayFallenBack, zero keys", run.err, paKinds(run.calls))
 	}
