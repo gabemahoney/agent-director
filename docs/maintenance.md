@@ -98,16 +98,16 @@ rows are in `unverified_ids`, each with `liveness_unverified_since` and
 `liveness_note` in `list` and `get`.
 
 Past its grace period, a `pending` row whose agent runs but has not reported
-in stays `pending` with `liveness_note` `unreported`. Read the pane, then type
-only if you looked at it:
+in stays `pending` with `liveness_note` `unreported`. Read the pane, then answer
+a startup choice only after judging the screen:
 
 ```sh
 agent-director read-pane --instance-id <id>
-agent-director send-keys --instance-id <id> --allow-pending --text "<answer>"
+agent-director send-keys --instance-id <id> --allow-pending --key <key>
 ```
 
-A caller that cannot judge the pane follows the
-[caller contract](caller-contract.md).
+For text answers, readiness waits and callers that cannot judge the pane, follow
+[pending-row recovery](caller-contract.md#pending-rows-and-startup-screens).
 
 A row with `relay_mode=on` stays in `check_permission` until the agent's
 next hook after its last permission request. A request answered at the

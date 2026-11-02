@@ -425,9 +425,10 @@ capability separately from readiness: an unsupported launch retains literal text
 and one Enter with no exact-proof result, while a supported launch lacking
 readiness attempts no input. Compatibility regressions in
 `sendkeys_compatibility_regression_test.go` cover the existing state, relay and
-dialog refusals before native selection, bounded pending-Codex hook observation,
-and unresolved native ownership blocking fallback resends. Tests of manual
-transport should explicitly choose a manual operation.
+dialog refusals before native selection, pending Claude terminal readiness and
+hook observation, and unresolved native ownership blocking fallback resends.
+`sendkeys_submission_test.go` covers bounded pending Codex and Claude hook
+observation. Tests of manual transport should explicitly choose a manual operation.
 
 Native adapter tests in `internal/inputdelivery` use private temporary launch
 manifests and native JSONL records. Reuse `evidenceSession`, `claudeRecord`,

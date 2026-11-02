@@ -132,7 +132,7 @@ func TestLegacyRecoveryMigratedV6Store(t *testing.T) {
 		}
 		r.Spawn.State = state
 		e.rec.Reset()
-		legacyRecoveryAssertTyped(t, e, r, legacyRecoverySend(e, r, e.clock.Now(), ""))
+		legacyRecoveryAssertTyped(t, e, r, legacyRecoverySend(t, e, r, e.clock.Now(), ""))
 		legacyRecoveryAssertVerdict(t, before, legacyRecoveryRead(t, migrated, r.ID, token))
 	}
 }

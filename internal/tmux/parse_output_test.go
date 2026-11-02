@@ -97,6 +97,22 @@ func TestParseCaptureUnchanged(t *testing.T) {
 	}
 }
 
+// b.qcf: reject malformed terminal paths before opening them. In particular,
+// /dev//null resolves to a device, but must fail parsing rather than ioctl.
+func TestPaneTerminalRawRejectsPath(t *testing.T) {
+	for _, reply := range []string{"", "pts/1\n", "/tmp/tty\n", "/dev\n", "/dev/\n", "/dev/../dev/null\n", "/dev//null\n", "/dev/./null\n"} {
+		t.Run(strconv.Quote(reply), func(t *testing.T) {
+			c, runner := newScripted(t, exitZero(reply))
+			raw, err := c.PaneTerminalRaw(testSocket, "%3", testTimeouts.Action+testTimeouts.WaitDelay)
+			ce := parseWantFailure(t, err, tmux.CallPaneTerminal, tmux.FailUnrecognized)
+			if raw || ce.FirstLine != "pane terminal is not an absolute /dev/ path" {
+				t.Errorf("raw=%v FirstLine=%q; want false and fixed malformed-path diagnosis", raw, ce.FirstLine)
+			}
+			runner.Only()
+		})
+	}
+}
+
 // TestParseDataOnlyFromExitZero checks stdout that would parse is ignored for
 // a non-zero exit: the failure comes from stderr (empty here; exec_mechanics'
 // TestExecStreamsSeparate has a recognised reply) and no data is returned.

@@ -246,7 +246,7 @@ success and make no exact transcript-confirmation claim. Manual
 operations (`no_enter`, `key`, empty text, pane hashes and permission answers)
 return an empty object on success; their input-ownership refusals are in
 [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
-Supported launches, Codex fallback paste and input restrictions, omitted-ID
+Supported launches, fallback readiness and input restrictions, omitted-ID
 behavior, structured outcomes and recovery are in
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
 Allow sufficient `callTimeoutMs` for that delivery window; a timeout does not
@@ -255,8 +255,10 @@ with `outcome: "gateway_refused"`; see
 [Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes).
 
 Pass `allow_pending: true` to also allow a `pending` row: a launch (spawn,
-reuse or resume) whose agent has not reported in yet, for example to dismiss a
-prompt the agent shows before it reports in. Keys are delivered only to a
+reuse or resume) whose agent has not reported in yet, for example to answer a
+startup choice with `key` (including `key: "Enter"`). See
+[pending startup screens](../../docs/caller-contract.md#pending-rows-and-startup-screens)
+for text answers and Enter-only sends. Keys are delivered only to a
 session started by the row's current launch. `ended` and `missing` rows are
 rejected, including retries of an existing delivery request. State, relay and
 dialog guards precede native capability selection and request reconciliation.
@@ -266,13 +268,15 @@ only a session an earlier launch left behind is found, gets
 
 `allow_pending` preserves native readiness and transcript requirements on
 supported launches; it does not make a startup dialog an ordinary composer.
-For fallback input to a pending Codex row, the bounded hook-state observation
-and its unconfirmed result are described in the caller contract.
+Ordinary pending Claude fallback has a readiness wait, and pending Claude and
+Codex fallback have a hook check; see
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
 `SubmissionUnconfirmedDetails` describes only a failed fallback hook observation:
 `keys_sent: true`, `submission_confirmed: false` and `row_state`. Native
-uncertainty, Codex fallback failures and Cursor gateway refusals carry additional
-runtime fields, including `outcome`, `phase`, `bytes_attempted`,
-`enter_may_have_been_sent` and `reason`; native attempts can also carry
+uncertainty, Claude fallback's `not_started` refusals, Codex fallback failures
+and Cursor gateway refusals carry additional runtime fields, including
+`outcome`, `phase`, `bytes_attempted`, `enter_may_have_been_sent` and `reason`;
+native attempts can also carry
 `request_id` and `last_queue`.
 Read these through `AgentDirectorError.errDetails`, whose type is
 `Readonly<Record<string, unknown>> | null`, and check their values; see
@@ -281,7 +285,7 @@ for the fields and recovery.
 
 `liveness_note: "unreported"` means an alive agent has not reported since
 launch. Action on a pending row belongs to the
-[caller contract](../../docs/caller-contract.md#caller-contract).
+[caller contract](../../docs/caller-contract.md#pending-rows-and-startup-screens).
 
 ### readPane
 
@@ -584,8 +588,8 @@ carry one, typed as exported interfaces: `ErrRelayFallenBack`
 (`DialogMaybeOpenDetails`), `ErrPauseTimeout` (`PauseTimeoutDetails`) and
 `ErrSubmissionUnconfirmed`
 (`SubmissionUnconfirmedDetails`, for failed fallback hook observation).
-Native, fallback paste and Cursor gateway facts remain available through the
-generic `errDetails` record. So does the `ErrInternal` of a
+Native, Claude readiness, Codex paste and Cursor gateway facts remain available
+through the generic `errDetails` record. So does the `ErrInternal` of a
 pane answer whose key was sent but not recorded (`PaneKeySentDetails`:
 `key_sent` `true` and `request_token`). Read facts from `errDetails`, never
 from `errDescription`.
@@ -670,7 +674,7 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 |---|---|
 | `ErrSpawnNotFound` | No spawn row matches the supplied `instance_id`. |
 | `ErrSpawnNotInteractive` | New input requires a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. `ended` and `missing` rows are refused even when observing an existing delivery request; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission). |
-| `ErrSubmissionUnconfirmed` | `SubmissionUnconfirmedDetails` describes failed fallback hook observation; native, fallback paste and Cursor gateway outcome fields are available through the generic `errDetails` record. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) for automatic delivery, [Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes) for `gateway_refused`, and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership) for manual `sendKeys`. |
+| `ErrSubmissionUnconfirmed` | `SubmissionUnconfirmedDetails` describes failed fallback hook observation; native, Claude readiness, Codex paste and Cursor gateway outcome fields are available through the generic `errDetails` record. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) for automatic delivery, [Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes) for `gateway_refused`, and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership) for manual `sendKeys`. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | Exit keys were sent but `ended` was not observed; `errDetails` has the `PauseTimeoutDetails` shape. See [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit). |
 | `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |
