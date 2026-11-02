@@ -76,9 +76,9 @@ func TestAdviceFollow_C1_AgentOutlivesExitWaitRetryKillLater(t *testing.T) {
 // residual: a retried kill succeeds while the named non-agent survivor runs.
 func TestAdviceFollow_C2_SurvivorRetrySucceedsAsDocumented(t *testing.T) {
 	t.Parallel()
-	// C2 ErrTmuxKillFailed naming another pane process: "retry kill later"; manifest: "a retried kill checks only the agent process. A retry's success means only that the agent is gone; the named process needs a human".
-	adviceAssertManifest(t, "kill", "", "a retried kill checks only the agent process. "+
-		"A retry's success means only that the agent is gone; the named process needs a human")
+	// C2 ErrTmuxKillFailed naming another pane process: "retry kill later"; manifest: "a retried kill checks only the agent process and its success means only that the agent is gone; the named process needs a human".
+	adviceAssertManifest(t, "kill", "", "a retried kill checks only the agent process "+
+		"and its success means only that the agent is gone; the named process needs a human")
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{Teammates: 1})
 	e.seedBystander(t, r.Socket)

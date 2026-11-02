@@ -217,7 +217,8 @@ func TestPaneVerbsNeighbours(t *testing.T) {
 		for _, tc := range []struct{ name, xID, yID, xName, yName string }{
 			{"name prefix", "", "", "proj-abc", "proj-abc123"},
 			{"same name, held by the other row's session", "", "", "proj-same", "proj-same"},
-			{"ids share first 8 characters, same-named folders", "abcd1234-x-row", "abcd1234-y-row", "work", "work"},
+			// Keep trail records distinct across parallel verbs while sharing the ID prefix.
+			{"ids share first 8 characters, same-named folders", "abcd1234-x-" + v.name, "abcd1234-y-" + v.name, "work", "work"},
 		} {
 			t.Run(v.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()

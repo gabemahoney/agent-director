@@ -162,8 +162,9 @@ launch", "no valid instance id"), naming each session by `$N` ("and N more":
 use step 1). Inspect each session first (steps 1 to 3), then:
 
 1. A leftover or "no valid instance id" session: if not wanted, end it (steps 4
-   and 5); on a `pending` row, first wait until `find-missing` marks it
-   `missing` and check the session still shows the `session_created` you noted.
+   and 5); on a `pending` row, first wait until a recovery check (a state read
+   or `sweep`) marks it `missing` and check the session still shows the
+   `session_created` you noted.
 2. "This id's own abandoned launch": `kill-finished` ends them all (not on a
    `pending` row).
 3. Rerun the refused command; if the error said the row was not restored, only
@@ -258,9 +259,9 @@ returns `ErrTmuxCaptureFailed`, while the agent process runs. A human decides:
    end the pane by id if not wanted. In no pane: recheck its start time, then
    `kill '<pid>'`. Do the same for a survivor.
 4. Run `agent-director kill --instance-id <id>` again, or wait for
-   `find-missing` to mark the row `missing` (a Codex row whose agent reported
-   its end: `ended`), then resume or respawn as the
-   [caller contract](caller-contract.md) says.
+   a recovery check (a state read or `sweep`) to mark the row `missing`
+   (a Codex row whose agent reported its end: `ended`), then resume or respawn
+   as the [caller contract](caller-contract.md) says.
 
 ## A command left running after Esc on a Codex agent
 
@@ -353,11 +354,11 @@ fixes it:
 `send-keys` or `pause` (with "not adopted": the next item). Read the quoted
 session's label (steps 1 and 2), list its panes (step 4b), look (step 3), then:
 
-- Nothing of value runs there: end the session (steps 4 and 5); `find-missing`
-  then marks the row; resume or reuse the id.
+- Nothing of value runs there: end the session (steps 4 and 5); a recovery check
+  (a state read or `sweep`) then marks the row; resume or reuse the id.
 - Another program someone uses runs there: leave it, remove only its claim with
   `tmux -u -S '<socket>' set-option -t '<session id>' -u @ad_owner`, and tell
-  its owner; `find-missing` then settles the row.
+  its owner; a recovery check (a state read or `sweep`) then settles the row.
 - The agent runs in another pane (its `ps` pid matches the row's): leave it;
   only the pane verbs fail, and `agent-director kill` still ends the session.
 
@@ -367,10 +368,12 @@ The row stays `pending` with the agent working and no pane recorded. Read the
 session's label (steps 1 and 2): its second field is the launch token. In its
 panes (step 4b), the agent's `@ad_pane` is `<token> <pane id>`.
 
-- Wanted agent: leave it; `find-missing` adopts its pane after the grace period.
-- No pane carries the token: `find-missing` marks the row `missing` though the
-  agent may still run. End the session with `agent-director kill` while the row
-  is live, by hand once `missing` (steps 4 and 5), then resume or reuse the id.
+- Wanted agent: leave it; a recovery check (a state read or `sweep`) adopts
+  its pane after the grace period.
+- No pane carries the token: a recovery check (a state read or `sweep`) marks
+  the row `missing` though the agent may still run. End the session with
+  `agent-director kill` while the row is live, by hand once `missing`
+  (steps 4 and 5), then resume or reuse the id.
 
 ## A `pending` row with no launch start or token
 
@@ -381,8 +384,9 @@ agent-director process started before it.
 1. Restart any `agent-director` process (`serve` too) from before the upgrade.
 2. Find the agent's session by the row's recorded name (step 1); read its
    environment (step 2b) and look (step 3). Unwanted: end it (steps 4 and 5).
-   Wanted, or someone else's: leave it; `find-missing` marks the row `missing`
-   once nothing of it runs. Then resume or reuse the id.
+   Wanted, or someone else's: leave it; a recovery check (a state read or
+   `sweep`) marks the row `missing` once nothing of it runs. Then resume or
+   reuse the id.
 
 ## Stopping a set of agents before a binary change
 
@@ -490,7 +494,7 @@ migrated store. Stop the caller and whatever starts agents (step 1 of
 **Forward** (preferred; keeps every write since the upgrade):
 
 1. Identify the live pre-upgrade agents from the set the caller was running
-   and end each by hand, then run `agent-director find-missing`. Missing
+   and end each by hand, then run `agent-director sweep`. Missing
    `tmux_socket` and `launch_started_at` identify older rows without spawn
    identity; handle those as "A `pending` row with no launch start or token"
    says. Schema 9→10→11 preserves existing identity fields, so populated
@@ -634,8 +638,8 @@ against a folder you accept that in.
 
 `ErrTmuxNotAvailable` ("not the tmux server the agent was launched on"), or
 the `liveness_note` `tmux_server_changed`: the recorded socket now reaches
-another server. Find the old server's process and decide; `find-missing`
-settles the row once it is gone.
+another server. Find the old server's process and decide; a recovery check
+(a state read or `sweep`) settles the row once it is gone.
 
 ## A stray `@ad_owner` value or a duplicate label
 
@@ -923,10 +927,8 @@ and not all four units. With `--schedule`, it adds a line, `--schedule was asked
 for and installed nothing:` (or `could not schedule the sweeps:` when it put the
 cron lines in anyway), that gives the reason.
 
-Copy the rendered cron lines from the warning. For manual units, fill the
-placeholders and use the recovery verb it names in `ExecStart`, keeping the
-`agent-director-find-missing` filenames. Raw templates may use `find-missing`
-even when rendered advice uses `sweep`.
+Copy the rendered cron lines from the warning. For manual units, follow
+[Schedule them by hand](maintenance.md#schedule-them-by-hand).
 
 The warning, with or without `--schedule`, also prints the exact command to run
 again: `cd <the directory the install ran in> && bash <script> <the original
@@ -1013,9 +1015,14 @@ and restore the matching pre-upgrade DB and input evidence at their original
 paths. Restore the DB with its companion files, removing a `-wal` or `-shm`
 that the copy lacks, as in step 4 below. Keep original launch-lock inodes;
 do not replace or delete them. Install the matching previous release with its
-own `install.sh` and the original flags. Before restarting any older runtime,
-reconcile uncertain attempts against the preserved evidence: restoration loses
-all later writes and can lose proof of input that already reached an agent.
+own `install.sh` and the original flags, omitting `--schedule` to preserve a
+custom cadence. Before restarting any older runtime, restore `find-missing`
+as the recovery command in every schedule that runs `sweep`: the tagged cron line
+(`crontab -e`), the service `ExecStart`, or a schedule you made another way,
+keeping your chosen cadence and environment. After editing a service, run
+`systemctl --user daemon-reload`. Then reconcile uncertain attempts against
+the preserved evidence: restoration loses all later writes and can lose proof
+of input that already reached an agent.
 Never replay an attempt merely because the restored copy lacks its proof.
 
 Schema v20 display evidence has no supported reverse recipe.
@@ -1107,7 +1114,8 @@ the move.
 8. Change back by hand what was changed by hand to the new path after the
    upgrade: help hooks in the `settings.json` of other `CLAUDE_CONFIG_DIR`
    folders, Codex MCP and help entries, scripts, `$PATH` entries and an MCP
-   registration made by hand.
+   registration made by hand, and any schedule you made another way, which
+   must run `find-missing` (the previous release has no `sweep`).
 9. Reconcile uncertain input against the preserved post-upgrade evidence
    before restarting any older runtime; a restored record cannot prove later
    input was never delivered. Then start the caller's previous version.

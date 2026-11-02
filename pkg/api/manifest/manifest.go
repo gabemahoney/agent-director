@@ -139,12 +139,12 @@ const TmuxSessionNameSpelling = "tmux_session_name (--tmux-session-name on the C
 // lives in docs/caller-contract.md and in docs/architecture.md. It
 // names kill as a documented procedure, which SR-1.4 allows here; it states
 // no timeout other than the pending grace default and the wait between
-// find-missing runs (SR-13.2 is the one source of the ceilings).
+// sweep runs (SR-13.2 is the one source of the ceilings).
 const liveRowSequence = "Live-row sequence (a pending row included): " +
 	"1. kill and check the result; on an error follow its class. " +
 	"2. If pending, wait until its launch start (status) plus the pending grace period (60 s unless configured); inside it, wait and check again, never escalate. " +
-	"3. Run find-missing, then check status; repeat about 5 s apart until ended or missing, at most three runs. " +
-	"4. Still live: kill once more, wait about 5 s, run find-missing once more and check. " +
+	"3. Run sweep, then check status; repeat about 5 s apart until ended or missing, at most three runs. " +
+	"4. Still live: kill once more, wait about 5 s, run sweep once more and check. " +
 	"5. Still live: escalate to a human. " +
 	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with " + ReuseOptInSpelling + " and " + RowAgentPointer + "; callers whose ids agent-director mints spawn fresh."
 
@@ -162,9 +162,9 @@ const liveRowSequencePointer = "To end a live row (pending included) and relaunc
 // sentence, since every verb Description reaches help and MCP. The full
 // sentence ("`missing` is a check's judgement on available evidence, not
 // proof that the agent has exited") stays in sweep's Description, and in
-// status/get state, list spawns and both sweep aliases' ids result fields.
-// find-missing points to sweep; both use the same shared checks as reads.
-const missingNotProofShort = "`missing` is not proof of exit (see find-missing)."
+// status/get state, list spawns and both sweep aliases' ids result fields,
+// so the short form points to sweep.
+const missingNotProofShort = "`missing` is not proof of exit (see sweep)."
 
 // unusableNamePointer is the short form of SR-1.7's unusable recorded-name
 // ErrInternal trigger (SR-3.2, SR-1.4; Epic 19 build-lead decision 1),
@@ -177,7 +177,7 @@ const unusableNamePointer = "Unusable recorded name: ErrInternal (see kill)."
 
 // expireCleanupPointer is SR-18.7's cleanup guidance in short form (Epic 15
 // build-lead decision 1, after decision-0930e's precedent), carried by the
-// kill and find-missing Descriptions in place of the full cleanup sentence,
+// kill and sweep Descriptions in place of the full cleanup sentence,
 // since every verb Description reaches help and MCP. The full sentence stays
 // in expireDescription. Keep it at or under 80 bytes.
 const expireCleanupPointer = "Agents never run expire (operator-scheduled finished-row cleanup)."
@@ -241,7 +241,7 @@ const reuseFinishedDescription = "Opt in to reusing an explicit instance_id whos
 	"Only an agent switch starts a new life; same-agent reuse keeps session history and subagent records but starts a fresh conversation. A switch back also starts with no memory of its earlier lives: resume and get never use or show an earlier life's history. Resume continues only the latest session; older sessions remain listed for inspection only. " +
 	"AD-agent children keep their parent_id; the append-only trail retains earlier lives. Cursor subagent tracking remains unsupported (tracked=false, empty records). " +
 	"A failed launch conditionally restores the prior row, agent, life and history only while the reset row is unchanged; a create timeout or lost reply never restores. Requests deleted and subagents closed by the reset are not revived. " +
-	"Retrying a failed plain spawn: after a held-name refusal (duplicate session) the row is already ended unless the error says otherwise, so the retry's lookup decides it at once; after any other failed launch the row stays pending and an opted-in retry collides until find-missing marks it missing, which happens only after the pending grace period (60 s by default). " +
+	"Retrying a failed plain spawn: after a held-name refusal (duplicate session) the row is already ended unless the error says otherwise, so the retry's lookup decides it at once; after any other failed launch the row stays pending and an opted-in retry collides until a recovery check (a state read or sweep) marks it missing, past the pending grace period (60 s by default) or sooner when a Cursor row's exact recorded gateway is gone. " +
 	"Feature detection: read the version of the binary that serves the caller: on the CLI the version verb; over MCP the version tool, which reports the running serve process's version until that process restarts; in the TypeScript client binaryVersion (from Client.create() or resolveSystemBinary()), never version(), which is the npm package's version. " +
 	"A release candidate X.Y.Z-rc.N counts as X.Y.Z. A build without a release stamp reports 0.0.0-dev (a make build) or dev (a plain go build); a caller cannot compare it and relies on the older-binary behaviour: " +
 	"an older binary returns ErrInvalidFlags on the CLI and in the TypeScript client, and over MCP silently ignores the parameter, so a finished row gives ErrInstanceIdCollision. " +
@@ -254,11 +254,11 @@ const killDescription = "End the agent of a live row's current launch (pending i
 	"kill finds the session with that launch's label on the row's recorded socket, ends the agent's pane and that session by tmux id, and succeeds only once the agent process and every other process found in the session's panes are gone; otherwise it returns ErrTmuxKillFailed. kill_sent says whether a kill was sent. " +
 	"With no session of the launch found, an agent process gone or not recorded is success, nothing sent; one running in another session's pane has that pane ended and is checked again. " +
 	"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call. " + missingNotProofShort + " " +
-	"kill never changes the row's state: find-missing marks it once its agent process is gone. kill never signals a process itself; one the agent started can outlive a successful kill. " +
+	"kill never changes the row's state: a state read or sweep marks it once its agent process is gone. kill never signals a process itself; one the agent started can outlive a successful kill. " +
 	"On a pending row, before the launch created its session, kill returns kill_sent false and does not stop the launch. kill never ends an earlier launch's session. " +
-	"Success is judged per call: if ErrTmuxKillFailed named a non-agent process outliving the kill, later calls do not track it: a retried kill checks only the agent process. A retry's success means only that the agent is gone; the named process needs a human (see docs/operator-actions.md). If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed; a retried kill is a finished-row no-op. " +
-	"Errors (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): after a kill the agent process or another process of the session's panes ran past the kill exit wait, or the process cannot be checked and its labelled session remains, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's, or tmux holds conflicting labels; no kill was sent (see docs/operator-actions.md). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the agent's tmux server; an operator must fix it. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the caller waits and checks again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. " +
-	"kill must run as the same user and in the same tmux environment as the agents. " + sameEnvConsequences + " " + expireCleanupPointer + " " +
+	"Success is judged per call: after ErrTmuxKillFailed names a non-agent process outliving the kill, a retried kill checks only the agent process and its success means only that the agent is gone; the named process needs a human (see docs/operator-actions.md). If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed; a retried kill is a finished-row no-op. " +
+	"Errors (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): after a kill the agent process or another process of the session's panes ran past the kill exit wait, or the process cannot be checked and its labelled session remains, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's, or tmux holds conflicting labels; no kill was sent (see docs/operator-actions.md). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the agent's tmux server; an operator must fix it. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; wait and check again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. " +
+	"Run kill as the agents' user in their tmux environment. " + sameEnvConsequences + " " + expireCleanupPointer + " " +
 	"A live row whose recorded tmux session name cannot be used (empty, or containing a control character or a character tmux stores differently) gets ErrInternal with no tmux call; removing the row is a human's decision (see docs/operator-actions.md). " +
 	liveRowSequence
 
@@ -1073,7 +1073,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:         "sweep",
-		Description:  "One bounded status/get/list check of a fixed all-agent snapshot. checks: three confirmations; complete/incomplete coverage, not observation success. No input, answer, restart or signal. Liveness uses the agent process at its recorded start identity, never children or copied IDs; no process environment is read. A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux. Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded), once per recorded socket (else caller's). Absence of its session, or (if no pane is recorded) of a pane carrying its launch token, marks missing; else an owned session leaves it unverified. Cursor uses its exact gateway: gone overrides pending protections; unknown stays unverified, without tmux fallback. Unusable tmux leaves it unverified; held names are never touched (docs/operator-actions.md). ErrProbeUnsupported is no longer returned. `missing` is a check's judgement on available evidence, not proof that the agent has exited. Run as the agents' user in their tmux environment: another user, root or another server can mark live rows missing; see kill. " + expireCleanupPointer + " Pending launches are protected while launching or within pending_grace_seconds (default 60 s) of launch start, not started_at; an unreadable start is judged at once. Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending. " + liveRowSequencePointer,
+		Description:  "One bounded pass of status/get/list recovery checks on a fixed all-agent snapshot: liveness, missed Codex turn ends, stale check_permission, display, provisional transcripts, late input proof. checks: three confirmations; complete/incomplete coverage, not observation success. No input, answer, restart or signal. Liveness uses the agent process at its recorded start identity, never children or copied IDs; no process environment is read. A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux. Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded), once per recorded socket (else caller's). No session, or (with no recorded pane) no pane with its launch token, marks missing; else an owned session leaves it unverified. Cursor uses its exact gateway: gone overrides pending protections; unknown stays unverified, no tmux fallback. Unusable tmux leaves it unverified; held names are untouched (docs/operator-actions.md). ErrProbeUnsupported: never returned. `missing` is a check's judgement on available evidence, not proof that the agent has exited. Run as the agents' user in their tmux environment: another user, root or another server can mark live rows missing; see kill. " + expireCleanupPointer + " Pending launches are protected while launching or within pending_grace_seconds (default 60 s) of launch start, not started_at; an unreadable start is judged at once. Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending. " + liveRowSequencePointer,
 		Callable:     true,
 		HandleFree:   false,
 		Params:       []ParamDef{},

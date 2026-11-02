@@ -480,12 +480,8 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      warning use that copy. A release tag older than the `schedule/`
      directory (a 404; for example `--from-release` on an older tag, or
      the latest release before it shipped) is retried once at `main`, and
-     the `schedule:` fetch line says so. Raw templates keep `find-missing`
-     for released installers. The current installer renders `sweep` only
-     when the target binary's `help` advertises it; otherwise, including
-     failed or unreadable help, it uses `find-missing`. Detection never
-     runs recovery. When the fetch fails (no network, no reliable ref, or
-     `main` answers no better), `--schedule`
+     the `schedule:` fetch line says so. When the fetch fails (no network, no
+     reliable ref, or `main` answers no better), `--schedule`
      installs nothing and says why, the warning points at the files on
      `main`, and the rest of the install and its exit status are
      unaffected.
@@ -1169,10 +1165,9 @@ This skill runs `install.sh` from the same directory. The script:
 
    Raw templates retain `find-missing`; the current installer renders
    `sweep` only when the target binary advertises it in `help`, otherwise
-   `find-missing`. Its warning prints rendered commands, which may differ
-   from the raw files. For manual units use the recovery verb the warning
-   names in `ExecStart`, keeping the `agent-director-find-missing` filenames.
-   Existing `find-missing` schedules remain supported.
+   `find-missing`. Existing `find-missing` schedules remain supported.
+   For manual units, follow
+   [Schedule them by hand](https://github.com/gabemahoney/agent-director/blob/main/docs/maintenance.md#schedule-them-by-hand).
 
    Without `--schedule`, existing commands, cadence and timer enablement
    stay unchanged. With it, the script installs from those files and nothing

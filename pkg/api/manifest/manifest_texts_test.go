@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,7 +43,8 @@ func preTrustField(skippedWhy string) apitest.DescCase {
 }
 
 // manifestTextCases lists the texts and their cases: find-missing (SR-18.9,
-// SR-18.7, SR-3.8, SR-11.7, SR-18.3, SR-18.11); kill (SR-18.9, SR-6.1,
+// SR-18.7, SR-3.8, SR-11.7, SR-18.3, SR-18.11); sweep's recovery coverage
+// (SR-3.2) and current-state ErrProbeUnsupported wording (SR-7.4); kill (SR-18.9, SR-6.1,
 // SR-1.7); spawn's launch rules (SR-18.1, SR-9.3, SR-9.4), ErrInternal
 // triggers (AC-CAT-03), param rules (SR-9.2, SR-18.9, SR-18.10, SR-22.6);
 // pre-trust (SR-22.6); launch_started_at (SR-22.2); list's liveness fields
@@ -59,6 +61,11 @@ func manifestTextCases() []textCase {
 		{verb: "sweep", own: true, c: apitest.DescFindMissingManifest()},
 		{verb: "find-missing", field: "ids", c: apitest.DescFindMissingField(apitest.FindMissingIDs)},
 		{verb: "find-missing", field: "unverified_ids", c: apitest.DescFindMissingField(apitest.FindMissingUnverifiedIDs)},
+		{verb: "sweep", own: true, c: apitest.DescCase{Name: "recovery coverage beyond liveness, current-state error wording",
+			Require: []string{"One bounded pass of status/get/list recovery checks on a fixed all-agent snapshot: liveness, " +
+				"missed Codex turn ends, stale check_permission, display, provisional transcripts, late input proof.",
+				"ErrProbeUnsupported: never returned."},
+			MustNot: []string{"no longer returned"}}},
 		{verb: "sweep", own: true, c: tokens("Codex end report, dead process",
 			"A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux.")},
 		{verb: "find-missing", field: "count", c: tokens("Codex ended transitions and other repairs not counted",
@@ -395,6 +402,17 @@ func TestLiveRowSequencePerVerb(t *testing.T) {
 		}
 		if want.desc != nil {
 			apitest.AssertAgentTextCase(t, v.Name+" description", v.Description, want.desc())
+		}
+	}
+}
+
+// TestSweepKeepsErrProbeUnsupported: although sweep's Description says it is
+// never returned, ErrProbeUnsupported stays in sweep's and find-missing's
+// ErrorNames, which client error mapping relies on (b.x9o F11).
+func TestSweepKeepsErrProbeUnsupported(t *testing.T) {
+	for _, verb := range []string{"sweep", "find-missing"} {
+		if !slices.Contains(verbOf(t, verb).ErrorNames, "ErrProbeUnsupported") {
+			t.Errorf("%s.ErrorNames lacks ErrProbeUnsupported", verb)
 		}
 	}
 }

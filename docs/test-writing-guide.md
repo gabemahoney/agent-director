@@ -161,8 +161,8 @@ wire detail.
     (`owner_launch_token`, `owner_permission_epoch`, `admitted_at`,
     `fallback_at`, `fallback_basis`) and `spawns.permission_epoch`.
   - `idle-screen` moves a committed baseline's start (`spawns.pane_since_ms`)
-    back instead of waiting out a timeout (a read is the baseline's only
-    writer), and its Cursor case seeds its rows (an
+    back instead of waiting out a timeout (state reads and `sweep` are the
+    baseline's only writers), and its Cursor case seeds its rows (an
     `idle_screen_timeout_seconds` override and an old baseline included) and
     a request, as `needs-intelligence` does.
 

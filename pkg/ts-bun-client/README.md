@@ -328,8 +328,8 @@ resolves only once the agent process is gone, and returns `{ kill_sent }`:
 `true` when a kill was sent to the agent's pane or its session, `false` when
 none was. On a finished Spawn (`ended` or `missing`) `kill` is a no-op that
 resolves with `kill_sent: false`; that is not verification that the agent
-exited. `kill` never changes the row's state: `find-missing` marks the row once
-its agent process is gone.
+exited. `kill` never changes the row's state: a state read or `sweep` marks it
+once its agent process is gone.
 
 ```ts
 const { kill_sent } = await client.kill({ instance_id: "<id>" });
@@ -719,7 +719,7 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 | `ErrNoSessionId` | The spawn has no `session_id`, so there is nothing to resume. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |
 | `ErrJsonlMissing` | The current session's transcript is unavailable. Cursor requires its protected gateway transcript; native session availability is decided later during load. Older sessions are never tried. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
-| `ErrProbeUnsupported` | No verb returns it: `find-missing` no longer reads process environments, the only path that returned it. The name stays catalogued (and listed for `sweep` and `find-missing`) so the client still maps it. |
+| `ErrProbeUnsupported` | No verb returns it. The name stays catalogued (and listed for `sweep` and `find-missing`) so the client still maps it. |
 
 **tmux transport** (infrastructure failures at the tmux layer — runtime). Each name has a class: GONE (the row's session is not there), UNAVAILABLE (transient; retry later), CONFLICT (permanent until a human looks), ENVIRONMENT (an environment problem for an operator to fix) or LAUNCH FAILURE (the launch failed).
 

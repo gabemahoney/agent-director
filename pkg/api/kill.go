@@ -510,8 +510,8 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, agentPID int, sessionID
 // before the launch created its session returns KillSent false and does not
 // stop the launch. Kill never ends a session an earlier launch left behind.
 //
-// Kill never changes the row's state: find-missing marks the row once its
-// agent process is gone. Kill never signals a process itself, so success
+// Kill never changes the row's state: a recovery check (a state read or
+// Sweep) marks the row once its agent process is gone. Kill never signals a process itself, so success
 // means the agent process exited, not every process it started. Kill writes
 // no log lines: the returned error is the report, and the ad.kill.called
 // trail event is the audit.

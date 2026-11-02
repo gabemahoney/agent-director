@@ -285,7 +285,7 @@ commands keep their raw-state guards. The package-level
 `api.Status`, `api.Get` and `api.List` functions use no settle time and
 sample no pane: they report stored display evidence without advancing either
 confirmation time. A committed non-sampling exit clears that evidence.
-Package-level `FindMissing` can sample panes when its
+Package-level `Sweep` (and its `FindMissing` alias) can sample panes when its
 supplied tmux provider supports capture.
 
 For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
@@ -563,7 +563,7 @@ launch left behind.
 
 A finished row (`ended`, `missing`) is a no-op success with no tmux call;
 that is not verification that the agent exited. Kill never changes the
-row's state: `find-missing` marks the row once its agent process is gone.
+row's state: a state read or `sweep` marks it once its agent process is gone.
 
 ```go
 res, err := c.Kill(api.KillParams{

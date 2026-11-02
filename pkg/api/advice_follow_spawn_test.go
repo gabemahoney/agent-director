@@ -429,7 +429,7 @@ func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 			advSpawnFreeName(t, e)
 			before := e.readRow(t, id)
 			if tc.failEnd {
-				// reuse_finished: a pending row collides until find-missing marks it missing past the pending grace period.
+				// reuse_finished: a pending row collides until a recovery check (a state read or sweep) marks it missing past the pending grace period.
 				_, err := e.c.Spawn(advSpawnReuse(p))
 				assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
 				e.assertRowIs(t, id, "after the opted-in retry of the pending row", before)
@@ -444,19 +444,21 @@ func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 }
 
 // TestAdviceFollow_A8_PendingRowReuseAfterGrace: A8 "after any other failed launch the row stays pending and an opted-in retry collides
-// until find-missing marks it missing, which happens only after the pending grace period (60 s by default)".
+// until a recovery check (a state read or sweep) marks it missing, past the pending grace period (60 s by default)".
 func TestAdviceFollow_A8_PendingRowReuseAfterGrace(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name    string
 		scripts map[tmux.Call]tmuxfix.Script // each answers once
 		want    error
+		read    bool // the recovery check is status (a state read), not sweep
 	}{
-		{"launch timeout", map[tmux.Call]tmuxfix.Script{tmux.CallCreate: {Failure: tmux.FailTimeout}}, api.ErrTmuxUnresponsive},
-		{"create failed", map[tmux.Call]tmuxfix.Script{tmux.CallCreate: {Failure: tmux.FailNoServer}}, api.ErrTmuxSessionCreate},
-		{"tmux unavailable", map[tmux.Call]tmuxfix.Script{tmux.CallCreate: {Failure: tmux.FailUnavailable}}, api.ErrTmuxNotAvailable},
+		{"launch timeout", map[tmux.Call]tmuxfix.Script{tmux.CallCreate: {Failure: tmux.FailTimeout}}, api.ErrTmuxUnresponsive, false},
+		{"launch timeout, checked by status", map[tmux.Call]tmuxfix.Script{tmux.CallCreate: {Failure: tmux.FailTimeout}}, api.ErrTmuxUnresponsive, true},
+		{"create failed", map[tmux.Call]tmuxfix.Script{tmux.CallCreate: {Failure: tmux.FailNoServer}}, api.ErrTmuxSessionCreate, false},
+		{"tmux unavailable", map[tmux.Call]tmuxfix.Script{tmux.CallCreate: {Failure: tmux.FailUnavailable}}, api.ErrTmuxNotAvailable, false},
 		{"session could not be labelled", map[tmux.Call]tmuxfix.Script{tmux.CallCreate: {Failure: tmux.FailLabel},
-			tmux.CallSetLabel: {Failure: tmux.FailTimeout}}, api.ErrTmuxSessionCreate},
+			tmux.CallSetLabel: {Failure: tmux.FailTimeout}}, api.ErrTmuxSessionCreate, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -472,13 +474,32 @@ func TestAdviceFollow_A8_PendingRowReuseAfterGrace(t *testing.T) {
 
 			adviceAssertAdvice(t, err, tc.want, "the row stays pending")
 			adviceAssertManifest(t, "spawn", "reuse_finished", "after any other failed launch the row stays pending and an opted-in retry collides "+
-				"until find-missing marks it missing, which happens only after the pending grace period (60 s by default)")
+				"until a recovery check (a state read or sweep) marks it missing, past the pending grace period (60 s by default)")
 			pending := e.readRow(t, id)
 			launch, _ := pending.LaunchStartedAt.(int64)
-			insideGrace := func(when string) {
-				if res, err := e.c.FindMissing(context.Background()); err != nil || res.Count != 0 {
-					t.Fatalf("FindMissing %s = %+v, %v; want nothing marked", when, res, err)
+			// check runs the recovery check the case follows and fails unless it marks the row missing exactly when marked.
+			check := func(when string, marked bool) {
+				t.Helper()
+				if tc.read {
+					want := store.StatePending
+					if marked {
+						want = store.StateMissing
+					}
+					if st, err := e.c.Status(id); err != nil || st.State != want {
+						t.Fatalf("Status %s = %q, %v; want %s", when, st.State, err, want)
+					}
+					return
 				}
+				res, err := e.c.Sweep(context.Background())
+				if marked && (err != nil || res.Count != 1 || res.IDs[0] != id) {
+					t.Fatalf("Sweep %s = %+v, %v; want %s marked missing", when, res, err, id)
+				}
+				if !marked && (err != nil || res.Count != 0) {
+					t.Fatalf("Sweep %s = %+v, %v; want nothing marked", when, res, err)
+				}
+			}
+			insideGrace := func(when string) {
+				check(when, false)
 				_, err := e.c.Spawn(advSpawnReuse(p))
 				assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
 				e.assertRowIs(t, id, "after the opted-in retry "+when, pending)
@@ -487,9 +508,7 @@ func TestAdviceFollow_A8_PendingRowReuseAfterGrace(t *testing.T) {
 			e.clock.Advance(time.UnixMilli(launch).Add(fmGrace - time.Second).Sub(e.clock.Now()))
 			insideGrace("at launch start + grace - 1 s")
 			e.clock.Advance(2 * time.Second)
-			if res, err := e.c.FindMissing(context.Background()); err != nil || res.Count != 1 || res.IDs[0] != id {
-				t.Fatalf("FindMissing past grace = %+v, %v; want %s marked missing", res, err, id)
-			}
+			check("past grace", true)
 
 			res, err := e.c.Spawn(advSpawnReuse(p))
 

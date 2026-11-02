@@ -99,8 +99,8 @@ Claude Code sends a `Notification` with `notification_type`
   permission requests holds it. A request holds the row while it still
   awaits an answer (until its relay hook confirms a verdict in the store,
   it is closed at the pane, or it is closed with the row by
-  `find-missing`'s mark or the agent's end) and Claude Code has not proven
-  its dialog gone (see "Hooks that prove a request's dialog gone" below).
+  a recovery check's missing mark or the agent's end) and Claude Code has not
+  proven its dialog gone (see "Hooks that prove a request's dialog gone" below).
   The agent's turn ended after its
   last request was answered, and the hook that would have moved the row
   (the turn's `Stop`, after a denied request) was lost. The Notification's
@@ -283,7 +283,7 @@ a `/review` thread's hooks record no turn.
 **A turn that ends in an error.** Codex sends no `Stop` for a turn that
 ends in an error (a model at capacity, for one), but its rollout, the row's
 transcript, records the end of every turn as a `task_complete` naming the
-turn. An eligible `status`, `get`, `list` or `find-missing` check can move
+turn. An eligible `status`, `get`, `list` or `sweep` check can move
 a Codex row to `waiting` when all of these hold:
 
 - the row's raw state is `working`, and its current turn has not ended;
@@ -309,7 +309,7 @@ and bumps no `last_seen_at`. What a caller does then is in the
 - The check fails open and waits for no lock: a busy store, an unreadable
   rollout or stale evidence cannot confirm the move. The call goes ahead
   with available stored facts, and a later call checks again.
-- Nothing checks between calls; a scheduled `find-missing` can recover the end
+- Nothing checks between calls; a scheduled `sweep` can recover the end
   without an intervening state read.
 
 **Late tool hooks.** A command a turn started can finish after the turn
@@ -376,11 +376,11 @@ report into `ended` is in "How a Codex row ends" below.
 ### How a Codex row ends
 
 A Codex row moves to `ended` only when both hold: the agent process of its
-current launch is proven gone (judged by its recorded start time, as
-`find-missing` judges every row, with no tmux call) and the row holds an end
-report. These operations share the guarded move:
+current launch is proven gone (judged by its recorded start time, with no
+tmux call) and the row holds an end report. These operations share the guarded
+move:
 
-- `status`, `get`, `list` and `find-missing`, for eligible selected rows.
+- `status`, `get`, `list` and `sweep`, for eligible selected rows.
 - `pause`, before it sends any key (in any live state, `pending` included) and
   in each poll while it waits for `ended`.
 
@@ -397,10 +397,11 @@ a recovery check or `pause` sees the agent gone (what a caller does is in the
 - **The move closes the row's requests** and its `running` subagent records, together (see "The agent's end closes its requests" below).
   The row keeps its end report.
 
-Whichever verb makes the move, it writes `find-missing`'s records: one
+Whichever verb makes the move, it writes the recovery records: one
 `ad.find_missing.tick` with `new_state` `ended` and `reconciliation_reason`
-`proc_absent`, and, for each request it denies, one
-`ad.row_mutation.committed` with `decision_reason` `ended` and
+`proc_absent` (`source` `ad_recovery` for a state read or `pause`,
+`ad_find_missing` for `sweep`/`find-missing`), and, for each request it denies,
+one `ad.row_mutation.committed` with `decision_reason` `ended` and
 `writer_process` `find_missing`, also from state reads or `pause`. It
 writes no `ad.spawn.state_transition`.
 
@@ -519,7 +520,7 @@ time and get the hook killed without a result or trail record. See
 A missed or ignored SessionStart, a startup screen before the first hook,
 or a Codex launch awaiting its first prompt can leave a running agent
 `pending`. Agent-director cannot tell these from the row alone. An eligible
-state read or a scheduled `find-missing` notes an alive, past-grace row
+state read or a scheduled `sweep` notes an alive, past-grace row
 `unreported`, once its launch owner no longer holds it and its pane is
 recorded or adopted. It keeps
 `launch_started_at` and the first `liveness_unverified_since` of that launch.
@@ -1080,9 +1081,9 @@ Limits:
 
 For a missed hook and stale `check_permission` recovery, see
 [Permissions](permissions.md) and the [caller contract](caller-contract.md#permission-relay).
-A selected state read or `find-missing` repairs an eligible Claude row to `waiting`
-when `idle_since` is set, otherwise `working`; a Codex row always repairs
-to `working`, since it sends no idle-prompt Notification.
+A recovery check (a state read or `sweep`) repairs an eligible Claude row to
+`waiting` when `idle_since` is set, otherwise `working`; a Codex row always
+repairs to `working`, since it sends no idle-prompt Notification.
 
 A row with the relay off is in `check_permission` while the agent's own
 prompt waits, with no request on record, so neither move applies to it.
@@ -1134,7 +1135,7 @@ undecided one also gets a historical deny with `decision_reason` `ended`,
 and a decided one keeps its verdict. Neither authorizes a later relay
 acknowledgement or response. Each deny is written to the
 trail as one `ad.row_mutation.committed` (`writer_process` `hook`), before
-the row's `ad.spawn.state_transition`. `find-missing`'s mark closes a
+the row's `ad.spawn.state_transition`. A recovery check's missing mark closes a
 `missing` row's requests the same way (`decision_reason` `find_missing`),
 and `resume`'s move to `pending` closes any request an older binary
 left open on the finished row (`decision_reason` `ended`,
@@ -1197,11 +1198,12 @@ requests carry no `tool_use_id`), and not a `PostToolUse` with another
 - **Own agent.** A hook from another process proves nothing.
 - **Fail-open.** A failed proof write logs to `errors.log` and changes
   nothing else; the requests stay unproven until a later proof.
-- **The agent's end.** The terminal `SessionEnd`, `find-missing`'s mark,
+- **The agent's end.** The terminal `SessionEnd`, a recovery check's missing mark,
   the move of a Codex row to `ended` and `resume`'s move prove every request
   of a non-Cursor row gone (`agent_gone`),
   with their close (see "The agent's end closes its
-  requests" above). A retained request of a finished row is proven by the same rule.
+  requests" above). A retained request of a finished row is proven by the same
+  rule.
 - **What a proof releases.** A request proven gone holds no move of the
   row, even while it still awaits an answer (see "A relay row left in
   `check_permission`" above). Proof also releases its dialog hold, but

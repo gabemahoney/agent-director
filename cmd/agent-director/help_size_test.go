@@ -59,7 +59,9 @@ import "testing"
 // in the commit message (what grew, by how many bytes, why it cannot be
 // shorter); never to make a failing guard pass.
 // On 2026-11-01 b.x9o cb canonical sweep and its short alias lowered it to 14571.
-const helpStdoutBytes = 14571
+// On 2026-11-02 b.x9o 5u sweep wording trims lowered it to 14570, then to
+// 14567 (free downward steps).
+const helpStdoutBytes = 14567
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

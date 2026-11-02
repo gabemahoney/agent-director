@@ -108,8 +108,9 @@ func DescReuseHistoryByLife() DescCase {
 // SR-10.7, SR-18.7), by key phrase: finished rows only, explicit id, this
 // call only, default unchanged, ambiguous success without dropped arguments,
 // switching evidence and CLI notice with dropped arguments, no memory of earlier lives,
-// the agent the reuse names (SR-4.4), the failed-plain-spawn retry with the
-// pending grace default, feature
+// the agent the reuse names (SR-4.4), the failed-plain-spawn retry marked
+// missing by a recovery check past the pending grace default or sooner on
+// exact Cursor gateway loss (never staleRecoveryActorClaims), feature
 // detection per surface, development builds and older binaries, serve
 // processes from before the rename (DescOlderServeParam, b.c4u), and the same
 // environment with SR-18.7's two consequences; plus DescReuseHistoryByLife.
@@ -133,8 +134,9 @@ func DescReuseFinishedParam() DescCase {
 			"starts with no memory of its earlier lives",
 			"resume and get never use or show an earlier life's history",
 			"after a held-name refusal (duplicate session)", "decides it at once",
-			"collides until find-missing marks it missing", "only after the pending grace period",
-			fmt.Sprintf("(%d s by default)", config.DefaultPendingGraceSeconds),
+			"collides until a recovery check (a state read or sweep) marks it missing",
+			fmt.Sprintf("past the pending grace period (%d s by default)", config.DefaultPendingGraceSeconds),
+			"or sooner when a Cursor row's exact recorded gateway is gone",
 			"Feature detection: read the version of the binary", "on the CLI the version verb",
 			"over MCP the version tool", "in the TypeScript client binaryVersion", "never version()",
 			"X.Y.Z-rc.N counts as X.Y.Z", "0.0.0-dev", "dev (a plain go build)",
@@ -144,9 +146,14 @@ func DescReuseFinishedParam() DescCase {
 			"same user and in the same tmux environment as the agents",
 			finishedRowNotVerification, wrongServerSecondAgent,
 		},
-		MustNot: concatStrings(historyByLifeClaims, olderServe.MustNot),
+		MustNot: concatStrings(historyByLifeClaims, olderServe.MustNot, staleRecoveryActorClaims),
 	}
 }
+
+// staleRecoveryActorClaims are the forms, before b.x9o F3, that name
+// find-missing as the only marking actor or mark only after pending grace,
+// which no text naming the recovery actor may make.
+var staleRecoveryActorClaims = []string{"find-missing marks", "only after the pending grace period"}
 
 // CollisionSite selects the form DescInstanceIDCollision requires. Code is
 // the quote a Markdown site puts around a state ("`"); empty elsewhere.

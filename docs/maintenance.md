@@ -14,15 +14,20 @@ agent-director expire
 
 `sweep` selects an all-agent snapshot and runs the same eligible
 [recovery checks as state reads](caller-contract.md#bounded-recovery-on-state-reads).
-It can recover missed Codex turn endings, stale permission state and display
-observations without an intervening read. Finished rows skip live-agent
-checks; late exact input proof can still be recorded without sending input.
+Finished rows skip live-agent checks; late exact input proof can still be
+recorded without sending input.
 `status`, `get` and `list` run those checks for their returned agents. Existing
 `find-missing` schedules keep working: it is an alias of `sweep`.
 
-Scheduling covers agents that no caller reads. Absent or failed checks can
-leave facts old until a later eligible event, command or check. An installed
-cron entry or enabled timer does not prove a check ran or confirmed anything.
+For agents no `status`, `get` or `list` returns, a longer sweep interval
+delays discovery of exits, missed Codex turn endings, stale permission state
+and display changes that no agent event or command reports, leaving those
+observations older. Discovery or confirmation within one interval is not
+guaranteed: busy storage, pending-launch protection, missing or unreadable
+evidence and the multi-sample display rule can delay it further, and a missed
+or failed sweep leaves facts old until a later eligible event, command or check.
+An installed cron entry or enabled timer does not prove a check ran or confirmed
+anything.
 Equal pane samples do not prove continuous inactivity; unknown or pending
 results need later evidence. See the [caller contract](caller-contract.md)
 for confirmation and completeness semantics. Without `expire`, finished rows
@@ -81,10 +86,12 @@ install (`curl ... | bash`) that fetched them:
 | `agent-director-find-missing.service`, `.timer` | recovery every 2 minutes |
 | `agent-director-expire.service`, `.timer` | `expire` daily at 03:17 |
 
-Raw templates use `find-missing` for compatibility with older installers and
-binaries. For a binary whose `help` advertises `sweep`, use `sweep` in the cron
+For a binary whose `help` advertises `sweep`, use `sweep` in the cron
 recovery line and service `ExecStart`; otherwise keep `find-missing`. Keep the
 `agent-director-find-missing` filenames and `agent-director-schedule` markers.
+See [the installer's template handling](install.md#schedule-the-sweeps) for why
+raw templates differ. On rollback, follow the schedule-restoration step in
+[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
 
 Lines starting with `##` are notes, not part of the schedule. Choose the cron
 times or timers' `OnCalendar` values and fill the placeholders. Add the cron

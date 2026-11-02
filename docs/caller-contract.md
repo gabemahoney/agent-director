@@ -7,8 +7,9 @@ error:
 - Only a GONE answer means a row's session is not there. Any other tmux error
   means "don't know", never "dead".
 - Row state, reconciled by the [bounded recovery checks](#bounded-recovery-on-state-reads),
-  is the liveness authority. `process_liveness` and `displayed_state` are
-  separate reports that never change it (see [Confirmations](#confirmations)).
+  is the liveness authority. `displayed_state` never changes it.
+  `process_liveness` `alive` never confirms or refreshes it; a proven exit can
+  establish `ended` or `missing` (see [Confirmations](#confirmations)).
   For launch readiness, poll with `status`;
   call `read-pane` only while the row is `pending`, at
   most once a second.
@@ -83,12 +84,13 @@ To end a live row (`pending` included) and relaunch its id:
    `pending_grace_seconds` (ask the operator for the value in force, see
    [timing settings](configuration.md#timing-settings-tmux)) has passed. Inside
    the grace period, wait and check later; never escalate.
-3. Run `agent-director find-missing`, then check with `status` that the row is
-   `ended` or `missing`; if not, wait about 5 s and repeat, up to three runs.
-4. Still live: `kill` once more, wait about 5 s, run `find-missing`, check.
+3. Run `sweep`, then check `status`; repeat about 5 s apart until `ended` or
+   `missing`, at most three runs.
+4. Still live: `kill` once more, wait about 5 s, run `sweep` once more and check.
 5. Still live: stop and escalate to a human.
 6. Once `ended` or `missing`, Cursor uses the
-   [resume or fresh-instance boundary](#cursor-operation-boundaries). For Claude or Codex:
+   [resume or fresh-instance boundary](#cursor-operation-boundaries). For Claude
+   or Codex:
    - with a session id, to get the conversation back:
      `agent-director resume --instance-id <id>`
    - otherwise, a reuse (a fresh conversation with no memory of the old one), with
@@ -100,7 +102,8 @@ To end a live row (`pending` included) and relaunch its id:
 ## Bounded recovery on state reads
 
 `status`, `get`, `list` and `sweep` share eligible recovery checks.
-`find-missing` remains a supported alias of `sweep` on CLI and MCP.
+`find-missing` remains a supported alias of `sweep` on CLI and MCP, as do
+Go `FindMissing`/`Client.FindMissing` and TypeScript `findMissing`.
 `status` and `get` check only the named row. `list` selects IDs using the
 stored state, displayed state, other filters and limit before checking them.
 It returns those same IDs after recovery, even if a returned value no longer
@@ -391,7 +394,7 @@ lock acquisition.
 Codex sends no hook when a turn ends in an error, such as a model at
 capacity. The row reads `working` until a check finds the turn's end in
 Codex's rollout: a `status` or `get` of that row, a `list` selecting it, or
-`find-missing` can move it to `waiting` (shown after any
+`sweep` can move it to `waiting` (shown after any
 [settle time](configuration.md#settle-time-state)). Keep polling `status` as for
 any turn. `waiting` does not mean the turn succeeded: read the pane for the
 error before sending more work. The row's `state_changed_at` is the time of
@@ -997,8 +1000,9 @@ outcomes. Display loss supplies no readiness, permission or termination evidence
 `spawn` returns before the runtime confirms startup. Missing programs,
 unsupported platforms, failed lifetime protection or unavailable ownership
 evidence cannot produce a ready report; a launch may remain `pending` until
-`find-missing` or a public read confirms gateway loss. Runtime/protocol/reporting
-failures emit `ad.cursor.failed` with a reason when the gateway has identified its row.
+a recovery check (a state read or `sweep`) confirms gateway loss.
+Runtime/protocol/reporting failures emit `ad.cursor.failed` with a reason when
+the gateway has identified its row.
 Examples include an ACP operation timeout, unsupported ACP protocol,
 changed runtime/session binding, a refused report or transport failure.
 Each tool proof keeps the original `[store] busy_timeout_ms` window from its
@@ -1062,7 +1066,7 @@ For a selected live Cursor row, the
 process identity alone and never look it up in tmux. A reused PID with a
 different start time means the recorded gateway is gone. Only that exact verdict
 ends the row: a confirmed lost gateway is reported as `missing` without waiting
-for `find-missing`, pending grace, a live launch owner or the state settle
+for `sweep`, pending grace, a live launch owner or the state settle
 delay, even if its runtime is still alive.
 Alive or unknown evidence leaves its lifecycle state unchanged; unknown evidence
 leaves the row unverified with `liveness_note` `probe_eacces`. A Cursor row with
@@ -1094,7 +1098,7 @@ receipt or delivery. Terminal closure leaves Cursor request proof
 unchanged, including after `delivered`; see
 [Cursor permission lifetimes](permissions.md#cursor-spawns).
 Finished Cursor rows receive no gateway check. State reads do not check outside
-their selected IDs; `find-missing` selects all agents.
+their selected IDs; `sweep` selects all agents.
 
 A Cursor `missing` row is not proof that its runtime has exited. Resolve any
 surviving work through the existing ownership and
@@ -1154,7 +1158,7 @@ A Claude row's clean exit ends the row at once. A Codex agent that exits other
 than through `pause`, an `/exit` typed at its pane, leaves its row in its last
 state, and so does a crash or a `kill` of either agent. Until something sees
 the agent gone, `send-keys` gets `ErrTmuxSendKeys` and `read-pane`
-`ErrTmuxCaptureFailed`. Run `find-missing`: it marks the row `ended` when the
+`ErrTmuxCaptureFailed`. Run `sweep`: it marks the row `ended` when the
 agent's end was reported, else `missing`, and an `ended` row is in neither of
 its lists (see [How a Codex row ends](hooks.md#how-a-codex-row-ends)). Selected
 state reads can make the same guarded move through
@@ -1166,8 +1170,8 @@ state reads can make the same guarded move through
   `ended`.
 - A live row whose agent already exited with an end report, in any live state,
   returns success having sent nothing, and the row is `ended`.
-- A gone agent with no end report, or one that cannot be judged, gets today's
-  outcomes: `ErrTmuxSendKeys` for a waiting row's keys, or `ErrPauseTimeout`.
+- A gone agent with no end report, or one that cannot be judged, gets
+  `ErrTmuxSendKeys` for a waiting row's keys, or `ErrPauseTimeout`.
   [Shared recovery](#bounded-recovery-on-state-reads) then settles the row.
 
 If a live Codex row has a draft exceeding 64 lines, `pause` submits the

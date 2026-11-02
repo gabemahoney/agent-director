@@ -56,7 +56,7 @@ func Sweep(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc ProcCh
 // CLI: agent-director sweep
 //
 // Errors:
-//   - ErrProbeUnsupported: retained for compatibility; no longer returned.
+//   - ErrProbeUnsupported: never returned; catalogued for client mapping.
 //   - [ErrStoreBusy]: the zero-wait store read selecting the agents did not
 //     finish within its bound: another call of this process held the store's
 //     operation slot or connection (an earlier call's operation keeps them

@@ -146,7 +146,7 @@ var missingNotProofFull = []string{
 // missingNotProofShort is SR-18.2's short form (decision-0930e), verbatim,
 // and missingNotProofShortMarks the phrases that mark a text as carrying it,
 // reworded or not, in its wording since b.7vf or before.
-const missingNotProofShort = "`missing` is not proof of exit (see find-missing)."
+const missingNotProofShort = "`missing` is not proof of exit (see sweep)."
 
 var missingNotProofShortMarks = []string{"is not proof of exit", "is not proof the agent exited"}
 
@@ -177,15 +177,15 @@ func DescMissingNotProof() DescCase {
 
 // DescMissingNotProofShort is SR-18.2's short form (decision-0930e) for the
 // verb Descriptions that reach help and MCP but do not produce missing (kill,
-// resume, pause, expire): "`missing` is not proof of exit
-// (see find-missing).", verbatim. Such a text must not carry the full
-// statement (DescMissingNotProof) instead or as well, nor the claims that
-// present ended or missing as dead or safe to delete. Check it with
-// AssertAgentTextCase.
+// resume, pause, expire): "`missing` is not proof of exit (see sweep).",
+// verbatim. Such a text must not carry the full statement
+// (DescMissingNotProof) instead or as well, the old "(see find-missing)"
+// pointer, nor the claims that present ended or missing as dead or safe to
+// delete. Check it with AssertAgentTextCase.
 func DescMissingNotProofShort() DescCase {
 	return DescCase{
 		Name:    "SR-18.2 short form, missing is not proof the agent exited",
 		Require: []string{missingNotProofShort},
-		MustNot: append(append([]string(nil), missingNotProofFull...), missingNotProofClaims...),
+		MustNot: concatStrings(missingNotProofFull, missingNotProofClaims, []string{"(see find-missing)"}),
 	}
 }

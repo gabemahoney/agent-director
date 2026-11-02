@@ -2,6 +2,7 @@ package installsh_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,7 +64,12 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"removing a `-wal` or `-shm` that the copy lacks",
 		"Keep original launch-lock inodes; do not replace or delete them",
 		"Install the matching previous release with its own `install.sh` and the original flags",
-		"Before restarting any older runtime, reconcile uncertain attempts against the preserved evidence",
+		"omitting `--schedule` to preserve a custom cadence",
+		"Before restarting any older runtime, restore `find-missing` as the recovery command in every schedule that runs `sweep`",
+		"the tagged cron line (`crontab -e`), the service `ExecStart`, or a schedule you made another way",
+		"keeping your chosen cadence and environment",
+		"After editing a service, run `systemctl --user daemon-reload`",
+		"Then reconcile uncertain attempts against the preserved evidence",
 		"restoration loses all later writes and can lose proof of input that already reached an agent",
 		"Never replay an attempt merely because the restored copy lacks its proof",
 		"The journal cutover creates a separate stopped-writer backup before schema changes; other installer steps do not supply this complete recovery set",
@@ -184,6 +190,19 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			h.S, h.Pair = &old, previous
 			h.Flags = originalFlags
 			moveMustInstall(t, h) // previous release's own installer, same flags
+			// b.x9o: restored schedules must use the older binary's recovery verb.
+			// Cadence and environment are operator edits, not installer defaults.
+			restored := filepath.Join(h.New, "bin", "agent-director")
+			if got := h.Run(restored, "find-missing"); got.Code != 0 {
+				t.Fatalf("restored previous release cannot run scheduled recovery: %+v", got)
+			}
+			got := h.Run(restored, "sweep")
+			var refusal struct {
+				ErrName string `json:"err_name"`
+			}
+			if err := json.Unmarshal([]byte(got.Stderr), &refusal); err != nil || got.Code == 0 || refusal.ErrName != "ErrUnknownVerb" {
+				t.Fatalf("restored previous release must refuse sweep as unknown: %+v (decode: %v)", got, err)
+			}
 			if got := h.Run(filepath.Join(h.New, "bin", "agent-director"), "get", "--instance-id", "before"); got.Code != 0 || !strings.Contains(got.Stdout, "original-session") || !strings.Contains(got.Stdout, "/before") {
 				t.Fatalf("restored previous release cannot read original row: %+v", got)
 			}
