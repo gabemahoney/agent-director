@@ -514,6 +514,90 @@ func (s sweepWithSampleRepair) RepairCheckPermissionSample(store.Spawn, []store.
 	return "", store.CondChanged, nil
 }
 
+// sweepCursorNarrowStore is a Go provider that reads Cursor bindings but has no
+// provisional-transcript capability.
+type sweepCursorNarrowStore interface {
+	api.FindMissingStore
+	api.InputProofStore
+	RecoveryRows([]string, store.SettleRead) ([]store.Spawn, error)
+	PermissionRequestsForSpawn(string) ([]store.PermissionRow, error)
+	PermissionRequestsForSpawnWithin(string, time.Duration) ([]store.PermissionRow, error)
+	ObserveNeedsIntelligence(store.Spawn, []store.PermissionSample, time.Time, store.SettleRead) (store.DisplayDetail, map[string]string, error)
+	ReadCursorRuntimeWithin(string, time.Duration) (store.CursorRuntime, error)
+}
+
+// b.x9o df review F1: a protected pending Cursor row with an unknown gateway is
+// decided by its protection, so its one gateway sample lends the sweep no
+// reason: a narrow provider reports incomplete/unsupported (its missing
+// transcript capability), never commit_unconfirmed; production is complete.
+func TestSweepProtectedCursorUnknownGatewayReason(t *testing.T) {
+	t.Parallel()
+	for _, protection := range []string{"grace", "owner"} {
+		for _, provider := range []string{"narrow", "production"} {
+			t.Run(protection+"/"+provider, func(t *testing.T) {
+				e, _, b, _ := cursorReadLaunch(t)
+				cursorReadSQL(t, e.dbPath, "UPDATE spawns SET state='pending',settled_state='pending' WHERE instance_id=?", b.InstanceID)
+				if protection == "grace" {
+					cursorReadSQL(t, e.dbPath, "UPDATE spawns SET launch_started_at=? WHERE instance_id=?", e.clock.Now().UnixMilli(), b.InstanceID)
+				} else {
+					owner := e.newPID()
+					e.pc.Set(owner, procfix.Alive(apitest.LinuxProcStarttime))
+					cursorReadSQL(t, e.dbPath, "UPDATE spawns SET launch_owner_pid=?,launch_owner_starttime=?,launch_owner_pidns=? WHERE instance_id=?",
+						owner, apitest.LinuxProcStarttime, selfPIDNamespace(t), b.InstanceID)
+				}
+				e.pc.Set(b.GatewayPID, procfix.Unreadable())
+				var source api.FindMissingStore = e.st
+				if provider == "narrow" {
+					var narrow sweepCursorNarrowStore = e.st
+					source = struct{ sweepCursorNarrowStore }{narrow}
+				}
+				before := e.columns(t, b.InstanceID)
+				mark, probed := trailMark(t), len(e.pc.StartTimeCalls())
+				got, err := runFindMissing(source, e.pc, fmSweep{canonical: true, clock: e.clock, tmux: e.rec})
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertLists(t, got, nil, nil)
+				if len(got.Checks) != 1 || got.Checks[0].State != store.StatePending {
+					t.Fatalf("checks=%s", jsonOf(t, got.Checks))
+				}
+				row := got.Checks[0]
+				reason := ""
+				if row.Reason != nil {
+					reason = *row.Reason
+				}
+				wantCompletion, wantReason := "incomplete", "unsupported"
+				if provider == "production" {
+					wantCompletion, wantReason = "complete", ""
+				}
+				if row.Completion != wantCompletion || reason != wantReason {
+					t.Errorf("completion=%s/%q; want %s/%q", row.Completion, reason, wantCompletion, wantReason)
+				}
+				if r := row.Confirmations.State; r.Reason != nil && (*r.Reason == store.ReasonOperationPending || *r.Reason == "commit_unconfirmed") {
+					t.Errorf("protected row carries a state attempt: %s", conf(r))
+				}
+				e.assertRowUnchanged(t, b.InstanceID, before)
+				if _, err := e.st.ReadCursorRuntime(b.InstanceID); err != nil {
+					t.Errorf("binding: %v", err)
+				}
+				if records := ptRecords(t, mark, "ad.find_missing.tick", b.InstanceID); len(records) != 0 {
+					t.Errorf("protected row ticked: %+v", records)
+				}
+				samples := 0
+				for _, pid := range e.pc.StartTimeCalls()[probed:] {
+					if pid == b.GatewayPID {
+						samples++
+					}
+				}
+				if samples != 1 {
+					t.Errorf("gateway samples=%d; want 1", samples)
+				}
+				e.assertNoTmuxCall(t)
+			})
+		}
+	}
+}
+
 // b.x9o cb review B3: unavailable writers are different from attempted no-ops.
 func TestSweepOptionalWriterCoverage(t *testing.T) {
 	t.Parallel()

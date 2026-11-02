@@ -133,11 +133,12 @@ type FindMissingResult struct {
 	// report, which the sweep moves to ended instead and does not list, and rows whose process could not
 	// be checked and whose lookup found no session or pane of their current
 	// launch; a pending row only past the pending grace period, never while
-	// its launch owner holds it, and never for being noted unreported. A row
-	// whose guarded mark found it changed or absent, or failed in the store,
-	// is not listed. missing is a check's judgement on available evidence,
-	// not proof that the agent has exited. Always non-nil — encodes as []
-	// when no rows were marked.
+	// its launch owner holds it (except a Cursor row whose recorded gateway is
+	// exactly gone, which neither protects), and never for being noted
+	// unreported. A row whose guarded mark found it changed or absent, or
+	// failed in the store, is not listed. missing is a check's judgement on
+	// available evidence, not proof that the agent has exited. Always non-nil
+	// — encodes as [] when no rows were marked.
 	IDs []string `json:"ids"`
 	// Unverified is the number of live rows this sweep left live with a
 	// liveness note: their agent process could not be checked (the
@@ -357,7 +358,9 @@ func findMissingAction(r findMissingRow) string {
 //     one start-time read). A row with no owner recorded (from before schema
 //     v6, or a launch whose hold has ended), an owner in another or
 //     unreadable pid namespace, and an owner gone or unreadable are judged as
-//     before, by the grace period alone.
+//     before, by the grace period alone. Neither protects a Cursor row whose
+//     recorded gateway is exactly gone: it is marked missing as in 5; any
+//     other gateway verdict leaves it protected and unnoted.
 //  3. Every other row is judged by its agent process (judgeLiveRow): alive
 //     leaves it live and clears any note it carries, except that a `pending`
 //     row whose pane is recorded (or was just adopted) stays pending and is
@@ -870,7 +873,8 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 // launch is still in progress: the spawn, reuse or resume that began it
 // records itself on the row and ends that hold when its launch ends, and the
 // row is not judged while that process is alive in this caller's pid
-// namespace. A row noted unreported is in neither result list. Ages and tmux time are
+// namespace. Neither protects a Cursor row whose exact recorded gateway is
+// gone: it is marked missing. A row noted unreported is in neither result list. Ages and tmux time are
 // read from the Client's clock. Recovery runs only when called; status/get/list
 // share the same checks for their fixed selected rows. No schedule is added.
 //

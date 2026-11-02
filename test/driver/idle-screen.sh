@@ -138,7 +138,7 @@ wait_raw() {
 launch() {
     local agent="$1" id="$2"
     shift 2
-    local cwd sid tp home out event extra payload end
+    local cwd sid tp home out end
     local spawn_extra=() hook_args=()
     cwd="$(mktemp -d /tmp/idle-screen-XXXXXX)"
     cwd="$(cd -P "$cwd" && pwd)"
@@ -165,14 +165,37 @@ launch() {
             sleep 0.1
         done
     fi
-    for event in SessionStart UserPromptSubmit; do
-        extra='{"source":"startup"}'
-        [[ "$event" == SessionStart ]] || extra='{"prompt":"hello","turn_id":"turn-1"}'
-        payload="$(jq -cn --arg e "$event" --arg sid "$sid" --arg tp "$tp" --arg cwd "$cwd" --argjson x "$extra" \
-            '{hook_event_name: $e, session_id: $sid, transcript_path: $tp, cwd: $cwd, model: "stand-in", permission_mode: "default"} + $x')"
-        /opt/driver/pane-hook.sh "${hook_args[@]}" "$id" "$payload" >/dev/null || fail "$event hook on $id exited non-zero"
-    done
+    hook_sid="$sid" hook_tp="$tp" hook_cwd="$cwd" hook_agent_args=("${hook_args[@]}")
+    hook "$id" SessionStart '{"source":"startup"}'
+    hook "$id" UserPromptSubmit '{"prompt":"hello","turn_id":"turn-1"}'
     wait_raw "$id" working
+}
+
+# hook ID EVENT EXTRA: type EVENT's payload, with EXTRA's members, into ID's
+# pane as the latest launch's agent and session (hook_sid, hook_tp, hook_cwd,
+# hook_agent_args); the hook must exit 0.
+hook() {
+    local payload
+    payload="$(jq -cn --arg e "$2" --arg sid "$hook_sid" --arg tp "$hook_tp" --arg cwd "$hook_cwd" --argjson x "$3" \
+        '{hook_event_name: $e, session_id: $sid, transcript_path: $tp, cwd: $cwd, model: "stand-in", permission_mode: "default"} + $x')"
+    /opt/driver/pane-hook.sh "${hook_agent_args[@]}" "$1" "$payload" >/dev/null || fail "$2 hook on $1 exited non-zero"
+}
+
+# settle_working ID: give the latest launch ID's working stay a settled base of
+# working through its own hooks alone (hookStateSet, internal/store/settle.go):
+# a Stop under settle_ms 0 makes working the settled value, and the next prompt
+# under settle_ms 60000 keeps it, because the brief waiting never settled. A
+# read settling for 60 s then reports working, with this last stay's own raw
+# record, while the display's exit is still settling. Run it before the
+# baseline, so the stay it ends in is the one every later read reports.
+settle_working() {
+    hook "$1" Stop '{"stop_hook_active":false,"turn_id":"turn-1"}'
+    wait_raw "$1" waiting
+    write_config 600 60000
+    hook "$1" UserPromptSubmit '{"prompt":"hello again","turn_id":"turn-2"}'
+    wait_raw "$1" working
+    write_config 600
+    [[ "$(col "$1" settled_state)" == working ]] || fail "$1: settled base [$(col "$1" settled_state)]; want working"
 }
 
 # baseline ID: status reads until the committed baseline is the fingerprint
@@ -256,6 +279,7 @@ public)
     for agent in claude codex; do
         id="pane-$agent-$(cat /proc/sys/kernel/random/uuid)"
         launch "$agent" "$id"
+        settle_working "$id"
         baseline "$id"
         backdate "$id" 900000
         v="$(version "$id")"
@@ -299,11 +323,15 @@ public)
         state_record="$(jq -c .confirmations.state <<<"$get")"
         sock="$(col "$id" tmux_socket)"
         pane="$(col "$id" pane_id)"
-        label="$(tmux ${sock:+-S "$sock"} show-options -p -v -t "$pane" @ad_pane)"
-        # Lose only the pane's ownership label. The actual agent process and
-        # lifecycle stay alive/working; the display's exit is still settling.
+        session="$(tmux ${sock:+-S "$sock"} display-message -p -t "$pane" '#{session_id}')"
+        label="$(tmux ${sock:+-S "$sock"} show-options -v -t "$session" @ad_owner)"
+        [[ -n "$label" ]] || fail "$agent: session $session carries no @ad_owner label"
+        # Lose only the session's ownership label, so the lookup no longer
+        # finds the launch's own session and the pane sample fails. The actual
+        # agent process and lifecycle stay alive/working; the display's exit
+        # is still settling.
         write_config 600 60000
-        tmux ${sock:+-S "$sock"} set-option -p -u -t "$pane" @ad_pane
+        tmux ${sock:+-S "$sock"} set-option -u -t "$session" @ad_owner
         observe "$id"
         failed="$last"
         jq -e --argjson prior "$get" --argjson state "$state_record" '.state == "working" and .displayed_state == "idle_screen"
@@ -312,6 +340,7 @@ public)
                 source:"pane", checked_at:.confirmations.displayed_state.checked_at, reason:"unreadable"}
             and .confirmations.displayed_state.checked_at >= $prior.confirmations.displayed_state.checked_at' <<<"$failed" >/dev/null || fail "lost pane borrowed fresh evidence: $failed"
         [[ "$(col "$id" "launch_token || '|' || pane_id || '|' || pid || '|' || proc_starttime")" == "$owner" ]] || fail "pane observation changed the agent identity"
+        [[ "$(col "$id" "state || '|' || settled_state")" == "working|working" ]] || fail "pane observation moved the lifecycle"
         stored="$(col "$id" display_evidence)"
         confirmed_ms="$(date -d "$(jq -r .confirmations.displayed_state.confirmed_at <<<"$failed")" +%s%3N)"
         checked_ms="$(date -d "$(jq -r .confirmations.displayed_state.checked_at <<<"$failed")" +%s%3N)"
@@ -319,10 +348,12 @@ public)
             and .at == $at and .since == $at and .checked == $checked' <<<"$stored" >/dev/null || fail "failed attempt not durable: $stored"
         jq -cn --arg agent "$agent" --arg id "$id" --arg owner "$owner" --argjson success "$get" --argjson listed "$listed" --argjson failed "$failed" --argjson stored "$stored" \
             '{agent:$agent,id:$id,owner:$owner,success:$success,listed:$listed,failed:$failed,stored:$stored}' >>"$evidence"
-        tmux ${sock:+-S "$sock"} set-option -p -t "$pane" @ad_pane "$label"
+        tmux ${sock:+-S "$sock"} set-option -t "$session" @ad_owner "$label"
+        [[ "$(tmux ${sock:+-S "$sock"} show-options -v -t "$session" @ad_owner)" == "$label" ]] || fail "$agent: @ad_owner not restored"
         write_config 600
 
     done
+    jq -se 'map(.agent) == ["claude", "codex"]' "$evidence" >/dev/null || fail "public evidence lacks an agent's line"
     trail_clean
     jq -cn --argjson m "$(printf '%s\n' "${minutes[@]}" | jq -sc .)" --argjson e "$(printf '%s\n' "${entries[@]}" | jq -sc .)" \
         '{case: "public", agents: ["claude", "codex"], timeout: 600, minutes: $m, entry_commits: $e, entry_records: [1, 1], pane_loss: "not_confirmed/unreadable", raw: "working"}'

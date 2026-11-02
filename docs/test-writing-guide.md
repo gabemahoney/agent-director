@@ -168,9 +168,9 @@ wire detail.
 
   The exceptions cover those two plans only.
 - `idle-screen` obtains positive
-  pane evidence through real launches/hooks/reads, then removes only the pane
-  label while the agent stays alive to test a failed latest attempt retaining
-  its first confirmation. Integration must export
+  pane evidence through real launches/hooks/reads, then removes only the
+  session's `@ad_owner` label while the agent stays alive to test a failed
+  latest attempt retaining its first confirmation. Integration must export
   `/tmp/idle-screen-artifacts/public.jsonl` before container cleanup. A baseline
   without `display_evidence` exits unavailable (77), not passed.
 - Lifecycle and read-write coverage lives in

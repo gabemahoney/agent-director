@@ -109,8 +109,9 @@ agents use. `HOME` is carried when it differs from the passwd home because the
 binary keeps its files in `$HOME/.config/agent-director`.
 
 See [Sweep results](caller-contract.md#sweep-results) for liveness outcomes,
-counters and check coverage. A `pending` row receives
-no liveness check inside its grace period or while its launch owner is alive.
+counters and check coverage. A `pending` row is not judged inside its grace
+period or while its launch owner is alive, except a Cursor row whose recorded
+gateway is gone.
 
 Past its grace period, a `pending` row whose agent runs but has not reported
 in stays `pending` with `liveness_note` `unreported`. Read the pane, then type

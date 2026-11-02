@@ -54,16 +54,20 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 					t.Fatal(err)
 				}
 				before := cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)
-				// b.x9o: shared checks preserve pending grace even for a known
-				// dead gateway. Advancing the clock alone performs no recovery.
-				grace, err := c.Get(row.InstanceID)
-				if err != nil || grace.State != store.StatePending || !reflect.DeepEqual(before, cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)) {
-					t.Fatalf("pending grace mutated current launch: %+v %v", grace, err)
+				if verdict != "dead" {
+					// b.x9o: shared checks preserve pending grace for an alive or
+					// unknown gateway. Advancing the clock alone performs no recovery.
+					grace, err := c.Get(row.InstanceID)
+					if err != nil || grace.State != store.StatePending || !reflect.DeepEqual(before, cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)) {
+						t.Fatalf("pending grace mutated current launch: %+v %v", grace, err)
+					}
+					e.clock.Advance(time.Minute + time.Second)
+					if !reflect.DeepEqual(before, cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)) {
+						t.Fatal("time alone performed recovery")
+					}
 				}
-				e.clock.Advance(time.Minute + time.Second)
-				if !reflect.DeepEqual(before, cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)) {
-					t.Fatal("time alone performed recovery")
-				}
+				// b.x9o (MI Q2A): an exact gateway loss outranks pending grace, so
+				// a dead gateway's first read, inside grace, reports missing.
 				getStarted := time.Now()
 				got, err := c.Get(row.InstanceID)
 				getFinished := time.Now()

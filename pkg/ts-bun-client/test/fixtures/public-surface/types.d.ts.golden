@@ -1143,12 +1143,13 @@ export interface SweepResult {
      * pane's) is dead, and rows whose process could not be checked and tmux
      * found no session or pane of their current launch; a pending row only past
      * the pending grace period, and never while the spawn, reuse or resume that
-     * began its launch still runs. A row whose guarded write found it changed or
-     * gone, or failed, is in neither list, and so is a Codex row the sweep moved
-     * to `ended` (its agent process gone and an end report held) and a pending
-     * row the sweep notes `unreported` (its agent alive) or finds already noted
-     * so. `missing` is a check's judgement on available evidence, not
-     * proof that the agent has exited. Never null; [] when none.
+     * began its launch still runs, except a Cursor row whose exact recorded
+     * gateway is gone, which neither protects. A row whose guarded write found
+     * it changed or gone, or failed, is in neither list, and so is a Codex row
+     * the sweep moved to `ended` (its agent process gone and an end report held)
+     * and a pending row the sweep notes `unreported` (its agent alive) or finds
+     * already noted so. `missing` is a check's judgement on available evidence,
+     * not proof that the agent has exited. Never null; [] when none.
      */
     ids: string[];
     /** Number of live rows this sweep left unverified (the length of `unverified_ids`). */

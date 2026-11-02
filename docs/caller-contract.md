@@ -114,7 +114,8 @@ and late exact input proof; a check of the agent process also records
 [`process_liveness`](#confirmations). Each runs only with applicable evidence and
 available capabilities. Finished rows skip liveness, turn, permission,
 display and transcript checks; late exact input proof remains eligible.
-Pending grace and a live launch owner protect an unfinished launch.
+Pending grace and a live launch owner protect an unfinished launch, except
+from [exact Cursor gateway loss](#cursor-operation-boundaries).
 
 Work is bounded per call and writes recheck the sampled identity. A stale
 sample, unavailable provider or unconfirmed commit is not successful recovery;
@@ -1061,7 +1062,8 @@ For a selected live Cursor row, the
 process identity alone and never look it up in tmux. A reused PID with a
 different start time means the recorded gateway is gone. Only that exact verdict
 ends the row: a confirmed lost gateway is reported as `missing` without waiting
-for `find-missing` or the state settle delay, even if its runtime is still alive.
+for `find-missing`, pending grace, a live launch owner or the state settle
+delay, even if its runtime is still alive.
 Alive or unknown evidence leaves its lifecycle state unchanged; unknown evidence
 leaves the row unverified with `liveness_note` `probe_eacces`. A Cursor row with
 no recorded gateway is checked like any other agent's row.

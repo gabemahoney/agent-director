@@ -507,10 +507,24 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 		checked.proofRow = &row
 		return
 	}
-	if p := r.view.active; p != nil {
+	// The exact gateway is sampled once, before the pending-launch protection:
+	// only its exact loss outranks that protection (SR-3.3), and the same
+	// sample then serves the checks below. Its outcome is recorded only once
+	// the protection has declined the row, so a protected row's gateway
+	// outcome stays inapplicable.
+	var proof *store.CursorMissingProof
+	var gateway activeCheckOutcome
+	cursor := row.Agent == store.AgentCursor && r.view.Procs != nil
+	if cursor {
+		proof, gateway = cursorGatewayProof(r.source, r.view.Procs, row)
+	}
+	if p := r.view.active; p != nil && proof == nil {
 		now := newRelayJudge(r.view).now()
 		inside := store.InsidePendingGrace(row.State, row.LaunchStartedAtMillis, p.pendingGrace, now)
 		if inside || (row.State == store.StatePending && r.view.Procs != nil && spawn.LaunchOwnerAlive(r.view.Procs, row.LaunchOwner)) {
+			// An alive, unknown or unreadable gateway is no terminal authority
+			// over a protected launch: the protection, not that sample, decides
+			// the row, which gains no note, attempt or mark from it.
 			checked.record(activeCheckOutcome{Adapter: "pending", Result: "inapplicable"})
 			checked.inapplicable("liveness", "cursor_gateway", "codex_turn", "permission_read", "permission_repair", "display", "permission_fallback", "native_proof")
 			// The pending-launch protection, not missing evidence, keeps the
@@ -527,12 +541,10 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 		}
 	}
 	var cursorProcess string
-	if row.Agent == store.AgentCursor && r.view.Procs != nil {
-		proof, outcome := cursorGatewayProof(r.source, r.view.Procs, row)
-		checked.record(outcome)
-		err := outcome.Err
-		if err != nil {
-			r.attempt(checked, outcomeReason(outcome.Result))
+	if cursor {
+		checked.record(gateway)
+		if gateway.Err != nil {
+			r.attempt(checked, outcomeReason(gateway.Result))
 			return
 		}
 		if proof != nil {
@@ -546,7 +558,7 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 			checked.inapplicable("liveness", "codex_turn", "transcript", "permission_read", "permission_repair", "display", "permission_fallback", "native_proof")
 			return // project the exact loss before the deferred terminal write
 		}
-		cursorProcess = outcome.Evidence
+		cursorProcess = gateway.Evidence
 	} else {
 		checked.inapplicable("cursor_gateway")
 	}

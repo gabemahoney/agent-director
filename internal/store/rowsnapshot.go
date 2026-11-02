@@ -77,7 +77,8 @@ type LaunchIdentity struct {
 // release (ReleaseLaunchOwner) on a path that ends without that write.
 // find-missing does not judge a pending row while its owner is provably
 // alive, so a launch that stalls past the pending grace period is neither
-// marked missing nor noted unreported under it.
+// marked missing nor noted unreported under it, unless it is a Cursor row
+// whose exact recorded gateway is gone.
 //
 // Zero values mean NULL. PID 0 means no owner is recorded: a row from before
 // schema v6, a launch whose own start time or pid namespace could not be
@@ -227,7 +228,8 @@ func decodeLaunchStartedAt(v any) int64 {
 // minimum applied here (configuration loading owns those, SR-4.1).
 //
 // Two callers use it with the same effective pending grace period (SR-13.4):
-// find-missing, which leaves a row inside it untouched, and the hook's
+// find-missing, which leaves a row inside it untouched (except a Cursor row
+// whose exact recorded gateway is gone, which it marks missing), and the hook's
 // SessionStart, which waits for its launch's identity write only while the
 // row is inside it (SR-22.9).
 //

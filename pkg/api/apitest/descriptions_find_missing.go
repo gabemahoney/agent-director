@@ -22,9 +22,10 @@ import (
 // manifest description states it (SR-18.9, SR-11.2): a pending row is not
 // judged inside the pending grace period (pending_grace_seconds, its default
 // config.DefaultPendingGraceSeconds), measured from its launch start rather
-// than its started_at, and a pending row can be a resume's launch; never the
-// old claim that the scan judges every pending row. Check it with
-// AssertAgentTextCase on FindMissingOwnText of the description.
+// than its started_at, and a pending row can be a resume's launch; except that
+// neither protection holds a Cursor row whose exact gateway is gone (b.x9o,
+// MI Q2A); never the old claim that the scan judges every pending row. Check
+// it with AssertAgentTextCase on FindMissingOwnText of the description.
 func DescFindMissingGrace() DescCase {
 	return DescCase{
 		Name: "find-missing manifest, pending grace statement",
@@ -33,6 +34,7 @@ func DescFindMissingGrace() DescCase {
 			fmt.Sprintf("pending_grace_seconds (default %d s)", config.DefaultPendingGraceSeconds),
 			"of launch start, not started_at",
 			"an unreadable start is judged at once",
+			"Cursor uses its exact gateway: gone overrides pending protections",
 		},
 		MustNot: []string{"live-state rows (including pending)"},
 	}
@@ -99,8 +101,9 @@ const (
 // as the manifest states it (SR-11.7, SR-18.3, SR-18.11), by key phrase. ids:
 // rows marked missing on process or tmux evidence (a dead agent process, or a
 // row whose process could not be checked with no session or pane of its
-// current launch in tmux), a pending row only past the pending grace period,
-// not proof of exit. unverified_ids: rows left unverified with a note,
+// current launch in tmux), a pending row only past the pending grace period
+// and never while its launch runs, except a Cursor row whose exact recorded
+// gateway is gone (b.x9o, MI Q2A), not proof of exit. unverified_ids: rows left unverified with a note,
 // written or already current, never a pending row inside the pending grace
 // period; never the old "left untouched" meaning. Both: a row whose guarded
 // write found it changed or gone, or failed, is in neither list; never null.
@@ -115,6 +118,8 @@ func DescFindMissingField(f FindMissingField) DescCase {
 				"marked `missing`, on process or tmux evidence", "agent process",
 				"could not be checked", "no session or pane of their current launch",
 				"a pending row only past the pending grace period",
+				"never while the spawn, reuse or resume that began its launch still runs",
+				"except a Cursor row whose exact recorded gateway is gone",
 				"not proof that the agent has exited",
 			}, both...),
 			MustNot: []string{"left untouched"},

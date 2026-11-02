@@ -5030,7 +5030,8 @@ The checker reuses the following adapters and guarded stores:
 - `CodexTurnSamples` / `EndCodexTurnSample` and
   `ProvisionalTranscriptsFor` / `HealProvisionalTranscript` for selected turn
   completion and newly available Claude transcripts. Pending grace skips
-  live-agent checks but still permits eligible transcript healing.
+  live-agent checks, except exact Cursor gateway loss, but still permits
+  eligible transcript healing.
 - `activePermissionReader`, `repairCheckPermissionRow` /
   `RepairCheckPermissionSample`, and `observeDisplay` with
   `ObserveNeedsIntelligenceOutcome` / `ObserveIdleScreenOutcome`. Samples bind
@@ -16847,7 +16848,10 @@ answers:
 [Cursor gateway and current-launch binding](#cursor-gateway-and-current-launch-binding)),
 never by the tmux lookup or the unusable-name rule: alive is handled as an
 alive process, unknown leaves the row unverified with `probe_eacces`, and only
-an exact gone verdict marks it `missing`. A Cursor row with no recorded
+an exact gone verdict marks it `missing`. The gateway is sampled before the
+pending-launch protections: an exact gone verdict overrides pending grace and
+a live launch owner, while any other verdict leaves them in force with the
+gateway outcome inapplicable (SR-3.3). A Cursor row with no recorded
 gateway, or checked by a provider without the gateway adapter, follows the
 table above.
 
@@ -17069,12 +17073,15 @@ row past its grace period whose launch owner is provably alive
 (`spawn.LaunchOwnerAlive`: the owner's pid namespace equals this
 process's, and the owner's pid is alive with its recorded start time) is
 excluded from live-agent checks like one inside its grace period: no
-liveness write, tick or tmux call, in neither list. Eligible transcript
-healing still runs through [Shared active checks](#shared-active-checks). So a `spawn` or `resume` stalled past the
-grace period is neither marked `missing` (after which it would start an
-agent no row tracks) nor noted `unreported` under it. A row with no owner recorded
-(from before schema v6, a launch that could not read its own start time or
-namespace, or a launch whose hold has ended), an owner in another or
+liveness write, tick or tmux call, in neither list. A Cursor row's recorded
+gateway is still sampled first; only its exact loss overrides either
+protection (see "Cursor rows" above). Eligible transcript healing still
+runs through [Shared active checks](#shared-active-checks). So a `spawn` or
+`resume` stalled past the grace period is neither marked `missing` (after
+which it would start an agent no row tracks) nor noted `unreported` under
+it. A row with no owner recorded (from before schema v6, a launch that
+could not read its own start time or namespace, or a launch whose hold has
+ended), an owner in another or
 unreadable pid namespace, and an owner gone or unreadable are judged by the
 grace period alone, as before. A launch's hold ends when the launch does
 (see "v6 columns" under [`internal/store`](#internalstore)), so a
@@ -17163,6 +17170,9 @@ step). The evidence model, notes, guard and marking order are in
    (`spawn.LaunchOwnerAlive`) is left untouched the same way (b.kdf; see "A
    launch in progress is not judged" under
    [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
+   A Cursor row's recorded gateway is still sampled first (a pid and
+   start-time read); only its exact loss overrides either protection (see
+   "Cursor rows" there).
    Any other row past the grace period, and every row in another live
    state, goes on to the steps below. The setting is `pending_grace_seconds` in the `[tmux]` table
    (60 s by default; unset, its derived minimum when that is larger),
@@ -17997,7 +18007,9 @@ adds it here.
   row with no launch start counts as past the grace period. Nor does it
   judge a `pending` row, however old, while the `spawn` or `resume` that
   began its launch is still running in the sweep's pid namespace and holds
-  the row (b.kdf); a launch ends its hold when it ends. The sweeps'
+  the row (b.kdf); a launch ends its hold when it ends. Only an exact
+  Cursor gateway loss overrides either protection (see "Cursor rows" under
+  [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)). The sweeps'
   per-run tmux time budget is 15 s by default and configurable
   (`sweep_budget_seconds`): once a `find-missing` run has spent it waiting
   on tmux, the run makes no more tmux calls, and every row still needing a
@@ -23046,7 +23058,8 @@ the Codex case naming the main agent's `Stop` or `Interrupt` and never a
     - `DescFindMissingGrace()`: `sweep`'s pending grace statement
       (a pending row is not judged inside the pending grace period,
       measured from its launch start; the default from
-      `config.DefaultPendingGraceSeconds`; a resume's launch included).
+      `config.DefaultPendingGraceSeconds`; a resume's launch included; an
+      exact Cursor gateway loss overrides it).
       Check it with `AssertAgentTextCase` on `FindMissingOwnText`.
     - `FindMissingOwnText(text)`: the part of the canonical `sweep` description
       before `LiveRowPointer`, so a check covers its own sentences only. It
