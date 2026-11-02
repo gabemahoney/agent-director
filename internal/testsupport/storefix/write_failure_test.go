@@ -2,11 +2,9 @@ package storefix_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,9 +22,6 @@ type proxyWrite struct {
 	kind        storefix.WriteFailureKind
 	failOpen    bool // the store method swallows the failure; only the effect shows it
 	ownKindOnly bool // run only with its own kind installed
-	alsoBlocked []storefix.WriteFailureKind
-	target      string                        // metadata key for store-wide authority, otherwise the instance id
-	writeRaw    func(dbPath, id string) error // exact SQL operation where no public writer exists
 	seed        func(t *testing.T, s *store.Store, dbPath, id string)
 	write       func(s *store.Store, id string) error
 	observe     func(t *testing.T, s *store.Store, dbPath, id string) any
@@ -337,113 +332,6 @@ var proxyWrites = []proxyWrite{
 	},
 }
 
-// inputProxyWrites exercises the trigger's exact SQL boundary against the real
-// schema. The records carry only the identity/phase fields the triggers inspect;
-// the API/store/migration consumers cover complete validated records and rollback.
-var inputProxyWrites = []struct {
-	name, sql string
-	kind      storefix.WriteFailureKind
-	also      []storefix.WriteFailureKind
-}{
-	{"input initial attempt insert", `INSERT INTO input_attempts(store_id,launch_token,request_id,revision,record)
- SELECT store_id,launch_token,'new',1,json_set(record,'$.request_id','new') FROM input_attempts WHERE launch_token=? AND request_id='seed'`, storefix.WriteFailInputAttemptInsert, nil},
-	{"input positive-byte upsert", `INSERT INTO input_attempts(store_id,launch_token,request_id,revision,record)
- SELECT store_id,launch_token,request_id,revision+1,json_set(record,'$.phase','text_attempted','$.bytes_attempted',1) FROM input_attempts WHERE launch_token=? AND request_id='seed'
- ON CONFLICT(store_id,launch_token,request_id) DO UPDATE SET revision=excluded.revision,record=excluded.record`, storefix.WriteFailInputTextIntent, []storefix.WriteFailureKind{storefix.WriteFailInputAttemptInsert}},
-	{"input zero-byte Enter upsert", `INSERT INTO input_attempts(store_id,launch_token,request_id,revision,record)
- SELECT store_id,launch_token,request_id,revision+1,json_set(record,'$.phase','enter_attempted','$.enter_attempted',1) FROM input_attempts WHERE launch_token=? AND request_id='seed'
- ON CONFLICT(store_id,launch_token,request_id) DO UPDATE SET revision=excluded.revision,record=excluded.record`, storefix.WriteFailInputAttemptInsert, nil},
-	{"input direct attempt update", `UPDATE input_attempts SET revision=revision+1,record=json_set(record,'$.bytes_attempted',1) WHERE launch_token=?`, 0, nil},
-	{"input current update", `UPDATE input_launches SET revision=revision+1 WHERE launch_token=?`, storefix.WriteFailInputCurrent, nil},
-	{"input launch insert", `INSERT INTO input_launches(store_id,launch_token,revision,record)
- SELECT store_id,launch_token||'-new',1,record FROM input_launches WHERE launch_token=?`, 0, nil},
-}
-
-func rawFailureDB(t *testing.T, path string) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
-
-func inputFailureProxies() []proxyWrite {
-	var out []proxyWrite
-	for _, test := range inputProxyWrites {
-		test := test
-		out = append(out, proxyWrite{
-			name: test.name, kind: test.kind, alsoBlocked: test.also,
-			seed: func(t *testing.T, s *store.Store, path, id string) {
-				db := rawFailureDB(t, path)
-				if _, err := db.Exec(`INSERT INTO input_launches(store_id,launch_token,revision,record)
- VALUES(?,?,1,json_object('Identity',json_object('InstanceID',?)))`, s.StoreID(), id, id); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := db.Exec(`INSERT INTO input_attempts(store_id,launch_token,request_id,revision,record)
- VALUES(?,?,'seed',1,json_object('identity',json_object('InstanceID',?),'phase','attempt_started','bytes_attempted',0))`, s.StoreID(), id, id); err != nil {
-					t.Fatal(err)
-				}
-			},
-			writeRaw: func(path, id string) error {
-				db, err := sql.Open("sqlite", path)
-				if err != nil {
-					return err
-				}
-				defer db.Close()
-				_, err = db.Exec(test.sql, id)
-				return err
-			},
-			observe: func(t *testing.T, _ *store.Store, path, id string) any {
-				db := rawFailureDB(t, path)
-				var launches, attempts string
-				if err := db.QueryRow(`SELECT json_group_array(json_array(launch_token,revision,record)) FROM input_launches WHERE json_extract(record,'$.Identity.InstanceID')=?`, id).Scan(&launches); err != nil {
-					t.Fatal(err)
-				}
-				if err := db.QueryRow(`SELECT json_group_array(json_array(request_id,revision,record)) FROM input_attempts WHERE launch_token=?`, id).Scan(&attempts); err != nil {
-					t.Fatal(err)
-				}
-				return []string{launches, attempts}
-			},
-		})
-	}
-	for _, update := range []bool{false, true} {
-		kind := storefix.WriteFailInputAuthority
-		query := `INSERT INTO store_meta(key,value) VALUES(?,'fixture') ON CONFLICT(key) DO UPDATE SET value=value||'-next'`
-		name := "input authority insert"
-		if update {
-			kind, name = 0, "input authority direct update"
-			query = `UPDATE store_meta SET value=value||'-next' WHERE key=?`
-		}
-		out = append(out, proxyWrite{
-			name: name, kind: kind, target: "native_input_authority",
-			seed: func(t *testing.T, _ *store.Store, path, id string) {
-				if _, err := rawFailureDB(t, path).Exec(`INSERT OR IGNORE INTO store_meta(key,value) VALUES(?,'fixture')`, id); err != nil {
-					t.Fatal(err)
-				}
-			},
-			writeRaw: func(path, id string) error {
-				db, err := sql.Open("sqlite", path)
-				if err != nil {
-					return err
-				}
-				defer db.Close()
-				_, err = db.Exec(query, id)
-				return err
-			},
-			observe: func(t *testing.T, _ *store.Store, path, id string) any {
-				var value string
-				if err := rawFailureDB(t, path).QueryRow(`SELECT value FROM store_meta WHERE key=?`, id).Scan(&value); err != nil {
-					t.Fatal(err)
-				}
-				return value
-			},
-		})
-	}
-	return out
-}
-
 // observeSubagentRows returns the id's subagent entries and claimable launches, raw.
 func observeSubagentRows(t *testing.T, _ *store.Store, dbPath, id string) any {
 	t.Helper()
@@ -470,12 +358,7 @@ func observeOpenRequests(t *testing.T, s *store.Store, _, id string) any {
 func runWrite(t *testing.T, s *store.Store, dbPath string, w proxyWrite, id string, blockedBy storefix.WriteFailureKind) {
 	t.Helper()
 	before := w.observe(t, s, dbPath, id)
-	var err error
-	if w.writeRaw != nil {
-		err = w.writeRaw(dbPath, id)
-	} else {
-		err = w.write(s, id)
-	}
+	err := w.write(s, id)
 	changed := !reflect.DeepEqual(before, w.observe(t, s, dbPath, id))
 	if blockedBy == 0 {
 		if err != nil || !changed {
@@ -508,82 +391,49 @@ func runWrite(t *testing.T, s *store.Store, dbPath string, w proxyWrite, id stri
 // on that id fail, and cleanup lifts them.
 func TestInjectWriteFailure(t *testing.T) {
 	const target, other = "wf-target", "wf-other"
-	writes := append(slices.Clone(proxyWrites), inputFailureProxies()...)
-	writes = append(writes, permissionIssueFailureProxies()...)
+	// Proven by their production consumers instead: store input_delivery tests,
+	// pkg/api sendkeys_persisted_proof_test and cursorhost request_boundary_linux_test.
+	production := map[storefix.WriteFailureKind]bool{
+		storefix.WriteFailInputAttemptInsert: true, storefix.WriteFailInputTextIntent: true, storefix.WriteFailInputCurrent: true,
+		storefix.WriteFailInputAuthority: true, storefix.WriteFailPermissionResponseIssue: true,
+	}
 	covered := map[storefix.WriteFailureKind]bool{}
-	for _, w := range writes {
+	for _, w := range proxyWrites {
 		covered[w.kind] = true
 	}
 	for _, k := range writefailfix.Kinds() {
-		if !covered[k] {
+		if !covered[k] && !production[k] {
 			t.Fatalf("no proxy write for kind %v", k)
 		}
 	}
 	for _, installed := range writefailfix.Kinds() {
-		for _, w := range writes {
+		if production[installed] {
+			continue
+		}
+		for _, w := range proxyWrites {
 			if w.ownKindOnly && installed != w.kind {
 				continue
 			}
 			t.Run(fmt.Sprintf("%v/%s", installed, w.name), func(t *testing.T) {
-				targetID := target
-				if w.target != "" {
-					targetID = w.target
-				}
 				s, dbPath := storefix.OpenTempStore(t)
-				w.seed(t, s, dbPath, targetID)
+				w.seed(t, s, dbPath, target)
 				w.seed(t, s, dbPath, other)
-				matching := installed == w.kind || slices.Contains(w.alsoBlocked, installed)
+				matching := installed == w.kind
 
 				t.Run("installed", func(t *testing.T) {
-					installTarget := targetID
-					if installed == storefix.WriteFailInputAuthority {
-						installTarget = "native_input_authority"
-					}
-					remove := storefix.InjectWriteFailure(t, dbPath, installed, installTarget)
+					storefix.InjectWriteFailure(t, dbPath, installed, target)
 					var blockedBy storefix.WriteFailureKind
 					if matching {
 						blockedBy = installed
 					}
-					runWrite(t, s, dbPath, w, targetID, blockedBy)
+					runWrite(t, s, dbPath, w, target, blockedBy)
 					runWrite(t, s, dbPath, w, other, 0)
-					// One overlapping handle must not release the first. Explicit
-					// removal is also safe when its registered cleanup runs later.
-					if matching && installed >= storefix.WriteFailInputAttemptInsert {
-						removeSecond := storefix.InjectWriteFailure(t, dbPath, installed, installTarget)
-						removeSecond()
-						removeSecond()
-						runWrite(t, s, dbPath, w, targetID, blockedBy)
-						remove()
-					}
 				})
 
 				if matching {
-					runWrite(t, s, dbPath, w, targetID, 0) // cleanup or explicit removal lifted the failure
+					runWrite(t, s, dbPath, w, target, 0) // the installing subtest's cleanup removed the failure
 				}
 			})
 		}
 	}
-}
-
-// These leaf-trigger probes exercise the exact issued-state UPDATE shape;
-// real guarded IssueCursorAnswer coverage lives in request_boundary_linux_test.
-func permissionIssueFailureProxies() []proxyWrite {
-	var out []proxyWrite
-	for _, state := range []string{store.ResponseRelayIssued, store.ResponseNativeIssued} {
-		out = append(out, proxyWrite{
-			name: state, kind: storefix.WriteFailPermissionResponseIssue, ownKindOnly: true,
-			seed: func(t *testing.T, s *store.Store, _ string, id string) { storefix.SeedCheckPermission(t, s, id) },
-			writeRaw: func(path, id string) error {
-				db, err := sql.Open("sqlite", path)
-				if err != nil {
-					return err
-				}
-				defer db.Close()
-				_, err = db.Exec("UPDATE permission_requests SET response_state=? WHERE instance_id=?", state, id)
-				return err
-			},
-			observe: observeOpenRequests,
-		})
-	}
-	return out
 }

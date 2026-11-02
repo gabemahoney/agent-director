@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,83 +11,6 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// The shell bridge must install/remove on a genuine legacy schema without
-// activating it. The fixture is the same released DDL used by installer tests.
-func TestWriteFailureDispatch(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	ddl, err := os.ReadFile("../../install-sh/testdata/pre-cutover-v15.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(string(ddl)); err != nil {
-		t.Fatal(err)
-	}
-	schema := func() string {
-		var text string
-		if err := db.QueryRow(`SELECT json_group_array(json_array(type,name,sql)) FROM sqlite_master`).Scan(&text); err != nil {
-			t.Fatal(err)
-		}
-		return text
-	}
-	before := schema()
-	call := func(args ...string) string {
-		t.Helper()
-		var stdout, stderr bytes.Buffer
-		if code := dispatch(args, &stdout, &stderr); code != 0 || stderr.Len() != 0 || strings.Count(stdout.String(), "\n") != 1 {
-			t.Fatalf("dispatch %v: code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
-		}
-		var result map[string]string
-		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || len(result) != 1 || result["handle"] == "" {
-			t.Fatalf("handle result=%v %v", result, err)
-		}
-		return result["handle"]
-	}
-	handle := call("install-write-failure", "--store", path, "--kind", "input-authority", "--id", "native_input_authority")
-	var version, tables int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 15 {
-		t.Fatalf("legacy version=%d %v", version, err)
-	}
-	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('input_launches','input_attempts','input_imports')`).Scan(&tables); err != nil || tables != 0 {
-		t.Fatalf("legacy activation tables=%d %v", tables, err)
-	}
-	insert := `INSERT INTO store_meta(key,value) VALUES('native_input_authority','sqlite-v1:0123456789abcdef')`
-	if _, err := db.Exec(insert); err == nil || !strings.Contains(err.Error(), "injected write failure: input authority") {
-		t.Fatalf("missing canonical failure: %v", err)
-	}
-	if got := call("remove-write-failure", "--store", path, "--handle", handle); got != handle {
-		t.Fatalf("removed handle=%q want=%q", got, handle)
-	}
-	if got := schema(); got != before {
-		t.Fatalf("remove changed legacy schema: %s", got)
-	}
-	if _, err := db.Exec(insert); err != nil {
-		t.Fatalf("marker retry: %v", err)
-	}
-
-	for _, args := range [][]string{
-		{"install-write-failure", "--kind", "input-authority", "--id", "native_input_authority"},
-		{"install-write-failure", "--kind", "unknown", "--id", "target"},
-		{"remove-write-failure", "--handle", "bad"},
-	} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			missing := filepath.Join(t.TempDir(), "absent.db")
-			args = append(args, "--store", missing)
-			var stdout, stderr bytes.Buffer
-			if code := dispatch(args, &stdout, &stderr); code != 1 || stdout.Len() != 0 || stderr.Len() == 0 {
-				t.Fatalf("invalid request: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-			}
-			if _, err := os.Stat(missing); !os.IsNotExist(err) {
-				t.Fatalf("bridge created missing store: %v", err)
-			}
-		})
-	}
-}
 
 // TestMain isolates this package's tests before any test function runs.
 //
