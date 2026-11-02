@@ -56,7 +56,10 @@ func (s *Store) ListSessionHistoryWithin(instanceID string, life int64, maxWait 
 		out, err = listSessionHistory(ctx, conn, instanceID, life)
 		return err
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ListSessionHistorySnapshot reads history in the same bounded read transaction
@@ -298,7 +301,10 @@ func (s *Store) ProvisionalTranscriptsFor(instanceID string) ([]ProvisionalTrans
 		}
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ProvisionalTranscript is one live row with a session id but no recorded

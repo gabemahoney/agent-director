@@ -170,10 +170,13 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 		}
 		return nil
 	})
-	if err == nil && len(stale.InstanceIDs) > 0 {
-		err = stale
+	if err != nil {
+		return nil, err
 	}
-	return out, err
+	if len(stale.InstanceIDs) > 0 {
+		return out, stale
+	}
+	return out, nil
 }
 
 // jsonPathFlatKey returns the SQLite JSONPath expression that matches a

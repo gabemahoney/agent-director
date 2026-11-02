@@ -3689,7 +3689,17 @@ still the one it read, so it knows the row has not changed since. As built:
     released by its deadline may not). Repeated timeouts cannot accumulate
     workers behind blocked native work. Contextless default-wait calls
     remain synchronous and use `releaseConn`'s existing cleanup lane; they
-    do not acquire the cancelable operation slot.
+    do not acquire the cancelable operation slot. Because the worker can
+    outlive its caller, a bounded reader or writer is error-first, like
+    `GetSpawnWithin` and `ListSessionHistorySnapshot`: its callback writes
+    only that function's own locals, never a named result or storage its
+    caller passed in, and an operation error returns nil/zero or
+    caller-owned results without reading those locals. Two results are
+    already synchronized and may be returned: a completed read's validated
+    rows with `*CursorMissingReadError` (see the
+    [missing read adapter](#cursor-gateway-and-current-launch-binding)),
+    and a value the callback wrote before COMMIT started, read only once
+    the committed write is confirmed.
 
     SQL receives cancellation immediately. If cancellation arrives before an
     absolute deadline, the reporting wait can observe a cooperative driver's

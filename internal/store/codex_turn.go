@@ -241,7 +241,10 @@ func (s *Store) CodexTurnSamples(instanceID string) ([]CodexTurnSample, error) {
 		}
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // CodexTurnEndEvent is the triggering_event_name of the move EndCodexTurnSample

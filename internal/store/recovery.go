@@ -210,7 +210,10 @@ func (s *RecoveryWrites) MarkMissingIfSameLifeFrom(id string, snapshot RowSnapsh
 	args = append(args, snapshotMatchArgs(snapshot)...)
 	statement, args := s.guard(id, markMissingIfSameLifeSQL, args)
 	prior, res, err = s.terminalMarkWithoutWait("store: recovery missing", statement, args, id, DecisionReasonFindMissing, &recorded)
-	return prior, res, recorded && err == nil && res == CondApplied, err
+	if err != nil {
+		return "", 0, false, err
+	}
+	return prior, res, recorded && res == CondApplied, nil
 }
 
 func (s *RecoveryWrites) MarkEndedIfSameLife(id string, snapshot RowSnapshot) (string, CondResult, error) {
@@ -224,7 +227,10 @@ func (s *RecoveryWrites) MarkEndedIfSameLife(id string, snapshot RowSnapshot) (s
 func (s *RecoveryWrites) MarkEndedIfSameLifeFrom(id string, snapshot RowSnapshot, exit ProcessExit) (prior string, res CondResult, recorded bool, err error) {
 	statement, args := s.guard(id, markEndedIfSameLifeSQL, endedIfSameLifeArgs(id, snapshot, exit))
 	prior, res, err = s.terminalMarkWithoutWait("store: recovery ended", statement, args, id, DecisionReasonEnded, &recorded)
-	return prior, res, recorded && err == nil && res == CondApplied, err
+	if err != nil {
+		return "", 0, false, err
+	}
+	return prior, res, recorded && res == CondApplied, nil
 }
 
 // recoveryExec checks the no-match outcome under the same write boundary and

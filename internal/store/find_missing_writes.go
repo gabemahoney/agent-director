@@ -347,9 +347,16 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	var res CondResult
 	var closed []closedRequest
 	var exits []displayTransition
+	// A timed-out operation may still scan its result. Keep that storage
+	// private until the transaction confirms completion.
+	var processRecorded bool
+	var recordDest *bool
+	if recorded != nil {
+		recordDest = &processRecorded
+	}
 	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
-		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason, recorded)
+		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason, recordDest)
 		if err == nil && res == CondApplied {
 			exits, err = takeDisplayExits(ctx, conn, instanceID)
 			if err != nil {
@@ -361,6 +368,9 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	})
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	if recorded != nil {
+		*recorded = processRecorded
 	}
 	if res == CondApplied {
 		emitDisplayTransitionsContext(ctx, exits)

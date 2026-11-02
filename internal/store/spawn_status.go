@@ -173,8 +173,11 @@ func (s *Store) recoveryRows(ids []string, settle SettleRead, proofs []CursorMis
 		}
 		return rows.Err()
 	})
-	if err == nil && len(stale.InstanceIDs) > 0 {
-		err = stale
+	if err != nil {
+		return nil, err
 	}
-	return out, err
+	if len(stale.InstanceIDs) > 0 {
+		return out, stale
+	}
+	return out, nil
 }
