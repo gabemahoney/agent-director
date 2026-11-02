@@ -79,9 +79,10 @@ func (r *Recorder) RemoveSessionAfter(call tmux.Call, socket, sessionID string) 
 // WithVirtualTime binds the Recorder to c (Appendix F.5): every later
 // socket-taking call advances c by its class's timeout from t, whatever its
 // result (query: lookup and pane listing; action: kills, text, Enter and key
-// sends, capture, label by id; create: the create; SR-13.1), and a scripted
-// FailTimeout carries that same value. SendKeysPane's text and Enter calls
-// are charged separately; t.WaitDelay is never charged. A zero field of t
+// sends, capture, label by id, terminal read; create: the create; SR-13.1),
+// and a scripted FailTimeout carries that same value. SendKeysPane's text
+// and Enter calls are charged separately; t.WaitDelay is never charged. A
+// zero field of t
 // takes the internal/config default. Seeded sessions and servers take their
 // default times from c. Without it the Recorder never touches a clock.
 func (r *Recorder) WithVirtualTime(c *Clock, t tmux.Timeouts) *Recorder {

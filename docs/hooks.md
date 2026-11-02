@@ -524,7 +524,8 @@ owner no longer holds it and its pane is recorded or adopted. It keeps
 An existing `provenance_conflict` note is kept. A later applied hook clears
 the note; a working move held by a permission request clears only `idle_since`.
 
-For caller action see the [live-row sequence](caller-contract.md#caller-contract);
+For caller action see [Pending rows and startup screens](caller-contract.md#pending-rows-and-startup-screens)
+and the [live-row sequence](caller-contract.md#caller-contract);
 for hook configuration repair see [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch)
 and [Codex pending rows](operator-actions.md#a-codex-row-stays-pending-or-goes-missing-for-another-reason).
 

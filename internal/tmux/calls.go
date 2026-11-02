@@ -37,6 +37,10 @@ const (
 	// the pane label by pane id in one invocation: a name containing $ or \,
 	// or a relabel after a failed chained label (SR-3.5).
 	CallSetLabel Call = "label by id"
+	// CallPaneTerminal is the read of a pane's terminal device by pane id,
+	// display-message -p '#{pane_tty}', that pending Claude fallback input
+	// waits on (b.qcf).
+	CallPaneTerminal Call = "pane terminal read"
 )
 
 // Failure classifies a failed call (SR-2.3, SR-2.5). Only the production
@@ -94,7 +98,8 @@ func (f Failure) String() string {
 }
 
 // CallError is the only error the socket-taking methods return (Appendix
-// F.1; the name-based HasSession keeps its own contract). It
+// F.1; the name-based HasSession keeps its own contract, and PaneTerminalRaw
+// also returns the error of reading the terminal its call names). It
 // wraps no catalogued sentinel (SR-1.5): the verb layer maps it to verb
 // errors. Its message never carries a label's value.
 type CallError struct {
@@ -276,8 +281,8 @@ type Pane struct {
 type Timeouts struct {
 	// Query bounds the lookup and the pane listing.
 	Query time.Duration
-	// Action bounds the kills, the text, Enter and key sends, the capture and
-	// the label by id.
+	// Action bounds the kills, the text, Enter and key sends, the capture,
+	// the label by id and the pane terminal read.
 	Action time.Duration
 	// Create bounds the create invocation.
 	Create time.Duration

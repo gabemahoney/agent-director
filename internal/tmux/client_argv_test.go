@@ -270,6 +270,53 @@ func TestSocketCallArgv(t *testing.T) {
 	}
 }
 
+// b.qcf: terminal queries target the pane and share maxWait between execution
+// and pipe cleanup, without shrinking the client's later calls.
+func TestPaneTerminalRawCall(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                    string
+		budget, action, cleanup time.Duration
+	}{
+		{"ample", time.Minute, testTimeouts.Action, testTimeouts.WaitDelay},
+		{"cleanup capped", testTimeouts.Action + time.Millisecond, testTimeouts.Action, time.Millisecond},
+		{"execution capped", 500 * time.Millisecond, 500 * time.Millisecond, 0},
+		{"zero", 0, 0, 0},
+		{"negative", -time.Nanosecond, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, runner := newScripted(t, timedOut(), timedOut())
+			raw, err := c.PaneTerminalRaw(testSocket, "%3", tc.budget)
+			ce := parseWantFailure(t, err, tmux.CallPaneTerminal, tmux.FailTimeout)
+			if raw {
+				t.Fatal("timed out query reported raw mode")
+			}
+			if tc.budget <= 0 {
+				if calls := runner.Calls(); len(calls) != 0 {
+					t.Fatalf("nonpositive budget invoked tmux: %+v", calls)
+				}
+			} else {
+				inv := runner.Only()
+				want := []string{"display-message", "-p", "-t", "%3", "#{pane_tty}"}
+				if got := argvCommand(t, inv); !slices.Equal(got, want) {
+					t.Errorf("argv = %q; want %q", got, want)
+				}
+				if inv.Timeout != tc.action || ce.Timeout != tc.action || inv.WaitDelay != tc.cleanup {
+					t.Errorf("invocation=%+v error=%+v; want timeout=%v cleanup=%v", inv, ce, tc.action, tc.cleanup)
+				}
+			}
+			// The same client still honors its configured bounds after a capped call.
+			_, err = c.PaneTerminalRaw(testSocket, "%3", time.Minute)
+			ce = parseWantFailure(t, err, tmux.CallPaneTerminal, tmux.FailTimeout)
+			calls := runner.Calls()
+			inv := calls[len(calls)-1]
+			if inv.Timeout != testTimeouts.Action || ce.Timeout != testTimeouts.Action || inv.WaitDelay != testTimeouts.WaitDelay {
+				t.Fatalf("client bounds changed: invocation=%+v error=%+v", inv, ce)
+			}
+		})
+	}
+}
+
 // TestNewSessionChain: a name without $ or \ (the catalogue's, a plain one,
 // one with a #) is created with the chain ';' set-option -F -t =<name>:
 // @ad_owner <five-field value> ';' set-option -p -F -t =<name>: @ad_pane

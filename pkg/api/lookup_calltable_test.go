@@ -203,13 +203,14 @@ type callTableCell struct {
 // world and row check (runCallTableSpawn). serial, when set, says why the
 // verb's cells cannot run in parallel; the others do.
 type callTableVerb struct {
-	name        string
-	invoke      func(t *testing.T, e *killEnv, r killRow) (sent bool, err error)
-	firstAction tmux.Call
-	actions     []tmux.Call
-	cells       map[callTableOutcome]callTableCell
-	run         func(t *testing.T, v callTableVerb, col callTableColumn, cell callTableCell)
-	serial      string
+	name             string
+	startBeforeInput bool // b.qcf: SessionStart during readiness, then preserve row-write checks.
+	invoke           func(t *testing.T, e *killEnv, r killRow) (sent bool, err error)
+	firstAction      tmux.Call
+	actions          []tmux.Call
+	cells            map[callTableOutcome]callTableCell
+	run              func(t *testing.T, v callTableVerb, col callTableColumn, cell callTableCell)
+	serial           string
 }
 
 // callTableVerbs is every verb's row; a later verb appends its adapter and
@@ -286,6 +287,9 @@ func runCallTableRowCell(t *testing.T, v callTableVerb, col callTableColumn, cel
 		cell.prepare(e, r)
 	}
 	rowBefore, sessionsBefore := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
+	if v.startBeforeInput && cell.sent {
+		e.sessionStartsWhenPolled(t, r, func() { rowBefore = e.columns(t, r.ID) })
+	}
 
 	sent, err := v.invoke(t, e, r)
 

@@ -15,6 +15,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/ptyfix"
 )
 
 // noExecFormTranscript is a payload transcript_path; hook_session_id is its
@@ -200,7 +201,7 @@ func TestNoExecFormCLINonHookStdinPrintsHelp(t *testing.T) {
 // help and writes nothing, so a terminal is never read (Linux; skipped elsewhere).
 func TestNoExecFormCLITerminalStdinPrintsHelp(t *testing.T) {
 	help := helpVerbStdout(t)
-	master, slave := openPTY(t)
+	master, slave := ptyfix.Open(t)
 	// Canonical mode: the line, then ^D, reads as the payload and then EOF.
 	payload := `{"hook_event_name":"SessionStart","transcript_path":"` + noExecFormTranscript + `"}` + "\n\x04"
 	if _, err := master.Write([]byte(payload)); err != nil {

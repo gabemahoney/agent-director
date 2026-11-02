@@ -66,8 +66,9 @@ func (e Entry) Calls() []tmux.Call {
 	return out
 }
 
-// AllCalls returns every call kind the production client makes: the nine of
-// SR-2.1 and the key send (pause's C-u, b.9o4).
+// AllCalls returns every call kind the production client makes but the pane
+// terminal read (b.qcf), whose answer is a terminal path no entry records:
+// the nine of SR-2.1 and the key send (pause's C-u, b.9o4).
 func AllCalls() []tmux.Call {
 	return []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallKillPane, tmux.CallKillSession,
 		tmux.CallSendText, tmux.CallSendEnter, tmux.CallSendKey, tmux.CallCapture, tmux.CallCreate, tmux.CallSetLabel}

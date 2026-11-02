@@ -33,6 +33,9 @@
 //     server's #{pid} and #{start_time}, with or without sessions, as tmux
 //     prints it with exit-empty off. A socket with no server fails it with
 //     the catalogue's no-socket reply (see below).
+//   - display-message -p -t <%N> '#{pane_tty}': the pane terminal read
+//     (b.qcf), its own call kind for injections: the pane's TTY from the
+//     table, else /dev/null, whose terminal mode cannot be read.
 //   - list-sessions -F <fmt>: one line per session, sorted by name. A
 //     session's #{@ad_owner} is the server or global-window scope value when
 //     one is set, else its own label, else the global value (as tmux
@@ -89,21 +92,23 @@
 //
 // One table per socket (faketmuxfix.Table: server pid and start time,
 // scope values, sessions with id, creation time, stored name and label, and
-// panes with window, index, id, pid and capture text), kept in the file
-// "<socket>.fake-tmux.json" beside the socket path, or, when FAKE_TMUX_TABLES
-// names a directory, in that directory (faketmuxfix.TablePath). Each
-// invocation locks the table and replaces it atomically.
+// panes with window, index, id, pid, capture text and terminal device), kept
+// in the file "<socket>.fake-tmux.json" beside the socket path, or, when
+// FAKE_TMUX_TABLES names a directory, in that directory
+// (faketmuxfix.TablePath). Each invocation locks the table and replaces it
+// atomically.
 //
 // # Injections
 //
 // A table's injections (faketmuxfix.Injection) replace or delay the answer
 // to one call kind (tmux.Call: lookup, pane listing, pane kill, session
 // kill, text send, Enter send, key send, capture, session creation, label
-// by id) on that socket, for every call or the next N: a catalogue entry's exact
-// bytes and exit status (reply), a bare exit status (exit), a hang the
-// client's timeout must end (hang; the fake exits 1 on its own after a
-// bound), a normal answer and exit while a child holds the output pipes open
-// (hold-pipes), and a create whose chained label step fails (chain-fails).
+// by id, pane terminal read) on that socket, for every call or the next N: a
+// catalogue entry's exact bytes and exit status (reply), a bare exit status
+// (exit), a hang the client's timeout must end (hang; the fake exits 1 on its
+// own after a bound), a normal answer and exit while a child holds the output
+// pipes open (hold-pipes), and a create whose chained label step fails
+// (chain-fails).
 // With Effect set, the call's normal effect on the table is applied first
 // (for example create and label, then hang).
 //

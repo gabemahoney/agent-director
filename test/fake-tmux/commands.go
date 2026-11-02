@@ -22,6 +22,14 @@ const (
 // createReplyDefault is tmux's -P format when no -F is given.
 const createReplyDefault = "#{session_name}:"
 
+// paneTTYFormat is the pane terminal read's format (b.qcf), and
+// unreadableTTY the device it names for a pane with no TTY in the table: one
+// that opens but whose terminal mode cannot be read, so the read fails.
+const (
+	paneTTYFormat = "#{pane_tty}"
+	unreadableTTY = "/dev/null"
+)
+
 // server runs one invocation's commands against a socket's table.
 type server struct {
 	tb      *faketmuxfix.Table
@@ -111,7 +119,9 @@ func (s *server) sorted() []*faketmuxfix.Session {
 
 // displayMessage prints display-message -p <fmt>, the lookup's server
 // identity read (LFR H5; b.47f): fmt expanded with the server's #{pid} and
-// #{start_time}, with or without sessions. On a socket with no server (no
+// #{start_time}, with or without sessions. With -t <%N> it answers the paste
+// transport's pane state check (b.qcr) or the pane terminal read (b.qcf):
+// the pane's TTY, else unreadableTTY. On a socket with no server (no
 // table, or no create yet) nothing answers: it fails with the catalogue's
 // no-socket reply (exit 1), as tmux does there, so the fake never names a
 // server that does not run.
@@ -124,13 +134,22 @@ func (s *server) displayMessage(args []string) (int, error) {
 		return s.reply(tmuxfix.NoSocket(s.socket)), nil
 	}
 	if len(o['t']) == 1 {
-		if _, _, ok := s.findPane(o['t'][0]); !ok {
+		i, j, ok := s.findPane(o['t'][0])
+		if !ok {
 			return s.reply(s.catalogued("reply/cant-find-pane")), nil
 		}
-		if rest[0] != "#{pane_in_mode}\t#{pane_input_off}" {
+		switch rest[0] {
+		case "#{pane_in_mode}\t#{pane_input_off}":
+			s.out.stdout += "0\t0\n"
+		case paneTTYFormat:
+			tty := s.tb.Sessions[i].Panes[j].TTY
+			if tty == "" {
+				tty = unreadableTTY
+			}
+			s.out.stdout += tty + "\n"
+		default:
 			return 0, errBadArgv
 		}
-		s.out.stdout += "0\t0\n"
 		return 0, nil
 	}
 	s.out.stdout += expand(rest[0], serverVars(s.tb.Server)) + "\n"

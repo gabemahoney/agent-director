@@ -38,11 +38,15 @@ var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 // ErrSubmissionUnconfirmed means ordinary delivery was refused or remains
 // unconfirmed. SubmissionUnconfirmedDetails distinguishes not_started,
 // partial_input_unconfirmed and submission_unconfirmed for both native delivery
-// and Codex fallback paste, and gateway_refused for a Cursor row's gateway
-// refusing the submission. Native delivery requires durable exact transcript
-// proof; pending Codex fallback uses bounded hook observation, whose failure
-// carries only KeysSent, SubmissionConfirmed and RowState. Partial or uncertain
-// input may still submit later; never replay text or Enter automatically.
+// and Codex fallback paste, not_started for pending Claude fallback input
+// whose terminal, SessionStart, 1.5 s settle since first observing waiting,
+// or launch and guard revalidation was not ready within 12 s (nothing typed;
+// the same call can be made again later), and gateway_refused for a Cursor row's
+// gateway refusing the submission. Native delivery requires durable exact
+// transcript proof; pending Codex and Claude fallback use bounded hook
+// observation, whose failure carries only KeysSent, SubmissionConfirmed and
+// RowState. Partial or uncertain input may still submit later; never replay
+// text or Enter automatically.
 // Only native attempts support passive reconciliation by repeating the original
 // delivery_request_id after the state, relay and dialog guards pass. For fallback,
 // inspect hook-derived get or status and escalate if submission remains unknown.

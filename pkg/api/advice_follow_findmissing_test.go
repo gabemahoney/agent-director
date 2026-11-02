@@ -17,7 +17,7 @@ import (
 // TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys (D1, b.kdf): "To act on it: read-pane, then send-keys with
 // allow_pending (--allow-pending on the CLI); only a caller that looked should type." (get's liveness_note; find-missing
 // and list say the same). Followed after find-missing noted a live pending row, found by liveness_note in get and list:
-// read-pane reads its pane, and send-keys with allow_pending delivers the text and Enter into that pane.
+// read-pane reads its pane, then Enter-only answers the inspected startup prompt (b.qcf).
 func TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys(t *testing.T) {
 	t.Parallel()
 	adviceAssertManifest(t, "find-missing", "", "Past its grace, a pending row whose agent runs but no hook reported "+
@@ -62,8 +62,10 @@ func TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys(t *testing.T) {
 		t.Fatalf("ReadPane = %q, %v; want the row's pane %q", got.Pane, err, paneText(r.Socket, pane))
 	}
 	e.rec.Reset()
-	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}); err != nil {
+	before := e.columns(t, r.ID) // b.qcf: a never-reported row remains pending.
+	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, AllowPending: true}); err != nil {
 		t.Fatalf("SendKeys with allow_pending: %v", err)
 	}
-	e.assertDelivered(t, r.Socket, pane, skpText)
+	e.assertEnterOnly(t, r.Socket, pane)
+	e.assertRowUnchanged(t, r.ID, before)
 }

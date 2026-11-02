@@ -7,6 +7,7 @@ package main_test
 
 import (
 	"errors"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -479,6 +480,40 @@ func TestSendTextAfterDoubleDash(t *testing.T) {
 				t.Errorf("log = %q, want one record with argv %q", recs, want)
 			}
 		})
+	}
+}
+
+// b.qcf: the terminal read returns its pane's configured device (or /dev/null)
+// and has its own injection kind, independent of text sends and paste checks.
+func TestPaneTerminalReplyAndInjection(t *testing.T) {
+	socket := seed(t)
+	tables.Update(t, socket, func(tb *faketmuxfix.Table) {
+		tb.Sessions[1].Panes[0].TTY = "/dev/pts/77"
+	})
+	for _, tc := range []struct{ pane, want string }{
+		{"%0", "/dev/pts/77\n"}, {"%1", "/dev/null\n"},
+	} {
+		t.Run(tc.pane, func(t *testing.T) {
+			cmd := exec.Command(faketmuxfix.Binary(t), "-u", "-S", socket, "display-message", "-p", "-t", tc.pane, "#{pane_tty}")
+			if out, err := cmd.CombinedOutput(); err != nil || string(out) != tc.want {
+				t.Fatalf("pane tty = %q, %v; want %q", out, err, tc.want)
+			}
+		})
+	}
+	tables.Inject(t, socket, faketmuxfix.ExitCode(tmux.CallPaneTerminal, 7).FirstN(1))
+	c := newClient(t, callTimeout)
+	if err := c.SendKeysPane(socket, "%0", "text", false); err != nil {
+		t.Fatalf("terminal injection affected text send: %v", err)
+	}
+	// The paste preflight is another display-message -t but must not consume it.
+	if code, stderr := runFake(t, socket, "display-message", "-p", "-t", "%0", "#{pane_in_mode}\t#{pane_input_off}"); code != 0 || stderr != "" {
+		t.Fatalf("terminal injection affected paste check: exit=%d stderr=%q", code, stderr)
+	}
+	raw, err := c.PaneTerminalRaw(socket, "%0", callTimeout)
+	assertFailure(t, err, tmux.CallPaneTerminal, tmux.FailUnrecognized, tmuxfix.Entry{})
+	var ce *tmux.CallError
+	if !errors.As(err, &ce) || ce.ExitStatus != 7 || raw {
+		t.Errorf("terminal read = %v, %+v; want false and injected exit 7", raw, err)
 	}
 }
 
