@@ -795,7 +795,8 @@ always returns untracked and empty; existing status response shapes remain.
 config directory and syncs each sequence-numbered record. Shared
 `internal/cursortranscript` owns no-follow component traversal, private directory,
 regular user-owned single-link file and access checks. Public preflight and
-gateway reopen MUST reuse it; nonblocking opens refuse special files without
+gateway reopen MUST reuse it; `send-keys` uses its read-only `OpenRead` with
+the same protection checks. Nonblocking opens refuse special files without
 hanging and unsupported platforms fail closed. Resume opens the same existing
 file for append without creation, reads only a bounded valid final record and
 continues its sequence after checking complete newline, instance/life and
@@ -809,6 +810,14 @@ record has unconfirmed delivery; termination and unconfirmed completion are
 separate dispositions. Replacement/symlink/insecure-path and persistence failures
 halt admission and cannot yield a false successful end or complete saved history.
 Future lifecycle records MUST reuse this protected synchronized recorder.
+Gateway writers and verdict readers MUST reuse `internal/cursortranscript`'s
+record-kind constants and `TextSHA256`. A `submission_refused`, or a
+`held_input_refused` that is provisional input's first verdict, carries
+`text_sha256` and `consumed_at` to distinguish that text from another call's,
+including an earlier identical input. The combined input-capacity overflow has
+neither attribution field populated; retirement after `input_held` and refusal
+after acceptance have no digest. The [Cursor verdict reader](#cursor-gateway-verdict)
+does not claim those unattributed refusals.
 Reports expose the actual recorded path through `jsonl_path`;
 `transcript_status` remains a reference summary, not a new reader-time file
 verification. Native Cursor storage remains runtime-owned and separate; neither
@@ -1413,7 +1422,7 @@ in `init`. The verb registry
 | `internal/cursorhost` | Fresh/latest-loaded owned Cursor ACP gateway, protected Linux lifetime, single pane input controller and synced protected transcripts; reuses `internal/cursormcp` for current-attempt guidance before publication/admission. See [Cursor gateway](#cursor-gateway-and-current-launch-binding). | stdlib; `internal/config`, `internal/layout`, `internal/store`, `internal/trail`, `internal/version`, `internal/tmux`, `internal/probe`, `internal/cursortranscript`; `golang.org/x/sys/unix`; `internal/cursorenv`; `internal/cursormcp` | `pkg/api`; `internal/mcp`; lifecycle screen classification. |
 | `internal/cursormcp` | Typed session-scoped ACP stdio registration, explicit protected routing scope and finite nonce observation. Gateway and scoped CLI serve MUST reuse its `New`, `Parse`, `Binding` and observation owners; routing is not permission or publication authority. | stdlib; `internal/store`. | `pkg/api`; `internal/cursorhost`; `internal/mcp`; native configuration/authentication access. |
 | `internal/helptext` | Pure canonical JSON help renderer shared by CLI help and scoped MCP instructions; consumers MUST reuse `Marshal`/`Plain` and leave agent wrapping at adapters. | stdlib; `pkg/api`. | Config/store/process access; agent-specific wrappers. |
-| `internal/cursortranscript` | Shared protected existing-transcript verification and append access for public resume and the gateway recorder. | stdlib; `golang.org/x/sys/unix`. | `pkg/api`; `internal/cursorhost`; native Cursor storage parsing. |
+| `internal/cursortranscript` | Shared protected transcript verification, append access for resume/recording and read-only access for send-keys. Owns shared submission record kinds and `TextSHA256`; writers and readers must reuse them. | stdlib; `golang.org/x/sys/unix`. | `pkg/api`; `internal/cursorhost`; native Cursor storage parsing. |
 | `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` shares; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. Internal `cursor-host` is parsed/dispatched before public client setup and delegates to `internal/cursorhost`; `hookCursorVerifier` wires independent runtime/transcript/pane verification into the hook without changing its dependency boundary. Privately scoped `serve` uses `cursorMCPScope` before client setup and `cursorMCPOptions` for the bounded protected guidance bootstrap described above. `serve` opens a second Client for its MCP tools, from the same global-flag overrides (`clisetup.APIOptions`) with no logger, and names a failed open of it with `clisetup.NewOpenError`, as `Open` names its own (b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `version` and its aliases never read stdin; `help` and its aliases read it only when `AGENT_DIRECTOR_AGENT` is `codex`, through the same bounded reader (see [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)). **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. For Claude/Codex it opens the verbs' configured store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). For Cursor, `runHook` instead uses the actual opened store path propagated by the launch in `AGENT_DIRECTOR_CURSOR_STORE_PATH`; the hook still has no `--store-path` flag. It opens that store with `store.OpenOrInitWithBusyTimeout` for Claude/Codex or non-initializing `store.OpenWithBusyTimeout` for Cursor, and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. `parseHookArgs` reads `--agent` and `--timeout` in one pass, in either order; an unknown flag or a positional is skipped without losing a valid one, `--agent` with no value or an empty one reaches `Handle` as the invalid value `(no value)` (a hook failure, below), and an absent `--agent` stays empty, which `ResolveAgent` reads as `claude`. `runHook` hands the raw value to `HandleConfig.Agent`; the manifest's `hook` verb lists it as the optional `agent` param (`claude`, `codex` or `cursor`), so the generated references carry it (see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, `serve`'s `APIOptions` and `NewOpenError`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook` and scoped `cursorMCPOptions`; `internal/cursormcp`; `internal/helptext`; `internal/cursorhost` for the internal gateway and injected Cursor verifier. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger` and the narrowly scoped `cursorMCPOptions` bootstrap (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
 | `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version` (also `--version` and `-v`, b.fv2), taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, `--create-if-missing`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h`, `version` and the aliases open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
@@ -9426,6 +9435,8 @@ are in `pkg/api/pane_answer.go`, and the relay guard in
 `pkg/api/sendkeys_relay.go`; `pkg/api/sendkeys_submission.go` coordinates
 native ordinary delivery through `internal/inputdelivery`, described below;
 `pkg/api/sendkeys_paste.go` handles ordinary Codex fallback paste;
+`pkg/api/sendkeys_cursor_gateway.go` reads a Cursor row's
+[gateway verdict](#cursor-gateway-verdict);
 `pkg/api/sendkeys_legacy_submission.go` preserves the bounded pending-Codex
 hook observation for input without native capability.
 Delivery begins with a lookup
@@ -9504,6 +9515,8 @@ Manual sends can also return `ErrSubmissionUnconfirmed` with
 `pause` returns `ErrInternal` for those failures before attempting input. No
 missing evidence causes a text, Enter or editing-key retry. Caller handling
 is in [Ordinary text submission](caller-contract.md#ordinary-text-submission).
+Cursor sends with Enter also check the [gateway verdict](#cursor-gateway-verdict),
+including Enter-only and pane-hash sends.
 
 State precondition (`sendKeysStateGuard`, before native reconciliation or any tmux call): the
 row's `state` must be one of `waiting`, `working`, `ask_user`,
@@ -9666,8 +9679,9 @@ adapter there for another agent, version or platform. Never infer readiness
 or acceptance from rendered terminal text, hook activity or an empty queue;
 never add automatic replay or a wake/editing-key fallback. When native
 capability is unavailable, ordinary Codex text uses the paste transport below;
-other agents keep `keysRun.typeText`. Fallback returns an empty
-`SendKeysResult`, without exact transcript confirmation. `confirmLegacySubmission`
+other agents use `keysRun.typeText`, with Cursor's
+[gateway verdict check](#cursor-gateway-verdict). Successful fallback returns an
+empty `SendKeysResult`, without exact transcript confirmation. `confirmLegacySubmission`
 observes a pending Codex row for up to 2 s after a successful fallback send with Enter;
 only hook-derived `working`, `ask_user` or `check_permission` state satisfies
 that observation. A changed launch, finished row, read failure or timeout
@@ -9844,10 +9858,36 @@ to [Ordinary text submission](caller-contract.md#ordinary-text-submission).
 Go and CLI expose optional request IDs and proof fields. The published
 TypeScript `SendKeysParams` and `SendKeysResult` retain their existing
 declaration surface, and `SubmissionUnconfirmedDetails` describes only the
-three-field failed hook observation with `keys_sent: true`. Native and fallback
-paste runtime error facts travel through the existing
+three-field failed hook observation with `keys_sent: true`. Native, fallback
+paste and Cursor gateway runtime error facts travel through the existing
 `AgentDirectorError.errDetails: Readonly<Record<string, unknown>> | null`;
 there is no additional TypeScript export or module for native delivery.
+
+### Cursor gateway verdict
+
+`sendKeysRun.typeCursorText` in `pkg/api/sendkeys_cursor_gateway.go` wraps plain
+Cursor text with Enter, including Enter-only and pane-hash sends. It opens the
+protected transcript read-only, snapshots its end and the run's wall clock just
+before typing, then reads newly completed lines for up to 2 s, bounded by twenty
+100 ms sleeps. A read failure or another launch's record ends observation with
+the existing empty success result. Nothing is retried or written to the transcript.
+
+`cursorRecordVerdict` ignores a record whose `consumed_at`, when present, is
+before that snapshot. Acceptance and holding require exact `text` equality;
+`submission_refused` and first-verdict `held_input_refused` require a nonempty
+matching `text_sha256`. Enter-only accepts any text's verdict after the time
+check, but still requires a digest for refusal. Matching acceptance/holding or
+`input_control` ends observation successfully. Missing timestamps alone do not
+disqualify a record; missing refusal digests do. Comparison uses the CR-stripped
+text without further normalization, so line-editor changes or an existing draft
+can leave the call unattributed. No matching verdict in the window keeps success.
+
+An attributed refusal becomes `ErrSubmissionUnconfirmed` with
+`outcome: "gateway_refused"` and the recorded reason through
+`gatewayRefusedError`; it establishes that the gateway discarded the submission
+before sending it to Cursor. Caller fields, recovery and success limits are in
+[Cursor input outcomes](caller-contract.md#cursor-input-outcomes). Key-only,
+`no_enter`, permission pane answers and `pause` do not use this observation.
 
 ### `read-pane`
 
@@ -17411,6 +17451,9 @@ adds it here.
   pending-Codex observation uses hook state without claiming exact text proof.
   Pane text and hook state do not prove native submission (see
   [Ordinary text submission](caller-contract.md#ordinary-text-submission)).
+- Cursor's `gateway_refused` establishes that the gateway discarded the text
+  before it reached Cursor. Recovery and the empty-success limits are in
+  [Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
 - The launch-timeout rule: after a timed-out spawn, reuse or `resume`
   (`ErrTmuxUnresponsive`, "the session may have been created") the row
   stays `pending` (after a reuse, in its reset life: "the row was reset");
@@ -21391,6 +21434,13 @@ comment has the detail):
   an `idShapedWorld`: raw `$7` and `%9` sessions, a barrier session, the
   pane-not-found row and the gone row, with preconditions that neither id
   exists.
+- Cursor gateway refusal fixture (`cursor_gateway_refusal_linux_test.go`):
+  `newGatewayHold(t, relay, kind, decision, after)` uses `newCursorPaneScenario`
+  and waits for the first turn to end after answering its request through the
+  relay or pane. `followUp` sends with an inspected pane hash when relay is on;
+  `prompted` checks exact peer prompt text, and `assertRefused` checks
+  `gateway_refused` and no peer receipt. **Must use** for real-tmux tests of
+  Cursor input held after an answered request.
 - Operator procedure (`unusable_name_procedure_test.go`): `n6Names(t)` and
   `dotX(t)` give the catalogue's E.10 N6 entries (`tmuxfix.StoredNames()`
   with source `E.10 N6`). `rt.procedureListing(t)` runs the docs/operator-actions.md step 2
@@ -23311,6 +23361,14 @@ each file's doc comments carry the detail.
     `find_missing_repair_test.go` uses `proveOn` too. A test that builds
     its own `turn_end` proof sets `RecordedBefore`: a zero one is
     `errTurnEndNoStart` and proves nothing.
+- **Cursor gateway verdict fixture** (`sendkeys_cursor_gateway_test.go`):
+  `newCursorGatewayEnv(t, agent, jsonl)` extends `newSubmissionEnv` with a
+  waiting row and `cursorfix.NewGatewayHistory`'s protected transcript; `jsonl`
+  optionally changes the row's transcript path. `gatewayRecord` builds records;
+  `atInput` and `atFirstSleep` append them at input or the first poll wait,
+  stamping `consumed_at` from the fixture clock. `assertGatewayRefused` checks
+  the error details and wire shape. **Must use** for `pkg/api` tests of Cursor
+  gateway verdict observation.
 - **Pane-input model** (`pane_input_fixture_test.go`, no tests; b.fji,
   b.9o4): `watchPaneInput(e, pane, timeoutsReach)` models the agent's
   input box from every keys call to `pane`, in call order, through one

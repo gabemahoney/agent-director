@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/cursortranscript"
 )
 
 type terminalInput struct {
@@ -22,8 +24,10 @@ type terminalInput struct {
 	repeats      uint64
 	repeatOnly   bool
 	text         string
-	interrupt    bool
-	err          error
+	// refusedSHA256 is the digest of a refused text, which put discards.
+	refusedSHA256 string
+	interrupt     bool
+	err           error
 }
 
 const maxQueuedSubmissions = 32
@@ -134,6 +138,7 @@ func (m *inputMailbox) put(v terminalInput) {
 		if v.refusal == "" {
 			v.refusal = "starting, held, stale or cancellation"
 		}
+		v.refusedSHA256 = cursortranscript.TextSHA256(v.text)
 		v.text = ""
 	}
 	// Refusals and menu keys are bounded too. Accepted reservations are never

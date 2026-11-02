@@ -31,6 +31,11 @@ func VerifyAppend(path string) error {
 	return f.Close()
 }
 
+// OpenRead opens an existing protected transcript read-only.
+func OpenRead(path string) (*os.File, error) {
+	return Open(path, unix.O_RDONLY)
+}
+
 // Open refuses symlink components, non-private files and file creation.
 func Open(path string, flags int) (*os.File, error) {
 	if flags != unix.O_RDONLY && flags != unix.O_RDWR|unix.O_APPEND {

@@ -160,8 +160,8 @@ type SendKeysEnv struct {
 	// IntentHold is how long a pane answer's intent whose sender cannot be
 	// checked counts as in progress (paneIntentHold).
 	IntentHold time.Duration
-	// Sleep pauses between reads while checking a pending Codex submission.
-	// Nil uses time.Sleep.
+	// Sleep pauses between native readiness, drain and submission checks,
+	// pending-Codex checks and Cursor gateway verdict reads. Nil uses time.Sleep.
 	Sleep func(time.Duration)
 }
 
@@ -245,6 +245,18 @@ type sendKeysGuard struct {
 // native attempt blocks fallback resends. Manual operations below retain their
 // separate contract and serialize with ordinary delivery. State, relay and
 // dialog guards precede native setup and proof reconciliation.
+//
+// On a Cursor row a plain text with Enter, an Enter-only send included, then
+// reads its gateway's verdict on that Enter from the row's protected gateway
+// transcript (jsonl_path), from its end just before typing, for up to 2 s
+// (b.bqd): the row's launch refusing the call's text is ErrSubmissionUnconfirmed
+// with outcome gateway_refused. That is a submission_refused or
+// held_input_refused with a text_sha256, the text's unless the send is
+// Enter-only, and no consumed_at earlier than the call's clock read just before
+// typing; a refusal without text_sha256 is never claimed. The text accepted or
+// held, an Enter taken as a gateway control, no verdict on the text within
+// 2 s, a transcript that cannot be read and a launch change keep success,
+// which means keys sent, not a prompt admitted.
 //
 // State precondition: the row requires a live interactive state (waiting,
 // working, ask_user or check_permission). A finished row (ended or missing)
@@ -527,7 +539,8 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 
 // send is the tmux phase: the agent's pane, then native ordinary delivery,
 // a pane answer (paneAnswer), or the hash check when asked (paneMatches)
-// followed by a key, fallback paste or literal text.
+// followed by a key, fallback paste or literal text; a Cursor row's text with
+// Enter also reads its gateway's verdict (typeCursorText).
 func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	paneID, launch, err := r.targetPane()
 	if err != nil {
@@ -554,6 +567,9 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	}
 	if r.paste != nil {
 		return r.pasteText(paneID, plan.text)
+	}
+	if r.row.Agent == store.AgentCursor && plan.enter {
+		return r.typeCursorText(paneID, launch, plan.text)
 	}
 	return r.typeText(paneID, launch, plan.text, plan.enter)
 }
@@ -892,12 +908,16 @@ func isInteractiveState(state string) bool {
 //     was launched on.
 //   - [ErrSubmissionUnconfirmed]: native delivery lacks exact proof, or Codex
 //     fallback was refused before input, had a paste transport failure, or lacks
-//     bounded hook-derived submission observation. Structured outcomes distinguish
-//     no input, partial text and possible Enter delivery; failed hook observation
-//     carries only keys_sent, submission_confirmed and row_state. Never replay
-//     uncertain text or Enter. Only native attempts support passive reconciliation
-//     with the original delivery_request_id. For fallback, inspect hook-derived
-//     get or status and escalate if submission remains unknown.
+//     bounded hook-derived submission observation, or a Cursor row's gateway
+//     refused the submission (outcome gateway_refused). Structured outcomes
+//     distinguish no input, partial text, possible Enter delivery and a gateway
+//     refusal; failed hook observation carries only keys_sent,
+//     submission_confirmed and row_state. Never replay uncertain text or Enter.
+//     Only native attempts support passive reconciliation with the original
+//     delivery_request_id. For fallback, inspect hook-derived get or status and
+//     escalate if submission remains unknown. On gateway_refused nothing reached
+//     Cursor and the gateway discarded the text: read the pane and get, answer
+//     or clear what holds the input before sending again, or kill and resume.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs.
