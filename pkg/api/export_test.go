@@ -166,6 +166,16 @@ func (s StartingSessionCheck) UnavailableError() error { return s.c.unavailableE
 // OwnIDConflictError returns step 3's own-id conflict.
 func (s StartingSessionCheck) OwnIDConflictError() error { return s.c.ownIDConflictError() }
 
+// SetClaudePacedTypingForTest sets the macOS selection of paced Claude typing
+// (claudePacedTyping, b.vr5) for the whole test binary, so Linux tests exercise
+// it; restore puts back the previous value. A test that calls it is serial.
+// TestMain sets it off for the binary, so on a Mac too it is off unless set.
+func SetClaudePacedTypingForTest(on bool) (restore func()) {
+	previous := claudePacedTyping
+	claudePacedTyping = on
+	return func() { claudePacedTyping = previous }
+}
+
 // SetStoreContextForTest scopes this Client's existing store until restore is called.
 func SetStoreContextForTest(c *Client, ctx context.Context) (restore func()) {
 	original := c.st

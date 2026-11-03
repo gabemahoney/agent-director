@@ -162,8 +162,8 @@ type SendKeysEnv struct {
 	IntentHold time.Duration
 	// Sleep pauses between native readiness, drain and submission checks,
 	// pending Claude fallback's terminal/SessionStart readiness and settle,
-	// pending-Codex and pending-Claude hook checks and Cursor gateway verdict
-	// reads. Nil uses time.Sleep.
+	// pending-Codex and pending-Claude hook checks, Cursor gateway verdict
+	// reads, and paced Claude typing's pieces and Enter. Nil uses time.Sleep.
 	Sleep func(time.Duration)
 }
 
@@ -256,6 +256,10 @@ type sendKeysGuard struct {
 // waiting after SessionStart. It then revalidates the server, session, pane and
 // relay/dialog guards within the same 12 s budget before journalling or typing
 // the literal text and one Enter.
+// On a macOS host a Claude row's plain text that does not take native delivery
+// and is longer than inputdelivery.ChunkBytes is typed in paced pieces, with
+// the row rechecked before each later piece and the Enter (typePaced,
+// pacedRefusal; b.vr5); longer than pacedTextMaxBytes it is refused not_started.
 // Pending Codex and Claude fallback input gets bounded hook observation. An
 // unresolved native attempt blocks fallback resends. Manual operations below
 // retain their separate contract and serialize with ordinary delivery. State,
@@ -390,11 +394,11 @@ type sendKeysGuard struct {
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
 // Manual calls are at most one lookup, one pane listing, one capture, the text
-// or key call, the Enter call and, only after an action failure other than a
-// timeout, one follow-up lookup (SR-13.2). SendKeys never writes the row's
-// state. Native ordinary delivery revalidates ownership and guards before
-// every write and queue sample, within bounded readiness, drain and
-// confirmation loops.
+// or key call (paced Claude text: one per piece), the Enter call and, only
+// after an action failure other than a timeout, one follow-up lookup
+// (SR-13.2). SendKeys never writes the row's state. Native ordinary delivery
+// revalidates ownership and guards before every write and queue sample,
+// within bounded readiness, drain and confirmation loops.
 //
 // Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
 // record per distinct reason per call (source ad_send_keys), fail-open, and
@@ -542,6 +546,9 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 		}
 		r.paste = paste
 	}
+	if reason := pacedTextTooLong(row.Agent, plan.text); !r.automatic && reason != "" {
+		return deliveryNotStarted(row, reason)
+	}
 	if !r.automatic && row.Agent == store.AgentClaude && row.State == store.StatePending && ordinary {
 		terminal, ok := r.t.(PaneTerminalTmux)
 		if !ok {
@@ -574,7 +581,8 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 // text first waits for a raw terminal, SessionStart and its settle, then
 // revalidates its launch and guards within the readiness budget
 // (waitTerminalRaw). A Cursor row's text with Enter also reads its gateway's
-// verdict (typeCursorText).
+// verdict (typeCursorText). On macOS a Claude row's text longer than
+// inputdelivery.ChunkBytes is typed in paced pieces (typePaced).
 func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	paneID, launch, err := r.targetPane()
 	if err != nil {
@@ -609,6 +617,9 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	}
 	if r.row.Agent == store.AgentCursor && plan.enter {
 		return r.typeCursorText(paneID, launch, plan.text)
+	}
+	if pacedText(r.row.Agent, plan.text) {
+		return r.typePaced(paneID, launch, plan.text, plan.enter, params)
 	}
 	return r.typeText(paneID, launch, plan.text, plan.enter)
 }
@@ -860,11 +871,17 @@ func isInteractiveState(state string) bool {
 // A plain call types Text (CR bytes (0x0D) stripped to prevent premature
 // submission; LF bytes (0x0A) preserved as composed newlines in Claude's
 // input box) and then one Enter, unless NoEnter (empty text with Enter sends
-// that Enter only); or, with Key, that one key alone. With ExpectPaneSHA256
-// it first checks that the pane still has the hash the caller read. Without
-// it, a plain call on a relayed Spawn is refused while any of its permission
-// requests is not proven gone by Claude Code's own hooks (ErrDialogMaybeOpen;
-// b.146 step 2c), less a Cursor request of an earlier launch of the row
+// that Enter only); or, with Key, that one key alone. On macOS a Claude row's
+// text longer than 512 bytes that does not take native delivery is typed in
+// pieces of at most 512 bytes, 100 ms apart, with Enter 500 ms after the last
+// pause; a reread of the row before each later piece and before the Enter can
+// stop it there, and such text over 32 KiB is refused before any input
+// (b.vr5). Send such text to one row one call at a time: the pieces of
+// concurrent calls can interleave. With ExpectPaneSHA256 it first checks that
+// the pane still has the hash the caller read. Without it, a plain call on a
+// relayed Spawn is refused while any of its permission requests is not proven
+// gone by Claude Code's own hooks (ErrDialogMaybeOpen; b.146 step 2c), less a
+// Cursor request of an earlier launch of the row
 // (store.PermissionRow.HoldsDialog); ExpectPaneSHA256 means a person or LLM
 // judged that exact screen, so never pass it from an automatic flow.
 //
@@ -947,22 +964,27 @@ func isInteractiveState(state string) bool {
 //     was launched on.
 //   - [ErrSubmissionUnconfirmed]: native delivery lacks exact proof, or Codex
 //     fallback was refused before input or had a paste transport failure, or
-//     pending Claude fallback did not observe raw input, SessionStart and a
-//     1.5 s settle after first observing waiting within 12 s, could not read
-//     readiness, lost its launch, waiting state, pane ownership or guards, or
-//     has an adapter without PaneTerminalTmux (outcome not_started: nothing
-//     was typed, so the same call can be made again later), or pending Codex
-//     or Claude fallback lacks bounded hook-derived submission observation,
-//     or a Cursor row's
-//     gateway refused the submission (outcome gateway_refused). Structured
-//     outcomes distinguish no input, partial text, possible Enter delivery and
-//     a gateway refusal; failed hook observation carries only keys_sent,
-//     submission_confirmed and row_state. Never replay uncertain text or Enter.
-//     Only native attempts support passive reconciliation with the original
-//     delivery_request_id. For fallback, inspect hook-derived get or status and
-//     escalate if submission remains unknown. On gateway_refused nothing reached
-//     Cursor and the gateway discarded the text: read the pane and get, answer
-//     or clear what holds the input before sending again, or kill and resume.
+//     a macOS Claude row's text to type in paced pieces is over 32 KiB
+//     (outcome not_started, before any input), or pending Claude fallback did
+//     not observe raw input, SessionStart and a 1.5 s settle after first
+//     observing waiting within 12 s, could not read readiness, lost its
+//     launch, waiting state, pane ownership or guards, or has an adapter
+//     without PaneTerminalTmux (outcome not_started: nothing was typed, so the
+//     same call can be made again later), or pending Codex or Claude fallback
+//     lacks bounded hook-derived submission observation, or a macOS Claude
+//     row's paced text timed out on its first piece, failed after it, or was
+//     stopped by the reread before a later piece or its Enter (outcome
+//     partial_input_unconfirmed: part or all of the text may be typed,
+//     unsubmitted), or a Cursor row's gateway refused the submission (outcome
+//     gateway_refused). Structured outcomes distinguish no input, partial
+//     text, possible Enter delivery and a gateway refusal; failed hook
+//     observation carries only keys_sent, submission_confirmed and row_state.
+//     Never replay uncertain text or Enter. Only native attempts support
+//     passive reconciliation with the original delivery_request_id. For
+//     fallback, inspect hook-derived get or status and escalate if submission
+//     remains unknown. On gateway_refused nothing reached Cursor and the
+//     gateway discarded the text: read the pane and get, answer or clear what
+//     holds the input before sending again, or kill and resume.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs; pending Claude fallback on
