@@ -58,6 +58,15 @@ type Options struct {
 	// must return promptly. Production leaves it nil.
 	afterAwaitConsumedWake func(string)
 
+	// beforeInputSave observes each durable input save (held or admitted
+	// capture, held promotion, prompt start) with the record it will write. It
+	// runs in await's worker immediately before the store write, outside mailbox
+	// locks, with control supervision active; any epoch check in that write runs
+	// after it returns. It must return within the save's bound (inputUntil, at
+	// most 3 s from entry), or the save fails with its context error instead.
+	// Production leaves it nil.
+	beforeInputSave func(store.CursorInput)
+
 	// beforeControllerCleanup observes the controller loop's result before any
 	// deferred cleanup can delay or amend it. Setup returns before loop entry are
 	// not observed. It runs on the session goroutine, outside locks, and must
@@ -653,6 +662,13 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		} else {
 			old := v.obligation.snapshot()
 			operation = func() error { return s.AdvanceCursorInput(ctx, old, next, until, check) }
+		}
+		if observe := options.beforeInputSave; observe != nil {
+			write := operation
+			operation = func() error {
+				observe(next)
+				return write()
+			}
 		}
 		if e := await(operation); e != nil {
 			return fmt.Errorf("Cursor input persistence unconfirmed; no replay: %w", e)
@@ -1317,12 +1333,19 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					v.sessionID = session
 					next := v.obligation.snapshot()
 					next.State, next.TargetSession = store.CursorInputAdmitted, session
+					accepted := map[string]any{"submission_id": v.submission, "text": v.text, "input_epoch": v.epoch, "consumed_at": v.at, "released_from_hold": true}
 					if err = saveInput(&v, next); err != nil {
-						return err
+						if !errors.Is(err, errPromptRetired) {
+							return err
+						}
+						// The promotion transaction refused before mutation, so the
+						// row stays held. submit cancels the input before dispatch,
+						// and its retired epoch also ends this promotion.
+						accepted["durable_admission"] = false
 					}
 					held = held[1:]
 					queue = insertSubmission(queue, v)
-					if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": v.submission, "text": v.text, "input_epoch": v.epoch, "consumed_at": v.at, "released_from_hold": true}); err != nil {
+					if err = record(cursortranscript.KindSubmissionAccepted, accepted); err != nil {
 						return err
 					}
 					fmt.Fprintf(writer, "Cursor submission %s accepted after fresh publication\r\n", v.submission)
@@ -1895,11 +1918,19 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					inputs.count++
 					inputs.bytes += len(text)
 					inputs.mu.Unlock()
+					accepted := map[string]any{"submission_id": v.submission, "text": text, "origin": "main"}
 					if err = captureInput(&v, store.CursorInputAdmitted, "configured initial prompt"); err != nil {
-						return err
+						if !errors.Is(err, errPromptRetired) {
+							return err
+						}
+						// The admission transaction refused before mutation, so no
+						// row exists. submit cancels a fresh session's prompt
+						// before dispatch, and a loaded session's queue disposal
+						// cancels it.
+						accepted["durable_admission"] = false
 					}
 					inputPrerequisitesChanged = true
-					if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": v.submission, "text": text, "origin": "main"}); err != nil {
+					if err = record(cursortranscript.KindSubmissionAccepted, accepted); err != nil {
 						return err
 					}
 					queue = append(queue, v)

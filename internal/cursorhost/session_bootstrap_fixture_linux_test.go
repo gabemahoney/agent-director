@@ -27,6 +27,13 @@ func postBootstrapCursorSession(t *testing.T, relay, initial string, guidance ..
 // relay is the row's relay mode, "on" or "off".
 func postBootstrapCursorSessionWithInput(t *testing.T, relay, initial string, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter, guidance ...bool) *cursorSession {
 	t.Helper()
+	return postBootstrapCursorSessionWithOptions(t, Options{}, relay, initial, opener, starter, guidance...)
+}
+
+// postBootstrapCursorSessionWithOptions passes options' test hooks to Run; the
+// fixture sets the runtime, initial prompt, MCP executable and its own observers.
+func postBootstrapCursorSessionWithOptions(t *testing.T, options Options, relay, initial string, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter, guidance ...bool) *cursorSession {
+	t.Helper()
 	e := newRequestEnv(t, relay, "synthetic-session-1")
 	mcpExecutable := ""
 	if len(guidance) > 0 && guidance[0] {
@@ -109,13 +116,15 @@ func postBootstrapCursorSessionWithInput(t *testing.T, relay, initial string, op
 	queueEnabled := make(chan struct{}, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), protocolWait)
 	defer cancel()
+	options.Runtime, options.mcpExecutable, options.InitialPrompt, options.beforeControllerCleanup = e.runtime.Program, mcpExecutable, initial, c.observeControllerReturn
+	options.afterStartupQueueEnabled = func() {
+		select {
+		case queueEnabled <- struct{}{}:
+		default:
+		}
+	}
 	go func() {
-		c.done <- runWithInput(Options{Runtime: e.runtime.Program, mcpExecutable: mcpExecutable, InitialPrompt: initial, beforeControllerCleanup: c.observeControllerReturn, afterStartupQueueEnabled: func() {
-			select {
-			case queueEnabled <- struct{}{}:
-			default:
-			}
-		}}, slave, c.pane, open, starter)
+		c.done <- runWithInput(options, slave, c.pane, open, starter)
 	}()
 	fail := func(phase string, err error) {
 		t.Helper()

@@ -593,11 +593,17 @@ uncertain output remains fatal and is never replayed.
 
 `input_obligations.go` and `Store.CaptureCursorInput` / `AdvanceCursorInput`
 retain the captured store/full runtime owner, submission, order, epoch,
-generation, exact text and time. Durable admission is confirmed before entering
-the controller queue. Earlier terminal acceptance remains a separate observation:
-a control can retire it before durable admission, retaining acceptance/cancellation
-history without dispatch authority. A held record retains its original owner
-when promotion sets its target conversation.
+generation, exact text and time. Ordinary input is durably admitted before
+entering the controller queue. Earlier terminal acceptance remains a separate
+observation: a control can retire it before durable admission, retaining
+acceptance/cancellation history without dispatch authority. A held promotion or
+the configured initial prompt whose admission save a control retires
+(`errPromptRetired`; nothing is written) still enters the queue unadmitted and
+records `submission_accepted` with `durable_admission: false`. `submit` then
+cancels it "control consumed before dispatch" before any bytes; on a loaded
+session, queue disposal cancels the initial prompt. Any other admission save
+failure stays fatal. A held record retains its original owner when promotion
+sets its target conversation.
 Advance is an exact-record compare-and-swap. Live admission/start/issue requires
 current session authority; terminal/control observations use the narrower
 same-connection/life evidence check and grant no issue authority. The controller
