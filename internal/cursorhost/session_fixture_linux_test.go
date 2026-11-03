@@ -38,7 +38,19 @@ type submissionRecord struct {
 		Count       uint64          `json:"count"`
 		Update      json.RawMessage `json:"update"`
 		TextSHA256  string          `json:"text_sha256"`
+		Durable     *bool           `json:"durable_admission"`
+		Written     *int            `json:"bytes_written"`
 	} `json:"data"`
+}
+
+// capturedInput is a recorded submission's durable SQLite capture (b.x9o).
+func (c *cursorSession) capturedInput(t *testing.T, r submissionRecord) store.CursorInput {
+	t.Helper()
+	v, err := c.e.s.ReadCursorInput(r.Connection, r.Data.ID)
+	if err != nil {
+		t.Fatalf("%s %s has no durable capture: %v", r.Kind, r.Data.ID, err)
+	}
+	return v
 }
 
 // Retired-response records preserve numeric JSON-RPC IDs while submission

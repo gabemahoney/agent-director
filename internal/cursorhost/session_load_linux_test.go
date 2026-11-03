@@ -448,6 +448,27 @@ func TestCursorLoadCanceledReplyCannotPublish(t *testing.T) {
 					if len(c.prompts(t)) != 0 {
 						t.Fatal("canceled load dispatched saved initial")
 					}
+					if phase != "load" || control == "runtime death" {
+						return
+					}
+					// b.x9o: a control before session confirmation cancels the initial
+					// prompt with the control's record, not a refusal, and finishes
+					// its durable capture as cancelled.
+					controls := 0
+					var controlRecord submissionRecord
+					for _, r := range c.records(t) {
+						switch r.Kind {
+						case "input_control":
+							controls++
+							controlRecord = r
+						case "submission_refused", "held_input_refused":
+							t.Fatalf("cancelled initial prompt became a refusal: %+v", r)
+						}
+					}
+					initial, err := c.e.s.ReadCursorInput(controlRecord.Connection, "initial")
+					if err != nil || controls != 1 || initial.State != store.CursorInputCancelled || initial.Text != "never dispatch" {
+						t.Fatalf("cancelled initial prompt: controls=%d capture=%+v error=%v pane=%s", controls, initial, err, c.pane.bytes())
+					}
 				})
 			}
 		})

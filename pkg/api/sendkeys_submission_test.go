@@ -43,9 +43,13 @@ func assertSubmissionUnconfirmed(t *testing.T, err error, state string) {
 
 // assertPendingInput checks the exact input writes (assertInputWrites) and
 // the terminal reads: pending Claude's wait makes two (b.qcf), Codex none.
+// Claude's cells also keep b.qcf's exact merged call order (b.x9o, t2.7tz.5c.8d).
 func assertPendingInput(t *testing.T, e *submissionEnv, r killRow, agent, text string) {
 	t.Helper()
 	assertInputWrites(t, e.killEnv, r, text)
+	if agent == "claude" {
+		e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text, 2)
+	}
 	if got, want := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)), map[string]int{"codex": 0, "claude": 2}[agent]; got != want {
 		t.Errorf("terminal reads = %d; want %d", got, want)
 	}

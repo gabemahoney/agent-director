@@ -73,6 +73,24 @@ func gatewayRecord(token, kind, text string, at time.Time) string {
 	return string(raw) + "\n"
 }
 
+// withGatewayData is the gateway record line with fields set in its data, for
+// the other record shapes the merged gateway writes (b.x9o).
+func withGatewayData(line string, fields map[string]any) string {
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		panic(err)
+	}
+	data := rec["data"].(map[string]any)
+	for k, v := range fields {
+		data[k] = v
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw) + "\n"
+}
+
 // appendGateway appends data, whole lines or not, to the transcript at path.
 func appendGateway(t *testing.T, path string, data ...string) {
 	t.Helper()
@@ -191,7 +209,8 @@ func assertGatewayRefused(t *testing.T, err error, bytes int, reason, state stri
 // is gateway_refused with the gateway's reason; the text accepted or held, a
 // control, another launch's refusal, an unattributed refusal or no verdict
 // keeps success. Another text's verdicts, and verdicts on input consumed
-// before the call, are passed over. The keys are sent once either way.
+// before the call, are passed over, as are b.x9o's input_observed and
+// submission_cancelled. The keys are sent once either way.
 func TestSendKeysCursorGatewayVerdict(t *testing.T) {
 	t.Parallel()
 	const (
@@ -263,6 +282,19 @@ func TestSendKeysCursorGatewayVerdict(t *testing.T) {
 			}},
 		{name: "no verdict", text: skaText, slept: 2 * time.Second,
 			gateway: func(*testing.T, *cursorGatewayEnv) {}},
+		// b.x9o: records the merged gateway writes that are not this call's
+		// refusal. An accepted submission without durable admission is still
+		// accepted; input_observed and submission_cancelled are passed over.
+		{name: "accepted without durable admission", text: skaText,
+			gateway: func(t *testing.T, e *cursorGatewayEnv) {
+				e.atInput(t, withGatewayData(e.record(accepted), map[string]any{"origin": "main", "durable_admission": false}))
+			}},
+		{name: "b.x9o non-verdict records passed over", text: skaText, slept: 2 * time.Second,
+			gateway: func(t *testing.T, e *cursorGatewayEnv) {
+				e.atInput(t,
+					withGatewayData(e.record(cursortranscript.KindInputObserved), map[string]any{"text": e.text, "durable_admission": false}),
+					withGatewayData(e.record("submission_cancelled"), map[string]any{"reason": "gateway stopped", "started": false}))
+			}},
 		{name: "no verdict on a frozen clock", text: skaText, slept: 2 * time.Second,
 			gateway: func(t *testing.T, e *cursorGatewayEnv) {
 				e.env.Sleep = func(d time.Duration) {
@@ -293,6 +325,48 @@ func TestSendKeysCursorGatewayVerdict(t *testing.T) {
 			} else {
 				e.assertDelivered(t, e.r.Socket, e.r.Spawn.Identity.PaneID, tc.text)
 			}
+		})
+	}
+}
+
+// TestSendKeysCursorPaneHashAfterAdmission (b.x9o, b.bqd): a Cursor row's text
+// with Enter and a pane hash compares the hash again after input admission and
+// before its first write (typeCursorText). A pane that changed after admission
+// is ErrPaneChanged with nothing typed and no gateway watch; an unchanged pane
+// gets the text and Enter once and the gateway's verdict.
+func TestSendKeysCursorPaneHashAfterAdmission(t *testing.T) {
+	t.Parallel()
+	for _, changed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unchanged", true: "changed after admission"}[changed], func(t *testing.T) {
+			t.Parallel()
+			e := newCursorGatewayEnv(t, store.AgentCursor, nil)
+			e.atInput(t, e.record(cursortranscript.KindSubmissionRefused))
+			const pane = "caller inspected this pane\n"
+			e.rec.SetCapture(e.r.Socket, e.r.Spawn.Identity.PaneID, pane)
+			captures := 0
+			e.rec.AfterCall(tmux.CallCapture, func(tmuxfix.SocketCall, error) { captures++ })
+			e.rec.AfterCall(tmux.CallListPanes, func(tmuxfix.SocketCall, error) {
+				// Admission makes no tmux call: a listing after the caller's hash
+				// check is the post-admission target recheck before the first write.
+				if changed && captures == 1 {
+					e.rec.SetCapture(e.r.Socket, e.r.Spawn.Identity.PaneID, "a new dialog appeared\n")
+				}
+			})
+
+			err := e.send(api.SendKeysParams{InstanceID: e.r.ID, Text: e.text, ExpectPaneSHA256: api.PaneSHA256(pane)})
+
+			if changed {
+				assertOneName(t, err, "ErrPaneChanged")
+				e.assertNothingSent(t)
+				if captures != 2 || e.slept != 0 {
+					t.Fatalf("captures=%d, waited %v; want the post-admission capture refusing with no gateway watch", captures, e.slept)
+				}
+				return
+			}
+			assertGatewayRefused(t, err, len(e.text), cursorGatewayReason, store.StateWaiting)
+			e.assertPaneCalls(t, paneHashSendCalls...)
+			assertTextSent(t, e.rec, e.r.Socket, e.r.Spawn.Identity.PaneID, e.text)
+			assertEnterSent(t, e.rec, e.r.Socket, e.r.Spawn.Identity.PaneID)
 		})
 	}
 }

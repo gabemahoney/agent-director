@@ -398,6 +398,11 @@ prompt admission remain separate facts. Existing mode confirmation,
 protected recording and prompt/hold/FIFO guards remain mandatory. Initialization
 alone neither commits identity nor releases provisionally held input.
 
+A control, signal or retired-prompt failure that `await` consumes makes the
+controller loop take another pass before it blocks in its `select` or exits for
+`/exit`. Such a control is handled and recorded exactly as one the `select`
+receives; no ticker or polling is involved.
+
 The shared verifier checks cancellation and the applicable absolute deadline after evidence
 returns, rejecting late positive results. Gateway controls, runtime loss, current
 input epoch and publication checks remain authoritative; acknowledgement receipt

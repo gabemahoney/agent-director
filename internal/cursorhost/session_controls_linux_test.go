@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/cursortranscript"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
@@ -262,8 +263,15 @@ func TestCursorControlBypassesSaturatedInputAndPendingReport(t *testing.T) {
 	c.keys(t, "before-wire\r")
 	c.wait(t, "pending actual submission report", func() bool { _, err := os.Stat(filepath.Join(dir, "entered")); return err == nil })
 	var keys strings.Builder
+	digests := map[string]bool{}
 	for i := 0; i < 32; i++ {
 		fmt.Fprintf(&keys, "queued-%02d\r", i)
+		digests[cursortranscript.TextSHA256(fmt.Sprintf("queued-%02d", i))] = true
+	}
+	// Past the mailbox's bounded entries, refusals coalesce into one count.
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&keys, "overflow-%02d\r", i)
+		digests[cursortranscript.TextSHA256(fmt.Sprintf("overflow-%02d", i))] = true
 	}
 	keys.WriteString("~")
 	c.keys(t, keys.String())
@@ -301,6 +309,41 @@ func TestCursorControlBypassesSaturatedInputAndPendingReport(t *testing.T) {
 	c.stop(t)
 	if got := c.prompts(t); !reflect.DeepEqual(got, []string{"later-explicit"}) {
 		t.Fatalf("retired work replayed: %q", got)
+	}
+	// b.bqd: each refused text names its digest and consumption time; the
+	// combined overflow has neither. b.x9o: input the control retired keeps its
+	// accepted history without durable admission, is cancelled, never refused,
+	// and every capture is finished.
+	retired := map[string]bool{}
+	refused, overflow := 0, uint64(0)
+	for _, r := range c.records(t) {
+		switch {
+		case r.Kind == "submission_refused" && r.Data.ID == "":
+			if r.Data.TextSHA256 != "" || !r.Data.ConsumedAt.IsZero() || r.Data.Count == 0 {
+				t.Fatalf("overflow refusal = %+v; want a count, no digest and no consumption time", r)
+			}
+			overflow += r.Data.Count
+		case r.Kind == "submission_refused":
+			if !digests[r.Data.TextSHA256] || r.Data.ConsumedAt.IsZero() || retired[r.Data.ID] {
+				t.Fatalf("text refusal = %+v; want a typed text's digest, once, and its consumption time", r)
+			}
+			delete(digests, r.Data.TextSHA256)
+			if v := c.capturedInput(t, r); v.State != store.CursorInputRefused || !v.CapturedAt.Equal(r.Data.ConsumedAt) {
+				t.Fatalf("refusal capture = %+v; want refused, captured at %s", v, r.Data.ConsumedAt)
+			}
+			refused++
+		case r.Kind == "submission_accepted" && r.Data.Text != "before-wire" && r.Data.Text != "later-explicit":
+			if r.Data.Durable == nil || *r.Data.Durable {
+				t.Fatalf("retired input claimed durable admission: %+v", r)
+			}
+			if v := c.capturedInput(t, r); v.State != store.CursorInputCancelled {
+				t.Fatalf("retired input capture = %+v; want cancelled", v)
+			}
+			retired[r.Data.ID] = true
+		}
+	}
+	if overflow == 0 || len(retired)+refused+int(overflow) != 72 {
+		t.Fatalf("typed inputs unaccounted: retired=%d refused=%d overflow=%d", len(retired), refused, overflow)
 	}
 }
 

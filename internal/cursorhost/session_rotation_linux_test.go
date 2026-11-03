@@ -382,9 +382,279 @@ func TestCursorUnrecordedHeldInputRefusalCarriesTextDigest(t *testing.T) {
 			if got := refused[0].Data.ConsumedAt; got.Before(typed) || !got.Before(cutoff) {
 				t.Fatalf("held_input_refused consumed_at = %s; want in [%s, %s) before recording resumed", got, typed, cutoff)
 			}
+			// b.x9o: the refusal's durable capture is finished as refused.
+			if v := c.capturedInput(t, refused[0]); v.State != store.CursorInputRefused || v.Text != "unrecorded-held" || !v.CapturedAt.Equal(refused[0].Data.ConsumedAt) {
+				t.Fatalf("held refusal capture = %+v; want refused %q captured at %s", v, "unrecorded-held", refused[0].Data.ConsumedAt)
+			}
 			rotationNoBytes(t, c, "unrecorded-held")
 		})
 	}
+}
+
+// b.bqd: a held refusal that is not the text's first verdict, and the
+// non-refusal input_observed, never gain a text digest, so send-keys cannot
+// claim them; their other released fields stay. b.x9o: each input's durable
+// capture is still finished as refused.
+func TestCursorUnclaimableInputRecordsKeepCapture(t *testing.T) {
+	// Serial: protected runtime and reporter subprocess use process environment.
+	t.Run("held retired after recording", func(t *testing.T) {
+		// Recorded held, and kept held past publication by an unproven hold.
+		c := postBootstrapCursorSession(t, "off", "")
+		b, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gate := store.HookGate{Event: "PermissionRequest", ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
+		if _, a, err := c.e.s.InsertRelayRequest(b.InstanceID, gate, store.RelayRequest{RequestToken: "aaaaaaaa-aaaa-4aaa-aaaa-000000000077", ToolName: "Unknown", ToolInput: "{}", SettledAt: time.Now().Add(time.Minute)}, 0, store.DefaultLockWait); err != nil || !a.Applied {
+			t.Fatalf("independent hold: %+v %v", a, err)
+		}
+		c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
+		c.keys(t, "/new\r")
+		c.wait(t, "rotation pending", func() bool { return rotationNewCount(c, t) == 2 })
+		c.keys(t, "recorded-held\r")
+		c.wait(t, "held", func() bool { return rotationRecordCount(c, t, "input_held") == 1 })
+		rotationRelease(t, c.e.runtime.NewRelease)
+		c.wait(t, "published with the hold", func() bool {
+			return rotationRecordCount(c, t, "rotation_published") == 1 && bytes.Contains(c.pane.bytes(), []byte("Cursor fresh conversation published"))
+		})
+		// The post-publication hold check has finished, so /exit reaches the
+		// held-retirement loop from the controller's idle select.
+		c.idleObservationBarrier(t, "published-hold-idle")
+		c.stop(t)
+		var held, refused []submissionRecord
+		for _, r := range c.records(t) {
+			switch r.Kind {
+			case "input_held":
+				held = append(held, r)
+			case "held_input_refused":
+				refused = append(refused, r)
+			}
+		}
+		if len(held) != 1 || len(refused) != 1 || refused[0].Data.ID != held[0].Data.ID || refused[0].Data.Reason != "control retired provisional input" || refused[0].Data.TextSHA256 != "" {
+			t.Fatalf("held_input_refused = %+v after %+v; want one by the control, without a text digest", refused, held)
+		}
+		if v := c.capturedInput(t, refused[0]); v.State != store.CursorInputRefused || v.Text != "recorded-held" {
+			t.Fatalf("held refusal capture = %+v; want refused %q", v, "recorded-held")
+		}
+		rotationNoBytes(t, c, "recorded-held")
+	})
+	t.Run("observed at gateway stop", func(t *testing.T) {
+		// Accepted input is still in the mailbox when the runtime dies during a report.
+		c := startCursorSession(t, "")
+		dir := t.TempDir()
+		t.Setenv("AD_TEST_CURSOR_BARRIER_EVENT", "UserPromptSubmit")
+		t.Setenv("AD_TEST_CURSOR_BARRIER_PHASE", "before")
+		t.Setenv("AD_TEST_CURSOR_BARRIER_DIR", dir)
+		t.Cleanup(func() { os.WriteFile(filepath.Join(dir, "release"), nil, 0600) })
+		c.keys(t, "before-wire\r")
+		c.wait(t, "pending submission report", func() bool { _, err := os.Stat(filepath.Join(dir, "entered")); return err == nil })
+		c.keys(t, "observed-at-stop\r~")
+		c.wait(t, "input consumed", func() bool { return bytes.Contains(c.pane.bytes(), []byte("\r\x1b[2K> ~")) })
+		raw, err := os.ReadFile(c.e.runtime.PID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pid int
+		fmt.Sscan(string(raw), &pid)
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+		c.awaitFailure(t, 5*time.Second)
+		var observed []submissionRecord
+		cancelled := map[string]bool{}
+		for _, r := range c.records(t) {
+			switch r.Kind {
+			case "input_observed":
+				observed = append(observed, r)
+			case "submission_cancelled":
+				cancelled[r.Data.ID] = true
+			case "submission_refused", "held_input_refused":
+				t.Fatalf("observed input became a refusal: %+v", r)
+			}
+		}
+		if len(observed) != 1 || observed[0].Data.TextSHA256 != "" || observed[0].Data.Durable == nil || *observed[0].Data.Durable || observed[0].Data.Text != "observed-at-stop" || observed[0].Data.ConsumedAt.IsZero() || !cancelled[observed[0].Data.ID] {
+			t.Fatalf("input_observed = %+v; want one with its text and consumption time, without a text digest or durable admission, then cancelled", observed)
+		}
+		if v := c.capturedInput(t, observed[0]); v.State != store.CursorInputRefused || v.Text != "observed-at-stop" {
+			t.Fatalf("observed input capture = %+v; want refused %q", v, "observed-at-stop")
+		}
+		rotationNoBytes(t, c, "observed-at-stop")
+	})
+}
+
+// Task t2.7tz.5c.8d, b.x9o: with no idle ticker, a control consumed by the
+// held-promotion record's await, after the loop's control handling, must still
+// be acted on before the controller blocks or exits. Either control is
+// recorded, and the loop, not shutdown, cancels the promoted input still queued
+// and retires the input still held; the interrupt then recovers idle instead
+// of timing out.
+func TestCursorControlDuringHeldPromotionIsActedOn(t *testing.T) {
+	// Serial: protected runtime and reporter subprocess use process environment.
+	for _, tc := range []struct {
+		control, keys string
+		want          []string
+	}{
+		{"interrupt", "\x03", []string{"rotation", "interrupt", "exit"}},
+		{"exit", "\x15/exit\r", []string{"rotation", "exit"}},
+	} {
+		t.Run(tc.control, func(t *testing.T) {
+			barrier, opener := newMatchingRecordBarrier(t, "submission_accepted", func(raw []byte) bool {
+				return bytes.Contains(raw, []byte(`"released_from_hold":true`)) && bytes.Contains(raw, []byte(`"queued-second"`))
+			})
+			consumed := make(chan struct{}, 2)
+			starter := func(in *os.File, out io.Writer, emit func(terminalInput), admit func() bool, choices ...func(rune) (string, string, bool)) func() {
+				return terminalLoop(in, out, func(v terminalInput) {
+					emit(v)
+					if v.interrupt || v.text == "/exit" {
+						select {
+						case consumed <- struct{}{}:
+						default:
+						}
+					}
+				}, admit, choices...)
+			}
+			c := postBootstrapCursorSessionWithInput(t, "off", "", opener, starter)
+			defer barrier.unblock()
+			c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
+			c.keys(t, "/new\r")
+			c.wait(t, "rotation pending", func() bool { return rotationNewCount(c, t) == 2 })
+			// The first is taken by submit, which cancels it before dispatch; the
+			// second stays queued behind it; the third is never promoted.
+			c.keys(t, "promoted-first\rqueued-second\rstill-held\r")
+			c.wait(t, "held", func() bool { return rotationRecordCount(c, t, "input_held") == 3 })
+			rotationRelease(t, c.e.runtime.NewRelease)
+			select {
+			case <-barrier.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("promotion record did not block")
+			}
+			// The blocked record's await is the only reader of the control's wake.
+			c.keys(t, tc.keys)
+			c.wait(t, "control consumed", func() bool { return len(consumed) == 1 })
+			barrier.unblock()
+			if tc.control == "interrupt" {
+				c.wait(t, "idle recovery", func() bool { return bytes.Contains(c.pane.bytes(), []byte("submit a new prompt to continue")) })
+				c.keys(t, "\x15/exit\r")
+			}
+			select {
+			case c.endErr = <-c.done:
+				c.ended = true
+			case <-time.After(5 * time.Second):
+				t.Fatal("exit did not stop the gateway")
+			}
+			if c.endErr != nil {
+				t.Fatalf("gateway ended with %v; want a clean exit", c.endErr)
+			}
+			var controls []string
+			held := map[string]string{}
+			var refused []submissionRecord
+			cancelled := map[string]string{}
+			for _, r := range c.records(t) {
+				switch r.Kind {
+				case "input_control":
+					controls = append(controls, r.Data.Control)
+				case "input_held":
+					held[r.Data.Text] = r.Data.ID
+				case "held_input_refused":
+					if len(controls) < 2 {
+						t.Fatalf("held input refused before its control was recorded: %+v", r)
+					}
+					refused = append(refused, r)
+				case "submission_cancelled":
+					// submit itself cancels the first before the control is recorded.
+					if r.Data.ID == held["queued-second"] && len(controls) < 2 {
+						t.Fatalf("queued input cancelled before its control was recorded: %+v", r)
+					}
+					cancelled[r.Data.ID] = r.Data.Reason
+				}
+			}
+			if !reflect.DeepEqual(controls, tc.want) {
+				t.Fatalf("input_control records = %q; want %q", controls, tc.want)
+			}
+			if got := cancelled[held["queued-second"]]; got != "interruption or shutdown" {
+				t.Fatalf("queued input cancellation = %q (all %v); want the loop's %q", got, cancelled, "interruption or shutdown")
+			}
+			if len(refused) != 1 || refused[0].Data.ID != held["still-held"] || refused[0].Data.Reason != "control retired provisional input" {
+				t.Fatalf("held_input_refused = %+v; want the loop to retire %q", refused, held["still-held"])
+			}
+			for _, text := range []string{"promoted-first", "queued-second", "still-held"} {
+				rotationNoBytes(t, c, text)
+			}
+		})
+	}
+}
+
+// Task t2.7tz.5c.8d, b.x9o: a prompt retired before write, whose failure the
+// interrupt's record await consumes, is still cancelled with nothing written,
+// and the gateway recovers idle. The interrupt's session/cancel write also
+// wakes the select, so this does not pin awaitConsumedWake's prompt trigger.
+func TestCursorPromptRetiredDuringControlRecordIsActedOn(t *testing.T) {
+	// Serial: protected runtime and reporter subprocess use process environment.
+	start, startOpener := newRecordBarrier(t, "submission_started")
+	control, _ := newRecordBarrier(t, "input_control")
+	defer start.unblock()
+	defer control.unblock()
+	consumed := make(chan string, 4)
+	options := Options{afterAwaitConsumedWake: func(kind string) { consumed <- kind }}
+	c := beginCursorSessionWithOptions(t, options, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{}}, control.around(startOpener), terminalLoop)
+	c.wait(t, "confirmed ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
+	c.keys(t, "retired-unwritten\r")
+	select {
+	case <-start.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("start record did not block")
+	}
+	// The blocked start record's await consumes the interrupt; its write guard
+	// still waits for that record.
+	c.keys(t, "\x03")
+	c.wait(t, "interrupt consumed", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cancellation requested")) })
+	start.unblock()
+	select {
+	case kind := <-consumed:
+		if kind != "prompt retired" {
+			t.Fatalf("await consumed %q; want the retired prompt", kind)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("await did not consume the retired prompt")
+	}
+	control.unblock()
+	c.wait(t, "idle recovery", func() bool { return bytes.Contains(c.pane.bytes(), []byte("submit a new prompt to continue")) })
+	c.stop(t)
+	if len(consumed) != 0 {
+		t.Fatalf("await consumed another wake: %q", <-consumed)
+	}
+	var controls []string
+	var cancelled []submissionRecord
+	id := ""
+	for _, r := range c.records(t) {
+		switch r.Kind {
+		case "input_control":
+			controls = append(controls, r.Data.Control)
+		case "submission_started":
+			id = r.Data.ID
+		case "submission_cancelled":
+			if len(controls) == 0 {
+				t.Fatalf("prompt retired before its control was recorded: %+v", r)
+			}
+			cancelled = append(cancelled, r)
+		case "submission_unconfirmed", "turn_outcome":
+			t.Fatalf("retired prompt reached an outcome: %+v", r)
+		}
+	}
+	if !reflect.DeepEqual(controls, []string{"interrupt", "exit"}) {
+		t.Fatalf("input_control records = %q; want interrupt, exit", controls)
+	}
+	if len(cancelled) != 1 || cancelled[0].Data.ID != id || cancelled[0].Data.Reason != "retired before write" || cancelled[0].Data.Started ||
+		cancelled[0].Data.Written == nil || *cancelled[0].Data.Written != 0 {
+		t.Fatalf("submission_cancelled = %+v; want %q retired before write with 0 bytes written", cancelled, id)
+	}
+	if v := c.capturedInput(t, cancelled[0]); v.State != store.CursorInputCancelled || v.Detail != "retired before write" {
+		t.Fatalf("retired prompt capture = %+v; want cancelled, retired before write", v)
+	}
+	if got := c.prompts(t); len(got) != 0 {
+		t.Fatalf("retired prompt reached the runtime: %q", got)
+	}
+	rotationNoBytes(t, c, "retired-unwritten")
 }
 
 func TestCursorRotationFailureRefusesEveryHeldInput(t *testing.T) {
@@ -430,13 +700,25 @@ func TestCursorRotationFailureRefusesEveryHeldInput(t *testing.T) {
 			for _, text := range []string{"refuse-held-one", "refuse-held-two"} {
 				rotationNoBytes(t, c, text)
 			}
+			stopped := 0
 			for _, r := range c.records(t) {
 				if r.Kind == "input_held" && !bytes.Contains(c.pane.bytes(), []byte("held submission "+r.Data.ID+" refused; nothing sent to either conversation")) {
 					t.Fatalf("missing per-input refusal: %+v pane=%s", r, c.pane.bytes())
 				}
+				if r.Kind == "held_input_refused" {
+					stopped++
+					// b.bqd: input recorded held already has its verdict, so its
+					// rotation-stopped refusal stays unclaimable by send-keys.
+					if r.Data.TextSHA256 != "" {
+						t.Fatalf("rotation-stopped refusal gained a text digest: %+v", r)
+					}
+				}
 				if r.Kind == "submission_started" || r.Kind == "submission_accepted" || r.Kind == "session_end" {
 					t.Fatalf("false execution/end: %+v", r)
 				}
+			}
+			if failure == "rejection" && stopped != 2 {
+				t.Fatalf("rotation-stopped refusals = %d; want one per held input", stopped)
 			}
 			row, _ := c.e.s.GetSpawn(before.InstanceID)
 			h, _ := c.e.s.ListSessionHistory(before.InstanceID, before.LifeNumber)

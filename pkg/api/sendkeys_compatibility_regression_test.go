@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -504,5 +505,73 @@ func TestSendKeysPendingClaudeReadinessDeadline(t *testing.T) {
 				e.assertRowUnchanged(t, r.ID, before)
 			})
 		}
+	}
+}
+
+// TestSendKeysPendingClaudeContextEndsWait (b.x9o, b.qcf): cancellation, or a
+// caller deadline earlier than the 12 s readiness budget, ends pending Claude's
+// wait itself: not_started with the cancellation reason, nothing typed or
+// journalled, and the row state last read through the call's context-scoped
+// store (waiting after SessionStart), not the pending row the call began with.
+func TestSendKeysPendingClaudeContextEndsWait(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"cancelled", "caller deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			e := newNativeSubmissionEnv(t)
+			e.clock.Advance(time.Now().Sub(e.clock.Now())) // the scoped store's real deadlines follow the call's clock
+			r := e.seedRow(t, killRowSpec{State: store.StatePending})
+			e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
+			e.b.current = &api.InputDeliveryAttempt{RequestID: "earlier", Phase: "not_started"}
+			prior := cloneAttempt(e.b.current)
+			e.rec.SetTerminalRaw(r.Socket, r.Spawn.Identity.PaneID, false) // only the context ends the wait early
+			start := e.clock.Now()
+			end := start.Add(6 * time.Second)
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if mode == "caller deadline" {
+				ctx, cancel = context.WithDeadline(context.Background(), end)
+			} else {
+				ctx, cancel = context.WithCancel(context.Background())
+			}
+			defer cancel()
+			e.env.Context = ctx
+			before := e.columns(t, r.ID)
+			sleeps := 0
+			sleep := e.env.Sleep
+			e.env.Sleep = func(d time.Duration) {
+				e.assertNothingSent(t)
+				if !reflect.DeepEqual(e.b.current, prior) || len(e.b.history) != 0 {
+					t.Fatal("input journalled during the wait")
+				}
+				sleep(d)
+				if sleeps++; sleeps == 1 {
+					if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", "context-wait-session"); !a.Applied {
+						t.Fatalf("SessionStart during wait: %+v", a)
+					}
+					before = e.columns(t, r.ID)
+				} else if mode == "cancelled" && sleeps == 3 {
+					cancel()
+					end = e.clock.Now()
+				}
+			}
+
+			_, err := api.SendKeys(e.st.WithContext(ctx), e.rec, e.env, api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+
+			assertOneName(t, err, "ErrSubmissionUnconfirmed")
+			want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StateWaiting,
+				Reason: "the call was cancelled or reached its deadline before input; nothing was typed, so the same send-keys can be retried later"}
+			if got := api.ErrDetails(err); got != want {
+				t.Fatalf("refusal=%+v; want %+v", got, want)
+			}
+			if sleeps < 3 || !e.clock.Now().Equal(end) {
+				t.Fatalf("wait ended after %s and %d sleeps; want %s", e.clock.Now().Sub(start), sleeps, end.Sub(start))
+			}
+			e.assertNothingSent(t)
+			if !reflect.DeepEqual(e.b.current, prior) || len(e.b.history) != 0 {
+				t.Fatal("ended wait journalled input")
+			}
+			e.assertRowUnchanged(t, r.ID, before)
+		})
 	}
 }

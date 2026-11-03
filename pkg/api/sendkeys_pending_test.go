@@ -462,6 +462,56 @@ func TestSendKeysResumedPendingClaudeAdmission(t *testing.T) {
 	}
 }
 
+// TestSendKeysPendingClaudeManualIntentAdoptedIdentity (b.x9o, b.qcf): after
+// pending Claude's wait, fallback records its manual intent under the adopted
+// launch identity (a lost reply's token pane), not the row's stale one. An
+// unconfirmed intent commit refuses not_started with nothing typed and the last
+// row state the call read (waiting), not the pending row it began with.
+func TestSendKeysPendingClaudeManualIntentAdoptedIdentity(t *testing.T) {
+	t.Parallel()
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "recorded", true: "unconfirmed commit"}[fail], func(t *testing.T) {
+			t.Parallel()
+			e := newNativeSubmissionEnv(t)
+			r := e.seedPending(t, pendingFresh, pendingLostReply)
+			pane := labelledPane(t, r.Session, r.Token)
+			e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
+			e.b.current = &api.InputDeliveryAttempt{RequestID: "earlier", Phase: "not_started"}
+			var intent *api.InputDeliveryAttempt
+			e.b.save = func(a *api.InputDeliveryAttempt) error {
+				intent = cloneAttempt(a)
+				if fail {
+					return inputdelivery.ErrUnconfirmed
+				}
+				return nil
+			}
+			e.sessionStartsWhenPolled(t, r, nil)
+
+			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+
+			row, rowErr := e.st.GetSpawn(r.ID)
+			if rowErr != nil || r.Spawn.Identity.PaneID != "" || row.Identity.PaneID != pane {
+				t.Fatalf("row %+v, %v; want the lost reply's token pane %s adopted", row.Identity, rowErr, pane)
+			}
+			if want := sqliteInputIdentity(row, e.storeID); intent == nil || intent.Phase != "manual_input" || !intent.ManualInterference || intent.Identity != want {
+				t.Fatalf("manual intent = %+v; want manual_input under the adopted identity %+v", intent, want)
+			}
+			if fail {
+				assertOneName(t, err, "ErrSubmissionUnconfirmed")
+				want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StateWaiting,
+					Reason: "cannot persist manual input intent"}
+				if got := api.ErrDetails(err); got != want {
+					t.Fatalf("refusal = %+v; want %+v", got, want)
+				}
+				e.assertNothingSent(t)
+				return
+			}
+			assertSubmissionUnconfirmed(t, err, store.StateWaiting) // no turn hook follows the Enter
+			e.assertDelivered(t, r.Socket, pane, skpText, 2)
+		})
+	}
+}
+
 // b.qcf: a liveness note does not confirm submission.
 // TestSendKeysNotedUnreportedRow (b.kdf, CSCB): a pending row find-missing noted unreported is still a pending row
 // to send-keys: refused without allow_pending (ErrSpawnNotInteractive, no tmux call);

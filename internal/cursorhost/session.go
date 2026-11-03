@@ -51,6 +51,13 @@ type Options struct {
 	// return promptly. Production leaves it nil.
 	afterStartupQueueEnabled func()
 
+	// afterAwaitConsumedWake observes a terminal signal ("signal") or a retired
+	// prompt ("prompt retired") that await consumed, after setting
+	// awaitConsumedWake. It also fires in awaits outside the loop, where no
+	// further pass follows. It runs on the session goroutine, outside locks, and
+	// must return promptly. Production leaves it nil.
+	afterAwaitConsumedWake func(string)
+
 	// beforeControllerCleanup observes the controller loop's result before any
 	// deferred cleanup can delay or amend it. Setup returns before loop entry are
 	// not observed. It runs on the session goroutine, outside locks, and must
@@ -510,6 +517,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		}
 		return nil
 	}
+	// A wake that await consumes never reaches the loop's select, so the loop
+	// takes another pass before it blocks or exits.
+	awaitConsumedWake := false
 	// Slow persistence and hook completion run serially, but controls and the
 	// original cancellation deadline remain supervised while they finish.
 	await := func(operation func() error) error {
@@ -531,14 +541,23 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					if e := handleControl(*v); e != nil {
 						return e
 					}
+					awaitConsumedWake = true
 				}
 			case <-signals:
 				if e := handleControl(terminalInput{text: "/exit", at: time.Now()}); e != nil {
 					return e
 				}
+				awaitConsumedWake = true
+				if options.afterAwaitConsumedWake != nil {
+					options.afterAwaitConsumedWake("signal")
+				}
 			case e := <-promptFailures:
 				if errors.Is(e, errPromptRetired) {
 					activeRetiredBeforeWrite = true
+					awaitConsumedWake = true
+					if options.afterAwaitConsumedWake != nil {
+						options.afterAwaitConsumedWake("prompt retired")
+					}
 				} else if !intentional && !runtimeEnded {
 					return e
 				}
@@ -1064,6 +1083,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		defer func() { options.beforeControllerCleanup(err) }()
 	}
 	for {
+		awaitConsumedWake = false
 		if v := inputs.takeControl(); v != nil {
 			if err = handleControl(*v); err != nil {
 				return err
@@ -1320,13 +1340,17 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				queue = queue[1:]
 			}
 		}
-		if intentional {
-			break
-		}
-		if !rotating && cancelAt.IsZero() {
+		if !rotating && !intentional && cancelAt.IsZero() {
 			if err = flushInputDispositions(); err != nil {
 				return err
 			}
+		}
+		if awaitConsumedWake {
+			// Nothing else wakes the select for it; an /exit keeps its record.
+			continue
+		}
+		if intentional {
+			break
 		}
 		select {
 		case childErr := <-p.done:
