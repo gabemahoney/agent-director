@@ -612,14 +612,14 @@ polled throughout and must remain `waiting` once observed. After the settle,
 the call rechecks raw input, the row, ownership of the tmux server, session and
 pane, and permission-relay and dialog guards. Readiness and revalidation share
 one 12 s deadline, capped by the call's earlier deadline; an in-flight check
-can make the call return later. On resume, SessionStart may keep or rotate the
-saved session ID under the same launch and process guards.
+can make the call return later. For a resumed row, the wait also accepts a
+SessionStart that keeps or rotates the saved session ID, under the same launch
+and process guards; `session_id` can change.
 An unavailable terminal-mode capability, a failed readiness read or check,
 cancellation or deadline expiry during readiness or admission, or changed
 launch or authority at admission returns `ErrSubmissionUnconfirmed` with `outcome: "not_started"`:
-nothing was typed, and `reason` names the unmet condition. Refusals retain the
-last successfully read `row_state`. Admission's state and relay/dialog guards
-keep their own refusal errors, also with nothing typed.
+nothing was typed, and `reason` names the unmet condition. Admission's state
+and relay/dialog guards keep their own refusal errors, also with nothing typed.
 Claude fallback sends read in any state other than `pending`, Enter-only,
 `no_enter`, `key` and pane-hash sends do not take this readiness path.
 

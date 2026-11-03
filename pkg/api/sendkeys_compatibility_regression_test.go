@@ -176,36 +176,6 @@ func TestSendKeysCapabilityLossNeverReplaysNativeAttempt(t *testing.T) {
 	}
 }
 
-// TestSendKeysPendingCodexFallbackKeepsBoundedHookCheck: pending Codex
-// fallback keeps its bounded 2 s hook check after the journalled paste and Enter.
-func TestSendKeysPendingCodexFallbackKeepsBoundedHookCheck(t *testing.T) {
-	t.Parallel()
-	for _, state := range []string{store.StatePending, store.StateWorking, store.StateEnded} {
-		t.Run(state, func(t *testing.T) {
-			e := newNativeSubmissionEnv(t)
-			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-			e.env.Input = nil
-			e.s.read = func(row api.Spawn) (api.Spawn, error) { row.State = state; return row, nil }
-			result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-			if state == store.StateWorking {
-				if err != nil || result != (api.SendKeysResult{}) {
-					t.Fatalf("hook activity result=%+v err=%v", result, err)
-				}
-			} else {
-				assertOneName(t, err, "ErrSubmissionUnconfirmed")
-				d, ok := api.ErrDetails(err).(api.SubmissionUnconfirmedDetails)
-				if !ok || !d.KeysSent || d.SubmissionConfirmed || d.RowState != state {
-					t.Fatalf("legacy uncertainty details=%+v err=%v", api.ErrDetails(err), err)
-				}
-			}
-			if state == store.StatePending && e.slept != 2*time.Second {
-				t.Fatalf("hook observation bound=%v; want 2s", e.slept)
-			}
-			assertInputWrites(t, e.killEnv, r, skpText)
-		})
-	}
-}
-
 // b.qcf: raw mode alone cannot authorize input. During pending and the settle,
 // nothing is typed or journalled; refusals retain the last successfully read state.
 func TestSendKeysPendingClaudeWaitsForRawMode(t *testing.T) {

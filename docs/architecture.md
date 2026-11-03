@@ -10101,8 +10101,10 @@ manual interference. Guarded manual delivery repeats captured-admission and
 physical-target checks before dispatch steps; a single lookup/listing count
 does not bound its tmux phase. Each tmux operation retains its configured
 query/action and pipe-close limits. Native readiness, write/drain and proof
-budgets, and the original-deadline admission rules, are described under
-[Ordinary input delivery](#ordinary-input-delivery).
+budgets, pending Claude readiness, pending Codex and Claude hook observation,
+and the original-deadline admission rules are described under
+[Ordinary input delivery](#ordinary-input-delivery); Cursor's verdict window
+under [Cursor gateway verdict](#cursor-gateway-verdict).
 Its trail is
 `ad.send_keys.called` from `Client.SendKeys` and `ad.provenance.disagree`
 with source `ad_send_keys` (see [`ad.*` event namespace](#ad-event-namespace)).
