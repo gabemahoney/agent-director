@@ -120,18 +120,19 @@ func TestCursorRelayQuestionPolicyPreservesGenuineRequest(t *testing.T) {
 	}
 }
 
+// assertRelayPromptGuard requires a plain send-keys of text to be refused
+// before it reaches ACP: by a relay guard, or by the gateway's hold, which
+// send-keys reports as ErrSubmissionUnconfirmed with outcome gateway_refused
+// (b.bqd), never as success. Relay off has no relay guard: only the gateway's.
 func assertRelayPromptGuard(t *testing.T, f *spawnFix, r cursorfix.Runtime, id, text string) {
 	t.Helper()
-	if _, e := f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: text}); e == nil {
-		waitFor(t, "gateway refuses ordinary input while request is open", func() bool {
-			p, e := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
-			return e == nil && strings.Contains(strings.ReplaceAll(p.Pane, "\n", ""), "Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent")
-		}, func() string {
-			p, e := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
-			return fmt.Sprintf("pane=%q err=%v replies=%v", p.Pane, e, relayReplies(t, r))
-		})
-	} else if !errors.Is(e, api.ErrSendKeysWhileRelayed) && !errors.Is(e, api.ErrRelayFallenBack) && !errors.Is(e, api.ErrDialogMaybeOpen) {
-		t.Fatalf("unexpected prompt refusal: %v", e)
+	_, e := f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: text})
+	if d, ok := api.ErrDetails(e).(api.SubmissionUnconfirmedDetails); errors.Is(e, api.ErrSubmissionUnconfirmed) {
+		if !ok || d.Outcome != "gateway_refused" || d.Phase != "enter_attempted" || d.Reason != "starting, held, stale or cancellation" || d.BytesAttempted != len(text) || !d.EnterMayHaveBeenSent || !d.KeysSent || d.SubmissionConfirmed {
+			t.Fatalf("gateway refusal: want gateway_refused for the hold, got %+v; replies=%v", api.ErrDetails(e), relayReplies(t, r))
+		}
+	} else if readRow(t, f.DBPath, id).RelayMode == "off" || (!errors.Is(e, api.ErrSendKeysWhileRelayed) && !errors.Is(e, api.ErrRelayFallenBack) && !errors.Is(e, api.ErrDialogMaybeOpen)) {
+		t.Fatalf("guarded prompt not refused: %v; replies=%v", e, relayReplies(t, r))
 	}
 	for _, frame := range r.Frames(t) {
 		if strings.Contains(string(frame["params"]), text) {

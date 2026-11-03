@@ -122,6 +122,9 @@ type Pane struct {
 	// another scope is written here as the text the listing would show,
 	// such as a value naming another pane (tmuxfix.PaneLabelShapes).
 	AdPane string `json:"ad_pane,omitempty"`
+	// TTY is the terminal device the pane terminal read's #{pane_tty} names
+	// (b.qcf); "" names /dev/null, whose terminal mode cannot be read.
+	TTY string `json:"tty,omitempty"`
 }
 
 // tableSuffix and lockSuffix name the files beside a socket path (or in the

@@ -901,7 +901,9 @@ func TestAdviceFollow_E8_PauseTimeoutInspectBeforeInput(t *testing.T) {
 
 // TestAdviceFollow_E9_SendKeysPendingAllowPending: E9 a pending row's
 // "state=pending" refusal, followed by the allow_pending text ("When true,
-// also allows a pending row"); re-issued with it, the keys reach the launch's pane.
+// also allows a pending row"); re-issued with it, the call passes the pending-row
+// eligibility guard, then refuses ordinary text because SessionStart is still
+// missing, without typing (b.qcf).
 func TestAdviceFollow_E9_SendKeysPendingAllowPending(t *testing.T) {
 	t.Parallel()
 	adviceAssertManifest(t, "send-keys", "allow_pending", "When true, also allows a pending row")
@@ -914,10 +916,8 @@ func TestAdviceFollow_E9_SendKeysPendingAllowPending(t *testing.T) {
 
 	p := skaParams(r)
 	p.AllowPending = true
-	if _, err := e.sendKeys(p); err != nil {
-		t.Fatalf("re-issued with allow_pending: %v; want delivery", err)
-	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skaText)
+	_, err = e.sendKeys(p)
+	e.assertSessionStartMissing(t, err)
 }
 
 // E15 (b.qcr): "put the prompt in a file and send a short instruction to read it".
@@ -1052,5 +1052,94 @@ func TestAdviceFollow_E17_CodexFallbackTransportUncertain(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// E19 (b.qcf): "nothing was typed, so the same send-keys can be retried later".
+// The capability refusal instead says "use an adapter with that capability".
+func TestAdviceFollow_E19_ClaudeFallbackTerminalRetry(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"cooked", "read failed", "no capability"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			e := newNativeSubmissionEnv(t)
+			r := e.seedRow(t, killRowSpec{State: store.StatePending})
+			before := e.columns(t, r.ID)
+			e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
+			var adapter api.SendKeysTmux = e.rec
+			advice := "nothing was typed, so the same send-keys can be retried later"
+			reason := "the agent's terminal did not take raw input within 12 seconds; " + advice
+			var readError error
+			e.rec.AfterCall(tmux.CallPaneTerminal, func(_ tmuxfix.SocketCall, err error) { readError = err })
+			switch mode {
+			case "cooked":
+				e.rec.SetTerminalRaw(r.Socket, r.Spawn.Identity.PaneID, false)
+			case "read failed":
+				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallPaneTerminal)
+			case "no capability":
+				adapter = struct{ api.SendKeysTmux }{e.rec}
+				advice = "use an adapter with that capability, or send once the row is no longer pending"
+				reason = "the tmux adapter cannot read the agent's terminal mode, which pending Claude fallback input waits on; nothing was typed, so the same send-keys can be retried later; " + advice
+			}
+			waits := 0
+			sleep := e.env.Sleep
+			e.env.Sleep = func(d time.Duration) {
+				waits++
+				if d <= 0 || d > 100*time.Millisecond || waits > 120 {
+					t.Fatalf("readiness wait %d=%v; want bounded 100ms polls", waits, d)
+				}
+				sleep(d)
+			}
+			params := api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}
+			start := e.clock.Now()
+			_, err := api.SendKeys(e.s, adapter, e.env, params)
+			if mode == "read failed" {
+				if readError == nil {
+					t.Fatal("scripted terminal read did not fail")
+				}
+				reason = "the agent's terminal mode could not be read: " + readError.Error() + "; " + advice
+			}
+			assertOneName(t, err, "ErrSubmissionUnconfirmed")
+			want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StatePending, Reason: reason}
+			if got := api.ErrDetails(err); got != want {
+				t.Fatalf("refusal=%+v; want %+v", got, want)
+			}
+			adviceAssertPhrase(t, err, advice)
+			e.assertNothingSent(t)
+			e.assertNoCalls(t, tmux.CallSendKey)
+			e.assertRowUnchanged(t, r.ID, before)
+			if e.b.current != nil || len(e.b.history) != 0 || e.s.sent {
+				t.Fatal("not-started refusal journalled or sent input")
+			}
+			reads := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal))
+			switch mode {
+			case "cooked":
+				elapsed := e.clock.Now().Sub(start)
+				if reads != 120 || waits != 120 || elapsed != 12*time.Second+2*time.Nanosecond {
+					t.Fatalf("terminal reads/waits/elapsed=%d/%d/%v; want 120/120/12s plus initial lookup/listing", reads, waits, elapsed)
+				}
+			case "read failed":
+				if reads != 1 || waits != 0 {
+					t.Fatalf("terminal reads/waits=%d/%d; want 1/0", reads, waits)
+				}
+			case "no capability":
+				e.assertNoTmuxCall(t)
+				if waits != 0 {
+					t.Fatalf("waits=%d; want none", waits)
+				}
+			}
+			// Follow the exact retry advice: clear the condition, keep the request unchanged.
+			e.clock.Advance(time.Second)
+			e.rec.Reset()
+			e.rec.SetTerminalRaw(r.Socket, r.Spawn.Identity.PaneID, true)
+			e.sessionStartsWhenPolled(t, r, nil)
+			e.env.Sleep = sleep // Each retry has a fresh readiness budget.
+			e.turnStartsAfterEnter(t, r)
+			result, err := e.send(params)
+			if err != nil || result != (api.SendKeysResult{}) {
+				t.Fatalf("same send after condition clears: %+v, %v", result, err)
+			}
+			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 2)
+		})
 	}
 }

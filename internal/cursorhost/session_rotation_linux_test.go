@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/cursortranscript"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -243,7 +245,19 @@ func TestCursorRotationAliasesIdleAndActive(t *testing.T) {
 
 func TestCursorRotationPublicationAndEveryHoldPrecedePromotion(t *testing.T) {
 	// Serial: protected runtime and reporter subprocess use process environment.
-	c := postBootstrapCursorSession(t, "off", "", true)
+	barrier, opener := newRecordBarrier(t, "input_held")
+	consumed := make(chan struct{}, 3)
+	starter := func(in *os.File, out io.Writer, emit func(terminalInput), admit func() bool, choices ...func(rune) (string, string, bool)) func() {
+		return terminalLoop(in, out, func(v terminalInput) {
+			emit(v)
+			switch v.text {
+			case "held-until-all-proofs", "ordinary-must-be-refused", "still-refused":
+				consumed <- struct{}{}
+			}
+		}, admit, choices...)
+	}
+	c := postBootstrapCursorSessionWithInput(t, "off", "", opener, starter, true)
+	defer barrier.unblock()
 	before, _ := c.e.s.GetSpawn(c.e.binding.InstanceID)
 	b, _ := c.e.s.ReadCursorRuntime(before.InstanceID)
 	gate := store.HookGate{Event: "PermissionRequest", ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
@@ -258,24 +272,53 @@ func TestCursorRotationPublicationAndEveryHoldPrecedePromotion(t *testing.T) {
 	rotationEntered(c, t, dir)
 	c.keys(t, "held-until-all-proofs\r")
 	// Input is consumed while the real hook has committed but its report is pending.
-	c.wait(t, "provisional input consumed", func() bool { return bytes.Contains(c.pane.bytes(), []byte("held-until-all-proofs")) })
+	c.wait(t, "provisional input consumed", func() bool { return len(consumed) == 1 })
 	rotationNoBytes(t, c, "held-until-all-proofs")
 	rotationRelease(t, filepath.Join(dir, "release"))
 	c.wait(t, "publication settled with durable holds", func() bool {
 		return rotationRecordCount(c, t, "rotation_published") == 1 && rotationRecordCount(c, t, "input_held") == 1
 	})
+	select {
+	case <-barrier.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("held input record did not block")
+	}
 	for _, r := range c.records(t) {
 		if r.Kind == "submission_accepted" {
 			t.Fatal("publication cleared independent guards")
 		}
 	}
 	c.rotationFixtureSQL(t, nil, 2, `UPDATE permission_requests SET closed_at=?`, time.Now().UnixMilli())
+	typed := time.Now()
 	c.keys(t, "ordinary-must-be-refused\r")
-	c.wait(t, "guarded refusal", func() bool { return rotationRecordCount(c, t, "submission_refused") == 1 })
+	c.wait(t, "guarded input consumed", func() bool { return len(consumed) == 2 })
 	c.rotationFixtureSQL(t, nil, 1, `UPDATE permission_requests SET proven_gone_at=? WHERE tool_name='Unknown'`, time.Now().UnixMilli())
 	// A second actual control-input consumption is an observable check, without inferring admission from screen state.
 	c.keys(t, "still-refused\r")
+	c.wait(t, "remaining hold input consumed", func() bool { return len(consumed) == 3 })
+	// b.bqd: both inputs were consumed while the controller could not record
+	// their refusals. A record-write timestamp would fall after this cutoff.
+	cutoff := time.Now()
+	barrier.unblock()
 	c.wait(t, "remaining hold refuses", func() bool { return rotationRecordCount(c, t, "submission_refused") == 2 })
+	// b.bqd: each refusal names its discarded text by digest, and when it was
+	// consumed, for send-keys.
+	var digests []string
+	for _, r := range c.records(t) {
+		if r.Kind == "submission_refused" {
+			if r.Data.ConsumedAt.Before(typed) || !r.Data.ConsumedAt.Before(cutoff) {
+				t.Fatalf("submission_refused consumed_at = %s; want in [%s, %s) before recording resumed", r.Data.ConsumedAt, typed, cutoff)
+			}
+			digests = append(digests, r.Data.TextSHA256)
+		}
+	}
+	if want := []string{cursortranscript.TextSHA256("ordinary-must-be-refused"), cursortranscript.TextSHA256("still-refused")}; !reflect.DeepEqual(digests, want) {
+		t.Fatalf("refusal text_sha256 = %q; want %q", digests, want)
+	}
+	// The released record barrier lets one controller turn record the hold and
+	// both refusals, then check the holds. End that turn before the last proof,
+	// so no check already under way can release the held input.
+	c.idleObservationBarrier(t, "rotation-refusals-recorded")
 	rotationNoBytes(t, c, "held-until-all-proofs")
 	c.rotationFixtureSQL(t, nil, 1, `UPDATE permission_requests SET proven_gone_at=? WHERE tool_name='Plan'`, time.Now().UnixMilli())
 	c.idleObservationBarrier(t, "rotation-holds-independently-cleared")
@@ -285,6 +328,62 @@ func TestCursorRotationPublicationAndEveryHoldPrecedePromotion(t *testing.T) {
 	c.stop(t)
 	if got := rotationPrompts(c, t); !reflect.DeepEqual(got, []rotationPrompt{{"synthetic-session-2", "held-until-all-proofs"}, {"synthetic-session-2", "fresh-explicit-after-rotation-hold"}}) {
 		t.Fatalf("guard release %+v", got)
+	}
+}
+
+// b.bqd: provisional input a control retires before the gateway records it
+// held gets held_input_refused as its first verdict, naming its text by
+// digest and its consumption time for send-keys: /exit retires it at
+// consumption, an interrupt stops the gateway with it still in the mailbox.
+func TestCursorUnrecordedHeldInputRefusalCarriesTextDigest(t *testing.T) {
+	// Serial: protected runtime and reporter subprocess use process environment.
+	for _, tc := range []struct{ control, reason string }{
+		{"/exit\r", "control retired provisional input"},
+		{"\x03", "gateway stopped"},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			consumed := make(chan struct{}, 2)
+			starter := func(in *os.File, out io.Writer, emit func(terminalInput), admit func() bool, choices ...func(rune) (string, string, bool)) func() {
+				return terminalLoop(in, out, func(v terminalInput) {
+					emit(v)
+					if v.text == "unrecorded-held" || v.text == "/exit" || v.interrupt {
+						consumed <- struct{}{}
+					}
+				}, admit, choices...)
+			}
+			c := postBootstrapCursorSessionWithInput(t, "off", "", openTranscript, starter, true)
+			dir := rotationBarrier(t, "after")
+			c.keys(t, "/new\r")
+			rotationEntered(c, t, dir)
+			// Publication blocks the loop, so the control comes before the input is recorded.
+			typed := time.Now()
+			c.keys(t, "unrecorded-held\r"+tc.control)
+			c.wait(t, "held input and control consumed", func() bool { return len(consumed) == 2 })
+			cutoff := time.Now()
+			rotationRelease(t, filepath.Join(dir, "release"))
+			select {
+			case c.endErr = <-c.done:
+				c.ended = true
+			case <-time.After(5 * time.Second):
+				t.Fatal("control did not stop the gateway")
+			}
+			var refused []submissionRecord
+			for _, r := range c.records(t) {
+				if r.Kind == "input_held" {
+					t.Fatalf("retired input recorded held: %+v", r)
+				}
+				if r.Kind == "held_input_refused" {
+					refused = append(refused, r)
+				}
+			}
+			if len(refused) != 1 || refused[0].Data.Reason != tc.reason || refused[0].Data.TextSHA256 != cursortranscript.TextSHA256("unrecorded-held") {
+				t.Fatalf("held_input_refused = %+v; want one, %q, with the text's digest (end: %v)", refused, tc.reason, c.endErr)
+			}
+			if got := refused[0].Data.ConsumedAt; got.Before(typed) || !got.Before(cutoff) {
+				t.Fatalf("held_input_refused consumed_at = %s; want in [%s, %s) before recording resumed", got, typed, cutoff)
+			}
+			rotationNoBytes(t, c, "unrecorded-held")
+		})
 	}
 }
 

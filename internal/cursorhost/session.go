@@ -19,6 +19,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/cursorenv"
 	"github.com/gabemahoney/agent-director/internal/cursormcp"
+	"github.com/gabemahoney/agent-director/internal/cursortranscript"
 	"github.com/gabemahoney/agent-director/internal/layout"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -935,7 +936,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 		}
 		for _, v := range held {
-			if !finalRecord("held_input_refused", map[string]any{"submission_id": v.submission, "reason": "rotation stopped; neither conversation admitted this input"}) {
+			if !finalRecord(cursortranscript.KindHeldInputRefused, map[string]any{"submission_id": v.submission, "reason": "rotation stopped; neither conversation admitted this input"}) {
 				return
 			}
 		}
@@ -947,12 +948,12 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		for _, v := range pending {
 			if v.accepted {
 				if v.held {
-					if !finalRecord("held_input_refused", map[string]any{"submission_id": v.submission, "text": v.text, "reason": "gateway stopped"}) {
+					if !finalRecord(cursortranscript.KindHeldInputRefused, map[string]any{"submission_id": v.submission, "text": v.text, "reason": "gateway stopped", "text_sha256": cursortranscript.TextSHA256(v.text), "consumed_at": v.at}) {
 						return
 					}
 					continue
 				}
-				if !finalRecord("input_observed", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "text": v.text, "consumed_at": v.at, "input_epoch": v.epoch, "durable_admission": false}) {
+				if !finalRecord(cursortranscript.KindInputObserved, map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "text": v.text, "consumed_at": v.at, "input_epoch": v.epoch, "durable_admission": false}) {
 					return
 				}
 				if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "reason": "gateway stopped", "started": false}) {
@@ -1100,7 +1101,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				}
 				cancelledInitial = nil
 			}
-			if err = record("input_control", data); err != nil {
+			if err = record(cursortranscript.KindInputControl, data); err != nil {
 				return err
 			}
 			if data["control"] == "rotation" {
@@ -1135,7 +1136,12 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				if err = captureInput(&input, store.CursorInputRefused, reason); err != nil {
 					return err
 				}
-				if err = record("submission_refused", map[string]any{"submission_id": input.submission, "reason": reason, "count": input.dropped}); err != nil {
+				data := map[string]any{"submission_id": input.submission, "reason": reason, "count": input.dropped, "text_sha256": input.refusedSHA256}
+				if !input.at.IsZero() {
+					// The combined input capacity overflow has no single consumption time.
+					data["consumed_at"] = input.at
+				}
+				if err = record(cursortranscript.KindSubmissionRefused, data); err != nil {
 					return err
 				}
 				fmt.Fprintf(writer, "Cursor input refused while starting or busy (%s); nothing sent\r\n", reason)
@@ -1148,7 +1154,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				inputPrerequisitesChanged = true
 				if rotating && inputs.current(input.epoch) && input.epoch == rotationEpoch {
 					held = append(held, input)
-					if err = record("input_held", map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at}); err != nil {
+					if err = record(cursortranscript.KindInputHeld, map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at}); err != nil {
 						return err
 					}
 					fmt.Fprintf(writer, "Cursor submission %s held provisionally\r\n", input.submission)
@@ -1160,13 +1166,13 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					}
 					inputs.release(input)
 					fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", input.submission)
-					if err = record("held_input_refused", map[string]any{"submission_id": input.submission, "reason": "control retired provisional input"}); err != nil {
+					if err = record(cursortranscript.KindHeldInputRefused, map[string]any{"submission_id": input.submission, "reason": "control retired provisional input", "text_sha256": cursortranscript.TextSHA256(input.text), "consumed_at": input.at}); err != nil {
 						return err
 					}
 					continue
 				}
 				held = append(held, input)
-				if err = record("input_held", map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at}); err != nil {
+				if err = record(cursortranscript.KindInputHeld, map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at}); err != nil {
 					return err
 				}
 				continue
@@ -1175,7 +1181,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				// Admission happened at terminal consumption, before this value
 				// reached the mailbox. Keep that history even when a later control
 				// prevents durable admission and dispatch.
-				if err = record("submission_accepted", map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main", "durable_admission": false}); err != nil {
+				if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main", "durable_admission": false}); err != nil {
 					return err
 				}
 				if err = cancelSubmission(input, "control or publication retired input"); err != nil {
@@ -1185,7 +1191,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 			if err = captureInput(&input, store.CursorInputAdmitted, ""); err != nil {
 				if errors.Is(err, errPromptRetired) {
-					if err = record("submission_accepted", map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main", "durable_admission": false}); err != nil {
+					if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main", "durable_admission": false}); err != nil {
 						return err
 					}
 					if err = cancelSubmission(input, "control retired input during admission"); err != nil {
@@ -1196,7 +1202,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				return err
 			}
 			inputPrerequisitesChanged = true
-			if err = record("submission_accepted", map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main"}); err != nil {
+			if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main"}); err != nil {
 				return err
 			}
 			fmt.Fprintf(writer, "Cursor submission %s accepted\r\n", input.submission)
@@ -1216,7 +1222,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 			inputs.release(v)
 			fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", v.submission)
-			if err = record("held_input_refused", map[string]any{"submission_id": v.submission, "reason": "control retired provisional input"}); err != nil {
+			if err = record(cursortranscript.KindHeldInputRefused, map[string]any{"submission_id": v.submission, "reason": "control retired provisional input"}); err != nil {
 				return err
 			}
 			held = held[1:]
@@ -1296,7 +1302,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					}
 					held = held[1:]
 					queue = insertSubmission(queue, v)
-					if err = record("submission_accepted", map[string]any{"submission_id": v.submission, "text": v.text, "input_epoch": v.epoch, "consumed_at": v.at, "released_from_hold": true}); err != nil {
+					if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": v.submission, "text": v.text, "input_epoch": v.epoch, "consumed_at": v.at, "released_from_hold": true}); err != nil {
 						return err
 					}
 					fmt.Fprintf(writer, "Cursor submission %s accepted after fresh publication\r\n", v.submission)
@@ -1869,7 +1875,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 						return err
 					}
 					inputPrerequisitesChanged = true
-					if err = record("submission_accepted", map[string]any{"submission_id": v.submission, "text": text, "origin": "main"}); err != nil {
+					if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": v.submission, "text": text, "origin": "main"}); err != nil {
 						return err
 					}
 					queue = append(queue, v)

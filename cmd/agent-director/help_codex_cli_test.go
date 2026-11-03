@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/ptyfix"
 )
 
 // codexAgentEnv is a Codex launch's agent signal.
@@ -159,7 +161,7 @@ func TestHelpCodexNegativeCasesPrintPlain(t *testing.T) {
 // terminal is never read (Linux; skipped elsewhere).
 func TestHelpCodexTerminalStdinPrintsPlain(t *testing.T) {
 	plain := helpVerbStdout(t)
-	master, slave := openPTY(t)
+	master, slave := ptyfix.Open(t)
 	// Canonical mode: the line, then ^D, reads as the payload and then EOF.
 	payload := strings.TrimSpace(codexPayload(t, "session-start-startup.json")) + "\n\x04"
 	if _, err := master.Write([]byte(payload)); err != nil {

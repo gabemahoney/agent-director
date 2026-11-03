@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -62,20 +63,23 @@ type securityScene struct {
 // ad.provenance.disagree record, the record written once for the subject
 // ("": the verb's event) with field values it carries, events the
 // arrangement writes for the subject during the call (the agent's own
-// hooks), and extra checks of the call's result.
+// hooks), extra checks of the call's result, and whether the scene's clock
+// starts at the wall clock instead of killClockStart (wallClock: a call that
+// scopes the Client's store reads to a context deadline taken from its clock).
 type securityCase struct {
-	name     string
-	target   killRowSpec
-	holder   securityHolder
-	server   func(e *killEnv, socket string)
-	arrange  func(t *testing.T, s *securityScene)
-	wantErr  error
-	desc     func(s *securityScene) apitest.DescCase
-	disagree bool
-	event    string
-	fields   map[string]any
-	others   []string
-	check    func(t *testing.T, s *securityScene, res any)
+	name      string
+	target    killRowSpec
+	holder    securityHolder
+	server    func(e *killEnv, socket string)
+	arrange   func(t *testing.T, s *securityScene)
+	wantErr   error
+	desc      func(s *securityScene) apitest.DescCase
+	disagree  bool
+	event     string
+	fields    map[string]any
+	others    []string
+	check     func(t *testing.T, s *securityScene, res any)
+	wallClock bool
 }
 
 // securityVerb is one verb under SR-15: its call on the scene's subject, the
@@ -246,6 +250,9 @@ func securityEnv() map[string]string { return map[string]string{"SECRET": securi
 func newSecurityScene(t *testing.T, v securityVerb, c securityCase) *securityScene {
 	t.Helper()
 	e := newKillEnv(t)
+	if c.wallClock {
+		e.clock.Advance(time.Now().Sub(e.clock.Now()))
+	}
 	spec := c.target
 	if v.launch {
 		spec.Opts = append(append([]apitest.SpawnOption(nil), spec.Opts...), apitest.WithTmuxSocket(e.defaultSocket))

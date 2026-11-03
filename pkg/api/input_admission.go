@@ -68,9 +68,13 @@ func (r *keysRun) admitInput(ctx context.Context, session InputDeliverySession, 
 }
 
 // Only optional adoption, liveness metadata and the initial same-process
-// report-in may change during preparation. An established session, permission
-// interval, turn, launch or target is never replaced. Compare the remaining
-// row too so newly added authority fields are conservative by default.
+// report-in may change during preparation. That report-in is a fresh launch's
+// first session id, or a resumed pending Claude launch's first process report
+// after resume cleared its process identity; that SessionStart may keep or
+// rotate the saved session id, and the store archives a rotated one to session
+// history. Otherwise a session, permission interval, turn, launch or target is
+// never replaced. Compare the remaining row too so newly added authority
+// fields are conservative by default.
 func (r *keysRun) sameInputPreparation(current Spawn) bool {
 	expected := r.row
 	if r.adoption.Applied {
@@ -81,7 +85,10 @@ func (r *keysRun) sameInputPreparation(current Spawn) bool {
 	if current.RowVersion < expected.RowVersion {
 		return false
 	}
-	initialReport := expected.SessionID == "" && current.SessionID != ""
+	resumedReport := expected.Agent == store.AgentClaude && expected.State == store.StatePending &&
+		expected.SessionID != "" && current.SessionID != "" &&
+		expected.PID == 0 && expected.ProcStarttime == "" && current.PID != 0
+	initialReport := (expected.SessionID == "" && current.SessionID != "") || resumedReport
 	if current.RowVersion != expected.RowVersion && !initialReport {
 		if (expected.State != store.StatePending && expected.State != store.StateWaiting) ||
 			(current.LivenessNote == expected.LivenessNote && current.LivenessUnverifiedSince == expected.LivenessUnverifiedSince) {

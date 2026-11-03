@@ -110,6 +110,7 @@ func sktRebindAfterText(t *testing.T, e *killEnv, r *killRow) {
 
 // TestSendKeysTrailCalledPerReturnPath: every return path of Client.SendKeys
 // writes exactly one ad.send_keys.called, outcome by name, row_state the state read.
+// b.qcf: pending Claude without a turn hook records ErrSubmissionUnconfirmed.
 func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -137,7 +138,7 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 		{name: "relay released", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}),
 			outcome: "ok", rowState: "check_permission", guard: "released"},
 		{name: "ours, live row", seed: sktRow(killRowSpec{}), outcome: "ok", rowState: "waiting"},
-		{name: "ours, pending row", seed: sktPending(pendingOurs), allow: true, outcome: "ok", rowState: "pending"},
+		{name: "ours, pending row", seed: sktPending(pendingOurs), allow: true, outcome: "ErrSubmissionUnconfirmed", rowState: "pending"},
 		{name: "pending Codex submission unconfirmed", seed: sktRow(codexSpec(store.StatePending, agentAlive, false)),
 			allow: true, outcome: "ErrSubmissionUnconfirmed", rowState: "pending"},
 		{name: "ours, pending row turned live by a SessionStart after the lookup: row_state the state read",
@@ -145,7 +146,7 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 				r := e.seedPending(t, pendingFresh, pendingOurs)
 				e.sessionStartAfter(t, tmux.CallLookup, r, "sess-"+uuid.NewString()[:8])
 				return r
-			}, allow: true, outcome: "ok", rowState: "pending"},
+			}, allow: true, outcome: "ErrSubmissionUnconfirmed", rowState: "pending"},
 		{name: "pending leftover", seed: sktPending(pendingLeftover), allow: true,
 			outcome: "ErrSpawnNotInteractive", rowState: "pending"},
 		{name: "live leftover", seed: sktRow(killRowSpec{NoSession: true}, sktLeftover),

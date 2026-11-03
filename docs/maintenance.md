@@ -121,16 +121,16 @@ period or while its launch owner is alive, except a Cursor row whose recorded
 gateway is gone.
 
 Past its grace period, a `pending` row whose agent runs but has not reported
-in stays `pending` with `liveness_note` `unreported`. Read the pane, then type
-only if you looked at it:
+in stays `pending` with `liveness_note` `unreported`. Read the pane, then answer
+a startup choice only after judging the screen:
 
 ```sh
 agent-director read-pane --instance-id <id>
-agent-director send-keys --instance-id <id> --allow-pending --text "<answer>"
+agent-director send-keys --instance-id <id> --allow-pending --key <key>
 ```
 
-A caller that cannot judge the pane follows the
-[caller contract](caller-contract.md).
+For text answers, readiness waits and callers that cannot judge the pane, follow
+[pending-row recovery](caller-contract.md#pending-rows-and-startup-screens).
 
 The hold and repair conditions for stale `check_permission` rows are in
 [Hooks](hooks.md#a-relay-row-left-in-check_permission), and response authority

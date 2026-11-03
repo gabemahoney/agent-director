@@ -29,11 +29,10 @@ func TestSendKeysDefaultNativeBackendPreservesExistingOwnership(t *testing.T) {
 				if _, err := db.Exec(`DELETE FROM input_launches`); err != nil {
 					t.Fatal(err)
 				}
-				result, err := e.send(params)
-				if err != nil || result != (api.SendKeysResult{}) {
-					t.Fatalf("fallback=%+v %v", result, err)
-				}
-				assertInputWrites(t, e.killEnv, r, params.Text)
+				// b.qcf: without a launch, ordinary text on this unreported
+				// pending Claude row is fallback input, which waits for SessionStart.
+				_, err = e.send(params)
+				e.assertSessionStartMissing(t, err)
 				return
 			}
 			if mode == "supported unready" {

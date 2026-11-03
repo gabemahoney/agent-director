@@ -97,6 +97,9 @@ in the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
 
 ## Unresolved ordinary input
 
+Cursor's `gateway_refused` is not unresolved input: the text was discarded.
+Follow [Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
+
 For `send-keys` with `partial_input_unconfirmed` or `submission_unconfirmed`,
 or `ErrSubmissionUnconfirmed` with `keys_sent: true` and no native `outcome`,
 the original input may still submit later. Keep other writers away. For a native

@@ -2,6 +2,7 @@ package tmuxfix
 
 import (
 	"sort"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -14,9 +15,9 @@ import (
 //
 // Table answers: a call on a socket with no bound server fails with the
 // socket's no-server failure (SetNoServerFailure; tmux.FailNoSocket by
-// default). A kill, send, capture or label of a pane or session id the
-// server does not hold is FailUnrecognized with no FirstLine and exit
-// status 1 (tmux's "can't find" replies; script a catalogue entry's
+// default). A kill, send, capture, terminal read or label of a pane or
+// session id the server does not hold is FailUnrecognized with no FirstLine
+// and exit status 1 (tmux's "can't find" replies; script a catalogue entry's
 // FirstLine to carry one). The server stays bound when its last session is
 // killed; StopServer models its exit. A pane listed in several sessions
 // (SeedPane.Shared) is one pane to every call: the pane listing shows it
@@ -31,9 +32,11 @@ type SocketCall struct {
 	// Socket is the socket the call names.
 	Socket string
 	// Target is the session id (session kill, label by id), the pane id
-	// (pane kill, sends, capture) or the name (create); "" for the lookup
-	// and the pane listing.
+	// (pane kill, sends, capture, terminal read) or the name (create); "" for
+	// the lookup and the pane listing.
 	Target string
+	// MaxWait is the caller's terminal-read allowance; zero for other calls.
+	MaxWait time.Duration
 	// PaneID is SetLabel's pane id, the pane its pane label is set on (WD
 	// 2026-09-29c); "" for every other call.
 	PaneID string
@@ -272,6 +275,31 @@ func (r *Recorder) SendKeyPaneRepeat(socket, paneID, key string, count int) erro
 	_, err := r.do(SocketCall{Call: tmux.CallSendKey, Socket: socket, Target: paneID, Key: key, Repeat: count},
 		sendEffect(paneID, tmux.CallSendKey))
 	return err
+}
+
+// PaneTerminalRaw answers the pane terminal read, tmux.CallPaneTerminal:
+// raw (true) by default, else the next answer SetTerminalRaw gave for the
+// pane, the last one repeating. The pane must be in socket's table. MaxWait
+// records the caller's allowance; virtual time still charges the configured
+// Action cost, so tests can model replies arriving beyond that allowance.
+func (r *Recorder) PaneTerminalRaw(socket, paneID string, maxWait time.Duration) (bool, error) {
+	c := SocketCall{Call: tmux.CallPaneTerminal, Socket: socket, Target: paneID, MaxWait: maxWait}
+	ans, err := r.do(c, func(st *socketState, _ Script) (any, *tmux.CallError) {
+		if _, s := st.server.findPane(paneID); s == nil {
+			return nil, notFound(tmux.CallPaneTerminal)
+		}
+		key := paneKey{socket, paneID}
+		answers, ok := r.terminals[key]
+		if !ok {
+			return true, nil
+		}
+		if len(answers) > 1 {
+			r.terminals[key] = answers[1:]
+		}
+		return answers[0], nil
+	})
+	raw, _ := ans.(bool)
+	return raw, err
 }
 
 // CapturePaneID returns the pane's capture text (SetCapture; "" by default)

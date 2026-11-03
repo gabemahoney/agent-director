@@ -58,8 +58,14 @@ func TestLegacyRecoveryMixedModernDelivery(t *testing.T) {
 					view.Window = legacyRecoveryWindow
 					sendKeys := func(params api.SendKeysParams) verbRun[api.SendKeysResult] {
 						params.AllowPending = state == store.StatePending
+						if params.AllowPending && params.Text != "" && params.ExpectPaneSHA256 == "" {
+							e.sessionStartsWhenPolled(t, r, nil) // b.qcf: settle after SessionStart.
+							e.turnStartsAfterEnter(t, r)
+						}
 						return runVerb(e, func() (api.SendKeysResult, error) {
-							return api.SendKeys(e.store, e.rec, api.SendKeysEnv{Relay: view}, params)
+							now := p.now
+							view.Now = func() time.Time { return now }
+							return api.SendKeys(&submissionStore{SendKeysStore: e.store, Persistence: e.store}, e.rec, api.SendKeysEnv{Relay: view, Sleep: func(d time.Duration) { now = now.Add(d); e.sleep(d) }}, params)
 						})
 					}
 					// The legacy row alone releases plain keys before its 24-hour window ends.

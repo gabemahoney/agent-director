@@ -190,9 +190,14 @@ func classify(cmd []string) tmux.Call {
 	switch cmd[0] {
 	case "display-message":
 		for _, arg := range cmd[1:] {
-			if arg == "-t" {
-				return tmux.CallSendText
+			if arg != "-t" {
+				continue
 			}
+			// A pane's: the terminal read, else the paste's pane state check.
+			if cmd[len(cmd)-1] == paneTTYFormat {
+				return tmux.CallPaneTerminal
+			}
+			return tmux.CallSendText
 		}
 		return tmux.CallLookup
 	case "list-sessions":

@@ -1,6 +1,6 @@
 package api_test
 
-// Pending Codex submission uses raw same-launch turn activity, never pane text.
+// Pending fallback submission uses same-launch hook activity, never pane text (b.qcf).
 
 import (
 	"context"
@@ -14,85 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// submissionStore injects hook/read races only after the keys have been sent.
-type submissionStore struct {
-	api.SendKeysStore
-	inputdelivery.Persistence
-	sent         bool
-	reads        int
-	read         func(int, api.Spawn) (api.Spawn, error)
-	waits        []time.Duration
-	preparation  []time.Duration
-	boundedReads bool
-}
-
-func (s *submissionStore) GetSpawnWithin(id string, maxWait time.Duration) (api.Spawn, error) {
-	if s.sent {
-		s.waits = append(s.waits, maxWait)
-	} else {
-		s.preparation = append(s.preparation, maxWait)
-	}
-	// Virtual poll budgets must not become real SQL deadlines in semantic tests.
-	read := s.SendKeysStore.GetSpawn
-	if s.boundedReads {
-		read = func(id string) (api.Spawn, error) { return s.SendKeysStore.GetSpawnWithin(id, maxWait) }
-	}
-	row, err := read(id)
-	if err != nil || !s.sent {
-		return row, err
-	}
-	s.reads++
-	if s.read != nil {
-		return s.read(s.reads, row)
-	}
-	return row, nil
-}
-
-// submissionEnv extends the shared real-store fixture with an advancing poll clock.
-type submissionEnv struct {
-	*killEnv
-	s     *submissionStore
-	env   api.SendKeysEnv
-	slept time.Duration
-	waits int
-}
-
-func newSubmissionEnv(t *testing.T) *submissionEnv {
-	t.Helper()
-	e := &submissionEnv{killEnv: newKillEnv(t)}
-	e.s = &submissionStore{SendKeysStore: e.store, Persistence: e.st}
-	e.rec.AfterCall(tmux.CallSendText, func(tmuxfix.SocketCall, error) { e.s.sent = true })
-	e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
-		if c.Key == "Enter" {
-			e.s.sent = true // Enter-only input has no preceding text event.
-		}
-	})
-	e.env = api.SendKeysEnv{
-		Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()},
-		Sleep: func(d time.Duration) {
-			e.waits++
-			e.slept += d
-			if d <= 0 || d > 100*time.Millisecond || e.waits > 20 {
-				t.Fatalf("submission wait %d = %v; want at most twenty positive waits <= 100ms", e.waits, d)
-			}
-			e.clock.Advance(d)
-		},
-	}
-	return e
-}
-
-func (e *submissionEnv) send(p api.SendKeysParams) error {
-	_, err := api.SendKeys(e.s, e.rec, e.env, p)
-	return err
-}
 
 func assertSubmissionUnconfirmed(t *testing.T, err error, state string) {
 	t.Helper()
@@ -114,64 +41,94 @@ func assertSubmissionUnconfirmed(t *testing.T, err error, state string) {
 	}
 }
 
-func TestSendKeysCodexSubmissionUnconfirmed(t *testing.T) {
+// assertPendingInput checks the exact input writes (assertInputWrites) and
+// the terminal reads: pending Claude's wait makes two (b.qcf), Codex none.
+func assertPendingInput(t *testing.T, e *submissionEnv, r killRow, agent, text string) {
+	t.Helper()
+	assertInputWrites(t, e.killEnv, r, text)
+	if got, want := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)), map[string]int{"codex": 0, "claude": 2}[agent]; got != want {
+		t.Errorf("terminal reads = %d; want %d", got, want)
+	}
+}
+
+func TestSendKeysPendingSubmissionUnconfirmed(t *testing.T) {
 	t.Parallel()
-	for _, state := range []string{store.StatePending, store.StateWaiting} {
-		for _, text := range []string{skpText, ""} {
-			t.Run(state+"/text="+text, func(t *testing.T) {
-				t.Parallel()
-				e := newSubmissionEnv(t)
-				r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-				before := e.columns(t, r.ID)
-				e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) { row.State = state; return row, nil }
-
-				err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text, AllowPending: true})
-
-				assertSubmissionUnconfirmed(t, err, state)
-				if e.slept != 2*time.Second {
-					t.Errorf("wait = %v; want 2s", e.slept)
+	// b.qcf: Claude fallback shares Codex's bounded hook check.
+	for _, agent := range []string{"codex", "claude"} {
+		for _, state := range []string{store.StatePending, store.StateWaiting} {
+			for _, text := range []string{skpText, ""} {
+				if agent == "claude" && text == "" {
+					continue // Enter-only does not get Claude's new hook check.
 				}
-				if e.s.reads != 20 {
-					t.Errorf("submission reads = %d; want 20 before the deadline", e.s.reads)
-				}
-				assertInputWrites(t, e.killEnv, r, text)
-				if text == "" {
-					e.assertNoCalls(t, tmux.CallSendText)
-					if len(e.rec.SocketCallsOf(tmux.CallSendKey))+len(e.rec.SocketCallsOf(tmux.CallSendEnter)) != 1 {
-						t.Fatal("Enter-only input issued another key")
+				t.Run(agent+"/"+state+"/text="+text, func(t *testing.T) {
+					t.Parallel()
+					e := newSubmissionEnv(t)
+					r := e.seedRow(t, killRowSpec{State: store.StatePending, Opts: agentRowOpts(agent)})
+					before := e.columns(t, r.ID)
+					if agent == "claude" {
+						e.sessionStartsWhenPolled(t, r, func() { before = e.columns(t, r.ID) })
 					}
-				}
-				e.assertNoCalls(t, tmux.CallCapture)
-				e.assertRowUnchanged(t, r.ID, before)
-			})
+					e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) { row.State = state; return row, nil }
+
+					err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text, AllowPending: true})
+
+					assertSubmissionUnconfirmed(t, err, state)
+					name := "Codex"
+					if agent == "claude" {
+						name = "Claude Code"
+					}
+					wantMessage := fmt.Sprintf("ErrSubmissionUnconfirmed: send-keys: %s: tmux accepted the keys and Enter, but %s submission could not be confirmed (no turn activity was observed within 2 seconds); do not repeat the text or send another Enter automatically; check hook-derived get or status; if submission remains unknown, escalate to the caller or a human", r.ID, name)
+					if err.Error() != wantMessage {
+						t.Errorf("message = %q; want %q", err, wantMessage)
+					}
+					if e.slept != 2*time.Second {
+						t.Errorf("wait = %v; want 2s", e.slept)
+					}
+					if e.s.reads != 20 {
+						t.Errorf("submission reads = %d; want 20 before the deadline", e.s.reads)
+					}
+					assertPendingInput(t, e, r, agent, text)
+					if text == "" {
+						e.assertNoCalls(t, tmux.CallSendText)
+						if len(e.rec.SocketCallsOf(tmux.CallSendKey))+len(e.rec.SocketCallsOf(tmux.CallSendEnter)) != 1 {
+							t.Fatal("Enter-only input issued another key")
+						}
+					}
+					e.assertNoCalls(t, tmux.CallCapture)
+					e.assertRowUnchanged(t, r.ID, before)
+				})
+			}
 		}
 	}
 }
 
-func TestSendKeysCodexSubmissionActivity(t *testing.T) {
+func TestSendKeysPendingSubmissionActivity(t *testing.T) {
 	t.Parallel()
-	for _, state := range []string{store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
-		for _, delay := range []int{0, 2} {
-			t.Run(fmt.Sprintf("%s/after %d waits", state, delay), func(t *testing.T) {
-				t.Parallel()
-				e := newSubmissionEnv(t)
-				r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-				e.s.read = func(n int, row api.Spawn) (api.Spawn, error) {
-					row.State = store.StateWaiting
-					if n > delay {
-						row.State = state
+	// b.qcf: Claude fallback shares Codex's bounded hook check.
+	for _, agent := range []string{"codex", "claude"} {
+		for _, state := range []string{store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
+			for _, delay := range []int{0, 2} {
+				t.Run(fmt.Sprintf("%s/%s/after %d waits", agent, state, delay), func(t *testing.T) {
+					t.Parallel()
+					e := newSubmissionEnv(t)
+					r := e.seedRow(t, killRowSpec{State: store.StatePending, Opts: agentRowOpts(agent)})
+					e.s.read = func(n int, row api.Spawn) (api.Spawn, error) {
+						row.State = store.StateWaiting
+						if n > delay {
+							row.State = state
+						}
+						return row, nil
 					}
-					return row, nil
-				}
-				if err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}); err != nil {
-					t.Fatalf("same-launch activity did not confirm: %v", err)
-				}
-				if e.waits != delay {
-					t.Errorf("waits = %d; want %d", e.waits, delay)
-				}
-				assertInputWrites(t, e.killEnv, r, skpText)
-				e.assertNoCalls(t, tmux.CallCapture)
-			})
+					if err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}); err != nil {
+						t.Fatalf("same-launch activity did not confirm: %v", err)
+					}
+					if e.waits != delay {
+						t.Errorf("waits = %d; want %d", e.waits, delay)
+					}
+					assertPendingInput(t, e, r, agent, skpText)
+					e.assertNoCalls(t, tmux.CallCapture)
+				})
+			}
 		}
 	}
 }
@@ -287,7 +244,7 @@ func TestSendKeysCodexSubmissionRemainingReadBudget(t *testing.T) {
 	assertInputWrites(t, e.killEnv, r, skpText)
 }
 
-func TestSendKeysCodexSubmissionActivityReadDeadline(t *testing.T) {
+func TestSendKeysPendingSubmissionActivityReadDeadline(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name     string
@@ -298,15 +255,17 @@ func TestSendKeysCodexSubmissionActivityReadDeadline(t *testing.T) {
 		{"at deadline", 2 * time.Second, false},
 		{"after deadline", 2*time.Second + time.Nanosecond, false},
 	}
-	for _, state := range []string{store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
+	// b.qcf: late Claude hook evidence cannot turn uncertainty into success.
+	// State membership is covered by TestSendKeysPendingSubmissionActivity.
+	for _, agent := range []string{"codex", "claude"} {
 		for _, tc := range cases {
-			t.Run(state+"/"+tc.name, func(t *testing.T) {
+			t.Run(agent+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 				e := newSubmissionEnv(t)
-				r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+				r := e.seedRow(t, killRowSpec{State: store.StatePending, Opts: agentRowOpts(agent)})
 				e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) {
 					e.clock.Advance(tc.readTime)
-					row.State = state
+					row.State = store.StateWorking
 					return row, nil
 				}
 
@@ -317,12 +276,12 @@ func TestSendKeysCodexSubmissionActivityReadDeadline(t *testing.T) {
 						t.Fatalf("activity read before deadline did not confirm: %v", err)
 					}
 				} else {
-					assertSubmissionUnconfirmed(t, err, state)
+					assertSubmissionUnconfirmed(t, err, store.StateWorking)
 				}
 				if e.s.reads != 1 || e.waits != 0 {
 					t.Errorf("submission reads/waits = %d/%d; want 1/0", e.s.reads, e.waits)
 				}
-				assertInputWrites(t, e.killEnv, r, skpText)
+				assertPendingInput(t, e, r, agent, skpText)
 			})
 		}
 	}
@@ -397,19 +356,29 @@ func TestSendKeysCodexSubmissionConnectionContention(t *testing.T) {
 func TestSendKeysSubmissionApplicability(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name   string
-		spec   killRowSpec
-		params api.SendKeysParams
-		paste  bool
+		name     string
+		spec     killRowSpec
+		params   api.SendKeysParams
+		paste    bool
+		hook     bool
+		terminal bool
 	}{
-		{"pending Claude", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText}, false},
-		{"waiting Codex", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: skpText}, true},
-		{"working Codex", codexSpec(store.StateWorking, agentAlive, false), api.SendKeysParams{Text: skpText}, true},
-		{"pending Codex no_enter", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: "manual $", NoEnter: true}, false},
-		{"pending Codex named key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "Enter"}, false},
-		{"pending Codex character key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "x"}, false},
-		{"waiting Codex empty", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{}, false},
-		{"waiting Codex hash", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: "manual $", ExpectPaneSHA256: fmt.Sprintf("%x", sha256.Sum256(nil))}, false},
+		// b.qcf: only ordinary pending Claude fallback gains a terminal read and hook check.
+		{"pending Claude", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText}, false, true, true},
+		{"waiting Claude", killRowSpec{}, api.SendKeysParams{Text: skpText}, false, false, false},
+		{"pending Claude Enter-only", killRowSpec{State: store.StatePending}, api.SendKeysParams{}, false, false, false},
+		{"pending Claude no_enter", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText, NoEnter: true}, false, false, false},
+		{"pending Claude key", killRowSpec{State: store.StatePending}, api.SendKeysParams{Key: "Enter"}, false, false, false},
+		{"pending Claude hash", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText, ExpectPaneSHA256: api.PaneSHA256("")}, false, false, false},
+		{"pending Codex", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: skpText}, true, true, false},
+		{"pending Cursor", killRowSpec{State: store.StatePending, Opts: agentRowOpts("cursor")}, api.SendKeysParams{Text: skpText}, false, false, false},
+		{"waiting Codex", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: skpText}, true, false, false},
+		{"working Codex", codexSpec(store.StateWorking, agentAlive, false), api.SendKeysParams{Text: skpText}, true, false, false},
+		{"pending Codex no_enter", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: "manual $", NoEnter: true}, false, false, false},
+		{"pending Codex named key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "Enter"}, false, false, false},
+		{"pending Codex character key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "x"}, false, false, false},
+		{"waiting Codex empty", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{}, false, false, false},
+		{"waiting Codex hash", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: "manual $", ExpectPaneSHA256: fmt.Sprintf("%x", sha256.Sum256(nil))}, false, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -418,11 +387,26 @@ func TestSendKeysSubmissionApplicability(t *testing.T) {
 			r := e.seedRow(t, tc.spec)
 			p := tc.params
 			p.InstanceID, p.AllowPending = r.ID, true
-			if err := e.send(p); err != nil {
-				t.Fatal(err)
+			err := e.send(p)
+			if tc.hook {
+				wantState := store.StatePending
+				if tc.terminal {
+					wantState = store.StateWaiting
+				} // b.qcf: SessionStart precedes input.
+				assertSubmissionUnconfirmed(t, err, wantState)
+				if e.s.reads != 20 || e.slept != 2*time.Second {
+					t.Errorf("hook reads/sleep=%d/%v; want 20/2s", e.s.reads, e.slept)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if e.s.reads != 0 || e.waits != 0 {
+					t.Errorf("submission reads/waits = %d/%d; want none", e.s.reads, e.waits)
+				}
 			}
-			if e.s.reads != 0 || e.waits != 0 {
-				t.Errorf("submission reads/waits = %d/%d; want none", e.s.reads, e.waits)
+			if reads := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)); reads != map[bool]int{false: 0, true: 2}[tc.terminal] {
+				t.Errorf("terminal reads=%d; want selected=%v", reads, tc.terminal)
 			}
 			pastes := 0
 			for _, call := range e.rec.SocketCallsOf(tmux.CallSendText) {
@@ -604,7 +588,7 @@ func TestSendKeysPostTextAdmissionRetainsProgress(t *testing.T) {
 // E10: "check hook-derived get or status" after keys were accepted.
 func TestAdviceFollow_E10_SubmissionUnconfirmedInspectGet(t *testing.T) {
 	t.Parallel()
-	adviceAssertManifest(t, "send-keys", "", "no auto-retry text/Enter; see hook-derived get/status, escalate if unknown.")
+	adviceAssertManifest(t, "send-keys", "", "ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown.")
 	e := newSubmissionEnv(t)
 	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 	err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})

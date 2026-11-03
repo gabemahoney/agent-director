@@ -127,16 +127,16 @@ ch_child() {
  jq -e --arg child "$child" 'any(.spawns[]; .instance_id==$child)' "$case_dir/child-$label-list.json" >/dev/null
  pc_assert_stores_untouched
 }
+# A relay guard refuses held input, or the gateway's hold does, which send-keys
+# reports as ErrSubmissionUnconfirmed gateway_refused (b.bqd), never success.
 ch_child_guard() {
  local child=$1 text=$2
  if ad send-keys --instance-id "$child" --text "$text" > "$case_dir/child-guard.json" 2> "$case_dir/child-guard.stderr"; then
-  check child.gateway-refusal wait_until ch_child_refused "$child"
- else
-  jq -e '.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' "$case_dir/child-guard.stderr" >/dev/null
+  check child.guard-refused false
  fi
+ jq -e --arg text "$text" '.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen" or (.err_name=="ErrSubmissionUnconfirmed" and .err_details.outcome=="gateway_refused" and .err_details.phase=="enter_attempted" and .err_details.reason=="starting, held, stale or cancellation" and .err_details.bytes_attempted==($text|utf8bytelength) and .err_details.keys_sent and (.err_details.submission_confirmed|not))' "$case_dir/child-guard.stderr" >/dev/null
  jq -se --arg text "$text" 'all(.[]|select(.method=="session/prompt"); .params.prompt[0].text!=$text)' "$case_dir/child-composed-trace.jsonl" >/dev/null
 }
-ch_child_refused() { ad read-pane --instance-id "$1" --n-lines 100 | jq -e '.pane|gsub("\n";"")|contains("Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent")' >/dev/null; }
 ch_composed_admitted() { [[ $(sql "SELECT count(*) FROM permission_requests WHERE instance_id='child-composed-$id';") == 1 ]]; }
 ch_composed_completed() { [[ $(sql "SELECT state FROM spawns WHERE instance_id='child-composed-$id';") == waiting && $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$ch_child_path") == "$1" ]]; }
 # One outcome: the held request's turn is still open, because a turn's end

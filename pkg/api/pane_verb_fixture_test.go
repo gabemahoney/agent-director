@@ -189,13 +189,65 @@ func (e *killEnv) sendKeys(p api.SendKeysParams) (api.SendKeysResult, error) {
 }
 
 // sendKeysAt is sendKeys with the relay window and guard clock given, for a
-// relay guard judged against permission requests stored at wall-clock time.
+// relay guard judged against permission requests stored at wall-clock time;
+// injected poll sleeps advance that clock without charging tmux fixture costs.
+// The submission-store wrapper keeps virtual poll budgets out of real SQL
+// deadlines; dedicated bounded-read tests opt into those separately.
 // The pid namespace reader is unset, so every relay hook is judged "can't
 // tell" (by its confirm_by), as before relay hooks were judged by process.
 func (e *killEnv) sendKeysAt(window time.Duration, now time.Time, p api.SendKeysParams) (api.SendKeysResult, error) {
-	return api.SendKeys(e.store, e.rec, api.SendKeysEnv{
+	return api.SendKeys(&submissionStore{SendKeysStore: e.store, Persistence: e.store}, e.rec, api.SendKeysEnv{
 		Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return now }, Window: window},
+		Sleep: func(d time.Duration) { now = now.Add(d); e.sleep(d) },
 	}, p)
+}
+
+// sessionStartsWhenPolled supplies b.qcf's real SessionStart on the first
+// terminal poll, with sessionID when given (default "ready-<id>"). Refused
+// lookups never report in; after observes only the hook's write, so callers
+// can retain their full-row no-write assertions.
+func (e *killEnv) sessionStartsWhenPolled(t *testing.T, r killRow, after func(), sessionID ...string) {
+	t.Helper()
+	sid := "ready-" + r.ID
+	if len(sessionID) > 0 {
+		sid = sessionID[0]
+	}
+	done := false
+	e.rec.AfterCall(tmux.CallPaneTerminal, func(c tmuxfix.SocketCall, err error) {
+		if done || err != nil || c.Socket != r.Socket {
+			return
+		}
+		done = true
+		row, err := e.st.GetSpawn(r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Target != row.Identity.PaneID {
+			t.Fatalf("terminal poll targets %s; want owned pane %s", c.Target, row.Identity.PaneID)
+		}
+		if row.State != store.StatePending {
+			return
+		}
+		if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", sid); !a.Applied {
+			t.Fatalf("SessionStart during readiness: %+v", a)
+		}
+		if after != nil {
+			after()
+		}
+	})
+}
+
+// assertSessionStartMissing pins b.qcf's never-reported refusal and no input.
+func (e *killEnv) assertSessionStartMissing(t *testing.T, err error) {
+	t.Helper()
+	assertOneName(t, err, "ErrSubmissionUnconfirmed")
+	want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StatePending,
+		Reason: "the agent did not report in with SessionStart within 12 seconds; nothing was typed, so the same send-keys can be retried later"}
+	if got := api.ErrDetails(err); got != want {
+		t.Fatalf("refusal=%+v; want %+v", got, want)
+	}
+	e.assertNothingSent(t)
+	e.assertNoCalls(t, tmux.CallSendKey)
 }
 
 // RecordHookGone delegates.
@@ -739,11 +791,23 @@ func assertEnterSent(t *testing.T, rec *tmuxfix.Recorder, socket, paneID string)
 	}
 }
 
-// assertDelivered fails unless the calls were exactly paneSendCalls: text
-// typed into paneID on socket (assertTextSent), then one Enter to paneID.
-func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string) {
+// assertDelivered checks paneSendCalls (lookup, listing, every target recheck,
+// literal text, one Enter key) with the specified number of terminal reads
+// (default zero) after the first lookup and listing. Terminal reads add pending
+// Claude's post-wait ownership lookup and listing (b.qcf).
+func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string, terminalReads ...int) {
 	t.Helper()
-	e.assertPaneCalls(t, paneSendCalls...)
+	calls := slices.Clone(paneSendCalls[:len(paneListedCalls)])
+	if len(terminalReads) > 0 {
+		for range terminalReads[0] {
+			calls = append(calls, tmux.CallPaneTerminal)
+		}
+		if terminalReads[0] > 0 {
+			calls = append(calls, paneListedCalls...)
+		}
+	}
+	calls = append(calls, paneSendCalls[len(paneListedCalls):]...)
+	e.assertPaneCalls(t, calls...)
 	assertTextSent(t, e.rec, socket, paneID, text)
 	assertEnterSent(t, e.rec, socket, paneID)
 }
@@ -1102,4 +1166,21 @@ func (e *killEnv) codexExitsAfterEnter(t *testing.T, r killRow, mark *int, sessi
 func pauseDisagrees(t *testing.T, id string) []map[string]any {
 	t.Helper()
 	return verbDisagrees(t, "pause", id)
+}
+
+// turnStartsAfterEnter models Claude's UserPromptSubmit on a successful Enter
+// for tests whose purpose needs a successful pending send (b.qcf).
+func (e *killEnv) turnStartsAfterEnter(t *testing.T, r killRow) {
+	t.Helper()
+	done := false
+	e.rec.AfterCall(tmuxfix.AnyCall, func(c tmuxfix.SocketCall, err error) {
+		enter := c.Call == tmux.CallSendEnter || c.Call == tmux.CallSendKey && c.Key == "Enter"
+		if done || !enter || err != nil || c.Socket != r.Socket || c.Target != r.Spawn.Identity.PaneID {
+			return
+		}
+		done = true
+		if applied := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "UserPromptSubmit", ""); !applied.Applied {
+			t.Fatalf("UserPromptSubmit after Enter: %+v", applied)
+		}
+	})
 }

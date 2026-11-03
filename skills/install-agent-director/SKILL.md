@@ -556,25 +556,24 @@ This skill runs `install.sh` from the same directory. The script:
    1. **Whitespace-in-install-path** — `$HOME` must not contain
       whitespace (SRD §4.3; tmux's direct-argv invocation requires
       shell-safe paths).
-   2. **OS/CPU gate (SR-2.1).** `uname -s` / `uname -m` must report
-      one of the supported tuples: `Linux/x86_64` or `Darwin/arm64`.
-      Every other combination (Windows, FreeBSD, `Linux/aarch64`,
-      `Darwin/x86_64`, etc.) is hard-refused with a message naming
-      the supported set and referencing Idea Bee `b.fg3` for
-      cross-platform expansion status.
-   3. **Required tools on PATH.** `tmux`, `jq`, `file`,
-      and `sqlite3` must all resolve via `command -v`. (Claude Code,
-      Codex and Cursor are not on this list: at least one of them must be present,
+   2. **Required tools on PATH.** Check the complete selected-mode inventory
+      in [install requirements](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#requirements).
+      Before any external command, download or installation change, the script
+      checks them all with `command -v`. Missing commands produce one report
+      with package hints and exit 2. Optional probes and fallbacks stay optional.
+      (Claude Code, Codex and Cursor are not on this list: at least one must be present,
       checked with item 4 below.) The `file(1)`
       tool is mandatory because step 7 below relies on it to probe
       `--binary` artifacts (never silent-skip per SR-2.2);
       install via `apt install file` / `brew install file-formula`
-      / `dnf install file`. `sqlite3` reads the private preflight snapshot
-      and performs later authorized store operations; see
+      / `dnf install file`. `sqlite3` reads the actual `user_version`,
+      including committed WAL state, from the private preflight snapshot and
+      during later authorized store operations and post-open verification; see
       [the six-step flow](#the-six-steps-installsh-performs). It honors the
       configured busy timeout and ignores `~/.sqliterc`. Install it via
       `apt install sqlite3` / `brew install sqlite` / `dnf install sqlite`.
-      `curl` is also required with `--from-release`.
+   3. **OS/CPU gate (SR-2.1).** `uname -s` / `uname -m` must report
+      `Linux/x86_64` or `Darwin/arm64`; every other combination is refused.
    4. **Store database (`[store] db_path` and `busy_timeout_ms`), the
       launch paths, and the agents** —
       reads `[store] db_path` from AD's `config.toml`
@@ -683,7 +682,7 @@ This skill runs `install.sh` from the same directory. The script:
    7. **Architecture probe (SR-2.2)**, for `--binary` and
       `--admin-binary` alike. Runs `file(1)` against `BINARY_SRC` and
       `ADMIN_SRC` and pattern-matches against the host pair captured by
-      step 2:
+      the OS/CPU gate above:
       - `Linux/x86_64`: file output must contain `ELF 64-bit LSB`
         AND (`x86-64` OR `x86_64`).
       - `Darwin/arm64`: file output must contain `Mach-O` AND
@@ -1283,7 +1282,7 @@ install.sh exits 0 on success. Its own failures exit 1 to 6:
 | Exit | Cause |
 |---|---|
 | 1 | The agent-rename migration could not write a file (a full disk, a permission changed since pre-flight, a failed copy), after the new binaries were installed and before the store was opened; see "Before the six steps" in step 5 of "What this skill does". The message starts `the agent-rename migration could not write <file>; stopping before the store is opened`, its `file` and `error` lines name the file and the cause, and there is no `err_name` line. The file is as it was, every copy the install made is kept, and the store is not opened. Fix the cause the `error` line names, then run this release's install.sh again with the same flags, from a shell agent-director did not start: it completes the migration, changes nothing already migrated, then migrates the store. Or take the way back ("Going back to the previous release" below, with the operator's go-ahead). A step that exits 1 for another reason is the last row of this table. |
-| 2 | Pre-flight: `HOME` unset, empty or not an absolute path (checked first, before anything is read or written: run it with `HOME` set to the user's home directory); a bad flag or flag pair; whitespace in the install path; an unsupported OS/CPU; a missing tool (`tmux`, `jq`, `file`, `sqlite3`); a binary built for another architecture; or no Claude Code, Codex or Cursor found (the message names all three, their `[launch]` keys and how to install one; install one, or set its `[launch]` path, then re-run). `uninstall.sh` exits 2 for an unset, empty or relative `HOME` too. |
+| 2 | Pre-flight: `HOME` unset, empty or not an absolute path (checked first, before anything is read or written: run it with `HOME` set to the user's home directory); a bad flag or flag pair; whitespace in the install path; an unsupported OS/CPU; missing required commands for the selected mode (reported together with package hints; see [requirements](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#requirements)); a binary built for another architecture; or no supported agent found (the message names Claude Code, Codex and Cursor, their `[launch]` keys and how to install one). `uninstall.sh` exits 2 for an unset, empty or relative `HOME` too. |
 | 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, two version stamps that differ or carry no commit, or a binary whose `version` result lacks `config_dir` `~/.config/agent-director` or names another directory (a binary from an earlier release: install this release's binaries; an earlier release is installed with its own install.sh, fetched from its tag). |
 | 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"): the file is not valid JSON, holds more than one JSON document, or is valid JSON of another shape. Or, with hooks on and Claude Code present, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). With Claude Code absent `settings.json` is not touched or checked. |
 | 5 | The config file or a template, the move of the old directory, or the store open and schema migration. The cause line below names which. |

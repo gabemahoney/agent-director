@@ -379,7 +379,7 @@ is already typed. `Key` sends one key alone instead (a named key `Escape`,
 `Enter`, `Up`, `Down`, `Tab`, or one character), with no Enter. With
 `ExpectPaneSHA256` (the `PaneSHA256` of the `ReadPane` you looked at, with
 its `NLines`) the pane is checked first and nothing is sent if it changed
-(`ErrPaneChanged`); on a relayed Spawn a match also passes the dialog hold
+(`ErrPaneChanged`); on a relayed Spawn a match also passes the API's dialog hold
 (`ErrDialogMaybeOpen`, below). Set it only for a pane a person or an LLM
 judged, never from an automatic flow. There is no flag to suppress CR
 stripping; it applies to every call.
@@ -406,9 +406,12 @@ exact transcript-confirmation claim. Manual operations
 (`NoEnter`, `Key`, empty text, pane hashes and permission answers) return an
 empty result on success; input-ownership refusals, including those from
 `Pause`, are in [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
-Supported launches, Codex fallback paste and input restrictions, omitted-ID
+Supported launches, fallback readiness and input restrictions, omitted-ID
 behavior, structured outcomes and recovery are in
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
+Cursor sends with Enter can return `ErrSubmissionUnconfirmed` with
+`Outcome: "gateway_refused"`; see
+[Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes).
 
 Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
 `ErrSubmissionUnconfirmed`, `ErrInvalidFlags`, `ErrSendKeysWhileRelayed`,
@@ -434,11 +437,13 @@ before deciding whether another call is safe. See `(*Client).SendKeys` godoc.
 By default `SendKeys` rejects new input to a `pending` row with
 `ErrSpawnNotInteractive`. `AllowPending: true` also allows a `pending`
 row: a launch (spawn, reuse or resume) whose agent has not reported in
-yet, for example to dismiss a prompt the agent shows before it reports
-in. Keys are delivered only to a session started by the row's current
-launch. `ended` and `missing` rows are rejected, with no tmux call, including
-retries of an existing delivery request. State, relay and dialog guards precede
-native capability selection and request reconciliation.
+yet, for example to answer a startup choice with `Key` (including `Key: "Enter"`).
+See [pending startup screens](../../docs/caller-contract.md#pending-rows-and-startup-screens)
+for text answers and Enter-only sends. Keys are delivered only to a session
+started by the row's current launch. `ended` and `missing` rows are rejected,
+with no tmux call, including retries of an existing delivery request. State,
+relay and dialog guards precede native capability selection and request
+reconciliation.
 
 A `pending` row is refused with `ErrSpawnNotInteractive` and nothing sent
 when its launch start or launch token is not recorded (before any tmux
@@ -449,8 +454,9 @@ arrive.
 
 `AllowPending` preserves native readiness and transcript requirements on
 supported launches; it does not make a startup dialog an ordinary composer.
-For fallback input to a pending Codex row, the bounded hook-state observation
-and its unconfirmed result are described in the caller contract.
+Ordinary pending Claude fallback has a readiness wait, and pending Claude and
+Codex fallback have a hook check; see
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
 `ErrSubmissionUnconfirmed` carries `SubmissionUnconfirmedDetails` through
 `api.ErrDetails(err)`: `RequestID`, `Outcome`, `Phase`, `BytesAttempted`,
 `EnterMayHaveBeenSent`, optional `LastQueue`, `Reason`, `KeysSent`,
@@ -462,7 +468,7 @@ for their meaning and recovery.
 
 `LivenessNote` `unreported` means an alive agent has not reported since
 launch. For action on pending rows see the
-[caller contract](../../docs/caller-contract.md#caller-contract).
+[caller contract](../../docs/caller-contract.md#pending-rows-and-startup-screens).
 
 #### Pure `SendKeys` function
 
@@ -475,21 +481,33 @@ func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 
 `SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity,
 `IntentHold`, optional `Input` (`InputDeliveryBackend`, nil uses native
-delivery), and optional `Sleep` for readiness, drain and submission checks
-(nil uses `time.Sleep`). Most callers use the Client method, which supplies these.
+delivery), and optional `Sleep` for native readiness, drain and submission
+checks, pending Claude readiness and settle, pending Codex and Claude hook
+checks, and Cursor gateway verdict reads (nil uses `time.Sleep`). Most callers
+use the Client method, which supplies these.
 Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
 bounding connection and lock waits by the supplied duration.
 Custom tmux adapters supplied to this function or through `Options.TmuxClient`
-must also implement optional `PasteKeysTmux` to support ordinary Codex fallback:
-`PasteKeysPane(socket, paneID, text string) error`. With an input journal,
-the adapter also implements `GuardedPasteKeysTmux.PasteKeysPaneGuarded(socket,
-paneID, text string, beforeWrite func(enter bool) error) error`, invoking the
-guard immediately before paste and Enter and stopping on refusal. It preserves text and LF in
-one paste, sends one Enter only after paste succeeds, and never retries input.
-Failures use `*TmuxCallError` with the failed text or Enter call. Adapters
-without this capability remain source-compatible but receive a pre-input
-`not_started` refusal on that path; native and manual operations keep their
-existing methods. The default client provides the capability.
+need these optional capabilities for the corresponding fallback paths:
+
+- `PasteKeysTmux` supports ordinary Codex fallback:
+  `PasteKeysPane(socket, paneID, text string) error`. It preserves text and LF in
+  one paste, sends one Enter only after paste succeeds, and never retries input.
+  Failures use `*TmuxCallError` with the failed text or Enter call.
+- `GuardedPasteKeysTmux` is also required for journal-backed Codex fallback:
+  `PasteKeysPaneGuarded(socket, paneID, text string, beforeWrite func(enter bool) error) error`.
+  It invokes the guard immediately before paste and Enter and stops on refusal,
+  with the same framing and error rules as `PasteKeysTmux`.
+- `PaneTerminalTmux` supports ordinary pending Claude fallback:
+  `PaneTerminalRaw(socket, paneID string, maxWait time.Duration) (bool, error)`.
+  It reports whether canonical mode, echo and CR-to-NL translation are all off,
+  without writing to the terminal. `maxWait` bounds the tmux read and pipe-close
+  wait together; a nonpositive allowance refuses without invoking tmux. tmux
+  failures use `*TmuxCallError` with `TmuxCallPaneTerminal`; terminal-device
+  failures retain their OS error.
+
+Adapters without the needed capability remain source-compatible but receive a
+pre-input `not_started` refusal on that path. The default client provides all three.
 See their godoc for each field's contract.
 
 ```go

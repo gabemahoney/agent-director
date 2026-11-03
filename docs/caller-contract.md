@@ -29,7 +29,9 @@ error:
   "may be typed": do the step the error names, never resend the same text.
   `--text ""` sends Enter only. Retry a `pause` that returns
   `ErrTmuxUnresponsive` later.
-- `ErrSubmissionUnconfirmed`: for automatic `send-keys`, follow
+- `ErrSubmissionUnconfirmed` with `outcome: "gateway_refused"`: follow
+  [Cursor input outcomes](#cursor-input-outcomes). Otherwise, for automatic
+  `send-keys`, follow
   [Ordinary text submission](#ordinary-text-submission); for manual
   `send-keys`, follow [Manual input ownership](#manual-input-ownership).
 - `ErrPauseTimeout`: inspect before further input; never retry `pause`
@@ -68,13 +70,6 @@ error:
 finished-row call is a no-op without checking the process; it is not proof
 of exit. `missing` is a judgement on available evidence, not an
 exit proof. Follow the sequence below before relaunching an id.
-
-A pending row noted `unreported` has an alive agent with no applied hook
-since launch. Read its pane, then type with `allow_pending` only after a
-person or an LLM judged that screen. A caller that cannot judge it uses the
-live-row sequence or hands it to a human. Cursor admits no prompt until its conversation is confirmed; `allow_pending`
-does not override that admission rule. Hook configuration diagnosis is
-in [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
 
 To end a live row (`pending` included) and relaunch its id:
 
@@ -289,6 +284,26 @@ Commands still make their own ownership and safety checks: no confirmation
 authorizes input, a permission answer or a kill, `delivered` keeps its
 acknowledgement meaning, and a timeout still proves neither rollback,
 non-delivery nor exit.
+
+## Pending rows and startup screens
+
+A pending row noted `unreported` has an alive agent with no applied hook
+since launch. Read its pane, then answer with `allow_pending` only after a
+person or an LLM judged that screen. Ordinary pending Claude fallback text
+waits for the agent to be ready; see [Ordinary text submission](#ordinary-text-submission).
+Such a Claude row that never reports in gets
+`ErrSubmissionUnconfirmed` with `outcome: "not_started"` after that wait,
+with nothing typed. Use `key` (including `key: "Enter"`) for startup choices,
+or a Claude Enter-only send; these take neither the readiness wait nor the
+hook check. For Codex Enter-only sends, see [Manual input ownership](#manual-input-ownership).
+
+A pending Codex fallback text answer that starts no turn returns
+`ErrSubmissionUnconfirmed` with `keys_sent: true` even when the screen accepted
+it: read the pane and `status` instead of resending. A caller that cannot judge
+the pane uses the live-row sequence or hands it to a human. Cursor admits no
+prompt until its conversation is confirmed; `allow_pending` does not override
+that rule. Hook configuration diagnosis is in
+[Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
 
 ## Experimental context fullness
 
@@ -588,13 +603,38 @@ When native capability is unavailable, including other versions, platforms,
 resumed conversations or unsupported launch arguments, ordinary Codex input
 uses one paste followed by one Enter; other agents retain literal text plus
 Enter. Paste framing requires the application to have enabled bracketed paste;
-it does not establish composer readiness. Fallback success returns an empty
-object, without exact transcript confirmation. A pending Codex row is
-observed for up to 2 s for hook-derived `working`, `ask_user` or
-`check_permission` state. If that activity is not observed, the call returns
+it does not establish composer readiness.
+
+For ordinary Claude fallback input read as `pending`, `send-keys` waits for the
+agent's terminal to take raw input, SessionStart to move the same launch to
+`waiting`, and 1.5 s from when the call first observes `waiting`. The row is
+polled throughout and must remain `waiting` once observed. After the settle,
+the call rechecks raw input, the row, ownership of the tmux server, session and
+pane, and permission-relay and dialog guards. Readiness and revalidation share
+one 12 s deadline, capped by the call's earlier deadline; an in-flight check
+can make the call return later. On resume, SessionStart may keep or rotate the
+saved session ID under the same launch and process guards.
+An unavailable terminal-mode capability, a failed readiness read or check,
+cancellation or deadline expiry during readiness or admission, or changed
+launch or authority at admission returns `ErrSubmissionUnconfirmed` with `outcome: "not_started"`:
+nothing was typed, and `reason` names the unmet condition. Refusals retain the
+last successfully read `row_state`. Admission's state and relay/dialog guards
+keep their own refusal errors, also with nothing typed.
+Claude fallback sends read in any state other than `pending`, Enter-only,
+`no_enter`, `key` and pane-hash sends do not take this readiness path.
+
+After a successful transport, pending Codex fallback and the pending Claude
+path above are observed for up to 2 s for hook-derived `working`, `ask_user`
+or `check_permission` state on the same launch. Success returns `{}`: a turn
+was seen to start, without exact transcript confirmation. If that activity
+is not observed, the call returns
 `ErrSubmissionUnconfirmed` with `keys_sent: true`,
 `submission_confirmed: false` and `row_state`, without an `outcome`.
+For these refusals and failed hook observations, `row_state` is the last state
+the call read successfully, even when that state caused the refusal.
 Missing hooks can leave submission unknown even when input reached the agent.
+Other fallback success returns `{}` without this hook confirmation; Cursor's
+verdict is described below.
 
 Codex fallback accepts literal TAB and LF inside the paste. Codex may trim
 trailing whitespace, including TAB, before submission. It refuses invalid
@@ -648,16 +688,17 @@ request discovers late proof for its predecessor,
 it reports `not_started`; re-issue the new request only after the predecessor
 has settled.
 
-Native delivery and Codex fallback refusals or paste-transport failures use
-these `ErrSubmissionUnconfirmed` details:
+Native delivery, Claude fallback refusals before input, Codex fallback refusals
+or paste-transport failures, and Cursor gateway refusals use these
+`ErrSubmissionUnconfirmed` details:
 
 | Field | Meaning |
 |---|---|
-| `outcome` | `not_started`: this request attempted no input; `partial_input_unconfirmed`: text or manual input may be present, with no automatic Enter attempted; `submission_unconfirmed`: Enter may have been sent and submission remains unknown. |
-| `request_id`, `phase` | The owned native attempt, when allocated, and the last delivery phase. An earlier unresolved native attempt can be reported instead of the requested new input. Fallback paste has no request ID. |
+| `outcome` | `not_started`: this request attempted no input; `partial_input_unconfirmed`: text or manual input may be present, with no automatic Enter attempted; `submission_unconfirmed`: Enter may have been sent and submission remains unknown; `gateway_refused`: Cursor's gateway discarded the submission before it reached Cursor (see below). |
+| `request_id`, `phase` | The owned native attempt, when allocated, and the last delivery phase. An earlier unresolved native attempt can be reported instead of the requested new input. Fallback sends have no request ID. |
 | `bytes_attempted`, `enter_may_have_been_sent`, `keys_sent` | Conservative input-attempt facts, not byte receipts. `keys_sent` means input was attempted and may have reached the pane. |
 | `last_queue` | Optional last terminal queue sample; zero is not submission evidence. |
-| `submission_confirmed`, `row_state`, `reason` | Confirmation is false; state and reason describe the observation, not proof of failure. |
+| `submission_confirmed`, `row_state`, `reason` | Confirmation is false; state and reason describe the observation. Only `gateway_refused` establishes that Cursor did not receive the submission. |
 
 A fallback paste-transport failure counts the whole offered payload as
 attempted, even when delivery may not have begun. It reports
@@ -687,11 +728,43 @@ still confirmed submission: never resend because cleanup failed. An existing
 primary error keeps its classification and details, with the cleanup cause
 retained.
 
+### Cursor input outcomes
+
+Cursor `send-keys` with text and Enter, or empty text (Enter only), pane-hash
+sends included, waits up to 2 s for the gateway's verdict. `key` sends, `Enter`
+included, are not checked. A refusal attributed to this call returns
+`ErrSubmissionUnconfirmed` with `outcome: "gateway_refused"`: nothing reached
+Cursor and the gateway discarded the text. Its details include
+`phase: "enter_attempted"`, `keys_sent: true`, `enter_may_have_been_sent: true`,
+`submission_confirmed: false`, `bytes_attempted`, the gateway's `reason` and
+`row_state`.
+
+On `gateway_refused`, do not automatically repeat text or Enter. Refused
+input is not queued and does not replace accepted work. If `reason` is
+`capacity`, wait for capacity, then explicitly submit the refused text again.
+Otherwise, read the pane and check `get`'s `state` and `unproven_requests`;
+answer or clear what holds input before explicitly sending again.
+
+A Cursor request of the current launch already answered (`delivered` or at
+the pane) with no validated tool proof holds input until that proof arrives
+or the launch ends ([Cursor spawns](permissions.md#cursor-spawns)). To recover
+a row held this way, follow the live-row sequence at the
+[top of this page](#caller-contract) to kill and resume it.
+
+An accepted or provisionally held submission still returns `{}`. So does a
+call with no attributable verdict in the window or an unavailable transcript.
+Success means keys were sent, not that the prompt was admitted or delivered.
+Literal text and Enter are separate operations; concurrent callers have no
+atomic submission guarantee. When admission is uncertain, inspect the pane,
+`get` and the [protected transcript](usage.md#cursor-transcripts) without
+blindly resending. Minimum gateway version: see [Upgrade](install.md#upgrade).
+
 ## Manual input ownership
 
 Empty text (Enter only), `no_enter`, `key`, pane-hash sends and permission
-pane answers remain separate manual operations. They return an empty success
-object and make no transcript-confirmation claim. They serialize with ordinary
+pane answers remain separate manual operations. On success they return an empty
+object and make no transcript-confirmation claim. Cursor sends with Enter also
+check for [gateway refusal](#cursor-input-outcomes). They serialize with ordinary
 delivery. Manual `send-keys` can return `ErrSubmissionUnconfirmed`
 with `outcome: "not_started"`, `keys_sent: false` and
 `enter_may_have_been_sent: false` when exclusive input ownership is unavailable
@@ -928,12 +1001,8 @@ their owned values from a copy of saved `agent_args`, leaving the stored list in
 Values owned by model/mode options and prompt operands after `--` remain values or
 prompt text even when they spell a selector; no `-r` or `-c` alias is assumed.
 Normal input ordering and limits are in
-[Fresh Cursor use](usage.md#fresh-cursor-use). A successful `send-keys`
-means keys were sent, not that the gateway admitted a prompt. Literal text
-and Enter are separate operations; concurrent callers have no atomic
-submission guarantee. Inspect the pane and the
-[protected transcript](usage.md#cursor-transcripts) when admission or delivery
-is uncertain; do not blindly resend an uncertain submission.
+[Fresh Cursor use](usage.md#fresh-cursor-use); `send-keys` results and recovery
+are in [Cursor input outcomes](#cursor-input-outcomes).
 
 Only confirmed store writes establish durable input or exact tool-proof
 evidence. These records are not a recovery queue. A still-live accepted input
@@ -946,11 +1015,7 @@ completed transport write, provider execution and dialog proof are separate
 facts. Permanent storage failure, lost evidence or a lost completion wake can
 prevent progress; acceptance promises no unconditional completion.
 
-On an explicit capacity refusal, wait for capacity and explicitly submit the
-refused text again. Refused input is not queued for later execution and does
-not replace accepted work.
-
-During rotation, a provisional holding-capacity refusal likewise requires a
+During rotation, a provisional holding-capacity refusal requires a
 later explicit submission after capacity is available; refused text will not
 be delivered automatically. Wait for publication and remaining decision holds
 to resolve before expecting held input to be admitted. A rotation notice or
@@ -1471,9 +1536,10 @@ can last until `created_at` plus the configured relay window plus 2 s
 (24 h + 2 s at the default). A decided legacy request with `agent_gone`
 proof contributes no hold.
 
-On relay-off rows, agent-director does not guard `send-keys` against an open
-permission prompt: nothing is refused, and the keys reach the prompt, where
-they can answer it. Before sending, check that the row is not in
+On relay-off rows, the API does not guard `send-keys` against an open
+permission prompt: keys can reach the prompt and answer it. Cursor's gateway
+still checks prompt admission; see [Cursor input outcomes](#cursor-input-outcomes).
+Before sending, check that the row is not in
 `check_permission`, or have a person or an LLM read the pane and send with
 that read's `pane_sha256` as `--expect-pane-sha256`.
 
@@ -1488,8 +1554,10 @@ Nothing is sent. Its
 say it closed and since when, and the agent's other such requests. Keep
 the keys and retry later. If it is still held after some seconds, have a
 person or an LLM read the pane and, having looked, send with that read's
-`pane_sha256`: a matching hash passes this hold (every other refusal still
-applies), and a changed pane is `ErrPaneChanged`. Never pass
+`pane_sha256`: a matching hash passes the API's dialog hold, and a changed pane
+is `ErrPaneChanged`. Every other refusal still applies. On Cursor the gateway
+can still refuse the prompt with `gateway_refused`; follow
+[Cursor input outcomes](#cursor-input-outcomes). Never pass
 `--expect-pane-sha256` from an automatic flow.
 
 A Cursor row can stay `check_permission` across working reports while a

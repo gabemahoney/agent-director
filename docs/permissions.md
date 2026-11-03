@@ -1261,10 +1261,12 @@ Its description states those facts and that nothing was sent; it never
 says that a dialog is on screen.
 
 **The look-and-send path.** A plain `send-keys` whose
-`expect_pane_sha256` matches the pane as captured now is not held: the
-hash says that a person or an LLM judged this exact screen. A mismatch is
+`expect_pane_sha256` matches the pane as captured now passes the API's dialog
+hold: the hash says that a person or an LLM judged this exact screen. A mismatch is
 `ErrPaneChanged`, and every other refusal still applies (a relay hook
 that may still answer, a fallen-back request, the pane-answer rules).
+Cursor's gateway can still refuse a prompt; see
+[Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
 **Never pass the hash from an automatic flow:** a program that reads the
 pane and passes its hash without judging it lets through exactly the
 Enter the hold exists to stop.
@@ -1281,7 +1283,9 @@ is a reason to read the pane: its dialog may still be there.
 later. If it is still held after some seconds, have a person or an LLM
 read the pane: if a dialog waits, answer it with a plain `send-keys --key`
 and that read's `pane_sha256`; if not, send the held keys with that
-`pane_sha256`. A held `pause` is stopped as "`pause`" under "Send-keys
+`pane_sha256`. On Cursor, see
+[Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
+A held `pause` is stopped as "`pause`" under "Send-keys
 interaction" above says.
 
 ### Answering at the pane
@@ -1366,7 +1370,9 @@ types the text with no Enter (with neither text nor key it is
 `ErrInvalidFlags`), and `--key K` sends that one key alone, with no Enter
 and no text. `--expect-pane-sha256` is optional: given, the pane is
 compared as for a pane answer (`ErrPaneChanged`) before anything is typed,
-and a match passes the dialog hold (see "The dialog hold" above).
+and a match passes the API's dialog hold (see "The dialog hold" above).
+Cursor's gateway can still refuse with `gateway_refused`; see
+[Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
 `--as` without `--request-token` is `ErrInvalidFlags`.
 
 **Never pass `expect_pane_sha256` from an automatic flow.** The hash says
@@ -1442,7 +1448,9 @@ gone. Two ways close it:
 Follow [Permission relay](caller-contract.md#permission-relay) for polling,
 uncertain commits and fallback recovery, and
 [Answer a request at the pane](usage.md#answer-a-request-at-the-pane) for
-commands. `ErrAlreadyDecided` alone proves neither receipt nor dialog closure.
+commands. Cursor input holds follow
+[Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
+`ErrAlreadyDecided` alone proves neither receipt nor dialog closure.
 
 ### Known limitations
 

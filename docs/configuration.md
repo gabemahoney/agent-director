@@ -243,7 +243,7 @@ Whole integers, never below the safe minimum.
 | `stopping_window_seconds` | s | 90 | **30** | How long after an agent ends it counts as "still stopping, retry later". |
 | `pending_grace_seconds` | s | 60 or more | **30** or more | How long shared recovery skips a new launch's live-agent checks (an exact Cursor gateway loss is still judged), and how long its SessionStart hook waits for the launch to be recorded (at most 540 s). No maximum. |
 | `query_timeout_ms` | ms | 1500 | none | Each tmux lookup and pane listing. |
-| `action_timeout_ms` | ms | 2000 | none | Each tmux kill, key send and pane capture. |
+| `action_timeout_ms` | ms | 2000 | none | Each tmux kill, key send, pane capture and pane terminal read. |
 | `create_timeout_ms` | ms | 5000 | none | The tmux call that creates a session. |
 | `pipe_close_wait_ms` | ms | 100 | none | How long a tmux call waits for its output pipes after its process exits. |
 | `sweep_budget_seconds` | s | 15 | none | Total tmux time per `sweep`, `expire` or shared state-read check invocation; see [bounded recovery](caller-contract.md#bounded-recovery-on-state-reads). |

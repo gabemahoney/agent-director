@@ -125,7 +125,12 @@ relay_decide() { ad decide --instance-id "$id" --request-token "$1" --decision "
 relay_guard() {
  local before
  before=$(frames | jq -sc '[.[]|select(.method=="session/prompt")]|length')
- ad send-keys --instance-id "$id" --text 'held prompt must not arrive' >"$case_dir/held-out" 2>"$case_dir/held-error" || jq -e '.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' "$case_dir/held-error" >/dev/null
+ # b.bqd: a witnessed gateway refusal is an error; an unavailable or late verdict still permits transport success.
+ ad send-keys --instance-id "$id" --text 'held prompt must not arrive' >"$case_dir/held-out" 2>"$case_dir/held-error" || jq -e '
+  .err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen" or
+  (.err_name=="ErrSubmissionUnconfirmed" and .err_details.outcome=="gateway_refused" and
+   .err_details.keys_sent==true and .err_details.submission_confirmed==false)
+ ' "$case_dir/held-error" >/dev/null
  # Pause must refuse, independently of whether tmux accepted the ordinary keys.
  if ad pause --instance-id "$id" >"$case_dir/pause-out" 2>"$case_dir/pause-error"; then return 1; fi
  jq -e '.err_name=="ErrSpawnNotPausable" or .err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' "$case_dir/pause-error" >/dev/null

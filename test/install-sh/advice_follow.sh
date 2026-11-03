@@ -1744,7 +1744,7 @@ test_J7_GateReadFailedRerun() {
 
 # ---- J8: required tool missing ---------------------------------------------------
 
-# J8: "Install <tool> via your package manager ..." and friends: put the tool
+# J8 (b.ufx): "Install <tool> via your package manager ..." and friends: put the tool
 # on PATH and re-run the same command. Claude Code is no required tool: a PATH
 # without it is J27's "neither agent" refusal, with Codex or [launch] as ways
 # on.
@@ -1754,12 +1754,15 @@ test_J8_MissingToolProvideAndRerun() {
         h="$(new_home)"
         argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink)
         [[ "$tool" == curl ]] && argv=(bash "$LOOSE" --from-release "$REL_TAG" --no-hooks --no-symlink)
+        [[ "$tool" == awk ]] && argv=(bash "$LOOSE" --from-release "$REL_TAG" --sha256 "$BIN_SHA" --admin-sha256 "$ADMIN_SHA" --no-hooks --no-symlink)
         mv "$TOOLBOX/$tool" "$ROOT/aside/$tool"
         run "$h" "${argv[@]}"
         mv "$ROOT/aside/$tool" "$TOOLBOX/$tool"
         expect_rc 2 "$tool missing" || continue
-        expect_advice "required tool not found on PATH: $tool"
+        grep -qxF 'install.sh: required tools not found on PATH:' "$ERR" || bad "$tool: missing aggregate header"
+        grep -qxF "  $tool" "$ERR" || bad "$tool: missing tool entry"
         expect_advice "$want"
+        grep -qxF "  $want" "$ERR" || bad "$tool: advice is not an exact line"
         run "$h" "${argv[@]}"
         expect_rc 0 "re-run with $tool on PATH" || continue
         grep -qx "install.sh: pre-flight OK" "$OUT" || bad "$tool: no \"pre-flight OK\" after the re-run"
@@ -1770,7 +1773,42 @@ jq|Install jq via your package manager (we use it to safely edit settings.json).
 file|Install file via your package manager (apt install file / brew install file-formula / dnf install file). Required for the --binary architecture probe.
 sqlite3|Install sqlite3 via your package manager (apt install sqlite3 / brew install sqlite / dnf install sqlite). Required to read state.db's schema version for the migration flow.
 curl|--from-release downloads via curl; install it via your package manager.
+cp|Install cp from the coreutils package (apt/brew/dnf install coreutils; macOS supplies the standard utility).
+awk|Install an awk package (apt install mawk / brew install gawk / dnf install gawk).
+grep|Install grep via your package manager (apt/dnf install grep; macOS supplies it).
+sed|Install sed via your package manager (apt/dnf install sed; macOS supplies it).
+cmp|Install diffutils via your package manager (apt/dnf install diffutils; macOS supplies cmp).
+find|Install findutils via your package manager (apt/dnf install findutils; macOS supplies find).
 EOF
+}
+
+# J8 (b.ufx): either advertised SHA implementation is sufficient. Remove both,
+# then restore only the chosen command and verify both downloaded assets.
+test_J8_MissingChecksumProvideEitherAndRerun() {
+    local tool h argv
+    local want='Checksum verification needs either sha256sum (coreutils package) or shasum (Perl / libdigest-sha-perl package).'
+    for tool in sha256sum shasum; do
+        h="$(new_home)"
+        argv=(bash "$LOOSE" --from-release "$REL_TAG" --sha256 "$BIN_SHA" --admin-sha256 "$ADMIN_SHA" --no-hooks --no-symlink)
+        mv "$TOOLBOX/sha256sum" "$ROOT/aside/sha256sum"
+        mv "$TOOLBOX/shasum" "$ROOT/aside/shasum"
+        run "$h" "${argv[@]}"
+        expect_rc 2 "both checksum tools missing"
+        grep -qxF 'install.sh: required tools not found on PATH:' "$ERR" || bad "missing aggregate header"
+        grep -qxF '  sha256sum or shasum' "$ERR" || bad "missing checksum alternatives entry"
+        grep -qxF "  $want" "$ERR" || bad "checksum advice is not an exact line"
+        mv "$ROOT/aside/$tool" "$TOOLBOX/$tool"
+        run "$h" "${argv[@]}"
+        # Restore the other command even when the recovery assertions fail.
+        if [[ "$tool" == sha256sum ]]; then
+            mv "$ROOT/aside/shasum" "$TOOLBOX/shasum"
+        else
+            mv "$ROOT/aside/sha256sum" "$TOOLBOX/sha256sum"
+        fi
+        expect_rc 0 "re-run with only $tool on PATH" || continue
+        [[ "$(grep -cxE '  (sha256  |admin sha256): verified' "$OUT")" == 2 ]] || bad "$tool: both assets not verified: $(flat "$OUT")"
+        expect_installed "$h" "$BIN" "$ADMIN"
+    done
 }
 
 # ---- J9: agent-director and agent-director-admin stamps differ or carry no commit (b.vqr)

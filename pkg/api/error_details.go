@@ -170,8 +170,14 @@ type PaneKeySentDetails struct {
 }
 
 // SubmissionUnconfirmedDetails reports delivery or dispatch facts for native,
-// manual, permission-pane and pause input, refused or failed Codex fallback
-// paste, or pending Codex fallback input without a bounded hook-derived observation.
+// manual, permission-pane and pause input and its cleanup, refused or failed
+// Codex fallback paste, pending Claude fallback input refused before input
+// (not_started, cancellation included), pending Codex or Claude fallback input
+// without a bounded hook-derived observation, or a Cursor submission its
+// gateway refused. Outcome is not_started, partial_input_unconfirmed,
+// submission_unconfirmed or gateway_refused (KeysSent and EnterMayHaveBeenSent
+// true, Phase enter_attempted, Reason the gateway's recorded reason; nothing
+// reached Cursor), or empty for a failed hook observation.
 // RowState is the last raw state read, not a synthetic state or proof that the
 // prompt remains unsubmitted.
 type SubmissionUnconfirmedDetails struct {
@@ -192,16 +198,18 @@ type SubmissionUnconfirmedDetails struct {
 	// KeysSent means input was attempted and may have reached the pane.
 	KeysSent bool `json:"keys_sent"`
 
-	// SubmissionConfirmed is false: the applicable submission evidence is unavailable.
+	// SubmissionConfirmed is false: the applicable submission evidence is
+	// unavailable or, for gateway_refused, shows the gateway refused it.
 	SubmissionConfirmed bool `json:"submission_confirmed"`
 
 	// RowState is the last raw state read, not proof of submission or its absence.
 	RowState string `json:"row_state"`
 }
 
-// MarshalJSON preserves the three-field payload for a failed pending-Codex hook
-// observation when Outcome is empty. Nonempty native or Codex fallback outcomes
-// retain every required field, including zero bytes and false Enter.
+// MarshalJSON preserves the three-field payload for a failed pending Codex or
+// Claude hook observation when Outcome is empty. Nonempty native, fallback or
+// Cursor gateway outcomes retain every required field, including zero bytes
+// and false Enter.
 func (d SubmissionUnconfirmedDetails) MarshalJSON() ([]byte, error) {
 	if d.Outcome == "" {
 		return json.Marshal(struct {

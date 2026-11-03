@@ -37,6 +37,7 @@ type submissionRecord struct {
 		InputEpoch  *uint64         `json:"input_epoch"`
 		Count       uint64          `json:"count"`
 		Update      json.RawMessage `json:"update"`
+		TextSHA256  string          `json:"text_sha256"`
 	} `json:"data"`
 }
 

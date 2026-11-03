@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -323,22 +324,27 @@ func (r *sendKeysRun) stopDelivery(a *inputdelivery.Attempt, reason string) erro
 	return deliveryError(r.row, a, unresolvedOutcome(a), reason)
 }
 
-func (r *sendKeysRun) revalidateInput(id inputdelivery.Identity, paneID string, params SendKeysParams, end time.Time) error {
+// errInputDeadline is a validation phase reaching its original deadline.
+var errInputDeadline = errors.New("input validation deadline exhausted")
+
+// inputStore scopes one validation phase's row and relay reads and writes to
+// the call context and the phase's original deadline end, so a later check
+// never spends a fresh budget. It preserves decorators around the scoped
+// store, as the decide path does. Native readiness and drain and pending Claude
+// fallback's wait share it. The caller must call the returned cancel.
+func (r *sendKeysRun) inputStore(end time.Time) (SendKeysStore, context.CancelFunc, error) {
 	ctx := r.env.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if !r.j.now().Before(end) {
-		return fmt.Errorf("input validation deadline exhausted")
+		return nil, nil, errInputDeadline
 	}
 	ctx, cancel := context.WithDeadline(ctx, end)
-	defer cancel()
 	s := r.s
-	// Preserve decorators around the scoped store, as the decide path does.
-	// All row/relay reads and writes share the phase's original deadline.
 	if contextual, ok := s.(interface {
 		WithSendKeysContext(context.Context) SendKeysStore
 	}); ok {
@@ -346,29 +352,69 @@ func (r *sendKeysRun) revalidateInput(id inputdelivery.Identity, paneID string, 
 	} else if concrete, ok := s.(*store.Store); ok {
 		s = concrete.WithContext(ctx)
 	}
+	return s, cancel, nil
+}
+
+// revalidateInput is native input's check before every write and queue
+// sample: the captured input authority at entry and exit around the shared
+// row and pane checks, plus the native adapter's OS process evidence.
+func (r *sendKeysRun) revalidateInput(id inputdelivery.Identity, paneID string, params SendKeysParams, end time.Time) error {
+	s, cancel, err := r.inputStore(end)
+	if err != nil {
+		return err
+	}
+	defer cancel()
 	if err := checkInput(r.input); err != nil {
 		return fmt.Errorf("captured input authority is stale or unavailable")
 	}
 	remaining := end.Sub(r.j.now())
 	if remaining <= 0 {
-		return fmt.Errorf("input validation deadline exhausted")
+		return errInputDeadline
 	}
-	row, err := s.GetSpawnWithin(id.InstanceID, min(time.Second, remaining))
+	row, err := r.revalidateInputRow(s, id, min(time.Second, remaining))
 	if err != nil {
-		return fmt.Errorf("launch cannot be reread")
-	}
-	if row.LifeNumber != r.row.LifeNumber || row.Identity.Token != id.Token || row.Identity.Socket != id.Socket {
-		return fmt.Errorf("launch identity changed")
-	}
-	if row.State != store.StatePending && row.State != store.StateWaiting {
-		return fmt.Errorf("ordinary composer is not waiting (state=%s)", row.State)
-	}
-	if row.Identity.PaneID != "" && (row.Identity.PaneID != id.PaneID || row.Identity.PanePID != id.PID || row.Identity.PaneStarttime != id.Starttime) {
-		return fmt.Errorf("native process identity changed")
+		return err
 	}
 	if id.Starttime == "" || r.pc == nil || tmux.JudgeProcess(r.pc, tmux.ProcIdentity{PID: id.PID, Starttime: id.Starttime}) != tmux.ProcAlive {
 		return fmt.Errorf("native process ownership unavailable")
 	}
+	if err := r.revalidateInputPane(s, row, paneID, id.PID, params, end); err != nil {
+		return err
+	}
+	// tmux and relay reads can wait too. Do not spend a newer row/epoch after
+	// the check at entry merely because those resources became available.
+	return checkInput(r.input)
+}
+
+// revalidateInputRow is shared by native input and pending Claude fallback:
+// the same life, launch and pane must still have an ordinary composer. It
+// reads through s, the phase's scoped store (inputStore), and does not require
+// the native adapter's OS process evidence. A successful read returns the
+// observed row even when validation fails; only a failed read returns a zero
+// row, so callers can retain their previous observation.
+func (r *sendKeysRun) revalidateInputRow(s SendKeysStore, id inputdelivery.Identity, maxWait time.Duration) (Spawn, error) {
+	row, err := s.GetSpawnWithin(id.InstanceID, maxWait)
+	if err != nil {
+		return Spawn{}, fmt.Errorf("launch cannot be reread")
+	}
+	if row.LifeNumber != r.row.LifeNumber || row.Identity.Token != id.Token || row.Identity.Socket != id.Socket {
+		return row, fmt.Errorf("launch identity changed")
+	}
+	if row.State != store.StatePending && row.State != store.StateWaiting {
+		return row, fmt.Errorf("ordinary composer is not waiting (state=%s)", row.State)
+	}
+	if row.Identity.PaneID != "" && (row.Identity.PaneID != id.PaneID || row.Identity.PanePID != id.PID || row.Identity.PaneStarttime != id.Starttime) {
+		return row, fmt.Errorf("pane process identity changed")
+	}
+	return row, nil
+}
+
+// revalidateInputPane shares the tmux ownership and relay/dialog checks across
+// native input and pending Claude fallback. The caller supplies the launch
+// identity already selected for this send, including any adopted identity, the
+// phase's scoped store s and its deadline end, checked before the relay read
+// (errInputDeadline).
+func (r *sendKeysRun) revalidateInputPane(s SendKeysStore, row Spawn, paneID string, pid int, params SendKeysParams, end time.Time) error {
 	res := tmux.Lookup(r.t, r.pc, r.launchFor(row.Identity), row.TmuxSessionName)
 	if res.Verdict != tmux.Ours {
 		return fmt.Errorf("exact launch socket/label no longer verified")
@@ -377,19 +423,17 @@ func (r *sendKeysRun) revalidateInput(id inputdelivery.Identity, paneID string, 
 	if err != nil {
 		return fmt.Errorf("pane ownership query failed")
 	}
-	if _, ok := agentPane(panes, paneID, id.PID); !ok {
+	if _, ok := agentPane(panes, paneID, pid); !ok {
 		return fmt.Errorf("owned pane changed")
 	}
 	if !r.j.now().Before(end) {
-		return fmt.Errorf("input validation deadline exhausted")
+		return errInputDeadline
 	}
 	guard, err := evaluateRelayGuard(s, r.j, r.env.IntentHold, row, params)
 	if err != nil || guard.refusal != nil {
 		return fmt.Errorf("permission or dialog guard no longer permits ordinary input")
 	}
-	// tmux and relay reads can wait too. Do not spend a newer row/epoch after
-	// the check at entry merely because those resources became available.
-	return checkInput(r.input)
+	return nil
 }
 
 func (r *sendKeysRun) waitInputReady(id inputdelivery.Identity, paneID string, params SendKeysParams) error {
@@ -514,7 +558,11 @@ func (r *sendKeysRun) recordManualInput() error {
 	owned := r.row
 	owned.Identity = r.adoption.Identity
 	if err := recordManualDelivery(r.input, deliveryIdentity(owned, r.s.StoreID())); err != nil {
-		return deliveryNotStarted(r.row, err.Error())
+		row := r.row
+		if r.terminal != nil {
+			row.State = r.terminalState
+		}
+		return deliveryNotStarted(row, err.Error())
 	}
 	return nil
 }

@@ -6,8 +6,7 @@ package api_test
 // the current launch's own pane by id, the refusals with nothing sent, the
 // no-launch-identity refusals with no tmux call, a row change between the read
 // and the send, and a reuse's read-pane and allow_pending halves. send-keys
-// reads no clock on a pending row (the relay guard alone does, on
-// check_permission), so no case steps it.
+// now waits on raw mode, SessionStart and its settle for pending Claude (b.qcf).
 
 import (
 	"context"
@@ -57,6 +56,7 @@ func skpAssertAdoptedOnce(t *testing.T, before, after adoptionColumns, pane any)
 	}
 }
 
+// b.qcf: delivery without a turn hook is unconfirmed; adoption and targeting stay unchanged.
 // TestSendKeysPendingDelivered: a pending launch of a fresh spawn or a reuse
 // gets the text and Enter in its own pane by id; a lost reply's adoption is
 // written once, and a second send writes nothing more. For a reuse
@@ -112,23 +112,26 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 				r := tc.seed(t, e, k)
 				pane := pane(t, r, tc.lostReply)
 				cols, before := e.columns(t, r.ID), e.adoption(t, r.ID)
+				e.sessionStartsWhenPolled(t, r, func() { cols = e.columns(t, r.ID) })
 
-				if err := skpSend(e, r.ID); err != nil {
-					t.Fatalf("SendKeys: %v", err)
-				}
-				e.assertDelivered(t, r.Socket, pane, skpText)
+				assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StateWaiting)
+				e.assertDelivered(t, r.Socket, pane, skpText, 2)
 				if !tc.lostReply {
 					e.assertRowUnchanged(t, r.ID, cols)
 					return
 				}
 				after := e.adoption(t, r.ID)
-				skpAssertAdoptedOnce(t, before, after, pane)
+				// b.qcf: SessionStart adds one versioned write after adoption.
+				adopted := after
+				adopted.RowVersion--
+				skpAssertAdoptedOnce(t, before, adopted, pane)
 
 				e.rec.Reset()
 				if err := skpSend(e, r.ID); err != nil {
-					t.Fatalf("second SendKeys: %v", err)
-				}
+					t.Fatal(err)
+				} // Now waiting: the established route.
 				e.assertDelivered(t, r.Socket, pane, skpText)
+				e.assertRowUnchanged(t, r.ID, cols)
 				if again := e.adoption(t, r.ID); again != after {
 					t.Errorf("adoption after the second call = %+v; want no further write %+v", again, after)
 				}
@@ -262,9 +265,12 @@ func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 
 // TestSendKeysPendingRowChangesBeforeSend: on a fresh spawn's or a reuse's
 // pending launch, a gated SessionStart, or a versioned write on a lost reply
-// (the adoption then not applied), between the row read and the send still
-// sends to the same pane. R11B1 (t2.7tz.tb.ib) also covers the earlier empty
-// journal reconciliation window, before target discovery or admission.
+// (the adoption then not applied), between the row read and the send keeps
+// the same pane and launch identity. R11B1 (t2.7tz.tb.ib) also covers the
+// earlier empty journal reconciliation window, before target discovery or
+// admission. b.qcf: ordinary fallback text sends after SessionStart, and
+// SessionStart alone does not confirm submission; a row that never reports
+// in refuses not_started with nothing typed. Native delivery is unchanged.
 func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -316,13 +322,17 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 				}
 
 				result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-				if err != nil {
-					t.Fatalf("SendKeys: %v; details=%+v; calls=%+v", err, api.ErrDetails(err), e.rec.SocketCalls())
-				}
-				if tc.native {
+				switch {
+				case tc.native:
+					if err != nil {
+						t.Fatalf("SendKeys: %v; details=%+v; calls=%+v", err, api.ErrDetails(err), e.rec.SocketCalls())
+					}
 					assertOrdinaryWrites(t, e.killEnv, r, skpText)
-				} else {
-					e.assertDelivered(t, r.Socket, pane, skpText)
+				case tc.session:
+					assertSubmissionUnconfirmed(t, err, store.StateWaiting)
+					e.assertDelivered(t, r.Socket, pane, skpText, 2)
+				default:
+					e.assertSessionStartMissing(t, err)
 				}
 				if tc.native && (result.Outcome != "submitted" || result.SessionID != sessionID || result.RecordSHA256 != inputdelivery.Hash(raw)) {
 					t.Fatalf("native result=%+v; want exact post-Enter proof", result)
@@ -359,9 +369,104 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 	}
 }
 
+// TestSendKeysResumedPendingClaudeAdmission (b.x9o t2.7tz.5c.fd, MI F1): a
+// resumed Claude launch's first SessionStart may keep or rotate its saved
+// session id; after the wait, admission accepts either, the text and one Enter
+// are sent once and the hook check observes the turn, and the store archives a
+// rotated id to session history. A changed launch token, an agent pid other
+// than the adopted pane's, or cancellation at the admission read after the
+// wait is not_started with nothing typed and the last row state read.
+func TestSendKeysResumedPendingClaudeAdmission(t *testing.T) {
+	t.Parallel()
+	for _, change := range []string{"same session id", "rotated session id", "launch token", "agent pid", "cancelled"} {
+		t.Run(change, func(t *testing.T) {
+			t.Parallel()
+			e := newNativeSubmissionEnv(t)
+			e.env.Input = nil // the SQLite journal's real admission; no native capability
+			saved, cwd := "saved-"+uuid.NewString()[:8], t.TempDir()
+			r := e.seedRow(t, killRowSpec{State: store.StateEnded, SessionID: saved, CWD: cwd, NoSession: true,
+				Opts: []apitest.SpawnOption{apitest.WithJsonlPath(apitest.SeedJsonl(t, cwd, saved))}})
+			e.resumeWritesOnPane(t, r)
+			row, err := e.st.GetSpawn(r.ID)
+			if err != nil || row.State != store.StatePending || row.SessionID != saved || row.PID != 0 || row.ProcStarttime != "" {
+				t.Fatalf("resumed row = %+v, %v; want pending with the saved session id and no agent process", row, err)
+			}
+			r.Spawn, r.Token = row, row.Identity.Token
+			e.seedSession(t, &r) // the resumed launch's session, labelled with its new token
+			sessionID := saved
+			if change != "same session id" {
+				sessionID = "rotated-" + uuid.NewString()[:8]
+			}
+			e.sessionStartsWhenPolled(t, r, nil, sessionID)
+			e.turnStartsAfterEnter(t, r)
+			hookReads := 0
+			e.s.read = func(row api.Spawn) (api.Spawn, error) { hookReads++; return row, nil }
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			e.env.Context = ctx
+			admission := false
+			e.rec.AfterCall(tmux.CallListPanes, func(tmuxfix.SocketCall, error) {
+				// The wait's final ownership listing follows its second terminal read.
+				admission = admission || len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)) == 2
+			})
+			e.s.reread = func(row api.Spawn) (api.Spawn, error) {
+				if admission {
+					admission = false
+					switch change {
+					case "launch token":
+						row.Identity.Token = tmuxfix.OtherToken
+					case "agent pid":
+						row.PID = e.newPID()
+					case "cancelled":
+						cancel()
+					}
+				}
+				return row, nil
+			}
+
+			result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+
+			switch change {
+			case "same session id", "rotated session id":
+				if err != nil || result != (api.SendKeysResult{}) {
+					t.Fatalf("resumed send = %+v, %v; want fallback success", result, err)
+				}
+				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 2)
+				if hookReads != 1 {
+					t.Errorf("hook reads = %d; want the turn observed on the first", hookReads)
+				}
+				var want []store.SessionHistoryEntry
+				if change == "rotated session id" {
+					want = []store.SessionHistoryEntry{{SessionID: saved, JSONLPath: row.JSONLPath}}
+				}
+				got, err := e.st.ListSessionHistory(r.ID, row.LifeNumber)
+				if err != nil || len(got) != len(want) || len(want) == 1 && (got[0].SessionID != want[0].SessionID || got[0].JSONLPath != want[0].JSONLPath) {
+					t.Errorf("session history = %+v, %v; want %+v", got, err, want)
+				}
+			default:
+				reason := "input preparation changed launch or authority"
+				if change == "cancelled" {
+					reason = "the call was cancelled or reached its deadline before input; nothing was typed, so the same send-keys can be retried later"
+				}
+				want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StateWaiting, Reason: reason}
+				assertOneName(t, err, "ErrSubmissionUnconfirmed")
+				if got := api.ErrDetails(err); got != want {
+					t.Fatalf("refusal = %+v; want %+v", got, want)
+				}
+				e.assertNothingSent(t)
+				if hookReads != 0 {
+					t.Errorf("hook reads = %d; want none", hookReads)
+				}
+			}
+		})
+	}
+}
+
+// b.qcf: a liveness note does not confirm submission.
 // TestSendKeysNotedUnreportedRow (b.kdf, CSCB): a pending row find-missing noted unreported is still a pending row
-// to send-keys: refused without allow_pending (ErrSpawnNotInteractive, no tmux call), delivered into its own pane
-// with it; neither call changes the row or its note.
+// to send-keys: refused without allow_pending (ErrSpawnNotInteractive, no tmux call);
+// with it, ordinary text waits for SessionStart then refuses without input (b.qcf).
+// Neither call changes the row or its note.
 func TestSendKeysNotedUnreportedRow(t *testing.T) {
 	t.Parallel()
 	for _, allow := range []bool{false, true} {
@@ -375,10 +480,7 @@ func TestSendKeysNotedUnreportedRow(t *testing.T) {
 			_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: allow})
 
 			if allow {
-				if err != nil {
-					t.Fatalf("SendKeys: %v", err)
-				}
-				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+				e.assertSessionStartMissing(t, err)
 			} else {
 				assertOneName(t, err, "ErrSpawnNotInteractive")
 				e.assertNoTmuxCall(t)

@@ -21,7 +21,11 @@
   [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries).
 - For Claude Code: `claude` (Claude Code) 2.1.280 or later
   (<https://claude.com/claude-code>): its native binary, or a wrapper that
-  `exec`s it, not a shim that runs it as a child.
+  `exec`s it, not a shim that runs it as a child. Its `feedbackDrafts` user
+  setting, shown in `/config` as "Claude-drafted feedback", defaults to
+  "notify", which can put a feedback-draft menu in a driven agent's pane that
+  may stop agent-director's input reaching the agent; we suggest
+  setting it to "off".
 - For Codex: `codex` (Codex) 0.159.2 or later, the native Codex program, not a
   launcher that runs it as a child. Codex installed with npm puts a node
   launcher script on PATH: set `[launch] codex_path` to the native program
@@ -52,7 +56,25 @@
   `User=` has no `HOME`; run the script with `HOME` set to the user's home
   directory. (A `~/` path in `config.toml` is refused at load while `HOME` is
   unset or empty: see [configuration](configuration.md).)
-- `jq`, `sqlite3` and `file` on PATH (the installer checks for them).
+- Bash to run `install.sh`, and these commands on PATH in every install mode:
+  `jq`, `sqlite3`, `file`, `uname`, `basename`, `cat`, `chmod`, `cmp`, `cp`,
+  `date`, `dirname`, `find`, `grep`, `head`, `id`, `ln`, `mkdir`, `mktemp`,
+  `mv`, `od`, `readlink`, `rm`, `rmdir`, `sed`, `stat`, `tail` and `tr`,
+  in addition to `tmux` above.
+- `awk` unless `--no-hooks` is supplied; checksum verification also requires
+  it, even with `--no-hooks`.
+- With `--from-release`: `curl` and `sleep`. With `--sha256` and
+  `--admin-sha256`: either `sha256sum` or `shasum`.
+
+After validating arguments and the install path, the installer checks all
+required commands for the selected mode before running external commands,
+downloading files or changing the installation. If any are missing, it exits
+2 with one report listing all of them and package-install hints.
+
+`gh` is optional for release lookup and download fallback; `curl` remains
+required for release installs. `git`, `ps`, `lsof`, `pgrep`, `getent`, `dscl`,
+`crontab` and `systemctl` remain optional probes or alternatives. Scheduling
+keeps its [cron/systemd fallback and warnings](#schedule-the-sweeps).
 
 Native confirmed ordinary text delivery has narrower requirements: Linux, the exact
 agent versions above and a fresh supported launch. See
@@ -384,6 +406,12 @@ holds the old name of the arguments key is refused at spawn, naming
 **After the upgrade:**
 
 - Restart every `serve` and every caller, TypeScript clients included.
+- Cursor gateway refusal reporting requires both the caller and the running
+  gateway to be agent-director 0.17.2 or later. With a pre-0.17.2 gateway,
+  `send-keys` returns `{}` after the 2 s wait for refused text until the row is
+  relaunched (`kill` or `pause`, then `resume`). `pause` can itself be refused
+  while input is held; follow
+  [Cursor input outcomes](caller-contract.md#cursor-input-outcomes) for recovery.
 - A link `~/.agent-director` that points to `~/.config/agent-director` is allowed,
   for scripts that still name the old path.
 - Change by hand each entry that names the old path: a `claude mcp add`

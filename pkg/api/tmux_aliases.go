@@ -75,6 +75,9 @@ const (
 	// TmuxCallSetLabel is tmux.CallSetLabel: sets the session label by
 	// session id and the pane label by pane id, in one invocation.
 	TmuxCallSetLabel = tmux.CallSetLabel
+	// TmuxCallPaneTerminal is tmux.CallPaneTerminal: the read of a pane's
+	// terminal device by pane id (PaneTerminalTmux).
+	TmuxCallPaneTerminal = tmux.CallPaneTerminal
 )
 
 // The failure kinds a *TmuxCallError carries (SR-2.3, SR-2.5), re-declared
