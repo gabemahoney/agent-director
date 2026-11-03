@@ -518,7 +518,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		return nil
 	}
 	// A wake that await consumes never reaches the loop's select, so the loop
-	// takes another pass before it blocks or exits.
+	// takes another pass before it blocks; an intentional end exits at once.
 	awaitConsumedWake := false
 	// Slow persistence and hook completion run serially, but controls and the
 	// original cancellation deadline remain supervised while they finish.
@@ -1345,12 +1345,12 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				return err
 			}
 		}
-		if awaitConsumedWake {
-			// Nothing else wakes the select for it; an /exit keeps its record.
-			continue
-		}
 		if intentional {
 			break
+		}
+		if awaitConsumedWake {
+			// Nothing else wakes the select for it.
+			continue
 		}
 		select {
 		case childErr := <-p.done:

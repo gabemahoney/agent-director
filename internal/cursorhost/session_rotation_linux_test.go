@@ -484,18 +484,20 @@ func TestCursorUnclaimableInputRecordsKeepCapture(t *testing.T) {
 
 // Task t2.7tz.5c.8d, b.x9o: with no idle ticker, a control consumed by the
 // held-promotion record's await, after the loop's control handling, must still
-// be acted on before the controller blocks or exits. Either control is
-// recorded, and the loop, not shutdown, cancels the promoted input still queued
-// and retires the input still held; the interrupt then recovers idle instead
-// of timing out.
+// be acted on before the controller blocks. The interrupt is recorded, the
+// loop, not shutdown, cancels the promoted input still queued and retires the
+// input still held, and the gateway recovers idle instead of timing out.
+// Task t2.7tz.5c.at: /exit there ends at once as on main 443474a9, without
+// recording its control, and shutdown disposes of both inputs after the end.
 func TestCursorControlDuringHeldPromotionIsActedOn(t *testing.T) {
 	// Serial: protected runtime and reporter subprocess use process environment.
 	for _, tc := range []struct {
-		control, keys string
-		want          []string
+		control, keys            string
+		want                     []string
+		queuedReason, heldReason string
 	}{
-		{"interrupt", "\x03", []string{"rotation", "interrupt", "exit"}},
-		{"exit", "\x15/exit\r", []string{"rotation", "exit"}},
+		{"interrupt", "\x03", []string{"rotation", "interrupt", "exit"}, "interruption or shutdown", "control retired provisional input"},
+		{"exit", "\x15/exit\r", []string{"rotation"}, "gateway stopped", "rotation stopped; neither conversation admitted this input"},
 	} {
 		t.Run(tc.control, func(t *testing.T) {
 			barrier, opener := newMatchingRecordBarrier(t, "submission_accepted", func(raw []byte) bool {
@@ -549,21 +551,32 @@ func TestCursorControlDuringHeldPromotionIsActedOn(t *testing.T) {
 			held := map[string]string{}
 			var refused []submissionRecord
 			cancelled := map[string]string{}
+			ended := false
+			// The interrupt's loop disposes after its control record; /exit's
+			// shutdown disposes only after the intentional end.
+			disposed := func() bool {
+				if tc.control == "exit" {
+					return ended
+				}
+				return len(controls) >= 2
+			}
 			for _, r := range c.records(t) {
 				switch r.Kind {
 				case "input_control":
 					controls = append(controls, r.Data.Control)
+				case "session_end":
+					ended = true
 				case "input_held":
 					held[r.Data.Text] = r.Data.ID
 				case "held_input_refused":
-					if len(controls) < 2 {
-						t.Fatalf("held input refused before its control was recorded: %+v", r)
+					if !disposed() {
+						t.Fatalf("held input refused before its %s owner acted: %+v", tc.control, r)
 					}
 					refused = append(refused, r)
 				case "submission_cancelled":
 					// submit itself cancels the first before the control is recorded.
-					if r.Data.ID == held["queued-second"] && len(controls) < 2 {
-						t.Fatalf("queued input cancelled before its control was recorded: %+v", r)
+					if r.Data.ID == held["queued-second"] && !disposed() {
+						t.Fatalf("queued input cancelled before its %s owner acted: %+v", tc.control, r)
 					}
 					cancelled[r.Data.ID] = r.Data.Reason
 				}
@@ -571,11 +584,11 @@ func TestCursorControlDuringHeldPromotionIsActedOn(t *testing.T) {
 			if !reflect.DeepEqual(controls, tc.want) {
 				t.Fatalf("input_control records = %q; want %q", controls, tc.want)
 			}
-			if got := cancelled[held["queued-second"]]; got != "interruption or shutdown" {
-				t.Fatalf("queued input cancellation = %q (all %v); want the loop's %q", got, cancelled, "interruption or shutdown")
+			if got := cancelled[held["queued-second"]]; got != tc.queuedReason {
+				t.Fatalf("queued input cancellation = %q (all %v); want %q", got, cancelled, tc.queuedReason)
 			}
-			if len(refused) != 1 || refused[0].Data.ID != held["still-held"] || refused[0].Data.Reason != "control retired provisional input" {
-				t.Fatalf("held_input_refused = %+v; want the loop to retire %q", refused, held["still-held"])
+			if len(refused) != 1 || refused[0].Data.ID != held["still-held"] || refused[0].Data.Reason != tc.heldReason {
+				t.Fatalf("held_input_refused = %+v; want %q retired with %q", refused, held["still-held"], tc.heldReason)
 			}
 			for _, text := range []string{"promoted-first", "queued-second", "still-held"} {
 				rotationNoBytes(t, c, text)
