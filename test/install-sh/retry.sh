@@ -416,9 +416,11 @@ locking_sqlite3() {
             "$(type -P sqlite3)" "$(type -P sleep)" "$1" "$ROOT/locks.log"
         cat <<'EOF'
 [[ "${!#}" == 'PRAGMA user_version;' ]] || exec "$SQLITE" "$@"
-# This seam holds the original for the two runtime version reads. Preflight
-# snapshot locking is exercised by the real held-writer move/store tests.
-for arg; do [[ "$arg" == -readonly ]] && exec "$SQLITE" "$@"; done
+# This seam holds the original for the two runtime version reads only. The
+# pre-flight read opens its private snapshot copy, named by its path (read-write,
+# b.x9o F1); snapshot locking is exercised by the real held-writer move/store
+# tests. b.zsj's -readonly move-time reads of the original pass through too.
+for arg; do [[ "$arg" == -readonly || "$arg" == */agent-director.read.*/state.db ]] && exec "$SQLITE" "$@"; done
 mark="$LOG.$$" lock=held
 ( { printf 'PRAGMA locking_mode=EXCLUSIVE;\nBEGIN EXCLUSIVE;\nSELECT 1;\n.system touch %s\n' "$mark"; "$SLEEP" 1; echo 'COMMIT;'; } \
     | "$SQLITE" -bail "$DB" >/dev/null 2>&1 ) &

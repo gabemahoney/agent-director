@@ -364,14 +364,14 @@ cat >"$SQLITE_SHIM" <<EOF
 # J24 names the live-row SELECT, independently of version/authority reads.
 if [[ "\${!#}" != *"\${FAKE_SQLITE3_MATCH:-user_version}"* ]]; then exec "$SQLITE" "\$@"; fi
 # Runtime version faults must reach the actual before/after-open connection,
-# while the gate case explicitly selects its private readonly query.
+# while the gate case explicitly selects its private snapshot query, named by
+# the copy's path (opened read-write, b.x9o F1). b.zsj's -readonly move-time
+# reads of the original are in neither phase.
 if [[ "\${FAKE_SQLITE3_MATCH:-user_version}" == user_version ]]; then
-    readonly=0
-    for arg in "\$@"; do [[ "\$arg" == -readonly ]] && readonly=1; done
-    if [[ "\$readonly" == 1 && "\${FAKE_SQLITE3_PHASE:-runtime}" != preflight ]] ||
-       [[ "\$readonly" == 0 && "\${FAKE_SQLITE3_PHASE:-runtime}" == preflight ]]; then
-        exec "$SQLITE" "\$@"
-    fi
+    phase=runtime
+    for arg in "\$@"; do [[ "\$arg" == -readonly ]] && phase=original; done
+    for arg in "\$@"; do [[ "\$arg" == */agent-director.read.*/state.db ]] && phase=preflight; done
+    [[ "\$phase" == "\${FAKE_SQLITE3_PHASE:-runtime}" ]] || exec "$SQLITE" "\$@"
 fi
 n=\$(( \$(cat "\$FAKE_SQLITE3_COUNT" 2>/dev/null || echo 0) + 1 ))
 echo "\$n" >"\$FAKE_SQLITE3_COUNT"

@@ -174,8 +174,9 @@ func TestMoveConflictRefusals(t *testing.T) {
 			setup: bothPresent(func(t *testing.T, h *moveHome) {
 				h.WriteStore(filepath.Join(h.New, "state.db"))
 			}),
-			// The snapshot's read-only read leaves an empty -wal, which counts for
-			// the store's last change, so the times are set after it.
+			// h.Snapshot's own sqlite3 -readonly read of the new store leaves an
+			// empty -wal, which counts for the store's last change, so the times
+			// are set after it.
 			hold: func(t *testing.T, h *moveHome) {
 				for _, f := range []string{"state.db", "state.db-wal"} {
 					if _, err := os.Lstat(filepath.Join(h.New, f)); err == nil {

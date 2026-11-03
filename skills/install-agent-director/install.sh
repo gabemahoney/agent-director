@@ -2994,7 +2994,8 @@ fi
 #
 # The version is read through a private locked snapshot (ad_readonly_query),
 # including committed WAL frames. Even sqlite3 -readonly can create source
-# WAL/SHM files, so no preflight SQLite connection opens the original. The
+# WAL/SHM files, so no preflight SQLite connection opens the original; only
+# the private copy is opened, read-write (ad_readonly_query says why). The
 # candidate binaries are resolved and validated first to provide the snapshot
 # helper, with the configured busy timeout. A store whose version cannot be
 # read stops the install here, with exit 5 and ErrVersionUnreadable, before
@@ -3002,9 +3003,11 @@ fi
 # --------------------------------------------------------------------
 
 # ad_user_version <db> [readonly] — print the DB's user_version, read through
-# the WAL, and exit with sqlite3's status. With "readonly" the read is
-# sqlite3 -readonly on a locked private snapshot (the agent-rename gate's:
-# the source remains untouched, as SR-11.7 requires while the move is due).
+# the WAL, and exit with sqlite3's status. With "readonly" the read goes
+# through ad_readonly_query, on a locked private snapshot (the agent-rename
+# gate's): "readonly" names what happens to <db>, which is only read, and
+# never by SQLite, so it remains untouched, as SR-11.7 requires while the
+# move is due.
 # sqlite3's stderr, or a snapshot failure,
 # is printed with its stdout, so the caller holds the whole read in one
 # variable and its status in another, with no file:
@@ -3029,9 +3032,27 @@ fi
 # output (b.hk7). -batch: with a terminal on stdin, -init makes sqlite3
 # print "-- Loading resources from /dev/null" to stderr, which would join
 # the read's output and make it no version.
-# ad_readonly_query <db> <SQL> [sqlite3 options...] — SQLite reads only a
-# private, lock-protected DB/WAL snapshot. No SQLite connection opens the
-# original, including the user_version and table-info preflight reads.
+# ad_readonly_query <db> <SQL> [sqlite3 options...] — run <SQL> on a
+# private, lock-protected DB/WAL snapshot of <db>. "readonly" names what
+# happens to <db>: it is only read, and never by SQLite. No SQLite connection
+# opens it, including the user_version, table-info and live-rows preflight
+# reads; snapshot-store reads it only through O_RDONLY descriptors under
+# read locks, copying state.db and any -wal (mode 0600; -shm and -journal
+# are never copied) into a private 0700 directory.
+#
+# The copy is opened through a read-write connection: a WAL-mode store's
+# snapshot has no -shm. With no -wal either, Apple's sqlite3 3.51.0 cannot
+# open it read-only (error 14), as ad_move_backup_store's comment explains
+# for its own copy (b.up4); with a copied -wal the same failure is likely
+# but unconfirmed, so every snapshot read uses the read-write connection.
+# Only the copy is touched:
+#   - the connection opens a copied -wal, creates only the -shm and any -wal
+#     that is absent, and writes any checkpoint, all inside the private
+#     directory, which the EXIT trap removes;
+#   - committed WAL frames in the copied -wal stay visible;
+#   - the copy never has a rollback journal (snapshot-store refuses a hot
+#     one and never copies one), so a read-write open cannot run journal
+#     recovery.
 # The admin source is resolved and validated before entering command
 # substitutions; no new system utility or installed helper is required.
 ad_readonly_query() (
@@ -3045,7 +3066,7 @@ ad_readonly_query() (
         printf '%s\n' "$snapshot_err"
         return "$rc"
     fi
-    sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$@" "$tmpd/state.db" "$sql" 2>&1
+    sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$@" "$tmpd/state.db" "$sql" 2>&1
 )
 
 ad_user_version() {
@@ -3448,8 +3469,8 @@ ad_refuse_no_agent
 # It then stops (exit 5, ErrAgentsLive), changing nothing, while the old
 # store holds a row in a live state (pending, waiting, working,
 # check_permission, ask_user) or a process runs the old bin/agent-director.
-# The rows are read with sqlite3 -readonly on a locked private snapshot,
-# waiting the store's busy timeout;
+# The rows are read on a locked private snapshot (ad_readonly_query: no
+# SQLite connection opens the original), waiting the store's busy timeout;
 # a read that fails stops the install the same way, saying so. A process
 # counts on Linux when its /proc/<pid>/exe, any " (deleted)" suffix dropped,
 # is the old binary's resolved path; on macOS when its executable path

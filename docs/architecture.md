@@ -11621,6 +11621,13 @@ dependency, and does not alter the original files, sidecars or directory.
 
 `ad_readonly_query` is the single preflight path for version, table-info and
 live-row SQL, passing the resolved DB and configured busy timeout to that helper.
+It opens the copy read-write, since the copy never has a `-shm`: a read-only
+connection on Apple's `sqlite3` 3.51.0 cannot open it with no `-wal` either
+([Moving agent-director's directory](#moving-agent-directors-directory) step 5),
+and likely not with a copied one. The connection's sidecars stay in the private
+directory, the copy has no rollback journal to recover, and the original stays
+untouched.
+
 Operational reads after installation remain distinct. `ad_user_version`,
 `ad_got_version` and the shared unreadable-version reporters retain whole-number
 and status validation. A missing file alone means a fresh install; an unreadable

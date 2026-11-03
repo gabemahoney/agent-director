@@ -4,7 +4,9 @@ package installsh_test
 // to ~/.config/agent-director and keeps the original, what it does to the path
 // keys and other references, a copy that fails (a file it cannot copy, a full
 // disk, a signal), recovery from the marker a failed move leaves, and a re-run.
-// What happens before the move is move_preflight_test.go's.
+// What happens before the move is move_preflight_test.go's. It also holds the
+// Apple sqlite3 stand-in (moveAppleSQLite) and the ordinary upgrades run under
+// it (b.x9o F1).
 
 import (
 	"crypto/sha256"
@@ -200,8 +202,8 @@ func moveRichOld(t *testing.T, h *moveHome, opts ...moveOldOpt) {
 	h.Link(filepath.Join(h.Home, "elsewhere", "note"), filepath.Join(h.Old, "note-link"))
 }
 
-// moveAppleSQLite is a WrapTool preamble for Apple's sqlite3 3.51.0 (b.up4): a
-// -readonly open of a WAL-mode file with no -wal and no -shm fails with error 14.
+// moveAppleSQLite: Apple sqlite3 3.51.0 (b.up4, b.x9o F1) fails a -readonly open
+// of a WAL-mode file with no -shm, with or without -wal, with error 14.
 const moveAppleSQLite = `ro= db=
 for ((i = 1; i <= $#; i++)); do
     case "${!i}" in
@@ -213,7 +215,7 @@ for ((i = 1; i <= $#; i++)); do
 done
 hex() { od -An -tx1 -j "$1" -N "$2" "$db" | tr -d ' \n'; }
 if [[ -n "$ro" && -f "$db" && "$(hex 0 16)" == 53514c69746520666f726d6174203300 &&
-    ( "$(hex 18 1)" == 02 || "$(hex 19 1)" == 02 ) && ! -e "$db-wal" && ! -e "$db-shm" ]]; then
+    ( "$(hex 18 1)" == 02 || "$(hex 19 1)" == 02 ) && ! -e "$db-shm" ]]; then
     echo 'Error: in prepare, unable to open database file (14)' >&2
     exit 1
 fi`
@@ -227,8 +229,10 @@ func TestMoveSuccessful(t *testing.T) {
 	}{
 		{name: "plain"},
 		{name: "keep-prior", args: []string{"--keep-prior"}, prior: true},
-		// b.up4: SQLite's backup of a WAL-mode store is a WAL-mode copy with no
-		// -wal and no -shm, which Apple's sqlite3 cannot open read-only.
+		// b.up4, b.x9o F1: SQLite's backup of a WAL-mode store (no -wal) and
+		// the pre-flight snapshot of one with -wal pages (-wal only) have no
+		// -shm, which Apple's sqlite3 cannot open read-only. The original keeps
+		// both, which b.zsj's -readonly move-time reads of it need.
 		{name: "apple-sqlite3", sqlite3: moveAppleSQLite},
 	}
 	for _, row := range rows {
@@ -238,6 +242,11 @@ func TestMoveSuccessful(t *testing.T) {
 				h.WrapTool("sqlite3", row.sqlite3)
 			}
 			moveRichOld(t, h)
+			// b.x9o F1: BuildOld has checked the -wal pages; the stand-in's case
+			// also needs the -shm its killed writer leaves.
+			if _, err := os.Stat(filepath.Join(h.Old, "state.db-shm")); row.sqlite3 != "" && err != nil {
+				t.Fatalf("the old store has no -shm: %v", err)
+			}
 			before := h.Snapshot()
 			res := moveMustInstall(t, h, row.args...)
 
@@ -277,6 +286,56 @@ func TestMoveSuccessful(t *testing.T) {
 				t.Errorf("user_version: new store %s, kept store %s, current schema %s; want new = current != kept", newV, keptV, current)
 			}
 			moveListHas(t, h, "ended-1", "ended-2", "missing-1", "ended-3")
+		})
+	}
+}
+
+// TestAppleSQLiteUpgrade (b.x9o F1): under moveAppleSQLite, an ordinary
+// current-layout upgrade succeeds over a WAL store closed cleanly (its
+// pre-flight snapshot has no -wal) and over one whose killed writer left -wal
+// pages and an -shm (its snapshot has the -wal only). The due move is
+// TestMoveSuccessful/apple-sqlite3.
+func TestAppleSQLiteUpgrade(t *testing.T) {
+	const walRow = "SELECT count(*) FROM spawns WHERE instance_id='wal-only';"
+	for _, wal := range []bool{false, true} {
+		name := "clean-close"
+		if wal {
+			name = "unflushed-wal"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newMoveHome(t)
+			db := filepath.Join(h.New, "state.db")
+			h.migLay(h.New, migStoreAt, migNewConfig)
+			h.Sqlite(db, "PRAGMA user_version;") // a last close leaves no -wal or -shm
+			if wal {
+				h.HoldSQLite(db, "PRAGMA wal_autocheckpoint=0;\nINSERT INTO spawns (instance_id, state, cwd, tmux_session_name, relay_mode, agent) "+
+					"VALUES ('wal-only', 'ended', '/work/wal', 'ad-wal-only', 'off', 'claude');").Kill()
+				mainOnly := filepath.Join(h.Root, "main-only.db")
+				h.Copy(db, mainOnly, 0o600)
+				if got := h.Sqlite(mainOnly, walRow, "-readonly"); got != "0\n" {
+					t.Fatalf("the row is not -wal only: the main file alone has %q", got)
+				}
+			}
+			if b, err := os.ReadFile(db); err != nil || len(b) < 20 || b[18] != 2 || b[19] != 2 {
+				t.Fatalf("the store has no WAL-mode header: %v", err)
+			}
+			for _, sidecar := range []string{"-wal", "-shm"} {
+				fi, err := os.Stat(db + sidecar)
+				if exists := err == nil; exists != wal || (wal && fi.Size() == 0) {
+					t.Fatalf("state.db%s exists = %v, want %v (and not empty)", sidecar, exists, wal)
+				}
+			}
+			h.WrapTool("sqlite3", moveAppleSQLite)
+			moveMustInstall(t, h)
+			if v, current := h.migStoreVersion(db), moveCurrentVersion(t, h); v != current {
+				t.Errorf("installed store version %s; want current %s", v, current)
+			}
+			if wal {
+				// The upgrade's no-lost-rows promise: the -wal's row is kept.
+				if got := h.Sqlite(db, walRow, "-readonly"); got != "1\n" {
+					t.Errorf("the -wal's row after the upgrade: count %q, want 1", got)
+				}
+			}
 		})
 	}
 }
