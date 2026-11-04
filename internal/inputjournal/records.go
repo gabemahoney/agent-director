@@ -15,7 +15,10 @@ import (
 	"unicode/utf8"
 )
 
-// ChunkBytes is the maximum UTF-8 write segment retained by proof matching.
+// ChunkBytes is the maximum UTF-8 write segment retained by proof matching, and
+// the most bytes one write of ordinary text carries: native delivery's chunks
+// (Chunks) and, through Split, macOS paced Claude typing's pieces (b.vr5),
+// which the Mac check validated at 512 bytes only.
 const ChunkBytes = 512
 
 var hexID = regexp.MustCompile(`^[0-9a-f]{16}$`)
@@ -85,8 +88,9 @@ func NewAttempt(id Identity, text string, watermark map[string]Watermark) (*Atte
 // Hash returns the SHA-256 of exact evidence bytes.
 func Hash(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 
-// Chunks rejects terminal controls and command modes before any bytes are sent.
-// LF is preserved, CR is removed by the API before this validation.
+// Chunks rejects terminal controls and command modes before any bytes are sent,
+// then splits text as Split does. LF is preserved, CR is removed by the API
+// before this validation.
 func Chunks(text string) ([]string, error) {
 	if !utf8.ValidString(text) {
 		return nil, fmt.Errorf("ordinary text must be valid UTF-8")
@@ -100,14 +104,26 @@ func Chunks(text string) ([]string, error) {
 			return nil, fmt.Errorf("unsupported ordinary-text control character")
 		}
 	}
-	var chunks []string
+	return Split(text), nil
+}
+
+// Split cuts text into pieces of at most ChunkBytes bytes. Each cut falls
+// before a UTF-8 rune start, searching back from ChunkBytes; with none found
+// (text that is not UTF-8) the cut is at ChunkBytes, so every piece advances
+// and the pieces join to text. It is the one splitter of ordinary text into
+// writes: use it for every such split, and never write another.
+func Split(text string) []string {
+	var pieces []string
 	for len(text) > 0 {
 		n := min(ChunkBytes, len(text))
-		for n < len(text) && !utf8.RuneStart(text[n]) {
+		for n > 0 && n < len(text) && !utf8.RuneStart(text[n]) {
 			n--
 		}
-		chunks = append(chunks, text[:n])
+		if n == 0 {
+			n = min(ChunkBytes, len(text))
+		}
+		pieces = append(pieces, text[:n])
 		text = text[n:]
 	}
-	return chunks, nil
+	return pieces
 }

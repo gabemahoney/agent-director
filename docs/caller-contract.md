@@ -636,6 +636,34 @@ Missing hooks can leave submission unknown even when input reached the agent.
 Other fallback success returns `{}` without this hook confirmation; Cursor's
 verdict is described below.
 
+On macOS, Claude fallback text longer than 512 bytes after CR removal is typed
+in pieces of at most 512 bytes, each followed by a 100 ms pause, with Enter
+500 ms after the last pause. This includes `no_enter`, `expect_pane_sha256`
+and `pending` sends (after the wait above); shorter text, keys, pane answers
+and Enter-only sends are typed in one call. The pauses add about 0.1 s per
+512 bytes plus 0.5 s before the Enter, about 7 s at the 32 KiB limit, on top
+of any readiness wait and hook observation; set the client timeout to match.
+Text over 32 KiB returns `ErrSubmissionUnconfirmed` with
+`outcome: "not_started"`, `phase: "pre_input"` and `keys_sent: false`, before
+any input: put the prompt in a file the agent can read and send a short
+instruction naming that file. Send text over 512 bytes to one row one call at
+a time, because the pieces of concurrent calls can interleave in its input.
+
+Before each piece after the first, `no_enter` included, and before that Enter,
+the call rereads the row and reruns the state, permission-relay and dialog
+guards. It stops there, typing nothing more and sending no Enter, when the
+launch changed, the row cannot be read, a guard refuses, or the row moved into
+`check_permission` or `ask_user` during the call; a send that began in one of
+those states is not stopped for that alone. A stop, a timed-out first piece or
+a failed later piece returns `ErrSubmissionUnconfirmed` with
+`outcome: "partial_input_unconfirmed"`, `phase: "text_attempted"`,
+`keys_sent: true` and `enter_may_have_been_sent: false`. `bytes_attempted`
+counts the pieces attempted: a failed piece counts, the piece a stop skipped
+does not. `row_state` is the stopping reread's state, or the state the call
+observed before typing when that reread or a piece failed. Part or all of the
+text may be in the input, unsubmitted: read the pane before any further input,
+and never resend the text.
+
 Codex fallback accepts literal TAB and LF inside the paste. Codex may trim
 trailing whitespace, including TAB, before submission. It refuses invalid
 UTF-8, other control characters after CR removal (including ESC, NUL and C1),
@@ -688,9 +716,9 @@ request discovers late proof for its predecessor,
 it reports `not_started`; re-issue the new request only after the predecessor
 has settled.
 
-Native delivery, Claude fallback refusals before input, Codex fallback refusals
-or paste-transport failures, and Cursor gateway refusals use these
-`ErrSubmissionUnconfirmed` details:
+Native delivery, Claude fallback refusals before input, macOS paced Claude
+typing, Codex fallback refusals or paste-transport failures, and Cursor gateway
+refusals use these `ErrSubmissionUnconfirmed` details:
 
 | Field | Meaning |
 |---|---|
@@ -781,6 +809,9 @@ bounded hook observation can instead return `ErrSubmissionUnconfirmed` with
 native `outcome`. Check hook-derived `get` or `status` without resending text
 or Enter. If submission remains unknown, use
 [Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
+
+On macOS, Claude `no_enter` and pane-hash text sends take the paced typing,
+size limit and outcomes in [Ordinary text submission](#ordinary-text-submission).
 
 Manual input, including `pause`, changes the native composer contract and prevents
 further new native delivery on that launch. A pane without native capability

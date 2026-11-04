@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+// ChunkBytes forwards inputjournal.ChunkBytes, the most bytes one write carries.
 const ChunkBytes = inputjournal.ChunkBytes
 
 // Session is held exclusively across automatic and manual AD writers. A crash
@@ -258,6 +259,25 @@ func (s *nativeSession) Check() error {
 	guard.Manual = true // read admission; ordinary issue also checks waiting state
 	return s.store.CheckInputGuard(s.ctx, s.launch, guard)
 }
+
+// CheckIdentity rechecks only the captured launch record, launch and life,
+// session, and process and pane identity, for an in-flight paced send whose
+// admission (with its epoch, version and state guard) already ran before the
+// first write. It sets ProofOnly on its own guard copy only because inputOwner
+// returns after exactly those identity checks for that flag; it grants no
+// proof-only save authority (it never reaches save), and s.guard is unchanged.
+func (s *nativeSession) CheckIdentity() error {
+	if s.failed != nil {
+		return s.failed
+	}
+	if err := s.ctx.Err(); err != nil {
+		return err
+	}
+	guard := s.guard
+	guard.Manual, guard.ProofOnly = true, true
+	return s.store.CheckInputGuard(s.ctx, s.launch, guard)
+}
+
 func (s *nativeSession) Load() (*Attempt, error) {
 	if s.failed != nil {
 		return nil, s.failed
@@ -339,3 +359,6 @@ func Hash(data []byte) string { return inputjournal.Hash(data) }
 
 // Chunks validates and splits ordinary input using the persisted proof contract.
 func Chunks(text string) ([]string, error) { return inputjournal.Chunks(text) }
+
+// Split forwards inputjournal.Split, the one splitter of ordinary text into writes.
+func Split(text string) []string { return inputjournal.Split(text) }

@@ -19,10 +19,11 @@ import (
 // paneInput is the agent pane's input box as send-keys' and pause's keys
 // calls leave it, as Claude Code's prompt input behaves (b.fji, b.9o4): a
 // text call types its text, C-u deletes to the start of the line, Enter
-// submits the box (an empty box submits nothing). box is what is typed and
-// not submitted, submitted the submissions in order. A failed call reached
-// the pane only when it timed out and timeoutsReach is set; onSubmit, when
-// set, runs on each submission.
+// submits the box (an empty box submits nothing): the named Enter key, as
+// send-keys, pause and paced Claude typing (b.vr5) send it. box is what is
+// typed and not submitted, submitted the submissions in order. A failed call
+// reached the pane only when it timed out and timeoutsReach is set; onSubmit,
+// when set, runs on each submission.
 type paneInput struct {
 	timeoutsReach bool
 	box           string

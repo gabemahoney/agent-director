@@ -274,8 +274,8 @@ environment `TestMain` sets and changes none of it.
 - checks the trail by fixed row ids that other tests also use, such as the
   find-missing tests' literal row ids.
 - changes other process-wide state: `api.SetPauseTestKnobs` (through
-  `fastPausePolls` or `endAtFirstWait`), `log.SetOutput`, or the working
-  directory (`cwdfix.Temp`).
+  `fastPausePolls` or `endAtFirstWait`), `api.SetClaudePacedTypingForTest`,
+  `log.SetOutput`, or the working directory (`cwdfix.Temp`).
 - removes the default socket's directory, changes its mode, or uses
   `test/fake-tmux`, which keeps its table beside the socket. Such a test takes
   its own `TMUX_TMPDIR` before seeding, with `e.ownSocketDir(t)` on the kill
@@ -302,8 +302,9 @@ and change the copy; otherwise `-race` reports a data race.
 
 **What `TestMain` sets.** `HOME` (fixing the trail file), `TMUX` unset,
 `AGENT_DIRECTOR_INSTANCE_ID` unset, and one `TMUX_TMPDIR` for the whole test
-binary (`apiTmuxTmpdir`, with its per-user socket directory at mode 0700).
-`newKillEnv` and `newResumeEnv` use these values and set nothing, so their
+binary (`apiTmuxTmpdir`, with its per-user socket directory at mode 0700). It
+also turns macOS paced Claude typing off, so the tests behave on a Mac as on
+Linux. `newKillEnv` and `newResumeEnv` use these values and set nothing, so their
 tests can run in parallel. A fixture that needs one of these values in place
 uses `setenvIfChanged` or `unsetenvIfSet`. They call `t.Setenv` only when the
 current value differs, which happens only in a test that is already serial.

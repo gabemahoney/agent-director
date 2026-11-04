@@ -199,12 +199,13 @@ func sqliteGuard(row api.Spawn, storeID string) inputdelivery.Guard {
 // sqliteDeliveryBackend must be reused for SQLite-backed native tests; it keeps
 // real admission and persistence while exposing optional I/O and fault seams.
 type sqliteDeliveryBackend struct {
-	e           *nativeSubmissionEnv
-	ctx         context.Context
-	afterSave   func(*api.InputDeliveryAttempt) error
-	afterClose  func() error
-	limit       func(time.Time) time.Time
-	beforeCheck func()
+	e                   *nativeSubmissionEnv
+	ctx                 context.Context
+	afterSave           func(*api.InputDeliveryAttempt) error
+	afterClose          func() error
+	limit               func(time.Time) time.Time
+	beforeCheck         func()
+	beforeCheckIdentity func()
 }
 
 func (b *sqliteDeliveryBackend) Open(id api.InputDeliveryIdentity) (api.InputDeliverySession, error) {
@@ -217,15 +218,17 @@ func (b *sqliteDeliveryBackend) Open(id api.InputDeliveryIdentity) (api.InputDel
 	if err != nil {
 		return nil, err
 	}
-	return &sqliteDeliverySession{InputDeliverySession: s, afterSave: b.afterSave, afterClose: b.afterClose, limit: b.limit, beforeCheck: b.beforeCheck}, nil
+	return &sqliteDeliverySession{InputDeliverySession: s, afterSave: b.afterSave, afterClose: b.afterClose, limit: b.limit, beforeCheck: b.beforeCheck,
+		beforeCheckIdentity: b.beforeCheckIdentity}, nil
 }
 
 type sqliteDeliverySession struct {
 	api.InputDeliverySession
-	afterSave   func(*api.InputDeliveryAttempt) error
-	afterClose  func() error
-	limit       func(time.Time) time.Time
-	beforeCheck func()
+	afterSave           func(*api.InputDeliveryAttempt) error
+	afterClose          func() error
+	limit               func(time.Time) time.Time
+	beforeCheck         func()
+	beforeCheckIdentity func()
 }
 
 // Close preserves production cleanup, then optionally loses its acknowledgement.
@@ -245,6 +248,15 @@ func (s *sqliteDeliverySession) Check() error {
 		s.beforeCheck()
 	}
 	return s.InputDeliverySession.(interface{ Check() error }).Check()
+}
+
+// CheckIdentity forwards the production identity-only recheck, as Check forwards
+// the full one; beforeCheckIdentity runs first.
+func (s *sqliteDeliverySession) CheckIdentity() error {
+	if s.beforeCheckIdentity != nil {
+		s.beforeCheckIdentity()
+	}
+	return s.InputDeliverySession.(interface{ CheckIdentity() error }).CheckIdentity()
 }
 
 // sqliteAdmissionWaitContext observes the actual held operation lane: Done is

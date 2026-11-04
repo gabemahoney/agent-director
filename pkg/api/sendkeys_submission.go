@@ -68,6 +68,16 @@ func checkInput(session InputDeliverySession) error {
 	}
 	return nil
 }
+
+// checkInputIdentity rechecks only input authority (launch record, launch and
+// life, session, process and pane identity), not the row's epoch, version or
+// state, for paced typing's later pieces and Enter after full admission.
+func checkInputIdentity(session InputDeliverySession) error {
+	if b, ok := session.(interface{ CheckIdentity() error }); ok {
+		return b.CheckIdentity()
+	}
+	return nil
+}
 func limitInput(session InputDeliverySession, end time.Time) {
 	if b, ok := session.(interface{ LimitTo(time.Time) }); ok {
 		b.LimitTo(end)
@@ -558,11 +568,7 @@ func (r *sendKeysRun) recordManualInput() error {
 	owned := r.row
 	owned.Identity = r.adoption.Identity
 	if err := recordManualDelivery(r.input, deliveryIdentity(owned, r.s.StoreID())); err != nil {
-		row := r.row
-		if r.terminal != nil {
-			row.State = r.terminalState
-		}
-		return deliveryNotStarted(row, err.Error())
+		return deliveryNotStarted(r.observedRow(), err.Error())
 	}
 	return nil
 }

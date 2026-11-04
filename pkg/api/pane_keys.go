@@ -8,17 +8,20 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// checkInputTarget retains captured row admission and re-observes the physical
-// target after a waited intent commit. These separate checks cannot make a
-// future OS target atomic; they never infer delivery from their success.
-func (r *keysRun) checkInputTarget(session InputDeliverySession) error {
-	if err := checkInput(session); err != nil {
+// checkInputTarget retains captured input authority through check and
+// re-observes the physical target after a waited intent commit: check, then
+// checkPhysicalTarget, then check again. check is checkInput (full row
+// admission) or, for paced typing's later pieces and Enter, checkInputIdentity.
+// These separate checks cannot make a future OS target atomic; they never
+// infer delivery from their success.
+func (r *keysRun) checkInputTarget(session InputDeliverySession, check func(InputDeliverySession) error) error {
+	if err := check(session); err != nil {
 		return err
 	}
 	if err := r.checkPhysicalTarget(); err != nil {
 		return err
 	}
-	return checkInput(session)
+	return check(session)
 }
 
 func (r *keysRun) checkPhysicalTarget() error {
@@ -285,7 +288,9 @@ func (f keysFacts) deliveryAttempt() *inputdelivery.Attempt {
 // paneActionFailureError in Keys mode with the verb's next step, and keeps
 // the follow-up lookup it made. call is tmux.CallSendText for literal text
 // or compatibility combined text/Enter calls; tmux.CallSendKey for line clear
-// or a separate key, including Enter sent for guarded or empty input.
+// or a separate key, including Enter sent for guarded or empty input; paced
+// typing's separately sent Enter passes tmux.CallSendText with its error
+// relabelled tmux.CallSendEnter, so it maps as a combined call's failed Enter.
 // launch is the follow-up's view of the row (target's).
 func (r *keysRun) sendFailed(err error, call tmux.Call, launch tmux.Launch) error {
 	fu, verr := paneActionFailureError(err, paneActionFailure{

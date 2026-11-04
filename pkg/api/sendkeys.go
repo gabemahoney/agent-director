@@ -170,10 +170,12 @@ type SendKeysEnv struct {
 	IntentHold time.Duration
 	// Sleep pauses between native readiness, drain and submission checks,
 	// pending Claude fallback's terminal/SessionStart readiness and settle,
-	// pending-Codex and pending-Claude hook checks and Cursor gateway verdict
-	// reads. An injected Sleep ignores Context, so the pending Claude wait
-	// checks Context after each pause. Nil waits on a timer that Context's end
-	// cuts short, or uses time.Sleep without Context.
+	// pending-Codex and pending-Claude hook checks, Cursor gateway verdict
+	// reads, and paced Claude typing's pieces and Enter. An injected Sleep
+	// ignores Context, so the pending Claude wait checks Context after each
+	// pause, and paced typing before each later piece and the Enter. Nil waits
+	// on a timer that Context's end cuts short, or uses time.Sleep without
+	// Context.
 	Sleep func(time.Duration)
 }
 
@@ -271,6 +273,16 @@ type sendKeysGuard struct {
 // follows the wait and accepts only the launch's initial SessionStart report-in
 // as a row change, a resumed launch's keeping or rotating its session id;
 // journalling and typing the literal text and one Enter follow it.
+// On a macOS host a Claude row's plain text that does not take native delivery
+// and is longer than inputdelivery.ChunkBytes is typed in paced pieces after
+// input admission and recordManualInput: with an input session, the full input
+// admission check runs before the first piece; before each later piece and the
+// Enter the row and relay guard (pacedRefusal) and, with an input session,
+// input authority (the launch, session, and pane and process identity, not the
+// row version or state) are rechecked; and the call's context and deadline are
+// checked before each later piece and the Enter (typePaced, pacedRefusal;
+// b.vr5). Longer than pacedTextMaxBytes it is refused not_started before any
+// input or durable input record.
 // Pending Codex and Claude fallback input gets bounded hook observation. An
 // unresolved native attempt blocks fallback resends. Manual operations below
 // retain their separate contract and serialize with ordinary delivery. State,
@@ -405,12 +417,15 @@ type sendKeysGuard struct {
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
 // Manual admission rechecks may repeat the lookup and pane listing before
-// text, a key or Enter. When a hash is supplied, the pane is recaptured after
-// waited admission checks before the first dispatch; the following Enter does
-// not compare that hash against this call's own text. An action failure other
-// than a timeout adds one follow-up lookup (SR-13.2). SendKeys never writes the
-// row's state. Ordinary delivery revalidates ownership and guards before every
-// write and queue sample, within bounded readiness, drain and confirmation loops.
+// text, a key or Enter (paced Claude text: one text call per piece; the first
+// preceded by the admission recheck, each later one and the Enter by an
+// input-authority recheck, each with one lookup and one pane listing). When a
+// hash is supplied, the pane is recaptured after waited admission checks
+// before the first dispatch; the following Enter does not compare that hash
+// against this call's own text. An action failure other than a timeout adds
+// one follow-up lookup (SR-13.2). SendKeys never writes the row's state.
+// Ordinary delivery revalidates ownership and guards before every write and
+// queue sample, within bounded readiness, drain and confirmation loops.
 //
 // Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
 // record per distinct reason per call (source ad_send_keys), fail-open, and
@@ -564,6 +579,9 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 		}
 		r.paste = paste
 	}
+	if reason := pacedTextTooLong(row.Agent, plan.text); !r.automatic && reason != "" {
+		return deliveryNotStarted(row, reason)
+	}
 	if !r.automatic && row.Agent == store.AgentClaude && row.State == store.StatePending && ordinary {
 		terminal, ok := r.t.(PaneTerminalTmux)
 		if !ok {
@@ -595,9 +613,11 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 // SessionStart and its settle with its launch and guards revalidated within
 // the readiness budget (waitTerminalRaw), then input admission (admitInput).
 // Native ordinary delivery, a pane answer (paneAnswer), a key, fallback paste
-// or literal text follow; a hash is compared again after admission and before
-// the first write, never after this call's own text. A Cursor row's text with
-// Enter also reads its gateway's verdict (typeCursorText).
+// or literal text follow; on macOS a Claude row's text longer than
+// inputdelivery.ChunkBytes is typed in paced pieces (typePaced). A hash is
+// compared again after admission and before the first write, never after this
+// call's own text. A Cursor row's text with Enter also reads its gateway's
+// verdict (typeCursorText).
 func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	paneID, launch, err := r.targetPane()
 	if err != nil {
@@ -639,7 +659,7 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 			return r.terminalRefusal(err)
 		}
 		r.beforeWrite = func() error {
-			if err := r.checkInputTarget(r.input); err != nil {
+			if err := r.checkInputTarget(r.input, checkInput); err != nil {
 				return deliveryNotStarted(r.row, "input admission changed after intent")
 			}
 			return nil
@@ -707,6 +727,9 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	}
 	if r.row.Agent == store.AgentCursor && plan.enter {
 		return r.typeCursorText(paneID, launch, plan.text)
+	}
+	if pacedText(r.row.Agent, plan.text) {
+		return r.typePaced(paneID, launch, plan.text, plan.enter, params)
 	}
 	return r.typeText(paneID, launch, plan.text, plan.enter)
 }
@@ -997,11 +1020,19 @@ func isInteractiveState(state string) bool {
 // A plain call types Text (CR bytes (0x0D) stripped to prevent premature
 // submission; LF bytes (0x0A) preserved as composed newlines in Claude's
 // input box) and then one Enter, unless NoEnter (empty text with Enter sends
-// that Enter only); or, with Key, that one key alone. With ExpectPaneSHA256
-// it first checks that the pane still has the hash the caller read. Without
-// it, a plain call on a relayed Spawn is refused while any of its permission
-// requests is not proven gone by Claude Code's own hooks (ErrDialogMaybeOpen;
-// b.146 step 2c), less a Cursor request of an earlier launch of the row
+// that Enter only); or, with Key, that one key alone. On macOS a Claude row's
+// text longer than 512 bytes that does not take native delivery is typed in
+// pieces of at most 512 bytes, 100 ms apart, with Enter 500 ms after the last
+// pause; a reread of the row before each later piece and before the Enter can
+// stop it there, as can a change of input authority (launch, session, pane or
+// process), cancellation or the call's deadline. Cancellation or the deadline
+// before the first piece types nothing, and such text over 32 KiB is refused
+// before any input (b.vr5). Send such text to one row one call at a time: the
+// pieces of concurrent calls can interleave. With ExpectPaneSHA256 it first
+// checks that the pane still has the hash the caller read. Without it, a plain
+// call on a relayed Spawn is refused while any of its permission requests is
+// not proven gone by Claude Code's own hooks (ErrDialogMaybeOpen; b.146 step
+// 2c), less a Cursor request of an earlier launch of the row
 // (store.PermissionRow.HoldsDialog); ExpectPaneSHA256 means a person or LLM
 // judged that exact screen, so never pass it from an automatic flow.
 //
@@ -1084,14 +1115,24 @@ func isInteractiveState(state string) bool {
 //     was launched on.
 //   - [ErrSubmissionUnconfirmed]: ordinary native delivery lacks exact proof;
 //     Codex fallback was refused before input or had a paste transport
-//     failure; manual or permission-pane dispatch, or input cleanup, could not
-//     confirm its outcome; pending Claude fallback did not observe raw input,
+//     failure; a macOS Claude row's text to type in paced pieces is over
+//     32 KiB (outcome not_started, before any input or durable input record);
+//     manual or permission-pane dispatch, or input cleanup, could not confirm
+//     its outcome; pending Claude fallback did not observe raw input,
 //     SessionStart and a 1.5 s settle after first observing waiting within
 //     12 s, could not read readiness, was cancelled or reached the call's
 //     deadline, lost its launch, waiting state, pane ownership, guards or input
 //     admission, or has an adapter without PaneTerminalTmux (outcome
 //     not_started: nothing was typed, so the same call can be made again
-//     later); pending Codex or Claude fallback lacks bounded hook-derived
+//     later); a macOS Claude row's paced text was cancelled or reached the
+//     call's deadline before its first piece (outcome not_started: nothing was
+//     typed, though a manual-input record may already be written); a macOS
+//     Claude row's paced text timed out on its first piece, failed after it,
+//     or was stopped before a later piece or its Enter by the row and
+//     relay-guard reread, a change of input authority (launch, session, pane
+//     or process), cancellation or the call's deadline (outcome
+//     partial_input_unconfirmed: part or all of the text may be typed,
+//     unsubmitted); pending Codex or Claude fallback lacks bounded hook-derived
 //     submission observation; or a Cursor row's gateway refused the submission
 //     (outcome gateway_refused). Structured outcomes distinguish no input,
 //     partial text, possible Enter delivery and a gateway refusal, and details
@@ -1113,7 +1154,9 @@ func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
 
 // SendKeysContext carries cancellation and the context's deadline through
 // pending Claude fallback's readiness wait (not_started with nothing typed),
-// input admission and intent commits. A begun transport can still be
+// input admission, intent commits and macOS paced Claude typing's pauses and
+// between-piece checks (not_started before the first piece,
+// partial_input_unconfirmed after one). A begun transport can still be
 // ambiguous; it is never retried here.
 func (c *Client) SendKeysContext(ctx context.Context, params SendKeysParams) (SendKeysResult, error) {
 	if err := c.checkClosed(); err != nil {

@@ -496,7 +496,7 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 					return err
 				}
 			}
-			return r.checkInputTarget(session)
+			return r.checkInputTarget(session, checkInput)
 		}
 		owned := r.row
 		owned.Identity = r.adoption.Identity
