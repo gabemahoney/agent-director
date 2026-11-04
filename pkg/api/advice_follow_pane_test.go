@@ -141,7 +141,8 @@ func TestAdviceFollow_E4_ReadPaneCaptureFailedRetryLater(t *testing.T) {
 
 // advPaneKeysFailure is a failed keys call: the call scripted to fail once,
 // whether a timed-out call reached the pane, the advice its description
-// carries and what the agent's input box holds before the first call.
+// carries, what the agent's input box holds before the first call and
+// whether send-keys types advPacedText in paced pieces (b.vr5).
 type advPaneKeysFailure struct {
 	name    string
 	call    tmux.Call
@@ -149,6 +150,33 @@ type advPaneKeysFailure struct {
 	reached bool
 	advice  string
 	typed   string
+	paced   bool
+}
+
+// advPacedText is send-keys text that macOS paced Claude typing types in
+// pieces of 512, 512 and 1 bytes (b.vr5).
+var advPacedText = strings.Repeat("p", 1025)
+
+// text is what f's send-keys types: advPacedText when paced, else skaText.
+func (f advPaneKeysFailure) text() string {
+	if f.paced {
+		return advPacedText
+	}
+	return skaText
+}
+
+// advPaced is fs with send-keys typing advPacedText in paced pieces, whose
+// Enter is the named Enter key (b.vr5).
+func advPaced(fs []advPaneKeysFailure) []advPaneKeysFailure {
+	var out []advPaneKeysFailure
+	for _, f := range fs {
+		f.name, f.paced = "paced: "+f.name, true
+		if f.call == tmux.CallSendEnter {
+			f.call = tmux.CallSendKey
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // The keys-failure advice sentences (SR-1.4, SR-7.3; b.9o4): send-keys names
@@ -200,14 +228,18 @@ func advPaneEnterSubmitted(what, advice string) advPaneKeysFailure {
 }
 
 // advPaneKeysRefused seeds a live row watching its agent's input box, fails
-// f's call once and sends skaText, which must be refused with f's advice.
+// f's call once and sends f's text, which must be refused with f's advice.
+// A paced f turns the macOS selection on until the test ends.
 func advPaneKeysRefused(t *testing.T, f advPaneKeysFailure) (*killEnv, killRow, *paneInput) {
 	t.Helper()
+	if f.paced {
+		t.Cleanup(api.SetClaudePacedTypingForTest(true))
+	}
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	in := watchPaneInput(e, r.Spawn.Identity.PaneID, f.reached)
 	e.rec.Script(r.Socket, f.script, f.call)
-	_, err := e.sendKeys(skaParams(r))
+	_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: f.text()})
 	adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, f.advice)
 	return e, r, in
 }
@@ -247,23 +279,132 @@ func TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyText(t *testing.T) 
 
 // TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmits: E3 "the text may
 // be typed but not submitted; send-keys with empty text submits it" (after a
-// timeout, "the keys may have been delivered; " first) after the Enter call
-// failed; send-keys with empty text must leave the text submitted once, also
-// when the timed-out Enter had submitted it (Enter on an empty input submits
-// nothing).
+// timeout, "the keys may have been delivered; " first) after the Enter call,
+// or paced typing's named Enter (b.vr5), failed; send-keys with empty text
+// must leave the text submitted once, also when the timed-out Enter had
+// submitted it (Enter on an empty input submits nothing).
 func TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmits(t *testing.T) {
-	t.Parallel()
+	// Serial: its paced cells set the process-wide paced-typing selection with api.SetClaudePacedTypingForTest; its other cells run in parallel.
 	adviceAssertManifest(t, "send-keys", "", advSendKeysEmptyTextManifest)
 	failures := append(advPaneEnterFailures(advSendKeysEnterTimeout, advSendKeysNotSubmitted),
 		advPaneEnterSubmitted("the text", advSendKeysEnterTimeout))
-	for _, f := range failures {
+	for _, f := range append(failures, advPaced(failures)...) {
 		t.Run(f.name, func(t *testing.T) {
+			if !f.paced {
+				t.Parallel()
+			}
 			e, r, in := advPaneKeysRefused(t, f)
 
 			if _, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID}); err != nil {
 				t.Fatalf("send-keys with empty text: %v; want Enter delivered", err)
 			}
-			in.assertSubmittedOnce(t, skaText)
+			in.assertSubmittedOnce(t, f.text())
+		})
+	}
+}
+
+// advSendKeysPacedReadPane is paced typing's advice once part of the text, or
+// all of it unsubmitted, may be in the input (b.vr5).
+const advSendKeysPacedReadPane = "read-pane before sending again, and do not resend the text blindly"
+
+// TestAdviceFollow_E20_SendKeysPacedPieceFailedReadPane: E20 (b.vr5)
+// "read-pane before sending again, and do not resend the text blindly" after
+// a later paced piece failed, the first timed out, or the relay guard held
+// input or could not read the row's permission requests before the next piece
+// or the Enter: partial_input_unconfirmed
+// counting the pieces attempted, with no further piece, Enter or follow-up
+// lookup and never "the same send-keys" or "send-keys with empty text";
+// read-pane then shows what was typed, unsubmitted.
+func TestAdviceFollow_E20_SendKeysPacedPieceFailedReadPane(t *testing.T) {
+	// Serial: it sets the process-wide paced-typing selection with api.SetClaudePacedTypingForTest.
+	t.Cleanup(api.SetClaudePacedTypingForTest(true))
+	for _, tc := range []struct {
+		name     string
+		failure  tmux.Failure
+		piece    int  // the piece that fails, of advPacedText's 512, 512 and 1 bytes; 0: none
+		held     int  // with none failing, the pieces typed before the relay guard holds input: 1, the second piece; 3, the Enter
+		readFail bool // with held, the guard's permission-request read fails instead of finding a held request
+	}{
+		{"first piece timed out", tmux.FailTimeout, 1, 0, false},
+		{"second piece timed out", tmux.FailTimeout, 2, 0, false},
+		{"second piece failed", tmux.FailNoServer, 2, 0, false},
+		{"relay guard held the second piece", 0, 0, 1, false},
+		{"relay guard held the Enter", 0, 0, 3, false},
+		{"permission read failed before the second piece", 0, 0, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r, other := e.seedKeysDisagreeCase(t, keysDisagreeCase{spec: killRowSpec{RelayOn: tc.held > 0},
+				setup: []func(*testing.T, *killEnv, *killRow){ktrRestart}})
+			in := watchPaneInput(e, r.Spawn.Identity.PaneID, true)
+			attempted, typed, pieces := len(advPacedText), len(advPacedText), 3
+			switch {
+			case tc.held > 0:
+				// A held permission request arrives, or the permission-request
+				// read starts failing, in the pause after the held-th piece,
+				// before the reread for the next piece (100 ms) or for the Enter
+				// (the 500 ms after the last piece's 100 ms).
+				attempted, pieces = min(512*tc.held, len(advPacedText)), tc.held
+				typed = attempted
+				pause := 100 * time.Millisecond
+				if tc.held == 3 {
+					pause = 500 * time.Millisecond
+				}
+				texts, sleep := 0, e.sleep
+				e.rec.AfterCall(tmux.CallSendText, func(tmuxfix.SocketCall, error) { texts++ })
+				e.sleep = func(d time.Duration) {
+					if texts == tc.held && d == pause && tc.readFail {
+						e.store.failPermissionRequests(nil)
+					} else if texts == tc.held && d == pause {
+						held := apitest.PermissionTimes(e.clock.Now(), time.Time{}, time.Time{}, time.Time{}, time.Time{}, "")
+						if _, err := apitest.SeedPermissionRequest(e.dbPath, r.ID, "Bash", held); err != nil {
+							t.Error(err)
+						}
+					}
+					sleep(d)
+				}
+			case tc.piece == 2:
+				e.rec.Script(r.Socket, tmuxfix.Script{Times: 1}, tmux.CallSendText) // the first piece goes through
+			}
+			if tc.piece > 0 {
+				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tc.failure, Times: 1}, tmux.CallSendText)
+				attempted, typed, pieces = 512*tc.piece, 512*tc.piece, tc.piece // a timed-out piece reached the pane
+				if tc.failure != tmux.FailTimeout {
+					typed -= 512
+				}
+			}
+			before := e.columns(t, r.ID)
+
+			run := runVerb(e, func() (api.SendKeysResult, error) {
+				return e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: advPacedText})
+			})
+
+			d := assertDeliveryError(t, run.err, "partial_input_unconfirmed", attempted, false)
+			if !d.KeysSent || d.Phase != "text_attempted" || d.RowState != store.StateWaiting {
+				t.Errorf("details = %+v; want keys_sent, phase text_attempted, row_state waiting", d)
+			}
+			adviceAssertAdvice(t, run.err, api.ErrSubmissionUnconfirmed, advSendKeysPacedReadPane)
+			for _, resend := range []string{"the same send-keys", "send-keys with empty text"} {
+				if strings.Contains(errText(run.err), resend) {
+					t.Errorf("description %q advises %q", errText(run.err), resend)
+				}
+			}
+			want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes}
+			for range pieces {
+				want = append(want, tmux.CallSendText)
+			}
+			if got := paKinds(run.calls); !slices.Equal(got, want) {
+				t.Errorf("tmux calls = %v; want %v: nothing after the failed piece, no Enter", got, want)
+			}
+			e.assertRowUnchanged(t, r.ID, before)
+			assertKeysDisagrees(t, e, sktDisagrees(t, r.ID), r, "send-keys", other, []disagreeWant{
+				{reason: "server_restarted", server: "restarted", verdict: "ours", action: "text_sent", ours: true}})
+
+			read, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
+			if err != nil || read.Pane != advPacedText[:typed] || len(in.submitted) != 0 {
+				t.Errorf("read-pane = %d bytes, %v, with %d submissions; want the %d bytes typed, unsubmitted",
+					len(read.Pane), err, len(in.submitted), typed)
+			}
 		})
 	}
 }
@@ -976,6 +1117,60 @@ func TestAdviceFollow_E15_CodexFallbackLiteralSafety(t *testing.T) {
 				t.Fatalf("not one paste: %+v", calls)
 			}
 			e.assertRowUnchanged(t, r.ID, before)
+		})
+	}
+}
+
+// E15 (b.vr5): "put the prompt in a file and send a short instruction to read
+// it" after macOS paced Claude text over 32 KiB is refused before any input,
+// typing and journalling nothing; followed, the instruction is delivered. Text
+// of 32 KiB is typed.
+func TestAdviceFollow_E15_PacedClaudeTextOver32KiB(t *testing.T) {
+	// Serial: it sets the process-wide paced-typing selection with api.SetClaudePacedTypingForTest.
+	t.Cleanup(api.SetClaudePacedTypingForTest(true))
+	for _, n := range []int{32 << 10, 32<<10 + 1} {
+		t.Run(fmt.Sprintf("%d bytes", n), func(t *testing.T) {
+			e := newNativeSubmissionEnv(t)
+			r := e.seedRow(t, killRowSpec{})
+			e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
+			pane := r.Spawn.Identity.PaneID
+			text := strings.Repeat("l", n)
+			before := e.columns(t, r.ID)
+
+			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text})
+
+			if n == 32<<10 {
+				typed := ""
+				for _, c := range e.rec.SocketCallsOf(tmux.CallSendText) {
+					typed += c.Text
+				}
+				if err != nil || typed != text || len(ordinaryEnters(e.killEnv)) != 1 {
+					t.Fatalf("send = %v, typed %d bytes, %d Enters; want the %d bytes and one Enter", err, len(typed), len(ordinaryEnters(e.killEnv)), n)
+				}
+				return
+			}
+			d := assertDeliveryError(t, err, "not_started", 0, false)
+			if d.KeysSent || d.Phase != "pre_input" {
+				t.Errorf("details = %+v; want nothing sent, phase pre_input", d)
+			}
+			adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "put the prompt in a file and send a short instruction to read it")
+			e.assertNothingSent(t)
+			e.assertNoCalls(t, tmux.CallSendKey)
+			if e.b.current != nil {
+				t.Errorf("journal = %+v; want no entry claiming input", e.b.current)
+			}
+			e.assertRowUnchanged(t, r.ID, before)
+
+			file := filepath.Join(t.TempDir(), "prompt.txt")
+			if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			short := "Read " + file + " and follow its instructions."
+			if _, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: short}); err != nil {
+				t.Fatalf("send-keys of the short instruction: %v", err)
+			}
+			assertTextSent(t, e.rec, r.Socket, pane, short)
+			assertEnterSent(t, e.rec, r.Socket, pane)
 		})
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 	"github.com/gabemahoney/agent-director/internal/trail"
+	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // apiTrailDir is the temp HOME for this test binary. Set by TestMain before
@@ -42,6 +43,9 @@ var apiTmuxTmpdir string
 //   - Unsets TMUX and points TMUX_TMPDIR at a fresh temp directory
 //     (apiTmuxTmpdir), so a default socket resolves under this binary's own
 //     directory, never the caller's tmux or /tmp/tmux-<uid>.
+//   - Turns macOS paced Claude typing off (b.vr5), so the tests behave on a
+//     Mac as on Linux; a test that wants it sets it with
+//     api.SetClaudePacedTypingForTest.
 //
 // The trail singleton pins to HOME, so HOME MUST be set here (via os.Setenv)
 // before m.Run() — a per-test t.Setenv would be too late. The environment is
@@ -91,6 +95,11 @@ func TestMain(m *testing.M) {
 	os.Setenv("TMUX_TMPDIR", tmuxTmp) // nolint:errcheck
 	os.Unsetenv("TMUX")               // nolint:errcheck
 	apiTmuxTmpdir = tmuxTmp
+
+	// ── Paced Claude typing off, as on Linux ─────────────────────────────────
+	// Its macOS default would otherwise split a long Claude text that a test
+	// expects in one call. Its restore is not needed: the binary ends here.
+	api.SetClaudePacedTypingForTest(false)
 
 	// ── Run all tests and examples ────────────────────────────────────────────
 	code := m.Run()

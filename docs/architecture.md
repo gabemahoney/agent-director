@@ -9437,6 +9437,8 @@ native ordinary delivery through `internal/inputdelivery`, described below;
 `pkg/api/sendkeys_paste.go` handles ordinary Codex fallback paste;
 `pkg/api/sendkeys_terminal.go` handles pending Claude fallback's
 [readiness wait](#ordinary-input-delivery);
+`pkg/api/sendkeys_paced.go` types a macOS Claude row's long fallback text in
+[paced pieces](#ordinary-input-delivery);
 `pkg/api/sendkeys_cursor_gateway.go` reads a Cursor row's
 [gateway verdict](#cursor-gateway-verdict);
 `pkg/api/sendkeys_legacy_submission.go` checks pending Codex and Claude
@@ -9672,9 +9674,9 @@ removing the row is a human's decision (docs/operator-actions.md). Next resolve
 the row's socket, acquire the native writer lock when native launch state exists,
 select capability and reconcile any ordinary request. These steps cannot mask
 the existing state, relay or dialog refusals. Native framing validation, or
-Codex fallback validation and paste-capability checks, or pending Claude's
-terminal-capability check, follow reconciliation. Only then perform the
-initial lookup.
+Codex fallback validation and paste-capability checks, or macOS paced Claude's
+size limit and then pending Claude's terminal-capability check, follow
+reconciliation. Only then perform the initial lookup.
 
 ### Ordinary input delivery
 
@@ -9686,8 +9688,9 @@ or acceptance from rendered terminal text, hook activity or an empty queue;
 never add automatic replay or a wake/editing-key fallback. When native
 capability is unavailable, ordinary Codex text uses the paste transport below;
 other agents use `keysRun.typeText`, with Cursor's
-[gateway verdict check](#cursor-gateway-verdict). Successful fallback returns an
-empty `SendKeysResult`, without exact transcript confirmation. `confirmLegacySubmission`
+[gateway verdict check](#cursor-gateway-verdict) and macOS Claude's paced
+typing below. Successful fallback returns an empty `SendKeysResult`, without
+exact transcript confirmation. `confirmLegacySubmission`
 observes a pending Codex row, or the pending Claude path below, for up to 2 s
 after a successful fallback send with Enter;
 only hook-derived `working`, `ask_user` or `check_permission` state satisfies
@@ -9743,6 +9746,41 @@ nothing to the terminal. tmux failures are `*CallError`; device-open or
 termios failures are OS errors, and other platforms return unsupported.
 Existing tmux interfaces remain source-compatible; injected adapters need
 `PaneTerminalTmux` only for this pending Claude fallback path.
+
+**Must use:** on macOS, a Claude row's fallback text longer than
+`inputdelivery.ChunkBytes` (512 bytes) goes through `sendKeysRun.typePaced` in
+`pkg/api/sendkeys_paced.go`, selected by `pacedText` wherever `typeText` would
+type it: with Enter or `no_enter`, with or without a pane hash, live or after
+the pending readiness wait. A macOS Claude pane loses the start of a longer
+burst typed in one call, which reaches it in reads of about 1 KiB, so each
+piece must arrive in one read. `inputdelivery.Split` cuts the pieces
+(rune-aligned, cut at 512 where the text is not UTF-8, so it always advances);
+it is also `Chunks`' splitter, so never write another. Each piece is one
+`SendKeysPane` followed by 100 ms on `SendKeysEnv.Sleep`; with Enter, 500 ms
+more, then one named Enter. The seam `claudePacedTyping` is
+`runtime.GOOS == "darwin"`; `SetClaudePacedTypingForTest` sets it, and
+`pkg/api`'s `TestMain` turns it off. Piece size and pauses are constants, not
+settings: the Mac check validated only these values. Paste was rejected
+because Claude records pasted text wrapped as pasted content, so the user
+record would no longer equal the text sent and the model would read it as
+quoted material.
+
+Before each piece after the first (`no_enter` included) and before the Enter,
+`pacedRefusal` rereads the row and reruns `sendKeysStateGuard` and
+`evaluateRelayGuard`, with no tmux call. A changed life or token, a failed
+read, a guard refusal, or a move into `check_permission` or `ask_user` from the
+state the call observed stops the call there: nothing more is typed and no
+Enter is sent. Paced typing takes no writer lock of its own, so the pieces of
+concurrent calls to one row can interleave. `run` refuses text over
+`pacedTextMaxBytes` (32 KiB, about 7 s of pauses) with `not_started` after
+ownership and reconciliation, before the pending wait, any journal entry or any
+input.
+A first piece that fails other than by timeout maps as `typeText`'s text call.
+A timed-out first piece, a failed later piece or a refusal is `deliveryError`
+with `partial_input_unconfirmed`, `text_attempted` and the bytes of the pieces
+attempted (a refused piece is not attempted), with no follow-up lookup, as for
+paste. A failed Enter is relabelled `CallSendEnter` so it maps as `typeText`'s
+Enter after text.
 
 **Must use:** ordinary Codex fallback goes through `sendKeysRun.pasteText` and
 the optional `PasteKeysTmux` capability, implemented by `tmux.Client.PasteKeysPane`
@@ -9912,8 +9950,8 @@ Go and CLI expose optional request IDs and proof fields. The published
 TypeScript `SendKeysParams` and `SendKeysResult` retain their existing
 declaration surface, and `SubmissionUnconfirmedDetails` describes only the
 three-field failed hook observation with `keys_sent: true`. Native, Claude
-readiness, Codex paste and Cursor gateway runtime error facts use
-`AgentDirectorError.errDetails: Readonly<Record<string, unknown>> | null`;
+readiness, Claude paced typing, Codex paste and Cursor gateway runtime error
+facts use `AgentDirectorError.errDetails: Readonly<Record<string, unknown>> | null`;
 there is no additional TypeScript export or module for native delivery.
 
 ### Cursor gateway verdict
