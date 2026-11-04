@@ -95,8 +95,11 @@ func pacedTextTooLong(agent, text string) string {
 // read; any durable record recordManualInput wrote stays as written (none on
 // an unsupported launch with no earlier attempt).
 //
-// The pieces of concurrent calls to one row can interleave in its input, so
-// on macOS long Claude text must go to one row one call at a time.
+// Paced typing takes no writer lock of its own: on a row with a launch token
+// the call holds that launch's exclusive input writer throughout (run's
+// openInputDelivery), so a concurrent call to the row is refused not_started;
+// only on a row without a token can the pieces of concurrent calls interleave
+// in its input. So on macOS long Claude text goes to one row one call at a time.
 func (r *sendKeysRun) typePaced(paneID string, launch tmux.Launch, text string, enter bool, params SendKeysParams) error {
 	if r.env.Context != nil && r.env.Context.Err() != nil {
 		return deliveryNotStarted(r.observedRow(), "paced Claude typing did not begin because "+pacedCancelledReason+"; nothing was typed")

@@ -9989,8 +9989,9 @@ no permission request token enters the native protocol, where supported, in
 native transcript proof, or `ErrSubmissionUnconfirmed` with honest delivery
 details. Launches without native capability use the fallback described there,
 with no exact transcript-confirmation claim. Other sends retain manual
-transport semantics and return an empty success result; launches with existing
-native state participate in the same writer lock and journal.
+transport semantics and return an empty success result; rows with a launch
+token share the launch's writer lock, and launches with native state also
+share its journal.
 Manual sends can also return `ErrSubmissionUnconfirmed` with
 `not_started` when writer ownership or durable manual intent is unavailable.
 `pause` returns `ErrInternal` for those failures before attempting input. No
@@ -10105,7 +10106,8 @@ full table is SRD SR-7.2; the failure rules SR-7.3):
 
 `send-keys` never writes the row's state. It can write adoption,
 `hook_gone_at`, pane-answer intent/results and input-session records, including
-manual interference. Guarded manual delivery repeats captured-admission and
+manual interference. Guarded manual delivery repeats captured-admission
+(identity only before paced typing's later pieces and Enter) and
 physical-target checks before dispatch steps; a single lookup/listing count
 does not bound its tmux phase. Each tmux operation retains its configured
 query/action and pipe-close limits. Native readiness, write/drain and proof
@@ -10146,7 +10148,7 @@ a recorded session name that is empty, holds a control character, or
 holds a character tmux stores differently (`.`, `:`, invalid UTF-8) →
 `ErrInternal` (`unusableNameError`, SR-3.2), no tmux call, nothing sent;
 removing the row is a human's decision (docs/operator-actions.md). Next resolve
-the row's socket, acquire the native writer lock when native launch state exists,
+the row's socket, acquire the launch's writer lock when the row has a launch token,
 select capability and reconcile any ordinary request. These steps cannot mask
 the existing state, relay or dialog refusals. Native framing validation, or
 Codex fallback validation and paste-capability checks, or macOS paced Claude's
@@ -10235,11 +10237,10 @@ Existing tmux interfaces remain source-compatible; injected adapters need
 type it: with Enter or `no_enter`, with or without a pane hash, live or after
 the pending readiness wait. A macOS Claude pane loses the start of a longer
 burst typed in one call, which reaches it in reads of about 1 KiB, so each
-piece must arrive in one read. `inputdelivery.Split` cuts the pieces
-(rune-aligned, cut at 512 where the text is not UTF-8, so it always advances);
-it is also `Chunks`' splitter, so never write another. Each piece is one
-`SendKeysPane` followed by 100 ms on `SendKeysEnv.Sleep`; with Enter, 500 ms
-more, then one named Enter. The seam `claudePacedTyping` is
+piece must arrive in one read. The pieces come from `inputjournal.Split`, the
+one splitter (see the `internal/inputjournal` paragraph below). Each piece is one
+`SendKeysPane` followed by 100 ms through `sleepInput` on `SendKeysEnv.Sleep`;
+with Enter, 500 ms more, then one named Enter. The seam `claudePacedTyping` is
 `runtime.GOOS == "darwin"`; `SetClaudePacedTypingForTest` sets it, and
 `pkg/api`'s `TestMain` turns it off. Piece size and pauses are constants, not
 settings: the Mac check validated only these values. Paste was rejected
@@ -10247,22 +10248,42 @@ because Claude records pasted text wrapped as pasted content, so the user
 record would no longer equal the text sent and the model would read it as
 quoted material.
 
-Before each piece after the first (`no_enter` included) and before the Enter,
-`pacedRefusal` rereads the row and reruns `sendKeysStateGuard` and
-`evaluateRelayGuard`, with no tmux call. A changed life or token, a failed
-read, a guard refusal, or a move into `check_permission` or `ask_user` from the
-state the call observed stops the call there: nothing more is typed and no
-Enter is sent. Paced typing takes no writer lock of its own, so the pieces of
-concurrent calls to one row can interleave. `run` refuses text over
-`pacedTextMaxBytes` (32 KiB, about 7 s of pauses) with `not_started` after
-ownership and reconciliation, before the pending wait, any journal entry or any
-input.
-A first piece that fails other than by timeout maps as `typeText`'s text call.
-A timed-out first piece, a failed later piece or a refusal is `deliveryError`
-with `partial_input_unconfirmed`, `text_attempted` and the bytes of the pieces
-attempted (a refused piece is not attempted), with no follow-up lookup, as for
-paste. A failed Enter is relabelled `CallSendEnter` so it maps as `typeText`'s
-Enter after text.
+`run` refuses text over `pacedTextMaxBytes` (32 KiB) with `not_started` after
+reconciliation, before the initial lookup, the pending wait, input admission,
+manual intent and any input. Paced typing then begins where `typeText` would,
+after input admission and manual intent (see reconciliation below for what
+manual intent records). The first piece follows a context check
+and `beforeWrite`. Each later piece (`no_enter` included) and the Enter follow
+a context check, `pacedRefusal`, then, last before the write, an identity-only
+recheck (`checkInputTarget` with `checkInputIdentity`: launch record, launch and
+life, session, the agent's process and pane; no permission epoch, row version
+or state), because `pacedRefusal` carries state, dialog and permission changes
+and a working row's hook updates must not stop the send. `beforeWrite`'s
+admission recheck and the identity-only recheck run only on a row with an input
+session (a launch token). `pacedRefusal` rereads the row and reruns
+`sendKeysStateGuard` and `evaluateRelayGuard`, with no tmux call; a changed
+life or token, a failed read, a guard refusal, or a move into `check_permission`
+or `ask_user` from the state the call observed (a send begun in one is not
+stopped for that alone) stops the call. The context
+checks also cover an injected `Sleep` that ignores the context; with
+`no_enter`, nothing follows the last piece's pause, so nothing is checked after
+it. Paced typing takes no writer lock of its own; the launch writer lock below
+refuses a concurrent call to a row with a launch token `not_started`, and on a
+row without one the pieces of concurrent calls can interleave.
+
+Before the first piece, a cancellation or deadline is `not_started` with
+nothing typed, and `beforeWrite`'s refusals keep their own errors. A first
+piece that fails other than by timeout maps as `typeText`'s text call. A
+timed-out first piece, a failed later piece, or a stop before a later piece or
+the Enter (`pacedRefusal`; a changed launch, session, pane or process, "input
+authority changed"; cancellation or the call's deadline) is `deliveryError` with
+`partial_input_unconfirmed`, `text_attempted` and the bytes of the pieces
+attempted (a skipped piece is not attempted), with no further piece, Enter,
+replay or follow-up lookup, as for paste. These details come from the call's
+attempted-input facts, which cleanup errors and `sendKeysAction` also read; a
+stop adds no durable write, as for any uncertain manual dispatch. A failed
+Enter is relabelled `CallSendEnter` so it maps as `typeText`'s Enter after
+text.
 
 **Must use:** ordinary Codex fallback goes through `sendKeysRun.pasteText` and
 the optional `PasteKeysTmux` capability in `internal/tmux/paste.go`.
@@ -10341,7 +10362,8 @@ token, instance, safe status, `KeymapPinned` and Claude's exact transcript path.
 acknowledgements; missing or changed markers fail closed.
 
 One request holds a nonblocking OS writer lock across validation, delivery
-and observation. The lock is `<launch-dir>.lock`, shared by automatic and
+and observation, for every row with a launch token, whether or not a launch
+record exists (the path then comes from the store id and token). The lock is `<launch-dir>.lock`, shared by automatic and
 manual `send-keys`, permission pane answers and `pause`. Lock release after
 a crash never clears its durable attempt. Writers outside agent-director
 are excluded by the protocol's caller precondition, not by this lock.
@@ -10395,8 +10417,12 @@ Multiple exact records are ambiguous and never return submitted.
 **Must use:** `internal/inputjournal` owns persisted records, validation, the
 exact provider-record parser, bounded regular-file evidence reads and the legacy
 importer/lock primitives. Store and delivery must reuse these components.
-`inputdelivery` keeps type aliases, the same error sentinels and thin delegates;
-it defines no second parser or persisted format. `internal/store` depends on
+`inputjournal.Split` is the one splitter of ordinary text into writes of at
+most `ChunkBytes` (512) bytes, rune-aligned, cut at `ChunkBytes` where text is
+not UTF-8; `Chunks` (native delivery, proof matching) and paced typing use it,
+so never write another. `inputdelivery` keeps type aliases, the same error
+sentinels and thin delegates, including forwards of `ChunkBytes`, `Chunks` and
+`Split`; it defines no second parser or persisted format. `internal/store` depends on
 this neutral protocol, never on live transport, process discovery or terminal
 probes. `inputdelivery` owns those live observations and coordinates the private
 `Backend`/`Session` adapter through `inputjournal.Persistence`, implemented by
@@ -10422,10 +10448,11 @@ captured launch/current-request snapshot. No save attempt, failure, uncertain
 commit or physical input permits another admission or refresh; dispatch checks
 retain the captured authority and original deadlines.
 
-After admission, `beforeWrite` rechecks the captured authority and physical
-target. A supplied pane hash is checked again after waited admission and before
-the first write on every path, including keys, pane answers and Cursor
-`typeCursorText`. The following Enter never compares the hash against this
+After admission, `beforeWrite` rechecks the captured authority (`Check`, the
+full guard; paced typing's later pieces and Enter use `CheckIdentity`, identity
+only, outside `beforeWrite`) and physical target. A supplied pane hash is checked again
+after waited admission and before the first write on every path, including
+keys, pane answers, paced typing and Cursor `typeCursorText`. The following Enter never compares the hash against this
 call's own text. Manual intent uses the adopted identity before transport.
 
 Optional pane caching is independent of plain delivery: if adoption did not
@@ -19130,7 +19157,7 @@ for process exit and `decide` for relay delivery or legacy settlement:
    A finished row never reaches this check (step 2).
 6. **`waiting` row: the tmux phase.** Resolve the row's socket (an unusable socket
    directory → `ErrTmuxNotAvailable`), then acquire the shared input writer
-   lock only if native launch state exists. Failure returns `ErrInternal`
+   lock when the row has a launch token. Failure returns `ErrInternal`
    with no input. Hold that lock through this call's input phase. Then one
    lookup by the row's current
    label and, on Ours, one pane listing; then `C-u`, a key send

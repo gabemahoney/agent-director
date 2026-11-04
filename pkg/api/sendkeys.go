@@ -1027,14 +1027,16 @@ func isInteractiveState(state string) bool {
 // stop it there, as can a change of input authority (launch, session, pane or
 // process), cancellation or the call's deadline. Cancellation or the deadline
 // before the first piece types nothing, and such text over 32 KiB is refused
-// before any input (b.vr5). Send such text to one row one call at a time: the
-// pieces of concurrent calls can interleave. With ExpectPaneSHA256 it first
-// checks that the pane still has the hash the caller read. Without it, a plain
-// call on a relayed Spawn is refused while any of its permission requests is
-// not proven gone by Claude Code's own hooks (ErrDialogMaybeOpen; b.146 step
-// 2c), less a Cursor request of an earlier launch of the row
-// (store.PermissionRow.HoldsDialog); ExpectPaneSHA256 means a person or LLM
-// judged that exact screen, so never pass it from an automatic flow.
+// before any input (b.vr5). Send such text to one row one call at a time: while
+// one call holds the row's input writer another is refused (not_started), and
+// on a row with no launch token the pieces of concurrent calls can interleave.
+// With ExpectPaneSHA256 it first checks that the pane still has the hash the
+// caller read. Without it, a plain call on a relayed Spawn is refused while any
+// of its permission requests is not proven gone by Claude Code's own hooks
+// (ErrDialogMaybeOpen; b.146 step 2c), less a Cursor request of an earlier
+// launch of the row (store.PermissionRow.HoldsDialog); ExpectPaneSHA256 means a
+// person or LLM judged that exact screen, so never pass it from an automatic
+// flow.
 //
 // A pane answer (RequestToken, As, Key and ExpectPaneSHA256; b.146 rule 8)
 // answers that permission request at the pane once it has fallen back: under

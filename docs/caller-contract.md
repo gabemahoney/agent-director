@@ -639,30 +639,38 @@ verdict is described below.
 On macOS, Claude fallback text longer than 512 bytes after CR removal is typed
 in pieces of at most 512 bytes, each followed by a 100 ms pause, with Enter
 500 ms after the last pause. This includes `no_enter`, `expect_pane_sha256`
-and `pending` sends (after the wait above); shorter text, keys, pane answers
-and Enter-only sends are typed in one call. The pauses add about 0.1 s per
-512 bytes plus 0.5 s before the Enter, about 7 s at the 32 KiB limit, on top
-of any readiness wait and hook observation; set the client timeout to match.
-Text over 32 KiB returns `ErrSubmissionUnconfirmed` with
+and `pending` sends; only a `pending` send with Enter and no hash is typed after
+the readiness wait above. Shorter text, keys, pane answers and Enter-only sends
+are typed in one call. The pauses add about 0.1 s per 512 bytes plus 0.5 s
+before the Enter; the checks before each later piece and the Enter add to that,
+and any readiness wait and hook observation come on top, so set the client
+timeout to match. Text over 32 KiB returns `ErrSubmissionUnconfirmed` with
 `outcome: "not_started"`, `phase: "pre_input"` and `keys_sent: false`, before
 any input: put the prompt in a file the agent can read and send a short
 instruction naming that file. Send text over 512 bytes to one row one call at
-a time, because the pieces of concurrent calls can interleave in its input.
+a time: a second call returns `not_started` with nothing typed while the first
+owns the row's input (re-issue it once that call settles), and on a row with no
+launch token the pieces of concurrent calls can interleave in its input.
 
 Before each piece after the first, `no_enter` included, and before that Enter,
-the call rereads the row and reruns the state, permission-relay and dialog
-guards. It stops there, typing nothing more and sending no Enter, when the
-launch changed, the row cannot be read, a guard refuses, or the row moved into
+the call rereads the row, reruns the state, permission-relay and dialog guards,
+and checks that the launch, session and the agent's pane and process are
+unchanged. It stops there, typing nothing more and sending no Enter, when the
+call was cancelled or reached its deadline, the launch, session, agent pane or
+process changed, the row cannot be read, a guard refuses, or the row moved into
 `check_permission` or `ask_user` during the call; a send that began in one of
-those states is not stopped for that alone. A stop, a timed-out first piece or
-a failed later piece returns `ErrSubmissionUnconfirmed` with
-`outcome: "partial_input_unconfirmed"`, `phase: "text_attempted"`,
-`keys_sent: true` and `enter_may_have_been_sent: false`. `bytes_attempted`
-counts the pieces attempted: a failed piece counts, the piece a stop skipped
-does not. `row_state` is the stopping reread's state, or the state the call
-observed before typing when that reread or a piece failed. Part or all of the
-text may be in the input, unsubmitted: read the pane before any further input,
-and never resend the text.
+those states is not stopped for that alone. Other state changes of a working
+row, such as its hook updates or its turn ending, do not stop the send. A
+cancellation or deadline before the first piece returns `not_started` with
+nothing typed. A stop, a timed-out first piece or a failed later piece returns
+`ErrSubmissionUnconfirmed` with `outcome: "partial_input_unconfirmed"`,
+`phase: "text_attempted"`, `keys_sent: true` and
+`enter_may_have_been_sent: false`. `bytes_attempted` counts the pieces
+attempted: a failed piece counts, the piece a stop skipped does not.
+`row_state` is the reread row's state when its launch, state or a guard stopped
+the call, otherwise the state the call observed before typing. Part or all of
+the text may be in the input, unsubmitted: read the pane before any further
+input.
 
 Codex fallback accepts literal TAB and LF inside the paste. Codex may trim
 trailing whitespace, including TAB, before submission. It refuses invalid

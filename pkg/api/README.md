@@ -480,11 +480,13 @@ func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 ```
 
 `SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity,
-`IntentHold`, optional `Input` (`InputDeliveryBackend`, nil uses native
-delivery), and optional `Sleep` for native readiness, drain and submission
-checks, pending Claude readiness and settle, pending Codex and Claude hook
-checks, Cursor gateway verdict reads, and the pauses of macOS paced Claude
-typing (nil uses `time.Sleep`). Most callers
+`IntentHold`, optional `Context` (the call's cancellation and deadline, as
+`SendKeysContext` sets), optional `Input` (`InputDeliveryBackend`, nil uses
+native delivery), and optional `Sleep` for native readiness, drain and
+submission checks, pending Claude readiness and settle, pending Codex and
+Claude hook checks, Cursor gateway verdict reads, and the pauses of macOS
+paced Claude typing (nil waits on a timer that `Context`'s end cuts short, or
+uses `time.Sleep` without `Context`). Most callers
 use the Client method, which supplies these.
 Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
 bounding connection and lock waits by the supplied duration.
