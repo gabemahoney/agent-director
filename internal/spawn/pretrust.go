@@ -185,7 +185,11 @@ func ConfigDirUsable(dir string) bool {
 var errConfigDirNotAbsolute = errors.New("is not an absolute path")
 
 // claudeJSONFor resolves the .claude.json file pre-trust targets for a launch
-// with extraEnv: the file the launched Claude Code reads (bugs b.18k, b.nje):
+// with extraEnv: the file the launched Claude Code reads (bugs b.18k, b.nje).
+// extraEnv is the row's: for a spawn or reuse it already holds the
+// CLAUDE_CONFIG_DIR agent-director inherited (launchExtraEnv, bug b.uzn), and
+// agent-director's own CLAUDE_CONFIG_DIR is never read here, so a resume
+// follows what the row recorded:
 //   - extraEnv["CLAUDE_CONFIG_DIR"] absent or empty → agent-director's own
 //     $HOME/.claude.json (via claudeJSONPath, stubbed by tests).
 //   - Usable (ConfigDirUsable) → <CLAUDE_CONFIG_DIR>/.claude.json.
