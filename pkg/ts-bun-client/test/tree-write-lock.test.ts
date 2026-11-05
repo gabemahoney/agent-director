@@ -32,28 +32,34 @@ test.skipIf(!hasFlock)("the preload's lock helper (exclusive) and every docker-e
 });
 
 /**
- * Runs docker-epics.sh's live path in a stand-in repo root whose `make build` records whether the tree-write lock is
- * held exclusively, then exits buildExit, and whose one epic's `make test-docker` leaves child.ran.
+ * Runs docker-epics.sh's live path in a stand-in repo root whose `make build` and `make ts-helper` record whether the
+ * tree-write lock is held exclusively (build then exits buildExit), and whose one epic's `make test-docker` leaves
+ * child.ran.
  */
 function runDockerEpicsLive(buildExit: number) {
   const dir = mkdtempSync(join(tmpdir(), "ad-tree-write-"));
+  const lockState = (file: string) => `\t@if flock -n -s .tree-write.lock true; then echo free; else echo exclusive; fi > ${file}`;
   const makefile = [
     "list-test-docker-epics:",
     "\t@echo fixture-epic",
     "build:",
-    "\t@if flock -n -s .tree-write.lock true; then echo free; else echo exclusive; fi > build.lock-state",
+    lockState("build.lock-state"),
     `\t@echo fixture-build-output; exit ${buildExit}`,
+    "ts-helper:",
+    lockState("ts-helper.lock-state"),
     "test-docker:",
     "\t@touch child.ran",
   ];
   writeFileSync(join(dir, "Makefile"), makefile.join("\n") + "\n");
+  const read = (file: string, absent: string) => (existsSync(join(dir, file)) ? readFileSync(join(dir, file), "utf8").trim() : absent);
   try {
     const r = Bun.spawnSync(["bash", dockerEpics], { cwd: dir, stdout: "pipe", stderr: "pipe" });
     return {
       exitCode: r.exitCode,
       stdout: r.stdout.toString(),
       stderr: r.stderr.toString(),
-      buildLockState: existsSync(join(dir, "build.lock-state")) ? readFileSync(join(dir, "build.lock-state"), "utf8").trim() : "build never ran",
+      buildLockState: read("build.lock-state", "build never ran"),
+      tsHelperLockState: read("ts-helper.lock-state", "ts-helper never ran"),
       childRan: existsSync(join(dir, "child.ran")),
     };
   } finally {
@@ -61,10 +67,12 @@ function runDockerEpicsLive(buildExit: number) {
   }
 }
 
-test.skipIf(!hasFlock)("docker-epics.sh builds bin/ under the exclusive lock, then runs the epics", () => {
+// b.m2s: the children's test-image builds bin/ts-helper too, so the pre-build must build it under the same hold.
+test.skipIf(!hasFlock)("docker-epics.sh builds bin/ and bin/ts-helper under the exclusive lock, then runs the epics", () => {
   const r = runDockerEpicsLive(0);
   expect(r.exitCode, r.stderr).toBe(0);
   expect(r.buildLockState).toBe("exclusive");
+  expect(r.tsHelperLockState).toBe("exclusive");
   expect(r.childRan).toBe(true);
 }, 15_000);
 

@@ -785,6 +785,8 @@ release-binaries:
 # and skips the build when nothing has changed. Without the apitest prereqs,
 # a stale binary can seed pre-migration stores (b.93m). Extend the list when
 # one of them gains a module import, or the binary can go stale.
+# test-image builds it too: Docker testplans run it from the read-only source
+# mount as /work/source/bin/ts-helper (b.m2s).
 TS_HELPER_SRC_DIRS := test/smoke/ts-helper pkg/api/apitest \
 	internal/testsupport/faketmuxfix internal/testsupport/tmuxfix \
 	internal/testsupport/launchfix internal/testsupport/procfix \

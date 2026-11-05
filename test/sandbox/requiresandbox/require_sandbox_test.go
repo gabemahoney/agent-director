@@ -25,6 +25,11 @@
 // test-docker). With a guarded goal given, every other recipe now waits for the
 // guard.
 //
+// b.m2s: make test-docker never built bin/ts-helper, which Docker testplans run
+// from the read-only source mount as /work/source/bin/ts-helper, so on a fresh
+// checkout (CI) they failed with "No such file or directory". test-image now
+// builds it with the binaries, so test-docker's builds include it.
+//
 // Like the other test/sandbox suites it drives a copy of the Makefile under test
 // in a temp tree, with logging fake go, bun and docker on PATH, and runs no repo
 // binary, so it needs no sandboxguard TestMain.
@@ -43,6 +48,10 @@
 // fail, and so do TestRequireSandbox_AdviceKeepsValues and
 // TestRequireSandbox_AdviceCopiesCmd. Without _require_sandbox_var's $
 // doubling, generate_simple_var and AdviceKeepsValues' simple_dollar fail.
+// Before b.m2s's fix, TestRequireSandbox_Passes' test_docker_j8_outside_sandbox
+// and sandbox_marker_test_docker_generate_j8 fail, and so does every check that
+// uses generateAndBuilds: TestRequireSandbox_AdviceFollow's test-docker cells
+// and TestRequireSandbox_AdviceKeepsValues.
 package sandboxrequiresandbox_test
 
 import (
