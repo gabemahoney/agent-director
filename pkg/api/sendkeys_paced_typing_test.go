@@ -491,7 +491,9 @@ func TestSendKeysMacClaudePacedWorkingRowCompletes(t *testing.T) {
 
 // TestSendKeysMacClaudePacedStopsOnContextOrAuthority (Task t2.7tz.6c.yb): with
 // the macOS selection on, a call past its deadline before the first piece
-// types nothing (not_started). Cancelled in a piece's pause or in the 500 ms
+// types nothing (not_started), and so does one whose row_version moved after
+// admission, at its manual_input save (Task t2.7tz.ss.dh, T1: the first
+// piece's full admission recheck refuses). Cancelled in a piece's pause or in the 500 ms
 // before the Enter, or with its input authority changed there (the session of
 // a SQLite-backed launch, or the pane's process, which pacedRefusal does not
 // read), it types no further piece, sends no Enter and makes no further tmux
@@ -556,6 +558,30 @@ func TestSendKeysMacClaudePacedStopsOnContextOrAuthority(t *testing.T) {
 		{name: "pane process replaced before the Enter", typed: 1023, want: stopped(1023, authority),
 			setup: func(_ *testing.T, e *nativeSubmissionEnv, r killRow) {
 				atPacedPause(e, 1023, 500*time.Millisecond, func() { e.pc.Set(r.Spawn.Identity.PanePID, procfix.Alive("replaced")) })
+			}},
+		{name: "row changed before the first piece", sqlite: true, want: api.SubmissionUnconfirmedDetails{Outcome: "not_started",
+			Phase: "pre_input", RowState: store.StateWaiting, Reason: "input admission changed after intent"},
+			setup: func(t *testing.T, e *nativeSubmissionEnv, r killRow) {
+				changed := false
+				e.env.Input.(*sqliteDeliveryBackend).afterSave = func(a *api.InputDeliveryAttempt) error {
+					if a.Phase != "manual_input" || changed {
+						return nil
+					}
+					changed = true
+					row, err := e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if res, err := e.st.SetLivenessNoteIfSameLife(r.ID, row.Snapshot, "changed after admission"); err != nil || res != store.CondApplied {
+						t.Fatalf("row_version write at the manual_input save = %d, %v; want applied", res, err)
+					}
+					return nil
+				}
+				t.Cleanup(func() {
+					if !changed {
+						t.Error("no manual_input attempt was saved: the row was never changed")
+					}
+				})
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -808,7 +808,10 @@ or its delivery journal cannot be read or saved. That call attempted no input;
 re-issue it after the stated condition clears. If another request still owns
 the writer, let it settle first; a persistent journal refusal needs an operator.
 For `pause`, the same ownership or journal failures return `ErrInternal`
-before any input is attempted. State, relay and recorded-name guards run
+before any input is attempted. If its ownership recheck fails after it clears
+the input line, `pause` returns `ErrInternal` with only that clear sent: no
+`/exit` and no Enter, so the agent is not pausing. Check `get`'s `state`
+before calling `pause` again. State, relay and recorded-name guards run
 before it acquires input ownership.
 
 After Enter-only or pane-hash text sends with Enter to a `pending` Codex row,

@@ -138,6 +138,71 @@ func TestPauseSQLiteRetainsUnresolvedOrdinaryOwner(t *testing.T) {
 	}
 }
 
+// TestPauseSQLiteFullCheckBeforeExit (Task t2.7tz.ss.dh, P3): pause's check
+// before `/exit` is the full admission recheck, not identity only. A row whose
+// row_version, or state and permission_epoch, moved once its C-u returned, with
+// identity and session unchanged, is refused: the C-u is the only key sent, no
+// text and no Enter follow, and pause's manual_input attempt stays as recorded.
+func TestPauseSQLiteFullCheckBeforeExit(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		change func(*testing.T, *nativeSubmissionEnv, killRow)
+	}{
+		{name: "row version", change: func(t *testing.T, e *nativeSubmissionEnv, r killRow) {
+			e.rowWriteAfter(t, tmux.CallSendKey, r)
+		}},
+		{name: "state and epoch", change: func(t *testing.T, e *nativeSubmissionEnv, r killRow) {
+			e.onceAfter(t, tmux.CallSendKey, "UserPromptSubmit", func() (bool, string) {
+				a := storefix.ApplyAgentHook(t, e.st, r.ID, "UserPromptSubmit", r.Spawn.SessionID)
+				return a.Applied, a.Reason
+			})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, r, _ := sqliteSubmission(t)
+			if a := storefix.ApplyAgentHook(t, e.st, r.ID, "SessionStart", r.Spawn.SessionID); !a.Applied {
+				t.Fatalf("waiting hook: %+v", a)
+			}
+			row, err := e.st.GetSpawn(r.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Spawn = row
+			var cleared *api.InputDeliveryAttempt
+			e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
+				if c.Key == "C-u" && cleared == nil {
+					_, cleared = sqliteAttempt(t, e, r)
+				}
+			})
+			tc.change(t, e, r)
+
+			_, err = api.Pause(context.Background(), e.st, e.rec, api.PauseEnv{Input: e.env.Input, Relay: e.env.Relay}, 0, pauseParams(r))
+
+			if errors.Is(err, api.ErrPauseTimeout) {
+				t.Fatalf("pause = %v; want refused before /exit", err)
+			}
+			assertOneName(t, err, "ErrInternal")
+			keys := e.rec.SocketCallsOf(tmux.CallSendKey)
+			if len(keys) != 1 || keys[0].Key != "C-u" || keys[0].Socket != r.Socket || keys[0].Target != r.Spawn.Identity.PaneID || keys[0].Repeat != 0 {
+				t.Fatalf("pause keys = %+v; want one C-u to %s on %s", keys, r.Spawn.Identity.PaneID, r.Socket)
+			}
+			e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendEnter)
+			if enters := ordinaryEnters(e.killEnv); len(enters) != 0 {
+				t.Fatalf("Enter calls = %+v; want none", enters)
+			}
+			_, after := sqliteAttempt(t, e, r)
+			if cleared == nil || cleared.Phase != "manual_input" || !cleared.ManualInterference {
+				t.Fatalf("attempt at the C-u = %+v; want pause's manual_input with manual interference", cleared)
+			}
+			if !reflect.DeepEqual(after, cleared) {
+				t.Fatalf("refused pause changed its attempt: at the C-u %+v, after %+v", cleared, after)
+			}
+		})
+	}
+}
+
 // t2.7tz.tb.ib R5: cleanup failure after /exit retains the dispatch facts and
 // the unresolved ordinary owner; cleanup never hides a pre-input refusal.
 func TestPauseSQLiteCloseFailureRetainsDispatch(t *testing.T) {
