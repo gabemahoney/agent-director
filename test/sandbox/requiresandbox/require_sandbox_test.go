@@ -28,7 +28,8 @@
 // b.m2s: make test-docker never built bin/ts-helper, which Docker testplans run
 // from the read-only source mount as /work/source/bin/ts-helper, so on a fresh
 // checkout (CI) they failed with "No such file or directory". test-image now
-// builds it with the binaries, so test-docker's builds include it.
+// builds it with the binaries, so test-docker's builds include it. Since b.q6s
+// its recipe also runs go list, to write its dependency file.
 //
 // Like the other test/sandbox suites it drives a copy of the Makefile under test
 // in a temp tree, with logging fake go, bun and docker on PATH, and runs no repo
@@ -116,8 +117,10 @@ var unsetVars = []string{
 	"CONTAINER_ENGINE", "SANDBOX_IMAGE", "SANDBOX_FLAGS", "GO_TEST_TIMEOUT",
 }
 
-// tree returns a temp dir holding a copy of the Makefile under test, and the
-// go.mod and go.sum that bin/ts-helper and test/fake-tmux/tmux depend on.
+// tree returns a temp dir holding a copy of the Makefile under test, the
+// go.mod and go.sum that bin/ts-helper and test/fake-tmux/tmux depend on, and
+// bin/, where the real go build would create ts-helper and its recipe writes
+// its dependency file (b.q6s).
 func tree(t *testing.T) string {
 	t.Helper()
 	sandboxtest.RequireTools(t, "skipping b.8yq _require-sandbox test", "make", "bash", "env")
@@ -133,6 +136,9 @@ func tree(t *testing.T) string {
 		if err := os.WriteFile(filepath.Join(root, name), body, 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatalf("make bin/: %v", err)
 	}
 	return root
 }
@@ -531,6 +537,7 @@ func briefCalls(calls []string) []string {
 func TestRequireSandbox_Passes(t *testing.T) {
 	root := tree(t)
 	builds := []string{"go build ./cmd/agent-director", "go build ./cmd/agent-director-admin"}
+	tsHelper := []string{"go build ./test/smoke/ts-helper/", "go list ./test/smoke/ts-helper/"}
 	for _, tc := range []struct {
 		name            string
 		args, env       []string
@@ -544,11 +551,11 @@ func TestRequireSandbox_Passes(t *testing.T) {
 		{name: "dry_run_outside_sandbox", args: []string{"-n", "generate"}, wantOutContains: "go generate ./..."},
 		{name: "build_outside_sandbox", args: []string{"build"}, wantCalls: builds},
 		{name: "build_ts_helper_j8_outside_sandbox", args: []string{"-j8", "build", "ts-helper"},
-			wantCalls: append([]string{"go build ./test/smoke/ts-helper/"}, builds...)},
+			wantCalls: append(tsHelper, builds...)},
 		// b.uc7: with no guarded goal no recipe waits for the guard; in the sandbox
 		// the guard passes and the recipes that wait for it run.
 		{name: "test_docker_j8_outside_sandbox", args: []string{"-j8", "test-docker", "EPIC=harness-smoke"},
-			wantCalls: append([]string{"docker build", "docker run", "go build ./test/smoke/ts-helper/"}, builds...)},
+			wantCalls: append(append([]string{"docker build", "docker run"}, tsHelper...), builds...)},
 		{name: "sandbox_marker_test_docker_generate_j8", args: []string{"-j8", "test-docker", "generate", "EPIC=harness-smoke"},
 			env: []string{"AGENT_DIRECTOR_TEST_SANDBOX=1"}, wantCalls: append([]string{"docker build", "docker run"}, generateAndBuilds...)},
 	} {
@@ -568,8 +575,10 @@ func TestRequireSandbox_Passes(t *testing.T) {
 }
 
 // generateAndBuilds are the go calls of make generate test-docker: go generate,
-// and test-docker's builds (through test-image).
-var generateAndBuilds = []string{"go generate ./...", "go build ./cmd/agent-director", "go build ./cmd/agent-director-admin", "go build ./test/smoke/ts-helper/"}
+// and test-docker's builds (through test-image), ts-helper's go list of its
+// dependency file (b.q6s) included.
+var generateAndBuilds = []string{"go generate ./...", "go build ./cmd/agent-director", "go build ./cmd/agent-director-admin",
+	"go build ./test/smoke/ts-helper/", "go list ./test/smoke/ts-helper/"}
 
 // testDockerGenerateAdvice is the advice for make test-docker generate EPIC=harness-smoke.
 const testDockerGenerateAdvice = `make test-docker 'EPIC=harness-smoke' && ` +
