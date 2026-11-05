@@ -2153,6 +2153,10 @@ JSONC or ambiguous ancestor Git local settings leave callbacks untouched.
 `cmd/agent-director/context_statusline.go` forwards the original shell command;
 observation failures and oversized input preserve its complete stdin,
 stdout, stderr and exit status. No native settings file is written.
+`synthesizeSettings` (`internal/spawn/settings.go`) skips this composition when
+`[defaults] disable_context_fullness` is true, so the payload has no
+`statusLine` or `subagentStatusLine` key, no capacity callback runs, and Claude
+context stays unknown; spawn, reuse and resume all take that one gate.
 **Must use:** callback composition and forwarding stay in these shared paths.
 
 `internal/hook/claude_capacity.go` admits capacity-only observations through
