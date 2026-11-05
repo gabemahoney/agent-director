@@ -38,7 +38,10 @@ var binaryPath string
 
 // TestMain builds the CLI binary once, then pins $HOME to a temp dir so
 // in-process store writes (apitest seeding's trail records) never reach the
-// real ~/.config/agent-director (or the old ~/.agent-director).
+// real ~/.config/agent-director (or the old ~/.agent-director). It clears
+// CLAUDE_CONFIG_DIR so no child inherits it from os.Environ(): a Claude
+// launch's pre-trust and environment fall back to that value (b.uzn), which
+// would move them off the per-test HOME.
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	tmp, err := os.MkdirTemp("", "agent-director-test-")
@@ -54,6 +57,9 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	if err := os.Setenv("HOME", home); err != nil {
+		panic(err)
+	}
+	if err := os.Unsetenv("CLAUDE_CONFIG_DIR"); err != nil {
 		panic(err)
 	}
 	code := m.Run()

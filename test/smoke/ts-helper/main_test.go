@@ -27,7 +27,9 @@ import (
 // too late) is the sole reliable trail-isolation mechanism.
 //
 // It also enforces the sandbox guard: these tests open the store and can
-// rewrite the real ~/.config/agent-director on the host (b.8dr).
+// rewrite the real ~/.config/agent-director on the host (b.8dr). It clears
+// CLAUDE_CONFIG_DIR too: a Claude launch's pre-trust and environment fall back
+// to this process's value (b.uzn), which would move them off the fake home.
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	tmpHome, err := os.MkdirTemp("", "ts-helper-home-*")
@@ -36,6 +38,9 @@ func TestMain(m *testing.M) {
 	}
 	if err := os.Setenv("HOME", tmpHome); err != nil { //nolint:errcheck — os.Setenv never errors on non-nil key
 		panic("TestMain: Setenv HOME: " + err.Error())
+	}
+	if err := os.Unsetenv("CLAUDE_CONFIG_DIR"); err != nil {
+		panic("TestMain: Unsetenv CLAUDE_CONFIG_DIR: " + err.Error())
 	}
 	code := m.Run()
 	_ = os.RemoveAll(tmpHome)
