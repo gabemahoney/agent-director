@@ -192,11 +192,7 @@ That base image has no init; without the setup below, the suites fail on
 unchanged code. Make the source a git clone of the tree under test with its
 uncommitted changes copied in, because some tests run `git rev-parse HEAD`.
 Install `tini` (as root) and make it PID 1 so it reaps orphaned processes:
-`CMD ["/usr/bin/tini", "--", …]`. Set `GOMAXPROCS=2 GOFLAGS=-p=1`. Worked
-example:
-`/home/horde/projects/agent-director-project/tickets/Bugs/b.4io/artifacts/prepare-check-context.py`
-(point its `ROOT` at the tree under test and its context path at your own
-folder; its `check-runner.py` runs more checks than these).
+`CMD ["/usr/bin/tini", "--", …]`. Set `GOMAXPROCS=2 GOFLAGS=-p=1`.
 
 #### Integration tests
 
