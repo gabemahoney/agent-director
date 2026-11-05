@@ -321,7 +321,7 @@ func TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking(t *testin
 // cancels it before dispatch; the next pass records the control, /exit's too,
 // before idle recovery or the intentional end. Any other failure of that save
 // stays fatal.
-func TestCursorControlDuringInitialPromptSaveFollowsMain(t *testing.T) {
+func TestCursorInitialPromptSaveControlCancelsAuthorityLossFails(t *testing.T) {
 	// Serial: actual Run, runtime and reporter subprocesses use environment.
 	for _, tc := range []struct{ control, keys string }{
 		{"interrupt", "\x03"},
@@ -354,7 +354,7 @@ func TestCursorControlDuringInitialPromptSaveFollowsMain(t *testing.T) {
 			if !reflect.DeepEqual(window, want) {
 				t.Fatalf("records from the initial prompt:\n%s\nwant:\n%s", strings.Join(window, "\n"), strings.Join(want, "\n"))
 			}
-			rotationPaneOrder(t, c, pane...)
+			paneOrder(t, c, pane...)
 			for _, r := range c.records(t) {
 				if r.Kind == "submission_cancelled" && r.Data.ID == "initial" {
 					if v := c.capturedInput(t, r); v.State != store.CursorInputCancelled || v.Detail != "control consumed before dispatch" {

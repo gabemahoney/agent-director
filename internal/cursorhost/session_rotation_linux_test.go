@@ -10,9 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -115,174 +113,6 @@ func rotationBarrier(t *testing.T, phase string) string {
 func rotationEntered(c *cursorSession, t *testing.T, dir string) {
 	t.Helper()
 	c.wait(t, "publication barrier", func() bool { _, e := os.Stat(filepath.Join(dir, "entered")); return e == nil })
-}
-
-// rotationWindow renders each record from the first submission_accepted as kind and
-// sorted data; submissions by text, times, epochs and control IDs as "*".
-func rotationWindow(t *testing.T, c *cursorSession) []string {
-	t.Helper()
-	row, err := c.e.s.GetSpawn(c.e.binding.InstanceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(row.JSONLPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := map[string]string{}
-	var window []string
-	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
-		var r struct {
-			Kind string         `json:"kind"`
-			Data map[string]any `json:"data"`
-		}
-		if err := json.Unmarshal(line, &r); err != nil {
-			t.Fatal(err)
-		}
-		if text, ok := r.Data["text"].(string); ok {
-			names[fmt.Sprint(r.Data["submission_id"])] = text
-		}
-		if len(window) == 0 && r.Kind != "submission_accepted" {
-			continue
-		}
-		keys := make([]string, 0, len(r.Data))
-		for k := range r.Data {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		rendered := r.Kind
-		for _, k := range keys {
-			v := r.Data[k]
-			switch k {
-			case "consumed_at", "input_epoch", "control_epoch", "input_id":
-				v = "*"
-			case "submission_id":
-				v = names[fmt.Sprint(v)]
-			}
-			rendered += fmt.Sprintf(" %s=%v", k, v)
-		}
-		window = append(window, rendered)
-	}
-	return window
-}
-
-// rotationPaneOrder fails unless the pane shows these lines in this order.
-func rotationPaneOrder(t *testing.T, c *cursorSession, lines ...string) {
-	t.Helper()
-	pane := c.pane.bytes()
-	for _, line := range lines {
-		i := bytes.Index(pane, []byte(line+"\r\n"))
-		if i < 0 {
-			t.Fatalf("pane lacks %q in order %q: %s", line, lines, c.pane.bytes())
-		}
-		pane = pane[i+len(line):]
-	}
-}
-
-// saveBarrier blocks the first matching durable input save through
-// Options.beforeInputSave; start signals the first control put (b.x9o).
-type saveBarrier struct {
-	match            func(store.CursorInput) bool
-	entered, release chan struct{}
-	controls         chan struct{}
-	blocked, opened  sync.Once
-}
-
-func newSaveBarrier(t *testing.T, match func(store.CursorInput) bool) *saveBarrier {
-	b := &saveBarrier{match: match, entered: make(chan struct{}), release: make(chan struct{}), controls: make(chan struct{}, 1)}
-	t.Cleanup(b.open)
-	return b
-}
-
-func (b *saveBarrier) before(next store.CursorInput) {
-	if b.match(next) {
-		b.blocked.Do(func() { close(b.entered); <-b.release })
-	}
-}
-
-func (b *saveBarrier) open() { b.opened.Do(func() { close(b.release) }) }
-
-func (b *saveBarrier) start(in *os.File, out io.Writer, emit func(terminalInput), admit func() bool, choices ...func(rune) (string, string, bool)) func() {
-	return terminalLoop(in, out, func(v terminalInput) {
-		emit(v)
-		if v.interrupt || v.text == "/exit" {
-			select {
-			case b.controls <- struct{}{}:
-			default:
-			}
-		}
-	}, admit, choices...)
-}
-
-func (b *saveBarrier) wait(t *testing.T, c *cursorSession) {
-	t.Helper()
-	select {
-	case <-b.entered:
-	case c.endErr = <-c.done:
-		c.ended = true
-		t.Fatalf("gateway ended before the save blocked: %v", c.endErr)
-	case <-time.After(5 * time.Second):
-		t.Fatal("save did not block")
-	}
-}
-
-// control puts keys (Ctrl-C or /exit) and releases the save; the control's cancelWait, from
-// the put, bounds the release. Returns rotationWindow at Ctrl-C's recovery or /exit's end.
-func (b *saveBarrier) control(t *testing.T, c *cursorSession, keys, followUp string) []string {
-	t.Helper()
-	b.wait(t, c)
-	c.keys(t, keys)
-	c.wait(t, "control consumed", func() bool { return len(b.controls) == 1 })
-	b.open()
-	if keys == "\x03" {
-		c.wait(t, "idle recovery", func() bool { return bytes.Contains(c.pane.bytes(), []byte("submit a new prompt to continue")) })
-		window := rotationWindow(t, c)
-		c.keys(t, followUp+"\r")
-		c.wait(t, "follow-up turn", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
-		c.stop(t)
-		return window
-	}
-	select {
-	case c.endErr = <-c.done:
-		c.ended = true
-	case <-time.After(5 * time.Second):
-		t.Fatal("exit did not stop the gateway")
-	}
-	if c.endErr != nil {
-		t.Fatalf("gateway ended with %v; want a clean exit", c.endErr)
-	}
-	return rotationWindow(t, c)
-}
-
-// fatal revokes runtime authority while the save blocks: that failure is not a
-// retired epoch, so it stays fatal and text is never accepted or sent.
-func (b *saveBarrier) fatal(t *testing.T, c *cursorSession, text string) {
-	t.Helper()
-	b.wait(t, c)
-	binding, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	null, err := os.OpenFile("/dev/null", os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer null.Close()
-	// As TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking does.
-	if err := syscall.Dup3(int(null.Fd()), binding.InputFD, syscall.O_CLOEXEC); err != nil {
-		t.Fatal(err)
-	}
-	b.open()
-	c.awaitFailure(t, 5*time.Second)
-	if _, err := c.controllerResult(); err == nil || err.Error() != "Cursor input persistence unconfirmed; no replay: ACP input binding changed" {
-		t.Fatalf("controller error = %v; want the save's unconfirmed persistence", err)
-	}
-	for _, r := range c.records(t) {
-		if r.Kind == "submission_accepted" && r.Data.Text == text {
-			t.Fatalf("failed save accepted its input: %+v", r)
-		}
-	}
-	rotationNoBytes(t, c, text)
 }
 
 // Real controller, PTY and guarded publication with a synthetic ACP peer.
@@ -773,7 +603,7 @@ func TestCursorControlDuringHeldPromotionIsActedOn(t *testing.T) {
 // input is accepted after fresh publication and submit cancels it before
 // dispatch; the control then acts, and the input held behind it is refused.
 // Any other failure of that save stays fatal.
-func TestCursorControlDuringHeldPromotionSaveFollowsMain(t *testing.T) {
+func TestCursorHeldPromotionSaveControlCancelsAuthorityLossFails(t *testing.T) {
 	// Serial: protected runtime and reporter subprocess use process environment.
 	for _, tc := range []struct{ control, keys string }{
 		{"interrupt", "\x03"},
@@ -829,7 +659,7 @@ func TestCursorControlDuringHeldPromotionSaveFollowsMain(t *testing.T) {
 			if !reflect.DeepEqual(window, want) {
 				t.Fatalf("records from the promotion:\n%s\nwant:\n%s", strings.Join(window, "\n"), strings.Join(want, "\n"))
 			}
-			rotationPaneOrder(t, c, pane...)
+			paneOrder(t, c, pane...)
 			// Cancelled from its held row: never persisted admitted to a target.
 			if v := c.capturedInput(t, first); v.State != store.CursorInputCancelled || v.Detail != "control consumed before dispatch" || v.TargetSession != "" {
 				t.Fatalf("promoted input row = %+v; want cancelled from held", v)

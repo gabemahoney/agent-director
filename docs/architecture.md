@@ -1470,11 +1470,14 @@ only the private tmux server and waits for its owned runtime/worker before
 temporary files are removed. Controller ordering and persistence tests MUST reuse
 `session_fixture_linux_test.go`'s real Run/PTY/session helpers, completed-input
 callbacks and protected-file record barriers alongside existing request/report
-fixtures. The internal input starter and optional post-recovery observation keep
-production terminal defaults and expose actual controller boundaries; the
-transcript opener retains protected file creation. Use these seams for causal
-ordering and complete large submissions instead of copied controllers, alternate
-runtimes or per-rune stress. They do not supply production authority.
+fixtures. To order a control inside a durable input save, they MUST block the
+save with `saveBarrier` through `Options.beforeInputSave`, because a record
+barrier blocks a later transcript record, not the save. The internal input
+starter and optional post-recovery observation keep production terminal
+defaults and expose actual controller boundaries; the transcript opener retains
+protected file creation. Use these seams for causal ordering and complete large
+submissions instead of copied controllers, alternate runtimes or per-rune
+stress. They do not supply production authority.
 
 Terminal and `Run` cleanup tests MUST reuse `terminalReadByNextOwner` in
 `terminal_test.go` with the existing PTY fixtures. After cleanup, it writes
