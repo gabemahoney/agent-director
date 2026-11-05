@@ -24138,7 +24138,10 @@ list -deps ./test/smoke/ts-helper`: the CLI itself, `pkg/api/apitest`,
 `internal/store`, `internal/trail`) plus `go.mod` and `go.sum`, so Make
 rebuilds when a seeder changes and skips the build otherwise. A package
 that gains a module import extends the list, or the binary can go stale
-(b.93m).
+(b.93m). `make test-image`, and so `make test-docker`, also builds it,
+because testplans run it from the read-only source mount as
+`/work/source/bin/ts-helper` (b.m2s); the release coverage gate
+(`docker-epics.sh`) pre-builds it with the binaries.
 
 **Bun integration — `TS_HELPER_PATH`.**
 

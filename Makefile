@@ -202,7 +202,7 @@ check-sandbox-bypass:
 
 # Build the Docker test harness image. Always rebuilds the binary first so
 # the image picks up the latest source.
-test-image: build
+test-image: build ts-helper
 	docker build \
 		--build-arg CLAUDE_CODE_VERSION=$(CLAUDE_CODE_VERSION) \
 		-t $(TEST_IMAGE) \
@@ -785,6 +785,8 @@ release-binaries:
 # and skips the build when nothing has changed. Without the apitest prereqs,
 # a stale binary can seed pre-migration stores (b.93m). Extend the list when
 # one of them gains a module import, or the binary can go stale.
+# test-image builds it too: Docker testplans run it from the read-only source
+# mount as /work/source/bin/ts-helper (b.m2s).
 TS_HELPER_SRC_DIRS := test/smoke/ts-helper pkg/api/apitest \
 	internal/testsupport/faketmuxfix internal/testsupport/tmuxfix \
 	internal/testsupport/launchfix internal/testsupport/procfix \

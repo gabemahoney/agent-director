@@ -25,6 +25,11 @@
 // test-docker). With a guarded goal given, every other recipe now waits for the
 // guard.
 //
+// b.m2s: make test-docker never built bin/ts-helper, which Docker testplans run
+// from the read-only source mount as /work/source/bin/ts-helper, so on a fresh
+// checkout (CI) they failed with "No such file or directory". test-image now
+// builds it with the binaries, so test-docker's builds include it.
+//
 // Like the other test/sandbox suites it drives a copy of the Makefile under test
 // in a temp tree, with logging fake go, bun and docker on PATH, and runs no repo
 // binary, so it needs no sandboxguard TestMain.
@@ -43,6 +48,10 @@
 // fail, and so do TestRequireSandbox_AdviceKeepsValues and
 // TestRequireSandbox_AdviceCopiesCmd. Without _require_sandbox_var's $
 // doubling, generate_simple_var and AdviceKeepsValues' simple_dollar fail.
+// Before b.m2s's fix, TestRequireSandbox_Passes' test_docker_j8_outside_sandbox
+// and sandbox_marker_test_docker_generate_j8 fail, and so does every check that
+// uses generateAndBuilds: TestRequireSandbox_AdviceFollow's test-docker cells
+// and TestRequireSandbox_AdviceKeepsValues.
 package sandboxrequiresandbox_test
 
 import (
@@ -539,7 +548,7 @@ func TestRequireSandbox_Passes(t *testing.T) {
 		// b.uc7: with no guarded goal no recipe waits for the guard; in the sandbox
 		// the guard passes and the recipes that wait for it run.
 		{name: "test_docker_j8_outside_sandbox", args: []string{"-j8", "test-docker", "EPIC=harness-smoke"},
-			wantCalls: append([]string{"docker build", "docker run"}, builds...)},
+			wantCalls: append([]string{"docker build", "docker run", "go build ./test/smoke/ts-helper/"}, builds...)},
 		{name: "sandbox_marker_test_docker_generate_j8", args: []string{"-j8", "test-docker", "generate", "EPIC=harness-smoke"},
 			env: []string{"AGENT_DIRECTOR_TEST_SANDBOX=1"}, wantCalls: append([]string{"docker build", "docker run"}, generateAndBuilds...)},
 	} {
@@ -560,7 +569,7 @@ func TestRequireSandbox_Passes(t *testing.T) {
 
 // generateAndBuilds are the go calls of make generate test-docker: go generate,
 // and test-docker's builds (through test-image).
-var generateAndBuilds = []string{"go generate ./...", "go build ./cmd/agent-director", "go build ./cmd/agent-director-admin"}
+var generateAndBuilds = []string{"go generate ./...", "go build ./cmd/agent-director", "go build ./cmd/agent-director-admin", "go build ./test/smoke/ts-helper/"}
 
 // testDockerGenerateAdvice is the advice for make test-docker generate EPIC=harness-smoke.
 const testDockerGenerateAdvice = `make test-docker 'EPIC=harness-smoke' && ` +

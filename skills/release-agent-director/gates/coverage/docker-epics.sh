@@ -97,32 +97,34 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 # ─── live run: pre-build bin/ once, under the EXCLUSIVE tree-write lock ───────
-# Each child's `make test-docker` runs `make build` first (test-image's
-# prerequisite), and it runs it under the child's SHARED hold. When bin/ is
-# stale, that build deletes and rewrites bin/agent-director and
-# bin/agent-director-admin while sibling children collect the tree as their
-# build context: the race the lock exists to close. In a release run bin/ is
-# always stale at this point, because `make build` stamps the HEAD commit
-# (COMMIT_SHA) into both binaries and branch-and-bump commits just before the
-# coverage phase. The test preload's exclusive build does not reliably come
-# first either: Linux flock does not favour a waiting exclusive locker, so it
-# usually queues behind the children's shared holds.
+# Each child's `make test-docker` runs `make build ts-helper` first
+# (test-image's prerequisites), and it runs them under the child's SHARED hold.
+# When bin/ is stale, those builds delete and rewrite bin/agent-director,
+# bin/agent-director-admin and bin/ts-helper while sibling children collect the
+# tree as their build context, and their containers run
+# /work/source/bin/ts-helper (b.m2s): the race the lock exists to close. In a
+# release run bin/ is always stale at this point, because `make build` stamps
+# the HEAD commit (COMMIT_SHA) into both binaries and branch-and-bump commits
+# just before the coverage phase. The test preload's exclusive build does not
+# reliably come first either: Linux flock does not favour a waiting exclusive
+# locker, so it usually queues behind the children's shared holds.
 #
 # So build bin/ here, once, as a tree writer: EXCLUSIVE, before run-parallel
 # starts any child. No child holds the lock yet, so this waits only on other
 # exclusive writers (the preload's builds, coverage.bun-test's install and
 # build). Each child's own `make build` then finds both binaries current, and
 # go build only updates their mtimes, which a concurrent context collection
-# tolerates. If the pre-build fails, the gate fails without starting a child:
-# every child would retry the same build under a shared hold.
-PREBUILD_OUT="$(flock .tree-write.lock make build 2>&1)"
+# tolerates; its ts-helper finds bin/ts-helper newer than its sources and
+# builds nothing. If the pre-build fails, the gate fails without starting a
+# child: every child would retry the same build under a shared hold.
+PREBUILD_OUT="$(flock .tree-write.lock make build ts-helper 2>&1)"
 PREBUILD_EXIT=$?
 if [[ "$PREBUILD_EXIT" -ne 0 ]]; then
   emit_diagnostic \
     "coverage.docker-epic-prebuild" \
     "bin/" \
-    "make build under the exclusive tree-write lock (.tree-write.lock), run once before any docker epic starts, failed with exit ${PREBUILD_EXIT}; no docker epic ran. Output tail: $(printf '%s' "$PREBUILD_OUT" | tail -c 500)" \
-    "Run 'make build' at the repo root to reproduce, fix the build, then rerun the coverage phase."
+    "make build ts-helper under the exclusive tree-write lock (.tree-write.lock), run once before any docker epic starts, failed with exit ${PREBUILD_EXIT}; no docker epic ran. Output tail: $(printf '%s' "$PREBUILD_OUT" | tail -c 500)" \
+    "Run 'make build ts-helper' at the repo root to reproduce, fix the build, then rerun the coverage phase."
   exit 1
 fi
 
