@@ -774,48 +774,62 @@ release-binaries:
 	@echo "[release] sizes:"
 	@du -h "$(RELEASE_DIST_DIR)"/agent-director-* | sed 's/^/  /'
 
+# The two test helpers below, bin/ts-helper and test/fake-tmux/tmux, rebuild
+# when anything they link from this module changes (b.q6s). After a build the
+# recipe writes <binary>.d from `go list -deps`: one `<VAR> += <files>` line
+# per package of this module the binary links, naming its non-test .go files
+# and the files it embeds, relative to the checkout so a file written in the
+# sandbox works on the host. The prerequisites are those files, the
+# directory each sits in, and go.mod and go.sum, so a file added to or
+# removed from one of those directories counts as a change too; one added
+# in a subdirectory holding no listed file (such as a new folder under an
+# embedded testdata/) does not. Each listed file and directory has an empty
+# rule, so a deleted one makes make rebuild rather than fail. A binary with
+# no dependency file (never built here, a failed build, or a helper built
+# before b.q6s) depends on the phony _go-deps-missing, so it always
+# rebuilds. go runs only in these recipes, never while make reads this file.
+-include bin/ts-helper.d test/fake-tmux/tmux.d
+.PHONY: _go-deps-missing
+# _go_deps returns the prerequisites of a binary whose dependency file set
+# $(1): the files, their directories, and go.mod and go.sum.
+_go_deps = $(if $(1),$(1) $(sort $(dir $(1))),_go-deps-missing) go.mod go.sum
+# _go_helper is the recipe that builds binary $(1) from package $(2) and
+# writes $(1).d setting $(3). It removes the old dependency file first, so a
+# failed step leaves none.
+define _go_helper
+@rm -f $(1).d
+CGO_ENABLED=0 go build -o $(1) $(2)
+@CGO_ENABLED=0 go list -deps -f '{{if and .Module .Module.Main}}{{$$p := ""}}{{with slice .Dir (len .Module.Dir)}}{{$$p = printf "%s/" (slice . 1)}}{{end}}$(3) +={{range .GoFiles}} {{$$p}}{{.}}{{end}}{{range .EmbedFiles}} {{$$p}}{{.}}{{end}}{{end}}' $(2) > $(1).d.tmp
+@mv $(1).d.tmp $(1).d
+endef
+$(sort $(TS_HELPER_DEPS) $(dir $(TS_HELPER_DEPS)) $(FAKE_TMUX_DEPS) $(dir $(FAKE_TMUX_DEPS))):
+
 # ts-helper builds the fixture-seeding CLI used by TypeScript smoke tests.
 # Built like any other binary (no special build tags); source lives under
 # test/smoke/ts-helper/, but the CLI also imports pkg/api/apitest (SeedSpawn)
 # to seed stores and the fake-tmux table/label packages (faketmuxfix,
 # tmuxfix). modernc.org/sqlite is pure Go; CGO_ENABLED=0 suffices. The
-# target is incremental: its prerequisites are every non-test source the
-# binary links from this module (`go list -deps ./test/smoke/ts-helper`) —
-# including the apitest seeder sources — so make rebuilds when one changes
-# and skips the build when nothing has changed. Without the apitest prereqs,
-# a stale binary can seed pre-migration stores (b.93m). Extend the list when
-# one of them gains a module import, or the binary can go stale.
+# target is incremental (see above): without the apitest sources among its
+# prerequisites, a stale binary can seed pre-migration stores (b.93m).
 # test-image builds it too: Docker testplans run it from the read-only source
 # mount as /work/source/bin/ts-helper (b.m2s).
-TS_HELPER_SRC_DIRS := test/smoke/ts-helper pkg/api/apitest \
-	internal/testsupport/faketmuxfix internal/testsupport/tmuxfix \
-	internal/testsupport/launchfix internal/testsupport/procfix \
-	internal/testsupport/procstarttimefix internal/testsupport/storefix \
-	internal/testsupport/writefailfix internal/spawn internal/hook \
-	internal/tmux internal/config internal/store internal/trail
-TS_HELPER_SRCS := $(filter-out %_test.go,$(foreach d,$(TS_HELPER_SRC_DIRS),$(wildcard $(d)/*.go))) go.mod go.sum
-
-bin/ts-helper: $(TS_HELPER_SRCS)
-	CGO_ENABLED=0 go build -o bin/ts-helper ./test/smoke/ts-helper/
+bin/ts-helper: $(call _go_deps,$(TS_HELPER_DEPS))
+	$(call _go_helper,bin/ts-helper,./test/smoke/ts-helper/,TS_HELPER_DEPS)
 
 ts-helper: bin/ts-helper
 
 # fake-tmux builds the test-only tmux stand-in (test/fake-tmux; its package
 # comment documents the call set, the per-socket tables and the control
 # variables) used by the TypeScript smoke tests. Compiled with CGO_ENABLED=0
-# (pure Go, no libc dependency). The prerequisites are every non-test source
-# the fake links from this module (`go list -deps ./test/fake-tmux`): its own
-# files, the shared table/injection package (faketmuxfix), the replay
-# catalogue and Recorder package (tmuxfix) and what they import
-# (internal/tmux, internal/config, internal/store, internal/trail). Extend the
-# list when one of them gains a module import, or the binary can go stale.
-FAKE_TMUX_SRC_DIRS := test/fake-tmux internal/testsupport/faketmuxfix \
-	internal/testsupport/tmuxfix internal/tmux internal/config \
-	internal/store internal/trail
-FAKE_TMUX_SRCS := $(filter-out %_test.go,$(foreach d,$(FAKE_TMUX_SRC_DIRS),$(wildcard $(d)/*.go))) go.mod go.sum
-
-test/fake-tmux/tmux: $(FAKE_TMUX_SRCS)
-	CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux/ && chmod 755 test/fake-tmux/tmux
+# (pure Go, no libc dependency). Incremental like ts-helper (see above).
+# Unlike ts-helper's, its binary and dependency file sit in a prerequisite
+# directory, test/fake-tmux/, whose mtime writing them changes, so the
+# recipe touches the binary last. That leaves a small window: a source
+# edited between go list and the touch ends up older than the binary.
+test/fake-tmux/tmux: $(call _go_deps,$(FAKE_TMUX_DEPS))
+	$(call _go_helper,test/fake-tmux/tmux,./test/fake-tmux/,FAKE_TMUX_DEPS)
+	@touch test/fake-tmux/tmux
+	chmod 755 test/fake-tmux/tmux
 
 fake-tmux: test/fake-tmux/tmux
 
