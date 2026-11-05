@@ -339,6 +339,21 @@ func TestRelaunchLeavesPermissionsNil(t *testing.T) {
 	}
 }
 
+// TestRelaunchContextFullnessSwitch (b.kh7): resume's settings follow
+// disable_context_fullness as a spawn's do.
+func TestRelaunchContextFullnessSwitch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, disabled := range []bool{false, true} {
+		e := newRelaunchEnv(t)
+		e.row.ExtraEnv = claudeConfigWithStatusLine(t)
+		e.cfg.Defaults.DisableContextFullness = disabled
+		if out := e.relaunch("s1"); out.Kind != CreateLabelled {
+			t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
+		}
+		assertContextStatuslines(t, e.onlyCreate().Command[4], "/bin/agent-director", disabled)
+	}
+}
+
 // TestRelaunchLabelledCreateOnPassedSocket: the create names the passed socket
 // and the row's name and cwd, and labels the session and its pane with the
 // passed token and store id. Relaunch is CreateAndLabel, whose label by id of

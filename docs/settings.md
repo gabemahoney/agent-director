@@ -35,6 +35,16 @@ The synthesized payload contains:
   populated from the spawn's `allow` / `deny` / `ask` params
   (`--allow` / `--deny` / `--ask` on the CLI) plus the
   `disable_ask_user` config flag. See `permissions.md`.
+- **`statusLine`** and **`subagentStatusLine`** — the experimental
+  [context fullness](caller-contract.md#experimental-context-fullness)
+  callbacks: each runs `agent-director hook --context-source <key>`, which
+  records the context window and runs the status-line command found in the
+  user, project and local settings files with its input, output and exit
+  status unchanged. Only those files are read: a status line that a
+  `[launch] claude_path` wrapper adds in its own `--settings` is not seen,
+  and the callback forwards to the command those files name instead. Set
+  [`[defaults] disable_context_fullness`](configuration.md#keys) to `true`
+  to omit both keys, so Claude Code's own status lines stand.
 
 agent-director never writes hooks or permissions to disk on behalf of a
 Spawn. The synthesized JSON exists only for the lifetime of the tmux

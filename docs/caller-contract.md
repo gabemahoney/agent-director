@@ -144,9 +144,13 @@ ordinary response's transcript usage must pair with its applicable native status
 capacity in the current live launch. Usage adds input, cache creation, cache
 read and output tokens once each; it does not sum requests or iterations.
 Automatic status-line observation preserves the selected user command's
-input, output and exit status. Unresolved settings, including JSONC or
-ambiguous ancestor Git local settings, leave native callbacks unchanged and
-context unknown. Unqualified configurations remain unknown.
+input, output and exit status (which command is selected: see
+[Settings](settings.md#what---settings-carries)). Unresolved settings,
+including JSONC or ambiguous ancestor Git local settings, leave native
+callbacks unchanged and context unknown. Unqualified configurations remain
+unknown. With `[defaults] disable_context_fullness` on, a Claude launch's
+context is unknown for it and its subagents (see
+[Configuration](configuration.md#keys)).
 
 Codex numeric support is limited to Codex CLI **0.159.2**, the **OpenAI** provider,
 and resolved sequential rollout history from a fresh session whose startup
