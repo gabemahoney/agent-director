@@ -25,7 +25,7 @@ processes.
 
 ## Install
 
-Requires **Go 1.22** or later.
+Requires **Go 1.27.3** or later.
 
 ```sh
 go get github.com/gabemahoney/agent-director@<tag>
