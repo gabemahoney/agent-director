@@ -209,13 +209,14 @@ EOF
 # J22's after-open move also surrounds the administrator open now used for
 # pre-cutover stores. Delegate to the real administrator, preserving inventory,
 # backup and transaction checks; inject the fixture move only after success,
-# and never after a snapshot or pre-flight's migrate-journal --check-only.
+# and never after a snapshot, pre-flight's migrate-journal --check-only or
+# its predates probe (migrate-journal --help), none of which opens the store.
 FAKE_ADMIN="$ROOT/bin/admin-around"
 FAKE_ADMIN_AROUND="$ROOT/fake-admin-around.sh"
 cat >"$FAKE_ADMIN_AROUND" <<EOF
 #!/bin/bash
 "$ADMIN" "\$@" || exit
-for arg in "\$@"; do [[ "\$arg" == snapshot-store || "\$arg" == --check-only ]] && exit 0; done
+for arg in "\$@"; do [[ "\$arg" == snapshot-store || "\$arg" == --check-only || "\$arg" == --help ]] && exit 0; done
 if [[ -e "\$HOME/fake-after" ]]; then . "\$HOME/fake-after"; rm "\$HOME/fake-after"; fi
 EOF
 chmod 0755 "$FAKE_ADMIN_AROUND" || die "chmod $FAKE_ADMIN_AROUND"

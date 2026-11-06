@@ -582,12 +582,61 @@ ad_outcome_exit() {
     ad_exit_5 "$err_name"
 }
 
+# The copies a restore needs (SR-2.16), which pre-flight makes on a crossing
+# upgrade ("Restore preconditions", below). One entry per item, in this
+# order: the binary, the administrator, the sentinel, the managed PATH link.
+# RESTORE_BELONGS[i] is where the item belongs; RESTORE_COPY[i] is its copy,
+# <what it copies>.restore-<RESTORE_TS>.<suffix> beside it (for a link, a
+# directory holding the link under the item's last component; see
+# ad_restore_copy), or empty when nothing was there before the run. Task t2.7tz.ab.p5 sets
+# RESTORE_KEEP_COPIES to 1 when an outcome keeps the copies; until then every
+# run removes its copies when it ends.
+RESTORE_TS=""
+RESTORE_BELONGS=()
+RESTORE_COPY=()
+RESTORE_KEEP_COPIES=0
+RESTORE_NOT_REMOVED=()
+
+# ad_restore_copies_remove — remove each copy this run made, by its recorded
+# name only, so another run's copies are never touched. A link's copy is its
+# mktemp -d directory: the link inside it, named as the item, is removed
+# (never its target) only while it is a link, then the directory only while
+# it is empty. Returns 1, listing each copy it could not remove in
+# RESTORE_NOT_REMOVED, when one stays.
+ad_restore_copies_remove() {
+    local i c inner rc=0
+    RESTORE_NOT_REMOVED=()
+    for ((i = 0; i < ${#RESTORE_COPY[@]}; i++)); do
+        c="${RESTORE_COPY[$i]}"
+        if [[ -z "$c" ]]; then
+            continue
+        fi
+        if [[ -d "$c" && ! -L "$c" ]]; then
+            inner="$c/${RESTORE_BELONGS[$i]##*/}"
+            if [[ -L "$inner" ]]; then
+                rm -f -- "$inner" 2>/dev/null || true
+            fi
+            if ! rmdir -- "$c" 2>/dev/null; then
+                RESTORE_NOT_REMOVED+=("$c")
+                rc=1
+            fi
+        elif ! rm -f -- "$c" 2>/dev/null; then
+            RESTORE_NOT_REMOVED+=("$c")
+            rc=1
+        fi
+    done
+    return "$rc"
+}
+
 # ad_exit_cleanup — the install's EXIT cleanup: remove every temp file this
 # install made and has not moved into place (the staged binary copies, the
 # --from-release downloads, the binary and admin temp copies, a migration
 # sentinel's temp file that step 3 never moved into place, and a migration
-# write's temp file). Every EXIT trap of this script runs it, the move's too
-# (ad_move_on_exit), so the move's traps chain onto it rather than replace it.
+# write's temp file), and the restore's copies unless RESTORE_KEEP_COPIES is
+# 1: after a success, a refusal, a post-swap failure and a failed move alike.
+# A SIGKILL leaves the copies, under their documented name pattern. Every
+# EXIT trap of this script runs it, the move's too (ad_move_on_exit), so the
+# move's traps chain onto it rather than replace it.
 ad_exit_cleanup() {
     local f
     for f in "${TMP:-}" "${ADMIN_TMP:-}" "${tmp_bin:-}" "${tmp_admin:-}" \
@@ -596,6 +645,9 @@ ad_exit_cleanup() {
             rm -f "$f"
         fi
     done
+    if [[ "$RESTORE_KEEP_COPIES" -ne 1 ]]; then
+        ad_restore_copies_remove || true
+    fi
     # The schedule step's download directory (b.wur), when an interrupt left it.
     if [[ -n "${sched_tmp:-}" ]]; then
         rm -rf -- "$sched_tmp"
@@ -1379,7 +1431,7 @@ STORE_SCHEMA_VERSION=20
 # t2.7tz.ab.hh, t2.7tz.ab.p5 and t2.7tz.ab.5w append their own installer
 # reasons to this one line. A test reads it, so keep it on one line in this
 # form, and ad_outcome_exit refuses a self-chosen reason missing from it.
-AD_OUTCOME_REASONS='cutover_state_unreadable native_input_authority_missing check_only_unestablished'
+AD_OUTCOME_REASONS='cutover_state_unreadable native_input_authority_missing check_only_unestablished previous_release_unknown restore_copies_unavailable backup_inside_install_directory'
 
 # >>> ad_agent_rename_migrate (b.ssz) >>>
 #
@@ -3919,7 +3971,8 @@ fi
 #   - no store, or v0: not crossing;
 #   - v1 up to INPUT_CUTOVER_VERSION - 1: crossing (CUTOVER_CROSSING=1),
 #     and the candidate administrator's migrate-journal --check-only must
-#     accept the run's journal flags;
+#     accept the run's journal flags; then the restore preconditions
+#     (below) run;
 #   - INPUT_CUTOVER_VERSION up to STORE_SCHEMA_VERSION - 1: not crossing
 #     when the native-input authority is recorded; refused when it is
 #     missing (native_input_authority_missing) or unreadable
@@ -3974,12 +4027,477 @@ ad_journal_check_only() {
     ad_outcome_exit ErrJournalMigrationRefused check_only_unestablished "$action" not_committed
 }
 
+# --------------------------------------------------------------------
+# Restore preconditions (SR-2.14 "Pre-flight", SR-2.16)
+#
+# On a crossing upgrade, after --check-only has passed and before the move
+# and the swap, pre-flight settles what SR-2.16's restore needs, and refuses
+# with nothing changed when it cannot:
+#   - with a move due, the journal backup directory lies outside AD's old and
+#     new directories (backup_inside_install_directory);
+#   - whether the previous release predates the cutover
+#     (previous_release_unknown when its probe gives no clear answer);
+#   - for a release that predates it, the copies the restore puts back
+#     (restore_copies_unavailable).
+# PREV_RELEASE_PREDATES is the decision Task t2.7tz.ab.p5's "When to restore"
+# reads. It describes the administrator binary probed here, never one
+# installed later in the run. A non-crossing run leaves PREV_ADMIN and
+# PREV_RELEASE_PREDATES empty and makes no copy.
+# --------------------------------------------------------------------
+
+# The installed binaries: pre-flight copies them, and the swap replaces them.
+CANONICAL="${DEFAULT_BIN_DIR}/agent-director"
+ADMIN_CANONICAL="$DEFAULT_ADMIN_PATH"
+
+# ad_managed_link_target — print the managed PATH link the swap makes
+# (${SYMLINK_DIR}/agent-director, when linking is on and SYMLINK_DIR is a
+# directory whose path holds no whitespace), or nothing. Once
+# ad_managed_link_decide has run, it prints that decision instead.
+MANAGED_LINK_DECIDED=0
+MANAGED_LINK_DECISION=""
+MANAGED_LINK_RECORD=""
+MANAGED_LINK_SKIP=""
+ad_managed_link_target() {
+    if [[ "$MANAGED_LINK_DECIDED" -eq 1 ]]; then
+        if [[ -n "$MANAGED_LINK_DECISION" ]]; then
+            printf '%s\n' "$MANAGED_LINK_DECISION"
+        fi
+        return 0
+    fi
+    if [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" && -d "$SYMLINK_DIR" && ! "$SYMLINK_DIR" =~ [[:space:]] ]]; then
+        printf '%s\n' "${SYMLINK_DIR}/agent-director"
+    fi
+}
+
+# ad_managed_link_decide — before the copies, fix whether and where the swap
+# makes the managed link, so the swap and the restore's record agree
+# (SR-2.16). While the move is due, a SYMLINK_DIR inside AD's old or new
+# directory (ad_backup_inside: lexically, physically, or by identity on
+# Darwin), or one that cannot be placed against them, gets none
+# (MANAGED_LINK_SKIP says why): the move renames the old directory and
+# replaces the new one, and the restore puts the pre-move directory back
+# whole. An outside one is recorded at SYMLINK_DIR's physical place
+# (MANAGED_LINK_RECORD), so the record names it after the rename; the link
+# itself is never followed.
+ad_managed_link_decide() {
+    local t dir which root rc phys
+    t="$(ad_managed_link_target)"
+    MANAGED_LINK_DECIDED=1
+    MANAGED_LINK_DECISION="$t"
+    MANAGED_LINK_RECORD="$t"
+    MANAGED_LINK_SKIP=""
+    if [[ -z "$t" || "$MOVE_DUE" -ne 1 ]]; then
+        return 0
+    fi
+    dir="$SYMLINK_DIR"
+    if [[ "$dir" != /* ]]; then
+        dir="$PWD/$dir"
+    fi
+    for which in old new; do
+        if [[ "$which" == old ]]; then
+            root="$OLD_INSTALL_ROOT"
+        else
+            root="$DEFAULT_INSTALL_ROOT"
+        fi
+        rc=0
+        ad_backup_inside "$dir" "$root" || rc=$?
+        if [[ "$rc" -eq 0 ]]; then
+            MANAGED_LINK_SKIP="$SYMLINK_DIR is inside AD's $which directory $root, which the move renames or replaces"
+        elif [[ "$rc" -eq 2 ]]; then
+            MANAGED_LINK_SKIP="$SYMLINK_DIR cannot be placed against AD's $which directory $root ($INSIDE_CAUSE)"
+        fi
+        if [[ -n "$MANAGED_LINK_SKIP" ]]; then
+            MANAGED_LINK_DECISION=""
+            MANAGED_LINK_RECORD=""
+            return 0
+        fi
+    done
+    if phys="$(cd -P -- "$dir" 2>/dev/null && pwd -P)"; then
+        MANAGED_LINK_RECORD="${phys%/}/agent-director"
+    fi
+}
+
+# ad_deep_place <absolute path> — set DEEP_BASE to the physical path (cd -P,
+# pwd -P) of the path's deepest existing ancestor-or-self, DEEP_REST to the
+# names below it joined by / (empty when the path exists), and DEEP_PATH to
+# the two joined. A component that is a dangling link is replaced by the
+# path it names and the walk goes on, so the place is judged as the kernel
+# would create it. Fails when that ancestor is not a directory or cannot be
+# entered, or when links loop.
+DEEP_BASE=""
+DEEP_REST=""
+DEEP_PATH=""
+ad_deep_place() {
+    local p rest="" hops=0
+    DEEP_BASE=""
+    DEEP_REST=""
+    DEEP_PATH=""
+    p="$(ad_clean_path "$1")"
+    while [[ ! -e "$p" ]]; do
+        if [[ "$p" != /* ]]; then
+            return 1
+        fi
+        if [[ -L "$p" ]]; then
+            if (( ++hops > 40 )); then
+                return 1
+            fi
+            p="$(ad_resolve_link "$p" 2>/dev/null)" || return 1
+            p="$(ad_clean_path "$p")"
+        else
+            rest="${p##*/}${rest:+/$rest}"
+            p="${p%/*}"
+            p="${p:-/}"
+        fi
+    done
+    if [[ ! -d "$p" ]]; then
+        return 1
+    fi
+    DEEP_BASE="$(cd -P -- "$p" 2>/dev/null && pwd -P)" || return 1
+    DEEP_REST="$rest"
+    if [[ -z "$rest" ]]; then
+        DEEP_PATH="$DEEP_BASE"
+    elif [[ "$DEEP_BASE" == / ]]; then
+        DEEP_PATH="/$rest"
+    else
+        DEEP_PATH="$DEEP_BASE/$rest"
+    fi
+}
+
+# ad_file_id <path> — print <path>'s file identity, device:inode in decimal
+# (GNU stat, then BSD stat).
+ad_file_id() {
+    local id
+    id="$(stat -L -c '%d:%i' "$1" 2>/dev/null || stat -L -f '%d:%i' "$1" 2>/dev/null)" || return 1
+    [[ "$id" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+    printf '%s\n' "$id"
+}
+
+# ad_fold <text> — print <text> with ASCII letters lower-cased (bash 3.2 has
+# no ${x,,}).
+ad_fold() {
+    printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]'
+}
+
+# ad_id_chain — from ad_deep_place's DEEP_BASE and DEEP_REST, fill ID_CHAIN
+# with the identity of DEEP_BASE and of each physical parent up to /, and
+# NAME_CHAIN with the case-folded names below each one down to the judged
+# path. Fails when an identity cannot be read.
+ID_CHAIN=()
+NAME_CHAIN=()
+ad_id_chain() {
+    local p="$DEEP_BASE" names id
+    ID_CHAIN=()
+    NAME_CHAIN=()
+    names="$(ad_fold "$DEEP_REST")"
+    while :; do
+        id="$(ad_file_id "$p")" || return 1
+        ID_CHAIN+=("$id")
+        NAME_CHAIN+=("$names")
+        if [[ "$p" == / ]]; then
+            return 0
+        fi
+        names="$(ad_fold "${p##*/}")${names:+/$names}"
+        p="${p%/*}"
+        p="${p:-/}"
+    done
+}
+
+# ad_backup_inside <backup> <dir> — 0 when <backup> is <dir> or under it,
+# 1 when it is outside, 2 (the cause in INSIDE_CAUSE) when its place cannot
+# be judged. Inside lexically (the cleaned paths), or physically (each
+# path's deepest existing ancestor resolved, as the move places path keys:
+# an inner link leading out still counts lexically, and a path reaching
+# <dir> through a link counts physically). On Darwin also by file identity
+# (SR-2.15 "Limits"): an element of <backup>'s chain with the identity of one
+# of <dir>'s, whose folded names below it are <dir>'s names below its match
+# or begin with them and /, so a case variant cannot escape the check, nor
+# can a containing directory that does not exist yet. For status 2,
+# INSIDE_SIDE says which path could not be judged: dir or backup.
+INSIDE_CAUSE=""
+INSIDE_SIDE=""
+ad_backup_inside() {
+    local b d dir_phys i j dn bn
+    local -a dir_ids dir_names
+    INSIDE_CAUSE=""
+    INSIDE_SIDE=""
+    b="$(ad_clean_path "$1")"
+    d="$(ad_clean_path "$2")"
+    if [[ "$b" == "$d" || "$b" == "$d"/* ]]; then
+        return 0
+    fi
+    INSIDE_SIDE=dir
+    if ! ad_deep_place "$d"; then
+        INSIDE_CAUSE="$d cannot be placed: an existing part of it is not a directory or cannot be entered, or its links loop"
+        return 2
+    fi
+    dir_phys="$DEEP_PATH"
+    if [[ "$uname_s" == Darwin ]]; then
+        if ! ad_id_chain; then
+            INSIDE_CAUSE="the file identity of $DEEP_BASE, or of a directory above it, cannot be read"
+            return 2
+        fi
+        dir_ids=("${ID_CHAIN[@]}")
+        dir_names=("${NAME_CHAIN[@]}")
+    fi
+    INSIDE_SIDE=backup
+    if ! ad_deep_place "$b"; then
+        INSIDE_CAUSE="$b cannot be placed: an existing part of it is not a directory or cannot be entered, or its links loop"
+        return 2
+    fi
+    if [[ "$DEEP_PATH" == "$dir_phys" || "$DEEP_PATH" == "$dir_phys"/* ]]; then
+        return 0
+    fi
+    if [[ "$uname_s" != Darwin ]]; then
+        return 1
+    fi
+    if ! ad_id_chain; then
+        INSIDE_CAUSE="the file identity of $DEEP_BASE, or of a directory above it, cannot be read"
+        return 2
+    fi
+    for ((i = 0; i < ${#ID_CHAIN[@]}; i++)); do
+        for ((j = 0; j < ${#dir_ids[@]}; j++)); do
+            if [[ "${ID_CHAIN[$i]}" != "${dir_ids[$j]}" ]]; then
+                continue
+            fi
+            dn="${dir_names[$j]}"
+            bn="${NAME_CHAIN[$i]}"
+            if [[ -z "$dn" || "$bn" == "$dn" || "$bn" == "$dn"/* ]]; then
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
+# ad_backup_install_dirs_check — with a move due, refuse a journal backup
+# directory inside AD's old or new directory (SR-2.14,
+# backup_inside_install_directory): step 4 creates it after the move, and a
+# restore renames the pre-move directory back and sets the new one aside,
+# which would move or hide it. When the install directory itself cannot be
+# placed or identified, no other backup helps, so the action says to repair
+# that path first.
+ad_backup_install_dirs_check() {
+    local which dir rc action
+    for which in old new; do
+        action="choose a --journal-backup directory outside AD's old and new directories (~/.agent-director and ~/.config/agent-director), then re-run this release's installer"
+        if [[ "$which" == old ]]; then
+            dir="$OLD_INSTALL_ROOT"
+        else
+            dir="$DEFAULT_INSTALL_ROOT"
+        fi
+        rc=0
+        ad_backup_inside "$JOURNAL_BACKUP" "$dir" || rc=$?
+        if [[ "$rc" -eq 1 ]]; then
+            continue
+        fi
+        if [[ "$rc" -eq 0 ]]; then
+            echo "install.sh: the journal backup directory $JOURNAL_BACKUP is inside AD's $which directory $dir; refusing to upgrade." >&2
+        else
+            echo "install.sh: cannot judge whether the journal backup directory $JOURNAL_BACKUP is inside AD's $which directory $dir; refusing to upgrade." >&2
+            echo "  $INSIDE_CAUSE" >&2
+            if [[ "$INSIDE_SIDE" == dir ]]; then
+                action="repair the path of AD's directory that the message names (rename aside any existing part of it that is not a directory, make each existing part one the user running the install can enter, break any link loop in it, and make its file identity readable), then choose a --journal-backup directory outside AD's old and new directories (~/.agent-director and ~/.config/agent-director), then re-run this release's installer"
+                echo "  To fix: repair the path $dir as the action below says; choosing another --journal-backup alone does not clear this." >&2
+            fi
+        fi
+        echo "  This upgrade moves $OLD_INSTALL_ROOT to $DEFAULT_INSTALL_ROOT, and a restore renames those directories, which would move or hide a backup inside them." >&2
+        echo "  Nothing was installed or changed." >&2
+        ad_outcome_exit ErrJournalMigrationRefused backup_inside_install_directory "$action" not_committed
+    done
+}
+
+# ad_prev_release_probe — decide whether the previous install's release
+# predates the cutover (SR-2.14): its administrator (the old layout's while
+# the move is due) absent, or answering migrate-journal --help with exit 1
+# and ErrUnknownVerb, predates it (PREV_RELEASE_PREDATES=1); exit 0 does not
+# (0). The probe passes no global flag, so no release opens a store or reads
+# a config. Any other answer refuses (previous_release_unknown).
+PREV_ADMIN=""
+PREV_RELEASE_PREDATES=""
+ad_prev_release_probe() {
+    local out rc=0 action
+    if [[ "$MOVE_DUE" -eq 1 ]]; then
+        PREV_ADMIN="${OLD_INSTALL_ROOT}/admin/agent-director-admin"
+    else
+        PREV_ADMIN="$DEFAULT_ADMIN_PATH"
+    fi
+    if [[ ! -e "$PREV_ADMIN" && ! -L "$PREV_ADMIN" ]]; then
+        PREV_RELEASE_PREDATES=1
+        echo "  previous: $PREV_ADMIN predates the native-input cutover (absent)"
+        return 0
+    fi
+    out="$("$PREV_ADMIN" migrate-journal --help </dev/null 2>&1)" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        PREV_RELEASE_PREDATES=0
+        echo "  previous: $PREV_ADMIN does not predate the native-input cutover (it has migrate-journal)"
+        return 0
+    fi
+    if [[ "$rc" -eq 1 && "$(ad_err_name "$out")" == ErrUnknownVerb ]]; then
+        PREV_RELEASE_PREDATES=1
+        echo "  previous: $PREV_ADMIN predates the native-input cutover (migrate-journal --help: ErrUnknownVerb)"
+        return 0
+    fi
+    action="make the previous agent-director-admin runnable, or remove it if it is not that release's, then re-run this release's installer"
+    echo "install.sh: cannot tell whether the previous release predates the native-input cutover; refusing to upgrade." >&2
+    echo "  previous agent-director-admin: $PREV_ADMIN" >&2
+    echo "  migrate-journal --help exited with status $rc, without exit 0 or exit 1 with ErrUnknownVerb. It said:" >&2
+    if [[ -n "$out" ]]; then
+        printf '%s\n' "$out" | sed 's/^/    /' >&2 || true
+    fi
+    echo "  Nothing was installed or changed." >&2
+    ad_outcome_exit ErrJournalMigrationRefused previous_release_unknown "$action" not_committed
+}
+
+# ad_restore_copy <path> [regular] — record <path> as an item the restore
+# puts back, with a copy beside it named <path>.restore-<RESTORE_TS>.<suffix>:
+# for a link, a directory created exclusively by mktemp -d holding a new link,
+# named as <path>'s last component, with the same raw target; for a regular
+# file, one created exclusively by mktemp (which never follows a link at the
+# name), with the same bytes and mode. Nothing at <path> records an empty
+# copy. With "regular" (the sentinel) only a regular file is copied, so its
+# bytes are never read or written through a link. Returns 1, the cause in
+# RESTORE_CAUSE and any chosen name in RESTORE_COPY_NAME (for a link, the
+# link inside its directory), when the copy cannot be made; a half-made copy
+# is removed, and nothing this run did not create is overwritten, written
+# through or removed.
+RESTORE_CAUSE=""
+RESTORE_COPY_NAME=""
+ad_restore_copy() {
+    local path="$1" only_regular="${2:-}" name raw out
+    RESTORE_CAUSE=""
+    RESTORE_COPY_NAME=""
+    if [[ ! -e "$path" && ! -L "$path" ]]; then
+        RESTORE_BELONGS+=("$path")
+        RESTORE_COPY+=("")
+        return 0
+    fi
+    if [[ -n "$only_regular" ]] && [[ -L "$path" || ! -f "$path" ]]; then
+        RESTORE_CAUSE="$path is not a regular file"
+        return 1
+    fi
+    if [[ -L "$path" ]]; then
+        if ! raw="$(readlink "$path" 2>&1)"; then
+            RESTORE_CAUSE="$raw"
+            return 1
+        fi
+        # ln writes its link inside any directory at its destination, so the
+        # link is made in a directory mktemp -d creates exclusively (mode
+        # 0700, never an existing entry), never at a free-looking name.
+        if ! name="$(mktemp -d "${path}.restore-${RESTORE_TS}.XXXXXX" 2>&1)"; then
+            RESTORE_CAUSE="$name"
+            return 1
+        fi
+        RESTORE_COPY_NAME="$name/${path##*/}"
+        if ! out="$(ln -sn -- "$raw" "$RESTORE_COPY_NAME" 2>&1)"; then
+            rmdir -- "$name" 2>/dev/null || true
+            RESTORE_CAUSE="$out"
+            return 1
+        fi
+        if [[ ! -L "$RESTORE_COPY_NAME" || "$(readlink "$RESTORE_COPY_NAME" 2>/dev/null)" != "$raw" ]]; then
+            RESTORE_BELONGS+=("$path")
+            RESTORE_COPY+=("$name")
+            RESTORE_CAUSE="the copy $RESTORE_COPY_NAME is not a link to $raw"
+            return 1
+        fi
+    elif [[ -f "$path" ]]; then
+        if ! name="$(mktemp "${path}.restore-${RESTORE_TS}.XXXXXX" 2>&1)"; then
+            RESTORE_CAUSE="$name"
+            return 1
+        fi
+        RESTORE_COPY_NAME="$name"
+        if ! out="$(cp -- "$path" "$name" 2>&1)" \
+            || ! out="$(chmod "$(ad_mode_of "$path")" "$name" 2>&1)"; then
+            rm -f -- "$name" 2>/dev/null || true
+            RESTORE_CAUSE="$out"
+            return 1
+        fi
+        if ! cmp -s -- "$path" "$name"; then
+            rm -f -- "$name" 2>/dev/null || true
+            RESTORE_CAUSE="the copy $name differs from $path"
+            return 1
+        fi
+    else
+        RESTORE_CAUSE="$path is neither a link nor a regular file"
+        return 1
+    fi
+    RESTORE_BELONGS+=("$path")
+    RESTORE_COPY+=("$name")
+}
+
+# ad_restore_item <item> <path> [regular] — ad_restore_copy, saying on
+# stdout which copy it made, or refusing (restore_copies_unavailable) with
+# every copy this run made removed.
+ad_restore_item() {
+    local c action
+    if ad_restore_copy "$2" "${3:-}"; then
+        if [[ -n "$RESTORE_COPY_NAME" ]]; then
+            echo "  restore : copied $2 to $RESTORE_COPY_NAME (removed when the run ends)"
+        fi
+        return 0
+    fi
+    action="make room or write access beside the installed binaries, the store and the managed PATH link; if the sentinel beside the store is not a regular file, or an installed binary or the managed PATH entry is neither a link nor a regular file, remove that entry; then re-run this release's installer"
+    ad_restore_copies_remove || true
+    echo "install.sh: cannot make the copies a restore needs; refusing to upgrade." >&2
+    echo "  item : $1, $2" >&2
+    if [[ -n "$RESTORE_COPY_NAME" ]]; then
+        echo "  copy : $RESTORE_COPY_NAME" >&2
+    fi
+    echo "  cause:" >&2
+    printf '%s\n' "$RESTORE_CAUSE" | sed 's/^/    /' >&2 || true
+    for c in ${RESTORE_NOT_REMOVED[@]+"${RESTORE_NOT_REMOVED[@]}"}; do
+        echo "  not removed: $c (an earlier copy this run made; remove it by hand)" >&2
+    done
+    echo "  Nothing was installed or changed." >&2
+    ad_outcome_exit ErrJournalMigrationRefused restore_copies_unavailable "$action" not_committed
+}
+
+# ad_restore_copies_make — make the copies SR-2.16's restore needs, before
+# the move and the swap, removed when the run ends (ad_exit_cleanup). While
+# the move is due the restore puts the whole pre-move directory back, so
+# nothing inside it is copied and the new directory holds no pre-run binary:
+# the binaries are recorded absent, and only a sentinel beside a store
+# outside the old directory (which step 3 writes there) is copied, at its
+# physical place. The managed link is copied where ad_managed_link_decide
+# records it, and not at all when the swap will make none.
+ad_restore_copies_make() {
+    local sentinel
+    trap ad_exit_cleanup EXIT
+    RESTORE_TS="$(ad_ts)"
+    if [[ "$MOVE_DUE" -eq 1 ]]; then
+        RESTORE_BELONGS+=("$CANONICAL" "$ADMIN_CANONICAL")
+        RESTORE_COPY+=("" "")
+        if [[ "$STORE_CLASS" == out || "$STORE_CLASS" == warn ]]; then
+            # A sentinel that is a link stays as it is, for the copy to refuse.
+            sentinel="$(ad_sentinel_path "$state_db")"
+            if [[ ! -L "$sentinel" ]]; then
+                sentinel="$(ad_phys_place "$sentinel")" || sentinel="$(ad_sentinel_path "$state_db")"
+            fi
+            ad_restore_item "the migration sentinel" "$sentinel" regular
+        fi
+    else
+        ad_restore_item agent-director "$CANONICAL"
+        ad_restore_item agent-director-admin "$ADMIN_CANONICAL"
+        ad_restore_item "the migration sentinel" "$(ad_sentinel_path "$state_db")" regular
+    fi
+    ad_managed_link_decide
+    if [[ -n "$MANAGED_LINK_RECORD" ]]; then
+        ad_restore_item "the managed PATH link" "$MANAGED_LINK_RECORD"
+    fi
+}
+
 CUTOVER_CROSSING=0
 ad_journal_args
 if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]]; then
     if ((PREFLIGHT_STORE_VERSION < INPUT_CUTOVER_VERSION)); then
         CUTOVER_CROSSING=1
         ad_journal_check_only
+        if [[ "$MOVE_DUE" -eq 1 ]]; then
+            ad_backup_install_dirs_check
+        fi
+        ad_prev_release_probe
+        if [[ "$PREV_RELEASE_PREDATES" -eq 1 ]]; then
+            ad_restore_copies_make
+        fi
     elif ((PREFLIGHT_STORE_VERSION < STORE_SCHEMA_VERSION)); then
         case "$PREFLIGHT_AUTHORITY" in
             recorded) ;;
@@ -4636,11 +5154,9 @@ chmod 00755 "$DEFAULT_BIN_DIR"
 # actually manage multiple concurrent versions; we don't.
 # --------------------------------------------------------------------
 
-CANONICAL="${DEFAULT_BIN_DIR}/agent-director"
 MANAGED_LINK=""
 PRIOR="${CANONICAL}.prior"
 TMP="${CANONICAL}.tmp.$$"
-ADMIN_CANONICAL="$DEFAULT_ADMIN_PATH"
 ADMIN_PRIOR="${ADMIN_CANONICAL}.prior"
 ADMIN_TMP="${ADMIN_CANONICAL}.tmp.$$"
 
@@ -4738,17 +5254,19 @@ echo "  binary  : $CANONICAL"
 # gets one, under any option (b.vqr).
 # --------------------------------------------------------------------
 
-if [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
+target="$(ad_managed_link_target)"
+if [[ -n "$target" ]]; then
+    ln -sfn "$CANONICAL" "${target}.new"
+    mv -f "${target}.new" "$target"
+    MANAGED_LINK="$target"
+    echo "  symlink : $target → $CANONICAL"
+elif [[ -n "$MANAGED_LINK_SKIP" ]]; then
+    echo "  symlink : skipped — $MANAGED_LINK_SKIP"
+elif [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
     if [[ ! -d "$SYMLINK_DIR" ]]; then
         echo "  symlink : skipped — $SYMLINK_DIR does not exist"
-    elif [[ "$SYMLINK_DIR" =~ [[:space:]] ]]; then
-        echo "  symlink : skipped — $SYMLINK_DIR contains whitespace"
     else
-        target="${SYMLINK_DIR}/agent-director"
-        ln -sfn "$CANONICAL" "${target}.new"
-        mv -f "${target}.new" "$target"
-        MANAGED_LINK="$target"
-        echo "  symlink : $target → $CANONICAL"
+        echo "  symlink : skipped — $SYMLINK_DIR contains whitespace"
     fi
 fi
 

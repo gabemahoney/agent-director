@@ -11052,7 +11052,15 @@ claude /install-agent-director (or `bash install.sh`)
     migration at install-time" below): a store at v1 to v15 crosses, and
     the candidate administrator's migrate-journal --check-only must accept
     the run's journal flags (its refusal is relayed → exit 5,
-    ErrJournalMigrationRefused, nothing on disk changed); a store from v16
+    ErrJournalMigrationRefused, nothing on disk changed); then, crossing
+    only, the restore preconditions: with a move due, a journal backup
+    directory inside the old or new directory refuses
+    (backup_inside_install_directory); the previous administrator's probe
+    refuses on an unclear answer (previous_release_unknown); for a previous
+    release that predates the cutover, the restore's copies are made, and
+    one that can't be made refuses (restore_copies_unavailable); each
+    refusal → exit 5, ErrJournalMigrationRefused, details.cutover
+    not_committed, nothing on disk changed; a store from v16
     to below this release's version whose native-input authority is
     unreadable or not recorded → exit 5, ErrJournalMigrationRefused,
     nothing on disk changed
@@ -11159,7 +11167,7 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `ErrAgentsLive` | `ad_agents_live_check`, in pre-flight and again as the move's first step | stop every agent, `serve` and caller, then re-run from a shell agent-director did not start; a re-run reads unreadable rows again |
 | `ErrMoveFailed` | `ad_move_fail`, any failure or interrupt before the rename | free space or fix the cause named, re-run; the old directory was not changed |
 | `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target | a human, following the advice (fix or check what it names, then re-run) |
-| `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`), with reason `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover, or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`. Step 4's `migrate-journal` refusal, relayed | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory; the two store-state reasons need a human. Step 4's: keep the maintenance boundary and retry administrator verification. See [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal) |
+| `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`), with reason `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover, or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`; on a crossing upgrade, the restore preconditions' `backup_inside_install_directory`, `previous_release_unknown` or `restore_copies_unavailable` (see "The restore preconditions" under [Schema migration at install-time](#schema-migration-at-install-time)). Step 4's `migrate-journal` refusal, relayed | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory (`previous_release_unknown` and `restore_copies_unavailable` re-run with the same flags); the two store-state reasons need a human. Step 4's: keep the maintenance boundary and retry administrator verification. See [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal) |
 | any other name | step 4's open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
 
 `ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
@@ -11945,6 +11953,95 @@ installer then checks the target version. Concurrent old hooks cannot
 cross this window. **Must use:** `ad_journal_args` is the one builder of
 the journal argv, for pre-flight's `--check-only` and step 4 alike.
 
+**The restore preconditions.** On a crossing upgrade only, after
+`--check-only` has passed, pre-flight settles what a restore of the
+previous install needs: the install-directory check, then the probe, then
+the copies, so a refusal has nothing to remove or removes only what this
+run made. Each refuses through `ad_outcome_exit` as above, its action in
+`details.refusal.action`.
+
+- **The install-directory check** (`ad_backup_install_dirs_check`) runs only
+  with a move due, because the move and a restore rename AD's old and new
+  directories, so a backup inside either would move or stop resolving; an
+  in-place restore renames no directory. `JOURNAL_BACKUP` equal to or under
+  either directory refuses with `backup_inside_install_directory`. Inside is
+  judged lexically and physically, with links resolved as the move places
+  path keys (see "Path keys" under [Moving agent-director's
+  directory](#moving-agent-directors-directory)); a path whose containing
+  directory doesn't exist yet is judged by its deepest existing ancestor and
+  the names below it. A place, the backup's or a directory's, that can't be
+  judged refuses too; when the install directory's own path is the cause
+  (`INSIDE_SIDE` `dir`), the action and a `  To fix:` line say to repair that
+  path, because another `--journal-backup` can't clear it. On Darwin it also compares file identity, so a case
+  variant or a directory not made yet stays inside: the rule of the
+  administrator's `backupInsideRoot` (see [`internal/store`](#internalstore)),
+  implemented separately in shell with only the GNU-first `stat` form and its
+  BSD fallback. **Must use:** `ad_backup_inside` (with `ad_deep_place`) is
+  install.sh's one test of whether a path lies inside a directory, Darwin's
+  identity rule included.
+- **The predates decision** (`ad_prev_release_probe`) looks at the previous
+  install's administrator, `PREV_ADMIN`: `DEFAULT_ADMIN_PATH` in place, the
+  old directory's `admin/agent-director-admin` while a move is due (a release
+  before 0.11.0 has none). Nothing there (a dangling link counts as
+  there) predates the cutover. Otherwise it runs `migrate-journal --help` with no
+  global flag and no `--store-path`: exit 1 with an `ErrUnknownVerb` envelope
+  predates, exit 0 doesn't, and any other answer refuses with
+  `previous_release_unknown`. It prints `  previous: <path> …` with the
+  decision. No release opens a store or loads config for that argv, so
+  `migrate-journal --help` must keep exiting 0 without doing either.
+  **Must use:** `PREV_RELEASE_PREDATES` (1 or 0; empty on a non-crossing run)
+  is the one record of the decision. It describes the binary probed in
+  pre-flight; later code reads it and never probes again.
+- **The copies** (`ad_restore_copies_make`) are made only when
+  `PREV_RELEASE_PREDATES` is 1: the installed `agent-director` and
+  `agent-director-admin` (`CANONICAL` and `ADMIN_CANONICAL`, assigned before
+  the crossing block), the sentinel's earlier bytes, and the managed PATH link
+  itself, not its target. With a move due nothing inside the old or new
+  directory is copied: the binaries are recorded as absent, and the sentinel
+  is copied only for a store outside the old directory, beside its physical
+  place. Each copy sits beside what it copies, never in the system temp
+  directory, as `<path>.restore-<YYYYmmdd-HHMMSS>.<suffix>`: one timestamp
+  per run (`RESTORE_TS`) and six characters from `mktemp`. The managed link
+  is decided once, before its copy, by `ad_managed_link_decide`: with a move
+  due, a `--symlink-dir` inside the old or new directory, or one that can't
+  be placed against them, gets no link and no copy (the swap prints
+  `  symlink : skipped — <reason>`); otherwise the link is recorded and
+  copied in the `--symlink-dir` directory's physical path. A file's copy goes
+  into a name `mktemp` creates exclusively, which never follows a link there,
+  keeps the mode and is checked with `cmp`. A link's copy is a directory
+  under the same pattern that `mktemp -d` creates exclusively (mode 0700),
+  holding a new link with the same raw target (`ln -sn`) under the item's
+  last path component; `RESTORE_COPY` records the directory, and the link a
+  restore puts back is `<copy>/<last component>`. So no copy is made at an
+  entry that already exists, and nothing outside the run's own copies is
+  overwritten, written through or removed. The one exception needs the same
+  user acting during the run: an entry planted inside the run's 0700 copy
+  directory before the link is made, which `ln` may write into; the run
+  then refuses and lists that directory as not removed. Each copy made
+  prints `  restore : copied <path> to <copy> (removed when the run ends)`,
+  naming the link inside the directory for a link. A copy that can't be
+  made, a sentinel that isn't a regular file (a link included), or a binary
+  or PATH entry that is neither a link nor a regular file refuses with
+  `restore_copies_unavailable`, after removing this run's copies.
+  `ad_exit_cleanup` removes them at the end of every run unless
+  `RESTORE_KEEP_COPIES` is 1, by recorded name, never by glob, so another
+  run's copies are never touched. A link's copy is removed by removing the
+  inner link only while it is a link (never its target), then the directory
+  only while it is empty; anything else is left and listed as not removed. A
+  SIGKILL leaves the copies under the pattern (see
+  [operator-actions.md](operator-actions.md)). **Must use:**
+  - `ad_restore_copy` is the one way to make a restore copy
+    (`ad_restore_item` wraps it with the stdout line or the refusal);
+  - `RESTORE_BELONGS`/`RESTORE_COPY` are the one record of the items, one
+    entry each (an empty copy: nothing was there before the run);
+  - `ad_restore_copies_remove` is the only removal;
+  - `RESTORE_KEEP_COPIES` is the one switch that keeps them;
+  - `ad_managed_link_target` is the one statement of when the swap writes
+    the managed PATH link, shared by the swap and the copies; once
+    `ad_managed_link_decide` has run, it returns that decision, so the swap
+    and the restore's record never differ (`MANAGED_LINK_SKIP` holds a
+    skip's reason).
+
 **Which store: `[store] db_path` (b.2io).** `state.db` in this flow is the
 database the binary opens: `~/.config/agent-director/state.db`, or the `[store]
 db_path` of `~/.config/agent-director/config.toml` (while the move is due,
@@ -12228,6 +12325,11 @@ until the operator deletes them (`uninstall.sh --purge` removes them with
 the directory). The move's scan for references to the old directory skips
 those in `templates/`.
 
+The restore's copies (`<name>.restore-<YYYYmmdd-HHMMSS>.<suffix>`) exist
+beside the binaries, the sentinel and the managed PATH link only during a
+crossing upgrade (see "The restore preconditions" under [Schema migration at
+install-time](#schema-migration-at-install-time)).
+
 The install root is `layout.Dir` under `$HOME`: the installer reads no
 `XDG_CONFIG_HOME`. `~/.config` is the directory it lives under, and the
 installer creates it with mode 0700 when it is missing. The move from the
@@ -12254,7 +12356,9 @@ in-flight exec is unaffected by the swap.
 
 A failure while staging replaces neither binary, so an install never
 leaves a new `agent-director` beside an old `agent-director-admin`; the
-EXIT trap removes a temp copy that was never moved.
+EXIT trap (`ad_exit_cleanup`) removes a temp copy that was never moved, and
+the run's restore copies (see "The restore preconditions" under [Schema
+migration at install-time](#schema-migration-at-install-time)).
 
 Optional `--keep-prior` snapshots each existing binary to its `.prior`
 (`agent-director.prior`, `agent-director-admin.prior`) before either is
@@ -12444,7 +12548,8 @@ fix and left as written (`ad_move_print_references`).
 `rmdir` only, a `~/.config` the move created, says why (a full disk is the
 usual cause) and ends with `ErrMoveFailed`; the old directory was not changed.
 The traps are armed for the move only: `EXIT` chains onto the install's own
-`EXIT` trap (`ad_exit_cleanup`) rather than replacing it, and `INT`, `TERM`
+`EXIT` trap (`ad_exit_cleanup`, so the restore's copies go too) rather than
+replacing it, and `INT`, `TERM`
 and `HUP` call `ad_move_fail`. After the rename nothing is removed: a signal
 that arrives after `mv` completed but before the traps are put back finds the
 rename done (`ad_move_rename_done`), removes nothing, and ends with
@@ -21568,10 +21673,22 @@ genuine previous install rather than the stand-in.
   (`assertRefusedUnchanged`), and `crossingCase`, a genuine v0.17.3 home for
   the native-input cutover's pre-flight cases, with a Darwin stand-in
   (`standInDarwin`) that logs any macOS-only tool reached.
+  `assertRefusedUnchanged` can leave out the size and mtime of named
+  directories, for a refusal that made and removed restore copies in them;
+  every entry is still compared.
+- For the restore preconditions, `crossing_preflight_test.go` also has
+  `newGenuineOldHome` (v0.11.1's genuine old layout, so a move is due),
+  `newCopiesCrossing` (a v0.17.3 home where every item a restore copies
+  exists) and `withLinkDir` (the managed PATH link in `~/links`), and
+  `restore_copies_test.go` has `restoreCopyNames` (every name under HOME
+  with the copies' pattern). Both files use them.
 
 **Must use:** a test that needs a previous release's own binaries, or an
 install made by them, builds them with `releaseBuildOf` or
-`genuineRelease`; never a second builder of a released pair. Stores laid
+`genuineRelease`; never a second builder of a released pair. Tests that
+enumerate restore-copy names under the fixture HOME after a run must use
+`restoreCopyNames`; inspect other copy locations and in-run state
+explicitly. Stores laid
 from a release's SQL keep their own fixtures. `advice_follow.sh`'s `need_old_release` (the `v0.11.1`
 cases) is the one bash builder left.
 
