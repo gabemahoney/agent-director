@@ -5,7 +5,8 @@ package api_test
 // a finished row whose saved cwd was removed, or replaced by a file, launched
 // the agent elsewhere and reported success. Resume refuses it as spawn does,
 // with ErrCwdNotFound or ErrCwdNotADirectory, before anything is written or
-// launched. The Cursor case is in resume_cursor_test.go, the real-tmux one in
+// launched. b.qwo adds a saved cwd that is still a directory but cannot be
+// entered (mode 000), refused with ErrCwdNotFound too. The Cursor case is in resume_cursor_test.go, the real-tmux one in
 // test/realtmux.
 
 import (
@@ -23,12 +24,16 @@ import (
 // saved cwd no longer exists is ErrCwdNotFound, and one whose cwd is now a
 // regular file ErrCwdNotADirectory, before the transcript lookup: quoting the
 // cwd, saying nothing was written or launched and naming the recourse; no tmux
-// call, nothing written (row, history, trail), no .claude.json touched.
+// call, nothing written (row, history, trail), no .claude.json touched. One
+// whose cwd is a directory with mode 000 (b.qwo) is ErrCwdNotFound, and its
+// first recourse is to make the directory enterable, not to recreate it; those
+// cases are skipped as root, which mode 000 does not stop.
 func TestResumeRefusesUnusableCwd(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name, agent, state string
 		file               bool // the cwd is replaced by a regular file, not removed
+		unenterable        bool // the cwd stays a directory, with mode 000 (b.qwo)
 		noTranscript       bool // the row's transcript is removed too, so the lookup would fail
 	}{
 		{name: "claude ended, cwd removed", agent: store.AgentClaude, state: store.StateEnded},
@@ -38,9 +43,15 @@ func TestResumeRefusesUnusableCwd(t *testing.T) {
 		{name: "claude missing, cwd is a file", agent: store.AgentClaude, state: store.StateMissing, file: true},
 		{name: "codex ended, cwd removed", agent: store.AgentCodex, state: store.StateEnded},
 		{name: "codex missing, cwd is a file", agent: store.AgentCodex, state: store.StateMissing, file: true},
+		{name: "claude ended, cwd cannot be entered", agent: store.AgentClaude, state: store.StateEnded, unenterable: true},
+		{name: "claude missing, cwd cannot be entered", agent: store.AgentClaude, state: store.StateMissing, unenterable: true},
+		{name: "codex ended, cwd cannot be entered", agent: store.AgentCodex, state: store.StateEnded, unenterable: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.unenterable && os.Geteuid() == 0 {
+				t.Skip("root ignores mode 000")
+			}
 			e := newKillEnv(t)
 			e.rowAgent = tc.agent
 			cwd := filepath.Join(t.TempDir(), "ad-gone")
@@ -50,7 +61,11 @@ func TestResumeRefusesUnusableCwd(t *testing.T) {
 			spec := e.resumableSpec(rlkSettled(e), agentGone)
 			spec.State, spec.CWD = tc.state, cwd
 			row := e.seedResumableRow(t, spec)
-			removeCwd(t, cwd, tc.file)
+			if tc.unenterable {
+				lockCwd(t, cwd)
+			} else {
+				removeCwd(t, cwd, tc.file)
+			}
 			if tc.noTranscript {
 				if err := os.Remove(row.JSONLPath); err != nil {
 					t.Fatalf("remove transcript: %v", err)
@@ -65,7 +80,11 @@ func TestResumeRefusesUnusableCwd(t *testing.T) {
 				want = "ErrCwdNotADirectory"
 			}
 			assertOneName(t, err, want)
-			assertCwdRefusalText(t, errText(err), cwd, spawn.ReuseSpawn(tc.agent))
+			fix := "recreate"
+			if tc.unenterable {
+				fix = "make that directory enterable"
+			}
+			assertCwdRefusalText(t, errText(err), cwd, fix, spawn.ReuseSpawn(tc.agent))
 			e.assertKillCalls(t)
 			e.assertResumeWroteNothing(t, before)
 		})
@@ -86,13 +105,23 @@ func removeCwd(t *testing.T, cwd string, file bool) {
 	}
 }
 
+// lockCwd sets the directory cwd to mode 000, so it cannot be entered, and
+// restores it at cleanup.
+func lockCwd(t *testing.T, cwd string) {
+	t.Helper()
+	if err := os.Chmod(cwd, 0); err != nil {
+		t.Fatalf("chmod cwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cwd, 0o700) })
+}
+
 // assertCwdRefusalText fails unless desc, a refused resume's description,
 // quotes cwd, says nothing was written or launched, and names both ways on:
-// recreating the directory, or recourse (a spawn of the id, or Cursor's fresh
-// recovery).
-func assertCwdRefusalText(t *testing.T, desc, cwd, recourse string) {
+// fix (recreating the directory, or making it enterable), or recourse (a
+// spawn of the id, or Cursor's fresh recovery).
+func assertCwdRefusalText(t *testing.T, desc, cwd, fix, recourse string) {
 	t.Helper()
-	for _, part := range []string{strconv.Quote(cwd), "nothing was written and nothing was launched", "recreate", recourse} {
+	for _, part := range []string{strconv.Quote(cwd), "nothing was written and nothing was launched", fix, recourse} {
 		if !strings.Contains(desc, part) {
 			t.Errorf("description %q\nwant it to contain %q", desc, part)
 		}

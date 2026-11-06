@@ -328,7 +328,7 @@ func TestCursorResumeUnusableCwdRefusesBeforeMutation(t *testing.T) {
 			_, err := e.resume(id)
 
 			assertOneName(t, err, tc.want)
-			assertCwdRefusalText(t, errText(err), cwd, advCursorCwd)
+			assertCwdRefusalText(t, errText(err), cwd, "recreate", advCursorCwd)
 			if !reflect.DeepEqual(before, e.columns(t, id)) {
 				t.Fatal("cwd refusal mutated row")
 			}

@@ -644,7 +644,7 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 |---|---|
 | `ErrCwdMissing` | No `cwd` was supplied; spawn requires it to derive the JSONL/resume path. |
 | `ErrCwdNotAPath` | `cwd` is neither absolute nor a `~/` form (URLs, bare relative paths, non-path values). |
-| `ErrCwdNotFound` | `cwd` resolved to a path that does not exist on disk. `resume` also returns it when the row's saved cwd is gone; nothing is written or launched. |
+| `ErrCwdNotFound` | `cwd` resolved to a path that does not exist on disk, or that cannot be accessed or entered (no search permission on it or a parent). `resume` also returns it when the row's saved cwd is gone or cannot be entered; nothing is written or launched. |
 | `ErrCwdNotADirectory` | `cwd` resolved to a file (or other non-directory inode). `resume` also returns it when the row's saved cwd is no longer a directory. |
 
 **spawn and template config validation** (bad `spawn` or `makeTemplate` arguments — programmer error):
