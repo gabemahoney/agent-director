@@ -524,6 +524,11 @@ fi
 #   ErrMoveFailed         the move failed before its rename: the partial
 #                         new directory was removed, the old one is
 #                         untouched; fix the cause (a full disk), re-run.
+#   ErrJournalMigrationRefused  the native-input cutover was refused: in
+#                         pre-flight (the journal flags, or the store's
+#                         cutover state) with nothing changed, or by
+#                         step 4's migrate-journal; the envelope above the
+#                         cause line gives the reason and action.
 # ErrVersionUnreadable, ErrSchemaVerifyFailed, ErrMoveConflict,
 # ErrAgentsLive and ErrMoveFailed are install.sh's own names, not
 # agent-director error names.
@@ -537,6 +542,44 @@ fi
 ad_exit_5() {
     echo "install.sh: err_name=$1" >&2
     exit 5
+}
+
+# ad_outcome_exit [--relayed] <err_name> <reason> <action> <cutover>
+# [<extra-details-json>] — write install.sh's own outcome envelope as one
+# compact JSON line on stderr, then exit 5 with <err_name>'s cause line, so
+# the envelope and the cause line cannot name different errors:
+#   {"err_name":<err_name>,"err_description":"install.sh: <reason>: <action>",
+#    "details":{"refusal":{"reason":<reason>,"processes":[],"action":<action>},
+#               "cutover":<cutover>} + <extra-details-json>}
+# Every outcome envelope install.sh writes itself goes through this helper:
+# Tasks t2.7tz.ab.hh, t2.7tz.ab.p5 and t2.7tz.ab.5w reuse it with their own
+# err_names, cutover values and extra fields (copies, attempt_store, remove).
+# Without --relayed (accepted only first), <reason> is one install.sh chose
+# itself and must be a word of AD_OUTCOME_REASONS; otherwise this writes no
+# envelope and no cause line and exits 1 with an internal error, so a test
+# expecting the outcome fails. --relayed marks a reason taken from a relayed
+# envelope (its details.refusal.reason or its err_name), never checked.
+# Print English message lines before calling it, so the envelope sits just
+# above the cause line. A failed envelope write never skips the cause line.
+ad_outcome_exit() {
+    local relayed=0 extra='{}'
+    if [[ "${1:-}" == --relayed ]]; then
+        relayed=1
+        shift
+    fi
+    local err_name="$1" reason="$2" action="$3" cutover="$4"
+    if [[ $# -ge 5 ]]; then
+        extra="$5"
+    fi
+    if [[ "$relayed" -eq 0 ]] && { [[ ! "$reason" =~ ^[a-z0-9_]+$ ]] || [[ " $AD_OUTCOME_REASONS " != *" $reason "* ]]; }; then
+        echo "install.sh: internal error: outcome reason $reason is not in AD_OUTCOME_REASONS" >&2
+        exit 1
+    fi
+    jq -nc --arg err_name "$err_name" --arg reason "$reason" --arg action "$action" \
+        --arg cutover "$cutover" --argjson extra "$extra" \
+        '{err_name: $err_name, err_description: ("install.sh: " + $reason + ": " + $action),
+          details: ({refusal: {reason: $reason, processes: [], action: $action}, cutover: $cutover} + $extra)}' >&2 || true
+    ad_exit_5 "$err_name"
 }
 
 # ad_exit_cleanup — the install's EXIT cleanup: remove every temp file this
@@ -1321,6 +1364,22 @@ ad_store_db_path() (
 # assignment below on a line of its own, in this form.
 # --------------------------------------------------------------------
 AGENT_RENAME_HOP_VERSION=9
+
+# The native-input cutover (SR-2.14 "Pre-flight"). INPUT_CUTOVER_VERSION is
+# the user_version internal/store's cutover step (v15 to v16) produces: a
+# store below it, above v0, crosses the cutover. STORE_SCHEMA_VERSION is this
+# release's schema version (internal/store's schemaVersion), which no verb
+# prints before the swap. A Go test fails when either differs from
+# internal/store, so keep each assignment on a line of its own, in this form.
+INPUT_CUTOVER_VERSION=16
+STORE_SCHEMA_VERSION=20
+
+# AD_OUTCOME_REASONS lists the reasons install.sh chooses itself for an
+# outcome envelope (ad_outcome_exit), never a relayed one. Tasks
+# t2.7tz.ab.hh, t2.7tz.ab.p5 and t2.7tz.ab.5w append their own installer
+# reasons to this one line. A test reads it, so keep it on one line in this
+# form, and ad_outcome_exit refuses a self-chosen reason missing from it.
+AD_OUTCOME_REASONS='cutover_state_unreadable native_input_authority_missing check_only_unestablished'
 
 # >>> ad_agent_rename_migrate (b.ssz) >>>
 #
@@ -2249,7 +2308,8 @@ ad_print_agent_summary() {
 # busy_timeout_ms in ~/.config/agent-director/config.toml for a lock another
 # connection holds (SQLite's busy timeout; internal/config
 # Store.EffectiveBusyTimeoutMs). install.sh's sqlite3 reads of the store's
-# user_version (ad_user_version) wait the same time, and so does the check
+# user_version (ad_user_version after the swap, ad_store_state on
+# pre-flight's snapshot) wait the same time, and so does the check
 # command it prints, so install.sh reads the key itself, from the file
 # ad_store_db_path has just accepted. That reader refuses every way to set
 # a [store] key but a bare name = value line under one [store] header, so
@@ -2992,25 +3052,124 @@ fi
 # key and every template are neither read nor changed, so a template made
 # after the upgrade survives every later install byte for byte.
 #
-# The version is read through a private locked snapshot (ad_readonly_query),
+# The version is read through a private locked snapshot (ad_store_state),
 # including committed WAL frames. Even sqlite3 -readonly can create source
 # WAL/SHM files, so no preflight SQLite connection opens the original; only
-# the private copy is opened, read-write (ad_readonly_query says why). The
+# the private copy is opened, read-write (ad_snapshot_sqlite says why). The
 # candidate binaries are resolved and validated first to provide the snapshot
 # helper, with the configured busy timeout. A store whose version cannot be
 # read stops the install here, with exit 5 and ErrVersionUnreadable, before
 # anything changes.
 # --------------------------------------------------------------------
 
-# ad_user_version <db> [readonly] — print the DB's user_version, read through
-# the WAL, and exit with sqlite3's status. With "readonly" the read goes
-# through ad_readonly_query, on a locked private snapshot (the agent-rename
-# gate's): "readonly" names what happens to <db>, which is only read, and
-# never by SQLite, so it remains untouched, as SR-11.7 requires while the
-# move is due.
-# sqlite3's stderr, or a snapshot failure,
-# is printed with its stdout, so the caller holds the whole read in one
-# variable and its status in another, with no file:
+# ad_readonly_query <db> <SQL> [sqlite3 options...] — run <SQL> on a
+# private, lock-protected snapshot of <db> (ad_with_store_snapshot), which
+# is only read, and never by SQLite.
+ad_readonly_query() {
+    local db="$1" sql="$2"
+    shift 2
+    ad_with_store_snapshot "$db" ad_snapshot_sqlite "$sql" "$@"
+}
+
+# ad_with_store_snapshot <db> <reader> [args...] — the one snapshot
+# implementation behind ad_readonly_query and ad_store_state: copy <db> into
+# a private 0700 directory with the candidate's snapshot-store, run
+# `<reader> <copy> [args...]` on the copy, and remove the directory. A
+# failed snapshot prints its output and returns its status.
+#
+# No SQLite connection opens <db>, including the user_version, table-info
+# and live-rows preflight reads: snapshot-store reads it only through
+# O_RDONLY descriptors under read locks, copying state.db and any -wal (mode
+# 0600; -shm and -journal are never copied) into the private directory.
+# The admin source is resolved and validated before entering command
+# substitutions; no new system utility or installed helper is required.
+ad_with_store_snapshot() (
+    local db="$1" reader="$2" tmpd snapshot_err rc=0
+    shift 2
+    # Use the system temp directory even if TMPDIR names the old install.
+    tmpd="$(umask 077; mktemp -d "/tmp/agent-director.read.XXXXXX")" || return 1
+    trap 'rm -rf -- "$tmpd"' EXIT
+    snapshot_err="$("$ADMIN_SRC" --store-path "$db" snapshot-store --directory "$tmpd" --busy-timeout-ms "$store_busy_timeout_ms" 2>&1)" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        printf '%s\n' "$snapshot_err"
+        return "$rc"
+    fi
+    "$reader" "$tmpd/state.db" "$@"
+)
+
+# ad_snapshot_sqlite <copy> <SQL> [sqlite3 options...] — run <SQL> on a
+# snapshot copy, sqlite3's stderr joined to its stdout, with ad_user_version's
+# busy timeout, -init /dev/null and -batch (its comment says why).
+#
+# The copy is opened through a read-write connection: a WAL-mode store's
+# snapshot has no -shm. With no -wal either, Apple's sqlite3 3.51.0 cannot
+# open it read-only (error 14), as ad_move_backup_store's comment explains
+# for its own copy (b.up4); with a copied -wal the same failure is likely
+# but unconfirmed, so every snapshot read uses the read-write connection.
+# Only the copy is touched:
+#   - the connection opens a copied -wal, creates only the -shm and any -wal
+#     that is absent, and writes any checkpoint, all inside the private
+#     directory, which ad_with_store_snapshot's EXIT trap removes;
+#   - committed WAL frames in the copied -wal stay visible;
+#   - the copy never has a rollback journal (snapshot-store refuses a hot
+#     one and never copies one), so a read-write open cannot run journal
+#     recovery.
+ad_snapshot_sqlite() {
+    local copy="$1" sql="$2"
+    shift 2
+    sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$@" "$copy" "$sql" 2>&1
+}
+
+# ad_store_state <db> — read <db>'s user_version and, on a store past the
+# native-input cutover but below this release (INPUT_CUTOVER_VERSION up to
+# STORE_SCHEMA_VERSION), its native-input authority, both from one private
+# snapshot (ad_with_store_snapshot). Status and output:
+#   - the version read failed (snapshot or sqlite3): its nonzero status and
+#     its own output, as a user_version read gives it;
+#   - the read printed something that is no version: status 0 and that
+#     output (b.hk7), so ad_fail_unreadable_version reports both kinds;
+#   - otherwise status 0 and two lines (AD_STORE_STATE_FORM): the version,
+#     then the authority: "-" (not read), "recorded" (a sqlite-v1:* value),
+#     "missing" (no row) or "unreadable" (the query failed, store_meta
+#     absent included, or any other value, which keeps pre-flight refusing).
+# Task t2.7tz.ab.p5 reuses it for SR-2.16's version cross-check.
+AD_STORE_STATE_FORM=$'^(0|[1-9][0-9]*)\n(-|recorded|missing|unreadable)$'
+ad_store_state() {
+    ad_with_store_snapshot "$1" ad_store_state_read
+}
+
+# ad_store_state_read <copy> — ad_store_state's two reads on the snapshot.
+ad_store_state_read() {
+    local copy="$1" version authority rc=0 state
+    version="$(ad_snapshot_sqlite "$copy" "PRAGMA user_version;")" || rc=$?
+    if [[ "$rc" -ne 0 ]] || ! ad_is_version "$version"; then
+        printf '%s\n' "$version"
+        return "$rc"
+    fi
+    if ((version < INPUT_CUTOVER_VERSION || version >= STORE_SCHEMA_VERSION)); then
+        printf '%s\n-\n' "$version"
+        return 0
+    fi
+    # The prefix tells a row with an empty value from no row.
+    authority="$(ad_snapshot_sqlite "$copy" "SELECT 'row:' || coalesce(value, '') FROM store_meta WHERE key = 'native_input_authority';")" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        state=unreadable
+    elif [[ -z "$authority" ]]; then
+        state=missing
+    elif [[ "$authority" == row:sqlite-v1:* && "$authority" != *$'\n'* ]]; then
+        state=recorded
+    else
+        state=unreadable
+    fi
+    printf '%s\n%s\n' "$version" "$state"
+}
+
+# ad_user_version <db> — print the DB's user_version, read through the WAL,
+# and exit with sqlite3's status. It opens <db> itself, so pre-flight, which
+# must leave the store untouched (SR-11.7), reads the version through
+# ad_store_state instead, on a locked private snapshot.
+# sqlite3's stderr is printed with its stdout, so the caller holds the whole
+# read in one variable and its status in another, with no file:
 #
 #     rc=0; out="$(ad_user_version "$db")" || rc=$?
 #
@@ -3032,49 +3191,50 @@ fi
 # output (b.hk7). -batch: with a terminal on stdin, -init makes sqlite3
 # print "-- Loading resources from /dev/null" to stderr, which would join
 # the read's output and make it no version.
-# ad_readonly_query <db> <SQL> [sqlite3 options...] — run <SQL> on a
-# private, lock-protected DB/WAL snapshot of <db>. "readonly" names what
-# happens to <db>: it is only read, and never by SQLite. No SQLite connection
-# opens it, including the user_version, table-info and live-rows preflight
-# reads; snapshot-store reads it only through O_RDONLY descriptors under
-# read locks, copying state.db and any -wal (mode 0600; -shm and -journal
-# are never copied) into a private 0700 directory.
-#
-# The copy is opened through a read-write connection: a WAL-mode store's
-# snapshot has no -shm. With no -wal either, Apple's sqlite3 3.51.0 cannot
-# open it read-only (error 14), as ad_move_backup_store's comment explains
-# for its own copy (b.up4); with a copied -wal the same failure is likely
-# but unconfirmed, so every snapshot read uses the read-write connection.
-# Only the copy is touched:
-#   - the connection opens a copied -wal, creates only the -shm and any -wal
-#     that is absent, and writes any checkpoint, all inside the private
-#     directory, which the EXIT trap removes;
-#   - committed WAL frames in the copied -wal stay visible;
-#   - the copy never has a rollback journal (snapshot-store refuses a hot
-#     one and never copies one), so a read-write open cannot run journal
-#     recovery.
-# The admin source is resolved and validated before entering command
-# substitutions; no new system utility or installed helper is required.
-ad_readonly_query() (
-    local db="$1" sql="$2" tmpd snapshot_err rc=0
-    shift 2
-    # Use the system temp directory even if TMPDIR names the old install.
-    tmpd="$(umask 077; mktemp -d "/tmp/agent-director.read.XXXXXX")" || return 1
-    trap 'rm -rf -- "$tmpd"' EXIT
-    snapshot_err="$("$ADMIN_SRC" --store-path "$db" snapshot-store --directory "$tmpd" --busy-timeout-ms "$store_busy_timeout_ms" 2>&1)" || rc=$?
-    if [[ "$rc" -ne 0 ]]; then
-        printf '%s\n' "$snapshot_err"
-        return "$rc"
-    fi
-    sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$@" "$tmpd/state.db" "$sql" 2>&1
-)
-
 ad_user_version() {
-    if [[ "${2:-}" == readonly ]]; then
-        ad_readonly_query "$1" "PRAGMA user_version;"
-    else
-        sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$1" "PRAGMA user_version;" 2>&1
+    sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$1" "PRAGMA user_version;" 2>&1
+}
+
+# ad_err_name <stderr> — the err_name of the JSON error envelope
+# ({"err_name":…,"err_description":…}) in a verb's captured stderr, or
+# nothing when it holds none; lines that are not an envelope are skipped.
+# The install branches on this name, never on the description's English
+# text (b.7b4).
+ad_err_name() {
+    printf '%s\n' "$1" | jq -Rr '(fromjson | .err_name | strings)?' 2>/dev/null | tail -n1 || true
+}
+
+# ad_relay_output <captured> — relay a verb's captured output on stderr: a
+# line that is a JSON envelope (ad_err_name's test) passes unchanged, so a
+# caller can parse it, and every other line is indented by two spaces, so
+# no relayed line starts `install.sh: err_name=`. A failed write never ends
+# the run before its cause line.
+ad_relay_output() {
+    if [[ -z "$1" ]]; then
+        return 0
     fi
+    printf '%s\n' "$1" | jq -Rr 'if ([(fromjson | .err_name | strings)?] | length) > 0 then . else "  " + . end' >&2 2>/dev/null || true
+}
+
+# ad_journal_args — fill JOURNAL_ARGS with migrate-journal's journal flags
+# from install.sh's --journal-* flags, for pre-flight's --check-only and
+# step 4's run alike: --maintenance-window and --roots-complete only when
+# given, --backup-dir always (empty when not given, which migrate-journal
+# refuses as absolute_backup_required), then --legacy-root for each root.
+JOURNAL_ARGS=()
+ad_journal_args() {
+    local journal_root
+    JOURNAL_ARGS=()
+    if [[ "$JOURNAL_MAINTENANCE" -eq 1 ]]; then
+        JOURNAL_ARGS+=(--maintenance-window)
+    fi
+    if [[ "$JOURNAL_ROOTS_COMPLETE" -eq 1 ]]; then
+        JOURNAL_ARGS+=(--roots-complete)
+    fi
+    JOURNAL_ARGS+=(--backup-dir "$JOURNAL_BACKUP")
+    for journal_root in ${JOURNAL_ROOTS[@]+"${JOURNAL_ROOTS[@]}"}; do
+        JOURNAL_ARGS+=(--legacy-root "$journal_root")
+    done
 }
 
 # ad_is_version <value> — true when <value> is a user_version as sqlite3
@@ -3151,18 +3311,29 @@ ad_fail_unreadable_version() {
 # exists at $state_db and its user_version is below AGENT_RENAME_HOP_VERSION,
 # else 0. A store whose version cannot be read stops the install (exit 5,
 # ErrVersionUnreadable); with "defer" it sets GATE_DEFERRED=1 and returns
-# instead (see below).
+# instead (see below). Its read (ad_store_state) also records the store's
+# version and native-input authority in PREFLIGHT_STORE_VERSION and
+# PREFLIGHT_AUTHORITY for the cutover decision, both empty with no store.
 GATE_DEFERRED=0
 AGENT_RENAME_DUE=0
+PREFLIGHT_STORE_VERSION=""
+PREFLIGHT_AUTHORITY=""
 ad_agent_rename_gate() {
-    local gate_rc=0 gate_version
+    local gate_rc=0 gate_read gate_version
     GATE_DEFERRED=0
     AGENT_RENAME_DUE=0
+    PREFLIGHT_STORE_VERSION=""
+    PREFLIGHT_AUTHORITY=""
     if [[ ! -e "$state_db" ]]; then
         return 0
     fi
     ad_prepare_source_binaries
-    gate_version="$(ad_user_version "$state_db" readonly)" || gate_rc=$?
+    gate_read="$(ad_store_state "$state_db")" || gate_rc=$?
+    gate_version="$gate_read"
+    if [[ "$gate_rc" -eq 0 && "$gate_read" =~ $AD_STORE_STATE_FORM ]]; then
+        gate_version="${BASH_REMATCH[1]}"
+        PREFLIGHT_AUTHORITY="${BASH_REMATCH[2]}"
+    fi
     if ! ad_got_version "$gate_rc" "$gate_version"; then
         if [[ "${1:-}" == defer ]]; then
             GATE_DEFERRED=1
@@ -3174,6 +3345,7 @@ ad_agent_rename_gate() {
             "tell whether config.toml and the templates need the agent-rename migration" \
             "Nothing was installed or changed."
     fi
+    PREFLIGHT_STORE_VERSION="$gate_version"
     if [[ "$gate_version" -lt "$AGENT_RENAME_HOP_VERSION" ]]; then
         AGENT_RENAME_DUE=1
     fi
@@ -3735,11 +3907,100 @@ if [[ "$GATE_DEFERRED" -eq 1 ]]; then
     ad_migrate_link_checks
 fi
 
+# --------------------------------------------------------------------
+# The native-input cutover decision (SR-2.14 "Pre-flight")
+#
+# From the version and authority the gate read on its snapshot of the store
+# pre-flight resolved (the old directory's while the move is due), decide
+# whether this upgrade crosses the native-input cutover, before the move and
+# the swap. Pre-flight only refuses: a check here never authorizes the
+# cutover or stands in for a verification migrate-journal makes after the
+# swap, and a refusal here leaves every file as it was.
+#   - no store, or v0: not crossing;
+#   - v1 up to INPUT_CUTOVER_VERSION - 1: crossing (CUTOVER_CROSSING=1),
+#     and the candidate administrator's migrate-journal --check-only must
+#     accept the run's journal flags;
+#   - INPUT_CUTOVER_VERSION up to STORE_SCHEMA_VERSION - 1: not crossing
+#     when the native-input authority is recorded; refused when it is
+#     missing (native_input_authority_missing) or unreadable
+#     (cutover_state_unreadable);
+#   - STORE_SCHEMA_VERSION or newer: not crossing (step 4's list reports a
+#     newer store).
+# --------------------------------------------------------------------
+
+# ad_cutover_refuse_state <reason> <what> <inspect> — refuse a store past the
+# cutover whose native-input authority is <what>; the action names the human
+# step: inspect <inspect>, or restore the pre-upgrade copy.
+ad_cutover_refuse_state() {
+    local reason="$1" what="$2" inspect="$3" action
+    action="inspect ${inspect}, or restore ${state_db_name}'s pre-upgrade copy, as docs/operator-actions.md \"Upgrading the native-input journal\" says, then re-run this install"
+    echo "install.sh: ${state_db_name} at v${PREFLIGHT_STORE_VERSION} is past the native-input cutover, but its native-input authority is ${what}" >&2
+    echo "  state.db: $state_db" >&2
+    echo "  Nothing was installed or changed." >&2
+    ad_outcome_exit ErrJournalMigrationRefused "$reason" "$action" not_committed
+}
+
+# ad_journal_check_only — run the candidate administrator's migrate-journal
+# --check-only with the run's journal flags (no --store-path: it reads no
+# store), and refuse in pre-flight unless it prints exactly {} with status
+# 0. $ADMIN_SRC is the candidate; $ADMIN_CANONICAL is still the previous
+# install's binary here.
+ad_journal_check_only() {
+    local out rc=0 name action
+    ad_prepare_source_binaries
+    out="$("$ADMIN_SRC" migrate-journal --check-only "${JOURNAL_ARGS[@]}" 2>&1)" || rc=$?
+    if [[ "$rc" -eq 0 && "$out" == "{}" ]]; then
+        return 0
+    fi
+    name="$(ad_err_name "$out")"
+    if [[ "$rc" -ne 0 && "$name" == ErrJournalMigrationRefused ]]; then
+        action="$(printf '%s\n' "$out" | jq -Rr '(fromjson | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.action | strings)?' 2>/dev/null | tail -n1 || true)"
+        echo "install.sh: pre-flight refused the journal flags (agent-director-admin migrate-journal --check-only)" >&2
+        echo "  Nothing was installed or changed." >&2
+        if [[ -n "$action" ]]; then
+            echo "  To fix: $action" >&2
+        fi
+        echo "  Then re-run this release's installer, with a new --journal-backup directory." >&2
+        ad_relay_output "$out"
+        ad_exit_5 ErrJournalMigrationRefused
+    fi
+    action="run this release's agent-director-admin as the candidate (the same release as agent-director), then re-run this install; report it if it persists"
+    echo "install.sh: pre-flight could not check the journal flags: agent-director-admin migrate-journal --check-only gave an unexpected result (status ${rc})" >&2
+    echo "  Nothing was installed or changed." >&2
+    ad_relay_output "$out"
+    if [[ -n "$name" ]]; then
+        ad_outcome_exit --relayed ErrJournalMigrationRefused "$name" "$action" not_committed
+    fi
+    ad_outcome_exit ErrJournalMigrationRefused check_only_unestablished "$action" not_committed
+}
+
+CUTOVER_CROSSING=0
+ad_journal_args
+if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]]; then
+    if ((PREFLIGHT_STORE_VERSION < INPUT_CUTOVER_VERSION)); then
+        CUTOVER_CROSSING=1
+        ad_journal_check_only
+    elif ((PREFLIGHT_STORE_VERSION < STORE_SCHEMA_VERSION)); then
+        case "$PREFLIGHT_AUTHORITY" in
+            recorded) ;;
+            missing)
+                ad_cutover_refuse_state native_input_authority_missing "not recorded" \
+                    "the native_input_authority row of ${state_db_name}'s store_meta table" ;;
+            *)
+                ad_cutover_refuse_state cutover_state_unreadable "unreadable" \
+                    "${state_db_name}'s store_meta table and its native_input_authority row" ;;
+        esac
+    fi
+fi
+
 echo "install.sh: pre-flight OK"
 ad_print_agent_summary
 echo "  tmux    : $(tmux -V 2>/dev/null || echo '<unknown>')"
 if [[ "$state_db_name" != state.db ]]; then
     echo "  store   : $state_db ([store] db_path in ${PREFLIGHT_CONFIG})"
+fi
+if [[ "$CUTOVER_CROSSING" -eq 1 ]]; then
+    echo "  cutover : $state_db at v${PREFLIGHT_STORE_VERSION} crosses the native-input cutover"
 fi
 
 # Source resolution can already have run for readonly preflight.
@@ -4700,8 +4961,10 @@ fi
 # the administrator's maintained writer exclusion, complete root inventory
 # and exclusive pre-hop backup. Invoking-HOME roots apply even to a custom DB.
 #
-# Step 4 invokes migrate-journal for a pending native-input transition;
-# ordinary list handles fresh/current stores. Step 5 checks the target
+# Step 4 invokes migrate-journal exactly when pre-flight's cutover decision
+# found a crossing upgrade (CUTOVER_CROSSING); every other store takes the
+# ordinary list. Every quiescence verification migrate-journal makes stays
+# here, after the swap: pre-flight only refused. Step 5 checks the target
 # version. Keep incompatible hooks, helpers, servers and launchers excluded
 # through committed verification. A committed or uncertain refusal requires
 # the direct administrator-verification retry in docs/operator-actions.md;
@@ -4709,9 +4972,10 @@ fi
 # SQLite keeps authority after commit even if legacy retirement is pending.
 # --------------------------------------------------------------------
 
-# (ad_user_version, ad_is_version, ad_got_version, ad_show_unreadable_version
-# and ad_fail_unreadable_version are defined above, in the pre-flight section
-# on the agent-rename gate, which reads the store's version first.)
+# (ad_user_version, ad_is_version, ad_got_version, ad_show_unreadable_version,
+# ad_fail_unreadable_version and ad_err_name are defined above, in the
+# pre-flight section on the agent-rename gate, which reads the store's
+# version first.)
 
 # ad_target_version <stderr> — the schema version THIS binary requires.
 # There is no public "print my schema version" verb (and SR-4 forbids
@@ -4726,15 +4990,6 @@ fi
 # consulted when a migration is actually pending.
 ad_target_version() {
     printf '%s' "$1" | grep -oE 'requires v[0-9]+' | head -n1 | grep -oE '[0-9]+' || true
-}
-
-# ad_err_name <stderr> — the err_name of the JSON error envelope
-# ({"err_name":…,"err_description":…}) in a verb's captured stderr, or
-# nothing when it holds none; lines that are not an envelope are skipped.
-# The install branches on this name, never on the description's English
-# text (b.7b4).
-ad_err_name() {
-    printf '%s\n' "$1" | jq -Rr '(fromjson | .err_name | strings)?' 2>/dev/null | tail -n1 || true
 }
 
 # ad_fail_config_refused <stderr> — agent-director refused its config file
@@ -4876,29 +5131,17 @@ else
 fi
 
 # ---- Step 4: run the selected open once and retain its status/details ----
-# Native-input migration requires the administrator even with an exact
-# sentinel. Fresh/current stores use ordinary list; help/version stay DB-free.
-# Capture one invocation's status and diagnostics so they describe the same
-# attempt. Keep the maintenance boundary through verification.
+# The route follows pre-flight's cutover decision: a crossing upgrade runs
+# the administrator's migrate-journal with the journal flags pre-flight's
+# --check-only accepted (the cutover needs it even with an exact sentinel),
+# and every other store the ordinary list, including a store past the
+# cutover with recorded authority whose probe asked for a sentinel.
+# help/version stay DB-free. Capture one invocation's status and diagnostics
+# so they describe the same attempt. Keep the maintenance boundary through
+# verification.
 open_command=("$CANONICAL" list)
-if [[ "${probe_name:-}" == ErrSchemaMigrationRequired ]]; then
-    journal_authority="$(sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$state_db" \
-        "SELECT value FROM store_meta WHERE key = 'native_input_authority';" 2>/dev/null || true)"
-    if [[ "$journal_authority" != sqlite-v1:* ]]; then
-        if [[ "$JOURNAL_MAINTENANCE" -ne 1 || "$JOURNAL_ROOTS_COMPLETE" -ne 1 || "$JOURNAL_BACKUP" != /* ]]; then
-            echo "install.sh: native-input cutover requires an operator-maintained maintenance window." >&2
-            echo "  Stop old mutators and prevent new invocations through committed verification." >&2
-            echo "  Re-run with --journal-maintenance-window --journal-roots-complete" >&2
-            echo "  --journal-backup <new-absolute-dir> and --journal-legacy-root for every" >&2
-            echo "  additional input root. Invoking HOME roots are included automatically." >&2
-            ad_exit_5 ErrJournalMigrationRefused
-        fi
-        open_command=("$ADMIN_CANONICAL" --store-path "$state_db" migrate-journal
-            --maintenance-window --roots-complete --backup-dir "$JOURNAL_BACKUP")
-        for journal_root in ${JOURNAL_ROOTS[@]+"${JOURNAL_ROOTS[@]}"}; do
-            open_command+=(--legacy-root "$journal_root")
-        done
-    fi
+if [[ "$CUTOVER_CROSSING" -eq 1 ]]; then
+    open_command=("$ADMIN_CANONICAL" --store-path "$state_db" migrate-journal "${JOURNAL_ARGS[@]}")
 fi
 open_rc=0
 if [[ "${open_command[0]}" == "$ADMIN_CANONICAL" ]]; then

@@ -41,6 +41,9 @@ type inputMigrationWindow struct {
 // process inventory; verify must refuse unreadable evidence, never kill it.
 // This entry is internal to this module, absent from the agent-facing API.
 // Roots are complete, canonical legacy input roots, including invoking HOME.
+// The caller makes the argument checks (adminapi's journalArguments),
+// including a new backup outside every root; the guard below is only this
+// entry's own precondition.
 func MigrateInputJournal(ctx context.Context, path string, roots []string, backup string, verify func(context.Context, string, []string) error) (result InputMigrationResult, resultErr error) {
 	if verify == nil || len(roots) == 0 || !filepath.IsAbs(backup) {
 		return result, fmt.Errorf("maintenance boundary and complete roots are required")
@@ -349,11 +352,6 @@ func (w *inputMigrationWindow) readLegacy(db *sql.DB, storeID string) error {
 }
 
 func backupInputStore(ctx context.Context, dbPath string, roots []string, dest string) error {
-	for _, root := range roots {
-		if dest == root || strings.HasPrefix(dest, root+string(filepath.Separator)) {
-			return fmt.Errorf("backup must be outside every legacy input root")
-		}
-	}
 	if err := makeInputBackupDir(dest); err != nil {
 		return fmt.Errorf("create exclusive stopped-writer backup: %w", err)
 	}

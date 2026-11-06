@@ -618,6 +618,9 @@ func (h *moveHome) WriteStore(path string) {
 // authorizeJournalMigration supplies the explicit operator window for the
 // fixture's owned temporary home and roots. Real inventory remains enabled.
 // Unauthorized cutover and preexisting-sentinel refusal use J34's direct runs.
+// The backup is one fixed path: a crossing re-run after a run that made it
+// needs a new --journal-backup, or pre-flight's --check-only refuses it as
+// backup_exists.
 func (h *moveHome) authorizeJournalMigration() {
 	h.t.Helper()
 	for _, flag := range h.Flags {

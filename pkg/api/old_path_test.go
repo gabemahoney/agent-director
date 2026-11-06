@@ -154,7 +154,7 @@ func oldPathRules(t testing.TB) *scanRules {
 	t.Helper()
 	list := []scanException{
 		{file: "internal/layout/old.go", reason: "SR-11.7: the presence rule looks for the old directory"},
-		{file: "internal/adminapi/journal_migration.go", block: "func MigrateJournal(", reason: "operator-only migration inventories both invoking-home input roots before SQLite cutover"},
+		{file: "internal/adminapi/journal_migration.go", block: "func journalArguments(", reason: "operator-only migration inventories both invoking-home input roots before SQLite cutover"},
 		{file: "internal/testsupport/sandboxguard/sandboxguard.go", reason: "SR-14.1: the guard names both directories"},
 		{file: "skills/release-agent-director/gates/coverage/bun-test.sh", reason: "SR-14.1: the gate names both directories"},
 		{file: "skills/release-agent-director/gates/coverage/bun-extra-scripts.sh", reason: "SR-14.1: the gate names both directories"},

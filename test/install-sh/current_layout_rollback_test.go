@@ -1,10 +1,8 @@
 package installsh_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -253,31 +251,14 @@ func rollbackRestoreStore(t *testing.T, h *moveHome, db string, backup map[strin
 	}
 }
 
-// Build the exact released baseline, rather than stamping today's binary v9.
+// Build the exact released baseline (v0.12.0's commit, schema v9) with the
+// genuine-release fixture, rather than stamping today's binary v9. A missing
+// revision fails the test.
 func rollbackReleasedPair(t *testing.T) (movePair, string) {
 	t.Helper()
-	const revision = "ccb41e075695609b084292f52c36512f3665d210"
-	src := t.TempDir()
-	archive := exec.Command("git", "archive", revision)
-	archive.Dir = "../.."
-	b, err := archive.Output()
+	r, err := releaseBuildOf("ccb41e075695609b084292f52c36512f3665d210")
 	if err != nil {
-		t.Fatalf("archive released baseline: %v", err)
+		t.Fatalf("released baseline: %v", err)
 	}
-	untar := exec.Command("tar", "-x", "-C", src)
-	untar.Stdin = bytes.NewReader(b)
-	if out, err := untar.CombinedOutput(); err != nil {
-		t.Fatalf("extract released baseline: %v: %s", err, out)
-	}
-	pair := movePair{filepath.Join(src, "bin", "agent-director"), filepath.Join(src, "bin", "agent-director-admin")}
-	for _, build := range []struct{ output, pkg string }{{pair.Main, "./cmd/agent-director"}, {pair.Admin, "./cmd/agent-director-admin"}} {
-		flags := "-X " + moveVersPkg + ".Version=0.12.0 -X " + moveVersPkg + ".Commit=" + revision
-		cmd := exec.Command("go", "build", "-ldflags", flags, "-o", build.output, build.pkg)
-		cmd.Dir = src
-		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("build released baseline: %v: %s", err, out)
-		}
-	}
-	return pair, filepath.Join(src, "skills", "install-agent-director", "install.sh")
+	return r.Pair, r.Install
 }
