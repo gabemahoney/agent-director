@@ -85,6 +85,10 @@ var errEmptyPath = errors.New("empty database path")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
+// install.sh holds it as STORE_SCHEMA_VERSION, and the version the
+// inputCutover step of migrationSteps produces as INPUT_CUTOVER_VERSION: its
+// pre-flight decides from them, before the binary swap, whether an upgrade
+// crosses the native-input cutover. A Go test fails when either differs.
 const schemaVersion = 20
 
 // agentRenameHopVersion is the user_version the agent-rename hop (v8 to v9,

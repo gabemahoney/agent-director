@@ -20,6 +20,7 @@ func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	code := m.Run()
 	moveFixtureShutdown() // os.Exit skips deferred calls; the fixture's shared build dir goes here
+	releaseFixtureShutdown()
 	os.Exit(code)
 }
 

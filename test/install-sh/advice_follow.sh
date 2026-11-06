@@ -208,13 +208,14 @@ EOF
 
 # J22's after-open move also surrounds the administrator open now used for
 # pre-cutover stores. Delegate to the real administrator, preserving inventory,
-# backup and transaction checks; inject the fixture move only after success.
+# backup and transaction checks; inject the fixture move only after success,
+# and never after a snapshot or pre-flight's migrate-journal --check-only.
 FAKE_ADMIN="$ROOT/bin/admin-around"
 FAKE_ADMIN_AROUND="$ROOT/fake-admin-around.sh"
 cat >"$FAKE_ADMIN_AROUND" <<EOF
 #!/bin/bash
 "$ADMIN" "\$@" || exit
-for arg in "\$@"; do [[ "\$arg" == snapshot-store ]] && exit 0; done
+for arg in "\$@"; do [[ "\$arg" == snapshot-store || "\$arg" == --check-only ]] && exit 0; done
 if [[ -e "\$HOME/fake-after" ]]; then . "\$HOME/fake-after"; rm "\$HOME/fake-after"; fi
 EOF
 chmod 0755 "$FAKE_ADMIN_AROUND" || die "chmod $FAKE_ADMIN_AROUND"
@@ -4432,9 +4433,12 @@ EOF
     grep -qF "nothing changed" "$OUT" || bad "the repeat does not say nothing changed: $(flat "$OUT")"
 }
 
-# J34: "Re-run with --journal-maintenance-window --journal-roots-complete
-# --journal-backup <new-absolute-dir> and --journal-legacy-root for every
-# additional input root." A preexisting sentinel never authorizes the probe.
+# J34: "To fix: establish the maintenance window (stop old mutators and
+# prevent new old-binary invocations through committed verification), then
+# pass --maintenance-window (install.sh: --journal-maintenance-window)", then
+# "Keep the maintenance boundary and restart administrator verification." A
+# preexisting sentinel never authorizes the probe: without journal flags
+# pre-flight's --check-only refuses, changing nothing.
 test_J34_JournalMaintenanceStopAndRestartVerification() {
     local h db prior before extra backup writer input_fd output_fd answer
     h="$(new_home)" db="$h/.config/agent-director/state.db"
@@ -4449,11 +4453,13 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
     for answer in first repeat; do
         run "$h" "${J7ARGV[@]}"
         expect_exit5 ErrJournalMigrationRefused "$answer without maintained boundary" || return
-        expect_advice "native-input cutover requires an operator-maintained maintenance window."
-        expect_advice "Stop old mutators and prevent new invocations through committed verification."
-        expect_advice "Re-run with --journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-dir> and --journal-legacy-root for every additional input root. Invoking HOME roots are included automatically."
+        expect_advice "install.sh: pre-flight refused the journal flags (agent-director-admin migrate-journal --check-only) Nothing was installed or changed."
+        expect_advice "To fix: establish the maintenance window (stop old mutators and prevent new old-binary invocations through committed verification), then pass --maintenance-window (install.sh: --journal-maintenance-window)"
+        expect_advice "Then re-run this release's installer, with a new --journal-backup directory."
+        grep -F '"reason":"maintenance_boundary_required"' "$ERR" >/dev/null || bad "no relayed maintenance_boundary_required refusal: $(flat "$ERR")"
         [[ "$(sha256sum "$db")" == "$before" ]] || bad "the sentinel let the early probe migrate"
-        [[ ! -e "$backup/COMPLETE" ]] || bad "refusal published a backup"
+        [[ -e "$(sentinel "$h")" ]] || bad "the pre-flight refusal consumed the sentinel"
+        [[ ! -e "$backup" ]] || bad "the pre-flight refusal made the backup directory"
     done
     # A real still-running incompatible executable, even without an open DB FD.
     cp /bin/cat "$ROOT/agent-director-inflight" || { bad "copy mutator fixture"; return; }

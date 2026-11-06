@@ -33,6 +33,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/oldnames"
+	"github.com/gabemahoney/agent-director/internal/store"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
@@ -88,15 +89,25 @@ func handlers(o clisetup.Overrides) map[string]func([]string) error {
 
 // The cutover must not construct a Client: even its initial schema probe needs
 // the explicit exclusion boundary when an old authorization sentinel exists.
+// --check-only makes only the argument checks, before any config load or
+// store-path resolution, so it loads no config and opens no store.
 func migrateJournalHandler(o clisetup.Overrides, args []string) error {
 	var options adminapi.JournalMigrationOptions
+	var checkOnly bool
 	fs := flag.NewFlagSet("migrate-journal", flag.ContinueOnError)
 	fs.BoolVar(&options.MaintenanceWindow, "maintenance-window", false, "operator maintains exclusion of old mutators through verification")
 	fs.BoolVar(&options.RootsComplete, "roots-complete", false, "operator established all legacy input roots")
 	fs.Var((*stringSlice)(&options.LegacyRoots), "legacy-root", "additional absolute legacy input root (repeatable)")
 	fs.StringVar(&options.BackupDir, "backup-dir", "", "new absolute stopped-writer backup directory")
+	fs.BoolVar(&checkOnly, "check-only", false, "make only the argument checks")
 	if done, err := parseFlags(fs, args); done {
 		return err
+	}
+	if checkOnly {
+		if err := adminapi.CheckJournalMigration(options); err != nil {
+			return writeJournalRefusal(err, nil)
+		}
+		return writeJSON(struct{}{})
 	}
 	cfg, err := config.Load(clisetup.ConfigPath)
 	if err != nil {
@@ -111,18 +122,29 @@ func migrateJournalHandler(o clisetup.Overrides, args []string) error {
 	}
 	result, err := adminapi.MigrateJournal(context.Background(), path, options)
 	if err != nil {
-		var refusal *adminapi.JournalRefusal
-		var details any = result
-		if errors.As(err, &refusal) {
-			details = struct {
-				Refusal *adminapi.JournalRefusal `json:"refusal"`
-				Result  any                      `json:"result"`
-			}{refusal, result}
-		}
-		_ = json.NewEncoder(os.Stderr).Encode(errorEnvelope{ErrName: "ErrJournalMigrationRefused", ErrDescription: err.Error(), Details: details})
-		return errDispatch
+		return writeJournalRefusal(err, &result)
 	}
 	return writeJSON(result)
+}
+
+// writeJournalRefusal writes both migrate-journal runs' ErrJournalMigrationRefused
+// envelope and returns errDispatch. A refusal carries details.refusal, and
+// details.result when the run attempted the migration (result non-nil); any
+// other error carries the result alone.
+func writeJournalRefusal(err error, result *store.InputMigrationResult) error {
+	var refusal *adminapi.JournalRefusal
+	var details any
+	if result != nil {
+		details = *result
+	}
+	if errors.As(err, &refusal) {
+		details = struct {
+			Refusal *adminapi.JournalRefusal    `json:"refusal"`
+			Result  *store.InputMigrationResult `json:"result,omitempty"`
+		}{refusal, result}
+	}
+	_ = json.NewEncoder(os.Stderr).Encode(errorEnvelope{ErrName: "ErrJournalMigrationRefused", ErrDescription: err.Error(), Details: details})
+	return errDispatch
 }
 
 func main() {
