@@ -21291,6 +21291,43 @@ the old directory, and never an edit of `install.sh` to make a case run. A
 fixture that the product's output depends on (the `claude mcp get`
 captures) is replaced by a real capture, not hand-edited.
 
+### treefix: macrun's test trees (reusable test fixture)
+
+`tools/macrun/internal/treefix` writes a throwaway tree of files, rooted at
+a Go module, for macrun's tests. `Write(t, files) string` writes a map of
+slash-separated paths to file text under `t.TempDir()`, with a root
+`go.mod`, and returns the root. The package doc comment carries the detail.
+Users: the tests of `tools/macrun/internal/setup`,
+`tools/macrun/internal/golist`, `tools/macrun/internal/plan` and the
+`macrun` command. It is a leaf package (standard library only).
+
+**Must use:** a macrun test that needs a tree of files on disk uses
+`treefix.Write`, never its own tree writer.
+
+### macrun setup-file reader (reusable component)
+
+`tools/macrun/internal/setup` reads macrun's setup files under `test/mac/`
+(`ReadParts` for `parts.txt`, `ReadExpectedFailures` for
+`expected-failures.txt`), each in `test/docker-epics.txt`'s line format,
+and returns every error in a file as a `model.SetupError` rather than
+stopping at the first. The package doc comment carries the detail.
+
+**Must use:** every macrun reader of a `test/mac/` file uses this package,
+never its own parser.
+
+### macrun Go case listing (reusable component)
+
+`tools/macrun/internal/golist` lists, from source alone, the top-level Go
+`Test` functions and output-checked Examples that a package's test build
+compiles for one platform. `List(ctx, root, dir)` takes `DarwinContext()`
+or `LinuxContext()`; it runs no `go` command, so it answers the same on
+Linux and on the Mac. `DarwinCgoEnabled` is the cgo setting both the
+listing and macrun's part build use. The package doc comment carries the
+detail.
+
+**Must use:** any macrun code that lists a package's Go cases uses `List`
+with these contexts, never its own lister.
+
 ### Which tmux test double to use
 
 - In-process verb tests: `tmuxfix.Recorder`
