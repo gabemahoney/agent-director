@@ -24,7 +24,7 @@ func TestCursorModePublicSavedReplayAndDeliberateRepair(t *testing.T) {
 	// Serial: the existing real-pane fixture owns HOME/PATH and tmux environment.
 	for _, surface := range []string{"Go", "Bun"} {
 		t.Run(surface, func(t *testing.T) {
-			initial := "--resume\n多行 🦋"
+			initial, resumedTurn := "--resume\n多行 🦋", "resumed turn"
 			modes := json.RawMessage(`{"currentModeId":"agent","availableModes":[{"id":"agent","name":"Agent"},{"id":"plan","name":"Plan"}]}`)
 			f, r, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{AgentArgs: []string{"--plan", "--", initial}, Script: &cursorfix.Scenario{Modes: modes}})
 			caller := newPaneCaller(t, f, surface, filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director"))
@@ -73,7 +73,23 @@ func TestCursorModePublicSavedReplayAndDeliberateRepair(t *testing.T) {
 			saved := readRow(t, f.DBPath, launch.ID)
 			pause(launch.ID)
 			r.Configure(t, cursorfix.Scenario{LoadSupport: true, Modes: modes})
+			beforeResume := len(r.Frames(t))
 			caller.must("resume", map[string]any{"instance_id": launch.ID})
+			// Resume restores the saved mode but never replays the saved prompt:
+			// the loaded session waits, pending, for the caller's next input.
+			waitFor(t, "loaded session awaiting a prompt", func() bool {
+				pane, e := f.API.ReadPane(api.ReadPaneParams{InstanceID: launch.ID, NLines: 100})
+				return e == nil && strings.Contains(pane.Pane, "awaiting a prompt")
+			}, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
+			for _, frame := range r.Frames(t)[beforeResume:] {
+				if string(frame["method"]) == `"session/prompt"` {
+					t.Fatalf("resume replayed a prompt: %s", frame["params"])
+				}
+			}
+			if row := readRow(t, f.DBPath, launch.ID); row.State != store.StatePending {
+				t.Fatalf("resumed row before its first prompt: %+v; want pending", row)
+			}
+			caller.must("send-keys", map[string]any{"instance_id": launch.ID, "text": resumedTurn, "allow_pending": true})
 			waitComplete(launch.ID)
 			pause(launch.ID)
 			var methods, prompts []string
@@ -93,7 +109,7 @@ func TestCursorModePublicSavedReplayAndDeliberateRepair(t *testing.T) {
 					prompts = append(prompts, p.Prompt[0].Text)
 				}
 			}
-			if !reflect.DeepEqual(prompts, []string{initial, initial}) || strings.Join(methods, ",") != `"initialize","session/new","session/set_mode","session/prompt","initialize","session/load","session/set_mode","session/prompt"` {
+			if !reflect.DeepEqual(prompts, []string{initial, resumedTurn}) || strings.Join(methods, ",") != `"initialize","session/new","session/set_mode","session/prompt","initialize","session/load","session/set_mode","session/prompt"` {
 				t.Fatalf("public mode/replay order=%v prompts=%q", methods, prompts)
 			}
 			after := readRow(t, f.DBPath, launch.ID)
@@ -108,7 +124,7 @@ func TestCursorModePublicSavedReplayAndDeliberateRepair(t *testing.T) {
 			for _, prompt := range panePrompts(t, r) {
 				literalPrompts = append(literalPrompts, prompt.Text)
 			}
-			if !reflect.DeepEqual(literalPrompts, []string{initial, initial, "--explain this project's entry points"}) {
+			if !reflect.DeepEqual(literalPrompts, []string{initial, resumedTurn, "--explain this project's entry points"}) {
 				t.Fatalf("literal protected prompt must reach ACP exactly once: %q", literalPrompts)
 			}
 			// A late refusal is asynchronous launch failure. The caller explicitly

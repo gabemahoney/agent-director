@@ -113,8 +113,8 @@ existing shape. Its fresh workflow is in [Usage](../../docs/usage.md#fresh-curso
 `Resume(api.ResumeParams{InstanceID: id})` launches load of only its latest saved session;
 the row can remain `pending` until a first real prompt. After inspecting the
 pane, set `SendKeysParams.AllowPending` for that prompt; current binding and
-dialog guards still apply. Saved configuration and initial-prompt replay are
-defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
+dialog guards still apply. Saved configuration replay, which never includes
+the initial prompt, is defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
 `SpawnParams.ReuseFinished` supports Cursor and agent switches; see the
 [life rules](../../docs/usage.md#naming-the-agent). Argument and
 asynchronous failure handling are in the

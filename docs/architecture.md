@@ -469,8 +469,10 @@ binding, independent runtime/pane verification and every durable hold. General
 pending permission authority stays refused. Public callers explicitly use the
 existing `allow_pending` after pane inspection; it bypasses no gateway guard.
 The real prompt reports UserPromptSubmit through the unchanged direct-parent
-hook. Saved initial text remains once per launch after successful load and hold
-checks; transient queued, held and editable draft input is never reconstructed.
+hook. The gateway submits a given initial text once after successful load and
+hold checks, but resume passes an empty one, so a loaded session submits
+nothing before that first real prompt; transient queued, held and editable
+draft input is never reconstructed.
 
 Explicit mode is private launch configuration, carried by `RequestedMode` and
 the internal gateway's `--requested-mode`, never a public spawn/template field
@@ -7488,8 +7490,8 @@ and the others call it.
   `--` on stays the prompt, and after every pass-through option, so
   agent-director's settings win (Codex applies the last `-c` of a key and
   every `--enable` and `--disable` after every `-c`). A resume's argv is
-  `<codex> resume <session id> [filtered args] <block> [-- prompt]`: nothing
-  of agent-director's stands before `resume`. The block leaves out
+  `<codex> resume <session id> [filtered args] <block>`, with no saved
+  prompt: nothing of agent-director's stands before `resume`. The block leaves out
   `--no-daemon`, `--dangerously-bypass-hook-trust` and
   `--enable write_stdin_approval` when the arguments already carry them
   before their first `--`, because Codex rejects a repeat of the first
@@ -7674,10 +7676,15 @@ invalidating that eligibility.
 
 `ComposeRelaunch` filters a copied stored list using this extraction;
 Claude replay additionally removes parsed `-p` / `--print`, including
-print bytes in clusters. It then composes the row's current session selected
+print bytes in clusters. Replay never carries the saved initial prompt: it
+drops the operands (`Positionals`) and an unowned `DoubleDash` with what
+follows, read for Claude from the original list before extraction and for
+Codex and Cursor from the extracted copy. Owned values survive; an unknown
+option's following word is an operand under the valueless reading and is
+dropped too. It then composes the row's current session selected
 by [Resume](#resume), preserving stored `AgentArgs` unchanged and applying
 no general spawn validation. Codex's per-launch settings follow surviving
-options before the protected prompt, retaining their settings precedence.
+options, retaining their settings precedence.
 
 **Must use:** future argument processing uses `ReadClaudeArgs` /
 `ReadCodexArgs` / `ReadCursorArgs` and their ownership metadata, and selector removal uses
@@ -15599,17 +15606,18 @@ written, harmlessly:
    then `spawn.ComposeRelaunch` composes env, the row's agent's settings
    and the argv into a `CreateRequest`: for a Claude row
    `claude --resume <session_id> --settings <json> [filtered agent_args]`, for
-   a Codex row `<codex> resume <session_id> [filtered args] <settings block>
-   [-- prompt]` (`<codex>` is `[launch] codex_path` or `codex`).
+   a Codex row `<codex> resume <session_id> [filtered args] <settings block>`
+   (`<codex>` is `[launch] codex_path` or `codex`).
    Cursor composes the real gateway with current `cursor_path`, saved model/
-   initial prompt and private latest load target through the shared selection
-   described above; it also forwards the actual opened store path privately.
+   mode, an empty initial prompt and private latest load target through the
+   shared selection described above; it also forwards the actual opened store
+   path privately. No agent's saved initial prompt is replayed.
    Token and composition run before the move, so a failure writes nothing. Relaunch applies
    no spawn argument validation; it removes parsed session selectors and
    values, Claude print mode and orphaned cloud controls through the
    [shared argument extraction](#shared-agent-argument-readers-and-resume-extraction).
    For Claude, that extraction preserves parsed ownership when original required
-   values are complete, moving prompts or re-encoding altered clusters only
+   values are complete, re-encoding altered clusters only
    when necessary and retaining relative option order. Incomplete required
    values get literal filtering only, with rejection left to the agent parser.
    The stored list is unchanged.
@@ -16179,8 +16187,8 @@ resume:
 A Codex row carries no synthesized settings to begin with: its relaunch
 rebuilds the per-launch settings block from the config in force at the
 resume (a changed `inject_help_hook` or `disable_ask_user` applies to it),
-and its filtered stored arguments are replayed after `resume <id>`, ahead
-of the block and protected prompt, so the question-tool setting wins over
+and its filtered stored options are replayed after `resume <id>`, ahead
+of the block, so the question-tool setting wins over
 a surviving stored argument that turns the tool on. See
 [Shared agent argument readers and resume extraction](#shared-agent-argument-readers-and-resume-extraction).
 

@@ -133,8 +133,8 @@ Cursor uses the existing result and row fields; `status` keeps its existing
 shape. `resume({ instance_id: id })` launches load of only its latest saved session;
 the row can remain `pending` until a real first prompt. After inspecting the
 pane, pass `allow_pending: true` to `sendKeys` for that prompt; binding and
-dialog guards still apply. Saved configuration and initial-prompt replay are
-defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
+dialog guards still apply. Saved configuration replay, which never includes
+the initial prompt, is defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
 `reuse_finished: true` supports Cursor and agent switches under the linked
 life rules. `makeTemplate`
 and `spawn` refuse nonempty Cursor permission lists with

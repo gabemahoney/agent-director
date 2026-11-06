@@ -205,9 +205,9 @@ put another `--` before the single prompt argument:
 agent-director spawn --cwd "$PWD" --agent cursor -- -- "--explain this project's entry points"
 ```
 
-The initial prompt preserves Unicode and newlines. It is submitted once per
-launch after session configuration and decision holds permit it, including
-saved-argument replay on resume; `/clear` and `/new` do not submit it again.
+The initial prompt preserves Unicode and newlines. It is submitted once, at
+spawn, after session configuration and decision holds permit it; `resume`,
+`/clear` and `/new` do not submit it again.
 
 Other arguments and lifecycle limitations are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries). Permission
@@ -826,10 +826,8 @@ Retaining those values does not establish account or group isolation. Loading
 the latest conversation can leave the row `pending` until its first real
 prompt. After inspecting the pane, submit that prompt with the existing
 `--allow-pending`; confirmation of the current conversation and
-[permission holds](permissions.md#cursor-spawns) still apply. Loading and
-replay do not manufacture `waiting`.
-The saved initial prompt in `agent_args` is submitted once per launch after
-successful load and hold checks. Transient queued, provisionally held and
+[permission holds](permissions.md#cursor-spawns) still apply. Loading does
+not manufacture `waiting`. Transient queued, provisionally held and
 editable draft text are not restored. Session-selector filtering is defined in
 the [Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
 
@@ -840,25 +838,28 @@ requires a fresh supported launch with an empty composer; `allow_pending`
 does not extend native confirmation to resumed conversations.
 
 `resume` replays stored `agent_args` except recognized session selectors and
-their values, and Claude's `-p` / `--print`, so those options cannot replace
-the latest session or request print mode. A value or prompt that spells a
-selector is preserved. When the original Claude arguments include every
+their values, Claude's `-p` / `--print`, and the saved initial prompt, so the
+resumed agent keeps the latest session, stays interactive and waits for your
+next input instead of repeating its original task. The prompt is every
+argument that is neither an option nor an option's value, plus a `--` and
+everything after it. An option's value is kept, even one that spells a
+selector, reads like a prompt or is `--`. An option agent-director does not
+recognize is read as taking no value, so a word after it is dropped too.
+When the original Claude arguments include every
 recognized required value, surviving options keep their meaning and owned
 values. Arguments keep their order and spelling unless removal would change
-their meaning. Only then, prompt tokens move behind surviving options and
-`--`, or an altered short-option cluster is split or re-encoded to preserve
-its options and values. Prompt tokens keep their exact text and order.
+their meaning. Only then is an altered short-option cluster split or
+re-encoded to preserve its options and values.
 If any recognized required Claude scalar or list option originally lacks its value,
-filtering only deletes the selected options, owned values and cluster bytes;
-it preserves the surviving order and spelling, without moving prompts,
-inserting `--` or re-encoding clusters. The agent's own parser handles rejection.
+filtering only deletes the selected options, owned values, cluster bytes and
+prompt; it preserves the surviving order and spelling, without re-encoding
+clusters. The agent's own parser handles rejection.
 Claude's `--forward-home-settings`, `--ref` and `--on-branch`, with their
 values, are also removed when removing an actual `--cloud` / `--remote`
 leaves no parsed `--environment` / `--pool` option with its required value.
 They remain when that context survives, or when no cloud selector was removed.
-The stored list is unchanged. Codex prompt text remains an original argument
-after `--`, and today's per-launch settings take precedence over replayed
-settings. `resume` does not apply spawn's argument refusals; see the
+The stored list is unchanged. Today's Codex per-launch settings take
+precedence over replayed settings. `resume` does not apply spawn's argument refusals; see the
 [argument recognition limits](caller-contract.md#spawn-and-template-input-refusals).
 A resumed Claude row stays `pending` until Claude reports SessionStart,
 then becomes `waiting`; startup or trust waits and missed hooks can prolong
