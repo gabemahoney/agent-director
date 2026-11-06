@@ -223,6 +223,7 @@ run that EPIC's testplan in the harness container.
 - The gate `compile.<plat>` produces one sub-check per binary: compile.linux-amd64, compile.linux-arm64, compile.darwin-arm64 for `agent-director`, and compile.admin-linux-amd64, compile.admin-linux-arm64, compile.admin-darwin-arm64 for `agent-director-admin`.
 - SR-7.2: No Go source file may carry a literal release-version constant. The `compile.no-literal-version-constant` gate enforces this — `internal/version/version.go`'s `var Version = "dev"` is the only allowed default; anything matching a SemVer literal fires the gate.
 - Subprocess: `skills/release-agent-director/gates/compile/cross-compile.sh`.
+- `compile.darwin-arm64.lc-uuid` and `compile.admin-darwin-arm64.lc-uuid` run next, on the darwin binaries `cross-compile.sh` just built (same `RELEASE_DIST_DIR`): each fails unless its binary has an `LC_UUID` load command, because macOS 26's dyld refuses to load a binary without one. Go's linker writes it for darwin by default from Go 1.24; releases v0.8.0 to v0.17.7, built with Go 1.22, lack it (b.jh2). The gate reads the load commands with `tools/check-lcuuid` (Go's `debug/macho`), which it builds into a temp dir; each sub-check's `detail` is the checker's line, with the `LC_UUID` and the minimum macOS. Subprocess: `skills/release-agent-director/gates/compile/darwin-lc-uuid.sh`.
 
 ### Smoke phase (`smoke.<plat>.<check>`)
 - Three sub-checks per binary, for all six (an `agent-director-admin` binary's `<plat>` carries an `admin-` prefix, e.g. `smoke.admin-linux-amd64.magic-bytes`):

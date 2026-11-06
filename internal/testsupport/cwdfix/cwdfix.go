@@ -1,10 +1,10 @@
 // Package cwdfix moves a test's process into a fresh temp directory for the
-// rest of the test (go 1.22 has no t.Chdir).
+// rest of the test, as t.Chdir(t.TempDir()) does.
 //
 // This is a LEAF test-support package: it imports nothing from agent-director,
 // so any test package can use it. The working directory is process-wide, so a
-// test using it must not be parallel; Temp enforces that the way go 1.24's
-// t.Chdir does, by setting $PWD with t.Setenv, which panics in a parallel test
+// test using it must not be parallel; Temp enforces that the way t.Chdir
+// does, by setting $PWD with t.Setenv, which panics in a parallel test
 // and makes a later t.Parallel call panic.
 package cwdfix
 
