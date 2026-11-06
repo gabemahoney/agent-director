@@ -20645,6 +20645,144 @@ No workflow runs `test/driver-scripts/` either: the guard against a bare
 run in `make test-sandbox` (see
 [Store access from a case: `sql.sh`](#store-access-from-a-case-sqlsh-reusable-driver-helper)).
 
+### Mac Tests
+
+A Mac Run is one run of `.github/workflows/mac.yml`. It runs on pushes to
+`main` and on `workflow_dispatch`, only in public repositories, with no
+secrets. The workflow has no `concurrency` or other cancellation mechanism;
+part failures do not cancel the other parts.
+
+- `plan` runs on Linux and produces the part matrix from the setup files.
+- `part <name>` runs each planned part on a GitHub-hosted `macos-26` runner,
+  with a 60-minute job timeout, and uploads its record even after failure.
+- `verdict` runs on Linux regardless of the earlier jobs' conclusions,
+  reads each part's artifact or falls back to its job log, and judges the run.
+
+All jobs install the Go release from `go.mod`. `part` and `verdict`
+recompute the plan from the same tested commit. The `part <name>` job name
+and its `Run cases` step name are a contract with the constants in
+`tools/macrun/internal/ghrun`; change them together. `Run cases` sets the
+[CI bypass](#sandbox-guard-and-the-ci-bypass).
+
+#### macrun
+
+`tools/macrun` is the only reader of `test/mac/` besides the Mac workflow:
+
+- `plan` reads the checkout's setup and test source, writes the plan with
+  `-json`, and appends `parts` and `planned` with `-github-output`; an invalid
+  or absent setup plans no parts, and its status does not fail the command.
+- `part` recomputes the plan, checks the Mac and its tools, then builds and
+  runs the selected Go tests, writing a part record and marked log lines.
+- `verdict` checks the checkout against the attempt's `head_sha`, recomputes
+  the plan, reads results through GitHub using `GH_TOKEN`, and writes the
+  verdict and summary; it exits successfully only for `passed`.
+
+Reuse the registered [setup reader](#macrun-setup-file-reader-reusable-component),
+[Go case listing](#macrun-go-case-listing-reusable-component),
+[Go test runner](#macrun-go-test-runner-reusable-component) and
+[GitHub run reader](#macrun-github-run-reader-reusable-component).
+macrun's tests run in the Linux Unit Tests and never skip; their fixtures
+are [treefix](#treefix-macruns-test-trees-reusable-test-fixture) and
+[macfix](#macfix-macruns-command-test-fakes-reusable-test-fixture).
+
+#### The tests' environment on the Mac
+
+Before any case, `part` checks that the runner is GitHub-hosted, its home
+has no agent-director state (including the old directory) or Claude/Codex
+account directories, and the required tools and their versions are readable.
+A failed check or setup step runs no case. The workflow fetches full history
+and tags, installs bun at the sandbox Dockerfile's version, builds the
+TypeScript client, and installs tmux, bash and SQLite through Homebrew.
+
+The tests' `PATH` starts with `/usr/bin:/bin:/usr/sbin:/sbin`, then the
+directories of the job's `go` and `bun`, then `<homebrew>/bin` and
+`<homebrew>/sbin`. Thus commands under test meet macOS's own tools first.
+Only `macrun part` sets `AGENT_DIRECTOR_TEST_BASH` to the absolute path of
+Homebrew's bash 4.4 or later and `AGENT_DIRECTOR_TEST_SQLITE3` to the absolute
+path of Homebrew's keg-only `sqlite` executable. Both variables are unset
+on Linux.
+
+Test code that checks a store uses Go's SQLite driver or the standard SQLite
+build at `AGENT_DIRECTOR_TEST_SQLITE3` when set, never Apple's `sqlite3`:
+Apple's `sqlite3 -readonly` fails on a cleanly closed WAL store. Only the
+command under test, such as `install.sh` or a documented `sqlite3` command,
+meets Apple's `sqlite3` on the default `PATH`.
+[`AGENT_DIRECTOR_TEST_BINARY`](#envelope-diff-regression-harness) stays unset
+so tests build their own CLI instead of skipping.
+
+#### Setup files
+
+`test/mac/parts.txt` makes a tree have the Mac Tests. Each non-comment line
+is `<part name><TAB><suite><TAB><selection>`, with real tabs. Part names are
+unique, nonempty strings of `[A-Za-z0-9._-]`; the file lists 1–256 parts.
+The suite is `go`, with one or more single-space-separated selectors:
+`<package dir>` or `<package dir>:<regexp>`. Directories are relative to the
+checkout root. A regexp selects top-level tests and output-checked Examples;
+use one anchored selector (`^…$`) per name so a renamed test leaves an
+invalid selector. A selected top-level test runs with all its subtests.
+The plan expects each selected test and Example, plus each package's own
+result (`go:<dir>`). Coverage is recorded per suite as `full` or `partial`;
+the current setup reports `partial` for both suites.
+
+`test/mac/expected-failures.txt` holds marks in the form
+`<case ID><TAB><Bug ID><TAB><note>`. A case ID is
+`go:<package dir>:<test name>` for a top-level test, subtest or Example, or
+`go:<package dir>` for the package result. A Bug ID is `b.<id>` with
+lowercase letters and digits; the note explains the failure. Mark a failing
+subtest's top-level test separately, because Go fails it too. The file has
+no marks when absent or empty.
+
+Both files ignore blank and `#` lines. Invalid setup lists every error as
+`<file>:<line>: <message>` (without a line for a file-wide error) and makes
+the run incomplete.
+
+#### macrun's result model (reusable component)
+
+`tools/macrun/internal/model` is macrun's reusable result model: case IDs,
+the plan and its setup errors, results and reasons, part records and their
+marked log lines, and the judging of completeness and verdicts.
+**Must use:** every macrun component that needs these uses this package,
+never a second result model. Its JSON fields, enum strings and log-line
+format are shared across jobs and saved artifacts.
+
+A case reports `pass`, `skip` or `fail`; only `fail` has a reason
+(`failed`). Each part writes `record.json` to artifact
+`mac-part-<part>-<attempt>`. Its `@macrun-event` JSON log lines can reconstruct
+the record when the artifact is unavailable. A part is complete only when
+its record exists, no setup step or check failed, it ended `finished`, and
+every expected or reported case has a `pass` or `fail` result.
+
+The stable incompleteness reasons are `no Mac Tests in the source`,
+`repository not public`, `invalid setup`, `part not run, missing or cancelled`,
+`part setup failed`, `case skipped` and `case without a result`.
+Any such reason makes the verdict `incomplete`; otherwise an unmarked
+failure makes it `failed`, and otherwise it is `passed`. Expected Failures,
+unexpected passes and marks whose cases reported no result are listed;
+they add no failure or incompleteness of their own. Marks never excuse a
+skip or missing result. The `verdict` job fails unless the verdict is
+`passed`.
+
+#### Running on demand
+
+From a checkout, replace the placeholders and dispatch on a branch:
+
+```sh
+gh workflow run mac.yml --ref <branch>
+```
+
+A dispatched run tests its ref's head. For a commit that is not a branch
+or tag head, push a branch at it, then dispatch:
+
+```sh
+git push origin <commit>:refs/heads/<branch>
+gh workflow run mac.yml --ref <branch>
+```
+
+Read the run's summary in GitHub Actions or download `mac-run-<attempt>`
+for `verdict.json` and the full `verdict.md`. Logs and artifacts use the
+repository's retention period. A run in a repository that is not public
+is never `passed`.
+
 ### Audit standard
 
 Per SRD §17, a Docker test plan is judged on the per-case JSON stream of
@@ -21383,8 +21521,9 @@ way a test builds an old-layout install and runs `install.sh` against it.
   regular expression in `ADVICE_FOLLOW_ONLY` (cleared by the Go test that
   runs it). J23's link case, both J24 live-row cases and G8 build the
   previous release's binary and store from the `v0.11.1` git tag and skip
-  when the tag is not in the checkout. No workflow runs `test/install-sh`, so
-  a checkout without that tag skips those cases and nothing else is affected.
+  when the tag is not in the checkout. No workflow runs `advice_follow.sh`
+  (`TestAdviceFollow_J_InstallShScript`); a checkout without that tag skips
+  only those cases.
 
 The agent and migration tests build on it. `migration_fixture_test.go` lays
 down `config.toml`, templates and a store at a chosen version in a directory
@@ -25349,7 +25488,7 @@ Allow-list for (c): `version`, `expire`, `sweep`, `find-missing`. `version` has 
 verb-level error names; `expire`, `sweep` and `find-missing` do have documented errors.
 The allow-list exempts their smoke-file assertion, not their public error contract.
 
-**Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `coverage` phase in the `/release` skill, against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks: `go-smoke.yml`, `integration.yml` and `lint.yml` (see [CI lane](#ci-lane)), `doc-drift.yml` and `pre-release-verify-mac.yml`; release-blocking gates run locally so they execute against exactly the tree being tagged.
+**Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `coverage` phase in the `/release` skill, against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks: `go-smoke.yml`, `integration.yml` and `lint.yml` (see [CI lane](#ci-lane)), `doc-drift.yml`, `pre-release-verify-mac.yml` and `mac.yml` (see [Mac Tests](#mac-tests)); release-blocking gates run locally so they execute against exactly the tree being tagged.
 
 **Gate — Go smoke.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. The workflow runs on Linux; this statement makes no additional platform guarantee.
 
@@ -25495,17 +25634,18 @@ agent-director's state names both directories, never one; a new one is added to
 the old-path test's exceptions (see [The old-path test](#the-old-path-test)) with
 its reason. The b.8dr incident itself hit the old directory.
 
-The bypass is set **only at the `job:`/`step:` level** of the three
+The bypass is set **only at the `job:`/`step:` level** of the four
 GitHub-hosted-runner workflows (`go-smoke.yml`, `integration.yml`,
-`doc-drift.yml`), each with an in-file comment recording why it is safe there.
+`doc-drift.yml`, `mac.yml`), each with an in-file comment recording why it is safe there.
 `doc-drift.yml` sets it on each step that runs a `_require-sandbox` target.
+`mac.yml` sets it only on `Run cases` (see [Mac Tests](#mac-tests)).
 It must never be a
 repository/organization-level Actions variable or secret, and never appear in
 `.github/workflows/pre-release-verify-mac.yml` — that job runs on
 `[self-hosted, macOS, ARM64]`, a persistent machine that plausibly holds a real
 store. `make check-sandbox-bypass` (run by the doc-drift workflow) enforces the
-latter by grep; it also fails if the mac workflow file is missing, so the check
-cannot pass vacuously. Deliberately **not** implemented: a store-presence probe
+latter by grep; it also fails if `pre-release-verify-mac.yml` is missing, so the check
+cannot pass vacuously. Deliberately **not** implemented in `sandboxguard`: a store-presence probe
 or any `CI` / `GITHUB_ACTIONS` / `$HOME`-derived discriminator — ambient signals
 would also disable the guard on the self-hosted runner (b.175).
 

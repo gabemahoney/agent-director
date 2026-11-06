@@ -1,38 +1,194 @@
-# mac: stub for the Mac Runs that b.2pk (automated macOS tests) builds.
+# mac: run the Mac Tests on GitHub-hosted Macs and judge the results.
 #
-# GitHub dispatches a workflow only when a file of that name is on the
-# default branch, and a dispatch on a branch runs that branch's own copy.
-# This stub lands on main first so b.2pk's branch changes it instead of
-# adding the file, and so its Mac Runs can be dispatched during the build
-# (b.2pk SRD SR-2.5). b.2pk's real mac.yml replaces it when that Idea merges.
-#
-# It triggers only on workflow_dispatch, so a push to main starts no run,
-# and its one job runs nothing. Like every job b.2pk adds, the job runs only
-# while the repository is public, so a private repository bills nothing
-# (SR-3.2).
+# plan outputs the part names for part's matrix. part and verdict recompute
+# the plan from the same tested commit, using the same Go release.
+# The part job's "part <name>" and its "Run cases" step name are a contract
+# with tools/macrun/internal/ghrun's constants; change them together.
+# Nothing here cancels a run: do not add a concurrency key at any level.
+# See docs/architecture.md "Mac Tests" for the setup and result rules.
 #
 # Local actionlint
 # ----------------
-#   go install github.com/rhysd/actionlint/cmd/actionlint@v1.6.27
+#   go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8
 #   actionlint .github/workflows/mac.yml
 
 name: mac
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
-# Least-privilege GITHUB_TOKEN: the stub reads nothing it doesn't need.
 permissions:
   contents: read
 
 jobs:
-  stub:
-    name: Mac Run stub
+  plan:
     if: ${{ !github.event.repository.private }}
-    # The stub runs only an echo, so a Linux runner does, pinned as
-    # lint.yml pins its own; b.2pk's real workflow pins its macOS runner.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      parts: ${{ steps.plan.outputs.parts }}
+      planned: ${{ steps.plan.outputs.planned }}
     steps:
-      - name: Say this is a stub
-        run: echo "mac.yml is a stub; the real Mac Run workflow arrives with b.2pk."
+      - name: Check out the tested commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build macrun
+        run: go build -o "$RUNNER_TEMP/macrun" ./tools/macrun
+
+      - name: Plan the Mac Run
+        id: plan
+        run: '"$RUNNER_TEMP/macrun" plan -github-output "$GITHUB_OUTPUT"'
+
+  part:
+    needs: plan
+    if: ${{ !github.event.repository.private && needs.plan.outputs.planned == 'true' }}
+    name: part ${{ matrix.part }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ${{ fromJSON(needs.plan.outputs.parts) }}
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install bun
+        run: |
+          set -euo pipefail
+          bun_version="$(sed -n 's/^ARG BUN_VERSION=//p' test/sandbox/Dockerfile)"
+          bun_install_sha256="$(sed -n 's/^ARG BUN_INSTALL_SHA256=//p' test/sandbox/Dockerfile)"
+          if [[ ! "$bun_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::test/sandbox/Dockerfile must pin a BUN_VERSION like 1.3.13"
+            exit 1
+          fi
+          if [[ ! "$bun_install_sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::test/sandbox/Dockerfile must pin a 64-hex BUN_INSTALL_SHA256"
+            exit 1
+          fi
+          installer="$RUNNER_TEMP/bun-install.sh"
+          curl -fsSL -o "$installer" https://bun.sh/install
+          printf '%s  %s\n' "$bun_install_sha256" "$installer" | shasum -a 256 -c -
+          BUN_INSTALL="$RUNNER_TEMP/bun" bash "$installer" "bun-v$bun_version"
+          echo "$RUNNER_TEMP/bun/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bun/bin/bun" --version
+
+      - name: Build the TypeScript client
+        working-directory: pkg/ts-bun-client
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Install tmux, bash and sqlite from Homebrew
+        id: homebrew
+        run: |
+          set -euo pipefail
+          brew install tmux bash sqlite
+          homebrew_prefix="$(brew --prefix)"
+          test_bash="$homebrew_prefix/bin/bash"
+          test_sqlite3="$(brew --prefix sqlite)/bin/sqlite3"
+          for tool in "$homebrew_prefix/bin/tmux" "$test_bash" "$test_sqlite3"; do
+            if [[ "$tool" != /* || ! -x "$tool" ]]; then
+              echo "::error::Homebrew tool is not executable by absolute path: $tool"
+              exit 1
+            fi
+          done
+          printf 'prefix=%s\nbash=%s\nsqlite3=%s\n' \
+            "$homebrew_prefix" "$test_bash" "$test_sqlite3" >> "$GITHUB_OUTPUT"
+
+      - name: Build macrun
+        run: go build -o "$RUNNER_TEMP/macrun" ./tools/macrun
+
+      - name: Run cases
+        env:
+          PART: ${{ matrix.part }}
+          TESTED_COMMIT: ${{ github.sha }}
+          TEST_BASH: ${{ steps.homebrew.outputs.bash }}
+          TEST_SQLITE3: ${{ steps.homebrew.outputs.sqlite3 }}
+          HOMEBREW_PREFIX: ${{ steps.homebrew.outputs.prefix }}
+          MAC_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          # This GitHub-hosted, ephemeral runner has no real store to protect.
+          # macrun checks that it is GitHub-hosted and its home has no agent
+          # state before running a case, so bypass the container requirement.
+          #
+          # Per b.175 this variable is set ONLY at job/step level in the
+          # GitHub-hosted workflows (go-smoke.yml, integration.yml,
+          # doc-drift.yml and mac.yml), NEVER as a repository or organization
+          # variable, and NEVER in pre-release-verify-mac.yml: its self-hosted
+          # runner may hold a real store. make check-sandbox-bypass enforces
+          # the latter.
+          BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS: "1"
+        run: |
+          set -euo pipefail
+          exec "$RUNNER_TEMP/macrun" part \
+            -part "$PART" -run-id "$GITHUB_RUN_ID" -attempt "$GITHUB_RUN_ATTEMPT" \
+            -commit "$TESTED_COMMIT" -out "$RUNNER_TEMP/mac-part" \
+            -bash "$TEST_BASH" -sqlite3 "$TEST_SQLITE3" -homebrew "$HOMEBREW_PREFIX" \
+            -runner-environment "$MAC_RUNNER_ENVIRONMENT"
+
+      - name: Upload the part record
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: mac-part-${{ matrix.part }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mac-part
+          if-no-files-found: warn
+
+  verdict:
+    needs: [plan, part]
+    if: ${{ always() && !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build macrun
+        run: go build -o "$RUNNER_TEMP/macrun" ./tools/macrun
+
+      - name: Judge the run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/macrun" verdict \
+            -repo "$GITHUB_REPOSITORY" -run-id "$GITHUB_RUN_ID" -attempt "$GITHUB_RUN_ATTEMPT" \
+            -api-url "$GITHUB_API_URL" -server-url "$GITHUB_SERVER_URL" \
+            -summary "$GITHUB_STEP_SUMMARY" -out "$RUNNER_TEMP/mac-run"
+
+      - name: Upload the run's verdict
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: mac-run-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mac-run
+          if-no-files-found: warn

@@ -22,7 +22,7 @@
 // run these tests on a development host, where a real store exists; use
 // `make test-sandbox` there. Per b.175 the bypass must be set only at the
 // job/step level of the GitHub-hosted workflows (go-smoke.yml,
-// integration.yml, doc-drift.yml), never as a repository/organization-level
+// integration.yml, doc-drift.yml, mac.yml), never as a repository/organization-level
 // Actions variable and never in pre-release-verify-mac.yml, whose self-hosted
 // macOS runner is a persistent machine that plausibly holds a real store. The
 // Makefile's _require-sandbox guard honours the bypass too (b.8yq), which is

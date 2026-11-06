@@ -1,0 +1,9 @@
+# The Mac Run's parts, read only by tools/macrun.
+# Blank lines and lines starting with # are ignored.
+# Line form: <part name><TAB><suite><TAB><selection>, with real tabs between fields.
+# A Go selection has space-separated <package dir> or <package dir>:<regexp> selectors.
+# A regexp matches top-level test and Example names as go test -run does at the top level.
+# Use one anchored selector (^...$) per test so a renamed or removed test is refused.
+# Each selected top-level test runs with all its subtests.
+# See docs/architecture.md "Mac Tests" for the rules.
+installer	go	test/install-sh:^TestAgentCodexOnly$ test/install-sh:^TestMoveSuccessful$

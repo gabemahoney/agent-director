@@ -267,9 +267,9 @@ GitHub-**hosted**, ephemeral runner only — set
 `go test` directly. Never export `AGENT_DIRECTOR_TEST_SANDBOX` in a workflow.
 
 The bypass carries a hard placement rule (b.175). It may be set **only at the
-`job:`/`step:` level of the GitHub-hosted workflows** — today `go-smoke.yml` and
-`integration.yml`, each with a comment at the set-site explaining why it is safe
-there. It must **never** be set:
+`job:`/`step:` level of the GitHub-hosted workflows** — today `go-smoke.yml`,
+`integration.yml`, `doc-drift.yml` and `mac.yml`, each with a comment at the
+set-site explaining why it is safe there. It must **never** be set:
 
 - as a repository- or organization-level Actions variable or secret — those
   apply to every workflow, including the self-hosted one; or
@@ -413,8 +413,8 @@ genuine leak — do not dismiss it.
 The sandbox image (`test/sandbox/Dockerfile`) uses `debian:bookworm-slim`
 with no host paths baked in. It can be used in GitHub Actions without
 modification: mount the checkout at `/work` and the Go module cache at
-`/go/pkg/mod`. The hosted-runner test workflows (`go-smoke.yml`,
-`integration.yml`) do not do this today — they run `go test` directly on the
+`/go/pkg/mod`. The hosted-runner workflows (`go-smoke.yml`, `integration.yml`,
+`doc-drift.yml` and `mac.yml`) do not do this today — they run Go checks directly on the
 ephemeral runner and set `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` instead,
 because a runner with neither `~/.config/agent-director` nor `~/.agent-director` has nothing for the container to
 protect (see §10).

@@ -197,7 +197,7 @@ jobs:
           #
           # Per b.175 this variable must be set ONLY at this job/step level in
           # the GitHub-hosted workflows (go-smoke.yml, integration.yml,
-          # doc-drift.yml). It must NEVER be set as a repository- or
+          # doc-drift.yml, mac.yml). It must NEVER be set as a repository- or
           # organization-level Actions variable/secret, and NEVER in
           # .github/workflows/pre-release-verify-mac.yml — that job runs on
           # [self-hosted, macOS, ARM64], a persistent machine that plausibly
