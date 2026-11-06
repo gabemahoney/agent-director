@@ -1,6 +1,6 @@
 module github.com/gabemahoney/agent-director-consumer-dryrun
 
-go 1.22
+go 1.27.3
 
 require github.com/gabemahoney/agent-director v0.0.0
 

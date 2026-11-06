@@ -71,7 +71,10 @@ so a failing run is greppable.
 
 4. **`compile`** — Cross-compile six binaries: `agent-director-<os>-<arch>`
    and the operator tool `agent-director-admin-<os>-<arch>` for linux/amd64,
-   linux/arm64 and darwin/arm64; per-binary smoke (the admin binary's `help`
+   linux/arm64 and darwin/arm64 (`gates/compile/cross-compile.sh`); then,
+   on those binaries, darwin `LC_UUID` (`gates/compile/darwin-lc-uuid.sh`:
+   both darwin binaries must carry the load command macOS 26's dyld
+   requires); per-binary smoke (the admin binary's `help`
    must open with its human-approval statement); binary-version coherence
    for both. The sha256 manifest covers all six, and the publish preflight
    refuses an `agent-director` or `agent-director-admin` asset without its

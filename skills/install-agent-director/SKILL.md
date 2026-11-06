@@ -227,7 +227,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
        install.sh change needed: the orchestrator runs `make build`
        first, then
        `install.sh --binary ./bin/agent-director --admin-binary ./bin/agent-director-admin`.
-       Prereq: Go 1.22+ on PATH.
+       Prereq: Go 1.27.3+ on PATH.
    - *Default:* depends on what the orchestrator detects about the
      launch environment. As of b.q3b, install.sh refuses option (b)
      when `./bin/agent-director`'s embedded commit doesn't match
