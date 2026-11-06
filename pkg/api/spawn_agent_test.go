@@ -489,7 +489,7 @@ func TestSpawnReuseTakesTheNewAgent(t *testing.T) {
 // TestResumeCodexRowLaunches (SR-5.0, SR-7.4, SR-14.5): a resume of a codex
 // row, ended or missing, launches `codex resume` with the row's session id,
 // moves the row to pending and keeps the row's agent and its stored arguments,
-// refusing none of them.
+// refusing none of them; the launch replays their options, not the prompt.
 func TestResumeCodexRowLaunches(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	for _, state := range []string{store.StateEnded, store.StateMissing} {
@@ -510,8 +510,8 @@ func TestResumeCodexRowLaunches(t *testing.T) {
 			if it, ok := l.Resume(); !ok || it.SessionID != "sess-codex-row" {
 				t.Errorf("launch %q; want codex resume sess-codex-row", l.Argv)
 			}
-			if !slices.Equal(l.PassThrough(), []string{"--model", "gpt"}) || !slices.Equal(l.AfterDashDashArgs(), []string{"carry on"}) {
-				t.Errorf("launch %q; want the stored arguments replayed", l.Argv)
+			if !slices.Equal(l.PassThrough(), []string{"--model", "gpt"}) || l.HasDashDash() || slices.Contains(l.Argv, "carry on") {
+				t.Errorf("launch %q; want the stored options replayed without the saved prompt", l.Argv)
 			}
 			if res.PreTrust != "ok" {
 				t.Errorf("pre_trust = %q; want ok", res.PreTrust)

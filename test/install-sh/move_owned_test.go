@@ -810,8 +810,8 @@ func ownedDirNames(t *testing.T, dir string) []string {
 
 // TestOwnedSettingsHooks: after the move, hooks on drop the entries naming the
 // old directory's binary and add the new ones, keeping every other entry and
-// the file's mode, with a backup; --no-hooks leaves the file byte for byte and
-// prints the fix.
+// the file's mode, with no backup (b.f3n); --no-hooks leaves the file byte for
+// byte and prints the fix.
 func TestOwnedSettingsHooks(t *testing.T) {
 	setup := func(t *testing.T, flags []string) (*moveHome, string) {
 		t.Helper()
@@ -864,12 +864,8 @@ func TestOwnedSettingsHooks(t *testing.T) {
 		if len(left) > 0 {
 			t.Errorf("settings.json still has commands starting with %s: %v", old, left)
 		}
-		backups, _ := filepath.Glob(path + ".bak.*")
-		if len(backups) != 1 {
-			t.Fatalf("backups = %v, want one", backups)
-		}
-		if b, bmode := ownedFileBytes(t, backups[0]); b != orig || bmode != 0o600 {
-			t.Errorf("backup %s is not the original (mode %v):\n%s", backups[0], bmode, b)
+		if names := ownedDirNames(t, filepath.Dir(path)); !reflect.DeepEqual(names, []string{"settings.json"}) {
+			t.Errorf("~/.claude holds %v, want settings.json alone (no backup, no temp file)", names)
 		}
 	})
 

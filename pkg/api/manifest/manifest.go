@@ -764,7 +764,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "n_lines",
 				Type:          "int",
-				Description:   "Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
+				Description:   "Number of trailing pane lines to return, counted up from the last line with content: blank lines below it are left out, blank lines above it count. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -1009,7 +1009,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name: "resume",
-		Description: "Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: current cursor_path, latest conversation/protected transcript; native-history loss fails async, no fallback. Replay: saved initial prompt once/launch; no transient input/readiness/decisions/proof. " + missingNotProofShort + " Cwd best-effort pre-trust unless the row's latest spawn set no_pre_trust; pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Moves the row to pending, keeping its session id and history; parent_id=caller's AGENT_DIRECTOR_INSTANCE_ID; stays pending until the agent reports in, then waiting (Cursor: first verified prompt). Non-timeout failure restores the row's prior ended or missing state; restore failure reported. ErrTmuxNotAvailable ENVIRONMENT; ErrTmuxSessionCreate LAUNCH FAILURE. Create timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient); the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move: untouched/retryable. ErrTmuxSessionConflict (CONFLICT, human) or ErrTmuxUnresponsive (starting/stopping): untouched. Held create: restore/refuse. A pending row (a launch in progress): ErrSpawnNotResumable. Cursor: keep row/session/transcript/artifacts. " +
+		Description: "Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: current cursor_path, latest conversation/protected transcript; native-history loss fails async, no fallback. No replay: saved initial prompt, transient input/readiness/decisions/proof. " + missingNotProofShort + " Cwd best-effort pre-trust unless the row's latest spawn set no_pre_trust; pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Moves the row to pending, keeping its session id and history; parent_id=caller's AGENT_DIRECTOR_INSTANCE_ID; stays pending until the agent reports in, then waiting (Cursor: first verified prompt). Non-timeout failure restores the row's prior ended or missing state; restore failure reported. ErrTmuxNotAvailable ENVIRONMENT; ErrTmuxSessionCreate LAUNCH FAILURE. Create timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient); the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move: untouched/retryable. ErrTmuxSessionConflict (CONFLICT, human) or ErrTmuxUnresponsive (starting/stopping): untouched. Held create: restore/refuse. A pending row (a launch in progress): ErrSpawnNotResumable. Cursor: keep row/session/transcript/artifacts. " +
 			"Fresh: kill's live-row advice; unresolved survivors: STOP, human: docs/operator-actions.md#inspect-and-end-a-session-by-hand; spawn agent=cursor, project cwd, omit instance_id, same HOME, known supported extra_env/template intent. None: intended personal login/no custom dirs; dirs don't isolate accounts. Unavailable intent/needs protected data: STOP, human; no saved-env edit/drop credential intent. Saved credential/bad-dir: ErrReservedEnvKey pre-mutation. " +
 			"ErrInternal: control-character id/unusable recorded name (see kill); record failure, no tmux/launch.",
 		Callable:   true,
@@ -1018,7 +1018,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "instance_id",
 				Type:          "string",
-				Description:   "Id of the finished (ended or missing) row to resume. Replay removes parsed session selectors, Claude print mode and cloud controls orphaned by selector removal without changing stored agent_args. Claude inputs missing a recognized required value get literal filtering only; otherwise arguments and option-owned values retain parsed meaning. Claude prompts move behind surviving options and --, and altered short clusters are re-encoded, only when needed to preserve that meaning; otherwise order and spelling survive.",
+				Description:   "Id of the finished (ended or missing) row to resume. Replay removes parsed session selectors, Claude print mode, cloud controls orphaned by selector removal and the prompt (operands, an unowned -- and what follows; an unknown option's next word counts) without changing stored agent_args. Claude inputs missing a recognized required value get literal filtering only; otherwise options and owned values retain parsed meaning. Altered Claude short clusters are re-encoded only when needed to preserve that meaning; otherwise order and spelling survive.",
 				Required:      true,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -1041,6 +1041,8 @@ var Verbs = []VerbDef{
 			"ErrSpawnNotResumable",
 			"ErrNoSessionId",
 			"ErrReservedEnvKey",
+			"ErrCwdNotFound",
+			"ErrCwdNotADirectory",
 			"ErrJsonlMissing",
 			"ErrJsonlNeverWritten",
 			"ErrTmuxNotAvailable",

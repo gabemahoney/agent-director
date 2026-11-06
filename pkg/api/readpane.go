@@ -27,8 +27,10 @@ type ReadPaneTmux interface {
 	TmuxLookup
 	// ListPanes lists every pane of the server at socket.
 	ListPanes(socket string) ([]TmuxPane, error)
-	// CapturePaneID returns the last nLines lines of the pane paneID on
-	// socket; ansi keeps the escape sequences (tmux's -e flag).
+	// CapturePaneID returns the last nLines rows of the pane paneID on
+	// socket, counted up from the last row with content as
+	// [TmuxClient].CapturePaneID says; ansi keeps the escape sequences
+	// (tmux's -e flag).
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
 }
 
@@ -51,9 +53,11 @@ const DefaultReadPaneLines = 25
 type ReadPaneParams struct {
 	// InstanceID identifies the Spawn whose pane will be captured.
 	InstanceID string `json:"instance_id"`
-	// NLines is the number of trailing pane lines to return. 0 falls back to
-	// [DefaultReadPaneLines] (25). There is no upper cap. A negative value is
-	// refused with [ErrInvalidFlags].
+	// NLines is the number of trailing pane lines to return, counted up from
+	// the last line with content: blank lines below it are left out, blank
+	// lines above it count. 0 falls back to [DefaultReadPaneLines] (25).
+	// There is no upper cap. A negative value is refused with
+	// [ErrInvalidFlags].
 	NLines int `json:"n_lines"`
 	// ANSI controls ANSI escape handling. When false (default) escape sequences
 	// are stripped while unicode TUI glyphs are preserved. When true raw bytes
@@ -129,8 +133,11 @@ type ReadPaneResult struct {
 //
 //   - NLines=0 → DefaultReadPaneLines (25). No upper cap; callers asking
 //     for "all available scrollback" pass a large number themselves.
-//     NLines counts lines of history before the visible pane (-S -<n>). A
-//     negative NLines is refused, never clamped.
+//     The pane is the last NLines rows of history and visible screen,
+//     counted up from the last row with content: blank rows below it are
+//     left out, blank rows between content rows count (the capture's own
+//     trim, tmux.LastPaneLines; b.7y8). A negative NLines is refused,
+//     never clamped.
 //   - ANSI=false (default) → strip ANSI escape sequences but preserve
 //     unicode TUI glyphs (❯, ⎿, 🐝, box-drawing). The caller reads glyphs
 //     as state signal; ASCII-mapping them would destroy that.

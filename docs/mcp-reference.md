@@ -196,7 +196,7 @@ Capture the last N lines of the agent's own pane (default 25, uncapped). ANSI es
 ### Input schema
 
 - `instance_id`: type=string, required=true — Id of the Spawn to read.
-- `n_lines`: type=int, required=false — Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).
+- `n_lines`: type=int, required=false — Number of trailing pane lines to return, counted up from the last line with content: blank lines below it are left out, blank lines above it count. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).
 - `ansi`: type=bool, required=false — When true, return raw bytes from tmux (escape codes preserved). When false (default), strip ANSI sequences while preserving unicode glyphs.
 - `allow_pending`: type=bool, required=false — No effect: pending, ended and missing rows are all readable.
 
@@ -346,11 +346,11 @@ Close a fallen-back request answered outside agent-director; types nothing. Need
 
 ## Tool: resume
 
-Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: current cursor_path, latest conversation/protected transcript; native-history loss fails async, no fallback. Replay: saved initial prompt once/launch; no transient input/readiness/decisions/proof. `missing` is not proof of exit (see find-missing). Cwd best-effort pre-trust unless the row's latest spawn set no_pre_trust; pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Moves the row to pending, keeping its session id and history; parent_id=caller's AGENT_DIRECTOR_INSTANCE_ID; stays pending until the agent reports in, then waiting (Cursor: first verified prompt). Non-timeout failure restores the row's prior ended or missing state; restore failure reported. ErrTmuxNotAvailable ENVIRONMENT; ErrTmuxSessionCreate LAUNCH FAILURE. Create timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient); the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move: untouched/retryable. ErrTmuxSessionConflict (CONFLICT, human) or ErrTmuxUnresponsive (starting/stopping): untouched. Held create: restore/refuse. A pending row (a launch in progress): ErrSpawnNotResumable. Cursor: keep row/session/transcript/artifacts. Fresh: kill's live-row advice; unresolved survivors: STOP, human: docs/operator-actions.md#inspect-and-end-a-session-by-hand; spawn agent=cursor, project cwd, omit instance_id, same HOME, known supported extra_env/template intent. None: intended personal login/no custom dirs; dirs don't isolate accounts. Unavailable intent/needs protected data: STOP, human; no saved-env edit/drop credential intent. Saved credential/bad-dir: ErrReservedEnvKey pre-mutation. ErrInternal: control-character id/unusable recorded name (see kill); record failure, no tmux/launch.
+Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: current cursor_path, latest conversation/protected transcript; native-history loss fails async, no fallback. No replay: saved initial prompt, transient input/readiness/decisions/proof. `missing` is not proof of exit (see find-missing). Cwd best-effort pre-trust unless the row's latest spawn set no_pre_trust; pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Moves the row to pending, keeping its session id and history; parent_id=caller's AGENT_DIRECTOR_INSTANCE_ID; stays pending until the agent reports in, then waiting (Cursor: first verified prompt). Non-timeout failure restores the row's prior ended or missing state; restore failure reported. ErrTmuxNotAvailable ENVIRONMENT; ErrTmuxSessionCreate LAUNCH FAILURE. Create timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient); the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move: untouched/retryable. ErrTmuxSessionConflict (CONFLICT, human) or ErrTmuxUnresponsive (starting/stopping): untouched. Held create: restore/refuse. A pending row (a launch in progress): ErrSpawnNotResumable. Cursor: keep row/session/transcript/artifacts. Fresh: kill's live-row advice; unresolved survivors: STOP, human: docs/operator-actions.md#inspect-and-end-a-session-by-hand; spawn agent=cursor, project cwd, omit instance_id, same HOME, known supported extra_env/template intent. None: intended personal login/no custom dirs; dirs don't isolate accounts. Unavailable intent/needs protected data: STOP, human; no saved-env edit/drop credential intent. Saved credential/bad-dir: ErrReservedEnvKey pre-mutation. ErrInternal: control-character id/unusable recorded name (see kill); record failure, no tmux/launch.
 
 ### Input schema
 
-- `instance_id`: type=string, required=true — Id of the finished (ended or missing) row to resume. Replay removes parsed session selectors, Claude print mode and cloud controls orphaned by selector removal without changing stored agent_args. Claude inputs missing a recognized required value get literal filtering only; otherwise arguments and option-owned values retain parsed meaning. Claude prompts move behind surviving options and --, and altered short clusters are re-encoded, only when needed to preserve that meaning; otherwise order and spelling survive.
+- `instance_id`: type=string, required=true — Id of the finished (ended or missing) row to resume. Replay removes parsed session selectors, Claude print mode, cloud controls orphaned by selector removal and the prompt (operands, an unowned -- and what follows; an unknown option's next word counts) without changing stored agent_args. Claude inputs missing a recognized required value get literal filtering only; otherwise options and owned values retain parsed meaning. Altered Claude short clusters are re-encoded only when needed to preserve that meaning; otherwise order and spelling survive.
 
 ### Output schema
 
@@ -363,6 +363,8 @@ Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: cu
 - `ErrSpawnNotResumable`
 - `ErrNoSessionId`
 - `ErrReservedEnvKey`
+- `ErrCwdNotFound`
+- `ErrCwdNotADirectory`
 - `ErrJsonlMissing`
 - `ErrJsonlNeverWritten`
 - `ErrTmuxNotAvailable`

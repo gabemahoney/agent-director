@@ -1349,7 +1349,8 @@ came up, the prompt closed); nothing was sent or recorded. It never
 carries the new hash, since a caller that retried with it would skip
 looking: read the pane again. Its `err_details` give `n_lines` and the
 `request_token` named, if any. Volatile bytes in the captured lines (a
-spinner, a clock) cause such refusals; pick `--n-lines` to leave them out.
+spinner, a clock) cause such refusals. A smaller `--n-lines` leaves out
+lines above the last N, but not a volatile line among the last N.
 The hash of an `ansi` read never matches.
 
 #### Plain `send-keys`

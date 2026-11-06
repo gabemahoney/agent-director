@@ -78,9 +78,10 @@ func TestParsePaneListingNeverLeaksLabel(t *testing.T) {
 	}
 }
 
-// TestParseCaptureUnchanged checks a capture returns stdout unchanged, with
-// and without -e.
-func TestParseCaptureUnchanged(t *testing.T) {
+// TestParseCapture checks a capture returns stdout's rows unchanged, with and
+// without -e, less the blank rows below its last row with content (E.10 O4's
+// 22).
+func TestParseCapture(t *testing.T) {
 	for _, e := range tmuxfix.Captures() {
 		for _, ansi := range []bool{false, true} {
 			t.Run(e.Name+"/ansi="+strconv.FormatBool(ansi), func(t *testing.T) {
@@ -89,11 +90,31 @@ func TestParseCaptureUnchanged(t *testing.T) {
 				if err != nil {
 					t.Fatalf("CapturePaneID: %v", err)
 				}
-				if got != e.Stdout {
-					t.Errorf("capture = %q, want %q", got, e.Stdout)
+				if want := strings.TrimRight(e.Stdout, "\n") + "\n"; got != want {
+					t.Errorf("capture = %q, want %q", got, want)
 				}
 			})
 		}
+	}
+}
+
+// TestCaptureLastRows (b.7y8): CapturePaneID returns only the last nLines rows
+// of what capture-pane -S -<n> prints (history rows plus the whole visible
+// screen), counted up from the last row with content, with the argv
+// unchanged.
+func TestCaptureLastRows(t *testing.T) {
+	// Two history rows, then a 24-row screen with its cursor on row 3.
+	stdout := "old 1\nold 2\n$ ls\nfile\n$ \n" + strings.Repeat("\n", 21)
+	c, runner := newScripted(t, exitZero(stdout))
+	got, err := c.CapturePaneID(testSocket, "%3", 2, false)
+	if err != nil {
+		t.Fatalf("CapturePaneID: %v", err)
+	}
+	if want := "file\n$ \n"; got != want {
+		t.Errorf("CapturePaneID(n 2) = %q; want %q", got, want)
+	}
+	if args := runner.Only().Args; len(args) < 2 || args[len(args)-2] != "-S" || args[len(args)-1] != "-2" {
+		t.Errorf("argv = %q; want it to end in -S -2", args)
 	}
 }
 

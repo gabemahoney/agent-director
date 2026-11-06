@@ -140,6 +140,13 @@ rl_missing() {
  fi
 }
 rl_gateway_gone() { [[ $resumed_gateway =~ ^[0-9]+$ ]] && proc_gone "$resumed_gateway"; }
+rl_awaiting() { ad read-pane --instance-id "$id" --n-lines 200 | jq -e '.pane|contains("awaiting a prompt")' >/dev/null; }
+# Resume never replays the saved initial prompt: the loaded session waits, pending.
+rl_not_replayed() {
+ check resume.awaiting-prompt wait_until rl_awaiting
+ check resume.saved-not-replayed pc_prompts_is 0
+ check resume.pending test "$(row_state)" = pending
+}
 rl_default_bun() {
  local hold=$1
  pc_install_bun
@@ -152,6 +159,9 @@ rl_default_bun() {
   mv "$case_dir/scenario-next" "$case_dir/scenario"
  fi
  rl_resume Bun
+ rl_not_replayed
+ # The live generation comes from the caller's own first prompt.
+ rl_send Bun HOLD true >/dev/null
  check generation.held wait_until pc_prompts_is 1
  if [[ $hold == permission ]]; then check permission.held wait_until request_count_is 1; fi
  check generation.unreleased test ! -e "$case_dir/release"
@@ -220,15 +230,17 @@ rl_saved_transient() {
  : > "$case_dir/raw"
  : > "$case_dir/sent.jsonl"
  rl_resume CLI
- check saved.completed wait_until rl_saved_complete
- check saved.exactly-once pc_prompts_is 1
- check saved.only-text test "$(frames | jq -sr '[.[]|select(.method=="session/prompt")|.params.prompt[0].text]|.[]')" = 'saved initial after crash'
+ rl_not_replayed
+ rl_send CLI 'real prompt after crash' true >/dev/null
+ check real.completed wait_until rl_real_complete
+ check real.exactly-once pc_prompts_is 1
+ check real.only-text test "$(frames | jq -sr '[.[]|select(.method=="session/prompt")|.params.prompt[0].text]|.[]')" = 'real prompt after crash'
  rl_preserved
  rl_public CLI pause >/dev/null
  check transient.no-late-dispatch pc_prompts_is 1
 }
 rl_queued() { jq -se 'any(.[]; .kind=="submission_accepted" and .data.text=="queued transient before crash")' "$path" >/dev/null; }
-rl_saved_complete() { [[ $(row_state) == waiting ]] && pc_prompts_is 1 && [[ $(pc_count turn_outcome) == "$((saved_outcomes+1))" ]]; }
+rl_real_complete() { [[ $(row_state) == waiting ]] && pc_prompts_is 1 && [[ $(pc_count turn_outcome) == "$((saved_outcomes+1))" ]]; }
 
 # E4 AC5-7: reuse uses the same isolated runtime/public helpers as latest resume.
 rl_reuse_call() {

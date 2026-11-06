@@ -38,7 +38,8 @@ func TestReadPaneParameters(t *testing.T) {
 		want      string
 	}{
 		{"defaults", 0, false, 25, stripped},
-		{"one line", 1, false, 1, stripped},
+		{"one line", 1, false, 1, "🐝 Brewed for 1s\n"},
+		{"two lines with ansi on", 2, true, 2, "\x1b[1m4\x1b[0m\n🐝 Brewed for 1s\n"},
 		{"no upper cap", 1000, false, 1000, stripped},
 		{"ansi on", 0, true, 25, raw},
 		{"ansi on with n_lines", 7, true, 7, raw},

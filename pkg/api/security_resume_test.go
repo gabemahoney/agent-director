@@ -9,6 +9,7 @@ package api_test
 // create returns.
 
 import (
+	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -49,11 +50,12 @@ func securityResumeHeldCall(t *testing.T, c *api.Client, s *securityScene) (any,
 }
 
 // rsSecTarget is expire's finished target with no session (exSecTarget), a
-// session id and a cwd, so resume and reuse pass their guards and reach the
-// lookup; it records no socket, so they resolve the fixture's per-user one.
+// session id and a cwd that exists (resume refuses a missing one, b.vit), so
+// resume and reuse pass their guards and reach the lookup; it records no
+// socket, so they resolve the fixture's per-user one.
 func rsSecTarget() killRowSpec {
 	spec := exSecTarget(true)
-	spec.SessionID, spec.CWD = "sess-security", "/security/resume"
+	spec.SessionID, spec.CWD = "sess-security", os.TempDir()
 	spec.Opts = append(spec.Opts, apitest.WithTmuxSocket(""))
 	return spec
 }
