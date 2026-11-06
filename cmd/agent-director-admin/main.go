@@ -27,7 +27,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/clisetup"
@@ -91,6 +95,12 @@ func handlers(o clisetup.Overrides) map[string]func([]string) error {
 // the explicit exclusion boundary when an old authorization sentinel exists.
 // --check-only makes only the argument checks, before any config load or
 // store-path resolution, so it loads no config and opens no store.
+//
+// Every error goes through writeJournalError, carrying the commit state SRD
+// SR-2.16 "Commit state" gives it. The real run catches INT, TERM and HUP from
+// right after its flags parse (journalInterruptContext): one that arrives
+// before the cutover commit begins stops the attempt as interrupted; once
+// that commit has begun, the attempt finishes first.
 func migrateJournalHandler(o clisetup.Overrides, args []string) error {
 	var options adminapi.JournalMigrationOptions
 	var checkOnly bool
@@ -100,7 +110,13 @@ func migrateJournalHandler(o clisetup.Overrides, args []string) error {
 	fs.Var((*stringSlice)(&options.LegacyRoots), "legacy-root", "additional absolute legacy input root (repeatable)")
 	fs.StringVar(&options.BackupDir, "backup-dir", "", "new absolute stopped-writer backup directory")
 	fs.BoolVar(&checkOnly, "check-only", false, "make only the argument checks")
-	if done, err := parseFlags(fs, args); done {
+	done, invalid, err := parseVerbFlags(fs, args)
+	switch {
+	case invalid != "" && (checkOnly || checkOnlyArgs(args)):
+		return writeJournalError(errInvalidFlags, invalid, nil, nil, adminapi.JournalCommitCheckOnly())
+	case invalid != "":
+		return writeJournalError(errInvalidFlags, invalid, nil, nil, adminapi.JournalCommitBeforeAttempt(o.StorePath))
+	case done:
 		return err
 	}
 	if checkOnly {
@@ -109,41 +125,100 @@ func migrateJournalHandler(o clisetup.Overrides, args []string) error {
 		}
 		return writeJSON(struct{}{})
 	}
+	ctx, stop := journalInterruptContext()
+	defer stop()
 	cfg, err := config.Load(clisetup.ConfigPath)
 	if err != nil {
-		return writeError("ErrConfigMalformed", err.Error())
+		return writeJournalError("ErrConfigMalformed", err.Error(), nil, nil, adminapi.JournalCommitBeforeAttempt(o.StorePath))
 	}
 	path := o.StorePath
 	if path == "" {
 		path, err = cfg.Store.EffectiveDbPath()
 		if err != nil {
-			return writeError("ErrStoreOpen", err.Error())
+			// No store path is known, so the lock cannot be checked.
+			return writeJournalError("ErrStoreOpen", err.Error(), nil, nil, adminapi.JournalCommitBeforeAttempt(""))
 		}
 	}
-	result, err := adminapi.MigrateJournal(context.Background(), path, options)
+	result, err := adminapi.MigrateJournal(ctx, path, options)
 	if err != nil {
 		return writeJournalRefusal(err, &result)
 	}
 	return writeJSON(result)
 }
 
-// writeJournalRefusal writes both migrate-journal runs' ErrJournalMigrationRefused
-// envelope and returns errDispatch. A refusal carries details.refusal, and
-// details.result when the run attempted the migration (result non-nil); any
-// other error carries the result alone.
+// checkOnlyArgs reports whether migrate-journal's arguments ask for
+// --check-only, whether or not they parse: such a run begins no attempt, so
+// every error it gets is not_committed. It reads the flag's forms the flag
+// package takes: --check-only or -check-only, alone or with a true value.
+func checkOnlyArgs(args []string) bool {
+	for _, arg := range args {
+		name, value, hasValue := strings.Cut(arg, "=")
+		if name != "--check-only" && name != "-check-only" {
+			continue
+		}
+		if on, err := strconv.ParseBool(value); !hasValue || err == nil && on {
+			return true
+		}
+	}
+	return false
+}
+
+// journalInterruptContext returns the real run's context, which the first
+// INT, TERM or HUP cancels (SRD SR-2.16 "Interrupts"). TERM is always caught;
+// INT and HUP only when they were not ignored at start, because catching one
+// would undo that ignore. The signals stay caught until the process exits, so
+// a later one kills it neither during the cutover commit nor during its
+// envelope write.
+func journalInterruptContext() (context.Context, context.CancelFunc) {
+	signals := []os.Signal{syscall.SIGTERM}
+	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGHUP} {
+		if !signal.Ignored(sig) {
+			signals = append(signals, sig)
+		}
+	}
+	caught := make(chan os.Signal, 1)
+	signal.Notify(caught, signals...)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-caught:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
+// writeJournalRefusal writes a refusal from either migrate-journal run as
+// ErrJournalMigrationRefused, with the refusal's commit state, and
+// details.result when the run attempted the migration (result non-nil).
 func writeJournalRefusal(err error, result *store.InputMigrationResult) error {
 	var refusal *adminapi.JournalRefusal
-	var details any
-	if result != nil {
-		details = *result
+	if !errors.As(err, &refusal) {
+		// Neither run returns another error; its commit state is not known.
+		return writeJournalError("ErrJournalMigrationRefused", err.Error(), nil, result, adminapi.JournalCommitBeforeAttempt(""))
 	}
-	if errors.As(err, &refusal) {
-		details = struct {
-			Refusal *adminapi.JournalRefusal    `json:"refusal"`
-			Result  *store.InputMigrationResult `json:"result,omitempty"`
-		}{refusal, result}
+	return writeJournalError("ErrJournalMigrationRefused", err.Error(), refusal, result, refusal.Commit)
+}
+
+// writeJournalError writes one migrate-journal error envelope on stderr, the
+// only way its errors are written, and returns errDispatch, or the write's own
+// error. details always carries cutover, and steps_committed when it is
+// not_committed; refusal for a refusal; result when the run attempted the
+// migration.
+func writeJournalError(name, desc string, refusal *adminapi.JournalRefusal, result *store.InputMigrationResult, commit adminapi.JournalCommit) error {
+	details := struct {
+		Refusal *adminapi.JournalRefusal    `json:"refusal,omitempty"`
+		Result  *store.InputMigrationResult `json:"result,omitempty"`
+		adminapi.JournalCommit
+	}{refusal, result, commit}
+	b, err := json.Marshal(errorEnvelope{ErrName: name, ErrDescription: desc, Details: details})
+	if err != nil {
+		return err
 	}
-	_ = json.NewEncoder(os.Stderr).Encode(errorEnvelope{ErrName: "ErrJournalMigrationRefused", ErrDescription: err.Error(), Details: details})
+	if _, err := fmt.Fprintln(os.Stderr, string(b)); err != nil {
+		return err
+	}
 	return errDispatch
 }
 
@@ -167,14 +242,22 @@ func run(args []string) int {
 // (--home replaces HOME before any config load), then runs the verb's
 // handler on the remaining arguments. The no-verb run, which counts a run
 // with only global flags, prints help. A malformed global flag is
-// ErrInvalidFlags.
-func dispatch(args []string) error {
-	g, args, err := clisetup.ParseGlobalFlags(args)
+// ErrInvalidFlags; on a migrate-journal run it is migrate-journal's envelope
+// (journalGlobalFlagError).
+func dispatch(argv []string) error {
+	g, args, err := clisetup.ParseGlobalFlags(argv)
 	if err != nil {
+		// The verb is not known yet; the token names a migrate-journal run.
+		if i := slices.Index(argv, "migrate-journal"); i >= 0 {
+			return journalGlobalFlagError(argv[i+1:], err)
+		}
 		return writeError(errInvalidFlags, err.Error())
 	}
 	o, err := g.Apply()
 	if err != nil {
+		if len(args) > 0 && args[0] == "migrate-journal" {
+			return journalGlobalFlagError(args[1:], err)
+		}
 		return writeError(errInvalidFlags, err.Error())
 	}
 	if len(args) == 0 {
@@ -185,6 +268,18 @@ func dispatch(args []string) error {
 		return writeError(errUnknownVerb, fmt.Sprintf("unknown verb %q; try '%s help'", args[0], binaryName))
 	}
 	return handler(args[1:])
+}
+
+// journalGlobalFlagError writes a global-flag error on a migrate-journal run,
+// given the arguments after the verb: not_committed for a --check-only run,
+// and otherwise unknown, because no store path is known yet to check the
+// migration lock.
+func journalGlobalFlagError(verbArgs []string, err error) error {
+	commit := adminapi.JournalCommitBeforeAttempt("")
+	if checkOnlyArgs(verbArgs) {
+		commit = adminapi.JournalCommitCheckOnly()
+	}
+	return writeJournalError(errInvalidFlags, err.Error(), nil, nil, commit)
 }
 
 // helpHandler prints the help of the global flags and every verb. Its
@@ -257,19 +352,30 @@ func deleteHandler(o clisetup.Overrides, args []string) error {
 // -h, or after an ErrInvalidFlags envelope for a bad flag or any positional
 // argument.
 func parseFlags(fs *flag.FlagSet, args []string) (done bool, err error) {
+	done, invalid, err := parseVerbFlags(fs, args)
+	if invalid != "" {
+		return true, writeError(errInvalidFlags, invalid)
+	}
+	return done, err
+}
+
+// parseVerbFlags is parseFlags without the ErrInvalidFlags envelope: for a bad
+// flag or any positional argument it returns that envelope's description as
+// invalid, for the caller to write.
+func parseVerbFlags(fs *flag.FlagSet, args []string) (done bool, invalid string, err error) {
 	fs.SetOutput(io.Discard)
 	switch perr := fs.Parse(args); {
 	case errors.Is(perr, flag.ErrHelp):
-		return true, printVerbHelp(fs.Name())
+		return true, "", printVerbHelp(fs.Name())
 	case perr != nil:
 		if text, ok := oldnames.RefuseFlag(fs, perr); ok {
-			return true, writeError(errInvalidFlags, text)
+			return true, text, nil
 		}
-		return true, writeError(errInvalidFlags, perr.Error())
+		return true, perr.Error(), nil
 	case fs.NArg() > 0:
-		return true, writeError(errInvalidFlags, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
+		return true, fmt.Sprintf("unexpected argument %q", fs.Arg(0)), nil
 	}
-	return false, nil
+	return false, "", nil
 }
 
 // printVerbHelp prints the help of the verb name.

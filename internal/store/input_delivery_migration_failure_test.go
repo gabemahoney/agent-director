@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,8 +29,14 @@ func TestInputJournalMigrationAtomicMarkerFailure(t *testing.T) {
 		}
 		legacy[entry.Name()] = b
 	}
-	if r, err := f.Migrate(); err == nil || !strings.Contains(err.Error(), "injected write failure: input authority") || r.Authority != "" {
+	r, err := f.Migrate()
+	if err == nil || !strings.Contains(err.Error(), "injected write failure: input authority") || r.Authority != "" {
 		t.Fatalf("failed marker published authority or missed injected boundary: %+v %v", r, err)
+	}
+	// The cutover's statements failed before its commit began.
+	var failure *store.InputMigrationError
+	if !errors.As(err, &failure) || failure.Cause != store.CauseSchemaStepFailed || failure.Commit.Cutover() != store.CutoverNotCommitted || failure.Commit.StepsCommitted {
+		t.Fatalf("marker failure's commit state: %+v", failure)
 	}
 	if !reflect.DeepEqual(before, f.Dump()) {
 		t.Fatal("marker failure retained DDL/import/current/history/version")

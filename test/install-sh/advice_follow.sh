@@ -471,6 +471,21 @@ run_journal() {
         --journal-backup "$home.journal-backup-$RUN_N"
 }
 
+# journal_verify <home> [<legacy root>...]: the journal actions' last step as
+# written, "run migrate-journal with a new --backup-dir until it exits 0 with
+# authority "sqlite"": the installed administrator over home's store with the
+# window flags, the same additional roots and a new backup. It fails the case
+# unless that holds.
+journal_verify() {
+    local home="$1" root args=(); shift
+    for root in "$@"; do args+=(--legacy-root "$root"); done
+    run "$home" "$home/.config/agent-director/admin/agent-director-admin" \
+        --store-path "$home/.config/agent-director/state.db" migrate-journal \
+        --maintenance-window --roots-complete --backup-dir "$home.verify-backup-$RUN_N" "${args[@]}"
+    expect_rc 0 "migrate-journal after the installer re-run" || return 1
+    jq -e '.authority == "sqlite"' "$OUT" >/dev/null || bad "migrate-journal after the installer re-run: $(flat "$OUT")"
+}
+
 # Build closed fixture databases from genuine pre-cutover schemas, never by
 # lowering the stamp of a native-authoritative store. These are empty test
 # replacements; production recovery must restore the stopped-writer backup.
@@ -546,6 +561,15 @@ expect_advice() {
     local text
     text="$(flat "$ERR")"
     [[ "$text" == *"$1"* ]] || bad "stderr lacks the advice \"$1\": $text"
+}
+
+# expect_refusal_action <action>: the first ErrJournalMigrationRefused
+# envelope on stderr carries exactly this refusal action, decoded from its
+# JSON (word for word, quotes included).
+expect_refusal_action() {
+    local got
+    got="$(jq -Rr 'fromjson? | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.action' "$ERR" | head -n 1)"
+    [[ "$got" == "$1" ]] || bad "relayed refusal action \"$got\"; want \"$1\""
 }
 
 # advice_after <marker>: the rest of the first stderr line holding marker
@@ -1126,6 +1150,16 @@ j6_repair_hop() {
     fi
 }
 
+# j6_expect_step_failed: the relayed refusal is the cutover's statements
+# failing before its commit: schema_step_failed with its own action, nothing
+# committed.
+J6_ACTION="fix what stopped the schema step, such as disk space, write access or a schema changed by hand, keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+j6_expect_step_failed() {
+    expect_advice '"reason":"schema_step_failed"'
+    expect_refusal_action "$J6_ACTION"
+    expect_advice '"cutover":"not_committed","steps_committed":false'
+}
+
 j6_assert_rollback() {
     local db="$J6H/.config/agent-director/state.db"
     [[ "$(db_version "$J6H")" == $PRE_CUTOVER_SCHEMA ]] || bad "failed migration stamped v$SCHEMA"
@@ -1155,21 +1189,25 @@ j6_failing_migration() {
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
     run_journal "$J6H" "${J6ARGV[@]}"
     expect_exit5 ErrJournalMigrationRefused "migration step fails" || return 1
-    expect_advice '"reason":"migration_incomplete_or_commit_unknown"'
+    j6_expect_step_failed
     expect_advice "Keep the maintenance boundary and restart administrator verification."
     [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
     j6_assert_rollback
 }
 
-# J6: "Keep the maintenance boundary and restart administrator verification."
-# Repeat the failing transaction with a fresh exclusive backup, then remove
-# only the injected fault and repeat verification/cutover. The sentinel alone
+# J6: "fix what stopped the schema step, such as disk space, write access or a
+# schema changed by hand, keep the maintenance window, then re-run this
+# release's installer with a new --journal-backup, which finishes any pending
+# schema step, then run migrate-journal with a new --backup-dir until it exits
+# 0 with authority "sqlite"", the relayed schema_step_failed action. Repeat the
+# failing transaction with a fresh exclusive backup, then remove only the
+# injected fault, re-run the installer and then migrate-journal. The sentinel alone
 # cannot authorize the early probe (b.7b4, b.dzw; native cutover contract).
 test_J6_MigrationFailedRerunRetries() {
     j6_failing_migration || return
     run_journal "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
     expect_exit5 ErrJournalMigrationRefused "re-run while the step's cause still holds" || return
-    expect_advice '"reason":"migration_incomplete_or_commit_unknown"'
+    j6_expect_step_failed
     expect_advice "Keep the maintenance boundary and restart administrator verification."
     j6_assert_rollback
     [[ "$(db_version "$J6H")" == $PRE_CUTOVER_SCHEMA ]] || bad "store moved off v$PRE_CUTOVER_SCHEMA on a failed re-run"
@@ -1209,6 +1247,7 @@ test_J6_MigrationFailedRerunRetries() {
     grep -qF "no migration authorization needed" "$OUT" && bad "step 3 says no migration was needed after its probe ran one"
     grep -qxF "  schema  : migration verified — state.db now at v$SCHEMA" "$OUT" \
         || bad "step 5 did not verify the migration the probe ran: $(flat "$OUT")"
+    journal_verify "$J6H"
 }
 
 # J6 with --keep-prior: re-running as advised keeps the rollback copies of the
@@ -2841,7 +2880,7 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
             restart-verification)
                 expect_advice "Keep the maintenance boundary and restart administrator verification."
                 expect_advice "A commit may have completed. Never reset the schema or restore replayable input."
-                expect_advice '"reason":"migration_incomplete_or_commit_unknown"'
+                j6_expect_step_failed
                 j6_assert_rollback
                 backup="$J7H.journal-backup-$((RUN_N - 1))"
                 [[ -f "$backup/COMPLETE" ]] || { bad "$setup: no stopped-writer backup"; continue; }
@@ -2851,6 +2890,8 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
                 [[ "$(j14_snap "$backup")" == "$before" ]] || bad "$setup: retry changed the original backup"
                 [[ -f "$J7H.journal-backup-$((RUN_N - 1))/COMPLETE" ]] || bad "$setup: no new verification backup"
                 [[ ! -e "$(sentinel "$J7H")" ]] || bad "$setup: successful verification left the sentinel"
+                expect_rc 0 "$setup: the installer re-run" || continue
+                journal_verify "$J7H" # then migrate-journal, as the action says
                 ;;
             apply-message)
                 # The message names the cause and its remedy: its commands, as written, under the marker in <config fix> (a
@@ -4436,9 +4477,12 @@ EOF
 # J34: "To fix: establish the maintenance window (stop old mutators and
 # prevent new old-binary invocations through committed verification), then
 # pass --maintenance-window (install.sh: --journal-maintenance-window)", then
-# "Keep the maintenance boundary and restart administrator verification." A
-# preexisting sentinel never authorizes the probe: without journal flags
-# pre-flight's --check-only refuses, changing nothing.
+# the relayed old_or_unverified_mutators action "stop each listed process (…),
+# keep the maintenance window, then re-run this release's installer with a new
+# --journal-backup, …, then run migrate-journal with a new --backup-dir until
+# it exits 0 with authority "sqlite"". A preexisting sentinel never authorizes
+# the probe: without journal flags pre-flight's --check-only refuses, changing
+# nothing.
 test_J34_JournalMaintenanceStopAndRestartVerification() {
     local h db prior before extra backup writer input_fd output_fd answer
     h="$(new_home)" db="$h/.config/agent-director/state.db"
@@ -4474,14 +4518,20 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
         expect_advice "Keep the maintenance boundary and restart administrator verification."
         expect_advice "A commit may have completed. Never reset the schema or restore replayable input."
         grep -F 'old_or_unverified_mutators' "$ERR" >/dev/null || bad "refused before process inventory: $(flat "$ERR")"
+        expect_refusal_action "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+        expect_advice '"cutover":"not_committed","steps_committed":false'
         kill -0 "$writer" || bad "verification killed the writer"
         [[ "$(sha256sum "$db")" == "$before" ]] || bad "live mutator did not prevent cutover"
         [[ ! -e "$backup/COMPLETE" ]] || bad "live mutator allowed completed backup"
     done
-    # Follow the instruction literally: end that writer, await exit and restart.
+    # Follow the instruction literally: stop the listed process and await its
+    # exit, re-run the installer with a new --journal-backup, then run
+    # migrate-journal with a new --backup-dir.
     exec {input_fd}>&-
     wait "$writer" || bad "writer did not exit cleanly"
     exec {output_fd}<&-
+    [[ ! -e "$backup" ]] || bad "the refused runs made the backup directory"
+    backup="$h/journal-backup-2"
     run "$h" "${J7ARGV[@]}" --journal-maintenance-window --journal-roots-complete --journal-backup "$backup" --journal-legacy-root "$extra"
     expect_rc 0 "same authorized install after actual writer exit" || return
     [[ "$("$SQLITE" "$db" 'PRAGMA user_version')" == "$SCHEMA" ]] || bad "schema not current"
@@ -4489,6 +4539,7 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
     [[ -f "$backup/COMPLETE" && -d "$backup/legacy-2" ]] || bad "backup lacks completion or extra root"
     [[ "$("$SQLITE" "$backup/database" 'PRAGMA user_version')" == "$prior" ]] || bad "backup is not the prior database"
     [[ ! -e "$(sentinel "$h")" ]] || bad "authorized migration did not consume sentinel"
+    journal_verify "$h" "$extra"
     run "$h" "$BIN" list
     expect_rc 0 "ordinary runtime after committed verification"
 }

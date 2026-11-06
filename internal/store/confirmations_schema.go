@@ -82,7 +82,7 @@ func migrateV18toV19(db *sql.DB) error {
 	if _, err := tx.Exec(`PRAGMA user_version = 19`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitMigrationStep(tx)
 }
 
 // v20DisplayEvidenceColumn is the displayed_state evidence column
@@ -149,5 +149,5 @@ func migrateV19toV20(db *sql.DB) error {
 	if _, err := tx.Exec(`PRAGMA user_version = 20`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitMigrationStep(tx)
 }

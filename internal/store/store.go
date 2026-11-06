@@ -318,7 +318,7 @@ func openDBWithInputWindow(resolved string, busyTimeoutMs int, window *inputMigr
 
 	if err := inputAuthority(context.Background(), db, storeID); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("%w: native input authority is not committed", ErrSchemaMismatch)
+		return nil, withInputMigrationCause(CauseNativeInputStateInconsistent, fmt.Errorf("%w: native input authority is not committed", ErrSchemaMismatch))
 	}
 
 	absolutePath, err := filepath.Abs(resolved)

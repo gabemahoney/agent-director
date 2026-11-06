@@ -1587,7 +1587,7 @@ in `init`. The verb registry
 | `internal/helptext` | Pure canonical JSON help renderer shared by CLI help and scoped MCP instructions; consumers MUST reuse `Marshal`/`Plain` and leave agent wrapping at adapters. | stdlib; `pkg/api`. | Config/store/process access; agent-specific wrappers. |
 | `internal/cursortranscript` | Shared protected transcript verification, append access for resume/recording and read-only access for send-keys. Owns shared submission record kinds and `TextSHA256`; writers and readers must reuse them. | stdlib; `golang.org/x/sys/unix`. | `pkg/api`; `internal/cursorhost`; native Cursor storage parsing. |
 | `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` uses for `kill-finished` and `delete`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. Internal `cursor-host` is parsed/dispatched before public client setup and delegates to `internal/cursorhost`; `hookCursorVerifier` wires independent runtime/transcript/pane verification into the hook without changing its dependency boundary. Privately scoped `serve` uses `cursorMCPScope` before client setup and `cursorMCPOptions` for the bounded protected guidance bootstrap described above. `serve` opens a second Client for its MCP tools, from the same global-flag overrides (`clisetup.APIOptions`) with no logger, and names a failed open of it with `clisetup.NewOpenError`, as `Open` names its own (b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `version` and its aliases never read stdin; `help` and its aliases read it only when `AGENT_DIRECTOR_AGENT` is `codex`, through the same bounded reader (see [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)). **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. For Claude/Codex it opens the verbs' configured store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). For Cursor, `runHook` instead uses the actual opened store path propagated by the launch in `AGENT_DIRECTOR_CURSOR_STORE_PATH`; the hook still has no `--store-path` flag. It opens that store with `store.OpenOrInitWithBusyTimeout` for Claude/Codex or non-initializing `store.OpenWithBusyTimeout` for Cursor, and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. `parseHookArgs` reads `--agent` and `--timeout` in one pass, in either order; an unknown flag or a positional is skipped without losing a valid one, `--agent` with no value or an empty one reaches `Handle` as the invalid value `(no value)` (a hook failure, below), and an absent `--agent` stays empty, which `ResolveAgent` reads as `claude`. `runHook` hands the raw value to `HandleConfig.Agent`; the manifest's `hook` verb lists it as the optional `agent` param (`claude`, `codex` or `cursor`), so the generated references carry it (see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, `serve`'s `APIOptions` and `NewOpenError`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook` and scoped `cursorMCPOptions`; `internal/cursormcp`; `internal/helptext`; `internal/cursorhost` for the internal gateway and injected Cursor verifier. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger` and the narrowly scoped `cursorMCPOptions` bootstrap (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
-| `cmd/agent-director-admin` | Thin operator shim for `kill-finished`, `delete`, `migrate-journal`, `snapshot-store`, `help` and `version`; verbs come from `internal/adminapi.Verbs`, never the public manifest. Shared global-flag parsing uses `internal/clisetup`. Only `kill-finished`/`delete` open a Client through `clisetup.Open` and call the private API hooks. Migration resolves config and calls `adminapi.MigrateJournal`; with `--check-only` it calls only `adminapi.CheckJournalMigration`, loading no config and opening no store; snapshot requires an explicit source and calls `adminapi.SnapshotStore` without config or Client initialization. JSON results go to stdout; stderr errors carry `err_name`, `err_description` and, for migration refusals, structured `details`. Help/version and their aliases open no store and load no config. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `internal/config` for migration path resolution; `internal/store` for snapshot constants and the migration result type; `internal/oldnames`; `pkg/api`; `pkg/api/errnames`. | `pkg/api/manifest`; direct SQL or store opening; direct tmux construction; business logic. |
+| `cmd/agent-director-admin` | Thin operator shim for `kill-finished`, `delete`, `migrate-journal`, `snapshot-store`, `help` and `version`; verbs come from `internal/adminapi.Verbs`, never the public manifest. Shared global-flag parsing uses `internal/clisetup`. Only `kill-finished`/`delete` open a Client through `clisetup.Open` and call the private API hooks. Migration resolves config and calls `adminapi.MigrateJournal`; with `--check-only` it calls only `adminapi.CheckJournalMigration`, loading no config and opening no store; snapshot requires an explicit source and calls `adminapi.SnapshotStore` without config or Client initialization. JSON results go to stdout; stderr errors carry `err_name` and `err_description`, and every `migrate-journal` error also carries `details` with its commit state, written only by `writeJournalError` (must use). Help/version and their aliases open no store and load no config. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `internal/config` for migration path resolution; `internal/store` for snapshot constants and the migration result type; `internal/oldnames`; `pkg/api`; `pkg/api/errnames`. | `pkg/api/manifest`; direct SQL or store opening; direct tmux construction; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. The administrator-only `MigrateJournal` and `SnapshotStore` call typed store primitives without a public Client; see schema versioning and install-time preflight below. | stdlib; `internal/store`. | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `APIOptions(Overrides)` builds the `pkg/api.Options` of every Client a command binary opens: the config path, `CreateIfMissing` (true unless the overrides set it false, b.78b) and the overrides' store path and tmux command, with `Logger` nil. `Open(Overrides)` builds the `pkg/api.Client` used by public store-backed CLI verbs and admin `kill-finished`/`delete`, from `APIOptions` plus the recovery logger (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`). `Open` returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired`, `ErrOldLayout` or `ErrStoreOpen`; it refuses with `ErrOldLayout` first (Pin 4, before the recovery logger and `errors.log`), under the rule in [Old layout (step 2b)](#pkgapi-client-lifecycle), and `ErrOldLayout` is the store's own sentinel, `store.ErrOldLayout`, re-exported by `clisetup` and `pkg/api`. `NewOpenError(err)` holds the one naming of a `pkg/api.New` failure: the `*OpenError` named `ErrSchemaMismatch` or `ErrSchemaMigrationRequired` when the store's schema refused the open, `ErrStoreOpen` otherwise; `Open` names its `pkg/api.New` failure with it, and `serve` the failure of its MCP Client's, so every Client a command binary opens names a failed open alike (b.uii). It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the five names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels and `ErrOldLayout` are the store's own, `store.ErrSchemaMismatch`, `store.ErrSchemaMigrationRequired` and `store.ErrOldLayout` (`pkg/api` re-exports them under the same names), so `Classify` gives a schema or old-layout refusal the same name whether it comes as an `OpenError` or straight from `pkg/api.New` (b.x8s); the store returns them only when it opens (`ErrOldLayout`, when the open is about to begin), so no verb error wraps them. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path`, `--tmux-command` and `--create-if-missing` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `--create-if-missing` takes exactly `true` or `false`; any other value, or none, is `ErrInvalidFlags` with exit 1 before any verb runs, `help` and `version` included (b.78b). `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` (a Client that must not log, such as `serve`'s MCP Client, takes its options from `APIOptions` and names a failed `pkg/api.New` with `NewOpenError`) and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup, options builder, open-failure naming or flag parser. A new override goes into `APIOptions`, so every Client a binary opens gets it. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Native ordinary input uses `internal/inputdelivery` through the existing backend/session seam; see [Ordinary input delivery](#ordinary-input-delivery). Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup`, `internal/helptext` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`sweep` / `find-missing` seams** (`sweep.go`, `find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests and running subagent entries in its own transaction, and the one-method `EndedMover` (`MarkEndedIfSameLife`, the same close for a Codex row that holds an end report), embedded in `PauseStore` too, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `Sweep` and its `FindMissing` alias also take the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), plus optional `PaneTerminalTmux` (`PaneTerminalRaw`) for pending Claude ordinary fallback, with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `PermissionRequestsForSpawn` and `RecordHookGone` for its relay guard (b.zdz), `AdoptIdentityIfUnchanged`, `EndedMover`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeyPaneRepeat` for a Codex row's repeated clear, `SendKeysPane`), with `PauseEnv` (the `RelayView` and `IntentHold`, as `send-keys` judges the relay) in place of a bare start-time reader. `*store.Store` and `TmuxClient` satisfy them. `SendKeys`, `RecordPaneAnswer` and `Pause` take the start-time reader in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the ten socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `SendKeyPaneRepeat`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`; `Client.Pause` builds its `PauseEnv` from `relayView()` and the same intent hold (`paneIntentHold`). **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies, and `RelayView`, which the exported `Decide`, `Status`, `Get`, `List`, `GetPermission`, `RepairCheckPermission` and `RelayHookGone` take; a store that also has `RecordPermissionFallbacks`, else `RecordHookGone`, gets the [readers' write](#readers-never-wait-problem-4); plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes an unsigned Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a value with a leading `+` or `-` in either form (b.c4n) and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **`list-subagents` seam** (`list_subagents.go`): `ListSubagentsStore` (`ListSubagentRecords`, no write; `*store.Store` satisfies it), taken by the exported `ListSubagents` and by `Client.ListSubagents`, with no clock, relay view or tmux (see [The `list-subagents` verb](#the-list-subagents-verb)). **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettledWithRelay`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time and sample no pane (`relayView()` gives the Client's reads the `idle_screen` timeout and a pane sampler of their own). See [Settle time](#settle-time-b3ie), [Displayed State reporting](#displayed-state-reporting) and [main-field evidence](#shared-active-checks) for settlement and confirmation projection rules. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/cursortranscript`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
@@ -4131,17 +4131,92 @@ checks (the window and roots assertions, legacy roots absolute and clean, a
 backup directory absolute, outside every root and not yet existing) have one
 implementation, `journalArguments`, which `MigrateJournal` and
 `CheckJournalMigration` (`migrate-journal --check-only`) both run before any
-verification or lock; each argument reason has its own action (`journalActions`).
+verification or lock.
 **Must use:** `journalArguments` for any argument check, and
 `backupInsideRoot` for backup containment; `store.MigrateInputJournal` leaves
 both to its caller. The store
-serializes administrators and retains original launch-lock inodes, makes an
+serializes administrators and retains original launch-lock inodes. It refuses,
+as `store_open_failed`, a store path that doesn't exist or runs through a
+regular file (before the lock), and a lock it can't create where no lock file
+exists (a missing, read-only or unwritable directory); a lock file that exists
+but can't be opened is `migration_lock_unestablished`. An attempt therefore
+never creates a store file; an existing empty one (version 0) needs no
+authorization, and the open builds the current schema in it. Before the backup it checks, from a private snapshot (`ReadSnapshot`),
+that the store is not newer than this release and that its migration is
+authorized, so either refusal leaves no backup directory. It then makes an
 exclusive stopped-writer DB/WAL/SHM/evidence backup before any hop, and verifies
 committed authority before retiring operational JSON. File authority ends at
 commit even if retirement fails. Recovery never reimports over newer SQLite
 state and never synthesizes a downgraded replayable journal. Backup/restore and
 operator refusals are owned by the
 [runbook](operator-actions.md#upgrading-the-native-input-journal).
+
+**`migrate-journal`'s reasons.** Every reason `migrate-journal` emits (the
+argument checks', the quiescence verifier's, the store's causes and
+`interrupted`) has its own bounded code and its own `action` in one table,
+`journalActions` (`internal/adminapi/journal_migration.go`), with no default
+action; `TestJournalReasonTable` fails on a reason that any of the package's
+files emits and the table lacks, and `TestInputMigrationCausesComplete` on a
+store `Cause*` constant missing from `store.InputMigrationCauses`. Every
+`store.MigrateInputJournal` error is a `*store.InputMigrationError`: its text
+is the failure's own, its `Cause` is the bounded cause the failing site names
+(a failure no site names takes its stage's), and its `Commit` reports what the
+attempt committed. `MigrateJournal` picks the reason in this order:
+`interrupted`; `committed_verification_incomplete`;
+`migration_incomplete_or_commit_unknown`, only for an unconfirmed commit or a
+chain left incomplete after the cutover committed; the verifier's own refusal
+(`process_inventory_unreadable` for a verifier error that isn't one); then the
+store's cause. A refusal's text is its reason and action, never file
+contents or raw OS text.
+**Must use:** a new reason goes into `journalActions`, and a new store failure
+adds a constant to `store.InputMigrationCauses` and its entry there, never a
+second mechanism. `journalUnsupportedHost` is the one refusal of a host with
+no quiescence verifier.
+
+**Commit state.** Every `migrate-journal` error envelope, whatever its
+`err_name` (`ErrJournalMigrationRefused`, `ErrInvalidFlags`,
+`ErrConfigMalformed`, `ErrStoreOpen`), carries `details.cutover`, this
+attempt's commit state: `committed` once its cutover committed, even if a
+later step or the post-commit verification failed; `not_committed` when it
+began no cutover commit, had no schema-step commit with an unconfirmed result,
+and established that no other administrator held the migration lock
+(`<store>.input-migration.lock`); `unknown` otherwise.
+`details.steps_committed` is present exactly with `not_committed`, true when a
+schema step of this attempt committed before the cutover. A real run's
+refusal carries `details.result`, whose `authority` is `sqlite` once the
+attempt read committed authority. `--check-only` always reports
+`not_committed` (`JournalCommitCheckOnly`), even when its arguments don't
+parse. Any other error before an attempt checks its store's lock
+(`JournalCommitBeforeAttempt`); with no store path to check (a global-flag
+error, `ErrStoreOpen`, and `ErrConfigMalformed` or a verb-flag
+`ErrInvalidFlags` without `--store-path`) it reports `unknown`.
+`store.InputMigrationLockHolder` checks the lock without creating, changing or
+removing its file. It sees only an administrator active when the attempt
+failed; it does not enforce the
+[one-run rule](operator-actions.md#upgrading-the-native-input-journal).
+**Must use:** a caller reads commit state from `details.cutover`, never from
+`err_description` or an action. Every ordinary schema step, a new one
+included, commits through `commitMigrationStep`, never `tx.Commit()`, so a
+COMMIT error counts as unconfirmed.
+
+**Interrupts.** A real `migrate-journal` run catches INT, TERM and HUP from
+right after its flags parse until it exits (`journalInterruptContext`);
+`--check-only` catches none. An INT or HUP ignored at start stays ignored
+(`signal.Ignored`), and because the signals stay caught, a second one cannot
+kill the process mid-commit or mid-write. A signal before the cutover commit
+begins stops the attempt with reason `interrupted`, whatever failure the
+cancellation caused. Each checkpoint before a change (before authorization,
+before the backup, before each schema step) reads the caller's cancellation
+under the attempt's mutex (`stopped`), so no change starts once a signal has
+arrived. The cutover gate (`beginCutoverCommit`) makes the same check and,
+under that mutex, records that the commit has begun; after it, the caller's
+cancellation no longer reaches the attempt's work context, so the attempt
+finishes, and a success exits 0 with `authority: "sqlite"` and no envelope.
+The attempt's own 30 s deadline gives `attempt_deadline`, and the verifier's
+listing deadline `inventory_deadline`; neither is `interrupted`.
+**Must use:** an attempt's steps run on its work context
+(`inputMigrationWindow.ctx`), a checkpoint before a change calls `stopped`,
+and a commit that must finish once begun is admitted through the gate.
 
 **Schema v1 → v2 Migration.** The first real migration:
 
@@ -5265,8 +5340,14 @@ hidden or CLI-only flag, and none of them can run these operator actions.
   `internal/clisetup.ParseGlobalFlags` and `GlobalFlags.Apply`. Creation applies
   to the row-repair Clients only; migration and snapshot require an existing
   source (`--check-only` reads none). It prints JSON on stdout, or an
-  `{err_name, err_description}` envelope on stderr with exit 1; migration
-  refusals also carry structured `details`. Ordinary error names come
+  `{err_name, err_description}` envelope on stderr with exit 1. Every
+  `migrate-journal` error, a global-flag error on an argv naming
+  `migrate-journal` included, also carries `details`: `cutover` always,
+  `steps_committed` with `not_committed`, `refusal` for a refusal and
+  `result` from a real run (see "Commit state" under
+  [`internal/store`](#internalstore)). **Must use:** `writeJournalError`
+  writes every `migrate-journal` error envelope; the verb's flag errors reach
+  it through `parseVerbFlags`, which writes none itself. Ordinary error names come
   from `errnames.Classify` (`ErrUnknownVerb` and `ErrInvalidFlags` for its
   own dispatch errors).
 - **Every help opens with the human-approval statement.** The no-verb
@@ -11727,9 +11808,11 @@ physical and lexical old/new-root containment before allocating under the
 selected `TMPDIR`; it does not repair mtimes after an unsafe allocation.
 
 **Must use for untouched preflight:** `store.ReadSnapshot` and the
-operator-only `adminapi.SnapshotStore`/`snapshot-store` wrapper. They run in a
-separate process without Client/config initialization or other source database
-descriptors: closing another descriptor of the inode would release POSIX locks.
+operator-only `adminapi.SnapshotStore`/`snapshot-store` wrapper. They run in
+a process holding no other descriptor or SQLite connection of the source
+database (a separate process without Client/config initialization, or
+`migrate-journal`'s attempt before it opens the store): closing another
+descriptor of the inode would release POSIX locks.
 Readonly no-follow descriptors hold SQLite-compatible DB and existing SHM
 locks while capturing DB plus committed WAL in an empty private 0700 directory.
 Identity/missing-sidecar changes retry within the original deadline; busy,
@@ -21404,6 +21487,71 @@ install made by them, builds them with `releaseBuildOf` or
 `genuineRelease`; never a second builder of a released pair. Stores laid
 from a release's SQL keep their own fixtures. `advice_follow.sh`'s `need_old_release` (the `v0.11.1`
 cases) is the one bash builder left.
+
+### journalfix: pre-cutover stores for admin tests (reusable test fixture)
+
+`internal/testsupport/journalfix` lays a genuine pre-cutover store from
+`test/install-sh/testdata/pre-cutover-v14.sql` (v0.16.0's fresh schema) or
+`pre-cutover-v15.sql`, for the native-input cutover's tests outside
+internal/store and test/install-sh.
+
+- `PreCutoverStore(t, dir, version)` loads version 14 or 15 into
+  `<dir>/state.db` as `advice_follow.sh`'s `pre_cutover_store` does: WAL mode,
+  closed, mode 0600 in a 0700 directory. It finds the SQL from its own source
+  file, so any package's test can call it.
+- `Authorize(t, db)` writes the `migrate-authorized` sentinel beside `db`,
+  from the store's version to the current one, read from a fresh store.
+
+**Must use:** a test outside internal/store and test/install-sh that needs a
+pre-cutover store uses journalfix. internal/store keeps `makeVersionedDB`;
+test/install-sh keeps the genuine-release fixture above and the bash
+`pre_cutover_store`.
+
+### migrate-journal fault seams and child runner (reusable test fixtures)
+
+These fail a `migrate-journal` attempt at a chosen point, over
+[journalfix](#journalfix-pre-cutover-stores-for-admin-tests-reusable-test-fixture)'s
+stores or a current one:
+
+- `store.SetInputMigrationFaultsForTest` installs `store.InputMigrationFaults`:
+  `AfterStepCommit` (a step's commit reported unconfirmed),
+  `BeforeCutoverCommit` and `AfterCutoverCommitBegan` (either side of the
+  cutover gate), `CutoverCommit` (wraps the cutover's COMMIT),
+  `AttemptTimeout` (replaces the 30 s deadline; negative has already passed)
+  and `BusyTimeoutMs` (the snapshot read's and the open's busy timeout).
+- `adminapi.SetJournalVerifierForTest` replaces the quiescence verifier, so a
+  test can fail any of an attempt's three verifications.
+- `journalProcRoot` is the Linux verifier's `/proc`, package-internal to
+  `internal/adminapi`, pointed at temporary files to reach the
+  unreadable-inventory refusals.
+
+All three are process-wide, and production leaves them at their defaults; a
+test that sets one restores it through `t.Cleanup` and does not call
+`t.Parallel`.
+
+`TestMigrateJournalAdminChild` (`cmd/agent-director-admin`) runs the real
+administrator's `run`, signal handling included, in a child of the test
+binary with those seams armed, which a built binary cannot do.
+`AD_ADMIN_CHILD` names the seams, `AD_ADMIN_CHILD_ARGS` holds the argv as
+JSON, and at its seam the child writes `ready` on fd 3 and, where the seam
+waits, reads `go` on fd 4, so the parent can signal it at a known point.
+`TestMigrateJournalCommitState` drives it.
+
+`journalInstaller(t, db, migrate)` (`internal/adminapi`'s tests) stands in
+for an action's "re-run this release's installer with a new
+--journal-backup", by install.sh's own route for the store at `db`: before
+the native-input cutover it writes the authorization for the store's version
+and runs migrate-journal (`migrate`, with the journal flags and a new
+backup); after it, it writes the authorization for a store older than the
+release and opens the store as `agent-director list` does. The action's own
+migrate-journal run follows it in the caller. G9, G12 and G13 use it.
+
+**Must use:** a test that fails a `migrate-journal` attempt at a chosen point
+uses these seams, and one that runs the real administrator with seams or
+real signals adds an `AD_ADMIN_CHILD` value to `TestMigrateJournalAdminChild`;
+a literal follow in `internal/adminapi` of an action that re-runs the
+installer uses `journalInstaller`; never a second seam, child runner or
+installer stand-in.
 
 ### Which tmux test double to use
 

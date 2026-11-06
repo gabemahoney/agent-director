@@ -106,7 +106,7 @@ func migrateV14toV15(db *sql.DB) error {
 	if _, err := tx.Exec(`PRAGMA user_version = 15`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitMigrationStep(tx)
 }
 
 // codexTurnSet is the SET fragment, with its arguments, by which an applied

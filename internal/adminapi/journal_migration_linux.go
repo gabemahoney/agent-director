@@ -16,13 +16,18 @@ import (
 	"github.com/gabemahoney/agent-director/internal/probe"
 )
 
+// journalProcRoot is where the verifier lists processes; tests point it at
+// real temporary files to reach its unreadable-inventory refusals. It is the
+// one seam for the listing: a test uses it, never a second one.
+var journalProcRoot = "/proc"
+
 func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string) error {
 	for _, path := range append([]string{dbPath}, roots...) {
 		if err := verifyJournalPath(path); err != nil {
 			return err
 		}
 	}
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(journalProcRoot)
 	if err != nil {
 		return journalRefusal("process_inventory_unreadable")
 	}
@@ -36,7 +41,7 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 		if err != nil || pid == os.Getpid() {
 			continue
 		}
-		base := filepath.Join("/proc", entry.Name())
+		base := filepath.Join(journalProcRoot, entry.Name())
 		info, err := os.Stat(base)
 		if os.IsNotExist(err) {
 			continue
@@ -136,15 +141,17 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 }
 
 // Verify every existing path component without following a link. An absent
-// root is known absent only after its existing parent was readable. Private
-// roots establish which unprivileged user can hold operational authority.
+// root is known absent only after its existing parent was readable; a path
+// through a regular file is absent too, since nothing can exist under it.
+// Private roots establish which unprivileged user can hold operational
+// authority.
 func verifyJournalPath(path string) error {
 	if !filepath.IsAbs(path) {
 		return journalRefusal("legacy_root_not_absolute")
 	}
 	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
 		info, err := os.Lstat(current)
-		if err != nil && !os.IsNotExist(err) {
+		if err != nil && !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
 			return journalRefusal("legacy_root_unreadable")
 		}
 		if err == nil {

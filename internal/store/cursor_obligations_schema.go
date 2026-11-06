@@ -131,5 +131,5 @@ func migrateV17toV18(db *sql.DB) error {
 	if _, err = tx.Exec(`PRAGMA user_version = 18`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitMigrationStep(tx)
 }

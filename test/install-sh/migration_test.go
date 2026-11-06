@@ -323,8 +323,16 @@ func TestMigrationWhileTheMoveIsDue(t *testing.T) {
 	})
 }
 
-// G10 (doc-review D3): "restart administrator verification" after commit,
-// following the operator's direct command when the cause clears.
+// G10 (doc-review D3): after a committed cutover's verification failed, the
+// operator's direct command refuses the unresolved root with
+// legacy_root_access_unestablished's action, "make the store and every legacy
+// root owned by the user running the migration and private to it (chmod 0600
+// the store, chmod 0700 each root), keep the maintenance window, then re-run
+// this release's installer with a new --journal-backup, which finishes any
+// pending schema step, then run migrate-journal with a new --backup-dir until
+// it exits 0 with authority "sqlite"", followed literally: the fix, the
+// installer (its ordinary list on this current store), then the direct
+// command to authority sqlite.
 func TestAdviceFollow_G10_PostcommitAdministratorVerification(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("administrator process inventory requires Linux")
@@ -410,28 +418,47 @@ func TestAdviceFollow_G10_PostcommitAdministratorVerification(t *testing.T) {
 	}
 	// Substitute only the documented operands, repeating the additional-root
 	// pair for our two roots; execute the command read from the actual runbook.
-	command = strings.NewReplacer(
-		"/absolute/actual-state.db", moveQuote(db),
-		"/absolute/new-verification-backup", moveQuote(verification),
-		"/absolute/additional/input", moveQuote(extra[0])+" --legacy-root "+moveQuote(extra[1]),
-	).Replace(command)
-	refused := h.Run(h.S.Bash, "-c", command)
+	commandWith := func(backup string) string {
+		return strings.NewReplacer(
+			"/absolute/actual-state.db", moveQuote(db),
+			"/absolute/new-verification-backup", moveQuote(backup),
+			"/absolute/additional/input", moveQuote(extra[0])+" --legacy-root "+moveQuote(extra[1]),
+		).Replace(command)
+	}
+	refusedBackup := filepath.Join(h.Home, "refused-verification-backup")
+	refused := h.Run(h.S.Bash, "-c", commandWith(refusedBackup))
 	var failure struct {
 		Name    string `json:"err_name"`
 		Details struct {
-			Refusal struct{ Reason, Action string }
+			Refusal        struct{ Reason, Action string }
+			Cutover        string `json:"cutover"`
+			StepsCommitted *bool  `json:"steps_committed"`
 		} `json:"details"`
 	}
-	if err := json.Unmarshal([]byte(refused.Stderr), &failure); err != nil || refused.Code != 1 || refused.Stdout != "" || failure.Name != "ErrJournalMigrationRefused" || failure.Details.Refusal.Reason != "legacy_root_access_unestablished" || failure.Details.Refusal.Action != "keep the maintenance boundary, stop incompatible mutators, and restart administrator verification" {
+	const action = "make the store and every legacy root owned by the user running the migration and private to it (chmod 0600 the store, chmod 0700 each root), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+	if err := json.Unmarshal([]byte(refused.Stderr), &failure); err != nil || refused.Code != 1 || refused.Stdout != "" || failure.Name != "ErrJournalMigrationRefused" || failure.Details.Refusal.Reason != "legacy_root_access_unestablished" || failure.Details.Refusal.Action != action {
 		t.Fatalf("direct verification must still refuse the unresolved root: %+v (%v)", refused, err)
 	}
-	if _, err := os.Stat(verification); !os.IsNotExist(err) {
+	// Its first verification refuses before the lock: nothing committed.
+	if d := failure.Details; d.Cutover != "not_committed" || d.StepsCommitted == nil || *d.StepsCommitted {
+		t.Fatalf("refusal's commit state = %q, steps %v; want not_committed, false", d.Cutover, d.StepsCommitted)
+	}
+	if _, err := os.Stat(refusedBackup); !os.IsNotExist(err) {
 		t.Fatalf("refused verification created a backup: %v", err)
 	}
-	if err := os.Chmod(extra[1], 0700); err != nil {
+	// Literally: chmod 0600 the store and 0700 each (existing) root, re-run
+	// this release's installer with a new --journal-backup, then
+	// migrate-journal with a new --backup-dir.
+	if err := os.Chmod(db, 0600); err != nil {
 		t.Fatal(err)
 	}
-	passed := h.Run(h.S.Bash, "-c", command)
+	for _, root := range roots {
+		if err := os.Chmod(root, 0700); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	moveMustInstall(t, h, "--journal-legacy-root", extra[0], "--journal-legacy-root", extra[1], "--journal-backup", filepath.Join(h.Home, "installer-backup"))
+	passed := h.Run(h.S.Bash, "-c", commandWith(verification))
 	var verified store.InputMigrationResult
 	if err := json.Unmarshal([]byte(passed.Stdout), &verified); err != nil || passed.Code != 0 || passed.Stderr != "" || verified != (store.InputMigrationResult{StoreID: result.StoreID, Authority: "sqlite", Backup: verification}) {
 		t.Fatalf("cause-clears direct verification must succeed: %+v, result %+v (%v)", passed, verified, err)
@@ -480,4 +507,74 @@ func TestAdviceFollow_G10_PostcommitAdministratorVerification(t *testing.T) {
 	}
 	migUnchanged(t, retained, h.PhysicalSnapshot(), "original-recovery")
 	t.Log("postcommit failure, ordinary installer bypass, direct refusal, cause-clears verification: PASS; original recovery retained, no new sentinel or reimport")
+}
+
+// G14: the direct administrator command over a store with no migration
+// authorization refuses authorization_missing, whose action is "the installer
+// writes the migration authorization, which migrate-journal never does:
+// re-run this release's installer with a new --journal-backup, which finishes
+// any pending schema step, then run migrate-journal with a new --backup-dir
+// until it exits 0 with authority "sqlite"; the store was not changed".
+// Followed literally: the installer migrates the store, then the direct
+// command verifies it.
+func TestAdviceFollow_G14_AuthorizationMissingRunsInstaller(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("administrator process inventory requires Linux")
+	}
+	h := newMoveHome(t)
+	moveMustInstall(t, h)
+	current := moveCurrentVersion(t, h)
+	db := filepath.Join(h.Home, "custom", "state.db")
+	h.WriteStore(db) // genuine released schema, with the fixture's journal flags and no sentinel
+	// A private store, as the verifier requires.
+	if err := os.Chmod(db, 0600); err != nil {
+		t.Fatal(err)
+	}
+	h.Write(filepath.Join(h.New, "config.toml"), moveConfig(db, 5000), 0600)
+	sentinel := filepath.Join(filepath.Dir(db), "migrate-authorized")
+	if _, err := os.Lstat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("the fixture wrote a sentinel: %v", err)
+	}
+	before := h.Sqlite(db, ".dump")
+	backup := filepath.Join(h.Home, "direct-backup")
+	refused := h.Run(h.S.Bash, "-c", "~/.config/agent-director/admin/agent-director-admin --store-path "+moveQuote(db)+" migrate-journal --maintenance-window --roots-complete --backup-dir "+moveQuote(backup))
+	var failure struct {
+		Name    string `json:"err_name"`
+		Details struct {
+			Refusal        struct{ Reason, Action string }
+			Cutover        string `json:"cutover"`
+			StepsCommitted *bool  `json:"steps_committed"`
+		} `json:"details"`
+	}
+	const action = "the installer writes the migration authorization, which migrate-journal never does: re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\"; the store was not changed"
+	if err := json.Unmarshal([]byte(refused.Stderr), &failure); err != nil || refused.Code != 1 || refused.Stdout != "" || failure.Name != "ErrJournalMigrationRefused" || failure.Details.Refusal.Reason != "authorization_missing" || failure.Details.Refusal.Action != action {
+		t.Fatalf("direct migrate-journal without authorization: %+v (%v)", refused, err)
+	}
+	if d := failure.Details; d.Cutover != "not_committed" || d.StepsCommitted == nil || *d.StepsCommitted {
+		t.Fatalf("refusal's commit state = %q, steps %v; want not_committed, false", d.Cutover, d.StepsCommitted)
+	}
+	if _, err := os.Lstat(backup); !os.IsNotExist(err) {
+		t.Fatalf("the refusal made a backup: %v", err)
+	}
+	if got := h.Sqlite(db, ".dump"); got != before {
+		t.Fatal("the refusal changed the store")
+	}
+	// Literally: this release's installer with its journal flags and a new
+	// --journal-backup (the fixture's, not yet made), then migrate-journal
+	// with a new --backup-dir.
+	moveMustInstall(t, h)
+	if got := h.migStoreVersion(db); got != current {
+		t.Fatalf("store at v%s after the installer; want v%s", got, current)
+	}
+	if got := h.Sqlite(db, "SELECT value FROM store_meta WHERE key='native_input_authority';"); !strings.HasPrefix(got, "sqlite-v1:") {
+		t.Fatalf("native_input_authority = %q; want sqlite-v1:<store id>", got)
+	}
+	if _, err := os.Lstat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("the installer's authorization was not consumed: %v", err)
+	}
+	passed := h.Run(h.S.Bash, "-c", "~/.config/agent-director/admin/agent-director-admin --store-path "+moveQuote(db)+" migrate-journal --maintenance-window --roots-complete --backup-dir "+moveQuote(filepath.Join(h.Home, "verify-backup")))
+	var verified store.InputMigrationResult
+	if err := json.Unmarshal([]byte(passed.Stdout), &verified); err != nil || passed.Code != 0 || passed.Stderr != "" || verified.Authority != "sqlite" {
+		t.Fatalf("migrate-journal after the installer: %+v (%v)", passed, err)
+	}
 }

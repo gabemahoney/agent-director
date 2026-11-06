@@ -54,6 +54,10 @@ var (
 // reaches the real ~/.config/agent-director (or the old ~/.agent-director).
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
+	if os.Getenv("AD_ADMIN_CHILD") != "" {
+		// A migrate-journal child (TestMigrateJournalAdminChild) builds nothing.
+		os.Exit(m.Run())
+	}
 	tmp, err := os.MkdirTemp("", "agent-director-admin-test-")
 	if err != nil {
 		panic(err)

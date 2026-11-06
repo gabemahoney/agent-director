@@ -13,8 +13,10 @@ import (
 // even a readonly SQLite connection can create or rewrite source sidecars.
 // Future preflight consumers must reuse ReadSnapshot to leave the source untouched.
 // The caller owns directory and removes it after querying the returned path.
-// Use this in a separate process, with no other source database descriptors:
-// closing any descriptor of an inode releases that process's POSIX locks.
+// Call it only while the calling process holds no other descriptor or SQLite
+// connection of the source database, such as from a separate process or before
+// the process opens the store: closing any descriptor of an inode releases
+// that process's POSIX locks.
 func ReadSnapshot(ctx context.Context, source, directory string, busyTimeoutMs int) (string, error) {
 	if !filepath.IsAbs(source) || !filepath.IsAbs(directory) {
 		return "", fmt.Errorf("readonly snapshot requires absolute source and directory paths")
