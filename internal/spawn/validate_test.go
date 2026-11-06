@@ -265,6 +265,54 @@ func TestValidateCanonicalizesCwd(t *testing.T) {
 	}
 }
 
+// TestValidateRefusesUnenterableCwd (b.qwo): a directory whose own mode denies
+// search (mode 000) passes stat and IsDir, but tmux cannot enter it and would
+// start the agent elsewhere, so it is ErrCwdNotFound, CWD left as given; so is
+// one under a mode-000 parent. A directory with search but no read permission
+// (mode 0100) can be entered and passes. Skipped as root, which mode 000 does
+// not stop.
+func TestValidateRefusesUnenterableCwd(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores mode 000")
+	}
+	base := t.TempDir()
+	self := filepath.Join(base, "self000")
+	child := filepath.Join(base, "parent000", "child")
+	searchOnly := filepath.Join(base, "search-only")
+	for _, d := range []string{self, child, searchOnly} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for dir, mode := range map[string]os.FileMode{self: 0, filepath.Dir(child): 0, searchOnly: 0o100} {
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	}
+	cases := []struct {
+		name, cwd string
+		want      error
+		text      string
+	}{
+		{"mode 000", self, ErrCwdNotFound, strconv.Quote(self) + " cannot be entered"},
+		{"under a mode-000 parent", child, ErrCwdNotFound, "permission denied"},
+		{"search but no read", searchOnly, nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Resolved{SpawnParams: SpawnParams{Agent: "claude", CWD: tc.cwd}}
+			err := Validate(&r)
+			if !errors.Is(err, tc.want) || (tc.want == nil) != (err == nil) {
+				t.Fatalf("Validate err = %v; want %v", err, tc.want)
+			}
+			if err != nil && (!strings.Contains(err.Error(), tc.text) || r.CWD != tc.cwd) {
+				t.Errorf("Validate err = %v, CWD %q; want it to carry %q and the CWD as given", err, r.CWD, tc.text)
+			}
+		})
+	}
+}
+
 // TestValidateTmuxSessionName covers SR-2.1, SR-2.2, SR-2.3, SR-2.5 and SR-9.2:
 // the check runs only when the name was supplied; wantText is a substring of
 // the error, naming a reserved character in Go %q form.
