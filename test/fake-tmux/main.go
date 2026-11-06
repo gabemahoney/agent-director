@@ -55,7 +55,9 @@
 //     log. Each is its own call kind for injections (text send, Enter send,
 //     key send), so an Enter injection never hits pause's C-u.
 //   - capture-pane -p [-e] -t <%N> -S -<n>: the pane's capture text, else
-//     FAKE_TMUX_PANE_OUTPUT, else a fixed two-line stub.
+//     FAKE_TMUX_PANE_OUTPUT, else a fixed two-line stub, whatever n is (as
+//     tmux prints history and the whole screen); the client keeps its last
+//     n rows.
 //   - new-session -d -s <name> -c <cwd> [-e K=V ...] -P -F <fmt> -- <argv>:
 //     adds a session named by the name's stored form (tmuxfix.StoredNames)
 //     with one pane and new $N and %N, starting a server when the socket has

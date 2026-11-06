@@ -3,9 +3,10 @@ package tmux
 import "regexp"
 
 // ansiSequence matches the SGR / CSI escape sequences `tmux capture-pane -e`
-// emits — `\x1b[<params><finalByte>` where params is any mix of digits and
-// `;`, and the final byte is an ASCII letter (m for SGR, H for cursor home,
-// etc.). It deliberately does not span non-ASCII bytes: the regex is byte-
+// emits — `\x1b[<params><finalByte>` where params is any mix of digits, `;`
+// and `:` (colon sub-parameters, such as `\x1b[4:3m` for a curly underline;
+// b.7y8), and the final byte is an ASCII letter (m for SGR, H for cursor
+// home, etc.). It deliberately does not span non-ASCII bytes: the regex is byte-
 // oriented and never consumes a UTF-8 continuation byte, which keeps the
 // unicode TUI glyphs (`❯`, `⎿`, `🐝`) intact when the caller wants the
 // rendered text.
@@ -13,7 +14,7 @@ import "regexp"
 // Reference: reference/pane-output-research.md ("Go library recommendation"
 // — a 10-line regex covers the entire corpus we observed; no external
 // dependency required for v1).
-var ansiSequence = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+var ansiSequence = regexp.MustCompile(`\x1b\[[0-9;:]*[a-zA-Z]`)
 
 // StripANSI removes ANSI CSI escape sequences from s while preserving every
 // other byte (including non-ASCII / multi-byte UTF-8 sequences). The TUI

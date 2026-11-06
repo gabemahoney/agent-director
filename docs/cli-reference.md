@@ -196,7 +196,7 @@ Capture the last N lines of the agent's own pane (default 25, uncapped). ANSI es
 ### Parameters
 
 - `instance_id` (string, required): Id of the Spawn to read.
-- `n_lines` (int, optional): Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).
+- `n_lines` (int, optional): Number of trailing pane lines to return, counted up from the last line with content: blank lines below it are left out, blank lines above it count. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).
 - `ansi` (bool, optional): When true, return raw bytes from tmux (escape codes preserved). When false (default), strip ANSI sequences while preserving unicode glyphs.
 - `allow_pending` (bool, optional): No effect: pending, ended and missing rows are all readable.
 
