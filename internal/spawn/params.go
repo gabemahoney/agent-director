@@ -84,9 +84,10 @@ type SpawnParams struct {
 
 	// NoPreTrust opts out of the folder-trust pre-write (PreTrust) into
 	// <CLAUDE_CONFIG_DIR>/.claude.json when the spawn's extra env sets
-	// CLAUDE_CONFIG_DIR, and ~/.claude.json otherwise; a CLAUDE_CONFIG_DIR
-	// that is set but not an absolute path (ConfigDirUsable) gets no
-	// pre-write at all, and PreTrust reports it failed. A codex agent has no
+	// CLAUDE_CONFIG_DIR, otherwise when agent-director's own environment
+	// does, and ~/.claude.json otherwise; a CLAUDE_CONFIG_DIR that is set
+	// but not an absolute path (ConfigDirUsable) gets no pre-write at all,
+	// and PreTrust reports it failed. A codex agent has no
 	// file: its pre-trust puts the cwd's trust and the hook-trust bypass on
 	// the launch's command line (CodexPreTrust), and a CODEX_HOME in the
 	// extra env that is set but not absolute reports it failed. Default false

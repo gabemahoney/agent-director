@@ -16,7 +16,10 @@ var mcpTrailPath string
 // stores, b.8dr) and, before m.Run, points $HOME at a fresh temp dir and pins
 // the trail singleton there: trail.Emit resolves its file once, on the first
 // call, so a per-test t.Setenv("HOME") is too late and the first emitting test
-// would otherwise pin it to the real ~/.config/agent-director (b.93m).
+// would otherwise pin it to the real ~/.config/agent-director (b.93m). It
+// clears CLAUDE_CONFIG_DIR too: a Claude launch's pre-trust and environment
+// fall back to this process's value (b.uzn), which would move them off the
+// fake home.
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	tmpHome, err := os.MkdirTemp("", "mcp-home-*")
@@ -25,6 +28,9 @@ func TestMain(m *testing.M) {
 	}
 	if err := os.Setenv("HOME", tmpHome); err != nil {
 		panic("TestMain: Setenv HOME: " + err.Error())
+	}
+	if err := os.Unsetenv("CLAUDE_CONFIG_DIR"); err != nil {
+		panic("TestMain: Unsetenv CLAUDE_CONFIG_DIR: " + err.Error())
 	}
 	trail.Default()
 	mcpTrailPath = filepath.Join(tmpHome, ".config", "agent-director", "ad-trail.jsonl")

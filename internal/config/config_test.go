@@ -44,6 +44,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Defaults.ExpireRetentionDays", d.Defaults.ExpireRetentionDays, 31},
 		{"Defaults.DisableAskUser", d.Defaults.DisableAskUser, false},
 		{"Defaults.InjectHelpHook", d.Defaults.InjectHelpHook, false},
+		{"Defaults.DisableContextFullness", d.Defaults.DisableContextFullness, false},
 		{"Relay.PollBaseMs", d.Relay.PollBaseMs, 100},
 		{"Relay.PollJitterMs", d.Relay.PollJitterMs, 100},
 		{"Relay.TimeoutSeconds", d.Relay.TimeoutSeconds, 86400},
@@ -106,6 +107,9 @@ func TestLoadKeepsDefaults(t *testing.T) {
 			func(c *config.Config) { c.Defaults.DisableAskUser = true }},
 		{"disable_ask_user as a dotted key", makeConfigFile(t, "defaults.disable_ask_user = true\n"),
 			func(c *config.Config) { c.Defaults.DisableAskUser = true }},
+		// b.kh7: the off switch for Claude's context-fullness status-line wrapping.
+		{"disable_context_fullness true", makeConfigFile(t, "[defaults]\ndisable_context_fullness = true\n"),
+			func(c *config.Config) { c.Defaults.DisableContextFullness = true }},
 		{"unrelated unknown [defaults] key ignored", makeConfigFile(t, "[defaults]\ndisable_something_else = true\nrelay_mode = \"on\"\n"),
 			func(c *config.Config) { c.Defaults.RelayMode = "on" }},
 		{"claude_path absolute", makeConfigFile(t, "[launch]\nclaude_path = \"/opt/bin/claude\"\n"),

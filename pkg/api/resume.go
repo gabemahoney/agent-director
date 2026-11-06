@@ -527,9 +527,11 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     for the row's cwd and extra env, off when the row records the opt-out of
 //     the row's latest spawn (row.NoPreTrust, which the move and the
 //     restore keep, so a retry after a restored failure follows it too). For a
-//     claude row it is spawn.PreTrust: CLAUDE_CONFIG_DIR resolves the file a
-//     spawn of the row used, waiting for a held lock on .claude.json for at
-//     most the config's effective pre_trust.lock_wait_seconds (b.kr4). For a
+//     claude row it is spawn.PreTrust: the row's extra env's CLAUDE_CONFIG_DIR
+//     (a spawn records the one it inherited; the resuming process's is never
+//     read) resolves the file a spawn of the row used, waiting for a held
+//     lock on .claude.json for at most the config's effective
+//     pre_trust.lock_wait_seconds (b.kr4). For a
 //     codex row it touches no file: it reports the outcome the composition
 //     carried (the argv was built for it), and prints the one warning only for
 //     failed (CODEX_HOME not absolute), after the composition succeeded. Best

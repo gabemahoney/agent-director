@@ -11,6 +11,7 @@ relative `db_path` or `error_log_path` is joined onto it:
 relay_mode = "off"
 expire_retention_days = 31
 disable_ask_user = false
+disable_context_fullness = false
 
 [relay]
 poll_base_ms = 100
@@ -63,6 +64,7 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[defaults] expire_retention_days` | 1 to 106751 | 31 | Days a finished row must have ended before `expire` (without `--older-than`) may delete it. |
 | `[defaults] disable_ask_user` | `true`, `false` | `false` | Whether every spawn denies the agent its question-asking tool: Claude Code's `AskUserQuestion`, and for Codex its question tool, turned off for the launch. Cursor denies questions with either value. See [permissions](permissions.md#disable_ask_user-config). |
 | `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether managed launches receive AD guidance: a SessionStart help entry for Claude and Codex, or session-scoped MCP instructions for Cursor. `install.sh` sets `true` unless `--no-hooks`. See [settings](settings.md#defaultsinject_help_hook-config). |
+| `[defaults] disable_context_fullness` | `true`, `false` | `false` | Claude launches only; Codex and Cursor ignore it. `true` turns off [experimental context fullness](caller-contract.md#experimental-context-fullness) for the launch, leaving Claude Code's status lines alone; `false` wraps them (see [settings](settings.md#what---settings-carries)). A change takes effect at the next launch (spawn, reuse or resume). |
 | `[relay] poll_base_ms` | ms | 100 | Wait between a relay hook's polls for a decision (never under 50 ms; 0 or negative gives that floor plus jitter). |
 | `[relay] poll_jitter_ms` | ms | 100 | Random time added to each poll wait; 0 or negative adds none. |
 | `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit; its decision window is 3 s shorter (see [The relay hook's time limit](#the-relay-hooks-time-limit)). For Cursor, the full value is the decision window from admission, followed by a separate four-second settlement reserve; see [Cursor spawns](permissions.md#cursor-spawns). |

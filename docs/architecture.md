@@ -2324,6 +2324,10 @@ JSONC or ambiguous ancestor Git local settings leave callbacks untouched.
 `cmd/agent-director/context_statusline.go` forwards the original shell command;
 observation failures and oversized input preserve its complete stdin,
 stdout, stderr and exit status. No native settings file is written.
+`synthesizeSettings` (`internal/spawn/settings.go`) skips this composition when
+`[defaults] disable_context_fullness` is true, so the payload has no
+`statusLine` or `subagentStatusLine` key, no capacity callback runs, and Claude
+context stays unknown; spawn, reuse and resume all take that one gate.
 **Must use:** callback composition and forwarding stay in these shared paths.
 
 `internal/hook/claude_capacity.go` admits capacity-only observations through
@@ -8408,8 +8412,9 @@ variable than the one asked for. The key `CLAUDE_CONFIG_DIR=/x` with the
 value `""` gives the pane `CLAUDE_CONFIG_DIR=/x=`, so Claude Code uses
 `/x=`. Pre-trust (`extraEnv["CLAUDE_CONFIG_DIR"]`) and resume's
 transcript fallback (`row.ExtraEnv["CLAUDE_CONFIG_DIR"]`) look the
-variable up by its exact key and find none, so pre-trust writes
-agent-director's own `~/.claude.json` and resume looks under its own
+variable up by its exact key and find none, so pre-trust writes the
+file it would with no such key (see [Workspace-trust
+pre-write](#workspace-trust-pre-write)) and resume looks under its own
 `~/.claude`. An empty key gives tmux
 `=value`, which names no variable. No env-var name can hold a NUL byte,
 and no tmux argument can carry one. Rewriting the key would launch an
@@ -9430,16 +9435,18 @@ write, it never lengthens the window between the launch start and the
 create.
 
 The step resolves the target `.claude.json` (`claudeJSONFor`) from the
-launch's extra env `CLAUDE_CONFIG_DIR`, so that it is the file the
-launched Claude Code reads (2.1.280:
-`CLAUDE_CONFIG_DIR || os.homedir()`):
+launch's extra env `CLAUDE_CONFIG_DIR` only, never agent-director's
+environment, so that it is the file the launched Claude Code reads
+(2.1.280: `CLAUDE_CONFIG_DIR || os.homedir()`). A spawn's or reuse's
+extra env already holds an inherited value (below):
 
 - Absent or empty: the operator's `~/.claude.json`, from
   agent-director's own `HOME`.
 - An absolute path: `<CLAUDE_CONFIG_DIR>/.claude.json`.
 - Set but not an absolute path (relative, `~`-prefixed or
-  whitespace-only): refused (b.nje). Pre-trust reads, writes and stats
-  no file, makes no lock dir, and reports `failed` (below). Claude Code
+  whitespace-only), from the extra env or inherited: refused (b.nje).
+  Pre-trust reads, writes and stats no file, makes no lock dir, and
+  reports `failed` (below). Claude Code
   resolves a relative value against its pane's cwd, while agent-director
   would resolve it against its own caller's cwd, which differs for each
   caller, so the entry could land in a file the agent never reads.
@@ -9459,8 +9466,36 @@ malformed key and `resume` refuses a row whose stored extra env has one,
 both with `ErrReservedEnvKey` and before pre-trust (see [Malformed
 `extra_env` keys](#malformed-extra_env-keys-bvpb)).
 
-For `resume` the extra env is the row's, so it targets the same file the
-row's spawn did. With a file resolved, the step sets
+**The pane runs under the value pre-trust used (b.uzn).** For a claude
+spawn or reuse whose `extra_env` has no `CLAUDE_CONFIG_DIR` key and whose
+agent-director environment sets it non-empty, `ComposeLaunch` adds that
+value to the extra env (`launchExtraEnv`), so the create's environment,
+the settings, pre-trust and the row all carry it, and a tmux server
+started with another environment cannot give the pane another file. A
+key in `extra_env` always wins, an empty value meaning unset. Codex and
+Cursor launches never take it from agent-director's environment.
+`resume`'s launch environment and pre-trust use only the row's extra
+env. A row with the key resumes
+under its spawn's folder: the launch, pre-trust, the transcript
+fallback and `find-missing`'s heal agree. A row without it (its spawn
+inherited none, or it was saved before 0.17.5) resumes as on 0.17.4:
+the pane takes tmux's environment and pre-trust targets
+`~/.claude.json`. So a row saved before 0.17.5 whose agent ran under a
+`CLAUDE_CONFIG_DIR` set only in agent-director's environment gets
+`pre_trust: failed` on resume when `~/.claude.json` is missing, or `ok`
+after writing a file the agent doesn't read; either way the agent may
+stop at Claude Code's folder-trust prompt. Answering it once in the pane
+lets that resume carry on with its conversation; respawning records the
+value but starts a fresh conversation (a new id, or a reuse with
+`reuse_finished`, has no history). When neither `extra_env` nor agent-director's
+environment sets it, pre-trust targets `~/.claude.json` and the pane
+takes tmux's environment, except that a fresh Claude Code 2.1.280 launch
+given ordinary delivery's settings gets
+`CLAUDE_CONFIG_DIR=<effective-home>/.claude` from `inputdelivery.Prepare`
+(see [Ordinary input delivery](#ordinary-input-delivery)); the launch
+does not set it empty, which would change Claude Code's folder.
+
+With a file resolved, the step sets
 `projects.<canonical cwd>.hasTrustDialogAccepted = true` and writes
 the file back atomically (`writeFileAtomic`: a temp file, then a rename
 over the file), so no reader ever sees a torn file. The written file
@@ -9494,7 +9529,12 @@ Only the response to an unusable value differs: those read paths treat
 it as absent and look under `~/.claude`, while pre-trust, which writes,
 refuses it. **Must use:** code that reads `CLAUDE_CONFIG_DIR` from a
 launch's or row's extra env decides whether to use it with
-`spawn.ConfigDirUsable`; do not write a second check. No reader derives
+`spawn.ConfigDirUsable`; do not write a second check. Code that needs
+the value a claude launch runs under reads the launch's or row's extra
+env: `launchExtraEnv` is the only reader of agent-director's own
+`CLAUDE_CONFIG_DIR` for this, besides the context statuslines
+(`contextsettings.go`) and `inputdelivery.Prepare`, so a resume's launch
+environment and pre-trust follow its row. No reader derives
 a path from an `extra_env` `HOME`: it is a reserved key (see [Reserved
 `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)), so do not add
 one.
@@ -9611,7 +9651,7 @@ it keeps the life. Every `resume` until the next spawn or reuse follows
 it. A failed reuse's applied restore writes the previous choice back.
 
 Pre-trust is best effort on both verbs: a failure never fails the
-launch. When the write cannot be made (the extra env's
+launch. When the write cannot be made (the launch's
 `CLAUDE_CONFIG_DIR` is set but not an absolute path, or the resolved
 file does not exist, as on a fresh Claude Code install or a fresh
 `CLAUDE_CONFIG_DIR`, or it cannot be read, parsed or written, or its
@@ -9630,7 +9670,7 @@ resolves no file, so its line names none and quotes the value (Go `%q`)
 instead: `agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR
 "rel" is not an absolute path); the agent may stop at Claude Code's
 folder-trust prompt`. The line names no label, token or environment
-value other than the extra env's `CLAUDE_CONFIG_DIR`. The launch
+value other than the launch's `CLAUDE_CONFIG_DIR`. The launch
 proceeds, and the agent may wait at the trust dialog.
 
 **The `pre_trust` result field.** Every successful `spawn` and `resume`
@@ -9646,8 +9686,8 @@ result carries `pre_trust`, always exactly one of three values:
   whose row was restored.
 - `failed`: pre-trust was attempted and the entry was not written (the
   `.claude.json` file is missing, or could not be read, parsed or
-  written, its lock held by another process included, or the extra
-  env's `CLAUDE_CONFIG_DIR` is set but not an absolute path, so no file
+  written, its lock held by another process included, or the launch's
+  `CLAUDE_CONFIG_DIR` is set but not an absolute path, so no file
   was touched). The launch still proceeds, and the agent may stop at
   Claude Code's folder-trust prompt. For Codex: the extra env's
   `CODEX_HOME` is set but not an absolute path, and the launch carries
@@ -16773,7 +16813,8 @@ fallback** and stats that (bug b.1ba). Two resolvers back this:
 - **`spawn.JsonlPathIn(configDir, cwd, sessionID)`** — composes
   `<configDir>/projects/<slug(cwd)>/<session_id>.jsonl`. This is the
   config-dir-aware resolver the fallback uses when the row's
-  `ExtraEnv["CLAUDE_CONFIG_DIR"]` is usable (`spawn.ConfigDirUsable`: an
+  `ExtraEnv["CLAUDE_CONFIG_DIR"]` (an inherited one included, which the
+  spawn records) is usable (`spawn.ConfigDirUsable`: an
   absolute path), so a Spawn that ran under a
   custom config dir finds its transcript under
   `<CLAUDE_CONFIG_DIR>/projects/...` rather than `~/.claude/projects/...`.
@@ -16822,7 +16863,8 @@ a surviving stored argument that turns the tool on. See
 [Shared agent argument readers and resume extraction](#shared-agent-argument-readers-and-resume-extraction).
 
 `ExtraEnv` **is** carried over. The original spawn's extra env vars
-(e.g. `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`) are persisted on the
+(e.g. `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, a claude spawn's
+inherited one included) are persisted on the
 row at launch and restored by `spawn.ComposeRelaunch` (`in.Row.ExtraEnv`,
 decoded by `GetSpawn`), so a resumed row's agent re-enters the same
 auth/config context as the original — no dependence on whatever the
@@ -23880,7 +23922,7 @@ gated by its own environment variable. Four make `.config/agent-director` mode
 (`expire_trail_test.go`). The fifth, `TestFindMissingDisagreeFailOpenChild`
 (`find_missing_disagree_test.go`), writes a read-only trail file instead of
 a 0500 directory. `TestMain` also unsets
-`AGENT_DIRECTOR_INSTANCE_ID` and `TMUX` and points `TMUX_TMPDIR` at one
+`AGENT_DIRECTOR_INSTANCE_ID`, `CLAUDE_CONFIG_DIR` and `TMUX` and points `TMUX_TMPDIR` at one
 fresh temp dir for the whole test binary
 (`apiTmuxTmpdir`, with its per-user socket directory made at mode 0700), so
 a default socket resolves there, never under the caller's tmux or
