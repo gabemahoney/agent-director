@@ -21760,10 +21760,10 @@ with no `---` terminator. `test/fake-tmux`'s `readLog`,
 `fakeTmuxArgvs` go through it. **Must use:** every Go test that reads the
 fake's invocation log uses `faketmuxfix.ReadLog`; never parse the log
 format by hand. The Makefile's
-`test/fake-tmux/tmux` rule (`make fake-tmux`) lists as prerequisites every
-non-test source of the packages the fake links (`FAKE_TMUX_SRCS`,
-including `faketmuxfix`, `tmuxfix` and `internal/tmux`), so a change to the
-shared packages rebuilds it.
+`test/fake-tmux/tmux` rule (`make fake-tmux`) rebuilds it when a package of
+this module that the fake links changes, as `bin/ts-helper`'s rule does (see
+"Makefile target" under ts-helper wrapper CLI), so a change to the shared
+packages, such as `faketmuxfix`, `tmuxfix` or `internal/tmux`, rebuilds it.
 
 ### ptyfix: real pseudo-terminals (reusable test fixture)
 
@@ -24857,16 +24857,18 @@ production Codex launch.
 
 **Makefile target.**
 
-`make ts-helper` builds `bin/ts-helper`. Its prerequisites
-(`TS_HELPER_SRCS`) are every non-test `.go` source of the directories in
-`TS_HELPER_SRC_DIRS` (every package of this module the binary links, `go
-list -deps ./test/smoke/ts-helper`: the CLI itself, `pkg/api/apitest`,
-`faketmuxfix`, `tmuxfix` and the other `internal/testsupport` packages,
-`internal/spawn`, `internal/hook`, `internal/tmux`, `internal/config`,
-`internal/store`, `internal/trail`) plus `go.mod` and `go.sum`, so Make
-rebuilds when a seeder changes and skips the build otherwise. A package
-that gains a module import extends the list, or the binary can go stale
-(b.93m). `make test-image`, and so `make test-docker`, also builds it,
+`make ts-helper` builds `bin/ts-helper`. After each build the recipe
+writes `bin/ts-helper.d` from `go list -deps ./test/smoke/ts-helper/`: the
+non-test `.go` files and embedded files of every package of this module the
+binary links, relative to the checkout. The Makefile includes it, and those
+files, the directory each sits in, `go.mod` and `go.sum` are the
+prerequisites, so Make rebuilds when a seeder changes, or a file is added to
+or removed from one of those directories, and skips the build otherwise
+(b.93m, b.q6s). A file added in a subdirectory holding no listed file, such
+as a new folder under an embedded `testdata/`, is not seen. With no
+dependency file, such as a binary built before it existed, it always
+rebuilds. The fake tmux's rule works the same way, with
+`test/fake-tmux/tmux.d`. `make test-image`, and so `make test-docker`, also builds it,
 because testplans run it from the read-only source mount as
 `/work/source/bin/ts-helper` (b.m2s); the release coverage gate
 (`docker-epics.sh`) pre-builds it with the binaries.
@@ -25304,10 +25306,18 @@ the exempt sections instead of naming it.
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
 `prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
-b.8yq, b.4a1, b.qgr, b.uc7 and b.1ce). Those tests run `make` against the real
-repo Makefile with a fake container engine or tool on PATH, never a real
-container, and assert on what the recipe produced. They exec no built binary
-and open no store, so they carry no sandbox guard.
+b.8yq, b.4a1, b.qgr, b.uc7 and b.1ce, `helperdeps` b.q6s). Those tests run
+`make` against the real repo Makefile with a fake container engine or tool on
+PATH, never a real container, and assert on what the recipe produced. They
+exec no built binary and open no store, so they carry no sandbox guard.
+
+`helperdeps` uses the real go instead. It copies the Makefile, `go.mod`,
+`go.sum` and the files `go list -deps` reports for `bin/ts-helper` and
+`test/fake-tmux/tmux` into a temp tree and builds both there. Then it changes
+one file at a time and checks that `make -q` reports the binary out of date:
+a non-test `.go` file of each package of this module it links, an embedded
+file of each package that has them, a file added to or deleted from its own
+package, and its missing dependency file.
 
 `cigates` also checks the CI workflows (see [CI lane](#ci-lane)): it runs
 `integration.yml`'s `docker-epics` list step against a scratch

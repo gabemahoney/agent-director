@@ -255,7 +255,9 @@ built binary. Currently: `internal/trail`, `internal/store`, `internal/hook`,
 `test/tla` and `test/driver-scripts`. Pure-logic packages with no
 state or exec surface (e.g. `pkg/api/manifest`, `pkg/api/errnames`) may skip
 it, as do the `test/sandbox/` Makefile tests (`gitmount`, `cmdinject`,
-`prebuild`, `cigates`), which run only `make` and shell fakes. When you add a package that
+`prebuild`, `cigates`, `helperdeps`), which run only `make`, shell fakes,
+`go build` and `go list` (helperdeps builds the test helpers but never runs
+them). When you add a package that
 opens the store or execs a binary, add `sandboxguard.Require()` to its
 `TestMain`.
 
