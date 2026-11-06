@@ -9,6 +9,7 @@ package api_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
@@ -21,6 +22,9 @@ const (
 	advCwdRecreate = "nothing was written and nothing was launched; recreate that directory and resume again"
 	advCwdGoDoc    = "Recreate the directory at that path and resume again, or spawn the same id with the reuse opt-in, the row's agent and an existing cwd, which starts a fresh conversation in the retained life"
 )
+
+// advCwdMakeEnterable is B16's advice for a saved cwd that cannot be entered (b.qwo).
+const advCwdMakeEnterable = "nothing was written and nothing was launched; make that directory enterable by the user agent-director runs as and resume again"
 
 // advCwdReuse is B16's spawn-again advice for a row of agent: the reuse opt-in and that agent word, then an existing cwd.
 func advCwdReuse(agent string) string {
@@ -98,6 +102,57 @@ func TestAdviceFollow_B16_MissingCwdRecreateOrSpawnWithReuse(t *testing.T) {
 				t.Errorf("row cwd = %v; want %q", got, cwd)
 			}
 		})
+	}
+}
+
+// TestAdviceFollow_B16_UnenterableCwdMakeEnterable (b.qwo): while the saved cwd
+// cannot be entered (mode 000, or under a mode-000 parent), resume is refused
+// with ErrCwdNotFound, its advice is to make the directory enterable and
+// resume again, and it writes nothing; once search permission is restored,
+// the same resume launches in the saved cwd. Skipped as root, which mode 000
+// does not stop.
+// B16 (b.qwo): "nothing was written and nothing was launched; make that directory enterable by the user agent-director runs as and resume again, or spawn the id with the reuse opt-in ..."
+func TestAdviceFollow_B16_UnenterableCwdMakeEnterable(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores mode 000")
+	}
+	for _, agent := range []string{"claude", "codex"} {
+		for _, shape := range []struct{ name, problem string }{
+			{"mode 000", "cannot be entered (no search permission: "},
+			{"under a mode-000 parent", "cannot be checked ("},
+		} {
+			t.Run(agent+" row, "+shape.name, func(t *testing.T) {
+				e := newKillEnv(t)
+				e.rowAgent = agent
+				cwd := filepath.Join(t.TempDir(), "parent", "ad-cwd")
+				if err := os.MkdirAll(cwd, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				spec := e.resumableSpec(rlkSettled(e), agentGone, agentRowOpts(agent)...)
+				spec.CWD = cwd
+				r := e.seedResumableRow(t, spec)
+				locked := cwd
+				if shape.name != "mode 000" {
+					locked = filepath.Dir(cwd)
+				}
+				lockCwd(t, locked)
+				before := e.snapshotResume(t, r)
+
+				_, refused := e.resume(r.ID)
+
+				adviceAssertAdvice(t, refused, spawn.ErrCwdNotFound, advCwdMakeEnterable)
+				adviceAssertPhrase(t, refused, strconv.Quote(cwd)+" "+shape.problem)
+				adviceAssertPhrase(t, refused, advCwdReuse(agent))
+				e.assertResumeWroteNothing(t, before)
+
+				if err := os.Chmod(locked, 0o700); err != nil {
+					t.Fatalf("restore search permission: %v", err)
+				}
+				advResumeLaunches(t, e, r.ID)
+				advCwdAssertCreateIn(t, e.rec.SocketCallsOf(tmux.CallCreate), cwd)
+			})
+		}
 	}
 }
 

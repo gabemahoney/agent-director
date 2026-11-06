@@ -277,7 +277,8 @@ func hasControlChar(id string) bool {
 // Errors:
 //   - ErrCwdMissing: params.CWD was not supplied.
 //   - ErrCwdNotAPath: CWD is not a valid filesystem path.
-//   - ErrCwdNotFound: CWD does not exist on disk.
+//   - ErrCwdNotFound: CWD does not exist on disk, or cannot be accessed
+//     or entered (no search permission on it or a parent).
 //   - ErrCwdNotADirectory: CWD exists but is a file, not a directory.
 //   - ErrRelayModeInvalid: RelayMode is not "on", "off", or "".
 //   - ErrAgentMissing: the call gives no Agent and its template names none.

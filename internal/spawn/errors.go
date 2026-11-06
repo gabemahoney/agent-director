@@ -20,7 +20,8 @@ var ErrCwdMissing = errors.New("ErrCwdMissing")
 var ErrCwdNotAPath = errors.New("ErrCwdNotAPath")
 
 // ErrCwdNotFound is returned when cwd resolved to a path that does not
-// exist on disk at validation time.
+// exist on disk at validation time, or that cannot be accessed or entered
+// (no search permission on it or a parent; bug b.qwo).
 var ErrCwdNotFound = errors.New("ErrCwdNotFound")
 
 // ErrCwdNotADirectory is returned when cwd resolved to a regular file (or
