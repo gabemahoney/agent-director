@@ -4188,7 +4188,9 @@ no access evidence; missing or unknown kinds, unreadable descriptors and
 vnodes without identity make the process unverified. Directory FD entries
 give no store/root evidence. The first `txt` entry is the image: a basename
 containing `agent-director`, or this module's build metadata in any thin or
-universal Mach-O slice, marks a mutator. An otherwise unidentified image is
+universal Mach-O slice, marks a mutator; build metadata whose path ends in
+`.test` (a Go test binary, which never touches real stores) names no module,
+so only the basename can mark one. An otherwise unidentified image is
 unverified if missing, replaced, changed since start, unopenable or not
 executable Mach-O.
 

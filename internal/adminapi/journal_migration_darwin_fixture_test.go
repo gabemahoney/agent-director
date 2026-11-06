@@ -380,8 +380,10 @@ func blockDarwinLookup(t *testing.T, f *darwinTestFS, op, path string, skipMatch
 	return entered, release
 }
 
-// darwinThinImage emits a minimal 64-bit Mach-O with Go's inline buildinfo.
-// Validation uses the standard readers; it is fixture setup, not a meta-test.
+// darwinThinImage emits a minimal 64-bit Mach-O with Go's inline buildinfo;
+// module "test-binary" is the metadata a newer Go gives this module's test
+// binaries. Validation uses the standard readers; it is fixture setup, not a
+// meta-test.
 func darwinThinImage(t *testing.T, module string, kind macho.Type) []byte {
 	t.Helper()
 	info := make([]byte, 32)
@@ -393,6 +395,8 @@ func darwinThinImage(t *testing.T, module string, kind macho.Type) []byte {
 		text = "path\texample.test/program\nmod\t" + journalModulePath + "\tv1.0.0\n"
 	case "dependency":
 		text += "dep\t" + journalModulePath + "\tv1.0.0\n"
+	case "test-binary":
+		text = "path\t" + journalModulePath + "/internal/adminapi.test\nmod\t" + journalModulePath + "\t(devel)\n"
 	}
 	for _, s := range []string{"go1.22.10", strings.Repeat("x", 16) + text + strings.Repeat("y", 16)} {
 		info = binary.AppendUvarint(info, uint64(len(s)))

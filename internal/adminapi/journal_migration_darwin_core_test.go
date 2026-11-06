@@ -141,7 +141,7 @@ func TestDarwinJournalRootFormsAndLookupGate(t *testing.T) {
 
 func TestDarwinJournalImages(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{"name", "thin-main", "thin-dependency", "universal-later", "universal-other", "universal-no-metadata", "universal-not-executable", "replaced", "removed", "changed", "plain", "not-executable", "open-refused", "lookup-refused", "no-txt", "first-txt"} {
+	for _, kind := range []string{"name", "thin-main", "thin-dependency", "thin-test-binary", "test-binary-name", "universal-later", "universal-other", "universal-no-metadata", "universal-not-executable", "replaced", "removed", "changed", "plain", "not-executable", "open-refused", "lookup-refused", "no-txt", "first-txt"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newDarwinTestHost(t)
 			fsys := &darwinTestFS{journalFS: osJournalFS{}}
@@ -156,6 +156,15 @@ func TestDarwinJournalImages(t *testing.T) {
 			case "thin-main", "thin-dependency":
 				h.write(image, darwinThinImage(t, strings.TrimPrefix(kind, "thin-"), macho.TypeExec))
 				role = "agent_director_mutator"
+			case "thin-test-binary", "test-binary-name":
+				// Q2 ruling (SRD t1.x9o.g1 `## Decisions`): a Go test binary's
+				// metadata names no mutator; its file name still can.
+				role = ""
+				if kind == "test-binary-name" {
+					image = filepath.Join(filepath.Dir(image), "agent-director-admin.test")
+					role = "agent_director_mutator"
+				}
+				h.write(image, darwinThinImage(t, "test-binary", macho.TypeExec))
 			case "universal-later":
 				h.write(image, darwinUniversalImage(t, "other", "dependency"))
 				role = "agent_director_mutator"
