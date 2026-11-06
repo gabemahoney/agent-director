@@ -55,9 +55,10 @@ func launchAgentError(agent string) error {
 //     codex agent the per-launch settings on its command line and the pre-trust
 //     outcome the argv was built for), the parent id and the row's request
 //     fields. A composition failure writes nothing.
-//  3. Pre-trusts the cwd through RunPreTrust, off when NoPreTrust: for a claude
-//     agent PreTrust, waiting for a held lock on .claude.json for at most
-//     cfg's effective pre_trust.lock_wait_seconds; for a codex agent the
+//  3. Pre-trusts the cwd through RunPreTrust with step 2's row extra env, off
+//     when NoPreTrust: for a claude agent PreTrust, waiting for a held lock
+//     on .claude.json for at most cfg's effective
+//     pre_trust.lock_wait_seconds; for a codex agent the
 //     outcome step 2 carried, with no file touched (best effort; a failure
 //     never fails the spawn, SR-22.6).
 //  4. INSERTs step 2's row with the launch start (one read of now, in
@@ -128,7 +129,7 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	}
 
 	// A failure never fails the spawn; the outcome is returned on success.
-	preTrust := RunPreTrust(r.Agent, c.PreTrust, r.CWD, r.ExtraEnv, r.NoPreTrust, cfg.PreTrust)
+	preTrust := RunPreTrust(r.Agent, c.PreTrust, r.CWD, c.Row.ExtraEnv, r.NoPreTrust, cfg.PreTrust)
 
 	// Read once, so a held-name outcome carries exactly what the insert wrote.
 	launchStart := now().UnixMilli()

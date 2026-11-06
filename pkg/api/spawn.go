@@ -33,8 +33,9 @@ type SpawnResult struct {
 	//     passed SpawnParams.NoPreTrust; nothing was attempted.
 	//   - "failed": pre-trust was attempted and the entry was not written
 	//     (a claude agent: the .claude.json file is missing, or could not be
-	//     read, parsed or written, or the extra env sets CLAUDE_CONFIG_DIR to
-	//     a path that is not absolute; a codex agent: the extra env sets
+	//     read, parsed or written, or the extra env, or else agent-director's
+	//     own environment, sets CLAUDE_CONFIG_DIR to a path that is not
+	//     absolute; a codex agent: the extra env sets
 	//     CODEX_HOME to a path that is not absolute, and the launch carries
 	//     neither the folder trust nor the hook-trust bypass); the agent may
 	//     stop at its folder-trust prompt.

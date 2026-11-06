@@ -6,6 +6,8 @@ package api_test
 // unwritable one, are internal/spawn's pre-trust tests'.
 
 import (
+	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -39,8 +41,9 @@ func rptResume(t *testing.T, e *resumeEnv, r resumableRow, c trustConfig, truste
 
 // TestResumePreTrust: an allowed row's entry is on disk when the move runs
 // (ok); a missing file or a relative CLAUDE_CONFIG_DIR (failed; b.nje) or the
-// opt-out (skipped) leaves the file, and each launches, reporting PreTrust
-// (JSON pre_trust). A retry after a restored failure keeps no_pre_trust.
+// opt-out (skipped) leaves the file, and each launches under the row's
+// CLAUDE_CONFIG_DIR, reporting PreTrust (JSON pre_trust). A retry after a
+// restored failure keeps no_pre_trust.
 func TestResumePreTrust(t *testing.T) {
 	// Serial: it changes the working directory and PWD (cwdfix.Temp).
 	optOut := []apitest.SpawnOption{apitest.WithNoPreTrust()}
@@ -107,6 +110,113 @@ func TestResumePreTrust(t *testing.T) {
 			cmd := cs[len(cs)-1].Command
 			if i := slices.Index(cmd, "--resume"); i < 0 || i+1 >= len(cmd) || cmd[i+1] != r.SessionID {
 				t.Errorf("argv = %q; want --resume %s", cmd, r.SessionID)
+			}
+			if got, ok := cs[len(cs)-1].Envs["CLAUDE_CONFIG_DIR"]; !ok || got != c.dir {
+				t.Errorf("create env CLAUDE_CONFIG_DIR = %q (set %v); want %q", got, ok, c.dir)
+			}
+		})
+	}
+}
+
+// TestInheritedConfigDirFollowsTheRow pins b.uzn's resume rule: a claude spawn
+// or reuse whose extra env lacks CLAUDE_CONFIG_DIR records the one it inherited
+// (dir A) on the row beside the given keys, leaving the caller's map as it was,
+// so a resume by a caller with it unset or set to dir B pre-trusts A's
+// .claude.json and launches under A; B's and $HOME's files are untouched. A
+// relative inherited value is recorded too, and both launches report failed.
+// A spawn that inherits none records none, and its resume by a caller set to B
+// pre-trusts $HOME's .claude.json and launches without one, as before b.uzn.
+// The resumed row is seeded with the extra_env text the first launch stored.
+func TestInheritedConfigDirFollowsTheRow(t *testing.T) {
+	// Serial: it sets HOME and CLAUDE_CONFIG_DIR with t.Setenv, and the working directory (cwdfix.Temp) in the relative cell.
+	cases := []struct {
+		name     string
+		reuse    bool // the first launch is a reuse of a finished row, not a plain spawn
+		relative bool // A is "rel" (seedRelativeTrustConfig)
+		resumerB bool // the resuming caller sets CLAUDE_CONFIG_DIR to B; else it is unset
+		keyless  bool // the first launch inherits no CLAUDE_CONFIG_DIR, so the row records none
+	}{
+		{"spawn, resumed with it unset", false, false, false, false},
+		{"reuse, resumed with B", true, false, true, false},
+		{"relative spawn, resumed with it unset", false, true, false, false},
+		{"spawn without it, resumed with B", false, false, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newReuseEnv(t)
+			c, _ := e.client(t)
+			home := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
+			t.Setenv("HOME", home.dir)
+			a := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
+			want := "ok"
+			if tc.relative {
+				a, want = seedRelativeTrustConfig(t, trustLacksEntry), "failed"
+			}
+			b := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
+			wantRow := map[string]string{"KEEP": "1"}
+			if !tc.keyless {
+				t.Setenv("CLAUDE_CONFIG_DIR", a.dir)
+				wantRow["CLAUDE_CONFIG_DIR"] = a.dir
+			}
+
+			given := map[string]string{"KEEP": "1"}
+			p := api.SpawnParams{Agent: "claude", CWD: t.TempDir(), ExtraEnv: given}
+			if tc.reuse {
+				p = reuseParams(t, e.seedReusable(t, agentGone, reuseRowSpec{}), reuseRequest{})
+				p.ExtraEnv = given
+			}
+			var res api.SpawnResult
+			var err error
+			captureStderr(t, func() {
+				if tc.reuse {
+					res, _, err = e.reuse(t, p)
+				} else {
+					res, err = c.Spawn(p)
+				}
+			})
+			if err != nil {
+				t.Fatalf("first launch: %v", err)
+			}
+			if res.PreTrust != want {
+				t.Errorf("SpawnResult.PreTrust = %q; want %q", res.PreTrust, want)
+			}
+			if !maps.Equal(given, map[string]string{"KEEP": "1"}) {
+				t.Errorf("caller's ExtraEnv = %v after the launch; want unchanged {KEEP: 1}", given)
+			}
+			stored, _ := e.columns(t, res.InstanceID).ExtraEnv.(string)
+			var row map[string]string
+			if err := json.Unmarshal([]byte(stored), &row); err != nil || !maps.Equal(row, wantRow) {
+				t.Fatalf("stored extra_env = %q (%v); want %v", stored, err, wantRow)
+			}
+
+			if tc.resumerB {
+				t.Setenv("CLAUDE_CONFIG_DIR", b.dir)
+			} else {
+				_ = os.Unsetenv("CLAUDE_CONFIG_DIR") // t.Setenv above restores it
+			}
+			r := e.seedResumable(t, rlkSettled(e), agentGone, apitest.WithRawExtraEnv(stored))
+			before := len(e.rec.SocketCallsOf(tmux.CallCreate))
+			var rr api.ResumeResult
+			captureStderr(t, func() { rr, err = c.Resume(api.ResumeParams{InstanceID: r.ID}) })
+
+			if err != nil {
+				t.Fatalf("resume: %v", err)
+			}
+			if rr.PreTrust != want {
+				t.Errorf("ResumeResult.PreTrust = %q; want %q", rr.PreTrust, want)
+			}
+			a.check(t, r.CWD, !tc.relative && !tc.keyless, "after the resume (A)")
+			b.check(t, r.CWD, false, "after the resume (B)")
+			home.check(t, r.CWD, tc.keyless, "after the resume ($HOME)")
+			cs := e.rec.SocketCallsOf(tmux.CallCreate)
+			if len(cs) != before+1 {
+				t.Fatalf("creates = %d; want %d", len(cs), before+1)
+			}
+			got, ok := cs[before].Envs["CLAUDE_CONFIG_DIR"]
+			if tc.keyless && ok {
+				t.Errorf("resume create env CLAUDE_CONFIG_DIR = %q; want none", got)
+			} else if !tc.keyless && (!ok || got != a.dir) {
+				t.Errorf("resume create env CLAUDE_CONFIG_DIR = %q (set %v); want %q", got, ok, a.dir)
 			}
 		})
 	}

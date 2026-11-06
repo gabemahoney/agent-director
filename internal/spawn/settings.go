@@ -139,6 +139,11 @@ const sessionStartHookTimeoutSeconds = 600
 // form ("command":"<install path> help", through quoteIfWhitespace): it
 // writes nothing, so its parent process does not matter.
 //
+// `statusLine` and `subagentStatusLine` carry the context-fullness callbacks
+// composeContextStatuslines writes, unless cfg.Defaults.DisableContextFullness
+// is true: then neither key is written and no Claude settings file is read for
+// them, so Claude's own status lines stand and context stays unknown (b.kh7).
+//
 // The `permissions` block is included whenever the caller supplied any
 // non-empty allow/deny/ask array OR when cfg.Defaults.DisableAskUser
 // is true (which prepends "AskUserQuestion" to deny). When omitted, Claude
@@ -199,7 +204,9 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 	}
 
 	top := map[string]any{"hooks": hooks}
-	composeContextStatuslines(r, exe, top)
+	if !cfg.Defaults.DisableContextFullness {
+		composeContextStatuslines(r, exe, top)
+	}
 
 	allow, deny, ask := mergePermissions(r.Permissions, cfg.Defaults.DisableAskUser)
 	if len(allow) > 0 || len(deny) > 0 || len(ask) > 0 {

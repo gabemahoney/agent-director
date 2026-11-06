@@ -73,13 +73,17 @@ type ComposedRelaunch struct {
 // The environment and the settings (the same hooks as a fresh spawn) are
 // composed from the row. ExtraEnv is restored from the persisted
 // row (in.Row.ExtraEnv, decoded by GetSpawn) so a resumed spawn keeps its
-// original env, including CLAUDE_CONFIG_DIR, CODEX_HOME and any auth vars. This is the
+// original env, including CLAUDE_CONFIG_DIR (a claude spawn's inherited one
+// too, which ComposeLaunch records), CODEX_HOME and any auth vars. This is the
 // persist-all posture: those values may sit at rest in the DB, but the store
 // file is already forced 0600 in a 0700 dir on every open, so restoring them
 // here opens no new exposure tier. Permissions, by contrast, is NOT stored,
 // so it cannot be reconstructed and stays nil; the caller's shell env
 // propagates auth via tmux's default behavior for anything not captured in
 // ExtraEnv, except Cursor's explicit-only configuration/credential selectors.
+// agent-director's own CLAUDE_CONFIG_DIR is never added here: a claude row
+// without the key (its spawn inherited none, or predates recording it)
+// resumes as before bug b.uzn.
 // AGENT_DIRECTOR_INSTANCE_ID reaches the create argv exactly once,
 // as for a plain spawn (the client drops the environment's copy).
 func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, error) {
