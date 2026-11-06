@@ -764,7 +764,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "n_lines",
 				Type:          "int",
-				Description:   "Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
+				Description:   "Number of trailing pane lines to return, counted up from the last line with content: blank lines below it are left out, blank lines above it count. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,

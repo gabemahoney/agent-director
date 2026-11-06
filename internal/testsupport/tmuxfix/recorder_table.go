@@ -435,8 +435,9 @@ func (r *Recorder) ClearScope(socket string, level ScopeLevel) *Recorder {
 	return r
 }
 
-// SetCapture sets the text CapturePaneID returns for paneID on socket
-// (default ""). The text is returned whole, whatever nLines asks for.
+// SetCapture sets the text tmux prints for a capture of paneID on socket
+// (default ""). CapturePaneID returns its last nLines rows, as the
+// production client does.
 func (r *Recorder) SetCapture(socket, paneID, text string) *Recorder {
 	r.mu.Lock()
 	defer r.mu.Unlock()

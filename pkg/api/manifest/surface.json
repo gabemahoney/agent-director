@@ -833,7 +833,7 @@
         {
           "name": "n_lines",
           "type": "int",
-          "description": "Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
+          "description": "Number of trailing pane lines to return, counted up from the last line with content: blank lines below it are left out, blank lines above it count. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
           "required": false,
           "nullable": false,
           "allow_empty": false,

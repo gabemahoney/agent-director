@@ -47,7 +47,13 @@ type TmuxClient interface {
 	// SendKeyPaneRepeat sends the key count times in one call (a Codex row's
 	// pause: 127 C-u).
 	SendKeyPaneRepeat(socket, paneID, key string, count int) error
-	// CapturePaneID returns the last nLines lines of the pane paneID on socket.
+	// CapturePaneID returns the last nLines rows of the pane paneID on
+	// socket, counted up from the last row with content: blank rows below it
+	// are left out, blank rows between content rows count, and a row is
+	// blank when it is whitespace only once ANSI escape sequences are
+	// stripped (b.7y8). read-pane returns this text and the expect_pane_sha256
+	// checks hash it, so an adapter that returns tmux's raw -S -<n> output
+	// (history plus the whole screen) breaks n_lines.
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
 	// NewSession creates the session name on socket with its chained labels,
 	// the session label "ad1 <token> <session id> <instance id> <store id>",

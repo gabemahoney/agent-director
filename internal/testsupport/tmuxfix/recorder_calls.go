@@ -273,15 +273,16 @@ func (r *Recorder) PaneTerminalRaw(socket, paneID string, maxWait time.Duration)
 	return raw, err
 }
 
-// CapturePaneID returns the pane's capture text (SetCapture; "" by default)
-// whole, whatever nLines asks for. The pane must be in socket's table.
+// CapturePaneID returns the last nLines rows of the pane's capture text
+// (SetCapture; "" by default), as the production client trims what tmux
+// prints (tmux.LastPaneLines; b.7y8). The pane must be in socket's table.
 func (r *Recorder) CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error) {
 	c := SocketCall{Call: tmux.CallCapture, Socket: socket, Target: paneID, NLines: nLines, ANSI: ansi}
 	ans, err := r.do(c, func(st *socketState, _ Script) (any, *tmux.CallError) {
 		if _, s := st.server.findPane(paneID); s == nil {
 			return nil, notFound(tmux.CallCapture)
 		}
-		return r.captures[paneKey{socket, paneID}], nil
+		return tmux.LastPaneLines(r.captures[paneKey{socket, paneID}], nLines), nil
 	})
 	text, _ := ans.(string)
 	return text, err

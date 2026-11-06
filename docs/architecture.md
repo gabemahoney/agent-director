@@ -10026,9 +10026,21 @@ before sending it to Cursor. Caller fields, recovery and success limits are in
 and `readPaneRun`, built on `paneRun`). It captures the last N lines of
 the agent's own pane by pane id: `capture-pane -p [-e] -t %N -S -<n>`.
 Default `n=25` (for `n_lines` 0 or omitted), no upper cap (SRD §12
-explicitly leaves the bound to the caller). `n` counts lines of history
-before the visible pane, so `n_lines: 1` is the smallest capture. A
-negative `n_lines` is refused, never read as the default (b.c4n).
+explicitly leaves the bound to the caller). tmux prints up to `n` rows of
+history and then the whole visible screen, so `tmux.Client.CapturePaneID`
+keeps only the last `n` rows (`tmux.LastPaneLines`, b.7y8; before it, an
+alternate-screen TUI such as Claude Code's or Codex's gave its whole
+screen for every `n`). The rows are counted up from the last row with
+content: blank rows (whitespace only once ANSI is stripped) below it are
+left out, blank rows between content rows count, and an all-blank pane
+is `""`. Blankness is judged on the stripped row, so an `ansi` read and a
+default read pick the same rows. The trim lives in the client, so
+`read-pane`, the `expect_pane_sha256` check of `send-keys` and
+`record-pane-answer` (`capturePaneHash`) and the idle-screen fingerprint
+(`samplePane`) see the same rows for the same `n`, and the
+`tmuxfix.Recorder` applies the same helper. `n_lines: 1` is the smallest
+capture. A negative `n_lines` is refused, never read as the default
+(b.c4n).
 
 Its result is `pane` and `pane_sha256`, the SHA-256 (lowercase hex,
 `paneSHA256`) of exactly the bytes of `pane` (b.146 rule 7). A caller that
@@ -10098,7 +10110,7 @@ ANSI handling:
 - **Default (`ansi=false`) — strip ANSI escape sequences, preserve
   unicode glyphs.** `tmux capture-pane -p` (without `-e`) already
   removes most SGR / cursor escapes server-side; `internal/tmux.StripANSI`
-  scrubs any residuals with a byte-oriented regex (`\x1b\[[0-9;]*[a-zA-Z]`)
+  scrubs any residuals with a byte-oriented regex (`\x1b\[[0-9;:]*[a-zA-Z]`, colon sub-parameters included)
   that never touches non-ASCII bytes. The TUI glyphs Claude uses
   (`❯` U+276F, `⎿` U+23BF, `🐝` U+1F41D, box-drawing chars) survive —
   the caller reads them as state signal per
