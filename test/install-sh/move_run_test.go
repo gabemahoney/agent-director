@@ -666,11 +666,30 @@ func TestMovePathKeyOutwardRewritten(t *testing.T) {
 
 func TestMoveOtherReferencesPrinted(t *testing.T) {
 	h := newMoveHome(t)
+	h.Flags = append(h.Flags, "--keep-prior")
 	cfg := moveOldConfig + "\n[launch]\nclaude_path = \"{HOME}/.agent-director/bin/claude\"\n"
 	h.BuildOld(withMoveConfig(func(h *moveHome) string { return h.expand(cfg) }))
+	oldLink := filepath.Join(h.Tools, "agent-director")
+	h.Link(filepath.Join(h.Old, "bin", "agent-director"), oldLink)
+	h.Env["PATH"] = h.Tools + ":" + filepath.Join(h.Old, "bin") + ":" + h.S.Toolbox
 	tmpl := "name = \"tooling\"\ncwd = \"{HOME}/.agent-director/work\"\n\n[extra_env]\nTOOLS = \"~/.agent-director/tools\"\nPLAIN = \"kept\"\n"
 	h.Write(filepath.Join(h.Old, "templates", "tooling.toml"), h.expand(tmpl), 0o644)
 	res := moveMustInstall(t, h)
+	// A crossing success flushes each deferred note exactly once, only
+	// after the journal result establishes that the move remains in place.
+	kept := filepath.Join(h.Home, moveKeptDir(t, h))
+	for _, line := range []string{
+		"  kept    : " + kept + " (the old directory as it was before the move, old binaries included; delete it once the upgrade is confirmed)",
+		"  prior   : --keep-prior made no snapshot on this install: the new bin and admin directories hold no earlier binary. The way back is operator-actions.md, \"Going back to the previous release\"",
+		"  old link: " + oldLink + " still leads into the old directory's bin, which is kept only until you delete it. Re-point it:",
+		"  old PATH: $PATH names " + filepath.Join(h.Old, "bin") + ", the old directory's bin, which is kept only until you delete it. In your shell startup file (~/.bashrc, ~/.zshrc, ...), replace it with " + filepath.Join(h.New, "bin") + ", then open a new shell.",
+		"  references: these lines still name the old directory. They were left as written; change each to the same place under " + h.New + " (or remove it) by hand, since the old directory is kept only until you delete it (" + kept + "):",
+	} {
+		at, journal := strings.Index(res.Stdout, line+"\n"), strings.Index(res.Stdout, "  journal : ")
+		if strings.Count(res.Stdout, line+"\n") != 1 || journal < 0 || at <= journal {
+			t.Errorf("note must appear once after journal: %q:\n%s", line, res.Stdout)
+		}
+	}
 	for _, s := range []string{
 		"  references: these lines still name the old directory. They were left as written;",
 		"    {HOME}/.config/agent-director/config.toml:9:claude_path = \"{HOME}/.agent-director/bin/claude\"",

@@ -1189,10 +1189,22 @@ j6_failing_migration() {
     J6_BEFORE="$("$SQLITE" "$J6H/.config/agent-director/state.db" '.sha3sum --schema')"
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
     run_journal "$J6H" "${J6ARGV[@]}"
-    expect_exit5 ErrJournalMigrationRefused "migration step fails" || return 1
+    if [[ "${1:-}" == pre-0.11.0 ]]; then
+        expect_exit5 ErrJournalMigrationRefused "migration step fails and restores" || return 1
+        expect_advice "install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run."
+        expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+        cmp -s "$J6H/.config/agent-director/bin/agent-director" "$BIN_OLD" || bad "restore did not put back the old CLI"
+        [[ ! -e "$J6H/.config/agent-director/admin/agent-director-admin" ]] || bad "restore retained the newly installed administrator"
+        [[ ! -e "$(sentinel "$J6H")" ]] || bad "restore retained the run's sentinel"
+    else
+        expect_exit5 ErrJournalMigrationIncomplete "migration step fails" || return 1
+        expect_advice "install.sh: the cutover did not commit; this release stays installed."
+        expect_advice "The administrator installed before the run ($J6H/.config/agent-director/admin/agent-director-admin) does not predate the cutover, so there is no earlier release to put back."
+        expect_advice "To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:"
+        expect_installed "$J6H" "$BIN" "$ADMIN"
+        [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
+    fi
     j6_expect_step_failed
-    expect_advice "Keep the maintenance boundary and restart administrator verification."
-    [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
     j6_assert_rollback
 }
 
@@ -1207,9 +1219,9 @@ j6_failing_migration() {
 test_J6_MigrationFailedRerunRetries() {
     j6_failing_migration || return
     run_journal "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
-    expect_exit5 ErrJournalMigrationRefused "re-run while the step's cause still holds" || return
+    expect_exit5 ErrJournalMigrationIncomplete "re-run while the step's cause still holds" || return
     j6_expect_step_failed
-    expect_advice "Keep the maintenance boundary and restart administrator verification."
+    expect_advice "To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:"
     j6_assert_rollback
     [[ "$(db_version "$J6H")" == $PRE_CUTOVER_SCHEMA ]] || bad "store moved off v$PRE_CUTOVER_SCHEMA on a failed re-run"
     j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; return; }
@@ -1260,7 +1272,7 @@ test_J6_RerunKeepsPriorRollbackCopy() {
     cmp -s "$J11C.prior" "$BIN_OLD" || bad "first run did not snapshot the old agent-director"
     cmp -s "$J11A.prior" "$ADMIN_OLD" || bad "first run did not snapshot the old agent-director-admin"
     run_journal "$J6H" "${J6ARGV[@]}"
-    expect_exit5 ErrJournalMigrationRefused "advised re-run while the step's cause still holds" || return
+    expect_exit5 ErrJournalMigrationIncomplete "advised re-run while the step's cause still holds" || return
     j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
     j11_not_snapshotted "admin prior" "kept $J11A.prior" "$J11_SAME_PAIR"
     cmp -s "$J11C.prior" "$BIN_OLD" \
@@ -1271,11 +1283,10 @@ test_J6_RerunKeepsPriorRollbackCopy() {
 }
 
 # J6 with --keep-prior on an upgrade from before 0.11.0
-# (test_J11_KeepPriorNoAdminRemoveIt's setup): the advised re-run keeps
-# agent-director.prior and still says "to roll back, remove
-# <agent-director-admin>" (b.2wk); doing that restores the old install.
+# (test_J11_KeepPriorNoAdminRemoveIt's setup): each refusal restores the old
+# CLI and removes the added administrator and sentinel. A retry snapshots the
+# restored CLI again; fixing only the reported cause then completes the upgrade.
 test_J6_RerunPreAdminUpgradeKeepsRemoveAdvice() {
-    local got
     j6_failing_migration pre-0.11.0 || return
     j11_paths "$J6H"
     grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" || bad "first run: no agent-director prior line: $(flat "$OUT")"
@@ -1283,16 +1294,20 @@ test_J6_RerunPreAdminUpgradeKeepsRemoveAdvice() {
         || bad "first run: no remove-it admin prior line: $(flat "$OUT")"
     run_journal "$J6H" "${J6ARGV[@]}"
     expect_exit5 ErrJournalMigrationRefused "advised re-run while the step's cause still holds" || return
-    j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
-    j11_not_snapshotted "admin prior" none "$J11_SAME_PAIR" "; to roll back, remove $J11A"
+    grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" || bad "retry did not snapshot the restored CLI"
+    grep -qxF "  admin prior: none (no agent-director-admin was installed); to roll back, remove $J11A" "$OUT" || bad "retry did not recognize the absent administrator"
     cmp -s "$J11C.prior" "$BIN_OLD" \
         || bad "after the advised re-run agent-director.prior is no longer the pre-install binary (rollback copy lost)"
     [[ ! -e "$J11A.prior" ]] || bad "the advised re-run left $J11A.prior, which would pair wrongly"
-    got="$(grep -m1 -F "to roll back, remove " "$OUT")" || return
-    mv "$J11C.prior" "$J11C" || bad "mv $J11C.prior $J11C"
-    rm "${got##*to roll back, remove }" || bad "remove ${got##*to roll back, remove }"
-    cmp -s "$J11C" "$BIN_OLD" || bad "rolled-back agent-director is not the old one"
-    [[ ! -e "$J11A" ]] || bad "agent-director-admin left after the rollback"
+    cmp -s "$J11C" "$BIN_OLD" || bad "restored agent-director is not the old one"
+    [[ ! -e "$J11A" ]] || bad "agent-director-admin left after the restore"
+    [[ ! -e "$(sentinel "$J6H")" ]] || bad "sentinel left after the restore"
+    j6_assert_rollback
+    j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; return; }
+    run_journal "$J6H" "${J6ARGV[@]}"
+    expect_rc 0 "retry after the cause is fixed" || return
+    expect_installed "$J6H" "$BIN" "$ADMIN"
+    [[ "$(db_version "$J6H")" == "$SCHEMA" ]] || bad "successful retry did not finish migration"
 }
 
 # J6: "If state.db is NEWER than this binary (ErrSchemaMismatch), install a
@@ -2706,7 +2721,8 @@ j17_remedy() {
         ErrTemplateMalformed) echo fix-template ;;
         ErrSchemaMismatch) echo newer-binary ;;
         ErrSchemaVerifyFailed) echo stop ;;
-        ErrJournalMigrationRefused) echo restart-verification ;;
+        ErrJournalMigrationRefused) echo fix-cutover ;;
+        ErrJournalMigrationIncomplete) echo complete-forward ;;
         ErrMoveConflict) echo apply-message ;;
         ErrAgentsLive) echo stop-agents ;;
         ErrMoveFailed) echo fix-cause ;;
@@ -2754,7 +2770,7 @@ j17_mismatch() { j7_older_store && j7_run 2 "$PRE_CUTOVER_SCHEMA"; }
 # The canonical cutover failure fixture preserves the complete old schema/data
 # and uses the shared write-failure handle, never another trigger definition.
 j17_journal_refused() {
-    j6_failing_migration || return 1
+    j6_failing_migration "$@" || return 1
     J7H="$J6H" J7ARGV=("${J6ARGV[@]}")
 }
 # j17_fake <mode>: a fresh install of FAKE_AD, J7ARGV with FAKE_AD as
@@ -2827,8 +2843,8 @@ j17_reap() {
 # fix-config applies the sed <config fix> to config.toml and re-runs (fix-template
 # applies the same sed to the template the headline names: ErrTemplateMalformed,
 # --help's "fix the template the message names, then re-run"),
-# restart-verification retains maintenance, clears only the injected fault and
-# repeats administrator verification with a fresh backup, preserving the first;
+# fix-cutover and complete-forward clear only the injected fault and re-run
+# with a fresh backup, preserving the first; the relayed action then verifies;
 # newer-binary installs BIN_NEWER; the move names (the table's rows): apply-message
 # runs the commands the message advises under the marker <config fix> gives, as
 # written (both directories, the new one holding only a template: it is set aside, then the template copied back),
@@ -2878,9 +2894,12 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
             newer-binary)
                 want_bin="$BIN_NEWER" want_v=$((SCHEMA + 1))
                 run "$J7H" bash "$LOOSE" --binary "$BIN_NEWER" --admin-binary "$ADMIN" --no-hooks --no-symlink ;;
-            restart-verification)
-                expect_advice "Keep the maintenance boundary and restart administrator verification."
-                expect_advice "A commit may have completed. Never reset the schema or restore replayable input."
+            fix-cutover|complete-forward)
+                if [[ "$remedy" == fix-cutover ]]; then
+                    expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+                else
+                    expect_advice "To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:"
+                fi
                 j6_expect_step_failed
                 j6_assert_rollback
                 backup="$J7H.journal-backup-$((RUN_N - 1))"
@@ -2934,7 +2953,8 @@ j17_config_refused|install.sh: agent-director refused its config file (ErrConfig
 j17_template_refused|install.sh: template @J7H@/.config/agent-director/templates/t.toml sets claude_args more than once; refusing to install.|ErrTemplateMalformed|/^claude_args = \["--b"\]$/d
 j17_newer_store|install.sh: store open (agent-director list) failed after install|ErrSchemaMismatch|
 j17_mismatch|install.sh: schema migration verification FAILED|ErrSchemaVerifyFailed|
-j17_journal_refused|  Keep the maintenance boundary and restart administrator verification.|ErrJournalMigrationRefused|
+j17_journal_refused|install.sh: the cutover did not commit; this release stays installed.|ErrJournalMigrationIncomplete|
+j17_journal_refused pre-0.11.0|install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run.|ErrJournalMigrationRefused|
 j17_fake ok|install.sh: state.db was not created by the store open|ErrSchemaVerifyFailed|
 j17_fake panic|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
 j17_fake odd-name|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
@@ -4516,8 +4536,10 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
     for answer in first repeat; do
         run "$h" "${J7ARGV[@]}" --journal-maintenance-window --journal-roots-complete --journal-backup "$backup" --journal-legacy-root "$extra"
         expect_exit5 ErrJournalMigrationRefused "$answer with incompatible process" || true
-        expect_advice "Keep the maintenance boundary and restart administrator verification."
-        expect_advice "A commit may have completed. Never reset the schema or restore replayable input."
+        expect_advice "install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run."
+        expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+        [[ ! -e "$h/.config/agent-director/bin/agent-director" && ! -e "$h/.config/agent-director/admin/agent-director-admin" ]] || bad "refusal retained binaries absent before the run"
+        [[ "$(cat "$(sentinel "$h")")" == "{\"from\":$prior,\"to\":$SCHEMA}" ]] || bad "refusal did not restore the original sentinel"
         grep -F 'old_or_unverified_mutators' "$ERR" >/dev/null || bad "refused before process inventory: $(flat "$ERR")"
         expect_refusal_action "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration, which for an image in a privacy-protected folder means granting the terminal app access to that folder), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
         expect_advice '"cutover":"not_committed","steps_committed":false'

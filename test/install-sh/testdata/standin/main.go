@@ -5,6 +5,8 @@
 // a test runs as an old install's agent-director: `standin serve` prints
 // "ready" and then runs until its stdin closes, as a Claude Code session's MCP
 // server runs until the session ends. Any other verb exits 0, printing nothing.
+// Cutover-outcome cases opt into exec delegation so no stand-in process is
+// left for the real administrator's live-mutator verification to refuse.
 package main
 
 import (
@@ -13,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"syscall"
 )
 
 // Set with -ldflags "-X main.<name>=<value>"; configDir is left out of the
@@ -53,6 +56,11 @@ func main() {
 		return
 	}
 	if delegate := os.Getenv("SCHED_TEST_DELEGATE"); delegate != "" {
+		if os.Getenv("SCHED_TEST_DELEGATE_EXEC") == "1" {
+			if err := syscall.Exec(delegate, append([]string{delegate}, os.Args[1:]...), os.Environ()); err != nil {
+				panic(err)
+			}
+		}
 		cmd := exec.Command(delegate, os.Args[1:]...)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {

@@ -10,8 +10,9 @@ package installsh_test
 // gets no link and no copy. A file's copy is a file; a link's is a 0700
 // directory, made by mktemp -d under the pattern, holding a link named as the
 // item with the same raw target. Nothing already at a name is written
-// through or removed. Until Task t2.7tz.ab.p5 keeps copies for some outcomes, every run
-// removes its own copies when it ends, and never another run's. A copy that
+// through or removed. Success and the non-cutover stops tested here remove
+// their own copies, never another run's; outcome tests cover retained copies.
+// A copy that
 // cannot be made for want of room, access or a regular file is J37's
 // (crossing_preflight_test.go).
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"io"
 	"os"
 	"os/signal"
@@ -23,7 +24,9 @@ import (
 
 // TestMigrateJournalAdminChild does nothing unless AD_ADMIN_CHILD names the
 // seams to arm; then it exits with run's code on the JSON argv in
-// AD_ADMIN_CHILD_ARGS. The verifier passes except at the call a
+// AD_ADMIN_CHILD_ARGS, or argv after -- when that variable is absent (the
+// installer outcome fixture). Non-handshake rows need no fd 3 or fd 4.
+// The verifier passes except at the call a
 // verify-fails-<n> seam names. Fd 3 writes "ready" to the parent; fd 4
 // reads its "go". It is the one child runner of the real administrator: a
 // test that needs another seam adds an AD_ADMIN_CHILD value here, never a
@@ -34,8 +37,12 @@ func TestMigrateJournalAdminChild(t *testing.T) {
 		return
 	}
 	var args []string
-	if err := json.Unmarshal([]byte(os.Getenv("AD_ADMIN_CHILD_ARGS")), &args); err != nil {
-		os.Exit(98)
+	if encoded, ok := os.LookupEnv("AD_ADMIN_CHILD_ARGS"); ok {
+		if err := json.Unmarshal([]byte(encoded), &args); err != nil {
+			os.Exit(98)
+		}
+	} else {
+		args = flag.Args()
 	}
 	toParent, fromParent := os.NewFile(3, "to-parent"), os.NewFile(4, "from-parent")
 	ready := func() {
