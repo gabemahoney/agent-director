@@ -10528,7 +10528,7 @@ never a literal `claude`; Codex and Cursor are never run by discovery.
 
 **The settings.json merge (b.cfq, b.zbg).** With hooks on, step 6 merges
 both `agent-director help` entries into `~/.claude/settings.json` with one
-jq filter, and writes the result after the usual `.bak` (see "Merged files
+jq filter, and writes the result with no backup copy (see "Merged files
 keep their mode" below). jq runs a filter once per JSON document it reads,
 so install.sh first counts the file's documents
 (`jq -n '[inputs] | length'`):
@@ -10842,8 +10842,8 @@ anyone who could not read the old. The mode is read with `stat -L` (GNU
 mode; for a symlinked `<file>` the `.new` and the `mv` act on the file the
 link resolves to, and the link is kept (see "A symlinked `settings.json`
 or `config.toml`" below). A `<file>` that does not exist yet takes the
-umask's mode (a new `config.toml` is then `chmod 0600`). The timestamped
-`.bak` copies are made
+umask's mode (a new `config.toml` is then `chmod 0600`). `config.toml`'s
+timestamped `.bak` (and the agent-rename migration's copy) is made
 with `ad_backup_keeping_mode <file> <bak>` the same way: it removes any
 `<bak>` (an earlier run's copy of the same second), copies with a plain
 `cp -f` under `umask 077`, then `chmod`s the copy to `<file>`'s mode. It
@@ -10852,9 +10852,9 @@ where the file system cannot take them (NFS homes, Ubuntu LP#2087769),
 which under `set -e` would stop the install at the backup. `uninstall.sh`
 uses the same functions for its two rewrites. **Must use:** a rewrite of
 an existing operator file in either script goes through
-`ad_replace_keeping_mode` and its backup through `ad_backup_keeping_mode`,
-never a bare tempfile and `mv`, a `cp -f` alone, or a `cp -p`;
-`ad_mode_of`, `ad_resolve_link`, `ad_link_write_check`,
+`ad_replace_keeping_mode`, and any backup of it through
+`ad_backup_keeping_mode`, never a bare tempfile and `mv`, a `cp -f` alone,
+or a `cp -p`; `ad_mode_of`, `ad_resolve_link`, `ad_link_write_check`,
 `ad_replace_keeping_mode` and `ad_backup_keeping_mode` exist in both
 scripts (install.sh, uninstall.sh) and change together.
 `test/install-sh/retry.sh`'s merge-modes table and
@@ -10863,6 +10863,35 @@ scripts (install.sh, uninstall.sh) and change together.
 bits before its `chmod` (retry.sh's `-written-owner-only` rows), and a
 `cp` that fails on `-p`/`--preserve`, as on NFS, is never hit (its
 `-no-cp-p` rows); a change adds its cases to both.
+
+**No copy of `settings.json` (b.f3n).** **Must not:** keep a copy of
+`settings.json` in either script. Its `env` can hold tokens, and a kept
+copy is one more plaintext copy of them that nothing removes. A copy would guard
+nothing: every file the merge or the filter cannot take is refused or left
+alone before any write, and `ad_replace_keeping_mode`'s `mv` either
+replaces the file or leaves it as it was.
+
+Releases before 0.17.6 did copy it, to
+`settings.json.bak.<YYYYmmdd-HHMMSS>` beside it before each hooks-on
+install's merge and each uninstall's filter, and kept the copies. Both
+scripts name such copies and delete none, as a file of that name may be the
+user's own: install.sh after the hooks step on every run that gets there
+(hooks on, `--no-hooks`, Claude Code absent), uninstall.sh after its
+`settings.json` and `config.toml` writes. Each globs exactly
+`settings.json.bak.` plus an 8-digit, `-`, 6-digit stamp (a
+`settings.json.bak.<other>` is not named) and, when any match, prints one
+stdout line: `  settings: ` (install.sh) or `uninstall.sh: ` (uninstall.sh),
+then `copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:`,
+then each path in glob order, after a space and quoted with `printf %q`, as
+install.sh's other followable advice quotes paths. The shell splits the list
+back into exactly those paths under any `HOME` (one holding a space or a
+quote, say), so it can be pasted after `rm --`. With none, nothing is
+printed. `advice_follow.sh`'s J34 and
+`TestAdviceFollow_J34_UninstallDeleteNamedCopiesAndRerun` follow the line
+under such a `HOME` and re-run; `TestSettingsBackupNotKept` pins that an
+install, its re-run and an uninstall, with and without `--no-hooks`, add
+no copy and name exactly the old ones, keeping a `settings.json.bak.<other>`
+unnamed.
 
 **A symlinked `settings.json` or `config.toml` (b.nw5).** When
 `~/.claude/settings.json` or `~/.config/agent-director/config.toml` is a symlink
@@ -10880,10 +10909,10 @@ not a link. It is a loop over `readlink` because older macOS has no
 `readlink -f`. The `.new` is written beside that resolved file and `mv`'d
 over it, so the rename stays within one directory even when the link
 points to another filesystem, and the resolved file keeps its mode as
-above. The `.bak` is still made beside the link: `cp` reads through the
-link, so it is a regular copy of the target's contents at the target's
-mode. A dangling link whose directory exists is taken for a missing file
-(`settings.json`'s merge starts from `{}`, `config.toml` gets the created
+above. `config.toml`'s `.bak` is still made beside the link: `cp` reads
+through the link, so it is a regular copy of the target's contents at the
+target's mode. A dangling link whose directory exists is taken for a
+missing file (`settings.json`'s merge starts from `{}`, `config.toml` gets the created
 file): install.sh creates the file the link names, keeping the link, and
 that file takes the umask's mode (`config.toml` is then `chmod 0600`,
 through the link). The `config.toml` create branch writes with `>` and
@@ -10943,20 +10972,12 @@ Each script uses it as follows.
   `<bin dir>/agent-director`, or `inject_help_hook` from `[defaults]` and
   the header too when only blank lines and comments are left under it),
   and `Nothing was removed or changed. Re-run this uninstall after the change.`
-  A `settings.json` that cannot be written through but holds none of
-  agent-director's hook entries is left alone instead, and the uninstall
-  goes on, with the stdout line
-  `uninstall.sh: left <file> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
-  uninstall.sh rewrites every `settings.json` holding one JSON document
-  of the outer shape install.sh's merge needs, so a refusal there would
-  stop every uninstall until the link went. A `settings.json` uninstall.sh
-  leaves alone while working out its edit (not valid JSON, not one
-  document, the wrong outer shape, or the filter failing; see "Uninstall
-  semantics" below) is not edited, so its link is not checked. The count
-  of entries to remove runs only after the check has refused the link;
-  should jq fail on it, the file is left alone too, after that check. A
-  `config.toml` without
-  the key needs no edit, so it is not checked.
+  A `settings.json` uninstall.sh leaves alone while working out its edit
+  (not valid JSON, not one document, the wrong outer shape, none of
+  agent-director's hook entries, or jq failing; see "Uninstall semantics"
+  below) is not edited, so its link is not checked: one holding none of
+  those entries never stops an uninstall, linked or not. A `config.toml`
+  without the key needs no edit, so it is not checked.
   Under a confirmed `--purge`, a `config.toml` that cannot be written
   through is left alone instead of refused, with the stdout line
   `uninstall.sh: left <file> alone: its symlink cannot be written through, and --purge removes the link; its target, <target>, keeps inject_help_hook`.
@@ -10991,10 +11012,11 @@ whole advice and HOME unchanged, then follows both ways out.
 `TestUninstallKeepsFileModes`' symlinked case (`config.toml`
 an absolute link, `settings.json` a relative one, each kept, its target
 edited), `TestUninstallRefusesUnwritableLink` (the refusal changes
-nothing; each way out, followed, lets the re-run finish, with the
-left-alone line for `settings.json`) and `TestUninstallPurge` pin
-uninstall.sh's. `TestUninstallPurge`'s rows: `--force` over a `config.toml`
-linked into a 0555 directory (the left-alone line, the target keeping the
+nothing; each way out, followed, lets the re-run finish; a
+`settings.json` whose entry is removed at the source is then left as it
+is, with no note) and `TestUninstallPurge` pin uninstall.sh's.
+`TestUninstallPurge`'s rows: `--force` over a `config.toml` linked into a
+0555 directory (the left-alone line, the target keeping the
 key, `~/.config/agent-director` gone); that link with `n` answered (the exit-2
 refusal after the prompt, HOME unchanged); a plain `config.toml` with `n`
 answered (a plain uninstall, last line `uninstall.sh: --purge aborted`,
@@ -11995,22 +12017,22 @@ hand, and the exit status is unchanged; the "removed N" count is the job lines
 only (the marked header comment goes with them); with no schedule present it
 prints nothing, and a line or unit a human wrote is never touched. Other
 user hooks in `SessionStart` / `SessionEnd` survive verbatim. Each
-rewrite of `settings.json` or `config.toml` takes a timestamped `.bak`
-first, keeps the file's mode and writes through a symlink to its target,
-keeping the link, as install.sh's merges do (see "Merged files keep their
-mode" and "A symlinked `settings.json` or `config.toml`" above). Both
-edits are worked out first; a symlinked file to be edited whose target's
+rewrite of `settings.json` or `config.toml` keeps the file's mode and
+writes through a symlink to its target, keeping the link, as install.sh's
+merges do; `config.toml`'s takes a timestamped `.bak` first,
+`settings.json`'s none (see "Merged files keep their mode", "No copy of
+`settings.json`" and "A symlinked `settings.json` or `config.toml`"
+above). Both edits are worked out first; a symlinked file to be edited whose target's
 directory cannot be written in is refused (exit 2) before anything is
-removed or changed, except a `settings.json` holding none of
-agent-director's hook entries, and a `config.toml` under a confirmed
-`--purge`, each left alone with a note.
+removed or changed, except a `config.toml` under a confirmed `--purge`,
+left alone with a note.
 Its `settings.json` filter, like install.sh's merge, runs once per JSON
 document it reads, so uninstall.sh counts the documents first, as
 install.sh does (b.zbg; see "The settings.json merge" above), and edits
 only a file holding exactly one. A file holding none (empty, or only
-whitespace) has no entries to remove and is left alone with no note and
-no `.bak`. One that is not valid JSON, or holds more than one document,
-is left alone with a stderr note
+whitespace) has no entries to remove and is left alone with no note. One
+that is not valid JSON, or holds more than one document, is left alone
+with a stderr note
 (`uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`,
 or `uninstall.sh: ~/.claude/settings.json holds <N> JSON documents, not one; leaving it alone`).
 A single document must also have the outer shape install.sh's merge
@@ -12029,30 +12051,33 @@ it, such as an entry that is a string
 and lists each such value's path (b.dzu; see "The settings.json merge"
 above), while uninstall.sh's filter takes any such value and keeps it
 verbatim (see below).
-Should jq still fail, on the filter or on the symlink branch's count of
-entries to remove (see "A symlinked `settings.json` or `config.toml`"
-above), the file is left alone with jq's error, then
+A document of that shape then has its entries to remove counted (those
+`ours` marks, below), before the filter and any symlink check. With none,
+the file is left byte for byte, with no note (b.f3n): the filter would
+rewrite it in jq's layout, filling in the event lists, with nothing
+removed. Should jq still fail, on the count or on the filter, the file is
+left alone with jq's error, then
 `uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone`.
-In each case the uninstall goes on and exits 0, with no `.bak`. The
-file's symlink is not checked, as the file is not edited, except on a
-jq failure on the count, which runs only after the check has refused
-the link.
+In each case the uninstall goes on and exits 0, and the file's symlink is
+not checked, as the file is not edited.
 
 Inside the event lists the filter takes any value. **Must use:**
 uninstall.sh's `hook_ours_jq` defines `ours`, the one test of an
-agent-director entry, shared by the filter and the symlink branch's
-count: an object whose `hooks` is a list holding an object whose
+agent-director entry, shared by the count and the filter: an object
+whose `hooks` is a list holding an object whose
 `command` is a string starting with `<bin dir>/agent-director`. Every
 other value (a string, a number, an entry whose `hooks` is not a list, a
 `command` that is not a string) is kept verbatim, never indexed or read
 as a string, and agent-director's entries beside it are still removed.
 `TestUninstallLeavesSettingsWithoutOneDocument` (empty, whitespace, two
 documents, not valid JSON), `TestUninstallLeavesSettingsItCannotEdit`
-(the wrong outer shapes, one of them behind an unwritable link, a
-stand-in jq failing on the filter and on the count, and an unwritable
-link holding only odd values) and
+(the wrong outer shapes, one of them behind an unwritable link, and a
+stand-in jq failing on the filter, and on the count behind an unwritable
+link), `TestUninstallLeavesSettingsWithoutItsEntries` (other hooks and an
+`env` token, a `null` document, and an unwritable link holding only odd
+values, each left byte for byte with no note) and
 `TestUninstallRemovesHookEntriesBesideOddValues` (odd values beside the
-help hooks, a `null` event list, a `null` document) pin this.
+help hooks, a `null` event list) pin this.
 
 **`--mcp-also` and the Claude Code program.** `--mcp-also` deregisters with
 the program `install.sh` registered with: `[launch] claude_path` from the
@@ -19207,7 +19232,9 @@ the upgrade and way-back cases (`epic-12-install`):
   not from a constant.
 - Claude Code writes `~/.claude/telemetry/` on every run: leave it out of any
   `~/.claude` comparison. Every install's hooks merge writes
-  `config.toml.bak.<ts>` and `settings.json.bak.<ts>`: expect them.
+  `config.toml.bak.<ts>`, and the previous release's install that
+  `old-layout.sh` runs also leaves `settings.json.bak.<ts>`, which each later
+  install and uninstall names (see "No copy of `settings.json`"): expect them.
 - The way-back case reads the steps from `/work/source` at run time and
   compares the way-back text of `docs/operator-actions.md` and of the install
   skill's `SKILL.md` with its own copy, word for word, so a change to a step

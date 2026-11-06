@@ -86,9 +86,10 @@
 #
 # Merge modes (b.ojn): a hooks-on re-install under umask 022 or 000 leaves
 # settings.json (a symlinked one too) and config.toml at the modes they had,
-# their .bak copies at the same, also over an earlier run's .new and .bak
+# config.toml's .bak copy at the same, also over an earlier run's .new and .bak
 # leftovers; each new file and copy is owner-only until its chmod, already has
 # its mode when moved into place, and no cp -p is needed (NFS homes).
+# settings.json, which can hold tokens, gets no .bak (b.f3n).
 #
 # Symlinked merge files (b.nw5): a hooks-on install writes through a symlinked
 # settings.json and config.toml, absolute or a chain of relative links, to the
@@ -102,14 +103,15 @@
 # settings.json the merge once left without the hooks (b.zbg): a hooks-on
 # install over an empty or whitespace-only settings.json, or one whose
 # SessionStart or compact SessionEnd entry holds the help hook in an object,
-# backs it up and leaves one JSON document holding both hooks in lists. One
+# leaves one JSON document holding both hooks in lists. One
 # that is not valid JSON stops the install with exit 4, left as it was with
 # nothing beside it. Several documents, refused, are advice_follow.sh's J21.
 #
 # Re-run (b.pye): a hooks-on re-run with no flags after a clean install
 # returns 0, copies both binaries again (new files, new inodes) and leaves the
-# merged files as they were, each after a .bak; neither it nor --help mentions
-# "already installed", and --help says the steps run again.
+# merged files as they were, config.toml after a .bak; neither it nor --help
+# mentions "already installed", and --help says the steps run again, only
+# config.toml after a fresh .bak (b.f3n).
 #
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
@@ -857,8 +859,9 @@ report merge-no-hooks-inline-list "$(ad_list)" "0"
 # Stand-ins for the b.ojn re-installs: an mv that logs "<target name> <mode>"
 # of each new settings.json or config.toml it moves into place, a chmod that
 # logs "<target name> <mode>" of each of their .new and .bak files before
-# changing it, a cp that fails on -p or -a as on an NFS home (LP#2087769), and a
-# date that names every .bak copy with BAK_STAMP.
+# changing it (so a settings.json.bak, which b.f3n stopped, shows up), a cp that
+# fails on -p or -a as on an NFS home (LP#2087769), and a date that names every
+# .bak copy with BAK_STAMP.
 KEEP="$ROOT/keep-mode" BAK_STAMP=20260101-000000
 mkdir -p "$KEEP"
 {
@@ -894,13 +897,14 @@ EOF
 chmod 0755 "$KEEP/mv" "$KEEP/chmod" "$KEEP/cp" "$KEEP/date"
 
 # A hooks-on re-install keeps the modes of the settings.json and config.toml it
-# merges into, and gives their .bak copies the same (b.ojn); each .new is 600
-# and each .bak its original's owner bits until chmod gives it its mode. Per case
+# merges into, and gives config.toml's .bak copy the same (b.ojn); each .new is
+# 600 and the .bak its original's owner bits until chmod gives it its mode.
+# settings.json gets no .bak (b.f3n). Per case
 # <name>|<umask>|<config mode>|<settings mode>|<setup>: after a first install,
 # both files get unmerged contents at those modes, and a re-install under
 # <umask> merges them. <setup> symlink makes both files links to files in
 # ~/dotfiles, which the merge writes through, keeping each link (b.nw5);
-# leftovers adds 0666 junk at both .new and .bak.BAK_STAMP names.
+# leftovers adds 0666 junk at both .new names and config.toml's .bak.BAK_STAMP.
 HOOKS=1
 while IFS='|' read -r -u 3 name mask cmode smode setup; do
     name="keep-mode-$name"
@@ -917,7 +921,7 @@ while IFS='|' read -r -u 3 name mask cmode smode setup; do
     printf '{"theme":"dark"}\n' >"$sj"
     chmod "$cmode" "$cfg" && chmod "$smode" "$sj"
     if [[ "$setup" == leftovers ]]; then
-        for f in "$cfg.new" "$cfg.bak.$BAK_STAMP" "$sj.new" "$sj.bak.$BAK_STAMP"; do
+        for f in "$cfg.new" "$cfg.bak.$BAK_STAMP" "$sj.new"; do
             echo junk >"$f" && chmod 0666 "$f"
         done
     fi
@@ -928,16 +932,16 @@ while IFS='|' read -r -u 3 name mask cmode smode setup; do
     UMASK="" PATH_PREFIX=""
     report "$name-exit-codes" "$rc $RC" "0 0"
     report "$name-no-cp-p" "$(grep -c 'b.ojn stand-in' "$ERR")" "0"
-    report "$name-modes" "$(stat -L -c %a "$cfg" "$sj" "$cfg.bak.$BAK_STAMP" "$sj.bak.$BAK_STAMP" 2>/dev/null | paste -sd/)" \
-        "$cmode/$smode/$cmode/$smode"
+    report "$name-modes" "$(stat -L -c %a "$cfg" "$sj" "$cfg.bak.$BAK_STAMP" 2>/dev/null | paste -sd/)" \
+        "$cmode/$smode/$cmode"
     report "$name-written-owner-only" "$(sort "$KEEP/chmod.log" | paste -sd,)" \
-        "config.toml.bak.$BAK_STAMP ${cmode:0:1}00,config.toml.new 600,settings.json.bak.$BAK_STAMP ${smode:0:1}00,settings.json.new 600"
+        "config.toml.bak.$BAK_STAMP ${cmode:0:1}00,config.toml.new 600,settings.json.new 600"
     report "$name-new-file-modes" "$(sort "$KEEP/mv.log" | paste -sd,)" "config.toml $cmode,settings.json $smode"
     report "$name-no-temp-left" "$(compgen -G "$cfg.new"; compgen -G "$sj.new"; compgen -G "$H/dotfiles/*.new")" ""
     report "$name-merged" \
         "$(grep -cx 'inject_help_hook = true' "$cfg") $(jq -c '[.theme, (.hooks.SessionStart | length), (.hooks.SessionEnd | length)]' "$sj" 2>&1)" \
         '1 ["dark",1,1]'
-    report "$name-backups" "$(cat "$cfg.bak.$BAK_STAMP" "$sj.bak.$BAK_STAMP" 2>&1 | paste -sd'|')" '[defaults]|relay_mode = "off"|{"theme":"dark"}'
+    report "$name-backups" "$(cat "$cfg.bak.$BAK_STAMP" 2>&1 | paste -sd'|')" '[defaults]|relay_mode = "off"'
     if [[ "$setup" == symlink ]]; then
         report "$name-links-kept" "$(readlink "$cfg" "$sj" | paste -sd,)" "$H/dotfiles/config.toml,$H/dotfiles/settings.json"
     fi
@@ -1044,7 +1048,7 @@ report link-no-hooks-not-checked "$(grep -c 'through its symlink' "$ERR")" "0"
 # only whitespace, as touch leaves it) merges it as {}, and one whose
 # SessionStart or compact SessionEnd entry holds the help hook in an object,
 # which Claude Code never runs, gets a runnable entry beside it (b.zbg). Each
-# prints "hooks : injected", backs the file up as it was, and leaves one
+# prints "hooks : injected" and leaves one
 # document whose SessionStart (<starts> entries) and compact SessionEnd lists
 # each hold the help hook once. Per case <name>|<settings.json> (printf %b,
 # @CMD@ the help hook's command)|<starts>.
@@ -1055,11 +1059,9 @@ while IFS='|' read -r -u 3 name settings starts; do
     sj="$H/.claude/settings.json" c="$H/.config/agent-director/bin/agent-director help"
     mkdir -p "$H/.claude"
     printf '%b' "${settings//@CMD@/$c}" >"$sj"
-    cp "$sj" "$ROOT/$name.before"
     local_install
     report "$name-exit-code" "$RC" "0"
     report "$name-injected-line" "$(grep -cxF "  hooks   : injected into $sj" "$OUT")" "1"
-    report "$name-backup" "$(compgen -G "$sj.bak.*" | wc -l)|$(shown "$sj".bak.*)" "1|$(shown "$ROOT/$name.before")"
     report "$name-merged" "$(jq -sc --arg c "$c" '[length, (.[0].hooks.SessionStart | length),
         ([.[0].hooks.SessionStart[] | .hooks | arrays | .[].command] == [$c]),
         ([.[0].hooks.SessionEnd[] | select(.matcher == "compact") | .hooks | arrays | .[].command] == [$c])]' "$sj" 2>&1)" \
@@ -1098,8 +1100,8 @@ HOOKS=""
 # A re-run with no flags after a clean install (b.pye) copies the pair it
 # finds (agent-director through its ~/.local/bin link, the installed
 # agent-director-admin) again and returns 0, leaving settings.json and
-# config.toml as they were, each after a .bak. The first install already put
-# the same bytes at 0755, so the copy shows only in the inodes: install.sh
+# config.toml as they were, config.toml after a .bak. The first install already
+# put the same bytes at 0755, so the copy shows only in the inodes: install.sh
 # copies each binary to a .tmp.<pid> beside it and mvs that over it, so each
 # ends up a new file. Neither run nor --help mentions an "already installed"
 # message, which install.sh never prints, and --help's "Idempotent:" paragraph
@@ -1107,7 +1109,8 @@ HOOKS=""
 # advice_follow.sh pins --help sentences). The paragraph also says the
 # agent-rename migration of config.toml and the templates runs only while the
 # store is below the rename's version, and makes no new copy of what an
-# earlier run already migrated.
+# earlier run already migrated, and that only config.toml gets a fresh .bak on
+# the re-merge, settings.json none (b.f3n).
 new_home rerun-no-flags
 mkdir -p "$H/.local/bin"
 HOOKS=1 PATH_PREFIX="$H/.local/bin"
@@ -1122,13 +1125,12 @@ report_installed rerun-no-flags
 report rerun-no-flags-binaries-copied-again \
     "$([[ "$(stat -c %i "$H/.config/agent-director/bin/agent-director")" != "$bin_ino" ]] && echo new || echo same) $([[ "$(stat -c %i "$H/.config/agent-director/admin/agent-director-admin")" != "$admin_ino" ]] && echo new || echo same)" "new new"
 report rerun-no-flags-merged-unchanged "$(cat "$H/.claude/settings.json" "$H/.config/agent-director/config.toml" | sha256sum)" "$merged"
-report rerun-no-flags-backups \
-    "$(compgen -G "$H/.claude/settings.json.bak.*" | wc -l) $(compgen -G "$H/.config/agent-director/config.toml.bak.*" | wc -l)" "1 1"
+report rerun-no-flags-backups "$(compgen -G "$H/.config/agent-director/config.toml.bak.*" | wc -l)" "1"
 report rerun-no-flags-already-installed "$(cat "$OUT" "$ERR" | grep -c 'already installed')" "0"
 run_install 0 '*' --help
 report help-exit-code "$RC" "0"
 report help-idempotent-steps-run-again \
-    "$(tr '\n' ' ' <"$OUT" | grep -cF 'Its steps run again: the binaries are copied again (with --keep-prior, not snapshotted: any earlier .prior files are kept), config.toml and the templates are migrated only while the store is below the rename'"'"'s version (a re-run that crosses the rename again changes nothing already migrated and makes no new copy of it), the store is opened (a state.db already at its target version is not migrated) and, with hooks on, settings.json and config.toml are merged again (no hook is added twice), each after a fresh timestamped .bak.')" "1"
+    "$(tr '\n' ' ' <"$OUT" | grep -cF 'Its steps run again: the binaries are copied again (with --keep-prior, not snapshotted: any earlier .prior files are kept), config.toml and the templates are migrated only while the store is below the rename'"'"'s version (a re-run that crosses the rename again changes nothing already migrated and makes no new copy of it), the store is opened (a state.db already at its target version is not migrated) and, with hooks on, settings.json and config.toml are merged again (no hook is added twice), config.toml after a fresh timestamped .bak.')" "1"
 report help-already-installed "$(grep -c 'already installed' "$OUT")" "0"
 
 echo "[b.kym install-sh retry] summary: $pass passed, $fail failed"
