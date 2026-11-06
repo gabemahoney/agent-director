@@ -1,0 +1,8 @@
+{"Time":"2026-11-06T04:50:15.661464723Z","Action":"start","Package":"pkg/b"}
+{"Time":"2026-11-06T04:50:15.663311213Z","Action":"run","Package":"pkg/b","Test":"TestOK"}
+{"Time":"2026-11-06T04:50:15.663351673Z","Action":"output","Package":"pkg/b","Test":"TestOK","Output":"=== RUN   TestOK\n"}
+{"Time":"2026-11-06T04:50:15.663377593Z","Action":"output","Package":"pkg/b","Test":"TestOK","Output":"--- PASS: TestOK (0.00s)\n"}
+{"Time":"2026-11-06T04:50:15.663382353Z","Action":"pass","Package":"pkg/b","Test":"TestOK","Elapsed":0}
+{"Time":"2026-11-06T04:50:15.663386503Z","Action":"output","Package":"pkg/b","Output":"PASS\n"}
+{"Time":"2026-11-06T04:50:15.663388083Z","Action":"output","Package":"pkg/b","Output":"TestMain: teardown failed\n"}
+{"Time":"2026-11-06T04:50:15.663524483Z","Action":"fail","Package":"pkg/b","Elapsed":0.002}

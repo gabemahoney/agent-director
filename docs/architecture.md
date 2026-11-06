@@ -21425,6 +21425,37 @@ Users: the tests of `tools/macrun/internal/setup`,
 **Must use:** a macrun test that needs a tree of files on disk uses
 `treefix.Write`, never its own tree writer.
 
+### macfix: macrun's command-test fakes (reusable test fixture)
+
+`tools/macrun/internal/macfix` holds the fakes the tests of `macrun part`
+and `macrun verdict` share: a GitHub-hosted Mac's tools, the Go runner and
+the GitHub run reader. The package doc comment carries the detail.
+
+- `*Tools` satisfies `part.Tools` from the executables that exist and each
+  command line's output; `Fail` names one command line that fails.
+  `Mac(root, commit)` gives a Mac on which a part's setup passes, and
+  `PartOptions`, `Environ`, `Versions` and the tool-path constants describe
+  the same Mac.
+- `*GoRunner` satisfies `part.GoRunner`: per package dir, a build output
+  that fails the build, or a script of `Start`, `Output` and `End` steps.
+  A `Block` step calls `OnBlock`, then waits until the run is cancelled.
+  `Calls` records each build and run.
+- `*Reader` satisfies `ghrun.Reader` in memory for one run and attempt,
+  with records by artifact name and logs by job ID; `Faults` fails a named
+  read.
+- `GitHubLog(printed)` shapes printed lines as GitHub's job-log download
+  does.
+
+Users: the tests of `tools/macrun/internal/part` and
+`tools/macrun/internal/verdict`. Besides the standard library it imports
+macrun's `part`, `gorun`, `ghrun` and `model`, so it is not a leaf: a test
+of one of those packages that uses it must be in that package's external
+test package.
+
+**Must use:** a macrun test that needs a fake of the Mac's tools, the Go
+runner or the GitHub reader, or a GitHub-shaped job log, uses or extends
+`macfix`, never a hand-written or near-copy fake.
+
 ### macrun setup-file reader (reusable component)
 
 `tools/macrun/internal/setup` reads macrun's setup files under `test/mac/`
@@ -21448,6 +21479,35 @@ detail.
 
 **Must use:** any macrun code that lists a package's Go cases uses `List`
 with these contexts, never its own lister.
+
+### macrun Go test runner (reusable component)
+
+`tools/macrun/internal/gorun` builds one Go package's test binary on the
+Mac as `go test -c` does (darwin/arm64, cgo as `golist.DarwinCgoEnabled`
+says, vet included) and runs it through `go tool test2json` as
+`go test -json` does, collecting its events as case results of macrun's
+result model. `Runner.Build`, `Runner.RunTests` and `Collect` are separate
+pieces. Every `go` command goes through the `Executor` seam, whose real
+one, `Exec`, stops a run's whole process group on a cancel. The package
+doc comment carries the detail.
+
+**Must use:** macrun code that builds or runs a Go package's tests on the
+Mac, or reads a `test2json` stream, uses this package, never its own
+`go test` call or event reader.
+
+### macrun GitHub run reader (reusable component)
+
+`tools/macrun/internal/ghrun` is the one place macrun talks to GitHub.
+Its `Client` reads a workflow run's attempt, jobs and step conclusions, a
+part's artifact file and a job's log through the REST API with the run's
+own token. It retries transport errors and 5xx responses, caps downloads,
+and never sends the token to a download's redirect host. It returns bytes
+for the result model to parse. Callers take the narrow `Reader` interface,
+which their tests fake with `macfix.Reader`. The package doc comment
+carries the detail.
+
+**Must use:** any macrun code that reads GitHub uses this package, adding
+the read it needs to `Client` and `Reader`, never a second GitHub client.
 
 ### install-sh genuine-release fixture (reusable test fixture)
 

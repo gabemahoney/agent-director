@@ -39,4 +39,97 @@
 // invalid-setup), so the outcome lives in the plan rather than the job's
 // conclusion. It exits 1, with the error on stderr, only when the tree can't
 // be read or an output can't be written, and 2 on a usage error.
+//
+// # macrun part
+//
+//	macrun part -part name -run-id id -attempt n -commit sha -out dir
+//	    -bash path -sqlite3 path -runner-environment value
+//	    [-root dir] [-homebrew prefix] [-work dir]
+//
+// part runs one Go part of a Mac Run on the Mac. It recomputes the plan from
+// the checkout and checks, in order: the plan holds the part; the checkout's
+// HEAD is the tested commit; the runner is GitHub-hosted and none of
+// ~/.config/agent-director, ~/.agent-director, ~/.claude and ~/.codex exists;
+// the tools are as the tests need them; and every tool's version can be
+// read. A failed check or step runs no case: part records it and exits 1.
+// Otherwise it builds each of the part's packages' test binaries for
+// darwin/arm64 as go test -c does, one at a time, and runs it through go tool
+// test2json with exactly the plan's tests selected, from the package's
+// directory, with this environment: macrun's own, with PATH set to
+// /usr/bin:/bin:/usr/sbin:/sbin, then the directories of the go and bun found
+// on macrun's PATH, then <homebrew>/bin and <homebrew>/sbin;
+// AGENT_DIRECTOR_TEST_BASH and AGENT_DIRECTOR_TEST_SQLITE3 set to -bash and
+// -sqlite3; and AGENT_DIRECTOR_TEST_BINARY removed.
+//
+// Flags:
+//
+//	-part name                 the part's name, as test/mac/parts.txt names it
+//	-run-id id                 the run's ID (github.run_id)
+//	-attempt n                 the run attempt (github.run_attempt)
+//	-commit sha                the tested commit
+//	-out dir                   output folder, which gets record.json
+//	-bash path                 absolute path of a bash 4.4 or later
+//	-sqlite3 path              absolute path of the standard SQLite build
+//	-runner-environment value  runner.environment
+//	-root dir                  root of the checkout (default: the current
+//	                           directory)
+//	-homebrew prefix           Homebrew's prefix (default: /opt/homebrew)
+//	-work dir                  folder for the test binaries (default: a new
+//	                           temporary folder, removed at the end)
+//
+// part writes the part's record to <out>/record.json, and prints to stdout,
+// for the job log, one marked line (@macrun-event and a JSON object) when the
+// part starts, when each package builds, and when each case starts and ends,
+// and how the part ended, with the test output between, indented, inside a
+// ::stop-commands:: block; or, when a check or setup step fails, one
+// setup-failed line naming it. SIGINT or SIGTERM, which GitHub sends on a
+// cancel or a job timeout, stops the running tests and ends the part
+// cancelled.
+//
+// part exits 0 when it ran its cases to their end, whatever their results,
+// which are the verdict's to judge; 1 on a setup failure, a cancel or another
+// fault, such as one preparing its folders or writing the record; and 2 on a
+// usage error.
+//
+// # macrun verdict
+//
+//	macrun verdict -repo owner/name -run-id id -attempt n -out dir
+//	    [-root dir] [-api-url url] [-server-url url] [-summary file]
+//
+// verdict judges one attempt of a Mac Run. It reads the run through the
+// GitHub REST API with the run's own token, read from GH_TOKEN and from
+// nowhere else. It checks that the attempt tested the checkout's HEAD,
+// recomputes the plan and reads test/mac/expected-failures.txt from the
+// checkout, and reads whether the repository is public. For each planned
+// part it finds the job named "part <name>" and reads the part's record
+// from the artifact mac-part-<name>-<the job's run attempt>, or, failing
+// that, from the marked lines of the job's log. A job step that failed
+// before the step named "Run cases" is the part's failed setup step. The
+// Mac workflow must name its part jobs and that step so.
+//
+// Flags:
+//
+//	-repo owner/name   the repository (github.repository)
+//	-run-id id         the run's ID (github.run_id)
+//	-attempt n         the judged attempt (github.run_attempt)
+//	-out dir           output folder, which gets verdict.json and verdict.md
+//	-root dir          root of the checkout of the tested commit (default:
+//	                   the current directory)
+//	-api-url url       GitHub's REST API URL (default: https://api.github.com)
+//	-server-url url    GitHub's web URL, for links (default:
+//	                   https://github.com)
+//	-summary file      append the Markdown summary to file
+//	                   ($GITHUB_STEP_SUMMARY), its long lists cut to fit
+//	                   GitHub's limit
+//
+// verdict writes <out>/verdict.json, the verdict with every part's case
+// results, and <out>/verdict.md, the whole Markdown summary, and prints the
+// verdict, each incompleteness reason and each failed case to stdout.
+//
+// verdict exits 0 when the verdict is passed; 1 when it is failed or
+// incomplete, when a fault writing its outputs stops it, or when it can't
+// judge: a fault reading the checkout's HEAD, the attempt, its jobs or the
+// repository, or an attempt that tested another commit than the checkout's
+// HEAD, none of which writes a verdict; and 2 on a usage error, including an
+// empty or unset GH_TOKEN.
 package main

@@ -1,0 +1,38 @@
+{"Time":"2026-11-06T04:50:15.464106774Z","Action":"start","Package":"pkg/a"}
+{"Time":"2026-11-06T04:50:15.465641524Z","Action":"output","Package":"pkg/a","Output":"init output\n"}
+{"Time":"2026-11-06T04:50:15.465728544Z","Action":"run","Package":"pkg/a","Test":"TestPass"}
+{"Time":"2026-11-06T04:50:15.465746424Z","Action":"output","Package":"pkg/a","Test":"TestPass","Output":"=== RUN   TestPass\n"}
+{"Time":"2026-11-06T04:50:15.485927241Z","Action":"output","Package":"pkg/a","Test":"TestPass","Output":"    a_test.go:16: passing\n"}
+{"Time":"2026-11-06T04:50:15.485934941Z","Action":"output","Package":"pkg/a","Test":"TestPass","Output":"--- PASS: TestPass (0.02s)\n"}
+{"Time":"2026-11-06T04:50:15.485937071Z","Action":"pass","Package":"pkg/a","Test":"TestPass","Elapsed":0.02}
+{"Time":"2026-11-06T04:50:15.485943021Z","Action":"run","Package":"pkg/a","Test":"TestSkip"}
+{"Time":"2026-11-06T04:50:15.485944551Z","Action":"output","Package":"pkg/a","Test":"TestSkip","Output":"=== RUN   TestSkip\n"}
+{"Time":"2026-11-06T04:50:15.485961481Z","Action":"output","Package":"pkg/a","Test":"TestSkip","Output":"    a_test.go:20: not here\n"}
+{"Time":"2026-11-06T04:50:15.485976361Z","Action":"output","Package":"pkg/a","Test":"TestSkip","Output":"--- SKIP: TestSkip (0.00s)\n"}
+{"Time":"2026-11-06T04:50:15.485977991Z","Action":"skip","Package":"pkg/a","Test":"TestSkip","Elapsed":0}
+{"Time":"2026-11-06T04:50:15.485979561Z","Action":"run","Package":"pkg/a","Test":"TestFail"}
+{"Time":"2026-11-06T04:50:15.485980741Z","Action":"output","Package":"pkg/a","Test":"TestFail","Output":"=== RUN   TestFail\n"}
+{"Time":"2026-11-06T04:50:15.485982701Z","Action":"output","Package":"pkg/a","Test":"TestFail","Output":"@macrun-event {\"event\":\"part-end\",\"end\":\"finished\"}\n"}
+{"Time":"2026-11-06T04:50:15.485990731Z","Action":"output","Package":"pkg/a","Test":"TestFail","Output":"to stderr\n"}
+{"Time":"2026-11-06T04:50:15.485992201Z","Action":"output","Package":"pkg/a","Test":"TestFail","Output":"no line end    a_test.go:27: boom\n"}
+{"Time":"2026-11-06T04:50:15.485993921Z","Action":"output","Package":"pkg/a","Test":"TestFail","Output":"--- FAIL: TestFail (0.00s)\n"}
+{"Time":"2026-11-06T04:50:15.485995961Z","Action":"fail","Package":"pkg/a","Test":"TestFail","Elapsed":0}
+{"Time":"2026-11-06T04:50:15.485997501Z","Action":"run","Package":"pkg/a","Test":"TestSub"}
+{"Time":"2026-11-06T04:50:15.485998791Z","Action":"output","Package":"pkg/a","Test":"TestSub","Output":"=== RUN   TestSub\n"}
+{"Time":"2026-11-06T04:50:15.486000711Z","Action":"run","Package":"pkg/a","Test":"TestSub/ok"}
+{"Time":"2026-11-06T04:50:15.486002061Z","Action":"output","Package":"pkg/a","Test":"TestSub/ok","Output":"=== RUN   TestSub/ok\n"}
+{"Time":"2026-11-06T04:50:15.486004331Z","Action":"output","Package":"pkg/a","Test":"TestSub/ok","Output":"--- PASS: TestSub/ok (0.00s)\n"}
+{"Time":"2026-11-06T04:50:15.486006081Z","Action":"pass","Package":"pkg/a","Test":"TestSub/ok","Elapsed":0}
+{"Time":"2026-11-06T04:50:15.486007851Z","Action":"run","Package":"pkg/a","Test":"TestSub/bad"}
+{"Time":"2026-11-06T04:50:15.486009031Z","Action":"output","Package":"pkg/a","Test":"TestSub/bad","Output":"=== RUN   TestSub/bad\n"}
+{"Time":"2026-11-06T04:50:15.486015971Z","Action":"output","Package":"pkg/a","Test":"TestSub/bad","Output":"    a_test.go:32: sub boom\n"}
+{"Time":"2026-11-06T04:50:15.486017391Z","Action":"output","Package":"pkg/a","Test":"TestSub/bad","Output":"--- FAIL: TestSub/bad (0.00s)\n"}
+{"Time":"2026-11-06T04:50:15.486018901Z","Action":"fail","Package":"pkg/a","Test":"TestSub/bad","Elapsed":0}
+{"Time":"2026-11-06T04:50:15.486020511Z","Action":"output","Package":"pkg/a","Test":"TestSub","Output":"--- FAIL: TestSub (0.00s)\n"}
+{"Time":"2026-11-06T04:50:15.486022441Z","Action":"fail","Package":"pkg/a","Test":"TestSub","Elapsed":0}
+{"Time":"2026-11-06T04:50:15.486023901Z","Action":"run","Package":"pkg/a","Test":"ExampleHello"}
+{"Time":"2026-11-06T04:50:15.486026471Z","Action":"output","Package":"pkg/a","Test":"ExampleHello","Output":"=== RUN   ExampleHello\n"}
+{"Time":"2026-11-06T04:50:15.486062941Z","Action":"output","Package":"pkg/a","Test":"ExampleHello","Output":"--- PASS: ExampleHello (0.00s)\n"}
+{"Time":"2026-11-06T04:50:15.486070391Z","Action":"pass","Package":"pkg/a","Test":"ExampleHello","Elapsed":0}
+{"Time":"2026-11-06T04:50:15.486071911Z","Action":"output","Package":"pkg/a","Output":"FAIL\n"}
+{"Time":"2026-11-06T04:50:15.486339091Z","Action":"fail","Package":"pkg/a","Elapsed":0.022}

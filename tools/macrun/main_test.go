@@ -99,6 +99,60 @@ func TestRunPlan(t *testing.T) {
 	}
 }
 
+// partArgs returns macrun part's arguments with every required flag, for
+// attempt, with its output and work folders under a temporary folder and a
+// checkout that doesn't exist, so a check that regresses fails the row
+// rather than writing to the repo.
+func partArgs(t *testing.T, attempt string) []string {
+	dir := t.TempDir()
+	return []string{
+		"part", "-part", "one", "-run-id", "7", "-attempt", attempt, "-commit", "c0ffee",
+		"-out", filepath.Join(dir, "out"), "-root", filepath.Join(dir, "missing"), "-work", dir,
+		"-bash", "/opt/homebrew/bin/bash", "-sqlite3", "/opt/homebrew/opt/sqlite/bin/sqlite3", "-runner-environment", "github-hosted",
+	}
+}
+
+// verdictArgs returns macrun verdict's arguments with every required flag but
+// -out, a checkout that doesn't exist and an API URL nothing listens on, so a
+// check that regresses fails the row rather than reading the repo or the
+// network.
+func verdictArgs(t *testing.T) []string {
+	return []string{
+		"verdict", "-repo", "o/r", "-run-id", "7", "-attempt", "2",
+		"-root", filepath.Join(t.TempDir(), "missing"), "-api-url", "http://127.0.0.1:1",
+	}
+}
+
+// TestRunVerdictToken stays serial: it sets GH_TOKEN in the process
+// environment.
+func TestRunVerdictToken(t *testing.T) {
+	args := append(verdictArgs(t), "-out", filepath.Join(t.TempDir(), "out"))
+	const noToken = "macrun verdict: GH_TOKEN is empty or unset; pass the run's token (github.token) in it\n"
+	for _, tc := range []struct {
+		name       string
+		token      string
+		unset      bool
+		args       []string
+		wantStderr string
+	}{
+		{name: "empty", args: args, wantStderr: noToken},
+		{name: "unset", unset: true, args: args, wantStderr: noToken},
+		{
+			name: "a repository not owner/name", token: "ghs_fake", args: append(args, "-repo", "o"),
+			wantStderr: "macrun verdict: repository \"o\" is not of the form owner/name\n" + usage,
+		},
+	} {
+		t.Setenv("GH_TOKEN", tc.token)
+		if tc.unset {
+			os.Unsetenv("GH_TOKEN")
+		}
+		var stdout, stderr bytes.Buffer
+		if code := run(tc.args, &stdout, &stderr); code != 2 || stdout.Len() > 0 || stderr.String() != tc.wantStderr {
+			t.Errorf("%s GH_TOKEN: run = %d, stdout %q, stderr %q; want 2, nothing, %q", tc.name, code, stdout.String(), stderr.String(), tc.wantStderr)
+		}
+	}
+}
+
 func TestRunErrors(t *testing.T) {
 	t.Parallel()
 	noMacTests := treefix.Write(t, map[string]string{})
@@ -128,6 +182,18 @@ func TestRunErrors(t *testing.T) {
 		{
 			"unreadable tree", []string{"plan", "-root", unreadable},
 			1, "", "macrun plan: read test/mac/expected-failures.txt: is a directory\n",
+		},
+		{
+			"part without -bash", append(partArgs(t, "2"), "-bash", ""),
+			2, "", "macrun part: -bash is required\n" + usage,
+		},
+		{
+			"part with attempt 0", partArgs(t, "0"),
+			2, "", "macrun part: -run-id and -attempt must be positive\n" + usage,
+		},
+		{
+			"verdict without -out", verdictArgs(t),
+			2, "", "macrun verdict: -out is required\n" + usage,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
