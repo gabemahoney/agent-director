@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J33, J26 retired, and G8 for the binary's ErrOldLayout). Each test
+# (advice inventory J1-J34, J26 retired, and G8 for the binary's ErrOldLayout). Each test
 # triggers one install.sh refusal, checks the advice text word for word, does
 # exactly what the text says (re-runs the same command, runs the advised
 # command, puts the missing tool on PATH) and checks the promised outcome.
@@ -4258,6 +4258,56 @@ EOF
     expect_rc 0 "the advised command again" || return
     cmp -s "$crontab_file" "$ROOT/j33-crontab.before" || bad "the repeat changed the crontab: $(diff "$ROOT/j33-crontab.before" "$crontab_file")"
     grep -qF "nothing changed" "$OUT" || bad "the repeat does not say nothing changed: $(flat "$OUT")"
+}
+
+# ---- J34: copies of settings.json that earlier releases kept (b.f3n) -----------
+
+# J34: "  settings: copies of settings.json that earlier releases kept may hold its
+# secrets (tokens, say) and can be deleted: <paths>", each path shell-quoted.
+# Under a HOME whose path holds shell characters (no blank: install.sh refuses
+# an install path holding whitespace), a hooks-on install over a settings.json
+# holding an env token, beside two settings.json.bak.<ts> copies an earlier
+# release kept and a user's own settings.json.bak.before-mcp,
+# prints the line once, on stdout, naming exactly the two copies as the shell
+# reads the list, and keeps all three files. With exactly the named paths
+# deleted, the re-run succeeds and names no copy; settings.json keeps its env
+# and both hooks, and the user's file is as it was. uninstall.sh's copy of the
+# line, followed under a HOME holding a space too: uninstall_test.go's
+# TestAdviceFollow_J34_UninstallDeleteNamedCopiesAndRerun.
+test_J34_OldSettingsCopiesDeleteAndRerun() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local HOME_TAG="j34,o'q\"\$x\`y\`." h sj own seed line list f token=PLACEHOLDER-TOKEN-not-a-secret-f3n
+    local phrase="  settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:"
+    local -a copies named
+    h="$(new_home)" sj="$h/.claude/settings.json" own="$h/.claude/settings.json.bak.before-mcp" seed="$h.settings"
+    copies=("$sj.bak.20240101-000000" "$sj.bak.20250101-000000")
+    mkdir -p "$h/.claude" || { bad "make $h/.claude"; return; }
+    printf '{"env":{"GH_TOKEN":"%s"}}\n' "$token" >"$seed"
+    for f in "$sj" "${copies[@]}" "$own"; do
+        cp "$seed" "$f" || { bad "seed $f"; return; }
+    done
+    run "$h" "${argv[@]}"
+    expect_rc 0 "a hooks-on install beside the old copies" || return
+    [[ "$(cat "$OUT" "$ERR" | grep -c 'settings\.json\.bak')" == 1 ]] \
+        || bad "want one line naming copies: $(grep -h 'settings\.json\.bak' "$OUT" "$ERR" | paste -sd'|')"
+    line="$(grep -m1 -F -- "$phrase" "$OUT")"
+    [[ "$line" == "$phrase"* ]] || { bad "stdout lacks a line starting \"$phrase\": $(flat "$OUT")"; return; }
+    list="${line#"$phrase"}" named=()
+    eval "named=($list)" 2>/dev/null || { bad "the list does not parse as shell words: $list"; return; }
+    [[ "$(printf '%s\n' "${named[@]}")" == "$(printf '%s\n' "${copies[@]}")" ]] \
+        || bad "the line names $(printf '[%s]' "${named[@]}"); want $(printf '[%s]' "${copies[@]}")"
+    for f in "${copies[@]}" "$own"; do
+        cmp -s "$f" "$seed" || bad "the install changed or removed $f"
+    done
+    # Delete what the line names, as the shell reads it, and run the install again.
+    rm -- "${named[@]}" || { bad "delete the named copies"; return; }
+    run "$h" "${argv[@]}"
+    expect_rc 0 "the re-run after deleting the named copies" || return
+    ! grep -q 'settings\.json\.bak' "$OUT" "$ERR" || bad "the re-run still names copies: $(grep -h 'settings\.json\.bak' "$OUT" "$ERR")"
+    hooks_injected "$h" || bad "settings.json lacks the hooks: $(<"$sj")"
+    [[ "$(jq -r .env.GH_TOKEN "$sj")" == "$token" ]] || bad "settings.json lost its env: $(<"$sj")"
+    cmp -s "$own" "$seed" || bad "the user's $own changed or is gone"
+    [[ "$(compgen -G "$sj.bak.*")" == "$own" ]] || bad "settings.json.bak.* now: $(compgen -G "$sj.bak.*" | paste -sd'|'); want the user's file alone"
 }
 
 echo "[b.fji install-sh advice-follow] start (schema v$SCHEMA)"
