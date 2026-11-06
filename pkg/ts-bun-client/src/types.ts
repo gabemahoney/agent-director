@@ -1083,8 +1083,9 @@ export interface ResumeParams {
  * environment/pool context. Other arguments and option-owned values survive.
  * Claude inputs missing a recognized required value get literal filtering only;
  * parsed-role preservation applies when all required values are present.
- * Claude prompts move behind surviving options and --, and altered short clusters
- * are re-encoded, only when needed to preserve their original parsed meaning;
+ * The saved prompt (operands, an unowned -- and what follows; an unknown
+ * option's next word counts) is never replayed. Altered Claude short clusters
+ * are re-encoded only when needed to preserve their original parsed meaning;
  * otherwise their order and spelling survive. Stored agent_args are unchanged.
  * Resume moved the row to `pending`, keeping
  * its session id and history, until the agent reports in (Cursor: verified first prompt),

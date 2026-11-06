@@ -31,9 +31,9 @@ var codexArgShapes = []struct {
 
 // TestCodexSettingsStandAfterPassThroughArguments: for a spawn and a resume,
 // the caller's options come first and unchanged, every AD setting stands after
-// the last of them and before the first `--`, and the prompt after `--` is
-// untouched. A copy of an AD flag in the prompt is the prompt, so AD still
-// adds its own.
+// the last of them and before the first `--`, and a spawn's prompt after `--`
+// is untouched. A copy of an AD flag in the prompt is the prompt, so AD still
+// adds its own. A resume drops the stored `--` and prompt (b.kz9).
 func TestCodexSettingsStandAfterPassThroughArguments(t *testing.T) {
 	for _, c := range codexComposers {
 		for _, sh := range codexArgShapes {
@@ -42,21 +42,28 @@ func TestCodexSettingsStandAfterPassThroughArguments(t *testing.T) {
 				args := append(slices.Clone(sh.before), sh.after...)
 				out := c.compose(t, codexIn{args: args, cwd: "/work/proj"}, codexConfig(true, true, 0))
 				l := codexfix.Split(t, out.argv)
+				after := sh.after
+				if c.name == "resume" {
+					after = nil
+					if l.HasDashDash() {
+						t.Errorf("resume argv %q keeps the stored `--`; want no prompt", out.argv)
+					}
+				}
 
 				if !slices.Equal(out.argv[out.start:out.start+len(sh.before)], sh.before) {
 					t.Errorf("argv after the program = %q; want the caller's options %q first", out.argv[out.start:], sh.before)
 				}
-				if !slices.Equal(tailFrom(out.argv, sh.after), sh.after) {
-					t.Errorf("argv ends %q; want the prompt part %q unchanged at the end", out.argv, sh.after)
+				if !slices.Equal(tailFrom(out.argv, after), after) {
+					t.Errorf("argv ends %q; want the prompt part %q unchanged at the end", out.argv, after)
 				}
-				if len(sh.after) > 0 && !slices.Equal(l.AfterDashDashArgs(), sh.after[1:]) {
-					t.Errorf("after `--` = %q; want %q", l.AfterDashDashArgs(), sh.after[1:])
+				if len(after) > 0 && !slices.Equal(l.AfterDashDashArgs(), after[1:]) {
+					t.Errorf("after `--` = %q; want %q", l.AfterDashDashArgs(), after[1:])
 				}
 				first := out.start + len(sh.before)
 				for _, it := range l.Items {
 					if it.Kind == codexfix.KindDashDash {
-						if it.Index != len(out.argv)-len(sh.after) {
-							t.Errorf("`--` at %d; want the caller's, at %d", it.Index, len(out.argv)-len(sh.after))
+						if it.Index != len(out.argv)-len(after) {
+							t.Errorf("`--` at %d; want the caller's, at %d", it.Index, len(out.argv)-len(after))
 						}
 						continue
 					}
@@ -76,7 +83,7 @@ func TestCodexSettingsStandAfterPassThroughArguments(t *testing.T) {
 					}
 				}
 				// A flag in the prompt is data: AD's own copy is still there before `--`.
-				if n := len(l.Of(codexfix.KindNoDaemon)); n != 1+countOf(sh.after, "--no-daemon") {
+				if n := len(l.Of(codexfix.KindNoDaemon)); n != 1+countOf(after, "--no-daemon") {
 					t.Errorf("--no-daemon appears %d times; want AD's once plus the prompt's", n)
 				}
 				if n := len(l.Before(codexfix.KindNoDaemon)); n != 1 {
@@ -103,8 +110,8 @@ func countOf(s []string, v string) int {
 
 // TestCodexSettingsSkipWhatTheCallerPassed: an option AD would add that the
 // caller's arguments already carry before `--` is left out, so it appears once;
-// the same option after `--` is the prompt and does not count. Pre-trust is ok
-// so the bypass is in play.
+// the same option after `--` is the prompt and does not count, and a resume
+// drops it with the prompt (b.kz9). Pre-trust is ok so the bypass is in play.
 func TestCodexSettingsSkipWhatTheCallerPassed(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -125,7 +132,9 @@ func TestCodexSettingsSkipWhatTheCallerPassed(t *testing.T) {
 					want := 1
 					if where == "after" {
 						args = append([]string{"--"}, tc.args...)
-						want = 2 // the prompt's copy and AD's own
+						if c.name == "spawn" {
+							want = 2 // the prompt's copy and AD's own
+						}
 					}
 					out := c.compose(t, codexIn{args: args, cwd: "/work/proj"}, codexConfig(false, false, 0))
 					l := codexfix.Split(t, out.argv)
@@ -164,7 +173,8 @@ func TestCodexQuestionOffWinsOverCallerArguments(t *testing.T) {
 
 // TestCodexResumeOrdering: a resume is codex, `resume`, the session id, then the
 // replayed arguments (`-i` among them, after the id) and AD's settings, with the
-// question tool off last; nothing of AD's stands before `resume`.
+// question tool off last; nothing of AD's stands before `resume`, and the
+// stored prompt is not replayed (b.kz9).
 func TestCodexResumeOrdering(t *testing.T) {
 	withStubExe(t, codexTestExe)
 	args := []string{"--model", "o3", "-i", "/img/a.png", "-c", "model_reasoning_effort=\"high\"", "--", "go on"}
@@ -194,8 +204,8 @@ func TestCodexResumeOrdering(t *testing.T) {
 	if i := slices.Index(out.argv, "-i"); i < 3 {
 		t.Errorf("-i at %d; want after the session id", i)
 	}
-	if got := l.AfterDashDashArgs(); !slices.Equal(got, []string{"go on"}) {
-		t.Errorf("after `--` = %q; want the stored prompt", got)
+	if l.HasDashDash() || slices.Contains(out.argv, "go on") {
+		t.Errorf("argv = %q; want no `--` and no stored prompt", out.argv)
 	}
 	if last, _ := l.Last(); last.Kind != codexfix.KindQuestionTool || last.Bool {
 		t.Errorf("last part before `--` = %+v; want the question tool off", last)

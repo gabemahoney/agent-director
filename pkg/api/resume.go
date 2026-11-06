@@ -124,8 +124,8 @@ type ResumeParams struct {
 // unrelated arguments and option-owned values without changing stored AgentArgs.
 // Claude inputs missing a recognized required value get literal filtering only;
 // parsed-role preservation applies when all required values are present.
-// Claude prompts move behind surviving options and --, and changed clusters are
-// re-encoded, only when needed to preserve the original parsed meaning.
+// The saved prompt is never replayed, and changed Claude clusters are
+// re-encoded only when needed to preserve the original parsed meaning.
 type ResumeResult struct {
 	// InstanceID is the id of the resumed row — identical to the
 	// value passed in ResumeParams.InstanceID.
@@ -564,7 +564,8 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //  4. A new launch token (a failure → ErrInternal, nothing written), then
 //     the environment, settings and argv (spawn.ComposeRelaunch, for the row's
 //     agent), filtering stored session selectors and Claude print mode plus
-//     orphaned cloud controls, all before the move, so a failure writes nothing.
+//     orphaned cloud controls and dropping the saved prompt, all before the
+//     move, so a failure writes nothing.
 //  5. Pre-trust (spawn.RunPreTrust, SR-8.1 step 4, SR-22.6): after every check
 //     above that can refuse without a write and immediately before the move,
 //     for the row's cwd and extra env, off when the row records the opt-out of

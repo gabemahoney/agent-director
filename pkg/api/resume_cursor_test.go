@@ -163,6 +163,10 @@ func TestCursorResumeLatestGateway(t *testing.T) {
 			if modeAt < 0 || modeAt+1 >= len(creates[0].Command) || creates[0].Command[modeAt+1] != "plan" {
 				t.Fatalf("saved requested mode lost: %q", creates[0].Command)
 			}
+			promptAt := slices.Index(creates[0].Command, "--initial-prompt")
+			if promptAt < 0 || promptAt+1 >= len(creates[0].Command) || creates[0].Command[promptAt+1] != "" || slices.Contains(creates[0].Command, "saved initial") {
+				t.Fatalf("saved initial prompt replayed: %q; want --initial-prompt \"\" (b.kz9)", creates[0].Command)
+			}
 			if creates[0].Envs["SAVED_CURSOR_ENV"] != "retained" || creates[0].Envs["AGENT_DIRECTOR_GROUP"] != "saved-group" || after.CWD != before.CWD {
 				t.Fatalf("saved cwd/env/group lost: %+v", creates[0])
 			}
