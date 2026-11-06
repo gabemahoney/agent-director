@@ -638,14 +638,14 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 
 These classes correspond to the shared CLI `err_name` contract. They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
 
-**cwd validation** (bad `cwd` argument to `spawn` — programmer error):
+**cwd validation** (spawn's `cwd` argument — programmer error — or resume's saved cwd, gone since the row finished):
 
 | Error | When it fires |
 |---|---|
 | `ErrCwdMissing` | No `cwd` was supplied; spawn requires it to derive the JSONL/resume path. |
 | `ErrCwdNotAPath` | `cwd` is neither absolute nor a `~/` form (URLs, bare relative paths, non-path values). |
-| `ErrCwdNotFound` | `cwd` resolved to a path that does not exist on disk. |
-| `ErrCwdNotADirectory` | `cwd` resolved to a file (or other non-directory inode). |
+| `ErrCwdNotFound` | `cwd` resolved to a path that does not exist on disk. `resume` also returns it when the row's saved cwd is gone; nothing is written or launched. |
+| `ErrCwdNotADirectory` | `cwd` resolved to a file (or other non-directory inode). `resume` also returns it when the row's saved cwd is no longer a directory. |
 
 **spawn and template config validation** (bad `spawn` or `makeTemplate` arguments — programmer error):
 

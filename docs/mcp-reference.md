@@ -363,6 +363,8 @@ Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: cu
 - `ErrSpawnNotResumable`
 - `ErrNoSessionId`
 - `ErrReservedEnvKey`
+- `ErrCwdNotFound`
+- `ErrCwdNotADirectory`
 - `ErrJsonlMissing`
 - `ErrJsonlNeverWritten`
 - `ErrTmuxNotAvailable`

@@ -1041,6 +1041,8 @@ var Verbs = []VerbDef{
 			"ErrSpawnNotResumable",
 			"ErrNoSessionId",
 			"ErrReservedEnvKey",
+			"ErrCwdNotFound",
+			"ErrCwdNotADirectory",
 			"ErrJsonlMissing",
 			"ErrJsonlNeverWritten",
 			"ErrTmuxNotAvailable",

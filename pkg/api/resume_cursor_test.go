@@ -298,6 +298,49 @@ func TestCursorResumeLiveRowStillRefuses(t *testing.T) {
 	}
 }
 
+// TestCursorResumeUnusableCwdRefusesBeforeMutation (b.vit): an otherwise
+// resumable Cursor row whose saved cwd was removed is ErrCwdNotFound, and one
+// whose cwd is now a regular file ErrCwdNotADirectory: the row unchanged, no
+// tmux call, the transcripts untouched.
+func TestCursorResumeUnusableCwdRefusesBeforeMutation(t *testing.T) {
+	// Serial: the protected transcript fixture sets HOME.
+	for _, tc := range []struct {
+		state string
+		file  bool
+		want  string
+	}{
+		{store.StateEnded, false, "ErrCwdNotFound"},
+		{store.StateMissing, false, "ErrCwdNotFound"},
+		{store.StateEnded, true, "ErrCwdNotADirectory"},
+	} {
+		t.Run(tc.want+"/"+tc.state, func(t *testing.T) {
+			e := newResumeEnv(t)
+			id, h := seedCursorResume(t, e, tc.state)
+			before := e.columns(t, id)
+			cwd := before.CWD.(string)
+			removeCwd(t, cwd, tc.file)
+			calls := len(e.rec.SocketCalls())
+
+			_, err := e.resume(id)
+
+			assertOneName(t, err, tc.want)
+			assertCwdRefusalText(t, errText(err), cwd, advCursorCwd)
+			if !reflect.DeepEqual(before, e.columns(t, id)) {
+				t.Fatal("cwd refusal mutated row")
+			}
+			if got := e.rec.SocketCalls()[calls:]; len(got) != 0 {
+				t.Fatalf("cwd refusal made tmux calls %+v", got)
+			}
+			for path, want := range map[string][]byte{h.Latest: h.LatestBytes, h.Older: h.OlderBytes} {
+				got, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("artifact changed: %s %v", path, err)
+				}
+			}
+		})
+	}
+}
+
 func TestCursorResumeNativeArtifactsRemainRuntimeOwned(t *testing.T) {
 	// Serial: the protected transcript fixture sets HOME.
 	for _, entry := range []struct{ name, state string }{
