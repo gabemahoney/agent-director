@@ -5,8 +5,6 @@ package adminapi
 import (
 	"context"
 	"debug/buildinfo"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +19,8 @@ import (
 // one seam for the listing: a test uses it, never a second one.
 var journalProcRoot = "/proc"
 
+// verifyJournalQuiescence on Linux uses /proc as its evidence basis: each
+// same-user process's start time, executable and descriptor links.
 func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string) error {
 	for _, path := range append([]string{dbPath}, roots...) {
 		if err := verifyJournalPath(path); err != nil {
@@ -78,16 +78,10 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 			continue
 		}
 		mutator := strings.Contains(filepath.Base(exe), "agent-director")
-		// Detect renamed binaries and Go callers embedding this module, even
-		// while their SQLite lease is closed. Read build metadata only.
+		// Read build metadata only.
 		if bi, err := buildinfo.ReadFile(exePath); err == nil {
-			if strings.Contains(bi.Path, "github.com/gabemahoney/agent-director") || bi.Main.Path == "github.com/gabemahoney/agent-director" {
+			if buildInfoNamesModule(bi) {
 				mutator = true
-			}
-			for _, dep := range bi.Deps {
-				if dep.Path == "github.com/gabemahoney/agent-director" {
-					mutator = true
-				}
 			}
 		} else if f, err := os.Open(exePath); err != nil {
 			blockers = append(blockers, p)
@@ -136,49 +130,6 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 	}
 	if len(blockers) > 0 {
 		return journalRefusal("old_or_unverified_mutators", blockers...)
-	}
-	return nil
-}
-
-// Verify every existing path component without following a link. An absent
-// root is known absent only after its existing parent was readable; a path
-// through a regular file is absent too, since nothing can exist under it.
-// Private roots establish which unprivileged user can hold operational
-// authority.
-func verifyJournalPath(path string) error {
-	if !filepath.IsAbs(path) {
-		return journalRefusal("legacy_root_not_absolute")
-	}
-	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
-		info, err := os.Lstat(current)
-		if err != nil && !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
-			return journalRefusal("legacy_root_unreadable")
-		}
-		if err == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				return journalRefusal("legacy_root_symlink")
-			}
-			if current == path {
-				st, ok := info.Sys().(*syscall.Stat_t)
-				if !ok || st.Uid != uint32(os.Geteuid()) || info.Mode().Perm()&0077 != 0 {
-					return journalRefusal("legacy_root_access_unestablished")
-				}
-			}
-			if info.IsDir() {
-				f, err := os.Open(current)
-				if err != nil {
-					return journalRefusal("legacy_root_unreadable")
-				}
-				_, err = f.Readdirnames(1)
-				f.Close()
-				if err != nil && !errors.Is(err, io.EOF) {
-					return journalRefusal("legacy_root_unreadable")
-				}
-			}
-		}
-		if current == filepath.Dir(current) {
-			break
-		}
 	}
 	return nil
 }

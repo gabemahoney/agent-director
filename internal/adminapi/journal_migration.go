@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -129,12 +130,12 @@ var journalActions = map[string]string{
 	// after its commit.
 	"legacy_root_unreadable":           "make each legacy root and its parent directories readable and searchable by the user running the migration, keep the maintenance window, " + journalRetry,
 	"legacy_root_symlink":              "make the store path, HOME and every --legacy-root (install.sh: --journal-legacy-root) real paths with no symbolic link in them, keep the maintenance window, " + journalRetry,
-	"legacy_root_access_unestablished": "make the store and every legacy root owned by the user running the migration and private to it (chmod 0600 the store, chmod 0700 each root), keep the maintenance window, " + journalRetry,
-	"process_inventory_unreadable":     "run it as the agents' user on a host where that user can list every process and read its details, keep the maintenance window, " + journalRetry,
+	"legacy_root_access_unestablished": "make the store and every legacy root owned by the user running the migration and private to it (chmod 0600 the store, chmod 0700 each root, and remove any access-control entry, for example chmod -N <path>), keep the maintenance window, " + journalRetry,
+	"process_inventory_unreadable":     "run it as the agents' user with every mounted file system reachable or unmounted (on Linux, with the proc file system mounted and readable), keep the maintenance window, " + journalRetry + "; report it if it persists",
 	"process_identity_unreadable":      "run it as the agents' user on a host where that user can read every process's identity, keep the maintenance window, " + journalRetry,
-	"inventory_deadline":               "stop processes until the process inventory finishes within the attempt's time limit, keep the maintenance window, " + journalRetry,
-	"old_or_unverified_mutators":       "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration), keep the maintenance window, " + journalRetry,
-	"process_inventory_unsupported":    "this host cannot verify that old mutators are stopped; run the migration on a supported install host; nothing was changed",
+	"inventory_deadline":               "answer any privacy consent prompt or grant the terminal app access to the folder it names, make every mounted file system reachable or unmount it, or stop processes until the process inventory finishes within the attempt's time limit; keep the maintenance window, " + journalRetry,
+	"old_or_unverified_mutators":       "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration, which for an image in a privacy-protected folder means granting the terminal app access to that folder), keep the maintenance window, " + journalRetry,
+	"process_inventory_unsupported":    "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64 or Darwin arm64); nothing was changed",
 
 	// The store's causes.
 	"migration_lock_held":                    "wait for the other administrator's migrate-journal to finish, " + journalRetry,
@@ -251,7 +252,9 @@ func journalArguments(options JournalMigrationOptions) ([]string, error) {
 	if !filepath.IsAbs(options.BackupDir) {
 		return nil, journalRefusal("absolute_backup_required")
 	}
-	if backupInsideRoot(filepath.Clean(options.BackupDir), unique) {
+	if inside, err := backupInsideRoot(filepath.Clean(options.BackupDir), unique); err != nil {
+		return nil, err
+	} else if inside {
 		return nil, journalRefusal("backup_inside_legacy_root")
 	}
 	// A directory made after this check fails the backup's exclusive mkdir.
@@ -268,9 +271,32 @@ func journalArguments(options JournalMigrationOptions) ([]string, error) {
 	return unique, nil
 }
 
+// journalContainmentHost is the host-selection seam for containment, and it
+// is must-use: the one way to choose how backupInsideRoot judges whether the
+// backup lies inside a legacy root, and the journalFS it looks up with.
+// Darwin compares file identity (SRD SR-2.15 "Limits"), so a case variant
+// cannot escape a root; Linux stays lexical. In-package tests set it to
+// select the Darwin rule on Linux, where runtime.GOOS is never darwin; such a
+// test is serial and restores it in t.Cleanup. It is a host choice, not
+// fault injection. Never add a second host switch for containment.
+var journalContainmentHost = struct {
+	byIdentity bool
+	fs         journalFS
+}{runtime.GOOS == "darwin", osJournalFS{}}
+
 // backupInsideRoot reports whether the clean absolute backup is a root or
-// lies under one, compared lexically.
-func backupInsideRoot(backup string, roots []string) bool {
+// lies under one, by the rule journalContainmentHost selects. Only the
+// identity rule looks anything up, so only it can fail, with a refusal.
+func backupInsideRoot(backup string, roots []string) (bool, error) {
+	if journalContainmentHost.byIdentity {
+		return backupInsideRootByIdentity(journalContainmentHost.fs, backup, roots)
+	}
+	return backupInsideRootLexical(backup, roots), nil
+}
+
+// backupInsideRootLexical reports whether the clean absolute backup is a
+// root or lies under one, compared lexically.
+func backupInsideRootLexical(backup string, roots []string) bool {
 	for _, root := range roots {
 		if backup == root || strings.HasPrefix(backup, root+string(filepath.Separator)) {
 			return true

@@ -327,7 +327,7 @@ func TestMigrationWhileTheMoveIsDue(t *testing.T) {
 // operator's direct command refuses the unresolved root with
 // legacy_root_access_unestablished's action, "make the store and every legacy
 // root owned by the user running the migration and private to it (chmod 0600
-// the store, chmod 0700 each root), keep the maintenance window, then re-run
+// the store, chmod 0700 each root, and remove any access-control entry, for example chmod -N <path>), keep the maintenance window, then re-run
 // this release's installer with a new --journal-backup, which finishes any
 // pending schema step, then run migrate-journal with a new --backup-dir until
 // it exits 0 with authority "sqlite"", followed literally: the fix, the
@@ -435,7 +435,7 @@ func TestAdviceFollow_G10_PostcommitAdministratorVerification(t *testing.T) {
 			StepsCommitted *bool  `json:"steps_committed"`
 		} `json:"details"`
 	}
-	const action = "make the store and every legacy root owned by the user running the migration and private to it (chmod 0600 the store, chmod 0700 each root), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+	const action = "make the store and every legacy root owned by the user running the migration and private to it (chmod 0600 the store, chmod 0700 each root, and remove any access-control entry, for example chmod -N <path>), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
 	if err := json.Unmarshal([]byte(refused.Stderr), &failure); err != nil || refused.Code != 1 || refused.Stdout != "" || failure.Name != "ErrJournalMigrationRefused" || failure.Details.Refusal.Reason != "legacy_root_access_unestablished" || failure.Details.Refusal.Action != action {
 		t.Fatalf("direct verification must still refuse the unresolved root: %+v (%v)", refused, err)
 	}

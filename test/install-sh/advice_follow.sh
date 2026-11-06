@@ -4518,7 +4518,7 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
         expect_advice "Keep the maintenance boundary and restart administrator verification."
         expect_advice "A commit may have completed. Never reset the schema or restore replayable input."
         grep -F 'old_or_unverified_mutators' "$ERR" >/dev/null || bad "refused before process inventory: $(flat "$ERR")"
-        expect_refusal_action "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+        expect_refusal_action "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration, which for an image in a privacy-protected folder means granting the terminal app access to that folder), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
         expect_advice '"cutover":"not_committed","steps_committed":false'
         kill -0 "$writer" || bad "verification killed the writer"
         [[ "$(sha256sum "$db")" == "$before" ]] || bad "live mutator did not prevent cutover"

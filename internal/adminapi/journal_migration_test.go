@@ -27,7 +27,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestMain(m *testing.M) { sandboxguard.Require(); os.Exit(m.Run()) }
+// TestMain's --journal-fixed-helper child mode is must-use for re-executing
+// this test binary as a fixed-path helper. Extend its one behaviour switch;
+// all other invocations retain the sandbox guard.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "--journal-fixed-helper" {
+		os.Exit(journalFixedHelperChild(os.Args[2:]))
+	}
+	sandboxguard.Require()
+	os.Exit(m.Run())
+}
 
 // TestJournalMigrationAuthorizationAndRoots: CheckJournalMigration and
 // MigrateJournal make the same argument checks, in order, each refusal with
@@ -295,7 +304,7 @@ func TestAdviceFollow_G9_JournalInventory(t *testing.T) {
 			for i := 0; i < 2; i++ {
 				err := verifyJournalQuiescence(ctx, db, []string{legacy})
 				var r *JournalRefusal
-				if !errors.As(err, &r) || r.Reason != "old_or_unverified_mutators" || r.Action != "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\"" {
+				if !errors.As(err, &r) || r.Reason != "old_or_unverified_mutators" || r.Action != "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration, which for an image in a privacy-protected folder means granting the terminal app access to that folder), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\"" {
 					t.Fatalf("inventory = %v", err)
 				}
 				found := false
@@ -637,7 +646,7 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 		// returns the action's own step.
 		refuse func(t *testing.T, db string, opts *JournalMigrationOptions) (follow func())
 	}{
-		{"process_inventory_unreadable", "run it as the agents' user on a host where that user can list every process and read its details" + retry,
+		{"process_inventory_unreadable", "run it as the agents' user with every mounted file system reachable or unmounted (on Linux, with the proc file system mounted and readable)" + retry + "; report it if it persists",
 			func(t *testing.T, _ string, _ *JournalMigrationOptions) func() {
 				file := filepath.Join(t.TempDir(), "proc")
 				if err := os.WriteFile(file, nil, 0o600); err != nil {
@@ -655,7 +664,7 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 				journalProcRoot = dir
 				return func() { journalProcRoot = "/proc" }
 			}},
-		{"inventory_deadline", "stop processes until the process inventory finishes within the attempt's time limit" + retry,
+		{"inventory_deadline", "answer any privacy consent prompt or grant the terminal app access to the folder it names, make every mounted file system reachable or unmount it, or stop processes until the process inventory finishes within the attempt's time limit;" + strings.TrimPrefix(retry, ","),
 			func(t *testing.T, db string, _ *JournalMigrationOptions) func() {
 				expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 				defer cancel()
@@ -664,7 +673,7 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 				t.Cleanup(restore)
 				return restore
 			}},
-		{"process_inventory_unsupported", "this host cannot verify that old mutators are stopped; run the migration on a supported install host; nothing was changed",
+		{"process_inventory_unsupported", "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64 or Darwin arm64); nothing was changed",
 			func(t *testing.T, _ string, _ *JournalMigrationOptions) func() {
 				restore := SetJournalVerifierForTest(func(context.Context, string, []string) error { return journalUnsupportedHost() })
 				t.Cleanup(restore)
@@ -723,7 +732,7 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 				opts.BackupDir = filepath.Join(dir, fmt.Sprintf("backup-%d", backups))
 				return MigrateJournal(context.Background(), db, opts)
 			}
-			if strings.Contains(tc.action, retry) {
+			if strings.Contains(tc.action, "then re-run this release's installer with a new --journal-backup") {
 				journalInstaller(t, db, migrate)
 			}
 			if result, err := migrate(); err != nil || result.Authority != "sqlite" {
