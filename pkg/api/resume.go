@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"strings"
@@ -251,7 +252,15 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     pre-trust and the transcript lookup below read (a key
 //     "CLAUDE_CONFIG_DIR=/x" sets CLAUDE_CONFIG_DIR). No transcript is
 //     looked up.
-//  5. Cursor validates only its saved protected gateway transcript, with no
+//     A Cursor row's saved selection is then checked
+//     (spawn.ValidateCursorEnv → ErrReservedEnvKey).
+//  5. The saved cwd must be a directory, for every agent → otherwise
+//     ErrCwdNotFound (it does not exist, or its stat fails) or
+//     ErrCwdNotADirectory, spawn's names (savedCwdError, bug b.vit). tmux
+//     starts a session whose -c directory cannot be entered somewhere else
+//     and reports success, so without this check the agent would run in
+//     another directory. No transcript is looked up.
+//  6. Cursor validates only its saved protected gateway transcript, with no
 //     synthesized or older fallback. Other agents: JSONL must exist → otherwise
 //     ErrJsonlMissing. Pure os.Stat pre-flight; no read. Candidate
 //     resolution follows a strict precedence (decision of record,
@@ -332,6 +341,11 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		if err := spawn.ValidateCursorEnv(row.ExtraEnv); err != nil {
 			return ResumeResult{}, fmt.Errorf("%w; nothing was written and nothing was launched; resume cannot change the saved environment; start a new instance with a supported explicit selection only if it matches the intended account and configuration; %s", err, cursorFreshRecovery)
 		}
+	}
+	if err := savedCwdError(row); err != nil {
+		return ResumeResult{}, err
+	}
+	if row.Agent == store.AgentCursor {
 		if err := cursortranscript.VerifyAppend(row.JSONLPath); err != nil {
 			return ResumeResult{}, fmt.Errorf("%w: latest protected Cursor transcript unavailable; %s", ErrJsonlMissing, cursorFreshRecovery)
 		}
@@ -459,6 +473,36 @@ func invalidEnvKeyError(id, key, agent string) error {
 	}
 	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q is not a valid env-var name: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %q (same-agent reuse starts a fresh conversation in the retained life; older sessions remain listed for inspection only), and %s",
 		spawn.ErrReservedEnvKey, id, key, spawn.EnvKeyProblem(key), spawn.ReuseSpawn(agent), key, spawn.InvalidEnvKeyAlternative)
+}
+
+// savedCwdError is resume's refusal of a row whose saved cwd cannot be the
+// relaunch's working directory (bug b.vit), nil when it is a directory. tmux
+// starts a session whose -c directory cannot be entered somewhere else and
+// still succeeds, so this stat is the only check. The names and their mapping
+// are spawn's (spawn.Validate): a path that does not exist, or whose stat
+// fails for any other reason, is spawn.ErrCwdNotFound, one that is not a
+// directory spawn.ErrCwdNotADirectory. The description names the instance,
+// quotes the cwd, says nothing was written or launched, and names the way
+// on: recreate the directory at that path and resume, or (Cursor:
+// cursorFreshRecovery) spawn the id with the reuse opt-in, the row's agent and
+// an existing cwd, which starts a fresh conversation in the retained life.
+func savedCwdError(row Spawn) error {
+	sentinel, problem := spawn.ErrCwdNotFound, "does not exist"
+	info, err := os.Stat(row.CWD)
+	switch {
+	case err == nil && info.IsDir():
+		return nil
+	case err == nil:
+		sentinel, problem = spawn.ErrCwdNotADirectory, "is not a directory"
+	case !errors.Is(err, fs.ErrNotExist):
+		problem = "cannot be checked (" + err.Error() + ")"
+	}
+	if row.Agent == config.AgentCursor {
+		return fmt.Errorf("%w: resume of instance %s: the row's cwd %q %s; nothing was written and nothing was launched; recreate that directory and resume again, or %s",
+			sentinel, row.InstanceID, row.CWD, problem, cursorFreshRecovery)
+	}
+	return fmt.Errorf("%w: resume of instance %s: the row's cwd %q %s; nothing was written and nothing was launched; recreate that directory and resume again, or spawn the id with %s and an existing cwd (same-agent reuse starts a fresh conversation in the retained life; older sessions remain listed for inspection only)",
+		sentinel, row.InstanceID, row.CWD, problem, spawn.ReuseSpawn(row.Agent))
 }
 
 // jsonlAttempt records one candidate transcript path resume tried to
@@ -817,7 +861,10 @@ func launchInProgressError(row Spawn) error {
 // spawned before spawn refused such keys can) is refused, also with
 // ErrReservedEnvKey, before any transcript lookup, tmux call or write:
 // relaunched, tmux would set a different variable than the one pre-trust and
-// the transcript lookup read (bug b.vpb).
+// the transcript lookup read (bug b.vpb). A row whose saved cwd no longer
+// exists or is not a directory is refused next, with spawn's ErrCwdNotFound
+// or ErrCwdNotADirectory, before any transcript lookup, tmux call or write:
+// tmux would start the agent in another directory (bug b.vit).
 //
 // Before it creates the session, Resume moves the row to pending in one
 // conditional write, keeping its session id and history and writing the
@@ -886,6 +933,13 @@ func launchInProgressError(row Spawn) error {
 //     selections before mutation; resume cannot change that saved environment.
 //     Fresh recovery follows cursorFreshRecovery; credential intent must never
 //     be discarded to retry personally, and unavailable intent requires a human.
+//   - ErrCwdNotFound: the row's saved cwd does not exist (or cannot be
+//     checked). Nothing is written or launched. Recreate the directory at
+//     that path and resume again, or spawn the same id with the reuse opt-in,
+//     the row's agent and an existing cwd, which starts a fresh conversation
+//     in the retained life. Cursor instead follows cursorFreshRecovery.
+//   - ErrCwdNotADirectory: the row's saved cwd is not a directory. Nothing is
+//     written or launched; the way on is ErrCwdNotFound's.
 //   - [ErrJsonlMissing]: the latest protected Cursor transcript is unavailable,
 //     or no other-agent current-session transcript path stats successfully.
 //     Claude tries the recorded path and its config-dir-aware recomputation;

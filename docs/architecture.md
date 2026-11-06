@@ -15516,7 +15516,25 @@ written, harmlessly:
    selection; a supported new-instance selection is permitted only if it matches
    the intended account/configuration. Historical saved AD variables remain
    compatible. No automatic account-intent removal or personal-login retry.
-5. For Cursor, `cursortranscript.VerifyAppend(row.JSONLPath)` checks only the
+5. The saved `cwd` is a directory, for every agent → otherwise
+   spawn's `ErrCwdNotFound` (the path does not exist, or its `os.Stat`
+   fails for another reason, as spawn maps it) or `ErrCwdNotADirectory`
+   (`savedCwdError`, b.vit). tmux starts a session whose `-c` directory
+   cannot be entered in another directory (the server's `HOME`, else `/`)
+   and still exits 0, so without this check the agent ran elsewhere and
+   resume reported success. The check runs before any transcript lookup,
+   tmux call or write. The description names the instance id, quotes the
+   cwd, says nothing was written or launched, and gives the recourse:
+   recreate the directory at that path and resume again, or spawn the id
+   with the reuse opt-in, the row's agent (`spawn.ReuseSpawn`) and an
+   existing cwd. Cursor gives `cursorFreshRecovery` instead of the reuse.
+   Pinned by `TestResumeRefusesUnusableCwd`
+   (`pkg/api/resume_missing_cwd_test.go`),
+   `TestCursorResumeUnusableCwdRefusesBeforeMutation`, the literal-follow
+   tests B16 (`pkg/api/advice_follow_missing_cwd_test.go`,
+   `pkg/api/advice_follow_cursor_resume_test.go`) and, on real tmux,
+   `TestResumeRemovedCwdIsCwdNotFound`.
+   Then, for Cursor, `cursortranscript.VerifyAppend(row.JSONLPath)` checks only the
    existing latest protected file without creating or writing it. Failure gives
    `ErrJsonlMissing` with unique-id fresh recovery; no native DB or history is
    parsed. Success passes the saved current session directly to `resumeAfterJsonl`.

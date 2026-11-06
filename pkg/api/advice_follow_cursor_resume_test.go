@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -22,6 +23,53 @@ import (
 )
 
 const advCursorHome = "keep HOME unchanged; for Cursor configuration/data with the existing personal login, set absolute CURSOR_CONFIG_DIR and CURSOR_DATA_DIR in extra_env; these directories do not isolate account credentials"
+
+// advCursorCwd is B16's advice for a Cursor row whose saved cwd is gone: recreate it, else the fresh recovery.
+const advCursorCwd = "nothing was written and nothing was launched; recreate that directory and resume again, or preserve the original row, session, transcript and saved artifacts"
+
+// TestAdviceFollow_B16_CursorMissingCwdRecreate (b.vit): while a Cursor row's
+// saved cwd is gone, resume is refused the same way each time, changing and
+// launching nothing; once the directory is recreated at that path, resume
+// launches there.
+// B16 (b.vit): "nothing was written and nothing was launched; recreate that directory and resume again, or preserve the original row, ..."
+func TestAdviceFollow_B16_CursorMissingCwdRecreate(t *testing.T) {
+	// Serial: the protected transcript fixture sets HOME.
+	for _, state := range []string{store.StateEnded, store.StateMissing} {
+		t.Run(state, func(t *testing.T) {
+			e := newResumeEnv(t)
+			id, _ := seedCursorResume(t, e, state)
+			before := e.columns(t, id)
+			cwd := before.CWD.(string)
+			if err := os.RemoveAll(cwd); err != nil {
+				t.Fatal(err)
+			}
+			calls := len(e.rec.SocketCalls())
+
+			_, refused := e.resume(id)
+
+			adviceAssertAdvice(t, refused, spawn.ErrCwdNotFound, advCursorCwd)
+			if _, err := e.resume(id); err == nil || err.Error() != refused.Error() {
+				t.Errorf("resume while the cwd is still gone = %v; want the same refusal %q", err, refused)
+			}
+			if got := e.rec.SocketCalls()[calls:]; !reflect.DeepEqual(before, e.columns(t, id)) || len(got) != 0 {
+				t.Fatalf("refused resumes changed the row or called tmux: %+v", got)
+			}
+
+			if err := os.Mkdir(cwd, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if res, err := e.resume(id); err != nil || res.InstanceID != id {
+				t.Fatalf("resume after recreating %q = %+v, %v; want it launched", cwd, res, err)
+			}
+			if st := e.columns(t, id).State; st != store.StatePending {
+				t.Errorf("state after the resume = %v; want pending", st)
+			}
+			if creates := e.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Cwd != cwd {
+				t.Fatalf("creates = %+v; want one, in %q", creates, cwd)
+			}
+		})
+	}
+}
 
 // A14 and E6 Task1: follow the directory advice only for the caller's intended
 // personal-login configuration. The recorder proves composition, not native auth.
