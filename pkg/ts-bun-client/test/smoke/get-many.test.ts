@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ErrTooManyIds, type GetManyResult } from "../../src/index.js";
+import { ErrInvalidFlags, ErrTooManyIds, type GetManyResult } from "../../src/index.js";
 import { withTempHome } from "../internal/tempHome.js";
 import { homeStore, openClient, rejection, runHelper } from "../internal/helper.js";
 
@@ -27,6 +27,25 @@ test("get-many: typed rows, missing ids, empty arrays and next-call config", asy
       const result = await client.getMany({ instance_ids: ids.slice(0, cap) });
       expect(result.spawns.map((row) => row.instance_id)).toEqual([ids[0]!]);
       expect(result.not_found).toEqual(ids.slice(1, cap));
+    }
+  });
+}, 15_000);
+
+test("get-many: no, empty and repeated ids, and over the cap with a repeat, are refused by the binary", async () => {
+  await withTempHome(async (home) => {
+    const store = homeStore(home);
+    runHelper("seed-spawn", { store, id: "many-0", state: "ended", "create-store": true });
+    using client = await openClient(store);
+    const overWithRepeat = [...Array.from({ length: 20 }, (_, i) => `many-${i}`), "many-0"];
+    for (const [ids, refusal] of [
+      [[], ErrInvalidFlags],
+      [["many-0", ""], ErrInvalidFlags],
+      [["many-0", "many-0"], ErrInvalidFlags],
+      [overWithRepeat, ErrTooManyIds],
+    ] as const) {
+      const err = await rejection(client.getMany({ instance_ids: [...ids] }));
+      expect(err).toBeInstanceOf(refusal);
+      if (refusal === ErrTooManyIds) expect((err as ErrTooManyIds).errDetails).toEqual({ id_cap: 20 });
     }
   });
 }, 15_000);

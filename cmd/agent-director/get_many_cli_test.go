@@ -46,7 +46,7 @@ func TestCLIGetManyRefusalsAndCapReload(t *testing.T) {
 		ids  []string
 		name string
 		cap  int
-	}{{nil, "ErrInvalidFlags", 0}, {[]string{ids[0], ""}, "ErrInvalidFlags", 0}, {[]string{ids[0], ids[0]}, "ErrInvalidFlags", 0}, {ids, "ErrTooManyIds", 20}} {
+	}{{nil, "ErrInvalidFlags", 0}, {[]string{ids[0], ""}, "ErrInvalidFlags", 0}, {[]string{ids[0], ids[0]}, "ErrInvalidFlags", 0}, {ids, "ErrTooManyIds", 20}, {append(ids[:20:20], ids[0]), "ErrTooManyIds", 20}} {
 		out, errout, code := runCLIWithHome(t, home, append([]string{"get-many"}, tc.ids...)...)
 		assertOnlyEnvelope(t, out, errout, code, tc.name)
 		if tc.cap != 0 {

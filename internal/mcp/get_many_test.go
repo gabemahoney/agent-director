@@ -28,9 +28,11 @@ func TestMCPGetManyRefusalsAndLoadedCap(t *testing.T) {
 			t.Fatalf("%s: %+v", args, data)
 		}
 	}
-	data := toolErrorData(t, callTool(t, e.d, "get_many", paramJSON(t, map[string]any{"instance_ids": ids})))
-	if data.ErrName != "ErrTooManyIds" || !reflect.DeepEqual(data.ErrDetails, map[string]any{"id_cap": float64(20)}) {
-		t.Fatalf("default cap: %+v", data)
+	for _, over := range [][]string{ids, append(ids[:20:20], ids[0])} {
+		data := toolErrorData(t, callTool(t, e.d, "get_many", paramJSON(t, map[string]any{"instance_ids": over})))
+		if data.ErrName != "ErrTooManyIds" || !reflect.DeepEqual(data.ErrDetails, map[string]any{"id_cap": float64(20)}) {
+			t.Fatalf("default cap, %d ids: %+v", len(over), data)
+		}
 	}
 	path := filepath.Join(t.TempDir(), "config.toml")
 	for _, cap := range []int{2, 1} {
