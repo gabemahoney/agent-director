@@ -44,7 +44,13 @@ var opsHeading = regexp.MustCompile(`^(#{1,6}) (.+)$`)
 // opsDocSection cuts the section whose heading text is heading.
 func opsDocSection(t *testing.T, heading string) *opsSection {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "operator-actions.md"))
+	return docSection(t, filepath.Join("docs", "operator-actions.md"), heading)
+}
+
+// docSection is opsDocSection for the repo file rel (a skill's SKILL.md, say).
+func docSection(t *testing.T, rel, heading string) *opsSection {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", rel))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +74,7 @@ func opsDocSection(t *testing.T, heading string) *opsSection {
 		}
 	}
 	if level == 0 {
-		t.Fatalf("docs/operator-actions.md has no section %q", heading)
+		t.Fatalf("%s has no section %q", rel, heading)
 	}
 	return &opsSection{t: t, name: heading, text: strings.Join(out, "\n")}
 }
@@ -209,6 +215,12 @@ func newOpsShell(h *moveHome) *opsShell {
 
 // Run runs command in the shell and returns its status and output.
 func (s *opsShell) Run(command string) moveResult {
+	s.h.t.Helper()
+	return s.RunWithin(command, moveWait)
+}
+
+// RunWithin is Run for a command that may take up to wait (a whole install).
+func (s *opsShell) RunWithin(command string, wait time.Duration) moveResult {
 	h := s.h
 	h.t.Helper()
 	s.n++
@@ -224,8 +236,8 @@ func (s *opsShell) Run(command string) moveResult {
 			h.t.Fatalf("the follower's shell ended running %q (%q)", command, line)
 		}
 		res.Code = code
-	case <-time.After(moveWait):
-		h.t.Fatalf("%q did not end within %v", command, moveWait)
+	case <-time.After(wait):
+		h.t.Fatalf("%q did not end within %v", command, wait)
 	}
 	for p, dst := range map[string]*string{out: &res.Stdout, errs: &res.Stderr} {
 		b, err := os.ReadFile(p)

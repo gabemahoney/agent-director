@@ -21993,8 +21993,12 @@ case leaves (J43 to J45).
   key phrases word for word, `Block` returns the one `sh` block holding a
   string, `Inline` the one inline command with a prefix, and `Fill` replaces
   only the doc's placeholders, failing on one absent or left.
+  `docSection(t, rel, heading)` cuts a section of another repo file the same
+  way; J47 (`upgrade_skill_follow_test.go`) reads the upgrade skill with it.
 - `newOpsShell(h)` is one bash in HOME with the toolbox as its only `PATH`,
   so no case stand-in runs; shell variables last between its commands.
+  `Run` waits up to `moveWait` for a command; `RunWithin` takes a longer
+  bound, for a whole install.
 - `newPutBack(t, h, res, env)` follows "Putting back a kept install" from
   the last envelope's details: `Checks` runs the three checks in order and
   stops at the first that fails (checks 1 and 2 only for the moved form),
@@ -25146,8 +25150,11 @@ each file's doc comments carry the detail.
     a heading that exists exactly once in its doc, and that a list of required sites
     all carry a pointer.
   - The anchor check: `TestREADMEAnchorLinksResolve` checks that every
-    relative link in the hand-written user docs (`mdUserDocs`) names an existing
-    path and every anchored `.md` link resolves to exactly one heading.
+    relative link in the hand-written user docs (`mdUserDocs`) and the install
+    and upgrade skills (`mdSkills`), and every link to a file on the repo's
+    main branch (`mdRepoBlobRe`), names an existing path, and every anchored
+    `.md` link resolves to exactly one heading. A skill may link nothing
+    else, and the install skill must link the upgrade skill.
     `TestREADMESectionHeadings` checks that each pointed-to heading exists
     exactly once, the "Caller contract: tmux refusal classes" heading of
     this document included, and that the first sentence of "Operator

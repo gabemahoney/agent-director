@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -44,6 +45,15 @@ var mdUserDocs = []string{
 	"../../docs/multi-account.md",
 }
 
+// mdSkills are the skills whose links are checked. Read from the repository,
+// a skill links each file by its URL on the main branch (mdRepoBlobRe).
+var mdSkills = []string{mdInstallSkill, mdUpgradeSkill}
+
+const (
+	mdInstallSkill = "../../skills/install-agent-director/SKILL.md"
+	mdUpgradeSkill = "../../skills/upgrade-agent-director/SKILL.md"
+)
+
 // mdHeading is one ATX heading of a Markdown file; line is its 0-based index.
 type mdHeading struct {
 	level int
@@ -63,6 +73,9 @@ var (
 	mdHeadingRe = regexp.MustCompile(`^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$`)
 	mdFenceRe   = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})")
 	mdLinkRe    = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)\)`)
+	// mdRepoBlobRe is a link to a file on this repository's main branch,
+	// with its repo path.
+	mdRepoBlobRe = regexp.MustCompile(`^https://github\.com/gabemahoney/agent-director/blob/main/(.+)$`)
 )
 
 // readMD parses path's headings, skipping fenced code blocks.
@@ -341,30 +354,42 @@ func TestREADMEPointersNameExistingSections(t *testing.T) {
 }
 
 // TestREADMEAnchorLinksResolve checks every relative Markdown link in the
-// user docs (mdUserDocs) names an existing path, and every anchored .md link
-// resolves to exactly one heading, the caller-contract links included.
+// user docs (mdUserDocs) and the skills (mdSkills), and every link to a file
+// on the repository's main branch, names an existing path, and every anchored
+// .md link resolves to exactly one heading, the caller-contract links
+// included. A skill links nothing else.
 func TestREADMEAnchorLinksResolve(t *testing.T) {
 	t.Parallel()
-	type link struct{ from, to, anchor string }
+	type link struct {
+		from, to, anchor string
+		anchored         bool
+	}
 	var links []link
 	total := 0
-	for _, from := range mdUserDocs {
+	for _, from := range append(append([]string{}, mdUserDocs...), mdSkills...) {
 		ms := mdLinkRe.FindAllStringSubmatch(strings.Join(readMD(t, from).lines, "\n"), -1)
 		total += len(ms)
 		for _, m := range ms {
 			target, anchor, anchored := strings.Cut(m[2], "#")
-			if strings.Contains(target, "://") {
-				continue
-			}
 			to := from
-			if target != "" {
+			switch blob := mdRepoBlobRe.FindStringSubmatch(target); {
+			case blob != nil:
+				to = filepath.Join(mdRepoRoot, blob[1])
+			case strings.Contains(target, "://"):
+				if slices.Contains(mdSkills, from) {
+					t.Errorf("%s: link [%s](%s) is not to a file on this repository's main branch", from, m[1], m[2])
+				}
+				continue
+			case target != "":
 				to = filepath.Join(filepath.Dir(from), target)
+			}
+			if to != from {
 				if _, err := os.Stat(to); err != nil {
 					t.Errorf("%s: link [%s](%s) names no existing path: %v", from, m[1], m[2], err)
 				}
 			}
-			if anchored && strings.HasSuffix(to, ".md") {
-				links = append(links, link{from, filepath.Clean(to), anchor})
+			if !anchored || strings.HasSuffix(to, ".md") {
+				links = append(links, link{from, filepath.Clean(to), anchor, anchored})
 			}
 		}
 	}
@@ -373,6 +398,9 @@ func TestREADMEAnchorLinksResolve(t *testing.T) {
 	}
 	docs := map[string]mdDoc{}
 	for _, l := range links {
+		if !l.anchored {
+			continue
+		}
 		if _, ok := docs[l.to]; !ok {
 			docs[l.to] = readMD(t, l.to)
 		}
@@ -382,8 +410,10 @@ func TestREADMEAnchorLinksResolve(t *testing.T) {
 	}
 
 	for _, want := range []link{
-		{mdCallerContract, filepath.Clean(mdArchitecture), mdAnchor(callerContractClassesTitle)},
-		{"README.md", filepath.Clean(mdCallerContract), mdAnchor(callerContractTitle)},
+		{mdCallerContract, filepath.Clean(mdArchitecture), mdAnchor(callerContractClassesTitle), true},
+		{"README.md", filepath.Clean(mdCallerContract), mdAnchor(callerContractTitle), true},
+		{mdInstallSkill, filepath.Clean(mdUpgradeSkill), "", false},
+		{mdUpgradeSkill, filepath.Clean(mdOperatorActions), mdAnchor("Upgrade refusal reasons"), true},
 	} {
 		found := false
 		for _, l := range links {

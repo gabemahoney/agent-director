@@ -1,6 +1,6 @@
 ---
 name: install-agent-director
-description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin (an upgrade from a release that kept its files in the old directory moves that directory first), migrates and opens state.db (requiring an operator-maintained maintenance window for the native-input cutover), migrates config.toml and the templates to the agent names, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up recovery (sweep when supported, otherwise find-missing) and separate expire cleanup (cron, else systemd user timers; otherwise it warns that nothing schedules them). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
+description: Install agent-director on a machine that does not have it yet. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin, creates and opens state.db, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up recovery (sweep when supported, otherwise find-missing) and separate expire cleanup (cron, else systemd user timers; otherwise it warns that nothing schedules them). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director" or "set up agent-director" on a new machine. To upgrade an existing install, use upgrade-agent-director instead.
 ---
 
 ## First-time install on a brand-new machine
@@ -15,13 +15,15 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 
 The rest of this skill assumes `install.sh` is already on disk (in a
 checkout or alongside SKILL.md). Use the one-liner above to bridge the
-gap on a fresh host, then run the interactive flow below on subsequent
-upgrades.
+gap on a fresh host, or run the interactive flow below for a new install.
+An upgrade, or a re-install of an existing install, follows the upgrade
+skill instead.
 
 ## When to invoke
 
-Trigger phrases: "install agent-director", "set up agent-director",
-"upgrade agent-director on this machine".
+Trigger phrases: "install agent-director", "set up agent-director".
+
+An upgrade of an existing install follows the [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md) step by step.
 
 ## Operator dialog (do BEFORE running install.sh)
 
@@ -30,25 +32,39 @@ them silently. Walk the operator through each choice with
 `AskUserQuestion`, echo the resolved flag set back for confirmation,
 then execute. Keep it tight — five questions, then a confirm.
 
-### Before the questions: which agents, and an old-layout install
+### Before the questions: an existing install, and which agents
 
-**Existing store:** establish the operator-maintained maintenance window in
+**Whether agent-director is already installed.** It is when an install's
+binary and that install's store both exist:
+`~/.config/agent-director/bin/agent-director` and its store (`state.db`
+beside `bin/`, or the `[store] db_path` its `config.toml` names), or the old
+directory's binary and store ("Upgrading an install from the old directory").
+Check with `ls -l ~/.config/agent-director/bin/agent-director ~/.config/agent-director/state.db`.
+Then stop and follow the
+[upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md)
+instead. It also re-installs a working install: a later change to an answer
+below is a flag added at its step 3, such as `--register-mcp`. Anything else
+is a new install, including a stray `agent-director` on PATH and a directory
+an uninstall kept.
+
+**A directory an uninstall kept.** When `~/.config/agent-director` or the old
+directory is there without its binary, the install keeps its store. Establish
+the operator-maintained maintenance window in
 [Upgrading the native-input journal](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal)
-before any upgrade that crosses the journal cutover. Confirm the actual DB,
-complete invoking-home/additional input roots and stopped-writer recovery set.
-Add `--journal-maintenance-window --journal-roots-complete --journal-backup
-<new-absolute-directory>` to the resolved flags, and repeat
-`--journal-legacy-root <absolute-input-root>` for every additional root.
-These assertions do not stop writers: the operator must exclude all old
-callers, hooks, helpers and launches through committed verification. The
-administrator verifies actual process identity/access and refuses unreadable
-or live evidence without killing anything. A hand-written sentinel, stored
-finished status or a finished-row `kill` no-op cannot establish this boundary.
-Run one upgrade at a time. On macOS, confirm the install runs as the agents'
-user, not as root, and tell the operator macOS may ask them to grant the
-terminal access to a folder.
+first. Confirm the actual DB, complete invoking-home/additional input roots
+and stopped-writer recovery set. Add `--journal-maintenance-window
+--journal-roots-complete --journal-backup <new-absolute-directory>` to the
+resolved flags, and repeat `--journal-legacy-root <absolute-input-root>` for
+every additional root. These assertions do not stop writers: the operator
+must exclude all old callers, hooks, helpers and launches through committed
+verification. Run one install at a time. When the old directory is there, do
+the "Before you run" steps of "Upgrading an install from the old directory"
+with the operator before the first question.
 
-Two checks come first. Neither is a question, but each changes what
+On macOS, confirm the install runs as the agents' user, not as root, and tell
+the operator macOS may ask them to grant the terminal access to a folder.
+
+One more check comes first. It is not a question, but it changes what
 you ask and what you tell the operator.
 
 **Which agents are on the machine.** agent-director launches Claude Code,
@@ -78,26 +94,6 @@ describes. Then:
   version, compatibility or authentication, and never writes a `[launch]` key.
   A configured missing path can still allow PATH discovery for installation;
   launches keep using the configured whole path, without a PATH fallback.
-
-**Whether this is an upgrade from the old layout.** An earlier release
-kept its files in a directory this release no longer uses, and the
-install moves it, once. Look for it with the check in "Upgrading an
-install from the old directory" below. When it finds one, do that
-section's "before you run" steps with the operator before the first
-question. In short, tell the operator to:
-
-- stop everything that starts agents, then every agent, every
-  `agent-director serve` and every caller (a Claude Code session's own
-  agent-director MCP server is a live `serve`: end that session too);
-  the install refuses (`ErrAgentsLive`) while any of them runs;
-- run the install from a shell agent-director did not start (not one
-  inside an agent's session), from the directory the original install
-  ran in (or one inside the same git repository), so it finds a
-  `local` MCP registration made there;
-- copy a store kept outside agent-director's directory (`[store]
-  db_path`, including one whose `db_path` reaches it through a link
-  inside the directory) first: the upgrade migrates it in place, and
-  the way back needs the copy.
 
 ### How to phrase each question
 
@@ -192,7 +188,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      PATH) and `agent-director-admin` into
      `~/.config/agent-director/admin/`, never on PATH. We need to know where to
      copy both *from*; they must come from the same build.
-   - *Four options:*
+   - *Three options:*
      - **(a) Download a pre-built release from GitHub** *(recommended
        for new users)*. The script `curl -L`s both assets for your
        OS/arch (`agent-director-<os>-<arch>` and
@@ -216,15 +212,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
        there on its own). If you downloaded the two release assets
        yourself, point at both. Flags: `--binary <path>
        --admin-binary <path>`.
-     - **(c) Use whatever `agent-director` is on `PATH` today.** Only
-       makes sense if you're re-installing an existing install (to
-       re-inject the hooks or register MCP, say). No binary flag: run
-       from the installed skill, outside any checkout, install.sh pairs
-       the `agent-director` on PATH with the installed
-       `~/.config/agent-director/admin/agent-director-admin`. For the full
-       lookup order, see "Where install.sh looks for each binary" in
-       step 6 of "What this skill does".
-     - **(d) Build from source now, then install.** Run `make build` in
+     - **(c) Build from source now, then install.** Run `make build` in
        this checkout to produce fresh `./bin/agent-director` and
        `./bin/agent-director-admin`, then point install.sh at them. No
        install.sh change needed: the orchestrator runs `make build`
@@ -246,19 +234,15 @@ previous release". The current installer refuses pre-move binaries with exit 3.
        admin binary's stamp itself.)
      - **In a checked-out tree with Go available but no fresh local
        binary** (missing, or `commit` doesn't match HEAD) → propose
-       **(d)** *build from source*. The orchestrator runs `make build`
+       **(c)** *build from source*. The orchestrator runs `make build`
        to produce a binary that matches the current tree, then points
        install.sh at it.
      - **In a checked-out tree but no Go (or `make build` would fail)**
        → propose **(a)** *download from release* and SAY SO. Don't try
        to use a possibly-stale `./bin/agent-director`.
      - **Not in a checked-out tree** (install.sh was curled to a tmp
-       path, or invoked from an arbitrary directory), `agent-director`
-       on PATH, `~/.config/agent-director/admin/agent-director-admin` present,
-       and the operator wants to re-inject the hooks or register MCP →
-       propose **(c)** *use what is on PATH* (no binary flag).
-     - **Not in a checked-out tree** otherwise, or the operator wants
-       to upgrade → propose **(a)** *download from release*.
+       path, or invoked from an arbitrary directory) → propose **(a)**
+       *download from release*.
 
    **Why the version-check matters:** absent a check, a binary at
    `./bin/agent-director` may have been built off a stale branch or a
@@ -267,7 +251,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    likely intent of "install the current source". install.sh now reads
    the binary's `version` verb and refuses option (b) unless the
    embedded commit matches HEAD — so the orchestrator can safely
-   default to (b) when fresh, and falls through to (d)/(a) when not.
+   default to (b) when fresh, and falls through to (c)/(a) when not.
    Separately, for every option, install.sh refuses (exit 3) unless
    `agent-director` and `agent-director-admin` report the same
    `version` stamp (version and commit), with a real commit: mixing
@@ -278,13 +262,13 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    build"). The fix for both is `make build` in a git checkout (both
    binaries again, stamped) or `--from-release`.
 
-   - *Reversibility:* picking wrong is cheap. The next
-     `uninstall.sh --purge` resets to a clean slate, and you can
-     re-run `install.sh` with a different source any time.
+   - *Reversibility:* picking wrong is cheap. The upgrade skill later
+     installs the latest release over it, and `uninstall.sh --purge`
+     resets to a clean slate.
 
    If `--from-release` is selected but the repo has no releases yet,
    the script exits with a clear error. Don't paper over that —
-   surface it to the operator and loop back to (b) or (d).
+   surface it to the operator and loop back to (b) or (c).
 
 2. **Should the binary go on `PATH` via a symlink? (`--symlink-dir <dir>` or `--no-symlink`)**
 
@@ -314,8 +298,9 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      `PATH`. Otherwise ask explicitly — don't silently fall back to
      (c), because the operator probably wants a working command.
    - *Reversibility:* fully reversible. The uninstall script removes
-     any symlink it created. If you skip and want one later, re-run
-     `install.sh --symlink-dir <dir>`.
+     any symlink it created. If you skip and want one later, follow the
+     [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#3-install)
+     with the original flags plus `--symlink-dir <dir>`.
 
 3. **Register the MCP server with Claude Code? (`--register-mcp`)**
    *(Claude Code only: skip this question when Claude Code is not
@@ -361,7 +346,9 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    - *Default:* (b) — OFF. MCP registration is the right call for
      orchestrator setups, but off-by-default keeps the tool list
      lean for operators who don't need it. Easy to flip on later.
-   - *Reversibility:* fully reversible. To add it later:
+   - *Reversibility:* fully reversible. To add it later, follow the
+     [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#3-install)
+     with the original flags plus `--register-mcp`, or by hand:
      `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`.
      To remove: `claude mcp remove agent-director -s <scope>` or
      `uninstall.sh --mcp-also`.
@@ -416,8 +403,9 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      two entries (preserving any other user hooks at those events;
      the entries of an install from before the move too), and the
      pre-edit `.bak` snapshot is retained for manual rollback.
-     Re-injecting later is a re-run of `install.sh` without
-     `--no-hooks`.
+     To inject them later, follow the
+     [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#3-install)
+     with the original flags less `--no-hooks`.
 
 5. **Schedule recovery every 2 minutes and expire daily at 03:17? (`--schedule`)**
 
@@ -474,7 +462,9 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    - *Reversibility:* fully reversible. `uninstall.sh` removes exactly
      the entries `--schedule` added (the tagged crontab lines, or the
      systemd units and their enable links) and does nothing when none are
-     there. A schedule added later is `install.sh --schedule`.
+     there. To add the schedule later, follow the
+     [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#3-install)
+     with the original flags plus `--schedule`.
    - *Curl-pipe first install:* a run piped from `curl` has no
      `schedule/` files beside it, so it fetches the same five files from
      the repository (`raw.githubusercontent.com`, at the release tag with
@@ -496,19 +486,6 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    - Ask "ready to run?" with `AskUserQuestion`. Only on an explicit
      "yes" execute the script. A "no" or any modification answer means
      loop back to the relevant question, not silently re-pick.
-   - For an upgrade with unchanged directory and schema, `--keep-prior`
-     provides a binary-only rollback of the matching pair. Without it,
-     use the prior release's own installer and original flags. If the
-     schema changes, follow "Going back to the previous release" before
-     any binary swap; `.prior` alone cannot restore the migrated DB.
-   - On the upgrade that moves the old directory, `--keep-prior`
-     makes no snapshot, so do not offer it as the rollback: the way
-     back is "Going back to the previous release" below, which sets
-     the new directory aside and puts the kept old directory back,
-     and the fallback `--from-release v<old>` does not work across
-     the move (this install.sh refuses a release from before it).
-     Tell the operator before the run that the way back loses
-     everything written since the upgrade.
    - After the run, tell the operator where `agent-director-admin` was
      installed (install.sh's `admin   :` line, just before
      `install.sh: done`) and that it is not on PATH. Do not run it.
@@ -530,9 +507,8 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      `install.sh: err_name=<Name>`, never on the text above it.
 
 Do NOT skip this dialog because flags "look obvious from context".
-The operator may want a non-default path, MCP off, or a `--keep-prior`
-binary rollback snapshot (only with unchanged directory and schema). Inferring
-intent is the failure mode this section exists to prevent.
+The operator may want a non-default path or MCP off. Inferring intent is the
+failure mode this section exists to prevent.
 
 ## What this skill does
 
@@ -2289,7 +2265,9 @@ independently of state.db in every case.
 
 An earlier release kept its files in `~/.agent-director`. This release keeps
 them in `~/.config/agent-director`, and `install.sh` moves the old directory,
-once, on the first upgrade. Check for it before the first question:
+once, on the first upgrade. Its binary is `~/.agent-director/bin/agent-director`
+and its store `~/.agent-director/state.db`, or the `[store] db_path` its
+`config.toml` names. Check for it before the first question:
 
 ```sh
 ls -ld ~/.agent-director ~/.config/agent-director
