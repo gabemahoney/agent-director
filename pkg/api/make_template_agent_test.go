@@ -26,6 +26,73 @@ const (
 	mtReservedHome    = `ErrReservedEnvKey: extra_env key "HOME" sets HOME, which is reserved: `
 )
 
+func TestPaneOnlyMakeTemplateRefusalsWriteNothing(t *testing.T) {
+	// Serial: each case uses a temporary HOME and checks the trail.
+	const rejected = "private-lane-sentinel"
+	for _, agent := range []string{"droid"} {
+		for _, tc := range []struct {
+			name, want string
+			p          api.MakeTemplateParams
+		}{
+			{"joined model", "ErrSpawnDeniedFlag", api.MakeTemplateParams{AgentArgs: []string{"--model=" + rejected}}},
+			{"custom model", "ErrSpawnDeniedFlag", api.MakeTemplateParams{AgentArgs: []string{"--model", "custom:" + rejected}}},
+			{"relay", "ErrAgentCapabilityUnsupported", api.MakeTemplateParams{RelayMode: "on"}},
+			{"allow", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Allow: []string{rejected}}}},
+			{"deny", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Deny: []string{rejected}}}},
+			{"ask", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Ask: []string{rejected}}}},
+			{"forbidden env", "ErrReservedEnvKey", api.MakeTemplateParams{ExtraEnv: map[string]string{"FACTORY_API_KEY": rejected}}},
+			{"empty forbidden env", "ErrReservedEnvKey", api.MakeTemplateParams{ExtraEnv: map[string]string{"FACTORY_HOME_OVERRIDE": ""}}},
+		} {
+			for _, existing := range []bool{false, true} {
+				name := "create"
+				if existing {
+					name = "replace"
+				}
+				t.Run(agent+"/"+tc.name+"/"+name, func(t *testing.T) {
+					e := newSpawnEnv(t)
+					c := agentClientWithConfig(t, e, "[experimental]\n"+agent+" = true\n")
+					p := tc.p
+					p.Agent, p.Name = agent, "lane"
+					p.Overwrite = existing
+					if existing {
+						seedTemplateFile(t, p.Name)
+					}
+					err := e.checkCreationWrites(t, func() error {
+						_, err := c.MakeTemplate(p)
+						return err
+					})
+					assertOneName(t, err, tc.want)
+					if strings.Contains(errText(err), rejected) {
+						t.Errorf("refusal exposed a rejected value: %v", err)
+					}
+				})
+			}
+		}
+	}
+}
+
+// Client advice lists an experimental agent only after its flag is enabled.
+func TestMakeTemplateAgentChoicesFollowExperimentalFlag(t *testing.T) {
+	// Serial: it sets HOME and checks all trail writes around each refusal.
+	for _, tc := range []struct{ enabled, choices string }{
+		{"false", "claude, codex or cursor"},
+		{"true", "claude, codex, cursor or droid"},
+	} {
+		t.Run(tc.enabled, func(t *testing.T) {
+			e := newSpawnEnv(t)
+			c := agentClientWithConfig(t, e, "[experimental]\ndroid = "+tc.enabled+"\n")
+			err := e.checkCreationWrites(t, func() error {
+				_, err := c.MakeTemplate(api.MakeTemplateParams{Name: "choices", Agent: "gemini"})
+				return err
+			})
+			assertOneName(t, err, "ErrTemplateMalformed")
+			if want := `ErrTemplateMalformed: agent "gemini" (want ` + tc.choices + `)`; errText(err) != want {
+				t.Errorf("refusal = %q; want %q", errText(err), want)
+			}
+		})
+	}
+}
+
 // TestMakeTemplateAgentCheckOrder (SR-1.4): make-template checks the name, then relay_mode, then the agent
 // (invalid, agent_args without one, codex permissions), then extra_env; the first failing check is the error
 // and the call creates no templates dir.

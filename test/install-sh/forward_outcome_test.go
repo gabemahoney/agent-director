@@ -335,7 +335,7 @@ func forwardOutcome(t *testing.T, tc forwardOutcomeCase, wayBack func(f *cutover
 			t.Errorf("recorded authority ran crossing preflight:\n%s\n%s", follow.Stdout, calls)
 		}
 	} else {
-		(&crossingCase{h: h, db: db}).assertCrossed(t, follow, backup)
+		(&crossingCase{h: h, db: db, version: "15"}).assertCrossed(t, follow, backup)
 	}
 	if tc.rebase || tc.relativePaths {
 		canonical := filepath.Join(h.New, "bin", "agent-director")

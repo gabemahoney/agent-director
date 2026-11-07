@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -146,6 +147,9 @@ func RecordPaneAnswer(s RecordPaneAnswerStore, t ReadPaneTmux, env RecordPaneAns
 	row, err := s.GetSpawn(pr.InstanceID)
 	if err != nil {
 		return RecordPaneAnswerResult{}, err
+	}
+	if spawn.IsPaneOnly(row.Agent) {
+		return RecordPaneAnswerResult{}, spawn.PaneOnlyCapabilityError(row.Agent, "record-pane-answer")
 	}
 	j := newRelayJudge(env.Relay)
 	reqs, err := judgedRequests(func() ([]PermissionRow, error) {
@@ -397,6 +401,8 @@ func (r *recordPaneRun) paneMatches(t ReadPaneTmux, paneID string, launch tmux.L
 // CLI: agent-director record-pane-answer
 //
 // Errors:
+//   - [ErrAgentCapabilityUnsupported]: the request belongs to a pane-only
+//     row, which does not support recorded pane answers; nothing is recorded.
 //   - [ErrInvalidFlags]: RequestToken missing, As not allow, deny or
 //     unknown, ExpectPaneSHA256 missing or not 64 hex digits, or NLines
 //     negative.

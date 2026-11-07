@@ -19,6 +19,9 @@ type StatusStore interface {
 // CLI.
 type StatusResult struct {
 	StateDetail
+	// IntegrationMode identifies the fixed pane-only capability contract;
+	// omitted for agents with native integration.
+	IntegrationMode string `json:"integration_mode,omitempty"`
 	// TmuxSessionName is present while a Displayed State is shown
 	// (DisplayedState).
 	TmuxSessionName string `json:"tmux_session_name,omitempty"`
@@ -45,7 +48,7 @@ type StatusResult struct {
 	// displayed_state records (Confirmation). family_state has none.
 	Confirmations Confirmations `json:"confirmations"`
 	// IdleScreenAvailability is whether idle_screen can apply to the row's
-	// agent: available for Claude, Codex or an absent agent, unavailable for Cursor
+	// agent: available for Claude, Codex or an absent agent, unavailable for Cursor or pane-only agents
 	// (IdleScreenAvailable, IdleScreenUnavailable). Present on every result;
 	// omitted only from the empty result of a failed call.
 	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
@@ -136,6 +139,7 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		}
 		display, family := displayed(s, v, settle, row)
 		out := StatusResult{State: row.ReportedState, StateDetail: stateDetail(display), FamilyState: family,
+			IntegrationMode:        integrationMode(row.Agent),
 			IdleScreenAvailability: idleScreenAvailability(row.Agent),
 			LaunchStartedAt:        launchStartedAt(row.State, row.LaunchStartedAtMillis), Context: contextOf(row.ContextEvidence())}
 		out.ProcessLiveness, out.Confirmations = mainFields(s, row, settle)
@@ -154,6 +158,7 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 			return StatusResult{}, err
 		}
 		return withUnknownMainFields(StatusResult{State: reported, FamilyState: evidence.FamilyState, LaunchStartedAt: launchStartedAt(raw, launchMillis),
+			IntegrationMode:        integrationMode(evidence.Agent),
 			IdleScreenAvailability: idleScreenAvailability(evidence.Agent), Context: contextOf(evidence)}, evidence.Agent), nil
 	}
 	if sr, ok := s.(familyStatusReader); ok {

@@ -133,8 +133,8 @@ Cursor uses the existing result and row fields; `status` keeps its existing
 shape. `resume({ instance_id: id })` launches load of only its latest saved session;
 the row can remain `pending` until a real first prompt. After inspecting the
 pane, pass `allow_pending: true` to `sendKeys` for that prompt; binding and
-dialog guards still apply. Saved configuration and initial-prompt replay are
-defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
+dialog guards still apply. Saved configuration replay, which never includes
+the initial prompt, is defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
 `reuse_finished: true` supports Cursor and agent switches under the linked
 life rules. `makeTemplate`
 and `spawn` refuse nonempty Cursor permission lists with
@@ -239,7 +239,7 @@ or omitted `text` sends the Enter only, submitting what is already typed.
 `no_enter: true` types the text without the Enter, and `key` sends one key
 alone (`"Escape"`, `"Enter"`, `"Up"`, `"Down"`, `"Tab"`, or one character),
 never followed by Enter. With `expect_pane_sha256` (the `pane_sha256` of
-the `readPane` you looked at, with its `n_lines`), nothing is sent if the
+the plain `readPane` you looked at, with its `n_lines`), nothing is sent if the
 pane changed since (`ErrPaneChanged`); on a relayed Spawn a match also
 passes the API's dialog hold (`ErrDialogMaybeOpen`, see "Answering a request at
 the pane" below). Pass it only for a pane a person or an LLM judged, never
@@ -321,7 +321,8 @@ console.log(result.pane, result.pane_sha256);
 
 `pane_sha256` is the SHA-256 of exactly the bytes of `pane`; pass it back as
 `sendKeys`' or `recordPaneAnswer`'s `expect_pane_sha256`, with the same
-`n_lines`, when you act on what this pane shows.
+`n_lines`, when you act on what this pane shows. Use the default ANSI-stripped
+read for this guard; the hash of an `ansi: true` read never matches.
 
 `readPane` has no state guard — it works on `pending`, `ended`, and `missing`
 rows as well as live ones. The `allow_pending` flag is accepted for symmetry
@@ -683,14 +684,14 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 
 These classes correspond to the shared CLI `err_name` contract. They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
 
-**cwd validation** (bad `cwd` argument to `spawn` — programmer error):
+**cwd validation** (spawn's `cwd` argument — programmer error — or resume's saved cwd, gone since the row finished):
 
 | Error | When it fires |
 |---|---|
 | `ErrCwdMissing` | No `cwd` was supplied; spawn requires it to derive the JSONL/resume path. |
 | `ErrCwdNotAPath` | `cwd` is neither absolute nor a `~/` form (URLs, bare relative paths, non-path values). |
-| `ErrCwdNotFound` | `cwd` resolved to a path that does not exist on disk. |
-| `ErrCwdNotADirectory` | `cwd` resolved to a file (or other non-directory inode). |
+| `ErrCwdNotFound` | `cwd` resolved to a path that does not exist on disk, or that cannot be accessed or entered (no search permission on it or a parent). `resume` also returns it when the row's saved cwd is gone or cannot be entered; nothing is written or launched. |
+| `ErrCwdNotADirectory` | `cwd` resolved to a file (or other non-directory inode). `resume` also returns it when the row's saved cwd is no longer a directory. |
 
 **spawn and template config validation** (bad `spawn` or `makeTemplate` arguments — programmer error):
 

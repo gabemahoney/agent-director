@@ -11,6 +11,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/cursorenv"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
+	"golang.org/x/sys/unix"
 )
 
 // MaxTmuxSessionNameBytes caps caller-supplied tmux_session_name values
@@ -62,6 +63,9 @@ const ReservedHomeReason = "the agent's hook resolves agent-director's config an
 // Claude/Codex variables are named when no agent is known (make-template
 // with no agent).
 func ReservedHomeAlternative(agent string) string {
+	if IsPaneOnly(agent) {
+		return "keep HOME unchanged; this lane does not accept an alternate agent home"
+	}
 	switch agent {
 	case config.AgentClaude:
 		return "to give the agent its own Claude Code config, set an absolute CLAUDE_CONFIG_DIR in extra_env instead"
@@ -86,29 +90,34 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //
 // Validation order (load-bearing — preserves error precedence the SRD
 // pins):
-//  1. cwd shape, existence, type. Canonicalize via EvalSymlinks so two
-//     callers spawning into /foo/bar and /foo/./bar end up with the same
-//     row.
+//  1. cwd shape, existence, type, and that it can be entered
+//     (CwdEnterError). Canonicalize via EvalSymlinks so two callers spawning
+//     into /foo/bar and /foo/./bar end up with the same row.
 //  2. relay_mode is "on" / "off" / "" if set.
-//  3. The agent (SR-1.3 step 5): the resolved agent is claude, codex or cursor,
+//  3. The agent (SR-1.3 step 5): the resolved agent is claude, codex, cursor or droid,
 //     else ErrAgentInvalid for a given value and ErrAgentMissing for none.
-//  4. Argument ownership (SR-2.1): inherited template agent_args belong to
+//  4. CheckExperimental requires the pane-only agent's experimental flag.
+//  5. Argument ownership (SR-2.1): inherited template agent_args belong to
 //     the resolved agent, else ErrAgentArgsMismatch.
-//  5. agent_args contains no denied flag (both --flag VALUE and
+//  6. Pane-only agents use ValidatePaneOnlySettings: validate the arguments
+//     with the model required, then refuse relay_mode on and any allow,
+//     deny or ask entry. For Droid, only one split --model ID is accepted.
+//     Other agents' agent_args contain no denied flag (both --flag VALUE and
 //     --flag=VALUE forms), except resume selectors removed on a verified
 //     finished-agent switch. Claude print is checked on the full original
 //     list, before removal. Claude uses deniedClaudeArgs and ClaudeResumeArgs; Codex uses
 //     CheckCodexArgs (subcommands, --remote, and the hooks, paste-burst and
 //     question-tool settings agent-director owns), which reads the
-//     question-tool setting from r.DisableAskUser.
-//  6. A codex or cursor spawn carries no allow, deny or ask entry
+//     question-tool setting from r.DisableAskUser. Cursor uses CursorArgs.
+//  7. A codex or cursor spawn carries no allow, deny or ask entry
 //     (ErrPermissionsUnsupported).
-//  7. extra_env contains no key whose env-var name (the part before the
-//     first '=', the name tmux sets) is HOME or starts with AGENT_DIRECTOR_,
-//     then no key that is not a valid env-var name (empty, or holding '='
-//     or a NUL byte).
-//  8. labels normalization is a no-op here; the prefix guard in §7.2
-//     step 5 lands at env-composition time.
+//  8. ValidateExtraEnv first refuses the effective pane-only agent's forbidden
+//     keys, then HOME, the AGENT_DIRECTOR_ namespace and malformed keys;
+//     Cursor's credential and directory checks follow for Cursor only.
+//  9. An explicitly supplied tmux session name passes validateTmuxSessionName.
+//
+// Labels normalization is a no-op here; the prefix guard in §7.2 step 5
+// lands at env-composition time.
 func Validate(r *Resolved) error {
 	if err := validateCwd(r); err != nil {
 		return err
@@ -117,6 +126,9 @@ func Validate(r *Resolved) error {
 		return err
 	}
 	if err := validateAgent(r); err != nil {
+		return err
+	}
+	if err := CheckExperimental(r.Agent, r.Experimental); err != nil {
 		return err
 	}
 	if err := validateArgsOwnership(r); err != nil {
@@ -148,16 +160,16 @@ func Validate(r *Resolved) error {
 
 // validateAgent applies SR-1.3 step 5 to r.Agent, the resolved agent (the
 // call's own, else its template's; Resolve). A value other than claude,
-// codex or cursor, case-sensitively, is ErrAgentInvalid; none is ErrAgentMissing. A
+// codex, cursor or droid, case-sensitively, is ErrAgentInvalid; none is ErrAgentMissing. A
 // template's own bad agent never gets here: loading it is
 // ErrTemplateMalformed (config.LoadTemplate).
 func validateAgent(r *Resolved) error {
 	switch {
 	case r.Agent == "":
-		return fmt.Errorf("%w: the call gives no agent and its template names none; pass agent %s, %s or %s (--agent on the CLI), or put agent in the template",
-			ErrAgentMissing, config.AgentClaude, config.AgentCodex, config.AgentCursor)
+		return fmt.Errorf("%w: the call gives no agent and its template names none; pass agent %s (--agent on the CLI), or put agent in the template",
+			ErrAgentMissing, config.AgentChoices(r.Experimental))
 	case !config.ValidAgent(r.Agent):
-		return fmt.Errorf("%w: agent %q (want %s, %s or %s)", ErrAgentInvalid, r.Agent, config.AgentClaude, config.AgentCodex, config.AgentCursor)
+		return fmt.Errorf("%w: agent %q (want %s)", ErrAgentInvalid, r.Agent, config.AgentChoices(r.Experimental))
 	}
 	return nil
 }
@@ -271,12 +283,28 @@ func validateCwd(r *Resolved) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%w: %q is not a directory", ErrCwdNotADirectory, r.CWD)
 	}
+	if err := CwdEnterError(canonical); err != nil {
+		return fmt.Errorf("%w: %q cannot be entered (no search permission: %v)", ErrCwdNotFound, r.CWD, err)
+	}
 	r.CWD = canonical
 	return nil
 }
 
-// validateRelayMode applies SRD §7.2 step 2. Empty is OK — the defaults
-// pass will fill it from config.
+// CwdEnterError returns nil when this process may enter the directory dir,
+// else access(2)'s error for search permission on it (bug b.qwo). stat needs
+// search permission only on dir's parents, so a directory whose own mode
+// denies search (mode 000) passes the stat and IsDir checks; tmux, unable to
+// enter it, would start the agent in another directory and report success.
+// access(2) is used rather than chdir, which would change the working
+// directory of the whole process while pkg/api serves concurrent callers.
+// Spawn (validateCwd) and resume (pkg/api savedCwdError) both call it after
+// their IsDir check and refuse a failure with ErrCwdNotFound.
+func CwdEnterError(dir string) error {
+	return unix.Access(dir, unix.X_OK)
+}
+
+// validateRelayMode applies SRD §7.2 step 2. Empty is OK: the defaults pass
+// fills it with off for pane-only agents or the config default for others.
 func validateRelayMode(m string) error {
 	switch m {
 	case "", "on", "off":
@@ -290,6 +318,9 @@ func validateRelayMode(m string) error {
 // long tokens owned as values are always refused; dropping them would change
 // the option's value. Claude print is checked before any selector is removed.
 func validateSpawnArgs(r *Resolved) error {
+	if IsPaneOnly(r.Agent) {
+		return ValidatePaneOnlySettings(r.Agent, r.AgentArgs, r.RelayMode, r.Permissions, true)
+	}
 	original := r.AgentArgs
 	if r.Agent == config.AgentCursor {
 		args := original
@@ -382,22 +413,25 @@ func refuseClaudePrint(args []string) error {
 // validation (Validate) and make-template (pkg/api MakeTemplate, bug b.66q)
 // both call it, so make-template refuses a template's extra_env with the same
 // error spawn would give for it, instead of saving a template every spawn that
-// uses it is refused for. Both reserved-key rules apply to
+// uses it is refused for. Reserved-key rules apply to
 // each key's env-var name (envVarName), the name tmux actually sets, not the
 // raw key. The checks are case-sensitive (POSIX env vars are case-sensitive)
-// and match the SRD §14.4 carve-out for auth env vars — those do NOT carry
-// the AGENT_DIRECTOR_ prefix and pass through.
+// and permit auth env vars without the reserved prefix unless the effective
+// agent's credential profile refuses them.
 //
-// HOME is checked first (ReservedHomeKey, bug b.nas): a key whose name is
-// HOME, whatever its value, an empty one included, is refused, the message
-// quoting the key as given and saying it sets HOME, why that is refused
+// The effective pane-only agent's forbidden keys are checked first, even
+// with empty values. HOME follows (ReservedHomeKey, bug b.nas): a key whose
+// name is HOME, whatever its value, an empty one included, is refused.
+// For native agents the message quotes the key as given and says it sets
+// HOME, why that is refused
 // (ReservedHomeReason) and what to set instead (ReservedHomeAlternative,
 // which names the folder variables of agent, or both Claude/Codex variables
 // when no agent is known).
-// Then a key whose name has the AGENT_DIRECTOR_ prefix is refused, quoted.
-// Last, a key that is not a valid env-var name (InvalidEnvKey, bug b.vpb:
+// Then a key whose name has the AGENT_DIRECTOR_ prefix is refused, quoted
+// for native agents. Last among the generic checks, a key that is not a
+// valid env-var name (InvalidEnvKey, bug b.vpb:
 // empty, or holding '=' or a NUL byte) is refused, also with
-// ErrReservedEnvKey, the message quoting the key as given, saying it is not a
+// ErrReservedEnvKey, the native-agent message quoting the key as given, saying it is not a
 // valid env-var name and what is wrong with it (EnvKeyProblem) and what to do
 // instead (InvalidEnvKeyAlternative). Such a key is refused, never rewritten:
 // tmux would set a different variable than the one pre-trust and resume read
@@ -411,16 +445,29 @@ func refuseClaudePrint(args []string) error {
 // writes anything, so a refused template leaves no file, new or replaced.
 // For effective Cursor only, explicit credential-profile selectors and invalid
 // directory selections are then refused, without values in the error. Generic
-// templates defer this check until their effective agent is resolved.
+// templates defer Cursor and pane-only checks until their effective agent is resolved.
+// Pane-only refusals also omit malformed key text: it can embed a value.
 func ValidateExtraEnv(env map[string]string, agent string) error {
+	if err := validatePaneOnlyEnv(agent, env); err != nil {
+		return err
+	}
 	if k, ok := ReservedHomeKey(env); ok {
+		if IsPaneOnly(agent) {
+			return fmt.Errorf("%w: extra_env sets reserved HOME; remove that entry and %s", ErrReservedEnvKey, ReservedHomeAlternative(agent))
+		}
 		return fmt.Errorf("%w: extra_env key %q sets %s, which is reserved: %s; remove %q from extra_env, and %s",
 			ErrReservedEnvKey, k, ReservedHomeEnvKey, ReservedHomeReason, k, ReservedHomeAlternative(agent))
 	}
 	if k, ok := firstEnvKey(env, func(key string) bool { return strings.HasPrefix(envVarName(key), reservedEnvKeyPrefix) }); ok {
+		if IsPaneOnly(agent) {
+			return fmt.Errorf("%w: extra_env uses the reserved AGENT_DIRECTOR_ namespace; remove that entry", ErrReservedEnvKey)
+		}
 		return fmt.Errorf("%w: %q", ErrReservedEnvKey, k)
 	}
 	if k, ok := InvalidEnvKey(env); ok {
+		if IsPaneOnly(agent) {
+			return fmt.Errorf("%w: extra_env has an invalid key: %s; %s", ErrReservedEnvKey, EnvKeyProblem(k), InvalidEnvKeyAlternative)
+		}
 		return fmt.Errorf("%w: extra_env key %q is not a valid env-var name: %s; remove %q from extra_env, and %s",
 			ErrReservedEnvKey, k, EnvKeyProblem(k), k, InvalidEnvKeyAlternative)
 	}

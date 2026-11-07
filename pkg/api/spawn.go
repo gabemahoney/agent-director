@@ -33,8 +33,9 @@ type SpawnResult struct {
 	//     passed SpawnParams.NoPreTrust; nothing was attempted.
 	//   - "failed": pre-trust was attempted and the entry was not written
 	//     (a claude agent: the .claude.json file is missing, or could not be
-	//     read, parsed or written, or the extra env sets CLAUDE_CONFIG_DIR to
-	//     a path that is not absolute; a codex agent: the extra env sets
+	//     read, parsed or written, or the extra env, or else agent-director's
+	//     own environment, sets CLAUDE_CONFIG_DIR to a path that is not
+	//     absolute; a codex agent: the extra env sets
 	//     CODEX_HOME to a path that is not absolute, and the launch carries
 	//     neither the folder trust nor the hook-trust bypass); the agent may
 	//     stop at its folder-trust prompt.
@@ -156,7 +157,11 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	id, preTrust, err := spawn.Launch(s, t, pc, r, idCheck == spawn.IDMinted, cfg, now, lg)
 	var held *spawn.HeldNameError
 	if errors.As(err, &held) {
-		return SpawnResult{}, spawnHeldName(s, t, pc, now, lg, held)
+		err := spawnHeldName(s, t, pc, now, lg, held)
+		if spawn.IsPaneOnly(r.Agent) {
+			spawn.ReclaimLaunchFiles(s.StoreID(), held.Token, lg)
+		}
+		return SpawnResult{}, err
 	}
 	if err != nil {
 		return SpawnResult{}, err
@@ -223,7 +228,7 @@ func hasControlChar(id string) bool {
 // description names it, and get shows it): without ReuseFinished, the spawn
 // collides with the id's finished row (ErrInstanceIdCollision).
 //
-// The spawn names its agent, claude, codex or cursor (case-sensitive): SpawnParams.Agent,
+// The spawn names its agent (case-sensitive): SpawnParams.Agent,
 // else the template's agent, else the call is refused with ErrAgentMissing; no
 // config key or environment variable supplies one. Agent_args inherited from
 // a template belong to the template's agent: a spawn of another agent that
@@ -276,11 +281,18 @@ func hasControlChar(id string) bool {
 // Errors:
 //   - ErrCwdMissing: params.CWD was not supplied.
 //   - ErrCwdNotAPath: CWD is not a valid filesystem path.
-//   - ErrCwdNotFound: CWD does not exist on disk.
+//   - ErrCwdNotFound: CWD does not exist on disk, or cannot be accessed
+//     or entered (no search permission on it or a parent).
 //   - ErrCwdNotADirectory: CWD exists but is a file, not a directory.
 //   - ErrRelayModeInvalid: RelayMode is not "on", "off", or "".
 //   - ErrAgentMissing: the call gives no Agent and its template names none.
-//   - ErrAgentInvalid: Agent is not claude, codex or cursor (case-sensitive).
+//   - ErrAgentInvalid: Agent is unrecognized (case-sensitive).
+//   - ErrExperimentalAgentDisabled: the requested experimental agent's flag
+//     is off; enable its [experimental] flag before spawning it.
+//   - ErrModelMissing: a pane-only launch has no --model ID after template
+//     resolution; supply one explicit subscription model.
+//   - ErrAgentCapabilityUnsupported: a pane-only launch requests RelayMode
+//     "on"; omit that capability and supervise the owned pane.
 //   - ErrAgentArgsMismatch: the template's agent_args are for another agent
 //     than this spawn's and the call supplies no AgentArgs of its own.
 //   - ErrSpawnDeniedFlag: a refused argument was passed in AgentArgs: for a
@@ -297,25 +309,32 @@ func hasControlChar(id string) bool {
 //     initial prompt. Unsupported or malformed Cursor arguments are refused;
 //     remove the named argument and any owned value, then retry. Explicit mode is established through
 //     ACP before prompt admission; later runtime failures are asynchronous.
-//   - ErrPermissionsUnsupported: a codex or cursor spawn carries Permissions allow,
-//     deny or ask entries (merged with the template's).
+//     Pane-only agents accept only one split --model ID with a nonempty subscription
+//     model ID. Malformed or duplicate model options, --model=ID, custom:
+//     model IDs and every other argument (including task text) are refused
+//     without echoing rejected values. No model at all is ErrModelMissing.
+//   - ErrPermissionsUnsupported: a codex, cursor or pane-only spawn carries
+//     Permissions allow, deny or ask entries (merged with the template's).
+//     Empty lists are allowed.
 //   - ErrReservedEnvKey: ExtraEnv (merged with the template's) contains a
 //     key whose name before the first '=' (the name tmux sets) is reserved:
 //     it starts with AGENT_DIRECTOR_, or it is HOME (the key HOME, or one
-//     such as "HOME=/x") with any value, an empty one included. The message
-//     quotes the key. An extra_env HOME would move the agent's hook to
-//     another agent-director store, so set an absolute CLAUDE_CONFIG_DIR
-//     (a claude agent) or CODEX_HOME (a codex agent) instead to give the
-//     agent its own config; the message names the spawn's agent's variable,
-//     both when no agent is known yet. Also returned,
-//     after those checks, for a key that is not a valid env-var name: it is
-//     empty, or it contains '=' or a NUL byte. tmux splits each KEY=VALUE
-//     entry at its first '=', so such a key would set a different variable
-//     (the key "CLAUDE_CONFIG_DIR=/x" sets CLAUDE_CONFIG_DIR). The key is
-//     refused, never rewritten; the message quotes it, says it is not a
-//     valid env-var name and says what is wrong with it. A key that is both
-//     reserved and malformed (such as "HOME=/x") gets the reserved-name
-//     message. Nothing is written or launched.
+//     such as "HOME=/x") with any value, an empty one included. Also returned
+//     for a malformed key: empty, or containing '=' or a NUL byte. tmux
+//     splits KEY=VALUE at its first '=', so malformed keys are refused,
+//     never rewritten. A reserved and malformed key gets the reserved-name
+//     refusal. For Claude/Codex/Cursor, these messages quote the key.
+//     Claude can use absolute CLAUDE_CONFIG_DIR and Codex absolute CODEX_HOME
+//     for its own config. Cursor can use absolute CURSOR_CONFIG_DIR and
+//     CURSOR_DATA_DIR with its existing personal login, without account
+//     isolation; explicit credential-profile selectors and invalid directory
+//     selections are refused too.
+//     Pane-only agents additionally refuse their credential and home
+//     selectors, including empty values and keys inherited
+//     from a template. The name before the first '=' is checked, so malformed
+//     variants cannot bypass the refusal. Keep HOME unchanged; this lane
+//     accepts no alternate agent home. Pane-only diagnostics omit values and
+//     raw malformed key text. Nothing is written or launched.
 //   - ErrInvalidFlags: InstanceID contains an ASCII control character, or
 //     IdleScreenTimeoutSeconds is negative or above 9223372036; nothing is
 //     written or launched.
@@ -353,7 +372,9 @@ func hasControlChar(id string) bool {
 //     reset, session creation failed, a created session could not be labelled, or after
 //     "duplicate session" no session held the requested name when it was
 //     looked up again; then the row is restored (the description says what
-//     the restore did). A name found held is never this error.
+//     the restore did). A name found held is never this error. Also returned
+//     if a pane-only agent's private launch-file preparation fails before the row insert
+//     or reuse reset and tmux creation; no row is changed or agent launched.
 //   - ErrTmuxUnresponsive: the session-creating call timed out or gave a
 //     reply that does not parse with a non-zero exit: the session may have
 //     been created and the row stays pending; do not retry until get shows
@@ -405,8 +426,7 @@ func hasControlChar(id string) bool {
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed, or it
 //     sets an unknown key, one key under names differing only in letter
-//     case, a relay_mode other than on/off, or an agent other than claude,
-//     codex or cursor.
+//     case, a relay_mode other than on/off, or an unrecognized nonempty agent.
 //   - ErrTemplateAgentMissing: the template sets agent_args but names no
 //     agent.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.

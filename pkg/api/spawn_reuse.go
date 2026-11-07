@@ -107,6 +107,7 @@ type reuseExamined struct {
 	pre             preLaunchRow
 	verdict         string
 	disagreeWritten []string
+	lookupGone      bool
 }
 
 // spawnReuse is the reuse path for a finished row (SR-10.2 to SR-10.6): the
@@ -198,7 +199,7 @@ func reuseExamine(d reuseDeps, r spawn.Resolved, row store.ReuseRow) (reuseExami
 		}
 		return reuseExamined{}, decision.Err
 	}
-	return reuseExamined{row: row, pre: pre, verdict: decision.Verdict, disagreeWritten: decision.Reasons}, nil
+	return reuseExamined{row: row, pre: pre, verdict: decision.Verdict, disagreeWritten: decision.Reasons, lookupGone: lookup.Verdict == tmux.Gone}, nil
 }
 
 // reuseSpawnOf returns row, as ReadForReuse read it for instanceID, as the
@@ -252,8 +253,8 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     environment, settings and argv) and the request fields the reset
 //     writes, with the parent id from the caller's AGENT_DIRECTOR_INSTANCE_ID.
 //     A failure writes nothing.
-//  5. Pre-trust (spawn.RunPreTrust) for the new request's cwd and extra env, by
-//     the call's own NoPreTrust, after every check that refuses without a
+//  5. Pre-trust (spawn.RunPreTrust) for the new request's cwd and the extra
+//     env the reset writes (step 4's), by the call's own NoPreTrust, after every check that refuses without a
 //     write and before the reset. For a claude agent it is spawn.PreTrust,
 //     waiting for a held lock on .claude.json for at most the config's
 //     effective pre_trust.lock_wait_seconds (b.kr4); for a codex agent it
@@ -316,13 +317,17 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	if err != nil {
 		return SpawnResult{}, err
 	}
+	r.LaunchStoreID, r.LaunchToken = d.storeID, token
 	c, err := spawn.ComposeLaunch(r, d.cfg)
 	if err != nil {
 		return SpawnResult{}, err
 	}
+	if err := spawn.PrepareLaunchFiles(c, d.storeID, token, d.lg); err != nil {
+		return SpawnResult{}, err
+	}
 
 	// A failure never fails the spawn; the outcome goes into the result.
-	preTrust := spawn.RunPreTrust(r.Agent, c.PreTrust, r.CWD, r.ExtraEnv, r.NoPreTrust, d.cfg.PreTrust)
+	preTrust := spawn.RunPreTrust(r.Agent, c.PreTrust, r.CWD, c.Row.ExtraEnv, r.NoPreTrust, d.cfg.PreTrust)
 
 	now := d.now()
 	fresh := c.Row
@@ -332,9 +337,15 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	fresh.LaunchOwner = spawn.CurrentLaunchOwner(d.pc)
 	res, archived, resetVersion, err := d.rs.ResetForReuse(id, ex.row.Snapshot, ex.row.Agent, fresh)
 	if err != nil {
+		if len(c.Files) > 0 {
+			spawn.ReclaimLaunchFiles(d.storeID, token, d.lg)
+		}
 		return SpawnResult{}, reuseChangeError(id, err)
 	}
 	if res != CondApplied {
+		if len(c.Files) > 0 {
+			spawn.ReclaimLaunchFiles(d.storeID, token, d.lg)
+		}
 		return SpawnResult{}, reuseLostRaceError(id)
 	}
 
@@ -349,7 +360,38 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	req.Input, _ = d.rs.(inputdelivery.Persistence)
 	out := spawn.CreateAndLabel(d.t, req)
 	emitReused(id, ex, archived, r.DroppedArgs)
-	if err := d.launchOnto(ex, resetVersion, fresh.LaunchOwner).outcome(out, req); err != nil {
+	launch := d.launchOnto(ex, resetVersion, fresh.LaunchOwner)
+	restore := launch.restoreWrite
+	retainedState := ""
+	launch.restoreWrite = func() (CondResult, error) {
+		res, err := restore()
+		if err == nil {
+			switch res {
+			case CondApplied:
+				retainedState = ex.row.State
+			case CondAbsent:
+				retainedState = "absent"
+			case CondChanged:
+				retainedState = "changed"
+			}
+		}
+		return res, err
+	}
+	err = launch.outcome(out, req)
+	if ex.lookupGone && spawn.IsPaneOnly(ex.row.Agent) {
+		state := tmux.JudgeProcess(d.pc, ex.pre.Agent.Identity)
+		if state == tmux.ProcGone || state == tmux.ProcNone {
+			spawn.ReclaimLaunchFiles(d.storeID, ex.row.Identity.Token, d.lg)
+		}
+	}
+	if err != nil {
+		if len(c.Files) > 0 {
+			if out.DefinitelyNotStarted() {
+				spawn.ReclaimLaunchFiles(d.storeID, token, d.lg)
+			} else if retainedState != "" {
+				spawn.ReportRetainedLaunchFiles(d.storeID, token, retainedState, d.lg)
+			}
+		}
 		return SpawnResult{}, err
 	}
 	return SpawnResult{InstanceID: id, PreTrust: string(preTrust), DroppedArgs: r.DroppedArgs}, nil

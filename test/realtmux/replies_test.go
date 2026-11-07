@@ -290,11 +290,14 @@ func TestRepliesSuccessfulCallStreams(t *testing.T) {
 }
 
 // TestRepliesCaptureStream checks a capture of typed text echoed by cat is
-// the catalogue's E.10 O4 answer on stdout, with empty stderr and exit 0.
+// the catalogue's E.10 O4 answer on stdout, with empty stderr and exit 0, and
+// that the client returns its two rows without the blank rows below them
+// (b.7y8).
 func TestRepliesCaptureStream(t *testing.T) {
 	rt := newRealTmux(t)
 	want := tmuxfix.Find(tmuxfix.Captures(), "capture/O4")
 	text, _, _ := strings.Cut(want.Stdout, "\n")
+	shown := text + "\n" + text + "\n"
 	c := rt.mustCreate(t, createSpec{Command: []string{"cat", "-"}})
 	pane := c.Reply.PaneID
 	if err := newClient().SendKeysPane(rt.Socket, pane, text, true); err != nil {
@@ -304,14 +307,14 @@ func TestRepliesCaptureStream(t *testing.T) {
 	var last string
 	waitFor(t, "pane shows the typed line and cat's copy", func() bool {
 		last, _ = newClient().CapturePaneID(rt.Socket, pane, rows, false)
-		return last == want.Stdout
+		return last == shown
 	}, func() string { return "capture " + strings.ReplaceAll(last, "\n", `\n`) })
 
 	cl, log := newRecordingClient(t)
 	got, err := cl.CapturePaneID(rt.Socket, pane, rows, false)
 	assertCallError(t, err, tmux.CallCapture, want)
 	assertTriple(t, log.last(t).rawResult, want)
-	if got != want.Stdout {
-		t.Errorf("capture = %q, want %q", got, want.Stdout)
+	if got != shown {
+		t.Errorf("capture = %q, want %q", got, shown)
 	}
 }

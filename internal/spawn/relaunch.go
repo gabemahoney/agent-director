@@ -43,26 +43,30 @@ type ComposedRelaunch struct {
 // Relaunch runs: the row's recorded session name verbatim ($ and \ names
 // included), its cwd, the environment, and the argv
 //
-//	claude --resume <session id> --settings <inline-json> [row agent_args]
+//	claude --resume <session id> --settings <inline-json> [row agent_args options]
 //
 // for a claude row (claude is [launch] claude_path when set, from cfg), or
 //
-//	codex resume <session id> [row agent_args before --] <per-launch settings> [-- and what follows]
+//	codex resume <session id> [row agent_args options] <per-launch settings>
 //
 // for a codex row (codex is [launch] codex_path when set, from cfg): nothing of
-// agent-director's stands before `resume`, the replayed arguments follow the
-// id, and the settings come last before any `--`, so the config's
-// question-tool setting wins over stored arguments. Parsed session selectors
-// and their values are removed, as are Claude print and orphaned cloud controls;
+// agent-director's stands before `resume`, the replayed options follow the
+// id, and the settings come last, so the config's question-tool setting wins
+// over stored arguments. Resume never replays the saved initial prompt (b.kz9):
+// operands and an unowned -- with everything after it are dropped from a copy,
+// read for Claude from the stored list and for Codex and Cursor from the list
+// once its selectors are removed. Option-owned values survive, even one that
+// reads like a prompt or is --. An unknown option is read as taking no value,
+// so a word after it is an operand and is dropped too.
+// Parsed session selectors and their values are removed, as are Claude print and orphaned cloud controls;
 // other arguments retain parsed ownership when Claude required values are present.
 // Claude inputs missing a recognized required value get literal filtering only.
-// Claude prompts move behind surviving
-// options and --, and changed short clusters are re-encoded, only when removal
-// would change their meaning; otherwise order/spelling survive. Codex's prompt
-// remains one original token after --. Stored AgentArgs is unchanged and no spawn
-// validation runs.
+// Changed Claude short clusters are re-encoded only when removal would change
+// their meaning; otherwise order/spelling survive. Stored AgentArgs is
+// unchanged and no spawn validation runs.
 // Cursor uses the current cursor_path through the actual AD cursor-host, with
-// the row's latest session as a private load target and one saved initial prompt.
+// the row's latest session as a private load target and an empty initial
+// prompt, so the loaded session waits for its first prompt.
 // Parsed Cursor selectors are filtered from a copy, never persisted back.
 // It writes nothing in any Codex folder. A row whose agent
 // is neither claude, codex nor cursor gets store.ErrRowAgentInvalid.
@@ -73,13 +77,17 @@ type ComposedRelaunch struct {
 // The environment and the settings (the same hooks as a fresh spawn) are
 // composed from the row. ExtraEnv is restored from the persisted
 // row (in.Row.ExtraEnv, decoded by GetSpawn) so a resumed spawn keeps its
-// original env, including CLAUDE_CONFIG_DIR, CODEX_HOME and any auth vars. This is the
+// original env, including CLAUDE_CONFIG_DIR (a claude spawn's inherited one
+// too, which ComposeLaunch records), CODEX_HOME and any auth vars. This is the
 // persist-all posture: those values may sit at rest in the DB, but the store
 // file is already forced 0600 in a 0700 dir on every open, so restoring them
 // here opens no new exposure tier. Permissions, by contrast, is NOT stored,
 // so it cannot be reconstructed and stays nil; the caller's shell env
 // propagates auth via tmux's default behavior for anything not captured in
 // ExtraEnv, except Cursor's explicit-only configuration/credential selectors.
+// agent-director's own CLAUDE_CONFIG_DIR is never added here: a claude row
+// without the key (its spawn inherited none, or predates recording it)
+// resumes as before bug b.uzn.
 // AGENT_DIRECTOR_INSTANCE_ID reaches the create argv exactly once,
 // as for a plain spawn (the client drops the environment's copy).
 func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, error) {
@@ -113,6 +121,8 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 			return ComposedRelaunch{}, fmt.Errorf("%w: Cursor latest conversation unavailable", ErrSpawnDeniedFlag)
 		}
 		r.AgentArgs = ExtractResumeArgs(r.Agent, r.AgentArgs).Args
+		read := ReadCursorArgs(r.AgentArgs)
+		r.AgentArgs = withoutOperands(r.AgentArgs, read.Positionals, read.DoubleDash)
 		var err error
 		command, err = composeCursorCommand(r, cfg)
 		if err != nil {
@@ -125,6 +135,8 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 		}
 	} else if r.Agent == store.AgentCodex {
 		r.AgentArgs = ExtractResumeArgs(r.Agent, r.AgentArgs).Args
+		read := ReadCodexArgs(r.AgentArgs)
+		r.AgentArgs = withoutOperands(r.AgentArgs, read.Positionals, read.DoubleDash)
 		carried = CodexPreTrust(r.ExtraEnv, in.Row.NoPreTrust)
 		var err error
 		command, err = composeCodexResumeCommand(in.SessionID, r.AgentArgs, r.CWD, carried, cfg)
@@ -132,7 +144,8 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 			return ComposedRelaunch{}, err
 		}
 	} else {
-		r.AgentArgs = extractClaudeArgs(in.Row.AgentArgs, true).Args
+		read := ReadClaudeArgs(in.Row.AgentArgs)
+		r.AgentArgs = extractClaudeArgs(withoutOperands(in.Row.AgentArgs, read.Positionals, read.DoubleDash), true).Args
 		settings, err := synthesizeSettings(r, cfg)
 		if err != nil {
 			return ComposedRelaunch{}, err
@@ -155,6 +168,20 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 		},
 		PreTrust: carried,
 	}, nil
+}
+
+// withoutOperands is a copy of args without the operands a reader found: its
+// positionals, and an unowned -- with everything after it. Option-owned values
+// are not operands, so they survive, even a value that is --.
+func withoutOperands(args []string, positionals []int, doubleDash int) []string {
+	drop := make(map[int]bool, len(positionals)+1)
+	for _, p := range positionals {
+		drop[p] = true
+	}
+	if doubleDash >= 0 {
+		drop[doubleDash] = true
+	}
+	return removeArgOptions(args, nil, drop).Args
 }
 
 // Relaunch is resume's session-creating step (SR-3.5, SR-8.1 step 6): the

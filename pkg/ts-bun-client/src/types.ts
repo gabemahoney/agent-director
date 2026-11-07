@@ -248,7 +248,7 @@ export interface PermissionRequestInfo extends RequestDelivery {
 
 /**
  * Whether `idle_screen` can apply to a row's agent: `"available"` for Claude and Codex,
- * `"unavailable"` for Cursor. A capability outcome, never a state.
+ * `"unavailable"` for Cursor and pane-only agents. A capability outcome, never a state.
  */
 export type IdleScreenAvailability = "available" | "unavailable";
 
@@ -309,7 +309,9 @@ export interface Confirmations {
 
 /** One Spawn row returned by the list verb. */
 export interface ListRow {
-  /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
+  /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
+  integration_mode?: "pane_only";
+  /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor and pane-only agents. */
   idle_screen_availability: IdleScreenAvailability;
 
   /** Stable Spawn id. */
@@ -356,7 +358,7 @@ export interface ListRow {
   confirmations: Confirmations;
   /** Canonicalized working directory. */
   cwd: string;
-  /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
+  /** The agent the row runs. Set at spawn; resume follows it. */
   agent: string;
   /** tmux session name. */
   tmux_session_name: string;
@@ -445,9 +447,9 @@ export interface SpawnParams {
   /** Named template under ~/.config/agent-director/templates/. */
   template?: string;
   /**
-   * The agent to launch: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor); case-sensitive,
+   * The agent to launch, such as `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor); case-sensitive,
    * empty or absent means not given. Spawn resolves it per call, else from `template`'s
-   * `agent`; with neither, the spawn is refused with `ErrAgentMissing`. Any other value is
+   * `agent`; with neither, the spawn is refused with `ErrAgentMissing`. An unrecognized value is
    * refused with `ErrAgentInvalid`. A template's `agent_args` belong to the template's agent
    * and are refused with `ErrAgentArgsMismatch` when the spawn's agent differs, unless this call
    * passes its own non-empty `agent_args`. The
@@ -574,6 +576,8 @@ export interface StatusParams {
 
 /** The row's reported lifecycle state. */
 export interface StatusResult {
+  /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
+  integration_mode?: "pane_only";
   /**
    * The report-only Displayed State the row shows beside `state`, present only while one
    * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across checks), or
@@ -595,7 +599,7 @@ export interface StatusResult {
   unchanged_minutes?: number;
   /** Attach target, present only while `displayed_state` is. */
   tmux_session_name?: string;
-  /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
+  /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor and pane-only agents. */
   idle_screen_availability: IdleScreenAvailability;
 
   /** Experimental context estimate for the current session. */
@@ -666,6 +670,8 @@ export interface GetParams {
 
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
+  /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
+  integration_mode?: "pane_only";
   /**
    * The report-only Displayed State the row shows beside `state`, present only while one
    * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across checks), or
@@ -685,7 +691,7 @@ export interface GetResult {
   tool_name?: string;
   /** Completed minutes of the committed unchanged pane period; only while `idle_screen`. */
   unchanged_minutes?: number;
-  /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
+  /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor and pane-only agents. */
   idle_screen_availability: IdleScreenAvailability;
 
   /** Experimental context estimate for the current session. */
@@ -726,7 +732,7 @@ export interface GetResult {
   /** Exactly the `state`, `process_liveness` and `displayed_state` records. */
   confirmations: Confirmations;
   cwd: string;
-  /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
+  /** The agent the row runs. Set at spawn; resume follows it. */
   agent: string;
   tmux_session_name: string;
   /** The tmux socket the row's launch uses; omitted when the row has no recorded socket. */
@@ -1151,8 +1157,9 @@ export interface ResumeParams {
  * environment/pool context. Other arguments and option-owned values survive.
  * Claude inputs missing a recognized required value get literal filtering only;
  * parsed-role preservation applies when all required values are present.
- * Claude prompts move behind surviving options and --, and altered short clusters
- * are re-encoded, only when needed to preserve their original parsed meaning;
+ * The saved prompt (operands, an unowned -- and what follows; an unknown
+ * option's next word counts) is never replayed. Altered Claude short clusters
+ * are re-encoded only when needed to preserve their original parsed meaning;
  * otherwise their order and spelling survive. Stored agent_args are unchanged.
  * Resume moved the row to `pending`, keeping
  * its session id and history, until the agent reports in (Cursor: verified first prompt),
@@ -1307,10 +1314,10 @@ export interface MakeTemplateParams {
   /** Default working directory to bake in. */
   cwd?: string;
   /**
-   * The agent the template belongs to: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor);
+   * The agent the template belongs to, such as `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor);
    * case-sensitive, empty or absent means not given. Required when the template bakes in
    * `agent_args` (otherwise `ErrTemplateAgentMissing`); a Codex or Cursor template cannot bake in
-   * `allow`, `deny` or `ask` (`ErrPermissionsUnsupported`). Any other value is refused
+   * `allow`, `deny` or `ask` (`ErrPermissionsUnsupported`). An unrecognized value is refused
    * with `ErrTemplateMalformed` (`ErrAgentInvalid` is spawn's per-call refusal). A spawn
    * that names no agent takes it from the template.
    */

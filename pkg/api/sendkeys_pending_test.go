@@ -11,6 +11,7 @@ package api_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,11 +19,205 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+func TestPaneOnlyLifecycleWithFlagOff(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{"droid"} {
+		t.Run(agent, func(t *testing.T) {
+			e := newKillEnv(t)
+			e.rowAgent = agent
+			r := e.seedPending(t, pendingFresh, pendingOurs)
+			c, _ := e.client(t) // experimental flags remain at their disabled defaults
+			e.clock.Advance(24 * time.Hour)
+			res, err := c.FindMissing(context.Background())
+			if err != nil || res.Count != 0 {
+				t.Fatalf("elapsed time reconciled a living lane: %+v, %v", res, err)
+			}
+			if row := e.columns(t, r.ID); row.State != store.StatePending {
+				t.Fatalf("live row=%+v", row)
+			}
+			e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "native prompt")
+			pane, err := c.ReadPane(api.ReadPaneParams{InstanceID: r.ID})
+			if err != nil || pane.Pane != "native prompt" {
+				t.Fatalf("ReadPane=%+v, %v", pane, err)
+			}
+			e.rec.AfterCall(tmux.CallKillPane, func(tmuxfix.SocketCall, error) { e.pc.Set(r.AgentPID, procfix.Gone()) })
+			k, err := c.Kill(api.KillParams{InstanceID: r.ID})
+			if err != nil || !k.KillSent {
+				t.Fatalf("Kill=%+v, %v", k, err)
+			}
+			res, err = c.FindMissing(context.Background())
+			if err != nil || res.Count != 1 || res.IDs[0] != r.ID {
+				t.Fatalf("exited row reconciliation=%+v, %v", res, err)
+			}
+			e.clock.Advance(time.Minute)
+			expired, err := c.Expire(olderThan(0))
+			if err != nil || expired.Count != 1 || expired.IDs[0] != r.ID {
+				t.Fatalf("flag-off Expire=%+v, %v", expired, err)
+			}
+		})
+	}
+}
+
+func TestPaneOnlyPlainInputBypassesNativeDelivery(t *testing.T) {
+	// Serial: isolate native lock/evidence paths under a temporary HOME.
+	for _, agent := range []string{"droid"} {
+		t.Run(agent, func(t *testing.T) {
+			home := withTempHome(t)
+			e := newNativeSubmissionEnv(t)
+			e.rowAgent = agent
+			r := e.seedPending(t, pendingFresh, pendingOurs)
+			// The injected backend supports native delivery; even Open followed
+			// by a silent fallback must be visible after the call.
+			in := watchPaneInput(e.killEnv, r.Spawn.Identity.PaneID, false)
+			before := e.columns(t, r.ID)
+			result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "plain input", AllowPending: true})
+			if err != nil || result != (api.SendKeysResult{}) {
+				t.Fatalf("plain lane send=%+v, %v; want empty manual result", result, err)
+			}
+			in.assertSubmittedOnce(t, "plain input")
+			if enters := ordinaryEnters(e.killEnv); len(enters) != 1 || enters[0].Socket != r.Socket || enters[0].Target != r.Spawn.Identity.PaneID {
+				t.Fatalf("manual Enter calls=%+v; want one to the owned pane", enters)
+			}
+			e.assertNoCalls(t, tmux.CallCapture, tmux.CallPaneTerminal)
+			e.assertRowUnchanged(t, r.ID, before)
+			if e.b.opened != 0 || e.b.locked || e.b.current != nil || len(e.b.history) != 0 || e.slept != 0 {
+				t.Fatalf("native activity: opens=%d locked=%t current=%+v history=%+v wait=%v",
+					e.b.opened, e.b.locked, e.b.current, e.b.history, e.slept)
+			}
+			if launch, err := e.st.ReadInputLaunch(context.Background(), r.Token); err != nil || launch != nil {
+				t.Fatalf("native launch journal=%+v, %v; want absent", launch, err)
+			}
+			if files := snapshotTrees(t, []string{filepath.Join(adConfigDir(home), "input")}); len(files) != 0 {
+				t.Fatalf("manual send created native lock/evidence files: %v", files)
+			}
+		})
+	}
+}
+
+func TestPaneOnlyManualInput(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{"droid"} {
+		for _, mode := range []string{"enter", "no enter", "empty", "without opt-in", "changed hash", "failed text", "failed enter"} {
+			t.Run(agent+"/"+mode, func(t *testing.T) {
+				e := newKillEnv(t)
+				e.rowAgent = agent
+				r := e.seedPending(t, pendingFresh, pendingOurs)
+				in := watchPaneInput(e, r.Spawn.Identity.PaneID, true)
+				e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "ready")
+				pane, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
+				if err != nil || pane.Pane != "ready" {
+					t.Fatalf("ReadPane=%+v, %v", pane, err)
+				}
+				e.rec.Reset()
+				p := api.SendKeysParams{InstanceID: r.ID, Text: "first\r\nsecond", AllowPending: true, ExpectPaneSHA256: pane.PaneSHA256}
+				wantError := ""
+				switch mode {
+				case "no enter":
+					p.NoEnter = true
+				case "empty":
+					p.Text = ""
+				case "without opt-in":
+					p.AllowPending = false
+					wantError = "ErrSpawnNotInteractive"
+				case "changed hash":
+					e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "changed")
+					wantError = "ErrPaneChanged"
+				case "failed text":
+					e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallSendText)
+					wantError = "ErrTmuxUnresponsive"
+				case "failed enter":
+					e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, callEnterKey)
+					wantError = "ErrTmuxUnresponsive"
+				}
+				before := e.columns(t, r.ID)
+				res, err := e.sendKeys(p)
+				if wantError != "" {
+					assertOneName(t, err, wantError)
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if res != (api.SendKeysResult{}) {
+					t.Fatalf("manual input returned proof: %+v", res)
+				}
+				e.assertRowUnchanged(t, r.ID, before)
+				texts, enters := e.rec.SocketCallsOf(tmux.CallSendText), e.rec.SocketCallsOf(callEnterKey)
+				if mode == "without opt-in" || mode == "changed hash" {
+					e.assertNothingSent(t)
+					return
+				}
+				wantTexts, wantEnters := 1, 1
+				if mode == "empty" {
+					wantTexts = 0
+				}
+				if mode == "no enter" || mode == "failed text" {
+					wantEnters = 0
+				}
+				if len(texts) != wantTexts || len(enters) != wantEnters {
+					t.Fatalf("text=%+v Enter=%+v; want %d/%d, no replay", texts, enters, wantTexts, wantEnters)
+				}
+				if wantTexts == 1 && (texts[0].Text != "first\nsecond" || texts[0].Target != r.Spawn.Identity.PaneID) {
+					t.Fatalf("manual text=%+v", texts)
+				}
+				if mode == "enter" {
+					in.assertSubmittedOnce(t, "first\nsecond")
+				}
+				if mode == "no enter" && (in.box != "first\nsecond" || len(in.submitted) != 0) {
+					t.Fatalf("unsubmitted input=%+v", in)
+				}
+			})
+		}
+	}
+}
+
+func TestPaneOnlyUnsupportedVerbsWriteNothing(t *testing.T) {
+	// Serial: it checks the shared trail for writes.
+	for _, agent := range []string{"droid"} {
+		t.Run(agent, func(t *testing.T) {
+			p := newPAEnvAgent(t, agent, "")
+			c, _ := p.client(t)
+			for _, operation := range []struct {
+				name, want string
+				run        func() error
+			}{
+				{"pause", "ErrAgentCapabilityUnsupported", func() error { _, err := c.Pause(context.Background(), api.PauseParams{InstanceID: p.r.ID}); return err }},
+				{"resume", "ErrAgentCapabilityUnsupported", func() error { _, err := c.Resume(api.ResumeParams{InstanceID: p.r.ID}); return err }},
+				{"decide", "ErrAgentCapabilityUnsupported", func() error {
+					_, err := c.Decide(api.DecideParams{InstanceID: p.r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "deny"})
+					return err
+				}},
+				{"record-pane-answer", "ErrAgentCapabilityUnsupported", func() error { _, err := c.RecordPaneAnswer(p.outside(storefix.TestRequestTokenA, "deny")); return err }},
+				{"delivery ID", "ErrAgentCapabilityUnsupported", func() error {
+					_, err := c.SendKeys(api.SendKeysParams{InstanceID: p.r.ID, Text: "task", DeliveryRequestID: "attempt", AllowPending: true})
+					return err
+				}},
+				{"request token", "ErrNoOpenPermissionRequest", func() error { _, err := c.SendKeys(p.answer(storefix.TestRequestTokenA, "deny", "Escape")); return err }},
+				{"unknown request", "ErrPermissionRequestNotFound", func() error { _, err := c.RecordPaneAnswer(p.outside("unknown", "deny")); return err }},
+			} {
+				t.Run(operation.name, func(t *testing.T) {
+					before := p.snapshotWrites(t, operation.name, p.r.ID, trustConfig{}, p.r.Socket)
+					assertOneName(t, operation.run(), operation.want)
+					if operation.name == "delivery ID" || operation.name == "request token" {
+						events := readAPITrailLines(t)[before.mark:]
+						if len(events) != 1 || events[0]["event"] != "ad.send_keys.called" || events[0]["instance_id"] != p.r.ID {
+							t.Fatalf("refused send-keys trail=%+v; want only its observational called event", events)
+						}
+						before.mark = trailMark(t)
+					}
+					p.assertWroteNothing(t, before)
+					p.assertNoTmuxCall(t)
+				})
+			}
+		})
+	}
+}
 
 // skpText is the text every case sends.
 const skpText = "first prompt"

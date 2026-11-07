@@ -81,6 +81,36 @@ func TestRecordPaneAnswerClaims(t *testing.T) {
 	}
 }
 
+// TestRecordPaneAnswerLastRows (b.7y8): given read-pane's pane_sha256 for
+// n_lines N, the last N rows, record-pane-answer with N+1 is ErrPaneChanged
+// with nothing recorded, and with N records the answer; each makes one
+// capture and types nothing.
+func TestRecordPaneAnswerLastRows(t *testing.T) {
+	t.Parallel()
+	tok := storefix.TestRequestTokenA
+	for n, want := range linesPaneLast {
+		p := newPAEnv(t)
+		p.setPane(linesPane)
+		p.paGoneLongAgo(t, tok)
+		res, err := p.readPaneClient(t, api.ReadPaneParams{InstanceID: p.r.ID, NLines: n})
+		if err != nil || res.Pane != want {
+			t.Fatalf("n_lines %d: read-pane = %+v, %v; want the last %d rows %q", n, res, err, n, want)
+		}
+		params := p.outside(tok, "allow")
+		params.ExpectPaneSHA256, params.NLines = res.PaneSHA256, n+1
+		other := runVerb(p.killEnv, func() (api.RecordPaneAnswerResult, error) { return p.recordPaneAnswer(params) })
+		assertOneSentinel(t, other.err, api.ErrPaneChanged)
+		if pr := p.request(t, tok); !slices.Equal(paKinds(other.calls), paneReadCalls) || !pr.AwaitsAnswer() {
+			t.Errorf("n_lines %d+1: calls = %v, request A = %+v; want %v and A still awaiting an answer", n, paKinds(other.calls), pr, paneReadCalls)
+		}
+		params.NLines = n
+		same := runVerb(p.killEnv, func() (api.RecordPaneAnswerResult, error) { return p.recordPaneAnswer(params) })
+		if same.err != nil || !slices.Equal(paKinds(same.calls), paneReadCalls) {
+			t.Errorf("n_lines %d: record-pane-answer with read-pane's hash = %v, calls %v; want it recorded after %v", n, same.err, paKinds(same.calls), paneReadCalls)
+		}
+	}
+}
+
 // r7HookUnjudgeable: request A's relay hook cannot be checked (its /proc
 // entry unreadable).
 var r7HookUnjudgeable r7Step = func(_ *testing.T, p *paEnv) { p.pc.Set(relayEnvHook.PID, procfix.Unreadable()) }

@@ -595,6 +595,8 @@ The installer's own reasons, and the one both tools write:
 |---|---|---|---|
 | `cutover_state_unreadable` | A store at schema v16 or later whose `store_meta` table cannot be read. | No | [A store at schema v16 or later that the upgrade cannot read](#a-store-at-schema-v16-or-later-that-the-upgrade-cannot-read). |
 | `native_input_authority_missing` | A store at schema v16 or later with no native-input authority recorded. | No | The same. |
+| `agents_live` | With no move due, the store holds rows in a live state (`pending`, `waiting`, `working`, `check_permission`, `ask_user`). The message lists each row's state and instance id, with the command that stops its agent. | No | Stop each listed agent with the command under it, clear the row of an agent you have established is gone with `find-missing` (as the agents' user), then re-run the same install command from a shell agent-director did not start ([the commands](#installsh-refuses-with-errjournalmigrationrefused)). |
+| `agent_rows_unreadable` | With no move due, the store's agent rows could not be read, so pre-flight cannot tell whether an agent is live. The message gives sqlite3's error. | No | Re-run the same install command once the store is no longer busy. If the rows still cannot be read, inspect the store with that error. |
 | `check_only_unestablished` | `--check-only` gave neither `{}` with exit 0 nor an envelope. | No | Install this release's `agent-director-admin` with this release's `agent-director` (`--admin-binary`, or both from one checkout or release), then re-run; report it if it persists. |
 | `backup_inside_install_directory` | With a move due, `--journal-backup` lies inside `~/.agent-director` or `~/.config/agent-director`, or its place there cannot be judged. | No | Choose a directory outside both, then re-run. When the message says `To fix: repair the path …`, first repair that directory's path: rename aside any part of it that is not a directory, make each part one the user can enter, break any link loop, and make its file identity readable. |
 | `previous_release_unknown` | The previous install's `agent-director-admin` answered `migrate-journal --help` with neither exit 0 nor exit 1 with `ErrUnknownVerb`. The message names it, and its output. | No | Make it runnable, or remove it if it is not that release's, then re-run with the same flags. |
@@ -625,6 +627,24 @@ details readable to the user running the upgrade.
 
 **On macOS:**
 
+- A process whose program file was replaced, removed or changed after it
+  started (for example, an app that updated itself) is not listed and needs
+  no action only if that file is its sole unverified evidence, its open-file
+  listing is complete, its start time reads the same both times, it holds no
+  store or legacy-root file, and its program's file name does not contain
+  `agent-director`.
+  A changed or unreadable start time still means `unverified_process`;
+  otherwise a store/root holder or an `agent-director` file name means
+  `agent_director_mutator`, even with an incomplete listing; otherwise an
+  incomplete listing means `unverified_process`.
+
+  A process running agent-director's code under a name without `agent-director`,
+  with its program file changed this way and no store/root file open when
+  listed, could still open the store during cutover. The guard is the maintenance
+  window: stop every caller and every `serve` before upgrading, as step 1 of
+  [Upgrading the native-input journal](#upgrading-the-native-input-journal)
+  and [the upgrade skill](../skills/upgrade-agent-director/SKILL.md#1-stop-the-agents)
+  require.
 - An unverified process whose image is in a privacy-protected folder: stop it,
   or grant the terminal app access to that folder (System Settings, Privacy &
   Security), then Retry. Any other unverified process: stop it, then Retry.
@@ -1091,7 +1111,7 @@ Then either:
 
 `install.sh` (exit 5, `err_name=ErrJournalMigrationRefused`) stopped a
 crossing upgrade with the install as it was before the run. Either pre-flight
-refused, before any change (the message ends `Nothing was installed or
+refused, before any change (the message says `Nothing was installed or
 changed.`), or `migrate-journal` refused its attempt before changing the
 previous install's store and the installer put the previous install back (`the
 previous install was put back as it was before the run.`). The binaries, the migration sentinel and the
@@ -1120,6 +1140,26 @@ Then:
    (a piped install says to run the same install command again). The re-run
    moves the old directory again; delete a set-aside directory once the
    upgrade is confirmed.
+
+**Live agents** (`agents_live`, with no move due). The message lists each
+row in a live state, and under it the command that stops its agent, run with
+the installed binary, which is still the previous release's:
+
+```sh
+~/.config/agent-director/bin/agent-director pause --instance-id <id>  # a waiting row
+~/.config/agent-director/bin/agent-director kill --instance-id <id>   # any other live row
+```
+
+Stop whatever starts agents (a scheduler, a loop, a caller) first. A row
+whose agent you have established is gone stays live until
+`~/.config/agent-director/bin/agent-director find-missing` clears it; run it
+as the agents' user, in their tmux environment. A `missing` row does not
+prove the agent stopped: a run as another user or against another tmux server
+can mark a running agent missing
+([Scheduling the sweeps](maintenance.md#scheduling-the-sweeps)). Then re-run
+the same install command from a shell agent-director did not start:
+pre-flight made nothing, so the same `--journal-backup` directory can be given
+again.
 
 ## `install.sh` stops with `ErrJournalMigrationIncomplete`
 

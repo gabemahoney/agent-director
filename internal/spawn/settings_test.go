@@ -1,6 +1,7 @@
 package spawn
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"math"
 	"os"
@@ -125,6 +126,69 @@ func TestSynthesizeSettingsPermissions(t *testing.T) {
 				t.Errorf("permissions = %v; want %v", got.Permissions, tc.want)
 			}
 		})
+	}
+}
+
+// claudeConfigWithStatusLine returns an ExtraEnv whose CLAUDE_CONFIG_DIR holds
+// a settings.json with the user statusLine command "user-gauge".
+func claudeConfigWithStatusLine(t *testing.T) map[string]string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"statusLine":{"type":"command","command":"user-gauge"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return map[string]string{"CLAUDE_CONFIG_DIR": dir}
+}
+
+// assertContextStatuslines checks settings' status lines for the user command
+// claudeConfigWithStatusLine writes: both wrapped in exe's context callback
+// when disabled is false, neither key present when it is true. It returns the
+// decoded settings.
+func assertContextStatuslines(t *testing.T, settings, exe string, disabled bool) map[string]any {
+	t.Helper()
+	var top map[string]any
+	if err := json.Unmarshal([]byte(settings), &top); err != nil {
+		t.Fatalf("settings %q: %v", settings, err)
+	}
+	prefix := "exec '" + exe + "' hook --context-source "
+	want := map[string]string{
+		"statusLine":         prefix + "statusLine --context-forward " + base64.RawStdEncoding.EncodeToString([]byte("user-gauge")),
+		"subagentStatusLine": prefix + "subagentStatusLine",
+	}
+	for key, command := range want {
+		got, present := top[key]
+		if disabled {
+			if present {
+				t.Errorf("disable_context_fullness on: settings carry %s = %v; want no %s key", key, got, key)
+			}
+			continue
+		}
+		if fields, _ := got.(map[string]any); fields["type"] != "command" || fields["command"] != command {
+			t.Errorf("disable_context_fullness off: %s = %v; want command %q", key, got, command)
+		}
+	}
+	return top
+}
+
+// TestSynthesizeSettingsContextFullnessSwitch (b.kh7): with
+// disable_context_fullness on, a Claude launch's settings carry neither status
+// line key, so Claude's own status line is left alone, and are otherwise the
+// settings it carries with the switch off.
+func TestSynthesizeSettingsContextFullnessSwitch(t *testing.T) {
+	const exe = "/opt/ad/bin/agent-director"
+	withStubExe(t, exe)
+	t.Setenv("HOME", t.TempDir())
+	r := Resolved{SpawnParams: SpawnParams{CWD: t.TempDir(), ExtraEnv: claudeConfigWithStatusLine(t),
+		Permissions: &Permissions{Allow: []string{"Bash(go test)"}}}}
+	cfg := config.Default()
+	cfg.Defaults.DisableAskUser = true
+	off := assertContextStatuslines(t, synthSettings(t, r, cfg), exe, false)
+	cfg.Defaults.DisableContextFullness = true
+	on := assertContextStatuslines(t, synthSettings(t, r, cfg), exe, true)
+	delete(off, "statusLine")
+	delete(off, "subagentStatusLine")
+	if !reflect.DeepEqual(on, off) {
+		t.Errorf("settings with the switch on = %v; want the switch-off settings without the status lines, %v", on, off)
 	}
 }
 

@@ -20,7 +20,8 @@ var ErrCwdMissing = errors.New("ErrCwdMissing")
 var ErrCwdNotAPath = errors.New("ErrCwdNotAPath")
 
 // ErrCwdNotFound is returned when cwd resolved to a path that does not
-// exist on disk at validation time.
+// exist on disk at validation time, or that cannot be accessed or entered
+// (no search permission on it or a parent; bug b.qwo).
 var ErrCwdNotFound = errors.New("ErrCwdNotFound")
 
 // ErrCwdNotADirectory is returned when cwd resolved to a regular file (or
@@ -85,14 +86,14 @@ var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 // ErrAgentMissing is returned by spawn when it resolves no agent: the call
 // gives no agent and its template, if any, names none. No config key,
 // environment variable or default supplies one (SR-1.1), so the caller names
-// the agent, claude, codex or cursor, in the call (agent; --agent on the CLI) or in
+// the agent, claude, codex, cursor or droid, in the call (agent; --agent on the CLI) or in
 // its template. It comes after the cwd and relay_mode checks and before
 // every check that depends on the agent, extra_env included; nothing was
 // written or launched.
 var ErrAgentMissing = errors.New("ErrAgentMissing")
 
 // ErrAgentInvalid is returned by spawn when the call's agent is not
-// claude, codex or cursor. The match is case-sensitive ("Claude" is refused) and the
+// claude, codex, cursor or droid. The match is case-sensitive ("Claude" is refused) and the
 // empty string counts as no agent given (ErrAgentMissing, when the template
 // names none either). The message quotes the value and names all accepted
 // values; nothing was written or launched. A bad agent in a template is
@@ -151,3 +152,12 @@ var ErrTmuxSessionNameInvalid = errors.New("ErrTmuxSessionNameInvalid")
 // The cap is an app-layer convenience (operator readability + room for
 // the defaulted-name's 8-char id suffix), not a tmux-imposed limit.
 var ErrTmuxSessionNameTooLong = errors.New("ErrTmuxSessionNameTooLong")
+
+// ErrExperimentalAgentDisabled means the requested experimental agent is disabled.
+var ErrExperimentalAgentDisabled = errors.New("ErrExperimentalAgentDisabled")
+
+// ErrAgentCapabilityUnsupported means the pane-only agent does not support the requested capability.
+var ErrAgentCapabilityUnsupported = errors.New("ErrAgentCapabilityUnsupported")
+
+// ErrModelMissing means the pane-only launch has no explicit model.
+var ErrModelMissing = errors.New("ErrModelMissing")

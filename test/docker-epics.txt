@@ -44,3 +44,4 @@ context-fullness
 needs-intelligence
 state-changed-at
 idle-screen
+droid-lane

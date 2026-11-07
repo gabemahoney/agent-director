@@ -8,6 +8,7 @@ func TestStripANSI(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"\x1b[31mhello\x1b[0m world", "hello world"},
 		{"\x1b[38;5;208mERROR\x1b[0m: boom", "ERROR: boom"},
+		{"\x1b[4:3m\x1b[58:2::255:0:0mwavy\x1b[0m", "wavy"}, // b.7y8: colon sub-parameters
 		{"\x1b[Hredrawn", "redrawn"},
 		{"plain ASCII line", "plain ASCII line"},
 		{"", ""},

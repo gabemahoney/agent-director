@@ -153,6 +153,8 @@ func TestCLIFlagsAreManifestParams(t *testing.T) {
 func TestCLIFlagUsageText(t *testing.T) {
 	s := scanCLISources(t)
 	for _, tc := range []struct{ verb, flag, want, banned string }{
+		{"spawn", "agent", "claude, codex or cursor", "droid"},
+		{"make-template", "agent", "claude, codex or cursor", "droid"},
 		{"spawn", "extra-env", "CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)", ""},
 		{"make-template", "extra-env", "CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)", ""},
 		{"spawn", "no-pre-trust", "CLAUDE_CONFIG_DIR", "CODEX_HOME"},

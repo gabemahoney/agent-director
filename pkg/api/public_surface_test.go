@@ -31,6 +31,17 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
+func TestPaneOnlyPublicErrors(t *testing.T) {
+	t.Parallel()
+	for name, err := range map[string]error{
+		"ErrExperimentalAgentDisabled":  api.ErrExperimentalAgentDisabled,
+		"ErrAgentCapabilityUnsupported": api.ErrAgentCapabilityUnsupported,
+		"ErrModelMissing":               api.ErrModelMissing,
+	} {
+		assertOneName(t, fmt.Errorf("wrapped: %w", err), name)
+	}
+}
+
 func TestPublicSurface(t *testing.T) {
 	t.Parallel()
 	_, thisFile, _, ok := runtime.Caller(0)

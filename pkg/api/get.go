@@ -54,6 +54,9 @@ type PermissionRequestInfo struct {
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
 	StateDetail
+	// IntegrationMode identifies the fixed pane-only capability contract;
+	// omitted for agents with native integration.
+	IntegrationMode string `json:"integration_mode,omitempty"`
 
 	// Context is an experimental on-demand reading for the current session.
 	Context ContextReading `json:"context"`
@@ -82,12 +85,12 @@ type SpawnRow struct {
 	// displayed_state records (Confirmation). family_state has none.
 	Confirmations Confirmations `json:"confirmations"`
 	// IdleScreenAvailability is, as StatusResult's, available for Claude and
-	// Codex or an absent agent and unavailable for Cursor. Present on every row;
+	// Codex or an absent agent and unavailable for Cursor or pane-only agents. Present on every row;
 	// omitted only from the empty result of a failed call.
 	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
-	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
+	// Agent is the agent the row runs: set by the spawn
 	// that most recently launched the row, followed by
 	// resume, never changed by anything else (SR-1.5).
 	Agent string `json:"agent"`
@@ -467,6 +470,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		IdleScreenAvailability:  idleScreenAvailability(row.Agent),
 		CWD:                     row.CWD,
 		Agent:                   row.Agent,
+		IntegrationMode:         integrationMode(row.Agent),
 		TmuxSessionName:         row.TmuxSessionName,
 		TmuxSocket:              row.Identity.Socket,
 		AgentArgs:               row.AgentArgs,

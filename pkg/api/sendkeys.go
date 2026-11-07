@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -65,8 +66,10 @@ type SendKeysTmux interface {
 	// SendKeyPane sends one key, by its tmux key name and never typed
 	// literally, to the pane paneID on socket.
 	SendKeyPane(socket, paneID, key string) error
-	// CapturePaneID returns the last nLines lines of the pane paneID on
-	// socket; ansi keeps the escape sequences (tmux's -e flag).
+	// CapturePaneID returns the last nLines rows of the pane paneID on
+	// socket, counted up from the last row with content as
+	// [TmuxClient].CapturePaneID says; ansi keeps the escape sequences
+	// (tmux's -e flag).
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
 }
 
@@ -515,6 +518,14 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 		return err
 	}
 	r.facts.RowState = row.State
+	paneOnly := spawn.IsPaneOnly(row.Agent)
+	if paneOnly && params.DeliveryRequestID != "" {
+		return spawn.PaneOnlyCapabilityError(row.Agent, "send-keys delivery_request_id")
+	}
+	if paneOnly && plan.answer {
+		return fmt.Errorf("%w: %s has no permission request %s; nothing was sent",
+			store.ErrNoOpenPermissionRequest, row.InstanceID, params.RequestToken)
+	}
 
 	if err := sendKeysStateGuard(row, params); err != nil {
 		return err
@@ -536,6 +547,12 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
 		return fmt.Errorf("instance %s: %w", row.InstanceID, err)
+	}
+	if paneOnly {
+		// No native journal, readiness, deduplication or proof applies to this
+		// lane. Retain the ordinary owned-pane, hash and literal input guards.
+		r.keysRun = newKeysRun(r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
+		return r.sendPrepared(plan, params)
 	}
 	if row.Identity.Token != "" {
 		r.input, err = openInputDelivery(r.env.Context, r.env.Input, r.s, row, r.s.StoreID(), plan.answer || plan.key != nil || plan.hash != "" || !plan.enter || plan.text == "")
@@ -589,6 +606,12 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 		}
 		r.terminal = terminal
 	}
+	return r.sendPrepared(plan, params)
+}
+
+// sendPrepared shares manual transport and ownership checks with native agents.
+func (r *sendKeysRun) sendPrepared(plan sendKeysPlan, params SendKeysParams) error {
+	row := r.row
 	if plan.enter {
 		// A literal retry after a text call with Enter would type the text
 		// again after its unsubmitted copy (b.9o4); without Enter, or for a
@@ -600,7 +623,7 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 			return pendingLeftoverError(row.InstanceID, leftovers)
 		}
 	}
-	err = r.send(plan, params)
+	err := r.send(plan, params)
 	r.facts.keysFacts = r.found
 	if err == nil && !r.automatic && row.State == store.StatePending && plan.enter && (row.Agent == store.AgentCodex || r.terminal != nil) {
 		return r.confirmLegacySubmission(row)
@@ -1059,6 +1082,8 @@ func isInteractiveState(state string) bool {
 // CLI: agent-director send-keys
 //
 // Errors:
+//   - [ErrAgentCapabilityUnsupported]: DeliveryRequestID requests native
+//     delivery for a pane-only row; nothing is sent. Omit it for manual input.
 //   - [ErrInvalidFlags]: the params' shape is refused (a pane answer without
 //     As allow or deny, Key or ExpectPaneSHA256, or with Text; As without
 //     RequestToken; Key with Text; NoEnter with neither; a Key that is not a

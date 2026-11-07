@@ -114,8 +114,8 @@ existing shape. Its fresh workflow is in [Usage](../../docs/usage.md#fresh-curso
 `Resume(api.ResumeParams{InstanceID: id})` launches load of only its latest saved session;
 the row can remain `pending` until a first real prompt. After inspecting the
 pane, set `SendKeysParams.AllowPending` for that prompt; current binding and
-dialog guards still apply. Saved configuration and initial-prompt replay are
-defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
+dialog guards still apply. Saved configuration replay, which never includes
+the initial prompt, is defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
 `SpawnParams.ReuseFinished` supports Cursor and agent switches; see the
 [life rules](../../docs/usage.md#naming-the-agent). Argument and
 asynchronous failure handling are in the
@@ -490,8 +490,16 @@ uses `time.Sleep` without `Context`). Most callers
 use the Client method, which supplies these.
 Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
 bounding connection and lock waits by the supplied duration.
-Custom tmux adapters supplied to this function or through `Options.TmuxClient`
-need these optional capabilities for the corresponding fallback paths:
+Custom tmux adapters supplied to this function, to `ReadPane` or
+`RecordPaneAnswer`, or through `Options.TmuxClient` must return from
+`CapturePaneID` the last `nLines` rows of the pane, counted up from the last
+row with content: blank rows below it are left out, blank rows between content
+rows count, and a row is blank when it is whitespace only once ANSI escape
+sequences are stripped. `read-pane` returns that text and the
+`expect_pane_sha256` checks hash it, so passing tmux's `capture-pane -S -<n>`
+output through unchanged (history plus the whole screen) breaks `n_lines`.
+They also need these optional capabilities for the corresponding fallback
+paths:
 
 - `PasteKeysTmux` supports ordinary Codex fallback:
   `PasteKeysPane(socket, paneID, text string) error`. It preserves text and LF in

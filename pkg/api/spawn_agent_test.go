@@ -23,10 +23,130 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// checkCreationWrites uses the shared row/file snapshots to assert a refused
+// creation leaves rows, history, permissions, templates, launch files, trust and trail intact.
+func (e spawnEnv) checkCreationWrites(t *testing.T, call func() error) error {
+	t.Helper()
+	trust := seedTrustConfig(t, e.home, trustLacksEntry)
+	ids := listIDs(t, e.c)
+	rows := make(map[string]reuseRowState, len(ids))
+	for _, id := range ids {
+		rows[id] = readReuseRowState(t, e.dbPath, id)
+	}
+	roots := []string{filepath.Join(adConfigDir(e.home), "launch"), filepath.Join(adConfigDir(e.home), "templates"), filepath.Dir(e.socket)}
+	files, mark := snapshotTrees(t, roots), trailMark(t)
+	err := call()
+	assertNoTmuxCalls(t, e.rec)
+	if got := listIDs(t, e.c); !reflect.DeepEqual(got, ids) {
+		t.Errorf("rows = %v; want unchanged %v", got, ids)
+	}
+	for id, before := range rows {
+		assertRowStateUnchanged(t, e.dbPath, id, before)
+	}
+	if diff := files.diff(snapshotTrees(t, roots)); len(diff) != 0 {
+		t.Errorf("refusal changed files: %v", diff)
+	}
+	if len(readAPITrailLines(t)) != mark {
+		t.Error("refusal wrote trail")
+	}
+	trust.check(t, "", false, "after refused creation")
+	return err
+}
+
+func TestPaneOnlyDisabledWritesNothing(t *testing.T) {
+	// Serial: it sets HOME and checks the shared trail.
+	for _, agent := range []string{"droid"} {
+		for _, operation := range []string{"spawn", "reuse", "make-template"} {
+			t.Run(agent+"/"+operation, func(t *testing.T) {
+				e := newSpawnEnv(t)
+				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: []string{"--model", "model"}}
+				if operation == "reuse" {
+					p.InstanceID, _ = seedFinishedRow(t, e.dbPath, store.StateEnded)
+					p.ReuseFinished = true
+				}
+				err := e.checkCreationWrites(t, func() error {
+					if operation == "make-template" {
+						_, err := e.c.MakeTemplate(api.MakeTemplateParams{Name: "lane", Agent: agent})
+						return err
+					}
+					_, err := e.c.Spawn(p)
+					return err
+				})
+				assertOneName(t, err, "ErrExperimentalAgentDisabled")
+			})
+		}
+	}
+}
+
+func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
+	// Serial: it sets HOME and the parent environment.
+	for _, agent := range []string{"droid"} {
+		t.Run(agent, func(t *testing.T) {
+			e := newSpawnEnv(t)
+			c := agentClientWithConfig(t, e, "[experimental]\ndroid = true\n[defaults]\nrelay_mode = \"on\"\n")
+			if _, err := c.MakeTemplate(api.MakeTemplateParams{Name: "lane", Agent: agent}); err != nil {
+				t.Fatal(err)
+			}
+			p := api.SpawnParams{Template: "lane", CWD: t.TempDir()}
+			err := e.checkCreationWrites(t, func() error {
+				_, err := c.Spawn(p)
+				return err
+			})
+			assertOneName(t, err, "ErrModelMissing")
+			seedAgentTemplate(t, e, apitest.TemplateFields{Agent: agent, AgentArgs: []string{"--model", "template-model"}, RelayMode: "on"})
+			p.Template = "t"
+			err = e.checkCreationWrites(t, func() error {
+				_, err := c.Spawn(p)
+				return err
+			})
+			assertOneName(t, err, "ErrAgentCapabilityUnsupported")
+			p.RelayMode, p.AgentArgs = "off", []string{"--model", "caller-model"}
+			if _, err := apitest.SeedSpawn(e.dbPath, "supervisor", store.StateEnded, t.TempDir(), "off", "", false); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "supervisor")
+			e.rec.AfterCall(tmux.CallCreate, func(call tmuxfix.SocketCall, _ error) {
+				for _, s := range e.rec.Sessions(call.Socket) {
+					for _, pane := range s.Panes {
+						e.pc.Set(pane.PID, procfix.Alive(apitest.LinuxProcStarttime))
+					}
+				}
+			})
+			res, err := c.Spawn(p)
+			if err != nil || res.PreTrust != "skipped" {
+				t.Fatalf("Spawn=%+v, %v", res, err)
+			}
+			row, _, _ := spawnRow(t, e, res.InstanceID)
+			if row.Agent != agent || row.ParentID != "supervisor" || !slices.Equal(storedAgentArgs(t, row), p.AgentArgs) {
+				t.Fatalf("stored request=%+v", row)
+			}
+			// The original client still has the flag off: inspection must remain available.
+			g, err := e.c.Get(res.InstanceID)
+			if err != nil || g.Agent != agent || g.State != "pending" || g.IntegrationMode != "pane_only" || g.Context != (api.ContextReading{}) || g.IdleScreenAvailability != "unavailable" {
+				t.Fatalf("Get=%+v, %v", g, err)
+			}
+			s, err := e.c.Status(res.InstanceID)
+			if err != nil || s.State != "pending" || s.IntegrationMode != "pane_only" || s.Context != (api.ContextReading{}) || s.IdleScreenAvailability != "unavailable" {
+				t.Fatalf("Status=%+v, %v", s, err)
+			}
+			l, err := e.c.List(api.ListParams{Parent: "supervisor"})
+			if err != nil || len(l.Spawns) != 1 || l.Spawns[0].Agent != agent || l.Spawns[0].IntegrationMode != "pane_only" || l.Spawns[0].IdleScreenAvailability != "unavailable" {
+				t.Fatalf("List=%+v, %v", l, err)
+			}
+			subs, err := e.c.ListSubagents(res.InstanceID)
+			if err != nil || jsonOf(t, subs) != emptySubagentsJSON {
+				t.Fatalf("ListSubagents=%+v, %v", subs, err)
+			}
+		})
+	}
+}
 
 // The refusal descriptions, as the Catalog name and the verb's text give them.
 const (
@@ -109,7 +229,7 @@ func TestSpawnAgentRefusals(t *testing.T) {
 		{name: "no agent from the call or a template", want: "ErrAgentMissing", text: agentMissingText},
 		{name: "no agent, the template names none either", tmpl: &apitest.TemplateFields{RelayMode: "on"},
 			want: "ErrAgentMissing", text: agentMissingText},
-		{name: "per-call agent not claude, codex or cursor", p: api.SpawnParams{Agent: "gemini"}, want: "ErrAgentInvalid",
+		{name: "unrecognized per-call agent", p: api.SpawnParams{Agent: "gemini"}, want: "ErrAgentInvalid",
 			text: strings.Replace(agentInvalidTextFmt, "%q", `"gemini"`, 1)},
 		{name: "cursor agent in another case", p: api.SpawnParams{Agent: "Cursor"}, want: "ErrAgentInvalid", text: strings.Replace(agentInvalidTextFmt, "%q", `"Cursor"`, 1)},
 		{name: "per-call agent in another case", p: api.SpawnParams{Agent: "Claude"}, want: "ErrAgentInvalid",
@@ -489,7 +609,7 @@ func TestSpawnReuseTakesTheNewAgent(t *testing.T) {
 // TestResumeCodexRowLaunches (SR-5.0, SR-7.4, SR-14.5): a resume of a codex
 // row, ended or missing, launches `codex resume` with the row's session id,
 // moves the row to pending and keeps the row's agent and its stored arguments,
-// refusing none of them.
+// refusing none of them; the launch replays their options, not the prompt.
 func TestResumeCodexRowLaunches(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	for _, state := range []string{store.StateEnded, store.StateMissing} {
@@ -510,8 +630,8 @@ func TestResumeCodexRowLaunches(t *testing.T) {
 			if it, ok := l.Resume(); !ok || it.SessionID != "sess-codex-row" {
 				t.Errorf("launch %q; want codex resume sess-codex-row", l.Argv)
 			}
-			if !slices.Equal(l.PassThrough(), []string{"--model", "gpt"}) || !slices.Equal(l.AfterDashDashArgs(), []string{"carry on"}) {
-				t.Errorf("launch %q; want the stored arguments replayed", l.Argv)
+			if !slices.Equal(l.PassThrough(), []string{"--model", "gpt"}) || l.HasDashDash() || slices.Contains(l.Argv, "carry on") {
+				t.Errorf("launch %q; want the stored options replayed without the saved prompt", l.Argv)
 			}
 			if res.PreTrust != "ok" {
 				t.Errorf("pre_trust = %q; want ok", res.PreTrust)

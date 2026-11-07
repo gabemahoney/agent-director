@@ -163,6 +163,10 @@ func TestCursorResumeLatestGateway(t *testing.T) {
 			if modeAt < 0 || modeAt+1 >= len(creates[0].Command) || creates[0].Command[modeAt+1] != "plan" {
 				t.Fatalf("saved requested mode lost: %q", creates[0].Command)
 			}
+			promptAt := slices.Index(creates[0].Command, "--initial-prompt")
+			if promptAt < 0 || promptAt+1 >= len(creates[0].Command) || creates[0].Command[promptAt+1] != "" || slices.Contains(creates[0].Command, "saved initial") {
+				t.Fatalf("saved initial prompt replayed: %q; want --initial-prompt \"\" (b.kz9)", creates[0].Command)
+			}
 			if creates[0].Envs["SAVED_CURSOR_ENV"] != "retained" || creates[0].Envs["AGENT_DIRECTOR_GROUP"] != "saved-group" || after.CWD != before.CWD {
 				t.Fatalf("saved cwd/env/group lost: %+v", creates[0])
 			}
@@ -293,6 +297,49 @@ func TestCursorResumeLiveRowStillRefuses(t *testing.T) {
 			}
 			if len(e.rec.SocketCallsOf(tmux.CallCreate)) != 0 {
 				t.Fatal("live refusal launched")
+			}
+		})
+	}
+}
+
+// TestCursorResumeUnusableCwdRefusesBeforeMutation (b.vit): an otherwise
+// resumable Cursor row whose saved cwd was removed is ErrCwdNotFound, and one
+// whose cwd is now a regular file ErrCwdNotADirectory: the row unchanged, no
+// tmux call, the transcripts untouched.
+func TestCursorResumeUnusableCwdRefusesBeforeMutation(t *testing.T) {
+	// Serial: the protected transcript fixture sets HOME.
+	for _, tc := range []struct {
+		state string
+		file  bool
+		want  string
+	}{
+		{store.StateEnded, false, "ErrCwdNotFound"},
+		{store.StateMissing, false, "ErrCwdNotFound"},
+		{store.StateEnded, true, "ErrCwdNotADirectory"},
+	} {
+		t.Run(tc.want+"/"+tc.state, func(t *testing.T) {
+			e := newResumeEnv(t)
+			id, h := seedCursorResume(t, e, tc.state)
+			before := e.columns(t, id)
+			cwd := before.CWD.(string)
+			removeCwd(t, cwd, tc.file)
+			calls := len(e.rec.SocketCalls())
+
+			_, err := e.resume(id)
+
+			assertOneName(t, err, tc.want)
+			assertCwdRefusalText(t, errText(err), cwd, "recreate", advCursorCwd)
+			if !reflect.DeepEqual(before, e.columns(t, id)) {
+				t.Fatal("cwd refusal mutated row")
+			}
+			if got := e.rec.SocketCalls()[calls:]; len(got) != 0 {
+				t.Fatalf("cwd refusal made tmux calls %+v", got)
+			}
+			for path, want := range map[string][]byte{h.Latest: h.LatestBytes, h.Older: h.OlderBytes} {
+				got, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("artifact changed: %s %v", path, err)
+				}
 			}
 		})
 	}

@@ -52,7 +52,7 @@ type SpawnParams struct {
 	// labels also persist into the spawns.labels JSON column.
 	AgentDirectorLabels map[string]string
 
-	// Agent is the agent the spawn is for: "claude", "codex" or "cursor", compared
+	// Agent is the agent the spawn is for, compared
 	// case-sensitively; empty means not given. As the caller sets it, it is
 	// the per-call agent; Resolve fills an empty one from the template's
 	// agent, so after Resolve it is the resolved agent (SR-1.2) and empty
@@ -78,15 +78,18 @@ type SpawnParams struct {
 	// settings tier per Claude Code's merge semantics.
 	Permissions *Permissions
 
-	// RelayMode is "on" / "off" / "" (use config default). Mirrored into
-	// AGENT_DIRECTOR_RELAY_MODE on the session env for the hook.
+	// RelayMode is "on" / "off" / "". Empty inherits the template's value,
+	// then defaults to off for pane-only agents or the config default for
+	// other agents. Pane-only agents refuse on. The resolved value is mirrored
+	// into AGENT_DIRECTOR_RELAY_MODE on the session env for the hook.
 	RelayMode string
 
 	// NoPreTrust opts out of the folder-trust pre-write (PreTrust) into
 	// <CLAUDE_CONFIG_DIR>/.claude.json when the spawn's extra env sets
-	// CLAUDE_CONFIG_DIR, and ~/.claude.json otherwise; a CLAUDE_CONFIG_DIR
-	// that is set but not an absolute path (ConfigDirUsable) gets no
-	// pre-write at all, and PreTrust reports it failed. A codex agent has no
+	// CLAUDE_CONFIG_DIR, otherwise when agent-director's own environment
+	// does, and ~/.claude.json otherwise; a CLAUDE_CONFIG_DIR that is set
+	// but not an absolute path (ConfigDirUsable) gets no pre-write at all,
+	// and PreTrust reports it failed. A codex agent has no
 	// file: its pre-trust puts the cwd's trust and the hook-trust bypass on
 	// the launch's command line (CodexPreTrust), and a CODEX_HOME in the
 	// extra env that is set but not absolute reports it failed. Default false
@@ -151,6 +154,13 @@ type Permissions struct {
 type Resolved struct {
 	SpawnParams
 
+	// Experimental is the configuration captured by Resolve for validation.
+	Experimental config.Experimental
+	// LaunchStoreID and LaunchToken are supplied by the launch owner before
+	// composition; they identify generated files without writing them.
+	LaunchStoreID string
+	LaunchToken   string
+
 	// DropResumeArgs is set only from a successful finished reuse snapshot
 	// whose raw stored agent differs exactly from the resolved agent.
 	DropResumeArgs bool
@@ -200,7 +210,7 @@ type Resolved struct {
 // The function never mutates p.
 func Resolve(p SpawnParams, cfg config.Config) (Resolved, error) {
 	if p.Template == "" {
-		return Resolved{SpawnParams: p, DisableAskUser: cfg.Defaults.DisableAskUser}, nil
+		return Resolved{SpawnParams: p, DisableAskUser: cfg.Defaults.DisableAskUser, Experimental: cfg.Experimental}, nil
 	}
 
 	tmpl, err := config.LoadTemplate(p.Template)
@@ -259,7 +269,7 @@ func Resolve(p SpawnParams, cfg config.Config) (Resolved, error) {
 		}
 	}
 
-	return Resolved{SpawnParams: merged, InheritedArgsAgent: inheritedArgsAgent, DisableAskUser: cfg.Defaults.DisableAskUser}, nil
+	return Resolved{SpawnParams: merged, InheritedArgsAgent: inheritedArgsAgent, DisableAskUser: cfg.Defaults.DisableAskUser, Experimental: cfg.Experimental}, nil
 }
 
 // mergeStringMap layers `over` on top of `base`. Per-call wins on

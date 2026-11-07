@@ -79,6 +79,11 @@ func TestMain(m *testing.M) {
 	// all test spawns are created as roots (NULL parent_id).
 	os.Unsetenv("AGENT_DIRECTOR_INSTANCE_ID") // nolint:errcheck
 
+	// ── Clear CLAUDE_CONFIG_DIR ──────────────────────────────────────────────
+	// A Claude launch's pre-trust and environment fall back to this process's
+	// value (b.uzn), so the host shell's would move them off the fake home.
+	os.Unsetenv("CLAUDE_CONFIG_DIR") // nolint:errcheck
+
 	// ── Unset TMUX, point TMUX_TMPDIR at this binary's own directory ─────────
 	// tmux.ResolveSocket reads both; the real path is taken as tmux takes it.
 	tmuxTmp, err := os.MkdirTemp("", "pkg-api-tmux-*")
