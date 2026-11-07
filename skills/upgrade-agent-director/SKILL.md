@@ -1,0 +1,174 @@
+---
+name: upgrade-agent-director
+description: Upgrade or re-install an existing agent-director install on this machine, step by step - stop the agents (with the operator's go-ahead), sweep with the installed release's find-missing, run install.sh, verify, hand a refusal's documented fix to the operator, resume the agents. Use this skill whenever agent-director is already installed and the user says "upgrade agent-director", "update agent-director", "upgrade agent-director on this machine" or asks to re-install it. For a first install, use install-agent-director.
+---
+
+# Upgrade agent-director
+
+Follow the steps in order, as the agents' user. The commands name an install
+in `~/.config/agent-director`. On one that still keeps its files in
+`~/.agent-director` ([the old directory](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#upgrading-an-install-from-the-old-directory)),
+use that directory in steps 1 and 2, and do that section's "Before you run"
+steps with the operator before step 3. Run
+[one upgrade at a time](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal).
+
+## 1. Stop the agents
+
+The upgrade runs only from a shell or agent that agent-director did not start.
+agent-director sets
+[`AGENT_DIRECTOR_INSTANCE_ID`](https://github.com/gabemahoney/agent-director/blob/main/docs/usage.md#drive-a-spawn-from-another-agent)
+for every Claude, Codex and Cursor agent it starts:
+
+```sh
+if [ -n "${AGENT_DIRECTOR_INSTANCE_ID:-}" ]; then echo "started by agent-director"; fi
+```
+
+If it prints `started by agent-director`, stop here and hand the upgrade to the
+user or to a session agent-director did not start, saying why: your own row is
+live, so the install refuses, and your own hooks would run the new binary
+mid-upgrade. Do the same if this session has agent-director's MCP tools: their
+`agent-director serve` must stop too.
+
+List the live rows:
+
+```sh
+~/.config/agent-director/bin/agent-director list --state pending,waiting,working,check_permission,ask_user
+```
+
+If it prints `{"spawns":[]}`, skip the checks below and ask the operator.
+Otherwise, while the agents still run, check that this shell is in their
+environment. Each must hold:
+
+- `id -un` prints the owner that `ls -ld ~/.config/agent-director` shows, and
+  not `root`.
+- `tmux list-sessions` shows the `tmux_session_name` of each live row whose
+  agent still runs. A live row whose session is not there is one for step 2's
+  sweep to clear, not a failed check. If no live row's session is there, ask
+  the operator whether any of those agents still runs: if one does, this check
+  fails.
+- For a live row whose session is there,
+  `tmux list-panes -a -F '#{session_name} #{pane_pid}'` gives its pid, and
+  `ps -p <pid>` prints that process.
+
+If one fails, this shell is another user's, root's, or on another container,
+tmux server or PID namespace, where a sweep can mark running agents `missing`
+([why](https://github.com/gabemahoney/agent-director/blob/main/docs/maintenance.md#scheduling-the-sweeps)).
+Move to the agents' own shell and tmux environment and start step 1 again.
+
+Ask the operator to stop whatever starts agents (a scheduler, a loop, a
+caller), every `agent-director serve` (each session with agent-director's MCP
+tools) and every caller, as
+[Stopping a set of agents before a binary change](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#stopping-a-set-of-agents-before-a-binary-change)
+says, and to confirm that you may stop each live row listed. If they say no,
+stop here and change nothing. Once they confirm, check that no `serve` runs:
+this prints nothing.
+
+```sh
+ps -A -o pid= -o args= | grep '[a]gent-director serve'
+```
+
+With no live row, go to step 3. Otherwise stop each one, keeping its id for
+step 6: `pause` a `waiting` row; `kill` any other live row, or one `pause`
+refuses.
+
+```sh
+~/.config/agent-director/bin/agent-director pause --instance-id <id>
+~/.config/agent-director/bin/agent-director kill --instance-id <id>
+```
+
+## 2. Sweep
+
+From the same shell, run the installed release's `find-missing`, then list
+again:
+
+```sh
+~/.config/agent-director/bin/agent-director find-missing
+~/.config/agent-director/bin/agent-director list --state pending,waiting,working,check_permission,ask_user
+```
+
+`find-missing`'s `ids` names the rows it marked `missing`; a row `kill` ended
+stays live until then. Repeat both about 5 s apart, at most three times, until
+`list` prints `{"spawns":[]}`. Go to step 3 only then.
+
+A row still live goes back to step 1: either its agent still runs (step 1
+stops it, the operator confirming), or the sweep ran in the wrong place
+(step 1's checks find it; then sweep from the agents' environment). Never
+mark, delete or edit rows by hand.
+
+## 3. Install
+
+The journal flags assert the operator's maintenance window: first confirm with
+the operator that steps 1 and 2 of
+[Upgrading the native-input journal](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal)
+hold. Then, from this shell:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release --journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>
+```
+
+Add `--journal-legacy-root <dir>` for each additional input root, and the
+original install's other
+[flags](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#install-from-a-release),
+plus any the operator adds now, such as `--register-mcp`.
+Exit 0: step 4. Exit 5 or 6: step 5. Another exit:
+[When install.sh fails](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#when-installsh-fails).
+
+## 4. Verify
+
+```sh
+~/.config/agent-director/bin/agent-director version
+~/.config/agent-director/bin/agent-director list
+```
+
+`version` shows the release just installed, and `list` exits 0. Then prepare
+the administrator's
+[verification](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal),
+filled in with the store's path (`[store] db_path`'s, when set), a new backup
+directory and step 3's `--journal-legacy-root` list as `--legacy-root`:
+
+```sh
+~/.config/agent-director/admin/agent-director-admin --store-path ~/.config/agent-director/state.db migrate-journal --maintenance-window --roots-complete --backup-dir <new-absolute-directory>
+```
+
+`agent-director-admin` runs only with a human's approval for that run
+([Operator actions](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md)):
+show the operator the filled-in command, and run it only once they approve
+that run; otherwise they run it. It must exit 0 with `"authority": "sqlite"`.
+An error goes to step 5.
+
+## 5. On a refusal
+
+`install.sh`'s last stderr line names the cause, `install.sh: err_name=<Name>`;
+`agent-director-admin`'s JSON envelope names it as `err_name`. The envelope
+gives `details.refusal.reason` and `action`. Find that reason's row in
+[Upgrade refusal reasons](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrade-refusal-reasons),
+or, with no reason, the `err_name`'s row in
+[Exit 5's cause line](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#exit-5s-cause-line).
+Show the operator the output (the envelope, when there is one) and that row:
+the operator performs its fix,
+up to its re-run of the install or its verification, which stay yours. Then
+resume at that step: step 3 to re-run the install, or step 4 for the
+verification, under that step's rules.
+
+For `agents_live` or `ErrAgentsLive`, instead, the row's stops are step 1's
+and its `find-missing` is step 2's: do those steps, with step 1's checks and
+the operator's confirmation, then step 3.
+
+On exit 6, the install finished but the MCP registration did not: tell the
+operator so, hand them its stderr to register by hand, as
+[its row](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#when-installsh-fails)
+says, then go on with step 4 and step 6.
+
+For a row that leads to neither step, or an `err_name` or reason with no row,
+stop and hand the operator the output.
+
+## 6. Resume the agents
+
+Ask the operator to restart whatever starts agents, every `serve` and every
+caller
+([after the upgrade](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#upgrade)),
+then bring back each agent stopped in step 1:
+
+```sh
+~/.config/agent-director/bin/agent-director resume --instance-id <id>
+```

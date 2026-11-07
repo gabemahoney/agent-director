@@ -1506,7 +1506,7 @@ STORE_SCHEMA_VERSION=20
 # t2.7tz.ab.hh, t2.7tz.ab.p5 and t2.7tz.ab.5w append their own installer
 # reasons to this one line. A test reads it, so keep it on one line in this
 # form, and ad_outcome_exit refuses a self-chosen reason missing from it.
-AD_OUTCOME_REASONS='cutover_state_unreadable native_input_authority_missing check_only_unestablished previous_release_unknown restore_copies_unavailable backup_inside_install_directory outcome_unestablished restore_incomplete interrupted legacy_root_symlink'
+AD_OUTCOME_REASONS='cutover_state_unreadable native_input_authority_missing check_only_unestablished previous_release_unknown restore_copies_unavailable backup_inside_install_directory outcome_unestablished restore_incomplete interrupted legacy_root_symlink agents_live agent_rows_unreadable'
 
 # >>> ad_agent_rename_migrate (b.ssz) >>>
 #
@@ -4044,10 +4044,11 @@ fi
 # cutover or stands in for a verification migrate-journal makes after the
 # swap, and a refusal here leaves every file as it was.
 #   - no store, or v0: not crossing;
-#   - v1 up to INPUT_CUTOVER_VERSION - 1: crossing (CUTOVER_CROSSING=1),
-#     and the candidate administrator's migrate-journal --check-only must
-#     accept the run's journal flags; then the restore preconditions
-#     (below) run;
+#   - v1 up to INPUT_CUTOVER_VERSION - 1: crossing (CUTOVER_CROSSING=1);
+#     with no move due the store must hold no live row
+#     (ad_crossing_live_rows_check), and the candidate administrator's
+#     migrate-journal --check-only must accept the run's journal flags;
+#     then the restore preconditions (below) run;
 #   - INPUT_CUTOVER_VERSION up to STORE_SCHEMA_VERSION - 1: not crossing
 #     when the native-input authority is recorded; refused when it is
 #     missing (native_input_authority_missing) or unreadable
@@ -4066,6 +4067,51 @@ ad_cutover_refuse_state() {
     echo "  state.db: $state_db" >&2
     echo "  Nothing was installed or changed." >&2
     ad_outcome_exit ErrJournalMigrationRefused "$reason" "$action" not_committed
+}
+
+# ad_crossing_live_rows_check — on a crossing upgrade with no move due,
+# refuse in pre-flight while the store holds a row in a live state
+# (agents_live), or when its rows cannot be read (agent_rows_unreadable),
+# with nothing changed. Rows only: migrate-journal's inventory after the swap
+# stays the process check. With a move due, ad_agents_live_check has already
+# read the old store's rows. The advice runs the installed binary, which here
+# is still the previous release's.
+ad_crossing_live_rows_check() {
+    local bin line state id cmd action
+    printf -v bin '%q' "$CANONICAL"
+    if ! ad_read_live_rows "$state_db"; then
+        action="re-run the same install command once ${state_db_name} is no longer busy (a re-run reads its rows again); if it still cannot be read, inspect $state_db with the error this run reported"
+        echo "install.sh: cannot read ${state_db_name}'s agent rows, so cannot tell whether an agent is live before the native-input cutover; refusing to upgrade." >&2
+        echo "  state.db: $state_db" >&2
+        echo "  The rows could not be read (the store was busy past its busy timeout of ${store_busy_timeout_ms} ms, or is unreadable). sqlite3 said:" >&2
+        printf '%s\n' "$LIVE_ROWS_ERR" | sed 's/^/    /' >&2
+        echo "  Nothing was installed or changed." >&2
+        ad_outcome_exit ErrJournalMigrationRefused agent_rows_unreadable "$action" not_committed
+    fi
+    if [[ -z "$LIVE_ROWS" ]]; then
+        return 0
+    fi
+    action="stop each live agent with $bin pause --instance-id <id> (a waiting row) or $bin kill --instance-id <id> (any other live row); only for an agent you have established is gone, clear its row with $bin find-missing, run as the agents' user in their tmux environment (a missing row does not prove the agent stopped: docs/maintenance.md \"Scheduling the sweeps\"); then re-run the same install command from a shell AD did not start"
+    echo "install.sh: ${state_db_name} holds live agents, which the native-input cutover cannot cross; refusing to upgrade." >&2
+    echo "  state.db: $state_db" >&2
+    echo "  Rows in a live state (state, instance id), each followed by the command that stops its agent:" >&2
+    while IFS= read -r line; do
+        state="${line%% *}"
+        id="${line#* }"
+        if [[ "$state" == waiting ]]; then
+            printf -v cmd '%s pause --instance-id %q' "$bin" "$id"
+        else
+            printf -v cmd '%s kill --instance-id %q' "$bin" "$id"
+        fi
+        echo "    $line" >&2
+        echo "      $cmd" >&2
+    done <<<"$LIVE_ROWS"
+    echo "  Stop whatever starts agents (a scheduler, a loop, a caller) first, so no new one starts." >&2
+    echo "  Only for an agent you have established is gone, clear its row with the installed binary's find-missing, run as the agents' user in their tmux environment:" >&2
+    echo "    $bin find-missing" >&2
+    echo "  A missing row does not prove the agent stopped: a run as another user or against another tmux server can mark a running agent missing (docs/maintenance.md \"Scheduling the sweeps\")." >&2
+    echo "  Nothing was installed or changed. Then re-run the same install command from a shell AD did not start." >&2
+    ad_outcome_exit ErrJournalMigrationRefused agents_live "$action" not_committed
 }
 
 # ad_journal_check_only — run the candidate administrator's migrate-journal
@@ -5268,6 +5314,9 @@ if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]]; then
             ad_rerun_advice journal
             ad_outcome_exit ErrJournalMigrationRefused legacy_root_symlink \
                 "replace the link at $DEFAULT_INSTALL_ROOT with the directory it points to, then re-run this release's installer with a new --journal-backup directory" not_committed
+        fi
+        if [[ "$MOVE_DUE" -ne 1 ]]; then
+            ad_crossing_live_rows_check
         fi
         ad_journal_check_only
         if [[ "$MOVE_DUE" -eq 1 ]]; then

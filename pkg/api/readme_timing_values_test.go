@@ -10,6 +10,7 @@ package api_test
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -342,23 +343,24 @@ func TestReadmeTimingValuesAgentMinimum(t *testing.T) {
 	}
 }
 
-// docConfigKeys are the non-[tmux] keys of docs/configuration.md, each with
-// the default it states, from the internal/config constants and Default(), and
-// the "1 to N" range cell it states where the key has a maximum (rng empty
-// otherwise). noExample marks a key the doc's example block leaves out:
-// inject_help_hook, whose default (false) is not what install.sh writes (true),
-// and the three [launch] paths, which the example block shows commented out.
-func docConfigKeys() []struct {
+// docKey is one non-[tmux] key of a user doc's Keys table, with the default it
+// states, from the internal/config constants and Default(), and the "1 to N"
+// range cell it states where the key has a maximum (rng empty otherwise).
+// noExample marks a key the doc's example block leaves out.
+type docKey struct {
 	key, def, rng string
 	noExample     bool
-} {
+}
+
+// docConfigKeys are the non-[tmux] keys of docs/configuration.md. Its example
+// block leaves out inject_help_hook, whose default (false) is not what
+// install.sh writes (true), and the [launch] paths, which it shows commented
+// out.
+func docConfigKeys() []docKey {
 	c := config.Default()
 	b := func(v bool) string { return strconv.FormatBool(v) }
 	rng := func(max int64) string { return "1 to " + itoa(max) }
-	return []struct {
-		key, def, rng string
-		noExample     bool
-	}{
+	return []docKey{
 		{"defaults.relay_mode", c.Defaults.RelayMode, "", false},
 		{"defaults.expire_retention_days", itoa(int64(c.Defaults.ExpireRetentionDays)), rng(int64(config.MaxExpireRetentionDays)), false},
 		{"defaults.disable_ask_user", b(c.Defaults.DisableAskUser), "", false},
@@ -382,78 +384,104 @@ func docConfigKeys() []struct {
 	}
 }
 
-// TestReadmeTimingValuesConfigKeys: docs/configuration.md's Keys table has one
-// row for each non-[tmux] key, in order, whose Default (and, where the key has
-// a maximum, Range) cell states the internal/config value; and the example
-// block's value for each key it lists is the default, and it lists every key
-// except those marked noExample.
+// docExperimentalKeys are the keys of docs/experimental.md. Its example block
+// leaves out droid_path and switches the droid opt-in on (docOptIns).
+func docExperimentalKeys() []docKey {
+	return []docKey{
+		{"launch.droid_path", "unset", "", true},
+		{"experimental.droid", strconv.FormatBool(config.Default().Experimental.Droid), "", false},
+	}
+}
+
+// docOptIns are the example-block values that switch an opt-in on rather than
+// state its default.
+var docOptIns = map[string]string{"experimental.droid": "true"}
+
+// TestReadmeTimingValuesConfigKeys: the Keys tables of docs/configuration.md
+// and docs/experimental.md have one row for each of that doc's keys, in order,
+// whose Default (and, where the key has a maximum, Range) cell states the
+// internal/config value; and each doc's toml example block gives each key it
+// lists the default (or, for an opt-in, the value that switches it on), and
+// lists every key except those marked noExample.
 func TestReadmeTimingValuesConfigKeys(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdConfiguration)
-	keys := docConfigKeys()
-	var rows [][]string
-	for _, line := range strings.Split(sectionBody(t, d, "Keys"), "\n") {
-		if strings.HasPrefix(line, "| `[") {
-			cells := strings.Split(strings.Trim(line, "|"), "|")
-			for i := range cells {
-				cells[i] = strings.Trim(strings.TrimSpace(cells[i]), "`")
+	for _, doc := range []struct {
+		path string
+		keys []docKey
+	}{{mdConfiguration, docConfigKeys()}, {mdExperimental, docExperimentalKeys()}} {
+		t.Run(filepath.Base(doc.path), func(t *testing.T) {
+			t.Parallel()
+			d, keys := readMD(t, doc.path), doc.keys
+			var rows [][]string
+			for _, line := range strings.Split(sectionBody(t, d, "Keys"), "\n") {
+				if strings.HasPrefix(line, "| `[") {
+					cells := strings.Split(strings.Trim(line, "|"), "|")
+					for i := range cells {
+						cells[i] = strings.Trim(strings.TrimSpace(cells[i]), "`")
+					}
+					rows = append(rows, cells)
+				}
 			}
-			rows = append(rows, cells)
-		}
-	}
-	if len(rows) != len(keys) {
-		t.Fatalf("%s Keys table has %d key rows; want %d", d.path, len(rows), len(keys))
-	}
-	for i, k := range keys {
-		t.Run(k.key, func(t *testing.T) {
-			row := rows[i]
-			if len(row) < 3 {
-				t.Fatalf("row %d has %d cells; want key, range, default: %v", i+1, len(row), row)
+			if len(rows) != len(keys) {
+				t.Fatalf("%s Keys table has %d key rows; want %d", d.path, len(rows), len(keys))
 			}
-			section, name, _ := strings.Cut(k.key, ".")
-			if want := "[" + section + "] " + name; row[0] != want {
-				t.Fatalf("row %d names %q; want %q", i+1, row[0], want)
+			for i, k := range keys {
+				t.Run(k.key, func(t *testing.T) {
+					row := rows[i]
+					if len(row) < 3 {
+						t.Fatalf("row %d has %d cells; want key, range, default: %v", i+1, len(row), row)
+					}
+					section, name, _ := strings.Cut(k.key, ".")
+					if want := "[" + section + "] " + name; row[0] != want {
+						t.Fatalf("row %d names %q; want %q", i+1, row[0], want)
+					}
+					if row[2] != k.def {
+						t.Errorf("default cell %q; the constant is %q", row[2], k.def)
+					}
+					if k.rng != "" && row[1] != k.rng {
+						t.Errorf("range cell %q; the constants give %q", row[1], k.rng)
+					}
+				})
 			}
-			if row[2] != k.def {
-				t.Errorf("default cell %q; the constant is %q", row[2], k.def)
+
+			// The toml example blocks, outside [tmux] (TestReadmeTimingValuesExampleBlock).
+			example := map[string]string{}
+			section, inFence, inTOML := "", false, false
+			for _, line := range d.lines {
+				switch line = strings.TrimSpace(line); {
+				case mdFenceRe.MatchString(line):
+					inFence = !inFence
+					inTOML = inFence && strings.TrimLeft(line, "`~") == "toml"
+				case !inTOML, line == "", strings.HasPrefix(line, "#"):
+				case strings.HasPrefix(line, "["):
+					section, _, _ = strings.Cut(strings.TrimPrefix(line, "["), "]")
+				case section != "tmux":
+					kv, _, _ := strings.Cut(line, "#")
+					name, val, _ := strings.Cut(kv, "=")
+					example[section+"."+strings.TrimSpace(name)] = strings.Trim(strings.TrimSpace(val), `"`)
+				}
 			}
-			if k.rng != "" && row[1] != k.rng {
-				t.Errorf("range cell %q; the constants give %q", row[1], k.rng)
+			listed := 0
+			for _, k := range keys {
+				got, ok := example[k.key]
+				want, wantName := k.def, "the default"
+				if v, optIn := docOptIns[k.key]; optIn {
+					want, wantName = v, "the opt-in"
+				}
+				switch {
+				case k.noExample:
+					if ok {
+						t.Errorf("%s example block lists %s = %q; the block leaves it out", d.path, k.key, got)
+					}
+				case !ok || got != want:
+					t.Errorf("%s example block gives %s = %q (present: %v); %s is %q", d.path, k.key, got, ok, wantName, want)
+				default:
+					listed++
+				}
+			}
+			if len(example) != listed {
+				t.Errorf("%s example block has %d non-[tmux] keys; want %d: %v", d.path, len(example), listed, example)
 			}
 		})
-	}
-
-	// The example block, outside [tmux] (TestReadmeTimingValuesExampleBlock).
-	example := map[string]string{}
-	section, inFence := "", false
-	for _, line := range d.lines {
-		switch line = strings.TrimSpace(line); {
-		case mdFenceRe.MatchString(line):
-			inFence = !inFence
-		case !inFence, line == "", strings.HasPrefix(line, "#"):
-		case strings.HasPrefix(line, "["):
-			section, _, _ = strings.Cut(strings.TrimPrefix(line, "["), "]")
-		case section != "tmux":
-			kv, _, _ := strings.Cut(line, "#")
-			name, val, _ := strings.Cut(kv, "=")
-			example[section+"."+strings.TrimSpace(name)] = strings.Trim(strings.TrimSpace(val), `"`)
-		}
-	}
-	listed := 0
-	for _, k := range keys {
-		got, ok := example[k.key]
-		switch {
-		case k.noExample:
-			if ok {
-				t.Errorf("%s example block lists %s = %q; the block leaves it out", d.path, k.key, got)
-			}
-		case !ok || got != k.def:
-			t.Errorf("%s example block gives %s = %q (present: %v); the default is %q", d.path, k.key, got, ok, k.def)
-		default:
-			listed++
-		}
-	}
-	if len(example) != listed {
-		t.Errorf("%s example block has %d non-[tmux] keys; want %d: %v", d.path, len(example), listed, example)
 	}
 }

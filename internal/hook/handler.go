@@ -364,13 +364,6 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		return nil
 	}
 
-	if hc.ContextSource != "" {
-		if err := handleClaudeCapacity(raw, st, hc, parent, start); err != nil {
-			logf(logger, "hook: Claude capacity: %v", err)
-		}
-		return nil
-	}
-
 	// Peek the event name from the raw payload so failClosed can gate
 	// its envelope write on event type from the first post-read failure
 	// point. An empty event name (parse failure or missing field) is
@@ -383,12 +376,63 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	// exit 0 with empty stdout. This gate is the b.45p fix — Claude
 	// Code routes hook output by fd, not by envelope contents, so an
 	// envelope from a PreToolUse process would be applied to the
-	// in-flight tool regardless of its hookEventName field.
+	// in-flight tool regardless of its hookEventName field. Capacity
+	// callbacks have no decision channel, even if their payload names an event.
 	failClosed := func(why string) {
 		logf(logger, "hook: %s", why)
-		if relayActive && eventName == EventNamePermissionRequest {
+		if hc.ContextSource == "" && relayActive && eventName == EventNamePermissionRequest {
 			_, _ = fmt.Fprintln(stdout, EncodeDecision(eventName, "deny", ""))
 		}
+	}
+
+	// Children inherit the row's instance ID too. Its stored agent, never
+	// the reporting process's --agent or event, determines lane authority.
+	// SessionStart uses its existing guarded row read below, preserving its
+	// snapshot retry and wait ordering. Other reports are checked before any
+	// capacity callback, permission handling or transition.
+	if hc.ContextSource != "" || eventName != "SessionStart" || hc.Agent == store.AgentCursor {
+		if id, err := ResolveInstanceID(env); err == nil {
+			row, err := st.GetSpawn(id)
+			if err != nil {
+				fields["instance_id"] = id
+				fields["event_name"] = eventName
+				fields["upsert_outcome"] = string(store.UpsertError)
+				if errors.Is(err, store.ErrSpawnNotFound) {
+					// Absence is the established no-change outcome. Classify
+					// only for its trail metadata; no missing/read-failed row
+					// grants authority to any of the report's write paths.
+					fields["upsert_outcome"] = string(store.UpsertNoChange)
+					if agent, e := ResolveAgent(hc.Agent); e == nil {
+						if res, e := ClassifyEvent(agent, raw); e == nil {
+							if res.EventName != "" {
+								fields["event_name"] = res.EventName
+							}
+							if res.ToolName != "" {
+								fields["tool_name"] = res.ToolName
+							}
+							fields["session_id"] = res.SessionID
+						}
+					}
+					logf(logger, "hook: row capability lookup found no row (instance=%q); report ignored", id)
+				} else {
+					failClosed(fmt.Sprintf("row capability lookup failed (instance=%q); report ignored", id))
+				}
+				return nil
+			}
+			if config.IsPaneOnly(row.Agent) {
+				fields["instance_id"] = id
+				fields["event_name"] = eventName
+				fields["upsert_outcome"] = string(store.UpsertNoChange)
+				return nil
+			}
+		}
+	}
+
+	if hc.ContextSource != "" {
+		if err := handleClaudeCapacity(raw, st, hc, parent, start); err != nil {
+			logf(logger, "hook: Claude capacity: %v", err)
+		}
+		return nil
 	}
 
 	instanceID, err := ResolveInstanceID(env)
@@ -856,6 +900,9 @@ func writeSessionStart(st HookStore, instanceID string, gate store.HookGate, jso
 		}
 		if err != nil {
 			return store.HookApplied{}, store.UpsertError, store.Spawn{}, err
+		}
+		if config.IsPaneOnly(sp.Agent) {
+			return store.HookApplied{}, store.UpsertNoChange, sp, nil
 		}
 		gate.Examined = sp.Snapshot
 		applied, changed, err := st.RecordSessionStartIdentity(instanceID, gate, jsonlPath, jsonlPresent)

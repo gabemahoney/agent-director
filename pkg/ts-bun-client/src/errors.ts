@@ -422,6 +422,12 @@ export class ErrRelayModeInvalid extends AgentDirectorError {}
 export class ErrSpawnDeniedFlag extends AgentDirectorError {}
 /** Mirrors ErrReservedEnvKey (package: spawn) */
 export class ErrReservedEnvKey extends AgentDirectorError {}
+/** The requested experimental agent is disabled. */
+export class ErrExperimentalAgentDisabled extends AgentDirectorError {}
+/** The pane-only agent does not support the requested capability. */
+export class ErrAgentCapabilityUnsupported extends AgentDirectorError {}
+/** The pane-only launch has no explicit model. */
+export class ErrModelMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentMissing (package: spawn) */
 export class ErrAgentMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentInvalid (package: spawn) */
@@ -599,7 +605,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 63
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 66
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -614,6 +620,9 @@ const ERROR_TABLE = {
   ErrRelayModeInvalid,
   ErrSpawnDeniedFlag,
   ErrReservedEnvKey,
+  ErrExperimentalAgentDisabled,
+  ErrAgentCapabilityUnsupported,
+  ErrModelMissing,
   ErrAgentMissing,
   ErrAgentInvalid,
   ErrAgentArgsMismatch,

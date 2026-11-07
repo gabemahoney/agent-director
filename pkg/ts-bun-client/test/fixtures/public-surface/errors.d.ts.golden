@@ -221,6 +221,15 @@ export declare class ErrSpawnDeniedFlag extends AgentDirectorError {
 /** Mirrors ErrReservedEnvKey (package: spawn) */
 export declare class ErrReservedEnvKey extends AgentDirectorError {
 }
+/** The requested experimental agent is disabled. */
+export declare class ErrExperimentalAgentDisabled extends AgentDirectorError {
+}
+/** The pane-only agent does not support the requested capability. */
+export declare class ErrAgentCapabilityUnsupported extends AgentDirectorError {
+}
+/** The pane-only launch has no explicit model. */
+export declare class ErrModelMissing extends AgentDirectorError {
+}
 /** Mirrors ErrAgentMissing (package: spawn) */
 export declare class ErrAgentMissing extends AgentDirectorError {
 }

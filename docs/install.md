@@ -256,15 +256,17 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 
 ## Install from inside Claude Code
 
-From the root of your clone, link the `install-agent-director` skill once,
-then say **install agent-director** in Claude Code:
+From the root of your clone, link the `install-agent-director` and
+`upgrade-agent-director` skills once, then say **install agent-director** in
+Claude Code, or **upgrade agent-director** for an existing install:
 
 ```sh
-mkdir -p ~/.claude/skills && ln -s "$PWD/skills/install-agent-director" ~/.claude/skills/install-agent-director
+mkdir -p ~/.claude/skills
+for s in install-agent-director upgrade-agent-director; do [ -e ~/.claude/skills/$s ] || [ -L ~/.claude/skills/$s ] || ln -s "$PWD/skills/$s" ~/.claude/skills/$s; done
 ```
 
-The skill asks five questions (source, symlink, MCP, hooks, schedule), then
-runs `install.sh`.
+The install skill asks five questions (source, symlink, MCP, hooks, schedule),
+then runs `install.sh`.
 
 ## Install from source
 
@@ -310,6 +312,9 @@ runs recovery to discover support. Existing `find-missing` schedules remain
 valid aliases on a supporting binary; an upgrade needs no schedule rewrite.
 
 ## Upgrade
+
+An agent upgrading an install follows the
+[upgrade skill](../skills/upgrade-agent-director/SKILL.md) step by step.
 
 An upgrade of an existing store below schema v16 crosses the native-input
 journal cutover, once, and needs the journal flags listed above; a fresh
@@ -449,7 +454,9 @@ check and fix in Operator actions):
 changed, and anything the run changed was put back). A crossing upgrade refuses a
 `~/.config/agent-director` that is a link: replace the link with its directory
 once, as [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons)
-shows.
+shows. With no move due, it also refuses while the store holds a live agent
+row (`agents_live`) or its rows cannot be read (`agent_rows_unreadable`);
+the same table gives each one's next step.
 
 Two other cutover outcomes end with exit 5:
 

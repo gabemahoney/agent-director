@@ -35,6 +35,21 @@
     "description": ""
   },
   {
+    "name": "ErrExperimentalAgentDisabled",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrAgentCapabilityUnsupported",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrModelMissing",
+    "package": "spawn",
+    "description": ""
+  },
+  {
     "name": "ErrAgentMissing",
     "package": "spawn",
     "description": ""

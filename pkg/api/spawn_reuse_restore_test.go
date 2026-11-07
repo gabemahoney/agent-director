@@ -9,6 +9,8 @@ package api_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -22,8 +24,73 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+func TestPaneOnlyLaunchFailureFiles(t *testing.T) {
+	// Serial: each case owns HOME for its per-launch files.
+	for _, agent := range []string{"droid"} {
+		for _, reuse := range []bool{false, true} {
+			for _, tc := range []struct {
+				name   string
+				script tmuxfix.Script
+				want   error
+				retain bool
+			}{
+				{"unavailable", tmuxfix.Script{Failure: tmux.FailUnavailable}, api.ErrTmuxNotAvailable, false},
+				{"no server", tmuxfix.Script{Failure: tmux.FailNoServer}, api.ErrTmuxSessionCreate, false},
+				{"duplicate without holder", tmuxfix.Script{Failure: tmux.FailDuplicate}, api.ErrTmuxSessionCreate, false},
+				{"lost reply", tmuxfix.Script{Failure: tmux.FailUnrecognized, Applied: true}, nil, true},
+				{"timeout", tmuxfix.Script{Failure: tmux.FailTimeout, Applied: true}, api.ErrTmuxUnresponsive, true},
+				{"unparseable reply", tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, HadStdout: true, Applied: true}, api.ErrTmuxUnresponsive, true},
+				{"unlabelled ended", tmuxfix.Script{Failure: tmux.FailLabel}, api.ErrTmuxSessionCreate, true},
+			} {
+				name := agent + "/spawn/" + tc.name
+				if reuse {
+					name = agent + "/reuse/" + tc.name
+				}
+				t.Run(name, func(t *testing.T) {
+					t.Setenv("HOME", t.TempDir())
+					e := newReuseEnv(t)
+					c, logs := e.paneOnlyClient(t, agent)
+					p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: []string{"--model", "model"}}
+					oldPath := ""
+					if reuse {
+						r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour, Bare: true, Opts: agentRowOpts(agent)})
+						p.InstanceID, p.ReuseFinished = r.ID, true
+						oldPath = seedLaneOverlay(t, e.storeID, r.Token)
+					}
+					e.rec.Script(tmuxfix.AnySocket, tc.script, tmux.CallCreate)
+					if tc.script.Failure == tmux.FailLabel {
+						e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1}, tmux.CallSetLabel)
+					}
+					_, err := c.Spawn(p)
+					if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
+						t.Fatalf("Spawn=%v; want %v", err, tc.want)
+					}
+					calls := e.rec.SocketCallsOf(tmux.CallCreate)
+					if len(calls) != 1 {
+						t.Fatalf("creates=%+v", calls)
+					}
+					path := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "launch", e.storeID, calls[0].Token, "droid-settings.json")
+					assertLaneOverlay(t, path, tc.retain)
+					if oldPath != "" {
+						assertLaneOverlay(t, oldPath, false)
+					}
+					if reuse && tc.want != nil && tc.want != api.ErrTmuxUnresponsive {
+						if row := e.columns(t, p.InstanceID); row.State != store.StateEnded {
+							t.Fatalf("failed reuse not restored: %+v", row)
+						}
+						if tc.retain && (!strings.Contains(logs.String(), "launch_token=\""+calls[0].Token+"\"") || !strings.Contains(logs.String(), "row_state=\"ended\"")) {
+							t.Fatalf("unreachable retained-token diagnostic=%q", logs.String())
+						}
+					}
+				})
+			}
+		}
+	}
+}
 
 // rrHistory reads id's history over every life.
 func rrHistory(t *testing.T, e *killEnv, id string) []apitest.HistoryEntry {

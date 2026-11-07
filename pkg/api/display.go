@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -32,7 +33,7 @@ const (
 	// may be sampled.
 	IdleScreenAvailable = "available"
 	// IdleScreenUnavailable: idle_screen never applies to the row's agent
-	// (Cursor), which is never sampled.
+	// (Cursor or pane-only agents), which are never sampled.
 	IdleScreenUnavailable = "unavailable"
 )
 
@@ -43,6 +44,14 @@ func idleScreenAvailability(agent string) string {
 		return IdleScreenAvailable
 	}
 	return IdleScreenUnavailable
+}
+
+// integrationMode is omitted for agents with their existing native contract.
+func integrationMode(agent string) string {
+	if spawn.IsPaneOnly(agent) {
+		return "pane_only"
+	}
+	return ""
 }
 
 // StateDetail is shared by get and status: the Displayed State shown and its

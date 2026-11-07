@@ -31,7 +31,7 @@ var advHomeAgents = []advHomeAgent{
 
 // The advice A14 and B11 pin, exactly as the manifest or Go doc words it (the description's depends on the agent).
 const (
-	advSpawnHomeDoc    = "so set an absolute CLAUDE_CONFIG_DIR (a claude agent) or CODEX_HOME (a codex agent) instead to give the agent its own config"
+	advSpawnHomeDoc    = "Claude can use absolute CLAUDE_CONFIG_DIR and Codex absolute CODEX_HOME for its own config"
 	advSpawnHomeParam  = "set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config"
 	advResumeHomeGoDoc = "Spawn the same id with the reuse opt-in, the row's agent and extra env without that key. That starts a fresh conversation in the retained life. An absolute CLAUDE_CONFIG_DIR gives Claude its own config; CODEX_HOME gives Codex its own config"
 )

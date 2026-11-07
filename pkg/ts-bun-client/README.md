@@ -259,7 +259,7 @@ or omitted `text` sends the Enter only, submitting what is already typed.
 `no_enter: true` types the text without the Enter, and `key` sends one key
 alone (`"Escape"`, `"Enter"`, `"Up"`, `"Down"`, `"Tab"`, or one character),
 never followed by Enter. With `expect_pane_sha256` (the `pane_sha256` of
-the `readPane` you looked at, with its `n_lines`), nothing is sent if the
+the plain `readPane` you looked at, with its `n_lines`), nothing is sent if the
 pane changed since (`ErrPaneChanged`); on a relayed Spawn a match also
 passes the API's dialog hold (`ErrDialogMaybeOpen`, see "Answering a request at
 the pane" below). Pass it only for a pane a person or an LLM judged, never
@@ -341,7 +341,8 @@ console.log(result.pane, result.pane_sha256);
 
 `pane_sha256` is the SHA-256 of exactly the bytes of `pane`; pass it back as
 `sendKeys`' or `recordPaneAnswer`'s `expect_pane_sha256`, with the same
-`n_lines`, when you act on what this pane shows.
+`n_lines`, when you act on what this pane shows. Use the default ANSI-stripped
+read for this guard; the hash of an `ansi: true` read never matches.
 
 `readPane` has no state guard — it works on `pending`, `ended`, and `missing`
 rows as well as live ones. The `allow_pending` flag is accepted for symmetry

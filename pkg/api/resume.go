@@ -306,6 +306,9 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	if err != nil {
 		return ResumeResult{}, err
 	}
+	if spawn.IsPaneOnly(row.Agent) {
+		return ResumeResult{}, spawn.PaneOnlyCapabilityError(row.Agent, "resume")
+	}
 
 	if row.State == store.StatePending {
 		return ResumeResult{}, launchInProgressError(row)
@@ -841,6 +844,8 @@ func launchInProgressError(row Spawn) error {
 // CLI: agent-director resume
 //
 // Errors:
+//   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
+//     cannot be resumed; nothing is changed or launched.
 //   - [ErrSpawnNotFound]: no row exists for the instance id, or the row was
 //     removed during the resume (found by the move, or by the one re-read
 //     after the pre-launch check found a left-over session; nothing

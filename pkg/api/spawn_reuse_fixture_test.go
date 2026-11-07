@@ -8,6 +8,8 @@ package api_test
 // a copy of them.
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -21,6 +23,41 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// paneOnlyClient enables the named lane on the existing store/clock/tmux fixture.
+func (e *killEnv) paneOnlyClient(t *testing.T, agent string) (*api.Client, *bytes.Buffer) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[experimental]\n"+agent+" = true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, log, err := e.clientFor(t, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, log
+}
+
+// seedLaneOverlay gives a seeded old launch its owned generated file.
+func seedLaneOverlay(t *testing.T, storeID, token string) string {
+	t.Helper()
+	path := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "launch", storeID, token, "droid-settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"model":"old"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func assertLaneOverlay(t *testing.T, path string, present bool) {
+	t.Helper()
+	_, err := os.Stat(path)
+	if present && err != nil || !present && !os.IsNotExist(err) {
+		t.Errorf("overlay %s: %v; want present=%v", path, err, present)
+	}
+}
 
 // reuseLife is the life a reusable row is seeded in; its earlier history
 // entry belongs to the life before.

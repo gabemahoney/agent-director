@@ -977,7 +977,7 @@ func (r *activeReadStore) finish() error {
 				continue
 			}
 			row := *checked.proofRow
-			if row.Agent == store.AgentCursor || row.Identity.Token == "" {
+			if row.Agent == store.AgentCursor || spawn.IsPaneOnly(row.Agent) || row.Identity.Token == "" {
 				checked.inapplicable("native_proof")
 				continue
 			}
@@ -988,7 +988,7 @@ func (r *activeReadStore) finish() error {
 	} else {
 		for _, checked := range r.rows {
 			if row := checked.proofRow; row != nil {
-				if row.Agent == store.AgentCursor || row.Identity.Token == "" {
+				if row.Agent == store.AgentCursor || spawn.IsPaneOnly(row.Agent) || row.Identity.Token == "" {
 					checked.inapplicable("native_proof")
 				} else {
 					checked.record(activeCheckOutcome{Adapter: "native_proof", Result: "unavailable"})

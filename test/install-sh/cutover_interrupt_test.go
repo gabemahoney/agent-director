@@ -254,7 +254,7 @@ fi`)
 				backup := filepath.Join(h.Root, "interrupt-follow-backup")
 				follow := f.Follow(res, !tc.file, backup)
 				if group == "before" {
-					(&crossingCase{h: h, db: db}).assertCrossed(t, follow, backup)
+					(&crossingCase{h: h, db: db, version: "15"}).assertCrossed(t, follow, backup)
 				} else {
 					if follow.Code != 0 {
 						t.Fatalf("committed retry: %+v", follow)

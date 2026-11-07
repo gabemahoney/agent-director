@@ -12,6 +12,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,80 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// b.7tx: even a provider or child with this row's ID cannot report lifecycle,
+// permission, question, context or subagent state for a pane-only launch.
+func TestPaneOnlyReportsIgnored(t *testing.T) {
+	for _, agent := range []string{"droid"} {
+		for _, event := range []string{"SessionStart", "SessionEnd", "Stop", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "SubagentStart", "SubagentStop", "capacity"} {
+			for _, child := range []bool{false, true} {
+				t.Run(agent+"/"+event+"/child="+strconv.FormatBool(child), func(t *testing.T) {
+					const id = "pane-only-hook"
+					st, db := ssgSeed(t, id, store.StatePending, "", apitest.WithAgent(agent), apitest.WithLaunchIdentity(ssgFreshPane))
+					seedGateSubagents(t, db, id)
+					row, subs := mustGetSpawn(t, st, id), readGateSubagents(t, db, id)
+					parent := agentParent(t, st, id)
+					if child {
+						parent = foreignParent(t, st, id)
+					}
+					hc := hookConfig(envHook(id, "on"), parent)
+					if child {
+						hc.ParentProc.(*fakeParentProc).ppids[parent.PID] = ssgFreshPane.PanePID
+					}
+					reported := event
+					if event == "capacity" {
+						hc.ContextSource = "statusLine"
+						reported = "Stop"
+					}
+					payload := map[string]any{"hook_event_name": reported, "session_id": "native-session", "tool_name": "AskUserQuestion", "tool_use_id": "toolu_gate"}
+					if event == "SubagentStart" || event == "SubagentStop" {
+						payload["agent_id"] = "new-subagent"
+					}
+					raw, err := json.Marshal(payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var output bytes.Buffer
+					if err := hook.Handle(context.Background(), bytes.NewReader(raw), &output, st, hc, nil); err != nil {
+						t.Fatal(err)
+					}
+					if output.Len() != 0 {
+						t.Fatalf("ignored report response=%q", output.String())
+					}
+					assertRowUnchanged(t, st, id, row)
+					assertGateSubagentsUnchanged(t, db, id, subs)
+					assertNoRequests(t, st, id)
+				})
+			}
+		}
+	}
+}
+
+func TestPaneOnlyCapabilityLookupFailureWritesNothing(t *testing.T) {
+	for _, event := range []string{"Stop", "SessionEnd", "PreToolUse", "PostToolUse", "PermissionRequest", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Notification", "SessionStart"} {
+		t.Run(event, func(t *testing.T) {
+			const id = "unresolved-lane-hook"
+			st, db := ssgSeed(t, id, store.StatePending, "", apitest.WithAgent("droid"), apitest.WithLaunchIdentity(ssgFreshPane))
+			seedGateSubagents(t, db, id)
+			row, subs := mustGetSpawn(t, st, id), readGateSubagents(t, db, id)
+			hc := hookConfig(envHook(id, "on"), agentParent(t, st, id))
+			wrapped := &swStore{Store: st, clock: hookClock(t, hc), failAt: 1}
+			var output bytes.Buffer
+			if err := hook.Handle(context.Background(), strings.NewReader(`{"hook_event_name":"`+event+`","tool_name":"Bash","session_id":"native-session"}`), &output, wrapped, hc, newSilentLogger()); err != nil {
+				t.Fatal(err)
+			}
+			// Unknown membership still honors the existing relay fail-closed contract.
+			if event == "PermissionRequest" {
+				assertDenyEnvelope(t, &output)
+			} else if output.Len() != 0 {
+				t.Fatalf("unexpected response: %q", output.String())
+			}
+			assertRowUnchanged(t, st, id, row)
+			assertGateSubagentsUnchanged(t, db, id, subs)
+			assertNoRequests(t, st, id)
+		})
+	}
+}
 
 // subPayload returns fixture with its transcript moved to a file on disk and
 // extra keys set, plus the session id and transcript path it reports.

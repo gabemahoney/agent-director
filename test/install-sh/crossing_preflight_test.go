@@ -120,12 +120,14 @@ func assertOwnRefusal(t *testing.T, res moveResult, reason, action string, lines
 	}
 }
 
-// crossingCase is a home holding a genuine v0.17.3 install (store v15), with
-// a private extra legacy root and a file to put a backup under.
+// crossingCase is a home holding a genuine v0.17.3 install (store v15), or
+// the release newCrossingCaseOf names, with a private extra legacy root and a
+// file to put a backup under.
 type crossingCase struct {
 	h       *moveHome
 	release releaseBuild
-	prev    string // v0.17.3's installed agent-director
+	prev    string // the release's installed agent-director
+	version string // its store's user_version
 	root    string // a legacy input root, 0700
 	file    string // a regular file
 	db      string
@@ -136,16 +138,26 @@ type crossingCase struct {
 // flags, say).
 func newCrossingCase(t *testing.T, setup ...func(h *moveHome)) *crossingCase {
 	t.Helper()
-	r := genuineRelease(t, "v0.17.3")
+	return newCrossingCaseOf(t, "v0.17.3", setup...)
+}
+
+// crossingStoreVersions is the store version each release a crossingCase
+// installs makes.
+var crossingStoreVersions = map[string]string{"v0.16.0": "14", "v0.17.3": "15"}
+
+// newCrossingCaseOf is newCrossingCase from tag's genuine install.
+func newCrossingCaseOf(t *testing.T, tag string, setup ...func(h *moveHome)) *crossingCase {
+	t.Helper()
+	r := genuineRelease(t, tag)
 	h := newMoveHome(t)
 	h.Flags = []string{"--no-hooks"} // the managed PATH link is part of what must not change
 	for _, f := range setup {
 		f(h)
 	}
-	c := &crossingCase{h: h, release: r, root: filepath.Join(h.Root, "legacy-input"), file: filepath.Join(h.Root, "file"), db: filepath.Join(h.New, "state.db")}
+	c := &crossingCase{h: h, release: r, version: crossingStoreVersions[tag], root: filepath.Join(h.Root, "legacy-input"), file: filepath.Join(h.Root, "file"), db: filepath.Join(h.New, "state.db")}
 	c.prev = h.InstallRelease(r)
-	if v := moveUserVersion(t, h, c.db); v != "15" {
-		t.Fatalf("v0.17.3 made a store at v%s; want v15", v)
+	if v := moveUserVersion(t, h, c.db); v != c.version {
+		t.Fatalf("%s made a store at v%s; want v%s", tag, v, c.version)
 	}
 	if err := os.Mkdir(c.root, 0o700); err != nil {
 		t.Fatal(err)
@@ -303,7 +315,7 @@ func (c *crossingCase) assertCrossed(t *testing.T, res moveResult, backup string
 	if res.Code != 0 {
 		t.Fatalf("install: exit %d\nstdout:\n%s\nstderr:\n%s", res.Code, res.Stdout, res.Stderr)
 	}
-	for _, s := range []string{"  cutover : " + c.db + " at v15 crosses the native-input cutover\n", "  journal : "} {
+	for _, s := range []string{"  cutover : " + c.db + " at v" + c.version + " crosses the native-input cutover\n", "  journal : "} {
 		if !strings.Contains(res.Stdout, s) {
 			t.Errorf("stdout lacks %q:\n%s", s, res.Stdout)
 		}
