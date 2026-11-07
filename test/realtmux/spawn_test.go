@@ -226,17 +226,23 @@ func (f *spawnFix) launched(t *testing.T, id string) spawned {
 	return s
 }
 
-// seedResumable seeds an ended row in cwd with args as its stored claude
-// args, the socket spawn resolves, the pre-trust opt-out and a transcript on
-// disk; it returns the row's id and session id.
+// seedResumable seeds an ended row through seedResumableIn.
 func (f *spawnFix) seedResumable(t *testing.T, cwd string, args []string) (id, sessionID string) {
+	t.Helper()
+	return f.seedResumableIn(t, store.StateEnded, cwd, args)
+}
+
+// seedResumableIn seeds a row in state (ended or missing) in cwd with args as
+// its stored claude args, the socket spawn resolves, the pre-trust opt-out and
+// a transcript on disk; it returns the row's id and session id.
+func (f *spawnFix) seedResumableIn(t *testing.T, state, cwd string, args []string) (id, sessionID string) {
 	t.Helper()
 	id, sessionID = newInstanceID("resume"), newInstanceID("sess")
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		t.Fatalf("encode agent args: %v", err)
 	}
-	if _, err := apitest.SeedSpawn(f.DBPath, id, store.StateEnded, cwd, "", sessionID, false,
+	if _, err := apitest.SeedSpawn(f.DBPath, id, state, cwd, "", sessionID, false,
 		apitest.WithRawAgentArgs(string(encoded)), apitest.WithTmuxSocket(f.Socket), apitest.WithNoPreTrust(),
 		apitest.WithJsonlPath(apitest.SeedJsonl(t, cwd, sessionID))); err != nil {
 		t.Fatalf("SeedSpawn %s: %v", id, err)

@@ -73,6 +73,11 @@ func TestMain(m *testing.M) {
 	// all test spawns are created as roots (NULL parent_id).
 	os.Unsetenv("AGENT_DIRECTOR_INSTANCE_ID") //nolint:errcheck
 
+	// ── Step 3c: clear CLAUDE_CONFIG_DIR ──────────────────────────────────────
+	// A Claude launch's pre-trust and environment fall back to this process's
+	// value (b.uzn), so the host shell's would move them off the fake home.
+	os.Unsetenv("CLAUDE_CONFIG_DIR") //nolint:errcheck
+
 	// ── Step 4: run all tests ─────────────────────────────────────────────────
 	code := m.Run()
 

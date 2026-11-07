@@ -49,7 +49,8 @@ func JsonlPath(cwd, sessionID string) (string, error) {
 //	<configDir>/projects/<slug(cwd)>/<session_id>.jsonl
 //
 // It is the config-dir-aware sibling of JsonlPath: when a Spawn ran
-// under a custom CLAUDE_CONFIG_DIR (persisted in the row's ExtraEnv),
+// under a custom CLAUDE_CONFIG_DIR (persisted in the row's ExtraEnv, an
+// inherited one included),
 // its transcript lives under <CLAUDE_CONFIG_DIR>/projects/... rather
 // than ~/.claude/projects/..., so resume's fallback must compose the
 // path from that config dir. The same byte-for-byte slug rule applies

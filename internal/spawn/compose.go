@@ -1,6 +1,7 @@
 package spawn
 
 import (
+	"maps"
 	"os"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -37,12 +38,13 @@ func ParentIDFromEnv() string {
 // to fill with the launch's socket, token and this store's id.
 //
 // Row carries the request fields the row records (instance id, cwd, session
-// name, agent args, relay mode, labels, extra env, timeout override), the request's
-// NoPreTrust (the choice the caller passes to RunPreTrust, so the row records
-// what the launch did, SR-22.6) and the parent id from the caller's
-// AGENT_DIRECTOR_INSTANCE_ID ("" is stored as NULL). Its launch start, start
-// time and Identity (token, socket) are zero, for the caller to fill from
-// the launch.
+// name, agent args, relay mode, labels, extra env with a claude launch's
+// inherited CLAUDE_CONFIG_DIR added (launchExtraEnv), timeout override), the
+// request's NoPreTrust (the choice the caller passes to RunPreTrust, so the
+// row records what the launch did, SR-22.6) and the parent id from the
+// caller's AGENT_DIRECTOR_INSTANCE_ID ("" is stored as NULL). Its launch
+// start, start time and Identity (token, socket) are zero, for the caller to
+// fill from the launch.
 //
 // PreTrust is the pre-trust outcome a codex launch was composed for (the folder
 // trust and the hook-review bypass are in its argv only on PreTrustOK), decided
@@ -63,10 +65,20 @@ type ComposedLaunch struct {
 // defaulted request, for plain spawn's insert and for reuse's reset
 // (SR-10.3, SR-22.2). It makes no store/file write, tmux call or network I/O.
 // It reads Claude's selected settings to preserve native status-line commands
-// and the process environment for the parent id. So every
+// and the process environment for the parent id and a claude launch's
+// CLAUDE_CONFIG_DIR. So every
 // composition failure (a settings synthesis error) comes before the write
 // that begins the launch and writes nothing, and between that write and the
 // create there is only in-process work (SR-13.4).
+//
+// A claude launch's extra env is launchExtraEnv's: an inherited
+// CLAUDE_CONFIG_DIR is in the create's environment, the settings, the
+// pre-trust the caller runs with Row.ExtraEnv and the row alike, so a resume
+// runs under the spawn's folder, not its caller's. launchExtraEnv is the only
+// reader that adds agent-director's own CLAUDE_CONFIG_DIR to a launch's extra
+// env, and so to the row; composeContextStatuslines and inputdelivery.Prepare
+// read it only when the extra env has no key. Resume's pre-trust and launch
+// environment use only the row's extra env.
 //
 // The environment carries AGENT_DIRECTOR_INSTANCE_ID; the create's own -e
 // entry carries it too and the client drops the environment's copy, so it
@@ -82,6 +94,7 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 	if err := launchAgentError(r.Agent); err != nil {
 		return ComposedLaunch{}, err
 	}
+	r.ExtraEnv = launchExtraEnv(r)
 	if r.Agent == store.AgentCursor {
 		if err := ValidateExtraEnv(r.ExtraEnv, r.Agent); err != nil {
 			return ComposedLaunch{}, err
@@ -152,4 +165,30 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 			IdleScreenTimeoutSeconds: r.IdleScreenTimeoutSeconds,
 		},
 	}, nil
+}
+
+// envClaudeConfigDir is the variable that moves Claude Code's config.
+const envClaudeConfigDir = "CLAUDE_CONFIG_DIR"
+
+// launchExtraEnv is the extra env a launch of r runs with and its row
+// records. For a claude launch whose extra env has no CLAUDE_CONFIG_DIR key
+// and whose agent-director environment sets it non-empty, it is a copy of
+// r's with that value added (bug b.uzn; relative included, which pre-trust
+// still refuses); otherwise r's, unchanged. A key present with an empty
+// value means unset and is kept. The caller's map is never written.
+func launchExtraEnv(r Resolved) map[string]string {
+	if r.Agent != store.AgentClaude {
+		return r.ExtraEnv
+	}
+	if _, ok := r.ExtraEnv[envClaudeConfigDir]; ok {
+		return r.ExtraEnv
+	}
+	dir := os.Getenv(envClaudeConfigDir)
+	if dir == "" {
+		return r.ExtraEnv
+	}
+	out := make(map[string]string, len(r.ExtraEnv)+1)
+	maps.Copy(out, r.ExtraEnv)
+	out[envClaudeConfigDir] = dir
+	return out
 }

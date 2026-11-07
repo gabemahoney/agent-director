@@ -117,12 +117,14 @@ func TestSpawnAgentArgsEndingInSemicolonRunNoTmuxCommand(t *testing.T) {
 
 // TestResumeAgentArgsEndingInSemicolonRunNoTmuxCommand resumes an ended row
 // whose stored agent args are "x;" then a tmux command: the relaunch runs no
-// second command and the agent receives the args literally.
+// second command and the agent receives the args literally. The words are
+// --allowedTools values, so they survive resume's prompt removal and stay
+// adjacent in the create's argv.
 func TestResumeAgentArgsEndingInSemicolonRunNoTmuxCommand(t *testing.T) {
 	for _, tc := range injections {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newInjectionFix(t)
-			args := append([]string{"x;"}, tc.cmd(f.Marker)...)
+			args := slices.Concat([]string{"--allowedTools", "x;"}, tc.cmd(f.Marker))
 			id, sessionID := f.seedResumable(t, f.CWD, args)
 			_, err := f.API.Resume(api.ResumeParams{InstanceID: id})
 			f.assertNoSecondCommand(t)

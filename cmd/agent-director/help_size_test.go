@@ -52,6 +52,7 @@ import "testing"
 // On 2026-10-31 b.7tz cw find-missing Cursor qualifier paid by lossless trims
 // lowered it to 14622 (free downward step).
 // On 2026-11-01 b.bqd send-keys wording trims lowered it to 14587 (free downward step).
+// On 2026-11-06 b.kz9 resume's no-replay wording lowered it to 14575 (free downward step).
 //
 // SR-20.6: this guard checks growth only, with no slack: help stdout one byte
 // over this count fails. Re-recording it downward, to the newly measured
@@ -64,7 +65,9 @@ import "testing"
 // 14567 (free downward steps).
 // On 2026-11-02 b.x9o t2.7tz.5c.fd's merge of main, with one send-keys
 // description carrying both lines' advice, lowered it to 14564 (free downward step).
-const helpStdoutBytes = 14564
+// On 2026-11-07 b.x9o's merge of main (b.kz9's resume no-replay wording)
+// lowered it to 14552 (free downward step).
+const helpStdoutBytes = 14552
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

@@ -188,11 +188,20 @@ runs `bun install --frozen-lockfile` and `bun run build` in
 `bun test` (in `pkg/ts-bun-client`), then prints one last line:
 `VERDICT: PASS` or `VERDICT: FAIL`.
 
+That base image has no init; without the setup below, the suites fail on
+unchanged code. Make the source a git clone of the tree under test with its
+uncommitted changes copied in, because some tests run `git rev-parse HEAD`.
+Install `tini` (as root) and make it PID 1 so it reaps orphaned processes:
+`CMD ["/usr/bin/tini", "--", …]`. Set `GOMAXPROCS=2 GOFLAGS=-p=1`.
+
 #### Integration tests
 
 Each slug `make list-test-docker-epics` prints is one isolated job running that
-slug's testplan (`make test-docker EPIC=<slug>`). When a change edits
-`spec/tla/`, also run the fast model check.
+slug's testplan (`make test-docker EPIC=<slug>`). The image's own `CMD` (bash
+running `run-testplan.sh`) is the PID 1 that reaps orphaned processes, so a
+harness keeps that `CMD` or runs it under `tini -s`; otherwise process-reaping
+cases fail on every branch. When a change edits `spec/tla/`, also run the fast
+model check.
 
 #### Model check
 
@@ -246,7 +255,9 @@ built binary. Currently: `internal/trail`, `internal/store`, `internal/hook`,
 `test/tla` and `test/driver-scripts`. Pure-logic packages with no
 state or exec surface (e.g. `pkg/api/manifest`, `pkg/api/errnames`) may skip
 it, as do the `test/sandbox/` Makefile tests (`gitmount`, `cmdinject`,
-`prebuild`, `cigates`), which run only `make` and shell fakes. When you add a package that
+`prebuild`, `cigates`, `helperdeps`), which run only `make`, shell fakes,
+`go build` and `go list` (helperdeps builds the test helpers but never runs
+them). When you add a package that
 opens the store or execs a binary, add `sandboxguard.Require()` to its
 `TestMain`.
 

@@ -201,7 +201,9 @@ ir_task2() {
  saved_args=$(sql "SELECT agent_args FROM spawns WHERE instance_id='$id';")
  rl_public "$surface" pause >/dev/null
  ir_launch "$surface" resume "$(jq -cn --arg id "$id" '{instance_id:$id}')" > "$case_dir/public.json"
- check task2.saved-initial-completion wait_until ir_task2_completed 2
+ ir_not_replayed task2 1
+ rl_send "$surface" 'resumed turn' true >/dev/null
+ check task2.resumed-turn-completion wait_until ir_task2_completed 2
  check task2.resume-mode-order frames_task2_order resume
  check task2.saved-args-retained test "$(sql "SELECT agent_args FROM spawns WHERE instance_id='$id';")" = "$saved_args"
  rl_public "$surface" pause >/dev/null
@@ -236,10 +238,17 @@ frames_task2_order() {
  if [[ $1 == resume ]]; then want='["initialize","session/new","session/set_mode","session/prompt","initialize","session/load","session/set_mode","session/prompt"]'; fi
  frames | jq -se --argjson want "$want" '[.[]|select(has("method"))|.method]==$want' >/dev/null
 }
-frames_task2_prompts() { frames | jq -se --arg prompt "$1" '[.[]|select(.method=="session/prompt")|.params.prompt[0].text]==[$prompt,$prompt,"replacement prompt"]' >/dev/null; }
+frames_task2_prompts() { frames | jq -se --arg prompt "$1" '[.[]|select(.method=="session/prompt")|.params.prompt[0].text]==[$prompt,"resumed turn","replacement prompt"]' >/dev/null; }
+# Resume never replays the saved initial prompt: once loaded, the session
+# waits pending with only the earlier launches' N prompts sent.
+ir_not_replayed() {
+ check "$1.resume-awaiting-prompt" wait_until rl_awaiting
+ check "$1.saved-not-replayed" pc_prompts_is "$2"
+ check "$1.resume-pending" test "$(row_state)" = pending
+}
 frames_task2_modes() { frames | jq -se '[.[]|select(.method=="session/set_mode")|.params.modeId]==["plan","plan","ask"] and ([.[]|select(.method=="session/new")]|length)==2 and ([.[]|select(.method=="session/load")]|length)==1' >/dev/null; }
 ir_finish() {
- jq -cn --arg case "$1" --arg id "$id" --argjson task2 "${ir_task2_ran:-false}" --argjson task3 "${ir_task3_ran:-false}" '{case:$case,status:"pass",checks:(["current-runtime-effect","no-config-rewrite","saved-resume-values-or-fresh-conversation","bad-path-never-falls-back"]+(if $task2 then ["Task2-AC2-AC3-AC7-SR1.2","authoritative-fresh-load-reuse-modes","saved-initial-exact-once-per-launch","static-refusal-no-row"] else [] end)+(if $task3 then ["Task3-AC4-AC5-AC6-AC7","minimal-capabilities-and-malformed-refusal","truthful-trust-saved-choice","installed-default-spawn-resume-whole-call"] else [] end)),provenance:{runtime:"synthetic-ACP",terminal:"actual-tmux-scripted",authenticated_cursor:false,native_capture:false},facts:{instance_id:$id,task2:$task2,task3:$task3}}'
+ jq -cn --arg case "$1" --arg id "$id" --argjson task2 "${ir_task2_ran:-false}" --argjson task3 "${ir_task3_ran:-false}" '{case:$case,status:"pass",checks:(["current-runtime-effect","no-config-rewrite","saved-resume-values-or-fresh-conversation","bad-path-never-falls-back"]+(if $task2 then ["Task2-AC2-AC3-AC7-SR1.2","authoritative-fresh-load-reuse-modes","saved-initial-once-never-replayed","static-refusal-no-row"] else [] end)+(if $task3 then ["Task3-AC4-AC5-AC6-AC7","minimal-capabilities-and-malformed-refusal","truthful-trust-saved-choice","installed-default-spawn-resume-whole-call"] else [] end)),provenance:{runtime:"synthetic-ACP",terminal:"actual-tmux-scripted",authenticated_cursor:false,native_capture:false},facts:{instance_id:$id,task2:$task2,task3:$task3}}'
 }
 
 # One installed representative connects capability, trust and whole-call timing.
@@ -274,7 +283,9 @@ ir_task3() {
  jq -cn --arg surface "$surface" --argjson elapsed "$elapsed" '{verb:"resume",surface:$surface,whole_call_ms:$elapsed,client_timeout_ms:30000,timeout_override:false}' >> "$case_dir/task3-timing.jsonl"
  touch "$case_dir/new-release"
  check task3.loaded wait_until rl_loaded
- check task3.saved-prompt-completed wait_until ir_task2_completed 2
+ ir_not_replayed task3 1
+ rl_send "$surface" 'resumed turn' true >/dev/null
+ check task3.resumed-turn-completed wait_until ir_task2_completed 2
  rl_public "$surface" pause >/dev/null
  params=$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" '{instance_id:$id,agent:"cursor",cwd:$cwd,reuse_finished:true,no_pre_trust:true}')
  ir_launch "$surface" spawn "$params" > "$case_dir/public.json"

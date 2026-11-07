@@ -178,14 +178,19 @@ func TestSpawnReuseAsCodexPreTrust(t *testing.T) {
 	}
 }
 
+// claudeRelativeFailedWarning is the one line a Claude pre-trust prints for
+// the relative CLAUDE_CONFIG_DIR "rel", from extra env or inherited.
+const claudeRelativeFailedWarning = "agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR \"rel\" is not an absolute path); the agent may stop at Claude Code's folder-trust prompt\n"
+
 // TestSpawnRecordsNoPreTrust: Client.Spawn records NoPreTrust on the row,
 // writes the trust entry into the spawn's CLAUDE_CONFIG_DIR only when allowed,
 // and reports the outcome as pre_trust; a missing or unwritable .claude.json,
-// or a relative CLAUDE_CONFIG_DIR (b.nje), still spawns. $HOME/.claude.json is
-// never touched.
+// or a relative CLAUDE_CONFIG_DIR (b.nje), still spawns. A CLAUDE_CONFIG_DIR
+// set only in agent-director's environment is the one pre-trusted and
+// launched under (b.uzn). $HOME/.claude.json is never touched.
 func TestSpawnRecordsNoPreTrust(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, the working directory and PWD, TMUX, TMUX_TMPDIR
-	// with t.Setenv.
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, CLAUDE_CONFIG_DIR, HOME, the working directory and PWD,
+	// TMUX, TMUX_TMPDIR with t.Setenv, and redirects stderr.
 	cases := []struct {
 		name         string
 		file         trustFile
@@ -194,12 +199,15 @@ func TestSpawnRecordsNoPreTrust(t *testing.T) {
 		wantEntry    bool  // the entry is written; otherwise the file is left as seeded
 		wantPreTrust string
 		relative     bool // CLAUDE_CONFIG_DIR is "rel" (seedRelativeTrustConfig)
+		inherited    bool // CLAUDE_CONFIG_DIR is set in agent-director's environment, not the extra env
 	}{
-		{"ok: allowed writes the entry", trustLacksEntry, false, 0, true, "ok", false},
-		{"skipped: opted out writes nothing", trustLacksEntry, true, 1, false, "skipped", false},
-		{"failed: .claude.json missing still spawns", trustMissing, false, 0, false, "failed", false},
-		{"failed: .claude.json unwritable still spawns", trustUnwritable, false, 0, false, "failed", false},
-		{"failed: relative CLAUDE_CONFIG_DIR is refused, still spawns", trustLacksEntry, false, 0, false, "failed", true},
+		{"ok: allowed writes the entry", trustLacksEntry, false, 0, true, "ok", false, false},
+		{"skipped: opted out writes nothing", trustLacksEntry, true, 1, false, "skipped", false, false},
+		{"failed: .claude.json missing still spawns", trustMissing, false, 0, false, "failed", false, false},
+		{"failed: .claude.json unwritable still spawns", trustUnwritable, false, 0, false, "failed", false, false},
+		{"failed: relative CLAUDE_CONFIG_DIR is refused, still spawns", trustLacksEntry, false, 0, false, "failed", true, false},
+		{"ok: inherited CLAUDE_CONFIG_DIR gets the entry", trustLacksEntry, false, 0, true, "ok", false, true},
+		{"failed: relative inherited CLAUDE_CONFIG_DIR is refused, still spawns", trustLacksEntry, false, 0, false, "failed", true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -214,17 +222,25 @@ func TestSpawnRecordsNoPreTrust(t *testing.T) {
 			} else {
 				c = seedTrustConfig(t, t.TempDir(), tc.file)
 			}
+			extra := c.extraEnv()
+			if tc.inherited {
+				extra = nil
+				t.Setenv("CLAUDE_CONFIG_DIR", c.dir)
+			}
 			cwd, err := filepath.EvalSymlinks(t.TempDir())
 			if err != nil {
 				t.Fatalf("EvalSymlinks: %v", err)
 			}
 
-			res, err := env.c.Spawn(api.SpawnParams{
-				Agent:      "claude",
-				CWD:        cwd,
-				InstanceID: "pretrust-" + uuid.NewString()[:8],
-				ExtraEnv:   c.extraEnv(),
-				NoPreTrust: tc.noPreTrust,
+			var res api.SpawnResult
+			warn := captureStderr(t, func() {
+				res, err = env.c.Spawn(api.SpawnParams{
+					Agent:      "claude",
+					CWD:        cwd,
+					InstanceID: "pretrust-" + uuid.NewString()[:8],
+					ExtraEnv:   extra,
+					NoPreTrust: tc.noPreTrust,
+				})
 			})
 			if err != nil {
 				t.Fatalf("Spawn: %v", err)
@@ -233,6 +249,11 @@ func TestSpawnRecordsNoPreTrust(t *testing.T) {
 				t.Errorf("SpawnResult.PreTrust = %q; want %q", res.PreTrust, tc.wantPreTrust)
 			}
 			checkPreTrustJSON(t, res, tc.wantPreTrust)
+			if tc.relative && warn != claudeRelativeFailedWarning {
+				t.Errorf("warning = %q; want %q", warn, claudeRelativeFailedWarning)
+			} else if tc.wantPreTrust != "failed" && warn != "" {
+				t.Errorf("warning = %q; want nothing printed", warn)
+			}
 
 			row, err := apitest.ReadSpawnColumns(env.dbPath, res.InstanceID)
 			if err != nil {
@@ -241,8 +262,12 @@ func TestSpawnRecordsNoPreTrust(t *testing.T) {
 			if row.NoPreTrust != tc.wantCol {
 				t.Errorf("no_pre_trust = %#v; want int64(%d)", row.NoPreTrust, tc.wantCol)
 			}
-			if n := len(env.rec.SocketCallsOf(tmux.CallCreate)); n != 1 {
-				t.Errorf("creates = %d; want 1", n)
+			cs := env.rec.SocketCallsOf(tmux.CallCreate)
+			if len(cs) != 1 {
+				t.Fatalf("creates = %d; want 1", len(cs))
+			}
+			if got, ok := cs[0].Envs["CLAUDE_CONFIG_DIR"]; !ok || got != c.dir {
+				t.Errorf("create env CLAUDE_CONFIG_DIR = %q (set %v); want %q", got, ok, c.dir)
 			}
 			c.check(t, cwd, tc.wantEntry, "after the spawn")
 			if b, err := os.ReadFile(homeJSON); err != nil || string(b) != "{}" {

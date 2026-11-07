@@ -176,3 +176,7 @@ conversation:
 ```sh
 agent-director spawn --cwd <dir> --instance-id <id> --reuse-finished --agent <agent>
 ```
+
+If the reboot removed a row's saved cwd (a tmpfs `/tmp` wiped, a container
+restarted), `resume` returns `ErrCwdNotFound` and changes nothing; see
+[Transcript recovery](caller-contract.md#transcript-recovery).

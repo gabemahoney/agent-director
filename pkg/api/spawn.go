@@ -33,8 +33,9 @@ type SpawnResult struct {
 	//     passed SpawnParams.NoPreTrust; nothing was attempted.
 	//   - "failed": pre-trust was attempted and the entry was not written
 	//     (a claude agent: the .claude.json file is missing, or could not be
-	//     read, parsed or written, or the extra env sets CLAUDE_CONFIG_DIR to
-	//     a path that is not absolute; a codex agent: the extra env sets
+	//     read, parsed or written, or the extra env, or else agent-director's
+	//     own environment, sets CLAUDE_CONFIG_DIR to a path that is not
+	//     absolute; a codex agent: the extra env sets
 	//     CODEX_HOME to a path that is not absolute, and the launch carries
 	//     neither the folder trust nor the hook-trust bypass); the agent may
 	//     stop at its folder-trust prompt.
@@ -280,7 +281,8 @@ func hasControlChar(id string) bool {
 // Errors:
 //   - ErrCwdMissing: params.CWD was not supplied.
 //   - ErrCwdNotAPath: CWD is not a valid filesystem path.
-//   - ErrCwdNotFound: CWD does not exist on disk.
+//   - ErrCwdNotFound: CWD does not exist on disk, or cannot be accessed
+//     or entered (no search permission on it or a parent).
 //   - ErrCwdNotADirectory: CWD exists but is a file, not a directory.
 //   - ErrRelayModeInvalid: RelayMode is not "on", "off", or "".
 //   - ErrAgentMissing: the call gives no Agent and its template names none.

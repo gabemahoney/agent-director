@@ -430,6 +430,16 @@ holds the old name of the arguments key is refused at spawn, naming
   relaunched (`kill` or `pause`, then `resume`). `pause` can itself be refused
   while input is held; follow
   [Cursor input outcomes](caller-contract.md#cursor-input-outcomes) for recovery.
+- Check, then delete, any `~/.claude/settings.json.bak.<YYYYmmdd-HHMMSS>`
+  files: an earlier release's install with hooks on, and its uninstall, saved
+  one on each run, and they may hold your tokens. Install and uninstall keep no
+  copy of `settings.json` and delete none of these, but each names those it
+  finds on one line, each path shell-quoted, ready to paste after `rm --`.
+  Install prints:
+
+  ```
+    settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted: <path> <path>...
+  ```
 - A link `~/.agent-director` that points to `~/.config/agent-director` is allowed,
   for scripts that still name the old path.
 - Change by hand each entry that names the old path: a `claude mcp add`
@@ -503,7 +513,8 @@ It works on `~/.config/agent-director`, or on the old directory (see
 [Upgrade](#upgrade)) for an install that was never moved. It removes the
 binaries, the PATH link, the help hooks in `~/.claude/settings.json` (those of
 an install from before the move included) and the `inject_help_hook` setting,
-and keeps the directory unless `--purge`. It leaves the MCP and help entries
+and keeps the directory unless `--purge`. Like the install, it names old copies
+of `settings.json` (see [Upgrade](#upgrade)). It leaves the MCP and help entries
 made by hand in Codex folders; remove them as [Set up agent-director in a Codex
 folder](settings.md#set-up-agent-director-in-a-codex-folder) says.
 

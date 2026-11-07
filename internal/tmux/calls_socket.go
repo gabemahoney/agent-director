@@ -131,7 +131,10 @@ func (c *Client) SendKeyPaneRepeat(socket, paneID, key string, count int) error 
 
 // CapturePaneID returns the last nLines lines of the pane paneID on socket:
 // capture-pane -p [-e] -t <pane id> -S -<n>, -e when ansi is set (SR-2.1).
-// Action timeout. The text is the standard output of an exit-0 call.
+// Action timeout. tmux prints up to n rows of history and then the whole
+// visible screen, so the text is the last nLines rows of an exit-0 call's
+// standard output, counted up from its last row with content
+// (LastPaneLines; b.7y8).
 func (c *Client) CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error) {
 	args := []string{"capture-pane", "-p"}
 	if ansi {
@@ -142,7 +145,7 @@ func (c *Client) CapturePaneID(socket, paneID string, nLines int, ansi bool) (st
 	if err != nil {
 		return "", err
 	}
-	return string(out), nil
+	return LastPaneLines(string(out), nLines), nil
 }
 
 // SetLabel labels the session sessionID and its pane paneID on socket by

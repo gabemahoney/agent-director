@@ -203,11 +203,11 @@ func standIn(t *testing.T, dir, name, body string) {
 	writeMode(t, filepath.Join(dir, name), "#!/bin/bash\n"+body+"\nexec '"+realPath+"' \"$@\"\n", 0o755)
 }
 
-// TestUninstallKeepsFileModes (b.ojn, b.nw5): uninstall.sh's edits of
-// settings.json and config.toml, and their .bak copies, keep each file's mode
-// under the umask, also over an earlier run's leftovers and through symlinks,
-// which stay links with their targets edited; each is owner-only until its
-// chmod, and no cp -p is needed (NFS homes).
+// TestUninstallKeepsFileModes (b.ojn, b.nw5, b.f3n): uninstall.sh's edits of
+// settings.json and config.toml, and config.toml's .bak copy, keep each file's
+// mode under the umask, also over an earlier run's leftovers and through
+// symlinks, which stay links with their targets edited; each is owner-only
+// until its chmod, no cp -p is needed (NFS homes), and settings.json gets no .bak.
 func TestUninstallKeepsFileModes(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
@@ -231,7 +231,7 @@ func TestUninstallKeepsFileModes(t *testing.T) {
 		name                     string
 		umask                    string
 		settingsMode, configMode os.FileMode
-		linkedWithLeftovers      bool // both files symlinks into dotfiles/, config.toml's absolute, settings.json's relative; 0666 junk at each .new and .bak name
+		linkedWithLeftovers      bool // both files symlinks into dotfiles/, config.toml's absolute, settings.json's relative; 0666 junk at each .new and config.toml's .bak name
 	}{
 		{"private settings, group-readable config", "022", 0o600, 0o640, false},
 		{"read-only, symlinked files over leftovers", "000", 0o400, 0o400, true},
@@ -246,10 +246,11 @@ func TestUninstallKeepsFileModes(t *testing.T) {
 				path, before string
 				mode         os.FileMode
 				link         string // what path links to in the linked case
+				bak          bool   // the edit keeps a .bak copy: config.toml's only (b.f3n)
 			}{
-				{cfg, "[defaults]\nrelay_mode = \"off\"\ninject_help_hook = true\n", tc.configMode, filepath.Join(home, "dotfiles", "config.toml")},
+				{cfg, "[defaults]\nrelay_mode = \"off\"\ninject_help_hook = true\n", tc.configMode, filepath.Join(home, "dotfiles", "config.toml"), true},
 				{settings, `{"theme":"dark","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"` + hook + `"}]}]}}` + "\n", tc.settingsMode,
-					filepath.Join("..", "dotfiles", "settings.json")},
+					filepath.Join("..", "dotfiles", "settings.json"), false},
 			}
 			// edited is the file uninstall.sh must edit: the link's target, or path itself.
 			edited := func(path string) string {
@@ -265,8 +266,9 @@ func TestUninstallKeepsFileModes(t *testing.T) {
 				}
 				symlink(t, f.link, f.path)
 				// An earlier run's leftovers: its .new beside the link's target, its .bak beside the link.
-				for _, p := range []string{edited(f.path) + ".new", f.path + ".bak." + stamp} {
-					writeMode(t, p, "junk\n", 0o666)
+				writeMode(t, edited(f.path)+".new", "junk\n", 0o666)
+				if f.bak {
+					writeMode(t, f.path+".bak."+stamp, "junk\n", 0o666)
 				}
 			}
 
@@ -277,16 +279,21 @@ func TestUninstallKeepsFileModes(t *testing.T) {
 			var wantChmods []string
 			for _, f := range files {
 				base := filepath.Base(f.path)
-				wantChmods = append(wantChmods, base+".new 600", fmt.Sprintf("%s.bak.%s %o", base, stamp, f.mode&0o700))
-				for _, p := range []string{f.path, f.path + ".bak." + stamp} {
+				wantChmods = append(wantChmods, base+".new 600")
+				checked := []string{f.path}
+				if f.bak {
+					wantChmods = append(wantChmods, fmt.Sprintf("%s.bak.%s %o", base, stamp, f.mode&0o700))
+					checked = append(checked, f.path+".bak."+stamp)
+					if got, err := os.ReadFile(f.path + ".bak." + stamp); err != nil || string(got) != f.before {
+						t.Errorf("%s.bak.%s = %q, %v; want %q", f.path, stamp, got, err, f.before)
+					}
+				}
+				for _, p := range checked {
 					if fi, err := os.Stat(p); err != nil {
 						t.Error(err)
 					} else if got := fi.Mode().Perm(); got != f.mode {
 						t.Errorf("%s mode = %v; want %v", p, got, f.mode)
 					}
-				}
-				if got, err := os.ReadFile(f.path + ".bak." + stamp); err != nil || string(got) != f.before {
-					t.Errorf("%s.bak.%s = %q, %v; want %q", f.path, stamp, got, err, f.before)
 				}
 				for _, p := range []string{f.path + ".new", edited(f.path) + ".new"} {
 					if _, err := os.Lstat(p); !os.IsNotExist(err) {
@@ -337,9 +344,9 @@ func TestUninstallLeavesSettingsWithoutOneDocument(t *testing.T) {
 }
 
 // TestUninstallLeavesSettingsItCannotEdit (b.ak5): a settings.json of another
-// shape (also behind an unwritable link, not refused), one jq fails on, or an
-// unwritable link holding none of agent-director's entries among odd values is
-// left alone, with a note, and the uninstall goes on.
+// shape (also behind an unwritable link, not refused), or one jq fails on (the
+// count of its entries or the filter removing them), is left alone, with a
+// note, and the uninstall goes on.
 func TestUninstallLeavesSettingsItCannotEdit(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
@@ -356,13 +363,28 @@ func TestUninstallLeavesSettingsItCannotEdit(t *testing.T) {
 		{name: "hooks a list", settings: `{"hooks":[]}`, note: shapeNote},
 		{name: "object-valued SessionStart holding the help hook", settings: `{"hooks":{"SessionStart":{"x":` + help + `}}}`, note: shapeNote},
 		{name: "string SessionEnd beside the help hook", settings: `{"hooks":{"SessionStart":[` + help + `],"SessionEnd":"x"}}`, note: shapeNote},
-		{name: "jq fails on the filter", settings: `{"hooks":{"SessionStart":[` + help + `]}}`, jqFails: `*'--arg prefix'*`, note: jqNote},
+		{name: "jq fails on the filter", settings: `{"hooks":{"SessionStart":[` + help + `]}}`, jqFails: `*'--arg prefix'*'ours | not'*`, note: jqNote},
 		{name: "unwritable link, object-valued SessionStart holding the help hook", linked: true,
 			settings: `{"hooks":{"SessionStart":{"x":` + help + `}}}`, note: shapeNote},
-		{name: "unwritable link, odd values and no help hook", linked: true, settings: `{"hooks":{"SessionStart":["x",{"hooks":[{"command":5}]}]}}`,
-			note: "uninstall.sh: left {settings} alone: it holds no agent-director hook entries, and its symlink cannot be written through"},
 		{name: "unwritable link, jq fails on the count", linked: true, settings: `{"hooks":{"SessionStart":[` + help + `]}}`,
 			jqFails: `*'--arg prefix'*'| length'*`, note: jqNote},
+	})
+}
+
+// TestUninstallLeavesSettingsWithoutItsEntries (b.f3n): a settings.json holding
+// none of agent-director's hook entries, a null document too, is left byte for
+// byte, with no backup and no note, and the uninstall goes on; behind an
+// unwritable link, among odd values, its link is not checked, so not refused.
+func TestUninstallLeavesSettingsWithoutItsEntries(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	checkSettingsLeftAlone(t, []settingsLeftAlone{
+		{name: "other hooks and an env token, as written", settings: `{ "env": {"GH_TOKEN": "PLACEHOLDER-TOKEN-not-a-secret-f3n"},` + "\n" +
+			`  "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "/usr/bin/true"}]}]} }` + "\n"},
+		{name: "a null document", settings: "null\n"},
+		{name: "unwritable link, odd values and no help hook", linked: true, settings: `{"hooks":{"SessionStart":["x",{"hooks":[{"command":5}]}]}}`},
 	})
 }
 
@@ -372,7 +394,7 @@ type settingsLeftAlone struct {
 	name, settings string
 	linked         bool   // settings.json links into a 0555 directory
 	jqFails        string // a bash pattern over jq's arguments on which a stand-in jq fails ("" no stand-in)
-	note           string // the output lines naming settings.json or starting "jq: ", "\n"-joined; {settings} is its path
+	note           string // the output lines naming settings.json or starting "jq: ", "\n"-joined
 }
 
 // checkSettingsLeftAlone runs uninstall.sh per case, checking it exits 0 with the
@@ -388,7 +410,7 @@ func checkSettingsLeftAlone(t *testing.T, cases []settingsLeftAlone) {
 			bin := filepath.Join(home, ".config", "agent-director", "bin", "agent-director")
 			claude := filepath.Join(home, ".claude")
 			settings := filepath.Join(claude, "settings.json")
-			fill := strings.NewReplacer("{bin}", bin, "{settings}", settings).Replace
+			fill := strings.NewReplacer("{bin}", bin).Replace
 			writeMode(t, bin, "binary", 0o755)
 			dirs := []string{claude}
 			if tc.linked {
@@ -433,9 +455,9 @@ func checkSettingsLeftAlone(t *testing.T, cases []settingsLeftAlone) {
 	}
 }
 
-// TestUninstallRemovesHookEntriesBesideOddValues (b.ak5): uninstall.sh removes its
-// entries from event lists holding values of any shape, keeping the rest verbatim,
-// fills in a null document's lists as install.sh does, and keeps a .bak of each.
+// TestUninstallRemovesHookEntriesBesideOddValues (b.ak5): uninstall.sh removes
+// its entries from event lists holding values of any shape, keeping the rest
+// verbatim, and fills in a null event list as install.sh does.
 func TestUninstallRemovesHookEntriesBesideOddValues(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
@@ -452,7 +474,6 @@ func TestUninstallRemovesHookEntriesBesideOddValues(t *testing.T) {
 			`{"theme":"dark","hooks":{"SessionStart":[` + odd + `],"SessionEnd":[5,null,{"hooks":"y"}]}}`},
 		{"null SessionEnd filled in", `{"theme":"dark","hooks":{"SessionStart":[` + help + `],"SessionEnd":null}}`,
 			`{"theme":"dark","hooks":{"SessionStart":[],"SessionEnd":[]}}`},
-		{"null document filled in", "null\n", `{"hooks":{"SessionStart":[],"SessionEnd":[]}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -479,15 +500,160 @@ func TestUninstallRemovesHookEntriesBesideOddValues(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("settings.json after uninstall.sh = %s; want %s", raw, fill(tc.want))
 			}
-			baks, err := filepath.Glob(settings + ".bak.*")
-			if err != nil {
-				t.Fatal(err)
+		})
+	}
+}
+
+// The old-copies advice each script prints (b.f3n, J48), before the
+// shell-quoted paths it names.
+const (
+	installOldCopies   = "  settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:"
+	uninstallOldCopies = "uninstall.sh: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:"
+)
+
+// oldCopiesNamed returns the paths out's line naming settings.json.bak copies
+// lists after phrase, split into words as bash reads them; nil with no such
+// line. A second such line, or one not starting with phrase, fails the case.
+func oldCopiesNamed(t *testing.T, out, phrase string) []string {
+	t.Helper()
+	var lines []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "settings.json.bak") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	list, ok := strings.CutPrefix(lines[0], phrase)
+	if len(lines) > 1 || !ok {
+		t.Errorf("lines naming settings.json.bak = %q; want one, starting %q", lines, phrase)
+		return nil
+	}
+	words, err := exec.Command("bash", "-c", `eval "set -- $1" && printf '%s\0' "$@"`, "bash", list).Output()
+	if err != nil {
+		t.Fatalf("bash cannot split the list %q: %v", list, err)
+	}
+	return strings.Split(strings.TrimSuffix(string(words), "\x00"), "\x00")
+}
+
+// TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun (b.f3n): J48,
+// uninstall.sh's copy of install.sh's advice (advice_follow.sh's test_J48),
+// "copies of settings.json that earlier releases kept may hold its secrets
+// (tokens, say) and can be deleted: <paths>". Under a HOME holding a space and
+// shell characters, the line names exactly the settings.json.bak.<ts> copies,
+// not a user's settings.json.bak.before-mcp; with what it names deleted, the
+// re-run prints no such line, and settings.json and the user's file are as they
+// were.
+func TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	const text = `{"env":{"GH_TOKEN":"PLACEHOLDER-TOKEN-not-a-secret-f3n"}}` + "\n"
+	home := filepath.Join(t.TempDir(), "home j34,o'q")
+	settings := filepath.Join(home, ".claude", "settings.json")
+	copies := []string{settings + ".bak.20240101-000000", settings + ".bak.20250101-000000"}
+	own := settings + ".bak.before-mcp"
+	for _, p := range append([]string{settings, own}, copies...) {
+		writeMode(t, p, text, 0o600)
+	}
+
+	named := oldCopiesNamed(t, string(runUninstall(t, home, "")), uninstallOldCopies)
+	if !slices.Equal(named, copies) {
+		t.Fatalf("the line names %q; want %q", named, copies)
+	}
+	for _, p := range named {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := runUninstall(t, home, "")
+
+	if strings.Contains(string(out), "settings.json.bak") {
+		t.Errorf("the re-run still names copies:\n%s", out)
+	}
+	for _, p := range []string{settings, own} {
+		if got, err := os.ReadFile(p); err != nil || string(got) != text {
+			t.Errorf("%s after the re-run = %q, %v; want it as it was", p, got, err)
+		}
+	}
+}
+
+// TestSettingsBackupNotKept (b.f3n): settings.json's env can hold tokens, so an
+// install, its re-run and uninstall.sh each leave no settings.json.bak.* and
+// keep the env; with --no-hooks they leave settings.json byte for byte. Copies
+// an earlier release left are kept as they were, and each run names exactly
+// them on one line (J48's advice); a user's own settings.json.bak.before-mcp is
+// kept and never named.
+func TestSettingsBackupNotKept(t *testing.T) {
+	const (
+		token = "PLACEHOLDER-TOKEN-not-a-secret-f3n"
+		text  = `{"env":{"GH_TOKEN":"` + token + `"}}` + "\n"
+	)
+	cases := []struct {
+		name    string
+		noHooks bool
+		earlier []string // the settings.json.bak.<ts> names an earlier release left
+		own     string   // a user's own settings.json.bak.<other> ("" none)
+	}{
+		{"no earlier copy", false, nil, ""},
+		{"a user's own .bak name", false, nil, "settings.json.bak.before-mcp"},
+		{"two earlier copies", false, []string{"settings.json.bak.20240101-000000", "settings.json.bak.20250101-000000"}, ""},
+		{"an earlier copy, --no-hooks", true, []string{"settings.json.bak.20250101-000000"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newMoveHome(t)
+			h.Flags = []string{"--no-symlink"}
+			if tc.noHooks {
+				h.Flags = append(h.Flags, "--no-hooks")
 			}
-			if len(baks) != 1 {
-				t.Fatalf("settings.json backups = %q; want one", baks)
+			settings := filepath.Join(h.Home, ".claude", "settings.json")
+			h.Write(settings, text, 0o600)
+			// named is what the old-copies line names; kept, every settings.json.bak.*
+			// each step leaves, sorted as filepath.Glob returns them.
+			var named []string
+			for _, name := range tc.earlier {
+				named = append(named, filepath.Join(h.Home, ".claude", name))
 			}
-			if bak, err := os.ReadFile(baks[0]); err != nil || string(bak) != fill(tc.settings) {
-				t.Errorf("%s = %q, %v; want the original, %q", baks[0], bak, err, fill(tc.settings))
+			kept := slices.Clone(named)
+			if tc.own != "" {
+				kept = append(kept, filepath.Join(h.Home, ".claude", tc.own))
+			}
+			slices.Sort(kept)
+			for _, p := range kept {
+				h.Write(p, text, 0o600)
+			}
+			for _, step := range []string{"install", "re-run", "uninstall.sh"} {
+				res, phrase := moveResult{}, installOldCopies
+				if step == "uninstall.sh" {
+					res, phrase = schedUninstall(t, h), uninstallOldCopies
+				} else {
+					res = h.Install()
+				}
+				if res.Code != 0 {
+					t.Fatalf("%s: exit %d\nstdout:\n%s\nstderr:\n%s", step, res.Code, res.Stdout, res.Stderr)
+				}
+				if baks, _ := filepath.Glob(settings + ".bak.*"); !slices.Equal(baks, kept) {
+					t.Errorf("after %s: settings.json.bak.* = %q; want %q", step, baks, kept)
+				}
+				for _, p := range kept {
+					if got, mode := ownedFileBytes(t, p); got != text || mode != 0o600 {
+						t.Errorf("after %s: %s = %q (mode %v); want it kept as it was", step, p, got, mode)
+					}
+				}
+				if got := oldCopiesNamed(t, res.Stdout+"\n"+res.Stderr, phrase); !slices.Equal(got, named) {
+					t.Errorf("%s: the old-copies line names %q; want %q\nstdout:\n%s\nstderr:\n%s", step, got, named, res.Stdout, res.Stderr)
+				}
+				raw, _ := ownedFileBytes(t, settings)
+				var got struct{ Env map[string]string }
+				if tc.noHooks && raw != text {
+					t.Errorf("after %s with --no-hooks: settings.json = %s; want it as it was, %s", step, raw, text)
+				} else if err := json.Unmarshal([]byte(raw), &got); err != nil || got.Env["GH_TOKEN"] != token {
+					t.Errorf("after %s: settings.json = %s (%v); want its env kept", step, raw, err)
+				}
 			}
 		})
 	}
@@ -523,11 +689,12 @@ func treeSnap(t *testing.T, root string) map[string]string {
 	return snap
 }
 
-// TestUninstallRefusesUnwritableLink (b.nw5, b.ssz): a settings.json holding its hooks,
+// TestUninstallRefusesUnwritableLink (b.nw5, b.ssz, b.f3n): a settings.json holding its hooks,
 // or a config.toml holding inject_help_hook, linked into a directory it cannot
 // write in, makes uninstall.sh refuse (exit 2) and change nothing. Each way out
 // the refusal gives, followed, lets the re-run finish: fixing the link, or
-// removing the entry where the file comes from, after which the file is left alone.
+// removing the entry where the file comes from, after which the file is left
+// alone, settings.json with no line naming it.
 func TestUninstallRefusesUnwritableLink(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
@@ -619,9 +786,8 @@ func TestUninstallRefusesUnwritableLink(t *testing.T) {
 				if follow == "remove the entry" && string(got) != f.without {
 					t.Errorf("%s after the re-run = %q; want it left alone, %q", target, got, f.without)
 				}
-				note := "uninstall.sh: left " + link + " alone: it holds no agent-director hook entries, and its symlink cannot be written through"
-				if wantNote := follow == "remove the entry" && f.base == "settings.json"; slices.Contains(strings.Split(string(out), "\n"), note) != wantNote {
-					t.Errorf("re-run output has the line %q = %v; want %v:\n%s", note, !wantNote, wantNote, out)
+				if follow == "remove the entry" && f.base == "settings.json" && strings.Contains(string(out), link) {
+					t.Errorf("re-run output names %s, which it leaves alone with no note:\n%s", link, out)
 				}
 				if _, err := os.Lstat(bin); !os.IsNotExist(err) {
 					t.Errorf("%s after the re-run: %v; want it removed", bin, err)
@@ -806,7 +972,11 @@ func TestUninstallNeverMovedLayout(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("uninstall.sh: exit %d\n%s", code, out)
 			}
-			lines := strings.Split(string(out), "\n")
+			// The --purge prompt ends with no newline, so the line after it would
+			// share its line: take it out before reading lines.
+			head, tail, prompted := strings.Cut(string(out), "uninstall.sh: --purge will rm -rf "+root+" — proceed? [y/N] ")
+			text := []byte(head + tail)
+			lines := strings.Split(string(text), "\n")
 			wantLines := []string{
 				"uninstall.sh: removed binaries under " + filepath.Join(root, "bin"),
 				"uninstall.sh: removed " + filepath.Join(root, "admin"),
@@ -821,10 +991,10 @@ func TestUninstallNeverMovedLayout(t *testing.T) {
 					t.Errorf("output lacks the line %q:\n%s", want, out)
 				}
 			}
-			if len(uninstallLinesWith(out, "uninstall.sh: cleared inject_help_hook from "+cfg+" (backup ")) != 1 {
+			if len(uninstallLinesWith(text, "uninstall.sh: cleared inject_help_hook from "+cfg+" (backup ")) != 1 {
 				t.Errorf("output lacks the line clearing inject_help_hook from %s:\n%s", cfg, out)
 			}
-			if got := uninstallLinesWith(out, "uninstall.sh: kept "); len(got) != 0 {
+			if got := uninstallLinesWith(text, "uninstall.sh: kept "); len(got) != 0 {
 				t.Errorf("output names directories it kept, with no other AD directory present: %q", got)
 			}
 			if _, err := os.Lstat(link); !os.IsNotExist(err) {
@@ -851,7 +1021,7 @@ func TestUninstallNeverMovedLayout(t *testing.T) {
 				if _, err := os.Lstat(root); !os.IsNotExist(err) {
 					t.Errorf("%s after a confirmed --purge: %v; want it removed", root, err)
 				}
-				if !strings.Contains(string(out), "uninstall.sh: --purge will rm -rf "+root+" — proceed? [y/N] ") != (m.input == "") {
+				if prompted != (m.input != "") {
 					t.Errorf("--purge prompt wrong for input %q:\n%s", m.input, out)
 				}
 			} else {
@@ -882,8 +1052,8 @@ func TestUninstallNeverMovedLayout(t *testing.T) {
 // TestUninstallRemovesOldDirectoryHookEntries (SR-11.4, b.ssz): uninstall.sh
 // removes the help hooks whose command starts with the old directory's
 // bin/agent-director beside the new ones, keeping every other hook, with the
-// .bak copy and the symlink rules as for the new ones: an old-path entry alone
-// counts, so a link it cannot write through is refused, not left alone.
+// symlink rules as for the new ones: an old-path entry alone counts, so a link
+// it cannot write through is refused, not left alone.
 func TestUninstallRemovesOldDirectoryHookEntries(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
@@ -965,16 +1135,6 @@ func TestUninstallRemovesOldDirectoryHookEntries(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("settings.json after uninstall.sh = %s; want %s", raw, fill(tc.want))
-			}
-			baks, err := filepath.Glob(settings + ".bak.*")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(baks) != 1 {
-				t.Fatalf("settings.json backups = %q; want one", baks)
-			}
-			if bak, err := os.ReadFile(baks[0]); err != nil || string(bak) != fill(tc.settings) {
-				t.Errorf("%s = %q, %v; want the original, %q", baks[0], bak, err, fill(tc.settings))
 			}
 			if tc.link != "" {
 				if got, err := os.Readlink(settings); err != nil || got != target {

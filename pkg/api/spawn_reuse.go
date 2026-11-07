@@ -253,8 +253,8 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     environment, settings and argv) and the request fields the reset
 //     writes, with the parent id from the caller's AGENT_DIRECTOR_INSTANCE_ID.
 //     A failure writes nothing.
-//  5. Pre-trust (spawn.RunPreTrust) for the new request's cwd and extra env, by
-//     the call's own NoPreTrust, after every check that refuses without a
+//  5. Pre-trust (spawn.RunPreTrust) for the new request's cwd and the extra
+//     env the reset writes (step 4's), by the call's own NoPreTrust, after every check that refuses without a
 //     write and before the reset. For a claude agent it is spawn.PreTrust,
 //     waiting for a held lock on .claude.json for at most the config's
 //     effective pre_trust.lock_wait_seconds (b.kr4); for a codex agent it
@@ -327,7 +327,7 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	}
 
 	// A failure never fails the spawn; the outcome goes into the result.
-	preTrust := spawn.RunPreTrust(r.Agent, c.PreTrust, r.CWD, r.ExtraEnv, r.NoPreTrust, d.cfg.PreTrust)
+	preTrust := spawn.RunPreTrust(r.Agent, c.PreTrust, r.CWD, c.Row.ExtraEnv, r.NoPreTrust, d.cfg.PreTrust)
 
 	now := d.now()
 	fresh := c.Row

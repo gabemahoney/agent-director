@@ -39,6 +39,9 @@ func TestMain(m *testing.M) {
 
 	stubPath := filepath.Join(dir, ".claude.json")
 	claudeJSONPath = func() (string, error) { return stubPath, nil }
+	// A Claude ComposeLaunch records this process's CLAUDE_CONFIG_DIR (b.uzn);
+	// tests that want one set it with t.Setenv.
+	_ = os.Unsetenv("CLAUDE_CONFIG_DIR")
 
 	os.Exit(m.Run())
 }

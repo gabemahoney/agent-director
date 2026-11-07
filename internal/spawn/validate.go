@@ -11,6 +11,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/cursorenv"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
+	"golang.org/x/sys/unix"
 )
 
 // MaxTmuxSessionNameBytes caps caller-supplied tmux_session_name values
@@ -89,9 +90,9 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //
 // Validation order (load-bearing — preserves error precedence the SRD
 // pins):
-//  1. cwd shape, existence, type. Canonicalize via EvalSymlinks so two
-//     callers spawning into /foo/bar and /foo/./bar end up with the same
-//     row.
+//  1. cwd shape, existence, type, and that it can be entered
+//     (CwdEnterError). Canonicalize via EvalSymlinks so two callers spawning
+//     into /foo/bar and /foo/./bar end up with the same row.
 //  2. relay_mode is "on" / "off" / "" if set.
 //  3. The agent (SR-1.3 step 5): the resolved agent is claude, codex, cursor or droid,
 //     else ErrAgentInvalid for a given value and ErrAgentMissing for none.
@@ -282,8 +283,24 @@ func validateCwd(r *Resolved) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%w: %q is not a directory", ErrCwdNotADirectory, r.CWD)
 	}
+	if err := CwdEnterError(canonical); err != nil {
+		return fmt.Errorf("%w: %q cannot be entered (no search permission: %v)", ErrCwdNotFound, r.CWD, err)
+	}
 	r.CWD = canonical
 	return nil
+}
+
+// CwdEnterError returns nil when this process may enter the directory dir,
+// else access(2)'s error for search permission on it (bug b.qwo). stat needs
+// search permission only on dir's parents, so a directory whose own mode
+// denies search (mode 000) passes the stat and IsDir checks; tmux, unable to
+// enter it, would start the agent in another directory and report success.
+// access(2) is used rather than chdir, which would change the working
+// directory of the whole process while pkg/api serves concurrent callers.
+// Spawn (validateCwd) and resume (pkg/api savedCwdError) both call it after
+// their IsDir check and refuse a failure with ErrCwdNotFound.
+func CwdEnterError(dir string) error {
+	return unix.Access(dir, unix.X_OK)
 }
 
 // validateRelayMode applies SRD §7.2 step 2. Empty is OK: the defaults pass

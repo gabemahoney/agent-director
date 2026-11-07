@@ -66,8 +66,10 @@ type SendKeysTmux interface {
 	// SendKeyPane sends one key, by its tmux key name and never typed
 	// literally, to the pane paneID on socket.
 	SendKeyPane(socket, paneID, key string) error
-	// CapturePaneID returns the last nLines lines of the pane paneID on
-	// socket; ansi keeps the escape sequences (tmux's -e flag).
+	// CapturePaneID returns the last nLines rows of the pane paneID on
+	// socket, counted up from the last row with content as
+	// [TmuxClient].CapturePaneID says; ansi keeps the escape sequences
+	// (tmux's -e flag).
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
 }
 

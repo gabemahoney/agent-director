@@ -6,8 +6,33 @@ Everything up to "Codex group folders" covers spawns whose agent is `claude`;
 the later sections cover `codex` and `cursor` separately.
 Selection uses agent-director's existing `extra_env` parameter; AD adds no
 separate profile mechanism.
-If `CLAUDE_CONFIG_DIR` is supplied via `extra_env`, it must be an
-absolute path. The pretrust write then targets
+
+A Claude spawn's `CLAUDE_CONFIG_DIR` is the `extra_env` value when the key
+is present (an empty value means unset), otherwise agent-director's own
+environment's. An inherited value is put on the launch and saved with the
+spawn, so a caller with its own `CLAUDE_CONFIG_DIR` gives it to the Claude
+agents it spawns without `extra_env`; set `CLAUDE_CONFIG_DIR` in `extra_env`
+to choose another folder. When neither sets it, pretrust targets
+`~/.claude.json` and the pane takes tmux's environment, except that a fresh
+launch given
+[Ordinary delivery launch settings](settings.md#ordinary-delivery-launch-settings)
+gets `CLAUDE_CONFIG_DIR=$HOME/.claude`. `resume` launches and pretrusts with
+only the saved value, never the resuming process's environment, so an agent
+saved without one
+resumes as it did before 0.17.5: the pane takes tmux's environment and
+pretrust targets `~/.claude.json`.
+
+Known gap: an agent saved before 0.17.5 in a setup where
+`CLAUDE_CONFIG_DIR` is set only in agent-director's environment has no
+saved value. Its `resume` pretrusts `~/.claude.json`, not the file the
+agent reads, so it reports `pre_trust: failed` when that file is missing,
+or `ok` after writing a file the agent doesn't read; either way the agent
+may stop at Claude Code's folder-trust prompt. Answering that prompt once
+in the pane lets the resume carry on with its conversation. Spawning it
+again saves the value but starts a fresh conversation: a new id, or a
+reuse with `reuse_finished`, has no history.
+
+The value must be an absolute path. The pretrust write then targets
 `<CLAUDE_CONFIG_DIR>/.claude.json` instead of the operator's
 `~/.claude.json`, and
 `resume`, when it has to recompute a transcript's path, looks under
@@ -107,7 +132,7 @@ separate absolute config directories when isolation is required.
   read JSONL transcript history that was created by a specific account,
   the JSONL lives in `~/.claude/projects/<slug(cwd)>/` on the host
   filesystem — which is account-scoped. Env-var auth does not redirect
-  this path. An absolute `CLAUDE_CONFIG_DIR` in `extra_env` does: the
+  this path. An absolute `CLAUDE_CONFIG_DIR` does: the
   transcript is then under `<CLAUDE_CONFIG_DIR>/projects/<slug(cwd)>/`,
   and `resume` looks there (see above). Either way, the JSONL must still
   be on that disk path for `resume` to find it.

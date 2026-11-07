@@ -81,7 +81,7 @@ func TestRelaunchClaudeStoredReplay(t *testing.T) {
 		{"name attached", []string{"-nrocket"}, []string{"-nrocket"}},
 		{"model owns c", []string{"--model", "-c"}, []string{"--model", "-c"}},
 		{"prompt owns dash value", []string{"--append-system-prompt", "-concise answers"}, []string{"--append-system-prompt", "-concise answers"}},
-		{"prompt owns denied long", []string{"--append-system-prompt", "--resume", "foo"}, []string{"--append-system-prompt", "--resume", "foo"}},
+		{"prompt owns denied long", []string{"--append-system-prompt", "--resume", "foo"}, []string{"--append-system-prompt", "--resume"}},
 		{"new session id survives", []string{"--session-id", "new-uuid"}, []string{"--session-id", "new-uuid"}},
 		{"repeated mixed modes", []string{"-rOLD", "--model", "sonnet", "--resume=OLDER", "--print", "-pc"}, []string{"--model", "sonnet"}},
 		{"orphan cloud controls", []string{"--ref", "main", "--cloud", "OLD", "--forward-home-settings", "false", "--on-branch=work"}, nil},
@@ -89,7 +89,6 @@ func TestRelaunchClaudeStoredReplay(t *testing.T) {
 		{"environment preserves controls", []string{"--ref", "main", "--cloud=OLD", "--environment", "env-id", "--forward-home-settings=false", "--on-branch", "work"}, []string{"--ref", "main", "--environment", "env-id", "--forward-home-settings=false", "--on-branch", "work"}},
 		{"pool preserves controls", []string{"--remote", "OLD", "--pool=pool-id", "--on-branch=work", "--forward-home-settings", "1", "--ref=main"}, []string{"--pool=pool-id", "--on-branch=work", "--forward-home-settings", "1", "--ref=main"}},
 		{"owned environment is no context", []string{"--cloud=OLD", "--append-system-prompt", "--environment", "--ref", "main"}, []string{"--append-system-prompt", "--environment"}},
-		{"delimiter context is prompt", []string{"--cloud=OLD", "--ref", "main", "--", "--pool", "pool-id"}, []string{"--", "--pool", "pool-id"}},
 		{"no selector no cleanup", []string{"--ref", "main", "--forward-home-settings", "false", "--on-branch=work"}, []string{"--ref", "main", "--forward-home-settings", "false", "--on-branch=work"}},
 		{"owned cloud no cleanup", []string{"--append-system-prompt", "--cloud", "--ref", "main"}, []string{"--append-system-prompt", "--cloud", "--ref", "main"}},
 	}
@@ -114,22 +113,23 @@ func TestRelaunchClaudeStoredReplay(t *testing.T) {
 	}
 }
 
-// Replay repairs only argument boundaries whose removal would change parsed roles.
+// Replay repairs only argument boundaries whose removal would change parsed
+// roles, and drops the saved prompt (b.kz9): options keep their values.
 func TestRelaunchClaudeReplayRoles(t *testing.T) {
 	cases := []struct {
 		name               string
 		args, want, prompt []string
 		options            [][]string
 	}{
-		{"optional with later option", []string{"--debug", "--continue", "fix this", "--model", "sonnet"}, []string{"--debug", "--model", "sonnet", "--", "fix this"}, []string{"fix this"}, [][]string{{"--debug"}, {"--model", "sonnet"}}},
-		{"list boundary", []string{"--tools", "Read", "--continue", "prompt"}, []string{"--tools", "Read", "--", "prompt"}, []string{"prompt"}, [][]string{{"--tools", "Read"}}},
-		{"print optional with later option", []string{"--debug", "--print", "fix this", "--model", "sonnet"}, []string{"--debug", "--model", "sonnet", "--", "fix this"}, []string{"fix this"}, [][]string{{"--debug"}, {"--model", "sonnet"}}},
-		{"print list boundary", []string{"--tools", "Read", "-p", "prompt"}, []string{"--tools", "Read", "--", "prompt"}, []string{"prompt"}, [][]string{{"--tools", "Read"}}},
+		{"optional with later option", []string{"--debug", "--continue", "fix this", "--model", "sonnet"}, []string{"--debug", "--model", "sonnet"}, []string{"fix this"}, [][]string{{"--debug"}, {"--model", "sonnet"}}},
+		{"list boundary", []string{"--tools", "Read", "--continue", "prompt"}, []string{"--tools", "Read"}, []string{"prompt"}, [][]string{{"--tools", "Read"}}},
+		{"print optional with later option", []string{"--debug", "--print", "fix this", "--model", "sonnet"}, []string{"--debug", "--model", "sonnet"}, []string{"fix this"}, [][]string{{"--debug"}, {"--model", "sonnet"}}},
+		{"print list boundary", []string{"--tools", "Read", "-p", "prompt"}, []string{"--tools", "Read"}, []string{"prompt"}, [][]string{{"--tools", "Read"}}},
 		{"continue cluster exact short collision", []string{"-cd2e"}, []string{"--debug=2e"}, nil, [][]string{{"--debug", "2e"}}},
 		{"print cluster exact short collision", []string{"-pd2e"}, []string{"--debug=2e"}, nil, [][]string{{"--debug", "2e"}}},
-		{"safe prompt keeps position", []string{"fix this", "--continue", "--model=sonnet", "-d2e"}, []string{"fix this", "--model=sonnet", "-d2e"}, []string{"fix this"}, [][]string{{"--model", "sonnet"}, {"--debug-to-stderr"}}},
+		{"leading prompt dropped", []string{"fix this", "--continue", "--model=sonnet", "-d2e"}, []string{"--model=sonnet", "-d2e"}, []string{"fix this"}, [][]string{{"--model", "sonnet"}, {"--debug-to-stderr"}}},
 		{"owned optional value keeps spelling", []string{"-dnetwork", "--continue", "--model=sonnet"}, []string{"-dnetwork", "--model=sonnet"}, nil, [][]string{{"--debug", "network"}, {"--model", "sonnet"}}},
-		{"safe list boundary keeps spelling", []string{"--tools", "Read", "--continue", "--model=sonnet", "fix this"}, []string{"--tools", "Read", "--model=sonnet", "fix this"}, []string{"fix this"}, [][]string{{"--tools", "Read"}, {"--model", "sonnet"}}},
+		{"safe list boundary keeps spelling", []string{"--tools", "Read", "--continue", "--model=sonnet", "fix this"}, []string{"--tools", "Read", "--model=sonnet"}, []string{"fix this"}, [][]string{{"--tools", "Read"}, {"--model", "sonnet"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -149,10 +149,11 @@ func TestRelaunchClaudeReplayRoles(t *testing.T) {
 			for _, input := range []struct {
 				args     []string
 				injected bool
-			}{{tc.args, false}, {argv[1:], true}} {
+				prompt   []string
+			}{{tc.args, false, tc.prompt}, {argv[1:], true, nil}} {
 				options, prompt := relaunchClaudeReplayRoles(input.args, input.injected)
-				if !reflect.DeepEqual(options, tc.options) || !slices.Equal(prompt, tc.prompt) {
-					t.Errorf("parsed roles for %q: options %q, prompt %q; want %q, %q", input.args, options, prompt, tc.options, tc.prompt)
+				if !reflect.DeepEqual(options, tc.options) || !slices.Equal(prompt, input.prompt) {
+					t.Errorf("parsed roles for %q: options %q, prompt %q; want %q, %q", input.args, options, prompt, tc.options, input.prompt)
 				}
 			}
 			if !slices.Equal(e.row.AgentArgs, tc.args) {
@@ -162,15 +163,18 @@ func TestRelaunchClaudeReplayRoles(t *testing.T) {
 	}
 }
 
+// An input missing a required value is filtered literally, and its original
+// prompt is still dropped, even where the filtered copy would read it as an
+// option's value (b.kz9).
 func TestRelaunchClaudeIncompleteRequiredValues(t *testing.T) {
 	for _, tc := range []struct {
 		name, missing string
 		args, want    []string
 	}{
-		{"scalar prompt exposure", "--model", []string{"--debug", "--continue", "prompt", "--model"}, []string{"--debug", "prompt", "--model"}},
-		{"orphan controls with missing environment", "--environment", []string{"--debug", "--cloud", "OLD", "prompt", "--ref", "main", "--environment"}, []string{"--debug", "prompt", "--environment"}},
-		{"required variadic print exposure", "--tools", []string{"--debug", "--print", "prompt", "--tools"}, []string{"--debug", "prompt", "--tools"}},
-		{"cluster remains literal", "--pool", []string{"-cd2e", "prompt", "--pool"}, []string{"-d2e", "prompt", "--pool"}},
+		{"scalar prompt exposure", "--model", []string{"--debug", "--continue", "prompt", "--model"}, []string{"--debug", "--model"}},
+		{"orphan controls with missing environment", "--environment", []string{"--debug", "--cloud", "OLD", "prompt", "--ref", "main", "--environment"}, []string{"--debug", "--environment"}},
+		{"required variadic print exposure", "--tools", []string{"--debug", "--print", "prompt", "--tools"}, []string{"--debug", "--tools"}},
+		{"cluster remains literal", "--pool", []string{"-cd2e", "prompt", "--pool"}, []string{"-d2e", "--pool"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newRelaunchEnv(t)
@@ -195,6 +199,53 @@ func TestRelaunchClaudeIncompleteRequiredValues(t *testing.T) {
 	}
 }
 
+// TestRelaunchClaudeDropsSavedPrompt (b.kz9): resume never replays the saved
+// initial prompt. Operands and an unowned -- with what follows are gone; every
+// option keeps its values, including values that read like a prompt or own --.
+func TestRelaunchClaudeDropsSavedPrompt(t *testing.T) {
+	cscb := []string{"--mcp-config", "/cfg/mcp.json", "--append-system-prompt-file", "/cfg/prompt.md", "--allowedTools", "mcp__slack__reply", "--model=opus", "--effort=high", "--system-prompt-snapshot", "off"}
+	for _, tc := range []struct {
+		name       string
+		args, want []string
+	}{
+		{"trailing prompt", []string{"--model", "opus", "add a fifth line"}, []string{"--model", "opus"}},
+		{"leading prompt", []string{"add a fifth line", "--model", "opus"}, []string{"--model", "opus"}},
+		{"prompt words around a flag", []string{"one", "--verbose", "two"}, []string{"--verbose"}},
+		{"prompt after delimiter", []string{"--model", "opus", "--", "add a fifth line"}, []string{"--model", "opus"}},
+		{"option-shaped words after delimiter", []string{"--model", "opus", "--", "--append-system-prompt-file", "/x", "--resume", "OLD"}, []string{"--model", "opus"}},
+		{"delimiter context after cloud", []string{"--model", "opus", "--cloud=OLD", "--ref", "main", "--", "--pool", "pool-id", "--verbose"}, []string{"--model", "opus"}},
+		{"print prompt", []string{"-p", "fix this", "--model", "sonnet"}, []string{"--model", "sonnet"}},
+		{"value equal to prompt", []string{"--append-system-prompt", "add a fifth line", "add a fifth line"}, []string{"--append-system-prompt", "add a fifth line"}},
+		{"option owns delimiter", []string{"--append-system-prompt", "--", "fix this"}, []string{"--append-system-prompt", "--"}},
+		{"option owns selector spelling", []string{"--system-prompt", "--resume", "fix this"}, []string{"--system-prompt", "--resume"}},
+		{"optional value", []string{"--debug", "api", "fix this"}, []string{"--debug", "api"}},
+		{"list values", []string{"--allowedTools", "Read", "Edit", "--model", "opus", "fix this"}, []string{"--allowedTools", "Read", "Edit", "--model", "opus"}},
+		// An unknown option reads as valueless, so the word after it is an
+		// operand and goes: an accepted residual, not a lost prompt.
+		{"unknown option's word dropped", []string{"--future-option", "word", "--model", "opus"}, []string{"--future-option", "--model", "opus"}},
+		{"prompt-named option values", cscb, cscb},
+		{"prompt-named option values with prompt", slices.Concat(cscb, []string{"do the task"}), cscb},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRelaunchEnv(t)
+			e.row.AgentArgs = slices.Clone(tc.args)
+			if out := e.relaunch("LATEST"); out.Kind != CreateLabelled {
+				t.Fatalf("relaunch: %+v", out)
+			}
+			argv := e.onlyCreate().Command
+			if len(argv) < 5 || !slices.Equal(argv[:4], []string{"claude", "--resume", "LATEST", "--settings"}) || !slices.Equal(argv[5:], tc.want) {
+				t.Fatalf("argv = %q; want latest resume and survivors %q", argv, tc.want)
+			}
+			if reading := ReadClaudeArgs(argv[1:]); len(reading.Positionals) != 0 || reading.DoubleDash >= 0 {
+				t.Errorf("composed argv %q keeps operands %v (-- at %d); want none", argv, reading.Positionals, reading.DoubleDash)
+			}
+			if !slices.Equal(e.row.AgentArgs, tc.args) {
+				t.Errorf("stored args = %q; want unchanged %q", e.row.AgentArgs, tc.args)
+			}
+		})
+	}
+}
+
 func relaunchClaudeReplayRoles(args []string, injected bool) ([][]string, []string) {
 	reading := ReadClaudeArgs(args)
 	var options [][]string
@@ -211,19 +262,26 @@ func relaunchClaudeReplayRoles(args []string, injected bool) ([][]string, []stri
 	return options, prompt
 }
 
+// Stored options replay without their selectors; the saved prompt never does
+// (b.kz9): no operand and no unowned -- reach the resume.
 func TestRelaunchCodexStoredReplay(t *testing.T) {
 	cases := []struct {
-		name               string
-		args, want, prompt []string
+		name       string
+		args, want []string
 	}{
-		{"resume id prompt", []string{"resume", "OLD", "continue the work"}, nil, []string{"continue the work"}},
-		{"fork id prompt", []string{"fork", "OLD", "--all", "--", "--last"}, nil, []string{"--last"}},
-		{"last treats first positional as prompt", []string{"resume", "--last", "--all", "--include-non-interactive", "OLD"}, nil, []string{"OLD"}},
-		{"fork last", []string{"fork", "--last", "--all", "keep going"}, nil, []string{"keep going"}},
-		{"selector after global option", []string{"--model", "o3", "resume", "OLD", "--model", "o4", "--", "resume --last"}, []string{"--model", "o3", "--model", "o4"}, []string{"resume --last"}},
-		{"owned command and delimiter", []string{"--model", "resume", "--config", "--", "fork", "OLD", "fix it"}, []string{"--model", "resume", "--config", "--"}, []string{"fix it"}},
-		{"fork invalid include preserved", []string{"fork", "OLD", "--include-non-interactive"}, []string{"--include-non-interactive"}, nil},
-		{"prompt commands untouched", []string{"--model", "resume", "--", "fork --last"}, []string{"--model", "resume"}, []string{"fork --last"}},
+		{"resume id prompt", []string{"resume", "OLD", "continue the work"}, nil},
+		{"fork id prompt", []string{"fork", "OLD", "--all", "--", "--last"}, nil},
+		{"last treats first positional as prompt", []string{"resume", "--last", "--all", "--include-non-interactive", "OLD"}, nil},
+		{"fork last", []string{"fork", "--last", "--all", "keep going"}, nil},
+		{"selector after global option", []string{"--model", "o3", "resume", "OLD", "--model", "o4", "--", "resume --last"}, []string{"--model", "o3", "--model", "o4"}},
+		{"owned command and delimiter", []string{"--model", "resume", "--config", "--", "fork", "OLD", "fix it"}, []string{"--model", "resume", "--config", "--"}},
+		{"fork invalid include preserved", []string{"fork", "OLD", "--include-non-interactive"}, []string{"--include-non-interactive"}},
+		{"prompt commands untouched", []string{"--model", "resume", "--", "fork --last"}, []string{"--model", "resume"}},
+		{"spawn prompt", []string{"--model", "o3", "add a fifth line"}, []string{"--model", "o3"}},
+		{"spawn prompt after delimiter", []string{"--model", "o3", "--", "add a fifth line"}, []string{"--model", "o3"}},
+		{"option-shaped words after delimiter", []string{"--model", "o3", "--", "--model", "o4", "-c", "x=1"}, []string{"--model", "o3"}},
+		{"prompt-named values", []string{"-c", `model_instructions_file="/cfg/prompt.md"`, "--model", "prompt", "prompt"}, []string{"-c", `model_instructions_file="/cfg/prompt.md"`, "--model", "prompt"}},
+		{"image list keeps values", []string{"--image", "a.png", "b.png", "--model", "o3", "describe them"}, []string{"--image", "a.png", "b.png", "--model", "o3"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -237,8 +295,11 @@ func TestRelaunchCodexStoredReplay(t *testing.T) {
 			}
 			argv := e.onlyCreate().Command
 			l := codexfix.Split(t, argv)
-			if !slices.Equal(argv[:3], []string{"codex", "resume", "LATEST"}) || !slices.Equal(l.PassThrough(), tc.want) || !slices.Equal(l.AfterDashDashArgs(), tc.prompt) {
-				t.Errorf("argv = %q; want latest resume, ordered options %q, original prompt %q", argv, tc.want, tc.prompt)
+			if !slices.Equal(argv[:3], []string{"codex", "resume", "LATEST"}) || !slices.Equal(l.PassThrough(), tc.want) || l.HasDashDash() {
+				t.Errorf("argv = %q; want latest resume, ordered options %q, no -- and no prompt", argv, tc.want)
+			}
+			if reading := ReadCodexArgs(argv[3:]); len(reading.Positionals) != 0 || reading.DoubleDash >= 0 {
+				t.Errorf("argv %q keeps operands %v (-- at %d); want none", argv, reading.Positionals, reading.DoubleDash)
 			}
 			if last, _ := l.Last(); last.Kind != codexfix.KindQuestionTool || last.Bool {
 				t.Errorf("last setting = %+v; want question tool off", last)
@@ -336,6 +397,21 @@ func TestRelaunchLeavesPermissionsNil(t *testing.T) {
 	}
 	if _, has := reflect.TypeOf(store.Spawn{}).FieldByName("Permissions"); has {
 		t.Error("store.Spawn grew a Permissions field; Relaunch must not reconstruct un-persisted Permissions")
+	}
+}
+
+// TestRelaunchContextFullnessSwitch (b.kh7): resume's settings follow
+// disable_context_fullness as a spawn's do.
+func TestRelaunchContextFullnessSwitch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, disabled := range []bool{false, true} {
+		e := newRelaunchEnv(t)
+		e.row.ExtraEnv = claudeConfigWithStatusLine(t)
+		e.cfg.Defaults.DisableContextFullness = disabled
+		if out := e.relaunch("s1"); out.Kind != CreateLabelled {
+			t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
+		}
+		assertContextStatuslines(t, e.onlyCreate().Command[4], "/bin/agent-director", disabled)
 	}
 }
 
