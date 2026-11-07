@@ -7,7 +7,9 @@ import (
 
 // StoppedSockets records only sockets stopped by a Sweep's stop rule, keyed
 // by Launch.Socket exactly as passed. Its zero value is empty. Successive
-// sweeps may share a pointer to it; it is not for concurrent use.
+// sweeps may share a pointer to it; it is not for concurrent use. Code
+// carrying stops across Sweeps must use it with NewSweepFrom, never its own
+// set of sockets (docs/architecture.md).
 type StoppedSockets struct {
 	sockets map[string]bool
 }
@@ -19,7 +21,9 @@ type StoppedSockets struct {
 // adoption pane listing through it (ListPanes), under the same stop rule and
 // budget. Its stop rule may start from and add to a caller's StoppedSockets
 // record; held answers and the budget belong to this run alone. A Sweep is
-// not for concurrent use.
+// not for concurrent use. A sweep verb must judge its rows through one Sweep
+// per run, never by calling the package-level Lookup per row or with its own
+// grouping, stop rule or budget (docs/architecture.md).
 //
 // Sockets are keyed by Launch.Socket exactly as passed; the Sweep never
 // resolves or creates a socket. It reads time only through now, reads no
@@ -79,6 +83,8 @@ func NewSweep(c LookupClient, pc ProcChecker, now func() time.Time, budget time.
 // NewSweepFrom is NewSweep with a caller's stop record. It skips sockets
 // already in stopped and adds sockets only when its stop rule fires. A nil
 // record gives the run its own; no held answers or spent budget are shared.
+// Code carrying stops across Sweeps must use it with StoppedSockets, never
+// its own set of sockets (docs/architecture.md).
 func NewSweepFrom(c LookupClient, pc ProcChecker, now func() time.Time, budget time.Duration, stopped *StoppedSockets) *Sweep {
 	if stopped == nil {
 		stopped = &StoppedSockets{}
