@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // validatePolicy checks observable policy results without constructing a store.
@@ -36,6 +38,68 @@ func validatePolicy(t *testing.T, agent string, args []string, eligible bool, wa
 	entries, readErr := os.ReadDir(cwd)
 	if readErr != nil || len(entries) != 0 {
 		t.Fatalf("Validate wrote files: entries %v, error %v", entries, readErr)
+	}
+}
+
+func TestValidatePaneOnlyPolicy(t *testing.T) {
+	for _, agent := range []string{"droid"} {
+		t.Run(agent, func(t *testing.T) {
+			const value = "caller-value-must-not-leak"
+			cases := []struct {
+				name        string
+				args        []string
+				relay       string
+				permissions *Permissions
+				env         map[string]string
+				want        error
+			}{
+				{name: "absent model", want: ErrModelMissing},
+				{name: "missing value", args: []string{"--model"}, want: ErrSpawnDeniedFlag},
+				{name: "empty model", args: []string{"--model", ""}, want: ErrSpawnDeniedFlag},
+				{name: "option model", args: []string{"--model", "--" + value}, want: ErrSpawnDeniedFlag},
+				{name: "duplicate", args: []string{"--model", value, "--model", value}, want: ErrSpawnDeniedFlag},
+				{name: "equals model", args: []string{"--model=" + value}, want: ErrSpawnDeniedFlag},
+				{name: "custom selector", args: []string{"--model", "custom:" + value}, want: ErrSpawnDeniedFlag},
+				{name: "other option", args: []string{"--settings=" + value}, want: ErrSpawnDeniedFlag},
+				{name: "task", args: []string{value}, want: ErrSpawnDeniedFlag},
+				{name: "relay", args: []string{"--model", value}, relay: "on", want: ErrAgentCapabilityUnsupported},
+			}
+			for _, perms := range []*Permissions{{Allow: []string{value}}, {Deny: []string{value}}, {Ask: []string{value}}} {
+				cases = append(cases, struct {
+					name        string
+					args        []string
+					relay       string
+					permissions *Permissions
+					env         map[string]string
+					want        error
+				}{"permission", []string{"--model", value}, "", perms, nil, ErrPermissionsUnsupported})
+			}
+			// Independent key inventory: deleting a production exclusion must not shrink this test.
+			for _, key := range []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE", "HOME=" + value, "AGENT_DIRECTOR_AGENT=" + value, "INVALID=" + value} {
+				for _, v := range []string{"", value} {
+					cases = append(cases, struct {
+						name        string
+						args        []string
+						relay       string
+						permissions *Permissions
+						env         map[string]string
+						want        error
+					}{"environment", []string{"--model", "model"}, "", nil, map[string]string{key: v}, ErrReservedEnvKey})
+				}
+			}
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					r := Resolved{SpawnParams: SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: tc.args, RelayMode: tc.relay, Permissions: tc.permissions, ExtraEnv: tc.env}, Experimental: config.Experimental{Droid: true}}
+					err := Validate(&r)
+					if !errors.Is(err, tc.want) {
+						t.Fatalf("error=%v; want %v", err, tc.want)
+					}
+					if strings.Contains(err.Error(), value) {
+						t.Fatalf("refusal leaked rejected value: %v", err)
+					}
+				})
+			}
+		})
 	}
 }
 

@@ -18,7 +18,7 @@ import (
 )
 
 // advTemplateHomeDoc is A14 as MakeTemplate's Go doc words it.
-const advTemplateHomeDoc = "Set the agent's absolute folder variable instead to give it its own config: CLAUDE_CONFIG_DIR for claude, CODEX_HOME for codex, and the message names both when Agent is empty"
+const advTemplateHomeDoc = "Claude can use absolute CLAUDE_CONFIG_DIR and Codex absolute CODEX_HOME for its own config; the HOME refusal names both when Agent is empty"
 
 // advTemplateHomeBoth is the alternative a make-template with no agent gets: both folder variables.
 const advTemplateHomeBoth = "to give the agent its own config, set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) in extra_env instead"

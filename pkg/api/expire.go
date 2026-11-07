@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -436,6 +437,7 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 		row.reason = keptStoreError
 	case res == CondApplied:
 		row.deleted = true
+		spawn.ReclaimLaunchFiles(r.s.StoreID(), cand.Identity.Token, r.lg)
 	case res == CondAbsent:
 	default: // CondChanged
 		row.reason = keptChangedSinceExamined

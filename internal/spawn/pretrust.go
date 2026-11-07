@@ -83,6 +83,9 @@ const envCodexHome = "CODEX_HOME"
 // For Cursor it reports carried without any trust I/O: failed prints the
 // unsupported warning; skipped stays silent. Neither grants approval or trust.
 func RunPreTrust(agent string, carried PreTrustOutcome, cwd string, extraEnv map[string]string, off bool, cfg config.PreTrust) PreTrustOutcome {
+	if IsPaneOnly(agent) {
+		return PreTrustSkipped
+	}
 	if agent == config.AgentCursor {
 		if carried == PreTrustFailed {
 			fmt.Fprintln(preTrustWarn, "agent-director: Cursor ACP pre-trust is unsupported; no trust grant was made")

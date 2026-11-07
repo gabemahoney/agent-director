@@ -32,6 +32,7 @@ const (
 	mdOperatorActions          = "../../" + apitest.OperatorActionsDoc
 	mdCallerContract           = "../../docs/caller-contract.md"
 	mdConfiguration            = "../../docs/configuration.md"
+	mdExperimental             = "../../docs/experimental.md"
 	mdInstall                  = "../../docs/install.md"
 	callerContractTitle        = "Caller contract"
 	callerContractClassesTitle = "Caller contract: tmux refusal classes"
@@ -40,7 +41,7 @@ const (
 // mdUserDocs are the hand-written user docs whose links are checked.
 var mdUserDocs = []string{
 	mdTopREADME, "README.md", mdInstall, "../../docs/usage.md", mdConfiguration,
-	"../../docs/maintenance.md", mdCallerContract, mdOperatorActions,
+	mdExperimental, "../../docs/maintenance.md", mdCallerContract, mdOperatorActions,
 	"../../docs/hooks.md", "../../docs/permissions.md", "../../docs/settings.md",
 	"../../docs/multi-account.md",
 }

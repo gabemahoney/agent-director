@@ -34,10 +34,11 @@ const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"
 	AgentCursor = "cursor"
+	AgentDroid  = "droid"
 )
 
 // ErrRowAgentInvalid is returned, wrapped, by InsertPending and ResetForReuse
-// when the row's agent is not exactly claude, codex or cursor (SR-3.1, SR-3.6). The
+// when the row's agent is not exactly claude, codex, cursor or droid (SR-3.1, SR-3.6). The
 // check runs before anything is written, so the database is unchanged. It is
 // the store's own marker, not a catalogued sentinel, and is never aliased in
 // pkg/api (the public agent errors come with the agent input). Callers use
@@ -45,10 +46,10 @@ const (
 var ErrRowAgentInvalid = errors.New("store: row agent must be claude, codex or cursor")
 
 // validateRowAgent returns an error wrapping ErrRowAgentInvalid unless agent
-// is exactly AgentClaude, AgentCodex or AgentCursor. The empty string, which is the column
+// is exactly AgentClaude, AgentCodex, AgentCursor or AgentDroid. The empty string, which is the column
 // default and no agent, and any other spelling are refused.
 func validateRowAgent(agent string) error {
-	if agent != AgentClaude && agent != AgentCodex && agent != AgentCursor {
+	if agent != AgentClaude && agent != AgentCodex && agent != AgentCursor && agent != AgentDroid {
 		return fmt.Errorf("%w: %q", ErrRowAgentInvalid, agent)
 	}
 	return nil
@@ -209,7 +210,7 @@ type Spawn struct {
 	// Full-row reads fill it; SpawnStatusRow does not select it.
 	IdleSince string
 
-	// Agent is the schema-v9 agent column (SR-3.1): claude, codex or cursor.
+	// Agent is the schema-v9 agent column (SR-3.1): claude, codex, cursor or droid.
 	// Full-row reads and SpawnStatusRow fill it; InsertPending and
 	// ResetForReuse write it from a Spawn, refusing any other value
 	// (ErrRowAgentInvalid). Rows that existed at the v9 migration read claude.
@@ -344,7 +345,7 @@ func boolInt(b bool) int {
 // (SRD §7.4 step 2). The caller is expected to have already validated the
 // row and minted any defaults — InsertPending does no semantic checks
 // beyond what SQLite's constraints enforce, and the row's agent: sp.Agent must
-// be exactly claude, codex or cursor, or it returns an error wrapping
+// be exactly claude, codex, cursor or droid, or it returns an error wrapping
 // ErrRowAgentInvalid before writing anything (SR-3.1, SR-3.6). The insert
 // writes the agent explicitly and leaves end_reported_at NULL.
 //

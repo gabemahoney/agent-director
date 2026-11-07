@@ -61,6 +61,8 @@ type SocketCall struct {
 	Cwd     string
 	Envs    map[string]string
 	Command []string
+	// ExcludeEnv records the lane's ambient client/session exclusions.
+	ExcludeEnv []string
 	// Token, InstanceID and StoreID are NewSession's and SetLabel's label
 	// arguments (the session label's second, fourth and fifth fields; WD
 	// 2026-09-29 STORE); Token is also the pane label's first field.
@@ -354,8 +356,13 @@ func (r *Recorder) SetLabel(socket, sessionID, paneID, token, instanceID, storeI
 // returns its reply with the error; with Script.Applied, any other scripted
 // failure adds the session (labelled by the same rule) and returns no reply.
 func (r *Recorder) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (tmux.CreateReply, error) {
+	return r.NewSessionWithEnvExclusions(socket, name, cwd, envs, command, token, instanceID, storeID, nil)
+}
+
+// NewSessionWithEnvExclusions records the same create, including lane exclusions.
+func (r *Recorder) NewSessionWithEnvExclusions(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, excluded []string) (tmux.CreateReply, error) {
 	c := SocketCall{Call: tmux.CallCreate, Socket: socket, Target: name, Cwd: cwd, Envs: envs,
-		Command: command, Token: token, InstanceID: instanceID, StoreID: storeID}
+		Command: command, Token: token, InstanceID: instanceID, StoreID: storeID, ExcludeEnv: append([]string(nil), excluded...)}
 	ans, err := r.do(c, r.createEffect(socket, name, token, instanceID, storeID))
 	reply, _ := ans.(tmux.CreateReply)
 	return reply, err

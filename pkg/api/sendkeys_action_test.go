@@ -319,6 +319,7 @@ func TestKeysVerbsAdoptionWrite(t *testing.T) {
 						t.Errorf("adoption columns %+v; want the identity unchanged %+v", after, before)
 					}
 				}
+				drainTrail(t) // pause cancels its wait before accepted bounded reports reach disk
 				if got := adoptedRecords(t, v.name, r.ID); got != wantAdopted {
 					t.Errorf("adopted records = %d; want %d", got, wantAdopted)
 				}
@@ -327,6 +328,7 @@ func TestKeysVerbsAdoptionWrite(t *testing.T) {
 				}
 				if tc.applied {
 					assertSameRun(t, runVerb(e, func() (string, error) { return v.run(t, e, r) }), first)
+					drainTrail(t)
 					if e.store.adoptTries != tc.tries || adoptedRecords(t, v.name, r.ID) != 1 {
 						t.Errorf("re-issued: %d writes attempted, %d adopted records; want %d and 1", e.store.adoptTries,
 							adoptedRecords(t, v.name, r.ID), tc.tries)

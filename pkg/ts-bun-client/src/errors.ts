@@ -422,6 +422,12 @@ export class ErrRelayModeInvalid extends AgentDirectorError {}
 export class ErrSpawnDeniedFlag extends AgentDirectorError {}
 /** Mirrors ErrReservedEnvKey (package: spawn) */
 export class ErrReservedEnvKey extends AgentDirectorError {}
+/** The requested experimental agent is disabled. */
+export class ErrExperimentalAgentDisabled extends AgentDirectorError {}
+/** The pane-only agent does not support the requested capability. */
+export class ErrAgentCapabilityUnsupported extends AgentDirectorError {}
+/** The pane-only launch has no explicit model. */
+export class ErrModelMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentMissing (package: spawn) */
 export class ErrAgentMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentInvalid (package: spawn) */
@@ -609,6 +615,9 @@ const ERROR_TABLE = {
   ErrRelayModeInvalid,
   ErrSpawnDeniedFlag,
   ErrReservedEnvKey,
+  ErrExperimentalAgentDisabled,
+  ErrAgentCapabilityUnsupported,
+  ErrModelMissing,
   ErrAgentMissing,
   ErrAgentInvalid,
   ErrAgentArgsMismatch,

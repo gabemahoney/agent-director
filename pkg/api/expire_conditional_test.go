@@ -7,6 +7,9 @@ package api_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,8 +18,63 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+func TestPaneOnlyExpireReclaimGuards(t *testing.T) {
+	// Serial: each case owns HOME for its per-launch files.
+	for _, agent := range []string{"droid"} {
+		for _, mode := range []string{"applied", "changed", "absent", "store error", "alive", "ours", "leftover", "cant tell", "reclaim failure"} {
+			t.Run(agent+"/"+mode, func(t *testing.T) {
+				t.Setenv("HOME", t.TempDir())
+				e := newKillEnv(t)
+				e.rowAgent = agent
+				a := agentGone
+				if mode == "alive" {
+					a = agentAlive
+				}
+				r := e.seedFinished(t, time.Hour, a)
+				path := seedLaneOverlay(t, e.storeID, r.Token)
+				w := e.expireStore()
+				switch mode {
+				case "changed":
+					w.refuseDelete(r.ID, api.CondChanged)
+				case "absent":
+					w.refuseDelete(r.ID, api.CondAbsent)
+				case "store error":
+					w.failDelete(r.ID, nil)
+				case "ours":
+					e.seedSession(t, &r)
+				case "leftover":
+					e.seedSession(t, &r, tmuxfix.WithRowSessionLabel(r.old(), true))
+				case "cant tell":
+					e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallLookup)
+				case "reclaim failure":
+					if err := os.Chmod(filepath.Dir(path), 0500); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(filepath.Dir(path), 0700) })
+				}
+				res, logs, err := e.expireWith(w, olderThan(0))
+				if err != nil {
+					t.Fatal(err)
+				}
+				deleted := mode == "applied" || mode == "reclaim failure"
+				if (res.Count == 1) != deleted {
+					t.Fatalf("Expire=%+v", res)
+				}
+				assertLaneOverlay(t, path, mode != "applied")
+				if deleted {
+					assertRowGone(t, e, r.ID)
+				}
+				if mode == "reclaim failure" && !strings.Contains(strings.Join(logs.lines, "\n"), "WARN") {
+					t.Fatalf("no reclaim warning: %+v", logs.lines)
+				}
+			})
+		}
+	}
+}
 
 // expireMove is resume's move of r's row to pending; it returns the row as
 // examined before the move and the version the move produced.
