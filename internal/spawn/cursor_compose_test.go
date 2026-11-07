@@ -239,16 +239,21 @@ func TestCursorRequestedModeComposition(t *testing.T) {
 	}
 }
 
+// Resume loads the latest conversation with an empty initial prompt: the saved
+// prompt is never replayed (b.kz9), while model and mode survive.
 func TestCursorResumeComposition(t *testing.T) {
 	for _, tc := range []struct {
 		name, path string
 		args       []string
-		prompt     string
+		model      string
+		mode       []string
 		noPreTrust bool
 	}{
-		{"configured", `/opt/current cursor/agent 'quoted'`, []string{"--resume", "OLDER", "--model", "model-x", "saved\n多行 🦋"}, "saved\n多行 🦋", false},
-		{"default path", "", []string{"--continue", "-m=model-x"}, "", false},
-		{"opt out", "/opt/new/agent", []string{"resume", "--new-session-id=NEW", "--model=model-x", "--", "--resume"}, "--resume", true},
+		{"configured", `/opt/current cursor/agent 'quoted'`, []string{"--resume", "OLDER", "--model", "model-x", "saved\n多行 🦋"}, "model-x", nil, false},
+		{"default path", "", []string{"--continue", "-m=model-x"}, "model-x", nil, false},
+		{"opt out", "/opt/new/agent", []string{"resume", "--new-session-id=NEW", "--model=model-x", "--", "--resume"}, "model-x", nil, true},
+		{"mode and delimited prompt", "", []string{"--plan", "--model=model-x", "--", "saved prompt"}, "model-x", []string{"--requested-mode", "plan"}, false},
+		{"model value equal to prompt", "", []string{"--model", "saved", "saved"}, "saved", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newRelaunchEnv(t)
@@ -274,7 +279,11 @@ func TestCursorResumeComposition(t *testing.T) {
 			if path == "" {
 				path = "agent"
 			}
-			want := []string{exe, "cursor-host", "--runtime", path, "--runtime-args", `["--model","model-x"]`, "--initial-prompt", tc.prompt, "--load-session", "LATEST"}
+			runtimeArgs, err := json.Marshal([]string{"--model", tc.model})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := slices.Concat([]string{exe, "cursor-host", "--runtime", path, "--runtime-args", string(runtimeArgs), "--initial-prompt", ""}, tc.mode, []string{"--load-session", "LATEST"})
 			if !slices.Equal(c.Create.Command, want) {
 				t.Fatalf("command %q; want %q", c.Create.Command, want)
 			}

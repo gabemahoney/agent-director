@@ -485,8 +485,10 @@ binding, independent runtime/pane verification and every durable hold. General
 pending permission authority stays refused. Public callers explicitly use the
 existing `allow_pending` after pane inspection; it bypasses no gateway guard.
 The real prompt reports UserPromptSubmit through the unchanged direct-parent
-hook. Saved initial text remains once per launch after successful load and hold
-checks; transient queued, held and editable draft input is never reconstructed.
+hook. The gateway submits a given initial text once after successful load and
+hold checks, but resume passes an empty one, so a loaded session submits
+nothing before that first real prompt; transient queued, held and editable
+draft input is never reconstructed.
 
 Explicit mode is private launch configuration, carried by `RequestedMode` and
 the internal gateway's `--requested-mode`, never a public spawn/template field
@@ -1610,7 +1612,7 @@ in `init`. The verb registry
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call) and optional standard instructions/current-client initialization observation through `Options`/`NewWithOptions`; default `New` omits instructions. Future consumers MUST reuse these owners. `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags` (naming the new key when the argument is an old name, see [Refusal of old names](#refusal-of-old-names)); every manifest param of every exposed verb is decoded through `decodeParams`, which refuses a wrongly typed value with `ErrInvalidFlags` too (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `expire`'s `older_than` is parsed with `pkg/api.ParseOlderThan`, the parser the CLI shares, and a value it rejects is `ErrInvalidFlags`. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `internal/oldnames` | The one table of the old, Claude-named public names (`Table`, one `Entry{Surface, Old, New}` per name and surface: the CLI, MCP, config and template surfaces), `Find` (exact for CLI and MCP names, letter-case-blind for config and template names, as the TOML decoder matches them), the refusal texts (`Entry.FlagText`, `KeyText`, `ConfigText`) and `RefuseFlag`, which turns the flag package's unknown-flag error into the refusal. **Must use:** every surface that refuses an old name builds its refusal from this table (see [Refusal of old names](#refusal-of-old-names)). | stdlib only (`errors`, `flag`, `strings`): a leaf package. | Every other package of the module. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
-| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Fresh supported native composer launches also use `internal/inputdelivery` preparation and its saved ordinary-input eligibility; see [Ordinary input delivery](#ordinary-input-delivery). On ordinary spawns, `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Opted-in explicit-id reuse makes one early `ReadForReuse` before `Validate`; `ApplyDefaults` consumes its saved answer through `reusePreCheck`, preserving collision and read-error precedence (see [Collision pre-check](#collision-pre-check)). Builds env maps and composes Claude/Codex settings, the Cursor gateway argv and the pane-only launch adapter (see [Per-agent launch composition](#per-agent-launch-composition)). Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). Every launch records its own process as the row's launch owner and ends that hold when it ends (`launch_owner.go`: `CurrentLaunchOwner`, `LaunchOwnerAlive`, `ReleaseLaunchOwner`, b.kdf; see "v6 columns" under [`internal/store`](#internalstore)). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest`, the row's request fields and, for a Codex launch, the pre-trust outcome its argv was built for (`ComposedLaunch{Create, Row, PreTrust}`), with no write or tmux call (Cursor verifies the selected gateway executable), shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch uses the shared pre-trust step `RunPreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; for a Claude agent it is `PreTrust`, whose read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; for a Codex agent it is the outcome `CodexPreTrust` decided during composition, which touches no file and takes no lock; Cursor grants no trust and reports `failed` by default or `skipped` for `no_pre_trust`; pane-only agents always skip without a trust write; see [Workspace-trust pre-write](#workspace-trust-pre-write). The agent is part of this stage: `Resolve` merges it and the inherited-arguments owner, `Validate` runs the agent checks in a fixed order, `ComposeLaunch` sets the row's agent and starts the pane command with the Claude/Codex program (`claudeProgram(cfg)` in `launch.go`, `codexProgram(cfg)` in `codexlaunch.go`) or the Cursor gateway (`composeCursorCommand` in `cursorlaunch.go`), with pane-only agents dispatched through their adapter; a row whose agent is outside the valid set fails composition with `store.ErrRowAgentInvalid` (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks) and [Per-agent launch composition](#per-agent-launch-composition)). The advice helpers that name an agent are `AgentSpelling`, `ReuseSpawn`, `ReuseRetry` and `ReservedHomeAlternative`. Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `ComposedRelaunch{Create, PreTrust}`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse for every agent uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. Cursor resume uses only the latest saved session through the shared gateway. Cursor same-agent reuse starts fresh within the current life; switches to/from Cursor start a new life, including switchback, through the shared finished-row path. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/inputdelivery` (native launch preparation; see [Ordinary input delivery](#ordinary-input-delivery)); `internal/tmux`; `internal/probe` (`SelfPIDNamespace` only, for the launch owner); `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting; `internal/cursorenv` | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
+| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Fresh supported native composer launches also use `internal/inputdelivery` preparation and its saved ordinary-input eligibility; see [Ordinary input delivery](#ordinary-input-delivery). On ordinary spawns, `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Opted-in explicit-id reuse makes one early `ReadForReuse` before `Validate`; `ApplyDefaults` consumes its saved answer through `reusePreCheck`, preserving collision and read-error precedence (see [Collision pre-check](#collision-pre-check)). Builds env maps and composes Claude/Codex settings, the Cursor gateway argv and the pane-only launch adapter (see [Per-agent launch composition](#per-agent-launch-composition)). Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). Every launch records its own process as the row's launch owner and ends that hold when it ends (`launch_owner.go`: `CurrentLaunchOwner`, `LaunchOwnerAlive`, `ReleaseLaunchOwner`, b.kdf; see "v6 columns" under [`internal/store`](#internalstore)). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest`, the row's request fields and, for a Codex launch, the pre-trust outcome its argv was built for (`ComposedLaunch{Create, Row, PreTrust}`), with no write or tmux call (Cursor verifies the selected gateway executable), shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch uses the shared pre-trust step `RunPreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; for a Claude agent it is `PreTrust`, whose read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; for a Codex agent it is the outcome `CodexPreTrust` decided during composition, which touches no file and takes no lock; Cursor grants no trust and reports `failed` by default or `skipped` for `no_pre_trust`; pane-only agents always skip without a trust write; see [Workspace-trust pre-write](#workspace-trust-pre-write). The agent is part of this stage: `Resolve` merges it and the inherited-arguments owner, `Validate` runs the agent checks in a fixed order, `ComposeLaunch` sets the row's agent and starts the pane command with the Claude/Codex program (`claudeProgram(cfg)` in `launch.go`, `codexProgram(cfg)` in `codexlaunch.go`) or the Cursor gateway (`composeCursorCommand` in `cursorlaunch.go`), with pane-only agents dispatched through their adapter; a row whose agent is outside the valid set fails composition with `store.ErrRowAgentInvalid` (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks) and [Per-agent launch composition](#per-agent-launch-composition)). The advice helpers that name an agent are `AgentSpelling`, `ReuseSpawn`, `ReuseRetry` and `ReservedHomeAlternative`. Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `ComposedRelaunch{Create, PreTrust}`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse for every agent uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. Cursor resume uses only the latest saved session through the shared gateway. Cursor same-agent reuse starts fresh within the current life; switches to/from Cursor start a new life, including switchback, through the shared finished-row path. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/inputdelivery` (native launch preparation; see [Ordinary input delivery](#ordinary-input-delivery)); `internal/tmux`; `internal/probe` (`SelfPIDNamespace` only, for the launch owner); `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting; `internal/cursorenv`; `golang.org/x/sys/unix` (`Access`, for `CwdEnterError`) | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: the server identity read `display-message -p 'ad-server<TAB>#{pid}<TAB>#{start_time}'`, then the session listing with labels, then the three `@ad_owner` scope reads; LFR H5; b.47f. The identity read answers on a server with no sessions too (tmux's `exit-empty` off), so every answer names the server that gave it. `parseLookup` takes the first line as the identity line, exactly `ad-server`, the decimal pid and the decimal start time, tab separated; then the session lines, whose pid and start time must equal the identity line's; then the scope section (LFR H6). A first line that is not an identity line, empty output included, or a session line that disagrees with it makes the answer malformed, `FailUnrecognized`), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is typed whole, by the argv escape below), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Key send (b.9o4)**, an addition beside the SR-2.1 calls, not one of them, also taking the socket: `SendKeyPane` (by pane id: `send-keys -t <pane id> <key>`, one key by its tmux key name, never typed literally, call kind `CallSendKey`, "key send"; `pause`'s `C-u`, and `send-keys`' named keys, b.146 rule 8; the key is always a fixed name from the calling code, `pause`'s constant or `pkg/api`'s `paneKeyNames` table, never caller text passed through) and `SendKeyPaneRepeat` (the same send with `-N <count>`, one call however many presses, the same call kind and the action timeout; a Codex row's `pause` sends `C-u` 127 times this way, and a count below 1 is sent as 1). **Terminal read:** `PaneTerminalRaw(socket, paneID, maxWait)` (`CallPaneTerminal`, "pane terminal read", bounded Action timeout) reads the pane's terminal mode; it implements the optional `api.PaneTerminalTmux` capability; see [Ordinary input delivery](#ordinary-input-delivery). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain passes only the instance id through the format escape below. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. **Argv escape (`invoke.go`):** tmux splits its argv into commands at every element ending in `;`, before any option parsing and so even after `--`: the `;` is dropped and the element ends its command, so a caller value ending in `;` followed by more elements would run those as a tmux command of the caller's choosing (`kill-server`, `run-shell <shell command>`). An element ending in `\;` is instead one argument with that backslash removed. `commandArgv(cmds ...[]string)` builds every call's argv after `-u -S <socket>` from a list of commands: a standalone `;` only between commands, and every element of every command passed through `escapeFinalSemicolon` (one backslash before a final `;`). So every value (session name, cwd, `-e` entry, the agent's command with its claude arguments at spawn and at resume, send-keys text, label values, targets) reaches its tmux command as one argument, a final `;` included, and never ends that command. The escape covers only this split: what the command then does with the argument is unchanged (format expansion is the format escape's job, below). The chain target `=<name>:` ends in `:`, so it is never escaped, and tmux matches it against the stored, unescaped name. The socket is not escaped: tmux's own option parsing consumes `-S <socket>` before the split. `HasSession` builds its argv the same way. **Must use:** every tmux call composes its argv through `commandArgv`, socket-taking calls by passing one `[]string` per command to `invoke` (`runAction`, `runData`); never put a `;` separator or a value into a tmux argv by hand. **Format escape (`create.go`):** tmux expands formats in some arguments before using them: `new-session`'s `-c` cwd (twice, by the command and again at the pane spawn, both times from the raw argument), its `-s` name, and every `set-option -F` value. In a format, `#(<cmd>)` runs `<cmd>` through the shell on the tmux server, and `#{…}` and aliases such as `#S` are replaced, so a raw cwd holding them would run a command, or start the agent in another directory, at spawn and on every resume. `escapeFormat(text)` returns text that expands back to exactly itself: each run of `#` is doubled (`##` expands to `#`), except a run directly before `[`, which tmux copies through unchanged as a style, so doubling it would add `#`. `createCommands` sends `-c` as `escapeFormat(cwd)` and the `@ad_owner` value's instance id through it, so spawn and resume start the agent in the cwd exactly as given and run nothing in it; the cwd stored on the row and reported by agent-director is the unescaped one. The two escapes compose: `escapeFormat` adds or removes no `;`, and tmux drops the argv escape's backslash before it expands the format, so a cwd `/a#;` is sent as `/a##\;` and expands to `/a#;`. Not escaped: the `-s` name, which never holds `#` (spawn refuses one, and a default name keeps only `[A-Za-z0-9_-]`); the `-e` entries and the agent's command, which tmux does not expand; and the client's own fixed formats (`#{session_id}`, `#{pane_id}`, the identity read's, the reply and listing formats). **Must use:** every caller-controlled value in a tmux argument that tmux format-expands goes through `escapeFormat`; never double `#` by hand. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. The shared runner owns both actual output collectors: after `Cmd.Run` joins them, an exit-zero `exec.ErrWaitDelay` is successful only if both collectors positively observed clean EOF; held, incomplete or errored streams remain `RunPipesCut`. Every caller must reuse this runner; the 1500 ms query and 100 ms pipe-close defaults and configured bounds remain unchanged. Socket-taking tmux calls fail with `*CallError`; `PaneTerminalRaw` can also return a device-open or termios error. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The one name-based method left is `HasSession`; the name-based kill, send and capture are removed (every verb targets ids only). `HasSession` is kept on the client and on `api.TmuxClient` and matches by prefix; no verb uses it, and none may (`resume` judges its row with the lookup). `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token), `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget) and `starting_session.go` (the session-age helper `SessionAge` and the starting-session rule `StartingSession`; see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`); `golang.org/x/sys/unix`; `internal/cursorenv` | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row, or a relayed `check_permission` row none of whose requests holds it (still awaits an answer and is not proven gone, `holdsRowSQL`; b.omt), to `waiting`, soft-refreshes any other, and records `idle_since` (b.svb, b.146 problem 3; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A relayed PermissionRequest is `runRelay`'s alone: its first write records the request and the move to `check_permission` in one transaction, and it writes an answer only once confirmed in the store (b.146 step 2; see [Permission relay](#permission-relay)). On a relay-on agent a `PostToolUse` or `PostToolUseFailure` carrying a `tool_use_id`, and the main agent's `Stop` or idle-prompt Notification, first prove permission requests' dialogs gone (`proveRequestsGone`, through `ProveRequestsGone`; the `Stop` or idle prompt only durably eligible main requests recorded before the hook started, b.omt; b.146 step 2c, see "The dialog hold" under [Permission relay](#permission-relay)); then such a `PostToolUse` or `PostToolUseFailure` closes the fallen-back request with that id (`closeToolRan`, through `CloseToolRanRequests`, each relay hook judged by `HandleConfig.RelayHookGone`; b.146 rule 13), and a terminal SessionEnd's move to `ended` closes the row's open requests and running subagent entries and, on a non-Cursor row, proves every request gone, in the same transaction (the store's `applyEndedTransition`; b.146 rule 12; see [The dialog hold](#the-dialog-hold-step-2c)). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Subagent capture (`subagent.go`; see [Subagent capture](#subagent-capture)): `SubagentStart` and `SubagentStop` are known soft refreshes that `Handle` routes to the store's one-transaction subagent write, and an `Agent`-tool `PreToolUse`, `PostToolUse` or `PostToolUseFailure` and a main-agent `Stop` (with its `background_tasks` snapshot) follow their applied row write with a gated entry transaction; the receipt time of every such write is the hook's start instant (`HandleConfig.Start`), and the store reads no clock. The classifier is agent-aware: `ClassifyEvent(agent, raw)` picks the Claude, Codex or Cursor table, the agent coming only from the hook's own `--agent` argument (`ResolveAgent`; an invalid value is a hook failure through `failClosed`), and its Cursor result requires the registered current-launch binding plus CLI-injected `HandleConfig.VerifyCursor` (nil/error rejects), and its result carries the flags the handler follows, among them `SubagentCapture` (Claude only), `EndReport` and `HealsTranscript`; a Codex `SessionEnd` without `agent_id` is an end report (`applyEndReport`, through the store's `ApplyHookEndReport`) and an applied Codex hook without `agent_id` may heal the row's transcript path (`healCodexTranscript`, through `HealJsonlPath`); the grandparent advice follows the row's agent (`paneIsGrandparentAdviceFor`). See [The agent-aware hook classifier](#the-agent-aware-hook-classifier). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), and the relay hook's start, per-hook timeout (its `--timeout` argument) and own process identity as `HandleConfig.Start`, `RelayTimeout` and `Self` (`Start`, the hook process's first clock reading, is also a `Stop`'s or idle prompt's `turn_end` cut, b.omt, and the receipt time of every subagent write), and the PostToolUse close's judge of a relay hook as `HandleConfig.RelayHookGone` (`pkg/api.RelayHookGone` with the per-OS readers, the hook's own pid namespace, `time.Now` and the effective relay window: `hookRelayHookGone`; nil closes nothing), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (Claude and Codex hook paths make no tmux call and no ancestry walk; their only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`. Cursor's CLI-injected `HandleConfig.VerifyCursor` calls `cursorhost.VerifyPane` for tmux and process ownership evidence; `internal/hook` still imports none of these forbidden packages). |
 
@@ -2333,6 +2335,10 @@ JSONC or ambiguous ancestor Git local settings leave callbacks untouched.
 `cmd/agent-director/context_statusline.go` forwards the original shell command;
 observation failures and oversized input preserve its complete stdin,
 stdout, stderr and exit status. No native settings file is written.
+`synthesizeSettings` (`internal/spawn/settings.go`) skips this composition when
+`[defaults] disable_context_fullness` is true, so the payload has no
+`statusLine` or `subagentStatusLine` key, no capacity callback runs, and Claude
+context stays unknown; spawn, reuse and resume all take that one gate.
 **Must use:** callback composition and forwarding stay in these shared paths.
 
 `internal/hook/claude_capacity.go` admits capacity-only observations through
@@ -7870,7 +7876,7 @@ so each stage can be tested in isolation against synthesized input.
    (Opted-in explicit id: one ReadForReuse now; save its answer for
     argument eligibility and ApplyDefaults. No error returned here.)
         ▼
-   ┌──────────┐   SRD §7.2: cwd shape/existence/type; relay_mode;
+   ┌──────────┐   SRD §7.2: cwd shape/existence/type/enterable; relay_mode;
    │ Validate │   agent (invalid, missing); inherited agent_args vs
    └────┬─────┘   the agent; denied flags (Claude's list, CursorArgs, Codex's
         │         argument check); allow/deny/ask
@@ -7982,7 +7988,7 @@ when its agent is the spawn's and otherwise refused with
 after `validateExplicitInstanceID`, `validateIdleScreenTimeout` and
 template loading, and before any side effect:
 
-1. `cwd` (shape, existence, type);
+1. `cwd` (shape, existence, type, and that it can be entered: `CwdEnterError`, b.qwo);
 2. `relay_mode`;
 3. `validateAgent`: a value other than `claude`, `codex`, `cursor` or `droid` is
    `ErrAgentInvalid`, none at all is `ErrAgentMissing`;
@@ -8179,8 +8185,8 @@ and the others call it.
   `--` on stays the prompt, and after every pass-through option, so
   agent-director's settings win (Codex applies the last `-c` of a key and
   every `--enable` and `--disable` after every `-c`). A resume's argv is
-  `<codex> resume <session id> [filtered args] <block> [-- prompt]`: nothing
-  of agent-director's stands before `resume`. The block leaves out
+  `<codex> resume <session id> [filtered args] <block>`, with no saved
+  prompt: nothing of agent-director's stands before `resume`. The block leaves out
   `--no-daemon`, `--dangerously-bypass-hook-trust` and
   `--enable write_stdin_approval` when the arguments already carry them
   before their first `--`, because Codex rejects a repeat of the first
@@ -8365,10 +8371,15 @@ invalidating that eligibility.
 
 `ComposeRelaunch` filters a copied stored list using this extraction;
 Claude replay additionally removes parsed `-p` / `--print`, including
-print bytes in clusters. It then composes the row's current session selected
+print bytes in clusters. Replay never carries the saved initial prompt: it
+drops the operands (`Positionals`) and an unowned `DoubleDash` with what
+follows, read for Claude from the original list before extraction and for
+Codex and Cursor from the extracted copy. Owned values survive; an unknown
+option's following word is an operand under the valueless reading and is
+dropped too. It then composes the row's current session selected
 by [Resume](#resume), preserving stored `AgentArgs` unchanged and applying
 no general spawn validation. Codex's per-launch settings follow surviving
-options before the protected prompt, retaining their settings precedence.
+options, retaining their settings precedence.
 
 **Must use:** future argument processing uses `ReadClaudeArgs` /
 `ReadCodexArgs` / `ReadCursorArgs` and their ownership metadata, and selector removal uses
@@ -8614,8 +8625,9 @@ variable than the one asked for. The key `CLAUDE_CONFIG_DIR=/x` with the
 value `""` gives the pane `CLAUDE_CONFIG_DIR=/x=`, so Claude Code uses
 `/x=`. Pre-trust (`extraEnv["CLAUDE_CONFIG_DIR"]`) and resume's
 transcript fallback (`row.ExtraEnv["CLAUDE_CONFIG_DIR"]`) look the
-variable up by its exact key and find none, so pre-trust writes
-agent-director's own `~/.claude.json` and resume looks under its own
+variable up by its exact key and find none, so pre-trust writes the
+file it would with no such key (see [Workspace-trust
+pre-write](#workspace-trust-pre-write)) and resume looks under its own
 `~/.claude`. An empty key gives tmux
 `=value`, which names no variable. No env-var name can hold a NUL byte,
 and no tmux argument can carry one. Rewriting the key would launch an
@@ -9641,16 +9653,18 @@ write, it never lengthens the window between the launch start and the
 create.
 
 The step resolves the target `.claude.json` (`claudeJSONFor`) from the
-launch's extra env `CLAUDE_CONFIG_DIR`, so that it is the file the
-launched Claude Code reads (2.1.280:
-`CLAUDE_CONFIG_DIR || os.homedir()`):
+launch's extra env `CLAUDE_CONFIG_DIR` only, never agent-director's
+environment, so that it is the file the launched Claude Code reads
+(2.1.280: `CLAUDE_CONFIG_DIR || os.homedir()`). A spawn's or reuse's
+extra env already holds an inherited value (below):
 
 - Absent or empty: the operator's `~/.claude.json`, from
   agent-director's own `HOME`.
 - An absolute path: `<CLAUDE_CONFIG_DIR>/.claude.json`.
 - Set but not an absolute path (relative, `~`-prefixed or
-  whitespace-only): refused (b.nje). Pre-trust reads, writes and stats
-  no file, makes no lock dir, and reports `failed` (below). Claude Code
+  whitespace-only), from the extra env or inherited: refused (b.nje).
+  Pre-trust reads, writes and stats no file, makes no lock dir, and
+  reports `failed` (below). Claude Code
   resolves a relative value against its pane's cwd, while agent-director
   would resolve it against its own caller's cwd, which differs for each
   caller, so the entry could land in a file the agent never reads.
@@ -9670,8 +9684,36 @@ malformed key and `resume` refuses a row whose stored extra env has one,
 both with `ErrReservedEnvKey` and before pre-trust (see [Malformed
 `extra_env` keys](#malformed-extra_env-keys-bvpb)).
 
-For `resume` the extra env is the row's, so it targets the same file the
-row's spawn did. With a file resolved, the step sets
+**The pane runs under the value pre-trust used (b.uzn).** For a claude
+spawn or reuse whose `extra_env` has no `CLAUDE_CONFIG_DIR` key and whose
+agent-director environment sets it non-empty, `ComposeLaunch` adds that
+value to the extra env (`launchExtraEnv`), so the create's environment,
+the settings, pre-trust and the row all carry it, and a tmux server
+started with another environment cannot give the pane another file. A
+key in `extra_env` always wins, an empty value meaning unset. Codex and
+Cursor launches never take it from agent-director's environment.
+`resume`'s launch environment and pre-trust use only the row's extra
+env. A row with the key resumes
+under its spawn's folder: the launch, pre-trust, the transcript
+fallback and `find-missing`'s heal agree. A row without it (its spawn
+inherited none, or it was saved before 0.17.5) resumes as on 0.17.4:
+the pane takes tmux's environment and pre-trust targets
+`~/.claude.json`. So a row saved before 0.17.5 whose agent ran under a
+`CLAUDE_CONFIG_DIR` set only in agent-director's environment gets
+`pre_trust: failed` on resume when `~/.claude.json` is missing, or `ok`
+after writing a file the agent doesn't read; either way the agent may
+stop at Claude Code's folder-trust prompt. Answering it once in the pane
+lets that resume carry on with its conversation; respawning records the
+value but starts a fresh conversation (a new id, or a reuse with
+`reuse_finished`, has no history). When neither `extra_env` nor agent-director's
+environment sets it, pre-trust targets `~/.claude.json` and the pane
+takes tmux's environment, except that a fresh Claude Code 2.1.280 launch
+given ordinary delivery's settings gets
+`CLAUDE_CONFIG_DIR=<effective-home>/.claude` from `inputdelivery.Prepare`
+(see [Ordinary input delivery](#ordinary-input-delivery)); the launch
+does not set it empty, which would change Claude Code's folder.
+
+With a file resolved, the step sets
 `projects.<canonical cwd>.hasTrustDialogAccepted = true` and writes
 the file back atomically (`writeFileAtomic`: a temp file, then a rename
 over the file), so no reader ever sees a torn file. The written file
@@ -9705,7 +9747,12 @@ Only the response to an unusable value differs: those read paths treat
 it as absent and look under `~/.claude`, while pre-trust, which writes,
 refuses it. **Must use:** code that reads `CLAUDE_CONFIG_DIR` from a
 launch's or row's extra env decides whether to use it with
-`spawn.ConfigDirUsable`; do not write a second check. No reader derives
+`spawn.ConfigDirUsable`; do not write a second check. Code that needs
+the value a claude launch runs under reads the launch's or row's extra
+env: `launchExtraEnv` is the only reader of agent-director's own
+`CLAUDE_CONFIG_DIR` for this, besides the context statuslines
+(`contextsettings.go`) and `inputdelivery.Prepare`, so a resume's launch
+environment and pre-trust follow its row. No reader derives
 a path from an `extra_env` `HOME`: it is a reserved key (see [Reserved
 `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)), so do not add
 one.
@@ -9822,7 +9869,7 @@ it keeps the life. Every `resume` until the next spawn or reuse follows
 it. A failed reuse's applied restore writes the previous choice back.
 
 Pre-trust is best effort on both verbs: a failure never fails the
-launch. When the write cannot be made (the extra env's
+launch. When the write cannot be made (the launch's
 `CLAUDE_CONFIG_DIR` is set but not an absolute path, or the resolved
 file does not exist, as on a fresh Claude Code install or a fresh
 `CLAUDE_CONFIG_DIR`, or it cannot be read, parsed or written, or its
@@ -9841,7 +9888,7 @@ resolves no file, so its line names none and quotes the value (Go `%q`)
 instead: `agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR
 "rel" is not an absolute path); the agent may stop at Claude Code's
 folder-trust prompt`. The line names no label, token or environment
-value other than the extra env's `CLAUDE_CONFIG_DIR`. The launch
+value other than the launch's `CLAUDE_CONFIG_DIR`. The launch
 proceeds, and the agent may wait at the trust dialog.
 
 **The `pre_trust` result field.** Every successful `spawn` and `resume`
@@ -9857,8 +9904,8 @@ result carries `pre_trust`, always exactly one of three values:
   whose row was restored.
 - `failed`: pre-trust was attempted and the entry was not written (the
   `.claude.json` file is missing, or could not be read, parsed or
-  written, its lock held by another process included, or the extra
-  env's `CLAUDE_CONFIG_DIR` is set but not an absolute path, so no file
+  written, its lock held by another process included, or the launch's
+  `CLAUDE_CONFIG_DIR` is set but not an absolute path, so no file
   was touched). The launch still proceeds, and the agent may stop at
   Claude Code's folder-trust prompt. For Codex: the extra env's
   `CODEX_HOME` is set but not an absolute path, and the launch carries
@@ -10791,9 +10838,21 @@ before sending it to Cursor. Caller fields, recovery and success limits are in
 and `readPaneRun`, built on `paneRun`). It captures the last N lines of
 the agent's own pane by pane id: `capture-pane -p [-e] -t %N -S -<n>`.
 Default `n=25` (for `n_lines` 0 or omitted), no upper cap (SRD §12
-explicitly leaves the bound to the caller). `n` counts lines of history
-before the visible pane, so `n_lines: 1` is the smallest capture. A
-negative `n_lines` is refused, never read as the default (b.c4n).
+explicitly leaves the bound to the caller). tmux prints up to `n` rows of
+history and then the whole visible screen, so `tmux.Client.CapturePaneID`
+keeps only the last `n` rows (`tmux.LastPaneLines`, b.7y8; before it, an
+alternate-screen TUI such as Claude Code's or Codex's gave its whole
+screen for every `n`). The rows are counted up from the last row with
+content: blank rows (whitespace only once ANSI is stripped) below it are
+left out, blank rows between content rows count, and an all-blank pane
+is `""`. Blankness is judged on the stripped row, so an `ansi` read and a
+default read pick the same rows. The trim lives in the client, so
+`read-pane`, the `expect_pane_sha256` check of `send-keys` and
+`record-pane-answer` (`capturePaneHash`) and the idle-screen fingerprint
+(`samplePane`) see the same rows for the same `n`, and the
+`tmuxfix.Recorder` applies the same helper. `n_lines: 1` is the smallest
+capture. A negative `n_lines` is refused, never read as the default
+(b.c4n).
 
 Its result is `pane` and `pane_sha256`, the SHA-256 (lowercase hex,
 `paneSHA256`) of exactly the bytes of `pane` (b.146 rule 7). A caller that
@@ -10863,7 +10922,7 @@ ANSI handling:
 - **Default (`ansi=false`) — strip ANSI escape sequences, preserve
   unicode glyphs.** `tmux capture-pane -p` (without `-e`) already
   removes most SGR / cursor escapes server-side; `internal/tmux.StripANSI`
-  scrubs any residuals with a byte-oriented regex (`\x1b\[[0-9;]*[a-zA-Z]`)
+  scrubs any residuals with a byte-oriented regex (`\x1b\[[0-9;:]*[a-zA-Z]`, colon sub-parameters included)
   that never touches non-ASCII bytes. The TUI glyphs Claude uses
   (`❯` U+276F, `⎿` U+23BF, `🐝` U+1F41D, box-drawing chars) survive —
   the caller reads them as state signal per
@@ -11358,7 +11417,7 @@ never a literal `claude`; Codex and Cursor are never run by discovery.
 
 **The settings.json merge (b.cfq, b.zbg).** With hooks on, step 6 merges
 both `agent-director help` entries into `~/.claude/settings.json` with one
-jq filter, and writes the result after the usual `.bak` (see "Merged files
+jq filter, and writes the result with no backup copy (see "Merged files
 keep their mode" below). jq runs a filter once per JSON document it reads,
 so install.sh first counts the file's documents
 (`jq -n '[inputs] | length'`):
@@ -11672,8 +11731,8 @@ anyone who could not read the old. The mode is read with `stat -L` (GNU
 mode; for a symlinked `<file>` the `.new` and the `mv` act on the file the
 link resolves to, and the link is kept (see "A symlinked `settings.json`
 or `config.toml`" below). A `<file>` that does not exist yet takes the
-umask's mode (a new `config.toml` is then `chmod 0600`). The timestamped
-`.bak` copies are made
+umask's mode (a new `config.toml` is then `chmod 0600`). `config.toml`'s
+timestamped `.bak` (and the agent-rename migration's copy) is made
 with `ad_backup_keeping_mode <file> <bak>` the same way: it removes any
 `<bak>` (an earlier run's copy of the same second), copies with a plain
 `cp -f` under `umask 077`, then `chmod`s the copy to `<file>`'s mode. It
@@ -11682,9 +11741,9 @@ where the file system cannot take them (NFS homes, Ubuntu LP#2087769),
 which under `set -e` would stop the install at the backup. `uninstall.sh`
 uses the same functions for its two rewrites. **Must use:** a rewrite of
 an existing operator file in either script goes through
-`ad_replace_keeping_mode` and its backup through `ad_backup_keeping_mode`,
-never a bare tempfile and `mv`, a `cp -f` alone, or a `cp -p`;
-`ad_mode_of`, `ad_resolve_link`, `ad_link_write_check`,
+`ad_replace_keeping_mode`, and any backup of it through
+`ad_backup_keeping_mode`, never a bare tempfile and `mv`, a `cp -f` alone,
+or a `cp -p`; `ad_mode_of`, `ad_resolve_link`, `ad_link_write_check`,
 `ad_replace_keeping_mode` and `ad_backup_keeping_mode` exist in both
 scripts (install.sh, uninstall.sh) and change together.
 `test/install-sh/retry.sh`'s merge-modes table and
@@ -11693,6 +11752,35 @@ scripts (install.sh, uninstall.sh) and change together.
 bits before its `chmod` (retry.sh's `-written-owner-only` rows), and a
 `cp` that fails on `-p`/`--preserve`, as on NFS, is never hit (its
 `-no-cp-p` rows); a change adds its cases to both.
+
+**No copy of `settings.json` (b.f3n).** **Must not:** keep a copy of
+`settings.json` in either script. Its `env` can hold tokens, and a kept
+copy is one more plaintext copy of them that nothing removes. A copy would guard
+nothing: every file the merge or the filter cannot take is refused or left
+alone before any write, and `ad_replace_keeping_mode`'s `mv` either
+replaces the file or leaves it as it was.
+
+Releases before 0.17.6 did copy it, to
+`settings.json.bak.<YYYYmmdd-HHMMSS>` beside it before each hooks-on
+install's merge and each uninstall's filter, and kept the copies. Both
+scripts name such copies and delete none, as a file of that name may be the
+user's own: install.sh after the hooks step on every run that gets there
+(hooks on, `--no-hooks`, Claude Code absent), uninstall.sh after its
+`settings.json` and `config.toml` writes. Each globs exactly
+`settings.json.bak.` plus an 8-digit, `-`, 6-digit stamp (a
+`settings.json.bak.<other>` is not named) and, when any match, prints one
+stdout line: `  settings: ` (install.sh) or `uninstall.sh: ` (uninstall.sh),
+then `copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:`,
+then each path in glob order, after a space and quoted with `printf %q`, as
+install.sh's other followable advice quotes paths. The shell splits the list
+back into exactly those paths under any `HOME` (one holding a space or a
+quote, say), so it can be pasted after `rm --`. With none, nothing is
+printed. `advice_follow.sh`'s J48 and
+`TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun` follow the line
+under such a `HOME` and re-run; `TestSettingsBackupNotKept` pins that an
+install, its re-run and an uninstall, with and without `--no-hooks`, add
+no copy and name exactly the old ones, keeping a `settings.json.bak.<other>`
+unnamed.
 
 **A symlinked `settings.json` or `config.toml` (b.nw5).** When
 `~/.claude/settings.json` or `~/.config/agent-director/config.toml` is a symlink
@@ -11710,10 +11798,10 @@ not a link. It is a loop over `readlink` because older macOS has no
 `readlink -f`. The `.new` is written beside that resolved file and `mv`'d
 over it, so the rename stays within one directory even when the link
 points to another filesystem, and the resolved file keeps its mode as
-above. The `.bak` is still made beside the link: `cp` reads through the
-link, so it is a regular copy of the target's contents at the target's
-mode. A dangling link whose directory exists is taken for a missing file
-(`settings.json`'s merge starts from `{}`, `config.toml` gets the created
+above. `config.toml`'s `.bak` is still made beside the link: `cp` reads
+through the link, so it is a regular copy of the target's contents at the
+target's mode. A dangling link whose directory exists is taken for a
+missing file (`settings.json`'s merge starts from `{}`, `config.toml` gets the created
 file): install.sh creates the file the link names, keeping the link, and
 that file takes the umask's mode (`config.toml` is then `chmod 0600`,
 through the link). The `config.toml` create branch writes with `>` and
@@ -11773,20 +11861,12 @@ Each script uses it as follows.
   `<bin dir>/agent-director`, or `inject_help_hook` from `[defaults]` and
   the header too when only blank lines and comments are left under it),
   and `Nothing was removed or changed. Re-run this uninstall after the change.`
-  A `settings.json` that cannot be written through but holds none of
-  agent-director's hook entries is left alone instead, and the uninstall
-  goes on, with the stdout line
-  `uninstall.sh: left <file> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
-  uninstall.sh rewrites every `settings.json` holding one JSON document
-  of the outer shape install.sh's merge needs, so a refusal there would
-  stop every uninstall until the link went. A `settings.json` uninstall.sh
-  leaves alone while working out its edit (not valid JSON, not one
-  document, the wrong outer shape, or the filter failing; see "Uninstall
-  semantics" below) is not edited, so its link is not checked. The count
-  of entries to remove runs only after the check has refused the link;
-  should jq fail on it, the file is left alone too, after that check. A
-  `config.toml` without
-  the key needs no edit, so it is not checked.
+  A `settings.json` uninstall.sh leaves alone while working out its edit
+  (not valid JSON, not one document, the wrong outer shape, none of
+  agent-director's hook entries, or jq failing; see "Uninstall semantics"
+  below) is not edited, so its link is not checked: one holding none of
+  those entries never stops an uninstall, linked or not. A `config.toml`
+  without the key needs no edit, so it is not checked.
   Under a confirmed `--purge`, a `config.toml` that cannot be written
   through is left alone instead of refused, with the stdout line
   `uninstall.sh: left <file> alone: its symlink cannot be written through, and --purge removes the link; its target, <target>, keeps inject_help_hook`.
@@ -11821,10 +11901,11 @@ whole advice and HOME unchanged, then follows both ways out.
 `TestUninstallKeepsFileModes`' symlinked case (`config.toml`
 an absolute link, `settings.json` a relative one, each kept, its target
 edited), `TestUninstallRefusesUnwritableLink` (the refusal changes
-nothing; each way out, followed, lets the re-run finish, with the
-left-alone line for `settings.json`) and `TestUninstallPurge` pin
-uninstall.sh's. `TestUninstallPurge`'s rows: `--force` over a `config.toml`
-linked into a 0555 directory (the left-alone line, the target keeping the
+nothing; each way out, followed, lets the re-run finish; a
+`settings.json` whose entry is removed at the source is then left as it
+is, with no note) and `TestUninstallPurge` pin uninstall.sh's.
+`TestUninstallPurge`'s rows: `--force` over a `config.toml` linked into a
+0555 directory (the left-alone line, the target keeping the
 key, `~/.config/agent-director` gone); that link with `n` answered (the exit-2
 refusal after the prompt, HOME unchanged); a plain `config.toml` with `n`
 answered (a plain uninstall, last line `uninstall.sh: --purge aborted`,
@@ -13130,22 +13211,22 @@ hand, and the exit status is unchanged; the "removed N" count is the job lines
 only (the marked header comment goes with them); with no schedule present it
 prints nothing, and a line or unit a human wrote is never touched. Other
 user hooks in `SessionStart` / `SessionEnd` survive verbatim. Each
-rewrite of `settings.json` or `config.toml` takes a timestamped `.bak`
-first, keeps the file's mode and writes through a symlink to its target,
-keeping the link, as install.sh's merges do (see "Merged files keep their
-mode" and "A symlinked `settings.json` or `config.toml`" above). Both
-edits are worked out first; a symlinked file to be edited whose target's
+rewrite of `settings.json` or `config.toml` keeps the file's mode and
+writes through a symlink to its target, keeping the link, as install.sh's
+merges do; `config.toml`'s takes a timestamped `.bak` first,
+`settings.json`'s none (see "Merged files keep their mode", "No copy of
+`settings.json`" and "A symlinked `settings.json` or `config.toml`"
+above). Both edits are worked out first; a symlinked file to be edited whose target's
 directory cannot be written in is refused (exit 2) before anything is
-removed or changed, except a `settings.json` holding none of
-agent-director's hook entries, and a `config.toml` under a confirmed
-`--purge`, each left alone with a note.
+removed or changed, except a `config.toml` under a confirmed `--purge`,
+left alone with a note.
 Its `settings.json` filter, like install.sh's merge, runs once per JSON
 document it reads, so uninstall.sh counts the documents first, as
 install.sh does (b.zbg; see "The settings.json merge" above), and edits
 only a file holding exactly one. A file holding none (empty, or only
-whitespace) has no entries to remove and is left alone with no note and
-no `.bak`. One that is not valid JSON, or holds more than one document,
-is left alone with a stderr note
+whitespace) has no entries to remove and is left alone with no note. One
+that is not valid JSON, or holds more than one document, is left alone
+with a stderr note
 (`uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`,
 or `uninstall.sh: ~/.claude/settings.json holds <N> JSON documents, not one; leaving it alone`).
 A single document must also have the outer shape install.sh's merge
@@ -13164,30 +13245,33 @@ it, such as an entry that is a string
 and lists each such value's path (b.dzu; see "The settings.json merge"
 above), while uninstall.sh's filter takes any such value and keeps it
 verbatim (see below).
-Should jq still fail, on the filter or on the symlink branch's count of
-entries to remove (see "A symlinked `settings.json` or `config.toml`"
-above), the file is left alone with jq's error, then
+A document of that shape then has its entries to remove counted (those
+`ours` marks, below), before the filter and any symlink check. With none,
+the file is left byte for byte, with no note (b.f3n): the filter would
+rewrite it in jq's layout, filling in the event lists, with nothing
+removed. Should jq still fail, on the count or on the filter, the file is
+left alone with jq's error, then
 `uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone`.
-In each case the uninstall goes on and exits 0, with no `.bak`. The
-file's symlink is not checked, as the file is not edited, except on a
-jq failure on the count, which runs only after the check has refused
-the link.
+In each case the uninstall goes on and exits 0, and the file's symlink is
+not checked, as the file is not edited.
 
 Inside the event lists the filter takes any value. **Must use:**
 uninstall.sh's `hook_ours_jq` defines `ours`, the one test of an
-agent-director entry, shared by the filter and the symlink branch's
-count: an object whose `hooks` is a list holding an object whose
+agent-director entry, shared by the count and the filter: an object
+whose `hooks` is a list holding an object whose
 `command` is a string starting with `<bin dir>/agent-director`. Every
 other value (a string, a number, an entry whose `hooks` is not a list, a
 `command` that is not a string) is kept verbatim, never indexed or read
 as a string, and agent-director's entries beside it are still removed.
 `TestUninstallLeavesSettingsWithoutOneDocument` (empty, whitespace, two
 documents, not valid JSON), `TestUninstallLeavesSettingsItCannotEdit`
-(the wrong outer shapes, one of them behind an unwritable link, a
-stand-in jq failing on the filter and on the count, and an unwritable
-link holding only odd values) and
+(the wrong outer shapes, one of them behind an unwritable link, and a
+stand-in jq failing on the filter, and on the count behind an unwritable
+link), `TestUninstallLeavesSettingsWithoutItsEntries` (other hooks and an
+`env` token, a `null` document, and an unwritable link holding only odd
+values, each left byte for byte with no note) and
 `TestUninstallRemovesHookEntriesBesideOddValues` (odd values beside the
-help hooks, a `null` event list, a `null` document) pin this.
+help hooks, a `null` event list) pin this.
 
 **`--mcp-also` and the Claude Code program.** `--mcp-also` deregisters with
 the program `install.sh` registered with: `[launch] claude_path` from the
@@ -16699,7 +16783,37 @@ written, harmlessly:
    selection; a supported new-instance selection is permitted only if it matches
    the intended account/configuration. Historical saved AD variables remain
    compatible. No automatic account-intent removal or personal-login retry.
-5. For Cursor, `cursortranscript.VerifyAppend(row.JSONLPath)` checks only the
+5. The saved `cwd` is a directory this process can enter, for every agent →
+   otherwise spawn's `ErrCwdNotFound` (the path does not exist, its
+   `os.Stat` fails for another reason, as spawn maps it, or
+   `spawn.CwdEnterError`, `access(2)` with `X_OK`, refuses it: b.qwo) or
+   `ErrCwdNotADirectory` (`savedCwdError`, b.vit). Spawn's `validateCwd`
+   makes the same enter check after its `IsDir` check. `stat` needs search
+   permission only on the parents, so a directory whose own mode denies
+   search (mode 000) passes it. tmux starts a session whose `-c` directory
+   cannot be entered in another directory (on tmux 3.3a, b.qwo saw the
+   directory of the process that called spawn or resume) and still exits 0,
+   so without this check the agent ran elsewhere and the call reported
+   success. The check runs before any transcript lookup, tmux call or
+   write. `access(2)` is used rather than `chdir`, which would change the
+   working directory of the whole process while `pkg/api` serves concurrent
+   callers. The description names the instance id, quotes the cwd, says
+   nothing was written or launched, and gives the recourse: recreate the
+   directory at that path (for a permission failure, make it enterable by
+   the user agent-director runs as) and resume again, or spawn the id with
+   the reuse opt-in, the row's agent (`spawn.ReuseSpawn`) and an existing
+   cwd. Cursor gives `cursorFreshRecovery` instead of the reuse. The mode
+   can still change between the check and tmux's `chdir`, as the directory
+   can still be removed. Pinned by `TestResumeRefusesUnusableCwd`
+   (`pkg/api/resume_missing_cwd_test.go`),
+   `TestCursorResumeUnusableCwdRefusesBeforeMutation`, the literal-follow
+   tests B16 (`pkg/api/advice_follow_missing_cwd_test.go`,
+   `pkg/api/advice_follow_cursor_resume_test.go`), spawn's
+   `TestValidateRefusesUnenterableCwd` and, on real tmux,
+   `TestResumeRemovedCwdIsCwdNotFound`, `TestSpawnUnenterableCwdIsCwdNotFound`
+   and `TestResumeUnenterableCwdIsCwdNotFound`
+   (`test/realtmux/unenterable_cwd_test.go`).
+   Then, for Cursor, `cursortranscript.VerifyAppend(row.JSONLPath)` checks only the
    existing latest protected file without creating or writing it. Failure gives
    `ErrJsonlMissing` with unique-id fresh recovery; no native DB or history is
    parsed. Success passes the saved current session directly to `resumeAfterJsonl`.
@@ -16782,17 +16896,18 @@ written, harmlessly:
    then `spawn.ComposeRelaunch` composes env, the row's agent's settings
    and the argv into a `CreateRequest`: for a Claude row
    `claude --resume <session_id> --settings <json> [filtered agent_args]`, for
-   a Codex row `<codex> resume <session_id> [filtered args] <settings block>
-   [-- prompt]` (`<codex>` is `[launch] codex_path` or `codex`).
+   a Codex row `<codex> resume <session_id> [filtered args] <settings block>`
+   (`<codex>` is `[launch] codex_path` or `codex`).
    Cursor composes the real gateway with current `cursor_path`, saved model/
-   initial prompt and private latest load target through the shared selection
-   described above; it also forwards the actual opened store path privately.
+   mode, an empty initial prompt and private latest load target through the
+   shared selection described above; it also forwards the actual opened store
+   path privately. No agent's saved initial prompt is replayed.
    Token and composition run before the move, so a failure writes nothing. Relaunch applies
    no spawn argument validation; it removes parsed session selectors and
    values, Claude print mode and orphaned cloud controls through the
    [shared argument extraction](#shared-agent-argument-readers-and-resume-extraction).
    For Claude, that extraction preserves parsed ownership when original required
-   values are complete, moving prompts or re-encoding altered clusters only
+   values are complete, re-encoding altered clusters only
    when necessary and retaining relative option order. Incomplete required
    values get literal filtering only, with rejection left to the agent parser.
    The stored list is unchanged.
@@ -17320,7 +17435,8 @@ fallback** and stats that (bug b.1ba). Two resolvers back this:
 - **`spawn.JsonlPathIn(configDir, cwd, sessionID)`** — composes
   `<configDir>/projects/<slug(cwd)>/<session_id>.jsonl`. This is the
   config-dir-aware resolver the fallback uses when the row's
-  `ExtraEnv["CLAUDE_CONFIG_DIR"]` is usable (`spawn.ConfigDirUsable`: an
+  `ExtraEnv["CLAUDE_CONFIG_DIR"]` (an inherited one included, which the
+  spawn records) is usable (`spawn.ConfigDirUsable`: an
   absolute path), so a Spawn that ran under a
   custom config dir finds its transcript under
   `<CLAUDE_CONFIG_DIR>/projects/...` rather than `~/.claude/projects/...`.
@@ -17363,13 +17479,14 @@ resume:
 A Codex row carries no synthesized settings to begin with: its relaunch
 rebuilds the per-launch settings block from the config in force at the
 resume (a changed `inject_help_hook` or `disable_ask_user` applies to it),
-and its filtered stored arguments are replayed after `resume <id>`, ahead
-of the block and protected prompt, so the question-tool setting wins over
+and its filtered stored options are replayed after `resume <id>`, ahead
+of the block, so the question-tool setting wins over
 a surviving stored argument that turns the tool on. See
 [Shared agent argument readers and resume extraction](#shared-agent-argument-readers-and-resume-extraction).
 
 `ExtraEnv` **is** carried over. The original spawn's extra env vars
-(e.g. `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`) are persisted on the
+(e.g. `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, a claude spawn's
+inherited one included) are persisted on the
 row at launch and restored by `spawn.ComposeRelaunch` (`in.Row.ExtraEnv`,
 decoded by `GetSpawn`), so a resumed row's agent re-enters the same
 auth/config context as the original — no dependence on whatever the
@@ -20406,7 +20523,9 @@ the upgrade and way-back cases (`epic-12-install`):
   not from a constant.
 - Claude Code writes `~/.claude/telemetry/` on every run: leave it out of any
   `~/.claude` comparison. Every install's hooks merge writes
-  `config.toml.bak.<ts>` and `settings.json.bak.<ts>`: expect them.
+  `config.toml.bak.<ts>`, and the previous release's install that
+  `old-layout.sh` runs also leaves `settings.json.bak.<ts>`, which each later
+  install and uninstall names (see "No copy of `settings.json`"): expect them.
 - The way-back case validates the install skill's absolute recovery pointer,
   resolves its repository path under `/work/source` and compares the canonical
   operator procedure with its executable fixture, normalizing Markdown links
@@ -22631,10 +22750,10 @@ with no `---` terminator. `test/fake-tmux`'s `readLog`,
 `fakeTmuxArgvs` go through it. **Must use:** every Go test that reads the
 fake's invocation log uses `faketmuxfix.ReadLog`; never parse the log
 format by hand. The Makefile's
-`test/fake-tmux/tmux` rule (`make fake-tmux`) lists as prerequisites every
-non-test source of the packages the fake links (`FAKE_TMUX_SRCS`,
-including `faketmuxfix`, `tmuxfix` and `internal/tmux`), so a change to the
-shared packages rebuilds it.
+`test/fake-tmux/tmux` rule (`make fake-tmux`) rebuilds it when a package of
+this module that the fake links changes, as `bin/ts-helper`'s rule does (see
+"Makefile target" under ts-helper wrapper CLI), so a change to the shared
+packages, such as `faketmuxfix`, `tmuxfix` or `internal/tmux`, rebuilds it.
 
 ### ptyfix: real pseudo-terminals (reusable test fixture)
 
@@ -24600,7 +24719,7 @@ gated by its own environment variable. Four make `.config/agent-director` mode
 (`expire_trail_test.go`). The fifth, `TestFindMissingDisagreeFailOpenChild`
 (`find_missing_disagree_test.go`), writes a read-only trail file instead of
 a 0500 directory. `TestMain` also unsets
-`AGENT_DIRECTOR_INSTANCE_ID` and `TMUX` and points `TMUX_TMPDIR` at one
+`AGENT_DIRECTOR_INSTANCE_ID`, `CLAUDE_CONFIG_DIR` and `TMUX` and points `TMUX_TMPDIR` at one
 fresh temp dir for the whole test binary
 (`apiTmuxTmpdir`, with its per-user socket directory made at mode 0700), so
 a default socket resolves there, never under the caller's tmux or
@@ -25731,16 +25850,21 @@ production Codex launch.
 
 **Makefile target.**
 
-`make ts-helper` builds `bin/ts-helper`. Its prerequisites
-(`TS_HELPER_SRCS`) are every non-test `.go` source of the directories in
-`TS_HELPER_SRC_DIRS` (every package of this module the binary links, `go
-list -deps ./test/smoke/ts-helper`: the CLI itself, `pkg/api/apitest`,
-`faketmuxfix`, `tmuxfix` and the other `internal/testsupport` packages,
-`internal/spawn`, `internal/hook`, `internal/tmux`, `internal/config`,
-`internal/store`, `internal/trail`) plus `go.mod` and `go.sum`, so Make
-rebuilds when a seeder changes and skips the build otherwise. A package
-that gains a module import extends the list, or the binary can go stale
-(b.93m).
+`make ts-helper` builds `bin/ts-helper`. After each build the recipe
+writes `bin/ts-helper.d` from `go list -deps ./test/smoke/ts-helper/`: the
+non-test `.go` files and embedded files of every package of this module the
+binary links, relative to the checkout. The Makefile includes it, and those
+files, the directory each sits in, `go.mod` and `go.sum` are the
+prerequisites, so Make rebuilds when a seeder changes, or a file is added to
+or removed from one of those directories, and skips the build otherwise
+(b.93m, b.q6s). A file added in a subdirectory holding no listed file, such
+as a new folder under an embedded `testdata/`, is not seen. With no
+dependency file, such as a binary built before it existed, it always
+rebuilds. The fake tmux's rule works the same way, with
+`test/fake-tmux/tmux.d`. `make test-image`, and so `make test-docker`, also builds it,
+because testplans run it from the read-only source mount as
+`/work/source/bin/ts-helper` (b.m2s); the release coverage gate
+(`docker-epics.sh`) pre-builds it with the binaries.
 
 **Bun integration — `TS_HELPER_PATH`.**
 
@@ -26175,10 +26299,18 @@ the exempt sections instead of naming it.
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
 `prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
-b.8yq, b.4a1, b.qgr, b.uc7 and b.1ce). Those tests run `make` against the real
-repo Makefile with a fake container engine or tool on PATH, never a real
-container, and assert on what the recipe produced. They exec no built binary
-and open no store, so they carry no sandbox guard.
+b.8yq, b.4a1, b.qgr, b.uc7 and b.1ce, `helperdeps` b.q6s). Those tests run
+`make` against the real repo Makefile with a fake container engine or tool on
+PATH, never a real container, and assert on what the recipe produced. They
+exec no built binary and open no store, so they carry no sandbox guard.
+
+`helperdeps` uses the real go instead. It copies the Makefile, `go.mod`,
+`go.sum` and the files `go list -deps` reports for `bin/ts-helper` and
+`test/fake-tmux/tmux` into a temp tree and builds both there. Then it changes
+one file at a time and checks that `make -q` reports the binary out of date:
+a non-test `.go` file of each package of this module it links, an embedded
+file of each package that has them, a file added to or deleted from its own
+package, and its missing dependency file.
 
 `cigates` also checks the CI workflows (see [CI lane](#ci-lane)): it runs
 `integration.yml`'s `docker-epics` list step against a scratch

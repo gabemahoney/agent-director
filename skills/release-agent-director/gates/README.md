@@ -302,7 +302,7 @@ shared.
 | --- | --- | --- |
 | test preload (`pkg/ts-bun-client/test/setup.ts`) | exclusive | each `make`, which rewrites `bin/agent-director`, `bin/agent-director-admin`, `bin/ts-helper` and `test/fake-tmux/tmux` |
 | `coverage.bun-test` (`bun-test.sh`) | exclusive | `bun install --frozen-lockfile`, then `bun run build`, one hold each. Not `bun test`: its preload takes the lock itself |
-| `docker-epics.sh` | exclusive | one `make build`, before any child starts |
+| `docker-epics.sh` | exclusive | one `make build ts-helper`, before any child starts |
 | each `coverage.docker-epic-*` child | shared (`flock -s`) | its whole `make test-docker` run |
 
 Shared holders overlap one another, so the docker epics keep their
@@ -321,14 +321,17 @@ the worktree-clean gate there. Since b.1xi `readme-snippets.test.ts` writes
 its scratch `.ts` file into a fresh dir under the OS temp dir and runs `tsc`
 on it there.
 
-**`bin/` pre-build.** Each child's `make test-docker` runs `make build` first
-(`test-docker` depends on `test-image`, which depends on `build`), under the
-child's shared hold. In a release run `bin/` is always stale when the coverage
-phase starts: `make build` stamps the HEAD commit (`COMMIT_SHA`) into both
-binaries, and branch-and-bump commits just before. So `docker-epics.sh` first
-runs `flock .tree-write.lock make build` once, before `run-parallel.sh` starts
-any child. Each child's own build then finds both binaries current and only
-updates their mtimes, which a concurrent context collection tolerates. If the
+**`bin/` pre-build.** Each child's `make test-docker` runs `make build
+ts-helper` first (`test-docker` depends on `test-image`, which depends on
+`build` and `ts-helper`; the testplans run `/work/source/bin/ts-helper`,
+b.m2s), under the child's shared hold. In a release run `bin/` is always stale
+when the coverage phase starts: `make build` stamps the HEAD commit
+(`COMMIT_SHA`) into both binaries, and branch-and-bump commits just before; a
+fresh worktree has no `bin/ts-helper`. So `docker-epics.sh` first runs
+`flock .tree-write.lock make build ts-helper` once, before `run-parallel.sh`
+starts any child. Each child's own build then finds all three files current:
+`build` only updates the two binaries' mtimes, which a concurrent context
+collection tolerates, and `ts-helper` builds nothing. If the
 pre-build fails, the gate emits one SR-14 diagnostic (gate
 `coverage.docker-epic-prebuild`, artifact `bin/`) and exits 1 without starting
 a child. `--dry-run` builds nothing.

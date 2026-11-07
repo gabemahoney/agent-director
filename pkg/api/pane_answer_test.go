@@ -37,12 +37,21 @@ func paKinds(calls []tmuxfix.SocketCall) []tmux.Call {
 	return out
 }
 
+// linesPane (b.7y8) has an escape sequence, a blank row between content rows
+// and blank rows below its last content row; linesPaneLast is its last n
+// rows as read-pane gives them by default.
+const linesPane = "one\n\x1b[1mtwo\x1b[0m\nthree\n\nfive\nsix\n\n  \n\n"
+
+var linesPaneLast = map[int]string{2: "five\nsix\n", 5: "two\nthree\n\nfive\nsix\n"}
+
 // TestReadPaneSHA256AndSendKeysHashCheck (b.146 rule 7): read-pane's
 // pane_sha256 is the SHA-256 of exactly the bytes it returns, ANSI read or
 // not; send-keys given that hash captures the pane as read-pane gives it by
 // default (the same n_lines, ANSI stripped) and types only while the bytes
 // match; a changed pane, or an ANSI read's hash, is ErrPaneChanged with
-// nothing sent, its err_details n_lines and never the new hash.
+// nothing sent, its err_details n_lines and never the new hash. With
+// n_lines N read-pane returns the last N rows (b.7y8), and their hash fails
+// the check at N+1.
 func TestReadPaneSHA256AndSendKeysHashCheck(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
@@ -85,6 +94,22 @@ func TestReadPaneSHA256AndSendKeysHashCheck(t *testing.T) {
 			if c.Call == tmux.CallCapture && (c.Target != pane || c.NLines != wantLines || c.ANSI) {
 				t.Errorf("capture = %+v; want %s, %d lines, no escapes", c, pane, wantLines)
 			}
+		}
+	}
+
+	e.rec.SetCapture(r.Socket, pane, linesPane)
+	for n, want := range linesPaneLast {
+		res := read(false, n)
+		if res.Pane != want {
+			t.Errorf("read-pane (n_lines %d) = %q; want the last %d rows %q", n, res.Pane, n, want)
+		}
+		other := send(res.PaneSHA256, n+1)
+		assertOneSentinel(t, other.err, api.ErrPaneChanged)
+		if !slices.Equal(paKinds(other.calls), paneReadCalls) {
+			t.Errorf("n_lines %d+1: calls = %v; want %v, nothing sent", n, paKinds(other.calls), paneReadCalls)
+		}
+		if same := send(res.PaneSHA256, n); same.err != nil {
+			t.Errorf("send-keys with read-pane's hash (n_lines %d) = %v; want it typed", n, same.err)
 		}
 	}
 

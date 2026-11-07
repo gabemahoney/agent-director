@@ -339,9 +339,13 @@ ordinary response's transcript usage must pair with its applicable native status
 capacity in the current live launch. Usage adds input, cache creation, cache
 read and output tokens once each; it does not sum requests or iterations.
 Automatic status-line observation preserves the selected user command's
-input, output and exit status. Unresolved settings, including JSONC or
-ambiguous ancestor Git local settings, leave native callbacks unchanged and
-context unknown. Unqualified configurations remain unknown.
+input, output and exit status (which command is selected: see
+[Settings](settings.md#what---settings-carries)). Unresolved settings,
+including JSONC or ambiguous ancestor Git local settings, leave native
+callbacks unchanged and context unknown. Unqualified configurations remain
+unknown. With `[defaults] disable_context_fullness` on, a Claude launch's
+context is unknown for it and its subagents (see
+[Configuration](configuration.md#keys)).
 
 Codex numeric support is limited to Codex CLI **0.159.2**, the **OpenAI** provider,
 and resolved sequential rollout history from a fresh session whose startup
@@ -848,6 +852,17 @@ failure or when no path is recorded, recomputes the current session's path
 from the row's cwd and config directory. Codex tries only its current recorded
 path. The refusals write and launch nothing.
 
+Before that lookup, for every agent, `resume` checks that the row's saved cwd
+is still a directory agent-director can enter, as `spawn` checks its `cwd`: a
+path that is gone, or a directory that the user agent-director runs as cannot
+enter (no search permission on it, such as mode 000, or on a parent), gives
+`ErrCwdNotFound`, and one that is now a file `ErrCwdNotADirectory`. Nothing is
+written or launched. Recreate the directory at that path, or for a permission
+failure make it enterable by that user, and resume again; the conversation
+continues. Or, for Claude and Codex, spawn the same id with `reuse_finished`,
+the row's agent and an existing `cwd`, which starts a fresh conversation. A
+Cursor row follows the error's fresh-recovery advice instead.
+
 When the current candidates fail, `ErrJsonlNeverWritten` means the recorded
 path is empty and visible current-life history is empty. An archived entry
 for the current session itself does not count as visible history. Otherwise
@@ -944,7 +959,9 @@ remain unverified.
 `ended` or `missing` Cursor row. It loads only the latest durably reported
 session with its saved configuration; see [Pause and resume](usage.md#pause-and-resume).
 Live and pending rows return `ErrSpawnNotResumable`. No saved session returns
-`ErrNoSessionId`. Missing, unreadable or insecure current protected transcript
+`ErrNoSessionId`. A saved cwd that is gone, cannot be entered or is no longer
+a directory returns `ErrCwdNotFound` or `ErrCwdNotADirectory` (see
+[Transcript recovery](#transcript-recovery)). Missing, unreadable or insecure current protected transcript
 returns `ErrJsonlMissing` before row or launch changes. Older sessions are
 never candidates, even when their native storage or transcripts exist.
 

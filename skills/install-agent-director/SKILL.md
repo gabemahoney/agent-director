@@ -379,15 +379,15 @@ previous release". The current installer refuses pre-move binaries with exit 3.
        installs)*. The merge is additive — existing user hooks at
        those events are preserved, and re-running the install is
        idempotent (duplicate entries are detected and skipped). The
-       install also snapshots `~/.claude/settings.json` to a
-       timestamped `.bak` first. On an upgrade from the old layout it
+       install keeps no copy of `~/.claude/settings.json`, whose `env`
+       can hold tokens. On an upgrade from the old layout it
        also removes the entries whose hook names the old directory's
        binary, which that upgrade replaced, before it adds the new ones.
      - **(b) Skip the hook injection (`--no-hooks`)**. Pick this if
        you want to manage how Claudes learn about agent-director
        yourself (e.g. via per-project CLAUDE.md, hand-paste, or some
        other mechanism). With this flag, settings.json is left
-       byte-identical to its pre-install state — no edit, no .bak. On
+       byte-identical to its pre-install state. On
        an upgrade from the old layout, the entries that still name the
        old directory's binary are printed with the fix and left in
        place: they point at a binary that is kept only until the
@@ -401,8 +401,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      case.
    - *Reversibility:* fully reversible. `uninstall.sh` removes the
      two entries (preserving any other user hooks at those events;
-     the entries of an install from before the move too), and the
-     pre-edit `.bak` snapshot is retained for manual rollback.
+     the entries of an install from before the move too).
      To inject them later, follow the
      [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#3-install)
      with the original flags less `--no-hooks`.
@@ -491,6 +490,10 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      `install.sh: done`) and that it is not on PATH. Do not run it.
      After a move, also tell them the kept directory's name (the
      `kept    :` line) and to delete it once the upgrade is confirmed.
+   - If the output has the `  settings: copies of settings.json that
+     earlier releases kept ...` line (see step 6 of "What this skill
+     does"), tell the operator the files it names may hold their tokens
+     and to check and delete them. Neither open nor delete them yourself.
    - Read the `schedule:` lines (before `admin   :`; none when the step
      only warns, except the line saying a piped run fetched the schedule
      files) to the operator, and show them any
@@ -932,16 +935,17 @@ This skill runs `install.sh` from the same directory. The script:
    skipped. An entry counts as already there only where Claude Code
    runs it: in the event's list, with the hook in the entry's own
    `hooks` list. An entry whose `hooks` is an object does not count, so
-   the install adds a proper entry beside it (b.zbg). The pre-edit
-   contents of `settings.json` are snapshotted to a timestamped `.bak`
-   sibling before the merge writes.
+   the install adds a proper entry beside it (b.zbg). No copy of
+   `settings.json` is kept, as its `env` can hold tokens (b.f3n): a file
+   the merge cannot use is refused before any write (below), and the
+   write is atomic, so a failed one leaves the file as it was.
 
    An empty `settings.json`, or one holding only whitespace (a file
-   made with `touch`, say), is merged as `{}`: it is backed up and gets
-   both hooks (b.zbg).
+   made with `touch`, say), is merged as `{}` and gets both hooks
+   (b.zbg).
 
    A `settings.json` the merge cannot use stops the install with
-   **exit 4** and is left as it was, with no `.bak`:
+   **exit 4** and is left as it was:
    - not valid JSON: `install.sh: ~/.claude/settings.json is not valid JSON`;
    - more than one JSON document (`{} {}`, say), each valid JSON on
      its own (b.zbg). `N` is how many:
@@ -1032,14 +1036,14 @@ This skill runs `install.sh` from the same directory. The script:
    `--no-hooks` the file is not merged, so it is not refused.
 
    A merged `settings.json` or `config.toml` keeps the mode it had (a
-   0600 file stays 0600 whatever your umask), and each `.bak` has the
-   same mode as the file it copies (b.ojn).
+   0600 file stays 0600 whatever your umask), and `config.toml`'s `.bak`
+   has the same mode as the file it copies (b.ojn).
 
    When either file is a symlink (into a dotfiles repo, say), the merge
    writes through it, following a chain of links too: the link is kept
-   and the file at its end gets the edit (b.nw5). The `.bak` is a regular
-   copy of that file, beside the link. A link to a file that does not
-   exist yet, in a directory that does, creates that file.
+   and the file at its end gets the edit (b.nw5). `config.toml`'s `.bak`
+   is a regular copy of that file, beside the link. A link to a file that
+   does not exist yet, in a directory that does, creates that file.
 
    With hooks on, pre-flight refuses a link the merge cannot write
    through, before anything is installed or changed: its links loop
@@ -1085,10 +1089,24 @@ This skill runs `install.sh` from the same directory. The script:
      already holds these entries.
 
    With `--no-hooks`, this step is skipped entirely: settings.json is
-   not read, not backed up, not written — left byte-identical to its
-   pre-install state — and config.toml is not touched; neither file's
-   symlink is checked in pre-flight. The post-install
+   not written — left byte-identical to its pre-install state — and
+   config.toml is not touched; neither file's symlink is checked in
+   pre-flight. The post-install
    summary reports `hooks   : skipped (--no-hooks)`.
+
+   After this step, with hooks on or off and with Claude Code absent too,
+   the install names every `settings.json.bak.<YYYYmmdd-HHMMSS>` file it
+   finds beside `settings.json` on one stdout line, each path
+   shell-quoted (`printf %q`), so the list can be pasted after a command
+   as it is:
+
+         settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted: <path> <path>...
+
+   Releases before 0.17.6 left one such copy on each install with hooks
+   on and each uninstall, and never removed them. With none, it prints
+   nothing. Only that timestamped name matches, and
+   it deletes none of them, as a file of that name may be the operator's
+   own.
 
 7. **Optional MCP registration.** With `--register-mcp`, runs
    `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`
@@ -1484,12 +1502,11 @@ destructive *additions*.
 ### What uninstall.sh does
 
 - Removes the two help hook entries (only the entries this skill
-  added; other user hooks are preserved), snapshotting
-  `settings.json` to a timestamped `.bak` first. A `settings.json`
-  that is empty or holds only whitespace has no entries to remove and
-  is left alone, with no `.bak` and no note. One the uninstall cannot
-  edit is left alone, with no `.bak` and a note on stderr, and the
-  uninstall goes on (the binaries are still removed; exit 0):
+  added; other user hooks are preserved), keeping no copy of
+  `settings.json`. A `settings.json` with none of them to remove (an
+  empty one, say) is left byte for byte, with no note. One the
+  uninstall cannot edit is left alone, with a note on stderr,
+  and the uninstall goes on (the binaries are still removed; exit 0):
   - not valid JSON (b.zbg):
     `uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`;
   - more than one JSON document (b.zbg):
@@ -1520,8 +1537,8 @@ destructive *additions*.
   letter case, as install finds them), and the `[defaults]` header too
   when only blank lines and comments are left under it. When that
   changes the file, it is snapshotted to a timestamped `.bak` first.
-- Both rewrites keep the file's mode, and each `.bak` has the same
-  mode as the file it copies (b.ojn). A symlinked file is written
+- Both rewrites keep the file's mode, and `config.toml`'s `.bak` has
+  the same mode as the file it copies (b.ojn). A symlinked file is written
   through: the link is kept and the file it points to gets the edit
   (b.nw5). A link that points nowhere, or whose links loop, is left
   alone.
@@ -1549,11 +1566,15 @@ destructive *additions*.
   `Nothing was removed or changed. Re-run this uninstall after the change.`
   Show it to the operator, and re-run the uninstall with the same flags
   after the change.
-- Such a `settings.json` that holds none of agent-director's hook
-  entries is left alone, and the uninstall goes on, printing
-  `uninstall.sh: left <path> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
-  Such a `config.toml` without `inject_help_hook` needs no edit and is
-  not checked.
+- A file that needs no edit (a `settings.json` holding none of
+  agent-director's hook entries, a `config.toml` without
+  `inject_help_hook`) gets no link check, so it never stops the
+  uninstall.
+- Names the `settings.json.bak.<YYYYmmdd-HHMMSS>` copies earlier
+  releases kept, as install does (step 6 of "What this skill does"),
+  on one stdout line starting
+  `uninstall.sh: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:`.
+  Tell the operator as for install.
 - Removes the binary at `~/.config/agent-director/bin/agent-director`
   and the `.prior` snapshot if one is present (the same files in the old
   directory on an old-only host).

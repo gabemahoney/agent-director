@@ -85,6 +85,11 @@ type Defaults struct {
 	// statically. See docs/settings.md and architecture.md "Spawn
 	// launch" for the merge implications.
 	InjectHelpHook bool `toml:"inject_help_hook,omitempty"`
+	// DisableContextFullness turns off the experimental context-fullness
+	// status-line wrapping on Claude launches, leaving Claude's own
+	// statusLine and subagentStatusLine untouched and context unknown.
+	// Codex and Cursor launches ignore it.
+	DisableContextFullness bool `toml:"disable_context_fullness"`
 }
 
 // DefaultExpireRetentionDays is the default of expire_retention_days, in
@@ -572,10 +577,11 @@ type Log struct {
 func Default() Config {
 	return Config{
 		Defaults: Defaults{
-			RelayMode:           "off",
-			ExpireRetentionDays: DefaultExpireRetentionDays,
-			DisableAskUser:      false,
-			InjectHelpHook:      false,
+			RelayMode:              "off",
+			ExpireRetentionDays:    DefaultExpireRetentionDays,
+			DisableAskUser:         false,
+			InjectHelpHook:         false,
+			DisableContextFullness: false,
 		},
 		Relay: Relay{
 			PollBaseMs:           100,

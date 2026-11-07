@@ -1,0 +1,38 @@
+# mac: stub for the Mac Runs that b.2pk (automated macOS tests) builds.
+#
+# GitHub dispatches a workflow only when a file of that name is on the
+# default branch, and a dispatch on a branch runs that branch's own copy.
+# This stub lands on main first so b.2pk's branch changes it instead of
+# adding the file, and so its Mac Runs can be dispatched during the build
+# (b.2pk SRD SR-2.5). b.2pk's real mac.yml replaces it when that Idea merges.
+#
+# It triggers only on workflow_dispatch, so a push to main starts no run,
+# and its one job runs nothing. Like every job b.2pk adds, the job runs only
+# while the repository is public, so a private repository bills nothing
+# (SR-3.2).
+#
+# Local actionlint
+# ----------------
+#   go install github.com/rhysd/actionlint/cmd/actionlint@v1.6.27
+#   actionlint .github/workflows/mac.yml
+
+name: mac
+
+on:
+  workflow_dispatch:
+
+# Least-privilege GITHUB_TOKEN: the stub reads nothing it doesn't need.
+permissions:
+  contents: read
+
+jobs:
+  stub:
+    name: Mac Run stub
+    if: ${{ !github.event.repository.private }}
+    # The stub runs only an echo, so a Linux runner does, pinned as
+    # lint.yml pins its own; b.2pk's real workflow pins its macOS runner.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Say this is a stub
+        run: echo "mac.yml is a stub; the real Mac Run workflow arrives with b.2pk."

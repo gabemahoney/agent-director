@@ -484,7 +484,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "no_pre_trust",
 				Type:          "bool",
-				Description:   "Skip the folder pre-trust. For a claude agent, pre-trust pre-writes projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra_env, otherwise ~/.claude.json). For a codex agent, it puts the cwd's trust and the hook-trust bypass on the launch's command line and writes no file, so Codex does not stop at its folder-trust prompt. Default off (best-effort pre-trust for Claude/Codex). Cursor grants no trust: failed by default (ACP pre-trust unsupported), skipped with no_pre_trust; permission policy is independent and readiness is not guaranteed. Pane-only agents always report skipped, with no trust grant or trust-file write, regardless of no_pre_trust. The choice is recorded on the row until the next spawn or reuse; agents that support resume follow it, so no pre-trust is attempted over an opt-out. Pane-only rows cannot resume. " + olderServeUndecoded + ".",
+				Description:   "Skip the folder pre-trust. For a claude agent, pre-trust pre-writes projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra_env, otherwise from agent-director's own environment; ~/.claude.json if neither sets it). For a codex agent, it puts the cwd's trust and the hook-trust bypass on the launch's command line and writes no file, so Codex does not stop at its folder-trust prompt. Default off (best-effort pre-trust for Claude/Codex). Cursor grants no trust: failed by default (ACP pre-trust unsupported), skipped with no_pre_trust; permission policy is independent and readiness is not guaranteed. Pane-only agents always report skipped, with no trust grant or trust-file write, regardless of no_pre_trust. The choice is recorded on the row until the next spawn or reuse; agents that support resume follow it, so no pre-trust is attempted over an opt-out. Pane-only rows cannot resume. " + olderServeUndecoded + ".",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -530,7 +530,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "pre_trust",
 				Type:          "string",
-				Description:   "What the launch's folder-trust pre-trust did. Pane-only agents: always skipped, regardless of no_pre_trust; no trust grant or trust-file write. Cursor: no trust grant, failed by default or skipped with no_pre_trust; never ok. For Claude/Codex: ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute; for a codex agent, extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
+				Description:   "What the launch's folder-trust pre-trust did. Pane-only agents: always skipped, regardless of no_pre_trust; no trust grant or trust-file write. Cursor: no trust grant, failed by default or skipped with no_pre_trust; never ok. For Claude/Codex: ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or CLAUDE_CONFIG_DIR is set but not an absolute path; the file is <CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra_env, otherwise from agent-director's own environment, and ~/.claude.json if neither sets it; for a codex agent, extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
@@ -797,7 +797,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "n_lines",
 				Type:          "int",
-				Description:   "Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
+				Description:   "Number of trailing pane lines to return, counted up from the last line with content: blank lines below it are left out, blank lines above it count. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -1044,7 +1044,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name: "resume",
-		Description: "Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: current cursor_path, latest conversation/protected transcript; native-history loss fails async, no fallback. Replay: saved initial prompt once/launch; no transient input/readiness/decisions/proof. " + missingNotProofShort + " Cwd best-effort pre-trust unless the row's latest spawn set no_pre_trust; pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Moves the row to pending, keeping its session id and history; parent_id=caller's AGENT_DIRECTOR_INSTANCE_ID; stays pending until the agent reports in, then waiting (Cursor: first verified prompt). Non-timeout failure restores the row's prior ended or missing state; restore failure reported. ErrTmuxNotAvailable ENVIRONMENT; ErrTmuxSessionCreate LAUNCH FAILURE. Create timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient); the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move: untouched/retryable. ErrTmuxSessionConflict (CONFLICT, human) or ErrTmuxUnresponsive (starting/stopping): untouched. Held create: restore/refuse. A pending row (a launch in progress): ErrSpawnNotResumable. Cursor: keep row/session/transcript/artifacts. " +
+		Description: "Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: current cursor_path, latest conversation/protected transcript; native-history loss fails async, no fallback. No replay: saved initial prompt, transient input/readiness/decisions/proof. " + missingNotProofShort + " Cwd best-effort pre-trust unless the row's latest spawn set no_pre_trust; pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Moves the row to pending, keeping its session id and history; parent_id=caller's AGENT_DIRECTOR_INSTANCE_ID; stays pending until the agent reports in, then waiting (Cursor: first verified prompt). Non-timeout failure restores the row's prior ended or missing state; restore failure reported. ErrTmuxNotAvailable ENVIRONMENT; ErrTmuxSessionCreate LAUNCH FAILURE. Create timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient); the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move: untouched/retryable. ErrTmuxSessionConflict (CONFLICT, human) or ErrTmuxUnresponsive (starting/stopping): untouched. Held create: restore/refuse. A pending row (a launch in progress): ErrSpawnNotResumable. Cursor: keep row/session/transcript/artifacts. " +
 			"Fresh: kill's live-row advice; unresolved survivors: STOP, human: docs/operator-actions.md#inspect-and-end-a-session-by-hand; spawn agent=cursor, project cwd, omit instance_id, same HOME, known supported extra_env/template intent. None: intended personal login/no custom dirs; dirs don't isolate accounts. Unavailable intent/needs protected data: STOP, human; no saved-env edit/drop credential intent. Saved credential/bad-dir: ErrReservedEnvKey pre-mutation. " +
 			"ErrInternal: control-character id/unusable recorded name (see kill); record failure, no tmux/launch.",
 		Callable:   true,
@@ -1053,7 +1053,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "instance_id",
 				Type:          "string",
-				Description:   "Id of the finished (ended or missing) row to resume. Replay removes parsed session selectors, Claude print mode and cloud controls orphaned by selector removal without changing stored agent_args. Claude inputs missing a recognized required value get literal filtering only; otherwise arguments and option-owned values retain parsed meaning. Claude prompts move behind surviving options and --, and altered short clusters are re-encoded, only when needed to preserve that meaning; otherwise order and spelling survive.",
+				Description:   "Id of the finished (ended or missing) row to resume. Replay removes parsed session selectors, Claude print mode, cloud controls orphaned by selector removal and the prompt (operands, an unowned -- and what follows; an unknown option's next word counts) without changing stored agent_args. Claude inputs missing a recognized required value get literal filtering only; otherwise options and owned values retain parsed meaning. Altered Claude short clusters are re-encoded only when needed to preserve that meaning; otherwise order and spelling survive.",
 				Required:      true,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -1065,7 +1065,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "pre_trust",
 				Type:          "string",
-				Description:   "What the launch's folder-trust pre-trust did. Cursor grants no trust: failed by default, skipped with no_pre_trust. ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the row's latest spawn turned it off with no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or the row's extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute; for a codex agent, the row's extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
+				Description:   "What the launch's folder-trust pre-trust did. Cursor grants no trust: failed by default, skipped with no_pre_trust. ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the row's latest spawn turned it off with no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or CLAUDE_CONFIG_DIR is set but not an absolute path; the file is <CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from the row's extra_env only (which holds the value the spawn inherited), and ~/.claude.json if it is not set there; for a codex agent, the row's extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
@@ -1077,6 +1077,8 @@ var Verbs = []VerbDef{
 			"ErrSpawnNotResumable",
 			"ErrNoSessionId",
 			"ErrReservedEnvKey",
+			"ErrCwdNotFound",
+			"ErrCwdNotADirectory",
 			"ErrJsonlMissing",
 			"ErrJsonlNeverWritten",
 			"ErrTmuxNotAvailable",

@@ -297,17 +297,21 @@ func TestRecorder_SendKeyPaneRepeat(t *testing.T) {
 	}
 }
 
-// TestRecorder_CapturePaneID: the pane's capture text whole (default empty),
-// with its arguments recorded; an unknown pane fails.
+// TestRecorder_CapturePaneID: the last nLines rows of the pane's capture text
+// (default empty) as the production client returns them (b.7y8), with its
+// arguments recorded; an unknown pane fails.
 func TestRecorder_CapturePaneID(t *testing.T) {
 	r := tmuxfix.NewRecorder().
 		SeedSessions(sockA, sess("$0", "a", tmux.Label{}, false, "%0", "%1")).
-		SetCapture(sockA, "%0", "line1\nline2\n")
-	for _, c := range []struct{ pane, want string }{{"%0", "line1\nline2\n"}, {"%1", ""}} {
+		SetCapture(sockA, "%0", "line1\nline2\n\n")
+	for _, c := range []struct{ pane, want string }{{"%0", "line2\n"}, {"%1", ""}} {
 		got, err := r.CapturePaneID(sockA, c.pane, 1, true)
 		if err != nil || got != c.want {
 			t.Errorf("CapturePaneID(%s) = %q, %v; want %q", c.pane, got, err, c.want)
 		}
+	}
+	if got, err := r.CapturePaneID(sockA, "%0", 5, false); err != nil || got != "line1\nline2\n" {
+		t.Errorf("CapturePaneID(%%0, 5 lines) = %q, %v; want both rows, no blank row", got, err)
 	}
 	if c := r.SocketCallsOf(tmux.CallCapture)[0]; c.NLines != 1 || !c.ANSI || c.Target != "%0" {
 		t.Errorf("recorded capture = %+v", c)

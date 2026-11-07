@@ -100,14 +100,14 @@ func composeCodexCommand(r Resolved, preTrust PreTrustOutcome, cfg config.Config
 // composeCodexResumeCommand composes the argv of a Codex resume (SR-7.4,
 // RN-20):
 //
-//	<codex> resume <session id> [replayed args before --] <settings block> [-- and what follows]
+//	<codex> resume <session id> [replayed options] <settings block>
 //
 // Nothing of agent-director's stands before `resume` (Codex ignores settings
 // there) and `-i` of the replayed arguments comes only after the id. The
 // block is last before any `--`, so agent-director's question-tool setting
 // wins over stored arguments that turn the tool on. ComposeRelaunch first
-// extracts parsed session selectors and their owned values while retaining
-// the original prompt token after --; this composer adds no spawn validation.
+// extracts parsed session selectors and their owned values and drops the
+// saved prompt; this composer adds no spawn validation.
 func composeCodexResumeCommand(sessionID string, args []string, cwd string, preTrust PreTrustOutcome, cfg config.Config) ([]string, error) {
 	block, err := codexSettingsBlock(args, cwd, preTrust, cfg)
 	if err != nil {

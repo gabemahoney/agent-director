@@ -73,9 +73,10 @@
 #                        ~/.claude/settings.json help hooks and the
 #                        inject_help_hook = true merge into config.toml.
 #                        settings.json and config.toml are left
-#                        byte-identical (no .bak backup, no edit). Default
-#                        OFF — defaulting to skip would defeat install.sh's
-#                        main value over a bare binary copy.
+#                        byte-identical (no edit, and no config.toml.bak
+#                        backup). Default OFF — defaulting to skip would
+#                        defeat install.sh's main value over a bare
+#                        binary copy.
 #   --keep-prior         Before overwriting an existing binary,
 #                        snapshot it to <target>.prior (overwriting
 #                        any previous .prior). Roll back with
@@ -322,6 +323,13 @@
 # server (`claude mcp get agent-director`, from the directory the install
 # runs in). Run the upgrade from a shell AD did not start.
 #
+# The hooks merge rewrites settings.json with no backup copy, as its env can
+# hold tokens (b.f3n). Each install that gets past the hooks step names, on
+# one line and each shell-quoted, the
+# ~/.claude/settings.json.bak.<YYYYmmdd-HHMMSS> copies earlier releases kept
+# (they may hold those tokens and can be deleted), and never deletes them
+# itself.
+#
 # Idempotent: re-running it after a clean install, with the same
 # binaries (a no-flag re-run outside a checkout picks the
 # agent-director on PATH and the installed agent-director-admin, as
@@ -334,7 +342,7 @@
 # and makes no new copy of it), the store is opened
 # (a state.db already at its target version is not migrated) and, with
 # hooks on, settings.json and config.toml are merged again (no hook is
-# added twice), each after a fresh timestamped .bak. With
+# added twice), config.toml after a fresh timestamped .bak. With
 # --register-mcp, `claude mcp add` refuses a name already registered in
 # its scope, so a re-run from a directory where `mcp get agent-director`
 # already shows this install's binary with `serve --stdio` adds nothing, says
@@ -3654,10 +3662,11 @@ ad_migrate_preflight_all
 # its chain of links resolves to, keeping the link
 # (ad_replace_keeping_mode). The write puts a .new beside that file and
 # moves it over the file, so it fails, late (after the binaries are
-# installed, the store migrated and a .bak written), when the links
-# loop, when the resolved file's directory is missing (a dotfiles
-# repository not cloned yet, say), or when that directory cannot be
-# written in (home-manager links into a read-only /nix/store, say). With
+# installed and the store migrated, and, for config.toml, after its .bak
+# is written), when the links loop, when the resolved file's directory is
+# missing (a dotfiles repository not cloned yet, say), or when that
+# directory cannot be written in (home-manager links into a read-only
+# /nix/store, say). With
 # hooks on, such a link is refused here instead, before anything on disk
 # changes: settings.json with exit 4 and config.toml with exit 5
 # (ErrConfigMalformed), as each file's other refusals. A plain file, and
@@ -6685,9 +6694,9 @@ fi
 # --------------------------------------------------------------------
 # Hook injection — additive merge into ~/.claude/settings.json
 #
-# Skipped entirely under --no-hooks: settings.json is not read, not
-# backed up, not written. There's no edit, so there's nothing to back
-# up — leaving settings.json byte-identical to its pre-install state.
+# Skipped entirely under --no-hooks: settings.json is not written,
+# leaving it byte-identical to its pre-install state. With hooks on it is
+# rewritten with no backup copy (b.f3n; see the write below).
 # --------------------------------------------------------------------
 
 # (ad_mode_of is defined above, in the section on AD's directory move, which
@@ -6720,9 +6729,6 @@ ad_replace_keeping_mode() {
     fi
     mv -f "$tmp" "$target"
 }
-
-# (ad_backup_keeping_mode is defined above, with the agent-rename migration's
-# apply step, which copies files first too.)
 
 # The help hooks an earlier release's install.sh wrote name the old
 # directory's binary (SR-11.7). An entry is "ours" the way uninstall.sh tests
@@ -6769,7 +6775,7 @@ else
     # counted first (b.zbg): with none it would write no hooks, and with
     # several it would write several merged documents back. A file holding
     # none (empty, or only whitespace: a touched file, say), which Claude
-    # Code reads as no settings, is merged as {}, after the usual backup. A
+    # Code reads as no settings, is merged as {}. A
     # file holding several is refused here, exit 4, and left as it was,
     # as one that is not valid JSON is.
     if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
@@ -6875,24 +6881,37 @@ else
         [(.hooks | objects) as $h | ("SessionStart", "SessionEnd") as $e | $h[$e] | arrays | .[] | select(ours)] | length
     ' 2>/dev/null || echo 0)
 
-    # Backup-before-edit: snapshot the prior settings.json (if any) into a
-    # timestamped .bak alongside the original so a regressed jq filter is
-    # recoverable. Only the *prior* contents are backed up; in-place
-    # re-runs of the install will keep the most recent pre-edit copy.
-    if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
-        backup_settings="${DEFAULT_SETTINGS_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
-        ad_backup_keeping_mode "$DEFAULT_SETTINGS_PATH" "$backup_settings"
-        echo "  backup  : $backup_settings"
-    fi
-
     # Atomic write: tempfile + mv, keeping an existing file's mode, and
-    # writing through a symlinked settings.json to its target.
+    # writing through a symlinked settings.json to its target. No backup
+    # copy is taken (b.f3n): settings.json's env can hold tokens, and each
+    # run's timestamped copy of them was kept for good. A file the merge
+    # cannot take was refused above, before any write, and a failed write
+    # leaves the file as it was.
     ad_replace_keeping_mode "$DEFAULT_SETTINGS_PATH" "$new_settings"
 
     echo "  hooks   : injected into $DEFAULT_SETTINGS_PATH"
     if [[ "$old_hook_count" =~ ^[0-9]+$ && "$old_hook_count" -gt 0 ]]; then
         echo "  hooks   : removed $old_hook_count hook entries that named the old directory's binary (${OLD_HOOK_PREFIX})"
     fi
+fi
+
+# Copies of settings.json earlier releases kept (b.f3n): their install.sh
+# with hooks on, and their uninstall.sh, copied it to
+# settings.json.bak.<YYYYmmdd-HHMMSS> beside it before each edit, and nothing
+# removed them. settings.json's env can hold tokens, so each run that gets
+# here names every file of that name, all on one line, each path quoted with
+# %q, as the other advice here quotes paths: a plain path prints unchanged,
+# and the list splits into its paths as the shell reads it under any HOME (one
+# holding a space, say). Only that name matches, so a settings.json.bak.<other>
+# the user keeps is not named. None is deleted: even a file of that name may
+# be the user's own. uninstall.sh does the same.
+old_settings_baks=""
+for old_settings_bak in "${DEFAULT_SETTINGS_PATH}".bak.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+    [[ -e "$old_settings_bak" || -L "$old_settings_bak" ]] || continue
+    printf -v old_settings_baks '%s %q' "$old_settings_baks" "$old_settings_bak"
+done
+if [[ -n "$old_settings_baks" ]]; then
+    echo "  settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:${old_settings_baks}"
 fi
 
 # --------------------------------------------------------------------
@@ -6907,6 +6926,9 @@ fi
 # Q4=no (--no-hooks) leaves config.toml untouched — the flag stays at
 # its zero-value default of false.
 # --------------------------------------------------------------------
+
+# (ad_backup_keeping_mode is defined above, with the agent-rename migration's
+# apply step, which copies files first too.)
 
 if [[ "$NO_HOOKS" -eq 0 ]]; then
     CONFIG_TOML="${DEFAULT_INSTALL_ROOT}/config.toml"
