@@ -21,6 +21,8 @@ import (
 //     key normalized to env-var form (uppercase, non-alphanumeric → '_').
 //   - AGENT_DIRECTOR_AGENT=codex and BASH_ENV= (empty) — a codex agent only
 //     (SR-10.1, Q5(c)); a BASH_ENV in ExtraEnv wins.
+//   - AGENT_DIRECTOR_AGENT — also set for Cursor and pane-only agents, so
+//     the session overrides any agent identity held by an existing server.
 //   - everything in ExtraEnv — including auth env vars (ANTHROPIC_API_KEY,
 //     CLAUDE_CODE_OAUTH_TOKEN). The validation step has already rejected
 //     every key whose env-var name (the part before the first '=', the name
@@ -40,6 +42,9 @@ func composeEnv(r Resolved) map[string]string {
 	}
 	if r.Agent == config.AgentCursor {
 		out[EnvAgent] = config.AgentCursor
+	}
+	if IsPaneOnly(r.Agent) {
+		out[EnvAgent] = r.Agent
 	}
 	if r.Agent == config.AgentCodex {
 		// A Codex launch only (a Claude launch's environment is unchanged).

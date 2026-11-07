@@ -5,6 +5,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/contextsource"
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -29,6 +30,9 @@ func contextOf(e store.SpawnContext) ContextReading {
 }
 
 func contextForSubject(e store.SpawnContext, child string) ContextReading {
+	if spawn.IsPaneOnly(e.Agent) {
+		return ContextReading{}
+	}
 	if !e.FreshCodexWriter() && e.CurrentClaudeCapacity() == nil {
 		return ContextReading{}
 	}

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
@@ -257,6 +258,9 @@ func decideWithin(ctx context.Context, s DecideStore, v RelayView, sleep func(ti
 	row, err := c.getSpawn()
 	if err != nil {
 		return DecideResult{}, err
+	}
+	if spawn.IsPaneOnly(row.Agent) {
+		return DecideResult{}, spawn.PaneOnlyCapabilityError(row.Agent, "decide")
 	}
 	if row.RelayMode != "on" {
 		return DecideResult{}, fmt.Errorf("%w: spawn %s relay_mode=%q",
@@ -847,6 +851,8 @@ func decideOutcome(err error) string {
 // CLI: agent-director decide
 //
 // Errors:
+//   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
+//     does not support relayed decisions; nothing is recorded.
 //   - [ErrMissingRequestToken]: RequestToken is empty.
 //   - [ErrInvalidFlags]: MaxWaitMs is negative.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
@@ -895,8 +901,12 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 
 	var callErr error
 	defer func() {
+		if errors.Is(callErr, ErrAgentCapabilityUnsupported) {
+			return
+		}
 		// Emit exactly one ad.decide.called per invocation, on every return
-		// path including ErrAlreadyDecided no-ops (SR-A-2.4). Fail-open per
+		// path admitted by the capability gate, including ErrAlreadyDecided
+		// no-ops (SR-A-2.4). Fail-open per
 		// SR-A-3.2: a trail-emit failure is silently discarded.
 		_ = trail.Emit(ctx, "ad.decide.called", map[string]any{
 			"instance_id":               params.InstanceID,
