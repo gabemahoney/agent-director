@@ -241,13 +241,15 @@ func assertDarwinRefusal(t *testing.T, err error, reason string, processes ...Jo
 }
 
 // darwinTestFS wraps real temporary files. fold simulates APFS case folding;
-// aliases/kernel simulate kernel path forms; before injects refusal/blocking.
+// aliases/kernel simulate kernel path forms; before injects refusal/blocking
+// or a file change; afterStat injects metadata timing without a clock wait.
 // Every call is recorded, including calls abandoned at the attempt deadline.
 type darwinTestFS struct {
 	journalFS
 	fold            bool
 	aliases, kernel map[string]string
 	before          func(op, path string) error
+	afterStat       func(op, path string, st journalStat) journalStat
 	mu              sync.Mutex
 	calls           []string
 }
@@ -300,7 +302,11 @@ func (f *darwinTestFS) Lstat(path string) (journalStat, error) {
 	if err != nil {
 		return journalStat{}, err
 	}
-	return f.journalFS.Lstat(p)
+	st, err := f.journalFS.Lstat(p)
+	if err == nil && f.afterStat != nil {
+		st = f.afterStat("lstat", path, st)
+	}
+	return st, err
 }
 func (f *darwinTestFS) ReadDir(path string) ([]string, error) {
 	p, err := f.lookup("readdir", path)
@@ -314,7 +320,11 @@ func (f *darwinTestFS) Open(path string) (journalImageFile, journalStat, error) 
 	if err != nil {
 		return nil, journalStat{}, err
 	}
-	return f.journalFS.Open(p)
+	file, st, err := f.journalFS.Open(p)
+	if err == nil && f.afterStat != nil {
+		st = f.afterStat("open", path, st)
+	}
+	return file, st, err
 }
 func (f *darwinTestFS) EvalSymlinks(path string) (string, error) {
 	p, err := f.lookup("eval", path)

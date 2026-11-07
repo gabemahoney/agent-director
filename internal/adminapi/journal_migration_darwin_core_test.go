@@ -141,7 +141,14 @@ func TestDarwinJournalRootFormsAndLookupGate(t *testing.T) {
 
 func TestDarwinJournalImages(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{"name", "thin-main", "thin-dependency", "thin-test-binary", "test-binary-name", "universal-later", "universal-other", "universal-no-metadata", "universal-not-executable", "replaced", "removed", "changed", "plain", "not-executable", "open-refused", "lookup-refused", "no-txt", "first-txt"} {
+	for _, kind := range []string{
+		"name", "thin-main", "thin-dependency", "thin-test-binary", "test-binary-name",
+		"universal-later", "universal-other", "universal-no-metadata", "universal-not-executable",
+		// SR-2.15 Exemption: only the image finding disappears; other blockers remain.
+		"replaced", "removed", "changed", "changed-main", "replaced-at-open", "removed-at-open", "changed-at-open",
+		"lookup-not-directory", "open-not-directory", "removed-name", "removed-store-holder", "removed-root-holder", "removed-incomplete",
+		"plain", "not-executable", "open-refused", "lookup-refused", "open-eperm", "lookup-eperm", "no-txt", "first-txt",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			h := newDarwinTestHost(t)
 			fsys := &darwinTestFS{journalFS: osJournalFS{}}
@@ -149,7 +156,7 @@ func TestDarwinJournalImages(t *testing.T) {
 			role := "unverified_process"
 			image := h.image
 			switch kind {
-			case "name":
+			case "name", "removed-name":
 				image = filepath.Join(filepath.Dir(image), "renamed-agent-director-helper")
 				h.write(image, []byte("unreadable-image-content"))
 				role = "agent_director_mutator"
@@ -183,27 +190,88 @@ func TestDarwinJournalImages(t *testing.T) {
 			}
 			h.processes[200].files = []lsofFile{h.file("txt", image)}
 			switch kind {
-			case "replaced":
+			case "replaced", "replaced-at-open":
 				replacement := image + ".new"
 				h.write(replacement, darwinThinImage(t, "main", macho.TypeExec))
-				if err := os.Rename(replacement, image); err != nil {
+				if kind == "replaced-at-open" {
+					fsys.before = func(op, p string) error {
+						if op == "open" && p == image {
+							return os.Rename(replacement, image)
+						}
+						return nil
+					}
+				} else if err := os.Rename(replacement, image); err != nil {
 					t.Fatal(err)
 				}
-			case "removed":
+				role = ""
+			case "removed", "removed-name", "removed-store-holder", "removed-root-holder", "removed-incomplete":
+				role = ""
+				switch kind {
+				case "removed-name":
+					// The name wins even with incomplete evidence and an absent image.
+					h.processes[200].files = append(h.processes[200].files, lsofFile{fd: "err"})
+					role = "agent_director_mutator"
+				case "removed-store-holder", "removed-root-holder":
+					path := h.db
+					if kind == "removed-root-holder" {
+						path = filepath.Join(h.root, "held-file")
+						h.write(path, []byte("private-content"))
+					}
+					h.processes[200].files = append(h.processes[200].files, h.file("4", path))
+					role = "agent_director_mutator"
+				case "removed-incomplete":
+					entry := h.file("4", image)
+					entry.hasIno = false
+					h.processes[200].files = append(h.processes[200].files, entry)
+					role = "unverified_process"
+				}
 				if err := os.Remove(image); err != nil {
 					t.Fatal(err)
 				}
-			case "changed":
+			case "removed-at-open":
+				fsys.before = func(op, p string) error {
+					if op == "open" && p == image {
+						return os.Remove(image)
+					}
+					return nil
+				}
+				role = ""
+			case "changed", "changed-main":
+				if kind == "changed-main" {
+					h.write(image, darwinThinImage(t, "main", macho.TypeExec))
+				}
 				h.start = procstarttimefix.DarwinProcStarttime
 				h.procs.Set(200, procfix.Alive(h.start))
-			case "open-refused", "lookup-refused":
+				role = ""
+			case "changed-at-open":
+				data := darwinThinImage(t, "main", macho.TypeExec)
+				fsys.before = func(op, p string) error {
+					if op == "open" && p == image {
+						return os.WriteFile(image, data, 0600)
+					}
+					return nil
+				}
+				fsys.afterStat = func(op, p string, st journalStat) journalStat {
+					if op == "open" && p == image {
+						st.ctime = h.listedAt // post-start change, without a clock wait
+					}
+					return st
+				}
+				role = ""
+			case "open-refused", "lookup-refused", "open-eperm", "lookup-eperm", "lookup-not-directory", "open-not-directory":
 				op := "open"
-				if kind == "lookup-refused" {
+				if strings.HasPrefix(kind, "lookup-") {
 					op = "lstat"
+				}
+				err := syscall.EACCES
+				if strings.HasSuffix(kind, "eperm") {
+					err = syscall.EPERM
+				} else if strings.HasSuffix(kind, "not-directory") {
+					err, role = syscall.ENOTDIR, ""
 				}
 				fsys.before = func(gotOp, p string) error {
 					if gotOp == op && p == image {
-						return syscall.EACCES
+						return err
 					}
 					return nil
 				}
@@ -222,8 +290,11 @@ func TestDarwinJournalImages(t *testing.T) {
 			} else {
 				h.check(context.Background(), "old_or_unverified_mutators", h.blocker(200, role))
 			}
-			if (kind == "replaced" || kind == "removed" || kind == "lookup-refused" || kind == "changed") && fsys.saw("open", image) {
+			if (kind == "replaced" || kind == "removed" || strings.HasPrefix(kind, "lookup-") || kind == "changed" || kind == "changed-main") && fsys.saw("open", image) {
 				t.Fatal("opened an image without established identity and ctime")
+			}
+			if (strings.HasSuffix(kind, "-at-open") || strings.HasPrefix(kind, "open-")) && !fsys.saw("open", image) {
+				t.Fatal("did not reach the image open")
 			}
 		})
 	}
@@ -231,7 +302,7 @@ func TestDarwinJournalImages(t *testing.T) {
 
 func TestDarwinJournalSelectionAndReconciliation(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{"other-uid", "zombie", "selection-error", "missing-self", "pid-zero", "missing-listed", "exits", "new-before", "new-between", "new-at-listing", "new-after", "bad-start", "changed-start", "unreadable-first", "unreadable-second", "mutator-precedence", "sorted"} {
+	for _, kind := range []string{"other-uid", "zombie", "selection-error", "missing-self", "pid-zero", "missing-listed", "exits", "new-before", "new-between", "new-at-listing", "new-after", "bad-start", "changed-start", "unreadable-first", "unreadable-second", "mutator-precedence", "sorted", "exempt-beside-blocker"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newDarwinTestHost(t)
 			reason := "old_or_unverified_mutators"
@@ -294,12 +365,23 @@ func TestDarwinJournalSelectionAndReconciliation(t *testing.T) {
 				h.processes[200].files = append(h.processes[200].files, h.file("4", h.db))
 				h.afterListing = func() { h.procs.Set(200, procfix.Unreadable()) }
 			case "mutator-precedence":
-				h.processes[200].files = []lsofFile{{fd: "err"}, h.file("4", h.db)}
+				h.processes[200].files = append(h.processes[200].files, lsofFile{fd: "err"}, h.file("4", h.db))
 				want[0] = h.blocker(200, "agent_director_mutator")
 			case "sorted":
 				h.add(300, h.v.euid, 1, h.file("4", h.db))
 				h.processes[200].files = nil
 				want = append(want, h.blocker(300, "agent_director_mutator"))
+			case "exempt-beside-blocker":
+				h.add(300, h.v.euid, 1, h.file("4", h.db))
+				want = []JournalProcess{h.blocker(300, "agent_director_mutator")}
+			}
+			switch kind {
+			case "changed-start", "unreadable-first", "unreadable-second", "mutator-precedence", "exempt-beside-blocker":
+				// SR-2.15 Exemption preserves start/mutator precedence and omits
+				// only the process whose removed image is its sole concern.
+				if err := os.Remove(h.image); err != nil {
+					t.Fatal(err)
+				}
 			}
 			h.check(context.Background(), reason, want...)
 			if h.procs.EnvReads() != 0 {

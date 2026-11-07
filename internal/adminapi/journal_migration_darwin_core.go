@@ -75,9 +75,10 @@ func (p *darwinProcess) setStart(start string) {
 // entries; the selection, with each process's first start identity; one
 // listing; the exclusions; the selection and the listing reconciled; the
 // store's and roots' identities; each process's files and image; the second
-// start identities. Unknown or unreadable evidence refuses. Every file-system
-// lookup runs under bounded, so a blocked one refuses inventory_deadline
-// rather than hold the attempt.
+// start identities. Unknown or unreadable evidence refuses, except for a
+// replaced, removed or changed image that meets SR-2.15's exemption. Every
+// file-system lookup runs under bounded, so a blocked one refuses
+// inventory_deadline rather than hold the attempt.
 func (v darwinVerifier) verify(ctx context.Context, dbPath string, roots []string) error {
 	helpers := &darwinHelpers{}
 	for _, path := range append([]string{dbPath}, roots...) {
@@ -171,8 +172,9 @@ func (v darwinVerifier) selection() (map[int]*darwinProcess, error) {
 // refuses with every process still blocking, sorted by pid. A process gone
 // since is skipped. A changed or unreadable start identity is unverified
 // whatever else was found; otherwise a mutator finding wins over an
-// unverified one. Only pid, first start identity, role and action are
-// reported (SR-2.11).
+// unverified one. Image replacement, removal or change alone adds no finding,
+// so it is exempt only when no other finding blocks the process.
+// Only pid, first start identity, role and action are reported (SR-2.11).
 func (v darwinVerifier) report(procs map[int]*darwinProcess, ordered []int) error {
 	var blockers []JournalProcess
 	for _, pid := range ordered {
@@ -436,7 +438,7 @@ func journalStoreIDs(fsys journalFS, dbPath string, ids map[journalFileID]bool) 
 
 // judge classifies one process's listed files by descriptor kind (SR-2.15
 // "Store and roots"), then tests its image ("Image") unless a file already
-// showed it a mutator.
+// showed it a mutator. Other unverified evidence survives an image exemption.
 func (v darwinVerifier) judge(ctx context.Context, p *darwinProcess, evidence *darwinEvidence) error {
 	var image *lsofFile
 	text := map[journalFileID]bool{}
@@ -511,9 +513,10 @@ func (v darwinVerifier) underRoot(ctx context.Context, name string, evidence *da
 }
 
 // judgeImage tests the process's image, its first program-text entry: a
-// mutator by its file name or by its build metadata; unverified when it was
-// replaced, removed or changed since the process started, or cannot be
-// opened as Mach-O. A live process with no image is unverified.
+// mutator by its file name or by its unchanged build metadata. A replaced,
+// removed or changed image adds no finding under SR-2.15's exemption; other
+// evidence remains. A live process with no image, or one that cannot be
+// opened as Mach-O for another reason, is unverified.
 func (v darwinVerifier) judgeImage(ctx context.Context, p *darwinProcess, image *lsofFile) error {
 	switch {
 	case image == nil:
@@ -538,24 +541,29 @@ func (v darwinVerifier) judgeImage(ctx context.Context, p *darwinProcess, image 
 	return nil
 }
 
-// journalImageFindings opens the image only while the file at its path is
-// still the entry's (same device and inode), so nothing unrelated, such as a
-// FIFO, is ever opened.
+// journalImageFindings adds no finding for a removed, replaced or post-start
+// changed image (SR-2.15's exemption). It opens only after observing the same
+// identity and a status-change time no later than the start, then checks both
+// again before reading metadata. Other lookup, open and Mach-O failures are
+// unverified.
 func journalImageFindings(fsys journalFS, image *lsofFile, started time.Time) (mutator, unverified bool) {
 	st, err := fsys.Lstat(image.name)
-	if err != nil || st.id != image.id {
-		return false, true // removed, replaced, or the lookup was refused
+	if err != nil {
+		return false, !journalLookupAbsent(err)
+	}
+	if st.id != image.id {
+		return false, false // replaced
 	}
 	if st.ctime.Truncate(time.Microsecond).After(started) {
-		return false, true // changed after the process started
+		return false, false // changed after the process started
 	}
 	f, opened, err := fsys.Open(image.name)
 	if err != nil {
-		return false, true
+		return false, !journalLookupAbsent(err)
 	}
 	defer f.Close()
-	if opened.id != image.id {
-		return false, true
+	if opened.id != image.id || opened.ctime.Truncate(time.Microsecond).After(started) {
+		return false, false // replaced or changed between lookup and open
 	}
 	return journalMachOFindings(f)
 }

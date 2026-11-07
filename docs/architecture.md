@@ -4199,13 +4199,20 @@ give no store/root evidence. The first `txt` entry is the image: a basename
 containing `agent-director`, or this module's build metadata in any thin or
 universal Mach-O slice, marks a mutator; build metadata whose path ends in
 `.test` (a Go test binary, which never touches real stores) names no module,
-so only the basename can mark one. An otherwise unidentified image is
-unverified if missing, replaced, changed since start, unopenable or not
-executable Mach-O.
+so only the basename can mark one. Before opening for build metadata, the
+device/inode must match the `txt` entry and the status-change time must be no
+later than process start. The opened file's identity and status-change time
+are rechecked before metadata is read. Replacement or removal found at lookup
+or the following open, and post-start change,
+alone add no finding. No `txt`, other lookup/open failures, failed reads or
+anything other than executable Mach-O add an unverified finding.
 
 After all evidence, start identities are read again. A changed or unreadable
-identity always reports `unverified_process`; otherwise a mutator finding
-wins over an unverified image or entry. Both are reported under
+identity always reports `unverified_process`; otherwise a store/root holder
+or an `agent-director` image name remains a mutator even with a changed image
+or incomplete listing. Any mutator finding wins; otherwise remaining
+unverified findings report `unverified_process`. With neither, the process
+is not reported. Blockers appear under
 `old_or_unverified_mutators`, with the Linux roles/actions
 `agent_director_mutator` / `stop_and_restart_after_cutover` and
 `unverified_process` / `stop_or_make_inventory_readable`. Only pid, first
@@ -4219,8 +4226,10 @@ access-control entries or an allowance for another principal refuse
 the attempt's context ends. Every verifier filesystem lookup runs under
 `bounded`, including initial path validation and ACL existence checks, so
 blocked privacy prompts or mounts refuse `inventory_deadline`.
-Unknown evidence refuses; no process arguments or
-environment are read, and release builds stay `CGO_ENABLED=0`.
+Unknown evidence refuses except for the image exemption above, whose
+[residual and maintenance-window guard](operator-actions.md#upgrade-refusal-reasons)
+are documented for operators. No process arguments or environment are read;
+release builds stay `CGO_ENABLED=0`.
 **Must use:** add Darwin evidence through this core's seams (`journalFS`,
 implemented by `osJournalFS`, for filesystem evidence); bind it only in the
 tagged file. Run fixed-path tools through `runFixedHelper`; share
@@ -22118,7 +22127,8 @@ The Darwin verifier has three further must-use test components:
 - `journal_migration_darwin_fixture_test.go` is the one seam fixture:
   `darwinTestHost` supplies the process table through `procfix.Checker` and
   renders listings; `darwinTestFS` wraps real files with case folding,
-  kernel aliases and recorded/refused lookups; `blockDarwinLookup` blocks
+  kernel aliases and recorded/refused lookups; its `afterStat` hook injects
+  metadata timing without waiting. `blockDarwinLookup` blocks
   and joins a lookup, optionally skipping earlier matching calls;
   `darwinThinImage` / `darwinUniversalImage` build images.
   Extend it for core, containment and advice tests; never add a second fake

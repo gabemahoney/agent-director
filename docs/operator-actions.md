@@ -627,6 +627,24 @@ details readable to the user running the upgrade.
 
 **On macOS:**
 
+- A process whose program file was replaced, removed or changed after it
+  started (for example, an app that updated itself) is not listed and needs
+  no action only if that file is its sole unverified evidence, its open-file
+  listing is complete, its start time reads the same both times, it holds no
+  store or legacy-root file, and its program's file name does not contain
+  `agent-director`.
+  A changed or unreadable start time still means `unverified_process`;
+  otherwise a store/root holder or an `agent-director` file name means
+  `agent_director_mutator`, even with an incomplete listing; otherwise an
+  incomplete listing means `unverified_process`.
+
+  A process running agent-director's code under a name without `agent-director`,
+  with its program file changed this way and no store/root file open when
+  listed, could still open the store during cutover. The guard is the maintenance
+  window: stop every caller and every `serve` before upgrading, as step 1 of
+  [Upgrading the native-input journal](#upgrading-the-native-input-journal)
+  and [the upgrade skill](../skills/upgrade-agent-director/SKILL.md#1-stop-the-agents)
+  require.
 - An unverified process whose image is in a privacy-protected folder: stop it,
   or grant the terminal app access to that folder (System Settings, Privacy &
   Security), then Retry. Any other unverified process: stop it, then Retry.
