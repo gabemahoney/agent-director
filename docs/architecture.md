@@ -11191,13 +11191,13 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `ErrMoveConflict` | `ad_move_conflict`, before every other pre-flight reader (and, for a store that is a link and a path key that cannot be placed, right after the reader) | the layout cannot be moved as it is: apply the remedy in operator-actions.md, re-run |
 | `ErrAgentsLive` | `ad_agents_live_check`, in pre-flight and again as the move's first step | stop every agent, `serve` and caller, then re-run from a shell agent-director did not start; a re-run reads unreadable rows again |
 | `ErrMoveFailed` | `ad_move_fail`, any failure or interrupt before the rename | free space or fix the cause named, re-run; the old directory was not changed |
-| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target; a restore that could not finish (an occupied pre-move path or I/O failure), with remaining copies kept and listed | a human, following the advice; an unfinished restore needs the kept-install procedure in [operator-actions.md](operator-actions.md) |
-| `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`): `legacy_root_symlink` for a linked `~/.config/agent-director` on a crossing run before `--check-only`; `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover; or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`; on a crossing upgrade, the restore preconditions' `backup_inside_install_directory`, `previous_release_unknown` or `restore_copies_unavailable` (see "The restore preconditions" under [Schema migration at install-time](#schema-migration-at-install-time)). Step 4: a failed crossing attempt whose restore put the previous install back; also a restored interrupt before the attempt started (own envelope, reason `interrupted`, `details.cutover: "not_committed"`) | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory (`previous_release_unknown` and `restore_copies_unavailable` re-run with the same flags); the two store-state reasons need a human. A restored run: fix the reported cause, then re-run this release's installer with a new `--journal-backup`. See [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal) |
-| `ErrJournalMigrationIncomplete` | step 4's failed crossing attempt kept forward: `not_committed` without meeting the restore conditions, `committed`, `unknown`, unreadable commit state, or no error envelope (`outcome_unestablished`); also reason `interrupted` before the attempt started without restoration (`details.cutover: "not_committed"`), or after an interrupted attempt exited 0 and step 5 passed (`details.cutover: "committed"`) | fix the reported cause, then re-run this release's installer with a new `--journal-backup`; except for `not_committed`, keep the maintenance boundary and then retry direct administrator verification with a new `--backup-dir` until it exits 0 with `authority: "sqlite"`. See [operator-actions.md](operator-actions.md) |
+| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target; a restore that could not finish (an occupied pre-move path or I/O failure), with remaining copies kept and listed | a human, following the advice; an unfinished restore needs [Putting back a kept install](operator-actions.md#putting-back-a-kept-install) |
+| `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`): `legacy_root_symlink` for a linked `~/.config/agent-director` on a crossing run before `--check-only`; `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover; or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`; on a crossing upgrade, the restore preconditions' `backup_inside_install_directory`, `previous_release_unknown` or `restore_copies_unavailable` (see "The restore preconditions" under [Schema migration at install-time](#schema-migration-at-install-time)). Step 4: a failed crossing attempt whose restore put the previous install back; also a restored interrupt before the attempt started (own envelope, reason `interrupted`, `details.cutover: "not_committed"`) | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory (`previous_release_unknown` and `restore_copies_unavailable` re-run with the same flags); the two store-state reasons need a human. A restored run: fix the reported cause, then re-run this release's installer with a new `--journal-backup`. See [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons) and [`install.sh` refuses with `ErrJournalMigrationRefused`](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused) |
+| `ErrJournalMigrationIncomplete` | step 4's failed crossing attempt kept forward: `not_committed` without meeting the restore conditions, `committed`, `unknown`, unreadable commit state, or no error envelope (`outcome_unestablished`); also reason `interrupted` before the attempt started without restoration (`details.cutover: "not_committed"`), or after an interrupted attempt exited 0 and step 5 passed (`details.cutover: "committed"`) | fix the reported cause, then re-run this release's installer with a new `--journal-backup`; except for `not_committed`, keep the maintenance boundary and then retry direct administrator verification with a new `--backup-dir` until it exits 0 with `authority: "sqlite"`. See [`install.sh` stops with `ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete) |
 | any other name | step 4's non-crossing `list` open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
 
 `ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
-`ErrAgentsLive` and `ErrMoveFailed` are install.sh's own signals, not
+`ErrAgentsLive`, `ErrMoveFailed` and `ErrJournalMigrationIncomplete` are install.sh's own signals, not
 agent-director error names: they are not in `errnames.Catalog` and no verb
 returns them (b.cfq's decision, overriding b.7b4's "no new error name" for
 the first two). `ErrTemplateMalformed` is the other kind: it is agent-director's
@@ -11891,9 +11891,9 @@ copy this install made is kept, and the new binaries are already installed
 while the store is not opened. `ad_migrate_ways_on` gives the two ways on:
 fix the cause and re-run this release's `install.sh`, which changes nothing
 in a file already migrated and so completes the rest and then migrates the
-store; or take the way back (see [operator-actions.md](operator-actions.md),
-"A migration write failed after the binary swap" and "Going back to the
-previous release"). A file that pre-flight accepted and the apply refuses
+store; or take the way back (see
+[A migration write failed after the binary swap](operator-actions.md#a-migration-write-failed-after-the-binary-swap)
+and [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release)). A file that pre-flight accepted and the apply refuses
 (it changed in between) stops the same way, with exit 5 and the file's
 name and the same two ways on. Both are safe to re-run: a migrated file
 needs no change, and the gate stays open until the store is migrated.
@@ -12067,7 +12067,7 @@ run made. Each refuses through `ad_outcome_exit` as above, its action in
   inner link only while it is a link (never its target), then the directory
   only while it is empty; anything else is left and listed as not removed. A
   SIGKILL leaves the copies under the pattern (see
-  [operator-actions.md](operator-actions.md)). **Must use:**
+  [Putting back a kept install](operator-actions.md#putting-back-a-kept-install)). **Must use:**
   - `ad_restore_copy` is the one way to make a restore copy
     (`ad_restore_item` wraps it with the stdout line or the refusal);
   - `RESTORE_BELONGS`/`RESTORE_COPY` are the one record of the items, one
@@ -12109,10 +12109,12 @@ schema steps, a previous release that already supports the cutover, or a
 changed version. The supplementary message names what remains installed,
 the reason and action, and the next step; `not_committed` never claims a
 possible cutover commit. The accepted residual, where earlier schema steps
-advanced the previous install's store, needs forward completion or the
-operator's [previous-release recovery](operator-actions.md#going-back-to-the-previous-release).
+advanced the previous install's store, needs forward completion or a
+restore from the journal backup and then the
+[previous-release recovery](operator-actions.md#going-back-to-the-previous-release)
+(see [`install.sh` stops with `ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete)).
 The [exit-5 table](#pattern-b--installsh-the-install-skill) gives the causes
-and retry sequence; [operator-actions.md](operator-actions.md) owns recovery.
+and retry sequence; operator-actions.md owns recovery.
 
 `ad_restore_run` processes the records in reverse order, renaming each
 copy into place and removing entries absent before the run, with the CLI
@@ -12501,9 +12503,11 @@ those in `templates/`.
 
 The restore's copies (`<name>.restore-<YYYYmmdd-HHMMSS>.<suffix>`) exist
 beside the binaries, the sentinel and the managed PATH link during a
-crossing upgrade; an unfinished restore or unestablished outcome retains
-them (see **Restore or complete forward** under [Schema migration at
-install-time](#schema-migration-at-install-time)). A restored move leaves
+crossing upgrade, none inside either install directory while a move is due;
+an unfinished restore or unestablished outcome retains them (see **Restore
+or complete forward** under [Schema migration at
+install-time](#schema-migration-at-install-time), and
+[Putting back a kept install](operator-actions.md#putting-back-a-kept-install)). A restored move leaves
 the new directory beside the install root as
 `~/.config/agent-director.after-upgrade-<YYYYmmdd-HHMMSS>` with a suffix on
 a clash; the retained linked-directory restore branch is described there.
@@ -12565,8 +12569,10 @@ way back there is the kept directory.
 
 On a crossing upgrade the installer puts the previous install back itself
 when the [restore conditions](#schema-migration-at-install-time) hold.
-Otherwise the manual way back, including the earlier-schema-step residual,
-is [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
+Otherwise the manual way back is
+[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release),
+after, for the earlier-schema-step residual, a restore from the journal
+backup (see [`install.sh` stops with `ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete)).
 
 **Schema migration across the swap.** Once the newer binary is in
 place, an older `state.db` cannot be opened until the install authorizes
@@ -12642,8 +12648,10 @@ install-time](#config-and-template-migration-at-install-time)).
 **Three refusals, one capability check.** `ErrMoveConflict`, `ErrAgentsLive`
 and `ErrMoveFailed` end the install with exit 5 and the cause line (see the
 table above); like `ErrVersionUnreadable` they are `install.sh`'s own names,
-not in `errnames.Catalog`. Their remedies are in
-[operator-actions.md](operator-actions.md). A pair of binaries whose
+not in `errnames.Catalog`. Their remedies are in operator-actions.md:
+[`ErrMoveConflict`](operator-actions.md#installsh-refuses-with-errmoveconflict),
+[`ErrAgentsLive`](operator-actions.md#installsh-refuses-with-erragentslive) and
+[`ErrMoveFailed`](operator-actions.md#installsh-stops-with-errmovefailed). A pair of binaries whose
 `version` output lacks `config_dir`, or names another directory, is refused
 with exit 3 before the move: an earlier release's binary would be installed
 into the new directory. `ad_config_dir_of` reads the field; the check reads no
@@ -21890,7 +21898,9 @@ genuine previous install rather than the stand-in.
   from its commit.
 - `crossing_preflight_test.go` adds the outcome helpers that check an
   `install.sh` outcome envelope (`preflightEnvelopes`,
-  `assertOutcomeEnvelope`) and a strict no-touch refusal
+  `assertOutcomeEnvelope`), pre-flight's refusal with install.sh's own reason
+  (`assertOwnRefusal`) or a relayed `--check-only` refusal
+  (`assertCheckOnlyRelayed`), over any `moveHome`, and a strict no-touch refusal
   (`assertRefusedUnchanged`), and `crossingCase`, a genuine v0.17.3 home for
   the native-input cutover's pre-flight cases, with a Darwin stand-in
   (`standInDarwin`) that logs any macOS-only tool reached.
@@ -21953,6 +21963,36 @@ attempts without a control file use the real administrator.
 another router or child runner. Interrupt cases use its `Start` and signal
 modes instead of their own process-group setup.
 
+### install-sh operator-procedure follower (reusable test fixture)
+
+`test/install-sh/operator_actions_follow_test.go` follows
+`docs/operator-actions.md`'s procedures literally, from the outcome a
+[cutover-outcome](#install-sh-cutover-outcome-fixture-reusable-test-fixture)
+or [genuine-release](#install-sh-genuine-release-fixture-reusable-test-fixture)
+case leaves (J43 to J45).
+
+- `opsDocSection(t, heading)` cuts a section, from its heading to the next
+  heading of the same or higher level outside a fence. `Pin` requires its
+  key phrases word for word, `Block` returns the one `sh` block holding a
+  string, `Inline` the one inline command with a prefix, and `Fill` replaces
+  only the doc's placeholders, failing on one absent or left.
+- `newOpsShell(h)` is one bash in HOME with the toolbox as its only `PATH`,
+  so no case stand-in runs; shell variables last between its commands.
+- `newPutBack(t, h, res, env)` follows "Putting back a kept install" from
+  the last envelope's details: `Checks` runs the three checks in order and
+  stops at the first that fails (checks 1 and 2 only for the moved form),
+  `InPlace` renames the copies back, and `Moved` runs the moved form's six
+  steps, undoing its renames when step 5's `list` fails.
+- `opsStash(t, h)` copies `h.Root` aside and returns a function putting it
+  back, for a follow of one way on from an outcome whose test then follows
+  the other.
+
+**Must use:** a test that follows an `operator-actions.md` procedure reads
+it with `opsDocSection` and runs it in an `opsShell`; never a second reader
+of these procedures. Put-back check 1 sees every process in the container,
+so these tests are serial and no temp path, test name or `go test` command
+line beside them holds the string `agent-director-admin`.
+
 ### journalfix: pre-cutover stores for admin tests (reusable test fixture)
 
 `internal/testsupport/journalfix` lays a genuine pre-cutover store from
@@ -21976,7 +22016,8 @@ test/install-sh keeps the genuine-release fixture above and the bash
 
 These fail a `migrate-journal` attempt at a chosen point, over
 [journalfix](#journalfix-pre-cutover-stores-for-admin-tests-reusable-test-fixture)'s
-stores or a current one:
+stores or a current one; the child runner and the installer stand-in,
+`journalInstaller`, follow them:
 
 - `store.SetInputMigrationFaultsForTest` installs `store.InputMigrationFaults`:
   `AfterStepCommit` (a step's commit reported unconfirmed),

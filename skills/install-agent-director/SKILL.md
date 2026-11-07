@@ -44,6 +44,9 @@ callers, hooks, helpers and launches through committed verification. The
 administrator verifies actual process identity/access and refuses unreadable
 or live evidence without killing anything. A hand-written sentinel, stored
 finished status or a finished-row `kill` no-op cannot establish this boundary.
+Run one upgrade at a time. On macOS, confirm the install runs as the agents'
+user, not as root, and tell the operator macOS may ask them to grant the
+terminal access to a folder.
 
 Two checks come first. Neither is a question, but each changes what
 you ask and what you tell the operator.
@@ -1310,9 +1313,10 @@ no other exit status has a cause line.
 | `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: the gate of the config and template migration in pre-flight (before anything was installed or changed), step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
 | `ErrConfigMalformed` | AD's `config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path`, `[store] busy_timeout_ms` and the `[launch]` table (`claude_path`, `codex_path`, `cursor_path`); by its migration checks (the question-tool key set more than once under `[defaults]`, or `defaults` set as a key on a line that names the key's old name, a file it cannot read, or a symlinked config.toml the migration cannot write through); with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); after the move, by the re-read of the moved config.toml's store and timeout keys; at apply time, by the migration refusing a config.toml that changed since pre-flight (nothing more is written; the two ways on are the exit 1 row's); or by agent-director at step 3's probe or step 4's store open. While the move is due, pre-flight reads the old directory's copy and the message names it. | Fix the file the message names, then re-run the install with the same flags. A symlink the hooks merge cannot write through also has a `--no-hooks` way out; a symlink the migration cannot write through does not (the migration runs with `--no-hooks` too): fix the link, or make the rename in the file's source. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 5 and step 6 of "What this skill does", "A refused config file" and "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
 | `ErrTemplateMalformed` | A stored template was refused by install.sh's pre-flight check for the migration of config.toml and the templates (a line before its first table header that the check cannot read, the old name of the arguments key set twice or together with `agent_args`, a file it cannot read, or a symlinked template the migration cannot write through; all before anything was installed or changed), or, at apply time, a template that changed since pre-flight (the same two ways on as the exit 1 row). | Fix the template the message names, then re-run the install with the same flags. See "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
-| `ErrJournalMigrationRefused` | The native-input maintenance, inventory, backup, import or committed verification did not complete. | Keep the maintenance boundary, resolve the reported cause and restart administrator verification with a new backup directory. A commit may have completed; follow [the operator runbook](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal), never reset the version or reconstruct replayable journals. |
+| `ErrJournalMigrationRefused` | A crossing upgrade of the native-input journal was refused: by pre-flight, before anything was installed or changed, or by the cutover before it changed the previous install's store, after which the installer put the previous install back. The install is as it was before the run; the envelope's `details.refusal` gives the reason and action. | Keep the maintenance boundary, fix the reported cause, then re-run this release's installer with a new `--journal-backup` directory. A store at schema v16 or later that pre-flight cannot read needs a human: see [A store at schema v16 or later that the upgrade cannot read](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#a-store-at-schema-v16-or-later-that-the-upgrade-cannot-read). Each reason's next step is in [Upgrade refusal reasons](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrade-refusal-reasons). |
+| `ErrJournalMigrationIncomplete` | A crossing upgrade's install did not finish successfully (the cutover may still have committed), and the installer did not put the previous install back: this release stays installed. `details.cutover` says whether the cutover committed (`not_committed`, `committed` or `unknown`). | Keep the maintenance boundary, fix the reported cause, then re-run this release's installer with a new `--journal-backup` directory; the message prints the command. For `committed` or `unknown`, then run the administrator's direct verification retry it prints until it exits 0 with `authority: "sqlite"`. Never reset the version or reconstruct replayable journals. See [`install.sh` stops with `ErrJournalMigrationIncomplete`](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#installsh-stops-with-errjournalmigrationincomplete). |
 | `ErrSchemaMismatch` | Step 4's store open: newer store, invalid store id, incompatible or uncommitted current-schema input authority, or authorized migration refusing eligibility column shape/values (including eligible known-child requests). | Identify the cause from the actual error envelope. Use a matching binary for a newer store; invalid metadata requires stopped-writer backup/restore or human recovery, never DB edits to bypass eligibility validation. See "ErrSchemaMismatch recovery". |
-| `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`: `[store] db_path` changed after pre-flight, or something removed or moved the store after the open); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open", "No store after the store open" and "No temp file for the sentinel". |
+| `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`: `[store] db_path` changed after pre-flight, or something removed or moved the store after the open); or step 3's `mktemp` could not create the sentinel's temp file; or, on a crossing upgrade, the put-back of the previous install could not finish, leaving it partly restored. That last one is told apart by the line `the restore could not finish` and kept copies in `details.copies`, not by its reason: a relayed `migrate-journal` refusal keeps its own reason, and `restore_incomplete` is the reason only when nothing was relayed. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open", "No store after the store open" and "No temp file for the sentinel"; for a restore that could not finish, [Putting back a kept install](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#putting-back-a-kept-install). |
 | `ErrMoveConflict` | Pre-flight, before anything was installed or changed: AD's old and new directories cannot be moved as they are. The first line names the one cause: the new directory is a dangling link or not a directory; the old directory is a dangling link; both directories exist (the message gives each one's store time); the old directory is a link or not a directory, or its `config.toml`, `templates`, one template or its store is a link while the move is due; a `[store] db_path` or `[log] error_log_path` whose place cannot be resolved against the old directory; or a store that is itself a link. On a host that has only the old directory, the Go client's `MakeTemplate` and the CLI's `make-template` run with `--store-path` create `~/.config/agent-director/templates/` themselves, so running either before the install makes both directories exist (the CLI's `make-template` without `--store-path` refuses with `ErrOldLayout` and creates nothing). | Change nothing else: the message names the cause and its remedy (docs/operator-actions.md, "`install.sh` refuses with `ErrMoveConflict`"). Apply that remedy, then re-run with the same flags. Where both directories exist, ask the operator which one holds the install in use before setting the other aside by renaming it (never delete either); a new directory holding only `templates` that `make-template` made is the one to set aside, then copy any template wanted from it into the moved directory's `templates`. |
 | `ErrAgentsLive` | Pre-flight (and again at the move's first step), before anything was installed or changed, while the move is due: a row in a live state (`pending`, `waiting`, `working`, `check_permission`, `ask_user`) in the old store, a process running the old binary (a Claude Code session's own `agent-director serve --stdio` counts), live rows that could not be read (the store stayed busy past its timeout, or is unreadable), or a process check that did not run (no `/proc`, no usable `ps` or `lsof`: check by hand). | Stop whatever starts agents, then every agent, every `serve` and every caller (ask the operator; do not end agents yourself), run `find-missing` with the old binary's path the message prints for a row whose agent is already gone, and re-run from a shell agent-director did not start. A re-run reads the rows again. See "Upgrading an install from the old directory" and "`install.sh` refuses with `ErrAgentsLive`" in docs/operator-actions.md. |
 | `ErrMoveFailed` | The move failed before its rename (a full disk is the usual cause; a fifo, socket or device in the old directory; a temp directory inside either AD directory), or the install was interrupted before the rename. The partial new directory was removed and the old directory is untouched. A signal after the rename also exits here, saying the move finished: the old directory is then the kept `~/.agent-director.pre-move-*`, and the new directory holds the complete copy. | Fix the cause the message names (free space on the disk that holds `~/` and on the one that holds the temp directory, move a fifo or socket out of the old directory, set `TMPDIR` outside both AD directories), then re-run with the same flags. A leftover `.move-incomplete` is handled by the re-run. After the move had finished, the re-run just continues from the new directory. See "`install.sh` stops with `ErrMoveFailed`" in docs/operator-actions.md. |
@@ -1322,16 +1326,21 @@ Remedy classes: re-run as is (`ErrVersionUnreadable`; `ErrMoveFailed`
 once its cause is fixed; `ErrAgentsLive` once the agents are stopped);
 fix the file or directory the message names, then re-run
 (`ErrConfigMalformed`, `ErrTemplateMalformed`, `ErrMoveConflict`);
+fix the reported cause, then re-run with a new `--journal-backup`
+directory (`ErrJournalMigrationRefused`; `ErrJournalMigrationIncomplete`,
+then the verification retry after a `committed` or `unknown` cutover);
 read the envelope for `ErrSchemaMismatch` (a matching binary for a newer
 store; stopped-writer restore or human recovery for invalid metadata);
 stop for a human (`ErrSchemaVerifyFailed`, a repeated unknown name).
 
 `ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
-`ErrAgentsLive` and `ErrMoveFailed` are install.sh's own names: no
-agent-director verb returns them. `ErrConfigMalformed` and
-`ErrTemplateMalformed` are agent-director's own catalogued names, which
-install.sh also gives for its pre-flight and migration checks of the
-two file kinds. Whatever the name, do NOT delete state.db, and never
+`ErrAgentsLive`, `ErrMoveFailed` and `ErrJournalMigrationIncomplete` are
+install.sh's own names: no agent-director verb returns them.
+`ErrConfigMalformed` and `ErrTemplateMalformed` are agent-director's own
+catalogued names, which install.sh also gives for its pre-flight and
+migration checks of the two file kinds. `ErrJournalMigrationRefused` is
+`agent-director-admin migrate-journal`'s name, which install.sh also gives
+for its own pre-flight checks of a crossing upgrade. Whatever the name, do NOT delete state.db, and never
 delete the old directory or its kept copy to get past a refusal.
 
 ## Uninstall
@@ -1889,8 +1898,14 @@ new installation. See the operator runbook for the maintenance boundary.
    with maintenance/root assertions, the new backup directory and additional
    roots. It backs up before any schema hop, imports under the maintenance
    boundary, commits and verifies SQLite authority, then attempts retirement.
-   `ErrJournalMigrationRefused` stops with exit 5: keep the boundary and restart
-   administrator verification; a commit may have completed. Ordinary
+   The installer settles a failed attempt itself: it puts the previous install
+   back when the previous install's store is unchanged and the previous release predates the
+   cutover
+   (`ErrJournalMigrationRefused`, the install as before the run), or else
+   leaves this release installed to complete forward
+   (`ErrJournalMigrationIncomplete`); a put-back that cannot finish ends
+   `ErrSchemaVerifyFailed`. Each ends with exit 5; keep the boundary and follow
+   [Exit 5's cause line](#exit-5s-cause-line). Run one upgrade at a time. Ordinary
    `agent-director list` handles a fresh or already-current store. `help` and
    `version` do not open it.
 5. **Verify the result.** A missing DB after successful open fails. When a
@@ -1910,7 +1925,8 @@ shell with the original flags and the journal maintenance/root/backup flags
 above. Keep failed backups and choose a new absolute directory for each
 attempt. The installer reads the actual version, authorizes it and verifies
 the result; neither a hand-authored sentinel nor an ordinary opener suffices.
-Never delete the DB or reset its version. For a committed or uncertain refusal,
+Never delete the DB or reset its version. For an
+`ErrJournalMigrationIncomplete` whose cutover is `committed` or `unknown`,
 follow the direct administrator-verification retry in
 [Operator actions](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal).
 For a step-5 unreadable version, readable mismatch or missing DB, use the

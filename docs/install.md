@@ -66,6 +66,11 @@
   it, even with `--no-hooks`.
 - With `--from-release`: `curl` and `sleep`. With `--sha256` and
   `--admin-sha256`: either `sha256sum` or `shasum`.
+- On macOS, an upgrade of an existing store reads the user's processes with
+  the system `/usr/sbin/lsof` and access-control entries with `/bin/ls`: run
+  the install as the agents' user, not as root, and grant the terminal access
+  if macOS asks. [Upgrade refusal
+  reasons](operator-actions.md#upgrade-refusal-reasons) gives the remedies.
 
 After validating arguments and the install path, the installer checks all
 required commands for the selected mode before running external commands,
@@ -74,7 +79,8 @@ downloading files or changing the installation. If any are missing, it exits
 
 `gh` is optional for release lookup and download fallback; `curl` remains
 required for release installs. `git`, `ps`, `lsof`, `pgrep`, `getent`, `dscl`,
-`crontab` and `systemctl` remain optional probes or alternatives. Scheduling
+`crontab` and `systemctl` remain optional probes or alternatives, except
+the macOS upgrade tools above. Scheduling
 keeps its [cron/systemd fallback and warnings](#schedule-the-sweeps).
 
 Native confirmed ordinary text delivery has narrower requirements: Linux, the exact
@@ -305,7 +311,13 @@ valid aliases on a supporting binary; an upgrade needs no schedule rewrite.
 
 ## Upgrade
 
-Before crossing the native-input journal upgrade, establish the
+An upgrade of an existing store below schema v16 crosses the native-input
+journal cutover, once, and needs the journal flags listed above; a fresh
+install or a store at schema v16 or later needs none. Pre-flight checks those
+flags before anything changes, and a refusal there changes nothing. Run
+[one upgrade at a time](operator-actions.md#upgrading-the-native-input-journal).
+
+Before crossing it, establish the
 [maintenance window and complete recovery set](operator-actions.md#upgrading-the-native-input-journal),
 including every invoking-home input root and any custom database. Keep old
 writers excluded through committed verification. Use the journal flags listed
@@ -424,14 +436,30 @@ holds the old name of the arguments key is refused at spawn, naming
   tag; this release's `install.sh` refuses an earlier release's binaries (exit
   3).
 
-**Refusals** (exit 5, with every file unchanged; each has its check and fix in
-Operator actions):
+**Refusals** (exit 5, with the install as it was before the run; each has its
+check and fix in Operator actions):
 [`ErrMoveConflict`](operator-actions.md#installsh-refuses-with-errmoveconflict)
 (the layout cannot be moved as it is),
 [`ErrAgentsLive`](operator-actions.md#installsh-refuses-with-erragentslive)
-(an agent or an agent-director process still uses the old directory), and
+(an agent or an agent-director process still uses the old directory),
 [`ErrMoveFailed`](operator-actions.md#installsh-stops-with-errmovefailed)
-(the copy failed; the old directory is untouched).
+(the copy failed; the old directory is untouched), and
+[`ErrJournalMigrationRefused`](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused)
+(pre-flight or the journal cutover refused before the previous install's store
+changed, and anything the run changed was put back). A crossing upgrade refuses a
+`~/.config/agent-director` that is a link: replace the link with its directory
+once, as [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons)
+shows.
+
+Two other cutover outcomes end with exit 5:
+
+- [`ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete):
+  the install did not finish successfully, and this release stays installed;
+  the cutover may still have committed.
+- `ErrSchemaVerifyFailed` after `the restore could not finish`, with kept
+  copies in `details.copies`, whatever its reason: the put-back of the
+  previous install could not finish, so it is partly restored; see
+  [Putting back a kept install](operator-actions.md#putting-back-a-kept-install).
 
 The migration refuses a `config.toml` or a template it cannot read safely, or a
 link it cannot write through (exit 5, `ErrConfigMalformed` or
@@ -445,7 +473,8 @@ because a re-run has no move to print them. See
 [A migration write failed after the binary swap](operator-actions.md#a-migration-write-failed-after-the-binary-swap).
 
 **Going back** to the previous release is
-[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
+[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release),
+when a crossing upgrade has not put it back itself.
 Binary-only rollback requires an unchanged directory and schema. Restoring a
 pre-upgrade store loses writes since its backup; restoring the kept pre-move
 directory loses writes since the move.

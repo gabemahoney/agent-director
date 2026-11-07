@@ -100,6 +100,22 @@
 #                        user (see "The schedule" below). Default OFF: without
 #                        it, an install with no schedule set up ends with a
 #                        warning on stderr naming the lines to add.
+#   --journal-maintenance-window
+#                        Assert that old writers are excluded for the
+#                        native-input journal upgrade.
+#   --journal-roots-complete
+#                        Assert that every legacy input root is accounted for.
+#   --journal-backup <dir>
+#                        A new absolute directory for the upgrade's
+#                        stopped-writer backup.
+#   --journal-legacy-root <dir>
+#                        An additional absolute legacy input root; repeat for
+#                        each. An upgrade of an existing store below schema
+#                        v16 needs the first three journal flags, and this one
+#                        for each additional root; pre-flight refuses without
+#                        the three, changing nothing. See docs/operator-actions.md
+#                        "Upgrading the native-input journal".
+#   -h, --help           Print this text and exit 0.
 #
 # The schedule (b.wur). sweep runs shared recovery checks every 2 minutes;
 # expire runs separate retention cleanup daily. State reads share the checks;
@@ -221,6 +237,18 @@
 #      before any binary is replaced; ErrMoveConflict and ErrAgentsLive are
 #      raised in pre-flight, changing nothing. They are install.sh's own
 #      names, as ErrVersionUnreadable is, not agent-director's.
+#      An upgrade that crosses the native-input journal cutover adds three:
+#      ErrJournalMigrationRefused (pre-flight refused, or the cutover
+#      refused and the installer put the previous install back: the install
+#      is as before the run; fix the reported cause, then re-run with a new
+#      --journal-backup directory), ErrJournalMigrationIncomplete (the
+#      install did not finish successfully, though the cutover may have
+#      committed, and this release stays installed; follow the
+#      message, then docs/operator-actions.md "install.sh stops with
+#      ErrJournalMigrationIncomplete") and ErrSchemaVerifyFailed for a
+#      restore that could not finish (needs a human; put the listed copies
+#      back as docs/operator-actions.md "Putting back a kept install"
+#      describes). ErrJournalMigrationIncomplete is install.sh's own name.
 #   6  the MCP registration failed (--register-mcp): `claude mcp add` (or the
 #      `claude mcp remove` before the re-add of a registration that names the
 #      old directory's binary) exited non-zero. Every other step is done: the

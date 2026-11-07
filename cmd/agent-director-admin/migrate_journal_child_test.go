@@ -89,6 +89,18 @@ func TestMigrateJournalAdminChild(t *testing.T) {
 			}
 			return nil
 		}
+	case seams == "exit-after-step":
+		// A run killed before its envelope, just after an earlier step committed.
+		faults.AfterStepCommit = func(int) error { os.Exit(2); return nil }
+	case seams == "exit-after-cutover":
+		// A run killed before its envelope, just after the cutover committed.
+		faults.CutoverCommit = func(commit func() error) error {
+			if err := commit(); err != nil {
+				return err
+			}
+			os.Exit(2)
+			return nil
+		}
 	case strings.HasPrefix(seams, "cutover-unconfirmed"):
 		faults.CutoverCommit = func(commit func() error) error {
 			if seams == "cutover-unconfirmed-committed" {

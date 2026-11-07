@@ -166,6 +166,7 @@ func oldPathRules(t testing.TB) *scanRules {
 		{file: "docs/operator-actions.md", heading: "`install.sh` refuses with `ErrMoveConflict`", reason: "SR-11.7: the refusal names the old directory"},
 		{file: "docs/operator-actions.md", heading: "`install.sh` refuses with `ErrAgentsLive`", reason: "SR-11.7: the refusal names the old directory"},
 		{file: "docs/operator-actions.md", heading: "`install.sh` stops with `ErrMoveFailed`", reason: "SR-11.7: the stop names the old directory"},
+		{file: "docs/operator-actions.md", heading: "Putting back a kept install", reason: "SR-11.7: the moved form puts the pre-move directory back"},
 		{file: "docs/operator-actions.md", heading: "Going back to the previous release", reason: "SR-11.7: going back names the old directory"},
 		{file: "docs/operator-actions.md", heading: "Upgrading the native-input journal", reason: "the administrator must inventory the genuine legacy input root before SQLite cutover"},
 		{file: "docs/architecture.md", heading: "Moving agent-director's directory", reason: "SR-11.7: the move's design names the old directory"},

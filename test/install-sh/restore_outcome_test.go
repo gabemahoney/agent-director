@@ -282,122 +282,124 @@ fi`)
 	}
 }
 
+// J44 runs the occupied old path row, continuing it with the put-back.
 func TestRestoreOutcomeIncomplete(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		partial bool
-	}{{"occupied old path", false}, {"after link and sentinel restore", true}} {
-		t.Run(tc.name, func(t *testing.T) {
-			var h *moveHome
-			var p copyPaths
-			var db, savedMain string
-			if tc.partial {
-				c, paths := newCopiesCrossing(t)
-				h, p, db = c.h, paths, c.db
-				h.Flags = append(h.Flags, c.valid()...)
-				// P5-T2: restoration must remove an administrator absent beforehand,
-				// after putting back the sentinel and a distinguishable raw link.
-				for _, path := range []string{p.admin, p.link} {
-					if err := os.Remove(path); err != nil {
-						t.Fatal(err)
-					}
-				}
-				h.Link("../.config/agent-director/bin/agent-director", p.link)
-				savedMain = restoreDescribe(t, p.bin)
-			} else {
-				h = newGenuineOldHome(t)
-				_, p.link = linksInHome(h)
-				db = filepath.Join(h.New, "state.db")
+	t.Run("after link and sentinel restore", func(t *testing.T) { restoreOutcomeIncomplete(t, true) })
+}
+
+// restoreOutcomeIncomplete runs one restore that cannot finish: partial, the
+// administrator's removal failing after the link and sentinel are back;
+// otherwise the occupied old path, for which it returns the home, the run,
+// its last envelope and the snapshot taken before the run.
+func restoreOutcomeIncomplete(t *testing.T, partial bool) (*moveHome, moveResult, cutoverEnvelope, moveTree) {
+	var h *moveHome
+	var p copyPaths
+	var db, savedMain string
+	if partial {
+		c, paths := newCopiesCrossing(t)
+		h, p, db = c.h, paths, c.db
+		h.Flags = append(h.Flags, c.valid()...)
+		// P5-T2: restoration must remove an administrator absent beforehand,
+		// after putting back the sentinel and a distinguishable raw link.
+		for _, path := range []string{p.admin, p.link} {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
 			}
-			link := p.link
-			f := newCutoverFixture(t, h)
-			if tc.partial {
-				f.Choose("child:verify-fails-1")
-				h.WrapTool("rm", `if [[ -f `+moveQuote(f.Finished)+` && "${!#}" == `+moveQuote(p.admin)+` ]]; then echo 'injected administrator removal failure' >&2; exit 1; fi`)
-			} else {
-				f.Choose("child:verify-fails-2")
-				h.Write(f.After, "mkdir "+moveQuote(h.Old)+"\nprintf 'occupant\\n' >"+moveQuote(filepath.Join(h.Old, "occupant"))+"\n", 0o700)
-			}
-			before := h.Snapshot()
-			res := f.Install(false, false)
-			env := f.Check(res, "ErrSchemaVerifyFailed", "not_committed", true)
-			if env.Details.AttemptStore != db {
-				t.Errorf("attempt store: %s", env.Details.AttemptStore)
-			}
-			if tc.partial {
-				if len(env.Details.Copies) != 1 || env.Details.Copies[0].Belongs != p.bin {
-					t.Fatalf("remaining copies: %+v; want only the previous CLI", env.Details.Copies)
-				}
-				copy := env.Details.Copies[0].Copy
-				if restoreDescribe(t, copy) != savedMain {
-					t.Errorf("retained CLI copy changed: %s", copy)
-				}
-				rel, err := filepath.Rel(h.Home, copy)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if copies := restoreCopyNames(t, h); len(copies) != 1 || copies[0] != rel {
-					t.Errorf("copies on disk: %v; want only %s", copies, rel)
-				}
-				if len(env.Details.Remove) != 1 || env.Details.Remove[0] != p.admin {
-					t.Errorf("remaining removals: %v; want only %s", env.Details.Remove, p.admin)
-				}
-				after := h.Snapshot()
-				for _, path := range []string{p.link, p.sentinel, db} {
-					rel, err := filepath.Rel(h.Home, path)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if after[rel] != before[rel] {
-						t.Errorf("completed item or store changed at %s: got %s; want %s", path, after[rel], before[rel])
-					}
-				}
-				for _, pair := range [][2]string{{p.bin, h.S.Current.Main}, {p.admin, h.S.ScheduleProbe.Main}} {
-					if restoreDescribe(t, pair[0]) != restoreDescribe(t, pair[1]) {
-						t.Errorf("restore advanced past its failure at %s", pair[0])
-					}
-				}
-				outcomeLines(t, res.Stderr,
-					"install.sh: the restore could not finish; the install is partly restored: cannot remove "+p.admin+": injected administrator removal failure",
-					"  put back "+p.link,
-					"  put back "+p.sentinel)
-				return
-			}
-			want := map[string]bool{h.Old: false, link: false}
-			for _, copy := range env.Details.Copies {
-				if _, exists := want[copy.Belongs]; !exists {
-					t.Errorf("unexpected kept copy: %+v", copy)
-				}
-				want[copy.Belongs] = true
-				if copy.Belongs == link && restoreDescribe(t, copy.Copy) != "link\t"+filepath.Join(h.Old, "bin", "agent-director") {
-					t.Error("kept link changed")
-				}
-				if copy.Belongs == h.Old {
-					// Compare the entire pre-move tree at its kept location.
-					got := h.Snapshot()
-					rel, _ := filepath.Rel(h.Home, copy.Copy)
-					for p, value := range before {
-						if p == ".agent-director" || strings.HasPrefix(p, ".agent-director/") {
-							if got[rel+strings.TrimPrefix(p, ".agent-director")] != value {
-								t.Errorf("kept old tree changed: %s", p)
-							}
-						}
-					}
-				}
-			}
-			for path, found := range want {
-				if !found {
-					t.Errorf("copy for %s not reported", path)
-				}
-			}
-			if b, err := os.ReadFile(filepath.Join(h.Old, "occupant")); err != nil || string(b) != "occupant\n" {
-				t.Errorf("occupant changed: %q, %v", b, err)
-			}
-			outcomeLines(t, res.Stderr,
-				"install.sh: the restore could not finish; the install is partly restored: "+h.Old+" is occupied",
-				"  Put the copies listed in details.copies back with mv, as docs/operator-actions.md \"Putting back a kept install\" describes.",
-				"  Use its moved-install form, which puts the pre-move directory back before checking its list.")
-			// fq owns the literal follow of the referenced human put-back procedure.
-		})
+		}
+		h.Link("../.config/agent-director/bin/agent-director", p.link)
+		savedMain = restoreDescribe(t, p.bin)
+	} else {
+		h = newGenuineOldHome(t)
+		_, p.link = linksInHome(h)
+		db = filepath.Join(h.New, "state.db")
 	}
+	link := p.link
+	f := newCutoverFixture(t, h)
+	if partial {
+		f.Choose("child:verify-fails-1")
+		h.WrapTool("rm", `if [[ -f `+moveQuote(f.Finished)+` && "${!#}" == `+moveQuote(p.admin)+` ]]; then echo 'injected administrator removal failure' >&2; exit 1; fi`)
+	} else {
+		f.Choose("child:verify-fails-2")
+		h.Write(f.After, "mkdir "+moveQuote(h.Old)+"\nprintf 'occupant\\n' >"+moveQuote(filepath.Join(h.Old, "occupant"))+"\n", 0o700)
+	}
+	before := h.Snapshot()
+	res := f.Install(false, false)
+	env := f.Check(res, "ErrSchemaVerifyFailed", "not_committed", true)
+	if env.Details.AttemptStore != db {
+		t.Errorf("attempt store: %s", env.Details.AttemptStore)
+	}
+	if partial {
+		if len(env.Details.Copies) != 1 || env.Details.Copies[0].Belongs != p.bin {
+			t.Fatalf("remaining copies: %+v; want only the previous CLI", env.Details.Copies)
+		}
+		copy := env.Details.Copies[0].Copy
+		if restoreDescribe(t, copy) != savedMain {
+			t.Errorf("retained CLI copy changed: %s", copy)
+		}
+		rel, err := filepath.Rel(h.Home, copy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if copies := restoreCopyNames(t, h); len(copies) != 1 || copies[0] != rel {
+			t.Errorf("copies on disk: %v; want only %s", copies, rel)
+		}
+		if len(env.Details.Remove) != 1 || env.Details.Remove[0] != p.admin {
+			t.Errorf("remaining removals: %v; want only %s", env.Details.Remove, p.admin)
+		}
+		after := h.Snapshot()
+		for _, path := range []string{p.link, p.sentinel, db} {
+			rel, err := filepath.Rel(h.Home, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after[rel] != before[rel] {
+				t.Errorf("completed item or store changed at %s: got %s; want %s", path, after[rel], before[rel])
+			}
+		}
+		for _, pair := range [][2]string{{p.bin, h.S.Current.Main}, {p.admin, h.S.ScheduleProbe.Main}} {
+			if restoreDescribe(t, pair[0]) != restoreDescribe(t, pair[1]) {
+				t.Errorf("restore advanced past its failure at %s", pair[0])
+			}
+		}
+		outcomeLines(t, res.Stderr,
+			"install.sh: the restore could not finish; the install is partly restored: cannot remove "+p.admin+": injected administrator removal failure",
+			"  put back "+p.link,
+			"  put back "+p.sentinel)
+		return h, res, env, before
+	}
+	want := map[string]bool{h.Old: false, link: false}
+	for _, copy := range env.Details.Copies {
+		if _, exists := want[copy.Belongs]; !exists {
+			t.Errorf("unexpected kept copy: %+v", copy)
+		}
+		want[copy.Belongs] = true
+		if copy.Belongs == link && restoreDescribe(t, copy.Copy) != "link\t"+filepath.Join(h.Old, "bin", "agent-director") {
+			t.Error("kept link changed")
+		}
+		if copy.Belongs == h.Old {
+			// Compare the entire pre-move tree at its kept location.
+			got := h.Snapshot()
+			rel, _ := filepath.Rel(h.Home, copy.Copy)
+			for p, value := range before {
+				if p == ".agent-director" || strings.HasPrefix(p, ".agent-director/") {
+					if got[rel+strings.TrimPrefix(p, ".agent-director")] != value {
+						t.Errorf("kept old tree changed: %s", p)
+					}
+				}
+			}
+		}
+	}
+	for path, found := range want {
+		if !found {
+			t.Errorf("copy for %s not reported", path)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(h.Old, "occupant")); err != nil || string(b) != "occupant\n" {
+		t.Errorf("occupant changed: %q, %v", b, err)
+	}
+	outcomeLines(t, res.Stderr,
+		"install.sh: the restore could not finish; the install is partly restored: "+h.Old+" is occupied",
+		"  Put the copies listed in details.copies back with mv, as docs/operator-actions.md \"Putting back a kept install\" describes.",
+		"  Use its moved-install form, which puts the pre-move directory back before checking its list.")
+	return h, res, env, before
 }

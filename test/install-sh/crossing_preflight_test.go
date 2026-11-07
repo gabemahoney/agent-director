@@ -578,50 +578,12 @@ func assertDarwinOnly(t *testing.T, h *moveHome) {
 //
 // No released version makes a v16 to v19 store: these are the genuine
 // v0.17.3 store raised by hand, in the shapes SR-8.6 describes.
+//
+// J43 runs the two v16 rows (crossingV16Rows), continuing each with the
+// documented inspection and way back.
 func TestCrossingPreflightStoreState(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and installs v0.17.3")
-	}
-	for _, tc := range []struct{ reason, sql, what, inspect string }{
-		{"cutover_state_unreadable", "DROP TABLE store_meta; PRAGMA user_version=16;", "unreadable",
-			"state.db's store_meta table and its native_input_authority row"},
-		{"native_input_authority_missing", "PRAGMA user_version=16;", "not recorded",
-			"the native_input_authority row of state.db's store_meta table"},
-	} {
-		t.Run(tc.reason, func(t *testing.T) {
-			c := newCrossingCase(t)
-			h := c.h
-			h.Sqlite(c.db, tc.sql)
-			prevErr := func() string {
-				got := h.Run(c.prev, "list")
-				var env struct {
-					ErrName string `json:"err_name"`
-				}
-				if err := json.Unmarshal([]byte(got.Stderr), &env); err != nil || got.Code == 0 || env.ErrName == "" {
-					t.Fatalf("v0.17.3's list on the v16 store: exit %d, stderr %q; want a refusal", got.Code, got.Stderr)
-				}
-				return env.ErrName
-			}
-			wantErr := prevErr()
-			before := h.PhysicalSnapshot()
-			res := h.Install(c.valid()...)
-			envs := preflightEnvelopes(t, res, "ErrJournalMigrationRefused")
-			action := "inspect " + tc.inspect + ", or restore state.db's pre-upgrade copy, as docs/operator-actions.md \"Upgrading the native-input journal\" says, then re-run this install"
-			if len(envs) != 1 {
-				t.Errorf("envelopes %q; want install.sh's own only", envs)
-			}
-			assertOutcomeEnvelope(t, envs[len(envs)-1], "ErrJournalMigrationRefused", tc.reason, action, "not_committed", nil)
-			for _, line := range []string{"install.sh: state.db at v16 is past the native-input cutover, but its native-input authority is " + tc.what,
-				"  state.db: " + c.db, "  Nothing was installed or changed."} {
-				if !strings.Contains(res.Stderr, line+"\n") {
-					t.Errorf("stderr lacks %q:\n%s", line, res.Stderr)
-				}
-			}
-			assertRefusedUnchanged(t, h, before)
-			if got := prevErr(); got != wantErr {
-				t.Errorf("v0.17.3's list refuses with %s after the run; %s before it", got, wantErr)
-			}
-		})
 	}
 	t.Run("v0 store", func(t *testing.T) {
 		h := newMoveHome(t)
@@ -640,6 +602,58 @@ func TestCrossingPreflightStoreState(t *testing.T) {
 			t.Errorf("store at v%s after list; want v%s", v, want)
 		}
 	})
+}
+
+// crossingV16Row is one v16 store pre-flight refuses: the SQL that raises
+// v0.17.3's store to it, and the refusal's wording.
+type crossingV16Row struct{ reason, sql, what, inspect string }
+
+var crossingV16Rows = []crossingV16Row{
+	{"cutover_state_unreadable", "DROP TABLE store_meta; PRAGMA user_version=16;", "unreadable",
+		"state.db's store_meta table and its native_input_authority row"},
+	{"native_input_authority_missing", "PRAGMA user_version=16;", "not recorded",
+		"the native_input_authority row of state.db's store_meta table"},
+}
+
+// crossingV16Refused raises a genuine v0.17.3 store to tc's v16 shape and
+// checks pre-flight's refusal of it. It returns the case and the
+// stopped-writer copy of the v15 store taken before the raise.
+func crossingV16Refused(t *testing.T, tc crossingV16Row) (*crossingCase, map[string][]byte) {
+	t.Helper()
+	c := newCrossingCase(t)
+	h := c.h
+	kept := rollbackStoreCopy(t, c.db)
+	h.Sqlite(c.db, tc.sql)
+	prevErr := func() string {
+		got := h.Run(c.prev, "list")
+		var env struct {
+			ErrName string `json:"err_name"`
+		}
+		if err := json.Unmarshal([]byte(got.Stderr), &env); err != nil || got.Code == 0 || env.ErrName == "" {
+			t.Fatalf("v0.17.3's list on the v16 store: exit %d, stderr %q; want a refusal", got.Code, got.Stderr)
+		}
+		return env.ErrName
+	}
+	wantErr := prevErr()
+	before := h.PhysicalSnapshot()
+	res := h.Install(c.valid()...)
+	envs := preflightEnvelopes(t, res, "ErrJournalMigrationRefused")
+	action := "inspect " + tc.inspect + ", or restore state.db's pre-upgrade copy, as docs/operator-actions.md \"Upgrading the native-input journal\" says, then re-run this install"
+	if len(envs) != 1 {
+		t.Errorf("envelopes %q; want install.sh's own only", envs)
+	}
+	assertOutcomeEnvelope(t, envs[len(envs)-1], "ErrJournalMigrationRefused", tc.reason, action, "not_committed", nil)
+	for _, line := range []string{"install.sh: state.db at v16 is past the native-input cutover, but its native-input authority is " + tc.what,
+		"  state.db: " + c.db, "  Nothing was installed or changed."} {
+		if !strings.Contains(res.Stderr, line+"\n") {
+			t.Errorf("stderr lacks %q:\n%s", line, res.Stderr)
+		}
+	}
+	assertRefusedUnchanged(t, h, before)
+	if got := prevErr(); got != wantErr {
+		t.Errorf("v0.17.3's list refuses with %s after the run; %s before it", got, wantErr)
+	}
+	return c, kept
 }
 
 // newGenuineOldHome builds BuildOld's old layout with v0.11.1's genuine pair
