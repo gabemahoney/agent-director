@@ -32,6 +32,29 @@
 
 FROM debian:bookworm-slim
 
+# The suites are tested on Debian 12 only (SRD SR-4.1). The bookworm-slim tag
+# is not digest-pinned, so if it ever moves to another Debian major, or the
+# base is not Debian, stop here before anything is installed rather than
+# silently test another platform. /etc/os-release is read as data, never
+# sourced. test/Dockerfile runs the same check.
+RUN os_id=; os_version_id=; \
+    if [ -r /etc/os-release ]; then \
+        while IFS='=' read -r key value || [ -n "$key" ]; do \
+            value=${value#[\"\']}; value=${value%[\"\']}; \
+            case "$key" in \
+                ID) os_id=$value ;; \
+                VERSION_ID) os_version_id=$value ;; \
+            esac; \
+        done < /etc/os-release; \
+        found="ID=${os_id:-<unset>} VERSION_ID=${os_version_id:-<unset>}"; \
+    else \
+        found="no readable /etc/os-release"; \
+    fi; \
+    if [ "$os_id" != debian ] || [ "$os_version_id" != 12 ]; then \
+        echo "ERROR: base image is $found; this image requires Debian 12 (ID=debian VERSION_ID=12)" >&2; \
+        exit 1; \
+    fi
+
 # Go toolchain version. Pinned to match the go.mod `go` directive (go 1.27.3),
 # the same release the sibling test/Dockerfile pins. Release binaries are built
 # in this image, so it is also the release toolchain: darwin binaries need Go

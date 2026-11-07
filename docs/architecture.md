@@ -20159,8 +20159,8 @@ than `go test ./...`.
   test plans run it by that full path, and install.sh's in-repo fallback
   finds it there for the bundled `/opt/skills` copy.
 - Copies all of `test/driver/` to `/opt/driver/`: the driver, its prompt,
-  `db-reset.sh`, and the helpers cases call (`sql.sh`, `pane-hook.sh` and
-  the Docker hook pattern's stand-ins).
+  `db-reset.sh`, `platform-env.sh`, and the helpers cases call (`sql.sh`,
+  `pane-hook.sh` and the Docker hook pattern's stand-ins).
 - Bakes the previous release under `/opt/previous-release` (see
   [The baked previous release](#the-baked-previous-release)).
 - Runs as a non-root `tester` user with `HOME=/home/tester`.
@@ -20172,6 +20172,14 @@ than `go test ./...`.
 - Default command is `/opt/driver/run-testplan.sh`.
 
 The image is built via `make test-image`.
+
+This image and the unit sandbox image (`test/sandbox/Dockerfile`) each build
+natively for the host's architecture, amd64 or arm64, from
+`debian:bookworm-slim` by tag, with no digest pin, `--platform` or emulation.
+Each build's first step fails, naming the identity it found, unless
+`/etc/os-release` says Debian 12 (`ID=debian`, `VERSION_ID=12`), so a tag
+that moves to another Debian major, or a non-Debian base, stops the build
+before anything is installed.
 
 ### Driver
 
@@ -20432,11 +20440,29 @@ temp-dir plan and a fake `db-reset.sh`, with no store or `sqlite3`; the
   untouched. It never sets the marker to `1`; the harness's smoke-5 case
   covers the reset itself. `DB_RESET_UNDER_TEST=<path>` runs it against
   another copy, to prove the fails-before direction.
+- **`platform_env_test.go`** covers `platform-env.sh` (below): the record's
+  exact fields and Debian 12 values in the sandbox, `null` for each tool
+  removed from `PATH` or failing, a stub tool's first version line kept
+  verbatim and JSON-escaped, and the missing-`sql.sh` note, followed
+  literally.
 
 **Must use:** a test of a `test/driver/` script goes in
 `test/driver-scripts/` and reuses its `newStore`, `holdLock`,
 `start`/`run` and `driverScript` helpers. Never put a Go file in
 `test/driver/`: the image copies that whole directory.
+
+### Environment Record: `platform-env.sh` (reusable driver helper)
+
+`test/driver/platform-env.sh` (installed at `/opt/driver/platform-env.sh`)
+prints the Environment Record: one JSON line, `{"platform_env":{...}}`, of
+the platform and tool versions a run used, each field a string or `null` when
+its source or tool is absent. It only reads and always exits 0; it compares
+nothing and gives no verdict. Its header lists the fields. It reads the
+`sqlite3` version through the `sql.sh` beside it; without one, that field is
+`null` and stderr says to copy `sql.sh` too.
+
+**Must use:** every Environment Record comes from this script. A consumer
+copies it together with its `sql.sh`; never fork or reimplement it.
 
 ### Pinned Claude Code version
 
