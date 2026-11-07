@@ -449,7 +449,9 @@ check and fix in Operator actions):
 changed, and anything the run changed was put back). A crossing upgrade refuses a
 `~/.config/agent-director` that is a link: replace the link with its directory
 once, as [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons)
-shows.
+shows. With no move due, it also refuses while the store holds a live agent
+row (`agents_live`) or its rows cannot be read (`agent_rows_unreadable`);
+the same table gives each one's next step.
 
 Two other cutover outcomes end with exit 5:
 

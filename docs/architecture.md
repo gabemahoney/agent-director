@@ -11054,7 +11054,9 @@ claude /install-agent-director (or `bash install.sh`)
   → the native-input cutover decision, from the gate's read (see "Schema
     migration at install-time" below): a store at v1 to v15 crosses;
     a linked ~/.config/agent-director refuses with legacy_root_symlink
-    before --check-only (exit 5, ErrJournalMigrationRefused, nothing changed).
+    before --check-only (exit 5, ErrJournalMigrationRefused, nothing changed);
+    with no move due, so does a store row in a live state (agents_live)
+    or rows that cannot be read (agent_rows_unreadable).
     Otherwise the candidate administrator's migrate-journal --check-only
     must accept the run's journal flags (its refusal is relayed → exit 5,
     ErrJournalMigrationRefused, nothing on disk changed); then, crossing
@@ -11192,7 +11194,7 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `ErrAgentsLive` | `ad_agents_live_check`, in pre-flight and again as the move's first step | stop every agent, `serve` and caller, then re-run from a shell agent-director did not start; a re-run reads unreadable rows again |
 | `ErrMoveFailed` | `ad_move_fail`, any failure or interrupt before the rename | free space or fix the cause named, re-run; the old directory was not changed |
 | `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target; a restore that could not finish (an occupied pre-move path or I/O failure), with remaining copies kept and listed | a human, following the advice; an unfinished restore needs [Putting back a kept install](operator-actions.md#putting-back-a-kept-install) |
-| `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`): `legacy_root_symlink` for a linked `~/.config/agent-director` on a crossing run before `--check-only`; `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover; or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`; on a crossing upgrade, the restore preconditions' `backup_inside_install_directory`, `previous_release_unknown` or `restore_copies_unavailable` (see "The restore preconditions" under [Schema migration at install-time](#schema-migration-at-install-time)). Step 4: a failed crossing attempt whose restore put the previous install back; also a restored interrupt before the attempt started (own envelope, reason `interrupted`, `details.cutover: "not_committed"`) | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory (`previous_release_unknown` and `restore_copies_unavailable` re-run with the same flags); the two store-state reasons need a human. A restored run: fix the reported cause, then re-run this release's installer with a new `--journal-backup`. See [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons) and [`install.sh` refuses with `ErrJournalMigrationRefused`](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused) |
+| `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`): `legacy_root_symlink` for a linked `~/.config/agent-director` on a crossing run before `--check-only`, then, with no move due, `agents_live` or `agent_rows_unreadable` for the store's live rows; `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover; or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`; on a crossing upgrade, the restore preconditions' `backup_inside_install_directory`, `previous_release_unknown` or `restore_copies_unavailable` (see "The restore preconditions" under [Schema migration at install-time](#schema-migration-at-install-time)). Step 4: a failed crossing attempt whose restore put the previous install back; also a restored interrupt before the attempt started (own envelope, reason `interrupted`, `details.cutover: "not_committed"`) | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory (`previous_release_unknown` and `restore_copies_unavailable` re-run with the same flags); the two store-state reasons need a human. A restored run: fix the reported cause, then re-run this release's installer with a new `--journal-backup`. See [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons) and [`install.sh` refuses with `ErrJournalMigrationRefused`](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused) |
 | `ErrJournalMigrationIncomplete` | step 4's failed crossing attempt kept forward: `not_committed` without meeting the restore conditions, `committed`, `unknown`, unreadable commit state, or no error envelope (`outcome_unestablished`); also reason `interrupted` before the attempt started without restoration (`details.cutover: "not_committed"`), or after an interrupted attempt exited 0 and step 5 passed (`details.cutover: "committed"`) | fix the reported cause, then re-run this release's installer with a new `--journal-backup`; except for `not_committed`, keep the maintenance boundary and then retry direct administrator verification with a new `--backup-dir` until it exits 0 with `authority: "sqlite"`. See [`install.sh` stops with `ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete) |
 | any other name | step 4's non-crossing `list` open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
 
@@ -11967,6 +11969,13 @@ resolved (the old directory's store while a move is due):
   reason `legacy_root_symlink` and cutover `not_committed`, changing nothing,
   whether moving or in place. Its action is to replace the link with the
   directory it points to and re-run with a new `--journal-backup`.
+  With no move due, `ad_crossing_live_rows_check` then refuses the same way
+  while `ad_read_live_rows` finds a row in a live state (`agents_live`: each
+  row with the installed binary's `pause` or `kill` for it, its
+  `find-missing`, and a re-run from a shell agent-director did not start),
+  or cannot read the rows (`agent_rows_unreadable`). It reads rows only:
+  `migrate-journal`'s inventory after the swap stays the process check, and
+  with a move due `ErrAgentsLive` has already read them.
   Otherwise the candidate administrator runs `migrate-journal --check-only`
   with the run's journal flags and no store path; anything but `{}` with
   status 0 refuses with
@@ -21913,6 +21922,14 @@ genuine previous install rather than the stand-in.
   exists) and `withLinkDir` (the managed PATH link in `~/links`), and
   `restore_copies_test.go` has `restoreCopyNames` (every name under HOME
   with the copies' pattern). Both files use them.
+- `newCrossingCaseOf(t, tag)` is a `crossingCase` from another release's
+  genuine install (v0.16.0's v14 store). For a store holding agents,
+  `crossing_live_rows_test.go` has `crossingLiveRowSQL(id, state)`, the one
+  statement that adds a row to a genuine v0.16.0 or v0.17.3 store with its
+  agent gone (a recorded process that is not running), so that release's
+  `find-missing` marks it `missing`, and `assertLiveRefused`, which checks
+  pre-flight's `agents_live` refusal of those rows exactly. A case needing
+  such a row uses them, never SQL of its own.
 
 **Must use:** a test that needs a previous release's own binaries, or an
 install made by them, builds them with `releaseBuildOf` or
