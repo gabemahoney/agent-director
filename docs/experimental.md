@@ -124,19 +124,18 @@ Use OpenCode 1.19.4 with auto-update disabled, on the agents' tmux server's
 startup, model, permission, input and quit checks before using another version.
 Enable its switch under [Setup](#setup).
 
-**Live acceptance pending:** native observations below come from a manual
-1.19.4 design check with different launch settings. Before real use, confirm
-them through agent-director's final configuration: host-key precedence over
-saved credentials, exact model/tool use, ordinary ask/once/reject, multiline
-input, visible busy/done/error and quit. The automated transport checks do not
-establish native behavior.
+**Live acceptance:** agent-director's acceptance with OpenCode 1.19.4 and
+these settings established host-key use over a saved credential, exact model
+and tool use, ordinary ask with Allow once and Reject, multiline input,
+visible busy, done and tool-error states, and quit with fresh reuse.
+Provider/API error display remains untested.
 
 Set `OPENROUTER_API_KEY` in agent-director's own environment, never in
 `extra_env`. For MCP this means the long-lived server's environment; restart
 it after changing the key. agent-director gives the key only to that session
-and points OpenCode's OpenRouter provider at it. Native explicit-provider-key
-precedence is expected to use it ahead of saved credentials; that selection
-still needs live confirmation with the final settings.
+and points OpenCode's OpenRouter provider at it. Live acceptance confirmed
+that native explicit-provider-key precedence uses it ahead of a saved
+credential.
 
 Before each spawn, vet the resolved launch environment, including caller and
 template config selectors, `HOME`, the working directory's `opencode.json` or
@@ -148,7 +147,7 @@ the pane check cannot prove this, and agent-director adds no scanner or isolatio
 Launch with exactly one `--model openrouter/<id>` and no task. There is no
 default or fallback in agent-director; a template may defer the model to spawn.
 
-**Credential-selection check, still pending live acceptance:**
+**Credential-selection check** (passed in live acceptance):
 
 1. Create an owned private root with fresh work and native data directories:
 
@@ -214,9 +213,9 @@ sandbox.
 Use Droid's pane inspection, input, outcome and kill/reconciliation procedure,
 with the shared [pane-only input and recovery rules](#pane-only-rows). Wait for
 idle and clear unwanted drafts before a new task; no busy-input behavior is
-promised. Ctrl+U clearing, multiline input and `/exit` were observed manually
-and need confirmation through agent-director. Inspect failures promptly;
-provider/API error display remains unverified. Finished-ID reuse starts a
+promised. Live acceptance confirmed Ctrl+U clearing, multiline input and
+`/exit`. Inspect failures promptly; provider/API error display remains
+untested. Finished-ID reuse starts a
 fresh native conversation, with `--agent opencode` and the explicit model;
 native data stays in OpenCode's own storage and is not deleted by agent-director.
 
