@@ -2,8 +2,9 @@
 
 ## Requirements
 
-- Linux x86_64 or macOS 13 or later on arm64 (Apple Silicon); no other
-  platform.
+- Linux on x86_64 or arm64 (aarch64), or macOS 13 or later on arm64
+  (Apple Silicon); no other platform. Debian 12 (bookworm) is long-term
+  supported on both x86_64 and arm64.
 - At least one of Claude Code, Codex and Cursor. Each counts as installed when
   its `[launch]` key in `config.toml` (`claude_path`, `codex_path`, `cursor_path`; see
   [configuration](configuration.md)) names an executable file, or its program
@@ -13,7 +14,7 @@
   on PATH or named by `[launch] cursor_path`. The editor's `cursor` command
   does not count. The Cursor gateway currently runs on Linux only; no minimum
   Cursor version or macOS Cursor runtime support is established. The recorded
-  Linux candidate, `2026.10.12-d47ca18`, is not a minimum-version guarantee.
+  linux/amd64 candidate, `2026.10.12-d47ca18`, is not a minimum-version guarantee.
   Compatibility requires ACP protocol 1 with a non-null `agentCapabilities`
   object. Optional capabilities may be omitted for a fresh text session;
   resume additionally requires `loadSession: true`. Requested session, mode
@@ -47,8 +48,8 @@
   It puts a link to its native program on PATH. On Linux x86_64 that program is
   `$HOME/.codex/packages/standalone/releases/<version>-x86_64-unknown-linux-musl/bin/codex`,
   whose `<version>` changes with each update, so leave `codex_path` unset and
-  use the link. Where the native program is on macOS arm64 is not documented
-  here.
+  use the link. Native Codex paths for npm and standalone installs on
+  Linux arm64 and macOS arm64 are not documented here.
 - `tmux` 3.2 or later on PATH (verified: 3.2a and 3.3a), with `remain-on-exit`
   off (the default). No tmux server needs to be running.
 - `HOME` set to an absolute path when `install.sh` or `uninstall.sh` runs: each
@@ -71,6 +72,9 @@
   the install as the agents' user, not as root, and grant the terminal access
   if macOS asks. [Upgrade refusal
   reasons](operator-actions.md#upgrade-refusal-reasons) gives the remedies.
+
+On Linux/aarch64, a release from before linux/arm64 support has an `install.sh`
+that refuses the host (exit 2, `unsupported host`).
 
 After validating arguments and the install path, the installer checks all
 required commands for the selected mode before running external commands,
@@ -110,7 +114,8 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
 - `--from-release [tag]`: download from GitHub Releases (latest, or a tag of
   this release or later). A tag of an earlier release is refused: pass a tag
   of this release or later, or install the earlier release with that
-  release's own `install.sh`, fetched from its tag. To verify, pass both
+  release's own `install.sh`, fetched from its tag, provided it
+  [supports this host](#requirements). To verify, pass both
   `--sha256 <hex>` and `--admin-sha256 <hex>`, or neither.
 - `--binary <path>`, `--admin-binary <path>`: install from explicit binaries
   of the same build.
@@ -246,7 +251,7 @@ Both assets must come from the same
 needs no clone:
 
 ```sh
-p=linux-amd64   # or darwin-arm64
+p=linux-amd64   # or linux-arm64 or darwin-arm64
 base=https://github.com/gabemahoney/agent-director/releases/latest/download
 curl -fL -o agent-director "$base/agent-director-$p"
 curl -fL -o agent-director-admin "$base/agent-director-admin-$p"
@@ -448,8 +453,8 @@ holds the old name of the arguments key is refused at spawn, naming
   entries](settings.md#set-up-agent-director-in-a-codex-folder), and scripts or
   test setups that pass the old binary's path.
 - An earlier release is installed with its own `install.sh`, fetched from its
-  tag; this release's `install.sh` refuses an earlier release's binaries (exit
-  3).
+  tag, provided it [supports this host](#requirements); this release's
+  `install.sh` refuses an earlier release's binaries (exit 3).
 
 **Refusals** (exit 5, with the install as it was before the run; each has its
 check and fix in Operator actions):

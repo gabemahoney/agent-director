@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -164,6 +165,95 @@ func newCrossingCaseOf(t *testing.T, tag string, setup ...func(h *moveHome)) *cr
 	}
 	h.Write(c.file, "not a directory\n", 0o600)
 	return c
+}
+
+// SR-3.5: genuine setup rejects foreign binaries; its confined Host Shim
+// must not change the host observed by the candidate that follows it.
+func TestCrossingReleaseHostBoundary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and installs v0.17.3")
+	}
+	r := genuineRelease(t, "v0.17.3")
+	for _, setup := range []bool{true, false} {
+		for _, flag := range []string{"--binary", "--admin-binary"} {
+			t.Run(fmt.Sprintf("setup=%t/%s", setup, flag), func(t *testing.T) {
+				h := newMoveHome(t)
+				var db string
+				if setup {
+					// Fresh setup has no declared store: v0.17.3's earlier store
+					// read is outside this Host Shim refusal's contract.
+					old := *h.S
+					old.Install = r.Install
+					h.S, h.Pair = &old, r.Pair
+				} else {
+					h.InstallRelease(r)
+					db = filepath.Join(h.New, "state.db")
+				}
+				path := h.Pair.Main
+				if flag == "--admin-binary" {
+					path = h.Pair.Admin
+				}
+				data, err := os.ReadFile(path)
+				if err != nil || len(data) < 20 || string(data[:4]) != "\x7fELF" {
+					t.Fatalf("expected a genuine ELF binary: %s: %v", path, err)
+				}
+				// J4's foreign-machine construction, with the same real file probe.
+				data[18], data[19] = 183, 0 // aarch64
+				if runtime.GOARCH == "arm64" {
+					data[18] = 62 // x86-64
+				}
+				wrong := filepath.Join(h.Root, "wrong-machine")
+				h.Write(wrong, string(data), 0o755)
+				if flag == "--binary" {
+					h.Pair.Main = wrong
+				} else {
+					h.Pair.Admin = wrong
+				}
+				osName, machine := h.Run(h.RealTool("uname"), "-s"), h.Run(h.RealTool("uname"), "-m")
+				description := h.Run(h.RealTool("file"), "-L", "-b", wrong)
+				if osName.Code != 0 || machine.Code != 0 || description.Code != 0 {
+					t.Fatal("real host or binary description unavailable")
+				}
+				host := strings.TrimSpace(osName.Stdout) + "/" + strings.TrimSpace(machine.Stdout)
+				detected := strings.TrimSuffix(description.Stdout, "\n")
+				if len(detected) > 80 {
+					detected = detected[:80]
+				}
+				wantCode := 2
+				want := fmt.Sprintf("install.sh: %s %s: architecture mismatch (binary appears to be %s; host is %s). Did you pass the wrong %s?\n", flag, wrong, detected, host, flag)
+				if setup && host == "Linux/aarch64" {
+					wantCode = 1
+					want = "host-shim: " + wrong + ": expected aarch64 little-endian ELF; file reports: " + description.Stdout
+				}
+				var files map[string][]byte
+				if db != "" {
+					files = rollbackStoreCopy(t, db)
+				}
+				temps := h.tempEntries()
+				state := *h
+				state.Home = h.Root
+				before := state.PhysicalSnapshot()
+				var res moveResult
+				if setup {
+					res = moveInstallReleaseSetup(t, h)
+				} else {
+					res = h.Install()
+				}
+				if res.Code != wantCode || res.Stderr != want {
+					t.Fatalf("host boundary: exit %d, stderr %q; want %d, %q", res.Code, res.Stderr, wantCode, want)
+				}
+				if db != "" && !reflect.DeepEqual(rollbackStoreCopy(t, db), files) {
+					t.Error("host refusal changed the store or its WAL/SHM")
+				}
+				if d := moveDiff(before, state.PhysicalSnapshot()); d != "" {
+					t.Fatalf("host refusal changed the case's files:\n%s", d)
+				}
+				if !reflect.DeepEqual(h.tempEntries(), temps) {
+					t.Fatal("host refusal changed TMPDIR")
+				}
+			})
+		}
+	}
 }
 
 // newBackup returns a new absolute backup directory path outside every root.

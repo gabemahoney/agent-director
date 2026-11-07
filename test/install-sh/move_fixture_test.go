@@ -16,8 +16,8 @@ package installsh_test
 //
 // Everything is built once per package run (moveFixture): the binary pairs, a
 // loose copy of install.sh outside any git checkout (so the source-tree check
-// is skipped) and the PATH toolbox the sandbox image's missing file(1) is
-// added to. There is no TestMain here (advice_follow_test.go owns it), so the
+// is skipped) and the PATH toolbox, with a stand-in for an image without
+// file(1). There is no TestMain here (advice_follow_test.go owns it), so the
 // shared directory is left to the sandbox container; moveFixtureShutdown
 // removes it for a TestMain that wants to.
 
@@ -215,7 +215,7 @@ func moveBuildShared() (*moveShared, error) {
 }
 
 // moveFakeFile describes ELF the way file(1) does, enough for install.sh's
-// architecture probe, for the sandbox image that has no file(1).
+// architecture probe, for an image without file(1).
 const moveFakeFile = `#!/bin/bash
 p="${!#}"
 hex() { od -An -tx1 -j "$1" -N "$2" "$p" | tr -d ' \n'; }

@@ -122,9 +122,9 @@
 #   make sandbox CMD="bash test/install-sh/retry.sh"
 # Every install.sh run gets its own HOME under a private temp root, `env -i`
 # and a PATH with fakes first (claude, an instant sleep so the backoffs cost
-# no wall time, and file(1) when the image lacks it). On a host install.sh
-# refuses, the script prints one "retry.sh: SKIP: <reason>" line and exits
-# 77.
+# no wall time, and file(1) when the image lacks it). A supported host's
+# refusal fails the suite; other refused hosts print one
+# "retry.sh: SKIP: <reason>" line and exit 77.
 
 set -uo pipefail
 
@@ -156,14 +156,20 @@ mkdir -p "${INSTALL_SH%/*}" && cp "$INSTALL_SRC" "$INSTALL_SH" || die "copy inst
 # download count these cases pin.
 cp -R "$REPO_ROOT/skills/install-agent-director/schedule" "${INSTALL_SH%/*}/schedule" || die "copy schedule/ beside $INSTALL_SH"
 
-# Host gate — install.sh hard-refuses anything outside the supported set.
-case "$(uname -s)/$(uname -m)" in
-    Linux/x86_64|Darwin/arm64) ;;
-    *)
-        echo "retry.sh: SKIP: install.sh only supports Linux/x86_64 and Darwin/arm64 hosts, not $(uname -s)/$(uname -m)"
-        exit 77
-        ;;
-esac
+# Ask the installer: a missing binary stops an admitted host before any write.
+HOST_ARCH="$(uname -s)/$(uname -m)"
+mkdir -p "$ROOT/gate-home" "$ROOT/tmp"
+gate_err="$(env -i HOME="$ROOT/gate-home" PATH="$PATH" TMPDIR="$ROOT/tmp" \
+    bash "$INSTALL_SH" --binary "$ROOT/no-such-binary" --no-hooks --no-symlink 2>&1 >/dev/null)"
+gate_rc=$?
+if [[ "$gate_rc" -eq 2 && "$gate_err" == *"install.sh: unsupported host: $HOST_ARCH."* ]]; then
+    case "$HOST_ARCH" in
+        Linux/x86_64|Linux/aarch64|Darwin/arm64) die "install.sh refused supported host $HOST_ARCH: $gate_err" ;;
+    esac
+    echo "retry.sh: SKIP: install.sh refuses $HOST_ARCH hosts; retry tests need a supported host"
+    printf '%s\n' "$gate_err" | sed 's/^/    /'
+    exit 77
+fi
 
 # The two asset bodies, stamped as one build of a 0.11.0 release (the same
 # version and a commit), as the /release skill builds them.
@@ -198,7 +204,7 @@ fake sleep <<'EOF'
 exit 0
 EOF
 if ! command -v file >/dev/null 2>&1; then
-    # The sandbox image has no file(1): describe ELF the way it does, enough
+    # For an image without file(1), describe ELF the way it does, enough
     # for install.sh's architecture probe.
     fake file <<'EOF'
 #!/bin/bash

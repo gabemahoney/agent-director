@@ -46,20 +46,21 @@ See the SRD (Ideas hive: `t1.jus.x5`) for the full design.
 
 ## Supported platforms (v1)
 
-The supported install hosts are **`linux/amd64`** and **`darwin/arm64`**
-on macOS 13 or later, the oldest macOS the Go 1.27 toolchain's darwin
-binaries run on. `install.sh`'s pre-flight host check (`uname -s` / `uname -m`) admits
-only `Linux/x86_64` and `Darwin/arm64` and exits 2 on any other host,
-`Linux/aarch64` included, before it downloads or writes anything. The
-release builds the CLI for three targets, those two and
-**`linux/arm64`** (see [Build paths](#build-paths)), but no installer
-admits a `linux/arm64` or `darwin/amd64` host. The
-TS Client's npm package ships no CLI binary: it drives the CLI installed
+The supported install hosts are **`linux/amd64`**, **`linux/arm64`** and
+**`darwin/arm64`** on macOS 13 or later, the oldest macOS the Go 1.27
+toolchain's darwin binaries run on. `install.sh`'s pre-flight host check
+(`uname -s` / `uname -m`) admits only `Linux/x86_64`, `Linux/aarch64` and
+`Darwin/arm64` and exits 2 on any other host before downloading or writing.
+Debian 12 (bookworm) is long-term supported on both x86_64 and arm64.
+Release checks target both Linux architectures natively; ARM results are
+currently report-only and amd64 gates remain blocking.
+
+The TS Client's npm package ships no CLI binary: it drives the CLI installed
 on the host (see
 [System-install discovery pipeline](#system-install-discovery-pipeline-bw3q)),
 and its `package.json` declares `"os": ["linux", "darwin"]` and
-`"cpu": ["x64", "arm64"]`. That pair also admits `linux/arm64` and
-`darwin/x64`, where the package installs but `install.sh` installs no
+`"cpu": ["x64", "arm64"]`. That pair also admits `darwin/x64`,
+where the package installs but `install.sh` installs no
 CLI for it to drive.
 
 Each target gets two binaries, `agent-director` and `agent-director-admin`
@@ -71,7 +72,7 @@ Cursor's protected gateway currently runs on Linux only and refuses other
 platforms before starting a runtime. The generic build/install targets above
 do not establish Cursor support. Darwin cross-compilation and synthetic
 Linux fixture passes are not authenticated runtime/platform acceptance.
-The recorded native Linux candidate `2026.10.12-d47ca18`, wire protocol ACP1
+The recorded native linux/amd64 candidate `2026.10.12-d47ca18`, wire protocol ACP1
 and SDK `0.14.1` are distinct evidence. None supplies a minimum Cursor release
 date or establishes earlier-version, macOS, account-model or trust equivalence.
 
@@ -932,7 +933,8 @@ complete history, rollback or successful intentional end.
 ### Cursor authorization dataflow and authority
 
 `authorization.go` owns the version-grounded adapters and shared pre-admission
-question policy for Cursor `2026.10.12-d47ca18` / ACP1 envelopes.
+question policy for Cursor `2026.10.12-d47ca18` / ACP1 envelopes recorded on
+linux/amd64.
 `parseAuthorization` validates the complete permission option list and captured
 `cursor/create_plan` fields, rejects duplicate JSON keys at every depth and retains the original params bytes as `ToolInput`.
 `ToolName` is the supplied title/plan name and `ToolUseID` the actual
@@ -4261,7 +4263,7 @@ chain left incomplete after the cutover committed; the verifier's own refusal
 (`process_inventory_unreadable` for a verifier error that isn't one); then the
 store's cause. A refusal's text is its reason and action, never file
 contents or raw OS text. The Darwin inventory, deadline and access-control
-refusals use this same table, whose actions apply on both supported hosts;
+refusals use this same table, whose actions apply on all supported hosts;
 the [runbook](operator-actions.md#upgrading-the-native-input-journal) owns
 their remedies.
 **Must use:** a new reason goes into `journalActions`, and a new store failure
@@ -4793,9 +4795,11 @@ except the evidence columns' order after a compatible partial evidence-column re
    and none is to be written (the hop renames columns and adds a column and
    two tables). The recipes cover v12 → v11 and v8 and older; none crosses
    v11 → v10, v10 → v9 or v9 → v8.
-   The way back from a v9 store is to restore the copy of `state.db` (with its
-   `-wal` and `-shm` files) taken before the install, then run the
-   previous release's install; every write made since the install is lost.
+   Before restoring a v9 store, check the previous installer's host support
+   as [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release)
+   requires. Restore the copy of `state.db` (with its `-wal` and `-shm`)
+   taken before the install, then run the previous release's install;
+   every write made since the install is lost.
    A store the hop migrated cannot be returned to the Claude-named columns in
    place, so rolling the binary back over it surfaces `ErrSchemaMismatch`
    (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery)). Every
@@ -11561,7 +11565,7 @@ and J9 (an installed admin from another build, refused, then
   ("release <tag> has no agent-director-admin binary"; the advice is to
   install this release or later with `--from-release <tag of this release or
   later>`, or an earlier release with that release's own `install.sh`,
-  fetched from its tag).
+  fetched from its tag (that release's install.sh must support this host)).
 
 **The source-tree version check (b.go9, b.1rs).** When `agent-director`
 comes from `--binary` or the in-repo build (never from PATH, never with
@@ -12715,9 +12719,9 @@ when it replaces `agent-director`, `install.sh` removes any stale
 "admin prior: none" line ending "to roll back, remove <path>", and
 rolling back means removing `agent-director-admin`; a re-run of that
 upgrade keeps `agent-director.prior` and prints the same advice.
-Without `--keep-prior`, rollback is a re-install of the previous tag
-via `install.sh --from-release v<old>`, which refuses a tag before
-0.11.0 (no `agent-director-admin` asset). Neither works across the
+Without `--keep-prior`, reinstall with the previous release's own installer
+and original flags, provided it [supports this host](install.md#requirements).
+Neither binary-only option works across the
 move of the directory (see [Moving agent-director's
 directory](#moving-agent-directors-directory)): the upgrade that makes it
 takes no `--keep-prior` snapshot, and a binary swap cannot undo it, so the
@@ -20144,10 +20148,8 @@ both built by `make release-binaries` with the same version stamp
 | linux | arm64 | ELF 64 LE | yes (no libc dep) |
 | darwin | arm64 | Mach-O 64 LE | n/a (no system linker) |
 
-A build target is not a supported install host. `linux/arm64` is
-built and shipped, but `install.sh`, the only installer, exits 2 on
-`Linux/aarch64`; the supported install hosts are
-`linux/amd64` and `darwin/arm64` (macOS 13 or later). Windows is not supported (SRD §16.1).
+All three targets are supported install hosts: Linux on x86_64 or arm64
+(aarch64), and macOS 13 or later on arm64. Windows is not supported (SRD §16.1).
 
 Linux binaries are statically linked via `CGO_ENABLED=0` plus
 `modernc.org/sqlite` (pure-Go SQLite driver, no libsqlite3
@@ -20499,13 +20501,44 @@ cases model that layout. Do not bump `PREV_RELEASE_TAG` unless the new
 previous release still uses the old layout; a bump moves all five pins
 together.
 
+### Host Shim: `host-shim.sh` (reusable driver helper)
+
+`test/driver/host-shim.sh` (at `/opt/driver/host-shim.sh` in the harness)
+runs one genuine Earlier Release's installer to build a test's starting
+state. It resolves real `uname` and `file` only from
+`/usr/local/bin:/usr/bin:/bin`, outside the caller's PATH stand-ins. On
+Linux/aarch64 it checks both binaries with real `file -L -b` for
+`ELF 64-bit LSB` and `aarch64`, then gives only that installer private
+stand-ins: `uname -m` reports `x86_64` and `file` reports aarch64 ELF as
+x86-64 ELF. Other calls and output pass through. The stand-ins are removed
+afterward; later commands and the candidate see the real host. On other
+hosts it executes the command unchanged without requiring `file`.
+
+Usage is `host-shim.sh <command> [<arg>...]`. The command's `--binary` and
+`--admin-binary` name the actual pair. When those flags are absent, use
+`host-shim.sh --installs <binary> <admin-binary> -- <command> [<arg>...]`;
+explicit command flags take precedence for each path. On Linux/aarch64,
+missing paths, missing real `file` or a failed binary check refuse with
+exit 1 and a `host-shim:` diagnostic before the installer runs. Otherwise
+the helper returns the command's status.
+
+Callers are `h.InstallRelease` and CurrentLayoutRollback's initial install
+through `moveInstallReleaseSetup`, `TestScheduleReleasedCompatibility`'s
+released installer through `moveInstallReleasePipedSetup` (with `--installs`
+naming the pair its curl stand-in serves), and `old-layout.sh`.
+
+**Must use:** genuine Earlier Release installer setup goes through this
+helper. A way back, a candidate install and later historical-binary commands
+never do; hand-built legacy layouts remain outside it.
+
 ### Old-layout install from a case: `old-layout.sh` and `tree-snapshot.sh` (reusable driver helpers)
 
 `test/driver/old-layout.sh` (installed at `/opt/driver/old-layout.sh`) builds
 an install of the previous release in the old layout, for the cases that
 upgrade from it or go back to it. `old-layout.sh <abs-home> [--store-outside
-<abs-dir>]` runs the baked release's own `install.sh` in `<abs-home>` (hooks
-on, `--register-mcp`, the default PATH link in `~/.local/bin`), with
+<abs-dir>]` runs the baked release's own `install.sh` through
+[`host-shim.sh`](#host-shim-host-shimsh-reusable-driver-helper) in `<abs-home>`
+(hooks on, `--register-mcp`, the default PATH link in `~/.local/bin`), with
 `HOME=<abs-home>` and that directory as the working directory. When that
 release's own registration registers nothing (current Claude Code refuses its
 form of the `claude mcp add` call), the helper registers the MCP server by
@@ -22112,6 +22145,7 @@ genuine previous install rather than the stand-in.
   Scheduler jobs have no network, so a job's context must carry the tags
   its cases use, and its log must show those cases passing, not skipped.
 - `h.InstallRelease(r)` installs the release's pair with its own `install.sh`
+  through [`host-shim.sh`](#host-shim-host-shimsh-reusable-driver-helper)
   into a move-fixture home and returns the installed `agent-director`, whose
   `list` it checks. v0.17.3 makes a v15 store and v0.16.0 a v14 one;
   `rollbackReleasedPair` builds the current-layout rollback's released pair

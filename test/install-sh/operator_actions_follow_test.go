@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -589,10 +590,36 @@ func TestAdviceFollow_J43_V16StoreInspection(t *testing.T) {
 			if got.Stdout != "" || (wantErr == "") != (got.Stderr == "") || !strings.Contains(got.Stderr, wantErr) {
 				t.Fatalf("inspection: stdout %q, stderr %q; want no value and the error %q", got.Stdout, got.Stderr, wantErr)
 			}
+			if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
+				// SR-9.3: refuse before restoring; include the extra legacy root.
+				files := rollbackStoreCopy(t, c.db)
+				state := *h
+				state.Home = h.Root
+				before := state.PhysicalSnapshot()
+				res := installOld(t, h, c.release)
+				if res.Code != 2 || !strings.Contains(res.Stderr, "install.sh: unsupported host: Linux/aarch64") {
+					t.Fatalf("unshimmed way back: %+v", res)
+				}
+				if !reflect.DeepEqual(rollbackStoreCopy(t, c.db), files) {
+					t.Fatal("refused way back changed the store or its WAL/SHM")
+				}
+				if d := moveDiff(before, state.PhysicalSnapshot()); d != "" {
+					t.Fatalf("refused way back changed the case's files:\n%s", d)
+				}
+				if !reflect.DeepEqual(h.tempEntries(), temps) {
+					t.Fatal("refused way back changed TMPDIR")
+				}
+				// Inspection found no sqlite-v1: authority. The pinned alternative
+				// is "get help": stop with the evidence intact, without a restore.
+				return
+			}
 			// Anything but a sqlite-v1: value: restore the pre-upgrade copy and
 			// install the previous release, as "Going back" says in place.
 			rollbackRestoreStore(t, h, c.db, kept)
-			h.InstallRelease(c.release)
+			if res := installOld(t, h, c.release); res.Code != 0 {
+				t.Fatalf("previous release's unshimmed install: %+v", res)
+			}
+			moveListJSON(t, h, c.prev)
 			if v := moveUserVersion(t, h, c.db); v != "15" {
 				t.Errorf("restored store at v%s; want v15", v)
 			}
@@ -819,9 +846,23 @@ func TestAdviceFollow_J44_PutBackKeptInstall(t *testing.T) {
 	})
 }
 
+// installOld runs a way back unshimmed, with the original flags and cwd.
+// Its result also lets a caller observe a host refusal before any restore.
+func installOld(t *testing.T, h *moveHome, r releaseBuild) moveResult {
+	t.Helper()
+	s, pair, flags := h.S, h.Pair, h.Flags
+	old := *h.S
+	old.Install = r.Install
+	h.S, h.Pair, h.Flags = &old, r.Pair, opsOriginalFlags(h.Flags)
+	res := h.Install()
+	h.S, h.Pair, h.Flags = s, pair, flags
+	return res
+}
+
 // J45: "To go back instead, restore the store from the journal backup
 // directory ... (filled before any schema step), and install the previous
-// release with its own installer, as docs/operator-actions.md "Going back to
+// release with its own installer (that release's install.sh must support this
+// host), as docs/operator-actions.md "Going back to
 // the previous release" describes."
 func TestAdviceFollow_J45_ResidualWayBack(t *testing.T) {
 	backupNamed := regexp.MustCompile(`restore the store from the journal backup directory (\S+) \(filled before any schema step\)`)
@@ -863,28 +904,40 @@ func TestAdviceFollow_J45_ResidualWayBack(t *testing.T) {
 			t.Fatalf("the way back's restore: exit %d, %q, %q", got.Code, got.Stdout, got.Stderr)
 		}
 	}
-	// installOld installs r with its own install.sh and the original flags,
-	// from the directory the upgrade ran in.
-	installOld := func(t *testing.T, h *moveHome, r releaseBuild) {
-		t.Helper()
-		s, pair, flags := h.S, h.Pair, h.Flags
-		old := *h.S
-		old.Install = r.Install
-		h.S, h.Pair, h.Flags = &old, r.Pair, opsOriginalFlags(h.Flags)
-		moveMustInstall(t, h)
-		h.S, h.Pair, h.Flags = s, pair, flags
-	}
-
 	t.Run("v0.16.0 in place", func(t *testing.T) {
 		row := forwardOutcomeCase{name: "J39 v0.16.0 residual", residual: true, mode: "child:verify-fails-2", cutover: "not_committed", reason: "old_or_unverified_mutators"}
 		forwardOutcome(t, row, func(f *cutoverFixture, res moveResult, env cutoverEnvelope, db string) {
 			h := f.h
-			defer opsStash(t, h)()
 			back := opsDocSection(t, "Going back to the previous release")
 			back.Pin("Restore the DB with its companion files, removing a `-wal` or `-shm` that the copy lacks",
 				"Install the matching previous release with its own `install.sh` and the original flags")
+			if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
+				files, temps := rollbackStoreCopy(t, db), h.tempEntries()
+				// The backup and legacy roots are outside HOME; snapshot the whole
+				// case without opening any store, including those kept copies.
+				state := *h
+				state.Home = h.Root
+				before := state.PhysicalSnapshot()
+				got := installOld(t, h, genuineRelease(t, "v0.16.0"))
+				if got.Code != 2 || !strings.Contains(got.Stderr, "install.sh: unsupported host: Linux/aarch64") {
+					t.Fatalf("unshimmed way back: %+v", got)
+				}
+				if !reflect.DeepEqual(rollbackStoreCopy(t, db), files) {
+					t.Fatal("refused way back changed the store or its WAL/SHM")
+				}
+				if d := moveDiff(before, state.PhysicalSnapshot()); d != "" {
+					t.Fatalf("refused way back changed the case's files:\n%s", d)
+				}
+				if !reflect.DeepEqual(h.tempEntries(), temps) {
+					t.Fatal("refused way back changed TMPDIR")
+				}
+				return // forwardOutcome follows the printed forward retry next.
+			}
+			defer opsStash(t, h)()
 			restore(t, h, newOpsShell(h), res, db)
-			installOld(t, h, genuineRelease(t, "v0.16.0"))
+			if got := installOld(t, h, genuineRelease(t, "v0.16.0")); got.Code != 0 {
+				t.Fatalf("previous release's unshimmed install: %+v", got)
+			}
 			if list := h.Run(filepath.Join(h.New, "bin", "agent-director"), "list"); list.Code != 0 {
 				t.Errorf("v0.16.0's list: exit %d: %s", list.Code, list.Stderr)
 			}
@@ -903,6 +956,37 @@ func TestAdviceFollow_J45_ResidualWayBack(t *testing.T) {
 				"3. If `~/.agent-director` exists again (something recreated it since the upgrade), set it aside too. Then rename the newest kept directory back.",
 				"Run the first command only when the old path exists. The newest name is the one with the latest timestamp.",
 				"7. From the same directory, install the previous release with that release's own `install.sh`, fetched from its tag, with the flags the original install used")
+			if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
+				files, temps := rollbackStoreCopy(t, db), h.tempEntries()
+				state := *h
+				state.Home = h.Root
+				before := state.PhysicalSnapshot()
+				// The original working directory now lives here. Observe the
+				// refusal there before step 2 moves or restores any directory.
+				h.Cwd = filepath.Join(h.New, "retry-dir")
+				got := installOld(t, h, genuineRelease(t, "v0.11.1"))
+				if got.Code != 2 || !strings.Contains(got.Stderr, "install.sh: unsupported host: Linux/aarch64") {
+					t.Fatalf("unshimmed way back: %+v", got)
+				}
+				if !reflect.DeepEqual(rollbackStoreCopy(t, db), files) {
+					t.Fatal("refused way back changed the external store or its WAL/SHM")
+				}
+				if d := moveDiff(before, state.PhysicalSnapshot()); d != "" {
+					t.Fatalf("refused way back changed the case's files:\n%s", d)
+				}
+				if !reflect.DeepEqual(h.tempEntries(), temps) {
+					t.Fatal("refused way back changed TMPDIR")
+				}
+				// Follow the moved-installer note: re-run ./install.sh from its
+				// current directory, with the original flags and a new backup.
+				f.Clear()
+				backup := filepath.Join(h.Root, "follow-backup")
+				h.Flags = setFlag(h.Flags, "--journal-backup", backup)
+				follow := h.Install()
+				(&crossingCase{h: h, db: db, version: "15"}).assertCrossed(t, follow, backup)
+				moveListJSON(t, h, filepath.Join(h.New, "bin", "agent-director"))
+				return
+			}
 			sh := newOpsShell(h)
 			run := func(cmd string) moveResult {
 				got := sh.Run(cmd)
@@ -930,7 +1014,9 @@ func TestAdviceFollow_J45_ResidualWayBack(t *testing.T) {
 			// Step 4: this restore, of the store kept outside AD's directory.
 			restore(t, h, sh, res, db)
 			// Steps 5 and 6: --no-hooks, and no MCP registration.
-			installOld(t, h, genuineRelease(t, "v0.11.1"))
+			if got := installOld(t, h, genuineRelease(t, "v0.11.1")); got.Code != 0 {
+				t.Fatalf("previous release's unshimmed install: %+v", got)
+			}
 			if fi, err := os.Lstat(h.Old); err != nil || !fi.IsDir() {
 				t.Fatalf("%s is not the pre-move directory: %v", h.Old, err)
 			}

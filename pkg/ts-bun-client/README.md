@@ -25,10 +25,11 @@ its version must meet the client floor.
 ## Supported platforms
 
 - `linux/x64` (Linux on x86_64)
+- `linux/arm64` (Linux on arm64/aarch64)
 - `darwin/arm64` (Apple Silicon Mac, macOS 13 or later)
 
-Package installation may also succeed on `linux/arm64` and `darwin/x64`;
-those are not supported CLI install hosts. See [Requirements](../../docs/install.md#requirements).
+Package installation may also succeed on `darwin/x64`, where no CLI installs.
+See [Requirements](../../docs/install.md#requirements).
 
 ## Quick start
 

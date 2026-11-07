@@ -673,7 +673,7 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 				t.Cleanup(restore)
 				return restore
 			}},
-		{"process_inventory_unsupported", "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64 or Darwin arm64); nothing was changed",
+		{"process_inventory_unsupported", "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64, Linux aarch64 or Darwin arm64); nothing was changed",
 			func(t *testing.T, _ string, _ *JournalMigrationOptions) func() {
 				restore := SetJournalVerifierForTest(func(context.Context, string, []string) error { return journalUnsupportedHost() })
 				t.Cleanup(restore)

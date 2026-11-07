@@ -135,7 +135,7 @@ var journalActions = map[string]string{
 	"process_identity_unreadable":      "run it as the agents' user on a host where that user can read every process's identity, keep the maintenance window, " + journalRetry,
 	"inventory_deadline":               "answer any privacy consent prompt or grant the terminal app access to the folder it names, make every mounted file system reachable or unmount it, or stop processes until the process inventory finishes within the attempt's time limit; keep the maintenance window, " + journalRetry,
 	"old_or_unverified_mutators":       "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration, which for an image in a privacy-protected folder means granting the terminal app access to that folder), keep the maintenance window, " + journalRetry,
-	"process_inventory_unsupported":    "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64 or Darwin arm64); nothing was changed",
+	"process_inventory_unsupported":    "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64, Linux aarch64 or Darwin arm64); nothing was changed",
 
 	// The store's causes.
 	"migration_lock_held":                    "wait for the other administrator's migrate-journal to finish, " + journalRetry,

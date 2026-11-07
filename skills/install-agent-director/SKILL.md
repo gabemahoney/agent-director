@@ -173,7 +173,8 @@ or without `--keep-prior`: the new `bin/` and `admin/` hold no earlier
 binary, so `.prior` is not a way back across the move (the way back is
 "Going back to the previous release" below).
 Without `--keep-prior`, reinstall using the prior release's own installer
-and original flags. This is a binary-only fallback only when the schema
+and original flags, provided it [supports this host](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#requirements).
+This is a binary-only fallback only when the schema
 and directory are unchanged; otherwise first follow "Going back to the
 previous release". The current installer refuses pre-move binaries with exit 3.
 
@@ -555,7 +556,8 @@ This skill runs `install.sh` from the same directory. The script:
       configured busy timeout and ignores `~/.sqliterc`. Install it via
       `apt install sqlite3` / `brew install sqlite` / `dnf install sqlite`.
    3. **OS/CPU gate (SR-2.1).** `uname -s` / `uname -m` must report
-      `Linux/x86_64` or `Darwin/arm64`; every other combination is refused.
+      `Linux/x86_64`, `Linux/aarch64` or `Darwin/arm64`; every other
+      combination is refused. macOS 13 or later is required on arm64.
    4. **Store database (`[store] db_path` and `busy_timeout_ms`), the
       launch paths, and the agents** —
       reads `[store] db_path` from AD's `config.toml`
@@ -667,6 +669,8 @@ This skill runs `install.sh` from the same directory. The script:
       the OS/CPU gate above:
       - `Linux/x86_64`: file output must contain `ELF 64-bit LSB`
         AND (`x86-64` OR `x86_64`).
+      - `Linux/aarch64`: file output must contain `ELF 64-bit LSB`
+        AND `aarch64`.
       - `Darwin/arm64`: file output must contain `Mach-O` AND
         (`arm64` OR `arm64e`).
 
@@ -719,7 +723,7 @@ This skill runs `install.sh` from the same directory. The script:
       The check runs `version`, which opens no store. The fix is to
       install this release's binaries (`make build` in a checkout, or
       `--from-release`); an earlier release is installed only with its
-      own `install.sh`, fetched from its tag.
+      own `install.sh`, fetched from its tag (that release's install.sh must support this host).
 
    **Also in pre-flight: the directory layout, the migration's checks and
    the live-agent check.** Establish the layout and paths first. Before any
@@ -1280,7 +1284,7 @@ install.sh exits 0 on success. Its own failures exit 1 to 6:
 |---|---|
 | 1 | The agent-rename migration could not write a file (a full disk, a permission changed since pre-flight, a failed copy), after the new binaries were installed and before the store was opened; see "Before the six steps" in step 5 of "What this skill does". The message starts `the agent-rename migration could not write <file>; stopping before the store is opened`, its `file` and `error` lines name the file and the cause, and there is no `err_name` line. The file is as it was, every copy the install made is kept, and the store is not opened. Fix the cause the `error` line names, then run this release's install.sh again with the same flags, from a shell agent-director did not start: it completes the migration, changes nothing already migrated, then migrates the store. Or take the way back ("Going back to the previous release" below, with the operator's go-ahead). A step that exits 1 for another reason is the last row of this table. |
 | 2 | Pre-flight: `HOME` unset, empty or not an absolute path (checked first, before anything is read or written: run it with `HOME` set to the user's home directory); a bad flag or flag pair; whitespace in the install path; an unsupported OS/CPU; missing required commands for the selected mode (reported together with package hints; see [requirements](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#requirements)); a binary built for another architecture; or no supported agent found (the message names Claude Code, Codex and Cursor, their `[launch]` keys and how to install one). `uninstall.sh` exits 2 for an unset, empty or relative `HOME` too. |
-| 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, two version stamps that differ or carry no commit, or a binary whose `version` result lacks `config_dir` `~/.config/agent-director` or names another directory (a binary from an earlier release: install this release's binaries; an earlier release is installed with its own install.sh, fetched from its tag). |
+| 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, two version stamps that differ or carry no commit, or a binary whose `version` result lacks `config_dir` `~/.config/agent-director` or names another directory (a binary from an earlier release: install this release's binaries; an earlier release is installed with its own install.sh, fetched from its tag (that release's install.sh must support this host)). |
 | 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"): the file is not valid JSON, holds more than one JSON document, or is valid JSON of another shape. Or, with hooks on and Claude Code present, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). With Claude Code absent `settings.json` is not touched or checked. |
 | 5 | The config file or a template, the move of the old directory, or the store open and schema migration. The cause line below names which. |
 | 6 | The MCP registration failed (`--register-mcp`): `claude mcp add`, or the `claude mcp remove` before the re-add of a registration that names the old directory's binary, exited non-zero. Every other step is done and kept (binaries, store, hooks, links). stderr shows the command run, its exit status, its stderr and the command to run by hand; the last line says the registration failed. There is no `err_name` line. Fix what the stderr names and run the command by hand; if the name is registered for another command and that registration should go, `claude mcp remove agent-director -s <scope>` first. Do not re-run the install for this. |
@@ -2178,7 +2182,8 @@ and `~/.config/agent-director/admin/agent-director-admin.prior`. Restore both:
 A reinstall of the same binary pair does not snapshot again, so `.prior`
 files still belong to the earlier upgrade. If no prior copy exists, use
 the prior release's own installer, fetched from its tag, with the original
-flags; do not use the current installer to reconstruct the previous release.
+flags, provided it [supports this host](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#requirements);
+do not use the current installer to reconstruct the previous release.
 A previous release without an admin binary requires removing the new admin
 binary, subject to the same unchanged-schema condition. Across a directory
 move no `.prior` pair exists; use the complete wayback procedure.

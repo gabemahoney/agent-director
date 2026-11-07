@@ -317,7 +317,12 @@ func TestScheduleReleasedCompatibility(t *testing.T) {
 				if backend != "manual" {
 					argv = append(argv, "--schedule")
 				}
-				res := schedRunArgv(t, h, script, true, argv)
+				var res moveResult
+				if installer == "released" {
+					res = moveInstallReleasePipedSetup(t, h, script, argv)
+				} else {
+					res = schedRunArgv(t, h, script, true, argv)
+				}
 				if res.Code != 0 {
 					t.Fatalf("install: %+v", res)
 				}

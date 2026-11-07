@@ -567,7 +567,7 @@ inside the cutover step and after its commit:
 | `process_identity_unreadable` | A process's identity cannot be read by the user. | Envelope | Run as the agents' user on a host where that user can read every process's identity, keep the window, then Retry. |
 | `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | Envelope | Answer any consent prompt or grant the terminal app access to the folder it names, make every mount reachable or unmount it, or stop processes; keep the window, then Retry. |
 | `old_or_unverified_mutators` | Listed processes may still write (roles below). | Envelope | Stop each listed process, or make an `unverified_process` readable, keep the window, then Retry. |
-| `process_inventory_unsupported` | The host is neither Linux x86_64 nor macOS arm64. | No | Run the upgrade on a supported host. |
+| `process_inventory_unsupported` | The host is outside the supported set: Linux on x86_64 or arm64 (aarch64), and macOS 13 or later on arm64. | No | Run the upgrade on a supported host. |
 
 The store's causes:
 
@@ -1484,6 +1484,10 @@ Delete the set-aside and `recreated` directories once the previous release is
 confirmed working.
 
 ## Going back to the previous release
+
+Before either procedure restores or moves anything, confirm that the previous
+release's own `install.sh` [supports this host](install.md#requirements).
+If that release's install.sh refuses this host, keep this release.
 
 For an upgrade within the current `~/.config/agent-director` layout,
 including schema v9→v10 through v19→v20, the old-layout steps below do not
