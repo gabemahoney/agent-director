@@ -26,6 +26,8 @@ import (
 // seams to arm; then it exits with run's code on the JSON argv in
 // AD_ADMIN_CHILD_ARGS, or argv after -- when that variable is absent (the
 // installer outcome fixture). Non-handshake rows need no fd 3 or fd 4.
+// signal-after-fifo uses AD_TEST_READY/AD_TEST_GO paths instead, for the
+// installer's command substitution, which preserves no extra descriptors.
 // The verifier passes except at the call a
 // verify-fails-<n> seam names. Fd 3 writes "ready" to the parent; fd 4
 // reads its "go". It is the one child runner of the real administrator: a
@@ -44,7 +46,20 @@ func TestMigrateJournalAdminChild(t *testing.T) {
 	} else {
 		args = flag.Args()
 	}
-	toParent, fromParent := os.NewFile(3, "to-parent"), os.NewFile(4, "from-parent")
+	var toParent, fromParent *os.File
+	if seams == "signal-after-fifo" {
+		var err error
+		toParent, err = os.OpenFile(os.Getenv("AD_TEST_READY"), os.O_WRONLY, 0)
+		if err != nil {
+			os.Exit(96)
+		}
+		fromParent, err = os.Open(os.Getenv("AD_TEST_GO"))
+		if err != nil {
+			os.Exit(96)
+		}
+	} else {
+		toParent, fromParent = os.NewFile(3, "to-parent"), os.NewFile(4, "from-parent")
+	}
 	ready := func() {
 		if _, err := toParent.WriteString("ready\n"); err != nil {
 			os.Exit(96)
@@ -88,7 +103,7 @@ func TestMigrateJournalAdminChild(t *testing.T) {
 			ready()
 			<-work.Done() // ended by the handler's cancellation alone
 		}
-	case seams == "signal-after":
+	case seams == "signal-after", seams == "signal-after-fifo":
 		faults.AfterCutoverCommitBegan = func() { ready(); awaitGo() }
 	case seams == "ignored":
 		faults.BeforeCutoverCommit = func() {

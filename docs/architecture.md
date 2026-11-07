@@ -11082,6 +11082,8 @@ claude /install-agent-director (or `bash install.sh`)
   → mv both into place, back to back:
     ~/.config/agent-director/bin/agent-director and
     ~/.config/agent-director/admin/agent-director-admin
+    crossing, first mv to uninterrupted migrate-journal success or outcome:
+    INT/TERM/HUP by phase, SIGPIPE ignored (see "Interrupts" below)
   → optional ~/.local/bin/agent-director PATH symlink (agent-director
     only; agent-director-admin never gets one, under any option); after a
     move, the managed link is re-pointed and reports progress immediately;
@@ -11148,6 +11150,18 @@ does not fall back to a PATH program when that configured path fails.
 
 Pattern B is where the CLI / state / hooks side effects happen.
 
+**Parsed before changing anything.** Everything after the header is one
+brace group, closed by `} ; exit` on the last line. Bash parses it whole
+before running any command: a source cut off inside the group runs nothing;
+once execution starts, a group signal ending `curl` leaves all code available
+for [interrupt settlement](#installer-cutover-interrupts). **Must use:** put
+new code inside the group and keep its body unindented
+(`TestInstallShHopVersionMatchesStore` and
+`TestInstallShCutoverVersionsMatchStore` match lines from column one).
+Never put the group behind `||`, `&&`, `!` or an `if` condition, which
+disables `set -e` inside it. `test/install-sh/install_parse_test.go` pins
+the no-change behavior of a truncated source.
+
 **Exit codes, and exit 5's cause line (b.cfq).** install.sh's header
 (`--help`) lists its exit codes: 1 a write of the config and template
 migration that failed after the binaries were swapped (see "Config and
@@ -11178,8 +11192,8 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `ErrAgentsLive` | `ad_agents_live_check`, in pre-flight and again as the move's first step | stop every agent, `serve` and caller, then re-run from a shell agent-director did not start; a re-run reads unreadable rows again |
 | `ErrMoveFailed` | `ad_move_fail`, any failure or interrupt before the rename | free space or fix the cause named, re-run; the old directory was not changed |
 | `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target; a restore that could not finish (an occupied pre-move path or I/O failure), with remaining copies kept and listed | a human, following the advice; an unfinished restore needs the kept-install procedure in [operator-actions.md](operator-actions.md) |
-| `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`): `legacy_root_symlink` for a linked `~/.config/agent-director` on a crossing run before `--check-only`; `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover; or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`; on a crossing upgrade, the restore preconditions' `backup_inside_install_directory`, `previous_release_unknown` or `restore_copies_unavailable` (see "The restore preconditions" under [Schema migration at install-time](#schema-migration-at-install-time)). Step 4: a failed crossing attempt whose restore put the previous install back | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory (`previous_release_unknown` and `restore_copies_unavailable` re-run with the same flags); the two store-state reasons need a human. A restored run: fix the reported cause, then re-run this release's installer with a new `--journal-backup`. See [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal) |
-| `ErrJournalMigrationIncomplete` | step 4's failed crossing attempt kept forward: `not_committed` without meeting the restore conditions, `committed`, `unknown`, unreadable commit state, or no error envelope (`outcome_unestablished`) | fix the reported cause, then re-run this release's installer with a new `--journal-backup`; except for `not_committed`, keep the maintenance boundary and then retry direct administrator verification with a new `--backup-dir` until it exits 0 with `authority: "sqlite"`. See [operator-actions.md](operator-actions.md) |
+| `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`): `legacy_root_symlink` for a linked `~/.config/agent-director` on a crossing run before `--check-only`; `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover; or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`; on a crossing upgrade, the restore preconditions' `backup_inside_install_directory`, `previous_release_unknown` or `restore_copies_unavailable` (see "The restore preconditions" under [Schema migration at install-time](#schema-migration-at-install-time)). Step 4: a failed crossing attempt whose restore put the previous install back; also a restored interrupt before the attempt started (own envelope, reason `interrupted`, `details.cutover: "not_committed"`) | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory (`previous_release_unknown` and `restore_copies_unavailable` re-run with the same flags); the two store-state reasons need a human. A restored run: fix the reported cause, then re-run this release's installer with a new `--journal-backup`. See [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal) |
+| `ErrJournalMigrationIncomplete` | step 4's failed crossing attempt kept forward: `not_committed` without meeting the restore conditions, `committed`, `unknown`, unreadable commit state, or no error envelope (`outcome_unestablished`); also reason `interrupted` before the attempt started without restoration (`details.cutover: "not_committed"`), or after an interrupted attempt exited 0 and step 5 passed (`details.cutover: "committed"`) | fix the reported cause, then re-run this release's installer with a new `--journal-backup`; except for `not_committed`, keep the maintenance boundary and then retry direct administrator verification with a new `--backup-dir` until it exits 0 with `authority: "sqlite"`. See [operator-actions.md](operator-actions.md) |
 | any other name | step 4's non-crossing `list` open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
 
 `ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
@@ -11208,9 +11222,9 @@ otherwise the installer writes its own, preserving any relayed
 `details.refusal`. A changed cause or kept copies therefore always gets a
 new envelope. **Must use:** every exit-5 path calls
 `ad_exit_5 <Name>`, never a bare `exit 5`; it exits 5 even with stderr closed.
-After a failed crossing attempt, reporting writes are guarded so their
-failure cannot interrupt restoration or copy retention. The installer's own
-outcome envelope (`err_name`, `err_description`, `details.refusal` in
+Throughout the crossing route's [protected span](#installer-cutover-interrupts),
+writes are guarded so their failure cannot interrupt restoration or copy
+retention. The installer's own outcome envelope (`err_name`, `err_description`, `details.refusal` in
 `migrate-journal`'s shape `{reason, processes, action}` with `processes`
 empty, `details.cutover`, and any extra `details` fields) is written only
 by `ad_outcome_exit`, which ends in `ad_exit_5` with the same name, so the
@@ -12133,10 +12147,66 @@ set those explicitly and use the same path. Failures of config/template
 migration, the version read or probe before step 4, and post-open schema
 verification keep their existing behavior.
 
+<a id="installer-cutover-interrupts"></a>
+
+**Interrupts.** Only a crossing upgrade (`CUTOVER_CROSSING`) arms these
+traps, just before the swap's first rename, after staging both binaries.
+The move has already removed its own signal traps (see **A failed move**
+under [Moving agent-director's directory](#moving-agent-directors-directory)).
+Protection lasts until an uninterrupted `migrate-journal` success or the
+installer's outcome report; an interrupted success stays protected through
+step 5. SIGPIPE is ignored and writes are guarded throughout: losing an
+output reader cannot end settlement. The [whole-script parse](#pattern-b--installsh-the-install-skill)
+keeps this path available when the input writer dies too.
+
+`CUTOVER_PHASE` selects the behavior:
+
+- `before_start`: `ad_cutover_on_signal` records the first signal and
+  enters settlement immediately, ignoring further interrupts. It supplies
+  `not_committed`, steps `false` and reason `interrupted` to the existing
+  restore decision. EXIT cleanup removes pending temps, including the
+  managed link's `.new`.
+- `running`: the handler only records the first signal. Step 4 captures
+  the administrator through `exec`, with INT and HUP not ignored, so no
+  intermediate capture shell can die and close the pipe. The installer
+  waits for the administrator's [own cancellation result](#internalstore).
+  A nonzero exit uses the existing outcome rules, relaying a cancelled
+  attempt's envelope unchanged. Exit 0 without an interrupt disarms the
+  traps; with an interrupt, the recording traps, SIGPIPE ignore and write
+  guards remain through step 5's version check, then settlement reports
+  the committed interrupt before hooks, MCP or scheduling.
+- `settling`: from a nonzero attempt exit or the before-start handler,
+  `trap ''` ignores INT, TERM and HUP in the installer and its commands,
+  before the version re-read and through reporting. Go helpers still end
+  on TERM. Status 143 from `ad_restore_reread` is an unreadable cross-check,
+  which permits restoration and sets `CUTOVER_LATE_INTERRUPT` for the late
+  interrupt note. Ignored INT and HUP leave no note.
+
+Before-start settlement also runs from `ad_exit_cleanup` when a signal was
+recorded or the exit status is 129, 130 or 143. It runs before copies are
+removed, so Bash 3.2's ordering of a pending trap and an errexit cannot
+bypass restoration. `ad_exit_5` cleans up before exiting even when reached
+inside EXIT; `AD_EXIT_CLEANUP_DONE` makes the later cleanup harmless.
+The three installer-chosen interrupt outcomes use `ad_outcome_exit` and
+the existing [exit-5 rows](#pattern-b--installsh-the-install-skill).
+An unfinished restore retains its existing `ErrSchemaVerifyFailed` outcome.
+
 **Must use:**
 
 - `ad_cutover_outcome` is the one decision path for a failed crossing attempt.
 - `ad_cutover_settle` is the one way to settle an outcome.
+- `ad_cutover_arm_traps`, `ad_cutover_ignore_interrupts` and
+  `ad_cutover_disarm_traps` alone set the crossing route's signal
+  dispositions. `ad_cutover_on_signal` writes nothing itself.
+- `ad_cutover_interrupted_before_start` and
+  `ad_cutover_interrupted_committed` supply `OUTCOME_*` to
+  `ad_cutover_settle`; they never write a separate envelope.
+- Trap-reachable code checks failures explicitly instead of relying on
+  `set -e`; interrupt settlement disables it with `set +e`. No function
+  may shadow a global the restore or decision reads with a same-named
+  `local`. Keep step 4's crossing capture's `exec`.
+- Guard writes throughout the span; `ad_cutover_write_failed` tolerates
+  failure only while `CUTOVER_PHASE` is set, preserving other routes.
 - `ad_restore_reread` is the one version cross-check, through `ad_store_state`.
 - `ad_restore_run` is the one restore implementation.
 - `ad_restore_copies_json`, `ad_restore_remove_json` and
@@ -21722,7 +21792,9 @@ way a test builds an old-layout install and runs `install.sh` against it.
   `config_dir` or naming another one, and which as `serve` runs until its stdin
   closes, as a Claude Code session's MCP server does. The cutover fixture
   uses its opt-in `SCHED_TEST_DELEGATE_EXEC` to replace the stand-in process
-  when delegating, so the stand-in is not itself a live mutator.
+  when delegating, so the stand-in is not itself a live mutator. Without
+  that opt-in, delegation catches INT/HUP unless ignored at start, returns
+  the delegate's status, and leaves TERM at Go's default.
 - Schedule tests must reuse `moveShared.ScheduleProbe` for help-capability
   cases: it pairs the synthetic stand-in with the current admin, selects help
   through `SCHED_TEST_HELP` and delegates other verbs through
@@ -21850,11 +21922,25 @@ child runner, a FIFO barrier or a canned response. It reuses the
 [genuine-release](#install-sh-genuine-release-fixture-reusable-test-fixture)
 fixtures and builds the child binary once per package run. A control file
 under `h.Root` chooses real execution, a named child row, a canned response,
-or `block` with a `ready`/`go` FIFO handshake; an optional after-hook runs
-before output is relayed. Files keep the selection available when a printed
-retry is followed literally. Other verbs, `--check-only`, `--help` and
+`block` with a `ready`/`go` FIFO handshake, or `signal` cancellation on a
+group signal; an optional after-hook runs before output is relayed. Files
+keep the selection available when a printed retry is followed literally.
+Other verbs, `--check-only`, `--help` and
 attempts without a control file use the real administrator.
 
+- Signal cases reach each phase through FIFO handshakes, never sleeps:
+  a before-start tool, `signal` cancellation, the real child's cutover
+  commit, or the first post-attempt snapshot blocked in `standin` before
+  delegation (TERM ends that Go helper). The router's supervisor preserves
+  output/status; delegated calls reset its recording traps and `exec`,
+  and cancellation reaps its blocker before reporting.
+- `Start` accepts a bash path for file or piped installs. The installer
+  leads the group; the pipe's source writer and optional stdout reader
+  join it. It returns `*moveRunning`, reusing `Signal`'s guard against
+  process-group reuse, and reaps every pipe member. `ReaderEnded` proves
+  the reader has exited before releasing a commit barrier.
+  Before-start rows also use GNU bash 3.2.57 from `AD_TEST_BASH32` when the
+  job image provides it.
 - `Check` reuses `preflightEnvelopes` for cause equality, checks unchanged
   relays/refusals and the second-envelope rule, verifies kept paths, and
   rejects possible-commit wording for `not_committed`.
@@ -21864,7 +21950,8 @@ attempts without a control file use the real administrator.
 
 **Must use:** installer tests needing a chosen cutover outcome use
 `newCutoverFixture` and its checks; extend its modes instead of adding
-another router or child runner.
+another router or child runner. Interrupt cases use its `Start` and signal
+modes instead of their own process-group setup.
 
 ### journalfix: pre-cutover stores for admin tests (reusable test fixture)
 
@@ -21936,6 +22023,8 @@ waits, reads `go` on fd 4, so the parent can signal it at a known point.
 [installer outcome fixture](#install-sh-cutover-outcome-fixture-reusable-test-fixture)
 also routes attempts through it by row name, with argv after `--` when
 `AD_ADMIN_CHILD_ARGS` is absent; non-handshake rows need neither fd.
+The `signal-after-fifo` row instead takes FIFO paths through `AD_TEST_READY`
+and `AD_TEST_GO`, for captures that preserve no extra descriptors.
 
 `journalInstaller(t, db, migrate)` (`internal/adminapi`'s tests) stands in
 for an action's "re-run this release's installer with a new

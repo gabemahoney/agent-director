@@ -313,6 +313,11 @@
 # so, and still returns 0. With --schedule, the entries are replaced, not
 # added (see "The schedule" above): a re-run leaves one copy of each.
 
+# Bash parses this whole block before running it (SR-2.16). A piped install
+# has all its code before its first change, even if an interrupt ends curl
+# in the same process group; a download cut off mid-block runs nothing.
+# The body is deliberately not indented.
+{
 set -euo pipefail
 
 # HOME first, before anything is read or written: every path below is built
@@ -544,7 +549,19 @@ fi
 # stderr, then exit 5.
 ad_exit_5() {
     echo "install.sh: err_name=$1" >&2 || true
+    # An outcome can be reported from inside EXIT (bash 3.2's errexit
+    # ordering). In that case exit will not run the trap's remaining code.
+    if [[ -n "${CUTOVER_PHASE:-}" ]]; then
+        ad_exit_cleanup
+    fi
     exit 5
+}
+
+# SR-2.16: a closed output stream must not interrupt cutover settlement.
+# Shared reporters also run in pre-flight, so define this before their use;
+# outside the cutover span a failed write keeps its ordinary failure.
+ad_cutover_write_failed() {
+    [[ -n "${CUTOVER_PHASE:-}" ]]
 }
 
 # ad_outcome_exit [--relayed] <err_name> <reason> <action> <cutover>
@@ -564,6 +581,8 @@ ad_exit_5() {
 # envelope (its details.refusal.reason or its err_name), never checked.
 # Print English message lines before calling it, so the envelope sits just
 # above the cause line. A failed envelope write never skips the cause line.
+# ad_exit_5 also performs the span's cleanup before exiting, including when
+# this outcome was reached from the EXIT trap itself.
 ad_outcome_exit() {
     local relayed=0 extra='{}'
     if [[ "${1:-}" == --relayed ]]; then
@@ -575,7 +594,7 @@ ad_outcome_exit() {
         extra="$5"
     fi
     if [[ "$relayed" -eq 0 ]] && { [[ ! "$reason" =~ ^[a-z0-9_]+$ ]] || [[ " $AD_OUTCOME_REASONS " != *" $reason "* ]]; }; then
-        echo "install.sh: internal error: outcome reason $reason is not in AD_OUTCOME_REASONS" >&2
+        echo "install.sh: internal error: outcome reason $reason is not in AD_OUTCOME_REASONS" >&2 || ad_cutover_write_failed
         exit 1
     fi
     jq -nc --arg err_name "$err_name" --arg reason "$reason" --arg action "$action" \
@@ -599,6 +618,7 @@ RESTORE_BELONGS=()
 RESTORE_COPY=()
 RESTORE_KEEP_COPIES=0
 RESTORE_NOT_REMOVED=()
+AD_EXIT_CLEANUP_DONE=0
 
 # ad_restore_copies_remove — remove each copy this run made, by its recorded
 # name only, so another run's copies are never touched. A link's copy is its
@@ -635,20 +655,38 @@ ad_restore_copies_remove() {
 # install made and has not moved into place (the staged binary copies, the
 # --from-release downloads, the binary and admin temp copies, a migration
 # sentinel's temp file that step 3 never moved into place, and a migration
-# write's temp file), and the restore's copies unless RESTORE_KEEP_COPIES is
-# 1: after a success, a refusal, a post-swap failure and a failed move alike.
+# write's temp file and the managed link's temp link), and the restore's
+# copies unless RESTORE_KEEP_COPIES is 1: after a success, a refusal, a
+# post-swap failure and a failed move alike.
 # A SIGKILL leaves the copies, under their documented name pattern. Every
 # EXIT trap of this script runs it, the move's too (ad_move_on_exit), so the
 # move's traps chain onto it rather than replace it.
+# Before removing copies, settle a before-start interrupt even when bash
+# exits on errexit before running the pending signal trap (bash 3.2).
 ad_exit_cleanup() {
+    local exit_rc=$?
     local f
+    [[ "$AD_EXIT_CLEANUP_DONE" -eq 1 ]] && return 0
+    if [[ "${CUTOVER_PHASE:-}" == before_start ]]; then
+        if [[ -n "$CUTOVER_INTERRUPTED" || "$exit_rc" -eq 129 || "$exit_rc" -eq 130 || "$exit_rc" -eq 143 ]]; then
+            if [[ -z "$CUTOVER_INTERRUPTED" ]]; then
+                case "$exit_rc" in
+                    129) CUTOVER_INTERRUPTED=HUP ;;
+                    130) CUTOVER_INTERRUPTED=INT ;;
+                    143) CUTOVER_INTERRUPTED=TERM ;;
+                esac
+            fi
+            CUTOVER_INTERRUPTED_IN=before_start
+            ad_cutover_interrupted_before_start
+        fi
+    fi
     # S1-S3 and unexpected exits keep the notes due by that point. Inline:
     # EXIT can run before the later helpers have been defined.
     if [[ -n "${MOVE_NOTES_DEFERRED:-}" ]]; then
         printf '%s' "$MOVE_NOTES_DEFERRED" 2>/dev/null || true
     fi
     for f in "${TMP:-}" "${ADMIN_TMP:-}" "${tmp_bin:-}" "${tmp_admin:-}" \
-        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}"; do
+        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}" "${link_tmp:-}"; do
         if [[ -n "$f" ]]; then
             rm -f "$f"
         fi
@@ -660,6 +698,7 @@ ad_exit_cleanup() {
     if [[ -n "${sched_tmp:-}" ]]; then
         rm -rf -- "$sched_tmp"
     fi
+    AD_EXIT_CLEANUP_DONE=1
 }
 
 # --------------------------------------------------------------------
@@ -3317,9 +3356,9 @@ ad_got_version() {
 # line of a user_version read that gave no version, with <output>, all the
 # read printed (sqlite3's own error when it failed), indented under it.
 ad_show_unreadable_version() {
-    echo "  actual   user_version: <unreadable>" >&2
+    echo "  actual   user_version: <unreadable>" >&2 || ad_cutover_write_failed
     if [[ -n "$1" ]]; then
-        printf '%s\n' "$1" | sed 's/^/    /' >&2
+        printf '%s\n' "$1" | sed 's/^/    /' >&2 || ad_cutover_write_failed
     fi
 }
 
@@ -3348,21 +3387,21 @@ ad_fail_unreadable_version() {
         failed=1
     fi
     ad_show_unreadable_version "$output"
-    echo "  Reading ${state_db_name}'s user_version (sqlite3 PRAGMA user_version)" >&2
+    echo "  Reading ${state_db_name}'s user_version (sqlite3 PRAGMA user_version)" >&2 || ad_cutover_write_failed
     if [[ "$failed" -eq 1 ]]; then
-        echo "  failed, so the install could not ${could_not}." >&2
+        echo "  failed, so the install could not ${could_not}." >&2 || ad_cutover_write_failed
     else
-        echo "  printed the output above, not a whole number (0 or more), so" >&2
-        echo "  the install could not ${could_not}." >&2
+        echo "  printed the output above, not a whole number (0 or more), so" >&2 || ad_cutover_write_failed
+        echo "  the install could not ${could_not}." >&2 || ad_cutover_write_failed
     fi
     for line in "$@"; do
-        echo "  $line" >&2
+        echo "  $line" >&2 || ad_cutover_write_failed
     done
     if [[ "$failed" -eq 1 ]]; then
-        echo "  Re-running this install retries the read." >&2
+        echo "  Re-running this install retries the read." >&2 || ad_cutover_write_failed
     else
-        echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2
-        echo "  A re-run gets the same output unless that sqlite3 or ${state_db_name} changes." >&2
+        echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2 || ad_cutover_write_failed
+        echo "  A re-run gets the same output unless that sqlite3 or ${state_db_name} changes." >&2 || ad_cutover_write_failed
     fi
     ad_exit_5 ErrVersionUnreadable
 }
@@ -4504,6 +4543,74 @@ RESTORE_ASIDE=""
 RESTORE_PREMOVE_AT=""
 RESTORE_FINISHED=()
 MOVE_NOTES_DEFERRED=""
+CUTOVER_PHASE=""
+CUTOVER_INTERRUPTED=""
+CUTOVER_INTERRUPTED_IN=""
+CUTOVER_LATE_INTERRUPT=""
+
+# SR-2.16: before-start signals restore; during the attempt they only record
+# cancellation. migrate-journal receives the process group's signal itself.
+ad_cutover_arm_traps() {
+    CUTOVER_PHASE=before_start
+    trap 'ad_cutover_on_signal INT' INT
+    trap 'ad_cutover_on_signal TERM' TERM
+    trap 'ad_cutover_on_signal HUP' HUP
+    trap '' PIPE
+}
+
+# SR-2.16: settlement and its children ignore further interrupts, with no
+# fork-to-trap window. Go helpers alone can still be ended by TERM.
+ad_cutover_ignore_interrupts() {
+    CUTOVER_PHASE=settling
+    trap '' INT TERM HUP
+}
+
+# SR-2.16: an uninterrupted successful attempt ends the protected span.
+ad_cutover_disarm_traps() {
+    CUTOVER_PHASE=""
+    trap - INT TERM HUP PIPE
+}
+
+ad_cutover_on_signal() {
+    if [[ -z "$CUTOVER_INTERRUPTED" ]]; then
+        CUTOVER_INTERRUPTED="$1"
+        CUTOVER_INTERRUPTED_IN="$CUTOVER_PHASE"
+    fi
+    if [[ "$CUTOVER_PHASE" == before_start ]]; then
+        ad_cutover_interrupted_before_start
+    fi
+    return 0
+}
+
+# No attempt ran: settle the explicit not_committed/no-step outcome through
+# the same restore decision. Also called by EXIT before it removes copies.
+ad_cutover_interrupted_before_start() {
+    ad_cutover_ignore_interrupts
+    set +e
+    OUTCOME_ENVELOPE=""
+    OUTCOME_ERR_NAME=""
+    OUTCOME_OUTPUT=""
+    OUTCOME_CUTOVER=not_committed
+    OUTCOME_STEPS=false
+    OUTCOME_REFUSAL="$(jq -nc --arg action "re-run this release's installer with a new --journal-backup directory, and let it finish" \
+        '{reason: "interrupted", processes: [], action: $action}')"
+    ad_cutover_settle
+}
+
+# SR-2.16: after an interrupted attempt succeeds and step 5 verifies it,
+# stop before hooks/MCP/scheduling and report the committed forward row.
+ad_cutover_interrupted_committed() {
+    ad_cutover_ignore_interrupts
+    set +e
+    OUTCOME_ENVELOPE=""
+    OUTCOME_ERR_NAME=""
+    OUTCOME_OUTPUT=""
+    OUTCOME_CUTOVER=committed
+    OUTCOME_STEPS=unknown
+    OUTCOME_REFUSAL="$(jq -nc --arg action "re-run this release's installer with a new --journal-backup directory, which finishes the install, then run the administrator's verification retry until it exits 0 with authority sqlite" \
+        '{reason: "interrupted", processes: [], action: $action}')"
+    ad_cutover_settle
+}
 
 # Only a crossing move can still be undone. Preserve trailing newlines in
 # its notes while waiting for the outcome; other installs print in place.
@@ -4801,6 +4908,9 @@ ad_restore_reread() {
         fi
     fi
     RESTORE_REREAD_OUTPUT="$(ad_store_state "$RESTORE_REREAD_PATH" 2>&1)" || rc=$?
+    if [[ "$rc" -eq 143 && "$CUTOVER_PHASE" == settling ]]; then
+        CUTOVER_LATE_INTERRUPT=TERM
+    fi
     RESTORE_REREAD_VERSION="${RESTORE_REREAD_OUTPUT%%$'\n'*}"
     if [[ "$rc" -ne 0 ]] || ! ad_is_version "$RESTORE_REREAD_VERSION"; then
         RESTORE_REREAD_FAILED=1
@@ -4957,6 +5067,19 @@ ad_restore_kept_message() {
 # Keep every write best-effort, including pipelines into a closed stderr.
 ad_cutover_message() {
     local row="$1" why residual=0
+    case "$CUTOVER_INTERRUPTED_IN" in
+        before_start)
+            echo "install.sh: the install was interrupted (SIG${CUTOVER_INTERRUPTED}) after the new binaries were installed and before migrate-journal started; migrate-journal never ran, so nothing was migrated." >&2 || true ;;
+        running)
+            if [[ -n "$OUTCOME_ENVELOPE" ]]; then
+                echo "install.sh: the install was interrupted (SIG${CUTOVER_INTERRUPTED}) while migrate-journal ran; its own outcome follows." >&2 || true
+            elif [[ "$OUTCOME_CUTOVER" == committed ]]; then
+                echo "install.sh: the install was interrupted (SIG${CUTOVER_INTERRUPTED}) while migrate-journal ran. It had already begun the cutover commit, so it finished the cutover and exited 0; the install stopped after checking the store's version, before the hook, MCP and schedule steps." >&2 || true
+            fi ;;
+    esac
+    if [[ -n "$CUTOVER_LATE_INTERRUPT" ]]; then
+        echo "install.sh: an interrupt arrived after migrate-journal's attempt and was ignored, so that the outcome below could be settled; it is the attempt's own." >&2 || true
+    fi
     case "$row" in
         restored) echo "install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run." >&2 || true ;;
         restore_incomplete) echo "install.sh: the restore could not finish; the install is partly restored: $RESTORE_FAILED" >&2 || true ;;
@@ -5077,7 +5200,9 @@ ad_cutover_settle() {
         case "$row" in
             unestablished) OUTCOME_REASON=outcome_unestablished ;;
             restore_incomplete) OUTCOME_REASON=restore_incomplete ;;
-            *) OUTCOME_REASON=interrupted ;;
+            *)
+                OUTCOME_REASON=interrupted
+                OUTCOME_ACTION="$(printf '%s\n' "$OUTCOME_REFUSAL" | jq -r '.action')" ;;
         esac
     fi
     if [[ "$RESTORE_KEEP_COPIES" -eq 1 && "$row" != restored ]]; then
@@ -5640,8 +5765,8 @@ ad_move_print_references() {
     local hits
     hits="$( { grep -n -F -I -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -F -I --exclude='*.pre-agent-rename.*' -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
     if [[ -n "$hits" ]]; then
-        echo "  references: these lines still name the old directory. They were left as written; change each to the same place under $NEW_ROOT_CLEAN (or remove it) by hand, since the old directory is kept only until you delete it ($1):"
-        printf '%s\n' "$hits" | sed 's/^/    /'
+        echo "  references: these lines still name the old directory. They were left as written; change each to the same place under $NEW_ROOT_CLEAN (or remove it) by hand, since the old directory is kept only until you delete it ($1):" || ad_cutover_write_failed
+        printf '%s\n' "$hits" | sed 's/^/    /' || ad_cutover_write_failed
     fi
 }
 
@@ -5877,10 +6002,15 @@ cp "$BINARY_SRC" "$TMP"
 chmod 0755 "$TMP"
 cp "$ADMIN_SRC" "$ADMIN_TMP"
 chmod 0755 "$ADMIN_TMP"
+# SR-2.16 starts at the first replacement. Keep INT/HUP catchable until
+# migrate-journal starts, so it can cancel rather than inherit an ignore.
+if [[ "$CUTOVER_CROSSING" -eq 1 ]]; then
+    ad_cutover_arm_traps
+fi
 mv "$TMP" "$CANONICAL"
 mv "$ADMIN_TMP" "$ADMIN_CANONICAL"
 
-echo "  binary  : $CANONICAL"
+echo "  binary  : $CANONICAL" || ad_cutover_write_failed
 
 # --------------------------------------------------------------------
 # Optional PATH symlink — agent-director only. agent-director-admin never
@@ -5889,17 +6019,19 @@ echo "  binary  : $CANONICAL"
 
 target="$(ad_managed_link_target)"
 if [[ -n "$target" ]]; then
-    ln -sfn "$CANONICAL" "${target}.new"
-    mv -f "${target}.new" "$target"
+    link_tmp="${target}.new"
+    ln -sfn "$CANONICAL" "$link_tmp"
+    mv -f "$link_tmp" "$target"
+    link_tmp=""
     MANAGED_LINK="$target"
-    echo "  symlink : $target → $CANONICAL"
+    echo "  symlink : $target → $CANONICAL" || ad_cutover_write_failed
 elif [[ -n "$MANAGED_LINK_SKIP" ]]; then
-    echo "  symlink : skipped — $MANAGED_LINK_SKIP"
+    echo "  symlink : skipped — $MANAGED_LINK_SKIP" || ad_cutover_write_failed
 elif [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
     if [[ ! -d "$SYMLINK_DIR" ]]; then
-        echo "  symlink : skipped — $SYMLINK_DIR does not exist"
+        echo "  symlink : skipped — $SYMLINK_DIR does not exist" || ad_cutover_write_failed
     else
-        echo "  symlink : skipped — $SYMLINK_DIR contains whitespace"
+        echo "  symlink : skipped — $SYMLINK_DIR contains whitespace" || ad_cutover_write_failed
     fi
 fi
 
@@ -5914,11 +6046,11 @@ ad_move_link_notes() {
         if [[ "$old_link" == "$MANAGED_LINK" ]]; then
             continue
         fi
-        echo "  old link: $old_link still leads into the old directory's bin, which is kept only until you delete it. Re-point it:"
-        printf '    ln -sfn %q %q\n' "$CANONICAL" "$old_link"
+        echo "  old link: $old_link still leads into the old directory's bin, which is kept only until you delete it. Re-point it:" || ad_cutover_write_failed
+        printf '    ln -sfn %q %q\n' "$CANONICAL" "$old_link" || ad_cutover_write_failed
     done
     for old_entry in ${OLD_BIN_PATH_ENTRIES[@]+"${OLD_BIN_PATH_ENTRIES[@]}"}; do
-        echo "  old PATH: \$PATH names $old_entry, the old directory's bin, which is kept only until you delete it. In your shell startup file (~/.bashrc, ~/.zshrc, ...), replace it with ${DEFAULT_BIN_DIR}, then open a new shell."
+        echo "  old PATH: \$PATH names $old_entry, the old directory's bin, which is kept only until you delete it. In your shell startup file (~/.bashrc, ~/.zshrc, ...), replace it with ${DEFAULT_BIN_DIR}, then open a new shell." || ad_cutover_write_failed
     done
 }
 if [[ "$MOVED" -eq 1 ]]; then
@@ -5969,13 +6101,13 @@ ad_backup_keeping_mode() {
 # ad_migrate_ways_on — the two ways on after a migration step failed, on
 # stderr.
 ad_migrate_ways_on() {
-    echo "  The new binaries are already installed, and the store is not opened. Either:" >&2
-    echo "    - fix the cause, then run this release's install.sh again. It completes the" >&2
-    echo "      migration: it changes nothing in a file already migrated and makes no new" >&2
-    echo "      backup of one, and then it migrates the store. Or" >&2
-    echo "    - take the way back to the previous release: see \"Going back to the" >&2
-    echo "      previous release\" and \"A migration write failed after the binary swap\" in" >&2
-    echo "      docs/operator-actions.md." >&2
+    echo "  The new binaries are already installed, and the store is not opened. Either:" >&2 || ad_cutover_write_failed
+    echo "    - fix the cause, then run this release's install.sh again. It completes the" >&2 || ad_cutover_write_failed
+    echo "      migration: it changes nothing in a file already migrated and makes no new" >&2 || ad_cutover_write_failed
+    echo "      backup of one, and then it migrates the store. Or" >&2 || ad_cutover_write_failed
+    echo "    - take the way back to the previous release: see \"Going back to the" >&2 || ad_cutover_write_failed
+    echo "      previous release\" and \"A migration write failed after the binary swap\" in" >&2 || ad_cutover_write_failed
+    echo "      docs/operator-actions.md." >&2 || ad_cutover_write_failed
 }
 
 # ad_migrate_fail_write <file> <error> — a migration write failed: remove
@@ -5986,10 +6118,10 @@ ad_migrate_fail_write() {
         rm -f "$migrate_tmp"
         migrate_tmp=""
     fi
-    echo "install.sh: the agent-rename migration could not write $1; stopping before the store is opened." >&2
-    echo "  file    : $1" >&2
-    printf '%s\n' "$2" | sed '1s/^/  error   : /;2,$s/^/            /' >&2
-    echo "  $1 is as it was, and every copy this install made is kept." >&2
+    echo "install.sh: the agent-rename migration could not write $1; stopping before the store is opened." >&2 || ad_cutover_write_failed
+    echo "  file    : $1" >&2 || ad_cutover_write_failed
+    printf '%s\n' "$2" | sed '1s/^/  error   : /;2,$s/^/            /' >&2 || ad_cutover_write_failed
+    echo "  $1 is as it was, and every copy this install made is kept." >&2 || ad_cutover_write_failed
     ad_migrate_stop_references
     ad_migrate_ways_on
     exit 1
@@ -6001,7 +6133,7 @@ ad_migrate_fail_write() {
 # (SR-11.7). Nothing when no move ran.
 ad_migrate_stop_references() {
     if [[ "$MOVED" -eq 1 ]]; then
-        ad_move_print_references "$MOVED_KEPT" >&2
+        ad_move_print_references "$MOVED_KEPT" >&2 || ad_cutover_write_failed
     fi
 }
 
@@ -6015,9 +6147,9 @@ ad_migrate_refuse_applied() {
         rm -f "$migrate_tmp"
         migrate_tmp=""
     fi
-    echo "install.sh: the agent-rename migration refuses $2, which pre-flight accepted; stopping before the store is opened." >&2
-    printf '%s\n' "$3" | sed '$d' >&2
-    echo "  $2 changed since pre-flight." >&2
+    echo "install.sh: the agent-rename migration refuses $2, which pre-flight accepted; stopping before the store is opened." >&2 || ad_cutover_write_failed
+    printf '%s\n' "$3" | sed '$d' >&2 || ad_cutover_write_failed
+    echo "  $2 changed since pre-flight." >&2 || ad_cutover_write_failed
     ad_migrate_stop_references
     ad_migrate_ways_on
     ad_exit_5 "$(ad_agent_rename_err_name "$1")"
@@ -6077,7 +6209,7 @@ ad_migrate_apply_file() {
         ad_migrate_fail_write "$file" "$err"
     fi
     migrate_tmp=""
-    echo "  migrate : $file migrated for the agent rename (copy: $bak)"
+    echo "  migrate : $file migrated for the agent rename (copy: $bak)" || ad_cutover_write_failed
 }
 
 if [[ "$AGENT_RENAME_DUE" -eq 1 ]]; then
@@ -6096,7 +6228,7 @@ if [[ "$AGENT_RENAME_DUE" -eq 1 ]]; then
         fi
     done
     if [[ "$migrate_changed" -eq 0 ]]; then
-        echo "  migrate : config.toml and the templates need no agent-rename change"
+        echo "  migrate : config.toml and the templates need no agent-rename change" || ad_cutover_write_failed
     fi
 fi
 
@@ -6158,11 +6290,11 @@ ad_target_version() {
 # re-run after the fix starts over, and its step-3 probe then authorizes any
 # pending migration (b.7b4).
 ad_fail_config_refused() {
-    echo "install.sh: agent-director refused its config file (ErrConfigMalformed)" >&2
-    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2
-    printf '%s\n' "$1" | sed 's/^/  /' >&2
-    echo "  Fix what the error above names in the config file, then re-run this" >&2
-    echo "  install." >&2
+    echo "install.sh: agent-director refused its config file (ErrConfigMalformed)" >&2 || ad_cutover_write_failed
+    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2 || ad_cutover_write_failed
+    printf '%s\n' "$1" | sed 's/^/  /' >&2 || ad_cutover_write_failed
+    echo "  Fix what the error above names in the config file, then re-run this" >&2 || ad_cutover_write_failed
+    echo "  install." >&2 || ad_cutover_write_failed
     ad_exit_5 ErrConfigMalformed
 }
 
@@ -6171,15 +6303,15 @@ if [[ ! -e "$state_db" ]]; then
     # Fresh install: no DB on disk. No sentinel is needed — the step-4
     # open fresh-creates state.db at the binary's current schemaVersion.
     db_version_before=""
-    echo "  schema  : no existing ${state_db_name} — fresh create on first open"
+    echo "  schema  : no existing ${state_db_name} — fresh create on first open" || ad_cutover_write_failed
 else
     db_version_before_rc=0
     db_version_before="$(ad_user_version "$state_db")" || db_version_before_rc=$?
     if ! ad_got_version "$db_version_before_rc" "$db_version_before"; then
         # Without the version no migration can be authorized, and the
         # step-4 open would refuse an older store anyway: stop here.
-        echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2
-        echo "  state.db: $state_db" >&2
+        echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2 || ad_cutover_write_failed
+        echo "  state.db: $state_db" >&2 || ad_cutover_write_failed
         ad_fail_unreadable_version "$db_version_before_rc" "$db_version_before" \
             "tell whether ${state_db_name} needs a migration" \
             "No migration was authorized."
@@ -6238,8 +6370,8 @@ else
             # The probe may have migrated the store, so neither "no
             # migration authorization needed" nor a skipped step 5 would
             # be true: stop here, as step 2 does.
-            echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2
-            echo "  state.db: $state_db" >&2
+            echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2 || ad_cutover_write_failed
+            echo "  state.db: $state_db" >&2 || ad_cutover_write_failed
             ad_fail_unreadable_version "$db_version_probed_rc" "$db_version_probed" \
                 "tell whether the probe (agent-director list) ran a migration" \
                 "A sentinel written before this install was beside ${state_db_name}, and it may" \
@@ -6251,14 +6383,14 @@ else
     fi
 
     if [[ -z "$probe_name" && -n "$target_version" ]]; then
-        echo "  schema  : migration v${db_version_before}→v${target_version} ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $sentinel)"
+        echo "  schema  : migration v${db_version_before}→v${target_version} ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $sentinel)" || ad_cutover_write_failed
     elif [[ -z "$probe_name" || "$probe_name" == ErrSchemaMismatch ]]; then
-        echo "  schema  : ${state_db_name} at v${db_version_before}; no migration authorization needed"
+        echo "  schema  : ${state_db_name} at v${db_version_before}; no migration authorization needed" || ad_cutover_write_failed
     elif [[ -z "$target_version" ]]; then
-        echo "  schema  : ${state_db_name} at v${db_version_before}; could not tell whether a migration is needed (agent-director list failed: ${probe_name})"
+        echo "  schema  : ${state_db_name} at v${db_version_before}; could not tell whether a migration is needed (agent-director list failed: ${probe_name})" || ad_cutover_write_failed
     elif [[ "$db_version_before" == "$target_version" ]]; then
         # Defensive: probe reported a target equal to current. Nothing to do.
-        echo "  schema  : ${state_db_name} already at target v${target_version}; no sentinel written"
+        echo "  schema  : ${state_db_name} already at target v${target_version}; no sentinel written" || ad_cutover_write_failed
     else
         # The temp file sits beside the sentinel, in the store's directory,
         # which [store] db_path may put in a directory other users can write.
@@ -6269,13 +6401,13 @@ else
         # predictable name.
         if ! tmp_sentinel="$(mktemp "${sentinel}.tmp.XXXXXX")"; then
             tmp_sentinel=""
-            echo "install.sh: writing the migration sentinel FAILED" >&2
-            echo "  sentinel: $sentinel" >&2
-            echo "  mktemp could not create a temp file beside it (its error is above), so" >&2
-            echo "  no migration was authorized: ${state_db_name} is still at v${db_version_before}." >&2
-            echo "  The new agent-director does not open it until it is at v${target_version}." >&2
-            echo "  Fix what mktemp's error names (a directory you cannot write, say, or a" >&2
-            echo "  full disk), then re-run this install: it authorizes the migration again." >&2
+            echo "install.sh: writing the migration sentinel FAILED" >&2 || ad_cutover_write_failed
+            echo "  sentinel: $sentinel" >&2 || ad_cutover_write_failed
+            echo "  mktemp could not create a temp file beside it (its error is above), so" >&2 || ad_cutover_write_failed
+            echo "  no migration was authorized: ${state_db_name} is still at v${db_version_before}." >&2 || ad_cutover_write_failed
+            echo "  The new agent-director does not open it until it is at v${target_version}." >&2 || ad_cutover_write_failed
+            echo "  Fix what mktemp's error names (a directory you cannot write, say, or a" >&2 || ad_cutover_write_failed
+            echo "  full disk), then re-run this install: it authorizes the migration again." >&2 || ad_cutover_write_failed
             # A re-run alone does not fix it: someone must make the
             # directory writable or free space first.
             ad_exit_5 ErrSchemaVerifyFailed
@@ -6283,7 +6415,7 @@ else
         printf '{"from": %d, "to": %d}\n' "$db_version_before" "$target_version" > "$tmp_sentinel"
         chmod 0600 "$tmp_sentinel" 2>/dev/null || true
         mv -f "$tmp_sentinel" "$sentinel"
-        echo "  schema  : authorized migration v${db_version_before}→v${target_version} (sentinel $sentinel)"
+        echo "  schema  : authorized migration v${db_version_before}→v${target_version} (sentinel $sentinel)" || ad_cutover_write_failed
     fi
 fi
 
@@ -6296,24 +6428,31 @@ fi
 # help/version stay DB-free. Capture one invocation's status and diagnostics
 # so they describe the same attempt. Keep the maintenance boundary through
 # verification; a failed crossing attempt settles through SR-2.16 before
-# reporting. The non-crossing list route keeps its existing failure rules.
+# reporting. exec leaves no intermediate capture shell that a group signal
+# could end before the attempt finishes. The non-crossing list route keeps
+# its existing failure rules.
 open_command=("$CANONICAL" list)
 if [[ "$CUTOVER_CROSSING" -eq 1 ]]; then
     open_command=("$ADMIN_CANONICAL" --store-path "$state_db" migrate-journal "${JOURNAL_ARGS[@]}")
 fi
 open_rc=0
 if [[ "${open_command[0]}" == "$ADMIN_CANONICAL" ]]; then
-    open_err="$("${open_command[@]}" 2>&1)" || open_rc=$?
+    CUTOVER_PHASE=running
+    open_err="$(exec "${open_command[@]}" 2>&1)" || open_rc=$?
 else
     open_err="$("${open_command[@]}" 2>&1 >/dev/null)" || open_rc=$?
 fi
 if [[ "$open_rc" -eq 0 ]]; then
     if [[ "${open_command[0]}" == "$ADMIN_CANONICAL" ]]; then
-        printf "  journal : %s\n" "$open_err"
+        if [[ -z "$CUTOVER_INTERRUPTED" ]]; then
+            ad_cutover_disarm_traps
+        fi
+        printf "  journal : %s\n" "$open_err" || ad_cutover_write_failed
         ad_move_notes_flush
     fi
 else
     if [[ "$CUTOVER_CROSSING" -eq 1 ]]; then
+        ad_cutover_ignore_interrupts
         ad_cutover_outcome "$open_rc" "$open_err"
     fi
     # A refused config stopped the open before it reached state.db, so the
@@ -6361,23 +6500,23 @@ fi
 # first. A re-run that fails the same way means the binary resolves the
 # store differently from ad_store_db_path: the maintainers' turn.
 if [[ ! -f "$state_db" ]]; then
-    echo "install.sh: ${state_db_name} was not created by the store open" >&2
-    echo "  state.db: $state_db" >&2
-    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2
-    echo "  The store open (agent-director list) succeeded, yet there is no store" >&2
-    echo "  at the state.db path above, where install.sh expected it. agent-director" >&2
-    echo "  opens its store at [store] db_path in the config file above" >&2
-    echo "  (~/.config/agent-director/state.db when unset), and install.sh read that file" >&2
-    echo "  before the open. So either db_path changed since and agent-director" >&2
-    echo "  opened a store somewhere else, or something removed or moved the store" >&2
-    echo "  after the open." >&2
-    echo "  Check db_path in the config file, and whether anything (a cleanup, say)" >&2
-    echo "  removed or moved the store. To keep a moved store's sessions, put it" >&2
-    echo "  back at the state.db path above first: with no store there, a re-run" >&2
-    echo "  creates a new, empty one. Then re-run this install: it reads db_path" >&2
-    echo "  again and opens the store there. If a re-run fails this same way, the" >&2
-    echo "  installed agent-director does not open its store where this install.sh" >&2
-    echo "  expects it: contact the maintainers." >&2
+    echo "install.sh: ${state_db_name} was not created by the store open" >&2 || ad_cutover_write_failed
+    echo "  state.db: $state_db" >&2 || ad_cutover_write_failed
+    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2 || ad_cutover_write_failed
+    echo "  The store open (agent-director list) succeeded, yet there is no store" >&2 || ad_cutover_write_failed
+    echo "  at the state.db path above, where install.sh expected it. agent-director" >&2 || ad_cutover_write_failed
+    echo "  opens its store at [store] db_path in the config file above" >&2 || ad_cutover_write_failed
+    echo "  (~/.config/agent-director/state.db when unset), and install.sh read that file" >&2 || ad_cutover_write_failed
+    echo "  before the open. So either db_path changed since and agent-director" >&2 || ad_cutover_write_failed
+    echo "  opened a store somewhere else, or something removed or moved the store" >&2 || ad_cutover_write_failed
+    echo "  after the open." >&2 || ad_cutover_write_failed
+    echo "  Check db_path in the config file, and whether anything (a cleanup, say)" >&2 || ad_cutover_write_failed
+    echo "  removed or moved the store. To keep a moved store's sessions, put it" >&2 || ad_cutover_write_failed
+    echo "  back at the state.db path above first: with no store there, a re-run" >&2 || ad_cutover_write_failed
+    echo "  creates a new, empty one. Then re-run this install: it reads db_path" >&2 || ad_cutover_write_failed
+    echo "  again and opens the store there. If a re-run fails this same way, the" >&2 || ad_cutover_write_failed
+    echo "  installed agent-director does not open its store where this install.sh" >&2 || ad_cutover_write_failed
+    echo "  expects it: contact the maintainers." >&2 || ad_cutover_write_failed
     ad_exit_5 ErrSchemaVerifyFailed
 fi
 chmod 0600 "$state_db" 2>/dev/null || true
@@ -6385,7 +6524,7 @@ db_version_after_rc=0
 db_version_after="$(ad_user_version "$state_db")" || db_version_after_rc=$?
 schema_shown="v${db_version_after}"
 ad_got_version "$db_version_after_rc" "$db_version_after" || schema_shown="<unreadable>"
-echo "  state.db: $(stat -c '%a' "$state_db" 2>/dev/null || stat -f '%Lp' "$state_db") at $state_db (schema ${schema_shown})"
+echo "  state.db: $(stat -c '%a' "$state_db" 2>/dev/null || stat -f '%Lp' "$state_db") at $state_db (schema ${schema_shown})" || ad_cutover_write_failed
 
 migration_expected=0
 [[ -n "$db_version_before" && -n "${target_version:-}" ]] && migration_expected=1
@@ -6398,15 +6537,15 @@ if ! ad_got_version "$db_version_after_rc" "$db_version_after"; then
     # warning says none was authorized, not none expected: step 3 may not
     # have been able to tell whether one was needed.
     if [[ "$migration_expected" -eq 1 ]]; then
-        echo "install.sh: schema migration verification FAILED" >&2
-        echo "  expected user_version: $target_version" >&2
+        echo "install.sh: schema migration verification FAILED" >&2 || ad_cutover_write_failed
+        echo "  expected user_version: $target_version" >&2 || ad_cutover_write_failed
         ad_fail_unreadable_version "$db_version_after_rc" "$db_version_after" "check the migration"
     fi
-    echo "install.sh: warning: ${state_db_name}'s schema version is unreadable after the store open" >&2
+    echo "install.sh: warning: ${state_db_name}'s schema version is unreadable after the store open" >&2 || ad_cutover_write_failed
     ad_show_unreadable_version "$db_version_after"
-    echo "  The store open (agent-director list) succeeded and no migration was" >&2
-    echo "  authorized, so the install carries on. Check the version later with:" >&2
-    printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2
+    echo "  The store open (agent-director list) succeeded and no migration was" >&2 || ad_cutover_write_failed
+    echo "  authorized, so the install carries on. Check the version later with:" >&2 || ad_cutover_write_failed
+    printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2 || ad_cutover_write_failed
 fi
 
 if [[ "$migration_expected" -eq 1 ]]; then
@@ -6444,22 +6583,26 @@ if [[ "$migration_expected" -eq 1 ]]; then
     # quoted with %q: a plain path prints unchanged, and one holding shell
     # characters ($, `, quotes) prints escaped.
     if [[ "$db_version_after" != "$target_version" ]]; then
-        echo "install.sh: schema migration verification FAILED" >&2
-        echo "  expected user_version: $target_version" >&2
-        echo "  actual   user_version: $db_version_after" >&2
-        echo "  The store open (agent-director list) succeeded, and a successful" >&2
-        echo "  open leaves ${state_db_name} at v${target_version}: any authorized migration" >&2
-        echo "  has run, and its sentinel is consumed. Yet the read after the open" >&2
-        echo "  gives v${db_version_after}: ${state_db_name} changed after the open, or the read" >&2
-        echo "  is wrong. Check its version now:" >&2
-        printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2
-        echo "  A re-run of this install reads the version again: below v${target_version} it" >&2
-        echo "  brings ${state_db_name} to v${target_version} again, above v${target_version} it stops" >&2
-        echo "  at the store open (ErrSchemaMismatch), and at v${target_version} it finishes" >&2
-        echo "  the install. If a re-run fails this same way, contact the maintainers." >&2
+        echo "install.sh: schema migration verification FAILED" >&2 || ad_cutover_write_failed
+        echo "  expected user_version: $target_version" >&2 || ad_cutover_write_failed
+        echo "  actual   user_version: $db_version_after" >&2 || ad_cutover_write_failed
+        echo "  The store open (agent-director list) succeeded, and a successful" >&2 || ad_cutover_write_failed
+        echo "  open leaves ${state_db_name} at v${target_version}: any authorized migration" >&2 || ad_cutover_write_failed
+        echo "  has run, and its sentinel is consumed. Yet the read after the open" >&2 || ad_cutover_write_failed
+        echo "  gives v${db_version_after}: ${state_db_name} changed after the open, or the read" >&2 || ad_cutover_write_failed
+        echo "  is wrong. Check its version now:" >&2 || ad_cutover_write_failed
+        printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2 || ad_cutover_write_failed
+        echo "  A re-run of this install reads the version again: below v${target_version} it" >&2 || ad_cutover_write_failed
+        echo "  brings ${state_db_name} to v${target_version} again, above v${target_version} it stops" >&2 || ad_cutover_write_failed
+        echo "  at the store open (ErrSchemaMismatch), and at v${target_version} it finishes" >&2 || ad_cutover_write_failed
+        echo "  the install. If a re-run fails this same way, contact the maintainers." >&2 || ad_cutover_write_failed
         ad_exit_5 ErrSchemaVerifyFailed
     fi
-    echo "  schema  : migration verified — ${state_db_name} now at v${db_version_after}"
+    echo "  schema  : migration verified — ${state_db_name} now at v${db_version_after}" || ad_cutover_write_failed
+fi
+
+if [[ "$CUTOVER_PHASE" == running && -n "$CUTOVER_INTERRUPTED" ]]; then
+    ad_cutover_interrupted_committed
 fi
 
 # --------------------------------------------------------------------
@@ -8047,3 +8190,4 @@ echo "install.sh: done. Try: $CANONICAL help"
 if [[ "$SCHED_WARN" -eq 1 ]]; then
     ad_sched_warn "$SCHED_REASON"
 fi
+} ; exit

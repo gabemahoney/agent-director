@@ -4,6 +4,9 @@ package installsh_test
 // candidate's migrate-journal attempt to the existing administrator child
 // runner, a FIFO barrier or a canned response. Installer tests needing a
 // chosen outcome use this fixture, never a second stand-in or child runner.
+// Signal modes share the FIFO barrier, including the post-attempt snapshot
+// in standin. Start runs a chosen bash in a process group with an optional
+// pipe writer/reader; all group members are reaped by this fixture.
 
 import (
 	"bufio"
@@ -32,6 +35,7 @@ type cutoverFixture struct {
 	h                                                  *moveHome
 	Control, After, Output, Calls, Finished, Ready, Go string
 	ready, goFile                                      *os.File
+	reader                                             *exec.Cmd
 }
 
 func newCutoverFixture(t *testing.T, h *moveHome) *cutoverFixture {
@@ -53,8 +57,9 @@ func newCutoverFixture(t *testing.T, h *moveHome) *cutoverFixture {
 		"calls": &f.Calls, "finished": &f.Finished, "ready": &f.Ready, "go": &f.Go} {
 		*p = filepath.Join(h.Root, "cutover-"+name)
 	}
+	h.Write(f.Output, "", 0o600) // before-start outcomes have no attempt to relay
 	router := filepath.Join(h.Root, "cutover-router")
-	// The control's first line is real, child:<seams>, canned, or block.
+	// The control's first line is real, child:<seams>, canned, block, or signal.
 	// block takes its eventual mode from line two. An absent control delegates
 	// to the real administrator, including when advice is followed literally.
 	h.Write(router, `#!/bin/bash
@@ -75,14 +80,33 @@ if [[ "$mode" == block ]]; then
     [[ "$go" == go ]] || exit 96
     mode=$(sed -n '2p' `+moveQuote(f.Control)+`)
 fi
+# The supervisor preserves the delegate's output/status; the subshell resets
+# its recording traps and execs, so the group signal reaches the actual child.
+trap ':' INT TERM HUP
+(
+trap - INT TERM HUP
 case "$mode" in
-    real) `+moveQuote(h.S.Current.Admin)+` "$@" ;;
-    child:*) AD_ADMIN_CHILD="${mode#child:}" `+moveQuote(outcomeChild.path)+` -test.run '^TestMigrateJournalAdminChild$' -- "$@" ;;
-    canned) bash `+moveQuote(f.Control+".response")+` ;;
+    real) exec `+moveQuote(h.S.Current.Admin)+` "$@" ;;
+    child:*) export AD_ADMIN_CHILD="${mode#child:}"; exec `+moveQuote(outcomeChild.path)+` -test.run '^TestMigrateJournalAdminChild$' -- "$@" ;;
+    canned) exec bash `+moveQuote(f.Control+".response")+` ;;
+    signal)
+        cancelled() {
+            kill -TERM "$blocker" 2>/dev/null
+            wait "$blocker" 2>/dev/null
+            cat `+moveQuote(f.Control+".response")+`
+            exit 1
+        }
+        trap cancelled INT TERM HUP
+        cat <`+moveQuote(f.Go)+` >/dev/null 2>&1 &
+        blocker=$!
+        printf 'ready\n' >`+moveQuote(f.Ready)+`
+        wait "$blocker"
+        exit 96 ;;
     *) echo "unknown outcome mode: $mode" >&2; exit 98 ;;
-esac >`+moveQuote(f.Output)+` 2>&1
+esac
+) >`+moveQuote(f.Output)+` 2>&1
 rc=$?
-: >`+moveQuote(f.Finished)+`
+printf '%s\n' "$rc" >`+moveQuote(f.Finished)+`
 if [[ -f `+moveQuote(f.After)+` ]]; then bash `+moveQuote(f.After)+`; fi
 cat `+moveQuote(f.Output)+`
 exit "$rc"
@@ -90,6 +114,7 @@ exit "$rc"
 	h.Pair = movePair{h.S.Current.Main, h.S.ScheduleProbe.Main}
 	h.Env["SCHED_TEST_DELEGATE"] = router
 	h.Env["SCHED_TEST_DELEGATE_EXEC"] = "1"
+	h.Env["AD_TEST_READY"], h.Env["AD_TEST_GO"] = f.Ready, f.Go
 	// h.command deliberately strips ambient variables. Preserve the actual
 	// guard environment for the child binary; never invent a sandbox marker.
 	for _, key := range []string{sandboxguard.EnvVar, sandboxguard.BypassEnvVar} {
@@ -112,6 +137,11 @@ func (f *cutoverFixture) Clear() {
 
 // Block makes a bounded FIFO handshake; no timing sleeps choose the race.
 func (f *cutoverFixture) Block(next string) {
+	f.Barrier()
+	f.Choose("block\n" + next)
+}
+
+func (f *cutoverFixture) Barrier() {
 	t := f.h.t
 	t.Helper()
 	for path, dst := range map[string]**os.File{f.Ready: &f.ready, f.Go: &f.goFile} {
@@ -125,7 +155,6 @@ func (f *cutoverFixture) Block(next string) {
 		*dst = file
 		t.Cleanup(func() { _ = file.Close() })
 	}
-	f.Choose("block\n" + next)
 }
 
 func (f *cutoverFixture) Await() {
@@ -172,7 +201,22 @@ func (f *cutoverFixture) Check(res moveResult, cause, cutover string, kept bool)
 	}
 	var relayed *cutoverEnvelope
 	n := 0
+	status, _ := os.ReadFile(f.Finished)
+	if string(status) == "0\n" {
+		// Successful migrate-journal output belongs on stdout. Only its
+		// interrupted installer outcome is an error envelope on stderr.
+		var success struct {
+			Authority string `json:"authority"`
+		}
+		if err := json.Unmarshal(raw, &success); err != nil || success.Authority != "sqlite" {
+			t.Fatalf("successful attempt: %q (%v)", raw, err)
+		}
+		raw = nil
+	}
 	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		if len(raw) == 0 {
+			break
+		}
 		var env cutoverEnvelope
 		want := "  " + line
 		if json.Unmarshal([]byte(line), &env) == nil && env.ErrName != "" {
@@ -276,4 +320,106 @@ func (f *cutoverFixture) Install(piped, closed bool) moveResult {
 	cmd := h.command()
 	cmd.Args = append([]string{h.S.Bash, "-c", `exec "$@" 2>&-`, "closed-stderr"}, cmd.Args...)
 	return schedExec(h.t, cmd)
+}
+
+// Start shares moveRunning's process-group signal/reap guard. The writer
+// delivers the complete script then holds stdin open until signalled; the
+// optional reader is a real cat, so INT closes stdout's only reader.
+func (f *cutoverFixture) Start(bash string, piped, reader, closed bool) *moveRunning {
+	h, t := f.h, f.h.t
+	t.Helper()
+	r := &moveRunning{cmd: h.command()}
+	if bash == "" {
+		bash = h.S.Bash
+	}
+	r.cmd.Path, r.cmd.Args[0] = bash, bash
+	if piped {
+		r.cmd.Args = append([]string{bash, "-s", "--"}, schedArgv(h)...)
+	}
+	if closed {
+		r.cmd.Args = append([]string{bash, "-c", `exec "$@" 2>&-`, "closed-stderr"}, r.cmd.Args...)
+	}
+	r.cmd.Stdout, r.cmd.Stderr = &r.stdout, &r.stderr
+	r.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var children []*exec.Cmd
+	var ends []*os.File
+	pipe := func() (*os.File, *os.File) {
+		rd, wr, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ends = append(ends, rd, wr)
+		return rd, wr
+	}
+	var inputRead, inputWrite, holdRead, holdWrite, outputRead, outputWrite *os.File
+	if piped {
+		inputRead, inputWrite = pipe()
+		holdRead, holdWrite = pipe()
+		r.cmd.Stdin = inputRead
+	}
+	if reader {
+		outputRead, outputWrite = pipe()
+		r.cmd.Stdout = outputWrite
+	}
+	// Register before starting any process, including failure during setup.
+	h.OnRelease(func() {
+		if r.cmd.Process != nil {
+			r.Signal(syscall.SIGKILL)
+		}
+		for _, e := range ends {
+			_ = e.Close()
+		}
+		for _, child := range children {
+			if child.ProcessState == nil {
+				_ = child.Process.Kill()
+				_ = child.Wait()
+			}
+		}
+		if r.cmd.Process != nil {
+			r.Wait(t)
+		}
+	})
+	if err := r.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	start := func(cmd *exec.Cmd) {
+		cmd.Env, cmd.Dir = r.cmd.Env, r.cmd.Dir
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: r.cmd.Process.Pid}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		children = append(children, cmd)
+	}
+	if piped {
+		writer := exec.Command(h.S.Bash, "-c", `cat "$1"; exec cat`, "source-writer", h.S.Install)
+		writer.Stdin, writer.Stdout = holdRead, inputWrite
+		start(writer)
+		_ = inputRead.Close()
+		_ = inputWrite.Close()
+		_ = holdRead.Close()
+		_ = holdWrite // cleanup owns the pipe's remaining end
+	}
+	if reader {
+		f.reader = exec.Command(h.RealTool("cat"))
+		f.reader.Stdin, f.reader.Stdout = outputRead, &r.stdout
+		start(f.reader)
+		_ = outputRead.Close()
+		_ = outputWrite.Close()
+	}
+	return r
+}
+
+// ReaderEnded is called before releasing the attempt, proving later writes
+// have no stdout reader rather than relying on signal-delivery timing.
+func (f *cutoverFixture) ReaderEnded() {
+	t := f.h.t
+	t.Helper()
+	err := f.reader.Wait()
+	if err == nil || f.reader.ProcessState == nil {
+		t.Fatalf("reader survived INT: %v", err)
+	}
+	ws, ok := f.reader.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGINT {
+		t.Fatalf("reader status: %v", f.reader.ProcessState)
+	}
 }
