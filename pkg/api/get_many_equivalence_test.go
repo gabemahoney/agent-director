@@ -3,9 +3,11 @@ package api_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,10 +76,15 @@ func TestGetManyEqualsSequentialGet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var clients []*api.Client
-	var stores []*store.Store
-	var recorders []*tmuxfix.Recorder
-	for i := 0; i < 2; i++ {
+	// Every attempt on either side reads a fresh copy of the seed, so a
+	// repeated attempt cannot count a write twice.
+	type manySide struct {
+		db       string
+		client   *api.Client
+		store    *store.Store
+		recorder *tmuxfix.Recorder
+	}
+	newSide := func() manySide {
 		db := filepath.Join(t.TempDir(), "state.db")
 		if err := os.WriteFile(db, seed, 0600); err != nil {
 			t.Fatal(err)
@@ -101,46 +108,136 @@ func TestGetManyEqualsSequentialGet(t *testing.T) {
 		t.Cleanup(func() { _ = c.Close() })
 		api.SetClockForTest(c, func() time.Time { return e.now })
 		api.SetProcCheckerForTest(c, pc)
-		clients = append(clients, c)
-		stores = append(stores, openDB(t, db))
-		recorders = append(recorders, rec)
+		return manySide{db, c, openDB(t, db), rec}
 	}
 	before := map[string]store.Spawn{}
+	base := newSide()
 	for _, id := range ids[:len(ids)-1] {
-		before[id], err = stores[0].GetSpawn(id)
+		before[id], err = base.store.GetSpawn(id)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	windows := map[string]manyReadWindow{}
-	want := api.GetManyResult{Spawns: []api.SpawnRow{}, NotFound: []string{}}
-	for _, id := range ids {
-		from := time.Now()
-		row, err := clients[0].Get(id)
-		windows[id] = manyReadWindow{from, time.Now()}
-		if errors.Is(err, api.ErrSpawnNotFound) {
-			want.NotFound = append(want.NotFound, id)
-			continue
+	// uncommitted names the first write the comparisons below need that a
+	// read pass did not commit: each is nonwaiting and best effort. Any such
+	// write that does not commit (process evidence, display observation,
+	// state transition) leaves its field's latest attempt with one of these
+	// reasons; the fallback clock and the exactly-once counts are checked on
+	// the stored rows.
+	lostWrite := []string{store.ReasonBusy, store.ReasonDeadline, store.ReasonCommitUnconfirmed}
+	uncommitted := func(s *store.Store, rows []api.SpawnRow) string {
+		for _, row := range rows {
+			for _, f := range []struct {
+				name string
+				c    api.Confirmation
+			}{{"state", row.Confirmations.State}, {"process_liveness", row.Confirmations.ProcessLiveness}, {"displayed_state", row.Confirmations.DisplayedState}} {
+				if f.c.Reason != nil && slices.Contains(lostWrite, *f.c.Reason) {
+					return row.InstanceID + " " + f.name + " write (" + *f.c.Reason + ")"
+				}
+			}
 		}
+		for _, id := range []string{e.id, "turn-end", "cursor-gone"} {
+			row, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case id == e.id && (row.ObservationVersion != before[id].ObservationVersion+1 || row.PaneSHA256 == ""):
+				return "pane observation"
+			case id == "turn-end" && (row.State != store.StateWaiting || row.RowVersion != before[id].RowVersion+1):
+				return "turn-end transition"
+			case id == "cursor-gone" && (row.State != store.StateMissing || row.RowVersion != before[id].RowVersion+1):
+				return "cursor-gone transition"
+			}
+		}
+		pr, err := s.PermissionRequestsForSpawn("claude-check_permission")
 		if err != nil {
-			t.Fatalf("Get(%s): %v", id, err)
+			t.Fatal(err)
 		}
-		want.Spawns = append(want.Spawns, row)
-		if id == "droid-pending" && row.IntegrationMode != "pane_only" {
-			t.Fatalf("Droid seed is not pane-only: %+v", row)
+		if len(pr) != 1 || !pr[0].HookGoneAt.Equal(e.now) {
+			return "fallback clock"
 		}
-		if id == known {
-			assertContext(t, row.Context, sample.Expected)
-		}
-		if id == "claude-waiting" {
-			assertContext(t, row.Context, []byte(contextfix.UnknownJSON))
+		return ""
+	}
+	var windows map[string]manyReadWindow
+	var want, got api.GetManyResult
+	var batchWindow manyReadWindow
+	passes := [2]func(c *api.Client) ([]api.SpawnRow, error){
+		func(c *api.Client) ([]api.SpawnRow, error) {
+			windows = map[string]manyReadWindow{}
+			want = api.GetManyResult{Spawns: []api.SpawnRow{}, NotFound: []string{}}
+			for _, id := range ids {
+				from := time.Now()
+				row, err := c.Get(id)
+				windows[id] = manyReadWindow{from, time.Now()}
+				if errors.Is(err, api.ErrSpawnNotFound) {
+					want.NotFound = append(want.NotFound, id)
+					continue
+				}
+				if err != nil {
+					return nil, fmt.Errorf("Get(%s): %w", id, err)
+				}
+				want.Spawns = append(want.Spawns, row)
+			}
+			return want.Spawns, nil
+		},
+		func(c *api.Client) ([]api.SpawnRow, error) {
+			from := time.Now()
+			var err error
+			got, err = c.GetMany(ids)
+			batchWindow = manyReadWindow{from, time.Now()}
+			return got.Spawns, err
+		},
+	}
+	// b.vkr: each side's whole read pass repeats at the same injected clock
+	// until every needed write commits. Its first attempt runs under a held
+	// write lock, which skips them all, and its second skips only the pane
+	// observation, so the bound is always exercised on both.
+	var sides [2]manySide
+	for i, pass := range passes {
+		var missed string
+		attempt := 0
+		attempts, elapsed, committed := apitest.RepeatUntilCommitted(func() bool {
+			attempt++
+			side := newSide()
+			release := func() {}
+			switch attempt {
+			case 1:
+				release = apitest.HoldWriteLock(t, side.db, time.Minute)
+			case 2:
+				storefix.InjectWriteFailure(t, side.db, storefix.WriteFailDisplayObservation, e.id)
+			}
+			rows, err := pass(side.client)
+			release()
+			if errors.Is(err, api.ErrStoreBusy) {
+				missed = err.Error()
+				return false
+			}
+			if err != nil {
+				t.Fatalf("side %d: %v", i, err)
+			}
+			missed = uncommitted(side.store, rows)
+			if attempt <= 2 && missed == "" {
+				t.Fatalf("side %d attempt %d committed despite its skipped write", i, attempt)
+			}
+			sides[i] = side
+			return missed == ""
+		})
+		if !committed {
+			t.Fatalf("side %d: %s never committed (%d attempts, %s)", i, missed, attempts, elapsed)
 		}
 	}
-	from := time.Now()
-	got, err := clients[1].GetMany(ids)
-	batchWindow := manyReadWindow{from, time.Now()}
-	if err != nil {
-		t.Fatal(err)
+	for _, row := range want.Spawns {
+		switch row.InstanceID {
+		case "droid-pending":
+			if row.IntegrationMode != "pane_only" {
+				t.Fatalf("Droid seed is not pane-only: %+v", row)
+			}
+		case known:
+			assertContext(t, row.Context, sample.Expected)
+		case "claude-waiting":
+			assertContext(t, row.Context, []byte(contextfix.UnknownJSON))
+		}
 	}
 	if len(got.Spawns) != len(want.Spawns) || !reflect.DeepEqual(got.NotFound, want.NotFound) {
 		t.Fatalf("found lengths %d/%d; not_found %v/%v", len(got.Spawns), len(want.Spawns), got.NotFound, want.NotFound)
@@ -156,25 +253,15 @@ func TestGetManyEqualsSequentialGet(t *testing.T) {
 		}
 	}
 	for _, id := range ids[:len(ids)-1] {
-		a, err := stores[0].GetSpawn(id)
+		a, err := sides[0].store.GetSpawn(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		b, err := stores[1].GetSpawn(id)
+		b, err := sides[1].store.GetSpawn(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		switch id {
-		case "turn-end", "cursor-gone":
-			expected := store.StateWaiting
-			if id == "cursor-gone" {
-				expected = store.StateMissing
-			}
-			for _, row := range []store.Spawn{a, b} {
-				if row.State != expected || row.RowVersion != before[id].RowVersion+1 {
-					t.Fatalf("%s did not commit exactly one transition: %+v", id, row)
-				}
-			}
+		if id == "turn-end" || id == "cursor-gone" {
 			bracket := [2]manyReadWindow{windows[id], batchWindow}
 			var ae, be map[string]any
 			if err := json.Unmarshal([]byte(a.StateEvidence), &ae); err != nil {
@@ -198,33 +285,25 @@ func TestGetManyEqualsSequentialGet(t *testing.T) {
 			if masked[0] != masked[1] {
 				t.Errorf("%s stored rows differ after SQL-clock checks\nget: %s\nget-many: %s", id, masked[0], masked[1])
 			}
-		case e.id:
-			if a.ObservationVersion != before[id].ObservationVersion+1 || a.PaneSHA256 == "" {
-				t.Fatal("pane observation not committed exactly once")
-			}
-		}
-		if id != "turn-end" && id != "cursor-gone" && !reflect.DeepEqual(a, b) {
+		} else if !reflect.DeepEqual(a, b) {
 			t.Errorf("%s stored rows differ\n%+v\n%+v", id, a, b)
 		}
-		pa, err := stores[0].PermissionRequestsForSpawn(id)
+		pa, err := sides[0].store.PermissionRequestsForSpawn(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		pb, err := stores[1].PermissionRequestsForSpawn(id)
+		pb, err := sides[1].store.PermissionRequestsForSpawn(id)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if id == "claude-check_permission" && (len(pa) != 1 || !pa[0].HookGoneAt.Equal(e.now)) {
-			t.Fatalf("fallback clock not written: %+v", pa)
 		}
 		if !reflect.DeepEqual(pa, pb) {
 			t.Errorf("%s stored requests differ: %+v / %+v", id, pa, pb)
 		}
 	}
-	if !reflect.DeepEqual(recorders[0].SocketCalls(), recorders[1].SocketCalls()) || !reflect.DeepEqual(recorders[0].Calls(), recorders[1].Calls()) {
+	if !reflect.DeepEqual(sides[0].recorder.SocketCalls(), sides[1].recorder.SocketCalls()) || !reflect.DeepEqual(sides[0].recorder.Calls(), sides[1].recorder.Calls()) {
 		t.Fatal("tmux calls differ")
 	}
-	if len(recorders[0].SocketCalls()) == 0 {
+	if len(sides[0].recorder.SocketCalls()) == 0 {
 		t.Fatal("fixture made no tmux observation")
 	}
 }
