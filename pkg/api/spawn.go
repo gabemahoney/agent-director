@@ -265,7 +265,7 @@ func hasControlChar(id string) bool {
 // docs/operator-actions.md).
 //
 // IdleScreenTimeoutSeconds, when positive, is the row's own idle_screen
-// timeout: status, get and list use it instead of their [state]
+// timeout: status, get, get-many and list use it instead of their [state]
 // idle_screen_timeout_seconds, and resume keeps it. A spawn or reuse without
 // it records none, clearing a reused row's earlier one; a reuse whose launch
 // fails restores the earlier one with the row. Cursor rows keep it, but

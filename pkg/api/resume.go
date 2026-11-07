@@ -732,7 +732,7 @@ func launchInProgressNoSessionStep(agent string) string {
 // launchInProgressError is resume's refusal of a pending row (SR-8.4,
 // SR-1.4): a launch in progress whose agent has not reported in. The launch
 // start is the row's decoded LaunchStartedAtMillis (0 = none recorded),
-// formatted as RFC3339 UTC exactly as get, status and list show
+// formatted as RFC3339 UTC exactly as get, get-many, status and list show
 // launch_started_at. A row with a session id (typically a resume's launch)
 // ends with find-missing marking it missing, after which resume applies; a
 // row with none (typically a spawn's or reuse's launch) also gets

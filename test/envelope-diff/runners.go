@@ -71,6 +71,7 @@ var dispatch = map[string]clientDispatchFn{
 	"spawn":              dispatchSpawn,
 	"status":             dispatchStatus,
 	"get":                dispatchGet,
+	"get-many":           dispatchGetMany,
 	"send-keys":          dispatchSendKeys,
 	"read-pane":          dispatchReadPane,
 	"kill":               dispatchKill,
@@ -363,6 +364,14 @@ func dispatchStatus(c *api.Client, params map[string]any) ([]byte, bool) {
 func dispatchGet(c *api.Client, params map[string]any) ([]byte, bool) {
 	id := strParam(params, "instance_id")
 	res, err := c.Get(id)
+	if err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	return successEnvelope(res)
+}
+
+func dispatchGetMany(c *api.Client, params map[string]any) ([]byte, bool) {
+	res, err := c.GetMany(strSliceParam(params, "instance_ids"))
 	if err != nil {
 		return marshalErrEnvelope(err), true
 	}

@@ -3,6 +3,9 @@
 Every verb prints JSON on stdout and a typed error on stderr. The full verb and
 flag list is in `cli-reference.md`.
 
+[`get-many`](caller-contract.md#reading-many-agents) returns `get`'s full
+result for each ID, with the same fields and guarantees described here.
+
 ## Naming the agent
 
 A `spawn` names its agent, `claude`, `codex` or `cursor` (case-sensitive), with `--agent` on the call or
@@ -89,7 +92,7 @@ reported `pre_trust` outcome means, is in
 `idle_screen` while a `working` Claude or Codex agent's pane looks the same
 on successive checks for the
 [configured time](configuration.md#idle-screen-timeout-state); `state` stays
-`working`. Selected `status`, `get`, `list` and `sweep` checks can
+`working`. Selected `status`, `get`, `get-many`, `list` and `sweep` checks can
 observe it; nothing samples between calls. Its separate
 [confirmation record](caller-contract.md#confirmations) reports evidence for
 the display actually returned, including no display. The fields, filtering
@@ -695,7 +698,7 @@ leaves these fields unchanged. Read `decision` for the
 verdict and the [delivery and proof fields](permissions.md#delivery) for its
 outcome; a reason is not an immutable writer identity.
 
-`get` and `list` carry the same delivery fields on each request in a row's
+`get`, `get-many` and `list` carry the same delivery fields on each request in a row's
 `permission_requests`; they list only requests that still await an answer,
 never a closed one. `hook_alive` is `null` when agent-director cannot check
 the relay hook's process (for example from another pid namespace, for a

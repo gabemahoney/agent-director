@@ -937,7 +937,7 @@ func (r *activeReadStore) finish() error {
 		// A rejected terminal write is the latest attempt for the stored row
 		// list reports in place of the projected missing (cursorListFallbacks);
 		// an applied one committed its own record. A failed write notes
-		// nothing: status and get already projected, and list falls back only
+		// nothing: status, get and get-many already projected; list falls back only
 		// after a rejection.
 		if err == nil && result != CondApplied {
 			r.stateAttempt(checked, proof.Row, proof.Row.State, outcomeReason(outcome.Result))

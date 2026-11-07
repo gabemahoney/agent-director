@@ -70,8 +70,8 @@ type RelayView struct {
 
 // RequestDelivery is a permission request's delivery facts (b.146 rule 15),
 // with whether the agent proved its dialog gone (b.146 step 2c), on every
-// request of get's and list's permission_requests and get's
-// unproven_requests, on get-permission and on decide's result. They are
+// request of get's, get-many's and list's permission_requests, get's and
+// get-many's unproven_requests, get-permission and decide's result. They are
 // derived from the record and a check of the request's relay hook process
 // each time they are read; nothing but hook_gone_at and the fallback clock
 // (fallback_at with its basis) is written for them.
@@ -289,7 +289,7 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 // even while the hook's parent lives; not_confirmed reports no ack while
 // the hook may still run, and fallen_back follows its disappearance or
 // confirm_by. A closed request no longer awaits an answer, so
-// get and list do not show it, and decide refuses it as closed
+// get, get-many and list do not show it, and decide refuses it as closed
 // (ErrNoOpenPermissionRequest, or ErrAlreadyDecided for the mark's deny),
 // never as fallen back; for a request recorded before schema v7 a close's
 // deny counts as no verdict, as above.
@@ -420,9 +420,9 @@ func addGone(slots []goneSlot, id int64, d *RequestDelivery, agent, relayMode st
 	return slots
 }
 
-// readerLockWait is a reading verb's wait for the write lock: none. get, list
-// and get-permission write hook_gone_at only if the lock is free at that
-// moment (b.146 problem 4).
+// readerLockWait is a reading verb's wait for the write lock: none. get,
+// get-many, list and get-permission write hook_gone_at only if the lock is
+// free at that moment (b.146 problem 4).
 const readerLockWait time.Duration = 0
 
 // recordGone writes at as hook_gone_at on every slot's request in one
@@ -520,7 +520,7 @@ func nullableTime(t time.Time) *time.Time {
 }
 
 // permissionRequestInfo projects pr, with its delivery facts d, as one
-// element of get's and list's permission_requests.
+// element of get's, get-many's and list's permission_requests.
 func permissionRequestInfo(pr PermissionRow, d RequestDelivery) PermissionRequestInfo {
 	return PermissionRequestInfo{
 		RequestID:       pr.RequestID,

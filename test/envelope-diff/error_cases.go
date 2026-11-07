@@ -81,6 +81,25 @@ var zeroPaneHash = strings.Repeat("0", 64)
 // TestErrorTableCoverage (error_cases_test.go) enforces completeness.
 var errorCases = append(append(append(append(append([]errorCase{
 
+	{
+		verb: "get-many", errName: "ErrTooManyIds",
+		seed: func(t *testing.T) (string, map[string]any) {
+			ids := make([]string, 21)
+			for i := range ids {
+				ids[i] = fmt.Sprintf("many-%02d", i)
+			}
+			return filepath.Dir(apitest.SeedEmptyStore(t)), map[string]any{"ids": ids}
+		},
+		params:  func(ctx map[string]any) map[string]any { return map[string]any{"instance_ids": ctx["ids"]} },
+		cliArgv: func(ctx map[string]any) []string { return append([]string{"get-many"}, ctx["ids"].([]string)...) },
+	},
+	{
+		verb: "get-many", errName: "ErrInvalidFlags",
+		seed:    func(t *testing.T) (string, map[string]any) { return filepath.Dir(apitest.SeedEmptyStore(t)), nil },
+		params:  func(_ map[string]any) map[string]any { return map[string]any{"instance_ids": []string{"same", "same"}} },
+		cliArgv: func(_ map[string]any) []string { return []string{"get-many", "same", "same"} },
+	},
+
 	// ── spawn / ErrCwdMissing ─────────────────────────────────────────────
 	// Most representative spawn error: pure parameter validation, no tmux
 	// interaction, reproducible on any host without fake-tmux involvement.

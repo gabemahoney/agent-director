@@ -60,7 +60,7 @@ sign in, sign out or change credentials. An unknown reason does not establish
 an authentication or configuration fault. Resolve surviving work using the
 steps above before the caller contract's explicit fresh-instance procedure.
 A transport failure alone does not authorize deleting a row or adopting an
-unrelated process. Public `get`, `status` and scoped `list` can reconcile a lost
+unrelated process. Public `get`, `get-many`, `status` and scoped `list` can reconcile a lost
 gateway, including one lost before runtime registration; their scope, binding
 conflict refusals and `ErrStoreBusy` behavior are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
@@ -191,7 +191,7 @@ A human removes the row, in order:
    ```
 
    Its `ErrInternal` quotes the exact recorded name with bytes escaped (`list`,
-   `get` and the trail cannot show them).
+   `get`, `get-many` and the trail cannot show them).
 2. Work out the name tmux stores (the `$` escaping is that of tmux 3.2 and 3.3;
    other versions differ, so compare by eye): `.` and `:` become `_`; an invalid
    byte `\` and three octal digits (0xff is `\377`); a control character its

@@ -108,7 +108,7 @@ type Client struct {
 	// records no sender, and the intent is then judged by its time.
 	paneSelf func() ProcessIdentity
 	// cursorMissingDeferred observes each lost Cursor launch's missing-row
-	// save that a status, get, list or find-missing check defers
+	// save that a status, get, get-many, list or find-missing check defers
 	// (activeReadStore.finish), with the launch's instance id and the deferred
 	// error: nil in production. Tests
 	// set it per Client, so a test can tell a documented deferral from a save
@@ -124,7 +124,7 @@ type Client struct {
 // effective relay window and idle_screen timeout, and the check providers
 // (tmux client, pending grace, sweep budget, logger and Cursor deferral
 // observer) from which each check pass builds its own pane sampler. Each call
-// is a fresh view for one read.
+// is a fresh view for one read, including each id of get-many.
 func (c *Client) relayView() RelayView {
 	return RelayView{
 		active:            &activeCheckProviders{tmux: c.tmuxClient, pendingGrace: c.cfg.Tmux.EffectivePendingGrace(), budget: c.cfg.Tmux.EffectiveSweepBudget(), logger: c.logger, deferred: c.cursorMissingDeferred},
@@ -136,8 +136,8 @@ func (c *Client) relayView() RelayView {
 	}
 }
 
-// settleRead is the settle time and clock of one status, get or list call
-// (b.3ie): the loaded config's [state] settle_ms, read once at New (a
+// settleRead is the settle time and clock of one status, get or list call, or
+// one get-many id (b.3ie): the loaded config's [state] settle_ms, read once at New (a
 // long-lived Client, such as the MCP server's, keeps the value it started
 // with), and the Client's clock, read now, before the call's store read. With
 // no settle time it is the zero store.SettleRead and reads no clock, so the
@@ -159,7 +159,7 @@ func (c *Client) settleRead() store.SettleRead {
 //  4. Open (or init) the store according to opts.CreateIfMissing, with the
 //     loaded config's [store] busy timeout (Store.EffectiveBusyTimeoutMs),
 //     and hand it the loaded config's [state] settle time
-//     (State.EffectiveSettleMs, b.3ie), which status, get and list also read
+//     (State.EffectiveSettleMs, b.3ie), which status, get, get-many and list also read
 //     from the loaded config.
 //  5. Construct the tmux client: an injected Options.TmuxClient as given,
 //     otherwise the production client for Options.TmuxCommand with the

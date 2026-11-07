@@ -112,9 +112,9 @@ type SpawnParams struct {
 	// reuse starts a fresh conversation and retains session history and
 	// subagent records.
 	// Only an agent switch starts a new life; switching back also starts with
-	// no memory of its earlier lives: resume and get never use or show an
-	// earlier life's history. Resume continues only the latest session; older
-	// sessions are listed for inspection only. Go callers link the
+	// no memory of its earlier lives: resume, get and get-many never use or
+	// show an earlier life's history. Resume continues only the latest session;
+	// older sessions are listed for inspection only. Go callers link the
 	// library, so the field exists at compile time; CLI, MCP and TypeScript
 	// callers detect it by the binary's version (the manifest's
 	// reuse_finished text gives each surface's source).

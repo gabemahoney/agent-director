@@ -186,7 +186,7 @@ func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
+	want := []string{"help", "spawn", "status", "get", "get-many", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -229,10 +229,10 @@ func TestCallableVerbsExcludesNonCallable(t *testing.T) {
 }
 
 // TestCallableVerbsOrder asserts the callable subset preserves Verbs-defined
-// order (the 17 callable verbs in the order they appear in Verbs).
+// order (the callable verbs in the order they appear in Verbs).
 func TestCallableVerbsOrder(t *testing.T) {
 	want := []string{
-		"spawn", "status", "get", "send-keys", "read-pane", "kill",
+		"spawn", "status", "get", "get-many", "send-keys", "read-pane", "kill",
 		"decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire",
 		"make-template", "list", "list-subagents", "pause", "version",
 	}
@@ -471,6 +471,9 @@ func TestFieldShapes(t *testing.T) {
 		{"list-subagents", "instance_id", "", shape{"string", false, false, nil}},
 		{"list-subagents", "", "tracked", shape{"bool", false, true, nil}},
 		{"list-subagents", "", "subagents", shape{"[]object", false, true, nil}},
+		{"get-many", "instance_ids", "", shape{"[]string", false, false, nil}},
+		{"get-many", "", "spawns", shape{"[]object", false, true, nil}},
+		{"get-many", "", "not_found", shape{"[]string", false, true, nil}},
 		{"get", "", "ended_at", shape{"timestamp?", true, false, nil}},
 		{"get", "", "liveness_unverified_since", shape{"timestamp?", true, false, nil}},
 		{"get", "", "liveness_note", shape{"string?", true, false, nil}},
@@ -601,6 +604,21 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 		if text := goDocErrorBulletText(t, "Spawn", name); !strings.Contains(text, "reuse opt-in") {
 			t.Errorf("(*Client).Spawn %s bullet does not state its reuse opt-in cases: %q", name, text)
 		}
+	}
+}
+
+func TestGetManyHasSRDErrorNames(t *testing.T) {
+	assertErrorNames(t, "get-many", "GetMany", true, "ErrInvalidFlags", "ErrTooManyIds", "ErrStoreBusy")
+}
+
+func TestGetManyDescription(t *testing.T) {
+	v := verbOf(t, "get-many")
+	want := "Return get's full row for each given id, in order; ids with no row are listed in not_found."
+	if v.Description != want {
+		t.Fatalf("get-many description = %q; want %q", v.Description, want)
+	}
+	if len(v.Params) != 1 || v.Params[0].Name != "instance_ids" || !v.Params[0].Required {
+		t.Fatalf("get-many params = %+v; want one required instance_ids", v.Params)
 	}
 }
 

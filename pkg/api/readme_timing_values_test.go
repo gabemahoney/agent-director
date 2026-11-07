@@ -368,6 +368,7 @@ func docConfigKeys() []struct {
 		{"relay.timeout_seconds", itoa(int64(c.Relay.TimeoutSeconds)), rng(int64(config.MaxRelayTimeoutSeconds)), false},
 		{"relay.permission_request_cap", itoa(int64(c.Relay.PermissionRequestCap)), "", false},
 		{"pause.timeout_seconds", itoa(int64(c.Pause.TimeoutSeconds)), rng(int64(config.MaxPauseTimeoutSeconds)), false},
+		{"get_many.id_cap", itoa(int64(c.GetMany.IdCap)), "", false},
 		{"pre_trust.lock_wait_seconds", itoa(int64(c.PreTrust.LockWaitSeconds)), rng(int64(config.MaxPreTrustLockWaitSeconds)), false},
 		{"store.db_path", c.Store.DbPath, "", false},
 		{"store.busy_timeout_ms", itoa(int64(c.Store.BusyTimeoutMs)), rng(int64(config.MaxStoreBusyTimeoutMs)), false},

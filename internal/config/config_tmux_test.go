@@ -73,9 +73,9 @@ func tmuxConfigFile(t *testing.T, settings ...tmuxSetting) string {
 // timeout_seconds and [pause] timeout_seconds (b.8q2), [pre_trust]
 // lock_wait_seconds (b.kr4), [store] busy_timeout_ms (b.c7f) and [state]
 // settle_ms (b.3ie), needs_intelligence_timeout_seconds and
-// idle_screen_timeout_seconds (b.sp6). "" leaves the key out.
+// idle_screen_timeout_seconds (b.sp6), and [get_many] id_cap. "" leaves the key out.
 type rangeKeys struct {
-	days, relay, pause, preTrust, busyTimeout, settle, needsIntelligence, idleScreen string
+	days, relay, pause, idCap, preTrust, busyTimeout, settle, needsIntelligence, idleScreen string
 }
 
 // keysFile writes a config file setting k's keys, then a [tmux] table holding settings.
@@ -87,6 +87,7 @@ func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
 		{"defaults", "expire_retention_days", k.days},
 		{"relay", "timeout_seconds", k.relay},
 		{"pause", "timeout_seconds", k.pause},
+		{"get_many", "id_cap", k.idCap},
 		{"pre_trust", "lock_wait_seconds", k.preTrust},
 		{"store", "busy_timeout_ms", k.busyTimeout},
 		{"state", "settle_ms", k.settle},

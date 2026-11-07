@@ -49,6 +49,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Relay.TimeoutSeconds", d.Relay.TimeoutSeconds, 86400},
 		{"Relay.PermissionRequestCap", d.Relay.PermissionRequestCap, 1000},
 		{"Pause.TimeoutSeconds", d.Pause.TimeoutSeconds, 30},
+		{"GetMany.IdCap", d.GetMany.IdCap, 20},
 		{"PreTrust.LockWaitSeconds", d.PreTrust.LockWaitSeconds, 12},
 		{"Store.DbPath", d.Store.DbPath, "~/.config/agent-director/state.db"},
 		{"Store.BusyTimeoutMs", d.Store.BusyTimeoutMs, 10000},

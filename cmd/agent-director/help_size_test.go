@@ -64,7 +64,11 @@ import "testing"
 // 14567 (free downward steps).
 // On 2026-11-02 b.x9o t2.7tz.5c.fd's merge of main, with one send-keys
 // description carrying both lines' advice, lowered it to 14564 (free downward step).
-const helpStdoutBytes = 14564
+// On 2026-11-07 b.ic1 added get-many's entry, raising it by the user-approved
+// 128 bytes, from 14564 to 14692. The exact SRD SR-1.5 description states the
+// full-row, input-order and not_found contract; shortening it would change
+// the approved wording.
+const helpStdoutBytes = 14692
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

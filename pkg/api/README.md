@@ -11,6 +11,7 @@ processes.
 - [Verb examples](#verb-examples)
   - [Spawn](#spawn)
   - [Status](#status)
+  - [GetMany](#getmany)
   - [List](#list)
   - [ListSubagents](#listsubagents)
   - [SendKeys](#sendkeys)
@@ -209,7 +210,7 @@ loading or waiting at a startup prompt. A resumed `pending` row keeps its
 session id and history; a caller tells it from a fresh one by its non-empty
 `session_id`, shown by `Get`.
 
-Client `Status`, `Get`, `List` and `Sweep` (also `FindMissing`) share
+Client `Status`, `Get`, `GetMany`, `List` and `Sweep` (also `FindMissing`) share
 [bounded recovery](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
 Single-row reads check only that row. Package-level helpers and custom stores
 run only checks their supplied capabilities support; they do not create
@@ -274,12 +275,12 @@ not. The [caller contract](../../docs/caller-contract.md#state-change-time)
 defines it and how it differs from `LastSeenAt`, the settled `State` and
 `Since`.
 
-`Client.Status`, `Client.Get` and `Client.List` use the config loaded when
-the client was built for [independent state and family
+`Client.Status`, `Client.Get`, `Client.GetMany` and `Client.List` use the config
+loaded when the client was built for [independent state and family
 settling](../../docs/configuration.md#settle-time-state). While a
-Displayed State's exit settles, `Status`, `Get` and `List` retain its
-`DisplayedState` and applicable confirmation, and `Status` and `Get` its
-committed `Since` and detail.
+Displayed State's exit settles, `Status`, `Get`, `GetMany` and `List` retain its
+`DisplayedState` and applicable confirmation, and `Status`, `Get` and `GetMany`
+its committed `Since` and detail.
 `StateChangedAt` and permission-request lists follow the live state;
 commands keep their raw-state guards. The package-level
 `api.Status`, `api.Get` and `api.List` functions use no settle time and
@@ -288,8 +289,8 @@ confirmation time. A committed non-sampling exit clears that evidence.
 Package-level `Sweep` (and its `FindMissing` alias) can sample panes when its
 supplied tmux provider supports capture.
 
-For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
-launch-guarded `missing` read result even when the separate terminal write is
+For Cursor, `Client.Status`, `Client.Get`, `Client.GetMany` and `Client.List`
+can report a launch-guarded `missing` read result even when the separate terminal write is
 busy or reaches its deadline. This does not confirm durable closure;
 `ended_at` and `state_changed_at` remain the stored values read, and
 `ended_at` may be absent. The
@@ -297,6 +298,30 @@ busy or reaches its deadline. This does not confirm durable closure;
 defines caller-budget errors, request proof and recovery. Package-level
 `api.Status`, `api.Get` and `api.List` can check gateway liveness when their
 store and `RelayView.Procs` supply the required capabilities.
+
+---
+
+### GetMany
+
+```go
+	result, err := c.GetMany([]string{"agent-b", "unknown", "agent-a"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, row := range result.Spawns {
+		fmt.Println(row.InstanceID, row.State)
+	}
+	fmt.Println("Not found:", result.NotFound)
+```
+
+Returns `GetManyResult`: each `Spawns` element is exactly `Get`'s `SpawnRow`,
+with the fields and guarantees described here. `Spawns` and `NotFound` are
+never nil, and both are empty on every failure.
+
+Input refusals are `ErrInvalidFlags` and `ErrTooManyIds`; for the latter,
+`api.ErrDetails(err)` returns `TooManyIdsDetails` with the `IdCap` loaded
+when the Client was built. Ordering, read failures and polling are defined in
+the [caller contract](../../docs/caller-contract.md#reading-many-agents).
 
 ---
 
@@ -720,8 +745,9 @@ holds the catalogued sentinel (`errors.Is` sees through it) and `Details`
 the object; `api.ErrDetails(err)` returns the `Details` of the first one in
 `err`'s chain, or nil. `ErrPaneChanged` (`PaneChangedDetails`),
 `ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`),
-`ErrClaimTooSoon` (`ClaimTooSoonDetails`) and `ErrDialogMaybeOpen`
-(`DialogMaybeOpenDetails`) carry it too, and so does a
+`ErrClaimTooSoon` (`ClaimTooSoonDetails`), `ErrDialogMaybeOpen`
+(`DialogMaybeOpenDetails`) and `ErrTooManyIds` (`TooManyIdsDetails`)
+carry it too, and so does a
 pane answer's `ErrInternal` after its key was sent (`PaneKeySentDetails`).
 
 `Decide` on a request already answered at the pane (`PaneAnswer`

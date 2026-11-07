@@ -97,7 +97,7 @@ func checkAdvice(t *testing.T, desc string) {
 	list = strings.TrimSuffix(strings.TrimSuffix(list, raisedTail), refusalTail)
 	refused := 0
 	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds ",
-		"[pre_trust] lock_wait_seconds ", "[store] busy_timeout_ms ", "[state] settle_ms ",
+		"[get_many] id_cap ", "[pre_trust] lock_wait_seconds ", "[store] busy_timeout_ms ", "[state] settle_ms ",
 		"[state] needs_intelligence_timeout_seconds ", "[state] idle_screen_timeout_seconds "} {
 		refused += strings.Count(list, k)
 	}

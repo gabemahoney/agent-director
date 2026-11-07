@@ -7,8 +7,8 @@
  */
 
 import { test, expect } from "bun:test";
-import { buildArgv } from "../src/internal/argv.js";
-import { ErrReservedEnvKey } from "../src/errors.js";
+import { buildArgv, GLOBAL_FLAGS } from "../src/internal/argv.js";
+import { ErrInvalidFlags, ErrReservedEnvKey } from "../src/errors.js";
 import { thrownBy } from "./internal/helper.js";
 
 const CLI = "/usr/local/bin/agent-director";
@@ -64,6 +64,7 @@ test.each([
     ["spawn", "--cwd", "/ws", "--extra-env", "my-var=a=b", "--extra-env", "1ST="]],
   ["status", "status", { instance_id: "id-1" }, ["status", ...ID]],
   ["get", "get", { instance_id: "id-1" }, ["get", ...ID]],
+  ["get-many", "get-many", { instance_ids: ["a", "b,c", "-h", "--", "--x"] }, ["get-many", "a", "b,c", "-h", "--", "--x"]],
   ["list-subagents", "list-subagents", { instance_id: "id-1" }, ["list-subagents", ...ID]],
   ["kill", "kill", { instance_id: "id-1" }, ["kill", ...ID]],
   ["resume", "resume", { instance_id: "id-1" }, ["resume", ...ID]],
@@ -174,3 +175,21 @@ test.each([
 ])("global options %p → %p before the verb (b.32k, b.78b)", (globals, flags) => {
   expect(buildArgv(CLI, "status", { instance_id: "id-1" }, globals)).toEqual([CLI, ...flags, "status", ...ID]);
 });
+
+test("get-many: globals precede unchanged id words and near misses", () => {
+  const ids = ["a", "b,c", "-h", "--", "--x", "-", ...GLOBAL_FLAGS.map((flag) => `${flag}suffix`)];
+  expect(buildArgv(CLI, "get-many", { instance_ids: ids }, { home: "/temp/home", storePath: "/temp/state.db" }))
+    .toEqual([CLI, "--store-path", "/temp/state.db", "--home", "/temp/home", "get-many", ...ids]);
+});
+
+test.each([...GLOBAL_FLAGS.flatMap((flag) => [flag, `${flag}=private-value`]), "private\0id"])(
+  "get-many: unsafe id %p is refused by position without its text", (id) => {
+    const err = thrownBy(() => buildArgv(CLI, "get-many", { instance_ids: ["safe", id] }));
+    expect(err).toBeInstanceOf(ErrInvalidFlags);
+    const e = err as ErrInvalidFlags;
+    expect([e.verb, e.errName]).toEqual(["get-many", "ErrInvalidFlags"]);
+    expect(e.errDescription).toBe(id.includes("\0")
+      ? "get-many: id at position 2 contains a NUL byte, which a CLI argument cannot carry"
+      : "get-many: id at position 2 would be consumed as a CLI global flag");
+    expect(e.errDescription).not.toContain(id);
+  });

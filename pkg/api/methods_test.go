@@ -77,6 +77,7 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 	ctx := context.Background()
 	emptyJSON := map[string]string{
 		"Get":           emptyGetJSON,
+		"GetMany":       `{"spawns":[],"not_found":[]}`,
 		"List":          `{"spawns":[]}`,
 		"ListSubagents": emptySubagentsJSON,
 		"Sweep":         `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
@@ -89,6 +90,7 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 		"Spawn":         func() (any, error) { return c.Spawn(api.SpawnParams{Agent: "claude"}) },
 		"Status":        func() (any, error) { return c.Status("") },
 		"Get":           func() (any, error) { return c.Get("") },
+		"GetMany":       func() (any, error) { return c.GetMany(nil) },
 		"List":          func() (any, error) { return c.List(api.ListParams{}) },
 		"ListSubagents": func() (any, error) { return c.ListSubagents("") },
 		"SendKeys":      func() (any, error) { return c.SendKeys(api.SendKeysParams{}) },

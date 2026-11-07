@@ -15,10 +15,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { Client } from "../src/client.js";
-import { ErrAgentArgsMismatch, ErrAgentMissing, ErrInvalidFlags, ErrReservedEnvKey, ErrTemplateAgentMissing } from "../src/errors.js";
+import { ErrAgentArgsMismatch, ErrAgentMissing, ErrInvalidFlags, ErrReservedEnvKey, ErrTemplateAgentMissing, ErrTooManyIds } from "../src/errors.js";
 import type { SpawnResult } from "../src/types.js";
 import {
-  CLAUDE_JSON, homeStore, makeTemplateClaude, openClient, rejection, seedOuterParent, spawnClaude, trustEntry,
+  CLAUDE_JSON, homeStore, makeTemplateClaude, openClient, rejection, runHelper, seedOuterParent, spawnClaude, trustEntry,
 } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
 
@@ -30,6 +30,31 @@ afterAll(() => {
 });
 
 type CreateOpts = Parameters<typeof Client.create>[0];
+
+// F13: "split the ids into calls of at most that many" (ErrTooManyIds class doc).
+test("F13 getMany: splitting by errDetails.id_cap as advised returns every row", async () => {
+  const source = fs.readFileSync(path.resolve(import.meta.dir, "../src/errors.ts"), "utf8");
+  expect(source.match(/\/\*\*(?:(?!\*\/)[^])*\*\/\s*export class ErrTooManyIds/)?.[0])
+    .toContain("split the ids into calls of at most that many");
+  await withTempHome(async (home) => {
+    const ids = Array.from({ length: 21 }, (_, i) => `advice-many-${i}`);
+    for (const id of ids) runHelper("seed-spawn", { store: homeStore(home), id, state: "ended", "create-store": true });
+    using client = await openClient(homeStore(home));
+    const err = await rejection(client.getMany({ instance_ids: ids }));
+    expect(err).toBeInstanceOf(ErrTooManyIds);
+    const e = err as ErrTooManyIds;
+    expect(e.errDescription).toContain("split the ids across calls of at most 20");
+    const id_cap = e.errDetails?.id_cap as number;
+    expect(id_cap).toBe(20);
+    const found: string[] = [];
+    for (let i = 0; i < ids.length; i += id_cap) {
+      const result = await client.getMany({ instance_ids: ids.slice(i, i + id_cap) });
+      expect(result.not_found).toEqual([]);
+      found.push(...result.spawns.map((row) => row.instance_id));
+    }
+    expect(found).toEqual(ids);
+  });
+}, 20_000);
 
 // K1: "omit the field to use the default (30000 ms)"
 for (const bad of [0, -1]) {

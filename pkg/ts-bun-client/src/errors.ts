@@ -557,6 +557,11 @@ export class ErrStoreBusy extends AgentDirectorError {}
 export class ErrMissingRequestToken extends AgentDirectorError {}
 /** Mirrors ErrInvalidFlags (package: api) */
 export class ErrInvalidFlags extends AgentDirectorError {}
+/**
+ * Mirrors ErrTooManyIds (package: api). `errDetails` is a `TooManyIdsDetails`
+ * whose `id_cap` is the Id Cap in force; split the ids into calls of at most that many.
+ */
+export class ErrTooManyIds extends AgentDirectorError {}
 /** Mirrors ErrConfigMalformed (package: clisetup) */
 export class ErrConfigMalformed extends AgentDirectorError {}
 /** Mirrors ErrStoreOpen (package: clisetup) */
@@ -594,7 +599,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 60
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 63
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -652,6 +657,7 @@ const ERROR_TABLE = {
   ErrInvalidDecision,
   ErrMissingRequestToken,
   ErrInvalidFlags,
+  ErrTooManyIds,
   // config package
   ErrTemplateNameUnsafe,
   ErrTemplateNotFound,

@@ -6,7 +6,7 @@ synthesized into its `--settings`. Each Codex Spawn gets eight on Codex's
 command line (see "The Codex entry set" below), plus a help entry and a
 question-tool deny entry while their settings are on. They fire on every
 lifecycle event of their agent and write the row update that powers
-`status` / `get` / `list`,
+`status` / `get` / `get-many` / `list`,
 but only for the row's own agent (see "Only the row's own agent moves
 the row" below). A Claude Spawn's also write the agent's subagent records
 (see "What the hooks write for subagent records" below); a Codex launch
@@ -14,6 +14,9 @@ registers no subagent events, so its agent has no records (see
 [usage.md](usage.md#when-an-agent-is-tracked)). A Codex agent's
 hooks run the same `hook` verb with `--agent codex` and map Codex's events
 to states by their own table (see "Hooks from a Codex agent" below).
+
+[`get-many`](caller-contract.md#reading-many-agents) returns `get`'s full
+result for each ID, with the same fields and guarantees described here.
 
 For Claude Code's own hooks reference, see:
 <https://docs.claude.com/en/docs/claude-code/hooks>.
@@ -66,8 +69,8 @@ name so operators can spot new Claude Code events that need a classifier
 update.
 
 These are the states the hooks write, and what every verb that acts on a
-row judges. With `[state] settle_ms` set in `config.toml`, `status`, `get`
-and `list` show a state a hook wrote only once it has held that long, and
+row judges. With `[state] settle_ms` set in `config.toml`, `status`, `get`,
+`get-many` and `list` show a state a hook wrote only once it has held that long, and
 the previous settled state until then. A hook's `ended` shows at once; a
 hook that moves a row out of `missing` or `ended` waits like any other
 change. Each hook reads the setting when it fires, to judge whether the
@@ -283,7 +286,7 @@ a `/review` thread's hooks record no turn.
 **A turn that ends in an error.** Codex sends no `Stop` for a turn that
 ends in an error (a model at capacity, for one), but its rollout, the row's
 transcript, records the end of every turn as a `task_complete` naming the
-turn. An eligible `status`, `get`, `list` or `sweep` check can move
+turn. An eligible `status`, `get`, `get-many`, `list` or `sweep` check can move
 a Codex row to `waiting` when all of these hold:
 
 - the row's raw state is `working`, and its current turn has not ended;
@@ -380,7 +383,7 @@ current launch is proven gone (judged by its recorded start time, with no
 tmux call) and the row holds an end report. These operations share the guarded
 move:
 
-- `status`, `get`, `list` and `sweep`, for eligible selected rows.
+- `status`, `get`, `get-many`, `list` and `sweep`, for eligible selected rows.
 - `pause`, before it sends any key (in any live state, `pending` included) and
   in each poll while it waits for `ended`.
 

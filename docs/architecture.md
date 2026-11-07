@@ -1652,9 +1652,12 @@ truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
   <unit>", and `[state] settle_ms` (see
   [Settle time (b.3ie)](#settle-time-b3ie)), refused the same way as
   "outside its range 0 to <max> milliseconds", since 0 is its default
-  (off); every refused key is described in one `*config.ConfigError`,
+  (off). `[get_many] id_cap` refuses only negative integers, as "outside its
+  range 1 or more", with no maximum; callers use `GetMany.EffectiveIdCap`
+  (missing or 0 gives `DefaultGetManyIdCap`, 20).
+  Every refused key is described in one `*config.ConfigError`,
   the tables in the order `[defaults]`, `[relay]`, `[pause]`,
-  `[pre_trust]`, `[store]`, `[state]`, `[tmux]`, each table's keys in table order. The description
+  `[get_many]`, `[pre_trust]`, `[store]`, `[state]`, `[tmux]`, each table's keys in table order. The description
   opens "refused <tables> values: ", the tables with a refused key listed
   as one name, two joined by " and ", or three or more separated by ", "
   with " and " before the last (`nameList`, which also lists a key's
@@ -4621,7 +4624,7 @@ their deadlines at any value of the key:
 | --- | --- | --- |
 | `decide` with `max_wait_ms` | its caller's | the verdict write waits at most what is left of the bound (`ErrStoreBusy`, nothing recorded), and the ack wait ends at the bound; a caller passes at most its deadline minus 1 s |
 | the relay hook | Claude Code's kill, its start plus its `--timeout` | write budget ends 2 s before the kill; a late or uncertain ack/timeout COMMIT may persist, but emits no answer (see the relay lifecycle) |
-| `get`, `list`, `get-permission` | the caller's | their relay-delivery write (`hook_gone_at` and the fallback clock, see [Readers never wait](#readers-never-wait-problem-4)) waits 0 and is skipped when the lock is held |
+| `get`, `get-many`, `list`, `get-permission` | the caller's | their relay-delivery write (`hook_gone_at` and the fallback clock, see [Readers never wait](#readers-never-wait-problem-4)) waits 0 and is skipped when the lock is held |
 
 The other hooks (SessionStart, UserPromptSubmit, PostToolUse and
 PostToolUseFailure with their close of a request whose tool ran, Stop, the
@@ -5181,6 +5184,18 @@ projects already-selected IDs: it never reapplies filters, fills limit slots or
 probes hidden descendants.
 Family fields use the consistent stored projection, with unconfirmed freshness.
 
+**Must reuse for get-many:** `Client.GetMany` calls Get's complete one-ID read,
+`getSettled`, once per ID in order, with a fresh `relayView()` and settle read
+each time. Each ID keeps Get's check pass, sweep, budget, family refresh and
+projection; there is no batch read or second projection. Before any read,
+`pkg/api` refuses a call with no IDs (`ErrInvalidFlags`), then one with more
+than the Client-loaded Id Cap (`ErrTooManyIds`, a `DetailedError` with
+`TooManyIdsDetails`), then one with an empty or repeated ID (`ErrInvalidFlags`).
+It adds only this validation, the ordered loop, separation of `ErrSpawnNotFound`
+IDs into `NotFound`, and the stop on any other error with both lists empty.
+Earlier reads' writes stay.
+The Get mechanisms below apply to each ID's read.
+
 **Must reuse for recovery tick attribution:** `Store.WithRecoveryTickSource`
 (`internal/store/recovery.go`) supplies the orphan-closeout tick's source through
 an immutable per-call store view; `recoveryTickTrail`
@@ -5197,7 +5212,7 @@ the complete earlier row, not a lightweight validation row. A final common
 stored projection carries committed changes for the selected families; it is
 not another recovery pass. Context keeps its existing provenance and nullability.
 
-Get uses the optional `ListSessionHistorySnapshot` capability after preceding
+Get, including each GetMany read, uses the optional `ListSessionHistorySnapshot` capability after preceding
 recovery refreshes and before display observation can lease the connection.
 **Must reuse:** this bounded store read validates the full row snapshot, launch
 identity and life and reads history in one SQLite read transaction, ending it
@@ -5280,8 +5295,8 @@ launch or observation facts.
   Narrow stores without evidence get
   unknown records (`withUnknownMainFields`).
 
-Each row's evidence commits under its own guards; one failed row does not
-suppress another row's eligible work. Cursor's local
+Each row's evidence commits under its own guards; in List and Sweep, one failed
+row does not suppress another row's eligible work. Cursor's local
 stale-proof handling preserves independent List results; genuine selection-wide
 errors and direct-read conflicts retain their existing failure shapes.
 
@@ -9265,12 +9280,12 @@ surface shows spells it `manifest.ReuseOptInSpelling`, "reuse_finished
 - A reused id starts a fresh conversation with no memory of the old
   conversation. Same-agent reuse keeps its life and visible history/records.
   The contract phrases "starts with no memory of its earlier lives" and
-  "resume and get never use or show an earlier life's history" refer to
+  "resume, get and get-many never use or show an earlier life's history" refer to
   agent lives: only a switch ends one. Same-agent reuse retains history
   for inspection, while resume continues only the latest session.
   An exact stored-agent change starts a fresh life, including a switch back.
-  `get` never shows an earlier life's history; `resume` never uses an
-  archived session, even within the current life. Children remain listed
+  `get` and `get-many` never show an earlier life's history; `resume` never
+  uses an archived session, even within the current life. Children remain listed
   and running across either switch (see "History belongs to a life" under
   [internal/store](#internalstore)).
 - Claude session S1 runs and ends, Codex runs and ends on the same id,
@@ -14382,7 +14397,7 @@ durability. The CLI's `--max-wait-ms` (`optionalInt64Value`, so an absent flag i
 
 ### Readers never wait (problem 4)
 
-`get`, `list` and `get-permission` judge every request they return
+`get`, `get-many`, `list` and `get-permission` judge every request they return
 through the Client's `relayView()`. Their relay-delivery write is one
 eligible attempt per request through `recordGone`, with a lock wait of 0
 (`readerLockWait`): `RecordPermissionFallbacks` stores `hook_gone_at` with
@@ -14399,14 +14414,14 @@ differ only for a Cursor relay-off request with zero `admitted_at` and
 nothing. The write happens only if the store's write lock is free at that
 moment; busy or failed, it writes nothing, and the reply reports
 `hook_gone_at` as stored. `decide` writes `hook_gone_at` with its own
-bounded wait. `get` and `list` list a row's requests that still await an
+bounded wait. `get`, `get-many` and `list` list a row's requests that still await an
 answer, decided or not, only while the row is in `check_permission`, so
 never a closed request (closed with its Spawn, or at the pane); `list`
 rows carry `permission_requests` as `get` does. Selected reads use the bounded
 `activePermissionReader`; their display observation and response share
 `readJudgedRequests`. A listed raw `check_permission` row projects actual
 open requests through `judgedOpenInfos`, preserving narrow-provider fallbacks.
-`get` reads a row in any state but `ended` and `missing` and projects both lists
+`get` (also each `get-many` read) reads a row in any state but `ended` and `missing` and projects both lists
 (`judgedSpawnInfos`), oldest first (`created_at`, then request id), each
 request judged once:
 `permission_requests`, the requests that still await an answer
@@ -14425,7 +14440,7 @@ fallback write suppresses later fallback writes; independent selected rows
 retain their own observation attempts. Neither judging nor recording supplies
 permission response authority.
 
-With `[state] settle_ms` set, `status`, `get` and `list` derive the settled state inside
+With `[state] settle_ms` set, `status`, `get`, `get-many` and `list` derive the settled state inside
 their own SELECT from the reader's clock (`SettleRead.stateExpr`), so
 settling adds no read, write or wait; the requests they list follow the
 raw state, never the settled one (see

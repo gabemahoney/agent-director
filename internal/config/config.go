@@ -23,10 +23,11 @@
 // MaxPauseTimeoutSeconds; [pre_trust] lock_wait_seconds (b.kr4), with
 // DefaultPreTrustLockWaitSeconds and MaxPreTrustLockWaitSeconds; and [store]
 // busy_timeout_ms (b.c7f), with DefaultStoreBusyTimeoutMs and
-// MaxStoreBusyTimeoutMs.
+// MaxStoreBusyTimeoutMs. [get_many] id_cap defaults to 20 for a missing key
+// or 0; Load refuses a negative value, with no maximum.
 //
-// [state] settle_ms (b.3ie), the settle time of the state status, get and list
-// report, is refused the same way: a negative value and one above
+// [state] settle_ms (b.3ie), the settle time of the state status, get, get-many
+// and list report, is refused the same way: a negative value and one above
 // MaxStateSettleMs. Unlike those keys, 0 is a value of its own, not the
 // default's stand-in: a missing key, or 0, turns the settle time off
 // (DefaultStateSettleMs).
@@ -59,6 +60,7 @@ type Config struct {
 	Defaults Defaults `toml:"defaults"`
 	Relay    Relay    `toml:"relay"`
 	Pause    Pause    `toml:"pause"`
+	GetMany  GetMany  `toml:"get_many"`
 	PreTrust PreTrust `toml:"pre_trust"`
 	Store    Store    `toml:"store"`
 	State    State    `toml:"state"`
@@ -232,6 +234,36 @@ func (p Pause) refusals() []string {
 	return nil
 }
 
+// DefaultGetManyIdCap is the default number of ids a get-many call accepts.
+// Default and GetMany.EffectiveIdCap share this value so they cannot drift.
+const DefaultGetManyIdCap = 20
+
+// GetMany holds the get-many verb's Id Cap.
+type GetMany struct {
+	// IdCap is the maximum number of ids per call. Read it only through
+	// EffectiveIdCap: a missing key or 0 gives the default. Load refuses
+	// a negative value; there is no maximum.
+	IdCap int `toml:"id_cap"`
+}
+
+// EffectiveIdCap returns the configured positive Id Cap, otherwise
+// DefaultGetManyIdCap (20).
+func (g GetMany) EffectiveIdCap() int {
+	if g.IdCap > 0 {
+		return g.IdCap
+	}
+	return DefaultGetManyIdCap
+}
+
+// refusals returns the description of a negative [get_many] id_cap, or nil.
+// Zero gives the default; every positive value is accepted.
+func (g GetMany) refusals() []string {
+	if g.IdCap < 0 {
+		return []string{fmt.Sprintf("[get_many] id_cap = %d, outside its range 1 or more", g.IdCap)}
+	}
+	return nil
+}
+
 // DefaultPreTrustLockWaitSeconds is the default of pre_trust.lock_wait_seconds,
 // in whole seconds (12): just above the 10 s stale limit of Claude Code's lock
 // on .claude.json, so a lock dir left by a holder killed while holding it goes
@@ -396,7 +428,7 @@ type State struct {
 	IdleScreenTimeoutSeconds int `toml:"idle_screen_timeout_seconds"`
 
 	// SettleMs is the settle time, in whole milliseconds: with a positive
-	// value, the state status, get and list report (and list --state filters
+	// value, the state status, get, get-many and list report (and list --state filters
 	// on) moves to a new value only once a hook-written raw state has held
 	// that long, and reads the last settled value until then; terminal states
 	// and command-written states report at once. 0, or a missing key, turns
@@ -570,6 +602,9 @@ func Default() Config {
 		Pause: Pause{
 			TimeoutSeconds: DefaultPauseTimeoutSeconds,
 		},
+		GetMany: GetMany{
+			IdCap: DefaultGetManyIdCap,
+		},
 		PreTrust: PreTrust{
 			LockWaitSeconds: DefaultPreTrustLockWaitSeconds,
 		},
@@ -650,7 +685,8 @@ func (e *ConfigError) Unwrap() error {
 // settle_ms (b.3ie): a negative value and one above the key's maximum
 // (MaxExpireRetentionDays, MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds,
 // MaxPreTrustLockWaitSeconds, MaxStoreBusyTimeoutMs, MaxStateSettleMs) are
-// refused, never replaced by the default or capped. A refusal behaves exactly
+// refused, never replaced by the default or capped. [get_many] id_cap is
+// refused only when negative; it has no maximum. A refusal behaves exactly
 // like a malformed file: Load returns a
 // *ConfigError for the file whose Err describes every refused key
 // (validate). A value that is not a TOML integer already fails the parse.
@@ -855,8 +891,8 @@ func keyName(k toml.Key) string {
 // as a list (nameList: "refused [tmux] values: ", "refused [defaults] and
 // [tmux] values: ", "refused [defaults], [relay] and [tmux] values: "), then
 // every refused key's description, tables in the order [defaults], [relay],
-// [pause], [pre_trust], [store], [state], [tmux] and each table in its own
-// order, then
+// [pause], [get_many], [pre_trust], [store], [state], [tmux] and each table
+// in its own order, then
 // missingKeyAdvice. A file refused only for [tmux] values gets the SR-4.1
 // description unchanged. Values are never changed.
 //
@@ -875,6 +911,7 @@ func validate(cfg Config, meta toml.MetaData) error {
 		{"[defaults]", cfg.Defaults.refusals()},
 		{"[relay]", cfg.Relay.refusals()},
 		{"[pause]", cfg.Pause.refusals()},
+		{"[get_many]", cfg.GetMany.refusals()},
 		{"[pre_trust]", cfg.PreTrust.refusals()},
 		{"[store]", cfg.Store.refusals()},
 		{"[state]", cfg.State.refusals()},

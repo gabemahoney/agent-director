@@ -12,7 +12,7 @@ import (
 // A25/B14: follow spawn's reuse opt-in with the row's agent, or explicitly switch it.
 func TestAdviceFollow_A25_B14_CursorReuseFinished(t *testing.T) {
 	// Serial: refusal snapshots inspect every append to the shared trail.
-	adviceAssertManifest(t, "spawn", "reuse_finished", "Only an agent switch starts a new life; same-agent reuse keeps session history and subagent records but starts a fresh conversation.", "A switch back also starts with no memory of its earlier lives: resume and get never use or show an earlier life's history.")
+	adviceAssertManifest(t, "spawn", "reuse_finished", "Only an agent switch starts a new life; same-agent reuse keeps session history and subagent records but starts a fresh conversation.", "A switch back also starts with no memory of its earlier lives: resume, get and get-many never use or show an earlier life's history.")
 	installCursorFixtureGateway(t)
 	for _, agents := range [][]string{{"cursor", "cursor"}, {"claude", "cursor", "claude"}, {"cursor", "codex", "cursor"}} {
 		t.Run(agents[0]+"-"+agents[1], func(t *testing.T) {

@@ -16,10 +16,10 @@ agent-director expire
 [recovery checks as state reads](caller-contract.md#bounded-recovery-on-state-reads).
 Finished rows skip live-agent checks; late exact input proof can still be
 recorded without sending input.
-`status`, `get` and `list` run those checks for their returned agents. Existing
+`status`, `get`, `get-many` and `list` run those checks for their returned agents. Existing
 `find-missing` schedules keep working: it is an alias of `sweep`.
 
-For agents no `status`, `get` or `list` returns, a longer sweep interval
+For agents no `status`, `get`, `get-many` or `list` returns, a longer sweep interval
 delays discovery of exits, missed Codex turn endings, stale permission state
 and display changes that no agent event or command reports, leaving those
 observations older. Discovery or confirmation within one interval is not

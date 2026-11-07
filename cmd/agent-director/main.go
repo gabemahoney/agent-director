@@ -103,6 +103,7 @@ func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) ma
 		"spawn":              func(args []string) error { return spawnHandlerWith(client, args) },
 		"status":             func(args []string) error { return statusHandlerWith(client, args) },
 		"get":                func(args []string) error { return getHandlerWith(client, args) },
+		"get-many":           func(args []string) error { return getManyHandlerWith(client, args) },
 		"send-keys":          func(args []string) error { return sendKeysHandlerWith(client, args) },
 		"read-pane":          func(args []string) error { return readPaneHandlerWith(client, args) },
 		"kill":               func(args []string) error { return killHandlerWith(client, args) },

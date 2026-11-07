@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,22 @@ func TestSettleOffMCP(t *testing.T) {
 					t.Errorf("%s: text result differs from its golden\n got: %s\nwant: %s", c.Name, got, want)
 				}
 			}
+			var ids, goldens []string
+			for _, c := range cases.Cases {
+				if c.Verb == "get" {
+					ids = append(ids, c.Params["instance_id"].(string))
+					goldens = append(goldens, strings.TrimSuffix(cases.Golden(t, c.Name), "\n"))
+				}
+			}
+			ids = append(ids, "get-many-unknown")
+			from := time.Now()
+			got := toolText(t, callTool(t, d, "get_many", paramJSON(t, map[string]any{"instance_ids": ids}))) + "\n"
+			got = apitest.NormalizeReadSurfaceProbes(t, got, from, time.Now(), first, apitest.ReadSurfaceCase{Verb: "get-many"})
+			want := `{"spawns":[` + strings.Join(goldens, ",") + `],"not_found":["get-many-unknown"]}` + "\n"
+			if got != want {
+				t.Fatalf("get-many differs from get goldens\ngot: %s\nwant: %s", got, want)
+			}
+
 		})
 	}
 }

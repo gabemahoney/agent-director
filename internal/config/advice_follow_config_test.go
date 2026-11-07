@@ -2,7 +2,7 @@ package config_test
 
 // advice_follow_config_test.go (b.fji G2): a refused [tmux] table's
 // description, or a refused [defaults] expire_retention_days's (b.sgw),
-// [relay] or [pause] timeout_seconds's (b.8q2), [pre_trust]
+// [get_many] id_cap, [relay] or [pause] timeout_seconds's (b.8q2), [pre_trust]
 // lock_wait_seconds's (b.kr4) or [store] busy_timeout_ms's (b.c7f), ends "A
 // missing key, or 0, gives the default."; following it literally (drop each refused key, or set it to 0)
 // must make the file load. Beside a refused pending_grace_seconds whose derived
@@ -93,6 +93,7 @@ func advRangeFollow(desc string, keys rangeKeys, value string) rangeKeys {
 		{"[defaults] expire_retention_days ", &keys.days},
 		{"[relay] timeout_seconds ", &keys.relay},
 		{"[pause] timeout_seconds ", &keys.pause},
+		{"[get_many] id_cap ", &keys.idCap},
 		{"[pre_trust] lock_wait_seconds ", &keys.preTrust},
 		{"[store] busy_timeout_ms ", &keys.busyTimeout},
 		{"[state] settle_ms ", &keys.settle},
@@ -118,6 +119,7 @@ func advRangeAssertDefaults(t *testing.T, cfg config.Config) {
 		{"expire_retention_days", cfg.Defaults.EffectiveExpireRetentionDays(), config.DefaultExpireRetentionDays},
 		{"relay timeout_seconds", cfg.Relay.EffectiveTimeoutSeconds(), config.DefaultRelayTimeoutSeconds},
 		{"pause timeout_seconds", cfg.Pause.EffectiveTimeoutSeconds(), config.DefaultPauseTimeoutSeconds},
+		{"get_many id_cap", cfg.GetMany.EffectiveIdCap(), 20},
 		{"pre_trust lock_wait_seconds", cfg.PreTrust.EffectiveLockWaitSeconds(), config.DefaultPreTrustLockWaitSeconds},
 		{"store busy_timeout_ms", cfg.Store.EffectiveBusyTimeoutMs(), config.DefaultStoreBusyTimeoutMs},
 		{"state settle_ms", cfg.State.EffectiveSettleMs(), config.DefaultStateSettleMs},
@@ -254,6 +256,7 @@ func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 		keys rangeKeys
 		tmux []tmuxSetting
 	}{
+		{"id cap negative", rangeKeys{idCap: "-1"}, nil},
 		{"retention negative", rangeKeys{days: "-1"}, nil},
 		{"retention above the largest", rangeKeys{days: "106752"}, nil},
 		{"retention above the largest, beside a refused [tmux] value", rangeKeys{days: "365000"}, killNegativeTmux},
@@ -270,7 +273,7 @@ func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 		{"state needs_intelligence timeout above the largest", rangeKeys{needsIntelligence: "9223372037"}, nil},
 		{"state needs_intelligence and settle refused", rangeKeys{needsIntelligence: "-1", settle: "60001"}, nil},
 		{"state idle_screen timeout above the largest", rangeKeys{idleScreen: "9223372037"}, nil},
-		{"every table refused", rangeKeys{days: "-1", relay: "9223372036", pause: "-1", preTrust: "-1", busyTimeout: "-1",
+		{"every table refused", rangeKeys{days: "-1", relay: "9223372036", pause: "-1", idCap: "-1", preTrust: "-1", busyTimeout: "-1",
 			settle: "60001", needsIntelligence: "-1", idleScreen: "-1"}, killNegativeTmux},
 	}
 	for _, tc := range cases {
