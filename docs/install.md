@@ -2,7 +2,8 @@
 
 ## Requirements
 
-- Linux x86_64 or macOS arm64 (Apple Silicon); no other platform.
+- Linux x86_64 or macOS 13 or later on arm64 (Apple Silicon); no other
+  platform.
 - At least one of Claude Code, Codex and Cursor. Each counts as installed when
   its `[launch]` key in `config.toml` (`claude_path`, `codex_path`, `cursor_path`; see
   [configuration](configuration.md)) names an executable file, or its program

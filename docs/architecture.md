@@ -43,8 +43,9 @@ See the SRD (Ideas hive: `t1.jus.x5`) for the full design.
 
 ## Supported platforms (v1)
 
-The supported install hosts are **`linux/amd64`** and **`darwin/arm64`**.
-`install.sh`'s pre-flight host check (`uname -s` / `uname -m`) admits
+The supported install hosts are **`linux/amd64`** and **`darwin/arm64`**
+on macOS 13 or later, the oldest macOS the Go 1.27 toolchain's darwin
+binaries run on. `install.sh`'s pre-flight host check (`uname -s` / `uname -m`) admits
 only `Linux/x86_64` and `Darwin/arm64` and exits 2 on any other host,
 `Linux/aarch64` included, before it downloads or writes anything. The
 release builds the CLI for three targets, those two and
@@ -18869,7 +18870,7 @@ both built by `make release-binaries` with the same version stamp
 A build target is not a supported install host. `linux/arm64` is
 built and shipped, but `install.sh`, the only installer, exits 2 on
 `Linux/aarch64`; the supported install hosts are
-`linux/amd64` and `darwin/arm64`. Windows is not supported (SRD §16.1).
+`linux/amd64` and `darwin/arm64` (macOS 13 or later). Windows is not supported (SRD §16.1).
 
 Linux binaries are statically linked via `CGO_ENABLED=0` plus
 `modernc.org/sqlite` (pure-Go SQLite driver, no libsqlite3
@@ -19008,6 +19009,8 @@ values that follow this rule today (b.v46, b.nsa, b.2wr):
 - `smoke/per-binary-smoke.sh`: a sub-check's `detail` (`ldd` or `help`
   output). `jq` is the only thing that escapes it, so the decoded value
   equals the raw output.
+- `compile/darwin-lc-uuid.sh`: a sub-check's `detail` (the
+  `tools/check-lcuuid` line, or the checker's build output).
 
 **Run report.** `dist/release-report.json` is written on every run (dry
 and live). It captures every phase, every sub-check, every publish substep,
@@ -20360,9 +20363,9 @@ failing wrapper of that interface.
 ### cwdfix: the working-directory fixture (reusable test fixture)
 
 `internal/testsupport/cwdfix` moves a test's process into a fresh temp
-directory for the rest of the test (b.nje), standing in for go 1.24's
-`t.Chdir`, which go 1.22 lacks. The package doc comment carries the
-detail.
+directory for the rest of the test (b.nje), as `t.Chdir(t.TempDir())`
+does. It predates the module's move from go 1.22 to a Go with `t.Chdir`
+(b.jh2). The package doc comment carries the detail.
 
 - `Temp(t) string` makes a fresh `t.TempDir()` the working directory
   until `t` ends, restores the previous one in `t.Cleanup`, and returns

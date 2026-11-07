@@ -20,9 +20,9 @@ ARG CLAUDE_CODE_VERSION=2.1.120
 #   4. Replace GO_SHA256_AMD64 + GO_SHA256_ARM64 below
 #   5. Rebuild the image; the in-container sha256sum check verifies
 #      the tarball before extraction, so a stale SHA fails loudly.
-ARG GO_VERSION=1.22.10
-ARG GO_SHA256_AMD64=736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092
-ARG GO_SHA256_ARM64=5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec
+ARG GO_VERSION=1.27.3
+ARG GO_SHA256_AMD64=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+ARG GO_SHA256_ARM64=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
 
 # Bun runtime version. Used by the ts-bun-lib testplan and any future Epic
 # that exercises the TypeScript/Bun client library inside the container.
