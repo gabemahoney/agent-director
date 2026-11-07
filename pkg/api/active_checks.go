@@ -91,8 +91,9 @@ type sessionHistorySnapshotReader interface {
 	ListSessionHistorySnapshot(Spawn, time.Duration) ([]SessionHistoryEntry, error)
 }
 
-// activeCheckProviders is invocation-owned. Narrow exported helpers have no
-// tmux provider and do not manufacture one from the host environment.
+// activeCheckProviders is invocation-owned, except for get-many's stop record.
+// Narrow exported helpers have no tmux provider and do not manufacture one
+// from the host environment.
 type activeCheckProviders struct {
 	// tickSource changes reporting only; sweep retains its released source.
 	tickSource   string
@@ -101,6 +102,8 @@ type activeCheckProviders struct {
 	budget       time.Duration
 	logger       FindMissingLogger
 	deferred     func(string, error)
+	// stoppedSockets carries only get-many's stopped sockets between ids.
+	stoppedSockets *tmux.StoppedSockets
 }
 
 // activeReadStore holds the fixed selection and its checked projections.
@@ -388,7 +391,7 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 				s = bounded.RecoveryWrites(rows...)
 			}
 			now := newRelayJudge(view).now
-			live = &findMissingRun{s: s, t: p.tmux, pc: view.Procs, sw: tmux.NewSweep(p.tmux, view.Procs, now, p.budget), lg: p.logger, emit: r.emit, now: now}
+			live = &findMissingRun{s: s, t: p.tmux, pc: view.Procs, sw: tmux.NewSweepFrom(p.tmux, view.Procs, now, p.budget, p.stoppedSockets), lg: p.logger, emit: r.emit, now: now}
 			if capture, ok := p.tmux.(interface {
 				CapturePaneID(string, string, int, bool) (string, error)
 			}); ok {

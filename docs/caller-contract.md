@@ -100,8 +100,8 @@ To end a live row (`pending` included) and relaunch its id:
 `find-missing` remains a supported alias of `sweep` on CLI and MCP, as do
 Go `FindMissing`/`Client.FindMissing` and TypeScript `findMissing`.
 `status` and `get` check only the named row. `get-many` checks each named ID
-in order, each checked and bounded as one `get`. `list` selects IDs using the
-stored state, displayed state, other filters and limit before checking them.
+in order. `list` selects IDs using the stored state, displayed state, other
+filters and limit before checking them.
 It returns those same IDs after recovery, even if a returned value no longer
 matches the filter; it neither refills limit slots nor adds newly matching rows.
 Invalid filters are refused before checks. Reading a parent does not check
@@ -116,8 +116,8 @@ display and transcript checks; late exact input proof remains eligible.
 Pending grace and a live launch owner protect an unfinished launch, except
 from [exact Cursor gateway loss](#cursor-operation-boundaries).
 
-Work is bounded per call (per ID for `get-many`), and writes recheck the sampled
-identity. A stale sample, unavailable provider or unconfirmed commit is not
+Work is bounded per call (per ID for [`get-many`](#reading-many-agents)),
+and writes recheck the sampled identity. A stale sample, unavailable provider or unconfirmed commit is not
 successful recovery; a successful read does not prove every check ran or
 committed. Checks never
 deliver input or permission answers, replay a submission, signal or restart
@@ -151,7 +151,7 @@ are always arrays, empty rather than null, each in the order the IDs were given.
 Any other read failure stops the call with both lists empty and no later ID
 read; earlier reads' committed observations stay recorded.
 
-Before reading any agent, get-many refuses a call with no IDs (`ErrInvalidFlags`),
+Before reading any agent, `get-many` refuses a call with no IDs (`ErrInvalidFlags`),
 then one with more IDs than [`[get_many] id_cap`](configuration.md#keys)
 (`ErrTooManyIds`), then one with an empty or repeated ID (`ErrInvalidFlags`).
 Empty and repeated IDs are named by their 1-based positions, never their text.
@@ -161,7 +161,17 @@ The result is not a single snapshot: agents are read one after another, so
 `family_state` can disagree between members of one family within a result.
 A large result may reach an MCP caller's model as a file.
 
-A binary without get-many refuses it with `ErrUnknownVerb` (CLI and
+Call time grows with the number of IDs and with slow tmux calls. A tmux
+server that answers nothing costs about one
+[`[tmux] query_timeout_ms`](configuration.md#timing-settings-tmux) per server
+under the [stop rule](#unchanged-panes), unless that timeout uses up the rest of an ID's
+[`[tmux] sweep_budget_seconds`](configuration.md#timing-settings-tmux).
+A stalled pane capture costs up to
+[`[tmux] action_timeout_ms`](configuration.md#timing-settings-tmux) per working
+Claude or Codex agent. There is no fixed call-time limit; raise TypeScript's
+`callTimeoutMs` if needed (see the timeout rule above).
+
+A binary without `get-many` refuses it with `ErrUnknownVerb` (CLI and
 TypeScript), or `ErrUnknownTool` over MCP. On either refusal, fall back to
 `get` per ID.
 
@@ -612,8 +622,9 @@ kept; nothing reads what the pane says.
 - **Time.** A sample makes up to three tmux calls (a lookup, a pane listing
   and a capture), each bounded by
   [`query_timeout_ms` or `action_timeout_ms`](configuration.md#timing-settings-tmux).
-  Within one call (per ID for `get-many`), a tmux server that does not answer
-  a lookup or pane listing is not asked again: its later rows count as failed
+  Within one call, a tmux server that does not answer a lookup or pane listing
+  is not asked again unless that timeout uses up the rest of an ID's
+  [`[tmux] sweep_budget_seconds`](configuration.md#timing-settings-tmux): its later rows count as failed
   samples for baseline handling, but their skipped work makes sweep coverage incomplete.
 
 ## Ordinary text submission

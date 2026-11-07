@@ -113,8 +113,8 @@ rules; the lane does not isolate Droid or prevent reads or disclosure.
 
 ## Pane-only rows
 
-`get`, `list` and `status` carry `integration_mode: "pane_only"` (omitted for
-other agents; Go `IntegrationMode`). A live row stays `pending`; it never
+`get`, `get-many`, `list` and `status` carry `integration_mode: "pane_only"`
+(omitted for other agents; Go `IntegrationMode`). A live row stays `pending`; it never
 reports work, idle, questions or permission waits. Context fields are all
 `null`, `idle_screen_availability` is `unavailable`, and `list-subagents`
 returns `tracked: false` with an empty list. Hook reports change none of these.

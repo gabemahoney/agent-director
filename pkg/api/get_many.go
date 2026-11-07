@@ -3,6 +3,8 @@ package api
 import (
 	"errors"
 	"fmt"
+
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // GetManyResult holds the full get rows and the ids without a record.
@@ -28,6 +30,9 @@ func emptyGetManyResult() GetManyResult {
 // GetMany never waits for the store's write lock or for a state to settle.
 // Agents are read one after another, each through get's own read, so they
 // are not one snapshot: family_state can disagree within one result.
+// A socket that stopped answering a lookup or pane listing for one id is
+// not asked again for later ids in the call. A capture timeout stops nothing;
+// each id keeps its own budget and held answers.
 //
 // CLI: agent-director get-many
 //
@@ -69,9 +74,12 @@ func (c *Client) GetMany(instanceIDs []string) (GetManyResult, error) {
 		}
 		positions[id] = i + 1
 	}
+	stopped := &tmux.StoppedSockets{}
 	out := emptyGetManyResult()
 	for _, id := range instanceIDs {
-		row, err := getSettled(c.st, c.relayView(), c.settleRead(), id)
+		view := c.relayView()
+		view.active.stoppedSockets = stopped
+		row, err := getSettled(c.st, view, c.settleRead(), id)
 		if errors.Is(err, ErrSpawnNotFound) {
 			out.NotFound = append(out.NotFound, id)
 			continue

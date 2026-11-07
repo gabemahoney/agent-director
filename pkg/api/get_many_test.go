@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -180,4 +183,135 @@ func TestGetManyDoesNotWaitForWriter(t *testing.T) {
 		}
 		return apitest.DisplayReading{State: r.Spawns[0].State, DisplayedState: r.Spawns[0].DisplayedState}, nil
 	})
+}
+
+// Only stopped sockets carry between ids; held answers and budgets stay per id.
+func TestGetManyStopsAnUnansweringSocket(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		call    tmux.Call
+		failure tmux.Failure
+		calls   [3]int // shared socket: lookups, listings, captures
+	}{
+		{"lookup timeout", tmux.CallLookup, tmux.FailTimeout, [3]int{1, 0, 0}},
+		{"unreadable pane listing", tmux.CallListPanes, tmux.FailUnrecognized, [3]int{1, 1, 0}},
+		{"no server", tmux.CallLookup, tmux.FailNoServer, [3]int{3, 0, 0}},
+		{"capture timeout", tmux.CallCapture, tmux.FailTimeout, [3]int{3, 3, 3}},
+		{"budget not carried", "", 0, [3]int{3, 3, 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+			shared := []string{e.id, e.addRow(t, store.AgentCodex, apitest.TestSocket, "%7", 4343), e.addRow(t, store.AgentClaude, apitest.TestSocket, "%8", 4344)}
+			other := e.addRow(t, store.AgentCodex, fmbSocket(1), "%9", 4345)
+			ids := []string{shared[0], other, shared[1], shared[2]}
+			c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+			_, _, baselined := apitest.RepeatUntilCommitted(func() bool {
+				e.rec.Reset()
+				if _, err := c.GetMany(ids); err != nil {
+					t.Fatal(err)
+				}
+				for _, id := range ids {
+					row, err := e.s.GetSpawn(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if row.PaneSHA256 == "" {
+						return false
+					}
+				}
+				return true
+			})
+			if !baselined {
+				t.Fatal("baselines never committed")
+			}
+			first := e.now
+			committed := map[string]store.Spawn{}
+			for _, id := range ids {
+				row, err := e.s.GetSpawn(id)
+				if err != nil || row.PaneSHA256 == "" {
+					t.Fatalf("setup: row %s has no baseline: %+v %v", id, row, err)
+				}
+				committed[id] = row
+			}
+			e.now = e.now.Add(time.Second)
+			var charge time.Duration
+			var got api.GetManyResult
+			attempts, elapsed, observed := apitest.RepeatUntilCommitted(func() bool {
+				// Each attempt measures one call at the same injected time.
+				e.rec.Reset()
+				if tc.failure != 0 {
+					e.rec.Script(apitest.TestSocket, tmuxfix.Script{Failure: tc.failure}, tc.call)
+				} else {
+					// Three calls fit one id's budget; two ids' six calls reach it.
+					charge = (config.Tmux{}).EffectiveSweepBudget() / 6
+					clock := tmuxfix.NewClock(e.now)
+					e.rec.WithVirtualTime(clock, tmux.Timeouts{Query: charge, Action: charge})
+					api.SetClockForTest(c, clock.Now)
+				}
+				var err error
+				got, err = c.GetMany(ids)
+				if err != nil || len(got.Spawns) != len(ids) || len(got.NotFound) != 0 {
+					t.Fatalf("get-many = %+v, %v", got, err)
+				}
+				for _, id := range ids {
+					row, err := e.s.GetSpawn(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					// Same-value samples update evidence without advancing the version.
+					if row.DisplayEvidence == committed[id].DisplayEvidence {
+						return false
+					}
+				}
+				return true
+			})
+			if !observed {
+				t.Fatalf("pane observations never committed in %d attempts over %v", attempts, elapsed)
+			}
+			calls := map[string][3]int{}
+			for _, call := range e.rec.SocketCalls() {
+				counts := calls[call.Socket]
+				switch call.Call {
+				case tmux.CallLookup:
+					counts[0]++
+				case tmux.CallListPanes:
+					counts[1]++
+				case tmux.CallCapture:
+					counts[2]++
+				default:
+					t.Errorf("unexpected tmux call: %+v", call)
+				}
+				calls[call.Socket] = counts
+			}
+			wantCalls := map[string][3]int{apitest.TestSocket: tc.calls, fmbSocket(1): {1, 1, 1}}
+			if !reflect.DeepEqual(calls, wantCalls) {
+				t.Errorf("tmux calls per socket (lookup, listing, capture) = %v; want %v", calls, wantCalls)
+			}
+			for i, detail := range got.Spawns {
+				id := ids[i]
+				if detail.InstanceID != id {
+					t.Fatalf("row %d = %s; want %s", i, detail.InstanceID, id)
+				}
+				row, err := e.s.GetSpawn(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before := committed[id]
+				reason := ""
+				if tc.failure != 0 && id != other {
+					reason = store.ReasonUnreadable
+					if row.ObservationVersion != before.ObservationVersion+1 || row.PaneSHA256 != "" || row.PaneSinceMillis != 0 {
+						t.Errorf("failed sample kept row %s's baseline: before=%+v after=%+v", id, before, row)
+					}
+				} else if row.ObservationVersion != before.ObservationVersion || row.PaneSHA256 != before.PaneSHA256 || row.PaneSinceMillis != before.PaneSinceMillis {
+					t.Errorf("sampled row %s lost its baseline: before=%+v after=%+v", id, before, row)
+				}
+				// In particular, later stopped ids report unreadable, not deadline.
+				checked := e.now.Add(time.Duration(i+1) * 3 * charge)
+				assertPaneRecord(t, detail.Confirmations.DisplayedState, first, checked, reason)
+			}
+		})
+	}
 }

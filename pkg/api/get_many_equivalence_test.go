@@ -43,6 +43,11 @@ func TestGetManyEqualsSequentialGet(t *testing.T) {
 			ids = append(ids, id)
 		}
 	}
+	_, err = apitest.SeedSpawn(e.dbPath, "droid-pending", store.StatePending, "/tmp", "off", "", false, apitest.WithAgent(store.AgentDroid), apitest.WithNoPane(), apitest.WithPID(writer.PanePID), apitest.WithProcStarttime(writer.PaneStarttime))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids = append(ids, "droid-pending")
 	sample := contextfix.Must(t, "claude-parent")
 	known, _ := apitest.SeedContextSpawn(t, e.dbPath, "known-context", false, sample)
 	ids = append(ids, known)
@@ -121,6 +126,9 @@ func TestGetManyEqualsSequentialGet(t *testing.T) {
 			t.Fatalf("Get(%s): %v", id, err)
 		}
 		want.Spawns = append(want.Spawns, row)
+		if id == "droid-pending" && row.IntegrationMode != "pane_only" {
+			t.Fatalf("Droid seed is not pane-only: %+v", row)
+		}
 		if id == known {
 			assertContext(t, row.Context, sample.Expected)
 		}

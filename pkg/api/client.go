@@ -124,7 +124,8 @@ type Client struct {
 // effective relay window and idle_screen timeout, and the check providers
 // (tmux client, pending grace, sweep budget, logger and Cursor deferral
 // observer) from which each check pass builds its own pane sampler. Each call
-// is a fresh view for one read, including each id of get-many.
+// is a fresh view for one read, including each id of get-many, whose views
+// carry only the call's record of stopped sockets between them.
 func (c *Client) relayView() RelayView {
 	return RelayView{
 		active:            &activeCheckProviders{tmux: c.tmuxClient, pendingGrace: c.cfg.Tmux.EffectivePendingGrace(), budget: c.cfg.Tmux.EffectiveSweepBudget(), logger: c.logger, deferred: c.cursorMissingDeferred},
