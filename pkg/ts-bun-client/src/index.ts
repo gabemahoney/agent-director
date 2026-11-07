@@ -45,6 +45,7 @@ export {
   ErrExperimentalAgentDisabled,
   ErrAgentCapabilityUnsupported,
   ErrModelMissing,
+  ErrHostCredentialMissing,
   ErrAgentMissing,
   ErrAgentInvalid,
   ErrAgentArgsMismatch,

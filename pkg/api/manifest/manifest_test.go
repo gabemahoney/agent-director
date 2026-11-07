@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -601,7 +602,7 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey", "ErrInvalidFlags", "ErrInstanceIdCollision",
 		"ErrTmuxSessionNameInvalid", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate", "ErrTmuxUnresponsive", "ErrTmuxSessionConflict",
 		"ErrAgentMissing", "ErrAgentInvalid", "ErrAgentArgsMismatch", "ErrPermissionsUnsupported", "ErrTemplateAgentMissing",
-		"ErrExperimentalAgentDisabled", "ErrModelMissing", "ErrAgentCapabilityUnsupported")
+		"ErrExperimentalAgentDisabled", "ErrModelMissing", "ErrAgentCapabilityUnsupported", "ErrHostCredentialMissing")
 	conflict := goDocErrorBulletText(t, "Spawn", "ErrTmuxSessionConflict")
 	for _, phrase := range []string{`after "duplicate session"`, "the new row is ended"} {
 		if !strings.Contains(conflict, phrase) {
@@ -842,5 +843,19 @@ func TestSweepAliasManifest(t *testing.T) {
 	}
 	if !reflect.DeepEqual(canonical.ResultFields, alias.ResultFields) || !reflect.DeepEqual(canonical.ErrorNames, alias.ErrorNames) {
 		t.Error("alias contract differs from sweep")
+	}
+}
+
+func TestExperimentalAgentsAbsentFromStaticText(t *testing.T) {
+	for surface, value := range map[string]any{"manifest": manifest.Verbs, "error catalog": errnames.Catalog} {
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"droid", "opencode"} {
+			if strings.Contains(strings.ToLower(string(body)), name) {
+				t.Errorf("static %s advertises %s", surface, name)
+			}
+		}
 	}
 }

@@ -33,19 +33,27 @@ import (
 
 func TestPaneOnlyReuseValidationWritesNothing(t *testing.T) {
 	// Serial: refusal snapshots check the shared trail and temporary HOME.
-	for _, agent := range []string{"droid"} {
-		for _, tc := range []struct{ name, want string }{
-			{"custom model", "ErrSpawnDeniedFlag"},
-			{"relay", "ErrAgentCapabilityUnsupported"},
-			{"inherited environment", "ErrReservedEnvKey"},
-		} {
+	for _, agent := range []string{"droid", "opencode"} {
+		type refusal struct{ name, want, key string }
+		cases := []refusal{
+			{"custom model", "ErrSpawnDeniedFlag", ""},
+			{"relay", "ErrAgentCapabilityUnsupported", ""},
+		}
+		keys := []string{"AWS_BEARER_TOKEN_BEDROCK"}
+		if agent == "opencode" {
+			keys = []string{"OPENROUTER_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"}
+		}
+		for _, key := range keys {
+			cases = append(cases, refusal{"inherited environment", "ErrReservedEnvKey", key})
+		}
+		for _, tc := range cases {
 			t.Run(agent+"/"+tc.name, func(t *testing.T) {
 				home := withTempHome(t)
 				e := newKillEnv(t)
 				r := e.seedReusable(t, agentGone, reuseRowSpec{Opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
 				seedLaneOverlay(t, e.storeID, r.Token)
 				c, _ := e.paneOnlyClient(t, agent)
-				p := api.SpawnParams{Agent: agent, CWD: r.CWD, InstanceID: r.ID, ReuseFinished: true, AgentArgs: []string{"--model", "model"}}
+				p := api.SpawnParams{Agent: agent, CWD: r.CWD, InstanceID: r.ID, ReuseFinished: true, AgentArgs: paneOnlyArgs(agent, "model")}
 				switch tc.name {
 				case "custom model":
 					p.AgentArgs = []string{"--model", "custom:private-lane-sentinel"}
@@ -53,7 +61,7 @@ func TestPaneOnlyReuseValidationWritesNothing(t *testing.T) {
 					p.RelayMode = "on"
 				case "inherited environment":
 					p.Template = "lane"
-					body := apitest.TemplateBody(apitest.TemplateFields{Agent: agent, ExtraEnv: map[string]string{"AWS_BEARER_TOKEN_BEDROCK": "private-lane-sentinel"}})
+					body := apitest.TemplateBody(apitest.TemplateFields{Agent: agent, ExtraEnv: map[string]string{tc.key: "private-lane-sentinel"}})
 					if _, err := apitest.SeedTemplate(filepath.Join(adConfigDir(home), "templates"), p.Template, body); err != nil {
 						t.Fatal(err)
 					}

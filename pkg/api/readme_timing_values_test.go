@@ -384,17 +384,19 @@ func docConfigKeys() []docKey {
 }
 
 // docExperimentalKeys are the keys of docs/experimental.md. Its example block
-// leaves out droid_path and switches the droid opt-in on (docOptIns).
+// leaves out the launch paths and switches both opt-ins on (docOptIns).
 func docExperimentalKeys() []docKey {
 	return []docKey{
 		{"launch.droid_path", "unset", "", true},
 		{"experimental.droid", strconv.FormatBool(config.Default().Experimental.Droid), "", false},
+		{"launch.opencode_path", "unset", "", true},
+		{"experimental.opencode", strconv.FormatBool(config.Default().Experimental.OpenCode), "", false},
 	}
 }
 
 // docOptIns are the example-block values that switch an opt-in on rather than
 // state its default.
-var docOptIns = map[string]string{"experimental.droid": "true"}
+var docOptIns = map[string]string{"experimental.droid": "true", "experimental.opencode": "true"}
 
 // TestReadmeTimingValuesConfigKeys: the Keys tables of docs/configuration.md
 // and docs/experimental.md have one row for each of that doc's keys, in order,

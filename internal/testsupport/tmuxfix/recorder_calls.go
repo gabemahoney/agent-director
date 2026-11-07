@@ -63,6 +63,9 @@ type SocketCall struct {
 	Command []string
 	// ExcludeEnv records the lane's ambient client/session exclusions.
 	ExcludeEnv []string
+	// UnsetEnv and ForwardEnv record names only, never forwarded values.
+	UnsetEnv   []string
+	ForwardEnv []string
 	// Token, InstanceID and StoreID are NewSession's and SetLabel's label
 	// arguments (the session label's second, fourth and fifth fields; WD
 	// 2026-09-29 STORE); Token is also the pane label's first field.
@@ -361,8 +364,15 @@ func (r *Recorder) NewSession(socket, name, cwd string, envs map[string]string, 
 
 // NewSessionWithEnvExclusions records the same create, including lane exclusions.
 func (r *Recorder) NewSessionWithEnvExclusions(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, excluded []string) (tmux.CreateReply, error) {
+	return r.NewSessionWithEnvPolicy(socket, name, cwd, envs, command, token, instanceID, storeID, excluded, excluded, nil)
+}
+
+// NewSessionWithEnvPolicy records the three separate name lists; it never
+// reads host credentials or materializes the private create input.
+func (r *Recorder) NewSessionWithEnvPolicy(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, excluded, unset, forward []string) (tmux.CreateReply, error) {
 	c := SocketCall{Call: tmux.CallCreate, Socket: socket, Target: name, Cwd: cwd, Envs: envs,
-		Command: command, Token: token, InstanceID: instanceID, StoreID: storeID, ExcludeEnv: append([]string(nil), excluded...)}
+		Command: command, Token: token, InstanceID: instanceID, StoreID: storeID, ExcludeEnv: append([]string(nil), excluded...),
+		UnsetEnv: append([]string(nil), unset...), ForwardEnv: append([]string(nil), forward...)}
 	ans, err := r.do(c, r.createEffect(socket, name, token, instanceID, storeID))
 	reply, _ := ans.(tmux.CreateReply)
 	return reply, err

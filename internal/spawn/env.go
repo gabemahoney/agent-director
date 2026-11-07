@@ -60,6 +60,12 @@ func composeEnv(r Resolved) map[string]string {
 	for k, v := range r.ExtraEnv {
 		out[k] = v
 	}
+	// Adapter values belong only to the new session, never Resolved.ExtraEnv
+	// or the row/template. They override accepted caller settings such as the
+	// native auto-update flag without mutating that caller's saved input.
+	for k, v := range paneOnlyAgents[r.Agent].sessionEnv {
+		out[k] = v
+	}
 	return out
 }
 

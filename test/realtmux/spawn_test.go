@@ -72,10 +72,13 @@ func newSpawnFix(t *testing.T, extraConfig ...string) *spawnFix {
 // b.7tx: exclusion is tested through production spawn and reuse, with only
 // harmless ambient sentinels. The ordinary agent is the positive control.
 func TestPaneOnlySpawnEnvironmentExclusion(t *testing.T) {
-	for _, agent := range []string{"droid", "claude"} {
+	for _, agent := range []string{"droid", "claude", "opencode"} {
 		for _, warm := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/warm=%t", agent, warm), func(t *testing.T) {
-				keys := []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE"}
+				keys := []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE", "OPENROUTER_API_KEY"}
+				if agent == "opencode" {
+					keys = []string{"OPENROUTER_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"}
+				}
 				for _, key := range keys {
 					t.Setenv(key, "harmless-"+key)
 				}
@@ -85,10 +88,14 @@ func TestPaneOnlySpawnEnvironmentExclusion(t *testing.T) {
 				if err := os.WriteFile(stub, []byte(codexStubScript), 0700); err != nil {
 					t.Fatal(err)
 				}
-				f := newSpawnFix(t, "[experimental]\ndroid = true\n[launch]\ndroid_path = "+strconv.Quote(stub)+"\nclaude_path = "+strconv.Quote(stub)+"\n")
+				f := newSpawnFix(t, "[experimental]\ndroid = true\nopencode = true\n[launch]\ndroid_path = "+strconv.Quote(stub)+"\nclaude_path = "+strconv.Quote(stub)+"\nopencode_path = "+strconv.Quote(stub)+"\n")
 				if warm {
 					f.startSession(t, "")
-				} // the raw fixture starts with ambient sentinel globals
+				}
+				// On a warm server the old global credential must remain unchanged.
+				if agent == "opencode" {
+					t.Setenv("OPENROUTER_API_KEY", "synthetic-fresh-host-key")
+				}
 				check := func(s spawned) {
 					t.Helper()
 					r := codexRecordOf(os.Getenv(codexRecordDirEnv), s.ID)
@@ -102,24 +109,61 @@ func TestPaneOnlySpawnEnvironmentExclusion(t *testing.T) {
 					pane := procEnviron(t, pid)
 					for _, key := range keys {
 						g, gset := envValue(global, key)
-						if want := warm || agent == "claude"; gset != want || want && g != "harmless-"+key {
-							t.Errorf("global %s=%q present=%v; want present=%v unchanged sentinel", key, g, gset, want)
+						wantGlobal := warm || agent == "claude" && key != "OPENROUTER_API_KEY"
+						if gset != wantGlobal || wantGlobal && g != "harmless-"+key {
+							t.Errorf("global %s=%q present=%v; want present=%v unchanged sentinel", key, g, gset, wantGlobal)
 						}
 						_, sset := envValue(session, key)
 						v, pset := envValue(pane, key)
-						if agent == "droid" && (sset || pset) {
-							t.Errorf("%s survived exclusion: session=%v pane=%v", key, sset, pset)
+						switch {
+						case agent == "opencode" && (key == "OPENROUTER_API_KEY" || key == "OPENCODE_CONFIG_CONTENT"):
+							sv, _ := envValue(session, key)
+							if !sset || !pset || sv != v {
+								t.Errorf("target environment disagrees for %s", key)
+							}
+							if key == "OPENROUTER_API_KEY" && v != "synthetic-fresh-host-key" {
+								t.Error("target key did not come from current host")
+							}
+							if key == "OPENCODE_CONFIG_CONTENT" {
+								var content map[string]any
+								if err := json.Unmarshal([]byte(v), &content); err != nil {
+									t.Fatal(err)
+								}
+								if !strings.Contains(v, "{env:OPENROUTER_API_KEY}") || strings.Contains(v, "synthetic-fresh-host-key") || v == "harmless-"+key {
+									t.Error("target config lacks nonsecret provider reference")
+								}
+							}
+						case agent == "opencode" || agent == "droid" && key != "OPENROUTER_API_KEY":
+							if sset || pset {
+								t.Errorf("%s survived exclusion: session=%v pane=%v", key, sset, pset)
+							}
+						case key == "OPENROUTER_API_KEY":
+							if !warm && (sset || pset) {
+								t.Error("cold non-OpenCode pane inherited host key")
+							}
+						default:
+							if !pset || v != "harmless-"+key {
+								t.Errorf("control failed to inherit %s", key)
+							}
 						}
-						if agent == "claude" && (!pset || v != "harmless-"+key) {
-							t.Errorf("control failed to inherit %s", key)
+					}
+					if agent == "opencode" {
+						for _, env := range [][]string{session, pane} {
+							if v, set := envValue(env, "OPENCODE_DISABLE_AUTOUPDATE"); !set || v != "1" {
+								t.Error("auto-update override missing")
+							}
 						}
 					}
 				}
-				check(f.mustLaunchWith(t, api.SpawnParams{Agent: agent, AgentArgs: []string{"--model", "model"}}))
-				if agent == "droid" {
+				args := []string{"--model", "model"}
+				if agent == "opencode" {
+					args[1] = "openrouter/model"
+				}
+				check(f.mustLaunchWith(t, api.SpawnParams{Agent: agent, AgentArgs: args}))
+				if agent == "droid" || agent == "opencode" && !warm {
 					id := newInstanceID("lane-reuse")
 					f.reuseRows(t).seedRow(t, id, uniqueName(), store.StateEnded, store.LaunchIdentity{Token: newToken(t), Socket: f.Socket}, apitest.WithAgent(agent), apitest.WithNoSubagentTracking())
-					check(f.mustLaunchWith(t, api.SpawnParams{Agent: agent, InstanceID: id, ReuseFinished: true, AgentArgs: []string{"--model", "reuse-model"}}))
+					check(f.mustLaunchWith(t, api.SpawnParams{Agent: agent, InstanceID: id, ReuseFinished: true, AgentArgs: args}))
 				}
 			})
 		}

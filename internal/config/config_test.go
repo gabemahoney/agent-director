@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,8 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		got, want any
 	}{
 		{"Experimental.Droid", d.Experimental.Droid, false},
+		{"Experimental.OpenCode", d.Experimental.OpenCode, false},
+		{"Launch.OpenCodePath", d.Launch.OpenCodePath, ""},
 		{"Launch.DroidPath", d.Launch.DroidPath, ""},
 		{"Defaults.RelayMode", d.Defaults.RelayMode, "off"},
 		{"Defaults.ExpireRetentionDays", d.Defaults.ExpireRetentionDays, 31},
@@ -111,8 +114,7 @@ func TestLoadKeepsDefaults(t *testing.T) {
 		{"unrelated unknown [defaults] key ignored", makeConfigFile(t, "[defaults]\ndisable_something_else = true\nrelay_mode = \"on\"\n"),
 			func(c *config.Config) { c.Defaults.RelayMode = "on" }},
 		{"droid opt-in", makeConfigFile(t, "[experimental]\ndroid = true\n"), func(c *config.Config) { c.Experimental.Droid = true }},
-		{"droid path absolute", makeConfigFile(t, "[launch]\ndroid_path = \"/opt/bin/droid\"\n"), func(c *config.Config) { c.Launch.DroidPath = "/opt/bin/droid" }},
-		{"droid path tilde", makeConfigFile(t, "[launch]\ndroid_path = \"~/bin/droid\"\n"), func(c *config.Config) { c.Launch.DroidPath = filepath.Join(home, "bin/droid") }},
+		{"opencode opt-in", makeConfigFile(t, "[experimental]\nopencode = true\n"), func(c *config.Config) { c.Experimental.OpenCode = true }},
 		{"claude_path absolute", makeConfigFile(t, "[launch]\nclaude_path = \"/opt/bin/claude\"\n"),
 			func(c *config.Config) { c.Launch.ClaudePath = "/opt/bin/claude" }},
 		{"codex_path absolute", makeConfigFile(t, "[launch]\ncodex_path = \"/opt/bin/codex\"\n"),
@@ -285,4 +287,60 @@ func TestLoadRecordsWhetherDbPathIsSet(t *testing.T) {
 // quoted wraps s in TOML double-quoted-string syntax with minimal escaping.
 func quoted(s string) string {
 	return "\"" + strings.ReplaceAll(s, "\\", "\\\\") + "\""
+}
+
+func TestPaneOnlyLaunchPaths(t *testing.T) {
+	for _, agent := range []string{"droid", "opencode"} {
+		t.Run(agent+"/tilde without HOME", func(t *testing.T) {
+			path := makeConfigFile(t, fmt.Sprintf("[launch]\n%s_path = \"~/bin/agent\"\n", agent))
+			t.Setenv("HOME", "")
+			if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), agent+"_path") {
+				t.Fatalf("unresolvable tilde: %v", err)
+			}
+		})
+		for _, value := range []string{"", agent, "/opt/my tools/" + agent, "~/bin/" + agent, "./" + agent, "bin/" + agent, "~someone/" + agent, "-bad", ".", "..", "two words", "back\\slash"} {
+			t.Run(agent+"/"+value, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				cfg, err := config.Load(makeConfigFile(t, fmt.Sprintf("[launch]\n%s_path = %q\n", agent, value)))
+				accepted := value == "" || value == agent || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~/")
+				if !accepted {
+					if err == nil {
+						t.Fatal("invalid launch path accepted")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := cfg.Launch.DroidPath
+				if agent == "opencode" {
+					got = cfg.Launch.OpenCodePath
+				}
+				want := value
+				if strings.HasPrefix(value, "~/") {
+					want = filepath.Join(home, value[2:])
+				}
+				if got != want {
+					t.Fatalf("path=%q; want %q", got, want)
+				}
+			})
+		}
+	}
+}
+
+func TestAgentChoices(t *testing.T) {
+	for _, tc := range []struct {
+		flags config.Experimental
+		want  string
+	}{
+		{config.Experimental{}, "claude, codex or cursor"},
+		{config.Experimental{Droid: true}, "claude, codex, cursor or droid"},
+		{config.Experimental{OpenCode: true}, "claude, codex, cursor or opencode"},
+		{config.Experimental{Droid: true, OpenCode: true}, "claude, codex, cursor, droid or opencode"},
+	} {
+		if got := config.AgentChoices(tc.flags); got != tc.want {
+			t.Errorf("AgentChoices(%+v)=%q; want %q", tc.flags, got, tc.want)
+		}
+	}
 }

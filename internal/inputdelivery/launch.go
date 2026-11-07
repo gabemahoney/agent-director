@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gabemahoney/agent-director/internal/hostenv"
 	"github.com/gabemahoney/agent-director/internal/inputjournal"
 	"os"
 	"os/exec"
@@ -197,16 +198,17 @@ func probeVersion(agent, program string, env map[string]string) string {
 	defer cancel()
 	version := exec.CommandContext(ctx, program, "--version")
 	version.WaitDelay = 200 * time.Millisecond
+	version.Env = make([]string, 0, len(env))
 	// This is a capability probe, not the launched pane. A wrapper that ignores
 	// --version must not run hooks as either the caller or the new launch.
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if !probeIdentityKey(key) {
+		if !probeIdentityKey(key) && !hostenv.IsCredential(key) {
 			version.Env = append(version.Env, entry)
 		}
 	}
 	for k, v := range env {
-		if !probeIdentityKey(k) {
+		if !probeIdentityKey(k) && !hostenv.IsCredential(k) {
 			version.Env = append(version.Env, k+"="+v)
 		}
 	}

@@ -85,14 +85,14 @@ var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 // ErrAgentMissing is returned by spawn when it resolves no agent: the call
 // gives no agent and its template, if any, names none. No config key,
 // environment variable or default supplies one (SR-1.1), so the caller names
-// the agent, claude, codex, cursor or droid, in the call (agent; --agent on the CLI) or in
+// the agent, claude, codex, cursor, droid or opencode, in the call (agent; --agent on the CLI) or in
 // its template. It comes after the cwd and relay_mode checks and before
 // every check that depends on the agent, extra_env included; nothing was
 // written or launched.
 var ErrAgentMissing = errors.New("ErrAgentMissing")
 
 // ErrAgentInvalid is returned by spawn when the call's agent is not
-// claude, codex, cursor or droid. The match is case-sensitive ("Claude" is refused) and the
+// claude, codex, cursor, droid or opencode. The match is case-sensitive ("Claude" is refused) and the
 // empty string counts as no agent given (ErrAgentMissing, when the template
 // names none either). The message quotes the value and names all accepted
 // values; nothing was written or launched. A bad agent in a template is
@@ -160,3 +160,7 @@ var ErrAgentCapabilityUnsupported = errors.New("ErrAgentCapabilityUnsupported")
 
 // ErrModelMissing means the pane-only launch has no explicit model.
 var ErrModelMissing = errors.New("ErrModelMissing")
+
+// ErrHostCredentialMissing means a required host credential is unset or empty
+// in agent-director's own environment. The launch refuses before mutation.
+var ErrHostCredentialMissing = errors.New("ErrHostCredentialMissing")

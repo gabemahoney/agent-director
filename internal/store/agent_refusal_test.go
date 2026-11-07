@@ -1,7 +1,7 @@
 package store_test
 
 // The row's agent write rule (SR-3.1, SR-3.6): an insert or a reuse reset names
-// exactly claude, codex or cursor, else it is refused with ErrRowAgentInvalid and
+// a registered agent, else it is refused with ErrRowAgentInvalid and
 // writes nothing. Over reuse_test.go's seedReuseRow and reuseFresh and
 // reuse_refused_test.go's reuseStateOf.
 
@@ -25,7 +25,7 @@ func agentInsert(agent string) store.Spawn {
 // agent is refused by an insert, which leaves no row, and by a reuse reset,
 // which leaves the row, its history, its requests and its child as they were.
 func TestAgentWriteRefused(t *testing.T) {
-	for _, agent := range []string{"", "gemini", "Claude", "CODEX", "Cursor", "Droid", "DROID", " droid", "droid ", " cursor", "cursor ", " claude", "codex ", "claude\n"} {
+	for _, agent := range []string{"", "gemini", "Claude", "CODEX", "Cursor", "Droid", "DROID", "OpenCode", "OPENCODE", " opencode", "opencode ", " droid", "droid ", " cursor", "cursor ", " claude", "codex ", "claude\n"} {
 		t.Run(strconv.Quote(agent), func(t *testing.T) {
 			f := newV5Store(t)
 			err := f.s.InsertPending(agentInsert(agent))
@@ -57,13 +57,13 @@ func TestAgentWriteRefused(t *testing.T) {
 	}
 }
 
-// TestAgentAcceptedAndRead checks claude and codex are accepted by an insert
+// TestAgentAcceptedAndRead checks registered agents are accepted by an insert
 // and a reset and read back as the row's agent raw, through GetSpawn and
 // ListSpawns; a new row has no end report and a seeded one reads back through
 // the row's end-report field.
 func TestAgentAcceptedAndRead(t *testing.T) {
 	const endReported int64 = 1790000123456
-	for _, agent := range []string{store.AgentClaude, store.AgentCodex, store.AgentCursor, store.AgentDroid} {
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex, store.AgentCursor, store.AgentDroid, store.AgentOpenCode} {
 		t.Run(agent, func(t *testing.T) {
 			f := newV5Store(t)
 			if err := f.s.InsertPending(agentInsert(agent)); err != nil {

@@ -63,7 +63,7 @@ const ReservedHomeReason = "the agent's hook resolves agent-director's config an
 // with no agent).
 func ReservedHomeAlternative(agent string) string {
 	if IsPaneOnly(agent) {
-		return "keep HOME unchanged; this lane does not accept an alternate agent home"
+		return "keep the invoking HOME"
 	}
 	switch agent {
 	case config.AgentClaude:
@@ -93,7 +93,7 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //     callers spawning into /foo/bar and /foo/./bar end up with the same
 //     row.
 //  2. relay_mode is "on" / "off" / "" if set.
-//  3. The agent (SR-1.3 step 5): the resolved agent is claude, codex, cursor or droid,
+//  3. The agent (SR-1.3 step 5): the resolved agent is claude, codex, cursor, droid or opencode,
 //     else ErrAgentInvalid for a given value and ErrAgentMissing for none.
 //  4. CheckExperimental requires the pane-only agent's experimental flag.
 //  5. Argument ownership (SR-2.1): inherited template agent_args belong to
@@ -114,6 +114,7 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //     keys, then HOME, the AGENT_DIRECTOR_ namespace and malformed keys;
 //     Cursor's credential and directory checks follow for Cursor only.
 //  9. An explicitly supplied tmux session name passes validateTmuxSessionName.
+//  10. The agent's forwarded host credentials must be present and nonempty.
 //
 // Labels normalization is a no-op here; the prefix guard in §7.2 step 5
 // lands at env-composition time.
@@ -154,12 +155,12 @@ func Validate(r *Resolved) error {
 			return err
 		}
 	}
-	return nil
+	return validateHostCredentials(r.Agent)
 }
 
 // validateAgent applies SR-1.3 step 5 to r.Agent, the resolved agent (the
 // call's own, else its template's; Resolve). A value other than claude,
-// codex, cursor or droid, case-sensitively, is ErrAgentInvalid; none is ErrAgentMissing. A
+// codex, cursor, droid or opencode, case-sensitively, is ErrAgentInvalid; none is ErrAgentMissing. A
 // template's own bad agent never gets here: loading it is
 // ErrTemplateMalformed (config.LoadTemplate).
 func validateAgent(r *Resolved) error {

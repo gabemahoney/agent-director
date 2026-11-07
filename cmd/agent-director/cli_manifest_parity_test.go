@@ -155,6 +155,8 @@ func TestCLIFlagUsageText(t *testing.T) {
 	for _, tc := range []struct{ verb, flag, want, banned string }{
 		{"spawn", "agent", "claude, codex or cursor", "droid"},
 		{"make-template", "agent", "claude, codex or cursor", "droid"},
+		{"spawn", "agent", "claude, codex or cursor", "opencode"},
+		{"make-template", "agent", "claude, codex or cursor", "opencode"},
 		{"spawn", "extra-env", "CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)", ""},
 		{"make-template", "extra-env", "CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)", ""},
 		{"spawn", "no-pre-trust", "CLAUDE_CONFIG_DIR", "CODEX_HOME"},

@@ -46,7 +46,7 @@ test("get: a codex row shows agent codex", async () => {
   });
 }, 10_000);
 
-test.each(["droid"])("get: %s pane-only contract works with its flag off", async (agent) => {
+test.each(["droid", "opencode"])("get: %s pane-only contract works with its flag off", async (agent) => {
   await withTempHome(async (homeDir) => {
     const store = homeStore(homeDir);
     const id = `pane-only-${crypto.randomUUID().slice(0, 8)}`;
