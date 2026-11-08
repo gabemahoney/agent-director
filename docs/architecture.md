@@ -20672,11 +20672,20 @@ temp-dir plan and a fake `db-reset.sh`, with no store or `sqlite3`; the
   removed from `PATH` or failing, a stub tool's first version line kept
   verbatim and JSON-escaped, and the missing-`sql.sh` note, followed
   literally.
+- **`release_check_test.go`** and **`release_prepare_test.go`** cover the
+  [Release Check Kit](#release-check-kit-testrelease-check) scripts with stub
+  installers and binaries: the Claude stand-in's lone `--version` under
+  `bash -s`; `check.sh install`'s refusals and its pass-through of verified
+  inputs to the installer; `check.sh run`'s check and `VERDICT` lines; and
+  `prepare.sh`'s archive of the committed tree in both modes, its hashes and
+  its refusals, some followed literally. They build no image and give no ARM
+  evidence.
 
 **Must use:** a test of a `test/driver/` script goes in
 `test/driver-scripts/` and reuses its `newStore`, `holdLock`,
-`start`/`run` and `driverScript` helpers. Never put a Go file in
-`test/driver/`: the image copies that whole directory.
+`start`/`run` (`startIn`/`runIn` in a given directory) and `driverScript`
+helpers. Never put a Go file in `test/driver/`: the image copies that whole
+directory.
 
 ### Environment Record: `platform-env.sh` (reusable driver helper)
 
@@ -20717,8 +20726,13 @@ except to assert that such a hook is ignored. Instead:
 
 - **The stand-in** `test/driver/stand-in-claude/claude` (installed at
   `/opt/driver/stand-in-claude/claude`) runs `exec bash --noprofile
-  --norc -i` and ignores its arguments, so the pane process tmux reports
-  at the create is an interactive shell with the same pid. A case selects
+  --norc -i` whatever its arguments, so the pane process tmux reports
+  at the create is an interactive shell with the same pid. Only a lone
+  `--version` differs: it prints `2.1.280 (Claude Code stand-in)` and exits
+  without reading stdin, so it never consumes the rest of an `install.sh` piped to `bash -s`. Spawn's
+  version probe does not accept that line, so a stand-in row keeps the
+  fallback delivery (see [Ordinary input delivery](#ordinary-input-delivery)).
+  A case selects
   it with a PATH prefix on the agent-director command, on the spawn and on
   every resume that should relaunch it:
 
@@ -20834,6 +20848,43 @@ stand-in and fires the hook through `pane-hook.sh`; never hand-roll the
 before the identity write, which uses the delayed-create `tmux` and the
 early-hook stand-in above; never add another way to hold the create
 back.
+
+### Release Check Kit (`test/release-check/`)
+
+The Release Check Kit installs one exact linux-arm64 `agent-director` and
+`agent-director-admin` pair into a disposable `node:24-bookworm` container on a
+native linux/arm64 Docker engine, then checks the installed pair's identity and
+basic operation with the stand-in agents. It is self-contained and comes from
+the same commit as the pair it checks. No Makefile target or CI workflow runs
+it; for its gating status see [Supported platforms (v1)](#supported-platforms-v1).
+
+`test/release-check/prepare.sh`, run inside the agent-director repository,
+makes the kit in one of two forms:
+
+- published, `prepare.sh <tag> <SHA256SUMS> <out-dir>`: the tag's commit,
+  installing that published release;
+- candidate, `prepare.sh --candidate <commit> <expected-version> <SHA256SUMS>
+  <payload-dir> <out-dir>`: that commit, installing the checksummed pair in
+  `<payload-dir>`.
+
+It takes the kit from the commit's own tree with `git archive`, never the
+working tree, uses only git, tar, gzip, jq and a SHA-256 tool, and runs no
+agent-director binary, installer or test. It refuses (exit 2) before writing
+anything to `<out-dir>`. It writes `release-check-kit.tar.gz`,
+`release-check-kit.tar.gz.sha256` and `INSTRUCTIONS.txt`, generic steps for any
+native linux/arm64 engine.
+
+The kit carries that tree's own `install.sh`, `platform-env.sh` with its
+`sql.sh` (see [Environment Record](#environment-record-platform-envsh-reusable-driver-helper)),
+`pane-hook.sh` and both stand-ins (see [Docker hook
+pattern](#docker-hook-pattern-the-stand-in-claude-and-pane-hooksh)). Its
+`Dockerfile` puts the stand-ins first on PATH; `check.sh install` installs the
+pair during the image build, and `check.sh run` checks it in a fresh container.
+
+The [`check.sh`](../test/release-check/check.sh) header owns the kit layout,
+`release.env` and the output lines. The `INSTRUCTIONS.txt` that `prepare.sh`
+writes owns verification, build, the isolated run, the evidence to return,
+cleanup and the outcome contract.
 
 ### Model check (`make tla`)
 

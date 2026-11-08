@@ -22,8 +22,19 @@
 # select this file (the real Claude Code starts). Every launch that should
 # run the stand-in, a resume included, needs the prefix. Every argument
 # (`--settings <json>`, `--resume <id>`, the caller's agent args) is
-# ignored.
+# ignored, except a lone `--version`.
 #
+# `claude --version` alone prints one line naming the stand-in, exits 0 and
+# reads nothing: install.sh runs it in its summary with stdin inherited, and
+# under `install.sh | bash -s` that stdin is the rest of the installer, which
+# an interactive bash would read and run. The line is deliberately not one
+# spawn's version probe (internal/inputdelivery/launch.go probeVersion)
+# accepts, so a stand-in launch keeps the fallback text delivery.
+if [[ $# -eq 1 && "$1" == --version ]]; then
+    printf '%s\n' '2.1.280 (Claude Code stand-in)'
+    exit 0
+fi
+
 # --noprofile --norc: nothing from the image's dotfiles runs; -i: the shell
 # reads commands from the pane's terminal.
 exec bash --noprofile --norc -i
