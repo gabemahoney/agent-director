@@ -651,17 +651,25 @@ read-write):
 ```sh
 store='<state.db path>'
 d=$(mktemp -d)
-cp -p -- "$store" "$d/state.db"
-if [ -e "$store-wal" ]; then cp -p -- "$store-wal" "$d/state.db-wal"; fi
-sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+if [ -n "$d" ] && cp -p -- "$store" "$d/state.db" &&
+  { [ ! -e "$store-wal" ] || cp -p -- "$store-wal" "$d/state.db-wal"; }
+then
+  sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+  rc=$?
+else
+  echo 'private copy failed: nothing was read' >&2
+  rc=1
+fi
 rm -rf -- "$d"
+[ "$rc" = 0 ]
 ```
 
-The `rm -rf` removes only the private copy. A `sqlite-v1:` value means the
-authority is recorded: re-run the install. Anything else (nothing, or an
-error): restore the stopped-writer pre-upgrade copy of the store as [Going back
-to the previous release](#going-back-to-the-previous-release) describes, or get
-help. Never write `store_meta` by hand.
+The `rm -rf` removes only the private copy. `private copy failed` means
+nothing was read: fix the failure and read again, or get help. A `sqlite-v1:`
+value means the authority is recorded: re-run the install. Anything else
+(nothing, or an error): restore the stopped-writer pre-upgrade copy of the
+store as [Going back to the previous release](#going-back-to-the-previous-release)
+describes, or get help. Never write `store_meta` by hand.
 
 ## agent-director was installed outside the caller's switch-over
 
@@ -1354,15 +1362,35 @@ once the upgrade is settled; never by a wildcard.
    ```sh
    store='<details.attempt_store>'
    d=$(mktemp -d)
-   cp -p -- "$store" "$d/state.db"
-   if [ -e "$store-wal" ]; then cp -p -- "$store-wal" "$d/state.db-wal"; fi
-   sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+   if [ -n "$d" ] && cp -p -- "$store" "$d/state.db" &&
+     { [ ! -e "$store-wal" ] || cp -p -- "$store-wal" "$d/state.db-wal"; }
+   then
+     sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+     rc=$?
+   else
+     echo 'private copy failed: nothing was read' >&2
+     rc=1
+   fi
    rm -rf -- "$d"
+   [ "$rc" = 0 ]
    ```
 
-   Nothing printed, or an error naming `no such table: store_meta`, means no
-   authority. A `sqlite-v1:` value means the cutover committed: complete
-   forward. The `rm -rf` removes only the private copy.
+   The query runs only on a full copy: the database and, when there is one,
+   its `-wal`. Only two results mean no authority: exit 0 with nothing
+   printed, or exit 1 with sqlite3's error naming `no such table: store_meta`
+   as the only output. A `sqlite-v1:` value means the cutover committed:
+   complete forward. Anything else, `private copy failed` included, leaves the
+   outcome unknown: put nothing back, and complete forward or fix the failure
+   and run the checks again. The `rm -rf` removes only the private copy.
+
+   One exception, only after an unfinished automatic restore: when that
+   restore emptied a linked `~/.config/agent-director` (its directory holds
+   only `.move-incomplete`) and `details.attempt_store` lay in it, the store is
+   gone and check 2 has nothing to read. Skip check 2 then: after an
+   unfinished automatic restore, the original store kept in the pre-move
+   directory is unchanged, and that is the store the put-back returns. After
+   an `outcome_unestablished` or killed run, a store check 2 cannot read is
+   never skipped.
 3. The copied release opens the store: its `list` exits 0. In place, run the
    `agent-director` entry's `copy` (or, with no such entry, the restore already
    put it back: `~/.config/agent-director/bin/agent-director`):
