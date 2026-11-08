@@ -4140,8 +4140,8 @@ for the exact gate and [Ordinary input delivery](#ordinary-input-delivery) for
 runtime reuse. No future schema slot is reserved.
 
 `adminapi.MigrateJournal` must be used for cutover; it bypasses Client creation,
-includes invoking-HOME and explicit legacy roots, verifies actual process/start
-identity and access, and requires operator-maintained exclusion. Its argument
+includes invoking-HOME and explicit legacy roots, checks readable process
+evidence and access, and requires operator-maintained exclusion. Its argument
 checks (the window and roots assertions, legacy roots absolute and clean, a
 backup directory absolute, outside every root and not yet existing) have one
 implementation, `journalArguments`, which `MigrateJournal` and
@@ -4159,8 +4159,10 @@ inside. Lookup errors give `backup_unreadable` or `legacy_root_unreadable`
 according to the failed side; `--check-only` and a real run judge identically.
 `verifyJournalQuiescence` is chosen by build: Linux reads `/proc`, darwin/arm64
 uses the Darwin verifier, and every other build refuses
-`process_inventory_unsupported` through `journalUnsupportedHost`. Verification
-still runs before the migration lock, inside the cutover step and after commit.
+`process_inventory_unsupported` through `journalUnsupportedHost`. Linux checks
+readable `exe` names and `fd` links for agent-director programs and store/root
+holders, skipping unreadable evidence. Verification still runs before the
+migration lock, inside the cutover step and after commit.
 The store serializes administrators and retains original launch-lock inodes.
 It refuses, as `store_open_failed`, a store path that doesn't exist or runs through a
 regular file (before the lock), and a lock it can't create where no lock file
@@ -4184,46 +4186,36 @@ them. It selects the verifier's effective uid through
 identities before one bulk `/usr/sbin/lsof -nP +w -u <euid> -F0pftDin`
 listing. Only pid, FD, type, device, inode and name are requested, never command
 or user fields. The verifier, its helpers and their descendants are excluded
-by pid and start identity; a reused helper pid stays under check. A missing
-selected live process is unverified. A listed process absent from the
-selection is checked if born between selection and listing, unverified if
-born later or unreadable, and refuses `process_inventory_unreadable` if born
-before selection; exited processes are skipped. Failed selection, listing
-errors, warnings or malformed output also refuse that reason.
+by pid and start identity; an unconfirmed helper identity grants no exclusion,
+and a reused helper pid stays under check. A selected process missing from the
+listing adds no finding. A listed process absent from the selection is checked
+like the others unless its start predates selection, which refuses
+`process_inventory_unreadable`; exited processes are skipped. Failed selection,
+listing errors, warnings or malformed output also refuse that reason.
 
 Store, WAL and SHM identities are captured before selection and after listing;
 each existing root is walked without following links. Vnode entries match
-those device/inode pairs. For names matching an existing root's form
-case-insensitively, an ancestor lookup checks containment by identity,
-counting refused components as absent. Root forms are the declared path, `EvalSymlinks`, and
-the kernel's `F_GETPATH` / `F_GETPATH_NOFIRMLINK` forms through `journalFS`.
-`lsofVnodeTypes`, `lsofNonVnodeTypes` and `lsofOctalVnodeType` in
-`journal_migration_darwin_lsof.go` are the only kind lists: non-vnodes give
-no access evidence; missing or unknown kinds, unreadable descriptors and
-vnodes without identity make the process unverified. Directory FD entries
-give no store/root evidence. The first `txt` entry is the image: a basename
-containing `agent-director`, or this module's build metadata in any thin or
-universal Mach-O slice, marks a mutator; build metadata whose path ends in
-`.test` (a Go test binary, which never touches real stores) names no module,
-so only the basename can mark one. Before opening for build metadata, the
-device/inode must match the `txt` entry and the status-change time must be no
-later than process start. The opened file's identity and status-change time
-are rechecked before metadata is read. Replacement or removal found at lookup
-or the following open, and post-start change,
-alone add no finding. No `txt`, other lookup/open failures, failed reads or
-anything other than executable Mach-O add an unverified finding.
+those device/inode pairs. An absolute name matching an existing root's form
+case-insensitively gates an ancestor lookup to confirm containment by identity,
+counting refused components as absent. Incomplete, unknown-kind, `err` and
+untyped entries use that test too, or match a store form exactly ignoring case
+and confirm its device/inode with `Lstat`. Forms are the declared path,
+`EvalSymlinks`, and the kernel's `F_GETPATH` / `F_GETPATH_NOFIRMLINK` forms
+through `journalFS`, appending absent components to the deepest existing
+ancestor's forms. Forms containing `\` or `^` never gate a listed-path lookup;
+direct device/inode matches still count. Other entry lookup failures add no
+finding unless the attempt's deadline expires. `lsofVnodeTypes`, `lsofNonVnodeTypes`
+and `lsofOctalVnodeType` in `journal_migration_darwin_lsof.go` are the only kind
+lists; non-vnodes and directory FD entries give no store/root evidence.
+The first `txt` entry names the program: a basename containing `agent-director`
+marks a mutator. The program file is never looked up or opened for this check.
 
-After all evidence, start identities are read again. A changed or unreadable
-identity always reports `unverified_process`; otherwise a store/root holder
-or an `agent-director` image name remains a mutator even with a changed image
-or incomplete listing. Any mutator finding wins; otherwise remaining
-unverified findings report `unverified_process`. With neither, the process
-is not reported. Blockers appear under
-`old_or_unverified_mutators`, with the Linux roles/actions
-`agent_director_mutator` / `stop_and_restart_after_cutover` and
-`unverified_process` / `stop_or_make_inventory_readable`. Only pid, first
-start identity, role and action are reported, sorted by pid; Darwin never
-emits `process_identity_unreadable`.
+After all evidence, start identities are read again and exited processes are
+skipped. On both hosts, missing, unreadable or changed per-process evidence adds
+no finding and cannot erase a positive one. Blockers alone appear under
+`old_or_unverified_mutators`, with role `agent_director_mutator` and action
+`stop_and_restart_after_cutover`. Only pid, first start identity (empty when
+unreadable), role and action are reported, sorted by pid.
 
 The database and every existing root also pass `/bin/ls -led`: unreadable
 access-control entries or an allowance for another principal refuse
@@ -4232,17 +4224,17 @@ access-control entries or an allowance for another principal refuse
 the attempt's context ends. Every verifier filesystem lookup runs under
 `bounded`, including initial path validation and ACL existence checks, so
 blocked privacy prompts or mounts refuse `inventory_deadline`.
-Unknown evidence refuses except for the image exemption above, whose
-[residual and maintenance-window guard](operator-actions.md#upgrade-refusal-reasons)
-are documented for operators. No process arguments or environment are read;
-release builds stay `CGO_ENABLED=0`.
+Apart from recognized mutators, refusals concern whole-inventory failures,
+the deadline and the store/root path and access checks. No process arguments
+or environment are read; release builds stay `CGO_ENABLED=0`.
 **Must use:** add Darwin evidence through this core's seams (`journalFS`,
 implemented by `osJournalFS`, for filesystem evidence); bind it only in the
 tagged file. Run fixed-path tools through `runFixedHelper`; share
 `verifyJournalPathIn` (the `journalFS` path check, with `verifyJournalPath`
-its real-filesystem form) and `buildInfoNamesModule` from
-`journal_migration_paths.go` across both verifiers. Order Darwin start strings
-only through `probe.ParseDarwinProcStartTime`.
+its real-filesystem form) from `journal_migration_paths.go` across both
+verifiers. Derive every root/store listed-path form through `journalPathForms`
+in `journal_migration_darwin_paths.go`. Order Darwin start strings only through
+`probe.ParseDarwinProcStartTime`.
 
 **`migrate-journal`'s reasons.** Every reason `migrate-journal` emits (the
 argument checks', the quiescence verifier's, the store's causes and
@@ -22234,8 +22226,9 @@ stores or a current one; the child runner and the installer stand-in,
 - `adminapi.SetJournalVerifierForTest` replaces the quiescence verifier, so a
   test can fail any of an attempt's three verifications.
 - `journalProcRoot` is the Linux verifier's `/proc`, package-internal to
-  `internal/adminapi`, pointed at temporary files to reach the
-  unreadable-inventory refusals.
+  `internal/adminapi`, pointed at temporary files to exercise readable and
+  unreadable process evidence and the unreadable-inventory refusal; start
+  identities still come from real `/proc`.
 
 All three are process-wide, and production leaves them at their defaults; a
 test that sets one restores it through `t.Cleanup` and does not call
@@ -22246,12 +22239,10 @@ The Darwin verifier has three further must-use test components:
 - `journal_migration_darwin_fixture_test.go` is the one seam fixture:
   `darwinTestHost` supplies the process table through `procfix.Checker` and
   renders listings; `darwinTestFS` wraps real files with case folding,
-  kernel aliases and recorded/refused lookups; its `afterStat` hook injects
-  metadata timing without waiting. `blockDarwinLookup` blocks
-  and joins a lookup, optionally skipping earlier matching calls;
-  `darwinThinImage` / `darwinUniversalImage` build images.
+  kernel aliases and recorded/refused lookups. `blockDarwinLookup` blocks
+  and joins a lookup, optionally skipping earlier matching calls.
   Extend it for core, containment and advice tests; never add a second fake
-  host, filesystem wrapper or image builder.
+  host or filesystem wrapper.
 - `TestMain`'s `--journal-fixed-helper` mode in `journal_migration_test.go`
   calls `journalFixedHelperChild` in `journal_migration_darwin_helper_test.go`.
   It is the one fixed-path re-exec helper for environment, output and

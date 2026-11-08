@@ -1,40 +1,11 @@
 package adminapi
 
 import (
-	"debug/buildinfo"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
-
-// journalModulePath is this module's path. A process whose image's build
-// metadata names it is an agent-director mutator on every host.
-const journalModulePath = "github.com/gabemahoney/agent-director"
-
-// buildInfoNamesModule reports whether an image's build metadata names this
-// module: as its path or main module, or as a dependency. It detects renamed
-// binaries and Go callers embedding this module, even while their SQLite
-// lease is closed. A Go test binary, whose path ends in ".test", never names
-// it, whatever its main module and dependencies, because test binaries never
-// touch real stores; callers' file-name test still applies to it. Go 1.22's
-// test binaries carry no build metadata, so there this changes nothing.
-// Must use: both verifiers recognise this module only through it.
-func buildInfoNamesModule(bi *buildinfo.BuildInfo) bool {
-	if strings.HasSuffix(bi.Path, ".test") {
-		return false
-	}
-	if strings.Contains(bi.Path, journalModulePath) || bi.Main.Path == journalModulePath {
-		return true
-	}
-	for _, dep := range bi.Deps {
-		if dep.Path == journalModulePath {
-			return true
-		}
-	}
-	return false
-}
 
 // verifyJournalPath is the path check over the host's own file system, as
 // the Linux verifier makes it (verifyJournalPathIn).

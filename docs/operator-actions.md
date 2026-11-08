@@ -449,6 +449,8 @@ a release the first run restored refuses the store with `ErrSchemaMismatch`.
    included even with a custom database. Declare every additional root used
    by another invoking home or installation; do not infer roots from the DB's
    directory. Prevent privileged or untracked writers from starting too.
+   The check does not look for renamed copies of agent-director, so stopping
+   every caller and `serve` is the guard.
 2. Keep the matching prior release and a stopped-writer copy of the actual
    DB, its existing `-wal`/`-shm`, and all legacy evidence before upgrading.
    Preserve provider logs/transcripts outside those roots separately. Do not
@@ -563,10 +565,9 @@ inside the cutover step and after its commit:
 | `legacy_root_unreadable` | A legacy root, or a directory above it, cannot be read or searched. | Envelope | Make each root and its parents readable and searchable by the user running the upgrade, keep the window, then Retry. |
 | `legacy_root_symlink` | `migrate-journal`: the store path, `HOME` or a legacy root has a link in it. `install.sh`, in pre-flight: `~/.config/agent-director` is a link. | Envelope; `install.sh`'s: no | `migrate-journal`'s: make them real paths, keep the window, then Retry. `install.sh`'s: replace the link with the directory it points to (below), then re-run this release's installer with a new `--journal-backup` directory. |
 | `legacy_root_access_unestablished` | The store or a legacy root is not owned by and private to the user, or carries an access-control entry, or its entries cannot be read. | Envelope | Make the store and every legacy root owned by the user running the upgrade (a repair by hand, path by path, not a recursive `chown`), then private to it: `chmod 0600` the store, `chmod 0700` each root, remove any access-control entry (`chmod -N <path>`). Keep the window, then Retry. |
-| `process_inventory_unreadable` | The process evidence could not be read (on macOS, see below). | Envelope | Run as the agents' user with every mounted file system reachable or unmounted (on Linux, with `/proc` mounted and readable), keep the window, then Retry; report it if it persists. |
-| `process_identity_unreadable` | A process's identity cannot be read by the user. | Envelope | Run as the agents' user on a host where that user can read every process's identity, keep the window, then Retry. |
-| `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | Envelope | Answer any consent prompt or grant the terminal app access to the folder it names, make every mount reachable or unmount it, or stop processes; keep the window, then Retry. |
-| `old_or_unverified_mutators` | Listed processes may still write (roles below). | Envelope | Stop each listed process, or make an `unverified_process` readable, keep the window, then Retry. |
+| `process_inventory_unreadable` | The process inventory as a whole could not be read (on macOS, see below). | Envelope | Run as the agents' user with every mounted file system reachable or unmounted (on Linux, with `/proc` mounted and readable), keep the window, then Retry; report it if it persists. |
+| `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | Envelope | Make every mounted file system reachable or unmount it, or answer any privacy consent prompt; keep the maintenance window, then Retry. |
+| `old_or_unverified_mutators` | Listed processes may still write (roles below). | Envelope | Stop each listed `agent_director_mutator` (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified. Keep the maintenance window, then Retry. |
 | `process_inventory_unsupported` | The host is neither Linux x86_64 nor macOS arm64. | No | Run the upgrade on a supported host. |
 
 The store's causes:
@@ -618,36 +619,15 @@ rm -- ~/.config/agent-director
 mv -- "$target" ~/.config/agent-director
 ```
 
-**Roles.** `old_or_unverified_mutators` lists each process with a role and
-action: `agent_director_mutator` (`stop_and_restart_after_cutover`) holds the
-store or a legacy root, or runs agent-director: stop it, and restart it only
-after the cutover is verified. `unverified_process`
-(`stop_or_make_inventory_readable`) could not be checked: stop it, or make its
-details readable to the user running the upgrade.
+**Roles.** On both hosts, `agent_director_mutator`
+(`stop_and_restart_after_cutover`) is the only role: readable evidence shows
+that the program's file name contains `agent-director` or the process holds
+the store or a file under a legacy root. Any other process needs no action,
+including one the check cannot fully inspect, such as a non-dumpable Linux
+process or an incomplete macOS open-file entry.
 
 **On macOS:**
 
-- A process whose program file was replaced, removed or changed after it
-  started (for example, an app that updated itself) is not listed and needs
-  no action only if that file is its sole unverified evidence, its open-file
-  listing is complete, its start time reads the same both times, it holds no
-  store or legacy-root file, and its program's file name does not contain
-  `agent-director`.
-  A changed or unreadable start time still means `unverified_process`;
-  otherwise a store/root holder or an `agent-director` file name means
-  `agent_director_mutator`, even with an incomplete listing; otherwise an
-  incomplete listing means `unverified_process`.
-
-  A process running agent-director's code under a name without `agent-director`,
-  with its program file changed this way and no store/root file open when
-  listed, could still open the store during cutover. The guard is the maintenance
-  window: stop every caller and every `serve` before upgrading, as step 1 of
-  [Upgrading the native-input journal](#upgrading-the-native-input-journal)
-  and [the upgrade skill](../skills/upgrade-agent-director/SKILL.md#1-stop-the-agents)
-  require.
-- An unverified process whose image is in a privacy-protected folder: stop it,
-  or grant the terminal app access to that folder (System Settings, Privacy &
-  Security), then Retry. Any other unverified process: stop it, then Retry.
 - An access-control entry on the database or a legacy root: remove it, for
   example `chmod -N <path>`, then Retry.
 - `process_inventory_unreadable`: for a mounted file system `lsof` cannot
@@ -655,8 +635,8 @@ details readable to the user running the upgrade.
   user; for a failed process selection or listing, or a process missing from
   the selection, Retry with a new backup directory, and report it if it
   persists.
-- `inventory_deadline`: answer the consent prompt or grant the terminal app
-  access, make every mount reachable, or stop processes, then Retry.
+- `inventory_deadline`: make every mount reachable or unmount it, or answer
+  any consent prompt, then Retry.
 
 ### A store at schema v16 or later that the upgrade cannot read
 
