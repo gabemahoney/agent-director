@@ -20788,9 +20788,10 @@ not current Cursor receipt, execution or authenticated acceptance evidence.
 
 `spec/tla/` holds bee b.zuj's TLA+ model of the Phase 1 LABEL design, its
 model-check suite and the runner. b.zuj owns the model and its results. The
-repo copy is vendored byte for byte under SHA-256 pins, with three
-exceptions, `Phase4.tla`, `Phase5Hook.tla` and `ci/mkci.py`. `Phase4.tla`
-carries bee b.66h's launch-scoped-actions change. Its knobs default to off.
+repo copy is vendored byte for byte under SHA-256 pins, with four
+exceptions: `Phase4.tla`, `Phase5Hook.tla`, `ci/mkci.py` and
+`jobs/lib/tlcjob.sh`. `Phase4.tla` carries bee b.66h's launch-scoped-actions
+change. Its knobs default to off.
 With them off, the model's steps are identical to b.zuj CI run 4, but
 distinct-state counts under `VIEW CIView` can vary between runs. Bee b.y88
 then changed only comments in both files, which now name
@@ -20800,9 +20801,11 @@ subagent-record change: subagent records behind four knobs (`Sub`,
 `SubNoGate`, `SubNoClose`, `SubOnTerminal`) that default to off. With them
 off, the model's steps are identical to run 4's, and a cfg without a `VIEW`
 reaches run 4's distinct-state count exactly. Run 4's verdicts do not cover
-the changed file until a `make tla` run passes.
+the changed file until a `make tla` run passes. `jobs/lib/tlcjob.sh` carries
+the SANY, storage-guard and stop-after-cap behavior described below; its
+fake-checker tests do not establish real model-check results.
 [`spec/tla/PROVENANCE.txt`](../spec/tla/PROVENANCE.txt) records the
-source, the pin list, the delivering run, the b.66h, b.y88 and b.xjn
+source, the pin list, the delivering run, the b.66h, b.y88, b.xjn and b.osa
 changes, the layout and the TLC build: `tla2tools.jar` rev `4260e47`,
 committed because that nightly build has no immutable upstream URL.
 
@@ -20841,7 +20844,7 @@ count exactly (11,387,737, 109,518 and 833,740). The historical suite carries
 list. No run was made on the dev host: every verdict is a scheduler result
 and every one matches the expectation (the PASS runs complete, the controls,
 limits and probes failing on their target). It is not wired into `make tla`
-or `ci/suite.tsv`, and `ci/run_ci.sh` never reads it.
+or `ci/suite.tsv`: its 11-column inventory is not a runner-format manifest.
 
 The E2 Task1 `Hold36hCx.tla` eligibility overlay has an
 [accepted exact-revision receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/gate-passed/e2t1-summary.txt)
@@ -20892,7 +20895,7 @@ as follows:
   startup prompts with `send-keys` on its `pending` row;
 - the *operator* resumes and kills by hand.
 
-The model has three specs:
+The default LABEL model has three specs:
 
 - `Phase4Split.tla` (65 runs) and `Phase4.tla` (5 runs: the unsplit
   cross-check `ci_smoke_*`, plus `ci_C7` and `ci_L1`). Together they model:
@@ -21014,9 +21017,15 @@ The model's limits:
 - **`ci_C7` uses `remain-on-exit`**, a setting that is out of scope.
 - **Phase5Hook covers one instance id** and no label lookup.
 
-**The manifest and tiers.** [`spec/tla/ci/suite.tsv`](../spec/tla/ci/suite.tsv)
-has 92 rows. Its columns are group, spec, cfg, cap_s, expect, tier and
-what. Its groups are g1, g2, g3, g4a, g4b, g5a, g5b, g5c and g6.
+**The manifest and tiers.** A manifest has seven tab-separated columns:
+group, spec, cfg, cap_s, expect, tier and what. An optional eighth, props,
+lists the expected violation properties, comma-separated, or `-` for a pass
+row. Every row has the same width. Module names match
+`[A-Za-z][A-Za-z0-9_]*`; each named `<spec>.tla` must exist in the spec
+directory, including modules outside the selected tier or groups.
+
+The default [`spec/tla/ci/suite.tsv`](../spec/tla/ci/suite.tsv) has 92 rows
+and seven columns. Its groups are g1, g2, g3, g4a, g4b, g5a, g5b, g5c and g6.
 
 | Tier | Runs | Contents | Scheduler time |
 |---|---|---|---|
@@ -21079,16 +21088,17 @@ nothing here changes it).**
    with no row. Its Can't-tell refusal on an unreadable lookup is not in
    the model.
 4. Environment assumptions:
-   - the jobs need a scheduler timeout of at least the group budget plus
-     margin, and at least 24 GiB;
-   - `tlcjob.sh`'s comment about the scheduler timeout is stale;
+   - the scheduler must honor the requested resources; the runner checks
+     reported timeout and memory as described below;
    - the job image's base is not pinned by digest.
 
-**How to run it.** Only an operator runs `make tla`. Agents never
-submit. They may run `make tla-print` and the runner tests.
+**How to run it.** `make tla` and `make tla-parse` submit scheduler jobs;
+run them only with the operator's go-ahead, which an agent's assignment can
+carry.
 
 ```
 make tla-print                          # the plan and the pin check; submits nothing
+make tla-parse TLA_CHANNEL=<channel id> TLA_JOBSCHED=<absolute path to the scheduler CLI>
 make tla TLA_CHANNEL=<channel id> TLA_JOBSCHED=<absolute path to the scheduler CLI>
 ```
 
@@ -21103,24 +21113,24 @@ The variables:
 - `TLA_TIER` is `fast` (the default) or `full`.
 - `TLA_GROUPS` lists the groups to run, space-separated, in the order
   given. The default is every manifest group.
-- `TLA_SPEC_DIR` and `TLA_SUITE` point at another copy of the three specs
-  and another manifest. An override is not pinned. The jar and the job
-  image files always come from the pinned tree, and so do the cfgs the
-  manifest names from `ci/cfg/`. A manifest may also name cfgs in the `cfg/`
-  directory next to it (`launch/cfg/`, `subagent/cfg/`); those are not
-  pinned.
+- `TLA_SPEC_DIR` holds any model's modules and local helpers; every `.tla`
+  directly in that directory is packaged into each job. Its default is
+  `spec/tla/`, where every packaged module must have a provenance pin.
+- `TLA_SUITE` names the manifest, defaulting to `spec/tla/ci/suite.tsv`.
+  Overridden specs and manifests are not pinned. The jar, job image files
+  and cfgs from `ci/cfg/` always come from the pinned tree. An overriding
+  manifest may also name cfgs in its adjacent `cfg/` directory; those are
+  not pinned. A cfg present in both locations is refused.
 
 The host needs `bash`, `sha256sum` and `jq`. The runner reads the
 scheduler's `--json` output with `jq`. The scheduler's dispatcher must
 already be running: `make tla` never starts or stops it.
 
-TLC and java never run on this host, nor in a local container. The runner
-builds job contexts, submits them, polls them and reads their logs. The
-checker runs only inside each job's container on the scheduler's remote
-host. Nothing local builds the job image. `make tla` is a host target only
-because the scheduler CLI is a host tool. It runs nothing built from the
-repo and never opens `~/.config/agent-director`, so it does not breach the rule
-that nothing built runs on the host.
+SANY, TLC and Java run only in the scheduler's remote job containers. The
+local runner builds job contexts, submits them, waits and reads their logs;
+it never builds the job image. `make tla` and `make tla-parse` are host
+targets because the scheduler CLI is a host tool. They run nothing built
+from the repo and never open `~/.config/agent-director`.
 
 The runner, [`spec/tla/ci/run_ci.sh`](../spec/tla/ci/run_ci.sh), runs in
 this order:
@@ -21129,7 +21139,7 @@ this order:
    - the tier;
    - the tools;
    - every pin in `PROVENANCE.txt`, and the jar's size;
-   - the manifest's rows and groups;
+   - the manifest's rows, modules, cfgs and groups;
    - that `TLA_CHANNEL` is set;
    - that the CLI resolves;
    - that `$TMPDIR` lies outside the repo;
@@ -21140,15 +21150,41 @@ this order:
    is down would run whenever it next starts. Any failure prints
    `FAIL <step> -- <reason>` and a `CI-VERDICT FAIL (<reason>, tier <t>)`
    line, submits nothing, and exits 1.
-2. **A parse-only job** over every spec module gates the rest. Its submit
-   reply carries the scheduler's limits. The run timeout must cover the
-   largest selected group budget plus 300 s (10500 s for either tier with
-   every group), and the
-   memory must be at least 24 GiB. Otherwise the runner waits for that
-   job to end, then fails with nothing more submitted.
+2. **A SANY and evaluation job** has a 600 s budget. It runs SANY on every
+   distinct manifest module, in first-occurrence order, regardless of tier
+   or group. `make tla-parse` (`run_ci.sh --parse`) stops after this SANY-only
+   job. For `make tla`, the same job then evaluates the first cfg per module
+   in the selected tier with TLC simulation at depth 1, regardless of group.
+   Both checks must pass before any exhaustive group is submitted.
 3. **One job per non-empty group,** strictly one at a time, in manifest
-   order or `TLA_GROUPS`'s order. Each job runs with `--network off`. A job's budget is the sum of
+   order or `TLA_GROUPS`'s order. A job's budget is the sum of
    each run's cap plus 20 s, plus 120 s, at most 10200 s.
+
+Every submit specifies `--network off --memory 28g --disk 20g` and
+`--timeout <job budget + 300>s`; the first job requests 900 s. Each submit
+reply must report a timeout covering that job's request and at least
+24 GiB memory. Otherwise the runner waits for the submitted job to end,
+then fails without submitting another. It does not validate reported disk
+limits. Inside the job, `DISKCAP_MB=15000` guards TLC's metadir, including
+states, queue and fingerprints.
+
+The runner blocks on `jobsched wait <id> --timeout 9m`, with the CLI in the
+background and the shell awaiting it so signal traps can fire. A terminal
+answer leads to results; a `timeout` answer triggers a status check for
+completion, dispatcher health and overrun before another wait. Interrupts
+also request status. Wait errors and unknown answers fail closed.
+
+`jobs/lib/tlcjob.sh` reads runs from `WORK` (default `/work`). A
+`<Module> - sany` entry invokes SANY and reports `sany:<Module>` with
+`PARSE-OK` or `PARSE-FAIL(...)`. Success requires exit zero, semantic
+processing of the requested root, and no recognized diagnostic record;
+empty output fails, while error-like words in module names are harmless.
+Time or disk caps take precedence and report `INCOMPLETE(...)`. After one,
+the job starts no further SANY or TLC run: later entries get
+`SKIPPED(after-cap)`. The runner submits no later group and reports each
+unrun planned row as `FAIL <cfg> NOT-RUN(after-cap)`, including when
+`make tla`'s first job caps. Any cap fails the normal or parse-only summary
+even if a later verdict reports success for the same row.
 
 Job contexts, logs and the per-run directory:
 
@@ -21157,9 +21193,13 @@ Job contexts, logs and the per-run directory:
 - A context is kept until its job ends, then removed.
 - Logs are fetched through the scheduler's `results` and always kept.
 - The output is one line per run, then the `CI-VERDICT` line with ok/total,
-  minutes and tier.
-- A run is ok only when its result matches its expectation. INCOMPLETE,
-  ERROR, SKIPPED and NO-VERDICT are never ok.
+  minutes and tier. Parse-only output is one `PASS|FAIL sany:<Module>
+  <result>` line per module, then `CI-VERDICT PASS|FAIL (<ok>/<total> modules
+  parse, <minutes> min, parse-only)`.
+- Each row uses its last verdict. A run is ok only when its result matches
+  its expectation (and the props column, when supplied). INCOMPLETE,
+  ERROR, SKIPPED, NOT-RUN and NO-VERDICT are never ok. Cap failure is
+  retained independently of these row counts.
 - The exit status is 0 only on PASS. Nothing is retried.
 
 **Interrupts.** On SIGINT, SIGTERM or SIGHUP the runner exits 130 with
@@ -21179,20 +21219,32 @@ expected), whose job ids and SHA-256s
 
 **Runner tests (`test/tla/`, reusable test fixtures).** Package `tla_test`
 calls `sandboxguard.Require()` from `TestMain`. It runs the real runner
-against a fake scheduler CLI and never runs TLC, java, docker or a real
-scheduler. The suite's files:
+against a fake scheduler CLI and the real job script against fake Java.
+No JVM, model checker, job image or real scheduler runs. The suite's files:
 
-- **`rig_test.go`** has three parts:
-  - the fake `jobsched`. Its scripted answers for `list`, `submit`,
-    `status` and `results` come from per-call plan files. Holds make a
-    call block. It serves canned run logs built from a verdict table;
+- **`testdata/jobsched`** is the fake `jobsched`. Its scripted answers for
+  `list`, `submit`, `wait`, `status` and `results` come from per-call plan
+  files. Holds block a call. It serves canned run logs built from a verdict
+  table. `test/sandbox/requiresandbox` runs it too.
+- **`rig_test.go`** has two parts:
   - never-call shims for `java`, `docker`, `podman`, `tlc` and `tlc2`;
-  - the `rig` fixture: `newRig`, `private` (a copy of `spec/tla/` that a
-    test may change), `plan`, `verdict`, `expectAll`, `hold` and `run`,
-    with a clean environment, `TLA_POLL_S=0` and a `TMPDIR` outside the
-    repo.
+  - the `rig` fixture: `newRig` (which installs the fake `jobsched` and the
+    shims), `private` (a copy of `spec/tla/` that a test may change),
+    `plan`, `verdict`, `expectAll`, `hold` and `run`, with a clean environment and a `TMPDIR` outside the repo. Optional
+    per-call clock values drive overrun checks without real waiting.
 - **`runner_test.go`** covers the job order and tiers, the ok rules, the
   fail-closed paths and the overrides.
+- **`models_test.go`** covers arbitrary modules and helpers, default-tree
+  pins, SANY-only mode and gating, explicit limits, waits and refusals,
+  and stopping after caps, including in the first job. Duplicate-verdict
+  cases check that caps remain failures and the depth-1 gate uses the last
+  verdict.
+- **`tlcjob_test.go`** provides `runTLCJob`, `fakeJobJava` and `jobVerdicts`.
+  It invokes the actual job script with a private `WORK` path containing a
+  space, fake Java and a fake budget clock. It checks SANY evidence and
+  diagnostics, time and disk caps overriding success, skipped later runs,
+  and the final `JOB-VERDICT`. The disk case writes a small queue into the
+  actual metadir with a lowered guard; it does not allocate 15000 MB.
 - **`interrupt_test.go`** covers the interrupt cases above.
 - **`props_test.go`** covers the props column: the shipped launch and
   subagent suites (a table, one subtest each, with a `print` subtest that
@@ -21200,7 +21252,7 @@ scheduler. The suite's files:
   `subagent/cfg/`, the subagent groups' budgets (2740, 1940 and 8400 s), the
   props ok rule, and the preflight refusals for bad props or an ambiguous or
   missing cfg.
-- **`provenance_test.go`** has six tests:
+- **`provenance_test.go`** checks:
   - every pin matches its file, and only `.gitattributes`,
     `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `subagent/`, `settle/`
     and `codex/` (each of the last two has its own pin list)
@@ -21215,15 +21267,18 @@ scheduler. The suite's files:
     run set's knob on (except the knobs-off `sx_eq_Sns`), and each cfg's
     comment names the run set's `README.md` and no `tickets/` path;
   - the runner names no checker or container command;
-  - `make -n tla` and `make -n tla-print` run only the runner, none of
-    `all`, `test` and `test-sandbox` reaches it, and `make tla-print` contacts no scheduler.
+  - all three `tla` targets invoke only the runner, none of `all`, `test`
+    and `test-sandbox` reaches it, and `make tla-print` contacts no scheduler.
 
 **Must use:** every test of `spec/tla/ci/run_ci.sh` or the `tla` make
-targets goes in `test/tla/` and uses its `rig` and fake `jobsched`. Never
-write another scheduler double, and never call a real scheduler. A test
-that changes vendored files uses `rig.private`, never the worktree's
-`spec/tla/`. Run the package with `-count=1` after a runner change. The Go
+targets goes in `test/tla/` and uses its `rig`. The one exception,
+`requiresandbox`'s follow of the `tla-parse` sandbox advice, runs the same
+fake `jobsched`. Never write another scheduler double, and never call a
+real scheduler. A test that changes vendored files uses `rig.private`,
+never the worktree's `spec/tla/`. Run the package with `-count=1` after a runner change. The Go
 test cache does not track files that only the runner subprocess reads.
+Tests of `jobs/lib/tlcjob.sh` reuse `runTLCJob`, `fakeJobJava` and
+`jobVerdicts` in the same package.
 
 ### CI lane
 
@@ -26300,7 +26355,7 @@ the exempt sections instead of naming it.
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
 `prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
-b.8yq, b.4a1, b.qgr, b.uc7 and b.1ce, `helperdeps` b.q6s). Those tests run
+b.8yq, b.4a1, b.qgr, b.uc7, b.1ce and b.osa, `helperdeps` b.q6s). Those tests run
 `make` against the real repo Makefile with a fake container engine or tool on
 PATH, never a real container, and assert on what the recipe produced. They
 exec no built binary and open no store, so they carry no sandbox guard.
@@ -26358,8 +26413,11 @@ bypass, that `make -n`, the build-only targets and `make -j8 test-docker`
 still run outside the sandbox, that in the sandbox
 `make -j8 test-docker generate` runs every goal's tools, and that the
 advice, run as printed, exits 0: for `make generate` it runs
-`go generate` in the "container", and for `make generate test-docker`
-also `test-docker`'s go builds on the host. The fake engine runs a sandbox-image
+`go generate` in the "container", for `make generate test-docker`
+also `test-docker`'s go builds on the host, and for `make generate tla-parse`
+and `make tla-parse generate`, with `TLA_CHANNEL` and `TLA_JOBSCHED` on the
+command line, also `make tla-parse` on the host, whose real runner passes its
+SANY-only job through `test/tla`'s fake `jobsched` (b.osa). The fake engine runs a sandbox-image
 command with docker and podman on its PATH that fail, as the real image has
 no container engine.
 

@@ -205,13 +205,24 @@ model check.
 
 #### Model check
 
-TLA+ with TLC; the suite is in `spec/tla/`. Run it as an isolated job, never on
-the host: `make tla` submits it through the job runner named by `TLA_JOBSCHED`
-and `TLA_CHANNEL`, which your host supplies. `TLA_TIER=fast` is the default, `full` is for releases;
-`make tla-print` shows the plan without submitting. Give a new formal model its
-own `suite.tsv` and `cfg/` folder, like `spec/tla/launch/`, and point
-`TLA_SUITE` and `TLA_SPEC_DIR` at them (see the header of
-`spec/tla/ci/run_ci.sh`).
+TLA+ with TLC; the default suite is in `spec/tla/`. `make tla` submits isolated
+jobs through `TLA_JOBSCHED` and `TLA_CHANNEL`, which your host supplies; the
+checker never runs on the host. `TLA_TIER=fast` is the default, `full` is for
+releases. `make tla-print` shows the plan without contacting the scheduler.
+
+Any model can supply a `suite.tsv` and adjacent `cfg/` folder through
+`TLA_SUITE`, with its modules and local helpers in `TLA_SPEC_DIR`. Every
+`.tla` directly in that directory is packaged. The manifest columns are in
+[Model check](architecture.md#model-check-make-tla). `make tla-parse` submits
+one SANY-only job to parse and import-check every manifest module, regardless
+of tier or group. `make tla` also starts with SANY, then depth-1 evaluation
+of one cfg per module in the selected tier, before exhaustive groups.
+
+Every job requests 28 GiB memory, 20 GiB disk and its budget plus 300 seconds
+timeout. A 15000 MB guard covers TLC's metadir, including queue and fingerprint
+storage. The runner uses `jobsched wait`. A time or disk cap is `INCOMPLETE`:
+remaining runs in that job are skipped, later groups are not submitted, and
+the suite fails.
 
 ### Fail-fast sandbox guard
 

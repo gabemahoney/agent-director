@@ -27,76 +27,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// fakeJobsched is the scheduler CLI. It logs every call to $FAKE_DIR/calls and
-// keeps what each submit's context held under $FAKE_DIR/seen/<job>/. The Nth
-// call for a key (list, submit.<job>, status.<job>, results.<job>) answers
-// line N of $FAKE_DIR/plan.<key> (the last line once they run out), else a
-// default; a line is "<exit code> <stdout>", with @ID@ standing for the job
-// id. $FAKE_DIR/hold.<cmd> makes that call mark held.<cmd> and block. results
-// writes a run log from $FAKE_DIR/verdicts ("<cfg or parse:cfg>\t<result>"
-// lines, in order); a parse cfg without one gets PARSE-OK.
-const fakeJobsched = `#!/usr/bin/env bash
-set -u
-d=$FAKE_DIR cmd=$1 id=
-shift
-printf '%s %s\n' "$cmd" "$*" >>"$d/calls"
-hold() { if [ -e "$d/hold.$1" ]; then : >"$d/held.$1"; sleep 30; exit 1; fi; }
-answer() {
-  local n line
-  n=$(( $(cat "$d/count.$1" 2>/dev/null || echo 0) + 1 ))
-  echo "$n" >"$d/count.$1"
-  if [ -f "$d/plan.$1" ]; then
-    line=$(sed -n "${n}p" "$d/plan.$1"); [ -n "$line" ] || line=$(tail -n 1 "$d/plan.$1")
-  else
-    line=$2
-  fi
-  line=${line//@ID@/$id}
-  printf '%s\n' "${line#* }"
-  exit "${line%% *}"
-}
-case $cmd in
-list)
-  hold list
-  answer list '0 {"summary":{"dispatcher_running":true}}' ;;
-submit)
-  ctx= name=
-  while [ $# -gt 0 ]; do
-    case $1 in --context) ctx=$2; shift ;; --name) name=$2; shift ;; esac
-    shift
-  done
-  job=${name#tla-}
-  id="j$(grep -c '^submit ' "$d/calls")-$job"
-  s="$d/seen/$job"; mkdir -p "$s"
-  cp "$ctx/runs" "$s/runs"
-  ls "$ctx" >"$s/ctx"
-  ls "$(dirname "$ctx")" >"$s/ctxdir"
-  grep -E '^(BUDGET|DISKCAP_MB)=' "$ctx/tlcjob.sh" >"$s/limits"
-  (cd "$ctx" && sha256sum Phase4.tla Phase4Split.tla Phase5Hook.tla) >"$s/specs"
-  (cd "$ctx" && sha256sum ./*.cfg) >"$s/cfgs"
-  hold submit
-  answer "submit.$job" "0 {\"id\":\"$id\",\"dispatcher_running\":true,\"timeout_s\":10800,\"memory\":34359738368}" ;;
-status)
-  id=$1; job=${id#*-}
-  answer "status.$job" '0 {"state":"succeeded","terminal":true,"dispatcher_running":true}' ;;
-results)
-  id=$1; job=${id#*-}; log="$d/logs/$job.log"
-  mkdir -p "$d/logs"; : >"$log"
-  while read -r _ cfg _; do
-    key=$cfg found=no
-    [ "$job" = parse ] && key=parse:$cfg
-    while IFS=$'\t' read -r k res; do
-      [ "$k" = "$key" ] || continue
-      echo "VERDICT $cfg checks=inv result=$res distinct=42 depth=3 secs=7" >>"$log"; found=yes
-    done <"$d/verdicts"
-    if [ "$job" = parse ] && [ "$found" = no ]; then
-      echo "VERDICT $cfg checks=parse result=PARSE-OK distinct=1 depth=1 secs=1" >>"$log"
-    fi
-  done <"$d/seen/$job/runs"
-  answer "results.$job" "0 {\"paths\":{\"run_log\":\"$log\"},\"present\":{\"run_log\":true}}" ;;
-*) echo "{\"error\":\"unknown command $cmd\"}"; exit 64 ;;
-esac
-`
-
 // neverShim stands in for a tool the runner must never start; it logs the call.
 const neverShim = "#!/bin/sh\necho \"$0 $*\" >> \"$FAKE_DIR/forbidden\"\nexit 1\n"
 
@@ -120,7 +50,8 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	r := &rig{tree: filepath.Join(repoRoot(t), "spec", "tla"), fake: t.TempDir(), tmp: t.TempDir(), bin: t.TempDir(), env: map[string]string{}}
-	writeFile(t, filepath.Join(r.bin, "jobsched"), fakeJobsched, 0o755)
+	// testdata/jobsched is the fake scheduler CLI; its header says how a test scripts it.
+	writeFile(t, filepath.Join(r.bin, "jobsched"), readFile(t, filepath.Join("testdata", "jobsched")), 0o755)
 	for _, name := range []string{"java", "docker", "podman", "tlc", "tlc2"} {
 		writeFile(t, filepath.Join(r.bin, name), neverShim, 0o755)
 	}
@@ -154,13 +85,15 @@ func (r *rig) private(t *testing.T) string {
 	return dst
 }
 
-// plan sets the fake's answers for key, one line per call.
+// plan sets the fake's answers for key, one line per call. A clock.<key> plan
+// holds Unix timestamps to apply when those answers are returned.
 func (r *rig) plan(t *testing.T, key string, lines ...string) {
 	t.Helper()
 	writeFile(t, filepath.Join(r.fake, "plan."+key), strings.Join(lines, "\n")+"\n", 0o644)
 }
 
-// verdict adds a VERDICT result for key (a cfg, or parse:<cfg>) to the run logs.
+// verdict adds a VERDICT result for key (a cfg, parse:<cfg> or sany:<module>) to
+// the run logs. An empty result omits the verdict, including the parse default.
 func (r *rig) verdict(t *testing.T, key, result string) {
 	t.Helper()
 	f, err := os.OpenFile(filepath.Join(r.fake, "verdicts"), os.O_APPEND|os.O_WRONLY, 0)
@@ -284,7 +217,7 @@ func (r *rig) calls(t *testing.T) []call {
 					c.job = strings.TrimPrefix(f[i+1], "tla-")
 				}
 			}
-		case (c.cmd == "status" || c.cmd == "results") && len(f) > 1:
+		case (c.cmd == "wait" || c.cmd == "status" || c.cmd == "results") && len(f) > 1:
 			c.job = f[1][strings.Index(f[1], "-")+1:]
 		}
 		out = append(out, c)
@@ -304,7 +237,7 @@ func (r *rig) submits(t *testing.T) []string {
 }
 
 // seen is what the fake kept from job's submit (runs, ctx, ctxdir, limits,
-// specs, cfgs).
+// specs, cfgs, submit-args).
 func (r *rig) seen(t *testing.T, job, name string) string {
 	t.Helper()
 	return readFile(t, filepath.Join(r.fake, "seen", job, name))
@@ -391,10 +324,23 @@ func byCfg(t *testing.T, rows []row, cfg string) row {
 	return row{}
 }
 
-// parseRuns is the parse job's runs file for rows: the first row of each spec.
-func parseRuns(rows []row) []string {
+// sanyRuns names every manifest module once, regardless of tier or group.
+func sanyRuns(rows []row) []string {
 	seen := map[string]bool{}
 	var out []string
+	for _, rw := range rows {
+		if !seen[rw.spec] {
+			seen[rw.spec] = true
+			out = append(out, rw.spec+" - sany")
+		}
+	}
+	return out
+}
+
+// parseRuns is the first job: SANY for all modules, then one depth-1 run per spec.
+func parseRuns(rows []row) []string {
+	seen := map[string]bool{}
+	out := sanyRuns(rows)
 	for _, rw := range rows {
 		if !seen[rw.spec] {
 			seen[rw.spec] = true

@@ -1,23 +1,27 @@
 #!/bin/sh
-# Runs inside the job container (on gmahoney-test, via jobsched). Never run on
-# the dev host. Reads /work/runs: one line per TLC run,
+# Runs inside the job container via jobsched. Never run on the dev host.
+# Reads $WORK/runs (WORK defaults to /work): one line per TLC or SANY run,
 #   SPEC CFG [@BUDGET_S] [TLC args]
+#   SPEC - sany
 # Everything the report needs goes to stdout (jobsched keeps it as run.log;
 # /out is not returned). TLC's own log stays in the container; stdout gets it
 # without state dumps, and a condensed counterexample (action + changed
 # variables per step) only when a property fails. Each run ends with one
 # "VERDICT ..." line; the LAST line of the job is "JOB-VERDICT ...".
 #
-# Guards: a wall-clock budget (BUDGET s in total, below jobsched's 1 h
+# Guards: a wall-clock budget (BUDGET s in total, below the job's requested
 # timeout; @N caps one run) and a disk cap (DISKCAP_MB) on TLC's metadir,
-# which lives on the container disk.
+# covering states, queue and fingerprints on the container disk. After any
+# INCOMPLETE verdict, every later row is SKIPPED(after-cap).
 BUDGET=${BUDGET:-3240}
-DISKCAP_MB=${DISKCAP_MB:-8000}
+DISKCAP_MB=${DISKCAP_MB:-15000}
 XMX=${XMX:-16g}
 DIRECT=${DIRECT:-6g}
+WORK=${WORK:-/work}
 start=$(date +%s)
-mkdir -p /work/states /work/logs
-cd /work || exit 1
+mkdir -p "$WORK/states" "$WORK/logs" || exit 1
+cd "$WORK" || exit 1
+WORK=$(pwd)
 
 # Condensed trace: "-- N Action" then the variables that changed.
 condense() {
@@ -47,44 +51,91 @@ condense() {
 }
 
 summary=""
+capped=no
 while read -r spec cfg args; do
   case "$spec" in ''|\#*) continue ;; esac
   cap=""
   case "$args" in @*) cap=${args%% *}; cap=${cap#@}; args=${args#@"$cap"}; args=${args# } ;; esac
+  key=$cfg; sany=no; checks=
+  if [ "$cfg" = - ] && [ "$args" = sany ]; then
+    key="sany:$spec"; sany=yes
+  else
+    checks=$(grep -E '^(INVARIANT|PROPERTY)' "$cfg.cfg" | cut -d' ' -f2- | tr '\n' ' ' | sed 's/ *$//; s/ /,/g')
+  fi
+  if [ "$capped" = yes ]; then
+    res='SKIPPED(after-cap)'
+    echo "VERDICT $key checks=$checks result=$res"
+    summary="$summary $key=$res"; continue
+  fi
   left=$(( BUDGET - ($(date +%s) - start) ))
   [ -n "$cap" ] && [ "$cap" -lt "$left" ] && left=$cap
-  checks=$(grep -E '^(INVARIANT|PROPERTY)' "$cfg.cfg" | cut -d' ' -f2- | tr '\n' ' ' | sed 's/ *$//; s/ /,/g')
-  log="/work/logs/$cfg.log"
+  log="$WORK/logs/$key.log"
   echo "=== RUN $spec $cfg ($args) checks=$checks budget=${left}s"
-  grep -E '^  (MaxSid|MaxLife|MaxFaults|Enable|Allow|Wall|OrchNames|SendBound|Probes|ApproverPrompt|HistoryByLife|FinishedSendOK|ClaimClearsPid|GraceFromLaunch|CreationCheck|ResumeSendOK|KillNeedsReported|AllowLeftover|DupEndsLaunch|EnableCrash|SquatMarks|KillRowRule|LaunchTag|KillSparesOld|ForgeMode|WrongServerFault|ServerCheck|LabelOverRecord|AdoptPidCheck|RemainOnExit|CallerWrongServer|A1TokenKept|A2ByLabel|A3DollarById|A4LabelRecover|A5PaneKill|A6RecordedSock|A7ProcLiveness|ActPidCheck)' "$cfg.cfg" | tr -s ' ' | tr '\n' ';'; echo
-  if [ "$left" -lt 30 ]; then
-    v="VERDICT $cfg checks=$checks result=SKIPPED(no-budget)"
-    echo "$v"; summary="$summary $cfg=SKIPPED"; continue
+  if [ "$sany" = no ]; then
+    grep -E '^  (MaxSid|MaxLife|MaxFaults|Enable|Allow|Wall|OrchNames|SendBound|Probes|ApproverPrompt|HistoryByLife|FinishedSendOK|ClaimClearsPid|GraceFromLaunch|CreationCheck|ResumeSendOK|KillNeedsReported|AllowLeftover|DupEndsLaunch|EnableCrash|SquatMarks|KillRowRule|LaunchTag|KillSparesOld|ForgeMode|WrongServerFault|ServerCheck|LabelOverRecord|AdoptPidCheck|RemainOnExit|CallerWrongServer|A1TokenKept|A2ByLabel|A3DollarById|A4LabelRecover|A5PaneKill|A6RecordedSock|A7ProcLiveness|ActPidCheck)' "$cfg.cfg" | tr -s ' ' | tr '\n' ';'; echo
   fi
-  rm -rf "/work/states/$cfg"; rm -f /work/diskcap
+  if [ "$left" -lt 30 ]; then
+    v="VERDICT $key checks=$checks result=SKIPPED(no-budget)"
+    echo "$v"; summary="$summary $key=SKIPPED"; continue
+  fi
+  rm -rf "$WORK/states/$key"; rm -f "$WORK/diskcap"
   t0=$(date +%s)
-  # shellcheck disable=SC2086
-  timeout -s KILL "$left" java -XX:+UseParallelGC -Xmx"$XMX" -XX:MaxDirectMemorySize="$DIRECT" \
-    -cp tla2tools.jar tlc2.TLC -workers 4 -noGenerateSpecTE \
-    -metadir "/work/states/$cfg" -config "$cfg.cfg" $args "$spec.tla" > "$log" 2>&1 < /dev/null &
-  jpid=$!
+  if [ "$sany" = yes ]; then
+    timeout -s KILL "$left" java -cp tla2tools.jar tla2sany.SANY "$spec.tla" > "$log" 2>&1 < /dev/null &
+    jpid=$!
+  else
+    # shellcheck disable=SC2086  # runs-file args are separate TLC arguments
+    timeout -s KILL "$left" java -XX:+UseParallelGC -Xmx"$XMX" -XX:MaxDirectMemorySize="$DIRECT" \
+      -cp tla2tools.jar tlc2.TLC -workers 4 -noGenerateSpecTE \
+      -metadir "$WORK/states/$key" -config "$cfg.cfg" $args "$spec.tla" > "$log" 2>&1 < /dev/null &
+    jpid=$!
+  fi
   # stream TLC's log minus state dumps (lines of a trace start with "/\" or a space)
   tail -n +1 -f "$log" --pid=$jpid < /dev/null | grep --line-buffered -vE '^(/\\| )' &
+  stream_pid=$!
   while kill -0 $jpid 2>/dev/null; do
-    used=$(du -sm "/work/states/$cfg" 2>/dev/null | cut -f1)
+    used=$(du -sm "$WORK/states/$key" 2>/dev/null | cut -f1)
     if [ "${used:-0}" -gt "$DISKCAP_MB" ]; then
-      echo "disk cap: states dir ${used} MB > ${DISKCAP_MB} MB" > /work/diskcap
+      echo "disk cap: states dir ${used} MB > ${DISKCAP_MB} MB" > "$WORK/diskcap"
       kill -TERM $jpid   # timeout(1) passes the signal on to java
     fi
     sleep 5
   done
   wait $jpid; rc=$?
-  sleep 2
+  # Reap the log stream before printing verdicts, including the final line.
+  wait "$stream_pid"
   secs=$(( $(date +%s) - t0 ))
   distinct=$(grep -oE '[0-9,]+ distinct states found' "$log" | tail -1 | cut -d' ' -f1 | tr -d ,)
   depth=$(grep -oE 'depth of the complete state graph search is [0-9]+' "$log" | tail -1 | grep -oE '[0-9]+$')
   viol=$(grep -m1 -oE 'Error: (Invariant [A-Za-z0-9_]+ is violated|Temporal propert(y [A-Za-z0-9_]+ was|ies were) violated|Action property [A-Za-z0-9_]+ is violated)' "$log" | sed 's/^Error: //')
-  if [ -n "$viol" ]; then
+  if [ -f "$WORK/diskcap" ]; then
+    res="INCOMPLETE(disk-cap)"; cat "$WORK/diskcap"
+  elif { [ "$rc" = 137 ] || [ "$rc" = 124 ]; } && [ "$secs" -ge "$((left - 5))" ]; then
+    res="INCOMPLETE(time-budget)"
+  elif [ "$sany" = yes ]; then
+    # Legacy SANY can report errors at exit zero. Match its diagnostic
+    # records, never words in file/module announcements (Error is a valid
+    # module name). A zero exit also needs semantic processing of this root;
+    # empty or unrecognized output is not evidence that the module parsed.
+    err=
+    if [ "$rc" -eq 0 ]; then
+      err=$(awk -v module="$spec" '
+        { sub(/\r$/, "") }
+        $0 == "Semantic processing of module " module { root = 1 }
+        /^[[:space:]]*(Semantic errors|Fatal errors|Parse Error|Lexical error|Syntax error|Error:|Warning treated as error:)/ ||
+        /^[[:space:]]*\*\*\*[[:space:]]*(Errors:|Parse Error)/ ||
+        /^[[:space:]]*(Could not parse module |Cannot find (source file |the specified file |file:)|Circular dependency among |Frontend returned error code:|FrontEndException:|Encountered an exception |An unexpected problem )/ {
+          if (err == "") err = $0
+        }
+        END {
+          if (err != "") print err
+          else if (root) print "PARSE-OK"
+          else print "no-semantic-processing"
+        }' "$log" | cut -c1-80 | tr ' ()\t' '____')
+      err=${err:-unrecognized-output}
+    fi
+    if [ "$rc" -eq 0 ] && [ "$err" = PARSE-OK ]; then res=PARSE-OK; else res="PARSE-FAIL(rc=$rc${err:+:$err})"; fi
+  elif [ -n "$viol" ]; then
     res="FAIL($(echo "$viol" | tr ' ' '_'))"
     echo "--- condensed counterexample ($cfg) ---"
     condense "$log"
@@ -93,10 +144,6 @@ while read -r spec cfg args; do
     res=PASS
   elif echo "$args" | grep -q simulate && grep -q 'The number of states generated' "$log" && ! grep -qE '^Error' "$log"; then
     res=PARSE-OK
-  elif [ -f /work/diskcap ]; then
-    res="INCOMPLETE(disk-cap)"; cat /work/diskcap
-  elif { [ "$rc" = 137 ] || [ "$rc" = 124 ]; } && [ "$secs" -ge "$((left - 5))" ]; then
-    res="INCOMPLETE(time-budget)"
   else
     err=$(grep -m1 -E '^Error|Exception|error' "$log" | cut -c1-80 | tr ' ' '_')
     res="ERROR(rc=$rc:$err)"
@@ -110,9 +157,10 @@ while read -r spec cfg args; do
     [ -n "$distinct" ] && distinct=">=$distinct"
   fi
   [ -z "$depth" ] && depth=$(grep -E '^Progress\(' "$log" | tail -1 | sed -E 's/^Progress\(([0-9]+)\).*/>=\1/')
-  rm -rf "/work/states/$cfg"
-  v="VERDICT $cfg checks=$checks result=$res distinct=${distinct:-?} depth=${depth:-?} secs=$secs"
+  case "$res" in INCOMPLETE\(*) capped=yes ;; esac
+  rm -rf "$WORK/states/$key"
+  v="VERDICT $key checks=$checks result=$res distinct=${distinct:-?} depth=${depth:-?} secs=$secs"
   echo "$v"
-  summary="$summary $cfg=$res/${distinct:-?}"
-done < /work/runs
+  summary="$summary $key=$res/${distinct:-?}"
+done < "$WORK/runs"
 echo "JOB-VERDICT$summary"
