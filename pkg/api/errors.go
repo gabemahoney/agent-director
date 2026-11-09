@@ -187,10 +187,12 @@ var ErrPaneChanged = errors.New("ErrPaneChanged")
 // step 2c), so no hook of the agent has shown its dialog gone, the dialog may
 // still be on the pane, and typed keys, an Enter above all, would land on it;
 // and it is not a Cursor request of an earlier launch. A request is proven
-// gone by its tool's PostToolUse or PostToolUseFailure (the same tool_use_id;
-// Claude rows only), on a Cursor row by the gateway's validated completed or
-// failed update of its exact tool_use_id under the launch that admitted it,
-// by a turn end under the turn_end rule (store.ProvenGoneTurnEnd; the
+// gone, on a Cursor row, by the gateway's validated completed or failed
+// update of its exact tool_use_id under the launch that admitted it (no
+// Claude or Codex request carries a tool_use_id, so no tool-ran proof
+// applies to one; b.wbs), by a turn end under the turn_end rule (the main
+// agent's for a request with no agent_id; on a Claude row, a subagent's
+// SubagentStop for that subagent's requests; store.ProvenGoneTurnEnd; the
 // proven_gone_how field of get-permission gives which hooks prove it and
 // which requests they cover), or, on a non-Cursor row, by its Spawn's end
 // (marked missing, ended, or resumed). agent-director's own records prove nothing: a

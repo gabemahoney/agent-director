@@ -676,11 +676,11 @@ The response is a single permission row:
   "hook_gone_at": null,
   "attempted_decision": null,
   "attempted_at": null,
-  "tool_use_id": "toolu_01ABCDEF",
+  "tool_use_id": null,
   "pane_answer": "none",
   "pane_as": null,
   "proven_gone_at": "2026-05-31T12:00:04.310Z",
-  "proven_gone_how": "tool_ran",
+  "proven_gone_how": "turn_end",
   "unproven_since": null
 }
 ```
@@ -688,8 +688,8 @@ The response is a single permission row:
 `decision_reason` annotates the recorded verdict: `operator` (API deny),
 `timeout` (relay timeout deny), `find_missing`/`ended` (owning-spawn closure),
 `pane` (`send-keys` or a native Cursor choice), `pane_outside` (outside claim),
-or `tool_ran` (tool execution). API allow initially has no reason; later
-hook close or validated successful Cursor execution can fill that missing
+or `tool_ran` (Cursor tool execution). API allow initially has no reason; later
+validated successful Cursor execution can fill that missing
 reason with `tool_ran`, preserving an existing verdict and non-null reason. Failed MCP invocation proof
 leaves these fields unchanged. Read `decision` for the
 verdict and the [delivery and proof fields](permissions.md#delivery) for its
@@ -712,16 +712,17 @@ still awaits an answer, so follow each request you track with
 `get-permission`, not only rows in `check_permission`.
 
 `proven_gone_at` and `proven_gone_how` say when and how the agent itself
-showed the request's dialog gone: `tool_ran` (Claude tool execution or
-validated matching Cursor invocation proof, including an exact failed MCP
+showed the request's dialog gone: `tool_ran` (validated matching Cursor
+invocation proof, including an exact failed MCP
 invocation without execution or answer inference; see [Cursor permissions](permissions.md#cursor-spawns)),
 `turn_end` (an eligible main request
-was written before the main turn ended, see [The dialog hold](permissions.md#the-dialog-hold);
+was written before the main turn ended, or a Claude subagent's request
+before that subagent's turn ended, see [The dialog hold](permissions.md#the-dialog-hold);
 or a Cursor request the gateway never answered when its turn ended, see
 [Cursor permissions](permissions.md#cursor-spawns)) or
-`agent_gone` (a non-Cursor agent ended). A Codex agent's request carries
-no `tool_use_id` (it reads `null`) and is never proven by `tool_ran`; see
-[how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows). `delivered` and a pane answer are
+`agent_gone` (a non-Cursor agent ended). A Claude or Codex agent's request
+carries no `tool_use_id` (it reads `null`) and is never proven by
+`tool_ran`. `delivered` and a pane answer are
 agent-director's own records, not proof. `get` lists every request still
 holding the dialog in `unproven_requests`, with `unproven_since`. A request that
 reads `delivered` or closed at the pane but stays unproven for a while is a
@@ -776,9 +777,8 @@ agent-director record-pane-answer --request-token "$token" \
     --as unknown --expect-pane-sha256 "$hash"
 ```
 
-Pass `--as unknown` unless you saw how it was answered. On a Claude agent, a
-request whose tool then runs is closed on its own (`decision_reason`
-`tool_ran`); a Codex request is closed only by one of the two calls above.
+Pass `--as unknown` unless you saw how it was answered. A Claude or Codex
+request is closed only by one of the two calls above, or with its spawn.
 A Cursor request can close on validated matching shell execution or a successful
 MCP result under [Cursor permissions](permissions.md#cursor-spawns);
 other tool/plan completion supplies no execution proof. `record-pane-answer`

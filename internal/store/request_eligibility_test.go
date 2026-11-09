@@ -131,6 +131,15 @@ func TestRequestEligibilityWritersReadersAndProof(t *testing.T) {
 			if err != nil || n != want {
 				t.Fatalf("turn end %d %v; want %d", n, err, want)
 			}
+			if tc.agent == AgentCursor && tc.child != "" {
+				// b.wbs: a subagent's turn end is Claude's alone; on a Cursor
+				// row it proves even its own child's request nothing.
+				sub := turnEndProof()
+				sub.AgentID = tc.child
+				if n, err := s.ProveRequestsGone(relayID, gate, sub); err != nil || n != 0 {
+					t.Fatalf("subagent turn end on a Cursor row %d %v; want 0", n, err)
+				}
+			}
 			if !tc.want && !tc.legacy {
 				independent := mainReq(tokenB)
 				independent.MainTurnEndEligible = eligibility(false)

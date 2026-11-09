@@ -116,11 +116,12 @@ type RequestDelivery struct {
 	// intent (a pane answer through send-keys was started; whether its key
 	// was typed is unknown), sent (its key was sent or Cursor recorded a native
 	// choice; neither establishes ACP delivery, receipt or proof), outside (a caller
-	// recorded it answered outside agent-director) or tool_ran (agent hooks or
-	// validated correlated Cursor execution output established its tool ran).
-	// Hook close and successful Cursor proof preserve an earlier verdict and
-	// non-null reason, inferring allow only when undecided and filling a missing
-	// reason with tool_ran. This history supplies no response authority.
+	// recorded it answered outside agent-director) or tool_ran (validated
+	// correlated Cursor execution output established its tool ran; in practice
+	// never on a Claude or Codex row, whose requests carry no tool_use_id).
+	// That close preserves an earlier verdict and non-null reason, inferring
+	// allow only when undecided and filling a missing reason with tool_ran.
+	// This history supplies no response authority.
 	PaneAnswer string `json:"pane_answer"`
 	// PaneAs is the verdict a pane answer claims: allow, deny, or unknown (an
 	// outside record that did not see the answer); null when none was
@@ -134,15 +135,16 @@ type RequestDelivery struct {
 	// holds plain send-keys without a pane hash, and pause (b.zdz), to its
 	// live Spawn (ErrDialogMaybeOpen).
 	ProvenGoneAt *time.Time `json:"proven_gone_at"`
-	// ProvenGoneHow is how: tool_ran (its tool's PostToolUse or
-	// PostToolUseFailure, by tool_use_id, or validated correlated Cursor
-	// execution output for that exact request), turn_end (the turn of the agent
-	// that asked ended after it: the main agent's Stop, idle-prompt
+	// ProvenGoneHow is how: tool_ran (validated correlated Cursor execution
+	// output for that exact request; in practice never on a Claude or Codex
+	// row, whose requests carry no tool_use_id), turn_end (the turn of the
+	// agent that asked ended after it: the main agent's Stop, idle-prompt
 	// Notification, Codex Interrupt or verified Cursor Stop/Interrupt proves
 	// only durably main-turn-eligible requests with no child identity recorded
-	// before the hook began; Cursor unknown-origin and child requests remain
-	// ineligible) or agent_gone (its non-Cursor Spawn was marked missing, ended
-	// or resumed); null until then.
+	// before the hook began, and a Claude subagent's SubagentStop proves that
+	// subagent's requests recorded before that hook began (b.wbs); Cursor
+	// unknown-origin and child requests remain ineligible) or agent_gone (its
+	// non-Cursor Spawn was marked missing, ended or resumed); null until then.
 	ProvenGoneHow *string `json:"proven_gone_how"`
 	// UnprovenSince is, for a request not proven gone that no longer awaits
 	// an answer in agent-director's own records, when its record stopped
@@ -498,7 +500,8 @@ func paneAnswerOf(pr PermissionRow) string {
 // margins) has passed. Call it BEFORE reading the record a decision rests on
 // (rule 5's check-before-read note): a gone hook writes nothing more. The
 // agent's PostToolUse close of a request whose tool ran judges the request's
-// hook with it (cmd/agent-director wires it into the hook verb).
+// hook with it (cmd/agent-director wires it into the hook verb); that close
+// matches no Claude or Codex request, which carries no tool_use_id (b.wbs).
 func RelayHookGone(v RelayView, pr PermissionRow) bool {
 	j := newRelayJudge(v)
 	switch j.hook(pr) {

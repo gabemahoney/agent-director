@@ -347,23 +347,30 @@ func (r spawnRequests) dialogMaybeOpenDetails(unproven []PermissionRow) DialogMa
 }
 
 // dialogMaybeOpenError is ErrDialogMaybeOpen for spawn instanceID of agent
-// (store.AgentCodex, or anything else for Claude), with d as its err_details
-// (b.146 step 2c): the request d names is not proven gone by any hook of the
-// agent, so its permission dialog may still be on the pane. The description
-// states facts only: the request, what agent-director's records say of it,
-// since when, and that nothing was sent. What would prove it gone is the
-// agent's: for Claude a PostToolUse with its tool_use_id or the end of the
-// main agent's turn (Stop or idle prompt); for Codex, whose requests carry no
-// tool_use_id, the end of the main agent's turn (a Stop or an Interrupt). It
+// (store.AgentCodex, store.AgentCursor, or anything else for Claude), with d
+// as its err_details (b.146 step 2c): the request d names is not proven gone
+// by any hook of the agent, so its permission dialog may still be on the
+// pane. The description states facts only: the request, what
+// agent-director's records say of it, since when, and that nothing was sent.
+// What would prove it gone is the agent's: for Claude, whose requests carry
+// no tool_use_id, the end of the main agent's turn (Stop or idle prompt) or,
+// for a subagent's request, that subagent's SubagentStop (b.wbs); for Codex,
+// whose requests carry none either, the end of the main agent's turn (a Stop
+// or an Interrupt). A Cursor row keeps the text it had before b.wbs. It
 // counts the Spawn's other requests that still hold the dialog.
 func dialogMaybeOpenError(instanceID, agent string, d DialogMaybeOpenDetails) error {
 	since := "it still awaits an answer"
 	if d.UnprovenSince != nil {
 		since = "its record has read closed since " + d.UnprovenSince.UTC().Format(time.RFC3339Nano)
 	}
-	proofs := "no PostToolUse with its tool_use_id, no end of the main agent's turn after it for a request with no agent_id, and no end of its agent is recorded"
-	if agent == store.AgentCodex {
+	var proofs string
+	switch agent {
+	case store.AgentCodex:
 		proofs = "no Stop or Interrupt of the main agent after it for a request with no agent_id, and no end of its agent is recorded"
+	case store.AgentCursor:
+		proofs = "no PostToolUse with its tool_use_id, no end of the main agent's turn after it for a request with no agent_id, and no end of its agent is recorded"
+	default:
+		proofs = "no end of the main agent's turn after it for a request with no agent_id, no SubagentStop of its subagent after it for a request with one, and no end of its agent is recorded"
 	}
 	return &DetailedError{
 		Err: fmt.Errorf("%w: %s request %s is not proven gone (%s), so its permission dialog may still be on the pane; agent-director's records give delivery %s and pane_answer %s, and %s; %d other request(s) of the spawn still hold the dialog (err_details); nothing was sent",

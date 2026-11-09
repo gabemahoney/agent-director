@@ -3,12 +3,14 @@ package hook_test
 // request_proof_test.go — b.146 step 2c through Handle on a real store: which
 // hooks of a relayed row's own agent prove its permission requests' dialogs
 // gone (a PostToolUse or PostToolUseFailure by tool_use_id, the main agent's
-// Stop or idle prompt started after the request) and which do not, and the
-// row's release once a request answered at the pane is proven gone (b.omt).
+// Stop or idle prompt started after the request, the asking subagent's
+// SubagentStop; b.wbs) and which do not, and the row's release once a request
+// answered at the pane is proven gone (b.omt).
 // The store's rules are internal/store/request_proof_test.go's.
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
@@ -47,11 +49,15 @@ func payloadWith(t *testing.T, fixture string, fields map[string]any) []byte {
 // agent-director's records say (here its relay hook may still answer, so it is
 // not closed); the main agent's Stop or idle-prompt Notification proves every
 // request with no agent_id recorded before the second it started (turn_end;
-// b.omt), one recorded before v7 included. Another tool_use_id, a PreToolUse,
-// a hook that came before the request or started in its second, a subagent's
-// request at the end of the main turn, a subagent's idle prompt or a
-// teammate's Stop (an agent_id), another Notification, a relay-off hook or
-// another process's hook proves nothing.
+// b.omt), one recorded before v7 included; a subagent's SubagentStop proves
+// its own requests recorded before the second it started, allowed or denied
+// (turn_end; b.wbs: Claude's PermissionRequest carries no tool_use_id, so
+// nothing else proves them before the agent ends). Another tool_use_id, a
+// PreToolUse, a hook that came before the request or started in its second, a
+// subagent's request at the end of the main turn, a subagent's idle prompt or
+// a teammate's Stop (an agent_id), a SubagentStop after another agent's
+// request, another Notification, a relay-off hook or another process's hook
+// proves nothing.
 func TestHookProvesRequestsGone(t *testing.T) {
 	const subagent = "a5b92f0e7d3c6184"
 	post := func(fixture, id string) func(t *testing.T) []byte {
@@ -61,9 +67,16 @@ func TestHookProvesRequestsGone(t *testing.T) {
 	notify := func(ntype, agentID string) func(t *testing.T) []byte {
 		return func(t *testing.T) []byte { return notificationPayload(t, ntype, agentID) }
 	}
+	subagentStop := func(agentID string) func(t *testing.T) []byte {
+		return func(t *testing.T) []byte {
+			return payloadWith(t, "subagent-stop.json", map[string]any{"agent_id": agentID})
+		}
+	}
 	cases := []struct {
 		name       string
 		request    string // "main", "subagent" or "pre-v7"
+		useID      bool   // the request carries proofUseID; a real Claude request carries none (b.wbs)
+		decision   string // "allow" or "deny": decided and delivered before the hook; "" undecided
 		payload    func(t *testing.T) []byte
 		first      bool // the hook fires before the request is recorded
 		sameSecond bool // the hook started in the second the request was recorded, not a second after
@@ -71,13 +84,13 @@ func TestHookProvesRequestsGone(t *testing.T) {
 		foreign    bool
 		want       string // proven_gone_how; "" unproven
 	}{
-		{name: "PostToolUse, its tool_use_id", request: "main", payload: post("post-tool-use.json", proofUseID), want: store.ProvenGoneToolRan},
-		{name: "PostToolUseFailure, its tool_use_id", request: "main", payload: post("post-tool-use-failure.json", proofUseID),
+		{name: "PostToolUse, its tool_use_id", request: "main", useID: true, payload: post("post-tool-use.json", proofUseID), want: store.ProvenGoneToolRan},
+		{name: "PostToolUseFailure, its tool_use_id", request: "main", useID: true, payload: post("post-tool-use-failure.json", proofUseID),
 			want: store.ProvenGoneToolRan},
-		{name: "PostToolUse, a subagent's request, its tool_use_id", request: "subagent", payload: post("post-tool-use.json", proofUseID),
+		{name: "PostToolUse, a subagent's request, its tool_use_id", request: "subagent", useID: true, payload: post("post-tool-use.json", proofUseID),
 			want: store.ProvenGoneToolRan},
-		{name: "PostToolUse, another tool_use_id", request: "main", payload: post("post-tool-use.json", "toolu_01OTHER")},
-		{name: "PreToolUse, its tool_use_id", request: "main", payload: post("pre-tool-use-bash.json", proofUseID)},
+		{name: "PostToolUse, another tool_use_id", request: "main", useID: true, payload: post("post-tool-use.json", "toolu_01OTHER")},
+		{name: "PreToolUse, its tool_use_id", request: "main", useID: true, payload: post("pre-tool-use-bash.json", proofUseID)},
 		{name: "Stop after a main-agent request", request: "main", payload: stop, want: store.ProvenGoneTurnEnd},
 		{name: "idle prompt after a main-agent request", request: "main", payload: notify("idle_prompt", ""), want: store.ProvenGoneTurnEnd},
 		{name: "Stop after a request recorded before v7", request: "pre-v7", payload: stop, want: store.ProvenGoneTurnEnd},
@@ -92,15 +105,26 @@ func TestHookProvesRequestsGone(t *testing.T) {
 		{name: "a teammate's Stop after a main-agent request", request: "main", payload: func(t *testing.T) []byte {
 			return payloadWith(t, "stop.json", map[string]any{"agent_id": subagent})
 		}},
+		{name: "SubagentStop after its subagent's allowed request", request: "subagent", decision: "allow", payload: subagentStop(subagent),
+			want: store.ProvenGoneTurnEnd},
+		{name: "SubagentStop after its subagent's denied request", request: "subagent", decision: "deny", payload: subagentStop(subagent),
+			want: store.ProvenGoneTurnEnd},
+		{name: "another subagent's SubagentStop after a subagent's request", request: "subagent", decision: "allow",
+			payload: subagentStop("a3f9c2e81b7d4056")},
+		{name: "SubagentStop after a main-agent request", request: "main", decision: "allow", payload: subagentStop(subagent)},
+		{name: "SubagentStop before its subagent's request", request: "subagent", decision: "allow", payload: subagentStop(subagent), first: true},
+		{name: "SubagentStop started in its subagent's request's second", request: "subagent", decision: "allow", payload: subagentStop(subagent),
+			sameSecond: true},
+		{name: "SubagentStop from another process", request: "subagent", decision: "allow", payload: subagentStop(subagent), foreign: true},
 		{name: "permission_prompt Notification after a main-agent request", request: "main", payload: notify("permission_prompt", "")},
 		{name: "Stop, relay off", request: "main", payload: stop, relayOff: true},
-		{name: "PostToolUse, relay off", request: "main", payload: post("post-tool-use.json", proofUseID), relayOff: true},
+		{name: "PostToolUse, relay off", request: "main", useID: true, payload: post("post-tool-use.json", proofUseID), relayOff: true},
 		{name: "Stop from another process", request: "main", payload: stop, foreign: true},
-		{name: "PostToolUse from another process", request: "main", payload: post("post-tool-use.json", proofUseID), foreign: true},
+		{name: "PostToolUse from another process", request: "main", useID: true, payload: post("post-tool-use.json", proofUseID), foreign: true},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			id := "request-proof-" + string(rune('a'+i))
+			id := "request-proof-" + strconv.Itoa(i)
 			st, _ := seedAgentRow(t, id, store.StateWorking)
 			record := func() {
 				if tc.request == "pre-v7" {
@@ -108,11 +132,20 @@ func TestHookProvesRequestsGone(t *testing.T) {
 					return
 				}
 				req := store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash", ToolInput: `{}`,
-					ToolUseID: proofUseID, Hook: relayHookSelf, SettledAt: time.Now().Add(time.Hour)}
+					Hook: relayHookSelf, SettledAt: time.Now().Add(time.Hour)}
+				if tc.useID {
+					req.ToolUseID = proofUseID
+				}
 				if tc.request == "subagent" {
 					req.AgentID = subagent
 				}
 				storefix.SeedRelayRequest(t, st, id, req)
+				if tc.decision != "" {
+					decideOnly(t, st, id, tc.decision)
+					if _, _, ok, err := st.AckRelayDecision(id, storefix.TestRequestTokenA, time.Now(), store.DefaultLockWait, nil); err != nil || !ok {
+						t.Fatalf("ack %s = %v, %v", tc.decision, ok, err)
+					}
+				}
 			}
 			parent := agentParent(t, st, id)
 			if tc.foreign {
@@ -150,7 +183,7 @@ func TestHookProvesRequestsGone(t *testing.T) {
 			if at := hc.Now(); pr.ProvenGoneAt.UnixMilli() != at.UnixMilli() {
 				t.Errorf("proven_gone_at = %v; want the hook's clock %v", pr.ProvenGoneAt, at)
 			}
-			if pr.PaneAnswer != store.PaneAnswerNone || pr.Decision != "" {
+			if pr.PaneAnswer != store.PaneAnswerNone || pr.Decision != tc.decision {
 				t.Errorf("request = pane_answer %q, decision %q; want it as recorded (the proof closes nothing)", pr.PaneAnswer, pr.Decision)
 			}
 		})

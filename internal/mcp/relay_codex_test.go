@@ -65,8 +65,9 @@ func TestMCPCodexErrDetails(t *testing.T) {
 // record-pane-answer tool is not proven gone on either agent's row, so the
 // send-keys tool's plain call is ErrDialogMaybeOpen with the same err_details
 // (tool_use_id null: the seeded request has none, as every Codex request) and
-// nothing sent; its description names the agent's own proofs: Claude's text as
-// it shipped, Codex's Stop or Interrupt with no PostToolUse.
+// nothing sent; its description names the agent's own proofs: Claude's own
+// text (the main turn end and the asking subagent's SubagentStop; b.wbs),
+// Codex's Stop or Interrupt with no PostToolUse.
 func TestMCPDialogMaybeOpenByAgent(t *testing.T) {
 	cases := []struct {
 		agent string

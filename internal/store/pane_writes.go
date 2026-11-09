@@ -12,7 +12,8 @@ import (
 // permission request at the pane: a pane answer through send-keys (rule 8:
 // its intent, then sent, or the intent released), a caller's record of an
 // answer made outside agent-director (record-pane-answer, rule 13), and the
-// PostToolUse close of a request whose tool ran (rule 13). None reads Claude
+// PostToolUse close of a request whose tool ran (rule 13; it matches no Claude
+// or Codex request, which carries no tool_use_id; b.wbs). None reads Claude
 // Code's screen: the verdict each records is a caller's claim (pane_as) or
 // the inference that a tool which ran was allowed.
 
@@ -332,7 +333,9 @@ const closeToolRanSQL = `UPDATE permission_requests AS pr
 // dialog is gone), only while the request still awaits an answer and the
 // hook's gate holds (hookGateSQL: the hook's parent is the row's recorded
 // pane process, SR-22.9). A nil gone closes nothing. An empty toolUseID
-// reads and closes nothing.
+// reads and closes nothing. In practice it closes nothing: Claude's and
+// Codex's PermissionRequest carry no tool_use_id, so no request they record
+// has one to match (b.wbs).
 // Cursor requests require validated ACP execution evidence through
 // ProveCursorToolRan; this generic hook path cannot close them.
 //

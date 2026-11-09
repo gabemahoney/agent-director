@@ -249,17 +249,19 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // returns to waiting, any other row is soft refreshed, and
 // either way the row records idle_since (applyOrdinaryHook; b.svb, b.146
 // problem 3). On a relayed row, a Claude PostToolUse or PostToolUseFailure
-// carrying a tool_use_id, and the main agent's Stop or idle-prompt
-// Notification (Codex: its Stop or Interrupt, with no agent_id), first
-// prove permission requests' dialogs gone (proveRequestsGone; b.146 step 2c),
-// with the same gate, the turn end only those recorded before the
-// hook's start; a request proven gone no longer holds the row's move to
-// working (b.omt). Then such a PostToolUse or PostToolUseFailure closes the
+// carrying a tool_use_id, the main agent's Stop or idle-prompt
+// Notification (Codex: its Stop or Interrupt, with no agent_id), and a Claude
+// subagent's SubagentStop (b.wbs) first prove permission requests' dialogs
+// gone (proveRequestsGone; b.146 step 2c), with the same gate, a turn end
+// only those recorded before the hook's start; a request proven gone no
+// longer holds the row's move to working (b.omt). Then such a PostToolUse or
+// PostToolUseFailure closes the
 // fallen-back request with that tool_use_id (closeToolRan; b.146 rule 13: the
 // tool ran, so its dialog was answered allow), with the same gate, before its
 // ordinary write. No Codex hook proves by tool_use_id or closes this way
 // (ClassifyResult.ToolRan is never true for one): Codex's permission requests
-// carry no tool_use_id.
+// carry no tool_use_id. Nor do Claude's, so a Claude PostToolUse matches none
+// either (b.wbs).
 //
 // The agent (HandleConfig.Agent, the verb's --agent): its raw value is
 // validated once ad.hook.fired is armed (ResolveAgent); an invalid one is a
@@ -740,7 +742,8 @@ func codexTurnGate(gate *store.HookGate, res ClassifyResult) {
 // it closed. It is fail-open: a store without the close, or a failed close,
 // logs and changes nothing else. That hook can die too, so the close is a
 // help, not a guarantee: record-pane-answer is the other way to close such a
-// request.
+// request. In practice it closes nothing: Claude's PermissionRequest carries
+// no tool_use_id, so no Claude request has one to match (b.wbs).
 func closeToolRan(st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, toolUseID string, logger *log.Logger) {
 	c, ok := st.(toolRanCloser)
 	if !ok {
@@ -759,13 +762,18 @@ func closeToolRan(st HookStore, hc HandleConfig, instanceID string, gate store.H
 // gone (b.146 step 2c; store ProveRequestsGone, with the hook's gate and
 // hc's clock): a Claude PostToolUse or PostToolUseFailure carrying a
 // tool_use_id (ToolRan; never a Codex hook) proves the requests with that
-// tool_use_id gone, tool_ran; the main agent's Stop or idle-prompt
-// Notification, a Codex Interrupt with no agent_id, or a verified Cursor
-// main Stop/Interrupt (TurnEnded; child/unknown events prove nothing), proves every
-// durably eligible request recorded before start, the hook's start (Handle's,
-// from HandleConfig.Start), turn_end: one whose created_at is strictly before
-// start's whole second (store.RequestProof.RecordedBefore; b.omt). The cut is
-// the hook's start, not its read: an idle-prompt Notification whose read
+// tool_use_id gone, tool_ran (none, in practice: Claude's PermissionRequest
+// carries no tool_use_id, so its requests are recorded with none; b.wbs); the
+// main agent's Stop or idle-prompt Notification, a Codex Interrupt with no
+// agent_id, or a verified Cursor main Stop/Interrupt (TurnEnded; child/unknown
+// events prove nothing), proves every durably eligible request recorded
+// before start, the hook's start (Handle's, from HandleConfig.Start),
+// turn_end: one whose created_at is strictly before start's whole second
+// (store.RequestProof.RecordedBefore; b.omt). A Claude subagent's
+// SubagentStop (SubagentStopped; b.wbs) proves that subagent's requests
+// recorded before start gone the same way, turn_end, whatever their verdict
+// (store.RequestProof.AgentID); a Codex SubagentStop proves nothing. The cut
+// is the hook's start, not its read: an idle-prompt Notification whose read
 // lands after the next turn's PermissionRequest must not prove that request
 // gone while its dialog is up, since a request proven gone no longer holds
 // the row's move to working. Any other hook proves nothing. It runs first
@@ -785,6 +793,8 @@ func proveRequestsGone(st HookStore, hc HandleConfig, start time.Time, instanceI
 		proof = store.RequestProof{How: store.ProvenGoneToolRan, ToolUseID: res.ToolUseID}
 	case res.TurnEnded():
 		proof = store.RequestProof{How: store.ProvenGoneTurnEnd, RecordedBefore: start}
+	case res.SubagentStopped():
+		proof = store.RequestProof{How: store.ProvenGoneTurnEnd, AgentID: res.AgentID, RecordedBefore: start}
 	default:
 		return
 	}
