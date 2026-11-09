@@ -259,7 +259,8 @@ type Spawn struct {
 	// the stored display observation or pane baseline: the observers' commits
 	// (ObserveNeedsIntelligence, ObserveIdleScreen) and the lifecycle writes
 	// that keep or clear the observation (hookStateSet on a raw-state change,
-	// immediateSettleSet, find-missing's check_permission repair).
+	// immediateSettleSet, find-missing's check_permission repair, and turn
+	// starts or adoptions through invalidatePaneSet).
 	// lockedObservationRow refuses a plan made from another version, and
 	// observationLanded recognises its own commit as the next one.
 	ObservationVersion int64
@@ -1065,14 +1066,17 @@ func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int
 // carries (SR-3.6, SR-5.2): the six server and pane identity columns and the
 // version advance, as a SET list whose placeholders take adoptIdentityArgs in
 // order. AdoptIdentityIfUnchanged and AdoptIdentityIfSameLife share it; it
+// also invalidates pane evidence and any idle_screen candidate/display
+// (invalidatePaneSet), without changing permission_epoch. It
 // never names launch_token, tmux_socket, the state, the liveness columns,
 // launch_started_at, life_number, no_pre_trust or any request column.
-const adoptIdentitySet = `tmux_server_pid       = ?,
+var adoptIdentitySet = `tmux_server_pid       = ?,
         tmux_server_started   = ?,
         tmux_server_starttime = ?,
         pane_id               = ?,
         pane_pid              = ?,
         pane_starttime        = ?,
+        ` + invalidatePaneSet(`state`) + `,
         ` + rowVersionAdvance
 
 // adoptIdentityArgs returns the bound arguments for adoptIdentitySet, in its
@@ -1088,7 +1092,7 @@ func adoptIdentityArgs(id LaunchIdentity) []any {
 // adoptIdentitySQL is AdoptIdentityIfUnchanged's one statement: the shared
 // identity-column assignment, guarded by the row snapshot the verb examined
 // (SR-3.6, SR-5.3).
-const adoptIdentitySQL = `UPDATE spawns
+var adoptIdentitySQL = `UPDATE spawns
     SET ` + adoptIdentitySet + `
   WHERE instance_id = ? AND ` + snapshotMatchSQL
 
@@ -1102,9 +1106,12 @@ const adoptIdentitySQL = `UPDATE spawns
 // identity (tmux_server_pid, tmux_server_started, tmux_server_starttime) and
 // the agent's pane (pane_id, pane_pid, pane_starttime) from id, a zero value
 // as NULL (so an adoption that found no pane records only the server
-// identity), and advances row_version by exactly one. It never writes
-// id.Token, id.Socket, the state or any other column, and emits no trail
-// event: the verb records adopted on ad.provenance.disagree (SR-14).
+// identity), and advances row_version by exactly one. The same statement
+// invalidates pane evidence and any idle_screen candidate/display, without
+// changing permission_epoch. Its transaction refreshes family history and
+// drains any display exit, emitted only after commit. It never writes
+// id.Token, id.Socket or the state; the verb records adopted on
+// ad.provenance.disagree (SR-14).
 //
 // It returns CondApplied when the write applied; CondChanged, having written
 // nothing, when the row exists but its snapshot differs; CondAbsent when no
@@ -1118,7 +1125,7 @@ const adoptIdentitySQL = `UPDATE spawns
 // and expire never write an adoption.
 func (s *Store) AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot, id LaunchIdentity) (CondResult, error) {
 	args := append(adoptIdentityArgs(id), instanceID)
-	res, err := s.db.Exec(adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
+	res, err := s.execFamily(instanceID, adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
 	if err != nil {
 		return 0, fmt.Errorf("store: adopt identity: %w", err)
 	}

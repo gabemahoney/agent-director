@@ -3817,9 +3817,11 @@ still the one it read, so it knows the row has not changed since. As built:
   `AdoptIdentityIfUnchanged(instanceID, examined, identity)` records a
   launch identity a verb found for a lost create reply: one UPDATE, guarded
   by `snapshotMatchSQL` on the `RowSnapshot` the verb examined, writing the
-  six server and pane identity columns (zero values as NULL) and advancing
-  `row_version`. It never writes the token, the socket or the state, and
-  emits no trail event. When nothing applied, `condNotApplied` tells
+  six server and pane identity columns (zero values as NULL), invalidating
+  [pane evidence](#displayed-state-reporting) and advancing `row_version`.
+  Its transaction refreshes families and drains display exits for emission
+  after commit. It never writes the token, the socket or the state.
+  When nothing applied, `condNotApplied` tells
   `CondChanged` from `CondAbsent`; a driver error returns a zero
   `CondResult`. **Must use:** only `kill`, `send-keys`, `pause` and the
   [shared active checks](#shared-active-checks) (a state read or
@@ -3917,11 +3919,13 @@ still the one it read, so it knows the row has not changed since. As built:
     is).
   - `AdoptIdentityIfSameLife(instanceID, examined, identity) (CondResult,
     now RowSnapshot, error)`: writes the six server and pane identity
-    columns through `adoptIdentitySet`, the assignment it shares with
-    `AdoptIdentityIfUnchanged`, and never the token, socket, state,
+    columns and invalidates pane evidence through `adoptIdentitySet`, the
+    assignment it shares with `AdoptIdentityIfUnchanged`, and never the token, socket, state,
     liveness columns or launch start. When it applies it returns `now`, the
     row's snapshot after the write (`examined` with `RowVersion` one
     higher, no read needed), which guards the row's verdict write.
+    `RecoveryWrites` carries the adoption's observation-version advance
+    into that verdict's guard; an intervening observation still refuses it.
   - `NoteUnreportedIfSameLife(instanceID, examined) (CondResult, error)`
     (b.146 rule 10, a report, not a state change): one UPDATE
     (`noteUnreportedIfSameLifeSQL`) guarded on `state = 'pending'`, a
@@ -5279,8 +5283,11 @@ launch or observation facts.
   row's mark carries its `exited` record in the mark's statement (`provenExit`;
   `findMissingWrite.ProcessRecorded`), and pause's `endIfGone` does the same.
   Otherwise `recordProcess` commits `RecordProcessEvidence` only while
-  `probeStillApplies`; a sample overtaken by a concurrent terminal move is
-  dropped as `stale_observation`. Cursor process evidence remains
+  `probeStillApplies`: the refreshed row must be what this invocation's own
+  writes left, at their exact observation version (the examined one, plus one
+  for an applied adoption) and permission interval. A sample overtaken by a
+  concurrent terminal move or an intervening observation is dropped as
+  `stale_observation`, never committed at the newer version. Cursor process evidence remains
   `unknown`/`unsupported` under D1; follow-up Bug b.14c owns runtime-identity parity.
 - `fieldAttempt`: per selected row, this invocation's unsuccessful or
   prevented state, process and pane attempts, with the value and owner each
@@ -6293,7 +6300,9 @@ unique.
   still reads `waiting` until that turn's next tool hook moves it back to
   `working`. A held `UserPromptSubmit` records `codex_turn` in
   `reportWorkingHeld`'s one write (`codexHeldTurnSQL`), so no read ends an
-  older turn while it runs.
+  older turn while it runs. Both turn-start writes invalidate
+  [pane evidence](#displayed-state-reporting), including when the raw state
+  stays `working`.
 - *Late tool hooks.* A `CodexToolTurn` move to `working` applies only while
   `codexToolTurnCurrentSQL` holds: the turn is `codex_turn` and not
   `codex_turn_ended`, or, with `codex_turn` NULL (a row upgraded mid-turn,
@@ -7567,6 +7576,7 @@ agent must go through.
 | `committedDisplayStateSQL` | `Spawn.CommittedDisplay` in SQL: the deterministic function `committed_display_state`, which gets each column as a BLOB so it judges the bytes a read scans, a NUL included, and never fails. A lifecycle write (`hookStateSet`, `immediateSettleSet`, `RepairCheckPermissionIfSameLife`) must use it, never a `json_extract` of the observation's `state`, to keep a displayed observation or record `display_exit`, so it keeps or exits exactly the display a read shows. The function exists only on this binary's connections (the sqlite3 CLI that `install.sh` and `sql.sh` run cannot call it), so it never goes in a trigger, view, index, CHECK or generated column. |
 | `RecordPermissionFallbacks` (via `recordGone`) | The shared active checker's and `get-permission`'s write of `hook_gone_at` and the fallback clock; it keeps the first basis and the existing `hook_gone_at` behaviour. |
 | `takeDisplayExits`, `emitDisplayTransitions` | Drain an immediate exit inside the writing transaction; emit after its commit. |
+| `invalidatePaneSet` | Every Codex turn-start and pane-adoption writer must use this shared SET fragment to clear the baseline and old `idle_screen` candidate/display without advancing the permission epoch. Its transaction refreshes families and drains display exits. |
 | `ListFilters.StoredDisplay`, `ListFilters.IDs`, `listFiltered` | Select stored reported-state or committed-display matches, then limit, before checks. Refresh by the selected IDs only; returned state/display may no longer match. Never widen or refill that selection after checking. |
 
 A new Displayed State, such as unknown-prompt inference for
@@ -7580,8 +7590,8 @@ own display, and no guard reads the display.
 
 **Ownership.** A request is stamped at admission with `owner_launch_token`,
 `owner_permission_epoch` and `admitted_at`. `permission_epoch` counts the
-row's continuous raw-state intervals (a stay in `check_permission`, a working
-turn): every true raw transition
+row's continuous raw-state intervals (a stay in `check_permission` or
+`working`): every true raw transition
 (`hookStateSet`, `immediateSettleSet`) bumps it and a write of the same value
 does not. A request gets a fallback clock (`permissionCandidate`) only while
 both ownership fields equal the row's current launch token and epoch, it
@@ -7613,8 +7623,12 @@ nothing.
 **Pane observation.** `spawns.pane_sha256`, `pane_since_ms` and `pane_epoch`
 hold the committed fingerprint, the start of its unchanged period and the
 `permission_epoch` it was sampled in. A baseline of another epoch counts as
-none (`committedPaneBaseline`), so a later turn or launch, which advances the
-epoch, never continues it, and no lifecycle write has to clear it. `planPane`
+none (`committedPaneBaseline`). A Codex turn start on an already-working row
+and either pane adoption invalidate it through `invalidatePaneSet`, without
+advancing `permission_epoch`: they clear all three pane columns and the old
+`idle_screen` candidate or display in the same statement, advance
+`observation_version`, and record any displayed episode's immediate exit.
+The first later sample starts a fresh period. `planPane`
 resets the baseline on a failed sample or a row that is not `PaneObservable`,
 keeps its start on an identical fingerprint and starts a new period at the
 check on a different one. The target is `idle_screen` once the period
@@ -7706,7 +7720,10 @@ Selected reads and sweeps may commit a display, evidence, fallback clock or pane
   `check_permission` repair through `RepairCheckPermissionSample`) advances
   `permission_epoch` and `observation_version`, clears the observation and,
   if the row showed a committed display, records `display_exit` (its time is
-  the statement's clock) in the same statement. The writing transaction drains
+  the statement's clock) in the same statement. A Codex turn start or pane
+  adoption records the same exit through `invalidatePaneSet` (see
+  [Pane observation](#displayed-state-reporting)), without advancing
+  `permission_epoch`. The writing transaction drains
   the marker and emits after commit, so a rolled-back write emits nothing and
   a committed one emits once. Report-only data never blocks these writes: a
   malformed stored observation is treated as none, and an invalid recorded
@@ -10712,7 +10729,9 @@ read errors or newly appearing native authority refuse. An empty native journal
 retains its exact snapshot and defers first binding to `Admit`.
 `keysRun.admitInput` makes one final bounded row read after target discovery
 and the pending-Claude wait, accepting only the same launch/target, this call's successful adoption, liveness
-metadata or an initial same-process report-in. A resumed pending Claude launch's
+metadata or an initial same-process report-in. Adoption's pane reset is accepted
+only with its exact observation-version advance; a later observation still
+refuses admission. A resumed pending Claude launch's
 first SessionStart may keep or rotate its saved session ID only when the expected
 PID/start time were cleared, there is no end report, and the current waiting
 row's PID/start time exactly match the adopted pane. The launch token, life
@@ -16504,7 +16523,7 @@ agent-aware hook classifier](#the-agent-aware-hook-classifier)) calls.
 | `ad.kill.called` | `ad_kill` | Exactly one per kill call (`runKill` in `pkg/api/kill.go`, behind the exported `Kill` and `agent-director-admin kill-finished`), on every return path, so `Client.Kill`, direct callers and the admin verb all get it; fail-open (a trail-write failure never changes the result). A call on a closed `Client` returns `ErrClientClosed` before `Kill` runs and emits nothing. Emitted by `killRun.emit` (`pkg/api/kill_trail.go`). Carries `instance_id`; `tmux_session_name` (the recorded name, empty when there is no row); `outcome` (`ok` or the err_name the CLI would print, from `errorName`; `ErrSpawnNotResumable` only for the operator-only opt-in on a live row); `lookup_outcome` (the lookup's outcome token, or `not_run` when no lookup ran: unknown id, a finished row without the operator-only opt-in, the operator-only opt-in on a live row, an unusable recorded name, an unusable socket directory); `followup_outcome` (the follow-up lookup's token, `not_run` when none ran); `kill_sent` (as in the result); `pane_killed` (whether a pane kill was sent); `process_check` (`gone`, `alive`, `unreadable` or `not_recorded` whenever a process check ran, on the Gone path or after a kill; after an expired wait `alive` when the agent still counted as running, else `gone` with survivors listed, except that the wait after the follow-up on this id's own abandoned launch, which never reads the agent, keeps its `unreadable` or `not_recorded`, survivors listed or not, beside that follow-up's `followup_outcome` (b.myx); `not_run` when none ran); `agent_pid` (the pid of the agent process that was checked, null when no check read one); `survivor_pids` (the pane processes of the labelled session, or of the sessions of this id's own abandoned launch the operator-only opt-in ended together with those sessions' agent pane processes wherever their panes now are, still running when the wait ended, `[]` otherwise); `include_finished` (whether the operator-only finished-row opt-in was set: true only for `agent-director-admin kill-finished`, whose `caller_process` is `agent-director-admin`); and the AD-collected `caller_process`, `caller_pid`, `caller_hostname`, `caller_user`. A human uses `agent_pid` and `survivor_pids` in docs/operator-actions.md procedure. Never session-environment content or another row's id (SR-6.4, SR-14, SR-15) |
 | `ad.provenance.disagree` | the verb that decided (`ad_kill`; `ad_send_keys` for both keys verbs, `send-keys` and `pause`, told apart by `verb`; `ad_spawn` for plain spawn's re-lookup after "duplicate session", reason `scope_value`, and for reuse's old-row lookup and its re-lookup after "duplicate session"; `ad_resume` for `resume`'s pre-launch lookup and its re-lookup after "duplicate session"; `ad_find_missing`; `ad_expire`) | Written only when a verb call meets a disagreement, never in the normal case: at most once per reason per verb call, or per reason per row per sweep; fail-open. Built by the shared `writeProvenanceDisagree` (`pkg/api/provenance_disagree.go`) with the caller-selected emitter (`emitProvenanceDisagree` is its legacy synchronous wrapper), which drops duplicates and unknown reasons; `pause` attempts its emissions before its wait (admission and durability: [Reusable writer](#reusable-writer)). `reason` is one of six: `server_restarted`, `server_mismatch`, `adopted` (a lost create reply's identity adopted and written), `duplicate_label` (two sessions with the current label), `scope_value` (an `@ad_owner` value at the global, server or global-window scope) or `name_changed` (Ours found under a name other than the recorded one); `pid_mismatch` is retired. Also carries `instance_id`, `verb`, `tmux_socket`, `tmux_session_name` (the recorded name), `tmux_session_id` (the session concerned, null when none), `current_session_name` (on `name_changed` only, null otherwise), `server` (`match`, `restarted`, `differs` or `unknown`), `verdict` (the lookup's outcome token), `action` (what the verb did; `kill` writes `kill_sent` or `nothing_sent`; `send-keys` and `pause` write send facts, not submission proof: `keys_sent` (input attempted with no recorded send error), `text_sent` (`SubmissionUnconfirmedDetails.KeysSent` is true, including non-timeout paste failures; otherwise a text/key timeout or failed Enter after text) or `nothing_sent` (no input attempt, including after `pause`'s failed `C-u`, or any remaining send error); plain spawn its held-name row result `ended`, `left_changed` or `still_pending`; `resume` and reuse `refused` or `proceeded` at their pre-launch lookup, and their restore's row result `restored`, `left_changed` or `still_pending` after "duplicate session") and the `caller_*` identity. **resume** (source `ad_resume`, `verb` `resume`, written by `emitFinishedRowDisagree` in `pkg/api/finished_launch.go`, over `emitLookupDisagree`) writes each distinct reason at most once per call, on a refusal too, never `adopted` (`resume` adopts nothing). Its pre-launch lookup's records (the lookup's reasons and `name_changed`) are written right after the decision, before any write, with `action` `refused` or `proceeded`. After "duplicate session" the re-lookup's records follow `ad.resume.restored`, with every reason the pre-launch lookup already wrote skipped and `action` the restore's row result; a `name_changed` record there names the row's own session, every other reason the name's holder (else the own session). `tmux_socket` is the lookup's socket and `tmux_session_name` the recorded name. **reuse** (source `ad_spawn`, `verb` `spawn`, written by the same `emitFinishedRowDisagree` with reuse's values) follows the same rules: each distinct reason at most once per call, never `adopted`; its old-row lookup's records right after the decision, before pre-trust and the reset, with `action` `refused` or `proceeded`; after "duplicate session" the re-lookup's records after `ad.spawn.reuse_restored`, skipping reasons already written, with `action` the restore's row result. `tmux_session_name` is the row's recorded (old) name, never the requested one, and `name_changed` compares against it. **send-keys and pause** (source `ad_send_keys`, `verb` `send-keys` or `pause`, written by the shared `keysRun.emitDisagree` in `pkg/api/pane_keys.go`) collect their reasons as `kill` does: the first lookup's, `name_changed`, a failed pane listing's, `adopted` only when the adoption write applied, and the follow-up lookup's; they write none when the call made no lookup; the outcome of `pause`'s wait neither adds nor removes one. `read-pane` writes none. **find-missing** (`verb` `find-missing`, written by `emitDisagree` in `pkg/api/find_missing.go` once the row's write has settled) writes one record per distinct reason per row per sweep, in the order above, and none for a row judged without a lookup (a row whose recorded session name cannot be used included) or a row whose lookup was not called. Its reasons are the lookup's own, `name_changed`, `adopted` (only when the adoption write applied) and those of an adoption pane listing that did not answer; each record carries the fields of the observation that produced its reason. A lookup reason carries the lookup's `server` and `verdict` and the lookup's session as `tmux_session_id` (the Ours session; null when none), with that session's stored name as `current_session_name` on `name_changed`. A reason only the listing reported (`server_mismatch`, on a no-server reply while the recorded server process is not gone) carries the listing's `server` (`differs`), its `verdict` (`different_server`) and `tmux_session_id` null. A reason both reported is written once, with the lookup's fields. `tmux_socket` is the socket the lookup used; `action` is the row's outcome: `marked_missing`, `left_live` (a `pending` row whose agent is alive and whose note is `provenance_conflict` included: it keeps that note), `left_unreported` (a live `pending` row noted `unreported`, or found already noted so, and left `pending`, b.kdf), `left_unverified`, `left_changed` (a guarded write, adoption included, found the row changed or absent) or `store_error`. **expire** (source `ad_expire`, `verb` `expire`, written by `expireRun.emitRow` in `pkg/api/expire_trail.go` once the row's delete attempt has settled) writes one record per distinct reason per row per run, and none for a row with no reason, a row kept for an unusable recorded name, a `process_alive` row or a row whose lookup was Skipped. Its reasons are the lookup's own and `name_changed`; it never writes `adopted`, because `expire` never adopts. `tmux_socket` is the socket the lookup used, `tmux_session_id` and `current_session_name` come from the lookup's session, `server` and `verdict` from the lookup (`not_run` when none ran), and `action` is the row's outcome: `deleted`, the row's kept reason (such as `ours` or `leftover_running`), or `left_changed` (another caller removed the row first). The caller identity is collected at most once per run (`lazyCaller`). Never a label's content or another row's id (SR-14, SR-15) |
 | `ad.expire.kept` | `ad_expire` | Exactly one per row `expire` kept, per run, written by `expireRun.emitRow` (`pkg/api/expire_trail.go`) once the row's outcome is final, `changed_since_examined` and `store_error` included; fail-open (a trail-write failure never changes the run's result). A deleted row and a row another caller removed first get none. Carries exactly `instance_id`, `reason` (the kept reason: `empty_session_name`, `control_char_session_name`, `rewritten_session_name` (an unusable recorded name, checked before every other reason, with no tmux call), `process_alive`, `tmux_skipped`, `leftover_running`, `ours`, `tmux_server_changed`, `provenance_conflict`, `cant_tell`, `tmux_unavailable`, `changed_since_examined` or `store_error` as built; the list is not closed), `tmux_session_name` (the recorded name, JSON-encoded like every trail field, so a control character below 0x20 appears escaped (DEL as is) and a byte that is not valid UTF-8 appears as U+FFFD) and `source`. Never session-environment content, a label value or another row's id (SR-12.5, SR-14, SR-15) |
-| `ad.spawn.displayed_state_transition` | none: the line carries no `source` field | One per entry into and exit from a Displayed State, `idle_screen` (or, exit only, a `needs_intelligence` 0.16 or 0.17 stored) (see [Displayed State reporting](#displayed-state-reporting)), emitted by `emitDisplayTransitions` / `emitDisplayTransitionsContext` through `displayTransition.emitContext` (`internal/store/display.go`) only after the write that made the change has committed, and fail-open: a trail-write failure changes nothing. An entry or a settled exit comes from the selected state read or `find-missing` check that commits it (`ObserveNeedsIntelligenceOutcome` or `ObserveIdleScreenOutcome`); an immediate exit (`ended`, `missing`, a command's state write, a shared repair of a stale `check_permission` row) comes from that write's own transaction, which drains the `display_exit` marker. A rolled-back write emits none, and a read that cannot commit emits none. A read whose COMMIT overruns its zero-wait work budget (`immediateWorkBudget`, or an earlier call deadline) and then lands (`branch=operation_guard`) also emits none, because `observationLanded`'s zero-wait re-read cannot confirm it while the abandoned operation holds the slot; the stored observation is correct, that read returns the previous display, and a later read shows the committed one, with `since` from the earlier read (an accepted SR-5.1 gap, Bug b.c55). Carries exactly `instance_id`, `prior_state`, `new_state` and `ts` (RFC 3339 UTC, millisecond precision: the transition's own time, the committing check's time for an entry or settled exit and the statement's clock for an immediate exit), plus the envelope's `event`. A Displayed State change never writes `ad.spawn.state_transition`. |
+| `ad.spawn.displayed_state_transition` | none: the line carries no `source` field | One per entry into and exit from a Displayed State, `idle_screen` (or, exit only, a `needs_intelligence` 0.16 or 0.17 stored) (see [Displayed State reporting](#displayed-state-reporting)), emitted by `emitDisplayTransitions` / `emitDisplayTransitionsContext` through `displayTransition.emitContext` (`internal/store/display.go`) only after the write that made the change has committed, and fail-open: a trail-write failure changes nothing. An entry or a settled exit comes from the selected state read or `find-missing` check that commits it (`ObserveNeedsIntelligenceOutcome` or `ObserveIdleScreenOutcome`); an immediate exit (`ended`, `missing`, a command's state write, a Codex turn start, a pane adoption, or a shared repair of a stale `check_permission` row) comes from that write's own transaction, which drains the `display_exit` marker. A rolled-back write emits none, and a read that cannot commit emits none. A read whose COMMIT overruns its zero-wait work budget (`immediateWorkBudget`, or an earlier call deadline) and then lands (`branch=operation_guard`) also emits none, because `observationLanded`'s zero-wait re-read cannot confirm it while the abandoned operation holds the slot; the stored observation is correct, that read returns the previous display, and a later read shows the committed one, with `since` from the earlier read (an accepted SR-5.1 gap, Bug b.c55). Carries exactly `instance_id`, `prior_state`, `new_state` and `ts` (RFC 3339 UTC, millisecond precision: the transition's own time, the committing check's time for an entry or settled exit and the statement's clock for an immediate exit), plus the envelope's `event`. A Displayed State change never writes `ad.spawn.state_transition`. |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
 
 ### Sources

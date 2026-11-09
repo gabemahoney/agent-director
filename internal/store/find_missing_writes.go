@@ -596,9 +596,12 @@ var adoptIdentityIfSameLifeSQL = `UPDATE spawns
 // tmux_server_starttime) and the agent's pane (pane_id, pane_pid,
 // pane_starttime) from id, a zero value as NULL, and advances row_version by
 // exactly one (SR-5.2), through the identity-column assignment it shares with
-// AdoptIdentityIfUnchanged. It never writes id.Token, id.Socket, the state,
+// AdoptIdentityIfUnchanged. The same statement invalidates pane evidence and
+// any idle_screen candidate/display without changing permission_epoch; its
+// transaction refreshes families and drains any display exit for emission
+// after commit. It never writes id.Token, id.Socket, the state,
 // the liveness columns, launch_started_at, life_number, no_pre_trust or any
-// request column, and emits no trail event: the sweep records adopted on
+// request column: the sweep records adopted on
 // ad.provenance.disagree (SR-14).
 //
 // It returns CondApplied and now, the row's snapshot after the write (what
@@ -609,9 +612,9 @@ var adoptIdentityIfSameLifeSQL = `UPDATE spawns
 // is returned as a wrapped error with a zero CondResult, never as a
 // CondResult value (SR-5.8).
 //
-// now needs no read: the snapshot holds none of the six identity columns, so
-// the applied write changed only row_version, by exactly one, from the value
-// the guard matched. The guarded statement alone decides whether it applied.
+// now needs no read: among the snapshot's columns, the applied write changes
+// only row_version, by exactly one, from the value the guard matched. The
+// guarded statement alone decides whether it applied.
 //
 // Only find-missing calls it (SR-3.6; LFR H2); kill, send-keys and pause use
 // AdoptIdentityIfUnchanged.
