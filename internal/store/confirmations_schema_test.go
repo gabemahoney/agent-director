@@ -242,11 +242,22 @@ func TestV19MigrationRollbackRetryAndRestore(t *testing.T) {
 	}
 }
 
-// b.x9o: v20 adds no proof to historical displays; compatible partial
-// reentry retains exact evidence and the fresh column order.
+// b.x9o, b.vch: v20 adds no proof or writer token to historical displays;
+// compatible partial reentry, with either column or both, retains exact
+// values, adds the missing column empty and converges with a fresh store.
 func TestV20DisplayMigration(t *testing.T) {
-	for _, present := range []bool{false, true} {
-		t.Run(map[bool]string{false: "historical", true: "partial reentry"}[present], func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		present []columnSpec // the v20 columns a partial run already added
+	}{
+		{"historical", nil},
+		{"partial reentry", v20ColumnSpecs},
+		{"display_evidence alone", v20ColumnSpecs[:1]},
+		{"observation_writer alone", v20ColumnSpecs[1:]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hasEvidence := slices.ContainsFunc(tc.present, func(c columnSpec) bool { return c.name == "display_evidence" })
+			hasWriter := slices.ContainsFunc(tc.present, func(c columnSpec) bool { return c.name == "observation_writer" })
 			dir := t.TempDir()
 			path := seedV18Store(t, dir)
 			withRaw(t, path, func(db *sql.DB) {
@@ -256,9 +267,12 @@ func TestV20DisplayMigration(t *testing.T) {
 				mustExec(t, db, `UPDATE spawns SET state='working', settled_state='working', display_observation='{"state":"idle_screen","since_ms":1792411208000,"unchanged_minutes":20,"candidate":"idle_screen","candidate_since_ms":1792411208000,"observed_at_ms":1792411208000,"permission_epoch":3}',pane_since_ms=1792410008000,pane_sha256='abc',pane_epoch=3`)
 			})
 			const record = `{"v":"idle_screen","life":2,"token":"0123456789abcdef","since":1792411208000,"at":1792411208000,"src":"pane","checked":1792411210000,"reason":null}`
-			if present {
-				preAddV14Columns(t, path, v20ColumnSpecs)
+			preAddV14Columns(t, path, tc.present)
+			if hasEvidence {
 				withRaw(t, path, func(db *sql.DB) { mustExec(t, db, `UPDATE spawns SET display_evidence=?`, record) })
+			}
+			if hasWriter {
+				withRaw(t, path, func(db *sql.DB) { mustExec(t, db, `UPDATE spawns SET observation_writer='00112233445566778899aabbccddeeff'`) })
 			}
 			var cols []string
 			withRaw(t, path, func(db *sql.DB) { cols = tableColumnNames(t, db, "spawns") })
@@ -275,24 +289,34 @@ func TestV20DisplayMigration(t *testing.T) {
 				t.Fatal(err)
 			}
 			fresh, _ := openTempStore(t)
-			if !reflect.DeepEqual(schemaShape(t, s.db), schemaShape(t, fresh.db)) || s.StoreID() != id || userVersion(t, s.db) != 20 {
+			got, wantShape := schemaShape(t, s.db), schemaShape(t, fresh.db)
+			if hasWriter && !hasEvidence {
+				// display_evidence is appended after the partial run's column.
+				got, wantShape = columnsByName(got), columnsByName(wantShape)
+			}
+			if !reflect.DeepEqual(got, wantShape) || s.StoreID() != id || userVersion(t, s.db) != 20 {
 				t.Fatal("v20 migration changed identity, column shape/order or version")
 			}
 			if !reflect.DeepEqual(before, readRawSpawn(t, path, "pre", cols)) {
 				t.Fatal("v20 changed historical facts")
+			}
+			for c, v := range readRawSpawn(t, path, "pre", v20ColumnNames()) {
+				if v != "NULL" && !slices.Contains(cols, c) {
+					t.Errorf("added %s = %s; want NULL (no backfill)", c, v)
+				}
 			}
 			row, err := s.GetSpawn("pre")
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := UnknownConfirmation(ReasonNoEvidence)
-			if present {
+			if hasEvidence {
 				want = Confirmation{Status: ConfirmationConfirmed, ConfirmedAtMillis: 1792411208000, Source: EvidencePane, CheckedAtMillis: 1792411210000}
 			}
 			if got := row.DisplayConfirmation(row.CommittedDisplay(), row.DisplayEvidence); got != want {
 				t.Fatalf("migrated display record %+v; want %+v", got, want)
 			}
-			if !present && row.DisplayEvidence != "" {
+			if !hasEvidence && row.DisplayEvidence != "" {
 				t.Fatal("migration backfilled display evidence")
 			}
 			s.Close()
@@ -314,20 +338,24 @@ func TestV20DisplayMigration(t *testing.T) {
 	}
 }
 
-// b.x9o: validate before adding/stamping; incompatible schema or values
-// leave the v19 store and its authorization intact.
+// b.x9o, b.vch: validate before adding/stamping; incompatible schema or
+// values leave the v19 store and its authorization intact.
 func TestV20DisplayMigrationRefusesInvalidEvidence(t *testing.T) {
 	for _, tc := range []struct {
-		name, ddl, value, kind string
-		bare                   bool
+		name, ddl, value, kind, col string
+		bare                        bool
 	}{
-		{"case", "Display_Evidence TEXT", "", "incompatible", false},
-		{"type", "display_evidence BLOB", "", "incompatible", false},
-		{"not null", "display_evidence TEXT NOT NULL", "", "incompatible", true},
-		{"default", "display_evidence TEXT DEFAULT '{}'", "", "incompatible", false},
-		{"blob", "display_evidence TEXT", "x'7b7d'", "invalid", false},
-		{"malformed", "display_evidence TEXT", "'{'", "invalid", false},
-		{"array", "display_evidence TEXT", "'[]'", "invalid", false},
+		{"case", "Display_Evidence TEXT", "", "incompatible", "display_evidence", false},
+		{"type", "display_evidence BLOB", "", "incompatible", "display_evidence", false},
+		{"not null", "display_evidence TEXT NOT NULL", "", "incompatible", "display_evidence", true},
+		{"default", "display_evidence TEXT DEFAULT '{}'", "", "incompatible", "display_evidence", false},
+		{"blob", "display_evidence TEXT", "x'7b7d'", "invalid", "display_evidence", false},
+		{"malformed", "display_evidence TEXT", "'{'", "invalid", "display_evidence", false},
+		{"array", "display_evidence TEXT", "'[]'", "invalid", "display_evidence", false},
+		{"writer case", "Observation_Writer TEXT", "", "incompatible", "observation_writer", false},
+		{"writer type", "observation_writer INTEGER", "", "incompatible", "observation_writer", false},
+		{"writer not null", "observation_writer TEXT NOT NULL", "", "incompatible", "observation_writer", true},
+		{"writer default", "observation_writer TEXT DEFAULT ''", "", "incompatible", "observation_writer", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -347,7 +375,7 @@ func TestV20DisplayMigrationRefusesInvalidEvidence(t *testing.T) {
 			if s != nil {
 				s.Close()
 			}
-			if !errors.Is(err, ErrSchemaMismatch) || !strings.Contains(err.Error(), "v19→v20 "+tc.kind+" spawns.display_evidence") {
+			if !errors.Is(err, ErrSchemaMismatch) || !strings.Contains(err.Error(), "v19→v20 "+tc.kind+" spawns."+tc.col) {
 				t.Fatalf("refusal = %v", err)
 			}
 			if readUserVersion(t, path) != 19 || !reflect.DeepEqual(before, dbDump(t, path)) {
@@ -358,16 +386,18 @@ func TestV20DisplayMigrationRefusesInvalidEvidence(t *testing.T) {
 	}
 	// SQLite cannot ALTER ADD a primary key, so this shape-only refusal
 	// starts from the minimal partial table the hop itself validates.
-	t.Run("primary key", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "state.db")
-		db := openRaw(t, path)
-		mustExec(t, db, `CREATE TABLE spawns (display_evidence TEXT PRIMARY KEY)`)
-		mustExec(t, db, `PRAGMA user_version=19`)
-		if err := migrateV19toV20(db); !errors.Is(err, ErrSchemaMismatch) {
-			t.Fatalf("primary key accepted: %v", err)
-		}
-		if userVersion(t, db) != 19 {
-			t.Fatal("refusal changed version")
-		}
-	})
+	for _, col := range v20ColumnNames() {
+		t.Run(col+" primary key", func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.db")
+			db := openRaw(t, path)
+			mustExec(t, db, `CREATE TABLE spawns (`+col+` TEXT PRIMARY KEY)`)
+			mustExec(t, db, `PRAGMA user_version=19`)
+			if err := migrateV19toV20(db); !errors.Is(err, ErrSchemaMismatch) || !strings.Contains(err.Error(), "spawns."+col) {
+				t.Fatalf("primary key accepted: %v", err)
+			}
+			if userVersion(t, db) != 19 || !slices.Equal(tableColumnNames(t, db, "spawns"), []string{col}) {
+				t.Fatal("refusal changed version or schema")
+			}
+		})
+	}
 }

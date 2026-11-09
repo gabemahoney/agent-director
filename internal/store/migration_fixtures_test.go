@@ -1952,10 +1952,13 @@ var v19ColumnSpecs = []columnSpec{
 	{"spawns", "process_evidence", "TEXT", false, ""},
 }
 
-// v20ColumnSpecs is the nullable, unbackfilled display evidence column.
-// Must use: a migration test in this package seeds or names it through
-// these specs.
-var v20ColumnSpecs = []columnSpec{{"spawns", "display_evidence", "TEXT", false, ""}}
+// v20ColumnSpecs are the nullable, unbackfilled display evidence and
+// observation writer columns, in schema order. Must use: a migration test in
+// this package seeds or names them through these specs.
+var v20ColumnSpecs = []columnSpec{
+	{"spawns", "display_evidence", "TEXT", false, ""},
+	{"spawns", "observation_writer", "TEXT", false, ""},
+}
 
 // v19ColumnNames are v19ColumnSpecs' column names, in order.
 // Must use: a migration test in this package reads the v19 columns by
@@ -1963,6 +1966,17 @@ var v20ColumnSpecs = []columnSpec{{"spawns", "display_evidence", "TEXT", false, 
 func v19ColumnNames() []string {
 	var names []string
 	for _, c := range v19ColumnSpecs {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// v20ColumnNames are v20ColumnSpecs' column names, in order.
+// Must use: a migration test in this package reads the v20 columns by
+// these names.
+func v20ColumnNames() []string {
+	var names []string
+	for _, c := range v20ColumnSpecs {
 		names = append(names, c.name)
 	}
 	return names

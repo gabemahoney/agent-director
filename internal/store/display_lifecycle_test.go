@@ -357,19 +357,7 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 			}, map[string]string{parent: store.StateWaiting, id: store.StateWaiting}
 		}},
 		{"pane", store.StateWorking, store.StateIdleScreen, func(t *testing.T) (*store.Store, string, string, time.Time, observation, map[string]string) {
-			path := filepath.Join(t.TempDir(), "state.db")
-			now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
-			// The committed baseline has been unchanged for an hour.
-			id, err := apitest.SeedSpawn(path, "", store.StateWorking, "", "off", "", true, apitest.WithPermissionEpoch(7),
-				apitest.WithPaneBaseline("abc", now.Add(-time.Hour).UnixMilli(), int64(7)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			s, err := store.Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = s.Close() })
+			s, path, id, now := idleBaselineRow(t)
 			return s, path, id, now, func(row store.Spawn) (store.DisplayDetail, map[string]string, error) {
 				return s.ObserveIdleScreen(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
 			}, nil
@@ -453,6 +441,132 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 				assertDisplayRecords(t, mark, id)
 			})
 		}
+	}
+}
+
+// idleBaselineRow is a working row whose committed pane baseline "abc" has
+// been unchanged for an hour at the time it returns, so a sample of "abc"
+// then, with a one-minute timeout, enters idle_screen.
+func idleBaselineRow(t *testing.T) (*store.Store, string, string, time.Time) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
+	id, err := apitest.SeedSpawn(path, "", store.StateWorking, "", "off", "", true, apitest.WithPermissionEpoch(7),
+		apitest.WithPaneBaseline("abc", now.Add(-time.Hour).UnixMilli(), int64(7)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, path, id, now
+}
+
+// b.vch: a caller whose own COMMIT failed (rolled back) does not claim a
+// peer's identical record. The peer, a second Store on the same path, commits
+// the same plan from the same examined row, samples and time after the
+// caller's rollback and before its re-read. The caller gets the
+// unconfirmed-commit error and the previous outcome, the row holds the peer's
+// commit, and the trail holds the peer's display transitions exactly once.
+func TestDisplayObservationFailedCommitClaimsNoPeerRecord(t *testing.T) {
+	type observe func(*store.Store, store.Spawn) (store.DisplayOutcome, error)
+	for _, tc := range []struct {
+		name     string
+		advances bool // the plan advances observation_version; else it changes only display_evidence
+		setup    func(*testing.T) (*store.Store, string, string, observe, []displayRecord)
+	}{
+		{"needs_intelligence observation", true, func(t *testing.T) (*store.Store, string, string, observe, []displayRecord) {
+			s, path, id, samples, now := permissionObservation(t, apitest.WithDisplayObservation(storedNeedsIntelligence))
+			return s, path, id, func(on *store.Store, row store.Spawn) (store.DisplayOutcome, error) {
+				return on.ObserveNeedsIntelligenceOutcome(row, samples, now, store.SettleRead{})
+			}, []displayRecord{{store.StateNeedsIntelligence, store.StateCheckPermission, now}}
+		}},
+		{"idle_screen observation", true, func(t *testing.T) (*store.Store, string, string, observe, []displayRecord) {
+			s, path, id, now := idleBaselineRow(t)
+			return s, path, id, func(on *store.Store, row store.Spawn) (store.DisplayOutcome, error) {
+				return on.ObserveIdleScreenOutcome(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
+			}, []displayRecord{{store.StateWorking, store.StateIdleScreen, now}}
+		}},
+		// A second sample a second after the first changes only the record's checked time.
+		{"idle_screen record only", false, func(t *testing.T) (*store.Store, string, string, observe, []displayRecord) {
+			f := newV5Store(t)
+			id := f.seed(store.StateWorking, "", rowVersionSeed()...)
+			start := time.UnixMilli(evidenceSeedMs)
+			pane := func(on *store.Store, row store.Spawn, at time.Time) (store.DisplayOutcome, error) {
+				return on.ObserveIdleScreenOutcome(row, store.PaneSample{SHA256: "pane"}, at, time.Minute, store.SettleRead{})
+			}
+			commitUnlessBusy(t, func() (store.DisplayDetail, error) {
+				row, err := f.s.GetSpawn(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out, err := pane(f.s, row, start)
+				return out.Display, err
+			})
+			return f.s, f.path, id, func(on *store.Store, row store.Spawn) (store.DisplayOutcome, error) {
+				return pane(on, row, start.Add(time.Second))
+			}, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, path, id, observe, records := tc.setup(t)
+			row, err := s.GetSpawnSettled(id, store.SettleRead{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer peer.Close()
+			lost := errors.New("injected: COMMIT never reached SQLite")
+			var failed, peerStarted atomic.Bool
+			peerDone := make(chan struct{})
+			var peerOut store.DisplayOutcome
+			var peerErr error
+			store.ObserveDecisionExecForTest(t, s, path, func(_ context.Context, q string) error {
+				// The caller's COMMIT never reaches SQLite, so its transaction rolls back.
+				if q == "COMMIT" && failed.CompareAndSwap(false, true) {
+					return lost
+				}
+				return nil
+			}, func(_ context.Context, q string, err error) {
+				if q == "ROLLBACK" && err == nil && failed.Load() && peerStarted.CompareAndSwap(false, true) {
+					peerOut, peerErr = observe(peer, row)
+					close(peerDone)
+				}
+			})
+			mark := store.TrailMark(t)
+			got, err := observe(s, row)
+			select {
+			case <-peerDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the peer never observed after the caller's rollback")
+			}
+			if peerErr != nil || !peerOut.Committed {
+				t.Fatalf("peer=%+v %v; want its identical plan committed", peerOut, peerErr)
+			}
+			if !errors.Is(err, store.ErrCommitUnconfirmedForTest) {
+				t.Errorf("caller err=%v; want the unconfirmed-commit error", err)
+			}
+			if previous := (store.DisplayOutcome{Display: row.CommittedDisplay(), Evidence: row.DisplayEvidence}); !reflect.DeepEqual(got, previous) {
+				t.Errorf("caller outcome=%+v; want the previous %+v, not committed", got, previous)
+			}
+			after, err := peer.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			version := row.ObservationVersion
+			if tc.advances {
+				version++
+			}
+			if after.ObservationVersion != version || after.DisplayEvidence != peerOut.Evidence || after.CommittedDisplay() != peerOut.Display || !tc.advances && after.DisplayEvidence == row.DisplayEvidence {
+				t.Errorf("row=%+v; want the peer's commit %+v at version %d", after, peerOut, version)
+			}
+			assertDisplayRecords(t, mark, id, records...)
+		})
 	}
 }
 

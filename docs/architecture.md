@@ -2641,7 +2641,7 @@ Claude-specific capacity provenance (see
   Codex turn columns `codex_turn` and `codex_turn_ended` (see "The Codex turn"
   under [The agent-aware hook classifier](#the-agent-aware-hook-classifier)), the
   nullable v19 evidence columns `state_evidence`, `settled_evidence` and
-  `process_evidence`, followed by v20's `display_evidence` (see below), the agent's arguments
+  `process_evidence`, followed by v20's `display_evidence` and `observation_writer` (see below), the agent's arguments
   (`agent_args`) and session id (`session_id`), tmux + relay metadata, and a
   JSON-encoded `labels` blob. Indexed on `state`, `last_seen_at`, and
   `parent_id`.
@@ -4106,10 +4106,14 @@ derive a confirmation time from a read's or response's clock,
 `state_changed_ms`, `last_seen_at` or a settle projection. The hop and its recovery are in
 [migration-guide.md](migration-guide.md#current-schema-facts-v18--v19).
 
-**v20 column: display evidence.** `spawns.display_evidence` is nullable TEXT,
+**v20 columns: display evidence and observation writer.** `spawns.display_evidence`
+and then `spawns.observation_writer` are nullable TEXT,
 appended after the v19 columns in fresh DDL and by `migrateV19toV20` on a normal
-v19 store. It holds one JSON record for the shown display: `idle_screen` or
-`none` (the public `displayed_state` is omitted). No backfill derives evidence
+v19 store. `display_evidence` holds one JSON record for the shown display: `idle_screen` or
+`none` (the public `displayed_state` is omitted). `observation_writer` holds
+the token of the observer commit that last wrote the display observation or
+record (see [Best-effort commits and races](#best-effort-commits-and-races));
+it is never reported. No backfill derives evidence or a writer
 from an existing display, baseline or timestamp. Migration validation and
 restore-only recovery are in the
 [migration guide](migration-guide.md#current-schema-facts-v19--v20).
@@ -4716,7 +4720,7 @@ and adding `cursor_runtimes`, proof eligibility, family history,
 Codex startup and Claude capacity provenance, the display observation (with
 the pane baseline and timeout override) and request ownership, and the Codex
 turn columns, the v16 input tables/authority, v17 permission provenance,
-v18 Cursor evidence tables, v19 state/process evidence and v20 display evidence, so a fresh and a migrated
+v18 Cursor evidence tables, v19 state/process evidence and v20 display evidence and observation writer, so a fresh and a migrated
 store have the same shape (names, positions, index columns and foreign keys),
 except the evidence columns' order after a compatible partial evidence-column reentry
 (see the v19/v20 columns above).
@@ -7691,7 +7695,11 @@ whose `unreadable`/`deadline` attempt is durable. Failed non-sampling settlement
 creates no overlay. After an unconfirmed COMMIT (`errCommitUnconfirmed`),
 `observationLanded` makes one nonwaiting re-read: the exact evidence must
 match, alongside the expected observation, version and baseline. A record-only
-write must retain the original observation/version. Only confirmed landing
+write must retain the original observation/version. Every observer commit,
+record-only included, also writes a fresh random `observation_writer` token
+(`newObservationWriter`), and the re-read requires the row to hold this call's
+token, so a caller whose COMMIT rolled back never claims a peer's identical
+later commit or re-emits its transitions. Only confirmed landing
 reports the new pair and emits any transition; doubt keeps the previous pair.
 A COMMIT abandoned at its deadline usually cannot be confirmed this way,
 so its transition is not emitted even if the
@@ -13428,8 +13436,8 @@ NULL or a JSON object stored as TEXT. See
 [the migration guide](migration-guide.md#current-schema-facts-v18--v19).
 
 The authorized v19→v20 hop applies the same exact column and JSON-object
-validation to `display_evidence`, with `ErrSchemaMismatch` and full hop
-rollback on refusal. See the
+validation to `display_evidence`, and the same column validation to
+`observation_writer`, with `ErrSchemaMismatch` and full hop rollback on refusal. See the
 [migration guide](migration-guide.md#current-schema-facts-v19--v20).
 
 If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch`,
@@ -21458,7 +21466,7 @@ The versioned migration fixture and `seedV10EligibilityFixture` provide
 migration preservation, reentry and refusal setup. `v17ColumnSpecs` and
 `seedV16PermissionHistory` extend that fixture for provenance, and
 `v19ColumnSpecs` / `v19ColumnNames` name the state/process evidence columns;
-`v20ColumnSpecs` adds the display column for preservation and convergence
+`v20ColumnSpecs` adds the display evidence and observation writer columns for preservation and convergence
 fixtures. Input-import fixtures stay at genuine v15 rather than current-minus-one. Request factories,
 `SeedDecideFixtureAgent` optional RelayRequest seeds and `newPAEnvAgent`
 optional origin control provide reusable request-origin setup. Cursor reporter

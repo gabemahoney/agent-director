@@ -93,20 +93,30 @@ func migrateV18toV19(db *sql.DB) error {
 // establishes it.
 const v20DisplayEvidenceColumn = "display_evidence"
 
+// v20ObservationWriterColumn holds the random token of the observer commit
+// that last wrote the row's display observation or record (display.go), so an
+// observer whose COMMIT went unanswered confirms only its own write. Nullable
+// TEXT without a default, backfilled with nothing: no stored value names a
+// writer, and an observer compares only the token it has just written.
+const v20ObservationWriterColumn = "observation_writer"
+
+// v20Columns are v20's additions, in their DDL order.
+var v20Columns = []string{v20DisplayEvidenceColumn, v20ObservationWriterColumn}
+
 // migrateV19toV20 follows the v19 main-field evidence step without modifying
 // its columns, with the same validate-first rule: an already-present column
-// of the exact shape whose values are all JSON objects is kept with its
-// values, any other shape or value refuses with the previous schema and data
-// intact, and the addition commits with the stamp. Recovery to an older
-// binary requires the stopped-writer pre-upgrade backup; display evidence
-// written after the upgrade is lost with it.
+// of the exact shape, display_evidence's values all JSON objects, is kept
+// with its values, any other shape or value refuses with the previous schema
+// and data intact, and the additions commit with the stamp. Recovery to an
+// older binary requires the stopped-writer pre-upgrade backup; display
+// evidence written after the upgrade is lost with it.
 func migrateV19toV20(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	found := false
+	found := make(map[string]bool)
 	rows, err := tx.Query(`PRAGMA table_info(spawns)`)
 	if err != nil {
 		return err
@@ -119,21 +129,23 @@ func migrateV19toV20(db *sql.DB) error {
 			rows.Close()
 			return err
 		}
-		if !strings.EqualFold(name, v20DisplayEvidenceColumn) {
-			continue
+		for _, c := range v20Columns {
+			if !strings.EqualFold(name, c) {
+				continue
+			}
+			if name != c || kind != "TEXT" || nn != 0 || pk != 0 || def.Valid {
+				rows.Close()
+				return fmt.Errorf("%w: store: v19→v20 incompatible spawns.%s", ErrSchemaMismatch, c)
+			}
+			found[c] = true
 		}
-		if name != v20DisplayEvidenceColumn || kind != "TEXT" || nn != 0 || pk != 0 || def.Valid {
-			rows.Close()
-			return fmt.Errorf("%w: store: v19→v20 incompatible spawns.%s", ErrSchemaMismatch, v20DisplayEvidenceColumn)
-		}
-		found = true
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return err
 	}
-	if found {
+	if found[v20DisplayEvidenceColumn] {
 		var invalid bool
 		// CASE keeps json_type from ever reading malformed text.
 		if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM spawns WHERE display_evidence IS NOT NULL AND CASE WHEN typeof(display_evidence) <> 'text' THEN 1
@@ -143,8 +155,13 @@ func migrateV19toV20(db *sql.DB) error {
 		if invalid {
 			return fmt.Errorf("%w: store: v19→v20 invalid spawns.%s", ErrSchemaMismatch, v20DisplayEvidenceColumn)
 		}
-	} else if _, err := tx.Exec(`ALTER TABLE spawns ADD COLUMN ` + v20DisplayEvidenceColumn + ` TEXT`); err != nil {
-		return err
+	}
+	for _, c := range v20Columns {
+		if !found[c] {
+			if _, err := tx.Exec(`ALTER TABLE spawns ADD COLUMN ` + c + ` TEXT`); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := tx.Exec(`PRAGMA user_version = 20`); err != nil {
 		return err

@@ -104,7 +104,8 @@ import (
 // and reads recorded (codex_turn.go), with no backfill. v19 adds the
 // nullable main-field evidence state_evidence, settled_evidence and
 // process_evidence (confirmations.go), with no backfill; v20 adds the
-// nullable display_evidence (confirmations.go), with no backfill.
+// nullable display_evidence (confirmations.go) and observation_writer, the
+// last observer commit's token (display.go), with no backfill.
 // The column order matches the corresponding migration steps.
 //
 // subagents holds one row per entry, a record (confirmed) or an observation
@@ -185,7 +186,8 @@ CREATE TABLE IF NOT EXISTS spawns (
     state_evidence             TEXT,
     settled_evidence           TEXT,
     process_evidence           TEXT,
-    display_evidence           TEXT
+    display_evidence           TEXT,
+    observation_writer         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);

@@ -94,7 +94,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	for _, phrase := range []string{
 		"**Current recovery policy.** Schemas v20, v19, v18, v17 and v16 are restore-only.",
-		"The v20 display column and v19 evidence columns have no reverse recipe: restore the stopped-writer pre-upgrade set, losing all later writes, and never drop the columns or reset the version.",
+		"The v20 display columns and v19 evidence columns have no reverse recipe: restore the stopped-writer pre-upgrade set, losing all later writes, and never drop the columns or reset the version.",
 		"This illustrates the historical pattern, not a recipe for v9 through v20. Never merely reset the version pragma.",
 		"recipe below is only for genuine family-only v12, never v13–v20 or a hand-reset store.",
 	} {
