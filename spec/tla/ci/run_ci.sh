@@ -59,6 +59,8 @@
 #      same job are SKIPPED(after-cap), and later groups are NOT-RUN(after-cap).
 #      A cap in the parse job leaves every planned group row NOT-RUN. Any
 #      cap fails the suite, even if a later verdict for that row says PASS.
+#      Scheduler time, disk and memory caps have the same effect; missing
+#      row verdicts are INCOMPLETE(<state>). Existing verdicts are retained.
 # Every job is submitted with --network off and awaited with `jobsched wait`;
 # only a wait timeout or an interrupt asks for `status --json`. Its run
 # log is read through the scheduler's `results --json` and copied into the
@@ -82,8 +84,9 @@
 #
 # Fail closed: a preflight refusal, a refused submit, a submit with no job id,
 # a failed wait or status call (an unknown job), a stopped dispatcher, an
-# unknown job state, a job past its timeout plus an hour, too-low limits or a
-# failed parse check each print "FAIL <step> -- <reason>" and
+# unknown job state, a job past its timeout plus an hour, too-low limits, a
+# cancelled job (after cleanup and log retrieval) or a failed parse check
+# each print "FAIL <step> -- <reason>" and
 # "CI-VERDICT FAIL (<reason>, tier <tier>)" and exit 1. Nothing is retried. A
 # usage error exits 2.
 #
@@ -93,7 +96,8 @@
 # it reaches the head of the queue: in effect a cancel. A job already building
 # or running keeps its context and finishes on its own. When the state cannot
 # be read, the context is kept (fail safe). Logs are always kept, and the
-# runner prints what it did.
+# runner prints what it did. An already ended job's log is fetched after
+# removing its context, as after an ordinary end.
 set -u -o pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # spec/tla/ci
@@ -159,8 +163,8 @@ drop_ctx() {
 
 # on_interrupt_job: the current job was submitted; ask the scheduler where it
 # is. Queued: remove the context (the dispatch re-check then rejects the job).
-# Building or running: keep the context. Ended: remove it, as after a normal
-# end. Anything unreadable: keep it.
+# Building or running: keep the context. Ended: remove it and fetch its log,
+# as after a normal end. Anything unreadable: keep it.
 # shellcheck disable=SC2317  # reached through the trap below
 on_interrupt_job() {
   local who="${CUR_JOB}${CUR_ID:+ ($CUR_ID)}" out rc st term out2 st2
@@ -189,9 +193,14 @@ on_interrupt_job() {
     building:false|running:false)
       echo "# interrupted: job $who is already $st; it will finish on its own (the scheduler has no cancel operation); its context stays in $CUR_CTX until it ends" >&2
       ;;
-    succeeded:true|failed:true|build-failed:true|infrastructure-error:true|rejected:true)
-      drop_ctx || true
-      echo "# interrupted: job $who had already ended ($st); its context was removed" >&2
+    succeeded:true|failed:true|timed-out:true|out-of-memory:true|disk-exceeded:true|build-failed:true|cancelled:true|rejected:true|infrastructure-error:true)
+      if drop_ctx; then
+        echo "# interrupted: job $who had already ended ($st); its context was removed" >&2
+      else
+        echo "# interrupted: job $who had already ended ($st), but its context $CUR_CTX could not be removed" >&2
+      fi
+      CUR_CTX=
+      fetch_log "$CUR_JOB"
       ;;
     *)
       echo "# interrupted: job $who state unknown (status exit $rc, state '${st:-unreadable}', terminal '${term:-unreadable}'); its context was kept in $CUR_CTX in case the job still needs it" >&2
@@ -533,7 +542,7 @@ wait_job() {
       st=${out#"$CUR_ID "}
       [ "$out" = "$CUR_ID $st" ] || die scheduler "unknown job state" "wait for job $1 ($CUR_ID) returned an unreadable answer; nothing more was submitted"
       case "$st" in
-        succeeded|failed|build-failed|infrastructure-error|rejected) JOB_STATE=$st; return 0 ;;
+        succeeded|failed|timed-out|out-of-memory|disk-exceeded|build-failed|cancelled|rejected|infrastructure-error) JOB_STATE=$st; return 0 ;;
         *) die scheduler "unknown job state" "wait for job $1 ($CUR_ID) reports state '${st:-unreadable}'; nothing more was submitted" ;;
       esac
     fi
@@ -546,7 +555,7 @@ wait_job() {
     term=$(jq -r '.terminal' <<<"$out" 2>/dev/null)
     disp=$(jq -r '.dispatcher_running' <<<"$out" 2>/dev/null)
     case "$st" in
-      succeeded|failed|build-failed|infrastructure-error|rejected) JOB_STATE=$st; return 0 ;;
+      succeeded|failed|timed-out|out-of-memory|disk-exceeded|build-failed|cancelled|rejected|infrastructure-error) JOB_STATE=$st; return 0 ;;
       queued|building|running) [ "$term" = true ] && die scheduler "unknown job state" "job $1 ($CUR_ID) is '$st' but marked ended; nothing more was submitted" ;;
       *) die scheduler "unknown job state" "job $1 ($CUR_ID) reports state '${st:-unreadable}'; nothing more was submitted" ;;
     esac
@@ -576,9 +585,11 @@ fetch_log() {
 
 # run_job <job> <runs-file> <budget> <needed timeout>: build, submit, wait,
 # remove the context, fetch the log; sets LOG and remembers any cap in CAPPED.
-# Too-low limits end the run once the job has ended.
+# MISSING_VERDICT is the current job's result for rows without a verdict.
+# Cancellation and too-low limits end the run once the job has ended.
 run_job() {
   local limits_ok=yes
+  MISSING_VERDICT=NO-VERDICT
   CUR_PHASE=build; CUR_JOB=$1; CUR_ID=; CUR_CTX="$RUN_DIR/ctx/$1"
   if ! build_ctx "$1" "$2" "$3"; then
     rm -rf "$CUR_CTX"; CUR_CTX=
@@ -588,11 +599,17 @@ run_job() {
   check_limits "$4" || limits_ok=no
   [ "$limits_ok" = yes ] || echo "# job $1: the scheduler gives it $LIMIT_ERR; waiting for it to end, then stopping" >&2
   wait_job "$1"
-  rm -rf "$CUR_CTX"
+  rm -rf "$CUR_CTX" || echo "# job $1: ended, but its context $CUR_CTX could not be fully removed" >&2
+  CUR_CTX=
   echo "# job $1: $JOB_STATE after $(suite_min) min (suite clock)" >&2
   fetch_log "$1"
-  if [ -n "$LOG" ] && grep -qE '^VERDICT .* result=INCOMPLETE(\(| |$)' "$LOG"; then CAPPED=yes; fi
   CUR_JOB=; CUR_ID=; CUR_CTX=; CUR_PHASE=
+  [ "$JOB_STATE" != cancelled ] || die scheduler "job cancelled" "job $1 was cancelled; nothing more was submitted"
+  case "$JOB_STATE" in
+    timed-out|disk-exceeded|out-of-memory)
+      CAPPED=yes; MISSING_VERDICT="INCOMPLETE($JOB_STATE)" ;;
+  esac
+  if [ -n "$LOG" ] && grep -qE '^VERDICT .* result=INCOMPLETE(\(| |$)' "$LOG"; then CAPPED=yes; fi
   [ "$limits_ok" = yes ] || die limits "scheduler limits too low" "the job scheduler gave job $1 $LIMIT_ERR; its limits must be raised first; nothing more was submitted"
 }
 
@@ -609,7 +626,7 @@ SANY_OK=0
 for s in "${SANY_SPECS[@]}"; do
   res=
   [ -n "$LOG" ] && res=$(awk -v c="sany:$s" '$1 == "VERDICT" && $2 == c' "$LOG" | tail -1 | sed -n 's/.* result=\([^ ]*\).*/\1/p')
-  res=${res:-NO-VERDICT}
+  res=${res:-$MISSING_VERDICT}
   if [ "$res" = PARSE-OK ]; then SANY_OK=$((SANY_OK + 1)); tag=PASS; else parse_ok=no; tag=FAIL; fi
   [ "$PARSE_ONLY" = no ] || echo "$tag sany:$s $res"
 done
@@ -622,7 +639,7 @@ if [ "$PARSE_ONLY" = yes ]; then
 fi
 if [ "$CAPPED" = yes ]; then
   # Use the ordinary group loop to count and report every planned unrun row.
-  echo "# parse check: capped (see $LOG); no group job will be submitted" >&2
+  echo "# parse check: capped (see ${LOG:-no log}); no group job will be submitted" >&2
 else
   for i in "${PARSE_IDX[@]}"; do
     [ "$parse_ok" = yes ] || break
@@ -653,7 +670,7 @@ for k in "${!PLAN_GROUPS[@]}"; do
     TOTAL=$((TOTAL + 1))
     v=
     [ -n "$LOG" ] && v=$(awk -v c="$c" '$1 == "VERDICT" && $2 == c' "$LOG" | tail -1)
-    res=$(sed -n 's/.* result=\([^ ]*\).*/\1/p' <<<"$v"); res=${res:-NO-VERDICT}
+    res=$(sed -n 's/.* result=\([^ ]*\).*/\1/p' <<<"$v"); res=${res:-$MISSING_VERDICT}
     dist=$(sed -n 's/.* distinct=\([^ ]*\).*/\1/p' <<<"$v")
     secs=$(sed -n 's/.* secs=\([^ ]*\).*/\1/p' <<<"$v")
     good=no; why=

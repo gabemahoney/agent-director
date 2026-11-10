@@ -463,3 +463,155 @@ func TestRunnerBOSAParseLatestVerdict(t *testing.T) {
 		t.Errorf("late depth-1 error allowed a group submit: %v", got)
 	}
 }
+
+// b.x9o CR14-1 (t2.7tz.rt.kh): scheduler caps end jobs, retain evidence and stop later work.
+func TestRunnerSchedulerEndStates(t *testing.T) {
+	type endCase struct {
+		name, state, mode, evidence string
+		timeout                     bool
+	}
+	cases := []endCase{
+		{"parse_all_ok", "timed-out", "normal", "success", false},
+		{"parse_only_all_ok", "out-of-memory", "parse", "success", true},
+		{"group_all_ok", "disk-exceeded", "group", "success", true},
+		{"group_no_log", "out-of-memory", "group", "missing", true},
+		{"parse_no_log", "timed-out", "parse", "missing", false},
+		{"cancelled_wait", "cancelled", "normal", "success", false},
+		{"cancelled_status", "cancelled", "normal", "success", true},
+		{"cancelled_status_no_log", "cancelled", "normal", "missing", true},
+	}
+	for _, st := range []string{"timed-out", "out-of-memory", "disk-exceeded"} {
+		for _, mode := range []string{"normal", "parse", "group"} {
+			cases = append(cases, endCase{st + "/" + mode, st, mode, "partial", mode == "parse"})
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			all := shipped(t)
+			rows := []row{byCfg(t, all, "ci_C1"), byCfg(t, all, "ci_H_Sns")}
+			job := "parse"
+			if tc.mode == "group" {
+				rows = []row{rows[0], byCfg(t, all, "ci_C2"), byCfg(t, all, "ci_C3"), rows[1]}
+				job = rows[0].group
+				r.expectAll(t, rows[:1])
+				if tc.evidence == "partial" {
+					r.verdict(t, rows[2].cfg, "SKIPPED(after-cap)")
+				} else {
+					r.expectAll(t, rows)
+				}
+			} else if tc.evidence == "partial" {
+				// Preserve one genuine SANY verdict; the other and depth-1 are absent.
+				r.verdict(t, "sany:"+rows[1].spec, "")
+				for _, rw := range rows {
+					r.verdict(t, "parse:"+rw.cfg, "")
+				}
+			}
+			r.env["TLA_SUITE"] = writeSuite(t, rows)
+			wantCalls := []call{{"list", ""}, {"submit", "parse"}, {"wait", "parse"}}
+			if job != "parse" {
+				wantCalls = append(wantCalls, call{"results", "parse"}, call{"submit", job}, call{"wait", job})
+			}
+			if tc.timeout {
+				r.plan(t, "wait."+job, "0 timeout")
+				r.plan(t, "status."+job, state(tc.state, true))
+				wantCalls = append(wantCalls, call{"status", job})
+			} else {
+				r.plan(t, "wait."+job, "0 @ID@ "+tc.state)
+			}
+			wantCalls = append(wantCalls, call{"results", job})
+			if tc.evidence == "missing" {
+				r.plan(t, "results."+job, `0 {"paths":{},"present":{"run_log":false}}`)
+			}
+			var args []string
+			if tc.mode == "parse" {
+				args = []string{"--parse"}
+			}
+
+			res := r.run(t, args...)
+
+			if got := r.calls(t); !reflect.DeepEqual(got, wantCalls) {
+				t.Errorf("ended-job calls = %v, want %v", got, wantCalls)
+			}
+			dir := runDir(t, res)
+			if exists(filepath.Join(dir, "ctx", job)) {
+				t.Error("ended job's context was kept")
+			}
+			if strings.Contains(res.stderr, "has not ended") {
+				t.Errorf("ended job was diagnosed as live\n%s", res)
+			}
+			if !regexp.MustCompile(`(?m)^# job ` + job + `: ` + tc.state + ` after \d+ min \(suite clock\)$`).MatchString(res.stderr) {
+				t.Errorf("missing scheduler end-state diagnostic\n%s", res)
+			}
+			log := filepath.Join(dir, "logs", job+".run.log")
+			if tc.evidence == "missing" {
+				if exists(log) || !strings.Contains(res.stderr, "# job "+job+": no run log\n") {
+					t.Errorf("missing log must remain explicit\n%s", res)
+				}
+			} else {
+				want := readFile(t, filepath.Join(r.fake, "logs", job+".log"))
+				if got := readFile(t, log); got != want || !strings.HasPrefix(got, "VERDICT ") {
+					t.Errorf("retained log = %q, want actual fetched evidence %q", got, want)
+				}
+			}
+			if tc.state == "cancelled" {
+				want := "FAIL scheduler -- job parse was cancelled; nothing more was submitted\nCI-VERDICT FAIL (job cancelled, tier fast)\n"
+				if res.code != 1 || res.stdout != want {
+					t.Errorf("cancellation must fail after fetching evidence\n%s", res)
+				}
+				return
+			}
+			ok := 0
+			if tc.mode == "parse" {
+				want := []string{"PASS sany:" + rows[0].spec + " PARSE-OK", "FAIL sany:" + rows[1].spec + " INCOMPLETE(" + tc.state + ")"}
+				if tc.evidence == "success" {
+					want[1] = "PASS sany:" + rows[1].spec + " PARSE-OK"
+					ok = 2
+				} else if tc.evidence == "missing" {
+					want[0] = "FAIL sany:" + rows[0].spec + " INCOMPLETE(" + tc.state + ")"
+				} else {
+					ok = 1
+				}
+				lines := res.lines()
+				if len(lines) != 3 || !reflect.DeepEqual(lines[:2], want) {
+					t.Errorf("parse rows must retain verdicts and label missing evidence: want %v\n%s", want, res)
+				}
+			} else {
+				lines := res.lines()
+				if len(lines) != len(rows)+1 {
+					t.Fatalf("want exactly one line per planned row and the summary\n%s", res)
+				}
+				for i, rw := range rows {
+					tag, shown, dist, secs := "FAIL", "NOT-RUN(after-cap)", "?", "?"
+					if tc.mode == "group" && rw.group == job {
+						shown = "INCOMPLETE(" + tc.state + ")"
+						if tc.evidence != "missing" {
+							if tc.evidence == "success" || i == 0 {
+								tag, shown, dist, secs = "PASS", "PASS", "42", "7"
+								if rw.expect == "violation" {
+									shown = "FAIL(Invariant_" + rw.cfg + "_is_violated)"
+								}
+								ok++
+							} else if i == 2 {
+								shown, dist, secs = "SKIPPED(after-cap)", "42", "7"
+							}
+						}
+					}
+					m := runLine.FindStringSubmatch(lines[i])
+					if m == nil || !reflect.DeepEqual(m[1:], []string{tag, rw.cfg, shown, dist, secs, rw.what}) {
+						t.Errorf("row %s = %q, want %s %s distinct=%s secs=%s", rw.cfg, lines[i], tag, shown, dist, secs)
+					}
+				}
+			}
+			counts := fmt.Sprintf("%d/%d runs ok", ok, len(rows))
+			ending := "tier fast"
+			if tc.mode == "parse" {
+				counts, ending = fmt.Sprintf("%d/2 modules parse", ok), "parse-only"
+			}
+			want := `^CI-VERDICT FAIL \(` + counts + `, \d+ min, ` + ending + `\)$`
+			if res.code != 1 || !regexp.MustCompile(want).MatchString(res.last()) {
+				t.Errorf("scheduler cap must remain fatal with exact accounting (%s)\n%s", want, res)
+			}
+		})
+	}
+}

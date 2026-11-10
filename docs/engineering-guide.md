@@ -220,9 +220,13 @@ of one cfg per module in the selected tier, before exhaustive groups.
 
 Every job requests 28 GiB memory, 20 GiB disk and its budget plus 300 seconds
 timeout. A 15000 MB guard covers TLC's metadir, including queue and fingerprint
-storage. The runner uses `jobsched wait`. A time or disk cap is `INCOMPLETE`:
-remaining runs in that job are skipped, later groups are not submitted, and
-the suite fails.
+storage. The runner uses `jobsched wait`. A time or disk cap inside the job
+reports `INCOMPLETE(...)`. When the scheduler ends a job `timed-out`,
+`disk-exceeded` or `out-of-memory`, its printed rows without a verdict show
+`INCOMPLETE(<state>)`. Either kind of cap fails the suite and stops further
+submissions. `cancelled` is a named failure, not a cap. See
+[Model check](architecture.md#model-check-make-tla) for row accounting, cleanup
+and log reporting.
 
 ### Fail-fast sandbox guard
 

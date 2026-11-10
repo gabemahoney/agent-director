@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -106,6 +107,21 @@ func TestRunnerInterrupt(t *testing.T) {
 		{name: "before any job", hold: "list", sig: syscall.SIGINT, submits: 0,
 			say: []string{"# interrupted"}, notSay: []string{"# interrupted: job"}},
 	}
+	// b.x9o CR14-1 (t2.7tz.rt.kh): every documented end state fetches evidence even on interruption.
+	for _, st := range []string{"failed", "timed-out", "out-of-memory", "disk-exceeded", "build-failed", "cancelled", "rejected", "infrastructure-error"} {
+		cases = append(cases, struct {
+			name    string
+			hold    string
+			sig     syscall.Signal
+			status  []string
+			ctx     string
+			say     []string
+			notSay  []string
+			submits int
+		}{name: "ended_" + st, sig: syscall.SIGTERM, status: []string{state(st, true)}, ctx: "gone", submits: 1,
+			say:    []string{"# interrupted: job parse (j1-parse) had already ended (" + st + "); its context was removed"},
+			notSay: []string{"has not ended", "state unknown"}})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t)
@@ -146,6 +162,17 @@ func TestRunnerInterrupt(t *testing.T) {
 					t.Errorf("a run dir was made\n%s", res)
 				}
 				return
+			}
+			if tc.ctx == "gone" && tc.hold == "" && len(tc.status) == 1 && strings.Contains(tc.status[0], `"terminal":true`) {
+				wantCalls := []call{{"list", ""}, {"submit", "parse"}, {"wait", "parse"}, {"status", "parse"}, {"results", "parse"}}
+				if got := r.calls(t); !reflect.DeepEqual(got, wantCalls) {
+					t.Errorf("interrupt end-state calls = %v, want %v", got, wantCalls)
+				}
+				want := "VERDICT sany:Phase4Split checks=parse result=PARSE-OK distinct=1 depth=1 secs=1\n" +
+					"VERDICT ci_C1 checks=parse result=PARSE-OK distinct=1 depth=1 secs=1\n"
+				if got := readFile(t, filepath.Join(runDir(t, res), "logs", "parse.run.log")); got != want {
+					t.Errorf("interrupted ended-job log = %q, want %q", got, want)
+				}
 			}
 			dir := runDir(t, res)
 			if !strings.Contains(res.stderr, "# run dir: "+dir+" (logs kept)") || !exists(filepath.Join(dir, "logs")) {

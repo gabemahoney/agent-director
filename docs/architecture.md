@@ -21225,10 +21225,12 @@ limits. Inside the job, `DISKCAP_MB=15000` guards TLC's metadir, including
 states, queue and fingerprints.
 
 The runner blocks on `jobsched wait <id> --timeout 9m`, with the CLI in the
-background and the shell awaiting it so signal traps can fire. A terminal
-answer leads to results; a `timeout` answer triggers a status check for
-completion, dispatcher health and overrun before another wait. Interrupts
-also request status. Wait errors and unknown answers fail closed.
+background and the shell awaiting it so signal traps can fire. A `timeout`
+answer triggers a status check for completion, dispatcher health and overrun
+before another wait. Interrupts also request status. The recognized end states
+are `succeeded`, `failed`, `timed-out`, `disk-exceeded`, `out-of-memory`,
+`build-failed`, `cancelled`, `rejected` and `infrastructure-error`.
+Wait errors and unknown or unreadable answers fail closed.
 
 `jobs/lib/tlcjob.sh` reads runs from `WORK` (default `/work`). A
 `<Module> - sany` entry invokes SANY and reports `sany:<Module>` with
@@ -21237,17 +21239,26 @@ processing of the requested root, and no recognized diagnostic record;
 empty output fails, while error-like words in module names are harmless.
 Time or disk caps take precedence and report `INCOMPLETE(...)`. After one,
 the job starts no further SANY or TLC run: later entries get
-`SKIPPED(after-cap)`. The runner submits no later group and reports each
-unrun planned row as `FAIL <cfg> NOT-RUN(after-cap)`, including when
-`make tla`'s first job caps. Any cap fails the normal or parse-only summary
-even if a later verdict reports success for the same row.
+`SKIPPED(after-cap)`.
+
+Scheduler caps (`timed-out`, `disk-exceeded`, `out-of-memory`) retain genuine
+verdicts; missing verdicts on the capped group's rows or parse-only `sany:`
+rows become `INCOMPLETE(<state>)`. After either kind of cap, the runner
+submits no later group and reports each unrun planned row as
+`FAIL <cfg> NOT-RUN(after-cap)`. When `make tla`'s first job caps, every planned
+row is `NOT-RUN(after-cap)`; a scheduler cap's state shows on stderr's
+`# job parse: <state>` line. Any cap fails the normal or parse-only summary,
+even if every available verdict succeeds or no log is available. A `cancelled`
+job fails naming `cancelled` after cleanup and log retrieval, submits nothing
+further, and is not an INCOMPLETE cap.
 
 Job contexts, logs and the per-run directory:
 
 - Contexts and logs live in a per-run directory under `$TMPDIR`, which the
   runner prints.
 - A context is kept until its job ends, then removed.
-- Logs are fetched through the scheduler's `results` and always kept.
+- Available logs are fetched through the scheduler's `results` and kept.
+  Unavailable logs produce a diagnostic; cleanup failures are also reported.
 - The output is one line per run, then the `CI-VERDICT` line with ok/total,
   minutes and tier. Parse-only output is one `PASS|FAIL sany:<Module>
   <result>` line per module, then `CI-VERDICT PASS|FAIL (<ok>/<total> modules
@@ -21265,9 +21276,8 @@ Job contexts, logs and the per-run directory:
 |---|---|
 | Still queued | Cancels it in effect: removes the job's context, so the scheduler rejects the job when it reaches the head of the queue. |
 | Already building or running | Keeps the context. The job finishes on the scheduler, because the scheduler has no cancel operation. |
+| Already ended | Removes the context and fetches its available run log. |
 | State unreadable | Keeps the context (fail safe). |
-
-The logs are always kept.
 
 **Evidence.** b.zuj CI run 4 (full tier, 92/92 ok, controls violating as
 expected), whose job ids and SHA-256s
@@ -21292,9 +21302,9 @@ No JVM, model checker, job image or real scheduler runs. The suite's files:
   fail-closed paths and the overrides.
 - **`models_test.go`** covers arbitrary modules and helpers, default-tree
   pins, SANY-only mode and gating, explicit limits, waits and refusals,
-  and stopping after caps, including in the first job. Duplicate-verdict
-  cases check that caps remain failures and the depth-1 gate uses the last
-  verdict.
+  scheduler end states (caps and cancellation), and stopping after caps,
+  including in the first job. Duplicate-verdict cases check that caps remain
+  failures and the depth-1 gate uses the last verdict.
 - **`tlcjob_test.go`** provides `runTLCJob`, `fakeJobJava` and `jobVerdicts`.
   It invokes the actual job script with a private `WORK` path containing a
   space, fake Java and a fake budget clock. It checks SANY evidence and
