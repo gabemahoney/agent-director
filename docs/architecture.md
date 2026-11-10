@@ -4066,9 +4066,12 @@ The public contract is in the
   `settledEvidenceMove` moves the raw record exactly where `settled_state`
   takes the old raw value, and `immediateSettleSet` clears it.
 - `process_evidence` is written only by `RecordProcessEvidence`
-  (nonwaiting; guarded on the sampled snapshot, life, launch, interval,
-  `observation_version` and earlier record) with a record from
-  `Spawn.ProcessEvidenceAfter`, or by a terminal move in its own statement:
+  (nonwaiting; guarded on the snapshot, life, launch, interval,
+  `observation_version` and earlier record of the row it commits against:
+  the examined row, or the row refreshed after the check's own verdict write;
+  see `processProbe` under [Shared active checks](#shared-active-checks))
+  with a record from `Spawn.ProcessEvidenceAfter`, or by a terminal move in
+  its own statement:
   `terminalProcessEvidenceSet` stores the `exited` record of the
   `ProcessExit` the move proved, else NULL, and `clearProcessEvidence` clears
   it on a hook's terminal write (SessionEnd) and `EndHeldLaunch`.
@@ -5277,7 +5280,8 @@ The log is not a public confirmation field or a durable freshness record.
 `pkg/api` tests must read it through `ActiveCheckOutcomesForTest` and
 classify a write error through `CheckOutcomeForTest` (`export_test.go`).
 Guards reject observations superseded by newer hook, turn, request,
-launch or observation facts.
+launch or observation facts; process-record writes may absorb writers that
+change none of their bound versions (see `processProbe` below).
 
 **Must reuse for main-field evidence** (see the v19/v20 columns under
 [`internal/store`](#internalstore)):
@@ -5287,11 +5291,23 @@ launch or observation facts.
   row's mark carries its `exited` record in the mark's statement (`provenExit`;
   `findMissingWrite.ProcessRecorded`), and pause's `endIfGone` does the same.
   Otherwise `recordProcess` commits `RecordProcessEvidence` only while
-  `probeStillApplies`: the refreshed row must be what this invocation's own
-  writes left, at their exact observation version (the examined one, plus one
-  for an applied adoption) and permission interval. A sample overtaken by a
-  concurrent terminal move or an intervening observation is dropped as
-  `stale_observation`, never committed at the newer version. Cursor process evidence remains
+  `refreshRow` and `probeStillApplies` find the instance, life and launch,
+  lifecycle state (through `permission_epoch`, which every raw-state change
+  advances), process record and `observation_version` as this check's own
+  earlier writes in the pass left them, including an applied adoption's
+  observation-version advance. Only between its own verdict write and the
+  refresh may the check absorb a writer that changes none of these: a peer's
+  liveness-note write, a same-state hook that starts no turn, a Codex end
+  report or a transcript-path heal. The commit is then guarded on the
+  refreshed row's full snapshot, so any later write makes the sample stale.
+  With no verdict write, the exact expected snapshot is also required.
+  A changed bound version makes the sample `stale_observation`.
+  Separately, after this check's own terminal mark stored no process record,
+  its follow-up binds to the same
+  instance, life and launch and the empty process record; a later state
+  change alone does not stale it, and it can record only an unsuccessful
+  attempt. See SRD t1.x9o.g1, **Decisions — SR-3.5 binding** and its addendum.
+  Cursor process evidence remains
   `unknown`/`unsupported` under D1; follow-up Bug b.14c owns runtime-identity parity.
 - `fieldAttempt`: per selected row, this invocation's unsuccessful or
   prevented state, process and pane attempts, with the value and owner each
@@ -7577,10 +7593,10 @@ agent must go through.
 | `planPermission` (`permissionCandidate`), `planPane`, `planObservation` | The permission plan (fallback clocks; never a display target), the pane target (baseline and qualifying `idle_screen`) and the pure observation/display plan, shared by the unlocked pre-check and locked commit. The guarded observer combines that plan with the [evidence comparison](#best-effort-commits-and-races) to decide whether to write. `planObservation` also ends a stored `needs_intelligence` at once, with its exit record. |
 | `store.FallbackClock` | The one rule for the start of a fallen-back request's fallback clock, used by shared active observations, by the `RecordPermissionFallbacks` write that state reads, `find-missing` and `get-permission` share and by those readers' pick-up for that write (`addGone`), so a persisted clock is never one a read rejects and a read attempts no write that stores nothing, save one `get-permission` case ([Readers never wait](#readers-never-wait-problem-4)). |
 | `Spawn.CommittedDisplay` | The previous committed display and detail (`store.DisplayDetail`), read from one row snapshot; what a read returns when it cannot commit. |
-| `committedDisplayStateSQL` | `Spawn.CommittedDisplay` in SQL: the deterministic function `committed_display_state`, which gets each column as a BLOB so it judges the bytes a read scans, a NUL included, and never fails. A lifecycle write (`hookStateSet`, `immediateSettleSet`, `RepairCheckPermissionIfSameLife`) must use it, never a `json_extract` of the observation's `state`, to keep a displayed observation or record `display_exit`, so it keeps or exits exactly the display a read shows. The function exists only on this binary's connections (the sqlite3 CLI that `install.sh` and `sql.sh` run cannot call it), so it never goes in a trigger, view, index, CHECK or generated column. |
+| `committedDisplayStateSQL` | `Spawn.CommittedDisplay` in SQL: the deterministic function `committed_display_state`, which gets each column as a BLOB so it judges the bytes a read scans, a NUL included, and never fails. A lifecycle write (`hookStateSet`, `immediateSettleSet`, `RepairCheckPermissionIfSameLife`, `invalidatePaneSet`) must use it, never a `json_extract` of the observation's `state`, to keep a displayed observation, record `display_exit` or decide whether a held Codex turn start has a shown display to end (`paneEvidencePresentSQL`), so it keeps or exits exactly the display a read shows. The function exists only on this binary's connections (the sqlite3 CLI that `install.sh` and `sql.sh` run cannot call it), so it never goes in a trigger, view, index, CHECK or generated column. |
 | `RecordPermissionFallbacks` (via `recordGone`) | The shared active checker's and `get-permission`'s write of `hook_gone_at` and the fallback clock; it keeps the first basis and the existing `hook_gone_at` behaviour. |
 | `takeDisplayExits`, `emitDisplayTransitions` | Drain an immediate exit inside the writing transaction; emit after its commit. |
-| `invalidatePaneSet` | Every Codex turn-start and pane-adoption writer must use this shared SET fragment to clear the baseline and old `idle_screen` candidate/display without advancing the permission epoch. Its transaction refreshes families and drains display exits. |
+| `invalidatePaneSet` | Every Codex turn-start and pane-adoption writer must use this shared SET fragment to clear the baseline and old `idle_screen` candidate/display. The fragment leaves `permission_epoch` alone; a turn start that changes the raw state advances it separately. Its transaction refreshes families and drains display exits. |
 | `ListFilters.StoredDisplay`, `ListFilters.IDs`, `listFiltered` | Select stored reported-state or committed-display matches, then limit, before checks. Refresh by the selected IDs only; returned state/display may no longer match. Never widen or refill that selection after checking. |
 
 A new Displayed State, such as unknown-prompt inference for
@@ -7627,11 +7643,15 @@ nothing.
 **Pane observation.** `spawns.pane_sha256`, `pane_since_ms` and `pane_epoch`
 hold the committed fingerprint, the start of its unchanged period and the
 `permission_epoch` it was sampled in. A baseline of another epoch counts as
-none (`committedPaneBaseline`). A Codex turn start on an already-working row
-and either pane adoption invalidate it through `invalidatePaneSet`, without
-advancing `permission_epoch`: they clear all three pane columns and the old
+none (`committedPaneBaseline`). Any Codex turn start or ownership change
+(either pane adoption) invalidates it through `invalidatePaneSet`.
+Same-state writes (both adoptions, a held turn start and a turn start on a
+working row) leave `permission_epoch`
+unchanged; a turn start from another state advances it, as every raw-state
+change does. These writes clear all three pane columns and the old
 `idle_screen` candidate or display in the same statement, advance
-`observation_version`, and record any displayed episode's immediate exit.
+`observation_version`, and record any displayed episode's immediate exit,
+including on a `waiting` row still showing `idle_screen`.
 The first later sample starts a fresh period. `planPane`
 resets the baseline on a failed sample or a row that is not `PaneObservable`,
 keeps its start on an identical fingerprint and starts a new period at the
@@ -7716,7 +7736,8 @@ Selected reads and sweeps may commit a display, evidence, fallback clock or pane
   committed the entry and is kept while a clearing settles and while
   `unchanged_minutes` changes, which refreshes the detail with no settling,
   `since` change or trail record. A hook that changes the raw state
-  (`hookStateSet`) keeps an observation the row shows as a committed display,
+  (`hookStateSet`), other than a Codex turn start (see *Immediate exits*),
+  keeps an observation the row shows as a committed display,
   with its detail and evidence, and clears only its candidate, so the exit
   settles like any change; it drops any other observation. While an entry is still
   settling, the stored display is the row's ordinary settled state, the same
@@ -7728,10 +7749,11 @@ Selected reads and sweeps may commit a display, evidence, fallback clock or pane
   `check_permission` repair through `RepairCheckPermissionSample`) advances
   `permission_epoch` and `observation_version`, clears the observation and,
   if the row showed a committed display, records `display_exit` (its time is
-  the statement's clock) in the same statement. A Codex turn start or pane
-  adoption records the same exit through `invalidatePaneSet` (see
-  [Pane observation](#displayed-state-reporting)), without advancing
-  `permission_epoch`. The writing transaction drains
+  the statement's clock) in the same statement. Any Codex turn start or
+  ownership change (either pane adoption) ends a shown `idle_screen` at once
+  through `invalidatePaneSet`, including on a `waiting` row still showing it
+  (see [Pane observation](#displayed-state-reporting) for when
+  `permission_epoch` advances). The writing transaction drains
   the marker and emits after commit, so a rolled-back write emits nothing and
   a committed one emits once. Report-only data never blocks these writes: a
   malformed stored observation is treated as none, and an invalid recorded
@@ -23613,7 +23635,9 @@ values, except for a row the test inserted itself.
     `SpawnColumns.EndReportedAt`, `SpawnColumns.SubagentTracking`; 1 on a
     default seed) included; v13's context provenance is read through the store
     context projection, not this helper. v8's settle columns are read with
-    `ReadSettle`; v12 family history uses `ReadFamilyHistory` (below). Each comes
+    `ReadSettle`; v12 family history uses `ReadFamilyHistory` (below); v14's
+    `display_exit` is read with `ReadDisplayExit` (see
+    [Displayed State reporting](#displayed-state-reporting)). Each comes
     back as `any`: nil for NULL,
     otherwise the stored storage class (`int64`, `float64`, `string` or
     `[]byte`). TIMESTAMP columns come back as stored text.

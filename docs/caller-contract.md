@@ -538,8 +538,8 @@ only while it shows `idle_screen`.
 - **Clearing.** When its pane changes or cannot be sampled, or the agent
   moves on, the row keeps `displayed_state` until the exit candidate settles
   and a check commits the exit. `ended`, `missing` and a state a command sets
-  show at once. A shown `idle_screen` also ends at once when a Codex turn
-  starts on a row already `working`, or on an ownership change.
+  show at once. A shown `idle_screen` also ends at once on any Codex turn
+  start or ownership change, including a `waiting` row retaining it.
 - **Trail.** Each entry and exit appends one
   `ad.spawn.displayed_state_transition` trail record with `instance_id`,
   `prior_state`, `new_state`, `event` and `ts`; the trail is audit only and a
