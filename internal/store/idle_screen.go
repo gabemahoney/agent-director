@@ -15,7 +15,7 @@ const paneColumns = `idle_screen_timeout_seconds, pane_sha256, pane_since_ms, pa
 // when its turn id is absent (or repeated) but pane evidence still exists.
 const paneEvidencePresentSQL = `(pane_sha256 IS NOT NULL OR pane_since_ms IS NOT NULL OR pane_epoch IS NOT NULL
     OR CASE WHEN json_valid(display_observation) THEN
-      json_extract(display_observation, '$.state') = 'idle_screen'
+      ` + committedDisplayStateSQL + ` = 'idle_screen'
       OR json_extract(display_observation, '$.candidate') = 'idle_screen' ELSE 0 END)`
 
 // invalidatePaneSet is the SET fragment every turn-start or pane-adoption
@@ -32,7 +32,7 @@ func invalidatePaneSet(newStateSQL string) string {
           ELSE display_exit END,
         display_evidence = CASE WHEN ` + committedDisplayStateSQL + ` = 'idle_screen' THEN NULL ELSE display_evidence END,
         display_observation = CASE WHEN json_valid(display_observation) THEN
-            CASE WHEN json_extract(display_observation, '$.state') = 'idle_screen' THEN NULL
+            CASE WHEN ` + committedDisplayStateSQL + ` = 'idle_screen' THEN NULL
               WHEN json_extract(display_observation, '$.candidate') = 'idle_screen' OR state <> ` + newStateSQL + ` THEN
               CASE WHEN ` + committedDisplayStateSQL + ` = 'needs_intelligence'
                 THEN json_set(display_observation, '$.candidate', '', '$.candidate_since_ms', 0) END

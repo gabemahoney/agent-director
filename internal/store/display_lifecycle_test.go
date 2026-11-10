@@ -145,6 +145,8 @@ func TestRepairCheckPermissionOfOrdinaryRowEmitsNothing(t *testing.T) {
 // could not read. Writes judge a stored value exactly as reads do: a NUL makes
 // an observation unreadable, and a BLOB holding a valid one shows its display,
 // which a hook keeps and an end or a missing mark exits.
+// Turn starts and adoptions invalidate a readable case-variant observation
+// exactly as a read shows it (b.x9o CR14-2).
 func TestLifecycleWritesIgnoreUnreadableDisplayMetadata(t *testing.T) {
 	validExit := `{"prior_state":"needs_intelligence","new_state":"working","at_ms":1792411205000}`
 	validObservation := `{"state":"needs_intelligence","since_ms":1792411205000,"request_token":"req-a","tool_name":"Bash",` +
@@ -248,8 +250,101 @@ func TestLifecycleWritesIgnoreUnreadableDisplayMetadata(t *testing.T) {
 			})
 		}
 	}
+	// b.x9o CR14-2: readable case-variant keys must invalidate the display a
+	// read shows, even on a same-state write with no other pane/turn evidence.
+	for _, writer := range []string{"Codex turn start", "held Codex turn start", "adoption"} {
+		t.Run(writer+"/case-variant idle display", func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.db")
+			observation := `{"State":"idle_screen","since_ms":1792411205000,"unchanged_minutes":20,` +
+				`"candidate":"","candidate_since_ms":0,"observed_at_ms":1792411205000,"permission_epoch":7}`
+			id, err := apitest.SeedSpawn(path, "lifecycle", store.StateWorking, "", "on", "", true,
+				apitest.WithAgent(store.AgentCodex), apitest.WithPermissionEpoch(7), apitest.WithDisplayObservation(observation))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if writer == "held Codex turn start" {
+				// The legacy request holds a working transition without moving
+				// the working row into check_permission.
+				if _, err := apitest.SeedPermissionRequest(path, id, "Bash", apitest.PermissionOwner("", -1)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			shown := store.DisplayDetail{State: store.StateIdleScreen, SinceMillis: 1792411205000, UnchangedMinutes: 20}
+			// No registered fixture seeds display_evidence; use displayedRow's
+			// pane record so evidence removal cannot pass before the write.
+			execRaw(t, path, `UPDATE spawns SET display_evidence=json_object(
+				'v', ?, 'life', life_number, 'token', launch_token, 'since', ?,
+				'at', ?, 'src', 'pane', 'checked', ?, 'reason', NULL) WHERE instance_id=?`,
+				store.StateIdleScreen, shown.SinceMillis, shown.SinceMillis, shown.SinceMillis, id)
+			before, err := s.GetSpawn(id)
+			if err != nil || before.State != store.StateWorking || before.CommittedDisplay() != shown || before.DisplayEvidence == "" {
+				t.Fatalf("setup display=%+v, raw=%q, evidence=%q, err=%v; want %+v on working with pane evidence",
+					before.CommittedDisplay(), before.State, before.DisplayEvidence, err, shown)
+			}
+			if before.IdleSince != "" || before.PaneSHA256 != "" || before.PaneSinceMillis != 0 || before.PaneEpoch != -1 {
+				t.Fatal("setup has idle_since or pane baseline evidence")
+			}
+			mark, from := store.TrailMark(t), time.Now().Truncate(time.Millisecond)
+			if writer == "adoption" {
+				if got, err := s.AdoptIdentityIfUnchanged(id, before.Snapshot, createdIdentity()); err != nil || got != store.CondApplied {
+					t.Fatalf("adoption=%v %v; want applied", got, err)
+				}
+			} else {
+				// FireHook does not propagate CodexTurnStart. Reuse its gated
+				// seed-pane path with the main-thread UserPromptSubmit flags.
+				err := storefix.WithSeedPane(path, id, func(gate store.HookGate) error {
+					gate.Event, gate.CodexTurnStart = "UserPromptSubmit", true
+					// No turn id: both the stored and incoming turn are absent.
+					outcome, applied, err := s.ApplyHookTransitionResult(id, gate, store.StateWorking, false, gate.Event, "", false)
+					want := store.UpsertUpdated
+					if writer == "held Codex turn start" {
+						want = store.UpsertNoChange
+					}
+					if err == nil && (!applied.Applied || outcome != want) {
+						t.Fatalf("turn start=%v %+v; want %v, applied", outcome, applied, want)
+					}
+					return err
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			to := time.Now()
+			// GetSpawn is a raw read: nothing after the writer may observe or
+			// perform a lifecycle write that could drain its forgotten exit.
+			after, err := s.GetSpawn(id)
+			ordinary := store.DisplayDetail{State: store.StateWorking}
+			if err != nil || after.State != store.StateWorking || after.CommittedDisplay() != ordinary || after.DisplayObservation != "" || after.DisplayEvidence != "" {
+				t.Errorf("after write: raw=%q display=%+v observation=%q evidence=%q err=%v; want ordinary working with no display metadata",
+					after.State, after.CommittedDisplay(), after.DisplayObservation, after.DisplayEvidence, err)
+			}
+			if after.ObservationVersion != before.ObservationVersion+1 || after.PermissionEpoch != before.PermissionEpoch {
+				t.Errorf("version %d -> %d, epoch %d -> %d; want one invalidation and unchanged epoch",
+					before.ObservationVersion, after.ObservationVersion, before.PermissionEpoch, after.PermissionEpoch)
+			}
+			if raw := storedDisplayExit(t, path, id); raw.Valid {
+				t.Errorf("exit still pending after writer: %q", raw.String)
+			}
+			records := store.TrailEventsSince(t, mark, "ad.spawn.displayed_state_transition", id)
+			if len(records) != 1 {
+				t.Fatalf("immediate display records=%v; want one idle_screen-to-working exit", records)
+			}
+			stamp, _ := records[0]["ts"].(string)
+			at, err := time.Parse(lifecycleTS, stamp)
+			if err != nil || at.Before(from) || at.After(to) {
+				t.Fatalf("exit timestamp=%q, err=%v; want within writer call [%s,%s]", stamp, err, from, to)
+			}
+			assertDisplayRecords(t, mark, id, displayRecord{store.StateIdleScreen, store.StateWorking, at})
+		})
+	}
 	// Positive control: a readable pending exit of the row's own is emitted by
-	// the same write, so the cases above are silent because of what they hold.
+	// the same write, so the unreadable-metadata cases above are silent because
+	// of what they hold.
 	t.Run("hook/readable own exit is emitted", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "state.db")
 		id, err := apitest.SeedSpawn(path, "lifecycle", store.StateCheckPermission, "", "on", "", true, apitest.WithDisplayExit(validExit))
