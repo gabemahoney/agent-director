@@ -10,19 +10,19 @@
 //
 // DESIGN
 // ======
-// 1. Pre-req     : requires `make release-binaries` to succeed; test is
-//                  skipped (not failed) if make exits non-zero.
-// 2. Mutation    : overwrite the first 4 bytes of the host-arch binary with
-//                  0x00000000 — guaranteed not to match ELF or Mach-O magic.
-// 3. Gate        : bash skills/release-agent-director/gates/smoke/per-binary-smoke.sh
-//                  is run from repo root.
-// 4. Assertions  : (a) gate exits non-zero; (b) consolidated JSON stdout
-//                  contains a sub-check named smoke.<host>.magic-bytes with
-//                  outcome "failed".
-// 5. Cleanup     : make writes into a per-test t.TempDir() (via
-//                  RELEASE_DIST_DIR) rather than the shared repo-root dist/;
-//                  the Go runner auto-cleans it (b.aur). No dist/ removal —
-//                  a shared os.RemoveAll(dist) raced concurrent tests.
+//  1. Pre-req     : requires `make release-binaries` to succeed; test is
+//     skipped (not failed) if make exits non-zero.
+//  2. Mutation    : overwrite the first 4 bytes of the host-arch binary with
+//     0x00000000 — guaranteed not to match ELF or Mach-O magic.
+//  3. Gate        : bash skills/release-agent-director/gates/smoke/per-binary-smoke.sh
+//     is run from repo root.
+//  4. Assertions  : (a) gate exits non-zero; (b) consolidated JSON stdout
+//     contains a sub-check named smoke.<host>.magic-bytes with
+//     outcome "failed".
+//  5. Cleanup     : make writes into a per-test t.TempDir() (via
+//     RELEASE_DIST_DIR) rather than the shared repo-root dist/;
+//     the Go runner auto-cleans it (b.aur). No dist/ removal —
+//     a shared os.RemoveAll(dist) raced concurrent tests.
 //
 // SLOW TEST
 // =========

@@ -21385,8 +21385,8 @@ the same groups. Adding or dropping a slug in `test/docker-epics.txt`
 needs no workflow edit.
 
 `.github/workflows/lint.yml` runs static checks that build nothing, on
-every PR and push to `main`. Its one `lint` job runs
-`make release-shellcheck` (shellcheck over
+every PR and push to `main`. Its one `lint` job runs two checks. The
+first is `make release-shellcheck` (shellcheck over
 `skills/release-agent-director/gates/**/*.sh`), first installing
 shellcheck from apt if the runner image lacks it. The job runs on
 `ubuntu-24.04`, not `ubuntu-latest`, because the image's Ubuntu release
@@ -21396,8 +21396,12 @@ change to the scripts. Move the pin on purpose, with the new version's
 findings fixed. The job logs `shellcheck --version`. It is that target's
 only automated caller; no `/release` phase runs it. The target exits 1
 when shellcheck is not on PATH. `SHELLCHECK_OPTIONAL=1` makes it skip
-instead, printing that nothing was checked; no workflow sets it. A new
-lint check is one more step in the `lint` job, with
+instead, printing that nothing was checked; no workflow sets it. The
+second, after an `actions/setup-go` step that reads `go.mod` (gofmt's
+output can change between Go versions), is `make fmt-check`. It fails and
+lists each tracked Go file (from `git ls-files`, so untracked scratch
+trees don't count) that is not gofmt-clean; the workflow is its only
+automated caller (b.7ep). A new lint check is one more step in the `lint` job, with
 `if: ${{ !cancelled() }}` so it still reports after an earlier check
 fails.
 
@@ -26446,7 +26450,11 @@ harness matrix is that step's output, that each secret reaches only the
 `pr_epic` job, and that a workflow calls `make release-shellcheck` and none
 sets `SHELLCHECK_OPTIONAL`. It also runs `make release-shellcheck` with a
 fake shellcheck, absent and present: with shellcheck present the target
-checks every gate script even under `SHELLCHECK_OPTIONAL=1`. It reads `.github/workflows/`, or the directory in
+checks every gate script even under `SHELLCHECK_OPTIONAL=1`. It runs
+`make fmt-check` in a scratch git repo, where a tracked unformatted file
+fails it and an untracked one doesn't, and against this repo, which must
+pass, and checks that a workflow runs `make fmt-check` after
+`actions/setup-go`. It reads `.github/workflows/`, or the directory in
 `WORKFLOWS_UNDER_TEST` (local to that package), to prove the fails-before
 direction against pre-fix workflows.
 

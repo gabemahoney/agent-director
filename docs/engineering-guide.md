@@ -176,8 +176,9 @@ what it regenerates (CI `doc-drift` fails otherwise).
 `make sandbox CMD="make lint"` (`go vet ./...`). Until b.hhi is fixed it
 reports known `unreachable code` findings under
 `skills/release-agent-director/tests/synthetic-regressions/`; it passes when it
-reports nothing else. Formatting: none, because no format check exists yet
-(b.7ep).
+reports nothing else. Formatting: `make sandbox CMD="make fmt-check"`, which
+fails and lists each tracked Go file that is not gofmt-clean (b.7ep); fix one
+with `make sandbox CMD="gofmt -w <file>"`, so gofmt is go.mod's version.
 
 #### Unit tests
 

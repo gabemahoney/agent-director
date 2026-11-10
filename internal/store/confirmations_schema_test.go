@@ -272,7 +272,9 @@ func TestV20DisplayMigration(t *testing.T) {
 				withRaw(t, path, func(db *sql.DB) { mustExec(t, db, `UPDATE spawns SET display_evidence=?`, record) })
 			}
 			if hasWriter {
-				withRaw(t, path, func(db *sql.DB) { mustExec(t, db, `UPDATE spawns SET observation_writer='00112233445566778899aabbccddeeff'`) })
+				withRaw(t, path, func(db *sql.DB) {
+					mustExec(t, db, `UPDATE spawns SET observation_writer='00112233445566778899aabbccddeeff'`)
+				})
 			}
 			var cols []string
 			withRaw(t, path, func(db *sql.DB) { cols = tableColumnNames(t, db, "spawns") })

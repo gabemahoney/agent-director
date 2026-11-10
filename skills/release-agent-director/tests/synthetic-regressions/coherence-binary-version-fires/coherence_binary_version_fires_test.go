@@ -12,18 +12,18 @@
 //
 // DESIGN
 // ======
-// 1. Pre-req     : requires linux/amd64 host (gate skips non-host binaries).
-// 2. Mutation    : build agent-director-linux-amd64 into a per-test
-//                  t.TempDir() (RELEASE_DIST_DIR) with
-//                  AGENT_DIRECTOR_BUILD_VERSION=9.9.9; the binary now reports
-//                  version "9.9.9" while the target "0.0.0" is passed to the gate.
-// 3. Gate        : bash skills/release-agent-director/gates/coherence/binary-version.sh
-//                  is run from repo root with target arg "0.0.0", pointed at the
-//                  isolated dir via COHERENCE_DIST_DIR.
-// 4. Cleanup     : none needed — the binary lives in the isolated t.TempDir(),
-//                  which the Go runner cleans up (b.aur). The prior
-//                  save/restore of the shared repo-root binary raced concurrent
-//                  tests.
+//  1. Pre-req     : requires linux/amd64 host (gate skips non-host binaries).
+//  2. Mutation    : build agent-director-linux-amd64 into a per-test
+//     t.TempDir() (RELEASE_DIST_DIR) with
+//     AGENT_DIRECTOR_BUILD_VERSION=9.9.9; the binary now reports
+//     version "9.9.9" while the target "0.0.0" is passed to the gate.
+//  3. Gate        : bash skills/release-agent-director/gates/coherence/binary-version.sh
+//     is run from repo root with target arg "0.0.0", pointed at the
+//     isolated dir via COHERENCE_DIST_DIR.
+//  4. Cleanup     : none needed — the binary lives in the isolated t.TempDir(),
+//     which the Go runner cleans up (b.aur). The prior
+//     save/restore of the shared repo-root binary raced concurrent
+//     tests.
 //
 // SLOW TEST
 // =========

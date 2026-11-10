@@ -1,4 +1,4 @@
-.PHONY: all build test generate lint err-coherence nondet-coverage \
+.PHONY: all build test generate lint fmt-check err-coherence nondet-coverage \
         check-doccomments check-sandbox-bypass test-install-sh test-install-sh-advice \
         test-image test-docker list-test-docker-epics \
         test-sandbox sandbox-shell sandbox \
@@ -151,6 +151,22 @@ errnames-json: _require-sandbox
 
 lint:
 	go vet ./...
+
+# fmt-check fails, listing them, when any tracked Go file is not gofmt-clean
+# (b.7ep). It checks git's tracked files, not `.`, so an untracked scratch tree
+# such as .release-work/ never fails it. gofmt's output can change between Go
+# versions, so run it with go.mod's: make sandbox CMD="make fmt-check", or the
+# lint workflow, whose setup-go reads go.mod.
+fmt-check:
+	@tracked=$$(git ls-files -- '*.go') || exit 1; \
+	files=; \
+	if [ -n "$$tracked" ]; then files=$$(gofmt -l $$tracked) || exit 1; fi; \
+	if [ -n "$$files" ]; then \
+		echo "ERROR: fmt-check: these Go files are not gofmt-clean; run gofmt -w on them:" >&2; \
+		echo "$$files" >&2; \
+		exit 1; \
+	fi; \
+	echo "[fmt-check] every tracked Go file is gofmt-clean"
 
 # err-coherence runs the five-way err_name coherence gate. It asserts that:
 #   (a) handler-referenced sentinels ⊆ errnames.Catalog
@@ -576,7 +592,7 @@ _REQUIRE_SANDBOX_GUARDED := generate surface-json errnames-json \
 # own (release-binaries, sandbox, tla, …).
 # Must use: a new target with a recipe joins this list (a host goal does
 # through _REQUIRE_SANDBOX_HOST_GOALS), unless it lists _require-sandbox.
-_REQUIRE_SANDBOX_WAIT := $(_REQUIRE_SANDBOX_HOST_GOALS) build lint \
+_REQUIRE_SANDBOX_WAIT := $(_REQUIRE_SANDBOX_HOST_GOALS) build lint fmt-check \
 	check-sandbox-bypass list-test-docker-epics \
 	release-binaries \
 	verify-installed-pkg-full bin/ts-helper test/fake-tmux/tmux

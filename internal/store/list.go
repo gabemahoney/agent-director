@@ -28,14 +28,14 @@ type ListFilters struct {
 	// a non-nil empty slice selects nothing. No filter is reapplied by a refresh.
 	IDs []string
 	// StoredDisplay matches committed display facts before any external check.
-	StoredDisplay     bool
-	State             []string
-	Labels            map[string]string
-	Parent            string
-	Cwd               string
-	TmuxSessionName   string
-	Limit             int
-	Settle            SettleRead
+	StoredDisplay   bool
+	State           []string
+	Labels          map[string]string
+	Parent          string
+	Cwd             string
+	TmuxSessionName string
+	Limit           int
+	Settle          SettleRead
 }
 
 // ListSpawns runs the filtered query and returns rows in unspecified
