@@ -165,6 +165,14 @@ func init() {
 		Error: nil,
 	}
 
+	// b.x9o: canonical sweep uses the existing empty-store smoke fixture.
+	sweep := seeders["find-missing"]
+	sweep.Manifest = mustVerb("sweep")
+	sweep.Happy = func(c *api.Client, _ string, ctx context.Context) (any, error) {
+		return c.Sweep(ctx)
+	}
+	seeders["sweep"] = sweep
+
 	// ── expire ────────────────────────────────────────────────────────────
 	seeders["expire"] = seederSpec{
 		Manifest: mustVerb("expire"),

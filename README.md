@@ -14,8 +14,8 @@ file, and tmux.
 - A **permission relay**: answer a Spawn's permission prompts allow/deny
   from outside, and learn whether the answer reached the agent.
 - **Pause and resume** that keep the conversation.
-- **Sweep verbs**, `find-missing` and `expire`, that keep the row states
-  honest. The install can schedule them for you.
+- **One-shot recovery**, `sweep`, and separate retention cleanup, `expire`.
+  The install can schedule them for you.
 
 ## Prerequisites
 
@@ -66,19 +66,17 @@ answers, and `waiting` once it has answered.
 
 ## Keep it healthy
 
-Two sweeps need a schedule, as the agents' user; the install's `--schedule` sets
-both up:
+Choose a cadence for recovery and retention cleanup, as the agents' user.
+Opt in with `--schedule` for these defaults:
 
 ```sh
-agent-director find-missing   # often, e.g. every 2 minutes
-agent-director expire         # e.g. daily
+agent-director sweep    # every 2 minutes
+agent-director expire   # daily
 ```
 
-`find-missing` keeps row states honest when an agent is killed, crashes, or is
-lost in a reboot: it marks the row `missing` (or `ended` for a Codex agent that
-reported its exit) instead of leaving it `working` or `waiting`. Run it often.
+`sweep` checks all agents once, recovering missed state changes and refreshing
+observations even when no caller reads them. State reads run the same checks
+for the agents they return.
 
 `expire` deletes finished rows older than the retention window (31 days by
 default), so the store does not grow forever. Running it daily is enough.
-
-See [Maintenance](docs/maintenance.md) for details.

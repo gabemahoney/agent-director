@@ -66,6 +66,11 @@
   it, even with `--no-hooks`.
 - With `--from-release`: `curl` and `sleep`. With `--sha256` and
   `--admin-sha256`: either `sha256sum` or `shasum`.
+- On macOS, an upgrade of an existing store reads the user's processes with
+  the system `/usr/sbin/lsof` and access-control entries with `/bin/ls`: run
+  the install as the agents' user, not as root, and grant the terminal access
+  if macOS asks. [Upgrade refusal
+  reasons](operator-actions.md#upgrade-refusal-reasons) gives the remedies.
 
 After validating arguments and the install path, the installer checks all
 required commands for the selected mode before running external commands,
@@ -74,7 +79,8 @@ downloading files or changing the installation. If any are missing, it exits
 
 `gh` is optional for release lookup and download fallback; `curl` remains
 required for release installs. `git`, `ps`, `lsof`, `pgrep`, `getent`, `dscl`,
-`crontab` and `systemctl` remain optional probes or alternatives. Scheduling
+`crontab` and `systemctl` remain optional probes or alternatives, except
+the macOS upgrade tools above. Scheduling
 keeps its [cron/systemd fallback and warnings](#schedule-the-sweeps).
 
 Native confirmed ordinary text delivery has narrower requirements: Linux, the exact
@@ -124,9 +130,21 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   [settings](settings.md#defaultsinject_help_hook-config)), which is also what
   enables Codex help entries and Cursor session guidance. It does not skip the [rename
   migration](#upgrade).
-- `--schedule`: schedule the `find-missing` and `expire` sweeps for the user
-  running the script, who must be the agents' user. Off by default. See
+- `--schedule`: schedule recovery (`sweep` when supported) and separate
+  `expire` cleanup for the user running the script, who must be the agents'
+  user. Off by default. See
   [Schedule the sweeps](#schedule-the-sweeps).
+- `--journal-maintenance-window`: assert that old writers are excluded; see
+  [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
+- `--journal-roots-complete`: assert that every legacy input root is accounted
+  for; see
+  [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
+- `--journal-backup <dir>`: choose a new absolute directory for the
+  stopped-writer backup; see
+  [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
+- `--journal-legacy-root <dir>`: include an additional absolute legacy input
+  root (repeat for each); see
+  [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
 - `--symlink-dir <dir>`: PATH symlink dir (default `~/.local/bin`, if on PATH).
 - `--no-symlink`: create no PATH symlink.
 - `--keep-prior`: keep each overwritten binary as `<target>.prior`. Restoring
@@ -238,15 +256,17 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 
 ## Install from inside Claude Code
 
-From the root of your clone, link the `install-agent-director` skill once,
-then say **install agent-director** in Claude Code:
+From the root of your clone, link the `install-agent-director` and
+`upgrade-agent-director` skills once, then say **install agent-director** in
+Claude Code, or **upgrade agent-director** for an existing install:
 
 ```sh
-mkdir -p ~/.claude/skills && ln -s "$PWD/skills/install-agent-director" ~/.claude/skills/install-agent-director
+mkdir -p ~/.claude/skills
+for s in install-agent-director upgrade-agent-director; do [ -e ~/.claude/skills/$s ] || [ -L ~/.claude/skills/$s ] || ln -s "$PWD/skills/$s" ~/.claude/skills/$s; done
 ```
 
-The skill asks five questions (source, symlink, MCP, hooks, schedule), then
-runs `install.sh`.
+The install skill asks five questions (source, symlink, MCP, hooks, schedule),
+then runs `install.sh`.
 
 ## Install from source
 
@@ -259,11 +279,16 @@ bash skills/install-agent-director/install.sh --binary ./bin/agent-director --ad
 
 ## Schedule the sweeps
 
-`--schedule` schedules the two sweeps:
+`--schedule` opts in to scheduling recovery and separate `expire` cleanup:
 
 ```sh
 bash skills/install-agent-director/install.sh --schedule
 ```
+
+Without the flag, an install or upgrade preserves existing schedule commands,
+cadence and timer enablement. With it, the installer replaces its own entries
+using the template cadence. Choose the defaults or set your own cadence in
+[Maintenance](maintenance.md#schedule-them-by-hand).
 
 What it installs, how to do it by hand and the same-environment rule are in
 [Maintenance](maintenance.md#scheduling-the-sweeps). An install that finds no
@@ -278,7 +303,32 @@ all or none, and keeps them in `~/.config/agent-director/schedule/`. When the
 release tag or commit has no `schedule/` (an older release: HTTP 404), it tries
 once more at `main`, and the `schedule:` line says so.
 
+Raw downloadable templates use `find-missing`, so released installers can use
+them with older binaries, including after a 404 fallback to `main`. The current
+installer checks only the target binary's `help`: if it advertises `sweep`,
+rendered cron lines, services and advice use `sweep`; otherwise they use
+`find-missing`. Failed or unreadable help also keeps `find-missing`. It never
+runs recovery to discover support. Existing `find-missing` schedules remain
+valid aliases on a supporting binary; an upgrade needs no schedule rewrite.
+
 ## Upgrade
+
+An agent upgrading an install follows the
+[upgrade skill](../skills/upgrade-agent-director/SKILL.md) step by step.
+
+An upgrade of an existing store below schema v16 crosses the native-input
+journal cutover, once, and needs the journal flags listed above; a fresh
+install or a store at schema v16 or later needs none. Pre-flight checks those
+flags before anything changes, and a refusal there changes nothing. Run
+[one upgrade at a time](operator-actions.md#upgrading-the-native-input-journal).
+
+Before crossing it, establish the
+[maintenance window and complete recovery set](operator-actions.md#upgrading-the-native-input-journal),
+including every invoking-home input root and any custom database. Keep old
+writers excluded through committed verification. Use the journal flags listed
+above; they assert the operator's boundary and do not stop processes.
+Recovery belongs in the
+[operator runbook](operator-actions.md#going-back-to-the-previous-release).
 
 Run the install again by any path above, from a shell agent-director did not
 start (not one inside an agent's session). This release keeps its files in
@@ -401,14 +451,32 @@ holds the old name of the arguments key is refused at spawn, naming
   tag; this release's `install.sh` refuses an earlier release's binaries (exit
   3).
 
-**Refusals** (exit 5, with every file unchanged; each has its check and fix in
-Operator actions):
+**Refusals** (exit 5, with the install as it was before the run; each has its
+check and fix in Operator actions):
 [`ErrMoveConflict`](operator-actions.md#installsh-refuses-with-errmoveconflict)
 (the layout cannot be moved as it is),
 [`ErrAgentsLive`](operator-actions.md#installsh-refuses-with-erragentslive)
-(an agent or an agent-director process still uses the old directory), and
+(an agent or an agent-director process still uses the old directory),
 [`ErrMoveFailed`](operator-actions.md#installsh-stops-with-errmovefailed)
-(the copy failed; the old directory is untouched).
+(the copy failed; the old directory is untouched), and
+[`ErrJournalMigrationRefused`](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused)
+(pre-flight or the journal cutover refused before the previous install's store
+changed, and anything the run changed was put back). A crossing upgrade refuses a
+`~/.config/agent-director` that is a link: replace the link with its directory
+once, as [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons)
+shows. With no move due, it also refuses while the store holds a live agent
+row (`agents_live`) or its rows cannot be read (`agent_rows_unreadable`);
+the same table gives each one's next step.
+
+Two other cutover outcomes end with exit 5:
+
+- [`ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete):
+  the install did not finish successfully, and this release stays installed;
+  the cutover may still have committed.
+- `ErrSchemaVerifyFailed` after `the restore could not finish`, with kept
+  copies in `details.copies`, whatever its reason: the put-back of the
+  previous install could not finish, so it is partly restored; see
+  [Putting back a kept install](operator-actions.md#putting-back-a-kept-install).
 
 The migration refuses a `config.toml` or a template it cannot read safely, or a
 link it cannot write through (exit 5, `ErrConfigMalformed` or
@@ -422,7 +490,8 @@ because a re-run has no move to print them. See
 [A migration write failed after the binary swap](operator-actions.md#a-migration-write-failed-after-the-binary-swap).
 
 **Going back** to the previous release is
-[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
+[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release),
+when a crossing upgrade has not put it back itself.
 Binary-only rollback requires an unchanged directory and schema. Restoring a
 pre-upgrade store loses writes since its backup; restoring the kept pre-move
 directory loses writes since the move.
@@ -451,10 +520,12 @@ folder](settings.md#set-up-agent-director-in-a-codex-folder) says.
 
 It also removes the schedule `--schedule` added and nothing else: the crontab
 lines tagged `agent-director-schedule` (the crontab itself only when nothing
-else is left in it), the tagged systemd user units with their timers, and the
+else is left in it), the tagged `agent-director-find-missing` and
+`agent-director-expire` systemd user services and timers, and the
 schedule files a piped install kept in `~/.config/agent-director/schedule/`
 (the directory stays, with a note, when it holds other files). With no schedule
-present it prints nothing about it.
+present it prints nothing about it. Cleanup recognizes the same markers and
+unit names whether the recovery command is `sweep` or `find-missing`.
 
 `--purge` also removes every directory the upgrade or the way back left:
 each `~/.agent-director.pre-move-*`, `~/.config/agent-director.after-upgrade-*`

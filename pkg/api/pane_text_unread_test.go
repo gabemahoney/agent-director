@@ -17,7 +17,7 @@ import (
 
 // TestNoCodePathReadsPaneText: in pkg/api's production code only readPane
 // (read-pane, which returns the text to its caller), capturePaneHash (the
-// hash check) and samplePane (the idle_screen fingerprint) capture the
+// hash check) and sampleActivePane (the idle_screen fingerprint) capture the
 // pane, and the captured value goes only to
 // paneSHA256, the result's Pane field and tmux.StripANSI, whose result goes
 // back into the same variable or straight to one of the other two: nothing
@@ -66,12 +66,12 @@ func TestNoCodePathReadsPaneText(t *testing.T) {
 	for name := range capturers {
 		got = append(got, name)
 	}
-	if slices.Sort(got); !slices.Equal(got, []string{"capturePaneHash", "readPane", "samplePane"}) {
-		t.Errorf("functions capturing the pane = %v; want only capturePaneHash, readPane and samplePane", got)
+	if slices.Sort(got); !slices.Equal(got, []string{"capturePaneHash", "readPane", "sampleActivePane"}) {
+		t.Errorf("functions capturing the pane = %v; want only capturePaneHash, readPane and sampleActivePane", got)
 	}
 }
 
-// capturedVars returns the names fd assigns a CapturePaneID result to.
+// capturedVars returns the names fd assigns a CapturePaneID or shared CapturePane result to.
 func capturedVars(fd *ast.FuncDecl) []string {
 	var out []string
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
@@ -80,7 +80,7 @@ func capturedVars(fd *ast.FuncDecl) []string {
 			return true
 		}
 		if call, ok := as.Rhs[0].(*ast.CallExpr); ok {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "CapturePaneID" {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "CapturePaneID" || sel.Sel.Name == "CapturePane") {
 				if id, ok := as.Lhs[0].(*ast.Ident); ok {
 					out = append(out, id.Name)
 				}

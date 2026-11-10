@@ -387,7 +387,8 @@ func (r *rvResume) move(t *testing.T, f *v5Store, id string) {
 	sp := rvExamine(t, f, id)
 	r.prior = store.ResumePrior{State: sp.State, EndedAtText: sp.EndedAtText, PID: sp.PID,
 		ProcStarttime: sp.ProcStarttime, LivenessUnverifiedSince: sp.LivenessUnverifiedSince,
-		LivenessNote: sp.LivenessNote, EndReportedAtMillis: sp.EndReportedAtMillis, Identity: sp.Identity}
+		LivenessNote: sp.LivenessNote, EndReportedAtMillis: sp.EndReportedAtMillis, Identity: sp.Identity,
+		StateEvidence: sp.PriorStateEvidence(), ProcessEvidence: sp.PriorProcessEvidence()}
 	r.moved = rvMove(t, f, id, sp, store.CondApplied)
 }
 

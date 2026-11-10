@@ -1,92 +1,93 @@
 package api_test
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"os"
-	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
 func TestSendKeysDefaultNativeBackendPreservesExistingOwnership(t *testing.T) {
-	// Serial: native launch paths use HOME, which each case isolates.
-	for _, mode := range []string{"absent", "corrupt manifest", "corrupt journal", "partial input", "submitted proof"} {
+	t.Parallel()
+	for _, mode := range []string{"absent", "corrupt capability", "corrupt attempt", "partial input", "supported unready"} {
 		t.Run(mode, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			e := newNativeSubmissionEnv(t)
-			r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
-			identity := r.Spawn.Identity
-			id := api.InputDeliveryIdentity{StoreID: e.store.StoreID(), Token: identity.Token, InstanceID: r.ID, Socket: identity.Socket, PaneID: identity.PaneID, PID: identity.PanePID, Starttime: identity.PaneStarttime, Agent: r.Spawn.Agent, CWD: r.Spawn.CWD}
-			dir := filepath.Join(home, ".config", "agent-director", "input", id.StoreID, id.Token)
+			e, r, launch := sqliteSubmission(t)
+			db, err := sql.Open("sqlite", e.dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
 			e.env.Input = nil
-			params := api.SendKeysParams{InstanceID: r.ID, Text: skpText, DeliveryRequestID: "original"}
-			var owner *api.InputDeliveryAttempt
-			if mode != "absent" {
-				var err error
-				owner, err = inputdelivery.NewAttempt(id, params.Text, nil)
-				if err != nil {
+			params := api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true, DeliveryRequestID: "original"}
+			if mode == "absent" {
+				if _, err := db.Exec(`DELETE FROM input_launches`); err != nil {
 					t.Fatal(err)
 				}
-				owner.RequestID, owner.Phase, owner.BytesAttempted = params.DeliveryRequestID, "text_attempted", len(params.Text)
-				if mode == "submitted proof" {
-					owner.Phase, owner.EnterAttempted = "submitted", true
-					raw := []byte(`{"type":"response_item","payload":{"type":"message","role":"user","id":"native-proof","content":[{"type":"input_text","text":"` + params.Text + `"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}`)
-					owner.Proof = &api.InputDeliveryProof{SessionID: r.Spawn.SessionID, RecordID: "native-proof", Raw: raw, RawSHA256: inputdelivery.Hash(raw)}
-				}
-				s, err := (inputdelivery.Native{}).Open(id)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := s.Save(owner); err != nil {
-					t.Fatal(err)
-				}
-				if err := s.Close(); err != nil {
-					t.Fatal(err)
-				}
-				corrupt := ""
-				if mode == "corrupt manifest" {
-					corrupt = "launch.json"
-				} else if mode == "corrupt journal" {
-					corrupt = "attempt.json"
-				}
-				if corrupt != "" {
-					if err := os.WriteFile(filepath.Join(dir, corrupt), []byte("not JSON"), 0600); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			before, readErr := os.ReadFile(filepath.Join(dir, "attempt.json"))
-			if mode != "absent" && readErr != nil {
-				t.Fatal(readErr)
-			}
-			result, err := e.send(params)
-			switch mode {
-			case "absent":
-				if err != nil || result != (api.SendKeysResult{}) {
-					t.Fatalf("compatibility input result=%+v err=%v", result, err)
-				}
-				e.assertDelivered(t, r.Socket, identity.PaneID, params.Text)
-				if _, err := os.Stat(filepath.Join(home, ".config", "agent-director", "input")); !os.IsNotExist(err) {
-					t.Fatalf("default compatibility input allocated native state: %v", err)
-				}
+				// b.qcf: without a launch, ordinary text on this unreported
+				// pending Claude row is fallback input, which waits for SessionStart.
+				_, err = e.send(params)
+				e.assertSessionStartMissing(t, err)
 				return
-			case "partial input":
-				assertDeliveryError(t, err, "partial_input_unconfirmed", len(params.Text), false)
-			case "submitted proof":
-				if err != nil || result.Outcome != "submitted" || result.RequestID != params.DeliveryRequestID || result.RecordSHA256 != owner.Proof.RawSHA256 {
-					t.Fatalf("persisted proof result=%+v err=%v", result, err)
-				}
-			default:
-				assertDeliveryError(t, err, "not_started", 0, false)
 			}
-			e.assertNoTmuxCall(t)
-			after, err := os.ReadFile(filepath.Join(dir, "attempt.json"))
-			if err != nil || !reflect.DeepEqual(after, before) {
-				t.Fatalf("default native backend replaced existing ownership: %v", err)
+			if mode == "supported unready" {
+				if err := os.Remove(launch.EvidenceDir + "/claude-debug.log"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "partial input" || mode == "corrupt attempt" {
+				id := sqliteInputIdentity(r.Spawn, e.storeID)
+				l, err := e.st.ReadInputLaunch(context.Background(), r.Token)
+				if err != nil {
+					t.Fatal(err)
+				}
+				g := sqliteGuard(r.Spawn, e.storeID)
+				l, err = e.st.BindInputLaunch(context.Background(), *l, g)
+				if err != nil {
+					t.Fatal(err)
+				}
+				a, err := inputdelivery.NewAttempt(id, params.Text, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.RequestID = params.DeliveryRequestID
+				l, a, err = e.st.SaveInputAttempt(context.Background(), *l, g, a)
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.Phase, a.BytesAttempted = "text_attempted", len(a.Payload)
+				if _, _, err = e.st.SaveInputAttempt(context.Background(), *l, g, a); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch mode {
+			case "corrupt capability":
+				_, err = db.Exec(`UPDATE input_launches SET record='broken'`)
+			case "corrupt attempt":
+				_, err = db.Exec(`UPDATE input_attempts SET record='broken'`)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = e.send(params)
+			if !errors.Is(err, api.ErrSubmissionUnconfirmed) {
+				t.Fatalf("unsafe fallback: %v", err)
+			}
+			e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendKey, tmux.CallSendEnter)
+			if mode == "partial input" {
+				assertDeliveryError(t, err, "partial_input_unconfirmed", len(params.Text), false)
+			}
+			if mode == "supported unready" && e.slept.Seconds() != 12 {
+				t.Fatalf("readiness budget=%v", e.slept)
+			}
+			row, err := e.st.GetSpawn(r.ID)
+			if err != nil || row.State != store.StatePending {
+				t.Fatalf("read changed row: %+v %v", row, err)
 			}
 		})
 	}

@@ -85,7 +85,11 @@ var errEmptyPath = errors.New("empty database path")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
-const schemaVersion = 15
+// install.sh holds it as STORE_SCHEMA_VERSION, and the version the
+// inputCutover step of migrationSteps produces as INPUT_CUTOVER_VERSION: its
+// pre-flight decides from them, before the binary swap, whether an upgrade
+// crosses the native-input cutover. A Go test fails when either differs.
+const schemaVersion = 20
 
 // agentRenameHopVersion is the user_version the agent-rename hop (v8 to v9,
 // migrateV8toV9, b.ssz) produces. install.sh holds the same number as
@@ -108,9 +112,17 @@ type Store struct {
 	// callContext is immutable on a scoped handle; the pool is shared with its
 	// owner. It carries the original caller deadline through every statement.
 	callContext context.Context
-	cleanup     *connectionCleanupLane
-	filePath    string // actual opened database, retained for owned Cursor launch plumbing
-	db          *sql.DB
+
+	// recoveryTickSource is invocation-only audit attribution, never stored.
+	recoveryTickSource string
+
+	// terminalReportingContext bounds only the post-commit reporting of a
+	// scoped terminal writer; nil preserves the legacy synchronous emissions.
+	terminalReportingContext context.Context
+
+	cleanup  *connectionCleanupLane
+	filePath string // actual opened database, retained for owned Cursor launch plumbing
+	db       *sql.DB
 	// storeID is store_meta's store_id, read once at open (SR-5.1); see
 	// StoreID.
 	storeID string
@@ -241,6 +253,10 @@ func busyTimeoutOrDefault(busyTimeoutMs int) int {
 // mode, and ensures the schema is current. It is the shared backend for
 // OpenWithBusyTimeout and OpenOrInitWithBusyTimeout.
 func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
+	return openDBWithInputWindow(resolved, busyTimeoutMs, nil)
+}
+
+func openDBWithInputWindow(resolved string, busyTimeoutMs int, window *inputMigrationWindow) (*Store, error) {
 	busyTimeoutMs = busyTimeoutOrDefault(busyTimeoutMs)
 
 	// foreign_keys is a per-connection PRAGMA. The context-aware connector
@@ -286,7 +302,7 @@ func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
 		return nil, fmt.Errorf("store: chmod db file: %w", err)
 	}
 
-	if err := ensureSchema(db, resolved); err != nil {
+	if err := ensureSchemaWithInputWindow(db, resolved, window); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -298,6 +314,11 @@ func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
 	if err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+
+	if err := inputAuthority(context.Background(), db, storeID); err != nil {
+		_ = db.Close()
+		return nil, withInputMigrationCause(CauseNativeInputStateInconsistent, fmt.Errorf("%w: native input authority is not committed", ErrSchemaMismatch))
 	}
 
 	absolutePath, err := filepath.Abs(resolved)

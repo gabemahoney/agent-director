@@ -8,6 +8,7 @@ package store
 // arrangements lives only here (SR-20.3).
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -22,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -83,11 +85,32 @@ func makeVersionedDB(t *testing.T, dir string, v int) string {
 		if !ok {
 			t.Fatalf("no migration step from %d", from)
 		}
-		if err := step.apply(db); err != nil {
+		var err error
+		if step.inputCutover {
+			err = migrateInputJournal(db, migrationTestWindow(t, path), from+1)
+		} else {
+			err = step.apply(db)
+		}
+		if err != nil {
 			t.Fatalf("step %d→%d: %v", from, from+1, err)
 		}
 	}
 	return path
+}
+
+// migrationTestWindow supplies a test-owned, empty legacy root for schema-only
+// tests. Real OS exclusion is covered separately by adminapi and Docker cases.
+func migrationTestWindow(t *testing.T, path string) *inputMigrationWindow {
+	t.Helper()
+	return &inputMigrationWindow{ctx: context.Background(), path: path,
+		roots: []string{t.TempDir()}, verify: func(context.Context, string, []string) error { return nil }}
+}
+
+// openMigrationTestStore keeps exact sentinel authorization while admitting the
+// administrator-only hop. Ordinary runtime refusal tests must still call Open.
+func openMigrationTestStore(t *testing.T, path string) (*Store, error) {
+	t.Helper()
+	return openDBWithInputWindow(path, DefaultBusyTimeoutMs, migrationTestWindow(t, path))
 }
 
 // userVersion reads db's PRAGMA user_version.
@@ -276,6 +299,47 @@ func dbDump(t *testing.T, path string) map[string]any {
 		}
 	})
 	return out
+}
+
+// expectInputAuthority extends a legacy dump by exactly the new authority row.
+// All prior metadata rows, their order and types remain part of the expectation.
+func expectInputAuthority(dump map[string]any, id string) {
+	dump["rows store_meta"] = append(slices.Clone(dump["rows store_meta"].([]string)),
+		fmt.Sprintf("%#v", []any{inputAuthorityKey, inputAuthorityVersion + id}))
+}
+
+// assertReleasedReentry checks the old hop's exact idempotence on a copy of
+// its released fixture. Re-running an old hop on a current journal would reset
+// its version, which is intentionally refused instead of being a downgrade.
+func assertReleasedReentry(t *testing.T, path string, from, to int) {
+	t.Helper()
+	copyPath := filepath.Join(t.TempDir(), "state.db")
+	for p, data := range readDBFileSet(t, path) {
+		if err := os.WriteFile(copyPath+strings.TrimPrefix(p, path), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply := func() {
+		withRaw(t, copyPath, func(db *sql.DB) {
+			for v := from; v < to; v++ {
+				step, ok := migrationStepFrom(v)
+				if !ok || step.apply == nil {
+					t.Fatalf("not a released primitive hop: %d", v)
+				}
+				if err := step.apply(db); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	apply()
+	want := dbDump(t, copyPath)
+	for run := 0; run < 2; run++ {
+		apply()
+		if readUserVersion(t, copyPath) != to || !reflect.DeepEqual(want, dbDump(t, copyPath)) {
+			t.Fatal("released-hop reentry changed retained schema, data or version")
+		}
+	}
 }
 
 // columnSpec is one column a migration step adds; dflt is table_info's
@@ -743,14 +807,14 @@ func makeV7Fixture(t *testing.T, dir string) v7Fixture {
 	t.Helper()
 	f := v7Fixture{dir: dir, path: makeVersionedDB(t, dir, 7), rows: map[string]map[string]string{}}
 	withRaw(t, f.path, func(db *sql.DB) {
-		for _, st := range v7States {
+		for n, st := range v7States {
 			var launch any
 			if st == StatePending {
 				launch = int64(1_790_000_000_123)
 			}
 			mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode, row_version,
 				launch_started_at, launch_token, tmux_socket, liveness_note) VALUES (?, ?, '/work/v7', ?, 'on', 4, ?,
-				'0123456789abcdef', '/tmp/ad-v7/sock', 'probe_eacces')`, v7ID(st), st, "ad-"+v7ID(st), launch)
+				?, '/tmp/ad-v7/sock', 'probe_eacces')`, v7ID(st), st, "ad-"+v7ID(st), launch, fmt.Sprintf("%016x", n+1))
 		}
 		mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input,
 			hook_pid, hook_starttime, tool_use_id, settled_at) VALUES (?, 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', 'Bash', '{}',
@@ -922,7 +986,7 @@ func makeV4HistoryFixture(t *testing.T, dir string) v4HistoryFixture {
 func migrateV4Fixture(t *testing.T, f v4HistoryFixture) {
 	t.Helper()
 	writeSentinel(t, f.dir, 4, schemaVersion)
-	s, err := Open(f.path)
+	s, err := openMigrationTestStore(t, f.path)
 	if err != nil {
 		t.Fatalf("Open(authorised v4): %v", err)
 	}
@@ -1534,6 +1598,59 @@ func seedPreMigrationRow(t *testing.T, path string, from int) {
 	})
 }
 
+// v17 fixtures retain v16's actual schema and history; no origin is backfilled.
+var v17ColumnSpecs = []columnSpec{
+	{"permission_requests", "decision_origin", "TEXT", false, ""},
+	{"permission_requests", "response_state", "TEXT", false, ""},
+	{"permission_requests", "owner_life_number", "INTEGER", false, ""},
+	{"permission_requests", "owner_session_id", "TEXT", false, ""},
+	{"permission_requests", "owner_cursor_connection", "TEXT", false, ""},
+}
+
+func seedV16PermissionHistory(t *testing.T, path string) {
+	t.Helper()
+	seedPreMigrationRow(t, path, 16)
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,decision,decided_at,proven_gone_at,proven_gone_how) VALUES('pre',?,'Bash','{}','allow','2026-10-01 01:00:00',12345,'tool_ran')`, tokenA)
+		mustExec(t, db, `INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,decision,decision_reason,decided_at) VALUES('pre',?,'Bash','{}','deny','operator','2026-10-01 01:00:01')`, tokenB)
+		mustExec(t, db, `INSERT INTO session_history(instance_id,session_id,life_number) VALUES('pre','history-session',2)`)
+	})
+}
+
+// seedV18Obligation records partial migration state beside the retained v17
+// permission/history fixture. Runtime tests use cursorRowBinding instead.
+func seedV18Obligation(t *testing.T, path, table string) {
+	t.Helper()
+	owner := CursorOwner{StoreID: assertOneStoreID(t, path), Runtime: CursorRuntime{
+		InstanceID: "pre", Token: "launch", Life: 2, GatewayPID: 11, GatewayStart: "gateway",
+		RuntimePID: 12, RuntimeStart: "runtime", Connection: "connection", InputPipe: "pipe:[1]",
+		OutputPipe: "pipe:[2]", InputFD: 3, OutputFD: 4, SessionID: "session"}}
+	at := time.Date(2026, 10, 30, 1, 2, 3, 4, time.UTC)
+	withRaw(t, path, func(db *sql.DB) {
+		if table == "cursor_inputs" {
+			mustExec(t, db, cursorInputsDDL)
+			v := CursorInput{Owner: owner, SubmissionID: "input", Generation: 3, Order: 5, Epoch: 7,
+				Text: " original\n\t文字 ", CapturedAt: at, State: CursorInputUnresolved,
+				TargetSession: "session", RequestID: "prompt", Deadline: at.Add(time.Second), Detail: "unknown commit"}
+			raw, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustExec(t, db, `INSERT INTO cursor_inputs VALUES(?,?,?,?,?)`, owner.StoreID, "connection", "pre", "input", string(raw))
+		} else {
+			mustExec(t, db, cursorProofsDDL)
+			v := CursorProof{Owner: owner, ID: "proof", Token: tokenA, Tool: "tool", Generation: 3,
+				Kind: "tool_call_update", CapturedAt: at, BusyUntil: at.Add(time.Second), Ran: true, TurnOpen: true}
+			raw, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence := []byte(" {\"sessionId\":\"session\", \"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tool\",\"status\":\"completed\",\"rawOutput\":{\"exitCode\":0,\"stdout\":\"\\u0020\",\"stderr\":\"\"}}} \n")
+			mustExec(t, db, `INSERT INTO cursor_proofs VALUES(?,?,?,?,?,?)`, owner.StoreID, "connection", "pre", "proof", string(raw), evidence)
+		}
+	})
+}
+
 // insertRow inserts row (column to value) into table; the columns are the
 // test's own literals.
 func insertRow(t *testing.T, db *sql.DB, table string, row map[string]any) {
@@ -1591,7 +1708,6 @@ func makeV8Fixture(t *testing.T, dir string) v8Fixture {
 		requests: map[string][]map[string]string{}, history: map[string][]map[string]string{}}
 	f.ids = []string{v8LiveID, v8PendingID, v8RelayID, v8UnsettledID, v8ReusedID, v8OptedOutID, v8MissingID}
 	const (
-		token  = "0123456789abcdef"
 		socket = "/tmp/ad-v8/sock"
 		pidns  = "pid:[4026531836]"
 	)
@@ -1605,7 +1721,7 @@ func makeV8Fixture(t *testing.T, dir string) v8Fixture {
 		return row
 	}
 	identity := func(pane string, pid int) map[string]any {
-		return map[string]any{"launch_token": token, "tmux_socket": socket, "tmux_server_pid": 4100,
+		return map[string]any{"launch_token": fmt.Sprintf("%016x", pid), "tmux_socket": socket, "tmux_server_pid": 4100,
 			"tmux_server_started": 1767225600, "tmux_server_starttime": "123", "pane_id": pane, "pane_pid": pid, "pane_starttime": "456"}
 	}
 	merge := func(base, more map[string]any) map[string]any {
@@ -1621,7 +1737,7 @@ func makeV8Fixture(t *testing.T, dir string) v8Fixture {
 			"launch_owner_pid": 4300, "launch_owner_starttime": "12345", "launch_owner_pidns": pidns,
 			"idle_since": "2026-05-01 10:03:00", "state_changed_ms": 1790000000000}, identity("%2", 4242))),
 		spawn(v8PendingID, map[string]any{"state": "pending", "settled_state": "pending", "row_version": 1,
-			"launch_started_at": int64(1790000000123), "launch_token": token, "tmux_socket": socket,
+			"launch_started_at": int64(1790000000123), "launch_token": "0123456789abcdef", "tmux_socket": socket,
 			"launch_owner_pid": 4300, "launch_owner_starttime": "12345", "launch_owner_pidns": pidns}),
 		spawn(v8RelayID, map[string]any{"state": "check_permission", "settled_state": "check_permission", "relay_mode": "on", "row_version": 4}),
 		spawn(v8UnsettledID, map[string]any{"state": "working", "settled_state": "waiting", "parent_id": v8LiveID,
@@ -1825,6 +1941,45 @@ func assertV15Defaults(t *testing.T, path, id string) {
 			t.Errorf("%s: %s = %s; want NULL", id, c, v)
 		}
 	}
+}
+
+// v19ColumnSpecs are the three spawns evidence columns the v18→v19 hop adds,
+// in schema order: nullable TEXT, no default, no backfill. Must use: a
+// migration test seeds or names them through these specs.
+var v19ColumnSpecs = []columnSpec{
+	{"spawns", "state_evidence", "TEXT", false, ""},
+	{"spawns", "settled_evidence", "TEXT", false, ""},
+	{"spawns", "process_evidence", "TEXT", false, ""},
+}
+
+// v20ColumnSpecs are the nullable, unbackfilled display evidence and
+// observation writer columns, in schema order. Must use: a migration test in
+// this package seeds or names them through these specs.
+var v20ColumnSpecs = []columnSpec{
+	{"spawns", "display_evidence", "TEXT", false, ""},
+	{"spawns", "observation_writer", "TEXT", false, ""},
+}
+
+// v19ColumnNames are v19ColumnSpecs' column names, in order.
+// Must use: a migration test in this package reads the v19 columns by
+// these names.
+func v19ColumnNames() []string {
+	var names []string
+	for _, c := range v19ColumnSpecs {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// v20ColumnNames are v20ColumnSpecs' column names, in order.
+// Must use: a migration test in this package reads the v20 columns by
+// these names.
+func v20ColumnNames() []string {
+	var names []string
+	for _, c := range v20ColumnSpecs {
+		names = append(names, c.name)
+	}
+	return names
 }
 
 // seedV13PermissionFixture retains lifecycle/runtime history and independent

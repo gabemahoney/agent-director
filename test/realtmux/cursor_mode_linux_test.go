@@ -143,6 +143,12 @@ func TestCursorModePublicSavedReplayAndDeliberateRepair(t *testing.T) {
 				failedID := newInstanceID("mode-failed")
 				caller.must("spawn", map[string]any{"instance_id": failedID, "agent": "cursor", "cwd": f.CWD, "no_pre_trust": true, "agent_args": modeArgs, "extra_env": selected})
 				waitFor(t, "late failed launch reconciled", func() bool { row, e := f.API.Get(failedID); return e == nil && row.State == store.StateMissing }, func() string { return fmt.Sprint(readRow(t, f.DBPath, failedID)) })
+				// The gateway closes its failed launch as missing before its final
+				// deferred ad.cursor.failed append; only its exit orders the event.
+				waitFor(t, "exact failed gateway gone", func() bool {
+					pid, ok := readRow(t, f.DBPath, failedID).PanePID.(int64)
+					return ok && pidGone(int(pid))
+				}, func() string { return fmt.Sprint(readRow(t, f.DBPath, failedID)) })
 				trail, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "ad-trail.jsonl"))
 				if err != nil || !strings.Contains(string(trail), want) {
 					t.Fatalf("late repair instruction absent: %v %s", err, trail)

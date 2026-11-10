@@ -9,9 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
-
-	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // The turn-end read examines a rollout's end backward, first its last
@@ -25,42 +22,6 @@ const (
 	minTurnEndTail = 64 << 10
 	maxTurnEndTail = 1 << 20
 )
-
-// codexTurnEnder is the optional store surface of the Codex turn end (b.x72).
-// *store.Store satisfies it, and *store.CursorMissingReads through it; a
-// store without it ends no turn.
-type codexTurnEnder interface {
-	CodexOpenTurns(instanceID string) ([]store.CodexOpenTurn, error)
-	EndCodexTurn(t store.CodexOpenTurn, maxWait time.Duration) (bool, error)
-}
-
-// endCodexTurns is the Codex turn end of a read that reports state (status,
-// get, list, and so family_state; b.x72). Codex runs no Stop hook for a turn
-// that ends in an error, but its rollout records the turn's task_complete. For
-// instanceID's row and its descendants, or every row when instanceID is "",
-// that is raw working on a Codex turn not recorded as ended
-// (store.CodexOpenTurns), it reads the rollout's end (codexRolloutEndsTurn)
-// and, when that records the row's turn as complete, moves the row to waiting
-// (store EndCodexTurn), so the read that follows reports it and the family it
-// counts in. It runs before the read, takes no settle time and samples no
-// pane. Like the reading verbs' other writes it never waits for the write
-// lock and fails open: a busy store or any failure leaves the row working for
-// this read, which goes ahead, and a later read ends the turn.
-func endCodexTurns(s any, instanceID string) {
-	e, ok := s.(codexTurnEnder)
-	if !ok {
-		return
-	}
-	turns, err := e.CodexOpenTurns(instanceID)
-	if err != nil {
-		return
-	}
-	for _, t := range turns {
-		if codexRolloutEndsTurn(t.SessionID, t.JSONLPath, t.Turn) {
-			_, _ = e.EndCodexTurn(t, readerLockWait)
-		}
-	}
-}
 
 // codexRolloutEndsTurn reports whether the rollout at path, session's,
 // records turn as complete: its last event_msg record of type task_started or
@@ -158,10 +119,3 @@ func lastTurnEvent(data []byte, turn string) (ended, decided bool) {
 	}
 	return false, false
 }
-
-// Compile-time assertion that *store.Store and *store.CursorMissingReads
-// (the Client's reads) end Codex turns.
-var (
-	_ codexTurnEnder = (*store.Store)(nil)
-	_ codexTurnEnder = (*store.CursorMissingReads)(nil)
-)

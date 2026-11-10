@@ -1,5 +1,6 @@
-// Package probe reads facts about a single process by pid. It holds three
-// readers, all selected by build tags at compile time:
+// Package probe reads facts about a single process by pid, and selects one
+// user's processes. It holds four readers, all selected by build tags at
+// compile time:
 //
 //   - The start-time reader (ProcChecker / NewProcChecker, starttime.go;
 //     SR-3.8, LFR C1): the one process reader every process judgement uses —
@@ -14,15 +15,20 @@
 //     evidence.
 //   - The parent-pid reader (ParentPIDReader / NewParentPIDReader, ppid.go):
 //     feeds the hook's `ad.hook.pane_is_grandparent` diagnostic and Cursor
-//     runtime's independent direct-child binding check.
+//     runtime's independent direct-child binding check, and the Darwin
+//     journal verifier's exclusion of its own helpers' children.
+//   - The uid selection reader (UIDProcessReader / NewUIDProcessReader,
+//     uidprocs.go): the Darwin journal verifier's process selection, the
+//     kernel's own effective-uid selection. It exists only on darwin.
 //
 // Beside them, SelfPIDNamespace (pidns.go) reads the calling process's own
 // pid namespace, which a recorded pid is judged in (b.146 rule 14).
 //
 // Per OS: Linux reads <procRoot>/<pid>/stat and /comm, and the link
 // <procRoot>/self/ns/pid (default root /proc); darwin reads the pid's single
-// KERN_PROC_PID kinfo_proc entry and has no pid namespaces; any other OS gets
-// readers that answer unreadable for every pid.
+// KERN_PROC_PID kinfo_proc entry, and a uid's KERN_PROC_UID entries, and has
+// no pid namespaces; any other OS gets readers that answer unreadable for
+// every pid.
 //
 // No reader reads a process environment, and none reads the clock.
 // Liveness is judged only by a process's start time (SR-11.1): this package

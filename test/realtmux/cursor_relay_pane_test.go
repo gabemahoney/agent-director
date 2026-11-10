@@ -235,13 +235,13 @@ func TestCursorRelayTurnEndRetiresUndecidedPermissionAndPlan(t *testing.T) {
 			verdicts[row.RequestToken] = "deny"
 		}
 		got, e := f.API.Decide(api.DecideParams{InstanceID: launch.ID, RequestToken: row.RequestToken, Decision: verdicts[row.RequestToken]})
-		if e != nil || got.Delivery != "not_confirmed" {
+		if !errors.Is(e, api.ErrNoOpenPermissionRequest) {
 			t.Fatalf("late decide: %+v %v", got, e)
 		}
 	}
 	for _, row := range relayRequests(t, f, launch.ID, 2) {
-		if row.Decision != verdicts[row.RequestToken] || row.ProvenGoneHow != "turn_end" || !row.DeliveredAt.IsZero() {
-			t.Fatalf("late decide not stored as given: %+v", row)
+		if row.Decision != "" || row.DecisionOrigin != "" || row.ResponseState != "" || row.ProvenGoneHow != "turn_end" || !row.DeliveredAt.IsZero() {
+			t.Fatalf("late decide changed retired request: %+v", row)
 		}
 	}
 	gateway := int(launch.Row.PanePID.(int64))

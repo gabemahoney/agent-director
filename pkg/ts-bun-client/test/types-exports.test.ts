@@ -7,7 +7,7 @@
 import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
 import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
-import type { DialogMaybeOpenDetails, ProvenGoneHow, IdleScreenAvailability } from "../src/index.js";
+import type { SweepParams, SweepResult, SweepCheck, FindMissingParams, FindMissingResult, DialogMaybeOpenDetails, ProvenGoneHow, IdleScreenAvailability } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
@@ -144,3 +144,19 @@ function _assertDisplayTypes(status: StatusResult, get: GetResult, row: ListRow)
   void [availability, displayed, minutes, override, badAvailability, badDisplayed, listMinutes];
 }
 void _assertDisplayTypes;
+
+// Both names remain source-compatible and share the exact check records.
+function _assertSweepAliases(client: ad.Client, result: SweepResult): void {
+ const oldParams: FindMissingParams = { timeout_ms: 1 };
+ const params: SweepParams = oldParams;
+ const oldResult: FindMissingResult = result;
+ const checks: SweepCheck[] = oldResult.checks;
+ const canonical: Promise<SweepResult> = client.sweep(params);
+ const optional: Promise<SweepResult> = client.sweep();
+ const legacy: Promise<FindMissingResult> = client.findMissing(oldParams);
+ void [checks, canonical, optional, legacy];
+ // @ts-expect-error checks must be present, even when empty
+ const missing: SweepResult = {count: 0, ids: [], unverified: 0, unverified_ids: []};
+ void missing;
+}
+void _assertSweepAliases;

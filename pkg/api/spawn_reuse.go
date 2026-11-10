@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"io"
 	"log"
 	"time"
@@ -106,6 +107,7 @@ type reuseExamined struct {
 	pre             preLaunchRow
 	verdict         string
 	disagreeWritten []string
+	lookupGone      bool
 }
 
 // spawnReuse is the reuse path for a finished row (SR-10.2 to SR-10.6): the
@@ -197,7 +199,7 @@ func reuseExamine(d reuseDeps, r spawn.Resolved, row store.ReuseRow) (reuseExami
 		}
 		return reuseExamined{}, decision.Err
 	}
-	return reuseExamined{row: row, pre: pre, verdict: decision.Verdict, disagreeWritten: decision.Reasons}, nil
+	return reuseExamined{row: row, pre: pre, verdict: decision.Verdict, disagreeWritten: decision.Reasons, lookupGone: lookup.Verdict == tmux.Gone}, nil
 }
 
 // reuseSpawnOf returns row, as ReadForReuse read it for instanceID, as the
@@ -315,8 +317,12 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	if err != nil {
 		return SpawnResult{}, err
 	}
+	r.LaunchStoreID, r.LaunchToken = d.storeID, token
 	c, err := spawn.ComposeLaunch(r, d.cfg)
 	if err != nil {
+		return SpawnResult{}, err
+	}
+	if err := spawn.PrepareLaunchFiles(c, d.storeID, token, d.lg); err != nil {
 		return SpawnResult{}, err
 	}
 
@@ -331,9 +337,15 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	fresh.LaunchOwner = spawn.CurrentLaunchOwner(d.pc)
 	res, archived, resetVersion, err := d.rs.ResetForReuse(id, ex.row.Snapshot, ex.row.Agent, fresh)
 	if err != nil {
+		if len(c.Files) > 0 {
+			spawn.ReclaimLaunchFiles(d.storeID, token, d.lg)
+		}
 		return SpawnResult{}, reuseChangeError(id, err)
 	}
 	if res != CondApplied {
+		if len(c.Files) > 0 {
+			spawn.ReclaimLaunchFiles(d.storeID, token, d.lg)
+		}
 		return SpawnResult{}, reuseLostRaceError(id)
 	}
 
@@ -345,9 +357,41 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	req.Socket = socket
 	req.Token = token
 	req.StoreID = d.storeID
+	req.Input, _ = d.rs.(inputdelivery.Persistence)
 	out := spawn.CreateAndLabel(d.t, req)
 	emitReused(id, ex, archived, r.DroppedArgs)
-	if err := d.launchOnto(ex, resetVersion, fresh.LaunchOwner).outcome(out, req); err != nil {
+	launch := d.launchOnto(ex, resetVersion, fresh.LaunchOwner)
+	restore := launch.restoreWrite
+	retainedState := ""
+	launch.restoreWrite = func() (CondResult, error) {
+		res, err := restore()
+		if err == nil {
+			switch res {
+			case CondApplied:
+				retainedState = ex.row.State
+			case CondAbsent:
+				retainedState = "absent"
+			case CondChanged:
+				retainedState = "changed"
+			}
+		}
+		return res, err
+	}
+	err = launch.outcome(out, req)
+	if ex.lookupGone && spawn.IsPaneOnly(ex.row.Agent) {
+		state := tmux.JudgeProcess(d.pc, ex.pre.Agent.Identity)
+		if state == tmux.ProcGone || state == tmux.ProcNone {
+			spawn.ReclaimLaunchFiles(d.storeID, ex.row.Identity.Token, d.lg)
+		}
+	}
+	if err != nil {
+		if len(c.Files) > 0 {
+			if out.DefinitelyNotStarted() {
+				spawn.ReclaimLaunchFiles(d.storeID, token, d.lg)
+			} else if retainedState != "" {
+				spawn.ReportRetainedLaunchFiles(d.storeID, token, retainedState, d.lg)
+			}
+		}
 		return SpawnResult{}, err
 	}
 	return SpawnResult{InstanceID: id, PreTrust: string(preTrust), DroppedArgs: r.DroppedArgs}, nil

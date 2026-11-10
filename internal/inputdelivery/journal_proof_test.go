@@ -2,17 +2,16 @@ package inputdelivery
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
 
-func TestJournalPreservesExactTranscriptProofAfterReopen(t *testing.T) {
+func TestLegacyPreservesExactTranscriptProof(t *testing.T) {
 	t.Parallel()
-	s, a := evidenceSession(t)
+	s, a, j := legacyEvidence(t)
 	a.Payload = "use <>&\n\"quoted\" \\ / café 🌍 ☺"
 	a.PayloadSHA256 = Hash([]byte(a.Payload))
 	a.Phase, a.BytesAttempted = "enter_attempted", len(a.Payload)
@@ -24,55 +23,36 @@ func TestJournalPreservesExactTranscriptProofAfterReopen(t *testing.T) {
 		t.Fatalf("exact native proof=%+v, err=%v; want raw=%q", proof, err, raw)
 	}
 	a.Proof, a.Phase = proof, "submitted"
-	if err := s.Save(a); err != nil {
-		t.Fatal(err)
+	writeLegacyAttempt(t, j, a, false)
+	r, err := j.Read(context.Background(), a.Identity.StoreID, &a.Identity)
+	if err != nil || r.Launch.Blocker != "" || len(r.Attempts) != 1 || !bytes.Equal(r.Attempts[0].Proof.Raw, raw) {
+		t.Fatalf("import=%+v err=%v", r, err)
 	}
-	reopened := &nativeSession{dir: s.dir, manifest: s.manifest}
-	loaded, err := reopened.Load()
-	if err != nil || !reflect.DeepEqual(loaded, a) {
-		t.Fatalf("reopened proof=%+v, err=%v; want %+v", loaded, err, a)
-	}
-	// A later owner forces LoadRequest to read the archived request file.
-	next, err := NewAttempt(a.Identity, "next ordinary prompt", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reopened.Save(next); err != nil {
-		t.Fatal(err)
-	}
-	reopened = &nativeSession{dir: s.dir, manifest: s.manifest}
-	archived, err := reopened.LoadRequest(a.RequestID)
-	if err != nil || !reflect.DeepEqual(archived, a) {
-		t.Fatalf("archived proof=%+v, err=%v; want %+v", archived, err, a)
+	if !r.Attempts[0].Confirmation.At.IsZero() || !r.Launch.Confirmation.At.IsZero() {
+		t.Fatal("import invented observation time")
 	}
 }
 
-func TestJournalRejectsAlteredRawProofOnCurrentAndArchivedRequests(t *testing.T) {
+func TestLegacyRejectsAlteredRawProofOnCurrentAndArchivedRequests(t *testing.T) {
 	t.Parallel()
 	for _, archived := range []bool{false, true} {
 		for _, mode := range []string{"changed bytes", "malformed record with matching hash", "legacy object raw", "invalid base64"} {
 			t.Run(fmt.Sprintf("archived=%t/%s", archived, mode), func(t *testing.T) {
-				s, a := evidenceSession(t)
+				s, a, j := legacyEvidence(t)
 				a.Phase, a.BytesAttempted = "submitted", len(a.Payload)
 				raw := claudeRecord(t, s, a.Payload, nil)
-				a.Proof = &Proof{SessionID: s.manifest.SessionID, Raw: raw, RawSHA256: Hash(raw)}
-				if err := s.Save(a); err != nil {
-					t.Fatal(err)
-				}
-				path := filepath.Join(s.dir, "attempt.json")
-				load := s.Load
+				recordID, _ := s.matchRecord(raw, a, s.manifest.SessionID)
+				a.Proof = &Proof{Path: s.manifest.Transcript, SessionID: s.manifest.SessionID, RecordID: recordID, Raw: raw, RawSHA256: Hash(raw)}
+				path := filepath.Join(j.Dir, "attempt.json")
 				if archived {
-					next, err := NewAttempt(a.Identity, "next ordinary prompt", nil)
+					path = filepath.Join(j.Dir, "request-"+Hash([]byte(a.RequestID))+".json")
+					next, err := NewAttempt(a.Identity, "next prompt", nil)
 					if err != nil {
 						t.Fatal(err)
 					}
-					if err := s.Save(next); err != nil {
-						t.Fatal(err)
-					}
-					path = filepath.Join(s.dir, "request-"+Hash([]byte(a.RequestID))+".json")
-					load = func() (*Attempt, error) { return s.LoadRequest(a.RequestID) }
+					writeLegacyAttempt(t, j, next, false)
 				}
-				data, err := os.ReadFile(path)
+				data, err := json.Marshal(a)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -97,8 +77,9 @@ func TestJournalRejectsAlteredRawProofOnCurrentAndArchivedRequests(t *testing.T)
 					t.Fatal(err)
 				}
 				writeEvidence(t, path, data)
-				if got, err := load(); err == nil || got != nil {
-					t.Fatalf("altered proof accepted: %+v, err=%v", got, err)
+				r, err := j.Read(context.Background(), a.Identity.StoreID, &a.Identity)
+				if err != nil || r.Launch.Blocker == "" || len(r.Attempts) != 0 {
+					t.Fatalf("altered proof accepted: %+v, err=%v", r, err)
 				}
 			})
 		}

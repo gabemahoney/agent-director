@@ -8,6 +8,8 @@ package api_test
 // needs_intelligence display an earlier release stored.
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -24,9 +26,23 @@ import (
 
 // needsIntelligenceClient keeps every read on the same injected clock and
 // refuses sleeps; timeout is its [state] needs_intelligence_timeout_seconds,
-// which has no effect.
-func needsIntelligenceClient(t *testing.T, e *relayEnv, settle, timeout int64) *api.Client {
+// which has no effect. An optional recorder exposes observational side effects.
+// Must use: a permission read or sweep test in this package that inspects
+// observational side effects passes its recorder here, never a second client.
+func needsIntelligenceClient(t *testing.T, e *relayEnv, settle, timeout int64, recorder ...*tmuxfix.Recorder) *api.Client {
 	t.Helper()
+	// These cases vary relay-hook liveness, while every agent remains alive.
+	rows, err := e.s.ListSpawns(store.ListFilters{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		writer, err := apitest.BindReadSurfaceProcess(e.dbPath, row.InstanceID, os.Getpid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.pc.Set(writer.PanePID, procfix.Alive(writer.PaneStarttime))
+	}
 	state, err := e.s.GetSpawnState(e.id)
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +52,11 @@ func needsIntelligenceClient(t *testing.T, e *relayEnv, settle, timeout int64) *
 	}
 	cfg := filepath.Join(t.TempDir(), "config.toml")
 	apitest.WriteKeysConfig(t, cfg, apitest.ConfigKeys{StateSettleMs: settle, RelayTimeoutSeconds: 3600, NeedsIntelligenceTimeoutSeconds: timeout})
-	c, err := api.New(api.Options{StorePath: e.dbPath, ConfigPath: cfg, TmuxClient: tmuxfix.NewRecorder()})
+	rec := tmuxfix.NewRecorder()
+	if len(recorder) != 0 {
+		rec = recorder[0]
+	}
+	c, err := api.New(api.Options{StorePath: e.dbPath, ConfigPath: cfg, TmuxClient: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,6 +400,57 @@ func TestFallbackNoRequestOrTrustworthyClock(t *testing.T) {
 				observeStatus(t, c, e.id, store.StateCheckPermission, func(store.Spawn, store.Spawn) bool { return !e.request(t).FallbackAt.IsZero() })
 			} else if assertDisplayState(t, c, e.id, store.StateCheckPermission); !e.request(t).FallbackAt.IsZero() {
 				t.Errorf("an untrustworthy creation stored a clock: %+v", e.request(t))
+			}
+		})
+	}
+}
+
+// b.x9o cb: a sweep records an expired permission's fallback without deciding,
+// dispatching an answer, or changing lifecycle. Advancing time alone does nothing.
+func TestSweepPermissionFallbackHasNoAnswerAuthority(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex, store.AgentCursor} {
+		t.Run(agent, func(t *testing.T) {
+			e := newRelayEnvAgent(t, relayEnvHook, agent)
+			e.now = displayAt
+			e.ns = ""
+			requestFacts(t, e, apitest.PermissionTimes(displayAt.Add(-time.Hour), time.Time{}, displayAt, time.Time{}, time.Time{}, ""))
+			rec := tmuxfix.NewRecorder()
+			c := needsIntelligenceClient(t, e, 0, 0, rec)
+			e.now = displayAt.Add(time.Minute)
+			if pr := e.request(t); !pr.FallbackAt.IsZero() || pr.Decision != "" || !pr.ClosedAt.IsZero() {
+				t.Fatalf("time performed recovery: %+v", pr)
+			}
+			got, err := c.Sweep(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertLists(t, got, nil, nil)
+			apitest.AssertConfirmationsShape(t, jsonOf(t, got))
+			if len(got.Checks) != 1 {
+				t.Fatalf("checks = %+v", got.Checks)
+			}
+			row := got.Checks[0]
+			if row.State != store.StateCheckPermission || row.DisplayedState != "" {
+				t.Errorf("fallback changed lifecycle/display: %s", jsonOf(t, row))
+			}
+			// This existing permission fixture has no Cursor gateway identity;
+			// fallback may commit while that independent coverage stays unavailable.
+			if agent == store.AgentCursor {
+				if row.Completion != "incomplete" || row.Reason == nil || *row.Reason != "unsupported" {
+					t.Errorf("missing gateway coverage = %s", jsonOf(t, row))
+				}
+			} else if row.Completion != "complete" || row.Reason != nil {
+				t.Errorf("fallback coverage = %s", jsonOf(t, row))
+			}
+			if pr := e.request(t); !pr.FallbackAt.Equal(displayAt) || pr.FallbackBasis != store.FallbackDeadline || pr.Decision != "" || !pr.ClosedAt.IsZero() {
+				t.Fatalf("fallback gained answer authority: %+v", pr)
+			}
+			if raw, err := e.s.GetSpawn(e.id); err != nil || raw.State != store.StateCheckPermission {
+				t.Fatalf("fallback changed raw lifecycle: %+v %v", raw, err)
+			}
+			if calls := rec.SocketCalls(); len(calls) != 0 {
+				t.Errorf("permission observation dispatched tmux: %+v", calls)
 			}
 		})
 	}

@@ -39,7 +39,7 @@ func TestEnvelopeErrNamesCatalogued(t *testing.T) {
 	// that stops seeing a writer fails here rather than passing on nothing.
 	floor := map[string][]string{
 		"cmd/agent-director":       {"ErrInvalidFlags", "ErrJSONMarshal", "ErrStoreOpen", "ErrTrailWrite", "ErrUnknownVerb"},
-		"cmd/agent-director-admin": {"ErrInvalidFlags", "ErrJSONMarshal", "ErrStoreOpen", "ErrUnknownVerb"},
+		"cmd/agent-director-admin": {"ErrJournalMigrationRefused", "ErrInvalidFlags", "ErrJSONMarshal", "ErrStoreOpen", "ErrUnknownVerb"},
 		"internal/clisetup":        {"ErrConfigMalformed", "ErrOldLayout", "ErrSchemaMigrationRequired", "ErrSchemaMismatch", "ErrStoreOpen"},
 		"internal/mcp":             {"ErrUnknownTool"},
 	}

@@ -4,8 +4,9 @@
 
 A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 
-- Spawns agent instances (Claude Code, Codex or Cursor, chosen per Spawn) inside tmux sessions.
-- Tracks agent state and transcripts through hooks; Cursor uses an owned ACP gateway with correlated reports and protected transcripts. All three agents share request inspection and decisions; Cursor validates ACP permissions/plans and denies questions before admission.
+- Spawns agent instances (Claude Code, Codex, Cursor or experimental Droid, chosen per Spawn) inside tmux sessions.
+- Tracks Claude/Codex state and transcripts through hooks; Cursor uses an owned ACP gateway with correlated reports and protected transcripts. These three agents share request inspection and decisions; Cursor validates ACP permissions/plans and denies questions before admission.
+- Droid uses the shared supervised pane-only policy, without lifecycle reports or native delivery/permission integration; see the [fixed capability contract](experimental.md#pane-only-rows).
 - Reports experimental context fullness through the shared read surfaces using qualified structured evidence; unsupported or unreliable sources return explicit nulls.
 - Exposes a CLI for humans and a stdio MCP server for LLM callers — both implemented by the same binary in different modes.
 
@@ -17,9 +18,9 @@ A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 - **Internal Cursor gateway** — `agent-director cursor-host`, the direct pane process for a fresh, reused or resumed Cursor row; CLI-only launch plumbing, excluded from MCP discovery and dispatch.
 - **Hook entrypoint** — the same binary invoked by the agent on hook events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, Stop, Notification, SessionEnd, PermissionRequest, SubagentStart, SubagentStop).
 - **Stdio MCP server** — same binary invoked as `agent-director serve --stdio`. Stdio transport, lifetime scoped to a single agent session.
-- **Operator tool** — a second binary, `agent-director-admin`, for the two
-  operator-only actions (the finished-row kill, `kill-finished`, and
-  `delete`). It is not an agent surface: install.sh puts it at
+- **Operator tool** — a second binary, `agent-director-admin`, for
+  `kill-finished`, `delete`, `migrate-journal` and `snapshot-store`.
+  It is not an agent surface: install.sh puts it at
   `~/.config/agent-director/admin/agent-director-admin`, never on PATH, and no
   manifest text, `help`, MCP tool or client library names it. See
   [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin)
@@ -30,7 +31,9 @@ A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 - SQLite at `~/.config/agent-director/state.db` for spawn state, parent/child links, permission requests, subagent records, and labels.
 - TOML config at `~/.config/agent-director/config.toml`.
 - Templates as plain files in `~/.config/agent-director/templates/`.
-- Private launch diagnostics, input attempts and transcript proof under
+- Private generated launch files under `~/.config/agent-director/launch/<store_id>/<launch_token>/`, prepared and reclaimed by the [launch-file seam](#per-agent-launch-composition).
+- Operational native launch/current/history records and exact proof in SQLite.
+- Private provider diagnostics and synchronization locks under
   `~/.config/agent-director/input/<store_id>/<launch_token>/`; see
   [Ordinary input delivery](#ordinary-input-delivery).
 
@@ -86,6 +89,12 @@ branches on the agent anywhere else. Each seam's own section states its rule
   its `...Program` function and the agent's words in advice come from the
   agent helpers: [The agent: resolution, ownership and
   checks](#the-agent-resolution-ownership-and-checks).
+- **Pane-only policy. Must use:** extend `config`'s capability table and
+  `internal/spawn`'s `paneOnlyAgents` adapter table. Callers use `IsPaneOnly`,
+  the shared settings/capability checks, `PrepareLaunchFiles` /
+  `ReclaimLaunchFiles` and the policy-owned credential/home exclusion list;
+  a new lane agent is a table entry plus its adapter, never another supervision
+  path. See [Per-agent launch composition](#per-agent-launch-composition).
 - **Hooks.** The event-to-write decision comes from the classifier: [The
   agent-aware hook classifier](#the-agent-aware-hook-classifier). Its output
   gates subagent capture: Claude's table enables it, Codex's and Cursor's never do. A
@@ -398,6 +407,12 @@ prompt admission remain separate facts. Existing mode confirmation,
 protected recording and prompt/hold/FIFO guards remain mandatory. Initialization
 alone neither commits identity nor releases provisionally held input.
 
+A control, signal or retired-prompt failure consumed by `await` without failing
+the controller requests another loop pass. At the loop tail, intentional exit
+takes precedence over that continuation; otherwise, the loop takes the extra
+pass before blocking in `select`. Shutdown finalizes any captured control input
+and queued or held input still pending. No ticker or polling is involved.
+
 The shared verifier checks cancellation and the applicable absolute deadline after evidence
 returns, rejecting late positive results. Gateway controls, runtime loss, current
 input epoch and publication checks remain authoritative; acknowledgement receipt
@@ -525,9 +540,8 @@ and release at dispatch or cancellation. Future input paths MUST reuse
 reservation, Enter can verify committed waiting through `reporter.verifyReport`
 while the hook finishes, and the saved initial prompt retains priority. Once
 startup is confirmed, eligible complete follow-ups queue in observed terminal
-order. `terminal_linux.go` preserves editable Unicode and multiline text;
-pending startup, stale or excess input is explicitly refused. Literal text and
-Enter remain separate public send-keys operations, without concurrent-caller
+order. Pending startup, stale or excess input is explicitly refused. Literal text
+and Enter remain separate public send-keys operations, without concurrent-caller
 atomicity. `/clear` and `/new` share the priority control lane and start a
 same-life conversation rotation. Old accepted queue entries are cancelled
 individually and never migrate. Ordinary input consumed during rotation captures
@@ -540,6 +554,35 @@ remains provisional until `CheckCursorPrompt` accepts every durable guard.
 merges by original observation order ahead of newer accepted work. Future
 rotation/admission paths MUST reuse these components and the captured status.
 
+`terminal_linux.go` owns one decoder and a private wake pipe; input/output
+handles remain borrowed. Until cleanup returns, callers must keep those handles
+open and must not read or change termios on the input. Idle and partial UTF-8
+refills wait for input or explicit stop, without timed polling. Escape consumes
+at most eight continuation bytes, with a separate 80 ms wait for each empty
+buffer; lone Escape interrupts. The 80 ms applies per wait, not to the whole
+sequence or turn.
+Unicode editing, the 256 Ki-rune draft limit, bracketed paste, C-u/C-c and
+native choice routing remain unchanged; literal LF adds a line, while CR
+outside paste submits.
+
+Cleanup runs once, including concurrent calls: signal stop, close the owned
+wake writer, join the original decoder, then attempt bracketed-paste disablement
+and termios restoration and close the wake reader. Restoration remains
+best-effort under the no-error cleanup API. Borrowed handles stay open; the
+reader introduces no nonblocking flag change. EOF, read/decoding and setup
+errors use the same joined cleanup. After return, this reader cannot consume
+later input, admit work, emit choices/events or write output. Stop checks
+discard buffered follow-up once observed; callbacks or writes already entered
+must return before join completes. `terminalInputLoop` also selects channel
+delivery, including setup errors, against stop.
+
+In `Run`, terminal cleanup precedes request/display/protocol teardown. Its later
+controller finalizer first disables admission and stops the mailbox.
+The reader uses the existing bounded mailbox/admission/choice callbacks and
+nonblocking `paneDisplay` enqueue. Joining it does not join a late admission
+verifier (the 100 ms limit and discarded late result remain) or drain already
+queued display output; the display's bounded stop below still applies.
+
 Dispatch requires the previous turn to finish and every retained durable dialog
 hold to resolve. Future dispatch paths MUST reuse `reporter.promptEligible`
 and `Store.CheckCursorPrompt`, which bound authority acquisition and verify
@@ -550,10 +593,39 @@ verified Cursor row; see "The hold" under
 request map, acknowledgement or local cancellation supplies no dialog proof.
 Late exact tool execution can discharge only its matching hold after completion.
 The guarded protocol request allocates its ACP identity before synchronizing
-`submission_started`; no prompt bytes may pass before that record succeeds.
+`submission_started` and the durable started record. Immediately before I/O,
+`inputObligation.issue` must confirm the exact started→issued store transition
+under the original writer deadline, current epoch and independent runtime/pane
+checks; the transaction rechecks durable dialog holds. Neither started nor
+issued proves provider receipt or execution.
 Both writer guards retire an obsolete prompt epoch before bytes. Known zero-byte
 retirement preserves a healthy transport for later explicit input; partial or
 uncertain output remains fatal and is never replayed.
+
+`input_obligations.go` and `Store.CaptureCursorInput` / `AdvanceCursorInput`
+retain the captured store/full runtime owner, submission, order, epoch,
+generation, exact text and time. Ordinary input is durably admitted before
+entering the controller queue. Earlier terminal acceptance remains a separate
+observation: a control can retire it before durable admission, retaining
+acceptance/cancellation history without dispatch authority. A held promotion or
+the configured initial prompt whose admission save a control retires
+(`errPromptRetired`; nothing is written) still enters the queue unadmitted and
+records `submission_accepted` with `durable_admission: false`. `submit` then
+cancels it "control consumed before dispatch" before any bytes; on a loaded
+session, queue disposal cancels the initial prompt. Any other admission save
+failure stays fatal. A held record retains its original owner when promotion
+sets its target conversation.
+Advance is an exact-record compare-and-swap. Live admission/start/issue requires
+current session authority; terminal/control observations use the narrower
+same-connection/life evidence check and grant no issue authority. The controller
+captures terminal dispositions and their deadlines at the actual event, writes
+them after required proof flushes and before reporting/recovering admission,
+and never retries an unknown result. A callback draft or local `final` flag is
+not a committed record. Protected transcripts remain history, not operational
+authority; neither transcript nor store reopen enumerates work for replay.
+Already accepted live input may continue only on its own prerequisite events
+and existing guards. No idle scan discovers held work, and permanent storage,
+evidence or wake loss can prevent completion.
 
 Controls use an independent mailbox lane and advance the cancellation epoch at
 consumption, including across a slow admission-to-insertion handoff. They retire
@@ -597,33 +669,47 @@ report pending loss after physical output resumes, even without another
 producer. Only that consumer writes output, outside the display mutex,
 including stop-drain checks. A permanently blocked writer still cannot render
 the notice, and the existing bounded stop is unchanged. The protected
-transcript remains authoritative; display content or loss never classifies AD
-state or authority.
+transcript retains history; display content or loss never classifies AD state
+or authority, and transcript content grants no dispatch authority.
 
-`process_linux.go` installs ptrace EXITKILL and parent-death protection at the
-initial exec stop before ACP input. Fork/clone/exec descendants stay guarded
-across launcher chains. Runtime/pipes are independently identified; a second
-ACP owner is refused. Only an explicitly identified same-runtime executable
-or script worker-server possessing neither ACP pipe may detach. Unknown
-process evidence grants no ownership. Stop reconciles inherited tracees
-through kernel `TracerPid` matching the locked supervisor OS-thread id,
-including an announcement overtaken by SIGKILL, then signals/drains those
-exact tracees. `PTRACE_O_TRACEEXIT` also reconciles these exact-owned tasks at
-the early exit stop: normal descendant group exit can overtake a clone
-announcement and otherwise prevent the leader's final wait status. The early
-event is not death proof; actual `Wait4` exit/signaled status remains required.
-The configured MCP child and its ordinary descendants retain this same owned
-cleanup path and receive no worker detach exception. No independent worker or
-AD child is adopted. Success requires confirmed leader exit and owned tracees gone.
+Runtime and configured-MCP lifecycle paths MUST reuse the owner behind
+`startProcess` and `ownedProcess.terminate` in `process_linux.go`. It pins its
+OS thread, subscribes to SIGCHLD before launch and establishes ptrace EXITKILL
+and parent-death protection at the initial exec stop, before ACP input.
+Startup, notifications and explicit stop drain exact-owned statuses to
+quiescence; idle ownership blocks without timed scans or repeated signals.
+Each owner releases only its own subscription. Exact thread-scoped waits leave
+unrelated subprocess statuses to their owners; there is no sweep-owned reaper
+or process-group cleanup.
+
+Causal lifecycle events and stop recover inherited tracees, including fork/clone
+announcements overtaken by exit. Admission requires the pinned owner's
+`TracerPid` and positive `Tgid` from one coherent status snapshot. Unknown
+evidence grants no ownership; failures of required evidence retain failure.
+Nonleader EXEC retains captured transition obligations until terminal
+reconciliation: a mutable event message or reused numeric TID cannot discharge
+them. Runtime/pipes are independently identified; a second ACP owner is refused.
+Only an identified same-runtime executable or script worker-server with readable
+evidence of neither ACP pipe, no pending EXEC reconciliation and no stop/failure
+may detach. Ordinary descendants, including the configured MCP child, retain
+owned cleanup without that exception. No independent worker or AD child is adopted.
+
+Success requires an actual leader exit/signaled wait status and owned tracees
+gone with no unresolved evidence. The single terminal result retains failure
+after its notification is consumed. `terminate` allows three seconds to request
+stop, then five seconds to confirm it; expiration or abandoned waiting does not
+certify exit or stop the owner's cleanup. SIGCHLD, early exit stops and EOF are
+not death proof; permanent wake loss can prevent completion. Explicit exit
+flushes deferred proofs before termination under the
+[existing proof-flush rules](#cursor-authorization-dataflow-and-authority).
+
 The transport writes through a separately closeable, pollable duplicate of
 the owned input pipe. Closing it releases stalled I/O while the registered
 ownership descriptor remains open through verified intentional end reporting.
 Transport closure supplies no process-death evidence.
-No process-group cleanup or arbitrary-child wait is allowed. Independent or
-shared surviving work retains the existing kill limits. EOF is transport
-failure, never child-death evidence; child loss stops the gateway rather than
-leaving a renderer classified live. Non-Linux lifetime/terminal operations
-fail closed.
+Independent or shared surviving work retains the existing kill limits. EOF is
+transport failure; child loss stops the gateway rather than leaving a renderer
+classified live. Non-Linux lifetime/terminal operations fail closed.
 
 On a fatal `Run` return after registration, run the bounded deferred-proof
 flush (see
@@ -639,22 +725,23 @@ store cleanup and final failure-event emission. `signal.Stop` must run after
 those defers; `signal.Notify` keeps its existing activation point. Repeated
 signals do not extend cancellation deadlines or supply death evidence.
 
-Public `Client.Get` and `Client.Status` collect fresh launch-scoped gateway
-loss evidence through `reconcileCursorGateway`. `Client.List` validates filters
-before store access, selects candidates within `Labels`/`Parent`/`Cwd`/
-`TmuxSessionName` with `State` and `Limit` removed, and examines each live Cursor
-candidate. CLI, MCP, Go and Bun public verbs reach these methods. The helper
+The [shared active checker](#shared-active-checks) collects launch-scoped
+gateway loss evidence through `cursorGatewayProof` for selected live Cursor
+rows. List selection includes stored state/display filters and limit before
+any check. CLI, MCP, Go and Bun public verbs reach this path. The helper
 judges the recorded gateway PID/start-time with `tmux.JudgeProcess`; a different
 start time proves the old identity gone. Alive or unknown evidence leaves the
-row unchanged. Positive gateway loss permits a read-scoped `missing` projection
+lifecycle state unchanged (see "Cursor rows" under
+[Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
+Positive gateway loss permits a read-scoped `missing` projection
 even when the runtime is alive or unknown; it cannot authorize intentional
-`ended`. Only after exact gateway loss and `ReadCursorRuntime` returning
+`ended`. Only after exact gateway loss and `ReadCursorRuntimeWithin` returning
 `sql.ErrNoRows` may the helper carry examined absence, retaining instance,
 token/life, gateway PID/start and session with every runtime field empty.
 An existing stale binding is not absence. Evidence is never cached across calls
-or reused for a replacement launch. Already terminal and non-Cursor rows incur
-no process probe or mutation. Standalone package-level `api.Get`/`api.Status`/
-`api.List` remain database projections without these Client checks.
+or reused for a replacement launch. Terminal rows receive no gateway check;
+other agents use their eligible adapters. Package-level helpers retain only
+their supplied capabilities, without inventing a process or tmux provider.
 
 **Must use:** `Store.WithCursorMissingReads` (`internal/store/cursor_missing_read.go`)
 is the read adapter for this evidence. Its `cursorMissingGuard` is also the
@@ -666,15 +753,18 @@ does not make that descriptor current authority or absence. New registration,
 restore or any examined binding change defeats the same read/write guard.
 Only true examined absence uses `NOT EXISTS` for **any** runtime binding for examined
 absence. Raw and reported state become `missing` only
-while that guard matches in the SELECT. List applies the guarded state inside
-SQL before settled/raw `State` filtering and `LIMIT`; missing bypasses settle
-delay. The existing JSON1 support carries one bound proof array per expression,
+while that guard matches in the SELECT. The final fixed-ID projection applies
+it without re-filtering or re-limiting; missing bypasses settle delay.
+The existing JSON1 support carries one bound proof array per expression,
 with at most two predicate shapes generated from the shared guard. Bind count
 and expression depth do not grow with proof count; there is no new durable
 table or proof-count ceiling. Correlated proof traversal still grows with data;
 this is no general performance claim. A changed same-launch snapshot or binding
-cannot be returned as working; unsafe live results fail validation. A replacement
-launch retains its own state.
+rejects the proof. `CursorMissingReadError` identifies the affected rows:
+direct Get/Status fail their own unresolved conflict, while List keeps the
+failed row's earlier coherent stored facts and independent selected results.
+Those older facts do not confirm liveness. A replacement launch retains its
+own stored state.
 
 The Client assembles the complete public result, including permission lists,
 BEFORE attempting terminal persistence. No required result read follows a
@@ -694,7 +784,11 @@ The read's separate persistence attempt MUST reuse
 repeats the shared guard and atomically closes requests and running subagents,
 advances row version and applies terminal state. An inserted binding, including
 a stale one after examined absence, defeats the close. Changed guards cannot
-close a newer launch; an unresolved live conflict on the same dead launch fails.
+close a newer launch. `activeReadStore.finish` keeps rejected writes row-local;
+List prepares `cursorListFallbacks` before persistence and uses their complete
+stored metadata, display and actual request facts only for a refused speculative
+result. Both projections use `listRow`. Failure to read a needed fallback still
+fails the call; no terminal request closeout is fabricated.
 Fatal cleanup requires exact owned termination and independent
 `VerifyRuntime(binding, true)`. Its guard permits only the matching binding's monotonic
 termination-bit advancement, retaining every other complete identity/snapshot
@@ -712,7 +806,7 @@ audit. Only this write's `ErrStoreBusy` or `context.DeadlineExceeded` may be
 deferred while the caller context remains valid. Read failures, non-deadline
 write failures and caller cancellation/exhaustion propagate with the existing
 empty failure shapes (`Get`/`Status` zero results; `List.Spawns` non-nil empty).
-`persistCursorMissing` checks caller context again after the whole persistence
+`activeReadStore.finish` checks caller context again after the whole persistence
 loop, including successful cleanup/audit. A confirmed store commit stays
 confirmed even if the public call fails on its caller budget. A timed-out COMMIT
 remains unconfirmed; a successful missing read certifies neither commit nor
@@ -720,9 +814,9 @@ rollback. No retry, new audit budget, deadline extension or uncertain replay is
 allowed. Fatal cleanup retains its error propagation; it does not adopt the
 public read's deferral rule. The allowance is not a whole-read deadline:
 preceding reads/process probes and multiple candidates have separate costs.
-Legacy `FindMissing`/`MarkEnded` retain their background transaction contracts.
-Repeated terminal reads are idempotent; explicit `find-missing` and other agents
-retain their contracts. Public held-writer/trail coverage and fixture-backed
+Legacy narrow providers retain their offered transaction contracts.
+Repeated terminal reads perform no gateway reconciliation. Public held-writer/trail
+coverage and fixture-backed
 native store COMMIT coverage exercise separate boundaries; they do not establish
 an end-to-end public Client native-COMMIT test.
 
@@ -855,9 +949,14 @@ replace active/answered IDs, and are bounded to 4096 per connection and 32
 active requests. Tool IDs also cannot be reused on the connection.
 
 `requests.go` owns one `requestController` event-loop arbiter for API decisions,
-native keys, timeout, cancellation and execution proof. Admission calls
-`InsertCursorRequest` to atomically raise `check_permission` and insert the
-request with unknown origin (`MainTurnEndEligible=false`, NULL child identity).
+native keys, timeout, cancellation and execution proof. `request_jobs.go`
+delivers finite, connection-local `permissionWait`, `proofWait` and
+`responseCompleted` continuations. Each captures store id, full launch/life/
+session/runtime binding, connection generation, request token, operation kind,
+and original phase deadline. Scheduled waits also carry a retirement sequence;
+a proof wake carries its proof id. Admission calls `InsertCursorRequest` to
+atomically raise `check_permission` and insert the
+request with unknown main/child origin (`MainTurnEndEligible=false`, NULL child identity).
 `internal/store/cursor_permission.go` supplies authenticated gateway entry
 points; no gateway PID is disguised as per-request hook evidence and no fake
 `HookGate` is constructed. Each transaction acquires `BEGIN IMMEDIATE`,
@@ -882,7 +981,19 @@ settlement is immediately past, so existing readers truthfully show
 `fallen_back` and pane availability without enabling `decide`. Native lifetime
 is separately bounded to 30 minutes from admission (relay off), or settlement
 plus 30 minutes (relay on). Prompt timing pauses while actual requests own
-these bounds. Caller restart never rearms settlement or replays a response.
+these bounds. Admission, deliberate choice and actual request/proof completion
+schedule only their own token. Relay or selected-native polling rereads that
+token; an unselected native request waits until its fixed expiry. Proof retries
+name their captured proof. Stale, duplicate or retired wakes are inert, and
+response completion is consumed once only after the writer publishes its sent
+or terminal result. No lifetime ticker scans requests or proofs; idle elapsed
+time discovers no work. Own-job timers and bounded polling remain.
+
+`requestPrerequisiteCompleted` restarts the existing 30-minute prompt-response
+phase only when an actual event releases the last open request while the prompt
+remains busy and uncancelled. It is a phase budget, not a fixed total-turn
+budget. Stale wakes cannot restart it; the first control's three-second bound
+always wins. Caller restart never rearms settlement or replays a response.
 
 `AckCursorDecision` reuses first-writer decision/ack/timeout predicates and
 checks immutable settlement after lock/evidence delays. Every relay answer,
@@ -893,11 +1004,15 @@ policy rejection and separately validated cancellation are separate paths.
 An existing allow is never rewritten or acknowledged late. `delivered` is
 acknowledgement, not pipe output, Cursor receipt, native claim, execution or
 dialog closure; an ack-before-crash can remain delivered without receipt.
+The [permission authority primitives](#permission-verdict-authority) bind these
+claims to their admitted owner and keep observational closeout non-authorizing.
 
 `protocol.sendGuarded` uses the existing serialized bounded writer with a
 request-specific guard, fixed deadline and completion callback. Immediately
 before Write, `CheckCursorAnswer` rechecks current authority and the exact
-acknowledgement/native claim; the writer checks transport expiry again after
+unconsumed acknowledgement/native claim; `IssueCursorAnswer` consumes that
+claim once in a confirmed commit before I/O. Validation may repeat, consumption
+may not. The writer checks transport expiry again after
 slow guards. Both guards use the earlier of the existing frame and applicable
 request deadlines. `CheckCursorAnswer` bounds connection and transaction
 acquisition by that remaining time, then revalidates current authority,
@@ -920,7 +1035,8 @@ intent/sent rules remain. `record-pane-answer` outside claims supply neither
 ACP approval authority nor proof. Before fallback transition, expired captured
 choices are discarded. A fresh deliberate connected choice after settlement
 may resolve an unacknowledged still-open native request, including a recorded
-API decision. Queued/uncertain replies, native timeout and terminal cancellation
+API decision, only without a prior response claim or proof. Queued/uncertain
+replies, native timeout and terminal cancellation
 cannot revive. Disconnection is visible failure, never fake pane availability
 or runtime receipt.
 
@@ -943,8 +1059,25 @@ mandatory; generic other-kind admission and ambiguous MCP output supply no
 execution proof. `authorization.completedMCPError` separately accepts only an
 already-admitted MCP kind-other request's completed update with exactly
 `rawOutput:{"error":"Tool execution error"}` under the same checks.
-`ProveCursorToolRan` then applies existing proof/close semantics to that request
-only for validated execution. `ProveCursorToolFailed` instead writes only missing
+`CommitCursorProof` records the exact source BLOB and captured `CursorProof`
+identity in the same `proveCursorTool` transaction as request, row and family
+effects. Its `Ran` flag selects the existing `ProveCursorToolRan` or
+`ProveCursorToolFailed` semantics. Exact stored record/raw equality is required
+for a duplicate id; a conflicting id is refused. The live controller ignores
+identical repeated envelopes, refuses a different completion while the earlier
+proof is unresolved, and gives a later distinct completion a new proof id.
+Nested metadata and raw proof field ambiguity is rejected without rewriting
+valid source bytes. These records are evidence, never a reopen/replay queue.
+The `ProveCursorToolRan` and `ProveCursorToolFailed` wrappers share these
+request effects but omit the durable proof record; gateway proofs MUST use
+`CommitCursorProof`.
+
+`ProveCursorToolRan` semantics apply to that request
+only for validated execution. It preserves an existing verdict and its origin,
+including unknown origin, and fills only a missing reason with `tool_ran`.
+An inferred allow has observational origin. Missing history is repaired once;
+complete duplicate proof is a no-op. None of this grants response authority.
+`ProveCursorToolFailed` instead writes only missing
 `proven_gone_at` / `proven_gone_how`, using `tool_ran` for the exact invocation's
 end, consistent with Claude's matching `PostToolUseFailure`. It establishes that
 the dialog is gone without asserting that the underlying server action ran or
@@ -963,33 +1096,34 @@ not deny, may also move the row from `check_permission` to `working`, as
 describes; any other proof
 moves nothing.
 
-The proof write takes the store lock without waiting, so the controller never
-blocks on it. `requestController.prove` keeps a proof that meets another writer
-(`ErrStoreBusy`) on its request as a `deferredProof`, still bound to the runtime
-binding that observed the completion, and each later tick retries it until
-`[store] busy_timeout_ms` has passed since the first attempt. A busy attempt
-after that, or any other failure, stays fatal. Rotation and termination retire
-that binding. Nothing re-reports waiting once a later tick stores a proof. So
-a `proofFlush` first writes every deferred proof in place,
-waiting out its remaining busy window, with the `turnOpen` the controller
-read when the flush was taken, at four points:
+The proof write takes the store lock without waiting. `requestController.prove`
+retains `ErrStoreBusy` as an immutable `deferredProof` with the observing owner,
+proof id, copied raw bytes, original `TurnOpen` and first `BusyUntil`. Only its
+named wake retries, paced at 10 ms within the original window. Ordinary expiry
+makes no new attempt; authority is checked before and after independent evidence
+against that deadline. Other failures remain fatal. An already-issued COMMIT
+can finish after abandonment; that does not turn an unknown return into success
+or grant new response/input work.
 
-- Before every waiting report (`reportWaiting`): SessionStart, the prompt
-  completion's Stop and the idle-control Stop, bounded by the cancellation
-  deadline when one is running. No turn is open at any of them, so these
-  proofs move no row; the report settles it.
-- Before rotation publication, within the cancellation deadline. A proof not
-  stored refuses the rotation. `turnOpen` reads false while rotating, so these
-  proofs move no row; `RotateCursorSession` settles it.
-- Before intentional-exit termination (`/exit`, pause, signals), outside
-  `await`, over the whole busy window. A proof not stored is fatal. A flush
-  running past the cancellation deadline gives up the intentional end for the
-  durable proof, and the row ends `missing`. A runtime already ended gets one
-  attempt.
-- On fatal cleanup, best effort, bounded by the cancellation deadline (three
-  seconds from the failure when none is running). A busy store can therefore
-  keep a live runtime up to that long before termination; the original failure
-  still decides cleanup.
+`proofFlush` captures an immutable snapshot at each actual lifecycle event,
+including binding, generation, event/epoch and a fresh sequence even for a
+repeated event of the same kind. Workers mutate only their own completion bits.
+Abandonment cancels the worker and fences late waiting-callback registration.
+Settlement clears only the same current proof id, binding and flush sequence;
+an old worker cannot dispose a newer proof or newer flush of that proof.
+Retries use the earlier of the proof's original window and the event bound.
+An already-expired snapshot retains one immediate attempt, never a fresh retry
+window. State effects require both the proof's original and flush's captured
+`TurnOpen`; rotation/report flushes cannot promote the row to working.
+
+| Actual event | Flush and publication order |
+|---|---|
+| Ctrl-C interruption | The correlated turn completion takes `endTurn`, then `reportWaiting("Stop")`; idle-control recovery also calls `reportWaiting("Stop")`. Each waiting flush precedes input dispositions and reporting, within the first control's deadline. |
+| `/clear` or `/new` | Outgoing prompt completion takes `endTurn` even while rotating. `rotate_new` flushes outgoing proofs and input dispositions before `reportIdentity`/`RotateCursorSession`, within the original cancellation bound. Missing required proof refuses publication. |
+| Ordinary prompt completion | Captures unanswered tokens in `endTurn`, then flushes deferred proofs before the Stop report. Each operation retains its original busy bound. |
+| Waiting reports | Startup SessionStart and turn/idle-control Stop use `reportWaiting`: proofs, input dispositions, then report/admission recovery. An active cancellation deadline clips the proof wait. |
+| Intentional `/exit`, eligible pause or signal | Flushes before runtime termination, outside `await`, through remaining original proof windows. Failure is fatal. A confirmed proof may outlast cancellation, preserving evidence while later finalization fails and the row becomes `missing`, not `ended`. |
+| Fatal cleanup / already-gone runtime | Fatal cleanup is best effort within the original cancellation deadline, or three seconds from failure if none exists. An already-gone runtime gets one attempt per proof without busy retries; death grants no authority. The initiating failure still decides cleanup. |
 
 Generic status, other failed MCP output, plan acceptance, main/child Stop/Interrupt/completion and
 session identity alone provide no such evidence. Other execution evidence
@@ -1006,6 +1140,9 @@ the session loop's rotation check, so a turn ended by `/clear` or `/new` is
 covered, `requestController.endTurn` snapshots the current conversation's
 requests the gateway never answered: none queued or sent, and none with a
 deferred proof, which the Stop's or rotation's flush stores as `tool_ran`.
+The snapshot retains its exact binding, token list, sequence and first busy
+deadline; later requests cannot join it. Abandonment and exact-sequence settlement
+prevent a stale worker from retiring a later snapshot's requests.
 `turnEnd.write` runs in `await` and calls `ProveCursorTurnEnded`, which proves
 `turn_end` on those still matching `holdsRowSQL`, under the same
 `cursorAuthority` check as the tool proofs; it writes no decision, delivery or
@@ -1015,7 +1152,12 @@ Stop report is. `turnEnd.settle` then marks those requests retired and
 terminal and removes their pane keys, so no later decision is delivered. The
 Stop that follows, or `RotateCursorSession`, finds nothing of that turn
 holding and writes `waiting`. A delivered or pane-answered request keeps its
-unproven dialog hold.
+unproven dialog hold. A later `decide` on an undecided retired request returns
+`ErrNoOpenPermissionRequest` without a write before `confirm_by`. At or after
+that instant, `decideWithin` reaches `refuseFallenBack` before the verdict
+guard: it returns `ErrRelayFallenBack` and may record attempted-decision and
+fallback history, but no verdict or response. Existing verdict/pane refusals
+retain precedence.
 
 `protocol.retiredResponse` uses a bounded numeric retirement watermark;
 current/pending correlation remains strict. Known retired session events and
@@ -1053,8 +1195,12 @@ and proven-dead fatal methods above. Authorization changes MUST extend
 `authorization.completedMCPError`
 and the single `requestController`;
 reuse `InsertCursorRequest`, `AckCursorDecision`, `ClaimCursorPaneAnswer`,
-`CheckCursorAnswer`, `ProveCursorToolRan`, `ProveCursorToolFailed` and
-`ProveCursorTurnEnded` with mandatory `CursorCheck`. Proof changes MUST reuse
+`CheckCursorAnswer`, `IssueCursorAnswer`, `CommitCursorProof` and
+`ProveCursorTurnEnded` with mandatory `CursorCheck`. Durable input changes MUST
+reuse `CaptureCursorInput`, `AdvanceCursorInput`, `ReadCursorInput` and
+`inputObligation.issue`; proof reads use `ReadCursorProof`, never transcript
+reconstruction. Request scheduling MUST reuse `requestWake`/`continueRequest`
+and the existing serialized writer's guarded completion. Proof changes MUST reuse
 the shared `cursorAuthority` transaction owner, and tool proofs their shared
 `proveCursorTool`, rather than introduce another proof framework, bypass
 transactional authority or fabricate hook evidence.
@@ -1068,6 +1214,11 @@ controller/recorder; do not create parallel pipes, a second input owner,
 screen classification or another transcript format.
 
 ### cursorfix: synthetic ACP runtime (reusable test fixture)
+
+Process lifecycle tests MUST reuse `cursorfix.TraceLifecycle(t)` for real Linux
+fork/vfork and pthread-exec barriers. It compiles embedded
+`internal/testsupport/cursorfix/trace_lifecycle.c` into `t.TempDir()`;
+callers own termination and pipe cleanup through the existing process owner.
 
 `internal/testsupport/cursorfix` owns `runtime.js` at its package root, embedded
 by `cursorfix.go`. `New` and `NewWithWorker` produce a private executable
@@ -1159,9 +1310,10 @@ and useful peer work afterward. `Scenario.RecordArtifacts` opts into these
 observations; ordinary scenarios retain their previous behavior. Extend this
 parameterized owner rather than copy the individual selection/failure matrices.
 
-`NewWithWorker` retains the recognized detached `index.js worker-server` shape
-without either ACP pipe. Its designated selection record and bounded operation
-channel establish useful independent operations before/after origin exit,
+`NewWithWorker` defaults to the recognized detached `index.js worker-server`
+shape without either ACP pipe; reuse its optional `WorkerOptions{Args, Stdio}`
+for role and partial-pipe negative controls. Its selection record and bounded
+operation channel establish useful independent operations before/after origin exit,
 including exact input/result/cwd/PID. Release/reap belongs to fixture cleanup
 after observations. This supplies no native account/renewal proof or authority
 to adopt workers or signal a process group. The worker's actual shipped-hook
@@ -1294,6 +1446,12 @@ guarded publication, existing `rotationBarrier` before/after publication,
 Store rotation tests reuse `rotationStore`, `rotationVisibility`,
 `cursorTrailEnv` and the existing hook/store fixture
 owners rather than copying controller logic or manufacturing publication proof.
+External store tests MUST reuse `HoldConnectionForTest` in
+`internal/store/relay_writes_test.go` to hold the real pooled connection; its
+release function is idempotent and joins the holder. Rotation acquisition-boundary
+tests MUST reuse `RotateCursorSessionBeforeAcquireForTest` in
+`internal/store/cursor_trail_export_test.go`: its per-call callback runs after
+entry validation, before the real acquisition computes its remaining wait.
 
 Load tests MUST extend `beginCursorLoad`/`beginObservedCursorLoad` and the same
 peer's `LoadSupport`, `BeforeLoadReply`, `LoadReply`, `WaitForLoad` and
@@ -1323,11 +1481,22 @@ only the private tmux server and waits for its owned runtime/worker before
 temporary files are removed. Controller ordering and persistence tests MUST reuse
 `session_fixture_linux_test.go`'s real Run/PTY/session helpers, completed-input
 callbacks and protected-file record barriers alongside existing request/report
-fixtures. The internal input starter and optional post-recovery observation keep
-production terminal defaults and expose actual controller boundaries; the
-transcript opener retains protected file creation. Use these seams for causal
-ordering and complete large submissions instead of copied controllers, alternate
-runtimes or per-rune stress. They do not supply production authority.
+fixtures. To order a control inside a durable input save, they MUST block the
+save with `saveBarrier` through `Options.beforeInputSave`, because a record
+barrier blocks a later transcript record, not the save. The internal input
+starter and optional post-recovery observation keep production terminal
+defaults and expose actual controller boundaries; the transcript opener retains
+protected file creation. Use these seams for causal ordering and complete large
+submissions instead of copied controllers, alternate runtimes or per-rune
+stress. They do not supply production authority.
+
+Terminal and `Run` cleanup tests MUST reuse `terminalReadByNextOwner` in
+`terminal_test.go` with the existing PTY fixtures. After cleanup, it writes
+distinct later input and checks the exact bytes through the borrowed slave as
+its legitimate owner. The caller keeps both PTY handles open and observes
+decoder output separately from terminal echo. This proves real PTY ownership;
+the accompanying `cursorfix` runtime remains synthetic evidence.
+
 Post-bootstrap rotation/capacity semantics MUST reuse the explicit
 `postBootstrapCursorSessionWithInput` family. One aggregate 45-second setup
 deadline begins before Run; retained ready observation plus independent current
@@ -1405,12 +1574,14 @@ selection/client serialization harness is needed.
 The binary is layered so each package owns exactly one concern. Imports flow
 in one direction only: `cmd/` depends on `pkg/api`, which depends on
 `internal/store` (and on `internal/config` for read-only configuration).
-Nothing flows back upward and nothing skips a layer.
+Nothing flows back upward. The administrator's migration and snapshot paths
+use typed `internal/adminapi`/`internal/store` operations without a public Client.
 
 `pkg/api` is the canonical verb-handler home sitting above `internal/store`,
 `internal/config`, `internal/tmux`, and `internal/probe`; it is consumed by
-`cmd/agent-director`, `cmd/agent-director-admin`, `internal/mcp` and
-`internal/clisetup` (the client setup both binaries share). No other
+`cmd/agent-director`, `cmd/agent-director-admin`, `internal/mcp`,
+`internal/clisetup` (the client setup both binaries share) and
+`internal/helptext` (the shared help renderer). No other
 package in `internal/` imports `pkg/api`. `internal/adminapi` imports
 nothing from it: `pkg/api` imports `internal/adminapi` and sets its hooks
 in `init`. The verb registry
@@ -1426,22 +1597,24 @@ in `init`. The verb registry
 | `internal/cursormcp` | Typed session-scoped ACP stdio registration, explicit protected routing scope and finite nonce observation. Gateway and scoped CLI serve MUST reuse its `New`, `Parse`, `Binding` and observation owners; routing is not permission or publication authority. | stdlib; `internal/store`. | `pkg/api`; `internal/cursorhost`; `internal/mcp`; native configuration/authentication access. |
 | `internal/helptext` | Pure canonical JSON help renderer shared by CLI help and scoped MCP instructions; consumers MUST reuse `Marshal`/`Plain` and leave agent wrapping at adapters. | stdlib; `pkg/api`. | Config/store/process access; agent-specific wrappers. |
 | `internal/cursortranscript` | Shared protected transcript verification, append access for resume/recording and read-only access for send-keys. Owns shared submission record kinds and `TextSHA256`; writers and readers must reuse them. | stdlib; `golang.org/x/sys/unix`. | `pkg/api`; `internal/cursorhost`; native Cursor storage parsing. |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` shares; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. Internal `cursor-host` is parsed/dispatched before public client setup and delegates to `internal/cursorhost`; `hookCursorVerifier` wires independent runtime/transcript/pane verification into the hook without changing its dependency boundary. Privately scoped `serve` uses `cursorMCPScope` before client setup and `cursorMCPOptions` for the bounded protected guidance bootstrap described above. `serve` opens a second Client for its MCP tools, from the same global-flag overrides (`clisetup.APIOptions`) with no logger, and names a failed open of it with `clisetup.NewOpenError`, as `Open` names its own (b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `version` and its aliases never read stdin; `help` and its aliases read it only when `AGENT_DIRECTOR_AGENT` is `codex`, through the same bounded reader (see [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)). **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. For Claude/Codex it opens the verbs' configured store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). For Cursor, `runHook` instead uses the actual opened store path propagated by the launch in `AGENT_DIRECTOR_CURSOR_STORE_PATH`; the hook still has no `--store-path` flag. It opens that store with `store.OpenOrInitWithBusyTimeout` for Claude/Codex or non-initializing `store.OpenWithBusyTimeout` for Cursor, and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. `parseHookArgs` reads `--agent` and `--timeout` in one pass, in either order; an unknown flag or a positional is skipped without losing a valid one, `--agent` with no value or an empty one reaches `Handle` as the invalid value `(no value)` (a hook failure, below), and an absent `--agent` stays empty, which `ResolveAgent` reads as `claude`. `runHook` hands the raw value to `HandleConfig.Agent`; the manifest's `hook` verb lists it as the optional `agent` param (`claude`, `codex` or `cursor`), so the generated references carry it (see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, `serve`'s `APIOptions` and `NewOpenError`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook` and scoped `cursorMCPOptions`; `internal/cursormcp`; `internal/helptext`; `internal/cursorhost` for the internal gateway and injected Cursor verifier. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger` and the narrowly scoped `cursorMCPOptions` bootstrap (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
-| `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version` (also `--version` and `-v`, b.fv2), taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, `--create-if-missing`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h`, `version` and the aliases open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
-| `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
-| `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `APIOptions(Overrides)` builds the `pkg/api.Options` of every Client a command binary opens: the config path, `CreateIfMissing` (true unless the overrides set it false, b.78b) and the overrides' store path and tmux command, with `Logger` nil. `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses from `APIOptions` plus the recovery logger (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`). `Open` returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired`, `ErrOldLayout` or `ErrStoreOpen`; it refuses with `ErrOldLayout` first (Pin 4, before the recovery logger and `errors.log`), under the rule in [Old layout (step 2b)](#pkgapi-client-lifecycle), and `ErrOldLayout` is the store's own sentinel, `store.ErrOldLayout`, re-exported by `clisetup` and `pkg/api`. `NewOpenError(err)` holds the one naming of a `pkg/api.New` failure: the `*OpenError` named `ErrSchemaMismatch` or `ErrSchemaMigrationRequired` when the store's schema refused the open, `ErrStoreOpen` otherwise; `Open` names its `pkg/api.New` failure with it, and `serve` the failure of its MCP Client's, so every Client a command binary opens names a failed open alike (b.uii). It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the five names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels and `ErrOldLayout` are the store's own, `store.ErrSchemaMismatch`, `store.ErrSchemaMigrationRequired` and `store.ErrOldLayout` (`pkg/api` re-exports them under the same names), so `Classify` gives a schema or old-layout refusal the same name whether it comes as an `OpenError` or straight from `pkg/api.New` (b.x8s); the store returns them only when it opens (`ErrOldLayout`, when the open is about to begin), so no verb error wraps them. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path`, `--tmux-command` and `--create-if-missing` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `--create-if-missing` takes exactly `true` or `false`; any other value, or none, is `ErrInvalidFlags` with exit 1 before any verb runs, `help` and `version` included (b.78b). `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` (a Client that must not log, such as `serve`'s MCP Client, takes its options from `APIOptions` and names a failed `pkg/api.New` with `NewOpenError`) and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup, options builder, open-failure naming or flag parser. A new override goes into `APIOptions`, so every Client a binary opens gets it. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Native ordinary input uses `internal/inputdelivery` through the existing backend/session seam; see [Ordinary input delivery](#ordinary-input-delivery). Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests and running subagent entries in its own transaction, and the one-method `EndedMover` (`MarkEndedIfSameLife`, the same close for a Codex row that holds an end report), embedded in `PauseStore` too, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), plus optional `PaneTerminalTmux` (`PaneTerminalRaw`) for pending Claude ordinary fallback, with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `PermissionRequestsForSpawn` and `RecordHookGone` for its relay guard (b.zdz), `AdoptIdentityIfUnchanged`, `EndedMover`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeyPaneRepeat` for a Codex row's repeated clear, `SendKeysPane`), with `PauseEnv` (the `RelayView` and `IntentHold`, as `send-keys` judges the relay) in place of a bare start-time reader. `*store.Store` and `TmuxClient` satisfy them. `SendKeys`, `RecordPaneAnswer` and `Pause` take the start-time reader in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the ten socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `SendKeyPaneRepeat`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`; `Client.Pause` builds its `PauseEnv` from `relayView()` and the same intent hold (`paneIntentHold`). **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies, and `RelayView`, which the exported `Decide`, `Status`, `Get`, `List`, `GetPermission`, `RepairCheckPermission` and `RelayHookGone` take; a store that also has `RecordPermissionFallbacks`, else `RecordHookGone`, gets the [readers' write](#readers-never-wait-problem-4); plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes an unsigned Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a value with a leading `+` or `-` in either form (b.c4n) and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **`list-subagents` seam** (`list_subagents.go`): `ListSubagentsStore` (`ListSubagentRecords`, no write; `*store.Store` satisfies it), taken by the exported `ListSubagents` and by `Client.ListSubagents`, with no clock, relay view or tmux (see [The `list-subagents` verb](#the-list-subagents-verb)). **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettledWithRelay`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time and sample no pane (`relayView()` gives the Client's reads the `idle_screen` timeout and a pane sampler of their own). Every other verb, and every field but `state`, `displayed_state` with its detail and the independently settled `family_state`, reads the raw state (see [Settle time (b.3ie)](#settle-time-b3ie) and [Displayed State reporting](#displayed-state-reporting)). | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/cursortranscript`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v15; see "Schema versioning convention" below), exposes typed CRUD primitives. Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
-| `internal/config` | Loads, validates, and serves the TOML config at `~/.config/agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets an old `[defaults]` key (`oldKeyRefusal`; see [Refusal of old names](#refusal-of-old-names)), then a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, a Claude launch's pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it (a Codex launch takes no lock and ignores the key), in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[state] settle_ms` (b.3ie), the settle time of the state `status`, `get` and `list` report, in whole milliseconds: `DefaultStateSettleMs` (0, off), `MaxStateSettleMs` (60000, one minute, far above the recommended 1 to 2 s; a longer one would hide whole turns from every polling caller on the host) and `State.EffectiveSettleMs()` (the configured value when positive, else 0). Unlike the keys above, 0 is the default itself, not its stand-in: a missing key or 0 turns the settle time off. A negative value and one above the maximum are refused at load in the same `*config.ConfigError` ("[state] settle_ms = <value>, outside its range 0 to 60000 milliseconds"), never clamped. Also owns `[state] idle_screen_timeout_seconds`, how long a working Claude or Codex row's sampled pane must stay unchanged before it can display `idle_screen`: `DefaultIdleScreenTimeoutSeconds` (1200), `MaxIdleScreenTimeoutSeconds` (`MaxPauseTimeoutSeconds`, the largest whole number of seconds a `time.Duration` holds, also the per-spawn override's ceiling) and `State.EffectiveIdleScreenTimeoutSeconds()` (the configured value when positive, else 1200); a negative value and one above the maximum are refused at load in the same `*config.ConfigError`, never clamped. `[state] needs_intelligence_timeout_seconds` has no effect: `Load` still refuses it by the same rule against `MaxNeedsIntelligenceTimeoutSeconds`, and `Default()` seeds `DefaultNeedsIntelligenceTimeoutSeconds` (30), so existing files keep loading, but nothing reads it. **Must use:** read the idle-screen timeout only through its accessor and its limit only from its `Max*` constant (see [Displayed State reporting](#displayed-state-reporting)). **Must use:** read the settle time only through `EffectiveSettleMs` and its limit only from `MaxStateSettleMs`; every opener that loads the config (`pkg/api.New` and `runHook`) passes it to the store through `Store.SetSettleMs`, and the Client's `status`, `get` and `list` take it from the loaded config (`settleRead`), so each process uses the value it loaded (see [Settle time (b.3ie)](#settle-time-b3ie)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.config/agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and Claude/Codex `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). Also owns `[launch]` (`config.Launch`: `claude_path`, `codex_path` and `cursor_path`), the program each agent's launch runs. A value is an absolute path or starts with `~/`, which `Load` joins onto `$HOME`; empty is unset. `Load` refuses a blank value, a relative one, `~` alone, `~user/...`, and a `~/` value when `HOME` is unset or empty, as `*config.ConfigError` (surfaced as `ErrConfigMalformed`) naming the key, never a silent default (`launchRefusals`, `launchRefusal`). **Must use:** launch composition takes the Claude program from `spawn`'s `claudeProgram(cfg)` (`claude_path` when set, else `claude` on `PATH`), read at each launch, never from `Launch.ClaudePath` directly or a literal `claude`; and takes the Codex program from `codexProgram(cfg)` (`codexlaunch.go`: `codex_path` when set, as one unchanged argument, else `codex` on the `PATH` of the agents' tmux server), read at each launch for spawn, reuse and resume, never from `Launch.CodexPath` directly or a literal `codex`. Fresh, reused and resumed Cursor composition selects `Launch.CursorPath` (else `agent` on `PATH`) in `composeCursorCommand` (`cursorlaunch.go`); all future Cursor argv construction must reuse that function. Also owns the template file's `agent` key (`TemplateFile.Agent`): `LoadTemplate` refuses a value outside `claude`, `codex` and `cursor` as `ErrTemplateMalformed`, and non-empty `agent_args` with no `agent` as `ErrTemplateAgentMissing`, and `config.ValidAgent`, `config.AgentClaude`, `config.AgentCodex` and `config.AgentCursor` are the one statement of the valid values (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` uses for `kill-finished` and `delete`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. Internal `cursor-host` is parsed/dispatched before public client setup and delegates to `internal/cursorhost`; `hookCursorVerifier` wires independent runtime/transcript/pane verification into the hook without changing its dependency boundary. Privately scoped `serve` uses `cursorMCPScope` before client setup and `cursorMCPOptions` for the bounded protected guidance bootstrap described above. `serve` opens a second Client for its MCP tools, from the same global-flag overrides (`clisetup.APIOptions`) with no logger, and names a failed open of it with `clisetup.NewOpenError`, as `Open` names its own (b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `version` and its aliases never read stdin; `help` and its aliases read it only when `AGENT_DIRECTOR_AGENT` is `codex`, through the same bounded reader (see [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)). **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. For Claude/Codex it opens the verbs' configured store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). For Cursor, `runHook` instead uses the actual opened store path propagated by the launch in `AGENT_DIRECTOR_CURSOR_STORE_PATH`; the hook still has no `--store-path` flag. It opens that store with `store.OpenOrInitWithBusyTimeout` for Claude/Codex or non-initializing `store.OpenWithBusyTimeout` for Cursor, and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. `parseHookArgs` reads `--agent` and `--timeout` in one pass, in either order; an unknown flag or a positional is skipped without losing a valid one, `--agent` with no value or an empty one reaches `Handle` as the invalid value `(no value)` (a hook failure, below), and an absent `--agent` stays empty, which `ResolveAgent` reads as `claude`. `runHook` hands the raw value to `HandleConfig.Agent`; the manifest's `hook` verb lists it as the optional `agent` param (`claude`, `codex`, `cursor` or `droid`), so the generated references carry it (see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, `serve`'s `APIOptions` and `NewOpenError`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook` and scoped `cursorMCPOptions`; `internal/cursormcp`; `internal/helptext`; `internal/cursorhost` for the internal gateway and injected Cursor verifier. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger` and the narrowly scoped `cursorMCPOptions` bootstrap (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
+| `cmd/agent-director-admin` | Thin operator shim for `kill-finished`, `delete`, `migrate-journal`, `snapshot-store`, `help` and `version`; verbs come from `internal/adminapi.Verbs`, never the public manifest. Shared global-flag parsing uses `internal/clisetup`. Only `kill-finished`/`delete` open a Client through `clisetup.Open` and call the private API hooks. Migration resolves config and calls `adminapi.MigrateJournal`; with `--check-only` it calls only `adminapi.CheckJournalMigration`, loading no config and opening no store; snapshot requires an explicit source and calls `adminapi.SnapshotStore` without config or Client initialization. JSON results go to stdout; stderr errors carry `err_name` and `err_description`, and every `migrate-journal` error also carries `details` with its commit state, written only by `writeJournalError` (must use). Help/version and their aliases open no store and load no config. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `internal/config` for migration path resolution; `internal/store` for snapshot constants and the migration result type; `internal/oldnames`; `pkg/api`; `pkg/api/errnames`. | `pkg/api/manifest`; direct SQL or store opening; direct tmux construction; business logic. |
+| `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. The administrator-only `MigrateJournal` and `SnapshotStore` call typed store primitives without a public Client; see schema versioning and install-time preflight below. | stdlib; `internal/store`; `internal/probe`; `golang.org/x/sys/unix`. | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
+| `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `APIOptions(Overrides)` builds the `pkg/api.Options` of every Client a command binary opens: the config path, `CreateIfMissing` (true unless the overrides set it false, b.78b) and the overrides' store path and tmux command, with `Logger` nil. `Open(Overrides)` builds the `pkg/api.Client` used by public store-backed CLI verbs and admin `kill-finished`/`delete`, from `APIOptions` plus the recovery logger (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`). `Open` returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired`, `ErrOldLayout` or `ErrStoreOpen`; it refuses with `ErrOldLayout` first (Pin 4, before the recovery logger and `errors.log`), under the rule in [Old layout (step 2b)](#pkgapi-client-lifecycle), and `ErrOldLayout` is the store's own sentinel, `store.ErrOldLayout`, re-exported by `clisetup` and `pkg/api`. `NewOpenError(err)` holds the one naming of a `pkg/api.New` failure: the `*OpenError` named `ErrSchemaMismatch` or `ErrSchemaMigrationRequired` when the store's schema refused the open, `ErrStoreOpen` otherwise; `Open` names its `pkg/api.New` failure with it, and `serve` the failure of its MCP Client's, so every Client a command binary opens names a failed open alike (b.uii). It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the five names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels and `ErrOldLayout` are the store's own, `store.ErrSchemaMismatch`, `store.ErrSchemaMigrationRequired` and `store.ErrOldLayout` (`pkg/api` re-exports them under the same names), so `Classify` gives a schema or old-layout refusal the same name whether it comes as an `OpenError` or straight from `pkg/api.New` (b.x8s); the store returns them only when it opens (`ErrOldLayout`, when the open is about to begin), so no verb error wraps them. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path`, `--tmux-command` and `--create-if-missing` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `--create-if-missing` takes exactly `true` or `false`; any other value, or none, is `ErrInvalidFlags` with exit 1 before any verb runs, `help` and `version` included (b.78b). `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` (a Client that must not log, such as `serve`'s MCP Client, takes its options from `APIOptions` and names a failed `pkg/api.New` with `NewOpenError`) and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup, options builder, open-failure naming or flag parser. A new override goes into `APIOptions`, so every Client a binary opens gets it. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Native ordinary input uses `internal/inputdelivery` through the existing backend/session seam; see [Ordinary input delivery](#ordinary-input-delivery). Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup`, `internal/helptext` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`sweep` / `find-missing` seams** (`sweep.go`, `find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests and running subagent entries in its own transaction, and the one-method `EndedMover` (`MarkEndedIfSameLife`, the same close for a Codex row that holds an end report), embedded in `PauseStore` too, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `Sweep` and its `FindMissing` alias also take the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), plus optional `PaneTerminalTmux` (`PaneTerminalRaw`) for pending Claude ordinary fallback, with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `PermissionRequestsForSpawn` and `RecordHookGone` for its relay guard (b.zdz), `AdoptIdentityIfUnchanged`, `EndedMover`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeyPaneRepeat` for a Codex row's repeated clear, `SendKeysPane`), with `PauseEnv` (the `RelayView` and `IntentHold`, as `send-keys` judges the relay) in place of a bare start-time reader. `*store.Store` and `TmuxClient` satisfy them. `SendKeys`, `RecordPaneAnswer` and `Pause` take the start-time reader in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the ten socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `SendKeyPaneRepeat`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`; `Client.Pause` builds its `PauseEnv` from `relayView()` and the same intent hold (`paneIntentHold`). **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies, and `RelayView`, which the exported `Decide`, `Status`, `Get`, `List`, `GetPermission`, `RepairCheckPermission` and `RelayHookGone` take; a store that also has `RecordPermissionFallbacks`, else `RecordHookGone`, gets the [readers' write](#readers-never-wait-problem-4); plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes an unsigned Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a value with a leading `+` or `-` in either form (b.c4n) and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **`list-subagents` seam** (`list_subagents.go`): `ListSubagentsStore` (`ListSubagentRecords`, no write; `*store.Store` satisfies it), taken by the exported `ListSubagents` and by `Client.ListSubagents`, with no clock, relay view or tmux (see [The `list-subagents` verb](#the-list-subagents-verb)). **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettledWithRelay`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time and sample no pane (`relayView()` gives the Client's reads the `idle_screen` timeout and a pane sampler of their own). See [Settle time](#settle-time-b3ie), [Displayed State reporting](#displayed-state-reporting) and [main-field evidence](#shared-active-checks) for settlement and confirmation projection rules. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/cursortranscript`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v20; see "Schema versioning convention" below), exposes typed CRUD primitives. Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import; `internal/inputjournal` persisted records, validation and legacy import; no live-delivery dependency. | `pkg/api`; `internal/config`; `cmd/*`. |
+| `internal/inputjournal` | Neutral persisted input protocol, exact proof parser, bounded evidence reader and legacy import/lock primitives. Store and delivery must reuse it; see [Ordinary input delivery](#ordinary-input-delivery). | stdlib; UUID parsing; platform file locks. | `internal/store`; live delivery, process discovery, terminal probes or tmux. |
+| `internal/inputdelivery` | Live input coordination and provider observation behind `Backend`/`Session`; store operations use the neutral `Persistence` contract. | `internal/inputjournal`; `internal/probe`; launch configuration and provider utilities. | SQL; a second persisted protocol or proof parser. |
+| `internal/config` | Loads, validates, and serves the TOML config at `~/.config/agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets an old `[defaults]` key (`oldKeyRefusal`; see [Refusal of old names](#refusal-of-old-names)), then a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both the shared active checker's hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only the checker's window. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, a Claude launch's pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it (a Codex launch takes no lock and ignores the key), in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[state] settle_ms` (b.3ie), the settle time of the state `status`, `get` and `list` report, in whole milliseconds: `DefaultStateSettleMs` (0, off), `MaxStateSettleMs` (60000, one minute, far above the recommended 1 to 2 s; a longer one would hide whole turns from every polling caller on the host) and `State.EffectiveSettleMs()` (the configured value when positive, else 0). Unlike the keys above, 0 is the default itself, not its stand-in: a missing key or 0 turns the settle time off. A negative value and one above the maximum are refused at load in the same `*config.ConfigError` ("[state] settle_ms = <value>, outside its range 0 to 60000 milliseconds"), never clamped. Also owns `[state] idle_screen_timeout_seconds`, how long a working Claude or Codex row's sampled pane must stay unchanged before it can display `idle_screen`: `DefaultIdleScreenTimeoutSeconds` (1200), `MaxIdleScreenTimeoutSeconds` (`MaxPauseTimeoutSeconds`, the largest whole number of seconds a `time.Duration` holds, also the per-spawn override's ceiling) and `State.EffectiveIdleScreenTimeoutSeconds()` (the configured value when positive, else 1200); a negative value and one above the maximum are refused at load in the same `*config.ConfigError`, never clamped. `[state] needs_intelligence_timeout_seconds` has no effect: `Load` still refuses it by the same rule against `MaxNeedsIntelligenceTimeoutSeconds`, and `Default()` seeds `DefaultNeedsIntelligenceTimeoutSeconds` (30), so existing files keep loading, but nothing reads it. **Must use:** read the idle-screen timeout only through its accessor and its limit only from its `Max*` constant (see [Displayed State reporting](#displayed-state-reporting)). **Must use:** read the settle time only through `EffectiveSettleMs` and its limit only from `MaxStateSettleMs`; every opener that loads the config (`pkg/api.New` and `runHook`) passes it to the store through `Store.SetSettleMs`, and the Client's `status`, `get` and `list` take it from the loaded config (`settleRead`), so each process uses the value it loaded (see [Settle time (b.3ie)](#settle-time-b3ie)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.config/agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and Claude/Codex `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). Also owns `[launch]` (`config.Launch`: `claude_path`, `codex_path`, `cursor_path` and `droid_path`), the program each agent's launch runs. A value is an absolute path or starts with `~/`, which `Load` joins onto `$HOME`; empty is unset. `droid_path` also accepts a bare executable name. `Load` refuses a blank value, other relative paths, `~` alone, `~user/...`, and a `~/` value when `HOME` is unset or empty, as `*config.ConfigError` (surfaced as `ErrConfigMalformed`) naming the key, never a silent default (`launchRefusals`, `launchRefusal`). **Must use:** launch composition takes the Claude program from `spawn`'s `claudeProgram(cfg)` (`claude_path` when set, else `claude` on `PATH`), read at each launch, never from `Launch.ClaudePath` directly or a literal `claude`; and takes the Codex program from `codexProgram(cfg)` (`codexlaunch.go`: `codex_path` when set, as one unchanged argument, else `codex` on the `PATH` of the agents' tmux server), read at each launch for spawn, reuse and resume, never from `Launch.CodexPath` directly or a literal `codex`. Fresh, reused and resumed Cursor composition selects `Launch.CursorPath` (else `agent` on `PATH`) in `composeCursorCommand` (`cursorlaunch.go`); all future Cursor argv construction must reuse that function. Also owns the template file's `agent` key (`TemplateFile.Agent`): `LoadTemplate` refuses a non-empty value outside `claude`, `codex`, `cursor` and `droid` as `ErrTemplateMalformed`, and non-empty `agent_args` with no `agent` as `ErrTemplateAgentMissing`, and `config.ValidAgent`, `config.AgentClaude`, `config.AgentCodex`, `config.AgentCursor` and `config.AgentDroid` are the one statement of the valid values (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `internal/layout` | The one definition of where agent-director keeps its files: `DirRel` (`.config/agent-director`), `Display` (`~/.config/agent-director`), the file and directory names in it (`ConfigFile`, `StoreFile`, `ErrorLogFile`, `TrailFile`, `TemplatesDir`, `BinDir`, `BinaryName`), the `~/` forms of the defaults (`DisplayConfigPath`, `DisplayStorePath`, `DisplayErrorLogPath`, `DisplayTemplatesDir`), `Dir(home)` and `Join(home, ...)`; and, in `old.go`, the presence rules `OldPresent`, `NewPresent`, `OnlyOldPresent` and `StoreExists`, the only code that names the old directory. See [`internal/layout`](#internallayout). **Must use:** every default path in the Go code derives from this package, never a literal `.config/agent-director`; a presence question about the two directories is asked only through `old.go`. | stdlib only. | Every other `internal/` and `pkg/` package (it is a leaf, so each can import it without a cycle). |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture` (with `SeedDecideFixtureAgent`), `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); the template body builder `TemplateBody` (see [apitest template factory](#apitest-template-factory-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
-| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. Besides the verb-surface names, `Catalog` holds every name the command binaries give outside a verb handler, so it lists every err_name the CLI writes in an error envelope (b.cm7): the CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired`, which `internal/clisetup.Open` gives before any verb runs (b.vma, b.cm7), and the last three of which `serve` gives through `clisetup.NewOpenError` when it cannot open its MCP Client (b.uii); the CLI-internal names `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which the binaries write themselves; and `ErrInternal`, `Classify`'s fallback, paired with the unexported sentinel `errInternal`, which no error wraps (see [err_name catalog](#err_name-catalog)). The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/clisetup` (its seven sentinels only); `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
+| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel or typed error category with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. Besides the verb-surface names, `Catalog` holds every name the command binaries give outside a verb handler, so it lists every err_name the CLI writes in an error envelope (b.cm7): the CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired`, which `internal/clisetup.Open` gives before any verb runs (b.vma, b.cm7), and the last three of which `serve` gives through `clisetup.NewOpenError` when it cannot open its MCP Client (b.uii); the CLI-internal names `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which the binaries write themselves; and `ErrInternal`, `Classify`'s fallback, paired with the unexported sentinel `errInternal`, which no error wraps (see [err_name catalog](#err_name-catalog)). The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/clisetup` (its seven sentinels only); `internal/adminapi` (the operator-only typed `JournalRefusal` category; see [coherence exclusions](#err-name-five-way-coherence)); `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call) and optional standard instructions/current-client initialization observation through `Options`/`NewWithOptions`; default `New` omits instructions. Future consumers MUST reuse these owners. `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags` (naming the new key when the argument is an old name, see [Refusal of old names](#refusal-of-old-names)); every manifest param of every exposed verb is decoded through `decodeParams`, which refuses a wrongly typed value with `ErrInvalidFlags` too (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `expire`'s `older_than` is parsed with `pkg/api.ParseOlderThan`, the parser the CLI shares, and a value it rejects is `ErrInvalidFlags`. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `internal/oldnames` | The one table of the old, Claude-named public names (`Table`, one `Entry{Surface, Old, New}` per name and surface: the CLI, MCP, config and template surfaces), `Find` (exact for CLI and MCP names, letter-case-blind for config and template names, as the TOML decoder matches them), the refusal texts (`Entry.FlagText`, `KeyText`, `ConfigText`) and `RefuseFlag`, which turns the flag package's unknown-flag error into the refusal. **Must use:** every surface that refuses an old name builds its refusal from this table (see [Refusal of old names](#refusal-of-old-names)). | stdlib only (`errors`, `flag`, `strings`): a leaf package. | Every other package of the module. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
-| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Fresh supported native composer launches also use `internal/inputdelivery` preparation and its saved ordinary-input eligibility; see [Ordinary input delivery](#ordinary-input-delivery). On ordinary spawns, `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Opted-in explicit-id reuse makes one early `ReadForReuse` before `Validate`; `ApplyDefaults` consumes its saved answer through `reusePreCheck`, preserving collision and read-error precedence (see [Collision pre-check](#collision-pre-check)). Builds env maps, synthesizes a Claude launch's `--settings` JSON and composes a Codex launch's per-launch settings and the fresh/resumed Cursor gateway argv (see [Per-agent launch composition](#per-agent-launch-composition)). Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). Every launch records its own process as the row's launch owner and ends that hold when it ends (`launch_owner.go`: `CurrentLaunchOwner`, `LaunchOwnerAlive`, `ReleaseLaunchOwner`, b.kdf; see "v6 columns" under [`internal/store`](#internalstore)). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest`, the row's request fields and, for a Codex launch, the pre-trust outcome its argv was built for (`ComposedLaunch{Create, Row, PreTrust}`), with no write or tmux call (Cursor verifies the selected gateway executable), shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `RunPreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; for a Claude agent it is `PreTrust`, whose read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; for a Codex agent it is the outcome `CodexPreTrust` decided during composition, which touches no file and takes no lock; Cursor grants no trust and reports `failed` by default or `skipped` for `no_pre_trust`; see [Workspace-trust pre-write](#workspace-trust-pre-write). The agent is part of this stage: `Resolve` merges it and the inherited-arguments owner, `Validate` runs the agent checks in a fixed order, `ComposeLaunch` sets the row's agent and starts the pane command with the Claude/Codex program (`claudeProgram(cfg)` in `launch.go`, `codexProgram(cfg)` in `codexlaunch.go`) or the fresh Cursor gateway (`composeCursorCommand` in `cursorlaunch.go`); a row whose agent is outside the three valid values fails composition with `store.ErrRowAgentInvalid` (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks) and [Per-agent launch composition](#per-agent-launch-composition)). The advice helpers that name an agent are `AgentSpelling`, `ReuseSpawn`, `ReuseRetry` and `ReservedHomeAlternative`. Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `ComposedRelaunch{Create, PreTrust}`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse for all three agents uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. Cursor resume uses only the latest saved session through the shared gateway. Cursor same-agent reuse starts fresh within the current life; switches to/from Cursor start a new life, including switchback, through the shared finished-row path. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `internal/probe` (`SelfPIDNamespace` only, for the launch owner); `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting; `internal/cursorenv`; `golang.org/x/sys/unix` (`Access`, for `CwdEnterError`) | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
+| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Fresh supported native composer launches also use `internal/inputdelivery` preparation and its saved ordinary-input eligibility; see [Ordinary input delivery](#ordinary-input-delivery). On ordinary spawns, `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Opted-in explicit-id reuse makes one early `ReadForReuse` before `Validate`; `ApplyDefaults` consumes its saved answer through `reusePreCheck`, preserving collision and read-error precedence (see [Collision pre-check](#collision-pre-check)). Builds env maps and composes Claude/Codex settings, the Cursor gateway argv and the pane-only launch adapter (see [Per-agent launch composition](#per-agent-launch-composition)). Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). Every launch records its own process as the row's launch owner and ends that hold when it ends (`launch_owner.go`: `CurrentLaunchOwner`, `LaunchOwnerAlive`, `ReleaseLaunchOwner`, b.kdf; see "v6 columns" under [`internal/store`](#internalstore)). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest`, the row's request fields and, for a Codex launch, the pre-trust outcome its argv was built for (`ComposedLaunch{Create, Row, PreTrust}`), with no write or tmux call (Cursor verifies the selected gateway executable), shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch uses the shared pre-trust step `RunPreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; for a Claude agent it is `PreTrust`, whose read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; for a Codex agent it is the outcome `CodexPreTrust` decided during composition, which touches no file and takes no lock; Cursor grants no trust and reports `failed` by default or `skipped` for `no_pre_trust`; pane-only agents always skip without a trust write; see [Workspace-trust pre-write](#workspace-trust-pre-write). The agent is part of this stage: `Resolve` merges it and the inherited-arguments owner, `Validate` runs the agent checks in a fixed order, `ComposeLaunch` sets the row's agent and starts the pane command with the Claude/Codex program (`claudeProgram(cfg)` in `launch.go`, `codexProgram(cfg)` in `codexlaunch.go`) or the Cursor gateway (`composeCursorCommand` in `cursorlaunch.go`), with pane-only agents dispatched through their adapter; a row whose agent is outside the valid set fails composition with `store.ErrRowAgentInvalid` (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks) and [Per-agent launch composition](#per-agent-launch-composition)). The advice helpers that name an agent are `AgentSpelling`, `ReuseSpawn`, `ReuseRetry` and `ReservedHomeAlternative`. Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `ComposedRelaunch{Create, PreTrust}`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse for every agent uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. Cursor resume uses only the latest saved session through the shared gateway. Cursor same-agent reuse starts fresh within the current life; switches to/from Cursor start a new life, including switchback, through the shared finished-row path. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/inputdelivery` (native launch preparation; see [Ordinary input delivery](#ordinary-input-delivery)); `internal/tmux`; `internal/probe` (`SelfPIDNamespace` only, for the launch owner); `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting; `internal/cursorenv`; `golang.org/x/sys/unix` (`Access`, for `CwdEnterError`) | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: the server identity read `display-message -p 'ad-server<TAB>#{pid}<TAB>#{start_time}'`, then the session listing with labels, then the three `@ad_owner` scope reads; LFR H5; b.47f. The identity read answers on a server with no sessions too (tmux's `exit-empty` off), so every answer names the server that gave it. `parseLookup` takes the first line as the identity line, exactly `ad-server`, the decimal pid and the decimal start time, tab separated; then the session lines, whose pid and start time must equal the identity line's; then the scope section (LFR H6). A first line that is not an identity line, empty output included, or a session line that disagrees with it makes the answer malformed, `FailUnrecognized`), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is typed whole, by the argv escape below), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Key send (b.9o4)**, an addition beside the SR-2.1 calls, not one of them, also taking the socket: `SendKeyPane` (by pane id: `send-keys -t <pane id> <key>`, one key by its tmux key name, never typed literally, call kind `CallSendKey`, "key send"; `pause`'s `C-u`, and `send-keys`' named keys, b.146 rule 8; the key is always a fixed name from the calling code, `pause`'s constant or `pkg/api`'s `paneKeyNames` table, never caller text passed through) and `SendKeyPaneRepeat` (the same send with `-N <count>`, one call however many presses, the same call kind and the action timeout; a Codex row's `pause` sends `C-u` 127 times this way, and a count below 1 is sent as 1). **Terminal read:** `PaneTerminalRaw(socket, paneID, maxWait)` (`CallPaneTerminal`, "pane terminal read", bounded Action timeout) reads the pane's terminal mode; it implements the optional `api.PaneTerminalTmux` capability; see [Ordinary input delivery](#ordinary-input-delivery). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain passes only the instance id through the format escape below. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. **Argv escape (`invoke.go`):** tmux splits its argv into commands at every element ending in `;`, before any option parsing and so even after `--`: the `;` is dropped and the element ends its command, so a caller value ending in `;` followed by more elements would run those as a tmux command of the caller's choosing (`kill-server`, `run-shell <shell command>`). An element ending in `\;` is instead one argument with that backslash removed. `commandArgv(cmds ...[]string)` builds every call's argv after `-u -S <socket>` from a list of commands: a standalone `;` only between commands, and every element of every command passed through `escapeFinalSemicolon` (one backslash before a final `;`). So every value (session name, cwd, `-e` entry, the agent's command with its claude arguments at spawn and at resume, send-keys text, label values, targets) reaches its tmux command as one argument, a final `;` included, and never ends that command. The escape covers only this split: what the command then does with the argument is unchanged (format expansion is the format escape's job, below). The chain target `=<name>:` ends in `:`, so it is never escaped, and tmux matches it against the stored, unescaped name. The socket is not escaped: tmux's own option parsing consumes `-S <socket>` before the split. `HasSession` builds its argv the same way. **Must use:** every tmux call composes its argv through `commandArgv`, socket-taking calls by passing one `[]string` per command to `invoke` (`runAction`, `runData`); never put a `;` separator or a value into a tmux argv by hand. **Format escape (`create.go`):** tmux expands formats in some arguments before using them: `new-session`'s `-c` cwd (twice, by the command and again at the pane spawn, both times from the raw argument), its `-s` name, and every `set-option -F` value. In a format, `#(<cmd>)` runs `<cmd>` through the shell on the tmux server, and `#{…}` and aliases such as `#S` are replaced, so a raw cwd holding them would run a command, or start the agent in another directory, at spawn and on every resume. `escapeFormat(text)` returns text that expands back to exactly itself: each run of `#` is doubled (`##` expands to `#`), except a run directly before `[`, which tmux copies through unchanged as a style, so doubling it would add `#`. `createCommands` sends `-c` as `escapeFormat(cwd)` and the `@ad_owner` value's instance id through it, so spawn and resume start the agent in the cwd exactly as given and run nothing in it; the cwd stored on the row and reported by agent-director is the unescaped one. The two escapes compose: `escapeFormat` adds or removes no `;`, and tmux drops the argv escape's backslash before it expands the format, so a cwd `/a#;` is sent as `/a##\;` and expands to `/a#;`. Not escaped: the `-s` name, which never holds `#` (spawn refuses one, and a default name keeps only `[A-Za-z0-9_-]`); the `-e` entries and the agent's command, which tmux does not expand; and the client's own fixed formats (`#{session_id}`, `#{pane_id}`, the identity read's, the reply and listing formats). **Must use:** every caller-controlled value in a tmux argument that tmux format-expands goes through `escapeFormat`; never double `#` by hand. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. The shared runner owns both actual output collectors: after `Cmd.Run` joins them, an exit-zero `exec.ErrWaitDelay` is successful only if both collectors positively observed clean EOF; held, incomplete or errored streams remain `RunPipesCut`. Every caller must reuse this runner; the 1500 ms query and 100 ms pipe-close defaults and configured bounds remain unchanged. Socket-taking tmux calls fail with `*CallError`; `PaneTerminalRaw` can also return a device-open or termios error. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The one name-based method left is `HasSession`; the name-based kill, send and capture are removed (every verb targets ids only). `HasSession` is kept on the client and on `api.TmuxClient` and matches by prefix; no verb uses it, and none may (`resume` judges its row with the lookup). `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token), `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget) and `starting_session.go` (the session-age helper `SessionAge` and the starting-session rule `StartingSession`; see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`); `golang.org/x/sys/unix`; `internal/cursorenv` | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
-| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row, or a relayed `check_permission` row none of whose requests holds it (still awaits an answer and is not proven gone, `holdsRowSQL`; b.omt), to `waiting`, soft-refreshes any other, and records `idle_since` (b.svb, b.146 problem 3; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A relayed PermissionRequest is `runRelay`'s alone: its first write records the request and the move to `check_permission` in one transaction, and it writes an answer only once confirmed in the store (b.146 step 2; see [Permission relay](#permission-relay)). On a relay-on agent a `PostToolUse` or `PostToolUseFailure` carrying a `tool_use_id`, and the main agent's `Stop` or idle-prompt Notification, first prove permission requests' dialogs gone (`proveRequestsGone`, through `ProveRequestsGone`; the `Stop` or idle prompt only durably eligible main requests recorded before the hook started, b.omt; b.146 step 2c, see "The dialog hold" under [Permission relay](#permission-relay)); then such a `PostToolUse` or `PostToolUseFailure` closes the fallen-back request with that id (`closeToolRan`, through `CloseToolRanRequests`, each relay hook judged by `HandleConfig.RelayHookGone`; b.146 rule 13), and a terminal SessionEnd's move to `ended` closes the row's open requests, proves every request of the row gone and closes its running subagent entries, in the same transaction (the store's `applyEndedTransition`; b.146 rule 12). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Subagent capture (`subagent.go`; see [Subagent capture](#subagent-capture)): `SubagentStart` and `SubagentStop` are known soft refreshes that `Handle` routes to the store's one-transaction subagent write, and an `Agent`-tool `PreToolUse`, `PostToolUse` or `PostToolUseFailure` and a main-agent `Stop` (with its `background_tasks` snapshot) follow their applied row write with a gated entry transaction; the receipt time of every such write is the hook's start instant (`HandleConfig.Start`), and the store reads no clock. The classifier is agent-aware: `ClassifyEvent(agent, raw)` picks the Claude, Codex or Cursor table, the agent coming only from the hook's own `--agent` argument (`ResolveAgent`; an invalid value is a hook failure through `failClosed`), and its Cursor result requires the registered current-launch binding plus CLI-injected `HandleConfig.VerifyCursor` (nil/error rejects), and its result carries the flags the handler follows, among them `SubagentCapture` (Claude only), `EndReport` and `HealsTranscript`; a Codex `SessionEnd` without `agent_id` is an end report (`applyEndReport`, through the store's `ApplyHookEndReport`) and an applied Codex hook without `agent_id` may heal the row's transcript path (`healCodexTranscript`, through `HealJsonlPath`); the grandparent advice follows the row's agent (`paneIsGrandparentAdviceFor`). See [The agent-aware hook classifier](#the-agent-aware-hook-classifier). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), and the relay hook's start, per-hook timeout (its `--timeout` argument) and own process identity as `HandleConfig.Start`, `RelayTimeout` and `Self` (`Start`, the hook process's first clock reading, is also a `Stop`'s or idle prompt's `turn_end` cut, b.omt, and the receipt time of every subagent write), and the PostToolUse close's judge of a relay hook as `HandleConfig.RelayHookGone` (`pkg/api.RelayHookGone` with the per-OS readers, the hook's own pid namespace, `time.Now` and the effective relay window: `hookRelayHookGone`; nil closes nothing), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (Claude and Codex hook paths make no tmux call and no ancestry walk; their only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`. Cursor's CLI-injected `HandleConfig.VerifyCursor` calls `cursorhost.VerifyPane` for tmux and process ownership evidence; `internal/hook` still imports none of these forbidden packages). |
+| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row, or a relayed `check_permission` row none of whose requests holds it (still awaits an answer and is not proven gone, `holdsRowSQL`; b.omt), to `waiting`, soft-refreshes any other, and records `idle_since` (b.svb, b.146 problem 3; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A relayed PermissionRequest is `runRelay`'s alone: its first write records the request and the move to `check_permission` in one transaction, and it writes an answer only once confirmed in the store (b.146 step 2; see [Permission relay](#permission-relay)). On a relay-on agent a `PostToolUse` or `PostToolUseFailure` carrying a `tool_use_id` (matching no Claude or Codex request, which records none; b.wbs), the main agent's `Stop` or idle-prompt Notification, and a Claude subagent's `SubagentStop` first prove permission requests' dialogs gone (`proveRequestsGone`, through `ProveRequestsGone`; the `Stop` or idle prompt only durably eligible main requests recorded before the hook started, b.omt, the `SubagentStop` only that subagent's, b.wbs; b.146 step 2c, see "The dialog hold" under [Permission relay](#permission-relay)); then such a `PostToolUse` or `PostToolUseFailure` closes the fallen-back request with that id (`closeToolRan`, through `CloseToolRanRequests`, each relay hook judged by `HandleConfig.RelayHookGone`; b.146 rule 13), and a terminal SessionEnd's move to `ended` closes the row's open requests and running subagent entries and, on a non-Cursor row, proves every request gone, in the same transaction (the store's `applyEndedTransition`; b.146 rule 12; see [The dialog hold](#the-dialog-hold-step-2c)). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Subagent capture (`subagent.go`; see [Subagent capture](#subagent-capture)): `SubagentStart` and `SubagentStop` are known soft refreshes that `Handle` routes to the store's one-transaction subagent write, and an `Agent`-tool `PreToolUse`, `PostToolUse` or `PostToolUseFailure` and a main-agent `Stop` (with its `background_tasks` snapshot) follow their applied row write with a gated entry transaction; the receipt time of every such write is the hook's start instant (`HandleConfig.Start`), and the store reads no clock. The classifier is agent-aware: `ClassifyEvent(agent, raw)` picks the Claude, Codex or Cursor table, the agent coming only from the hook's own `--agent` argument (`ResolveAgent`; an invalid value is a hook failure through `failClosed`), and its Cursor result requires the registered current-launch binding plus CLI-injected `HandleConfig.VerifyCursor` (nil/error rejects), and its result carries the flags the handler follows, among them `SubagentCapture` (Claude only), `EndReport` and `HealsTranscript`; a Codex `SessionEnd` without `agent_id` is an end report (`applyEndReport`, through the store's `ApplyHookEndReport`) and an applied Codex hook without `agent_id` may heal the row's transcript path (`healCodexTranscript`, through `HealJsonlPath`); the grandparent advice follows the row's agent (`paneIsGrandparentAdviceFor`). See [The agent-aware hook classifier](#the-agent-aware-hook-classifier). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), and the relay hook's start, per-hook timeout (its `--timeout` argument) and own process identity as `HandleConfig.Start`, `RelayTimeout` and `Self` (`Start`, the hook process's first clock reading, is also a `Stop`'s, idle prompt's or `SubagentStop`'s `turn_end` cut, b.omt, and the receipt time of every subagent write), and the PostToolUse close's judge of a relay hook as `HandleConfig.RelayHookGone` (`pkg/api.RelayHookGone` with the per-OS readers, the hook's own pid namespace, `time.Now` and the effective relay window: `hookRelayHookGone`; nil closes nothing), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (Claude and Codex hook paths make no tmux call and no ancestry walk; their only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`. Cursor's CLI-injected `HandleConfig.VerifyCursor` calls `cursorhost.VerifyPane` for tmux and process ownership evidence; `internal/hook` still imports none of these forbidden packages). |
 
 ### `[tmux]` timing settings
 
@@ -1449,14 +1622,14 @@ Every tmux timing value (the starting-session bound, the stopping window,
 the pending grace period, the per-call timeouts, the pipe-close wait, the
 sweep tmux budget and `kill`'s exit wait) is a key of the `[tmux]` table,
 held in `config.Config.Tmux`. The pending grace period has two users
-(SR-13.4): `find-missing` leaves a `pending` row inside it unjudged, and a
+(SR-13.4): the shared active checker leaves a `pending` row inside it unjudged, and a
 SessionStart hook that arrives before its launch's identity write waits for
 that write until the launch start plus the grace period or 540 s after it
 began waiting, whichever comes first (SR-22.9; WD 2026-09-30c; `runHook`
 passes `EffectivePendingGrace` to the hook as `HandleConfig.PendingGrace`).
 The 540 s cap is `sessionStartWaitCap` in `internal/hook`, not a `[tmux]`
 setting; `pending_grace_seconds` keeps no maximum, and a grace above 540 s
-lengthens only `find-missing`'s window. `internal/config` is the single source of
+lengthens only the checker's window. `internal/config` is the single source of
 truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
 
 - **Read a value only through its `config.Tmux` accessor**
@@ -1531,13 +1704,14 @@ truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
   uses it for a 0. After validation, `config.Load` writes it into each
   `[tmux]` field the file does not set (`resolveUnsetTmux`), so a loaded
   config never holds a seeded default below the derived minimum, and every
-  reader of the grace period (`find-missing`, the SessionStart hook's
+  reader of the grace period (the
+  [shared active checks](#shared-active-checks), the SessionStart hook's
   wait) gets the same value. Why the grace period is kept apart from
   `create_timeout_ms`: the create timeout bounds one tmux "create
   session" call, while the grace period bounds the whole launch, tmux
-  plus Claude starting and checking in, before `find-missing` may mark
+  plus Claude starting and checking in, before a check may mark
   the row `missing`. The grace period must outlast the create timeout
-  plus a margin (the rule `PendingGraceMinimumSeconds`), or the sweep
+  plus a margin (the rule `PendingGraceMinimumSeconds`), or a check
   could mark `missing` a launch that is still legitimately starting.
 - **One spelling per key (b.p8n).** Before validating any value,
   `config.Load` refuses a file that sets one key under two or more names
@@ -1865,8 +2039,8 @@ never Gone. It makes no tmux call.
 **Must use** `tmux.PaneByToken` to find a pane by its `@ad_pane` token;
 never match `AdPane` by hand. Its users are `pkg/api`'s adoption rules
 (`findAdoption`, which `kill`, `send-keys` and `pause` reach through
-`adoptIdentity`, `find-missing` through `adoptInSweep`, and `read-pane`
-directly, for the call only, with no write) and `kill`'s finished-row
+`adoptIdentity`, the shared active checks through `adoptInSweep`, and
+`read-pane` directly, for the call only, with no write) and `kill`'s finished-row
 opt-in on this id's own abandoned launch (`killRun.endAbandoned`), which
 takes each session's agent pane by its label's token.
 
@@ -1901,10 +2075,10 @@ socket is Skipped with no call, even when its answer is held. Other sockets
 go on. A different server, a `provenance_conflict` and a no-server or
 no-socket reply stop nothing. `tmux.Result.StopsSocket()` is the one
 predicate for this rule; **must use:** code that stops a socket on a result
-calls it, never its own test of the verdict. `sweepSocket.stopOn` and
-`Client.samplePane` use it. Pane sampling in `list` is not a sweep (no
-budget, nothing held): within one read it gives a stopped socket's later
-rows an empty sample with no tmux call (see [Displayed State reporting](#displayed-state-reporting)).
+calls it, never its own test of the verdict. `sweepSocket.stopOn` uses it
+for both liveness fallback and pane sampling
+in [Shared active checks](#shared-active-checks). Selected rows share the
+socket stop rule and cumulative budget.
 
 **Budget (on the injected clock).** Each call's time is `now()` at its
 return minus `now()` at its start, added only when positive (a clock stepped
@@ -2021,10 +2195,10 @@ the detail.
 | `unusable_name.go` | `unusableNameError(name)`: nil for a usable recorded name, else the verb-agnostic `ErrInternal` refusal (empty, control character, or which rewritten character via `tmux.RewrittenIn`), pointing to "Operator actions" and saying no tmux call was made. The verb prefixes the instance id. | Every verb that would look a row up refuses an unusable recorded name through it, before the socket and any tmux call: `kill` of a live row and, with the finished-row opt-in, of a finished row (`killRun.withOptIn`); `read-pane` (any state); `send-keys` after its state and relay guards; `pause` on a `waiting` row; `resume` first in `resumeAfterJsonl`, wrapped `resume: ` in place of the instance id; reuse in `reuseExamine`. Never write another unusable-name description. `find-missing` and `expire` refuse nothing and do not use it: they note or keep such a row through `tmux.Unusable` (`unusableNameNote`, `unusableKeptReason`). |
 | `agent_pane.go` | `agentPane(panes, paneID, panePID)`: the agent's pane in one listing, by recorded pane id and pid, wherever it now is (SR-3.7). `findAdoption(recorded, res, panes, pc) adoption`: the one home of the adoption rules (SR-3.6), with no write: due when the lookup is Ours and the row records no server identity or no pane; the server identity from the answering server, the pane by `@ad_pane` token (`tmux.PaneByToken`), start times through `tmux.KnownStartTime`. `adoptIdentity(s, row, res, panes, pc) adoption`: the single-row verbs' step, `findAdoption` over the verb's own listing plus one `AdoptIdentityIfUnchanged` write; the found identity (`adoption.Identity`) is used for this call whatever the write's outcome, and `Applied` is set only when the write applied. `identityAdopter` is the store capability it needs. `adoptInSweep(s, sw, pl, it, launch, res, pc, lg) sweepAdoption`: `find-missing`'s step, `findAdoption` over the Sweep's pane listing (`sw.ListPanes`, at most one per socket per run) plus one `AdoptIdentityIfSameLife` write guarded on the snapshot the sweep read; `sweepAdoption` reports `Unlisted` (the listing did not answer: nothing adopted, no write) with the listing's `Listing` result, `Guard` (the snapshot the row's verdict write is guarded on: the adoption write's new one when it applied), `Write` and `Left` (the write found the row changed or absent, or failed: the row gets no verdict write). `sameLifeAdopter` is its store capability. | `findAdoption` holds the adoption rules; never decide or build an adopted identity elsewhere. `kill`, `send-keys` and `pause` find the agent's pane with `agentPane` and adopt with `adoptIdentity`, using the verb's own one pane listing; `read-pane` calls `findAdoption` directly and uses what it found for that call only, with no write (SR-7.5), as `resume`, reuse and `expire` must when they need an identity without writing it; a sweep adopts only with `adoptInSweep`. Never match panes or write an adoption by hand. |
 | `pane_run.go` | `paneRun`: one pane-verb call's run, with `paneTmux` (`TmuxLookup` + `ListPanes`). It holds the row, the socket, the store id, the verb's gone sentinel (`ErrTmuxCaptureFailed` or `ErrTmuxSendKeys`), what its refusals say was not done (`paneNothing`) and an optional `adopter`. Methods: `launchFor` (through `rowLaunch`), `ours` (the one pane listing, adoption — `adoptIdentity` with an adopter, else `findAdoption` for the call only — then `agentPane`, or `paneNotFoundError`), `listPanes` (a failed listing classified by `tmux.ListingFailure`: Gone → the gone error, otherwise `cantTellError`), `goneError`, `refusal` and `cantTellRefusal`. `readPaneRun` embeds it. | Every pane verb runs its lookup's Ours step, pane listing, gone error and Can't tell mapping through `paneRun`; a new pane verb embeds it and keeps only its own Leftover handling and action. |
-| `pane_keys.go` | `keysRun` (embeds `paneRun`), `newKeysRun(t, pc, row, storeID, socket, adopter)` and `keysFacts`: the shared pane lookup and send facts for `send-keys` and `pause`. `deliver(text)` is the literal-text route: one lookup (`target`, holder name the recorded name), on Ours one listing and the adoption write, then, when `keysRun.clear` is set, the line clear (`SendKeyPane` of `lineClearKey`, or one `SendKeyPaneRepeat` call when `keysRun.clearPresses` is above 1), then `SendKeysPane` by pane id; a failure of either is mapped by `sendFailed` through `paneActionFailureError` in Keys mode with the verb's next step; nothing sent before Ours and the agent's pane, and nothing after a failed line clear. `keysRun.leftover` is the verb's Leftover refusal (nil gives `paneLeftoverError`; `send-keys` sets `pendingLeftoverError` on a `pending` row). `keysRun.next` (a `keysNext`) is the verb's next step after a keys failure that may have left its text typed: `send-keys` sets `sendKeysNext` (`pane_action_failure.go`); the zero value, `pause`'s, keeps "retry later". `keysRun.clear` (a `lineClearTmux`; `pause` sets it to its `PauseTmux`, `send-keys` leaves it nil) sends `lineClearKey`, `C-u`, before the text, `keysRun.clearPresses` times in one call on a Codex row (`pause` sets 127; why, and what it does not clear: "Why `C-u` first" under [`pause`](#pause)). `keysFacts` keeps the socket, the first lookup, a failed listing, `Adopted`, the Ours session, `Sent` / `SendErr` (both unset after a failed line clear, which types no text) and the follow-up. `emitDisagree(verb, instanceID, who)`: the keys verbs' one `ad.provenance.disagree` emit, source `ad_send_keys`, reasons collected as `kill` collects them, action from `sendKeysAction` (`sendkeys_trail.go`: `keys_sent`, `text_sent`, `nothing_sent`). | Pane input reuses `keysRun` and `keysRun.emitDisagree`; literal input uses `deliver` or its `targetPane`/`typeText` stages, while ordinary native and Codex fallback input follow [Ordinary input delivery](#ordinary-input-delivery). Never duplicate lookup, action mapping or disagree collection. A verb that must send the line clear first sets `keysRun.clear` rather than sending its own key call, and a verb whose literal retry would type its text twice sets `keysRun.next` rather than its own retry sentence. |
+| `pane_keys.go` | `keysRun` (embeds `paneRun`), `newKeysRun(t, pc, row, storeID, socket, adopter)` and `keysFacts`: the tmux phase shared by the verbs that type keys (`send-keys`' text, `pause`'s `/exit`). `targetPane` starts with a lookup (`target`, holder name the recorded name), an Ours pane listing and adoption when due. `typeText` invokes an installed `beforeWrite` callback before clear, text and Enter; `checkInputTarget` retains captured session authority and repeats physical-target lookup/listing. When `keysRun.clear` is set, delivery includes the line clear (`SendKeyPane` of `lineClearKey`, or one `SendKeyPaneRepeat` call when `keysRun.clearPresses` is above 1), then `SendKeysPane` by pane id; a failure of either is mapped by `sendFailed` through `paneActionFailureError` in Keys mode with the verb's next step; nothing sent before Ours and the agent's pane, and nothing after a failed line clear. `keysRun.leftover` is the verb's Leftover refusal (nil gives `paneLeftoverError`; `send-keys` sets `pendingLeftoverError` on a `pending` row). `keysRun.next` (a `keysNext`) is the verb's next step after a keys failure that may have left its text typed: `send-keys` sets `sendKeysNext` (`pane_action_failure.go`); the zero value, `pause`'s, keeps "retry later". `keysRun.clear` (a `lineClearTmux`; `pause` sets it to its `PauseTmux`, `send-keys` leaves it nil) sends `lineClearKey`, `C-u`, before the text, `keysRun.clearPresses` times in one call on a Codex row (`pause` sets 127; why, and what it does not clear: "Why `C-u` first" under [`pause`](#pause)). `keysFacts` keeps the socket, the first lookup, a failed listing, `Adopted`, the Ours session, `Sent` / `SendErr` (both unset after a failed line clear, which types no text) and the follow-up. `emitDisagree(emit, verb, instanceID, who)`: the keys verbs' one `ad.provenance.disagree` emit through `writeProvenanceDisagree` with the caller's emitter (`pause` passes its bounded recovery emitter, `send-keys` the legacy one; see [Reusable writer](#reusable-writer)), source `ad_send_keys`, reasons collected as `kill` collects them, action from `sendKeysAction` (`sendkeys_trail.go`: `keys_sent`, `text_sent`, `nothing_sent`). | A verb that types keys into the agent's pane reuses `keysRun.targetPane` and its journal admission, then `typeText` (or their `deliver` wrapper) for literal input or `sendKeysRun.pasteText` for ordinary Codex fallback and writes its disagree records with `keysRun.emitDisagree`; never a second keys phase, action mapping or disagree collection. A verb that must send the line clear first sets `keysRun.clear` rather than sending its own key call, and a verb whose literal retry would type its text twice sets `keysRun.next` rather than its own retry sentence. |
 | `pane_refusals.go` | The pane verbs' refusal descriptions, verb-neutral through `paneRefusal{InstanceID, Name, Nothing}` and `paneNothing` (`nothingRead`, `nothingSent`, `textNotSubmitted`): `paneNotFoundError(r, notAdopted)` ("the agent's pane was not found", plus "the agent's pane was not adopted (no pane carries this launch's pane label)" for a lost create reply), `paneLeftoverError(r, leftovers, moreThanOne)` ("not this launch's session"; "more than one leftover session exists" for `read-pane`), `paneGoneError(gone, r, detail)` ("the row's session is not there", matching only the verb's gone sentinel). `leftoverSessions(leftovers)`: the one sentence naming leftover sessions, shared with `kill`'s `leftoverError`; `namedSessions(sessions, limit)`: quoted names and `$N`, then a count. `send-keys`' two `pending`-row `ErrSpawnNotInteractive` builders: `pendingNoLaunchError(instanceID)` (no launch start or token; no tmux call made) and `pendingLeftoverError(instanceID, leftovers)`. | No verb builds its own pane-verb refusal text: pane not found, Leftover and the gone error go through these builders, a Leftover sentence through `leftoverSessions`. Tests check them with `apitest`'s `DescPane*` and `DescSendKeysPending*` cases. |
 | `pane_action_failure.go` | `paneActionFailureError(err, paneActionFailure{Call, Gone, Pane, Refusal, Keys, Next}, t, pc, launch)`: the SR-7.3 mapping of a failed action call (capture, line clear, text, Enter): a timeout → `ErrTmuxUnresponsive` with no follow-up; any other failure → exactly one follow-up lookup (Gone or Leftover → the verb's gone error; a different server or tmux unavailable → `ErrTmuxNotAvailable`; otherwise `ErrTmuxUnresponsive`); returns the follow-up (`paneFollowUp`) for the trail. `Keys` selects the "keys may have reached the pane" mode (`keysReached`): "the keys may have been delivered" after a timeout and "the text may be typed but not submitted" once the text went through (`enterFailedAfterText`). In that mode `Next` (a `keysNext{TextTimeout, NotSubmitted}`) is the verb's next step, which `keysReached` sets as `Refusal.Retry`, so an `ErrTmuxUnresponsive` that may have left the text in the pane ends with it in place of "retry later": `TextTimeout` after a timed-out text call, `NotSubmitted` after a failed or timed-out Enter; a field left `""` keeps "retry later". `sendKeysNext` holds `send-keys`' two: "read-pane; if the text is typed, send-keys with empty text, otherwise the same send-keys" and "send-keys with empty text submits it" (b.9o4). A failed line clear (`tmux.CallSendKey`, `pause`'s `C-u`) types no text: a timeout says "the keys may have been delivered", any other failure is described as a text call's that typed nothing, and both end "retry later". The reply text never classifies. | Shared capture and manual/literal action paths must use it; their keys failures put the next step in `Next`. Native and Codex paste failures follow [Ordinary input delivery](#ordinary-input-delivery). |
-| `provenance_disagree.go` | `emitProvenanceDisagree(provenanceDisagree{...}, reasons...)` (callers: `kill`, `find-missing`, `expire` (`expireRun.emitRow`), plain spawn's held-name path, `resume` and reuse through `emitFinishedRowDisagree` (`finished_launch.go`, over `emitLookupDisagree`), and the keys verbs through `keysRun.emitDisagree`): writes one `ad.provenance.disagree` per distinct reason among the six (`disagreeReasons`), in a fixed order, nothing for none, dropping unknown reasons; fail-open; never a label's content. `nameChanged(res, recordedName)`: the `name_changed` condition (Ours under a name that is not a stored form of the recorded one, `tmux.StoredForms`). | A verb collects every reason of its call (lookups, a pane-listing failure, `adopted` when the adoption applied, `name_changed`) and calls the emitter once per call; a sweep calls it once per row. Never write the event directly. |
+| `provenance_disagree.go` | `writeProvenanceDisagree(emit, provenanceDisagree{...}, reasons...)`, the shared builder writing through the caller-selected emitter (the keys verbs through `keysRun.emitDisagree`, and `find-missing`'s shared checks through `findMissingRun.emitDisagree`), and `emitProvenanceDisagree(provenanceDisagree{...}, reasons...)`, its legacy synchronous wrapper (callers: `kill`, `expire` (`expireRun.emitRow`), plain spawn's held-name path, `resume` and reuse through `emitFinishedRowDisagree` (`finished_launch.go`, over `emitLookupDisagree`)): writes one `ad.provenance.disagree` per distinct reason among the six (`disagreeReasons`), in a fixed order, nothing for none, dropping unknown reasons; fail-open; never a label's content. `nameChanged(res, recordedName)`: the `name_changed` condition (Ours under a name that is not a stored form of the recorded one, `tmux.StoredForms`). | A verb collects every reason of its call (lookups, a pane-listing failure, `adopted` when the adoption applied, `name_changed`) and calls the emitter once per call; a sweep calls it once per row. Never write the event directly. |
 | `error_name.go` | `errorName(err)`: the err_name the CLI would print, for trail fields (`ad.kill.called`'s and `ad.send_keys.called`'s `outcome`, `ad.resume.restored`'s and `ad.spawn.reuse_restored`'s `launch_error`, `ad.launch.name_held`'s `outcome`); `ErrInternal` for anything else. `pkg/api` cannot import `errnames`, so this is its one mapping. | A trail field that carries an err_name uses it, and a verb that gains a name extends it here. |
 | `caller_identity.go` | `callerIdentity()`: the invoking process's identity (`caller`: process name, pid, hostname, user), collected inside agent-director, never from caller-asserted params, for the trail's `caller_*` fields. `lazyCaller` (`get()`): a sweep run's caller identity, collected on first use and shared by every record of the run, so a run collects it at most once and a run that writes no record carrying it collects none; the zero value is ready, and it serves one run, not concurrently. `find-missing` and `expire` each hold one per run. | A verb's trail `caller_*` fields come from `callerIdentity`; a sweep holds one `lazyCaller` per run and calls `get()` only when a record needs it. Never collect the caller identity another way or once per row. |
 | `starting_session.go` | `startingSessionLimitsOf`, `startingSessionRow` (with its `NoLaunchSessionRecorded`, `Consequence` and `Retry`), `checkStartingSession` and the `startingSessionCheck` errors `refusal`, `unavailableError` and `ownIDConflictError`: the shared starting-session refusal over `tmux.StartingSession` (see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | Every verb that applies the starting-session rule must use them, with the age from `tmux.SessionAge`; never re-implement the stopping window, the age calculation or their refusal texts. |
@@ -2047,11 +2221,12 @@ following symbols must appear **only** in the named exemption sites:
 | Symbol | Permitted in |
 | --- | --- |
 | `store.Open` / `store.OpenOrInit`, and their `WithBusyTimeout` forms | `runHook` only |
-| `config.Load` | `runHook` and `newHookLogger` only; the Client's config load and logger bootstrap (Pin 3) are `internal/clisetup.Open`'s, which `setupClient` and `agent-director-admin` call |
+| `config.Load` | `runHook`, `newHookLogger` and the administrator's `migrateJournalHandler`; ordinary Client setup uses `internal/clisetup.Open`. The snapshot handler loads no config. |
 | `tmux.New` | none — `cmd/` must not construct a tmux client directly; `pkg/api.New` owns it |
 
-`cmd/agent-director-admin/` has no exemption site: none of the three may
-appear there. Any occurrence outside those sites is a layer-boundary
+The administrator's migration handler loads config to resolve its store
+without constructing a Client (with `--check-only` it loads none). It delegates migration to `adminapi.MigrateJournal`.
+Any occurrence outside the named sites is a layer-boundary
 violation and should be rejected at review. The enforcement command:
 
 ```sh
@@ -2059,7 +2234,8 @@ grep -rn "store\.Open\|config\.Load\|tmux\.New" cmd/agent-director/ cmd/agent-di
   | grep -v '_test\.go'
 ```
 
-Expected output: only lines inside `runHook` and `newHookLogger` (and
+Expected output: only lines inside `runHook`, `newHookLogger` and
+`migrateJournalHandler` (and
 comments that name them).
 
 ### Experimental context readers
@@ -2091,6 +2267,9 @@ chooses the first supported capability: `SpawnStatusRow`, `SpawnStatusContext`,
 after read errors. Every eligible reader before `GetSpawnState` can supply
 launch time. `SpawnStatusContext` remains the context fallback for
 stores lacking `SpawnStatusRow`; stores lacking both return unknown context.
+Only `SpawnStatusRow` supplies main-field evidence; every other fallback
+returns `process_liveness` `unknown` with unknown records
+(`withUnknownMainFields`).
 
 `internal/store/codex_startup.go` owns `CodexStartup`, its strict bounded JSON
 validation and `FreshCodexWriter`. Schema v13 adds nullable
@@ -2429,11 +2608,21 @@ verbatim so future code review can grep for it:
 
 > No SQL outside `internal/store`; callers use typed query primitives only.
 
-**Schema v15** lives in `internal/store/schema.go`. Seven tables. The v9 hop
+**Schema v20** lives in `internal/store/schema.go`. Twelve tables. The v9 hop
 renamed agent-generic fields; v13's `claude_capacity` is deliberately
 Claude-specific capacity provenance (see
 [Store upgrade to agent-generic names](#store-upgrade-to-agent-generic-names)):
 
+- `input_launches`, `input_attempts`, `input_imports` — operational native
+  launch/current/history and exact retained import/proof evidence; see
+  [Ordinary input delivery](#ordinary-input-delivery).
+- `cursor_inputs`, `cursor_proofs` — captured Cursor input dispositions and
+  exact tool-proof records/raw BLOBs, keyed by store/connection/submission or
+  proof id, FK-cascaded on spawn deletion. They grant no replay authority; see
+  [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority).
+  The separate v17→v18 hop validates compatible existing tables and records
+  before adding/stamping; fresh creation shares `cursorObligationsDDL`.
+  Recovery is restore-only under [the migration guide](migration-guide.md#emergency-downgrade-recipe).
 - `spawns` — one row per agent instance under direction (Claude Code,
   Codex or Cursor), keyed by `instance_id`, with parent/child link (`parent_id`),
   lifecycle (`state`, the raw state, `started_at`, `last_seen_at`,
@@ -2450,7 +2639,9 @@ Claude-specific capacity provenance (see
   `pane_sha256`, `pane_since_ms` and `pane_epoch` (see
   [Displayed State reporting](#displayed-state-reporting)), the nullable v15
   Codex turn columns `codex_turn` and `codex_turn_ended` (see "The Codex turn"
-  under [The agent-aware hook classifier](#the-agent-aware-hook-classifier)), the agent's arguments
+  under [The agent-aware hook classifier](#the-agent-aware-hook-classifier)), the
+  nullable v19 evidence columns `state_evidence`, `settled_evidence` and
+  `process_evidence`, followed by v20's `display_evidence` and `observation_writer` (see below), the agent's arguments
   (`agent_args`) and session id (`session_id`), tmux + relay metadata, and a
   JSON-encoded `labels` blob. Indexed on `state`, `last_seen_at`, and
   `parent_id`.
@@ -2504,8 +2695,9 @@ Claude-specific capacity provenance (see
   - **Retention and reads.** The store keeps every entry until the row is
     deleted or expired. Its history read, `ListSessionHistory(id, life)`,
     returns one life's entries, newest first, and keeps an entry equal to the
-    row's current session id. `resume` and `get` read the life of the row
-    they read and use only its *visible history*: that life's entries minus
+    row's current session id. Get's validated acquisition is described in
+    [Shared active checks](#shared-active-checks). `resume` and `get` use only
+    the selected row's *visible history*: that life's entries minus
     any entry whose session id equals the row's current, non-empty session
     id (`visibleHistory` in `pkg/api/visible_history.go`). The visible
     history is the queryable link from a row back to the earlier sessions of
@@ -2620,7 +2812,7 @@ Claude-specific capacity provenance (see
     `store.EvictSubagentLaunchGatedForTest`, each one committed transaction
     that takes the `HookGate`).
 - `store_meta` (v5, b.fmk; SR-5.1) — `key TEXT PRIMARY KEY, value TEXT NOT
-  NULL`, with one row in Phase 1: `store_id`, the store's identity. Every
+  NULL`, holding `store_id` and the v16 native-input authority marker. Every
   `@ad_owner` label carries it as its last field (see `internal/tmux` in the
   package inventory).
   - **Value.** 64 random bits from `crypto/rand`, written as 16 lowercase hex
@@ -2630,7 +2822,7 @@ Claude-specific capacity provenance (see
     `migrateV4toV5` (the hop) insert it inside their own transaction, before
     the stamp, only when no `store_id` row exists (`insertStoreIDOnceSQL` in
     `internal/store/storeid.go`, the only statement that writes
-    `store_meta`). No verb changes it, and a restore keeps it because it is in
+    `store_id`). No verb changes it, and a restore keeps it because it is in
     the file.
   - **Read once at open.** `openDB` reads it after `ensureSchema` succeeds
     (`readStoreID`), and `(*Store).StoreID()` returns it. A current-version
@@ -2753,12 +2945,12 @@ columns to this same list. None has a CHECK constraint or an index.
 | `settled_at` | INTEGER (epoch ms) | initial request admission | The fixed `confirm_by`: Claude/Codex hook kill plus 2 s; Cursor decision window plus 4 s, immediately past for relay off. NULL marks a request recorded before v7 (`PermissionRow.PreV7`). |
 | `hook_gone_at` | INTEGER (epoch ms) | readers, `decide`, `send-keys`, `record-pane-answer`, pane intent, Cursor native claim and the PostToolUse close | When a reader first found the request fallen back; `COALESCE`d, so the first value stays. |
 | `attempted_decision`, `attempted_at` | TEXT, INTEGER (epoch ms) | `decide` refusing with `ErrRelayFallenBack` | The refused verdict, the latest one; shown, never acted on. |
-| `pane_answer` | TEXT NOT NULL DEFAULT `'none'` | pane writes (`internal/store/pane_writes.go`), Cursor native claim/proof | How the request was answered at the pane (b.146 step 2b): `none` (nothing recorded through agent-director), `intent` (a pane answer's intent, its key maybe typed), `sent` (its key sent or a Cursor native choice recorded; neither establishes ACP delivery, receipt or proof), `outside` (`record-pane-answer`), `tool_ran` (Claude PostToolUse close or validated Cursor execution). `none` and `intent` leave a request awaiting an answer; the other three close it (`PermissionRow.PaneAnswered`). The values are the `PaneAnswer*` constants of `internal/store/permission.go`. |
+| `pane_answer` | TEXT NOT NULL DEFAULT `'none'` | pane writes (`internal/store/pane_writes.go`), Cursor native claim/proof | How the request was answered at the pane (b.146 step 2b): `none` (nothing recorded through agent-director), `intent` (a pane answer's intent, its key maybe typed), `sent` (its key sent or a Cursor native choice recorded; neither establishes ACP delivery, receipt or proof), `outside` (`record-pane-answer`), `tool_ran` (validated Cursor execution, or the PostToolUse close, which matches no Claude or Codex request; b.wbs). `none` and `intent` leave a request awaiting an answer; the other three close it (`PermissionRow.PaneAnswered`). The values are the `PaneAnswer*` constants of `internal/store/permission.go`. |
 | `pane_as` | TEXT | pane intent, `record-pane-answer`, Cursor native claim | The claimed verdict (`allow`, `deny`; `unknown` from `record-pane-answer`). Public pane writes store it without interpreting the screen or verifying its verdict. Before granting ACP response authority, Cursor additionally requires a sent claim to match the actual selected option; native choices derive their verdict from that option. An outside claim never supplies ACP approval authority or proof. |
 | `pane_sender_pid`, `pane_sender_starttime`, `pane_sender_pidns` | INTEGER, TEXT, TEXT | a pane answer's intent | The process that sends the pane answer's key (`SendKeysEnv.Self`), judged as a relay hook is (`relayJudge.sender`); NULL when it could not read itself, and NULLed when it releases its intent. |
 | `pane_intent_at` | INTEGER (epoch ms) | a pane answer's intent | When the intent was written, read inside `RecordPaneIntent`'s transaction after its `PaneCheck` (so it is the commit's instant, not the call's start): the key of the sender's own later writes (`paneIntentOwnerSQL`) and the start of `paneIntentHold` for a sender that cannot be checked. NULLed with the sender when the intent is released; never cleared by age. |
-| `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): `find-missing`'s mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed; a decided pre-v7 request without an ack or completed pane answer is closed too, preserving its verdict. |
-| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor invocation proof (`ProveCursorToolRan` / `ProveCursorToolFailed`), a Cursor turn's end (`ProveCursorTurnEnded`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (Claude `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, or authenticated exact-request Cursor invocation proof under [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority), where a failed MCP invocation proves only dialog closure; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt; on Cursor, the gateway proves the requests it never answered when their prompt turn completes, b.gwj), `agent_gone` (on a non-Cursor row only: a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`), unless it is a Cursor request of an earlier launch (`PermissionRow.HoldsDialog`), and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (the writes and reads the `holdsRowSQL` Must use entry under [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility) lists; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
+| `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): shared recovery's mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed; a decided pre-v7 request without an ack or completed pane answer is closed too, preserving its verdict. |
+| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor invocation proof (`CommitCursorProof`), a Cursor turn's end (`ProveCursorTurnEnded`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (a `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, which no Claude or Codex request records, b.wbs, or authenticated exact-request Cursor invocation proof under [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority), where a failed MCP invocation proves only dialog closure; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt, and a Claude subagent's `SubagentStop` proves that subagent's requests (its `agent_id`) created before that second, b.wbs; on Cursor, the gateway proves the requests it never answered when their prompt turn completes, b.gwj), `agent_gone` (on a non-Cursor row only: a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`), unless it is a Cursor request of an earlier launch (`PermissionRow.HoldsDialog`), and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (the writes and reads the `holdsRowSQL` Must use entry under [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility) lists; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
 | `spawns.idle_since` | TEXT (`CURRENT_TIMESTAMP`) | the idle-prompt Notification | When the main agent's idle-prompt Notification last landed; NULLed by every other applied hook (`idleClear`). |
 
 ### v11 columns: durable main-turn proof eligibility
@@ -2769,7 +2961,8 @@ the persisted bool; nullable `agent_id` separately carries known child identity.
 Main-turn proof requires BOTH `main_turn_end_eligible = 1` AND `agent_id IS NULL`;
 NULL child identity alone supplies no origin evidence. Even an already-current
 current row corrupted to child=true remains excluded from main-turn proof.
-Only matching owning tool-use proof or the owning launch ending (the spawn's
+Only matching owning tool-use proof, a Claude subagent's own `SubagentStop`
+(its `agent_id`'s requests; b.wbs) or the owning launch ending (the spawn's
 close, or a `resume` replacing the launch) can release such a hold.
 
 `RelayRequest.MainTurnEndEligible` is an internal optional `*bool`: nil resolves
@@ -2858,13 +3051,14 @@ policy is in [migration-guide.md](migration-guide.md#historical-worked-example-v
   its own. A request proven gone holds none of
   them, whatever agent-director's records say of it: one a person answered
   at the pane, which nothing records, still awaits an answer, and once the
-  main agent's turn end after it (`turn_end`) or its tool's `PostToolUse`
-  (`tool_ran`) proves it gone it no longer keeps the row in
-  `check_permission`. Every other reader of a request that awaits an answer
-  (`get` and `list`, `decide`, `send-keys` and its pane answers, the
-  cap eviction) reads `awaitingAnswerSQL` alone, so such a
-  request is still listed, decided, refused and closed as before. A new
-  write that a request should hold off reads `holdsRowSQL`, never
+  turn end of the agent that asked, after it (`turn_end`), proves it gone it
+  no longer keeps the row in
+  `check_permission`. `awaitingAnswerSQL` still governs reportable open
+  history and plain-input exclusion; it does not grant response authority.
+  New decisions and responses also require the owner and eligibility guards in
+  [Permission verdict authority](#permission-verdict-authority). Proof can
+  leave history open while making it ineligible for a new verdict or response.
+  A new write that a request should hold off reads `holdsRowSQL`, never
   `awaitingAnswerSQL` with a proof test of its own, and carries it in the
   WHERE of the statement that writes (a hook write joins
   `noRequestHoldsRowSQL`), never in a separate read alone: a request's
@@ -2873,7 +3067,8 @@ policy is in [migration-guide.md](migration-guide.md#historical-worked-example-v
   requests' dialogs are gone is written only by `ProveRequestsGone`
   (`internal/store/request_proof.go`, with a `RequestProof`: `How`
   `tool_ran` and its `ToolUseID`, or `turn_end` and its `RecordedBefore`,
-  the hook's start; b.omt), the end of a non-Cursor Spawn's
+  the hook's start, b.omt, and for a Claude subagent's `SubagentStop` its
+  `AgentID`, b.wbs), the end of a non-Cursor Spawn's
   agent only by `closeOrphanedRequests`' third statement
   (`proveAgentGoneSQL`) and, for a row already finished when the store
   is migrated, `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`), and the
@@ -2917,7 +3112,7 @@ guard reads. The writes and the derivation live in
 - **Immediate writes**: a terminal value (`ended`, `missing`), a hook's
   included, and every state write outside the settling category above:
   `InsertPending`,
-  `find-missing`'s mark (`MarkMissingIfSameLife`), its Codex move
+  shared recovery's mark (`MarkMissingIfSameLife`), its Codex move
   (`MarkEndedIfSameLife`) and its repair
   (`RepairCheckPermissionIfSameLife`), `EndHeldLaunch`, `MoveToPending`,
   `RestoreAfterFailedResume`, `ResetForReuse` and
@@ -2968,6 +3163,14 @@ guard reads. The writes and the derivation live in
   `SpawnState`, `ReadForReuse` or a raw `state` WHERE), never
   `ReportedState`.
 
+**Must use for complete stored-row comparisons:** `Spawn.RawFields` in
+`internal/store/spawns.go` clears only derived `ReportedState` and `FamilyState`
+from a value copy, preserving raw `State` and every other field, including future
+fields. It makes no read or authority decision. Callers retain their raw-state,
+revision and permitted-transition checks; [input preparation](#ordinary-input-delivery)
+compares these projections after its accepted transitions. Do not substitute the
+narrower `RowSnapshot` or compare settled presentation.
+
 **v9 columns: the row's agent, its end report and its subagent tracking (b.ssz,
 b.xjn; one migration).**
 Schema v9 adds three `spawns` columns after `state_changed_ms`, in this order.
@@ -2980,12 +3183,12 @@ names](#store-upgrade-to-agent-generic-names)).
 
 | Column | Type | Written by | Meaning |
 | --- | --- | --- | --- |
-| `agent` | TEXT NOT NULL DEFAULT `''` | `InsertPending` and `ResetForReuse`, from `Spawn.Agent`; the hop's backfill | Which agent the row runs: exactly `claude`, `codex` or `cursor` (`store.AgentClaude`, `store.AgentCodex`, `store.AgentCursor`). The empty default is only what SQLite needs to add a not-null column; it is no agent, and no write relies on it: the hop sets every existing row to `claude`, and the two writes that begin a row name the agent. Spawn and reuse write the agent the call resolved (`Resolved.Agent`), and `ComposeLaunch` composes that agent's launch (see [Per-agent launch composition](#per-agent-launch-composition)). |
-| `end_reported_at` | INTEGER (epoch ms), nullable | the Codex end report | When a Codex row's verified agent process reported its session's end. NULL on every row until then, and always on a Claude or Cursor row. `ApplyHookEndReport` sets it (a Codex `SessionEnd` without `agent_id`, any reason); `RecordSessionStartIdentity` clears it (a `SessionStart` from the same verified process); the life rules below keep or reset it. Read by `find-missing` and `pause`, which move a Codex row to `ended` only while it is set (`MarkEndedIfSameLife`, which leaves it set), and by the live-identity read (`LiveSpawnIdentity.EndReportedAtMillis`, with `Agent`). See [The agent-aware hook classifier](#the-agent-aware-hook-classifier). |
-| `subagent_tracking` | INTEGER NOT NULL DEFAULT 0 | `InsertPending`, `MoveToPending` and `ResetForReuse`, each by the launch's agent (see "The tracking flag's rules"); `RestoreAfterFailedResume` and `RestoreAfterFailedReuse`, the earlier value | Whether the settings the row's current launch was given register the agent's subagent start and stop events: 1 yes, 0 no. A Claude launch's settings register them and store 1; Codex and Cursor launches register none and store 0. So a row launched, resumed or reused by this build reads 1 if its agent is `claude` and 0 if it is `codex` or `cursor`. A row from before the v9 migration reads 0 (untracked) until its next launch write, because the hop does no backfill. Nothing else writes it. `get`, `list` and `status` do not show it. |
+| `agent` | TEXT NOT NULL DEFAULT `''` | `InsertPending` and `ResetForReuse`, from `Spawn.Agent`; the hop's backfill | Which agent the row runs: exactly `claude`, `codex`, `cursor` or `droid` (`store.AgentClaude`, `store.AgentCodex`, `store.AgentCursor`, `store.AgentDroid`). The empty default is only what SQLite needs to add a not-null column; it is no agent, and no write relies on it: the hop sets every existing row to `claude`, and the two writes that begin a row name the agent. Spawn and reuse write the agent the call resolved (`Resolved.Agent`), and `ComposeLaunch` composes that agent's launch (see [Per-agent launch composition](#per-agent-launch-composition)). |
+| `end_reported_at` | INTEGER (epoch ms), nullable | the Codex end report | When a Codex row's verified agent process reported its session's end. NULL on every row until then, and always on a non-Codex row. `ApplyHookEndReport` sets it (a Codex `SessionEnd` without `agent_id`, any reason); `RecordSessionStartIdentity` clears it (a `SessionStart` from the same verified process); the life rules below keep or reset it. Read by shared active checks and `pause`, which move a Codex row to `ended` only while it is set (`MarkEndedIfSameLife`, which leaves it set), and by the live-identity read (`LiveSpawnIdentity.EndReportedAtMillis`, with `Agent`). See [The agent-aware hook classifier](#the-agent-aware-hook-classifier). |
+| `subagent_tracking` | INTEGER NOT NULL DEFAULT 0 | `InsertPending`, `MoveToPending` and `ResetForReuse`, each by the launch's agent (see "The tracking flag's rules"); `RestoreAfterFailedResume` and `RestoreAfterFailedReuse`, the earlier value | Whether the settings the row's current launch was given register the agent's subagent start and stop events: 1 yes, 0 no. A Claude launch's settings register them and store 1; Other agents' launches register none and store 0. So a row launched, resumed or reused by this build reads 1 if its agent is `claude` and 0 for other agents. A row from before the v9 migration reads 0 (untracked) until its next launch write, because the hop does no backfill. Nothing else writes it. `get`, `list` and `status` do not show it. |
 
 - **Agent write refusal.** `InsertPending` and `ResetForReuse` refuse a
-  `Spawn` whose `Agent` is anything but exactly `claude`, `codex` or `cursor` (the empty
+  `Spawn` whose `Agent` is anything but exactly `claude`, `codex`, `cursor` or `droid` (the empty
   string, another case or a padded value included) with an error wrapping
   `store.ErrRowAgentInvalid`, before any write: no row is inserted and a
   reset changes no row, archives no session and deletes no request. No other
@@ -3005,7 +3208,7 @@ names](#store-upgrade-to-agent-generic-names)).
   stored integer 1, false for 0 and any other stored value, so no stored value
   fails a read (`decodeSubagentTracking` in `internal/store/rowsnapshot.go`). It
   is on no `SpawnRow` or `ListRow`. The three launch writes write one rule: 1 for a `claude`
-  launch, 0 for a `codex` or `cursor` launch, with nothing taken from a `Spawn` but its
+  launch, 0 for any other agent's launch, with nothing taken from a `Spawn` but its
   agent, including over a row that held the other value. The rule is two
   SQL expressions in `internal/store/spawns.go`, the same `CASE` over two
   sources of the agent: `subagentTrackedParamSQL` takes the agent as the
@@ -3040,7 +3243,7 @@ columns" above). Two writes take a `Spawn`: `InsertPending` and
 `ResetForReuse` (its `fresh` row), each taking `LaunchStartedAtMillis`,
 `NoPreTrust`, `Identity.Token`, `Identity.Socket`, `LaunchOwner` and `Agent`
 from it (both also write the tracking flag by the `Spawn`'s agent, 1 for
-`claude` and 0 for `codex` or `cursor`, and nothing else); no write takes the
+`claude` and 0 for other agents, and nothing else); no write takes the
 other v5 fields from one.
 Reuse reads a finished row through its own narrow read, `ReadForReuse`
 (`store.ReuseRow`, with the raw `store.RawLife`; see "Versioned writes"). A caller passes `Snapshot` to `MoveToPending`, and builds the `store.ResumePrior` that
@@ -3133,10 +3336,11 @@ evidence in one snapshot through `statusRowColumns` and `scanSpawnStatus`:
   copied from the snapshot;
 - `PermissionEpoch`, `ObservationVersion` and `DisplayObservation`;
 - the idle-screen timeout override and committed pane baseline through
-  `paneColumns`/`paneScan`.
+  `paneColumns`/`paneScan`;
+- `StateChangedMillis` and the v19/v20 evidence through `evidenceColumns`/`evidenceScan`.
 
 All other fields remain unpopulated: notably `LaunchOwner`, `IdleSince`,
-`StateChangedMillis`, `SubagentTracking`, `NoPreTrust`, `EndedAtText`, parsed
+`SubagentTracking`, `NoPreTrust`, `EndedAtText`, parsed
 `StartedAt`/`LastSeenAt`/`EndedAt`, `Labels`, `AgentArgs`, `ExtraEnv` and other
 unselected metadata. Their zero values do not establish stored absence.
 `Snapshot.StartedAt` retains exact stored text despite the omitted parsed
@@ -3160,9 +3364,17 @@ still the one it read, so it knows the row has not changed since. As built:
   SET fragment is `rowVersionAdvance` in `internal/store/spawns.go`. This
   covers every branch of `ApplyHookTransition` / `ApplyHookTransitionResult`
   (state transitions, the `ended` transition, soft refreshes),
-  `ApplyHookWaitingIfWorking`, `RecordSessionStartIdentity`, `SetParentID`,
-  `HealJsonlPath`, the relay hook's first write `InsertRelayRequest` (its
-  move to `check_permission`), the working hold's clearing of `idle_since`
+  `ApplyHookWaitingIfWorking`, `ApplyHookEndReport`, `ApplySubagentLifecycle`,
+  `RecordSessionStartIdentity`, `SetParentID`, `HealJsonlPath`,
+  `HealProvisionalTranscript`, the held Codex prompt's `codexHeldTurnSQL`,
+  and the sampled `EndCodexTurnSample` (see [The agent-aware hook
+  classifier](#the-agent-aware-hook-classifier)). Cursor's authenticated
+  `InsertCursorRequest`, the `proveCursorTool` UPDATE reached by
+  `CommitCursorProof` / `ProveCursorToolRan` / `ProveCursorToolFailed` when it
+  moves `check_permission` to `working`, and `RotateCursorSession`'s guarded
+  publication UPDATE also advance the version. The remaining writers are the
+  relay hook's first write `InsertRelayRequest` (its move to
+  `check_permission`), the working hold's clearing of `idle_since`
   (`clearIdleSinceSQL`, only on a row that has it set and whose gate holds,
   whether the hold's read held the move or the move's own UPDATE matched
   no row), and
@@ -3264,7 +3476,7 @@ still the one it read, so it knows the row has not changed since. As built:
   timeout, an identity write that did not apply or failed, or a restore
   that did not apply or failed. Without it, a launch run by a long-lived
   process (the MCP server, a Go caller of `pkg/api`) would hold its row for
-  as long as that process lives, and `find-missing` would never judge it.
+  as long as that process lives, and no shared active check would judge it.
   Residual: a release that fails on all three tries leaves that hold in
   place, so the row is not judged until its owner process exits (for
   `agent-director serve`, the end of its Claude session).
@@ -3275,7 +3487,7 @@ still the one it read, so it knows the row has not changed since. As built:
 - Resume's writes (SR-8.3, SR-8.5; `internal/store/resume_writes.go`;
   called only by `resume`, see [Resume](#resume)). `MoveToPending` moves
   an `ended` or `missing` row whose `RowSnapshot` still equals the
-  examined one to `pending`: it sets the launch start, `launch_token`, `tmux_socket`, `parent_id`, `subagent_tracking` (by the row's agent: 1 for `claude`, 0 for `codex` or `cursor`, `subagentTrackedColumnSQL`) and the launch owner (its `owner` parameter, the resuming process), and clears `pid`,
+  examined one to `pending`: it sets the launch start, `launch_token`, `tmux_socket`, `parent_id`, `subagent_tracking` (by the row's agent: 1 for `claude`, 0 for other agents, `subagentTrackedColumnSQL`) and the launch owner (its `owner` parameter, the resuming process), and clears `pid`,
   `proc_starttime`, `ended_at`, the liveness columns, `end_reported_at` and the
   six identity columns. In the same `BEGIN IMMEDIATE` transaction (`inImmediateTx`),
   when the move applied, it closes every request of the row that still
@@ -3345,7 +3557,7 @@ still the one it read, so it knows the row has not changed since. As built:
     launch-owner columns from `fresh.LaunchOwner` (the reusing process);
     `agent` from `fresh.Agent`, refused before anything is written, with an
     error holding `ErrRowAgentInvalid`, when it is not exactly `claude`,
-    `codex` or `cursor`; `subagent_tracking` by that agent (1 for `claude`, 0 for `codex` or `cursor`, `subagentTrackedParamSQL`); `life_number` advances by one only when
+    `codex`, `cursor` or `droid`; `subagent_tracking` by that agent (1 for `claude`, 0 for other agents, `subagentTrackedParamSQL`); `life_number` advances by one only when
     `reuseAgentTextSQL` differs exactly from `fresh.Agent` in this UPDATE;
     `row_version` + 1; then the deletion of every
     permission request of the id, decided or not; then the subagent close
@@ -3367,7 +3579,8 @@ still the one it read, so it knows the row has not changed since. As built:
     stored (state, `life_number`, `no_pre_trust`, the session id and path,
     pid and start time, `started_at`, `last_seen_at`, the liveness
     columns, the request fields, token, socket, the six identity
-    columns, the three launch-owner columns, `agent`, `end_reported_at` and `subagent_tracking`); `ended_at` as stored, or
+    columns, the three launch-owner columns, `agent`, `end_reported_at`, `subagent_tracking` and the process record), but
+    not the state record or its interval (see "v19 columns" below); `ended_at` as stored, or
     `failedAt` when it was NULL;
     `parent_id` only while that row still exists (else NULL, decided in
     the same statement, so the foreign key never fails it); clears
@@ -3416,7 +3629,7 @@ still the one it read, so it knows the row has not changed since. As built:
     a completed pane answer, on the caller's connection, inside the
     transaction the caller holds: first `denyOrphanedRequestsSQL` denies
     each undecided one (`decision` `deny`, `decision_reason` `reason`,
-    `decided_at`, `closed_at`), then `closeDecidedRequestsSQL` sets only
+    `decided_at`, `closed_at`, origin `observation`), then `closeDecidedRequestsSQL` sets only
     `closed_at` on each decided, unacked request with `pane_answer` `none`
     or `intent` and no prior close (including pre-v7), then
     `proveAgentGoneSQL` proves every request of a non-Cursor row not yet proven
@@ -3517,7 +3730,17 @@ still the one it read, so it knows the row has not changed since. As built:
     released by its deadline may not). Repeated timeouts cannot accumulate
     workers behind blocked native work. Contextless default-wait calls
     remain synchronous and use `releaseConn`'s existing cleanup lane; they
-    do not acquire the cancelable operation slot.
+    do not acquire the cancelable operation slot. Because the worker can
+    outlive its caller, a bounded reader or writer is error-first, like
+    `GetSpawnWithin` and `ListSessionHistorySnapshot`: its callback writes
+    only that function's own locals, never a named result or storage its
+    caller passed in, and an operation error returns nil/zero or
+    caller-owned results without reading those locals. Two results are
+    already synchronized and may be returned: a completed read's validated
+    rows with `*CursorMissingReadError` (see the
+    [missing read adapter](#cursor-gateway-and-current-launch-binding)),
+    and a value the callback wrote before COMMIT started, read only once
+    the committed write is confirmed.
 
     SQL receives cancellation immediately. If cancellation arrives before an
     absolute deadline, the reporting wait can observe a cooperative driver's
@@ -3594,13 +3817,16 @@ still the one it read, so it knows the row has not changed since. As built:
   `AdoptIdentityIfUnchanged(instanceID, examined, identity)` records a
   launch identity a verb found for a lost create reply: one UPDATE, guarded
   by `snapshotMatchSQL` on the `RowSnapshot` the verb examined, writing the
-  six server and pane identity columns (zero values as NULL) and advancing
-  `row_version`. It never writes the token, the socket or the state, and
-  emits no trail event. When nothing applied, `condNotApplied` tells
+  six server and pane identity columns (zero values as NULL), invalidating
+  [pane evidence](#displayed-state-reporting) and advancing `row_version`.
+  Its transaction refreshes families and drains display exits for emission
+  after commit. It never writes the token, the socket or the state.
+  When nothing applied, `condNotApplied` tells
   `CondChanged` from `CondAbsent`; a driver error returns a zero
-  `CondResult`. **Must use:** only `kill`, `send-keys`, `pause` and
-  `find-missing` write an adoption (SR-3.6): the single-row verbs through
-  `pkg/api`'s `adoptIdentity` and `find-missing` through `adoptInSweep`
+  `CondResult`. **Must use:** only `kill`, `send-keys`, `pause` and the
+  [shared active checks](#shared-active-checks) (a state read or
+  `find-missing`) write an adoption (SR-3.6): the single-row verbs through
+  `pkg/api`'s `adoptIdentity` and the checks through `adoptInSweep`
   (with `AdoptIdentityIfSameLife`), both on the rules of `findAdoption` (see
   [Single-row verb helpers](#single-row-verb-helpers-pkgapi)); never write
   the identity columns another way.
@@ -3631,7 +3857,7 @@ still the one it read, so it knows the row has not changed since. As built:
     answer. Two statements, both returning what they closed: first
     `denyOrphanedRequestsSQL` gives each undecided one `decision` `deny`,
     `decision_reason` `find_missing` and `decided_at` `CURRENT_TIMESTAMP`
-    besides `closed_at` (a relay still polling reads a fail-closed deny);
+    besides `closed_at` and observational origin (never response authority);
     then `closeDecidedRequestsSQL` sets only `closed_at` on each
     decided, unacked request without a prior close or completed pane
     answer, including pre-v7; it keeps its `decision`, `decision_reason` and
@@ -3677,9 +3903,9 @@ still the one it read, so it knows the row has not changed since. As built:
     emits no `ad.spawn.state_transition` and no tick for the move itself:
     the caller emits the row's tick. **Must use:** every move of a Codex row
     to `ended` in response to its agent's end goes through this one write,
-    from `markEndedSameLife` (the outcome writer `find-missing` and `pause`
-    share, below); nothing else makes that move. The other writes of `ended`
-    (a plain spawn ending its own row when its create found the name held,
+    from `markEndedSameLife` (the outcome writer the shared active checks
+    and `pause` share, below); nothing else makes that move. The other
+    writes of `ended` (a plain spawn ending its own row when its create found the name held,
     the restores after a failed resume or reuse) are outside this rule.
   - `SetLivenessNoteIfSameLife(instanceID, examined, note)`: overwrites
     `liveness_note`, keeps `liveness_unverified_since` when set and sets it
@@ -3688,16 +3914,18 @@ still the one it read, so it knows the row has not changed since. As built:
   - `ClearLivenessIfSameLife(instanceID, examined)`: NULLs both liveness
     columns, whether or not a note was set; not writing a row with no note
     is the caller's rule, and so is never clearing the note of a live
-    `pending` row whose pane is recorded (the sweep notes such a row
+    `pending` row whose pane is recorded (a check notes such a row
     `unreported` instead, or leaves its `provenance_conflict` note as it
     is).
   - `AdoptIdentityIfSameLife(instanceID, examined, identity) (CondResult,
     now RowSnapshot, error)`: writes the six server and pane identity
-    columns through `adoptIdentitySet`, the assignment it shares with
-    `AdoptIdentityIfUnchanged`, and never the token, socket, state,
+    columns and invalidates pane evidence through `adoptIdentitySet`, the
+    assignment it shares with `AdoptIdentityIfUnchanged`, and never the token, socket, state,
     liveness columns or launch start. When it applies it returns `now`, the
     row's snapshot after the write (`examined` with `RowVersion` one
     higher, no read needed), which guards the row's verdict write.
+    `RecoveryWrites` carries the adoption's observation-version advance
+    into that verdict's guard; an intervening observation still refuses it.
   - `NoteUnreportedIfSameLife(instanceID, examined) (CondResult, error)`
     (b.146 rule 10, a report, not a state change): one UPDATE
     (`noteUnreportedIfSameLifeSQL`) guarded on `state = 'pending'`, a
@@ -3715,7 +3943,7 @@ still the one it read, so it knows the row has not changed since. As built:
     path, `pid`, `proc_starttime`, the server or pane identity or the
     launch owner, so the agent's next hook still passes its gate and clears
     the note as every applied hook does. It writes even when the stored
-    note is already `unreported`; skipping that row, so repeated sweeps do
+    note is already `unreported`; skipping that row, so repeated checks do
     not advance `row_version`, is the caller's rule. The two note names the
     store compares are the constants `LivenessNoteUnreported` and
     `LivenessNoteProvenanceConflict` (`internal/store/find_missing_writes.go`).
@@ -3733,8 +3961,9 @@ still the one it read, so it knows the row has not changed since. As built:
     changes: `idle_since` stays until the agent's next hook, and
     `last_seen_at` is not bumped.
     Whether a request's relay hook may still run is the caller's to check
-    first (`RepairCheckPermission`, which skips a request a close
-    closed, and judges a proven one as any other); a request recorded after that check
+    first (`RepairCheckPermission`, which judges every request, a proven one
+    as any other, but lets no closed request hold the repair: `!Closed()` in
+    `mayHaveJudgedHook`); a request recorded after that check
     advances the snapshot, so the guard refuses. It emits no trail event.
 
   The note write, the clear, the adoption and the `unreported` note leave
@@ -3749,10 +3978,11 @@ still the one it read, so it knows the row has not changed since. As built:
   with a zero `CondResult`, never as a `CondResult` value (SR-5.8); the
   prior state is `""` and `now` the zero snapshot on anything but
   `CondApplied`.
-  **Must use:** `find-missing` writes a live row only through these seven,
-  reached through `pkg/api`'s per-row outcome writers, `adoptInSweep` and
-  `RepairCheckPermission` (see [`find-missing`](#find-missing)), and closes a row's open requests
-  only inside its mark or its Codex move; there is no separate close of a
+  **Must use:** the legacy process/tmux lifecycle/liveness branch of the
+  shared active checks writes a live row only through these seven (the
+  complete writer inventory: [shared active checks](#shared-active-checks)), reached through `pkg/api`'s per-row outcome writers, `adoptInSweep` and
+  `RepairCheckPermission` (see [`find-missing`](#find-missing)), and close a row's open requests
+  only inside the mark or the Codex move; there is no separate close of a
   missing or ended row's requests. A new sweep write guarded on the life
   it read is a new statement here built from `liveStateGuardSQL` (or a
   narrower state guard) and `snapshotMatchSQL`, never an unguarded update.
@@ -3793,73 +4023,301 @@ still the one it read, so it knows the row has not changed since. As built:
   read any other way never matches.
 - **Must use:** any new or changed store statement that updates a `spawns`
   row must advance `row_version` in that same statement (concatenate
-  `rowVersionAdvance`), except for the derived family-history updates above.
+  `rowVersionAdvance`), except for the derived family-history updates above
+  and the observation/evidence writes described below (`RecordProcessEvidence`
+  and [Displayed State reporting](#displayed-state-reporting)).
   Lifecycle and metadata writes must follow the launch-start rule (concatenate
   `launchStartClear` when it sets a non-`pending` state) and, when it
   writes `state`, the settle rule (its settle columns in the same
-  statement; see "v8 columns" above). It must also get a
+  statement; see "v8 columns" above) and the evidence rule ("v19 columns").
+  It must also get a
   case in the SR-5.2 versioning test, `internal/store/row_version_test.go`,
-  which every later exported `spawns` write extends. A write that skips the
-  advance silently defeats every version guard.
+  which every later exported `spawns` write extends; `TestEvidenceEveryWrite`
+  checks each listed write's evidence and fails when a listed case changes
+  the state's value, interval or launch with no declared evidence source.
+  A write that skips the advance silently defeats every version guard.
 
-**Schema versioning convention.** SQLite's `PRAGMA user_version` is the
-source of truth for which schema this binary expects. On `Open`:
+**v19 columns: main-field evidence.** Schema v19 appends three nullable
+TEXT JSON columns to `spawns`, in this order: `state_evidence`,
+`settled_evidence` and `process_evidence`; a compatible partial reentry keeps
+an existing one where it is, with its values (migration guide, linked below).
+`internal/store/confirmations.go` owns them. They hold only the evidence of
+the current, or still displayed,
+`state` and `process_liveness` values; no other table, history, per-member or
+family record holds confirmation evidence, and there is no general revision
+or history mechanism. Each record names the life and launch token it was
+made for and its value; a state record also names its raw-state interval
+(`permission_epoch`), and a process record the pid and start time judged.
+The public contract is in the
+[caller contract](caller-contract.md#confirmations).
 
-- `user_version == 0` → fresh DB: create the v15 tables and indexes and insert
-  the store id inside a single transaction, then stamp `PRAGMA user_version =
-  15`.
-- `0 < user_version < 15` (older-than-binary, v1 through v14) → **gated**: the
-  store does **not** auto-migrate on `Open`. The open is refused with
-  `store.ErrSchemaMigrationRequired` (an exported `errors.New` value; callers
-  use `errors.Is`) and zero DDL runs, *unless* an administrator has placed a
-  valid authorization sentinel next to the DB file. The sentinel (`migrate-authorized`,
-  sibling to the resolved DB path) is a strict JSON object naming exactly one
-  transition (e.g. `{"from": 14, "to": 15}`) and authorizes the migration only
-  when its `from` exact-matches the DB's actual `user_version` and its `to`
-  exact-matches this binary's `schemaVersion`. When authorized, the upgrade
-  runs as a chain of `migrationSteps` (the ordered step registry in
-  `schema.go`), each step individually transactional; today the chain holds fourteen
-  steps, `{from: 1, apply: migrateV1toV2}` (DROP+CREATE `permission_requests`,
-  V1 rows discarded), `{from: 2, apply: migrateV2toV3}` (five ADD COLUMN on
-  `spawns`), `{from: 3, apply: migrateV3toV4}` (CREATE `session_history`),
-  `{from: 4, apply: migrateV4toV5}` (thirteen ADD COLUMN across `spawns` and
-  `session_history`, then CREATE `store_meta` and its store id),
-  `{from: 5, apply: migrateV5toV6}` (three ADD COLUMN on `spawns`, the launch
-  owner), `{from: 6, apply: migrateV6toV7}` (twenty ADD COLUMN across
-  `permission_requests` and `spawns`, the relay's delivery facts, then the
-  proof of finished rows' requests), `{from: 7, apply: migrateV7toV8}`
-  (two ADD COLUMN on `spawns`, the settle columns, then their backfill) and
-  `{from: 8, apply: migrateV8toV9}` (six column renames, three ADD COLUMN on
-  `spawns`, CREATE `subagents` and `subagent_launches`, then the `agent`
-  backfill), then `{from: 9, apply: migrateV9toV10}` (CREATE
-  `cursor_runtimes`, validating a pre-existing table before stamping), then
-  `{from: 10, apply: migrateV10toV11}` (durable main-turn eligibility,
-  conditional backfill and validation; see v11 columns above), then
-  `{from: 11, apply: migrateV11toV12}` (three family-history columns,
-  validation and initialization; see [Family reporting](#family-reporting)), then
-  `{from: 12, apply: migrateV12toV13}` (nullable Codex startup and Claude capacity provenance,
-  validation and no backfill; see [Experimental context readers](#experimental-context-readers)), then
-  `{from: 13, apply: migrateV13toV14}` (display observation, pane baseline,
-  timeout override and request ownership/fallback columns, validate-first, a
-  conservative ownership
-  backfill and no invented history; see
-  [Displayed State reporting](#displayed-state-reporting)), then
-  `{from: 14, apply: migrateV14toV15}` (the two nullable Codex turn columns,
-  validate-first and no backfill; see "The Codex turn" under
-  [The agent-aware hook classifier](#the-agent-aware-hook-classifier)) —
-  see "Schema v1 → v2 Migration", "Schema v2 → v3 Migration", "Schema v3 →
-  v4 Migration", "Schema v4 → v5 Migration", "Schema v5 → v6 Migration",
-  "Schema v6 → v7 Migration", "Schema v7 → v8 Migration" and [Store upgrade
-  to agent-generic names](#store-upgrade-to-agent-generic-names) below.
-  A v1 DB opened against this binary chains v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12→v13→v14→v15 in one
-  pass. The sentinel is consumed after the chain commits.
-- `user_version == 15` → nothing to do; the schema already matches.
-- `user_version > 15` (newer-than-binary) → return the sentinel
-  `store.ErrSchemaMismatch` (an exported `errors.New` value, so callers use
-  `errors.Is`). No DDL runs in this case.
-- After any of the successful arms, `openDB` reads the store id; a store
-  without a valid one also fails with `ErrSchemaMismatch` (see `store_meta`
-  above).
+- `state_evidence` is written by the statement that writes `state`, with the
+  statement's clock and the writer's source: `caller_command`
+  (`InsertPending`, `ResetForReuse`, `MoveToPending`), `agent_event` (hooks
+  through `hookWriteStateEvidenceSet`, Cursor gateway transitions),
+  `transcript` (`EndCodexTurnSample`), `process` (process-proven marks and
+  ends, Cursor terminal marks), `tmux` (tmux-evidence marks, `EndHeldLaunch`)
+  or `store` (the `check_permission` repair). An empty source stores NULL
+  (`Store.MarkMissingIfSameLife`). `stateEvidenceSet` /
+  `currentStateEvidenceSet` keep an applicable record when the value does not
+  change, so a soft refresh, held transition or same-value hook never redates
+  it.
+- `settled_evidence` follows `settled_state`: `hookStateSet`'s
+  `settledEvidenceMove` moves the raw record exactly where `settled_state`
+  takes the old raw value, and `immediateSettleSet` clears it.
+- `process_evidence` is written only by `RecordProcessEvidence`
+  (nonwaiting; guarded on the snapshot, life, launch, interval,
+  `observation_version` and earlier record of the row it commits against:
+  the examined row, or the row refreshed after the check's own verdict write;
+  see `processProbe` under [Shared active checks](#shared-active-checks))
+  with a record from `Spawn.ProcessEvidenceAfter`, or by a terminal move in
+  its own statement:
+  `terminalProcessEvidenceSet` stores the `exited` record of the
+  `ProcessExit` the move proved, else NULL, and `clearProcessEvidence` clears
+  it on a hook's terminal write (SessionEnd) and `EndHeldLaunch`.
+  `ProcessEvidenceAfter` refuses a Cursor row, an identity the row does not
+  record and `alive` on a finished row. A successful same-value probe of the
+  same process keeps its first `confirmed_at` and source and advances only
+  `checked_at`, clearing any failure reason; a failed attempt keeps the earlier value and confirmation
+  with its own check time and reason.
+  `Store.MarkEndedIfSameLifeFrom` and `RecoveryWrites.MarkMissingIfSameLifeFrom`
+  / `MarkEndedIfSameLifeFrom` return `recorded`, read back from what the
+  statement stored.
+- A new launch (`ResetForReuse`, `MoveToPending`) stamps its admission and
+  clears `process_evidence`. A failed launch's restore writes back the prior
+  state record only when it applied (`PriorStateEvidence`), rebound to the
+  restored interval. A failed resume's restore writes back only an applicable
+  process record (`PriorProcessEvidence`); a failed reuse's restore writes the
+  prior raw `process_evidence` back verbatim with the rest of `RawLife`, and
+  `ProcessConfirmation` judges it on read.
+- Reads: `spawnColumns` and `statusRowColumns` select `evidenceColumns`.
+  `Spawn.StateConfirmation(SettleRead)` (`settle.go`) applies the raw record to
+  the raw state of its interval or, while a younger change settles, the
+  settled record to the settled value shown. `Spawn.ProcessConfirmation`
+  applies a process record only to the recorded process at its start
+  identity. A malformed or inapplicable record reads `unknown`
+  (`no_evidence`); no stored value fails a read.
+- Evidence is metadata, never authority: no command-authority guard relies on
+  it, input preparation (`sameInputPreparation`) ignores it, and it advances
+  neither `row_version` nor `observation_version`.
+
+**Must use:** a writer of `spawns.state` records its evidence in the same
+statement through these fragments; a terminal move sets `process_evidence`
+through `terminalProcessEvidenceSet` or `clearProcessEvidence`; readers report
+evidence only through `StateConfirmation` and `ProcessConfirmation`. Never
+derive a confirmation time from a read's or response's clock,
+`state_changed_ms`, `last_seen_at` or a settle projection. The hop and its recovery are in
+[migration-guide.md](migration-guide.md#current-schema-facts-v18--v19).
+
+**v20 columns: display evidence and observation writer.** `spawns.display_evidence`
+and then `spawns.observation_writer` are nullable TEXT,
+appended after the v19 columns in fresh DDL and by `migrateV19toV20` on a normal
+v19 store. `display_evidence` holds one JSON record for the shown display: `idle_screen` or
+`none` (the public `displayed_state` is omitted). `observation_writer` holds
+the token of the observer commit that last wrote the display observation or
+record (see [Best-effort commits and races](#best-effort-commits-and-races));
+it is never reported. No backfill derives evidence or a writer
+from an existing display, baseline or timestamp. Migration validation and
+restore-only recovery are in the
+[migration guide](migration-guide.md#current-schema-facts-v19--v20).
+
+**Must reuse:** `Spawn.DisplayConfirmation` and `displayEvidenceAfter` in
+`confirmations.go` project and update this record; `attemptRecordFor` shares
+process/display status rules and `encodeFieldEvidence` their encoding.
+`applicableDisplayEvidence` requires the exact value, life, launch and, for
+`idle_screen`, committed entry `since`. A present token must be 16 lowercase
+hex characters and match; null qualifies only a tokenless row. Malformed,
+foreign or obsolete records read `unknown`/`no_evidence`, never a read error.
+The four-column `evidenceColumns`/`evidenceScan` seam supplies both full and
+status readers. Display evidence, like process evidence, is reporting
+metadata ignored by `sameInputPreparation`; it grants no command authority.
+The observer and lifecycle rules are in [Displayed State reporting](#displayed-state-reporting).
+
+**Schema versioning convention.** `schemaVersion` is 20. Fresh creation
+commits the twelve-table schema, store id, store-bound
+`native_input_authority=sqlite-v1:<store_id>` and version in one FULL
+transaction. A nonempty store stamped zero is refused. Current-version opens
+validate the store id and authority; missing/mismatched authority is corruption,
+never permission to import files. Newer versions return `ErrSchemaMismatch`.
+
+Older stores require exact administrator authorization; a pre-v16 store also
+requires the maintained input-migration window before any hop. The nineteen-entry
+registry retains v1→v19 steps, including permission provenance, owner and response
+claims, Cursor input/proof and state/process evidence, and appends
+`migrateV19toV20` for display evidence. Historical values gain no inferred authority. The v15→v16 importer shares
+`inputDeliveryDDL` with fresh creation, atomically commits launch/current/history,
+raw proof/import evidence, authority marker and version, and preserves the
+existing store id. Earlier hops remain individually transactional. See
+[migration-guide.md §1a](migration-guide.md#1a-the-chained-step-engine-and-the-sentinel-gate)
+for the exact gate and [Ordinary input delivery](#ordinary-input-delivery) for
+runtime reuse. No future schema slot is reserved.
+
+`adminapi.MigrateJournal` must be used for cutover; it bypasses Client creation,
+includes invoking-HOME and explicit legacy roots, checks readable process
+evidence and access, and requires operator-maintained exclusion. Its argument
+checks (the window and roots assertions, legacy roots absolute and clean, a
+backup directory absolute, outside every root and not yet existing) have one
+implementation, `journalArguments`, which `MigrateJournal` and
+`CheckJournalMigration` (`migrate-journal --check-only`) both run before any
+verification or lock.
+**Must use:** `journalArguments` for any argument check, and
+`backupInsideRoot` for backup containment; `store.MigrateInputJournal` leaves
+both to its caller. `backupInsideRoot` chooses by host: lexical on Linux,
+file identity on Darwin through `backupInsideRootByIdentity` and
+`pathWithinByIdentity`, the must-use Darwin containment test. An existing
+root must occur in the backup's resolved ancestor identities; a root that
+doesn't exist yet must share its deepest existing ancestor, with the
+remaining names compared case-insensitively. Case variants therefore stay
+inside. Lookup errors give `backup_unreadable` or `legacy_root_unreadable`
+according to the failed side; `--check-only` and a real run judge identically.
+`verifyJournalQuiescence` is chosen by build: Linux reads `/proc`, darwin/arm64
+uses the Darwin verifier, and every other build refuses
+`process_inventory_unsupported` through `journalUnsupportedHost`. Linux checks
+readable `exe` names and `fd` links for agent-director programs and store/root
+holders, skipping unreadable evidence. Verification still runs before the
+migration lock, inside the cutover step and after commit.
+The store serializes administrators and retains original launch-lock inodes.
+It refuses, as `store_open_failed`, a store path that doesn't exist or runs through a
+regular file (before the lock), and a lock it can't create where no lock file
+exists (a missing, read-only or unwritable directory); a lock file that exists
+but can't be opened is `migration_lock_unestablished`. An attempt therefore
+never creates a store file; an existing empty one (version 0) needs no
+authorization, and the open builds the current schema in it. Before the backup it checks, from a private snapshot (`ReadSnapshot`),
+that the store is not newer than this release and that its migration is
+authorized, so either refusal leaves no backup directory. It then makes an
+exclusive stopped-writer DB/WAL/SHM/evidence backup before any hop, and verifies
+committed authority before retiring operational JSON. File authority ends at
+commit even if retirement fails. Recovery never reimports over newer SQLite
+state and never synthesizes a downgraded replayable journal. Backup/restore and
+operator refusals are owned by the
+[runbook](operator-actions.md#upgrading-the-native-input-journal).
+
+**Darwin quiescence.** The build-tag-free `darwinVerifier` takes process,
+listing, filesystem and clock seams; `journal_migration_darwin.go` only binds
+them. It selects the verifier's effective uid through
+`probe.NewUIDProcessReader` (`kern.proc.uid`), then reads initial start
+identities before one bulk `/usr/sbin/lsof -nP +w -u <euid> -F0pftDin`
+listing. Only pid, FD, type, device, inode and name are requested, never command
+or user fields. The verifier, its helpers and their descendants are excluded
+by pid and start identity; an unconfirmed helper identity grants no exclusion,
+and a reused helper pid stays under check. A selected process missing from the
+listing adds no finding. A listed process absent from the selection is checked
+like the others unless its start predates selection, which refuses
+`process_inventory_unreadable`; exited processes are skipped. Failed selection,
+listing errors, warnings or malformed output also refuse that reason.
+
+Store, WAL and SHM identities are captured before selection and after listing;
+each existing root is walked without following links. Vnode entries match
+those device/inode pairs. An absolute name matching an existing root's form
+case-insensitively gates an ancestor lookup to confirm containment by identity,
+counting refused components as absent. Incomplete, unknown-kind, `err` and
+untyped entries use that test too, or match a store form exactly ignoring case
+and confirm its device/inode with `Lstat`. Forms are the declared path,
+`EvalSymlinks`, and the kernel's `F_GETPATH` / `F_GETPATH_NOFIRMLINK` forms
+through `journalFS`, appending absent components to the deepest existing
+ancestor's forms. Forms containing `\` or `^` never gate a listed-path lookup;
+direct device/inode matches still count. Other entry lookup failures add no
+finding unless the attempt's deadline expires. `lsofVnodeTypes`, `lsofNonVnodeTypes`
+and `lsofOctalVnodeType` in `journal_migration_darwin_lsof.go` are the only kind
+lists; non-vnodes and directory FD entries give no store/root evidence.
+The first `txt` entry names the program: a basename containing `agent-director`
+marks a mutator. The program file is never looked up or opened for this check.
+
+After all evidence, start identities are read again and exited processes are
+skipped. On both hosts, missing, unreadable or changed per-process evidence adds
+no finding and cannot erase a positive one. Blockers alone appear under
+`old_or_unverified_mutators`, with role `agent_director_mutator` and action
+`stop_and_restart_after_cutover`. Only pid, first start identity (empty when
+unreadable), role and action are reported, sorted by pid.
+
+The database and every existing root also pass `/bin/ls -led`: unreadable
+access-control entries or an allowance for another principal refuse
+`legacy_root_access_unestablished`. Both tools run at fixed paths, with only
+`LC_ALL=C` in their environment and in their own process groups, killed when
+the attempt's context ends. Every verifier filesystem lookup runs under
+`bounded`, including initial path validation and ACL existence checks, so
+blocked privacy prompts or mounts refuse `inventory_deadline`.
+Apart from recognized mutators, refusals concern whole-inventory failures,
+the deadline and the store/root path and access checks. No process arguments
+or environment are read; release builds stay `CGO_ENABLED=0`.
+**Must use:** add Darwin evidence through this core's seams (`journalFS`,
+implemented by `osJournalFS`, for filesystem evidence); bind it only in the
+tagged file. Run fixed-path tools through `runFixedHelper`; share
+`verifyJournalPathIn` (the `journalFS` path check, with `verifyJournalPath`
+its real-filesystem form) from `journal_migration_paths.go` across both
+verifiers. Derive every root/store listed-path form through `journalPathForms`
+in `journal_migration_darwin_paths.go`. Order Darwin start strings only through
+`probe.ParseDarwinProcStartTime`.
+
+**`migrate-journal`'s reasons.** Every reason `migrate-journal` emits (the
+argument checks', the quiescence verifier's, the store's causes and
+`interrupted`) has its own bounded code and its own `action` in one table,
+`journalActions` (`internal/adminapi/journal_migration.go`), with no default
+action; `TestJournalReasonTable` fails on a reason that any of the package's
+files emits and the table lacks, and `TestInputMigrationCausesComplete` on a
+store `Cause*` constant missing from `store.InputMigrationCauses`. Every
+`store.MigrateInputJournal` error is a `*store.InputMigrationError`: its text
+is the failure's own, its `Cause` is the bounded cause the failing site names
+(a failure no site names takes its stage's), and its `Commit` reports what the
+attempt committed. `MigrateJournal` picks the reason in this order:
+`interrupted`; `committed_verification_incomplete`;
+`migration_incomplete_or_commit_unknown`, only for an unconfirmed commit or a
+chain left incomplete after the cutover committed; the verifier's own refusal
+(`process_inventory_unreadable` for a verifier error that isn't one); then the
+store's cause. A refusal's text is its reason and action, never file
+contents or raw OS text. The Darwin inventory, deadline and access-control
+refusals use this same table, whose actions apply on both supported hosts;
+the [runbook](operator-actions.md#upgrading-the-native-input-journal) owns
+their remedies.
+**Must use:** a new reason goes into `journalActions`, and a new store failure
+adds a constant to `store.InputMigrationCauses` and its entry there, never a
+second mechanism. `journalUnsupportedHost` is the one refusal of a host with
+no quiescence verifier.
+
+**Commit state.** Every `migrate-journal` error envelope, whatever its
+`err_name` (`ErrJournalMigrationRefused`, `ErrInvalidFlags`,
+`ErrConfigMalformed`, `ErrStoreOpen`), carries `details.cutover`, this
+attempt's commit state: `committed` once its cutover committed, even if a
+later step or the post-commit verification failed; `not_committed` when it
+began no cutover commit, had no schema-step commit with an unconfirmed result,
+and established that no other administrator held the migration lock
+(`<store>.input-migration.lock`); `unknown` otherwise.
+`details.steps_committed` is present exactly with `not_committed`, true when a
+schema step of this attempt committed before the cutover. A real run's
+refusal carries `details.result`, whose `authority` is `sqlite` once the
+attempt read committed authority. `--check-only` always reports
+`not_committed` (`JournalCommitCheckOnly`), even when its arguments don't
+parse. Any other error before an attempt checks its store's lock
+(`JournalCommitBeforeAttempt`); with no store path to check (a global-flag
+error, `ErrStoreOpen`, and `ErrConfigMalformed` or a verb-flag
+`ErrInvalidFlags` without `--store-path`) it reports `unknown`.
+`store.InputMigrationLockHolder` checks the lock without creating, changing or
+removing its file. It sees only an administrator active when the attempt
+failed; it does not enforce the
+[one-run rule](operator-actions.md#upgrading-the-native-input-journal).
+**Must use:** a caller reads commit state from `details.cutover`, never from
+`err_description` or an action. Every ordinary schema step, a new one
+included, commits through `commitMigrationStep`, never `tx.Commit()`, so a
+COMMIT error counts as unconfirmed.
+
+**Interrupts.** A real `migrate-journal` run catches INT, TERM and HUP from
+right after its flags parse until it exits (`journalInterruptContext`);
+`--check-only` catches none. An INT or HUP ignored at start stays ignored
+(`signal.Ignored`), and because the signals stay caught, a second one cannot
+kill the process mid-commit or mid-write. A signal before the cutover commit
+begins stops the attempt with reason `interrupted`, whatever failure the
+cancellation caused. Each checkpoint before a change (before authorization,
+before the backup, before each schema step) reads the caller's cancellation
+under the attempt's mutex (`stopped`), so no change starts once a signal has
+arrived. The cutover gate (`beginCutoverCommit`) makes the same check and,
+under that mutex, records that the commit has begun; after it, the caller's
+cancellation no longer reaches the attempt's work context, so the attempt
+finishes, and a success exits 0 with `authority: "sqlite"` and no envelope.
+The attempt's own 30 s deadline gives `attempt_deadline`, and the verifier's
+listing deadline `inventory_deadline`; neither is `interrupted`.
+**Must use:** an attempt's steps run on its work context
+(`inputMigrationWindow.ctx`), a checkpoint before a change calls `stopped`,
+and a commit that must finish once begun is admitted through the gate.
 
 **Schema v1 → v2 Migration.** The first real migration:
 
@@ -3877,7 +4335,8 @@ source of truth for which schema this binary expects. On `Open`:
    in-transaction step before `COMMIT`. A crash mid-migration leaves
    `user_version = 1` and — because the sentinel is only consumed *after* the
    chain commits — the `migrate-authorized` sentinel still in place, so the
-   next authorized `Open` retries the migration cleanly.
+   administrator can retry under the maintained input-migration window; see
+   [the upgrade runbook](operator-actions.md#upgrading-the-native-input-journal).
 
 **Schema v2 → v3 Migration.** This migration adds process-liveness
 identity to `spawns` (`migrateV2toV3`):
@@ -3931,12 +4390,9 @@ the `store_meta` table (`migrateV4toV5`, b.fmk):
    in-transaction step before `COMMIT`; a rollback on any error (a column,
    the table or the insert) leaves `user_version = 4`, neither table with any
    of the new columns, and no `store_id`.
-4. **Install-only**: like every hop, it runs only when the install flow's
-   `migrate-authorized` sentinel authorizes the transition from the store's
-   version to this binary's (`{"from": 4, "to": 15}` for a v4 store, which
-   chains through this hop); a v4 store opened without it is refused with
-   `ErrSchemaMigrationRequired`. `install.sh` learns the target version from
-   that refusal, so it needed no change.
+4. **Install-only**: this hop belongs to the authorized chain to v20, under
+   the maintained administrator window described in
+   [the upgrade runbook](operator-actions.md#upgrading-the-native-input-journal).
 5. **Downgrade**: to return a migrated store to v4, use the v5 → v4 emergency
    downgrade recipe in docs/migration-guide.md §5 (drop the thirteen columns
    and the `store_meta` table, then `PRAGMA user_version = 4`; on a v6, v7
@@ -3966,10 +4422,9 @@ columns (`migrateV5toV6`, b.kdf; see "v6 columns" above):
 3. **`user_version` stamp**: `PRAGMA user_version = 6` is the final
    in-transaction step before `COMMIT`; a rollback on any error (a probe or
    a column) leaves `user_version = 5` and none of the three columns.
-4. **Install-only**: it runs only when the install flow's
-   `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 5, "to": 15}` for a v5 store); a v5 store opened without it is
-   refused with `ErrSchemaMigrationRequired`.
+4. **Install-only**: this hop belongs to the authorized chain to v20, under
+   the maintained administrator window described in
+   [the upgrade runbook](operator-actions.md#upgrading-the-native-input-journal).
 5. **Downgrade**: to return a migrated store to v5, use the v6 → v5
    emergency downgrade recipe in docs/migration-guide.md §5 (drop the three
    columns, then `PRAGMA user_version = 5`; on a v7 or v8 store run the
@@ -4025,10 +4480,9 @@ see "v7 columns" above):
    in-transaction step before `COMMIT`; a rollback on any error (a probe, a
    column or the backfill) leaves `user_version = 6`, none of the twenty
    columns and no request proven.
-4. **Install-only**: it runs only when the install flow's
-   `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 6, "to": 15}` for a v6 store); a v6 store opened without it is
-   refused with `ErrSchemaMigrationRequired`.
+4. **Install-only**: this hop belongs to the authorized chain to v20, under
+   the maintained administrator window described in
+   [the upgrade runbook](operator-actions.md#upgrading-the-native-input-journal).
 5. **Downgrade**: to return a migrated store to v6, use the v7 → v6
    emergency downgrade recipe in docs/migration-guide.md §5 (drop the
    twenty columns, then `PRAGMA user_version = 6`; on a v8 store run the
@@ -4066,10 +4520,9 @@ columns (`migrateV7toV8`, b.3ie; see "v8 columns" above):
 3. **`user_version` stamp**: `PRAGMA user_version = 8` is the final
    in-transaction step before `COMMIT`; a rollback on any error (a probe, a
    column or the backfill) leaves `user_version = 7` and neither column.
-4. **Install-only**: it runs only when the install flow's
-   `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 7, "to": 15}` for a v7 store); a v7 store opened without it is
-   refused with `ErrSchemaMigrationRequired`.
+4. **Install-only**: this hop belongs to the authorized chain to v20, under
+   the maintained administrator window described in
+   [the upgrade runbook](operator-actions.md#upgrading-the-native-input-journal).
 5. **Downgrade**: to return a migrated store to v7, use the v8 → v7
    emergency downgrade recipe in docs/migration-guide.md §5 (drop
    `settled_state` and `state_changed_ms`, then `PRAGMA user_version = 7`;
@@ -4081,7 +4534,7 @@ columns (`migrateV7toV8`, b.3ie; see "v8 columns" above):
    Every agent is stopped before the rollback and started again after it.
 6. **Distinct migration hops**: the v6 → v7 permission-relay hop and the
    v7 → v8 settle-state hop remain separate steps in the authorized chain
-   to v15; their columns are not folded together.
+   to v20; their columns are not folded together.
 
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. WAL is set once at
 fresh-database initialization and otherwise verified from the persistent
@@ -4169,24 +4622,24 @@ here.
   the two writes after the wait alone, a long store wait can get the hook
   killed before it writes its result or its `no_pane_recorded`, with no
   trail record. The key is deliberately not capped against this (b.146:
-  correctness comes from the sweep's report, not timing): `find-missing`
-  notes such a row `unreported`, leaving it `pending`, within
-  `pending_grace_seconds` plus one `find-missing` period, provided it is
-  scheduled (see "The cap and the hook timeout" under
+  correctness comes from the checks' report, not timing): a shared active
+  check notes such a row `unreported`, leaving it `pending`, on a state read
+  of the row, or within `pending_grace_seconds` plus one `find-missing`
+  period, provided it is scheduled (see "The cap and the hook timeout" under
   [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)).
 - **The TypeScript client's call timeout.** The client ends a call after
   its `callTimeoutMs` (30 s by default) with `ErrCallTimeout`, so a verb
   whose statements wait that long in total, one at 30 s or more or several
   shorter ones, is cut off before SQLite gives up.
 - **The Cursor deferred-proof window.** A busy Cursor tool proof is retried
-  for `busy_timeout_ms` (see
+  within its original `busy_timeout_ms` window (see
   [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority)),
   but an interrupt, rotation, `/exit` or `pause` must finish within the
   fixed 3 s `cancelWait`. Above 3 s, the default included, contention
   outlasting that deadline fails the gateway after an interrupt, refuses the
   rotation, or ends the row `missing` after `/exit` or `pause`. The exit flush
-  itself is not cut off, so above `[pause] timeout_seconds` (30 s by
-  default) it can outlast `pause`'s wait.
+  itself retains the remaining original proof window, so above
+  `[pause] timeout_seconds` (30 s by default) it can outlast `pause`'s wait.
 
 **Deadlines that hold whatever `busy_timeout_ms` is (b.146).** The relay
 path bounds its own waits (see the bounded write above), so these keep
@@ -4195,7 +4648,7 @@ their deadlines at any value of the key:
 | Process | Deadline | How it holds |
 | --- | --- | --- |
 | `decide` with `max_wait_ms` | its caller's | the verdict write waits at most what is left of the bound (`ErrStoreBusy`, nothing recorded), and the ack wait ends at the bound; a caller passes at most its deadline minus 1 s |
-| the relay hook | Claude Code's kill, its start plus its `--timeout` | every write is cut to commit at least 2 s before the kill: the first write by a fail-closed deny, the ack and the timeout deny by no answer |
+| the relay hook | Claude Code's kill, its start plus its `--timeout` | write budget ends 2 s before the kill; a late or uncertain ack/timeout COMMIT may persist, but emits no answer (see the relay lifecycle) |
 | `get`, `list`, `get-permission` | the caller's | their relay-delivery write (`hook_gone_at` and the fallback clock, see [Readers never wait](#readers-never-wait-problem-4)) waits 0 and is skipped when the lock is held |
 
 The other hooks (SessionStart, UserPromptSubmit, PostToolUse and
@@ -4206,9 +4659,9 @@ Agent tool's hooks and a main-agent Stop) do not hold theirs by design (each
 subagent transaction waits at most one busy timeout for the write lock, and
 the hook adds no sleep): a long store wait
 can still get one killed before its write, and the row settles through a
-later hook or `find-missing` (except when both the turn's `Stop` and the
-idle-prompt Notification are lost). `decide` without `max_wait_ms` waits up
-to the busy timeout per write, as before.
+later hook or a [shared active check](#shared-active-checks) (except when
+both the turn's `Stop` and the idle-prompt Notification are lost). `decide`
+without `max_wait_ms` waits up to the busy timeout per write, as before.
 
 **Must use:** code that opens the configured store passes
 `EffectiveBusyTimeoutMs` (see the `internal/config` row of the package
@@ -4265,12 +4718,15 @@ v9. It drops the Claude names from the store's columns, gives every row a
 record of its agent and of whether its launch registers the subagent events,
 and adds the tables that hold a row's subagent records (these are folded into
 this hop: they are not moved into the separate v9→v10 Cursor hop). A fresh
-store is created at v15 by `schemaDDL`, retaining the same v9 column text
+store is created at v20 by `schemaDDL`, retaining the same v9 column text
 and adding `cursor_runtimes`, proof eligibility, family history,
 Codex startup and Claude capacity provenance, the display observation (with
 the pane baseline and timeout override) and request ownership, and the Codex
-turn columns, so a fresh and a migrated
-store have the same shape (names, positions, index columns and foreign keys).
+turn columns, the v16 input tables/authority, v17 permission provenance,
+v18 Cursor evidence tables, v19 state/process evidence and v20 display evidence and observation writer, so a fresh and a migrated
+store have the same shape (names, positions, index columns and foreign keys),
+except the evidence columns' order after a compatible partial evidence-column reentry
+(see the v19/v20 columns above).
 
 1. **Six renames**, each an `ALTER TABLE … RENAME COLUMN`, in `v9Renames`'
    order:
@@ -4325,16 +4781,18 @@ store have the same shape (names, positions, index columns and foreign keys).
    before anything is changed. Any later failure (a rename, an `ADD COLUMN`,
    the backfill, the stamp or the commit) rolls the whole hop back: the store
    stays at v8 with every column under its old name, no new column or table
-   and the sentinel kept, so the next authorized open retries. Re-entering the hop is
+   and the sentinel kept. An administrator retry still requires the maintained
+   window in [the upgrade runbook](operator-actions.md#upgrading-the-native-input-journal).
+   Re-entering the hop is
    safe: a rename whose new name is present and old name absent is skipped
    (an earlier run did it), an `ADD COLUMN` whose column is present is
    skipped (a `pragma_table_info` probe), and a subagent table or index that
    exists is left as it is (`IF NOT EXISTS`).
 6. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it, `{"from": 8,
-   "to": 15}` for a v8 store (the sentinel's `to` is this binary's
-   `schemaVersion`, 15; the separate v9→v10, v10→v11, v11→v12, v12→v13, v13→v14 and v14→v15 hops follow); a v8 store opened without it is refused with
-   `ErrSchemaMigrationRequired`, and `user_version > 15` surfaces
+   "to": 20}` for a v8 store (the sentinel's `to` is this binary's
+   `schemaVersion`, 20; the separate v9→v20 hops follow, with the input-migration window required before the chain); a v8 store opened without it is refused with
+   `ErrSchemaMigrationRequired`, and `user_version > 20` surfaces
    `ErrSchemaMismatch`.
 7. **No reverse recipe.** docs/migration-guide.md §5 has no v9 → v8 recipe,
    and none is to be written (the hop renames columns and adds a column and
@@ -4388,6 +4846,15 @@ case. A new param also needs its CLI flag and, on an MCP-exposed verb,
 its `LiveDispatcher.Call` decoding. Make these in the same change (see "How to add a verb" and
 "Prohibitions" below). The CI doc-drift gate re-runs `go generate` and
 fails if any tracked file changes.
+
+Both `sweep` and its retained `find-missing` alias are callable and discoverable
+manifest entries with the same `sweepResultFields`. The CLI's flag-free handlers
+share `writeSweep`; MCP dispatches both names to `Client.Sweep`. TypeScript's
+known verbs, argv builder and subprocess queue expose `sweep` and `findMissing`
+with their respective CLI spellings. `SweepParams` accepts the ignored
+`timeout_ms`; `FindMissingParams` extends it. `FindMissingResult` extends
+`SweepResult`, and `SweepCheck` reuses existing state and confirmation types.
+**Must reuse:** these dispatch paths forward the common result unchanged.
 
 **Help size guard.** `TestHelpSizeGuard` in
 `cmd/agent-director/help_size_test.go` measures `agent-director help`'s
@@ -4614,7 +5081,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 +-------------------------+
                 |   internal/store        |
                 |   (sole SQL owner;      |
-                |    schema v15 / SRD §4.2)|
+                |    schema v20 / SRD §4.2)|
                 +-------------------------+
 
    internal/config -----> consumed by pkg/api and cmd/
@@ -4730,6 +5197,155 @@ envelope and rethrows them as the matching `Err*` subclass.
 
 Every arrow from a caller surface terminates at `pkg/api.Client`; no surface short-circuits to a lower layer.
 
+### Shared active checks
+
+**Must reuse:** state reads and recovery sweeps use `checkActiveRows` and its
+invocation-owned `activeReadStore` in `pkg/api/active_checks.go`. Status/Get
+select one ID; List validates filters, selects stored state/display matches
+and applies its limit once. `Sweep` / `Client.Sweep` and their retained
+`FindMissing` / `Client.FindMissing` aliases use `findMissingChecked`, which
+selects all agents through `RecoveryRows(nil, settle)`. `activeRefresh` only
+projects already-selected IDs: it never reapplies filters, fills limit slots or
+probes hidden descendants.
+Family fields use the consistent stored projection, with unconfirmed freshness.
+
+**Must reuse for recovery tick attribution:** `Store.WithRecoveryTickSource`
+(`internal/store/recovery.go`) supplies the orphan-closeout tick's source through
+an immutable per-call store view; `recoveryTickTrail`
+(`pkg/api/find_missing_writes.go`) supplies the API tick's source while preserving
+the wrapped emitter's context and bounds. Recovery paths must use both together,
+without changing write policy, evidence, permission reasons or event names.
+Default legacy attribution and `sweep` / `find-missing` remain `ad_find_missing`;
+reads and `pause` explicitly select `ad_recovery`.
+
+Status uses lightweight `RecoveryRows` so unrelated full-row metadata cannot
+break it. Get/List retain complete row projections. `ListFilters.IDs` and
+`StoredDisplay` are the store selection seams. A failed optional refresh keeps
+the complete earlier row, not a lightweight validation row. A final common
+stored projection carries committed changes for the selected families; it is
+not another recovery pass. Context keeps its existing provenance and nullability.
+
+Get uses the optional `ListSessionHistorySnapshot` capability after preceding
+recovery refreshes and before display observation can lease the connection.
+**Must reuse:** this bounded store read validates the full row snapshot, launch
+identity and life and reads history in one SQLite read transaction, ending it
+before external observation. A validated pair survives a failed final
+projection; a changed row requires its own validated history. Acquisition
+errors propagate. Legacy `ListSessionHistoryWithin` / `ListSessionHistory`
+providers retain their ordinary final read; other shared-check verbs request
+no history.
+
+The checker reuses the following adapters and guarded stores:
+
+- `findMissingRun`, `RecoveryWrites` and one `tmux.Sweep` for exact process,
+  pending-grace, launch-owner and owned-session/pane checks. Lookup and pane
+  listing are shared per socket with the existing stop rule and time budget;
+  `sampleActivePane` reuses them for eligible display samples.
+- `cursorGatewayProof`, `WithCursorMissingReads` and
+  `MarkCursorMissingIfSameLaunch` for guarded gateway-loss projection and
+  deferred terminal persistence; see the
+  [Cursor binding contract](#cursor-gateway-and-current-launch-binding).
+- `CodexTurnSamples` / `EndCodexTurnSample` and
+  `ProvisionalTranscriptsFor` / `HealProvisionalTranscript` for selected turn
+  completion and newly available Claude transcripts. Pending grace skips
+  live-agent checks, except exact Cursor gateway loss, but still permits
+  eligible transcript healing.
+- `activePermissionReader`, `repairCheckPermissionRow` /
+  `RepairCheckPermissionSample`, and `observeDisplay` with
+  `ObserveNeedsIntelligenceOutcome` / `ObserveIdleScreenOutcome`. Samples bind
+  row/launch/life, observation version, permission epoch and exact requests;
+  state, observation and related family changes commit atomically.
+- `activeReadStore.recordGone` forwards only the source's offered
+  `RecordPermissionFallbacks` or legacy `RecordHookGone`, including requests
+  first judged after refresh. It deduplicates attempts per request and suppresses
+  later fallback writes after a busy result. It records observations only,
+  without verdict, response claim, acknowledgement or answer authority.
+- `reconcileInputProof` through `InputProofStore` for persistence-only late
+  native proof. `finish` runs this after response reads, so an abandoned native
+  COMMIT cannot hold a connection needed by response assembly. It never invokes
+  a delivery backend. Finished rows admit this adapter only; their liveness,
+  turn, permission, display and transcript adapters are inapplicable.
+
+`activeCheckSample` and `activeCheckOutcome` retain examined identities,
+evidence and actual attempted/committed/stale/busy/unconfirmed outcomes within
+the invocation; a finished row logs one `inapplicable` outcome per skipped
+adapter. `sweepCompletion` consumes the latest outcome per adapter after
+`finish`: attempted failures are covered, while cancelled, unattempted or
+unavailable eligible work is incomplete. Cancellation takes `deadline` priority;
+otherwise the last specific failure reason wins, with `unsupported` for an
+unavailable capability and `unattempted` for other gaps. `sampleActivePane`
+propagates stopped-socket skips separately from attempted unreadable captures;
+missing process-evidence or permission-repair writers remain unavailable.
+The log is not a public confirmation field or a durable freshness record.
+`pkg/api` tests must read it through `ActiveCheckOutcomesForTest` and
+classify a write error through `CheckOutcomeForTest` (`export_test.go`).
+Guards reject observations superseded by newer hook, turn, request,
+launch or observation facts; process-record writes may absorb writers that
+change none of their bound versions (see `processProbe` below).
+
+**Must reuse for main-field evidence** (see the v19/v20 columns under
+[`internal/store`](#internalstore)):
+
+- `judgeLiveRow`'s `processProbe`: one `tmux.JudgeProcess` judgement of the
+  `SelectAgentProcess` identity, stamped with the judgement's instant. A gone
+  row's mark carries its `exited` record in the mark's statement (`provenExit`;
+  `findMissingWrite.ProcessRecorded`), and pause's `endIfGone` does the same.
+  Otherwise `recordProcess` commits `RecordProcessEvidence` only while
+  `refreshRow` and `probeStillApplies` find the instance, life and launch,
+  lifecycle state (through `permission_epoch`, which every raw-state change
+  advances), process record and `observation_version` as this check's own
+  earlier writes in the pass left them, including an applied adoption's
+  observation-version advance. Only between its own verdict write and the
+  refresh may the check absorb a writer that changes none of these: a peer's
+  liveness-note write, a same-state hook that starts no turn, a Codex end
+  report or a transcript-path heal. The commit is then guarded on the
+  refreshed row's full snapshot, so any later write makes the sample stale.
+  With no verdict write, the exact expected snapshot is also required.
+  A changed bound version makes the sample `stale_observation`.
+  Separately, after this check's own terminal mark stored no process record,
+  its follow-up binds to the same
+  instance, life and launch and the empty process record; a later state
+  change alone does not stale it, and it can record only an unsuccessful
+  attempt. See SRD t1.x9o.g1, **Decisions — SR-3.5 binding** and its addendum.
+  Cursor process evidence remains
+  `unknown`/`unsupported` under D1; follow-up Bug b.14c owns runtime-identity parity.
+- `fieldAttempt`: per selected row, this invocation's unsuccessful or
+  prevented state, process and pane attempts, with the value and owner each
+  examined. Display attempts also bind the episode's `since` and exact stored
+  evidence, so a concurrent record-only commit defeats an older overlay.
+  They are response-only and never confirm; non-sampling settlement creates none.
+- `mainFields` (`pkg/api/display.go`): the one projection of
+  `process_liveness` and the three records for status, get, list and sweep checks.
+  `withAttempt` (`pkg/api/confirmations.go`) applies an attempt only while
+  `fieldAttempt.describes` the returned row and the attempt is no older than
+  the record. The checked display and its `displayEvidence` stay paired through
+  observation and refresh; `mainFields` uses that pair for `DisplayConfirmation`.
+  Cursor's process and display records are always `unknown`/`unsupported`.
+  Narrow stores without evidence get
+  unknown records (`withUnknownMainFields`).
+
+Each row's evidence commits under its own guards; one failed row does not
+suppress another row's eligible work. Cursor's local
+stale-proof handling preserves independent List results; genuine selection-wide
+errors and direct-read conflicts retain their existing failure shapes.
+
+Narrow exported helpers use only capabilities they receive. Without
+`RecoveryRows`, a legacy `FindMissingStore` supplies live identities and its
+provisional-transcript seam, not an all-agent snapshot or unavailable adapters.
+No provider is manufactured from the host environment. Reads never wait for a
+state change and do not send input, answer requests, replay, signal, restart or
+schedule work. Other read surfaces retain their existing scoped checks.
+
+`activeReadStore.sweepChecks` in `pkg/api/sweep.go` assembles every selected
+row through `mainFields` after deferred outcomes are known. `SweepResult` aliases
+`FindMissingResult`, adding `Checks` without changing the guarded counters.
+**Must reuse:** extend this checker, outcome consumer and projector for sweep
+results; never add a second sampler or derive confirmations from response time.
+The exact public shape and coverage meanings live in
+[the caller contract](caller-contract.md#sweep-results). A refused deferred
+Cursor terminal write falls back to the matching stored row and family; a
+successful write does not synthesize a confirmed state from the response clock.
+
 ### Refusal of old names
 
 The public names are agent-generic: `instance_id`, `agent_args`,
@@ -4758,15 +5374,16 @@ fails when an old name appears on any other surface.
 
 ### Operator tool `agent-director-admin`
 
-`agent-director-admin` (`cmd/agent-director-admin`, b.vqr) is a second
-binary for the two operator-only actions: `kill-finished
---instance-id <id>` (kill's finished-row opt-in; see step 2 of
-[`kill`](#kill)) and `delete --instance-id <id>...` (see
-[`delete`](#delete)), plus `help` and `version`. Its generated reference is
+`agent-director-admin` (`cmd/agent-director-admin`) provides operator-only
+`kill-finished` (kill's finished-row opt-in; see [`kill`](#kill)),
+[`delete`](#delete), `migrate-journal` and `snapshot-store`, plus `help` and
+`version`. The migration and snapshot paths are described under
+[Schema migration at install-time](#schema-migration-at-install-time).
+Its generated reference is
 `docs/admin-reference.md`. It exists so that the agent surfaces keep full
 CLI/MCP parity: the `agent-director` CLI, MCP, the Go client and the
 TypeScript client expose exactly the same verbs and parameters, with no
-hidden or CLI-only flag, and none of them can run either action.
+hidden or CLI-only flag, and none of them can run these operator actions.
 
 - **Not an agent surface.** Its verbs are not manifest verbs. Its verb
   list, global-flag list and opening statement live in `internal/adminapi`
@@ -4820,22 +5437,34 @@ hidden or CLI-only flag, and none of them can run either action.
   `TestMCPExposedVerbExceptions` pins `mcp.ExposedVerb`'s exception list:
   the only manifest verbs MCP does not expose are exactly `hook`, `serve`,
   `trail-emit` and `cursor-host`.
-- **How it reaches `pkg/api`.** `pkg/api` keeps both implementations
+- **Row-repair actions reach `pkg/api`.** `pkg/api` keeps both implementations
   unexported (`Client.killFinished`, `Client.deleteRows`).
   `internal/adminapi` declares the hooks `KillFinished` and `Delete` as
   function variables, and `pkg/api/admin.go`'s `init` sets them.
   `internal/adminapi` imports nothing from `pkg/api`, so there is no
   cycle, and being under `internal/` it cannot be imported from another
-  module. **Must use:** a new operator-only action gets a hook in
-  `internal/adminapi` and a verb in its `Verbs`, never an exported
-  `pkg/api` symbol, a manifest param or a CLI flag.
-- **Same store, same conventions.** It parses and applies the main CLI's
+  module. `kill-finished` and `delete` use these hooks and a Client from
+  `clisetup.Open`. `migrate-journal` instead loads config and calls
+  `adminapi.MigrateJournal`, or with `--check-only` only
+  `adminapi.CheckJournalMigration`, loading no config and opening no store;
+  `snapshot-store` loads no config and calls
+  `adminapi.SnapshotStore` with an explicit source path. Neither constructs a
+  Client. Operator-only actions remain in `adminapi.Verbs`, never the public
+  manifest or exported `pkg/api` surface; reuse the applicable typed boundary.
+- **Shared flags, distinct store admission.** It parses and applies the main CLI's
   global flags (`--store-path`, `--home`, `--tmux-command`,
-  `--create-if-missing`, before or after the verb) and opens its Client
-  through `internal/clisetup`
-  (`ParseGlobalFlags`, `GlobalFlags.Apply`, `Open`), exactly as
-  `agent-director` does. It prints JSON on stdout, or one
-  `{err_name, err_description}` envelope on stderr with exit 1, the names
+  `--create-if-missing`, before or after the verb) through
+  `internal/clisetup.ParseGlobalFlags` and `GlobalFlags.Apply`. Creation applies
+  to the row-repair Clients only; migration and snapshot require an existing
+  source (`--check-only` reads none). It prints JSON on stdout, or an
+  `{err_name, err_description}` envelope on stderr with exit 1. Every
+  `migrate-journal` error, a global-flag error on an argv naming
+  `migrate-journal` included, also carries `details`: `cutover` always,
+  `steps_committed` with `not_committed`, `refusal` for a refusal and
+  `result` from a real run (see "Commit state" under
+  [`internal/store`](#internalstore)). **Must use:** `writeJournalError`
+  writes every `migrate-journal` error envelope; the verb's flag errors reach
+  it through `parseVerbFlags`, which writes none itself. Ordinary error names come
   from `errnames.Classify` (`ErrUnknownVerb` and `ErrInvalidFlags` for its
   own dispatch errors).
 - **Every help opens with the human-approval statement.** The no-verb
@@ -5101,14 +5730,8 @@ each verb call is a one-shot subprocess.
 - Has no subprocess to terminate (every verb call is its own short-lived subprocess) — so it cannot fail mid-call.
 - **Idempotent**: a second `close()` call is a no-op.
 
-**`[Symbol.dispose]()`** delegates to `close()`, enabling `using` blocks (Explicit Resource Management):
-
-```ts
-{
-  using client = await Client.create({});
-  // use client …
-} // client.close() called automatically here
-```
+**`[Symbol.dispose]()`** in `src/internal/subprocessClient.ts` delegates to
+`close()`, so a `using` block closes the client when its scope ends.
 
 **`#assertOpen()`** is called at the top of every verb method. It throws `ErrClientClosed` (a TS-only error subclass, not in the shared Go catalog) if the client has already been closed.
 
@@ -5240,15 +5863,18 @@ shared Go-runtime state to preserve across calls.
 
 Every agent-director error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string), and, on a refusal that gives its facts as fields, the optional object `err_details` (b.146 rule 15; see "Error envelope" under [Stdio MCP server](#stdio-mcp-server)). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
 
-**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for the named errors the TS client maps to classes. It contains the verb-surface names (the agent names `ErrAgentMissing`, `ErrAgentInvalid`, `ErrAgentArgsMismatch`, `ErrPermissionsUnsupported` and `ErrTemplateAgentMissing` among them), the CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired` (b.vma, b.cm7) and `ErrOldLayout` (the store's sentinel, `package` `clisetup`; no verb lists it in `ErrorNames`), the CLI-internal names `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, and `ErrInternal` (b.cm7). Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package (`clisetup` for the CLI-setup and CLI-internal names, `errnames` for `ErrInternal`). The catalog lists every `err_name` the CLI writes in an error envelope (b.cm7; MCP's `ErrUnknownTool` is no CLI name), so the TS client has a class for every name a binary of its own version gives; `ErrUnknownErrorName` means the binary is of another version, most often a newer one. **Must:** a new `err_name` the CLI writes, from a verb or from the binary itself, gets a `Catalog` entry, so the TS client never meets a name of its own version as `ErrUnknownErrorName`. `TestEnvelopeErrNamesCatalogued` (`pkg/api/errnames/envelope_names_test.go`) fails on an `err_name` that `cmd/` or `internal/` hands an error envelope or an envelope writer (`writeError`, `writeApiErrorAndDispatch`) and that `Catalog` lacks; `ErrUnknownTool` is exempt only in `internal/mcp` (b.zvb).
+**Catalog source.** `pkg/api/errnames/catalog.json` is generated from the Go
+`Catalog`. Public error names map to TS classes; the separate administrator
+category has the narrow [catalog exclusion](#err-name-five-way-coherence).
+Each entry records its name, origin package and description. New public envelope
+names must enter the catalog and client mapping. `TestEnvelopeErrNamesCatalogued`
+checks emitted names, including administrator envelopes; only MCP's transport
+error `ErrUnknownTool` is excluded from that scan.
 
 **Base class.** `src/errors.ts::AgentDirectorError extends Error`. Constructor: `(verb: string, err_name: string, err_description: string, err_details?: Readonly<Record<string, unknown>> | null)`. Sets `this.name = this.constructor.name` so subclass names propagate correctly through the prototype chain. Readonly fields: `verb`, `errName`, `errDescription`, `errDetails` (the envelope's `err_details` object as sent, `null` when it carries none). Message format: `"${err_name}: ${err_description}"`. The object's shapes are exported as types (`RelayFallenBackDetails` with `OpenRequestFacts`, `PaneAnswerInProgressDetails`, `ClaimTooSoonDetails`, `PaneChangedDetails`); the field itself is untyped, so a caller narrows it by the error's class.
 
-**Subclasses.** One `Err<Name> extends AgentDirectorError {}` per catalog entry. Bodies are empty — class identity is the sole value-add. Example:
-
-```ts
-export class ErrSpawnNotFound extends AgentDirectorError {}
-```
+**Subclasses.** `src/errors.ts` declares one empty `AgentDirectorError`
+subclass per public catalog entry; class identity distinguishes the errors.
 
 **TS-only errors.** Ten subclasses have no counterpart in the Go catalog:
 `ErrClientClosed`, `ErrBunVersionTooOld`, `ErrConsumerSignal`,
@@ -5269,12 +5895,13 @@ subclass in `src/errors.ts` carries a comment cross-referencing this module.
 **Catalog drift enforcement gate.** `pkg/ts-bun-client/test/errors-catalog-drift.test.ts`
 reads `pkg/api/errnames/catalog.json` at test time (the single source of truth,
 produced by Epic 1's `go generate ./pkg/api/errnames/...` mechanism), imports
-`src/errors.ts`, and asserts that every catalog entry has a corresponding
+`src/errors.ts`, and asserts that every public catalog entry has a corresponding
 `AgentDirectorError` subclass and that every exported `Err*` subclass (after
 removing the TS-only allow-list from `src/internal/tsOnlyErrors.ts`) appears in
 the catalog. On mismatch the test reports a two-sided diff: names present in the
 catalog but absent from TS, and names present in TS but absent from the catalog.
-This keeps the TS error surface from silently drifting from the Go one.
+The shared test loader excludes only the administrator category described
+below; tests also assert that it has no public class or export.
 
 **Runtime ENOENT detection.** At verb dispatch in the subprocess transport, an `ENOENT` from spawning is classified into three outcome classes: `ErrSystemInstallDisappeared` if the binary is gone, `ErrCallerCwdUnreachable` if the caller's working directory is unreachable, or the original error rethrown if neither condition applies.
 
@@ -5282,8 +5909,9 @@ This keeps the TS error surface from silently drifting from the Go one.
 
 The diagram's AskUserQuestion and idle-prompt paths are Claude-specific.
 Codex tool hooks write `working`; its `Stop` or `Interrupt` writes `waiting`.
-Codex SessionEnd is an end report without a terminal transition; only
-`find-missing` or `pause` can turn a gone process with that report into
+Codex SessionEnd is an end report without a terminal transition; a
+[shared active check](#shared-active-checks) on a state read or
+`find-missing`, or `pause`, turns a gone process with that report into
 `ended`. Gone processes without that report, or tmux-only absence, are
 marked `missing`. The detailed agent classifier and end-report sections
 above own these differences.
@@ -5352,17 +5980,17 @@ ended     (records no pane, so no later hook moves it)
 
 pending / waiting / working / ask_user / check_permission
   │
-  ▼   find-missing: the row's agent process is gone, or it cannot be
+  ▼   a shared active check: the row's agent process is gone, or it cannot be
   │   checked and the lookup finds no session of the row's current
   │   launch (Gone or Leftover); a pending row only once past its
   │   pending grace period and no longer held by its launch's owner.
   │   The same transaction denies the row's open permission requests and
   │   closes its running subagent entries
-missing   (the sweep's judgement, not proof that the agent exited)
+missing   (a check's judgement, not proof that the agent exited)
 
 pending   (past its pending grace period, not held by its launch's owner)
   │
-  │   find-missing: its pane is recorded (or just adopted) and the pane's
+  │   a shared active check: its pane is recorded (or just adopted) and the pane's
   │   agent process is alive, but no hook has reported since its launch
   │   (b.146 rule 10): a report, not a transition. One write guarded on
   │   pending, a note other than provenance_conflict and the snapshot the
@@ -5428,7 +6056,7 @@ its own table, in [The agent-aware hook classifier](#the-agent-aware-hook-classi
 | `PermissionRequest` | — | `check_permission`; with relay on, written by the relay hook's first write (`InsertRelayRequest`) in one transaction with the request (see [Permission relay](#permission-relay)) |
 | `SessionEnd` | missing or any reason other than `logout`, `prompt_input_exit`, `exit` | soft refresh — no state change; bumps `last_seen_at` |
 | `SessionEnd` | `reason ∈ {logout, prompt_input_exit, exit}` | `ended` (also sets `ended_at`), with the close of the row's open permission requests and of its running subagent entries in the same transaction (`applyEndedTransition`; see "The ended transition closes the row's requests" under [Permission relay](#permission-relay) and [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries)) |
-| `SubagentStart`, `SubagentStop` | — | soft refresh — no state change; bumps `last_seen_at`; `idle_since` and the settle columns are untouched (`ApplySubagentLifecycle`). With an `agent_id` the soft refresh and the subagent's entry writes are one `BEGIN IMMEDIATE` transaction, the entry writes only when the row write applied (a `SubagentStop`'s are the stop, then its `background_tasks` listing's confirm, move and fill); no `agent_id`: the soft refresh alone, no entry (a session id is then recorded by today's rule). `ad.hook.fired` `upsert_outcome` is `updated` (committed), `no_change` (the gate did not hold; nothing written) or `error` (rolled back, row and entries as they were). One `ad.spawn.state_transition` (`soft_refresh` true) after the commit; the entry writes emit none |
+| `SubagentStart`, `SubagentStop` | — | soft refresh — no state change; bumps `last_seen_at`; `idle_since` and the settle columns are untouched (`ApplySubagentLifecycle`). With relay on, a `SubagentStop` with an `agent_id` is preceded by the proof of that subagent's requests recorded before the hook started (`turn_end`; b.wbs). With an `agent_id` the soft refresh and the subagent's entry writes are one `BEGIN IMMEDIATE` transaction, the entry writes only when the row write applied (a `SubagentStop`'s are the stop, then its `background_tasks` listing's confirm, move and fill); no `agent_id`: the soft refresh alone, no entry (a session id is then recorded by today's rule). `ad.hook.fired` `upsert_outcome` is `updated` (committed), `no_change` (the gate did not hold; nothing written) or `error` (rolled back, row and entries as they were). One `ad.spawn.state_transition` (`soft_refresh` true) after the commit; the entry writes emit none |
 | unknown event | — | soft refresh + info-level log entry |
 | any event | the gate does not apply (the hook's parent is not the row's recorded pane process, or the row records no pane) | unchanged; one `ad.hook.ignored` (for a `pending` row's SessionStart whose parent is the pane process's child, also one `ad.hook.pane_is_grandparent`; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)) |
 | `SessionStart`, `SessionEnd` | the payload carries a non-empty `agent_id` (a subagent or in-process teammate), any reason or source | unchanged, decided before the gate; one `ad.hook.ignored` `subagent_event` (none when no row has the id) |
@@ -5515,10 +6143,9 @@ running, until the subagent's next tool hook (`PreToolUse`, `PostToolUse`
 or `PermissionRequest`). `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` in the
 agent's environment turns off the prompt-suggestion fork at its source.
 
-`missing` is set by `find-missing`'s mark, and written back by a failed
+`missing` is set by shared recovery's mark, and written back by a failed
 resume's or reuse's restore when the row was `missing` before the move or
-reset. It is the
-sweep's judgement on the evidence available to it, not proof that the
+reset. It is a check's judgement on available evidence, not proof that the
 agent has exited; neither `ended` nor `missing` means the agent is dead
 or its row is safe to delete (see [`find-missing`](#find-missing)).
 
@@ -5528,7 +6155,7 @@ a spawn's insert (`InsertPending`), reuse's reset (`ResetForReuse`, see
 (`MoveToPending`, see [Resume](#verb-pkgapiresumego)). It is ended by
 every write that sets another state: the agent's report-in (the first
 SessionStart hook, to `waiting`), another of the agent's hooks' state
-transitions (`ApplyHookTransition`), `find-missing`'s mark (to
+transitions (`ApplyHookTransition`), shared recovery's mark (to
 `missing`), a plain spawn's end write after
 "duplicate session" (`EndHeldLaunch`, to `ended`), a failed resume's
 restore (`RestoreAfterFailedResume`) and a failed reuse's restore
@@ -5543,10 +6170,11 @@ judges the row once its grace period has passed.
 A row that stays `pending` while its agent runs (its SessionStart hook
 killed or failed before its write, or ignored as `no_pane_recorded`, or
 its agent held at a Claude Code startup screen shown before any hook
-runs) is reported by `find-missing`, never moved by it: the sweep leaves
-the row `pending` and writes the liveness note `unreported`
-(`NoteUnreportedIfSameLife`) within the pending grace period plus one
-`find-missing` period, provided `find-missing` is scheduled (see
+runs) is reported by a [shared active check](#shared-active-checks), never
+moved by it: the check leaves the row `pending` and writes the liveness note
+`unreported` (`NoteUnreportedIfSameLife`) on a state read of the row, or
+within the pending grace period plus one `find-missing` period, provided
+`find-missing` is scheduled (see
 "The `unreported` note of a live `pending` row" under
 [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
 agent-director cannot tell a startup
@@ -5562,6 +6190,8 @@ launch start plus the pending grace period or 540 s after the wait began,
 whichever comes first; the hook still exits 0 with empty stdout.
 
 ### The agent-aware hook classifier
+
+Pane-only rows ignore all provider and child reports through `config.IsPaneOnly` guards before lifecycle, permission, subagent or native-proof writes, including the guarded SessionStart read.
 
 `ClassifyEvent(agent, raw)` (`classify.go`) is the one pure function that maps
 a hook payload to a `ClassifyResult`. It holds three agent classifiers: `classifyClaude`,
@@ -5584,11 +6214,12 @@ entry, and a deny envelope only for a relayed `PermissionRequest` (see
 with the agent `ResolveAgent` returned, and the handler decides what to write
 from the result's outputs: `NewState`, `SoftRefresh`, `WaitingIfWorking`,
 `SubagentCapture`, `EndReport`, `HealsTranscript`, `MainThread` and `TurnID`
-(Codex's turn, through `codexTurnGate`), and `ToolRan()`. The
+(Codex's turn, through `codexTurnGate`), `ToolRan()`, `TurnEnded()` and
+`SubagentStopped()`. The
 result's `EventName` and `ToolName` are still read where an event needs its
 own handling (`Handle` for `SessionStart` and `PermissionRequest`,
 `subagent.go` for the subagent events and the `Agent` tool). The result's
-`Agent` is read by `ToolRan()` and `TurnEnded()`, and the handler branches
+`Agent` is read by `ToolRan()`, `TurnEnded()` and `SubagentStopped()`, and the handler branches
 on Cursor to authenticate its runtime binding and populate `gate.Cursor`
 before a lifecycle write. This gate does not admit authorization requests.
 The grandparent advice is chosen by the row's agent (see "Hooks move a row
@@ -5620,6 +6251,8 @@ without `agent_id`. A hook with `agent_id` has an empty `SessionID`:
 for a marked hook, so such a hook records neither. `ToolUseID` is kept verbatim, and
 `ToolRan()` is false for Codex: its permission requests carry no
 `tool_use_id`, so a tool hook proves no request gone and closes none.
+`SubagentStopped()` is false for Codex too, so its `SubagentStop` proves
+nothing.
 Codex sends no idle-prompt Notification, so `WaitingIfWorking` is never set;
 `TurnEnded()` is true for a Codex `Interrupt` without `agent_id`, as for a
 `Stop`.
@@ -5687,7 +6320,9 @@ unique.
   still reads `waiting` until that turn's next tool hook moves it back to
   `working`. A held `UserPromptSubmit` records `codex_turn` in
   `reportWorkingHeld`'s one write (`codexHeldTurnSQL`), so no read ends an
-  older turn while it runs.
+  older turn while it runs. Both turn-start writes invalidate
+  [pane evidence](#displayed-state-reporting), including when the raw state
+  stays `working`.
 - *Late tool hooks.* A `CodexToolTurn` move to `working` applies only while
   `codexToolTurnCurrentSQL` holds: the turn is `codex_turn` and not
   `codex_turn_ended`, or, with `codex_turn` NULL (a row upgraded mid-turn,
@@ -5697,14 +6332,11 @@ unique.
   its UPDATE and, when that matches nothing, reads it again, so a turn end
   landing between the read and the move gives the same gated soft refresh,
   not a held report.
-- *The read-time turn end.* `endCodexTurns` runs first in
-  `statusSettledWithRelay`, `getSettled` and `listFiltered` (so the Client's
-  `CursorMissingReads`, which embeds `*Store`, gets it too), with no settle
-  time and no pane sample. `CodexOpenTurns(id)` selects the open turns of
-  the row and every descendant down `parent_id` (a recursive CTE), whose
-  turns its `family_state` counts, or of every row for `""` (`list`): a
-  Codex row, raw `working`, with `codex_turn` set and not ended and a
-  `jsonl_path`. For each, `codexRolloutEndsTurn`, a tail scanner separate
+- *Observed turn completion.* The [shared active checker](#shared-active-checks)
+  calls `CodexTurnSamples(id)` only for each selected raw `working` Codex row
+  with an open recorded turn and `jsonl_path`. Status/Get never check its
+  descendants; List never checks excluded rows. `find-missing` can recover a
+  missed end without an intervening read. `codexRolloutEndsTurn`, a tail scanner separate
   from the context reader's (see [Experimental context
   readers](#experimental-context-readers)), opens the rollout as
   `readCodexContext` does (absolute path whose base name carries the
@@ -5713,8 +6345,9 @@ unique.
   round reading only the bytes before the last, at most 1 MiB in all. The
   last `event_msg` `task_started` or `task_complete` decides, and only a
   `task_complete` of the row's turn ends it; a short read past the first
-  round is undecided. `EndCodexTurn` is one guarded UPDATE that repeats the
-  open-turn condition with the turn and the rollout path, writes `waiting`
+  round is undecided. `EndCodexTurnSample` revalidates the snapshot, launch,
+  life, observation version, permission epoch, session/path and both turn IDs
+  before its guarded UPDATE. It repeats the open-turn condition, writes `waiting`
   through `hookWriteStateSet`, `codex_turn_ended = codex_turn` and the
   `row_version` advance (no `last_seen_at` bump), refreshes families and
   drains display exits in the same transaction (it writes no
@@ -5723,8 +6356,10 @@ unique.
   `triggering_event_name` `task_complete`, `cause`
   `codex_rollout_task_complete`); an unconfirmed commit emits none. It waits
   `readerLockWait` (0, see "Readers never wait" under
-  [Permission relay](#permission-relay)), and the step fails open: any error
-  is dropped and the read goes ahead.
+  [Permission relay](#permission-relay)); an error is retained as an internal
+  outcome without suppressing independent rows. **Must use:** retain the
+  `CodexTurnSamples` sample across rollout access and pass that same sample to
+  `EndCodexTurnSample`; do not replace its revision guards with a fresh read.
 - *Residuals.* A turn Codex begins with no `UserPromptSubmit` leaves
   `codex_turn` on the previous turn until its `Stop` or `Interrupt`: its tool
   hooks keep the row's state, and no read ends it (its `task_started` is
@@ -5744,7 +6379,7 @@ unique.
   the late-hook soft refresh.
 - *Schema and fixtures.* `migrateV14toV15` appends the two nullable TEXT
   columns, validate-first, with no backfill (see the
-  [migration guide](migration-guide.md#current-worked-example-v14--v15)).
+  [migration guide](migration-guide.md#previous-worked-example-v14--v15)).
   **Must use:** a test that needs a captured Codex turn end uses
   `codexfix.ErroredTurn` (see
   [codexfix](#codexfix-codexs-own-files-and-launch-command-reusable-test-fixture));
@@ -5860,12 +6495,10 @@ pid's start time from `HandleConfig.ParentProc.StartTime` (the per-OS
 the event name and the payload's session id, is the hook's
 `store.HookGate`, and every store write for the hook carries it.
 
-**The condition, in each statement.** Every hook write puts the gate in
-its own `WHERE` (`hookGateSQL`, `internal/store/hook_gate.go`):
-
-```sql
-pane_pid = ? AND ? <> '' AND (pane_starttime = ? OR pane_starttime IS NULL)
-```
+**The condition, in each statement.** Every hook write uses `hookGateSQL`
+from `internal/store/hook_gate.go` in its own `WHERE`: the pane PID must match,
+the captured start time must be nonempty, and the recorded start time must
+match it or be NULL.
 
 So no write lands between a check and the write, and a hook racing a
 launch write never applies to the new launch. The writes are:
@@ -6010,9 +6643,10 @@ SessionStart killed before it writes its result or its
 `no_pane_recorded`, with no trail record, and so can any other death of
 the hook (OOM, a crash, an overloaded host). Correctness comes from the
 report, not timing: the row is left `pending` while the agent runs, and
-`find-missing` notes it `unreported` (the row stays `pending`) once it is
-past its pending grace period and no longer held by its launch's owner,
-so within `pending_grace_seconds` plus one `find-missing` period, provided
+a shared active check notes it `unreported` (the row stays `pending`) once
+it is past its pending grace period and no longer held by its launch's
+owner: on a state read of the row, or within `pending_grace_seconds` plus
+one `find-missing` period, provided
 `find-missing` is scheduled (see [`find-missing`](#find-missing)). The
 caller reads the pane, and only a caller that looked types. A SessionStart that writes
 later still records the session identity, moves the row to `waiting` and
@@ -6163,27 +6797,27 @@ pane process; its other hooks are kept but record no session id.
 are ignored, so their work is not reflected in the row. A row whose
 create reply was lost takes no hook, and stays `pending`, until a verb
 adopts its pane by `@ad_pane` (SR-3.6: `kill`, and `send-keys` with
-`allow_pending`, through `adoptIdentity`, and `find-missing`, once the row
-is past its pending grace period, through `adoptInSweep`; `read-pane` uses
-the pane for its call only and writes nothing). Its SessionStart waits to the bound and, unless the
+`allow_pending`, through `adoptIdentity`, and a shared active check,
+once the row is past its pending grace period, through `adoptInSweep`;
+`read-pane` uses the pane for its call only and writes nothing). Its SessionStart waits to the bound and, unless the
 pane is adopted meanwhile, is ignored as `no_pane_recorded`, so after a
 later adoption an idle agent's row stays `pending` until the agent's
-next hook; `find-missing`, past the grace period, notes it `unreported`
-so a caller that reads the pane can act on it (the lost-reply residual,
-reported by the sweep; b.kdf). The SessionStart wait bounds the
+next hook; a shared active check, past the grace period, notes it
+`unreported` so a caller that reads the pane can act on it (the lost-reply
+residual; b.kdf). The SessionStart wait bounds the
 race with the identity write by the pending grace period and by the
 540 s cap, so an identity write slower than that period, or than 540 s,
 leaves the row `pending` the same way (residual (ii); TLA+
 `ci_H_Lrep_slow`), until the agent's next hook, noted `unreported` by
-`find-missing` meanwhile. The wait ends at the earlier of its grace bound and 540 s
+a shared active check meanwhile. The wait ends at the earlier of its grace bound and 540 s
 after it began, before the `"timeout": 600` its hook entry states,
 whatever the grace or a clock step does (WD 2026-09-30c); the hook's store
 writes around the wait can still outlast that timeout and get it killed
 with no record (see "The cap and the hook timeout" above). With a grace
 above 540 s, SessionStart stops waiting at 540 s while `find-missing`
 still counts the row as inside its grace period; the row stays `pending`
-until the agent's next hook (noted `unreported` by `find-missing` once
-the grace period has passed), as in residual (ii), with its
+until the agent's next hook (noted `unreported` by a shared active check
+once the grace period has passed), as in residual (ii), with its
 `no_pane_recorded` record. A launch
 start later than the hook's clock (a wall-clock step back, or clocks
 that disagree) likewise keeps `find-missing` counting the row as inside
@@ -6191,8 +6825,8 @@ the grace period; the hook's wait still ends by the cap at the latest. While a S
 waits too, since Claude Code waits on SessionStart hooks. A Claude Code
 version that does not run exec-form hooks (Claude Code 2.1.120, the
 Docker pin, is one) never applies a hook, so its rows stay `pending`
-until `kill` or until `find-missing` marks them `missing`, noted
-`unreported` by `find-missing` while the agent runs (no hook of theirs
+until `kill` or until shared recovery marks them `missing`, noted
+`unreported` while the agent runs (no hook of theirs
 clears the note); each of its hooks writes
 `ad.hook.ignored` `no_exec_form`, so the trail says why (RN-9; the
 README states the minimum version). A `claude` on PATH that runs Claude
@@ -6423,9 +7057,9 @@ hook write does, so one run of a subagent adds two advances. The entry writes
 advance nothing of their own. A snapshot-guarded write that one of them
 overtakes is refused as changed (`row_version` is part of the snapshot match)
 and handled as when any other hook overtakes it: `SessionStart`'s identity
-write re-reads the row and retries once; find-missing's guarded writes
-(`markMissingSameLife` and the other sweep writes) apply nothing and leave the
-row to the next run; expire's delete (`DeleteFinishedIfSameLife`) keeps the row
+write re-reads the row and retries once; the shared active checks' guarded
+writes (`markMissingSameLife` and the other sweep writes) apply nothing and
+leave the row to the next check; expire's delete (`DeleteFinishedIfSameLife`) keeps the row
 as `changed_since_examined`, so the next run examines it again.
 
 **Teammates and internal agents.** A teammate's launch request names the
@@ -6679,7 +7313,7 @@ to the `state` that `status`, `get` and `list` report on every surface
   included, so a dead agent never reads as alive for T. So does every
   command state change outside authenticated Cursor request admission:
   `InsertPending` (spawn), `EndHeldLaunch`
-  (spawn's held name), `find-missing`'s mark and its `check_permission`
+  (spawn's held name), shared recovery's mark and its `check_permission`
   repair, `MoveToPending` and `RestoreAfterFailedResume` (`resume`),
   `ResetForReuse` and `RestoreAfterFailedReuse` (spawn with the reuse
   opt-in). Such a value becomes the last settled value at once: a caller
@@ -6716,7 +7350,12 @@ a caller past its deadline (the TypeScript client's 30 s
 `DEFAULT_CALL_TIMEOUT_MS`, `decide`'s `max_wait_ms`) or change a relay
 outcome. A hook's own-state settle columns remain part of its state UPDATE;
 the lifecycle transaction also refreshes family history before commit (see
-[Family reporting](#family-reporting)).
+[Family reporting](#family-reporting)). Settling and passing time create no
+confirmation or attempt time: a read reports the shown value's own state record
+(`settled_evidence` while a younger change settles; see "v19 columns" under
+[`internal/store`](#internalstore)). A retained display likewise keeps its
+own evidence until an observation changes it; a failed non-sampling settle-out
+leaves its complete record unchanged.
 
 **Who reads T.** Each process reads the config once: a hook process when it
 fires (its T judges whether the state its write replaces had settled) and
@@ -6843,7 +7482,7 @@ because this hop precedes the display columns. DDL, initialization and stamp
 share one transaction; failure rolls back the hop. Fresh DDL converges with
 it; store identity and own-state history are preserved. The family-only
 v12 → v11 recovery recipe applies to genuine v12 stores; it cannot operate
-on v13, v14 or v15. Recovery is in
+on v13–v20. Recovery is in
 [migration-guide.md §5](migration-guide.md#v12--v11-reverses-migratev11tov12).
 
 **Writers must reuse** `refreshFamilies` in `family.go` for every mutation
@@ -6881,20 +7520,16 @@ restarts, so the next read after T needs no intervening polling or timer.
 Clock and configuration-change semantics match own-state settling.
 Family projection adds no writer lock, write, settle wait or liveness probe.
 
-**Families from the observation's commit.** `ObserveNeedsIntelligence` and
-`ObserveIdleScreen` return, with the committed display, the family of the
+**Families from the observation's commit.** `ObserveNeedsIntelligenceOutcome`
+and `ObserveIdleScreenOutcome` return, with the committed display, the family of the
 member and of each stored ancestor, read with the reader's original
 `SettleRead` clock and T; nil when no contribution changed or no commit
-was confirmed. API readers must use these values (`familyOf` in
-`pkg/api/display.go`), never a later read. `status` and `get` take the row's
-family from its commit, else from its snapshot. `list` merges each commit's
-families in observation order, a later commit winning; its final pass
-changes only `family_state`, so an ancestor emitted before a descendant's
-exit reports that exit. Every other field keeps the projection already
-computed in the pass: `displayed_state` from the row's own observation,
-request lists from their own reads, the rest from the snapshot. A row that
-no commit of the pass supplies keeps its snapshot family. State filtering
-and limits apply once, to the reported state and `displayed_state`. A skipped, busy or rolled-back
+was confirmed. The shared checker's `checkPermissionDisplay` applies these
+values to every already-selected ancestor, in commit order, without another
+read or a hidden-child check. Its final common stored refresh includes all
+confirmed member changes; if unavailable, the selected rows still retain the
+families returned by those commits. State/display filtering and limits select
+membership before checks and never run again. A skipped, busy or rolled-back
 observation itself returns the previous display, detail and snapshot family
 together; in `list` another member's commit can still supply that row's
 final family. After an unconfirmed
@@ -6903,15 +7538,22 @@ before COMMIT; otherwise the read reports the previous view, and the write
 may still land without a record, as Trail in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows)
 allows.
-Ordinary own-state settling keeps the original read's view.
+Own-state and family settling use the invocation's original clock.
 
-Existing Cursor read checks, guarded terminal persistence and errors remain
-in place. A projected `missing` own state does not remove a member from its
+Cursor's guarded projection and row-local failure handling follow the
+[shared checker](#shared-active-checks). A projected `missing` own state does
+not remove a member from its
 stored family until the terminal write commits. Ancestor own-state and
 permission fields remain local to the ancestor; descendant `ask_user` or
 `check_permission` affects only the binary family aggregate. A stored live
-working row continues to contribute until existing detection or state
-changes say otherwise. Family waiting is no task-success or action-safety
+working row continues to contribute until detection or state changes say
+otherwise. Family freshness is unconfirmed, with no extra marker and no
+confirmation record: selected checks do not establish the state of hidden
+members, and a parent's confirmed `state`, `process_liveness` and
+`displayed_state` records do not confirm its family. Nothing derives a family
+from process or display confirmation evidence, so record-only writes refresh none; a terminal
+move's evidence commits with its family refresh. Family waiting is no
+task-success or action-safety
 guarantee, including while settling briefly retains waiting after work begins.
 
 ### Displayed State reporting
@@ -6926,8 +7568,12 @@ the agent's screen, but no read enters it: a permission request agent-director
 knows about never yields a Displayed State, so its row reads
 `check_permission` however long it waits, and unknown-prompt inference is
 separate future work. Displayed States are report-only and computed on
-demand by `status`, `get` and `list`; AD runs no background process or timer
-for them, and reads no pane text or agent log. User-facing rules are in the
+demand by the selected `status`, `get`, `list` and `find-missing` checks;
+AD runs no background process or timer for them. Display detection interprets
+neither pane text nor agent logs. `confirmations.displayed_state` reports the
+stored evidence of the exact display returned, including no Displayed State;
+only an owned-pane sample can confirm it. Unavailable display (Cursor) remains
+`unknown`/`unsupported` with null evidence. User-facing rules are in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows);
 this section holds the shared components every Displayed State and every
 agent must go through.
@@ -6936,21 +7582,22 @@ agent must go through.
 
 | Component | Owns |
 | --- | --- |
-| `pkg/api/display.go` `observeDisplay` / `displayed` | The one dispatch `status`, `get` and `list` share. When a write of the same read found the store busy (`permissionRead.storeBusy`), it returns the committed display, sampling, reading and writing nothing. Otherwise a raw `working` row whose agent `store.IdleScreenApplies` is observed by its pane (`paneObservation`) when the reader samples panes; every other row by its permission requests (`permissionObservation`), which also settles out a display of either state an earlier interval left. A reader that samples no pane (the exported `Status`, `Get` and `List`) keeps such a row's current pane finding (`Spawn.IdleScreenCurrent`: a current-epoch observation whose candidate is `idle_screen`, so a displayed `idle_screen`, a pending entry or a pending move to it) as committed, writing nothing; any other observation goes to `permissionObservation`, which settles out an earlier interval's display and a settling exit. It also reports whether its write found the store busy. It never returns a `needs_intelligence` display (one 0.16 or 0.17 stored): it returns the row's reported state instead. |
-| `pkg/api/display.go` `displayedState`, `namesDisplayedState` | The one test of whether a display, or a `list --state` value, is a Displayed State; `displayed_state` and the list filter use it. |
-| `permissionObservation` | The one all-agent permission evaluation (Claude, Codex, Cursor); it judges every request of a row with the relay's own check-before-read verdicts, builds one `store.PermissionSample` each and asks the store to commit the fallback clocks they establish and the settling out of any display the row keeps. It never enters a Displayed State. It takes the requests the reader already read (`permissionRead.requests`); without them it reads its own, without waiting. See [Readers never wait](#readers-never-wait-problem-4). |
-| `Client.paneSampler` / `samplePane` | The one pane sample, one sampler per read (`relayView`): the agent's pane of the row's current launch, found as `read-pane` finds it (`paneRun.ours`; a leftover session never counts) and captured as `read-pane`'s default read, so the stored fingerprint is that read's `pane_sha256`. Any failure is an empty sample. Once a socket's lookup or pane-listing result `StopsSocket()` (the [sweep's stop rule](#sweep-sweepgo)), the read's later rows on that socket get an empty sample with no tmux call; a failed capture stops nothing. |
+| `pkg/api/display.go` `observeDisplay` / `displayed` | The shared display dispatch, invoked once per eligible selected row by the active checker. A raw `working` row eligible under `store.IdleScreenApplies` uses `paneObservation` when a sampler is supplied; otherwise `permissionObservation` settles any retained display. A narrow reader without a sampler retains a current pane finding (`Spawn.IdleScreenCurrent`). A prior busy write suppresses further fallback work. `permissionRead.record` carries the paired evidence and any response-only pane attempt; `displayed` reuses the checked result during response assembly. No path reports retired `needs_intelligence`. |
+| `pkg/api/display.go` `displayedState` | Projects a committed display to its reportable name. List selection uses the stored-filter seams in [Shared active checks](#shared-active-checks). |
+| `permissionObservation` | The one all-agent permission evaluation (Claude, Codex, Cursor); it judges every request with the relay's check-before-read verdicts and sends `store.PermissionSample`s to the fallback/settle-out observer. It never samples a pane, enters a Displayed State or records a display attempt, even on failure. It reuses `permissionRead.requests`, or reads them without waiting. See [Readers never wait](#readers-never-wait-problem-4). |
+| `sampleActivePane` / `failedPaneSample` | The owned current-launch sampler through [Shared active checks](#shared-active-checks). It shares `tmux.Sweep`, matches the default `read-pane` fingerprint and never interprets pane text. `PaneSample.Reason` classifies a failed/untrusted sample as `unreadable`, or `deadline` when `Sweep.Spent` says the invocation budget ran out. |
 | `store.IdleScreenApplies` | The eligibility rule used by `Spawn.PaneObservable`: only Claude and Codex may be sampled, whatever a row's timeout override. |
 | `pkg/api/display.go` `idleScreenAvailability` | The shared status/get/list availability projection: Claude and Codex read `available`; Cursor and other nonempty unknown agents read `unavailable`. An empty agent reads `available` for Go custom-store compatibility, without sampling eligibility. |
 | `StateDetail`, `stateDetail` | The one wire shape of the Displayed State shown: `displayed_state`, `since` (RFC3339 UTC, exactly milliseconds) and that state's detail (`unchanged_minutes` for `idle_screen`; `request_token` and `tool_name` are kept for `needs_intelligence`), embedded in `StatusResult` and `SpawnRow`. `ListRow` carries only `DisplayedState` (call `get` for the rest); `StatusResult` adds `tmux_session_name` only while `displayed_state` is present. A field that does not apply is omitted, never null, empty or zero. `api.StateNeedsIntelligence` and `api.StateIdleScreen` are the only state constants pkg/api exports. |
-| `store.ObserveNeedsIntelligence`, `store.ObserveIdleScreen` | The only writers of the observation: the permission observation (which keeps its name but enters no Displayed State) and the pane observation. Neither waits for the write lock (`inWriteTx(0, ...)`); both re-check the row with `lockedObservationRow`. |
-| `planPermission` (`permissionCandidate`), `planPane`, `planObservation` | The permission plan (the fallback clocks to establish; never a display target), the pane target (the baseline to store and `idle_screen` once it qualifies) and the one pure plan of everything a read would commit (observation, display, trail events, and whether to write at all), applied by both the unlocked pre-check and the locked commit so they cannot drift. `planObservation` also ends a stored `needs_intelligence` at once, with its exit record. |
-| `store.FallbackClock` | The one rule for the start of a fallen-back request's fallback clock, used by the `status`, `get` and `list` observation, by the `RecordPermissionFallbacks` write that `get`, `list` and `get-permission` share and by those readers' pick-up for that write (`addGone`), so a persisted clock is never one a read rejects and a read attempts no write that stores nothing, save one `get-permission` case ([Readers never wait](#readers-never-wait-problem-4)). |
+| `store.ObserveNeedsIntelligenceOutcome`, `store.ObserveIdleScreenOutcome` | Guarded writers returning `DisplayOutcome`: paired `Display`/`Evidence`, affected `Families` and `Committed` (including record-only commits). When nothing commits, they return the examined snapshot's pair. They recheck through `lockedObservationRow` and atomically commit observation/evidence and affected family changes without waiting for a lock. Existing observer wrappers remain. |
+| `planPermission` (`permissionCandidate`), `planPane`, `planObservation` | The permission plan (fallback clocks; never a display target), the pane target (baseline and qualifying `idle_screen`) and the pure observation/display plan, shared by the unlocked pre-check and locked commit. The guarded observer combines that plan with the [evidence comparison](#best-effort-commits-and-races) to decide whether to write. `planObservation` also ends a stored `needs_intelligence` at once, with its exit record. |
+| `store.FallbackClock` | The one rule for the start of a fallen-back request's fallback clock, used by shared active observations, by the `RecordPermissionFallbacks` write that state reads, `find-missing` and `get-permission` share and by those readers' pick-up for that write (`addGone`), so a persisted clock is never one a read rejects and a read attempts no write that stores nothing, save one `get-permission` case ([Readers never wait](#readers-never-wait-problem-4)). |
 | `Spawn.CommittedDisplay` | The previous committed display and detail (`store.DisplayDetail`), read from one row snapshot; what a read returns when it cannot commit. |
-| `committedDisplayStateSQL` | `Spawn.CommittedDisplay` in SQL: the deterministic function `committed_display_state`, which gets each column as a BLOB so it judges the bytes a read scans, a NUL included, and never fails. A lifecycle write (`hookStateSet`, `immediateSettleSet`, `RepairCheckPermissionIfSameLife`) must use it, never a `json_extract` of the observation's `state`, to keep a displayed observation or record `display_exit`, so it keeps or exits exactly the display a read shows. The function exists only on this binary's connections (the sqlite3 CLI that `install.sh` and `sql.sh` run cannot call it), so it never goes in a trigger, view, index, CHECK or generated column. |
-| `RecordPermissionFallbacks` (via `recordGone`) | The readers' write of `hook_gone_at` and the fallback clock (`get`, `list` and `get-permission`); it keeps the first basis and the existing `hook_gone_at` behaviour. |
+| `committedDisplayStateSQL` | `Spawn.CommittedDisplay` in SQL: the deterministic function `committed_display_state`, which gets each column as a BLOB so it judges the bytes a read scans, a NUL included, and never fails. A lifecycle write (`hookStateSet`, `immediateSettleSet`, `RepairCheckPermissionIfSameLife`, `invalidatePaneSet`) must use it, never a `json_extract` of the observation's `state`, to keep a displayed observation, record `display_exit` or decide whether a held Codex turn start has a shown display to end (`paneEvidencePresentSQL`), so it keeps or exits exactly the display a read shows. The function exists only on this binary's connections (the sqlite3 CLI that `install.sh` and `sql.sh` run cannot call it), so it never goes in a trigger, view, index, CHECK or generated column. |
+| `RecordPermissionFallbacks` (via `recordGone`) | The shared active checker's and `get-permission`'s write of `hook_gone_at` and the fallback clock; it keeps the first basis and the existing `hook_gone_at` behaviour. |
 | `takeDisplayExits`, `emitDisplayTransitions` | Drain an immediate exit inside the writing transaction; emit after its commit. |
-| `ListFilters.DisplayCandidates`, `listFiltered` | A `list --state` filter of lifecycle states only stays in the statement with its `LIMIT`. A filter that names a Displayed State widens the statement to every row whose reported state is a filter value, every row with a stored observation, and raw `working` rows when it names `idle_screen`; `listFiltered` then keeps a row whose reported state or `displayed_state` is a filter value and applies `--limit` afterwards. |
+| `invalidatePaneSet` | Every Codex turn-start and pane-adoption writer must use this shared SET fragment to clear the baseline and old `idle_screen` candidate/display. The fragment leaves `permission_epoch` alone; a turn start that changes the raw state advances it separately. Its transaction refreshes families and drains display exits. |
+| `ListFilters.StoredDisplay`, `ListFilters.IDs`, `listFiltered` | Select stored reported-state or committed-display matches, then limit, before checks. Refresh by the selected IDs only; returned state/display may no longer match. Never widen or refill that selection after checking. |
 
 A new Displayed State, such as unknown-prompt inference for
 `needs_intelligence`, adds its own target planner beside `planPane` and
@@ -6963,8 +7610,8 @@ own display, and no guard reads the display.
 
 **Ownership.** A request is stamped at admission with `owner_launch_token`,
 `owner_permission_epoch` and `admitted_at`. `permission_epoch` counts the
-row's continuous raw-state intervals (a stay in `check_permission`, a working
-turn): every true raw transition
+row's continuous raw-state intervals (a stay in `check_permission` or
+`working`): every true raw transition
 (`hookStateSet`, `immediateSettleSet`) bumps it and a write of the same value
 does not. A request gets a fallback clock (`permissionCandidate`) only while
 both ownership fields equal the row's current launch token and epoch, it
@@ -6996,15 +7643,25 @@ nothing.
 **Pane observation.** `spawns.pane_sha256`, `pane_since_ms` and `pane_epoch`
 hold the committed fingerprint, the start of its unchanged period and the
 `permission_epoch` it was sampled in. A baseline of another epoch counts as
-none (`committedPaneBaseline`), so a later turn or launch, which advances the
-epoch, never continues it, and no lifecycle write has to clear it. `planPane`
-resets the baseline on an empty sample or a row that is not `PaneObservable`,
+none (`committedPaneBaseline`). Any Codex turn start or ownership change
+(either pane adoption) invalidates it through `invalidatePaneSet`.
+Same-state writes (both adoptions, a held turn start and a turn start on a
+working row) leave `permission_epoch`
+unchanged; a turn start from another state advances it, as every raw-state
+change does. These writes clear all three pane columns and the old
+`idle_screen` candidate or display in the same statement, advance
+`observation_version`, and record any displayed episode's immediate exit,
+including on a `waiting` row still showing `idle_screen`.
+The first later sample starts a fresh period. `planPane`
+resets the baseline on a failed sample or a row that is not `PaneObservable`,
 keeps its start on an identical fingerprint and starts a new period at the
-read on a different one. The target is `idle_screen` once the period
+check on a different one. The target is `idle_screen` once the period
 reaches the timeout: the row's own `idle_screen_timeout_seconds` when
-positive, else the reader's `[state] idle_screen_timeout_seconds`.
+positive, else the reader's `[state] idle_screen_timeout_seconds`. At least
+two successful matching owned-pane captures must span that timeout; equality
+proves neither continuous inactivity between captures nor exit.
 `unchanged_minutes` is the period in whole minutes, floored, at the committing
-read. A failed sample's reset is persisted like any baseline change, so the
+check. A failed sample's reset is persisted like any baseline change, so the
 next success starts fresh; a reset that cannot commit is skipped, so a later
 sample may continue the committed baseline. The override is written by
 `InsertPending` and `ResetForReuse` (0 stored as NULL, so omission clears it),
@@ -7014,7 +7671,7 @@ by resume; spawn refuses an invalid one first (see
 
 **Stored observation.** `display_observation` holds the displayed `state`
 itself (`idle_screen` or an ordinary state; `needs_intelligence` only as 0.16
-or 0.17 committed it, which no read returns and the next committing read
+or 0.17 committed it, which no read returns and the next committing check
 ends at once with its exit record) with its
 `since_ms` and detail, the settling `candidate` (the target state) with
 `candidate_since_ms`, `observed_at_ms` and the `permission_epoch` of its
@@ -7023,57 +7680,89 @@ Displayed State left), `new_state` and `at_ms`. The decoders accept only
 these encodings; anything else, an earlier encoding included, decodes as no
 committed display or exit marker.
 
-**Best-effort commits and races.** A read samples without a lock, then the
-state's observer takes a nonwaiting write transaction and compares the whole
+**Display evidence.** A successful pane sample updates only the record for
+the display it establishes. The first success in a stay sets `confirmed_at` and
+`checked_at` from the sample and source `pane`; later same-value samples keep
+the first confirmation and advance only the check. Idle entry's first
+confirmation equals its committed `since`. A successful sample of a different
+settling candidate leaves the shown record unchanged. A failed sample stores
+its reason and check time with any applicable older confirmation; without one,
+it is `not_confirmed` with null confirmation time/source. Stored reads,
+settlement, reopen and age projection never stamp either time.
+
+#### Best-effort commits and races
+
+A read samples without a lock, then the state's observer takes a nonwaiting
+write transaction and compares the whole
 sample with the current rows: the row's snapshot, identity, agent, epoch,
-observation version and raw state (`lockedObservationRow`), and, for a
-permission sample, every request row including its answer and proof. Any
+observation version, raw state and exact `display_evidence`
+(`lockedObservationRow`), and, for a permission sample, every request row
+including its answer and proof. Any
 difference, a write lock it cannot take, or a clock that stepped back returns
-the previous committed display (state and detail together) and a later read
-tries again. Every commit increments `observation_version`, so an older pane sample
-never overwrites a newer baseline or reset. A pane baseline and the display
-it yields commit together or not at all. A read writes only to commit a newly
-established fallback clock, a pane baseline change, a candidate or display
-change, a change of `unchanged_minutes`, or the clearing of a retained
-observation; `planObservation` says which.
-Otherwise it is answered from its snapshot and takes no write lock, because
-the settle deadline counts from the stored `candidate_since_ms`, which such a
-read keeps. If the commit's outcome is unconfirmed (`errCommitUnconfirmed`,
-under [`internal/store`](#internalstore)) the read re-checks the row once
-without waiting and emits its transition only if its own write landed; any
-doubt keeps the previous display. A COMMIT abandoned at its deadline usually
-cannot be confirmed this way, so its transition is not emitted even if the
+the previous committed display, detail and evidence together. Observation
+changes increment `observation_version`; baseline, display, evidence and any
+affected family history commit together. `planObservation` identifies changed
+fallback clocks, baseline, candidate, display, whole-minute detail or retained
+observation. If only the evidence changes, a record-only UPDATE advances
+neither version, refreshes no family and emits no trail event. The explicit
+evidence guard still rejects an older sample after that write. With neither
+change, the observer takes no write lock.
+
+An uncommitted pane attempt can overlay `busy`, `stale_observation`,
+`commit_unconfirmed` or `deadline` in this response only, bound to the examined
+display episode and record. This differs from a committed failed sample,
+whose `unreadable`/`deadline` attempt is durable. Failed non-sampling settlement
+creates no overlay. After an unconfirmed COMMIT (`errCommitUnconfirmed`),
+`observationLanded` makes one nonwaiting re-read: the exact evidence must
+match, alongside the expected observation, version and baseline. A record-only
+write must retain the original observation/version. Every observer commit,
+record-only included, also writes a fresh random `observation_writer` token
+(`newObservationWriter`), and the re-read requires the row to hold this call's
+token, so a caller whose COMMIT rolled back never claims a peer's identical
+later commit or re-emits its transitions. Only confirmed landing
+reports the new pair and emits any transition; doubt keeps the previous pair.
+A COMMIT abandoned at its deadline usually cannot be confirmed this way,
+so its transition is not emitted even if the
 write lands (see `ad.spawn.displayed_state_transition` under
-[`ad.*` event namespace](#ad-event-namespace)). This is the one narrowing of
-"reads do not write": `status`, `get` and `list` may commit the observation
-(and with it a clock or pane baseline), `get`, `list` and `get-permission`
-may also set a request's fallback clock alongside `hook_gone_at` through
-`RecordPermissionFallbacks`, and the other verbs keep their own rules.
+[`ad.*` event namespace](#ad-event-namespace)). Observations are one part of the [shared active checks](#shared-active-checks).
+Selected reads and sweeps may commit a display, evidence, fallback clock or pane baseline;
+`get-permission` retains its scoped fallback recorder. None supplies answer authority.
 
 **Settling, trail, family and raw guards.**
 
 - *Settling.* Entering and leaving a Displayed State are candidates held for
-  `[state] settle_ms` from the read that first saw them, the same hold
-  ordinary state settling uses (`settle.go`); `since` is the read that
+  `[state] settle_ms` from the check that first saw them, the same hold
+  ordinary state settling uses (`settle.go`); `since` is the check that
   committed the entry and is kept while a clearing settles and while
   `unchanged_minutes` changes, which refreshes the detail with no settling,
-  `since` change or record. A hook that changes the raw state
-  (`hookStateSet`) keeps an observation the row shows as a committed display,
-  with its detail, and clears only its candidate, so the exit settles like
-  any change; it drops any other observation. While an entry is still
+  `since` change or trail record. A hook that changes the raw state
+  (`hookStateSet`), other than a Codex turn start (see *Immediate exits*),
+  keeps an observation the row shows as a committed display,
+  with its detail and evidence, and clears only its candidate, so the exit
+  settles like any change; it drops any other observation. While an entry is still
   settling, the stored display is the row's ordinary settled state, the same
   value every other reader shows, never a stale copy of it, and no
-  `displayed_state` is reported.
+  `displayed_state` is reported. A successful non-pane exit clears the
+  evidence to unknown; a failed settle-out keeps the entire shown record.
 - *Immediate exits.* A terminal write (`ended`, `missing`) or a command's
-  state write (`MoveToPending`, reuse, resume, and `find-missing`'s repair of a
-  stale `check_permission` row, `RepairCheckPermissionIfSameLife`) advances
+  state write (`MoveToPending`, reuse, resume, and shared stale
+  `check_permission` repair through `RepairCheckPermissionSample`) advances
   `permission_epoch` and `observation_version`, clears the observation and,
   if the row showed a committed display, records `display_exit` (its time is
-  the statement's clock) in the same statement. The writing transaction drains
+  the statement's clock) in the same statement. Any Codex turn start or
+  ownership change (either pane adoption) ends a shown `idle_screen` at once
+  through `invalidatePaneSet`, including on a `waiting` row still showing it
+  (see [Pane observation](#displayed-state-reporting) for when
+  `permission_epoch` advances). The writing transaction drains
   the marker and emits after commit, so a rolled-back write emits nothing and
   a committed one emits once. Report-only data never blocks these writes: a
   malformed stored observation is treated as none, and an invalid recorded
   exit is dropped without an event rather than failing the transaction.
+  **Must reuse** `keepDisplayEvidence` in `immediateSettleSet` and the
+  permission repair: ending a shown episode clears its record in the same
+  statement. A row already showing none keeps its record, applicable only
+  while its life/launch still match. Reuse/resume therefore starts unknown;
+  a failed launch's restore can recover its prior owner's none record.
 - *Trail.* One `ad.spawn.displayed_state_transition` per entry and exit,
   carrying `instance_id`, `prior_state`, `new_state` and `ts`;
   emitted after the commit and fail-open. A Displayed State change never
@@ -7089,6 +7778,8 @@ may also set a request's fallback clock alongside `hook_gone_at` through
 observation, pane baseline and override columns to `spawns` and the request
 ownership and fallback clock columns to `permission_requests`; the worked
 example is in the [migration guide](migration-guide.md#previous-worked-example-v13--v14).
+Schema v20 adds the separate display record described under
+[`internal/store`](#internalstore); it does not repurpose `display_observation`.
 Recovery is restore-only from the stopped-writer pre-upgrade copy (see
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release)).
 
@@ -7103,6 +7794,11 @@ or a second copy:
   `PermissionCreation`, `PermissionDelivered`) taken by
   `SeedPermissionRequest` and `SetPermissionFacts`, each setting only its own
   facts, so clocks, ownership, answer, proof and decision stay independent;
+  `ReadSurfaceProcessOptions(writerPID ...int)` supplies exact live process
+  identity (the caller PID by default); `BindReadSurfaceProcess` applies that
+  identity to an existing reporting fixture row. **Must use:** reuse these
+  helpers for live reporting fixtures; short-lived seed helpers
+  pass their long-lived caller PID to the display/read-surface factories;
   `SeedNeedsIntelligenceSurface` (one `check_permission` row per agent with
   an open fallen-back request and the `needs_intelligence` episode 0.16 or
   0.17 would have committed for it at permission epoch 3, which no read
@@ -7152,7 +7848,8 @@ or a second copy:
   `failOnce(e, call)` makes the next sample of `e`'s pane fail (lookup or
   capture) and returns the `CommitCheck` to pass to the read that must commit
   that failure; the check scripts the failure again after each attempt that
-  did not commit. Every
+  did not commit. Assertions keep first confirmation and latest attempt
+  separate through entry/exit settling. Every
   pane test (`idle_screen_test.go`, `idle_screen_settle_test.go`) uses them.
 - `storefix.WriteFailDisplayObservation` (`writefailfix.DisplayObservation`):
   fails a read's `display_observation` commit.
@@ -7165,6 +7862,16 @@ or a second copy:
   `pkg/api/display_test.go` `displayEvents` (package-internal): the trail
   checks, failing any `ad.spawn.displayed_state_transition` whose fields are
   not exactly the record's.
+- `internal/store/display_lifecycle_test.go` `displayedRow` includes historical
+  pane evidence so immediate-exit clearing is non-vacuous.
+  `internal/store/confirmations_test.go` `stampEvidence` seeds applicable
+  lifecycle, process and none-display records for the shared write matrix.
+- `pkg/api/apitest/display.go` `ReadDisplayExit(dbPath, id)` reads only that
+  row's stored `display_exit`, preserving SQL NULL, so lifecycle tests can
+  check the writer drained it before any observing write.
+- `pkg/api/confirmations_test.go` `readMain` returns status/get/list values and
+  all three records, including the display, for paired assertions. Its Cursor
+  stored-record case rejects pane evidence as unsupported.
 - `internal/store/migration_fixtures_test.go`: `v14ColumnSpecs`,
   `preAddV14Columns` and `seedV13PermissionFixture` for the v13 to v14
   matrices.
@@ -7172,7 +7879,8 @@ or a second copy:
   whose testplans run on the job scheduler through the drivers
   `test/driver/needs-intelligence.cjs` and `test/driver/idle-screen.sh`. They
   write columns that have no public writer with `sql.sh`, a reviewed exception
-  (see the [test writing guide](test-writing-guide.md#displayed-state-fixtures)).
+  (see the [test writing guide](test-writing-guide.md#displayed-state-fixtures),
+  which also owns `idle-screen`'s run sequence and artifact export).
 
 #### Cursor and `idle_screen`
 
@@ -7313,7 +8021,7 @@ nothing, on every surface.
 
 ### The agent: resolution, ownership and checks
 
-Every spawn names an agent, `claude`, `codex` or `cursor` (SRD SR-1, SR-2.1, SR-5).
+Every spawn names an agent, `claude`, `codex`, `cursor` or `droid` (SRD SR-1, SR-2.1, SR-5).
 `SpawnParams.Agent` is the per-call value (`--agent` on the CLI, `agent`
 on MCP, `agent?` in the TypeScript client); a template file names its
 own with the key `agent`. Values compare case-sensitively; an empty one
@@ -7338,37 +8046,43 @@ template loading, and before any side effect:
 
 1. `cwd` (shape, existence, type, and that it can be entered: `CwdEnterError`, b.qwo);
 2. `relay_mode`;
-3. `validateAgent`: a value other than `claude`, `codex` or `cursor` is
+3. `validateAgent`: a value other than `claude`, `codex`, `cursor` or `droid` is
    `ErrAgentInvalid`, none at all is `ErrAgentMissing`;
-4. `validateArgsOwnership`: inherited template `agent_args` whose agent
+4. `CheckExperimental`: a disabled pane-only agent gives
+   `ErrExperimentalAgentDisabled`;
+5. `validateArgsOwnership`: inherited template `agent_args` whose agent
    differs from the resolved agent are `ErrAgentArgsMismatch`; it names
    the template, both agents, and the two ways out (spawn the template's
    agent, or pass the call's own non-empty `agent_args`);
-5. `validateSpawnArgs`: denied arguments give `ErrSpawnDeniedFlag`.
+6. `validateSpawnArgs`: pane-only agents use `ValidatePaneOnlySettings`,
+   checking model arguments (required for launches), relay `on` and permission
+   lists in that order; see [Per-agent launch composition](#per-agent-launch-composition).
+   For other agents, denied arguments give `ErrSpawnDeniedFlag`.
    Claude print is checked on the full original list before extraction;
    exact denied long tokens owned as values always refuse. A verified
    finished-agent switch removes session selectors and validates the
    remainder; other paths refuse them. Ordinary Codex paths retain
    `CheckCodexArgs`' first-argument refusal order (see
    [Shared agent argument readers and resume extraction](#shared-agent-argument-readers-and-resume-extraction));
-6. `RefuseCursorPermissions` for Cursor, or `RefuseCodexPermissions` for
+7. `RefuseCursorPermissions` for Cursor, or `RefuseCodexPermissions` for
    Codex: any `allow`, `deny`
    or `ask` entry, from the call or the template, is
    `ErrPermissionsUnsupported`. The question-tool deny entry that
    `disable_ask_user` adds is never a permission-list entry, so it does
    not trigger it;
-7. `ValidateExtraEnv(env, agent)` (see
+8. `ValidateExtraEnv(env, agent)`, including the pane-only policy's
+   credential/home exclusions (see
    [Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas));
-8. the explicit tmux session name.
+9. the explicit tmux session name.
 
 A template that loads has already passed its own checks in
-`config.LoadTemplate`, after `relay_mode`: an `agent` outside those three
-values is `ErrTemplateMalformed`, and non-empty `agent_args` with no
+`config.LoadTemplate`, after `relay_mode`: a non-empty `agent` outside those
+four values is `ErrTemplateMalformed`, and non-empty `agent_args` with no
 `agent` is `ErrTemplateAgentMissing`. The path from the launch verbs'
 caller to the error is the same on every surface, because all of them
 reach `runSpawn`.
 
-**The five errors** are `ErrAgentMissing`, `ErrAgentInvalid`,
+**Shared agent-input errors** are `ErrAgentMissing`, `ErrAgentInvalid`,
 `ErrAgentArgsMismatch`, `ErrPermissionsUnsupported` and
 `ErrTemplateAgentMissing`. Each is declared beside its kind, re-exported
 by `pkg/api/aliases.go`, catalogued in `errnames` (see
@@ -7429,9 +8143,8 @@ stand-in `claude`.
 
 ### Per-agent launch composition
 
-Each agent has one composition in `internal/spawn`. Claude/Codex spawn,
-reuse and resume launch through it: `ComposeLaunch` for a plain spawn and a
-reuse, `ComposeRelaunch` for a resume. A Claude launch composes
+Each agent has one composition in `internal/spawn`: `ComposeLaunch` for a
+plain spawn and a reuse, `ComposeRelaunch` for a supported resume. A Claude launch composes
 `<claude> --settings <inline json> [args]` (`synthesizeSettings`,
 `settings.go`; resume puts `--resume <id>` before the settings). A Codex
 launch composes the program, the caller's own pass-through arguments and
@@ -7440,9 +8153,46 @@ agent-director's per-launch settings, all on the command line, from
 `ComposeLaunch` and `ComposeRelaunch` share `composeCursorCommand`, with resume
 filtering saved selectors and carrying only the private latest load target
 (see [Cursor gateway](#cursor-gateway-and-current-launch-binding)). A future agent
-adds its composition at these two entry points (its program, its
+adds its composition at the applicable entry points (its program, its
 argument check, its settings, its environment and its pre-trust) and
 never assembles an argv elsewhere.
+
+Droid's adapter consumes the validated model directive and composes the
+program plus `--settings` and an AD-owned overlay path. Composition performs
+no file I/O: `ComposedLaunch.Files` describes only the primary model in
+`droid-settings.json`, with no credentials or caller-controlled settings.
+The shared policy skips pre-trust and native-input preparation, and adds no
+gateway or hooks. Capability membership lives in `internal/config` so hook
+guards need no spawn/tmux dependencies; launch adapters live in `internal/spawn`.
+
+**Must use:** prepare generated files through `PrepareLaunchFiles`, after
+composition and before pending insert/reuse reset. The token directory is
+0700 and each regular file is created exclusively at 0600 through
+directory-relative, no-follow operations. There is no launch-file I/O between
+that row write and tmux create. Preparation failure rolls back only this
+attempt's files and empty directories; failures retain their causes without
+printing sensitive paths, and incomplete cleanup emits a safe warning.
+
+**Must use:** reclaim through `ReclaimLaunchFiles` only after definite no-start
+evidence or the existing conditional finish, process/session and launch-start
+guards. A finished row alone is insufficient. Reuse and expiry remove only
+policy-named, regular, current-user files and then-empty directories, never
+recursively or at the cost of native session data. An uncertain create keeps
+its files. If failed reuse restores the old row, the new token can become
+unreachable to ordinary cleanup; the retained-file warning identifies
+`store_id`, `launch_token`, `row_state` and `owning_path` for
+[operator handoff](experimental.md#retained-launch-files-after-failed-reuse).
+There is no scanner or cleanup timer.
+
+**Must use:** the policy owns one forbidden-key list for request validation
+and launch exclusion through `PaneOnlyExcludedEnv`. Droid's
+`DroidForbiddenEnvKeys` covers credential and alternate-home selectors.
+`CreateAndLabel` uses `NewSessionWithEnvExclusions`: filter the tmux client's
+environment and explicit session values, then unset inherited server values
+before immediately execing the agent. No server-global or other-session
+environment is changed; the agent remains the pane's root process with its
+reserved identity and parent association. Fresh and reused launches share
+this path; a creator without exclusion support fails closed.
 
 Cursor composition uses resolved `ExtraEnv` for fresh/reuse and saved row
 `ExtraEnv` for resume. `ValidateCursorEnv` defends both entry points before
@@ -7829,7 +8579,7 @@ tmux `new-session -e`, and the agent's hooks run a bare
 (`~/.config/agent-director/config.toml`) and store (`EffectiveDbPath`) from the
 pane's `HOME`. An `extra_env` `HOME` would send the agent's hook events to
 another agent-director store, and the spawner's row would stay `pending`
-until `find-missing` marks it `missing`, with no error to the caller.
+until shared recovery marks it `missing`, with no error to the caller.
 Every other `HOME`-derived path (pre-trust's `.claude.json`, the
 transcript lookup of `resume` and `find-missing`) would need a second
 home too. Refusing at validation closes that whole class with one check,
@@ -8024,19 +8774,24 @@ the rule or its texts also changes `invalidExtraEnvKey` and
 
 ### `make-template` runs the same check (b.66q)
 
-`MakeTemplate` (`pkg/api/make_template.go`) passes the template's own
-`extra_env` to `spawn.ValidateExtraEnv`, so it never saves a template
-that every spawn using it would refuse. Its checks run in this order:
-the name (`config.ValidateTemplateName`), `relay_mode`, the agent
-(`validateTemplateAgent`: a value outside `claude`, `codex` and `cursor`
-is `ErrTemplateMalformed`; `agent_args` with no agent is
-`ErrTemplateAgentMissing`; a Codex or Cursor template with `allow`, `deny` or
-`ask` entries is `ErrPermissionsUnsupported`, through
-`spawn.RefuseCodexPermissions` or `spawn.RefuseCursorPermissions`), then `ValidateExtraEnv(env, agent)`
-(`HOME`, then the `AGENT_DIRECTOR_` prefix, then a malformed key, each
-`ErrReservedEnvKey` with its own description). The template's `agent`
-is written only when given, so a template that names none stays valid
-and each spawn that uses it must pass `agent`. All
+`MakeTemplate` (`pkg/api/make_template.go`) validates before creating any
+template directory or file, in this order:
+
+1. `spawn.CheckExperimental` gates a named pane-only agent before the name check.
+2. `config.ValidateTemplateName`, then `relay_mode`.
+3. `validateTemplateAgent`: a non-empty value outside `claude`, `codex`,
+   `cursor` and `droid` is `ErrTemplateMalformed`; `agent_args` without an
+   agent is `ErrTemplateAgentMissing`. Pane-only templates use
+   `ValidatePaneOnlySettings`, checking arguments with the model optional,
+   then relay `on`, then permission lists. Cursor parses its arguments and
+   refuses permission lists; Codex refuses permission lists. See
+   [Per-agent launch composition](#per-agent-launch-composition).
+4. `ValidateExtraEnv(env, agent)`: the pane-only credential/home exclusions,
+   then `HOME`, the `AGENT_DIRECTOR_` prefix and malformed keys; refusals use
+   `ErrReservedEnvKey`.
+
+The template's `agent` is written only when given; agent-specific checks on
+a template that names none wait until spawn resolves its agent. All checks
 run before `config.EnsureTemplatesDir`, so a refused call creates no
 templates directory and writes or replaces no file, whatever
 `Overwrite` is. The error and its description are the ones spawn gives
@@ -8192,8 +8947,9 @@ A store error gives one `WARN:` line on the Client's logger and does not
 change the spawn's result. A reply lost with exit 0 (`CreateLostReply`) is
 a success with no identity written; that row takes no hook until its
 pane is adopted by `@ad_pane` (SR-3.6: `kill`, and `send-keys` with
-`allow_pending`, adopt through `adoptIdentity`, and `find-missing`, once
-the row is past its pending grace period, through `adoptInSweep`). A SessionStart that arrives before the identity write
+`allow_pending`, adopt through `adoptIdentity`, and a shared active
+check, once the row is past its pending grace period, through
+`adoptInSweep`). A SessionStart that arrives before the identity write
 waits for it until the launch start plus the pending grace period or
 540 s after it began waiting, whichever comes first (see [the hook
 gate](#hooks-move-a-row-only-for-its-own-agent)), so when this write
@@ -8652,7 +9408,7 @@ surface shows spells it `manifest.ReuseOptInSpelling`, "reuse_finished
   already `ended` (unless the error says the end write did not apply), so
   an opted-in retry is decided by its lookup at once; after any other
   failed launch the row stays `pending`, and an opted-in retry collides
-  until `find-missing` marks it `missing`, which happens only after the
+  until shared recovery marks it `missing`, which happens only after the
   pending grace period (60 s by default; unset, its derived minimum when
   that is larger; see [`[tmux]` timing settings](#tmux-timing-settings)).
 - Feature detection: a caller reads the version of the binary that serves
@@ -8795,7 +9551,7 @@ exact raw-agent reading (`ReuseRow.Agent`, passed as `examinedAgent`):
   (the `agent`, `agent_args` and `extra_env` of the new call among them)
   and `parent_id` from the new request; `no_pre_trust` from this call;
   `end_reported_at` NULL, so the new launch has no end report;
-  `subagent_tracking` by the new agent (1 for `claude`, 0 for `codex` or `cursor`);
+  `subagent_tracking` by the new agent (1 for `claude`, 0 for other agents);
   `launch_started_at` set; version advanced. The raw stored `labels`,
   `agent_args` and `extra_env` are never decoded;
 - the deletion of every permission request of the id. Children keep
@@ -8848,7 +9604,7 @@ sentence the restore picks (`restoreResult.Retry`, b.gu6):
 | Restore | Row sentence | Retry sentence after "duplicate session" | `row_result` |
 | --- | --- | --- | --- |
 | Applied | "the row was restored to its prior state, ended" (or "missing") | "retry later" | `restored` |
-| The row changed since the reset | "the row changed after this spawn reset it and was left as it is" | "do not retry until get shows the row ended or missing": the row may still be `pending`, and an opted-in retry collides until `find-missing` marks it `missing` | `left_changed` |
+| The row changed since the reset | "the row changed after this spawn reset it and was left as it is" | "do not retry until get shows the row ended or missing": the row may still be `pending`, and an opted-in retry collides until shared recovery marks it `missing` | `left_changed` |
 | The row was removed | "the row was removed after this spawn reset it, so nothing was restored" | "retry later": an opted-in retry inserts the id afresh | `left_changed` |
 | Store error | "the row could not be restored and stays pending", plus one `WARN: spawn: restoring instance <id> to its prior state after a failed launch failed: …` line on the Client's logger | "do not retry until get shows the row ended or missing" | `still_pending` |
 
@@ -9493,7 +10249,7 @@ native ordinary delivery through `internal/inputdelivery`, described below;
 fallback input for bounded hook evidence.
 Delivery begins with a lookup
 (the session found by its `@ad_owner` label on the row's recorded socket)
-and, on Ours, one pane listing; native delivery then revalidates that
+and, on Ours, one pane listing; journal-backed delivery then revalidates that
 ownership before each write. All text and keys target the agent's pane id.
 Keys are never sent
 before the lookup returned Ours and the listing showed the agent's pane.
@@ -9560,8 +10316,9 @@ no permission request token enters the native protocol, where supported, in
 native transcript proof, or `ErrSubmissionUnconfirmed` with honest delivery
 details. Launches without native capability use the fallback described there,
 with no exact transcript-confirmation claim. Other sends retain manual
-transport semantics and return an empty success result; launches with existing
-native state participate in the same writer lock and journal.
+transport semantics and return an empty success result; rows with a launch
+token share the launch's writer lock, and launches with native state also
+share its journal.
 Manual sends can also return `ErrSubmissionUnconfirmed` with
 `not_started` when writer ownership or durable manual intent is unavailable.
 `pause` returns `ErrInternal` for those failures before attempting input. No
@@ -9578,8 +10335,8 @@ row's `state` must be one of `waiting`, `working`, `ask_user`,
 after the state, relay and dialog guards; finished rows cannot return proof.
 `pending` is refused the same way unless `allow_pending`
 is set. The agent's first SessionStart hook moves `pending` to `waiting`,
-after which the row is reachable without the flag. A `pending` row that
-`find-missing` noted `unreported` (b.kdf; see [`find-missing`](#find-missing))
+after which the row is reachable without the flag. A `pending` row noted
+`unreported` (b.kdf; see [`find-missing`](#find-missing))
 is still `pending`: the note does not relax the guard, and `send-keys`
 refuses it without `allow_pending` like any other `pending` row. For such
 a row the caller reads the pane first and sends with the flag only having
@@ -9674,18 +10431,17 @@ full table is SRD SR-7.2; the failure rules SR-7.3):
   Enter-only send needs no read first: on an empty input it submits
   nothing.
 
-`send-keys` never writes the row's state. Its SQLite writes are the
-adoption, the `hook_gone_at` of a request its relay guard found fallen
-back, and a pane answer's three writes on its request (see "Send-keys
-interaction" in the relay chapter). For manual transport its tmux calls are at most one lookup,
-one pane listing, one capture (with `expect_pane_sha256`, so on every pane
-answer), the text call or the key call, the Enter call and one follow-up
-lookup. Without a hash its ceiling is 3Q + 2A + 5W, **9 s** at the
-defaults (SRD SR-13.2, the one source for this tmux bound); the capture adds
-one more action-class call and its pipe-close wait. Native delivery, pending
-Claude fallback and pending Codex fallback have additional bounded phases below
-(readiness, chunk/drain, paste or hook confirmation). The manual transport ceiling
-does not bound an ordinary request.
+`send-keys` never writes the row's state. It can write adoption,
+`hook_gone_at`, pane-answer intent/results and input-session records, including
+manual interference. Guarded manual delivery repeats captured-admission
+(identity only before paced typing's later pieces and Enter) and
+physical-target checks before dispatch steps; a single lookup/listing count
+does not bound its tmux phase. Each tmux operation retains its configured
+query/action and pipe-close limits. Native readiness, write/drain and proof
+budgets, pending Claude readiness, pending Codex and Claude hook observation,
+and the original-deadline admission rules are described under
+[Ordinary input delivery](#ordinary-input-delivery); Cursor's verdict window
+under [Cursor gateway verdict](#cursor-gateway-verdict).
 Its trail is
 `ad.send_keys.called` from `Client.SendKeys` and `ad.provenance.disagree`
 with source `ad_send_keys` (see [`ad.*` event namespace](#ad-event-namespace)).
@@ -9719,7 +10475,7 @@ a recorded session name that is empty, holds a control character, or
 holds a character tmux stores differently (`.`, `:`, invalid UTF-8) →
 `ErrInternal` (`unusableNameError`, SR-3.2), no tmux call, nothing sent;
 removing the row is a human's decision (docs/operator-actions.md). Next resolve
-the row's socket, acquire the native writer lock when native launch state exists,
+the row's socket, acquire the launch's writer lock when the row has a launch token,
 select capability and reconcile any ordinary request. These steps cannot mask
 the existing state, relay or dialog refusals. Native framing validation, or
 Codex fallback validation and paste-capability checks, or macOS paced Claude's
@@ -9751,7 +10507,9 @@ resends text or Enter.
 
 **Must use:** ordinary Claude fallback read as `pending` goes through
 `sendKeysRun.waitTerminalRaw` in `pkg/api/sendkeys_terminal.go` and the optional
-`PaneTerminalTmux` capability. Within 12 s on the injected clock it requires
+`PaneTerminalTmux` capability. The wait runs after target lookup and the initial
+pane-hash check, before `admitInput` freezes authority. Within 12 s on the
+injected clock, or the caller context's earlier deadline, it requires
 raw input, SessionStart making the same launch `waiting`, and a 1.5 s settle
 from when this call first observes `waiting`. Every 100 ms it revalidates the
 row, even while cooked; row reads take at most one second, capped by the
@@ -9759,7 +10517,9 @@ remaining budget. After the first raw sample, only the row is polled until the s
 can finish. A fresh raw sample, another row validation, then server, session,
 pane ownership and relay/dialog checks must pass before typing. The same life,
 launch and socket must hold throughout; the row must stay `pending` or
-`waiting`, and `waiting` once observed. All checks share the readiness deadline.
+`waiting`, and `waiting` once observed. Row and relay reads use `inputStore(end)` for context/deadline scoping.
+The context is checked before reads, after sleeps and before accepting readiness;
+the wait never checks the unadmitted input guard. All checks share the readiness deadline.
 Ownership and guard calls retain their own bounds, so the call can return after
 the deadline, but late evidence never authorizes input. Unlike native delivery,
 the recheck needs no OS process evidence.
@@ -9770,10 +10530,13 @@ onset or within 30 ms of SessionStart, and 6/6 at 0.59–3.5 s after SessionStar
 The chosen settle then submitted 3/3 in live confirmation; it is a timing
 margin, not proof of submission.
 
-A failed check or terminal read, missing capability or missed deadline returns
-`ErrSubmissionUnconfirmed` with `not_started`/`pre_input`, before input journalling
-or typing; `reason` names the unmet condition. Refusals during and after
-readiness, including a failed hook check, report the last successfully read
+A failed wait check or terminal read, missing capability, cancellation or missed
+deadline returns `ErrSubmissionUnconfirmed` with `not_started`/`pre_input`,
+before input intent or typing; `reason` names the unmet condition. Cancellation
+or context expiry during the following admission also returns `not_started`.
+Changed launch or authority at admission is `not_started`; admission's state
+and relay/dialog guards keep their own refusal errors, with nothing typed.
+Refusals during and after readiness, including a failed hook check, report the last successfully read
 `row_state`; a read failure keeps the prior
 observation, with the original launch and adopted identity still pinned.
 Literal text and one Enter follow successful checks, then hook observation
@@ -9801,11 +10564,10 @@ Existing tmux interfaces remain source-compatible; injected adapters need
 type it: with Enter or `no_enter`, with or without a pane hash, live or after
 the pending readiness wait. A macOS Claude pane loses the start of a longer
 burst typed in one call, which reaches it in reads of about 1 KiB, so each
-piece must arrive in one read. `inputdelivery.Split` cuts the pieces
-(rune-aligned, cut at 512 where the text is not UTF-8, so it always advances);
-it is also `Chunks`' splitter, so never write another. Each piece is one
-`SendKeysPane` followed by 100 ms on `SendKeysEnv.Sleep`; with Enter, 500 ms
-more, then one named Enter. The seam `claudePacedTyping` is
+piece must arrive in one read. The pieces come from `inputjournal.Split`, the
+one splitter (see the `internal/inputjournal` paragraph below). Each piece is one
+`SendKeysPane` followed by 100 ms through `sleepInput` on `SendKeysEnv.Sleep`;
+with Enter, 500 ms more, then one named Enter. The seam `claudePacedTyping` is
 `runtime.GOOS == "darwin"`; `SetClaudePacedTypingForTest` sets it, and
 `pkg/api`'s `TestMain` turns it off. Piece size and pauses are constants, not
 settings: the Mac check validated only these values. Paste was rejected
@@ -9813,33 +10575,57 @@ because Claude records pasted text wrapped as pasted content, so the user
 record would no longer equal the text sent and the model would read it as
 quoted material.
 
-Before each piece after the first (`no_enter` included) and before the Enter,
-`pacedRefusal` rereads the row and reruns `sendKeysStateGuard` and
-`evaluateRelayGuard`, with no tmux call. A changed life or token, a failed
-read, a guard refusal, or a move into `check_permission` or `ask_user` from the
-state the call observed stops the call there: nothing more is typed and no
-Enter is sent. Paced typing takes no writer lock of its own, so the pieces of
-concurrent calls to one row can interleave. `run` refuses text over
-`pacedTextMaxBytes` (32 KiB, about 7 s of pauses) with `not_started` after
-ownership and reconciliation, before the pending wait, any journal entry or any
-input.
-A first piece that fails other than by timeout maps as `typeText`'s text call.
-A timed-out first piece, a failed later piece or a refusal is `deliveryError`
-with `partial_input_unconfirmed`, `text_attempted` and the bytes of the pieces
-attempted (a refused piece is not attempted), with no follow-up lookup, as for
-paste. A failed Enter is relabelled `CallSendEnter` so it maps as `typeText`'s
-Enter after text.
+`run` refuses text over `pacedTextMaxBytes` (32 KiB) with `not_started` after
+reconciliation, before the initial lookup, the pending wait, input admission,
+manual intent and any input. Paced typing then begins where `typeText` would,
+after input admission and manual intent (see reconciliation below for what
+manual intent records). The first piece follows a context check
+and `beforeWrite`. Each later piece (`no_enter` included) and the Enter follow
+a context check, `pacedRefusal`, then, last before the write, an identity-only
+recheck (`checkInputTarget` with `checkInputIdentity`: launch record, launch and
+life, session, the agent's process and pane; no permission epoch, row version
+or state), because `pacedRefusal` carries state, dialog and permission changes
+and a working row's hook updates must not stop the send. `beforeWrite`'s
+admission recheck and the identity-only recheck run only on a row with an input
+session (a launch token). `pacedRefusal` rereads the row and reruns
+`sendKeysStateGuard` and `evaluateRelayGuard`, with no tmux call; a changed
+life or token, a failed read, a guard refusal, or a move into `check_permission`
+or `ask_user` from the state the call observed (a send begun in one is not
+stopped for that alone) stops the call. The context
+checks also cover an injected `Sleep` that ignores the context; with
+`no_enter`, nothing follows the last piece's pause, so nothing is checked after
+it. Paced typing takes no writer lock of its own; the launch writer lock below
+refuses a concurrent call to a row with a launch token `not_started`, and on a
+row without one the pieces of concurrent calls can interleave.
+
+Before the first piece, a cancellation or deadline is `not_started` with
+nothing typed, and `beforeWrite`'s refusals keep their own errors. A first
+piece that fails other than by timeout maps as `typeText`'s text call. A
+timed-out first piece, a failed later piece, or a stop before a later piece or
+the Enter (`pacedRefusal`; a changed launch, session, pane or process, "input
+authority changed"; cancellation or the call's deadline) is `deliveryError` with
+`partial_input_unconfirmed`, `text_attempted` and the bytes of the pieces
+attempted (a skipped piece is not attempted), with no further piece, Enter,
+replay or follow-up lookup, as for paste. These details come from the call's
+attempted-input facts, which cleanup errors and `sendKeysAction` also read; a
+stop adds no durable write, as for any uncertain manual dispatch. A failed
+Enter is relabelled `CallSendEnter` so it maps as `typeText`'s Enter after
+text.
 
 **Must use:** ordinary Codex fallback goes through `sendKeysRun.pasteText` and
-the optional `PasteKeysTmux` capability, implemented by `tmux.Client.PasteKeysPane`
-in `internal/tmux/paste.go`. The existing public tmux interfaces remain
+the optional `PasteKeysTmux` capability in `internal/tmux/paste.go`.
+Journal-backed calls require `GuardedPasteKeysTmux`, implemented by
+`tmux.Client.PasteKeysPaneGuarded`, to recheck captured admission immediately
+before paste and Enter, including after waited buffer preparation. The existing
+manual-interference record is committed before transport; an unresolved native
+attempt still blocks fallback. Fallback does not claim native proof. The existing public tmux interfaces remain
 source-compatible; an injected adapter without the capability is refused
 before input. Native, pane-hash, key, no-Enter, empty-text and permission-answer
 operations retain their existing routes. `codexPasteRefusal` checks normalized
 text before any tmux call; its restrictions and file-based recovery belong in
 the [caller contract](caller-contract.md#ordinary-text-submission).
 
-`PasteKeysPane` checks `pane_in_mode` and `pane_input_off`, loads a unique
+`PasteKeysPane` and its guarded variant check `pane_in_mode` and `pane_input_off`, loads a unique
 `ad-input-<UUID>` buffer through `Invocation.Stdin`, then calls
 `paste-buffer -p -r -d` and one Enter only after paste succeeds. It carries TAB
 and LF literally and avoids shared buffers, clipboard access and payload argv
@@ -9875,9 +10661,9 @@ The capability probe removes all `AGENT_DIRECTOR_*` variables plus `TMUX` and
 `TMUX_PANE` from both inherited and supplied environment, so a wrapper that
 ignores `--version` cannot report hooks as the caller or new launch. The real
 launch retains its identity environment. Unsupported versions or unsafe composer
-arguments still launch and use fallback input. Linux is the only native
+arguments still launch and retain fallback input. Linux is the only native
 terminal/ownership probing implementation; other platforms use fallback input.
-`nativeSession.Supports` selects capability from the fresh matching manifest,
+`nativeSession.Supports` selects capability from the matching SQLite launch record,
 pinned version, safe arguments, Codex keymap/managed checks and platform.
 `Ready` separately gates supported delivery; a readiness failure never switches
 that attempt to fallback.
@@ -9898,20 +10684,20 @@ the tmux server's environment and Codex's home default apply, independently
 of this process's config. Its fresh `codex-tui.log` must contain
 `tui startup initial frame scheduled`. Claude gets a generated native session
 UUID, `--debug-file <launch-dir>/claude-debug.log` and `-d hooks`; its marker
-is `Terminal capabilities:`. `launch.json` records agent, version, creation
-time, cwd, socket, token, instance, safe status, `KeymapPinned` and Claude's exact transcript
-path. These are pinned diagnostic observations, not documented ready
+is `Terminal capabilities:`. The SQLite launch record retains agent/version, creation time, cwd, socket,
+token, instance, safe status, `KeymapPinned` and Claude's exact transcript path. These are pinned diagnostic observations, not documented ready
 acknowledgements; missing or changed markers fail closed.
 
 One request holds a nonblocking OS writer lock across validation, delivery
-and observation. The lock is `<launch-dir>.lock`, shared by automatic and
+and observation, for every row with a launch token, whether or not a launch
+record exists (the path then comes from the store id and token). The lock is `<launch-dir>.lock`, shared by automatic and
 manual `send-keys`, permission pane answers and `pause`. Lock release after
 a crash never clears its durable attempt. Writers outside agent-director
 are excluded by the protocol's caller precondition, not by this lock.
-The default API backend uses `Native.OpenExisting`: an absent launch directory
-is a capability miss and allocates no state. Existing unreadable or corrupt
-state fails closed, retaining unresolved native ownership rather than allowing
-a fallback resend. Explicit injected backends use their `Open` contract.
+The default API backend uses `Native.OpenExisting` over the store: only a
+committed absence of a launch record is a capability miss. A missing evidence
+directory is not absence of operational state. Unreadable or corrupt records
+fail closed, retaining unresolved ownership rather than allowing fallback. Explicit injected backends use their `Open` contract.
 Failure to acquire the lock or read/save manual intent returns
 `ErrSubmissionUnconfirmed` with `not_started` for `send-keys`, or `ErrInternal`
 for `pause`, before that call attempts input.
@@ -9955,20 +10741,81 @@ reconciliation, including after a descriptor closes or the process exits,
 provided the row's state, relay and dialog guards still allow the call.
 Multiple exact records are ambiguous and never return submitted.
 
-The private directory is
-`~/.config/agent-director/input/<store_id>/<launch_token>/` (0700), independent
-of a custom SQLite path. Its adjacent lock is 0600. `attempt.json` is the
-current owner; `request-<SHA256(request_id)>.json` retains request history.
-`writeJSON` uses a 0600 temporary file, file fsync, atomic rename and directory
-fsync. The current owner commits before its history file so an interrupted
-save cannot expose an older settled owner. Attempts retain the full normalized
-payload/hash, process/launch identity, snapshot/watermarks, delivery phase,
-attempted bytes/Enter, queue sample and matching raw transcript proof. This
-proof's `Proof.Raw` is a byte slice, encoded as base64 in the journal JSON,
-so literal whitespace and `<`, `>` and `&` bytes round-trip exactly without
-JSON reformatting or escaping changing the record or its SHA-256. This
-content is private evidence, never an instruction to replay; there is no
-automatic journal cleanup.
+**Must use:** `internal/inputjournal` owns persisted records, validation, the
+exact provider-record parser, bounded regular-file evidence reads and the legacy
+importer/lock primitives. Store and delivery must reuse these components.
+`inputjournal.Split` is the one splitter of ordinary text into writes of at
+most `ChunkBytes` (512) bytes, rune-aligned, cut at `ChunkBytes` where text is
+not UTF-8; `Chunks` (native delivery, proof matching) and paced typing use it,
+so never write another. `inputdelivery` keeps type aliases, the same error
+sentinels and thin delegates, including forwards of `ChunkBytes`, `Chunks` and
+`Split`; it defines no second parser or persisted format. `internal/store` depends on
+this neutral protocol, never on live transport, process discovery or terminal
+probes. `inputdelivery` owns those live observations and coordinates the private
+`Backend`/`Session` adapter through `inputjournal.Persistence`, implemented by
+the store. Reuse that adapter for every runtime native journal operation.
+
+Launch preparation derives identity from the exact pending launch and commits
+capability before returning its command. Input preparation is separate: an
+early absent-journal read observes SQLite absence without authorizing dispatch;
+read errors or newly appearing native authority refuse. An empty native journal
+retains its exact snapshot and defers first binding to `Admit`.
+`keysRun.admitInput` makes one final bounded row read after target discovery
+and the pending-Claude wait, accepting only the same launch/target, this call's successful adoption, liveness
+metadata or an initial same-process report-in. Adoption's pane reset is accepted
+only with its exact observation-version advance; a later observation still
+refuses admission. A resumed pending Claude launch's
+first SessionStart may keep or rotate its saved session ID only when the expected
+PID/start time were cleared, there is no end report, and the current waiting
+row's PID/start time exactly match the adopted pane. The launch token, life
+and every other authority field retain the frozen full-row comparison; the
+wait never rebases that snapshot. Rotation uses `RecordSessionStartIdentity`'s
+existing transactional session-history path. State and relay guards run again.
+The read uses at most 12 seconds and the remaining caller deadline. `Admit`
+then freezes the validated row/session/permission revision while retaining the
+captured launch/current-request snapshot. No save attempt, failure, uncertain
+commit or physical input permits another admission or refresh; dispatch checks
+retain the captured authority and original deadlines.
+
+After admission, `beforeWrite` rechecks the captured authority (`Check`, the
+full guard; paced typing's later pieces and Enter use `CheckIdentity`, identity
+only, outside `beforeWrite`) and physical target. A supplied pane hash is checked again
+after waited admission and before the first write on every path, including
+keys, pane answers, paced typing and Cursor `typeCursorText`. The following Enter never compares the hash against this
+call's own text. Manual intent uses the adopted identity before transport.
+
+Optional pane caching is independent of plain delivery: if adoption did not
+apply, its stored-row guard remains distinct from the discovered transport
+identity. Each dispatch still checks the stored authority and exact physical
+target. A native launch requires confirmed exact binding; failed caching cannot
+create capability or bypass a binding failure.
+
+`input_launches` owns the current request and launch revision;
+`input_attempts` retains request history and raw proof BLOBs. Current/history
+changes commit atomically. Full normalized payloads, identities, watermarks,
+intent, interference and proof provenance stay in SQLite; `proof_raw` preserves
+the exact native record bytes and hash. Each authorizing intent commit verifies
+`synchronous=FULL` on the actual connection before physical input. Failed,
+unknown, cancelled, stale or abandoned work cannot authorize a later chunk or
+Enter. Revalidation retains original phase deadlines. Durable intent is not a
+provider receipt, and imported unknown confirmation times stay unknown.
+
+The private `~/.config/agent-director/input/<store_id>/<launch_token>/`
+directory (0700) retains provider diagnostics; transcripts remain provider
+evidence. Its adjacent 0600 lock synchronizes automatic/manual/pause writers
+and carries no operational authority. Imported launches keep their original
+evidence directory and lock inode. Legacy JSON is read only by the importer,
+never by runtime delivery. There is no automatic evidence cleanup.
+
+**Must use for proof-only observation:** `pkg/api.ReconcileInputProof(ctx,
+InputProofStore, captured Spawn)` performs one pass through the same adapter,
+with a one-second SQL/caller admission ceiling, no sleeps, input capability,
+new request or replay. It returns exact identity, launch revision, retained
+attempt/proof and capability confirmation. Existing submitted proof is returned
+unchanged. It cannot bind an unused capability or retarget the current owner.
+Shared public read/sweep integration must reuse this seam; it is not implemented
+by this private pass. Its deadline does not promise cancellation of arbitrary
+kernel filesystem stalls.
 
 `delivery_request_id` owns normalized text and exact process/launch identity.
 Stored proof can be returned by ID even after a later settled request.
@@ -9992,7 +10839,11 @@ optional native record ID and raw record SHA-256. Refusals use
 `SubmissionUnconfirmedDetails` with `not_started`,
 `partial_input_unconfirmed` or `submission_unconfirmed`, plus attempt phase,
 attempted bytes, Enter uncertainty and queue/reason facts. These are
-conservative observations, not synthetic row states. Public recovery belongs
+conservative observations, not synthetic row states. `input_cleanup.go` preserves
+an existing primary error/details while retaining a Close failure. After native
+confirmation, the exact `SendKeysResult` survives as both return value and
+`ErrInternal` details; manual/key/permission/pause failures retain actual
+dispatch facts instead of claiming no input. Public recovery belongs
 to [Ordinary text submission](caller-contract.md#ordinary-text-submission).
 Go and CLI expose optional request IDs and proof fields. The published
 TypeScript `SendKeysParams` and `SendKeysResult` retain their existing
@@ -10001,6 +10852,17 @@ three-field failed hook observation with `keys_sent: true`. Native, Claude
 readiness, Claude paced typing, Codex paste and Cursor gateway runtime error
 facts use `AgentDirectorError.errDetails: Readonly<Record<string, unknown>> | null`;
 there is no additional TypeScript export or module for native delivery.
+
+Native API tests must reuse `sqliteSubmission`/`sqliteDeliveryBackend` for real
+SQLite authority, admission and optional failure seams; reuse
+`enableSQLiteSubmission` when the row is already seeded. Shared pane tests reuse
+`killStore`'s persistence/intent delegation without enabling native capability;
+parser-only `evidencePersistence` establishes neither SQLite nor provider
+qualification. Migration tests reuse
+`migrationTestWindow`, `openMigrationTestStore` and `assertReleasedReentry` for
+authorized whitebox/released-schema setup; actual OS inventory evidence comes
+from the administrator tests. Reuse these fixtures rather than duplicate their
+store or authorization setup.
 
 ### Cursor gateway verdict
 
@@ -10133,16 +10995,13 @@ ANSI handling:
 - `pkg/api/sendkeys.go`, `pkg/api/readpane.go`, `pkg/api/pause.go` and
   `pkg/api/record_pane_answer.go` are the pane-verb surfaces — typed params
   in, typed result + error out, errors matched via `errors.Is`.
-- The shared capture and manual/literal tmux stage uses one lookup, one
-  pane listing and at most three actions (`read-pane`: one capture;
-  literal `send-keys`: a capture with
-  `expect_pane_sha256`, then the text and Enter or one key;
-  `record-pane-answer`: one capture; `pause`: the line clear, the text and
-  Enter), plus at most one follow-up lookup after an action failure.
-  Store work and waits surround that stage. Native delivery and Codex
-  paste follow [Ordinary input delivery](#ordinary-input-delivery).
-  The verbs use `internal/store` for row, adoption and permission-request
-  work, and `internal/tmux` methods target session or pane ids on the row's
+- Store operations cover row/permission reads, adoption and permission
+  writes, plus `send-keys`/`pause` input-journal admission and manual records.
+  Guarded delivery repeats captured-authority and physical-target checks
+  before dispatch steps; see [Ordinary input delivery](#ordinary-input-delivery).
+  The verbs call `internal/tmux` through the
+  id-based client methods (`Lookup`'s session listing, `ListPanes`,
+  `SendKeysPane`, `SendKeyPane`, `CapturePaneID`), each on the row's
   socket. A pane answer's capture, and `record-pane-answer`'s, runs inside
   its write's transaction, holding the store's write lock across that call.
 - No SQL strings, no shell, no `&&`/`|`/`$VAR` at any layer (SRD §4.3,
@@ -10323,6 +11182,23 @@ claude /install-agent-director (or `bash install.sh`)
     its [launch] path names an executable file or its program is on PATH;
     discovery runs nothing and writes no [launch] key; absence is refused
     only after the config/link checks below
+  → if a DB exists, prepare the source binaries before the first DB read
+    (without a DB, these source checks run after pre-flight OK):
+  → with --from-release: download both assets, checking each hash when
+    given (a mismatch → exit 3, nothing installed)
+  → find both source binaries (agent-director-admin last from its
+    installed path, never PATH; see "The two binaries" below); --binary
+    and --admin-binary arch probes
+  → source-tree version check (a local agent-director must be built from
+    the HEAD of the checkout install.sh takes bin/ from, else exit 3; see
+    "The source-tree version check" below)
+  → version-stamp pairing: agent-director and agent-director-admin must
+    report the same `version` stamp (version and commit), with a real
+    commit, else exit 3
+  → capability check: both binaries' `version` must name config_dir
+    ~/.config/agent-director, else exit 3 (an earlier release's binary)
+  → preflight database reads use the candidate administrator's private
+    consistent snapshot; SQLite never opens the original for these reads
   → migration gate: the store at $state_db has user_version below
     AGENT_RENAME_HOP_VERSION (see "Config and template migration at
     install-time" below); a version that cannot be read → exit 5,
@@ -10349,23 +11225,31 @@ claude /install-agent-director (or `bash install.sh`)
   → move due only: ErrAgentsLive (exit 5, nothing on disk changed) while the
     old store holds a live row or a process runs the old binary; a gate that
     was deferred above runs again here, then the migration's two checks
+  → the native-input cutover decision, from the gate's read (see "Schema
+    migration at install-time" below): a store at v1 to v15 crosses;
+    a linked ~/.config/agent-director refuses with legacy_root_symlink
+    before --check-only (exit 5, ErrJournalMigrationRefused, nothing changed);
+    with no move due, so does a store row in a live state (agents_live)
+    or rows that cannot be read (agent_rows_unreadable).
+    Otherwise the candidate administrator's migrate-journal --check-only
+    must accept the run's journal flags (its refusal is relayed → exit 5,
+    ErrJournalMigrationRefused, nothing on disk changed); then, crossing
+    only, the restore preconditions: with a move due, a journal backup
+    directory inside the old or new directory refuses
+    (backup_inside_install_directory); the previous administrator's probe
+    refuses on an unclear answer (previous_release_unknown); for a previous
+    release that predates the cutover, the restore's copies are made, and
+    one that can't be made refuses (restore_copies_unavailable); each
+    refusal → exit 5, ErrJournalMigrationRefused, details.cutover
+    not_committed, nothing on disk changed; a store from v16
+    to below this release's version whose native-input authority is
+    unreadable or not recorded → exit 5, ErrJournalMigrationRefused,
+    nothing on disk changed
   → pre-flight OK, then the per-agent summary lines (claude, codex and cursor; see
     "Agent presence")
-  → with --from-release: download both assets, checking each hash when
-    given (a mismatch → exit 3, nothing installed)
-  → find both source binaries (agent-director-admin last from its
-    installed path, never PATH; see "The two binaries" below); --binary
-    and --admin-binary arch probes
-  → source-tree version check (a local agent-director must be built from
-    the HEAD of the checkout install.sh takes bin/ from, else exit 3; see
-    "The source-tree version check" below)
-  → version-stamp pairing: agent-director and agent-director-admin must
-    report the same `version` stamp (version and commit), with a real
-    commit, else exit 3
-  → capability check: both binaries' `version` must name config_dir
-    ~/.config/agent-director, else exit 3 (an earlier release's binary)
   → move due only: the move (steps 0 to 10; ErrMoveFailed, exit 5, the old
-    directory untouched)
+    directory untouched); on a crossing run its kept summary waits for
+    the cutover outcome
   → --keep-prior: snapshot both existing binaries to their .prior,
     unless this is a re-install of the same pair (then neither; the
     .prior files are kept)
@@ -10374,19 +11258,27 @@ claude /install-agent-director (or `bash install.sh`)
   → mv both into place, back to back:
     ~/.config/agent-director/bin/agent-director and
     ~/.config/agent-director/admin/agent-director-admin
+    crossing, first mv to uninterrupted migrate-journal success or outcome:
+    INT/TERM/HUP by phase, SIGPIPE ignored (see "Interrupts" below)
   → optional ~/.local/bin/agent-director PATH symlink (agent-director
     only; agent-director-admin never gets one, under any option); after a
-    move, the link install.sh manages is re-pointed and every other link or
-    $PATH entry into the old bin directory is printed
+    move, the managed link is re-pointed and reports progress immediately;
+    on a crossing move the other-link and old-PATH notes wait for the
+    cutover outcome, otherwise they print here
   → config and template migration, gate open only (see "Config and template
     migration at install-time" below): after the move and the binary
     swap, before the first store open; config.toml and each template are
     migrated in place, each with a .pre-agent-rename.<time> copy; a failed
-    write → exit 1, the store not opened. The move's "references" lines
-    print after it, so their line numbers are those of the migrated files
+    write → exit 1, the store not opened. The move's "references" lines use
+    the migrated files' line numbers; on a crossing move they wait too
   → schema migration at install-time (see below): open/migrate state.db
-    under a one-shot migrate-authorized sentinel (full six-step flow in
-    install-agent-director/SKILL.md)
+    under a one-shot migrate-authorized sentinel; step 4 runs the installed
+    administrator's migrate-journal when pre-flight found a crossing, list
+    otherwise (full six-step flow in install-agent-director/SKILL.md).
+    A failed crossing attempt settles before reporting: restored → exit 5,
+    ErrJournalMigrationRefused; kept forward → ErrJournalMigrationIncomplete;
+    restore unfinished → ErrSchemaVerifyFailed ("Restore or complete
+    forward" below)
   → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json,
     with Claude Code present only (an empty or whitespace-only file is
     merged as {}; not valid JSON, more than one JSON document, or valid
@@ -10434,6 +11326,18 @@ does not fall back to a PATH program when that configured path fails.
 
 Pattern B is where the CLI / state / hooks side effects happen.
 
+**Parsed before changing anything.** Everything after the header is one
+brace group, closed by `} ; exit` on the last line. Bash parses it whole
+before running any command: a source cut off inside the group runs nothing;
+once execution starts, a group signal ending `curl` leaves all code available
+for [interrupt settlement](#installer-cutover-interrupts). **Must use:** put
+new code inside the group and keep its body unindented
+(`TestInstallShHopVersionMatchesStore` and
+`TestInstallShCutoverVersionsMatchStore` match lines from column one).
+Never put the group behind `||`, `&&`, `!` or an `if` condition, which
+disables `set -e` inside it. `test/install-sh/install_parse_test.go` pins
+the no-change behavior of a truncated source.
+
 **Exit codes, and exit 5's cause line (b.cfq).** install.sh's header
 (`--help`) lists its exit codes: 1 a write of the config and template
 migration that failed after the binaries were swapped (see "Config and
@@ -10457,38 +11361,61 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `<Name>` | Sites | Remedy |
 |---|---|---|
 | `ErrVersionUnreadable` | `ad_fail_unreadable_version`: the migration gate's read (pre-flight, before anything on disk changes; "reading state.db's schema version FAILED"), step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
-| `ErrConfigMalformed` | pre-flight `ad_store_db_path` (including its `[launch]` reader), `ad_store_busy_timeout_ms`, the migration's checks of `config.toml` (a form it refuses, a file it cannot read, a symlink it cannot write through; with or without `--no-hooks`; and, at the apply, a file that changed since pre-flight) and (hooks on) `ad_config_merge_check` and `ad_link_write_check` on a symlinked `config.toml`, all but the apply's before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml` (or its symlink), then re-run; see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template) |
+| `ErrConfigMalformed` | pre-flight `ad_store_db_path` (including its `[launch]` reader), `ad_store_busy_timeout_ms`, the migration's checks of `config.toml` (a form it refuses, a file it cannot read, a symlink it cannot write through; with or without `--no-hooks`; and, at the apply, a file that changed since pre-flight) and (hooks on) `ad_config_merge_check` and `ad_link_write_check` on a symlinked `config.toml`, all but the apply's before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's non-crossing `list` open | fix `config.toml` (or its symlink), then re-run; see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template) |
 | `ErrTemplateMalformed` | the migration's checks of a stored template (a form it refuses, a file it cannot read, a symlink it cannot write through; with or without `--no-hooks`; and, at the apply, a file that changed since pre-flight) | fix the template the message names (or its symlink), then re-run; see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template) |
-| `ErrSchemaMismatch` | step 4's open, relayed: newer store, invalid store id, or authorized migration refusing incompatible eligibility, family-history or context-provenance definitions/values | read the actual envelope; a matching binary addresses a newer store, while invalid metadata requires stopped-writer backup/restore or human recovery; never edit eligibility, family history or context provenance to bypass validation (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery)) |
+| `ErrSchemaMismatch` | step 4's non-crossing `list` open, relayed: newer store, invalid store id, incompatible or uncommitted current-schema input authority, or authorized migration refusing incompatible eligibility, family-history or context-provenance definitions/values | read the actual envelope; a matching binary addresses a newer store, while invalid metadata requires stopped-writer backup/restore or human recovery; never edit eligibility, family history or context provenance to bypass validation (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery)) |
 | `ErrMoveConflict` | `ad_move_conflict`, before every other pre-flight reader (and, for a store that is a link and a path key that cannot be placed, right after the reader) | the layout cannot be moved as it is: apply the remedy in operator-actions.md, re-run |
 | `ErrAgentsLive` | `ad_agents_live_check`, in pre-flight and again as the move's first step | stop every agent, `serve` and caller, then re-run from a shell agent-director did not start; a re-run reads unreadable rows again |
 | `ErrMoveFailed` | `ad_move_fail`, any failure or interrupt before the rename | free space or fix the cause named, re-run; the old directory was not changed |
-| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target | a human, following the advice (fix or check what it names, then re-run) |
-| any other name | step 4's open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
+| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target; a restore that could not finish (an occupied pre-move path or I/O failure), with remaining copies kept and listed | a human, following the advice; an unfinished restore needs [Putting back a kept install](operator-actions.md#putting-back-a-kept-install) |
+| `ErrJournalMigrationRefused` | pre-flight, before anything on disk changes: `migrate-journal --check-only`'s refusal, relayed; the installer's own envelope (`ad_outcome_exit`): `legacy_root_symlink` for a linked `~/.config/agent-director` on a crossing run before `--check-only`, then, with no move due, `agents_live` or `agent_rows_unreadable` for the store's live rows; `cutover_state_unreadable` or `native_input_authority_missing` for a store past the cutover; or, for a `--check-only` answer that is neither `{}` nor this refusal, the relayed `err_name` or `check_only_unestablished`; on a crossing upgrade, the restore preconditions' `backup_inside_install_directory`, `previous_release_unknown` or `restore_copies_unavailable` (see "The restore preconditions" under [Schema migration at install-time](#schema-migration-at-install-time)). Step 4: a failed crossing attempt whose restore put the previous install back; also a restored interrupt before the attempt started (own envelope, reason `interrupted`, `details.cutover: "not_committed"`) | pre-flight's: follow `details.refusal.action`, then re-run with a new `--journal-backup` directory (`previous_release_unknown` and `restore_copies_unavailable` re-run with the same flags); the two store-state reasons need a human. A restored run: fix the reported cause, then re-run this release's installer with a new `--journal-backup`. See [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons) and [`install.sh` refuses with `ErrJournalMigrationRefused`](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused) |
+| `ErrJournalMigrationIncomplete` | step 4's failed crossing attempt kept forward: `not_committed` without meeting the restore conditions, `committed`, `unknown`, unreadable commit state, or no error envelope (`outcome_unestablished`); also reason `interrupted` before the attempt started without restoration (`details.cutover: "not_committed"`), or after an interrupted attempt exited 0 and step 5 passed (`details.cutover: "committed"`) | fix the reported cause, then re-run this release's installer with a new `--journal-backup`; except for `not_committed`, keep the maintenance boundary and then retry direct administrator verification with a new `--backup-dir` until it exits 0 with `authority: "sqlite"`. See [`install.sh` stops with `ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete) |
+| any other name | step 4's non-crossing `list` open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
 
 `ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
-`ErrAgentsLive` and `ErrMoveFailed` are install.sh's own signals, not
+`ErrAgentsLive`, `ErrMoveFailed` and `ErrJournalMigrationIncomplete` are install.sh's own signals, not
 agent-director error names: they are not in `errnames.Catalog` and no verb
 returns them (b.cfq's decision, overriding b.7b4's "no new error name" for
 the first two). `ErrTemplateMalformed` is the other kind: it is agent-director's
 own catalogued name (`LoadTemplate` returns it for a template it refuses),
 which install.sh's pre-flight gives for a template its migration refuses, so
 a caller that branches on it gets one remedy, fix the template, whether the
-refusal came from install.sh or from a verb. `ErrConfigMalformed` is shared
-the same way. The exit-1 write failure of the migration has no `err_name`.
+refusal came from install.sh or from a verb. `ErrConfigMalformed` and the
+administrator's `ErrJournalMigrationRefused` are shared the same way. The
+exit-1 write failure of the migration has no `err_name`.
 The `^Err[A-Za-z0-9]+$` check keeps a relayed
 name holding a newline from adding a second cause-line-shaped line at the
-end of stderr, and every relayed output (the open's stderr at step 4, the
-envelope in `ad_fail_config_refused`, a read's output under
-`<unreadable>`) is indented line by line, so no line but the cause line
-starts `install.sh: err_name=`. **Must use:** every exit-5 path calls
-`ad_exit_5 <Name>`, never a bare `exit 5`. A command whose failure is left
+end of stderr. `migrate-journal`'s output, `--check-only`'s included, is
+relayed with its envelope lines unchanged, so a caller can parse them
+(`ad_relay_output`, shared by pre-flight and the crossing outcome).
+Every other relayed output (the `list` open's stderr at step 4, the envelope in
+`ad_fail_config_refused`, a read's output under `<unreadable>`) is
+indented line by line. An envelope line starts with `{`, so no line but
+the cause line starts `install.sh: err_name=`. The last outcome envelope's
+`err_name` equals the cause line. On a failed crossing attempt, only a complete
+restore of a relayed `ErrJournalMigrationRefused` needs no second envelope;
+otherwise the installer writes its own, preserving any relayed
+`details.refusal`. A changed cause or kept copies therefore always gets a
+new envelope. **Must use:** every exit-5 path calls
+`ad_exit_5 <Name>`, never a bare `exit 5`; it exits 5 even with stderr closed.
+Throughout the crossing route's [protected span](#installer-cutover-interrupts),
+writes are guarded so their failure cannot interrupt restoration or copy
+retention. The installer's own outcome envelope (`err_name`, `err_description`, `details.refusal` in
+`migrate-journal`'s shape `{reason, processes, action}` with `processes`
+empty, `details.cutover`, and any extra `details` fields) is written only
+by `ad_outcome_exit`, which ends in `ad_exit_5` with the same name, so the
+envelope and the cause line cannot differ. Every later installer outcome
+reuses it. A reason the installer chooses itself must be on the one
+`AD_OUTCOME_REASONS` line, or `ad_outcome_exit` exits 1 with an internal
+error and writes no outcome; `--relayed` marks a reason taken from a
+relayed envelope, which is not checked. A command whose failure is left
 to `set -e` stops the install with that command's own status (usually 1)
 and no cause line, so none is left there where its status can be 5: jq
 exits 5 on a runtime error, so the `settings.json` merge checks jq's status
 and exits 4 itself ("cannot merge the hooks into ~/.claude/settings.json
 (jq's error is above)"); sqlite3 exits 5 on a busy database, and each
-caller of `ad_user_version` captures the read's status beside its output.
+caller of `ad_user_version` or `ad_store_state` captures the read's status
+beside its output.
 
 **Agent presence (b.ssz).** `install.sh` needs at least one of Claude Code,
 Codex and Cursor. The `[launch]` keys come from the same reader as the store path:
@@ -10906,8 +11833,8 @@ then each path in glob order, after a space and quoted with `printf %q`, as
 install.sh's other followable advice quotes paths. The shell splits the list
 back into exactly those paths under any `HOME` (one holding a space or a
 quote, say), so it can be pasted after `rm --`. With none, nothing is
-printed. `advice_follow.sh`'s J34 and
-`TestAdviceFollow_J34_UninstallDeleteNamedCopiesAndRerun` follow the line
+printed. `advice_follow.sh`'s J48 and
+`TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun` follow the line
 under such a `HOME` and re-run; `TestSettingsBackupNotKept` pins that an
 install, its re-run and an uninstall, with and without `--no-hooks`, add
 no copy and name exactly the old ones, keeping a `settings.json.bak.<other>`
@@ -11066,10 +11993,16 @@ constant is `install.sh`'s one name for that version, on a line of its own
 (`AGENT_RENAME_HOP_VERSION=<n>`); `TestInstallShHopVersionMatchesStore`
 (`internal/store/install_sh_hop_version_test.go`) fails when it differs from
 `internal/store`'s `agentRenameHopVersion`, or when that is above the
-current schema version. The gate reads the version from the database
-header (`ad_header_user_version`) and falls back to `sqlite3 -readonly`
-when the header's magic is wrong, a non-empty `-wal` or `-journal` sits
-beside the file, or the value is negative. A version neither gives stops the
+current schema version. Beside it, `INPUT_CUTOVER_VERSION` (16, the
+version the v15→v16 cutover step produces) and `STORE_SCHEMA_VERSION`
+(this release's `schemaVersion`, which no verb prints before the swap)
+drive the cutover decision (see [Schema migration at
+install-time](#schema-migration-at-install-time));
+`TestInstallShCutoverVersionsMatchStore`, in the same file, fails when
+either differs from `internal/store`. The gate reads the version through
+`ad_store_state` on a private locked snapshot, never raw source-header
+bytes or a source SQLite open.
+A failed version read stops the
 install with exit 5, `ErrVersionUnreadable` ("reading state.db's schema
 version FAILED"), before anything on disk changes. While the move is due the
 gate defers to the live-row check, which reads the same store and refuses
@@ -11143,8 +12076,9 @@ template), each file the block changes is written as follows:
 A failed backup stops at once, before the `mv`. Each file migrated prints
 `migrate : <file> migrated for the agent rename (copy: <backup>)`; with
 nothing to change, one line says that `config.toml` and the templates need
-no change. The move's "references" lines print after the migration, so
-their line numbers are those of the migrated files.
+no change. The move's "references" lines use the migrated files' line
+numbers; a crossing move defers their output until the outcome is settled
+(see [Moving agent-director's directory](#moving-agent-directors-directory)).
 
 **A failed write, and re-runs.** A step of the apply that fails (the
 `.new`, the copy, the `chmod`, the `mv`) ends the install with exit 1:
@@ -11155,9 +12089,9 @@ copy this install made is kept, and the new binaries are already installed
 while the store is not opened. `ad_migrate_ways_on` gives the two ways on:
 fix the cause and re-run this release's `install.sh`, which changes nothing
 in a file already migrated and so completes the rest and then migrates the
-store; or take the way back (see [operator-actions.md](operator-actions.md),
-"A migration write failed after the binary swap" and "Going back to the
-previous release"). A file that pre-flight accepted and the apply refuses
+store; or take the way back (see
+[A migration write failed after the binary swap](operator-actions.md#a-migration-write-failed-after-the-binary-swap)
+and [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release)). A file that pre-flight accepted and the apply refuses
 (it changed in between) stops the same way, with exit 5 and the file's
 name and the same two ways on. Both are safe to re-run: a migrated file
 needs no change, and the gate stays open until the store is migrated.
@@ -11173,82 +12107,332 @@ the migration's matrix (see
 
 #### Schema migration at install-time
 
-Because the store refuses to auto-migrate under an agent (see the
-schema-versioning section above), a bare warm-up would fail every
-upgrade whose binary is newer than an existing `state.db`. `install.sh`
-runs on the end-user's machine as an *administrator* action, so it is
-the one legitimate place to authorize that migration — which it does
-with a one-shot `migrate-authorized` sentinel: it reads the DB's ACTUAL
-`user_version` (via `sqlite3 -batch -init /dev/null -cmd ".timeout $store_busy_timeout_ms" … "PRAGMA user_version"`,
-through the WAL and with the store's own busy timeout, `[store]
-busy_timeout_ms` (see "How long: `[store] busy_timeout_ms`" below), so a
-running agent-director's momentary lock delays the read instead of failing it;
-`-init /dev/null` keeps the operator's `~/.sqliterc` from changing the
-output, and `-batch` keeps sqlite3 from announcing that init file on a
-terminal — hence `sqlite3` is a preflight requirement), writes a
-`{"from":<actual>,"to":<target>}` sentinel beside `state.db` (skipped
-when already current, on a fresh install, or when step 3's probe open
-already ran the migration; see "A sentinel from before the install"
-below), opens the store once with a store-opening verb
-(`agent-director list`, deliberately not the DB-free
-`help`/`version`) to run the migration and consume the sentinel, then
-verifies the post-open `user_version` and aborts loudly (exit 5) on any
-mismatch. That check runs only after the open succeeded, which leaves
-`state.db` at the binary's version with any authorized migration run
-and its sentinel consumed; a readable mismatch therefore means
-`state.db` changed after the open or the read is wrong (b.wt9). A
-fresh install is one with no `state.db` on disk, never one whose
-version read failed. Every version read must exit 0 and print a whole
-number (0 or more), checked with `ad_got_version`, before it reaches the
-sentinel's `printf %d` or the version compare. `ad_user_version`
-captures sqlite3's stdout and stderr together (`2>&1`) in a shell
-variable, and the caller keeps its exit status beside it; no temp file
-is made for a read (b.rfn).
-A read that gives no version is reported as `<unreadable>`, with
-everything sqlite3 printed, stderr and stdout in the order they reached
-the pipe, indented under it. It failed when sqlite3 exited nonzero (a version
-printed before the failure counts for nothing) or printed nothing; a
-failure report adds that re-running the install retries the read. A
-read that exited 0 and printed anything else (stderr included, so a
-notice on stderr before the version makes it no version) printed no
-version; a failure report names the sqlite3 on PATH and says a re-run
-gets the same output unless that sqlite3 or state.db changes. **Must
-use:** every `user_version` read goes through `ad_user_version`, is
-judged with `ad_got_version` on its status and output together, and is
-reported with `ad_fail_unreadable_version` (a failure) or
-`ad_show_unreadable_version` (step 5's warning); never a temp file for
-sqlite3's error, and never `ad_is_version` on the output alone.
-`advice_follow.sh`'s J7 pins this. Either kind at the first read stops
-the install (exit 5) before any sentinel is written or the store is
-opened. At step 3's read after the probe, made only when a
-sentinel from before the install was there (see "A sentinel from before
-the install" below), it stops the install (exit 5) before step 3 prints
-its verdict, because the probe may have run a migration. At the
-post-open read it stops the install (exit 5) only when a migration was
-expected. With none expected (a fresh install
-or an already-current store), the open has already left `state.db`
-usable at the binary's version, so that read only reports the version:
-install.sh prints the same `<unreadable>` lines as a stderr warning
-(`ad_show_unreadable_version`, shared with the failure report), then the
-command to read the version later, and the install carries on to the
-hooks, the config merge and MCP registration (b.xd9). The sentinel is
-written to a temp file that `mktemp "<sentinel>.tmp.XXXXXX"` creates
-beside it, then moved into place; the EXIT trap removes a temp file that
-was never moved. A mktemp failure stops the install (exit 5,
-`install.sh: writing the migration sentinel FAILED`) with no migration
-authorized; the advice is to fix what mktemp's error names and re-run. A
-brief
-hook-failure window between the binary swap and that open is accepted,
-not worked around. That same open gives the store its store id: the
-v4→v5 hop creates it on an upgrade, and `createSchema` on a fresh
-install. `install.sh` never reads or writes `store_meta`.
+The installed six-step flow is owned by
+[the install skill](../skills/install-agent-director/SKILL.md#schema-migration-the-six-step-sentinel-flow).
+Candidate resolution, platform/architecture/version and capability validation
+precede the first preflight SQL read and all moves/installation. Release download
+files and private snapshots use literal `/tmp` templates. Move staging validates
+physical and lexical old/new-root containment before allocating under the
+selected `TMPDIR`; it does not repair mtimes after an unsafe allocation.
+
+**Must use for untouched preflight:** `store.ReadSnapshot` and the
+operator-only `adminapi.SnapshotStore`/`snapshot-store` wrapper. They run in
+a process holding no other descriptor or SQLite connection of the source
+database (a separate process without Client/config initialization, or
+`migrate-journal`'s attempt before it opens the store): closing another
+descriptor of the inode would release POSIX locks.
+Readonly no-follow descriptors hold SQLite-compatible DB and existing SHM
+locks while capturing DB plus committed WAL in an empty private 0700 directory.
+Identity/missing-sidecar changes retry within the original deadline; busy,
+unreadable, hot-journal and unsupported-platform cases refuse conservatively.
+SQLite opens only the copy. The caller owns/removes it after queries. This uses
+the existing Unix dependency on Linux/macOS, adds no authority or persistent
+dependency, and does not alter the original files, sidecars or directory.
+
+`ad_with_store_snapshot` is the one preflight snapshot implementation,
+passing the resolved DB and configured busy timeout to that helper and
+running a reader on the copy. Over it, `ad_readonly_query` runs the
+table-info and live-row SQL, and `ad_store_state` reads the version and
+authority (below). Each opens the copy read-write, since the copy never has a `-shm`: a read-only
+connection on Apple's `sqlite3` 3.51.0 cannot open it with no `-wal` either
+([Moving agent-director's directory](#moving-agent-directors-directory) step 5),
+and likely not with a copied one. The connection's sidecars stay in the private
+directory, the copy has no rollback journal to recover, and the original stays
+untouched.
+
+Operational reads after installation remain distinct. `ad_user_version`,
+`ad_got_version` and the shared unreadable-version reporters retain whole-number
+and status validation. A missing file alone means a fresh install; an unreadable
+DB never does. The current ordinary probe refuses an old chain even with a
+preexisting sentinel.
+
+**Must use:** `ad_store_state` is pre-flight's one reader of the store's
+version and native-input authority, both from one snapshot. It prints the
+version and an authority state: `-` (not read: below v16, or at this
+release's version or newer), `recorded` (a `sqlite-v1:*` value), `missing`
+(no row) or `unreadable` (the query failed, `store_meta` absent included,
+or any other value, so pre-flight refuses). A failed version read keeps its
+status and output for `ad_fail_unreadable_version`. A later check of the
+same store reuses it.
+
+**The native-input cutover decision.** After the gate, before the move and
+the swap, pre-flight decides from the gate's read, in the layout it
+resolved (the old directory's store while a move is due):
+
+- no store, or v0: not crossing;
+- v1 to below `INPUT_CUTOVER_VERSION`: crossing. Before `--check-only`,
+  a linked `~/.config/agent-director` refuses with `ErrJournalMigrationRefused`,
+  reason `legacy_root_symlink` and cutover `not_committed`, changing nothing,
+  whether moving or in place. Its action is to replace the link with the
+  directory it points to and re-run with a new `--journal-backup`.
+  With no move due, `ad_crossing_live_rows_check` then refuses the same way
+  while `ad_read_live_rows` finds a row in a live state (`agents_live`: each
+  row with the installed binary's `pause` or `kill` for it, its
+  `find-missing`, and a re-run from a shell agent-director did not start),
+  or cannot read the rows (`agent_rows_unreadable`). It reads rows only:
+  `migrate-journal`'s inventory after the swap stays the process check, and
+  with a move due `ErrAgentsLive` has already read them.
+  Otherwise the candidate administrator runs `migrate-journal --check-only`
+  with the run's journal flags and no store path; anything but `{}` with
+  status 0 refuses with
+  `ErrJournalMigrationRefused` (see "Exit codes" above);
+- `INPUT_CUTOVER_VERSION` to below `STORE_SCHEMA_VERSION`: not crossing
+  when the authority is `recorded`; refused with `cutover_state_unreadable`
+  when `unreadable`, and `native_input_authority_missing` when `missing`;
+- `STORE_SCHEMA_VERSION` or newer: not crossing; step 4's `list` reports a
+  newer store.
+
+Pre-flight only refuses: no check before the swap authorizes the cutover or
+stands in for a later verification, so every quiescence verification stays
+in `migrate-journal`, after the swap. A pre-flight refusal leaves the
+installed pair, the PATH link, the sentinel and the store's files as they
+were. Step 3's probe still writes the sentinel. Step 4 runs the installed
+administrator's `migrate-journal --store-path "$state_db"` exactly when
+pre-flight found a crossing, and `list` otherwise, including for a store
+past the cutover whose probe asked for a sentinel. Successful
+committed-authority verification precedes file retirement, and the
+installer then checks the target version. Concurrent old hooks cannot
+cross this window. **Must use:** `ad_journal_args` is the one builder of
+the journal argv, for pre-flight's `--check-only` and step 4 alike.
+
+**The restore preconditions.** On a crossing upgrade only, after
+`--check-only` has passed, pre-flight settles what a restore of the
+previous install needs: the install-directory check, then the probe, then
+the copies, so a refusal has nothing to remove or removes only what this
+run made. Each refuses through `ad_outcome_exit` as above, its action in
+`details.refusal.action`.
+
+- **The install-directory check** (`ad_backup_install_dirs_check`) runs only
+  with a move due, because the move and a restore rename AD's old and new
+  directories, so a backup inside either would move or stop resolving; an
+  in-place restore renames no directory. `JOURNAL_BACKUP` equal to or under
+  either directory refuses with `backup_inside_install_directory`. Inside is
+  judged lexically and physically, with links resolved as the move places
+  path keys (see "Path keys" under [Moving agent-director's
+  directory](#moving-agent-directors-directory)); a path whose containing
+  directory doesn't exist yet is judged by its deepest existing ancestor and
+  the names below it. A place, the backup's or a directory's, that can't be
+  judged refuses too; when the install directory's own path is the cause
+  (`INSIDE_SIDE` `dir`), the action and a `  To fix:` line say to repair that
+  path, because another `--journal-backup` can't clear it. On Darwin it also compares file identity, so a case
+  variant or a directory not made yet stays inside: the rule of the
+  administrator's `backupInsideRoot` (see [`internal/store`](#internalstore)),
+  implemented separately in shell with only the GNU-first `stat` form and its
+  BSD fallback. **Must use:** `ad_backup_inside` (with `ad_deep_place`) is
+  install.sh's one test of whether a path lies inside a directory, Darwin's
+  identity rule included.
+- **The predates decision** (`ad_prev_release_probe`) looks at the previous
+  install's administrator, `PREV_ADMIN`: `DEFAULT_ADMIN_PATH` in place, the
+  old directory's `admin/agent-director-admin` while a move is due (a release
+  before 0.11.0 has none). Nothing there (a dangling link counts as
+  there) predates the cutover. Otherwise it runs `migrate-journal --help` with no
+  global flag and no `--store-path`: exit 1 with an `ErrUnknownVerb` envelope
+  predates, exit 0 doesn't, and any other answer refuses with
+  `previous_release_unknown`. It prints `  previous: <path> …` with the
+  decision. No release opens a store or loads config for that argv, so
+  `migrate-journal --help` must keep exiting 0 without doing either.
+  **Must use:** `PREV_RELEASE_PREDATES` (1 or 0; empty on a non-crossing run)
+  is the one record of the decision. It describes the binary probed in
+  pre-flight; later code reads it and never probes again.
+- **The copies** (`ad_restore_copies_make`) are made only when
+  `PREV_RELEASE_PREDATES` is 1: the installed `agent-director` and
+  `agent-director-admin` (`CANONICAL` and `ADMIN_CANONICAL`, assigned before
+  the crossing block), the sentinel's earlier bytes, and the managed PATH link
+  itself, not its target. With a move due nothing inside the old or new
+  directory is copied: the binaries are recorded as absent, and the sentinel
+  is copied only for a store outside the old directory, beside its physical
+  place. Each copy sits beside what it copies, never in the system temp
+  directory, as `<path>.restore-<YYYYmmdd-HHMMSS>.<suffix>`: one timestamp
+  per run (`RESTORE_TS`) and six characters from `mktemp`. The managed link
+  is decided once, before its copy, by `ad_managed_link_decide`: with a move
+  due, a `--symlink-dir` inside the old or new directory, or one that can't
+  be placed against them, gets no link and no copy (the swap prints
+  `  symlink : skipped — <reason>`); otherwise the link is recorded and
+  copied in the `--symlink-dir` directory's physical path. A file's copy goes
+  into a name `mktemp` creates exclusively, which never follows a link there,
+  keeps the mode and is checked with `cmp`. A link's copy is a directory
+  under the same pattern that `mktemp -d` creates exclusively (mode 0700),
+  holding a new link with the same raw target (`ln -sn`) under the item's
+  last path component; `RESTORE_COPY` records the directory, and the link a
+  restore puts back is `<copy>/<last component>`. So no copy is made at an
+  entry that already exists, and nothing outside the run's own copies is
+  overwritten, written through or removed. The one exception needs the same
+  user acting during the run: an entry planted inside the run's 0700 copy
+  directory before the link is made, which `ln` may write into; the run
+  then refuses and lists that directory as not removed. Each copy made
+  prints its source and copy path, naming the inner link for a link. A copy
+  that can't be made, a sentinel that isn't a regular file (a link included), or a binary
+  or PATH entry that is neither a link nor a regular file refuses with
+  `restore_copies_unavailable`, after removing this run's copies.
+  `ad_exit_cleanup` removes this run's remaining copies unless
+  `RESTORE_KEEP_COPIES` is 1: an unfinished restore keeps what it has not
+  put back, and an unestablished outcome keeps every copy. Other outcomes
+  remove them by recorded name, never by glob, so another run's copies are
+  never touched. A link's copy is removed by removing the
+  inner link only while it is a link (never its target), then the directory
+  only while it is empty; anything else is left and listed as not removed. A
+  SIGKILL leaves the copies under the pattern (see
+  [Putting back a kept install](operator-actions.md#putting-back-a-kept-install)). **Must use:**
+  - `ad_restore_copy` is the one way to make a restore copy
+    (`ad_restore_item` wraps it with the stdout line or the refusal);
+  - `RESTORE_BELONGS`/`RESTORE_COPY` are the one record of the items, one
+    entry each (an empty copy: nothing was there before the run);
+  - `ad_restore_copies_remove` is the only removal;
+  - `RESTORE_KEEP_COPIES` is the one switch that keeps them;
+  - `ad_managed_link_target` is the one statement of when the swap writes
+    the managed PATH link, shared by the swap and the copies; once
+    `ad_managed_link_decide` has run, it returns that decision, so the swap
+    and the restore's record never differ (`MANAGED_LINK_SKIP` holds a
+    skip's reason).
+
+**Restore or complete forward.** From the swap until a successful cutover,
+the swapped binaries refuse the pre-cutover store; restoring the previous
+install is the installer's only way to end that boundary before success.
+Every failed crossing attempt, including `ErrConfigMalformed` and
+`ErrStoreOpen`, goes through `ad_cutover_outcome`. `ad_journal_outcome_read`
+reads the last JSON line with a string `err_name`, taking `details.cutover`,
+`details.steps_committed` and `details.refusal` into `OUTCOME_*`. For the
+field meanings see **Commit state** under [`internal/store`](#internalstore).
+An unrecognized cutover value is unreadable; no envelope means
+`outcome_unestablished`. Neither proves that restoration is safe.
+
+`ad_restore_decide` restores only when all five conditions hold, in order:
+
+1. Pre-flight found a crossing upgrade.
+2. The attempt reported `not_committed`.
+3. `steps_committed` is false, unless the move copied the store the previous
+   install opens. Missing or unreadable steps count as committed here.
+4. `PREV_RELEASE_PREDATES` is 1.
+5. A version re-read finds no difference from `PREFLIGHT_STORE_VERSION`.
+   `ad_restore_reread` uses `ad_store_state` at the pre-move directory's
+   store when the move copied it, at `STORE_PHYS` after a move that did not,
+   or at `$state_db` in place. A failed or unreadable re-read permits the
+   restore; it is not evidence against the attempt's `not_committed`.
+
+Otherwise this release stays installed. `RESTORE_WHY_NOT` records earlier
+schema steps, a previous release that already supports the cutover, or a
+changed version. The supplementary message names what remains installed,
+the reason and action, and the next step; `not_committed` never claims a
+possible cutover commit. The accepted residual, where earlier schema steps
+advanced the previous install's store, needs forward completion or a
+restore from the journal backup and then the
+[previous-release recovery](operator-actions.md#going-back-to-the-previous-release)
+(see [`install.sh` stops with `ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete)).
+The [exit-5 table](#pattern-b--installsh-the-install-skill) gives the causes
+and retry sequence; operator-actions.md owns recovery.
+
+`ad_restore_run` processes the records in reverse order, renaming each
+copy into place and removing entries absent before the run, with the CLI
+last. It replaces links themselves, never their targets. After a move,
+it first refuses an occupied old path, sets the new directory aside as
+`~/.config/agent-director.after-upgrade-<YYYYmmdd-HHMMSS>` (`-2`, `-3`, … on
+a clash), then renames the pre-move directory back. Pre-flight refuses an
+already linked install root before the attempt; the restore retains its
+linked-directory branch for other refusals. That branch empties the new
+directory without removing the link and writes the empty `.move-incomplete`
+marker. Both restore forms leave the move due again (see **When it
+is due** and **A failed move** under [Moving agent-director's
+directory](#moving-agent-directors-directory)). The restore never restores
+store contents, reads or restores `.prior`, removes the journal backup,
+or removes a `~/.config` the move created. It stops at the first failure,
+without further deletions; completed work and surviving locations are
+recorded in `RESTORE_DONE`, `RESTORE_FAILED`, `RESTORE_ASIDE` and
+`RESTORE_PREMOVE_AT`.
+
+The two outcomes that retain copies add `details.attempt_store`,
+`details.copies` (`{copy, belongs_at}`, including the pre-move directory)
+and `details.remove` (outstanding additions to remove). Copy paths name
+the actual surviving file or inner link, and the attempt-store path follows
+a set-aside directory. An unfinished restore has `ErrSchemaVerifyFailed`;
+an unestablished outcome has `ErrJournalMigrationIncomplete` with cutover
+`unknown`. A relayed refusal is preserved; `restore_incomplete` is the
+installer's reason only when there is no relayed envelope.
+
+`ad_cutover_settle` settles restoration and copy retention before reporting.
+Its attempt inputs are only the `OUTCOME_*` globals: another caller must
+set those explicitly and use the same path. Failures of config/template
+migration, the version read or probe before step 4, and post-open schema
+verification keep their existing behavior.
+
+<a id="installer-cutover-interrupts"></a>
+
+**Interrupts.** Only a crossing upgrade (`CUTOVER_CROSSING`) arms these
+traps, just before the swap's first rename, after staging both binaries.
+The move has already removed its own signal traps (see **A failed move**
+under [Moving agent-director's directory](#moving-agent-directors-directory)).
+Protection lasts until an uninterrupted `migrate-journal` success or the
+installer's outcome report; an interrupted success stays protected through
+step 5. SIGPIPE is ignored and writes are guarded throughout: losing an
+output reader cannot end settlement. The [whole-script parse](#pattern-b--installsh-the-install-skill)
+keeps this path available when the input writer dies too.
+
+`CUTOVER_PHASE` selects the behavior:
+
+- `before_start`: `ad_cutover_on_signal` records the first signal and
+  enters settlement immediately, ignoring further interrupts. It supplies
+  `not_committed`, steps `false` and reason `interrupted` to the existing
+  restore decision. EXIT cleanup removes pending temps, including the
+  managed link's `.new`.
+- `running`: the handler only records the first signal. Step 4 captures
+  the administrator through `exec`, with INT and HUP not ignored, so no
+  intermediate capture shell can die and close the pipe. The installer
+  waits for the administrator's [own cancellation result](#internalstore).
+  A nonzero exit uses the existing outcome rules, relaying a cancelled
+  attempt's envelope unchanged. Exit 0 without an interrupt disarms the
+  traps; with an interrupt, the recording traps, SIGPIPE ignore and write
+  guards remain through step 5's version check, then settlement reports
+  the committed interrupt before hooks, MCP or scheduling.
+- `settling`: from a nonzero attempt exit or the before-start handler,
+  `trap ''` ignores INT, TERM and HUP in the installer and its commands,
+  before the version re-read and through reporting. Go helpers still end
+  on TERM. Status 143 from `ad_restore_reread` is an unreadable cross-check,
+  which permits restoration and sets `CUTOVER_LATE_INTERRUPT` for the late
+  interrupt note. Ignored INT and HUP leave no note.
+
+Before-start settlement also runs from `ad_exit_cleanup` when a signal was
+recorded or the exit status is 129, 130 or 143. It runs before copies are
+removed, so Bash 3.2's ordering of a pending trap and an errexit cannot
+bypass restoration. `ad_exit_5` cleans up before exiting even when reached
+inside EXIT; `AD_EXIT_CLEANUP_DONE` makes the later cleanup harmless.
+The three installer-chosen interrupt outcomes use `ad_outcome_exit` and
+the existing [exit-5 rows](#pattern-b--installsh-the-install-skill).
+An unfinished restore retains its existing `ErrSchemaVerifyFailed` outcome.
+
+**Must use:**
+
+- `ad_cutover_outcome` is the one decision path for a failed crossing attempt.
+- `ad_cutover_settle` is the one way to settle an outcome.
+- `ad_cutover_arm_traps`, `ad_cutover_ignore_interrupts` and
+  `ad_cutover_disarm_traps` alone set the crossing route's signal
+  dispositions. `ad_cutover_on_signal` writes nothing itself.
+- `ad_cutover_interrupted_before_start` and
+  `ad_cutover_interrupted_committed` supply `OUTCOME_*` to
+  `ad_cutover_settle`; they never write a separate envelope.
+- Trap-reachable code checks failures explicitly instead of relying on
+  `set -e`; interrupt settlement disables it with `set +e`. No function
+  may shadow a global the restore or decision reads with a same-named
+  `local`. Keep step 4's crossing capture's `exec`.
+- Guard writes throughout the span; `ad_cutover_write_failed` tolerates
+  failure only while `CUTOVER_PHASE` is set, preserving other routes.
+- `ad_restore_reread` is the one version cross-check, through `ad_store_state`.
+- `ad_restore_run` is the one restore implementation.
+- `ad_restore_copies_json`, `ad_restore_remove_json` and
+  `ad_restore_attempt_store` build the corresponding kept-copy fields.
+- `ad_relay_output` relays both pre-flight and attempt output.
+- `ad_cutover_message` holds outcome messages; re-runs use the
+  [shared command builder](#the-schedule-for-the-sweeps).
+- `ad_verify_retry_cmd` builds the direct verification retry.
 
 **Which store: `[store] db_path` (b.2io).** `state.db` in this flow is the
 database the binary opens: `~/.config/agent-director/state.db`, or the `[store]
 db_path` of `~/.config/agent-director/config.toml` (while the move is due,
 those of the old directory instead; the reader's `<base>` argument below) (`pkg/api`'s `resolveStorePath`,
 tiers 2 and 3, which are `config.Store.EffectiveDbPath`, the path the hook
-handler opens too; `install.sh` passes no `--store-path`). `install.sh` reads
+handler opens too). The ordinary `list` branch passes no `--store-path` and
+resolves config at open time; private preflight snapshots and the administrator
+cutover instead receive the captured `$state_db` explicitly. See the
+[selected-open flow](../skills/install-agent-director/SKILL.md#the-six-steps-installsh-performs).
+`install.sh` reads
 `db_path` itself in pre-flight, with `ad_store_db_path <config> <home> <base> [log]` (the
 self-contained block between the `# >>> ad_store_db_path` and
 `# <<< ad_store_db_path` lines; bash builtins only), and keeps the result
@@ -11313,23 +12497,22 @@ side (`resolvePathField`, `EffectiveDbPath`, `resolveStorePath`,
 **No store after the open (b.iks).** Step 5 first checks that
 `$state_db` exists. The open succeeded, so a missing one is exit 5
 `ErrSchemaVerifyFailed`, headline
-`install.sh: <$state_db_name> was not created by the store open`. The
-binary takes its store path only from `[store] db_path`
-(`resolveStorePath`; install.sh passes neither `--store-path` nor
-`--home`, and no `AGENT_DIRECTOR_*` variable moves it), which
-`ad_store_db_path` read in pre-flight. So a missing store means one of:
-`db_path` changed after pre-flight, something removed or moved the store
-after the open, or the installed binary resolves its store differently
-from `ad_store_db_path`. On an upgrade step 2 read `$state_db`, so there
-it was removed or moved: either of the other two causes would have left
-it in place. The report prints `state.db: <$state_db>` and
+`install.sh: <$state_db_name> was not created by the store open`. Its emitted
+diagnostic describes ordinary `list`, which resolves `[store] db_path` again
+without `--store-path` or `--home`. In that branch a changed config or different
+path resolution can redirect the open. The administrator cutover receives
+`--store-path "$state_db"`, so a later config change cannot redirect that open;
+see the [canonical cutover procedure](operator-actions.md#upgrading-the-native-input-journal).
+Removal or movement after either selected open can leave the expected path
+missing. On an upgrade step 2 already read that path, so redirecting an open
+alone would have left the file in place. The report prints `state.db: <$state_db>` and
 `config  : <config.toml>`, then advises checking `db_path` and any
 cleanup, putting a moved store back at the `state.db:` path first (a
 re-run with no store there creates a new, empty one), and a re-run, which
-reads `db_path` again and opens the store there. That re-run finishes
-after the first two causes; one that fails the same way points to the
-third, and the advice is to contact the maintainers.
-`advice_follow.sh`'s J22 pins this in five cases. A `db_path` changed
+reads `db_path` again and opens the store there. In the ordinary branch,
+a re-run that still resolves the path differently points to a binary/installer
+disagreement, and the advice is to contact the maintainers.
+`advice_follow.sh`'s J22 pins the ordinary branch in five cases. A `db_path` changed
 between pre-flight and the open, a store moved after the open and put
 back, the same with `db_path` set to `~/custom/s.db` before the first
 install (the headline and the `state.db:` line name that path, and the
@@ -11340,7 +12523,8 @@ path with `db_path` unset and nothing moved, standing in for a binary
 that resolves its store elsewhere, fails the re-run with the same stderr.
 
 **How long: `[store] busy_timeout_ms` (b.c7f).** Every `sqlite3` read of
-the store's `user_version` (`ad_user_version`) waits as long as the
+the store's `user_version` (`ad_user_version` after the swap,
+`ad_store_state` on pre-flight's snapshot) waits as long as the
 binary's own connections do (see "Busy timeout" under
 [`internal/store`](#internalstore)), and the check command `install.sh`
 prints after an unreadable or mismatched post-open read carries the same
@@ -11418,37 +12602,16 @@ the fix probes again and authorizes any pending migration. **Must use:**
 an `install.sh` decision on a verb's failure branches on `ad_err_name`,
 never on the description's text.
 
-**A sentinel from before the install (b.dzw).** The probe is a full store
-open, so a `migrate-authorized` already beside `state.db` (left by an
-earlier run whose store open failed and advised a re-run, or written by an
-operator) authorizes a migration when its `from` and `to` match: the
-probe's open runs the migration, consumes the sentinel and succeeds. A
-probe that opens therefore does not show that `state.db` was current.
-Step 3 notes whether the sentinel existed before the probe
-(`sentinel_before`); when it did, the probe opened and `state.db` was
-above v0, it reads `user_version` again. A higher version means the probe
-ran the migration: it becomes `target_version`, step 3 reports that
-migration (second table row), and step 5 verifies it exactly as it
-verifies one step 3 authorized (`migration verified — state.db now at
-v<T>`). The same version reads as a plain open. A read that gives no
-version stops the install (exit 5) with no step-3 verdict: the headline is
-step 2's (`reading state.db's schema version FAILED`), the cause is that
-the install could not tell whether the probe ran a migration, and a
-further line says a sentinel written before this install may have
-authorized one. A leftover sentinel the probe does not consume changes
-nothing step 3 or step 5 prints: a v0 store is created at the target
-without the sentinel being read (no re-read), an open of a current store
-never reads it (the re-read finds the same version), a newer store fails
-the probe with `ErrSchemaMismatch`, and at an older store a mismatched one
-makes the probe refuse with `ErrSchemaMigrationRequired`, so step 3 writes
-its own sentinel over it.
+**A sentinel from before the install.** It cannot authorize the native-input
+hop through the ordinary probe. The installer retains its successful-probe
+version recheck for older migration paths, but this cutover requires the
+administrator window before any hop. Current-version opens do not consume a
+stale sentinel; the installer refreshes authorization after a partial chain.
 
-The full ordered six-step flow — including how `<target>` is learned
-from the binary's own refusal message and why `list` rather than
-`help`/`version` is the warm-up verb — is documented in
-`skills/install-agent-director/SKILL.md` ("Schema migration: the
-six-step sentinel flow"), the canonical admin-facing home for the
-install flow. The store-side gate contract (sentinel path/shape, strict
+The [six-step install flow](../skills/install-agent-director/SKILL.md#the-six-steps-installsh-performs)
+documents target discovery and selection of ordinary `list` or the explicit-path
+administrator cutover. `help` and `version` do not open the store.
+The store-side gate contract (sentinel path/shape, strict
 parsing, one-shot consume-on-success, audit trail) lives in
 docs/migration-guide.md §1a.
 
@@ -11500,8 +12663,8 @@ agent-director with one script.
 │                                    migration rewrote it; its mode)
 ├── input/<store_id>/              (private native input evidence)
 │   ├── <launch_token>.lock        (mode 0600; writer ownership)
-│   └── <launch_token>/            (mode 0700; diagnostics, launch.json,
-│                                    attempt.json and request history)
+│   └── <launch_token>/            (mode 0700; provider diagnostics/logs;
+│                                    retired JSON may remain as evidence)
 ├── config.toml                    (operator-owned; a hooks-on install
 │                                    creates it, mode 0600, only when it
 │                                    is missing, and a merge keeps its mode)
@@ -11543,6 +12706,17 @@ until the operator deletes them (`uninstall.sh --purge` removes them with
 the directory). The move's scan for references to the old directory skips
 those in `templates/`.
 
+The restore's copies (`<name>.restore-<YYYYmmdd-HHMMSS>.<suffix>`) exist
+beside the binaries, the sentinel and the managed PATH link during a
+crossing upgrade, none inside either install directory while a move is due;
+an unfinished restore or unestablished outcome retains them (see **Restore
+or complete forward** under [Schema migration at
+install-time](#schema-migration-at-install-time), and
+[Putting back a kept install](operator-actions.md#putting-back-a-kept-install)). A restored move leaves
+the new directory beside the install root as
+`~/.config/agent-director.after-upgrade-<YYYYmmdd-HHMMSS>` with a suffix on
+a clash; the retained linked-directory restore branch is described there.
+
 The install root is `layout.Dir` under `$HOME`: the installer reads no
 `XDG_CONFIG_HOME`. `~/.config` is the directory it lives under, and the
 installer creates it with mode 0700 when it is missing. The move from the
@@ -11569,7 +12743,9 @@ in-flight exec is unaffected by the swap.
 
 A failure while staging replaces neither binary, so an install never
 leaves a new `agent-director` beside an old `agent-director-admin`; the
-EXIT trap removes a temp copy that was never moved.
+EXIT trap (`ad_exit_cleanup`) removes a temp copy that was never moved, and
+the run's restore copies (see "The restore preconditions" under [Schema
+migration at install-time](#schema-migration-at-install-time)).
 
 Optional `--keep-prior` snapshots each existing binary to its `.prior`
 (`agent-director.prior`, `agent-director-admin.prior`) before either is
@@ -11596,6 +12772,13 @@ directory](#moving-agent-directors-directory)): the upgrade that makes it
 takes no `--keep-prior` snapshot, and a binary swap cannot undo it, so the
 way back there is the kept directory.
 
+On a crossing upgrade the installer puts the previous install back itself
+when the [restore conditions](#schema-migration-at-install-time) hold.
+Otherwise the manual way back is
+[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release),
+after, for the earlier-schema-step residual, a restore from the journal
+backup (see [`install.sh` stops with `ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete)).
+
 **Schema migration across the swap.** Once the newer binary is in
 place, an older `state.db` cannot be opened until the install authorizes
 the migration with a one-shot `migrate-authorized` sentinel — the flow
@@ -11616,14 +12799,14 @@ install (see [Moving agent-director's
 directory](#moving-agent-directors-directory) and [Store upgrade to
 agent-generic names](#store-upgrade-to-agent-generic-names)); a store kept
 outside that directory is put back from the operator's pre-upgrade copy.
-An upgrade within the current layout, including v9→v10, v10→v11, v11→v12, v12→v13, v13→v14 and v14→v15, retains no old
+An upgrade within the current layout, including v9→v10 through v19→v20, retains no old
 layout directory: restore the operator's pre-upgrade store copy, with its
 companion files and all writers stopped, as described in
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release). For a store
 at genuine family-only v12, the tested v12 → v11 recipe drops only the three family-history
 columns and preserves own-state history and store identity; it cannot cross
 the unsupported v11 → v10 or v10 → v9 boundaries and cannot operate on
-a v13, v14 or v15 store. Schemas v13, v14 and v15 have no supported in-place reverse recipe. For a store
+a v13–v20 store. Schemas v13–v20 have no supported in-place reverse recipe. For a store
 at v8 or older the recipes are (for v8 → v7: drop the two
 settle columns, then stamp `user_version = 7`; then, for an older
 release, v7 → v6: drop the twenty v7 columns, then stamp
@@ -11670,8 +12853,10 @@ install-time](#config-and-template-migration-at-install-time)).
 **Three refusals, one capability check.** `ErrMoveConflict`, `ErrAgentsLive`
 and `ErrMoveFailed` end the install with exit 5 and the cause line (see the
 table above); like `ErrVersionUnreadable` they are `install.sh`'s own names,
-not in `errnames.Catalog`. Their remedies are in
-[operator-actions.md](operator-actions.md). A pair of binaries whose
+not in `errnames.Catalog`. Their remedies are in operator-actions.md:
+[`ErrMoveConflict`](operator-actions.md#installsh-refuses-with-errmoveconflict),
+[`ErrAgentsLive`](operator-actions.md#installsh-refuses-with-erragentslive) and
+[`ErrMoveFailed`](operator-actions.md#installsh-stops-with-errmovefailed). A pair of binaries whose
 `version` output lacks `config_dir`, or names another directory, is refused
 with exit 3 before the move: an earlier release's binary would be installed
 into the new directory. `ad_config_dir_of` reads the field; the check reads no
@@ -11693,8 +12878,8 @@ store.
   both directories, and the next install refuses.
 - `ErrAgentsLive`: the old store holds a row in a live state (`pending`,
   `waiting`, `working`, `check_permission`, `ask_user`; read with
-  `sqlite3 -readonly`, waiting the busy timeout, a failed read being a
-  refusal too) or a process runs the old binary (`ad_scan_old_processes`:
+  SQLite over the candidate administrator's private consistent snapshot,
+  within the busy timeout; a failed capture/read refuses too) or a process runs the old binary (`ad_scan_old_processes`:
   `/proc/<pid>/exe` on Linux; `ps` and `lsof` on macOS; a host with neither
   prints that the check did not run). The checks run in pre-flight and again
   as the move's first step.
@@ -11755,11 +12940,25 @@ rewritten, before the rename. A store that is a link to anywhere (class
 value or a template's `cwd` that names the old directory is printed with its
 fix and left as written (`ad_move_print_references`).
 
+**Move notes.** The managed-link progress line prints immediately after
+the swap. On a crossing move, the `kept` summary, other-link, old-PATH and
+references notes wait until the outcome is known. Success prints them once
+after `journal : …`; forward completion prints
+them before its message. A complete restore discards them and prints one
+move-undone line on stderr, reporting where the run's new directory went.
+An unfinished restore discards them in favor of its item locations.
+A stop before the attempt flushes only notes already due
+through `ad_exit_cleanup`; non-crossing moves print in place.
+**Must use:** new deferred move notes use `ad_move_note` and
+`MOVE_NOTES_DEFERRED`, with `ad_move_notes_flush` for the one flush;
+`ad_move_outcome_notes` replaces or discards them on restoration.
+
 **A failed move.** `ad_move_fail` removes the partial new directory and, with
 `rmdir` only, a `~/.config` the move created, says why (a full disk is the
 usual cause) and ends with `ErrMoveFailed`; the old directory was not changed.
 The traps are armed for the move only: `EXIT` chains onto the install's own
-`EXIT` trap (`ad_exit_cleanup`) rather than replacing it, and `INT`, `TERM`
+`EXIT` trap (`ad_exit_cleanup`, so the restore's copies go too) rather than
+replacing it, and `INT`, `TERM`
 and `HUP` call `ad_move_fail`. After the rename nothing is removed: a signal
 that arrives after `mv` completed but before the traps are put back finds the
 rename done (`ad_move_rename_done`), removes nothing, and ends with
@@ -11859,7 +13058,8 @@ install writes the new binaries and then, on the path each concerns:
 - **PATH.** The link `install.sh` manages is re-pointed; every other link
   into the old `bin/` (at `~/.local/bin`, at `--symlink-dir`, where
   `command -v agent-director` leads) and each `$PATH` entry naming it is
-  printed with its fix (`ad_discover_old_bin_refs`).
+  reported with its fix (`ad_discover_old_bin_refs`), with the timing under
+  **Move notes** above.
 
 **The one break in the hook path.** Spawn-side hooks name the binary's
 absolute path (see [Spawn-side hook stability](#spawn-side-hook-stability-bue3--sr-18)),
@@ -11869,13 +13069,12 @@ directory still holds the old binaries, but the original absolute path is gone a
 kept binary is callable only at its new backup path. Nothing should rely on
 the old hook command after this move.
 
-**The way back.** The previous release's schema cannot read this release's
-store, and nothing here reverses the rename, so the way back is the kept
-directory: rename the new one aside, rename the kept one back, put back a
-store kept outside the directory from its pre-upgrade copy, remove the
-entries this release's binary path wrote, and install the previous release
-with its own `install.sh` (see [operator-actions.md](operator-actions.md),
-"Going back to the previous release"). Whatever was written since is lost.
+**The way back.** A crossing upgrade reverses the move automatically when
+the [restore conditions](#schema-migration-at-install-time) hold. Otherwise
+the previous release cannot read a store advanced past its schema: manual
+recovery uses the kept directory and, for a store outside it, the pre-upgrade
+backup, as [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release)
+describes. That recovery loses whatever was written since the backup.
 
 **Test seam.** `INSTALL_SH_TEST_PROC_CHECK=macos|none` (not in `--help`) runs
 the macOS `ps` and `lsof` branch on any host, or neither branch. Every call
@@ -11901,20 +13100,29 @@ J25.
 
 ### The schedule for the sweeps
 
-`find-missing` and `expire` keep the row states honest, and nothing runs them
-unless they are scheduled: a live row whose agent is gone stays live, a relay
-row stays in `check_permission`, a killed agent's running subagent records are
-never turned `lost` (they turn only when the row is marked `missing` or
-`ended`), and finished rows are never expired. The binary schedules nothing
+`sweep` (also callable as `find-missing`) reconciles stored observations;
+`expire` separately removes eligible finished rows. Neither runs between calls
+unless scheduled. State reads check only the rows they select
+([shared active checks](#shared-active-checks)). Rows receiving no eligible
+event or read/sweep check retain their stored observations; an external sweep
+supplies checks for otherwise unqueried rows. Without `expire` finished rows
+are never expired. The binary schedules nothing
 itself. `install.sh` ships the schedule as files and installs it only on
 request.
 
 **The files** are in `skills/install-agent-director/schedule/`, beside
 `install.sh` and `SKILL.md`: `agent-director.cron` (the two crontab lines) and
 `agent-director-find-missing` and `agent-director-expire`, each as a systemd
-user `.service` and `.timer`. `find-missing` runs every 2 minutes and `expire`
+user `.service` and `.timer`. The recovery command runs every 2 minutes and `expire`
 daily at 03:17 (`Persistent=true` on the expire timer only). They hold
-three placeholders:
+three placeholders. Raw templates retain `find-missing` so released installers
+can safely fetch newer assets, including the release-404 fallback to `main`.
+The current renderer promotes that literal to `sweep` only when the target
+binary's help advertises it, before substituting paths and environment; failed
+or unsupported help keeps `find-missing` and never runs recovery. Detection and
+post-write checks accept either spelling. Unit names and the
+`agent-director-schedule` marker remain stable, so replacement and uninstall
+keep identifying the same files. The placeholders are:
 `@@AGENT_DIRECTOR@@` (the canonical binary path,
 `~/.config/agent-director/bin/agent-director`, written out), and, for the
 environment cron and systemd do not pass, `@@ENV_PREFIX@@` (cron) and
@@ -11979,6 +13187,23 @@ changes an exit status. It cannot see an entry made by
 hand, so a host scheduled another way gets it too, and the text says to ignore
 it.
 
+**Re-run commands.** `ad_rerun_cmd schedule|journal` is the one command
+builder; `ad_sched_rerun_cmd` delegates to its schedule form without changing
+that advice. The journal form replaces every `--journal-backup` value
+(or adds the option) with a new-directory placeholder; a piped run instead
+gets the instruction to repeat the install command with a new backup.
+Forward journal advice preserves path spellings: `ad_rerun_absolute_path`
+makes relative script, `--binary`, `--admin-binary` and `--symlink-dir` paths
+absolute against the original logical cwd (`ORIG_PWD`), without resolving
+links or `..`. When the move remains in place, only a cwd spelled under the
+old directory is rebased to the new directory. If the script or an explicit
+binary source is named under the moved directory, one line in both file and
+piped advice says those files now sit under `~/.config/agent-director/...`
+and to re-run from wherever the caller keeps the installer. Empty values
+still select defaults; restored runs and schedule advice retain the original
+paths.
+**Must use:** new re-run advice extends `ad_rerun_cmd`.
+
 **Piped install.** With no `schedule/` beside the script (`curl ... | bash`,
 or a copy of the skill without it), and only when `--schedule` is given or no
 schedule is present, `install.sh` fetches the five files from
@@ -12003,6 +13228,9 @@ host's crontab or user manager (`schedule_test.go`,
 `schedule_uninstall_test.go`; the Docker case `install-13` of
 `epic-12-install`, whose image has no cron, installs through a stand-in
 `crontab` and runs the installed `find-missing` line itself, as cron would).
+Schedule tests must reuse `moveShared.ScheduleProbe` for synthetic help
+capabilities and `schedRunRecovery` for rendered recovery commands; their
+contracts are in the [install-sh fixture registry](#install-sh-move-fixture-reusable-test-fixture).
 
 **Must use:** `install.sh` installs and warns from the shipped files, never
 from a copy of their text in the script; a change to a line, placeholder or
@@ -12146,7 +13374,9 @@ aside to settle `ErrMoveConflict`, is never removed: it may hold data the
 operator did not choose, so it is left and named. `uninstall.sh` does not read `[store]
 db_path`, so a store that `db_path` puts outside `~/.config/agent-director`
 survives `--purge`. `rm -rf` removes a symlink under
-`~/.config/agent-director`, never the file it points to.
+`~/.config/agent-director`, never the file it points to. Restore copies
+outside the directories removed by `--purge`, including a managed PATH-link
+copy, survive it.
 
 The confirmation is asked before anything is removed or changed: after
 `settings.json`'s symlink check, which `--purge` does not waive, so that
@@ -12170,41 +13400,14 @@ line from stdin. Each reply, and what a caller sees:
 
 ### ErrSchemaMismatch recovery
 
-`ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
-this binary — typically meaning the store was written by a newer binary
-(`user_version > 15`). An unauthorized older store (v1 through v14)
-surfaces `ErrSchemaMigrationRequired`. An authorized migration can instead
-return `ErrSchemaMismatch` when it refuses incompatible metadata. The store does not silently upgrade an
-older DB on `Open`: the open is refused with `ErrSchemaMigrationRequired`
-unless an administrator has placed a valid `migrate-authorized` sentinel next
-to the DB file, in which case the gated migration chain runs (v1→v2, DROP+CREATE
-`permission_requests` with v1 rows discarded; v2→v3, five `spawns` ADD COLUMN
-preserving every row; v3→v4, CREATE `session_history` preserving every row;
-v4→v5, thirteen ADD COLUMN across `spawns` and `session_history` preserving
-every row and entry, then CREATE `store_meta` with one new store id; v5→v6,
-three `spawns` ADD COLUMN, the launch owner, preserving every row and the
-store id; v6→v7, nineteen `permission_requests` and one `spawns` ADD COLUMN,
-the relay's delivery facts, preserving every row and the store id; v7→v8,
-two `spawns` ADD COLUMN, the settle columns, with every row backfilled as
-settled, preserving every row and the store id; v8→v9, six column renames,
-three `spawns` ADD COLUMN and CREATE `subagents` and `subagent_launches`, with
-every row backfilled as a Claude row, preserving every row and the store id;
-v9→v10, CREATE `cursor_runtimes`, preserving existing rows and the store id;
-v10→v11, add and validate durable main-turn proof eligibility;
-v11→v12, add, validate and initialize independent family history;
-v12→v13, add nullable Codex startup and Claude capacity provenance without
-backfill; v13→v14, add the display observation, pane baseline, timeout
-override, request ownership and fallback columns with a conservative ownership
-backfill; v14→v15, add the two nullable Codex turn columns without
-backfill). The tested v12 → v11 family-only reverse recipe is in
-docs/migration-guide.md §5; it cannot operate on v13, v14 or v15. Rolling the binary back
-across a migration to v14 or v15 requires the genuine pre-upgrade copy of `state.db`,
-restored with matched WAL/SHM companions and all writers stopped as in
+`ErrSchemaMismatch` rejects a newer store or invalid current metadata.
+An older store (v1–v19) requires exact authorization before any hop; v1–v15
+also requires the maintained administrator input window. Missing authorization
+or the required window returns `ErrSchemaMigrationRequired`. See [Schema versioning convention](#internalstore) and
+[the migration guide](migration-guide.md#1a-the-chained-step-engine-and-the-sentinel-gate).
+Restore-only v16–v20 recovery must preserve input evidence and reconcile uncertain
+attempts before an older runtime resumes; the canonical procedure is
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
-No supported in-place reverse path crosses v15 → v14, v14 → v13, v13 → v12, v11 → v10,
-v10 → v9 or v9 → v8.
-Rolling it back over a migration that ended at v8 or older can also use the
-emergency downgrade recipes in docs/migration-guide.md §5.
 
 `ErrSchemaMismatch` also fires for a store at the current version that has no
 valid store id: no `store_meta` table, no `store_id` row, or a value that is
@@ -12247,7 +13450,20 @@ incompatible spawns.<column>" or "v14→v15 invalid spawns.<column>"), with
 the whole hop rolled back, for an existing `codex_turn` or
 `codex_turn_ended` column that is not exactly that name, nullable TEXT with
 no default and no primary key, or a value that is not NULL or 1 to 256
-bytes of TEXT. See [the migration guide](migration-guide.md#current-worked-example-v14--v15).
+bytes of TEXT. See [the migration guide](migration-guide.md#previous-worked-example-v14--v15).
+
+The authorized v18→v19 hop returns `ErrSchemaMismatch` ("v18→v19
+incompatible spawns.<column>" or "v18→v19 invalid spawns.<column>"), with
+the whole hop rolled back, for an existing `state_evidence`,
+`settled_evidence` or `process_evidence` column that is not exactly that name,
+nullable TEXT with no default and no primary key, or a value that is not
+NULL or a JSON object stored as TEXT. See
+[the migration guide](migration-guide.md#current-schema-facts-v18--v19).
+
+The authorized v19→v20 hop applies the same exact column and JSON-object
+validation to `display_evidence`, and the same column validation to
+`observation_writer`, with `ErrSchemaMismatch` and full hop rollback on refusal. See the
+[migration guide](migration-guide.md#current-schema-facts-v19--v20).
 
 If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch`,
 the recovery depends on the cause, and it is never to delete `state.db`:
@@ -12261,7 +13477,7 @@ the recovery depends on the cause, and it is never to delete `state.db`:
   the install afterwards; this release's install migrates it again. Writes
   made since the install are lost.
 
-- **Eligibility, family-history, context-provenance or Codex-turn shape/value refusal.** Stop all writers and use the
+- **Eligibility, family-history, context-provenance, Codex-turn or evidence shape/value refusal.** Stop all writers and use the
   supported backup/restore procedure or human recovery in
   [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release),
   using the actual DB path and matched WAL/SHM companions. Retry through
@@ -12607,32 +13823,27 @@ server's `classifyDispatchError` delegate to `errnames.Classify`,
 so the same canonical names appear in both surfaces for the same
 wrapped errors. See the [err_name catalog](#err_name-catalog) subsection below.
 
-**`err_details` (b.146 rule 15, decision 8 A).** A refusal that gives its
+**`err_details` (b.146 rule 15, decision 8 A).** An error that gives its
 facts as fields carries a third, optional key, `err_details`: a JSON
 object, absent on every other error. It is the same on every surface: the
 CLI's stderr envelope (`errorEnvelope.ErrDetails`, written by
 `writeVerbError` in `cmd/agent-director/spawn_cmd.go` for every verb), the
 MCP error's `data` (`ToolErrorData.ErrDetails`) and the TypeScript
 client's `AgentDirectorError.errDetails` (`null` when absent). A client
-that does not know the key ignores it. Named errors carrying it include:
-`ErrRelayFallenBack` (`RelayFallenBackDetails`, from `decide`, `send-keys`
-and `pause`), `ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`),
-`ErrClaimTooSoon` (`ClaimTooSoonDetails`), `ErrPaneChanged`
-(`PaneChangedDetails`), `ErrDialogMaybeOpen` (`DialogMaybeOpenDetails`,
-from a plain `send-keys` and `pause`), and `ErrPauseTimeout`
-(`PauseTimeoutDetails`, after the exit keys were sent; see [`pause`](#pause)).
-One unnamed error does too: the `ErrInternal` of a
-pane answer through `send-keys` whose key was sent but whose `sent` write
-failed (`PaneKeySentDetails`: `key_sent` true and `request_token`), so a
-caller tells it from an error that sent nothing and reads the pane before
-sending anything again. The shapes are in `pkg/api/error_details.go` and
-`pkg/ts-bun-client/src/types.ts`. The `err_name` stays the contract and
+that does not know the key ignores it. Details can preserve a confirmed
+`SendKeysResult` receipt on `ErrInternal` after cleanup failure, or attempted-input
+facts in `SubmissionUnconfirmedDetails` and `PaneKeySentDetails`. Their canonical
+types are in [sendkeys.go](../pkg/api/sendkeys.go),
+[error_details.go](../pkg/api/error_details.go) and
+[`types.ts`](../pkg/ts-bun-client/src/types.ts); the
+[caller contract](caller-contract.md#ordinary-text-submission) owns their meaning
+for callers. The `err_name` stays the contract and
 `err_description` advice: a caller reads facts from `err_details`, never
 by parsing the description.
 
 **Must use:** a verb error that carries facts is a `*api.DetailedError`
-(`Err`, whose chain holds the catalogued sentinel, so `errors.Is` and
-`errnames.Classify` see through it; `Details`, the object), and every
+(`Err`, whose chain remains visible to `errors.Is` and `errnames.Classify`;
+`Details`, the object), and every
 surface reads the object through `api.ErrDetails(err)`. A CLI verb handler
 writes its error through `writeVerbError`, never its own envelope.
 
@@ -12668,12 +13879,12 @@ strings; callers read them through this package only.
 | Field | Type | Description |
 | --- | --- | --- |
 | `Name` | `string` | The canonical err_name string (e.g. `"ErrSpawnNotFound"`). |
-| `Err` | `error` | The sentinel error the name maps to. Matching uses `errors.Is`, so `%w`-wrapped errors resolve correctly. |
+| `Err` | `error` | The sentinel or typed category matched through `errors.Is`, including wrapped errors. |
 
 **`Classify(err error) (name, description string)`** — walks `Catalog`
 via `errors.Is` and returns the first matching entry's `Name` plus
 `err.Error()` as the description. Errors that match no catalogued
-sentinel return `"ErrInternal"`. This is the deliberate name for such
+entry return `"ErrInternal"`. This is the deliberate name for such
 failures, and production paths do reach it: for example, the `spawn`
 collision pre-check's store read failure (see
 [Collision pre-check](#collision-pre-check)). `ErrInternal` is the last
@@ -12820,6 +14031,13 @@ or catalog Go source requires regenerating the corresponding JSON file.
 
 **Documented exclusions**
 
+- `ErrJournalMigrationRefused` is the existing administrator-only typed
+  `adminapi.JournalRefusal` category, matched through `errors.Is`. Its generated
+  catalog entry records origin `adminapi`; it adds no public API sentinel,
+  callable CLI/MCP verb error or TS class/export. Envelope scanning still requires
+  this entry. The five-way check and TS test loader give this category a
+  name-specific public-surface exclusion; negative controls preserve that boundary and
+  the unknown-envelope fallback. Reuse the canonical catalog, not a parallel list.
 - `ErrInternal` is the `Classify` fallback for errors that match no catalogued sentinel,
   such as `spawn.PreCheckReadError`'s result. It is in the Catalog (b.cm7), with the
   unexported sentinel `errInternal`, which no error wraps, but is listed in no verb's
@@ -12995,6 +14213,39 @@ derived when it is read; the store records only what the relay hook,
 `decide` and the readers observed (the v7 columns under
 [`internal/store`](#internalstore)).
 
+### Permission verdict authority
+
+`internal/store/permission_authority.go` owns the shared response predicates
+and schema-v17 facts. `decision_origin` is `caller`, `timeout`, `pane` or
+`observation`; NULL is unknown history. Verdict origin is separate from
+main/child proof eligibility and from the public reason:
+an explicit allow can have a NULL reason, and successful proof can later fill
+that reason without changing origin. Closeout, outside claims and inferred
+execution verdicts are observational; they cannot authorize a response.
+
+Admission captures launch, permission epoch, life, session and Cursor connection.
+`permissionOwnerSQL` and `permissionResponseEligibleSQL` require that owner,
+an active row, no closure and no proof. New verdicts and claims also require
+no prior `response_state`. `relayVerdictSQL` admits only caller/timeout verdicts;
+native responses require a deliberate matching pane choice. Hook parent checks
+and authenticated Cursor runtime/pane checks remain mandatory.
+
+An acknowledgement commits `delivered_at` and `relay_claimed`; native choice
+commits `native_claimed` without relay acknowledgement. Cursor's final
+`CheckCursorAnswer` validates an unconsumed claim; `IssueCursorAnswer` changes it
+once to `relay_issued` or `native_issued` before transport. An independent
+request's proof may advance the row epoch without retiring an already committed
+Cursor claim, but new acquisition still requires the admission epoch. Exact
+owner, token, origin, closure/proof, generation and deadline guards still apply.
+
+Claims and issue verify WAL/FULL on their actual transaction lease through
+`permissionResponseDurability`. Only a confirmed commit permits output; failed
+or unknown commits authorize no bytes or replay. No provider I/O occurs inside
+the transaction. Claim, acknowledgement, issue, transport completion, receipt,
+execution and dialog proof are distinct facts. Future response writers MUST
+reuse these predicates and guarded claim/issue methods, never infer authority
+from a non-null decision, public reason, display state or observation.
+
 ### The relay hook's lifecycle
 
 `runRelay` (`internal/hook/permission.go`) owns a relayed request from the
@@ -13010,7 +14261,7 @@ back from it (b.146 rule 4):
 | Instant | `relayClock` | Meaning |
 | --- | --- | --- |
 | kill − 3 s | `pollEnd` | The poll's deadline: `relayDenyLead` (1 s) before `ackBy`, the longest the timeout deny's own wait for the write lock may take. |
-| kill − 2 s | `ackBy` | The last instant a write may commit: `relayReserve` (2 s) is kept to write the answer and exit. `waitLeft()` is the lock wait a write may still take. |
+| kill − 2 s | `ackBy` | The write budget's deadline: `relayReserve` (2 s) is for output and exit. `waitLeft()` bounds the lock wait; an already-entered COMMIT may finish late, but the final budget check suppresses output. |
 | kill + 2 s | `settledAt` | Recorded as the request's `settled_at`: the `confirm_by` readers fall back to when they cannot check the hook. |
 
 So a relay window of 3 s or less leaves no time to poll, and one of 2 s or
@@ -13051,30 +14302,33 @@ falls back when the hook exits.
    runs with the start time captured then (an unwired reader or a start
    time not read at entry fails it); a failed check returns
    `errParentChanged`, which rolls the transaction back, writing nothing.
-   The statement is one `UPDATE … SET delivered_at … WHERE decision IS NOT
-   NULL AND delivered_at IS NULL AND pane_answer = 'none' RETURNING
-   decision, decision_reason`; it acks a request a close of its Spawn's
-   requests closed (`find-missing`'s mark, the ended transition, resume's
-   move) like any other, so the verdict recorded on it, or the close's deny
-   of an undecided one, still reaches a hook whose parent lives. Only the
-   decision that statement returned is written to stdout, followed by
-   `ad.resume.observed`.
+   `AckRelayDecision` atomically claims only an eligible caller/timeout verdict,
+   with no previous acknowledgement, response claim or pane answer. Closure,
+   proof and obsolete or unknown ownership exclude it even if the parent lives.
+   After the confirmed commit, `parentCheck` rechecks the original budget and
+   parent before output. Only the returned verdict is written to stdout,
+   followed by `ad.resume.observed`; a failed recheck emits nothing.
 4. **The timeout deny (rule 3).** At `pollEnd` with no verdict,
    `timeoutDeny` makes the same lock-wait cut, then runs
    `DenyRelayTimeout` with the same `parentCheck` inside its transaction:
    one statement setting `decision` `deny`, `decision_reason` `timeout`,
    `decided_at` and `delivered_at`, only while the request is undecided and
-   has no pane answer (it emits the deny's `ad.row_mutation.committed`). A
-   verdict that landed first is acked and written instead, through
-   `deliver`. The deny writes no row state: the row leaves
+   has no pane answer, proof, closure or prior claim and still matches its owner
+   (it emits the deny's `ad.row_mutation.committed`). It records timeout origin
+   and a relay claim. A verdict that landed first goes through `deliver` with
+   the same eligibility checks. The original budget and parent are checked
+   after evidence and commit, without rearming. The deny writes no row state: the row leaves
    `check_permission` with the agent's next hook (see "The row after the
    last answer" below).
 5. **No answer.** Every other end — a parent check that fails, no time
    left before the reserve, an ack or a deny that fails or is cut, an ack
    that matches nothing, `ctx` cancelled, the request deleted (its spawn
    row removed), the read-retry budget spent — is `silent`: one log line,
-   empty stdout, exit 0. The agent shows its own dialog, and readers find
-   the request fallen back once they find the hook gone.
+   empty stdout, exit 0. Without a persisted acknowledgement, readers find
+   the request fallen back once they find the hook gone. An already-entered
+   COMMIT can finish late or succeed with an unknown result: its durable
+   acknowledgement remains, and delivery can read `delivered` despite zero
+   stdout. Neither outcome authorizes replay.
 
 Claude Code reads a hook's JSON on any exit code, so the ack comes first:
 the hook never prints an answer whose `delivered_at` has not committed.
@@ -13129,15 +14383,16 @@ exited between a read and its check is never reported fallen back.
   can't tell → `fallen_back` from `confirm_by` on, `not_confirmed` before.
 
 A request a close of its Spawn's requests closed (`closed_at`, rule 12:
-`find-missing`'s mark, the ended transition or resume's move) is derived by
+shared recovery's mark, the ended transition or resume's move) is derived by
 the same rules, so each value keeps its meaning and never goes back. For
-a request with a settle instant, `delivered` requires its hook's ack
-(a hook whose parent lives may still ack its verdict or the close's deny),
+a request with a settle instant, `delivered` retains an ack committed before
+closure; closing a request cannot permit a later ack,
 `not_confirmed` lasts while that hook may still run, and `fallen_back`
 starts once it is gone or past `confirm_by`. Pre-v7 rows retain the
 [time-derived delivery rules](#requests-recorded-before-v7), even when closed. A
-closed request no longer awaits an answer, so `get` and `list` do not
-show it; `get-permission` reads it by its token.
+closed request is omitted from the `permission_requests` lists of `get` and `list`;
+`get-permission` reads it by its token. For `get.unproven_requests`, see
+[The dialog hold](#the-dialog-hold-step-2c).
 
 `relayJudge.delivery` fills a `RequestDelivery` (`delivery`, `confirm_by`,
 `hook_alive`, `hook_gone_at`, `attempted_decision`, `attempted_at`,
@@ -13201,21 +14456,13 @@ mode.
 
 The decide verb writes the decision via a single-statement UPDATE in its
 own write transaction, guarded by the first-call-wins `decision IS NULL`
-predicate, the request being unconfirmed, without a pane answer and not
-closed with its spawn, a `created_at > ?` deliverability predicate that
+predicate, current admission ownership, no proof, claim, acknowledgement,
+pane answer or closure, and a `created_at > ?` deliverability predicate that
 applies only to a request recorded by an older binary (one with no
 `settled_at`), and a check that the request's spawn is not `ended` or
 `missing` (the checks and the write are one atomic statement):
 
-```sql
-UPDATE permission_requests
-   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
- WHERE instance_id = ? AND request_token = ? AND decision IS NULL
-   AND delivered_at IS NULL AND pane_answer = 'none' AND closed_at IS NULL
-   AND (settled_at IS NOT NULL OR created_at > ?)
-   AND NOT EXISTS (SELECT 1 FROM spawns
-                    WHERE instance_id = ? AND state IN (?, ?))  -- 'ended', 'missing'
-```
+The statement is `decideRelayRequestSQL` in `internal/store/permission.go`.
 
 First call wins; concurrent second calls see RowsAffected==0. The
 verb then does a follow-up SELECT (and, for an open row, a read of its
@@ -13257,12 +14504,12 @@ store transaction: both are written or neither is.
 3. The request, by the check-before-read rule: absent →
    `ErrNoOpenPermissionRequest`; decided, closed or answered at the pane
    (`PaneAnswered`) → `recordedRefusal`: closed with its Spawn
-   (`find-missing`'s mark, the ended transition or resume's move), not
-   acked, with a verdict `find-missing` did not write (`closed_at` set, no
+   (shared recovery's mark, the ended transition or resume's move), not
+   acked, with a verdict the missing mark did not write (`closed_at` set, no
    `delivered_at`, `decision_reason` not `find_missing`: a verdict recorded
    before the close, or the ended close's own deny) →
    `ErrNoOpenPermissionRequest` ("is closed: its spawn ended, or
-   find-missing marked it missing, before the request's relay hook
+   a shared check marked it missing, before the request's relay hook
    delivered a verdict, so nothing was recorded; do not answer it at the
    pane"), whether or not the Spawn was resumed since; closed at the pane
    (`pane_answer` `sent`, `outside` or `tool_ran`), whatever its
@@ -13274,7 +14521,8 @@ store transaction: both are written or neither is.
    `attempted_decision` (`RecordRefusedDecision` is guarded by
    `awaitingAnswerSQL` besides); otherwise `ErrAlreadyDecided`
    (`alreadyDecidedError`, naming the `decision_reason`), the mark's own
-   deny and a closed request a live hook acked since included. Every later
+   deny and a request acknowledged before closure included. Closure never
+   permits a later ack. Every later
    path that re-reads the request (`notWritten`, `refusePreV7`,
    `fallenBackRefusal`, `finishedRowRefusal`) applies the same check, so
    the answer is the same before and after v7. A closed request is never
@@ -13296,7 +14544,8 @@ store transaction: both are written or neither is.
    `send-keys`).
 5. The verdict write, `DecideRelayRequest`: one guarded statement in a
    bounded `inWriteTx` (undecided, unacked, `pane_answer` `none`, not
-   closed, Spawn not finished; for a request recorded before v7 also the
+   closed or proven gone, current admission ownership, no response claim,
+   Spawn not finished; for a request recorded before v7 also the
    deliverability cutoff). Its wait, for the store's connection and its
    write lock, is `lockWait()`: what is left of the bound, never below 0,
    or `DefaultLockWait` (the store's own waits) without one. A connection
@@ -13326,8 +14575,9 @@ store transaction: both are written or neither is.
    error, and a failed read keeps the facts of the one before.
 
 `ErrStoreBusy` is `store.ErrStoreBusy`, re-exported in `pkg/api/aliases.go`
-and catalogued with package `store`; `decide` is the one verb that lists
-it. It covers a wait for the store's write lock (another process or
+and catalogued with package `store`; each verb that can return it declares
+it in its manifest error list, the authority for which verbs do. For `decide`
+it covers a wait for the store's write lock (another process or
 connection held it) and a wait for the store's one connection (another
 call of the same process held it), plus precommit SQL/setup deadline
 exhaustion without any competing holder. SQL and cleanup use the original
@@ -13342,7 +14592,7 @@ durability. The CLI's `--max-wait-ms` (`optionalInt64Value`, so an absent flag i
 
 `get`, `list` and `get-permission` judge every request they return
 through the Client's `relayView()`. Their relay-delivery write is one
-`recordGone` per call (`list` gathers every row's) with a lock wait of 0
+eligible attempt per request through `recordGone`, with a lock wait of 0
 (`readerLockWait`): `RecordPermissionFallbacks` stores `hook_gone_at` with
 the request's first [fallback clock](#displayed-state-reporting), or, on a store
 without it, `RecordHookGone` stores `hook_gone_at` alone. A fallen-back
@@ -13360,20 +14610,11 @@ moment; busy or failed, it writes nothing, and the reply reports
 bounded wait. `get` and `list` list a row's requests that still await an
 answer, decided or not, only while the row is in `check_permission`, so
 never a closed request (closed with its Spawn, or at the pane); `list`
-rows carry `permission_requests` as `get` does. Each reads a row's
-requests at most once with a wait, by the check-before-read rule
-(`readJudgedRequests`, with `PermissionRequestsForSpawn`), and gives that
-read to the row's [display observation](#displayed-state-reporting)
-(`permissionRead.requests`). `list` makes that read of a
-`check_permission` row unless its state filter names a Displayed State:
-otherwise the row is sure to be listed (a lifecycle filter is applied in
-the statement). With such a filter its observation reads without
-waiting (`PermissionRequestsForSpawnWithin`). `list` projects a listed
-row's open requests from the observation's read (`judgedOpenInfos`) or,
-when the observation read none (as on a store without the display
-observation), from a waiting `OpenPermissionRequestsForSpawn` read
-(`awaitingAnswerSQL`, through `openRequestInfos`). `get` reads a row in
-any state but `ended` and `missing` and projects both of its lists
+rows carry `permission_requests` as `get` does. Selected reads use the bounded
+`activePermissionReader`; their display observation and response share
+`readJudgedRequests`. A listed raw `check_permission` row projects actual
+open requests through `judgedOpenInfos`, preserving narrow-provider fallbacks.
+`get` reads a row in any state but `ended` and `missing` and projects both lists
 (`judgedSpawnInfos`), oldest first (`created_at`, then request id), each
 request judged once:
 `permission_requests`, the requests that still await an answer
@@ -13383,14 +14624,14 @@ holding the dialog (`PermissionRow.HoldsDialog`). Its requests from either
 list join the same one `recordGone` by the rule above. With no wait left, the
 zero-wait write still takes a free connection.
 
-After a write the store refused as busy (`ErrStoreBusy`, a refused
-connection included), a read skips its other kind of write. When `get`'s
-`recordGone` was busy, its observation samples no pane, attempts no write
-and returns the committed display (`permissionRead.storeBusy`); after a
-`recordGone` write, the observation re-reads the requests without waiting.
-`list`
-skips its `recordGone` once a row's observation write was busy; every row
-still attempts its own observation write.
+The active checker retains judged requests for response assembly and
+invalidates them when refreshed row/permission identity changes. Requests first
+judged after that refresh still reach the original offered fallback recorder,
+through `activeReadStore.recordGone`: at most one eligible attempt per request,
+with no invented recorder when the provider offers none. A busy observation or
+fallback write suppresses later fallback writes; independent selected rows
+retain their own observation attempts. Neither judging nor recording supplies
+permission response authority.
 
 With `[state] settle_ms` set, `status`, `get` and `list` derive the settled state inside
 their own SELECT from the reader's clock (`SettleRead.stateExpr`), so
@@ -13398,18 +14639,11 @@ settling adds no read, write or wait; the requests they list follow the
 raw state, never the settled one (see
 [Settle time (b.3ie)](#settle-time-b3ie)).
 
-Public `get`, `status` and `list` also perform the separate guarded
-[Cursor gateway reconciliation](#cursor-gateway-and-current-launch-binding)
-using fresh launch/binding evidence in the read statement. The complete result
-precedes its separate best-effort terminal write; only that write's busy/deadline
-failure is deferrable with a valid caller context. Read failures, other write
-failures and caller cancellation/exhaustion propagate. See the linked lifecycle
-owner for guards, unchanged budgets and the distinction from durable closeout.
-
-`get`, `status` and `list` first end the Codex turns whose rollout records
-their end (`endCodexTurns`), with the same zero wait; a busy store or any
-failure there is dropped (see "The Codex turn" under [The agent-aware hook
-classifier](#the-agent-aware-hook-classifier)).
+Cursor gateway projection, Codex missed-turn recovery and these permission
+checks run through the [shared active checker](#shared-active-checks), after
+fixed selection. Cursor terminal persistence follows response assembly; its
+local stale-proof and genuine error handling are defined in the
+[gateway contract](#cursor-gateway-and-current-launch-binding).
 
 ### The row after the last answer (rule 9, problem 3)
 
@@ -13450,8 +14684,9 @@ hold as described in [Cursor gateway](#cursor-gateway-and-current-launch-binding
 
 Cursor sends no mid-turn hook, so its tool proof stands in for Claude's
 `PostToolUse` or `PostToolUseFailure` (b.eoe). When `proveCursorTool`
-(`ProveCursorToolRan`, or `ProveCursorToolFailed` for a failed MCP
-completion) writes a proof while a prompt turn is open (`turnOpen`, the
+(through `CommitCursorProof`; see
+[Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority))
+writes a proof while a prompt turn is open (`turnOpen`, the
 gateway session loop's `busy && !rotating`) and the request's retained
 decision is not deny, the same transaction moves the row from
 `check_permission` to `working` under `noRequestHoldsRowSQL`, with the
@@ -13492,46 +14727,46 @@ row's requests closes it. The agent's own hooks end its hold instead:
 the main agent's `Stop` or idle-prompt Notification after it proves it
 gone (`turn_end`, a durably eligible request with no `agent_id` recorded before the hook
 started; on a Codex row its `Stop` or its `Interrupt`, the idle prompt
-being Claude's), and a Claude tool's `PostToolUse` or `PostToolUseFailure`
-does (`tool_ran`, an allow; never a Codex row's). Each proof is the hook's first write, so the
+being Claude's), and on a Claude row a subagent's `SubagentStop` proves
+that subagent's requests (`turn_end`; b.wbs). Each proof is the hook's first write, so the
 hook's own write is not held by it, and from then on the agent's moves to
-`working` apply though the request stays open. A `PostToolUse` whose tool
-ran therefore moves the row to `working` even when the PostToolUse close
-leaves the request open because its relay hook may still answer it: the
-tool ran, so its dialog is gone. Such a request
-is still open everywhere else (`awaitingAnswerSQL`): `get-permission`
+`working` apply though the request stays open: proof retires response
+authority regardless of the relay hook's liveness. Such a request
+can remain reportable open history (`awaitingAnswerSQL`): `get-permission`
 reads it, `get` and `list` list it while the row's raw state is
 `check_permission` (not once the row has moved on, though with `[state]
 settle_ms` set `state` can still read `check_permission` for up to the
-settle time; see [Settle time (b.3ie)](#settle-time-b3ie)), `decide`
-judges it, and rule 7 refuses
-plain `send-keys` on its account until it is closed.
+settle time; see [Settle time (b.3ie)](#settle-time-b3ie)), and rule 7 refuses
+plain `send-keys` on its account until it is closed. `decide` cannot acquire
+new response authority from that history; see
+[Permission verdict authority](#permission-verdict-authority).
 
 Residuals, accepted:
 
 - **A subagent's request.** A request with an `agent_id` answered at the
   pane outside agent-director is never proven by the main agent's turn
   end (a background subagent can outlive the main turn), so it holds the
-  row's moves to `working` until `record-pane-answer`, its tool's
-  `PostToolUse`, or the row's end. On Claude/Codex the main agent's `Stop` still moves the
+  row's moves to `working` until `record-pane-answer`, its subagent's
+  `SubagentStop` (Claude rows; b.wbs), or the row's end. On Claude/Codex the main agent's `Stop` still moves the
   row to `waiting` (only moves to `working` are held), so the row can read
-  `waiting` through later turns until one of those. On a Codex row there is
-  no `PostToolUse` to wait for, so a subagent's request holds until
-  `record-pane-answer` or the row's end, allowed or denied.
+  `waiting` through later turns until one of those. If Claude Code sends no
+  `SubagentStop` for that subagent, the request holds until
+  `record-pane-answer` or the row's end, as a Codex row's subagent request
+  always does, allowed or denied.
 - **A turn interrupted by a pane deny.** Claude Code sends no `Stop` on a
   user interrupt, so after a deny at the pane that interrupts the turn the
   hold lasts until the idle-prompt Notification, once the agent idles, or
   the next turn's `Stop`. A Codex row has no such residual: its `Interrupt`
   is the turn end.
-- **A Codex row's allow.** With no `tool_ran` proof (Codex's requests carry
-  no `tool_use_id`), a request allowed at the pane outside agent-director
-  holds the row's moves to `working` until the turn ends, not until its
-  tool runs.
+- **An allow.** With no `tool_ran` proof (Claude's and Codex's requests
+  carry no `tool_use_id`; b.wbs), a request allowed at the pane outside
+  agent-director holds the row's moves to `working` until the turn ends,
+  not until its tool runs.
 - **The hook's start second.** A `turn_end` proof covers only requests
   created before the second its hook process started (see "The `turn_end`
   ordering rule" under "The dialog hold" below). A request recorded in the
-  second a `Stop` or idle prompt started is therefore not proven by it and
-  holds until a later turn-end proof. And the hook process starts a little
+  second a `Stop`, idle prompt or `SubagentStop` started is therefore not
+  proven by it and holds until a later turn-end proof. And the hook process starts a little
   after Claude Code sends the hook, so a next-turn request recorded in that
   gap, in an earlier second, could still be proven (very unlikely).
 
@@ -13543,24 +14778,25 @@ When the hook that would move the row is lost:
   [Event → state mapping](#event--state-mapping-srd-52)); its own
   `turn_end` proof runs first. A Codex row has none; its `Stop` and
   `Interrupt` do the move as they do for any row;
-- `find-missing`'s repair, `RepairCheckPermission`
-  (`pkg/api/find_missing_repair.go`), which `Client.FindMissing` runs
-  after the sweep on a fresh read of the live rows. For each row in
-  `check_permission` it reads every request and leaves the row alone when
+- The shared checker's `repairCheckPermissionRow`
+  (`pkg/api/find_missing_repair.go`) uses the selected row and its judged
+  requests. The exported `RepairCheckPermission` retains the same permission-only
+  adapter for narrow callers. It leaves a `check_permission` row alone when
   any request no close has closed and whose `confirm_by` has not
-  passed has a relay hook it does not judge gone (`mayHaveLiveHook`: alive
-  or can't tell). A closed request is skipped unjudged: a close closed it
+  passed has a relay hook it does not judge gone (`mayHaveJudgedHook`: alive
+  or can't tell). A closed request cannot hold the repair (`!Closed()` in
+  `mayHaveJudgedHook`), even when the shared request read has judged its hook:
+  a close closed it
   when the row moved to `missing` or `ended` (or, left open by an earlier
   release, when the finished row was resumed), so the row is in
-  `check_permission` again only through a later hook, and its leftover hook
-  can write only
-  its own request's `delivered_at`, never the row; judging it would let a
-  hook that cannot be checked hold the row until its `confirm_by`, up to a
-  relay window later. A request proven gone is judged as any other no
+  `check_permission` again only through a later hook. Its leftover hook
+  cannot acknowledge the closed request or move the row; see
+  [Permission verdict authority](#permission-verdict-authority). A request proven gone is judged as any other no
   close has closed, so a live relay hook of one still holds the repair
   off; the proof leaves it out of the statement's guard only. Otherwise one
-  guarded statement, `RepairCheckPermissionIfSameLife`
-  (`internal/store/find_missing_writes.go`), moves the row to `waiting`
+  guarded repair, `RepairCheckPermissionSample`
+  (`internal/store/recovery.go`), rechecks the row, observation version,
+  permission epoch and exact request rows, then moves it to `waiting`
   when `idle_since` is set and to `working` otherwise (a Codex row always
   to `working`: the statement's `CASE` also tests `agent <> 'codex'`, since
   Codex sends no idle-prompt Notification and an `idle_since` on its row
@@ -13568,8 +14804,8 @@ When the hook that would move the row is lost:
   is still in `check_permission` with `relay_mode` on, holds the snapshot
   the read gave, and has no request holding it (`holdsRowSQL`). It NULLs
   `launch_started_at`, advances `row_version` and writes the own-state settle
-  columns for an immediate report. The guarded statement runs in
-  `inImmediateTx`, which refreshes family history before commit; family
+  columns for an immediate report. The sampled repair uses a nonwaiting
+  guarded transaction and refreshes family history before commit; family
   reporting settles independently. No other own-state column changes
   (`idle_since` stays until the agent's next hook; `last_seen_at` is not
   bumped, since no hook reported). A request recorded after the read
@@ -13602,30 +14838,33 @@ close of a Spawn's requests" under [`internal/store`](#internalstore)):
   commit it emits one `ad.row_mutation.committed` (writer `hook`,
   `decision_reason` `ended`) per request it denied, then the
   `ad.spawn.state_transition`.
-- **`find-missing`'s mark** (`MarkMissingIfSameLife`), reason
+- **shared recovery's mark** (`MarkMissingIfSameLife`), reason
   `find_missing`, as before.
 - **The Codex move to `ended`** (`MarkEndedIfSameLife`), reason `ended`,
-  writer `find_missing`: made by `find-missing`, and by `pause` before its
-  keys or in its wait, once a Codex row's agent process is gone and the row
-  holds an end report (see [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
+  writer `find_missing`: made by a [shared active check](#shared-active-checks)
+  (state read or `find-missing`), and by `pause` before its keys or in its
+  wait, once a Codex row's agent process is gone and the row holds an end
+  report (see [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
   It runs the same close as the mark in the same kind of transaction, so
   the row's requests and subagent records close with it. Its writer is
-  `find_missing` even when `pause` makes the write: the writer names the
-  write, not the verb.
+  `find_missing` even when a state read or `pause` makes the write: the
+  writer names the write, not the verb.
 - **Resume's move to `pending`** (`MoveToPending`), reason `ended`, writer
   `resume`: a backstop for a request left open on a row that finished
   before the ended close existed (or by any path that missed it).
 
-An undecided request is denied by the close, so a relay hook still polling
-for it reads a fail-closed deny; a decided one whose hook has not acked
-keeps its verdict. On a non-Cursor row the same close proves every request
+An undecided request gets an observational deny from the close; a decided
+one keeps its verdict and origin. Neither can acquire a response claim after
+closure. On a non-Cursor row the same close proves every request
 of the row gone (`agent_gone`, step 2c), closed now or before. `decide` on a request the
 ended close denied is
 `ErrNoOpenPermissionRequest` (`recordedRefusal`), not `ErrAlreadyDecided`
 as for the mark's deny. The Codex move's deny reads the same way, since its
-reason is `ended`. After a resume, a closed request holds no working
-transition, is not listed on `get` or `list`, refuses no `send-keys` and
-blocks no repair.
+reason is `ended`. After a resume, a closed request no longer awaits an
+answer: it is omitted from `get` and `list`'s `permission_requests` and
+supplies no awaiting-answer hold on working transitions or repair. Its
+independent dialog hold and visibility in `get.unproven_requests` follow
+[The dialog hold](#the-dialog-hold-step-2c).
 
 The same four writes, and reuse's reset, also close the row's running
 subagent entries and claimable launches in that transaction (see
@@ -13649,9 +14888,9 @@ inside its own `BEGIN IMMEDIATE` transaction and only once its row write
 applied. Family history is refreshed after the close and before commit:
 
 - the terminal SessionEnd's move to `ended` (`applyEndedTransition`);
-- `find-missing`'s mark (`MarkMissingIfSameLife`);
-- `find-missing`'s Codex move to `ended` (`MarkEndedIfSameLife`), which `pause`
-  also makes;
+- shared recovery's mark (`MarkMissingIfSameLife`);
+- the Codex move to `ended` (`MarkEndedIfSameLife`), made by a shared active
+  check or `pause`;
 - resume's move to `pending` (`MoveToPending`);
 - reuse's reset (`ResetForReuse`).
 
@@ -13719,10 +14958,15 @@ of that kind uses it, never an `UPDATE subagents` or a
 
 A request answered at the pane outside agent-director stays fallen back,
 and rule 7 refuses every plain `send-keys` on its account, until it is
-closed. One close needs no caller on a Claude row: Claude Code runs a tool
-only once its permission dialog is answered allow, and the agent's `PostToolUse` (or
+closed. This close rests on a tool running only once its permission dialog
+is answered allow: the agent's `PostToolUse` (or
 `PostToolUseFailure`, for a tool that ran and failed) carries the tool use's
-`tool_use_id`, which the relay hook recorded on the request.
+`tool_use_id`. It matches a request only by the `tool_use_id` its relay hook
+recorded, and neither Claude's nor Codex's `PermissionRequest` carries one
+(Claude Code's hooks reference: PreToolUse's input without `tool_use_id`),
+so in practice it closes no request (b.wbs): a fallen-back request closes
+through `record-pane-answer`, a pane answer or the Spawn's close (see
+"Send-keys interaction" below).
 
 - **Classification.** `ClassifyEvent` (`internal/hook/classify.go`)
   copies the payload's `tool_use_id` into `ClassifyResult.ToolUseID`;
@@ -13735,31 +14979,24 @@ only once its permission dialog is answered allow, and the agent's `PostToolUse`
   write's `working` transition is no longer held by the request it closed.
   The hook's `tool_ran` proof, written just before the close, already ends
   that hold for every request it covers, so a request the close leaves
-  open (its relay hook may still answer it) does not hold the write either
+  open (its relay hook may still be alive) does not hold the write either
   (b.omt; see "The row after the last answer" above).
   `CloseToolRanRequests` (`internal/store/pane_writes.go`) reads the row's
   requests recorded from v7 on (`settled_at` set) with that `tool_use_id`
   that still await an answer. Its conditional mutation excludes actual Cursor
   while preserving NULL-agent compatibility; it judges each one's relay hook with
-  `HandleConfig.RelayHookGone` before its write (a request whose hook may
-  still answer it is left alone), and closes each other one with one
-  statement guarded by `awaitingAnswerSQL` and the hook gate: `pane_answer`
-  `tool_ran`, `decision` `allow`, `decision_reason` `tool_ran`,
-  `decided_at`, `hook_gone_at` when unset, and `proven_gone_at` with
+  `HandleConfig.RelayHookGone` before its write (a request whose hook is not
+  judged gone is left open as history, without response authority), and closes
+  each other one with one statement guarded by `awaitingAnswerSQL` and the hook gate: `pane_answer`
+  `tool_ran`, an observational `allow` only when undecided, and `tool_ran`
+  only for a missing reason. Existing verdict/origin and non-null reason remain.
+  It also fills missing `decided_at`, `hook_gone_at`, and `proven_gone_at` with
   `proven_gone_how` `tool_ran` when not yet proven (the hook's proof,
   written just before, normally has). Each close emits one
   `ad.row_mutation.committed` (writer `hook`). It is fail-open: a store
   without the method, or a failed close, logs and changes nothing else.
-- **A Codex row has none.** `ToolRan()` is never true for a Codex hook and
-  a Codex request records no `tool_use_id`, so no `PostToolUse` closes or
-  proves a Codex request; a fallen-back allow there closes only through
-  `record-pane-answer` or a pane answer (see "The relay on Codex rows"
-  below).
-- **What it does not cover.** It closes only allows (Claude Code runs no
-  hook for a deny at its dialog), never a request recorded before v7 (no
-  `tool_use_id` on record), and the hook that would make it can die, so it
-  is a help, not a guarantee: `record-pane-answer` is the other close (see
-  "Send-keys interaction" below).
+- **A Codex row has none.** `ToolRan()` is never true for a Codex hook, so
+  a Codex `PostToolUse` neither runs the close nor proves anything.
 
 ### The dialog hold (step 2c)
 
@@ -13772,8 +15009,10 @@ dialog of another request, and a dialog drawn more than 2 s late, after
 would answer such a dialog allow. b.146 step 2c (design U + B) holds
 plain keys after a request
 until the agent's hooks prove its dialog gone, according to "Proofs by agent"
-below: Claude has tool-run and turn-end proofs; Codex has main-agent `Stop`
-or `Interrupt` proofs and no tool-run proof. Both also have an agent-gone
+below: Claude has turn-end proofs, the main agent's and each subagent's
+(its `SubagentStop`; b.wbs), and a tool-run proof that none of its requests
+can match; Codex has main-agent `Stop` or `Interrupt` proofs and no tool-run
+proof. Both also have an agent-gone
 proof when their requests close with the Spawn; Codex's move to `ended` requires its
 verified process gone and its end report recorded. Cursor has its gateway's
 exact-invocation tool-run proof and its turn-end proof of the requests it never
@@ -13790,17 +15029,22 @@ docs/engineering-guide.md).
   (`RequestProof.match`): `tool_ran` covers the requests whose
   `tool_use_id` is the hook's, whatever their `agent_id` (an empty id
   proves nothing); the conditional UPDATE excludes actual Cursor with
-  NULL-safe `agent IS NOT 'cursor'`. Cursor uses only the authenticated
-  `ProveCursorToolRan` / `ProveCursorToolFailed` / `ProveCursorTurnEnded`
-  routes described above; `turn_end` means the turn of the agent that asked
+  NULL-safe `agent IS NOT 'cursor'`. Cursor uses the authenticated
+  routes required by [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority); `turn_end` means the turn of the agent that asked
   ended after the request was written, and the main agent's `Stop` or idle
   prompt, Codex main `Stop`/`Interrupt`, or verified Cursor main
   `Stop`/`Interrupt`, cover only requests with durable eligibility true AND
-  `agent_id IS NULL`, recorded before the hook started. Historical non-Cursor
-  main behavior is preserved; child/unknown-origin completion or session end
-  proves nothing here, other than the gateway's turn-end retirement (see
+  `agent_id IS NULL`, recorded before the hook started. A Claude subagent's
+  `SubagentStop` (`RequestProof.AgentID` set; b.wbs) covers instead
+  `pr.agent_id = ? AND pr.created_at < ?`: that subagent's requests
+  recorded before the hook started, whatever their verdict, never another
+  agent's; its UPDATE carries the same NULL-safe `agent IS NOT 'cursor'` as
+  `tool_ran`'s, so it proves nothing on a Cursor row. Historical non-Cursor
+  main behavior is preserved; other child/unknown-origin completion or
+  session end proves nothing here, other than the gateway's turn-end
+  retirement (see
   [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority)).
-  `SubagentStop` remains capture-only. See v11 columns above.
+  See v11 columns above.
   One read first takes the
   newest such request not yet proven (`MAX(request_id)`); then one UPDATE
   covers the unproven matching requests up to that id, with the hook gate
@@ -13811,7 +15055,8 @@ docs/engineering-guide.md).
   after the last answer" above), whatever agent-director's records say of
   it.
 - **The `turn_end` ordering rule.** "Written before the hook started" is
-  two cuts, both applied by the write. The first is the hook's
+  two cuts, both applied by the write, to the main agent's and a
+  subagent's turn end alike. The first is the hook's
   start (b.omt): `RequestProof.RecordedBefore`, `HandleConfig.Start` (the
   hook process's first clock reading, in `runHook`), passed to SQL as the
   store's `CURRENT_TIMESTAMP` text (`storeTimestamp`: UTC, whole seconds,
@@ -13825,10 +15070,12 @@ docs/engineering-guide.md).
   PermissionRequest, would otherwise prove that request gone with its
   dialog up, and a subagent's working hook would then move the row to
   `working`. The second is the read, taken before the write waits for the
-  lock: a request recorded while a `Stop` or idle prompt waits for the lock
-  (a later turn's) has a higher id and is not proven by it. The rule relies
+  lock: a request recorded while a `Stop`, idle prompt or `SubagentStop`
+  waits for the lock (a later turn's) has a higher id and is not proven by it. The rule relies
   on Claude Code sending a turn's `Stop` before it takes the next prompt,
-  so a `Stop` never arrives after the next turn's permission request;
+  so a `Stop` never arrives after the next turn's permission request, and
+  on a subagent resumed after its `SubagentStop` starting a new run, under
+  the same `agent_id`, whose requests come after that hook;
   request ids order the requests by their first write. Its residuals are
   listed under "The row after the last answer" above ("The hook's start
   second").
@@ -13841,20 +15088,22 @@ docs/engineering-guide.md).
   on a Codex result, an `Interrupt`, with no `agent_id`, or verified Cursor
   main `Stop`/`Interrupt`)
   a `turn_end` proof whose `RecordedBefore` is `Handle`'s `start` (from
-  `HandleConfig.Start`); any other hook proves nothing. It goes through the
+  `HandleConfig.Start`), and `ClassifyResult.SubagentStopped()` (a Claude
+  `SubagentStop` with an `agent_id`; b.wbs) a `turn_end` proof with the same
+  `RecordedBefore` and that `AgentID`; any other hook proves nothing. It goes through the
   optional `requestProver` extension of `HookStore` and is fail-open: a
   failed write logs, and the requests stay unproven (holding plain
   `send-keys`, and the row while they await an answer) until a later proof.
-  A request with an `agent_id` is proven only by its `PostToolUse` or by
-  the agent's end: a background subagent can outlive the main turn, and
-  `SubagentStop`, though registered, proves no request gone (`ToolRan()` and
-  `TurnEnded()` are false for it). On a Codex row a request with an
-  `agent_id` has no `PostToolUse` proof at all, so it holds until the agent's
-  end whether it was allowed or denied, and an `Interrupt` carrying an
-  `agent_id` (Codex sends none) proves nothing.
+  A request with an `agent_id` is proven only by its subagent's
+  `SubagentStop` or by the agent's end, never by the main turn's: a
+  background subagent can outlive the main turn. If Claude Code sends no
+  `SubagentStop` for that subagent, its requests hold until the agent's end. On a Codex row `SubagentStopped()` is
+  false, so a request with an `agent_id` holds until the agent's end whether
+  it was allowed or denied, and an `Interrupt` carrying an `agent_id` (Codex
+  sends none) proves nothing.
 - **The agent's end.** `closeOrphanedRequests`' third statement,
   `proveAgentGoneSQL`, proves every request of a non-Cursor row not yet proven
-  (`agent_gone`) in the transaction of `find-missing`'s mark, the ended
+  (`agent_gone`) in the transaction of shared recovery's mark, the ended
   transition and resume's move (see "Must use: the close of a Spawn's
   requests" under [`internal/store`](#internalstore)). It checks the actual
   `spawns` row in the caller's transaction with NULL-safe `agent IS NOT 'cursor'`,
@@ -13913,10 +15162,9 @@ docs/engineering-guide.md).
 `cursorHoldsDialogSQL` (`CheckCursorPrompt`), never a test of
 `delivered_at`, `pane_answer`, `closed_at` or `ProvenGone()` alone; whether it
 holds the row is `holdsRowSQL` (see "The row after the last answer" above); and a proof is
-written only through `ProveRequestsGone`, authenticated exact-request
-`ProveCursorToolRan` after validated execution or `ProveCursorToolFailed` after
-validated failed invocation, `ProveCursorTurnEnded` at a Cursor prompt
-turn's completion, `proveAgentGoneSQL`, the
+written only through `ProveRequestsGone`, the authenticated Cursor routes in
+[Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority),
+`proveAgentGoneSQL`, the
 PostToolUse close or the v6 → v7 hop's `v7ProveFinishedSQL` (see "Must use: a request's proof" under
 [`internal/store`](#internalstore)).
 
@@ -13926,8 +15174,8 @@ The relay serves a Codex row through the same path: `Handle` sends a Codex
 `PermissionRequest` to `runRelay` when the row's `relay_mode` is on, the
 request is one `permission_requests` row, and delivery, `confirm_by`, the
 fallback and the pane answers are as above. What differs follows from what
-Codex sends, and the code reads it in three places: `ClassifyResult.ToolRan()`
-and `TurnEnded()` (`internal/hook/classify.go`), the repair statement
+Codex sends, and the code reads it in three places: `ClassifyResult.ToolRan()`,
+`TurnEnded()` and `SubagentStopped()` (`internal/hook/classify.go`), the repair statement
 (`repairCheckPermissionSQL`) and the hook's heal. No store column, verb or
 error is new.
 
@@ -13944,15 +15192,13 @@ error is new.
 
   | Proof (`proven_gone_how`) | Claude row | Codex row |
   | --- | --- | --- |
-  | `tool_ran` | `PostToolUse` or `PostToolUseFailure` with the request's `tool_use_id` | never: no `tool_use_id`, `ToolRan()` false |
-  | `turn_end` | the main agent's `Stop` or idle-prompt Notification, no `agent_id` | the main agent's `Stop` or `Interrupt`, no `agent_id`; an `Interrupt` with one proves nothing |
+  | `tool_ran` | never in practice: `PostToolUse` or `PostToolUseFailure` with the request's `tool_use_id`, which a Claude request does not record (b.wbs) | never: no `tool_use_id`, `ToolRan()` false |
+  | `turn_end` | the main agent's `Stop` or idle-prompt Notification, no `agent_id`; a subagent's `SubagentStop`, for that `agent_id`'s requests (b.wbs) | the main agent's `Stop` or `Interrupt`, no `agent_id`; an `Interrupt` with one, and a `SubagentStop`, prove nothing |
   | `agent_gone` | a close of the Spawn's requests | the same, and the Codex move to `ended` |
 
-  So on a Codex row the hold after a main-agent allow lasts until the turn
-  ends, and a subagent's request, allowed or denied, holds plain `send-keys`
-  and `pause` until the agent ends. The PostToolUse close does not run, so a
-  fallen-back allow closes only through `record-pane-answer` or a pane
-  answer.
+  So on a Codex row a subagent's request, allowed or denied, holds plain
+  `send-keys` and `pause` until the agent ends, and the PostToolUse close
+  does not run.
 - **One end signal per turn (F4).** Codex sends no idle-prompt
   Notification, so a lost `Stop` or `Interrupt` hook leaves the turn's
   requests unproven until the next turn's end; the row itself returns to
@@ -14004,8 +15250,8 @@ property of the source models under Codex events), with controls that fail
 as expected when the Interrupt does not prove, when a main turn end proves a
 subagent's request, and when a subagent's Interrupt reads as unmarked.
 
-**Must use:** whether a hook ends a request's hold is `TurnEnded()` and
-`ToolRan()`, never a test of the agent in the handler; no write ties a Codex
+**Must use:** whether a hook ends a request's hold is `TurnEnded()`,
+`SubagentStopped()` and `ToolRan()`, never a test of the agent in the handler; no write ties a Codex
 row's repair to `idle_since`; and a Codex request is never proven by
 `tool_use_id`.
 
@@ -14029,12 +15275,14 @@ before the upgrade (rule 5's compatibility clause), through
   plain call is refused with `ErrRelayFallenBack` in any live state of the
   row, until a pane answer, `record-pane-answer` or a close of its Spawn
   closes it. The PostToolUse close never closes it.
-- `decide` takes it through `decidePreV7`: the verdict write carries the
-  deliverability cutoff (`RelayDeliverabilityCutoff`, the statement's
-  `created_at > ?` term, which applies only to a request with no
-  `settled_at`) and returns at once, with no ack wait. A refusal goes to
-  `refusePreV7`, which waits out the end of the window and names the
-  refusal as before (see "The wait at the window's end" and "Shown sitting
+- `decide` takes it through `decidePreV7`. A genuine migrated request has
+  unknown admission ownership: v17 leaves those columns NULL, so
+  `permissionOwnerSQL` rejects a new verdict even before the legacy cutoff.
+  Retained delivery history grants no response authority. The verdict write
+  also carries `RelayDeliverabilityCutoff` (`created_at > ?`, only for a
+  request with no `settled_at`). A refusal goes to `refusePreV7`: before
+  the cutoff it reaches `notWritten` and returns `ErrNoOpenPermissionRequest`;
+  after it, it waits out the end of the window and names the refusal (see "The wait at the window's end" and "Shown sitting
   on the request alone" under `pkg/api/decide.go` below), except that
   under a `max_wait_ms` bound ending before `relayHookSettledAt` it returns
   `ErrStoreBusy`, having recorded nothing, instead of sleeping. An
@@ -14123,12 +15371,12 @@ reserve; this repair imposes no shorter bound on those retained holds.
   by `awaitingAnswerSQL`; `pane_intent_at`, and `hook_gone_at` when unset,
   are the instant read inside the transaction after the `PaneCheck`),
   `RecordPaneSent` (`sent`, `decision = pane_as`, `decision_reason`
-  `pane`, only while the request still carries that sender's intent,
+  `pane` with pane origin, only while the request still carries that sender's intent,
   `paneIntentOwnerSQL`: the intent's `pane_intent_at` and sender, and is
   not closed, `closed_at IS NULL`),
   `ReleasePaneIntent` (clears the sender and `pane_intent_at` under the same
   guard; `pane_answer` stays `intent`), `RecordPaneOutside`
-  (`record-pane-answer`'s record after its `PaneCheck`, guarded by
+  (`record-pane-answer`'s observational record after its `PaneCheck`, guarded by
   `awaitingAnswerSQL`) and `CloseToolRanRequests` (the PostToolUse close:
   one statement per request on the pool, guarded by `awaitingAnswerSQL`
   and the hook gate). `PaneIntent` (the claimed verdict, the sender and the
@@ -14141,7 +15389,7 @@ reserve; this repair imposes no shorter bound on those retained holds.
   three statements, the close of a Spawn's requests that still await an
   answer plus decided unacked requests without a completed pane answer
   (including pre-v7), and the proof of every request of a non-Cursor Spawn (`agent_gone`),
-  shared by `find-missing`'s mark, the ended transition and resume's move
+  used by shared recovery's mark, the ended transition and resume's move
   (see "The ended transition closes the row's requests" above, and its
   "Must use" under [`internal/store`](#internalstore)). Future terminal writers
   MUST reuse this close so Cursor proof remains separate from row closure.
@@ -14197,7 +15445,8 @@ reserve; this repair imposes no shorter bound on those retained holds.
     is `GetSpawn` bounded the same way.)
   - `DecideRelayRequest`: `decide`'s verdict write, one statement guarded
     by `decision IS NULL`, `delivered_at IS NULL`, `pane_answer = 'none'`,
-    `closed_at IS NULL`, the deliverability cutoff for a request recorded
+    no prior response claim, current ownership and no closure or proof through
+    `permissionResponseEligibleSQL`, the deliverability cutoff for a request recorded
     before v7
     (`settled_at IS NOT NULL OR created_at > ?`; the cutoff comes from the
     `pkg/api` single authority and is never restated in SQL, SR-4.4) and
@@ -14209,8 +15458,7 @@ reserve; this repair imposes no shorter bound on those retained holds.
     through `closedRequest.emitDeny`, and the closes at the pane: a pane
     answer's `sent`, `record-pane-answer`'s `outside`, the PostToolUse
     close, and Cursor timeout/native/proof mutations through
-    `AckCursorDecision`, `ClaimCursorPaneAnswer`, `ProveCursorToolRan` and
-    `ProveCursorToolFailed`);
+    `AckCursorDecision`, `ClaimCursorPaneAnswer` and `CommitCursorProof`);
     events carry the actual final committed verdict and reason. A `decision`
     of `""` (an outside record claiming `unknown`) is
     emitted as null, as an empty `decision_reason` is.
@@ -14271,8 +15519,8 @@ reserve; this repair imposes no shorter bound on those retained holds.
   gone sentinel, no adoption write). **Must use:** a claim's earliest time
   comes from `claimNotBefore`, never from `hook_gone_at` alone.
 
-- **`pkg/api/error_details.go`** — `DetailedError`, `ErrDetails` and the
-  six `err_details` shapes (see "Error envelope" under
+- **`pkg/api/error_details.go`** — `DetailedError`, `ErrDetails` and structured
+  error facts (see "Error envelope" under
   [Stdio MCP server](#stdio-mcp-server)).
 
 - **`pkg/api/deliverability.go`** — the single authority (SR-4.4) for the
@@ -14339,9 +15587,10 @@ reserve; this repair imposes no shorter bound on those retained holds.
 
   - At its own deadline. A relay hook of this release counts from its own
     start, the instant Claude Code arms its kill, so the kill comes by
-    C + window + 1 s, and the hook commits its last write (its ack, or its
-    timeout deny with its own ack) at least 2 s before the kill, then
-    writes it and exits. A relay hook of an earlier release polled until
+    C + window + 1 s. Its write budget ends 2 s before the kill; a final
+    parent/deadline check suppresses late output. This is not a bound on
+    COMMIT completion; see [The relay hook's lifecycle](#the-relay-hooks-lifecycle).
+    A relay hook of an earlier release polled until
     C + window, then recorded its timeout deny, moved the row to `working`
     and returned the deny; the settle instant leaves that path margin +
     `createdAtResolution` (2 s) to complete in.
@@ -14542,17 +15791,15 @@ reserve; this repair imposes no shorter bound on those retained holds.
     returns `ErrRelayFallenBack`, and a plain `send-keys` is refused on the
     request's account. The main agent's `Stop` or idle-prompt Notification
     after such an eligible main request (one with no `agent_id`, a request recorded before
-    v7 included) proves it gone (`turn_end`), and so does its tool's
-    `PostToolUse` (`tool_ran`); from then on it holds no move to `working`,
+    v7 included) proves it gone (`turn_end`); from then on it holds no move to `working`,
     so it no longer keeps the spawn off `working` in later turns, though it
     stays open (see "The row after the last answer" above, which lists the
     residuals: a subagent's request, a turn interrupted by the pane deny,
     the hook's start second). A caller that follows
     the advice reads the pane first (a pane answer requires its hash) and,
     finding no prompt for the request, closes the record with
-    `record-pane-answer` instead of typing. The PostToolUse close closes such a
-    record whose tool then ran (recorded from v7 on), and the record also
-    closes with its spawn.
+    `record-pane-answer` instead of typing. The record also closes with its
+    spawn.
   - **A later request in the gap before it is recorded.** Closed for
     requests recorded from v7 on: a PermissionRequest hook's move to
     `check_permission` and its record are one transaction (rule 1).
@@ -14592,8 +15839,9 @@ reserve; this repair imposes no shorter bound on those retained holds.
 - **`pkg/api/find_missing_repair.go`** — `RepairCheckPermission` and its
   store surface `CheckPermissionRepairStore` (`ListLiveSpawnIdentities`,
   `PermissionRequestsForSpawn`, `RepairCheckPermissionIfSameLife`), and
-  `mayHaveLiveHook`, which skips a closed request unjudged; see "The row
-  after the last answer" above.
+  the per-row `repairCheckPermissionRow` / `mayHaveJudgedHook`, which reuse
+  the already judged request set; see "The row after the last answer" above
+  and [Shared active checks](#shared-active-checks).
 
 ### Polling cadence + the 50ms floor
 
@@ -14621,7 +15869,9 @@ row preempted via `sql.ErrNoRows`, read-retry budget exhausted, a parent
 that changed, no time left before the reserve, and an ack or timeout deny
 that fails, is cut or matches nothing. A deny written there without its
 ack could reach Claude Code while every reader reports the request fallen
-back.
+back. Conversely, an already-entered COMMIT may retain an acknowledgement
+when its result is late or unknown; `silent` suppresses output without erasing
+that history. See the lifecycle's "No answer" branch above.
 
 The cmd/-side `runHook` ALSO has a pre-Handle fail-closed: if the
 config can't be loaded, the store path can't be resolved
@@ -14665,12 +15915,12 @@ not hold is not a failure: it gets no deny envelope.
   store's reason (one read after the rollback, `notAppliedReason`), so
   `Handle` writes the hook's one `ad.hook.ignored`. A row gone in between
   gives no reason and no `ad.hook.ignored`.
-- **The ack and the deny.** They are not gated by the row's recorded
-  pane: they are keyed by the request the hook recorded. The hook's own
-  parent check (`parentIsStarter`, run as `parentCheck` inside each
-  write's transaction after the write lock is taken) guards them instead,
-  against a leftover hook whose Claude Code exited (problem 7), even one
-  that exited while the hook waited for the lock.
+- **The ack and the deny.** They use the request's captured owner and
+  response-eligibility guards, not the row's recorded pane; see
+  [Permission verdict authority](#permission-verdict-authority). `parentCheck`
+  additionally checks the starting agent and original deadline after taking
+  the write lock and again before output. A live parent alone cannot authorize
+  a closed, proven-gone or otherwise stale request.
 
 ### Send-keys interaction
 
@@ -14720,18 +15970,17 @@ reads every request of the row by the check-before-read rule
    answer on T still being sent (`paneInProgress`) →
    `ErrPaneAnswerInProgress` with `PaneAnswerInProgressDetails`.
 
-A request closed with its Spawn (`closed_at`) is proven gone by the same
-close and never holds or refuses anything; one closed at the pane
-(`PaneAnswered`) holds nothing under rules 1 and 2, and only rule 3 until
-it is proven gone. There is no time window of the guard's own, no
-zero-rows rule (the relay hook records its request and the row's move to
+A non-Cursor request closed with its Spawn (`closed_at`) is proven gone by
+the same close and no longer holds the guards. Cursor closure leaves proof
+unchanged; its requests follow [the Cursor launch hold rule](#the-dialog-hold-step-2c).
+A request closed at the pane (`PaneAnswered`) holds nothing under rules 1 and
+2; rule 3 uses `PermissionRow.HoldsDialog`.
+There is no time window of the guard's own, no zero-rows rule (the relay hook
+records its request and the row's move to
 `check_permission` in one transaction, rule 1) and no exception for
 decided modern requests; the decided pre-v7 `agent_gone` repair above is
-logical closure under both rules 1 and 2. Under rule 1 a request holds
-exactly while its relay
-hook may still answer it, and under rule 3 exactly until a hook proves it
-gone. Before a refusal with `ErrRelayFallenBack` is
-returned, `hook_gone_at` is recorded on every fallen-back request with none
+logical closure under both rules 1 and 2. Before a refusal with
+`ErrRelayFallenBack` is returned, `hook_gone_at` is recorded on every fallen-back request with none
 (`recordFallenBackGone`, `DefaultLockWait`, fail-open) and the rule applied
 again, so its `err_details` carry it. A failed read is `guardError`,
 the send failing with the store's error. On `ad.send_keys.called`,
@@ -14765,9 +16014,9 @@ returns `ErrAlreadyDecided`). That last step is the caller's (the
 `record-pane-answer`, `retryLater` (`retry later`) from `pause`, so no
 description advises retrying `send-keys` to a caller of `pause`. A plain retry once that hook has ended can
 meet rule 3 instead (`ErrDialogMaybeOpen`) until the request is proven
-gone: for Claude, its matching tool's PostToolUse or the main agent's
-Stop/idle-prompt Notification; for Codex, its main-agent Stop or Interrupt.
-Subagent requests need a matching Claude tool proof or the agent's end.
+gone: for Claude, the main agent's Stop/idle-prompt Notification; for Codex,
+its main-agent Stop or Interrupt. Subagent requests need their Claude
+subagent's SubagentStop or the agent's end.
 
 **`ErrRelayFallenBack`** (decision 10 A) is built only by
 `relayFallenBackError`, for `send-keys`, `pause` and `decide` alike: its description
@@ -14813,8 +16062,8 @@ when `decide` could not read them.
    (`closed_at IS NULL`: a close of its Spawn's requests between the
    intent and `sent` wins and keeps its verdict, rule 12); its
    `ad.row_mutation.committed` has writer `send_keys`. A statement that
-   matches nothing (the request was closed meanwhile, by the PostToolUse
-   close of its tool or a close of its Spawn's requests) changes nothing,
+   matches nothing (the request was closed meanwhile, by a close of its
+   Spawn's requests, say) changes nothing,
    and the call succeeds: the key was sent.
 
 When step 2 fails, or step 3 does, `releaseIntent` runs `ReleasePaneIntent`,
@@ -14905,10 +16154,11 @@ forever, and `decide` on it is refused with `ErrRelayFallenBack` rather
 than recorded into a void.
 
 **Sanctioned handling of a fallen-back request.** A caller closes it with
-an answer at the pane or a record of one. Claude's tool-run close and the
-agent-specific closes with the Spawn also close it, as described below;
-Codex has no tool-run close, and its move to `ended` requires a gone verified
-process plus a recorded end report. A caller (a person or an LLM, through
+an answer at the pane or a record of one. The agent-specific closes with
+the Spawn also close it, as described below; no Claude or Codex request is
+closed by its tool's run (see "The PostToolUse close (rule 13)"), and
+Codex's move to `ended` requires a gone verified process plus a recorded end
+report. A caller (a person or an LLM, through
 whatever relays the outcome to it) reads the pane, then answers through
 `send-keys` with the request's `request_token` and the pane's hash, or,
 when it was answered outside agent-director, records it with
@@ -14920,15 +16170,15 @@ A pane answer is audited as `ad.send_keys.called` with
 
 **A record that outlives its dialog (b.t6e, b.omt).** A request's record
 left awaiting an answer after its dialog closed while the spawn lives is
-closed by `record-pane-answer`, or by Claude's PostToolUse close when its
-tool ran (a request recorded from v7 on; Codex has no tool-run close), or
-with the spawn (`find-missing`'s mark, Claude's terminal end, or Codex's
-gone verified process plus recorded end report). Until then rule 7 refuses
+closed by `record-pane-answer` or with the spawn (shared recovery's mark,
+Claude's terminal end, or Codex's gone verified process plus recorded end
+report). Until then rule 7 refuses
 plain `send-keys` on its account. Until the agent proves its dialog gone
 according to [The dialog hold](#the-dialog-hold-step-2c), "Proofs by agent"
 (Claude's main-agent `Stop` or idle-prompt Notification, or Codex's
-main-agent `Stop` or `Interrupt`, `turn_end`; Claude's tool's `PostToolUse`,
-`tool_ran`; or an agent-specific close, `agent_gone`), the store's working
+main-agent `Stop` or `Interrupt`, `turn_end`; a Claude subagent's
+`SubagentStop` for its own request, `turn_end`; or an agent-specific close,
+`agent_gone`), the store's working
 hold also keeps the spawn
 in `check_permission` until a later hook moves it out or records a later
 request, and `find-missing`'s repair leaves the row alone; once it is
@@ -14975,8 +16225,9 @@ The AD code paths that satisfy this invariant:
   `timeout` deny and writes it. The row's state moves with the agent's
   next hook.
 - **Process death**: a relay hook that dies is read as gone by the next
-  reader (`delivery` `fallen_back`). When the agent dies, the
-  `find-missing` reconciler marks the Spawn `missing` and, in the same
+  reader (`delivery` `fallen_back`). When the agent dies, a
+  [shared active check](#shared-active-checks) (state read or
+  `find-missing`) marks the Spawn `missing` and, in the same
   store transaction, closes each request still awaiting an answer,
   writing `decision='deny'`, `decision_reason='find_missing'` to the
   undecided ones (the guarded `MarkMissingIfSameLife`; see the pinned
@@ -14986,8 +16237,8 @@ The AD code paths that satisfy this invariant:
   and closes its requests the same way in one transaction
   (`decision_reason='ended'`), and resume's move to `pending` closes any
   left open by an earlier release. A Codex Spawn whose agent process is
-  gone and that holds an end report is moved to `ended` by `find-missing`
-  (or `pause`) in the same way (`decision_reason='ended'`). Each move and its close are both
+  gone and that holds an end report is moved to `ended` by a
+  [shared active check](#shared-active-checks) (or `pause`) in the same way (`decision_reason='ended'`). Each move and its close are both
   written or neither is (b.146 rule 12), so a Spawn marked `missing` or
   ended by its agent never keeps an open request, and `decide` treats any
   request of an `ended` or `missing` Spawn as closed (see
@@ -15134,23 +16385,25 @@ must use them, never free-form strings:
 | --- | --- | --- |
 | `operator` | `deny` | `Decide` verb (orchestrator deny; an allow records no reason) |
 | `timeout` | `deny` | the relay hook's `DenyRelayTimeout` or gateway `AckCursorDecision` timeout deny, recording its own `delivered_at` |
-| `find_missing` | `deny` | `find-missing`'s mark (`MarkMissingIfSameLife`), which denies the marked row's undecided open requests in the mark's own transaction (`closeOrphanedRequests`) |
-| `ended` | `deny` | the terminal SessionEnd's move to `ended` (`applyEndedTransition`) and resume's move to `pending` (`MoveToPending`), which deny the row's undecided open requests in their own transaction (`closeOrphanedRequests`), and `find-missing`'s and `pause`'s Codex move to `ended` (`MarkEndedIfSameLife`), which does the same on a Codex row whose process is gone and that holds an end report |
+| `find_missing` | `deny` | shared recovery's mark (`MarkMissingIfSameLife`), which denies the marked row's undecided open requests in the mark's own transaction (`closeOrphanedRequests`) |
+| `ended` | `deny` | the terminal SessionEnd's move to `ended` (`applyEndedTransition`) and resume's move to `pending` (`MoveToPending`), which deny the row's undecided open requests in their own transaction (`closeOrphanedRequests`), and the Codex move to `ended` by a shared active check or `pause` (`MarkEndedIfSameLife`), which does the same on a Codex row whose process is gone and that holds an end report |
 | `pane` | `allow` or `deny` | `RecordPaneSent` for a public `send-keys` claim, or `ClaimCursorPaneAnswer` for a native Cursor choice (including a matching sent claim) |
 | `pane_outside` | `allow`, `deny` or NULL | `record-pane-answer` (`RecordPaneOutside`): the caller's claim, NULL for `unknown` |
-| `tool_ran` | `allow` or a preserved earlier verdict | the PostToolUse close (`CloseToolRanRequests`, allow), or authenticated `ProveCursorToolRan` filling a missing reason while preserving an earlier decision |
+| `tool_ran` | `allow` or a preserved earlier verdict | validated Cursor execution via `CommitCursorProof` (`Ran=true`), filling a missing reason while preserving an earlier decision; `CloseToolRanRequests` writes it too, but matches no Claude or Codex request (b.wbs) |
 
-`find_missing` and `ended` are the fail-closed deny a close writes, no
+`find_missing` and `ended` are historical denies a close writes, no
 verdict a caller or a relay hook chose (`PermissionRow.CloseDenied`): for a
 request recorded before v7, delivery counts it as no verdict.
 
 **Null semantics.** Undecided rows without a pane answer initially have no
 reason; a successful API allow also initially records NULL. Later validated
-Cursor execution through `ProveCursorToolRan` fills a missing reason with
+Cursor execution through `CommitCursorProof` (`Ran=true`) fills a missing reason with
 `tool_ran` without replacing an existing decision or non-null reason.
 Prior deny/operator, timeout, pane and outside reasons remain intact.
-`ProveCursorToolFailed` writes no verdict or reason, even when NULL: its
-`tool_ran` is a dialog proof value, not a decision-reason inference.
+A validated failed MCP invocation (`Ran=false`) writes no verdict or reason,
+even when NULL: its `tool_ran` is a dialog proof value, not a decision-reason
+inference. Both proof modes follow
+[Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority).
 Native Cursor choices can record `pane` without a `send-keys` call.
 Every deny and pane verdict has a reason; an outside `unknown` record has
 `pane_outside` and NULL decision until a later valid writer fills that verdict.
@@ -15279,18 +16532,19 @@ event families; the last is a self-reporting meta event. The store's
 session-history events (`ad.session.archived`, `ad.session.archive_failed`,
 `ad.session.jsonl_healed`) and schema-migration events (`ad.schema.*`)
 are also emitted but are not listed here. `ad.session.jsonl_healed` comes from
-`HealJsonlPath`, which `find-missing`'s sweep and a Codex hook's heal (see [The
-agent-aware hook classifier](#the-agent-aware-hook-classifier)) both call.
+a shared active check's Claude heal (`HealProvisionalTranscript`) and from
+`HealJsonlPath`, which a Codex hook's heal (see [The
+agent-aware hook classifier](#the-agent-aware-hook-classifier)) calls.
 
 | Event | Source | Description |
 |-------|--------|-------------|
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
 | `ad.hook.ignored` | `ad_hook` | Exactly one per hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane, for a SessionStart only after its bounded wait for the launch's identity write; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
 | `ad.hook.pane_is_grandparent` | `ad_hook` | One per SessionStart refused with `pid_mismatch` on a `pending` row whose pane process is the hook's grandparent (b.9n6, b.zde; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), written by `emitPaneIsGrandparent` (`internal/hook/gate.go`) right after that hook's `ad.hook.ignored`; not once-only. Carries `instance_id`, `pane_pid` (the row's pane process), `pane_command` (its command name; null when unreadable), `parent_pid` and `parent_command` (the `ad.hook.ignored` record's values), `advice` and `source`. The event name is the contract and claims only that structure; `advice` is supplementary English naming both causes (a launcher that does not exec, a hook run through a shell), chosen by the row's agent: a Claude row's also names `[launch] claude_path`, a Codex row's names the `codex` program, the launcher case and `[launch] codex_path`. Fail-open; it changes nothing else. Never another row's id or any session-environment content (SR-14, SR-15) |
-| `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write, including same-state and soft-refresh writes, per authenticated `InsertCursorRequest` admission after COMMIT (prior state to `check_permission`, `PermissionRequest`, `soft_refresh=false`), per Cursor tool proof that moves its row after COMMIT (`proveCursorTool`, only while a prompt turn is open and no rotation is under way, and never for a request whose retained decision is deny: `check_permission` to `working`, `PostToolUse`, or `PostToolUseFailure` for `ProveCursorToolFailed`, `soft_refresh=false`; no `ad.hook.fired` accompanies it), and per read-time Codex turn end after COMMIT (`EndCodexTurn`: `working` to `waiting`, `task_complete`, `soft_refresh=false`, plus `cause` `codex_rollout_task_complete`, the one record of this event that carries `cause`; see "The Codex turn" under [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). Ignored hooks and failed admissions emit none. Ack/timeout writes do not change state. Spawn insert, find-missing, resume and reuse keep their own existing event contracts. |
+| `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write, including same-state and soft-refresh writes, per authenticated `InsertCursorRequest` admission after COMMIT (prior state to `check_permission`, `PermissionRequest`, `soft_refresh=false`), per Cursor tool proof that moves its row after COMMIT (`CommitCursorProof` through `proveCursorTool`, only while a prompt turn is open and no rotation is under way, and never for a request whose retained decision is deny: `check_permission` to `working`, `PostToolUse`, or `PostToolUseFailure` for validated failed MCP invocation (`Ran=false`), `soft_refresh=false`; no `ad.hook.fired` accompanies it), and per sampled Codex turn end after COMMIT (`EndCodexTurnSample`, from a selected read or `find-missing`: `working` to `waiting`, `task_complete`, `soft_refresh=false`, plus `cause` `codex_rollout_task_complete`, the one record of this event that carries `cause`; see "The Codex turn" under [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). Ignored hooks and failed admissions emit none. Ack/timeout writes do not change state. Spawn insert, terminal liveness moves, resume and reuse keep their own event contracts. |
 | `ad.row_mutation.committed` | `ad_store` | After COMMIT, one per request insert and established decision mutation, with final persisted request id/token/tool/decision/reason. `writer_process` uses the closed `WriterProcess*` set: `hook`, `cursor_host`, `decide`, `find_missing`, `send_keys`, `record_pane_answer`, `resume`. Actual gateway admission, timeout, native claim and exact-tool proof use `cursor_host`; genuine hook paths retain `hook`. Cursor native/proof writes reuse `emitDecisionCommitted`; complete duplicate proof performs no UPDATE or event. Pure acknowledgement of an existing verdict, hook-gone/attempt/intent/release writes, nonmatch, errors and rollback emit no mutation event. Trail failure after COMMIT is fail-open and cannot undo the mutation. No raw ACP params or execution output is logged. |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`), `ErrStoreBusy` (a `max_wait_ms` bound reached before the verdict was recorded) and `ErrInvalidFlags` (a negative `max_wait_ms`); a successful call is `ok` whether its `delivery` is `delivered` or `not_confirmed` (SR-A-2.4, Epic 4) |
-| `ad.find_missing.tick` | `ad_find_missing` | Written by find-missing only for a guarded write that applied (see [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)); fail-open. Every tick carries `instance_id`, `prior_state`, `new_state`, `reconciliation_reason` and `source`. **Codex-move ticks** (`markEndedSameLife`, `pkg/api/find_missing_writes.go`): exactly one per applied move of a Codex row to `ended`, made by `find-missing` or by `pause`, `prior_state` the row's state before the move, `new_state` `ended`, `reconciliation_reason` `proc_absent`, source `ad_find_missing` and no extra field; the move's close-out ticks and denies are as a mark's. **Mark ticks** (`markMissingSameLife`, `pkg/api/find_missing_writes.go`): exactly one per applied mark, `prior_state` the row's state before the mark and `new_state` `missing`, with `reconciliation_reason` one of `proc_absent` (the agent process, from the SessionStart identity or the pane identity, recorded or adopted, is gone; no extra field), `tmux_absent` (the lookup found no session of the row's current launch and no session holds the recorded name, or an Ours row that records no pane has no pane carrying its launch token; plus `lookup_outcome`, the lookup's outcome token: `gone`, `leftover` or `ours`) or `tmux_name_held` (as `tmux_absent`, but a session holds the recorded name; plus `lookup_outcome` and `tmux_session_name`, the recorded name). **Close-out ticks** (`MarkMissingIfSameLife` and `MarkEndedIfSameLife`, `internal/store/find_missing_writes.go`, through `emitOrphanCloseoutTick` in `internal/store/recovery.go`): one `permission_orphan_closeout` per permission request the mark's transaction closed (each request still awaiting an answer: denied when undecided, or only closed when decided but unacked), written once it commits, in request-id order, each after that request's `ad.row_mutation.committed` when the mark denied it, and all before the mark's own tick, carrying `request_token`, `prior_state` and `new_state` null. **Note ticks** (`writeLivenessNote`, and `writeUnreportedNote` for the `unreported` note of a live `pending` row, b.kdf; both through `emitNoteTick`): `prior_state` and `new_state` null, `reconciliation_reason` the note (`probe_eacces`, `process_not_seen_session_present`, `process_not_seen_tmux_unchecked`, `tmux_server_changed`, `provenance_conflict`, `unreported`, or one of the unusable-recorded-name notes `tmux_session_name_empty`, `tmux_session_name_control_char` and `tmux_session_name_rewritten`, which carry no extra field), at most one per applied note write, and only when the row goes from no note to a note or enters `provenance_conflict` from no note or another note. So the `unreported` note ticks once, reason `unreported`, when it is written onto a row with no note, and not when it replaces another note; it writes no state, so it never has a state tick, and a sweep that finds the row already noted `unreported` writes and ticks nothing. No tick for a clear, for a note equal to the one the sweep read, for any other change of note, or for a write that found the row changed or absent or failed in the store (SR-11.4, SR-11.6, SR-14). A mark is the sweep's judgement on the evidence available to it, not proof that the agent has exited (SR-18.2). **Repair ticks** (`RepairCheckPermission`, `pkg/api/find_missing_repair.go`; b.146 rule 9): exactly one per applied repair of a relayed row left in `check_permission`, `prior_state` `check_permission`, `new_state` the state written (`waiting` or `working`) and `reconciliation_reason` `stale_check_permission`, with no extra field. There is no global-refusal tick. (SR-A-2.5) |
+| `ad.find_missing.tick` | `ad_find_missing` / `ad_recovery` | Written by shared recovery adapters (also reused by Codex `pause`) only for a guarded write that applied (see [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)); fail-open. The event name is retained. Source selection must reuse `Store.WithRecoveryTickSource` for close-out ticks and `recoveryTickTrail` for API ticks, with the defaults in [Shared active checks](#shared-active-checks). Every tick carries `instance_id`, `prior_state`, `new_state`, `reconciliation_reason` and `source`. **Codex-move ticks** (`markEndedSameLife`, `pkg/api/find_missing_writes.go`): exactly one per applied move of a Codex row to `ended`, made by a shared active check or by `pause`, `prior_state` the row's state before the move, `new_state` `ended`, `reconciliation_reason` `proc_absent`, source chosen by the invoking path above and no extra field; the move's close-out ticks and denies are as a mark's. **Mark ticks** (`markMissingSameLife`, `pkg/api/find_missing_writes.go`): exactly one per applied mark, `prior_state` the row's state before the mark and `new_state` `missing`, with `reconciliation_reason` one of `proc_absent` (the agent process, from the SessionStart identity or the pane identity, recorded or adopted, is gone; no extra field), `tmux_absent` (the lookup found no session of the row's current launch and no session holds the recorded name, or an Ours row that records no pane has no pane carrying its launch token; plus `lookup_outcome`, the lookup's outcome token: `gone`, `leftover` or `ours`) or `tmux_name_held` (as `tmux_absent`, but a session holds the recorded name; plus `lookup_outcome` and `tmux_session_name`, the recorded name). **Close-out ticks** (`MarkMissingIfSameLife` and `MarkEndedIfSameLife`, `internal/store/find_missing_writes.go`, through `emitOrphanCloseoutTick` in `internal/store/recovery.go`): one `permission_orphan_closeout` per permission request the mark's transaction closed (each request still awaiting an answer: denied when undecided, or only closed when decided but unacked), written once it commits, in request-id order, each after that request's `ad.row_mutation.committed` when the mark denied it, and all before the mark's own tick, carrying `request_token`, `prior_state` and `new_state` null. **Note ticks** (`writeLivenessNote`, and `writeUnreportedNote` for the `unreported` note of a live `pending` row, b.kdf; both through `emitNoteTick`): `prior_state` and `new_state` null, `reconciliation_reason` the note (`probe_eacces`, `process_not_seen_session_present`, `process_not_seen_tmux_unchecked`, `tmux_server_changed`, `provenance_conflict`, `unreported`, or one of the unusable-recorded-name notes `tmux_session_name_empty`, `tmux_session_name_control_char` and `tmux_session_name_rewritten`, which carry no extra field), at most one per applied note write, and only when the row goes from no note to a note or enters `provenance_conflict` from no note or another note. So the `unreported` note ticks once, reason `unreported`, when it is written onto a row with no note, and not when it replaces another note; it writes no state, so it never has a state tick, and a check that finds the row already noted `unreported` writes and ticks nothing. No tick for a clear, for a note equal to the one the sweep read, for any other change of note, or for a write that found the row changed or absent or failed in the store (SR-11.4, SR-11.6, SR-14). A mark is a check's judgement on available evidence, not proof that the agent has exited (SR-18.2). **Repair ticks** (`repairCheckPermissionRow`, `pkg/api/find_missing_repair.go`; b.146 rule 9): exactly one per applied repair of a relayed row left in `check_permission`, `prior_state` `check_permission`, `new_state` the state written (`waiting` or `working`) and `reconciliation_reason` `stale_check_permission`, with no extra field. There is no global-refusal tick. (SR-A-2.5) |
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
 | `ad.resume.moved_to_pending` | `ad_resume` | Once per applied move to `pending` by the `resume` verb, emitted when the create that directly follows the move returns (no I/O may run between the move and the create, SR-8.3); fail-open. Carries `instance_id`, `prior_state` (`ended` or `missing`) and `session_id` (the session id the row keeps). A `resume` refused before or at its move emits none. Emitted in `pkg/api/resume.go`, so every surface gets it. Unrelated to `ad.resume.observed`, a permission relay's hook resume (SR-8.3, SR-14) |
@@ -15300,9 +16554,9 @@ agent-aware hook classifier](#the-agent-aware-hook-classifier)) both call.
 | `ad.send_keys.called` | `ad_send_keys` | One per `Client.SendKeys` call past the closed check (every `agent-director send-keys` invocation), on every return path, fail-open (mirroring `ad.decide.called`); emitted by `emitSendKeysCalled` (`pkg/api/sendkeys_trail.go`). The exported `SendKeys` writes none. Carries `instance_id`; `allow_pending`; `row_state` (the stored state of the row the verb read, `""` when no row was read: it tells keys typed into a launching agent's startup prompt, a `pending` row, from keys sent to a live conversation, and records the state a refusal met); `outcome` (`ok` or the err_name from `errorName`: `ErrTmuxUnresponsive`, `ErrTmuxSessionConflict`, `ErrTmuxNotAvailable`, `ErrTmuxSendKeys`, `ErrSpawnNotInteractive` (its `pending`-row triggers included), `ErrSendKeysWhileRelayed`, `ErrSpawnNotFound`, and b.146 step 2b's `ErrRelayFallenBack`, `ErrPaneChanged`, `ErrPaneAnswerInProgress`, `ErrInvalidFlags`, `ErrNoOpenPermissionRequest`, `ErrAlreadyDecided` and `ErrStoreBusy`, and b.146 step 2c's `ErrDialogMaybeOpen`, by name; `ErrInternal` only for an error none of those matches, such as a relay-guard store error); the AD-collected `caller_*` identity (collected once per call); and a `guard_evaluation` field — `not-applicable` (relay guard did not apply: `relay_mode` is not on, or the call was refused before it), `held` (b.146 rule 7 refused the call: `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`, `ErrPaneAnswerInProgress`, or a pane answer's request not open), `released` (rule 7 let it through: no relay hook of the Spawn may still answer and, for a plain call, no open request has fallen back and every request is proven gone or the call carries `expect_pane_sha256`, or, for a pane answer, its request has fallen back; a pane answer is the audited recovery of a fallen-back relay) or `error` (the guard's store read failed) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2, SR-7.4). Never the typed text or key. `pause` and `read-pane` write no call event |
 | `ad.launch.name_held` | `ad_spawn`; `ad_resume`; `ad_find_missing` | Written by the one emitter `emitNameHeld` (`pkg/api/name_held_trail.go`), fail-open: a trail-write failure never changes the verb's result, error or description. Exactly one per plain-spawn label-scan refusal ("left over from an earlier life"), exactly one per plain spawn whose create answered "duplicate session" (the held-name path; see [Launch identity](#launch-identity)), exactly one per `resume` whose create answered "duplicate session" (see [After "duplicate session"](#after-duplicate-session)), and exactly one per reuse whose create answered "duplicate session" (see [Reuse of a finished id](#reuse-of-a-finished-id)). Carries `source`, `instance_id`, `launch` (`spawn`, `resume` or `reuse`), `tmux_session_name` (the requested name; for the scan, the first leftover's; for `resume`, the recorded name), `tmux_socket`, `tmux_session_id` and `session_created` (the blocking session; for the scan, the leftover with the lowest `$N`), `store_id` (this store's `store_meta.store_id`, never a label's, for comparison with a label's last field), `carries_this_id` and `current_launch` (from the holder's label class only, never the environment: true and false for an old label; true and true for a current label, which only the re-lookup of `resume` or reuse can meet (the row's own session); false and null for another id's, another store's or no valid label, another store's counting as not carrying the id even when it names it; both null when no single holder was identified or its class cannot be trusted), `lookup_outcome` (the lookup's outcome token), `outcome` (the returned error's name), `row_result` (`not_inserted` for the scan; `ended`, `left_changed` or `still_pending` after a plain spawn's "duplicate session"; `restored`, `left_changed` or `still_pending` after a `resume`'s or a reuse's, as its restore went), `store_error` (the end write's or the restore's store error text, else null), the by-hand `attach_command` (`tmux -u -S '<socket>' attach-session -r -t '<$N>'`) and `end_command` (`tmux -u -S '<socket>' kill-session -t '<$N>'`), and the `caller_*` identity; `leftover_count` only on the scan's record. `tmux_session_id`, `session_created` and both commands are present whenever one blocking session was identified, a holder with no valid label included, and null otherwise (vanished, ambiguous, unreadable, tmux unavailable). The trail carries the two commands because humans read it; no error description carries them. Later sources and launch kinds (another launch's `launch` value, the sweep's null `launch` and `outcome`) add their constants beside the existing ones without changing the field set. **resume** (source `ad_resume`, `launch` `resume`, written by `finishedLaunch.heldName` in `pkg/api/finished_launch.go`) writes exactly one per call whose create answered "duplicate session", after its re-lookup, its restore attempt and `ad.resume.restored`, whatever the outcome: the holder fields from the re-lookup, `tmux_socket` the launch socket, `lookup_outcome` the re-lookup's token, `outcome` the returned error's name, `row_result` the restore's (`restored`: the restore applied; `left_changed`: the row changed or was removed after the move; `still_pending`: the restore failed in the store, with `store_error`); no `leftover_count`. A refusal at `resume`'s pre-launch lookup writes none. **reuse** (source `ad_spawn`, `launch` `reuse`, written by the same `finishedLaunch.heldName`) writes exactly one per call whose create answered "duplicate session", after `ad.spawn.reused`, its re-lookup, its restore attempt and `ad.spawn.reuse_restored`, in that order, whatever the outcome, with the same fields as `resume`'s: `tmux_session_name` the requested name, `row_result` the restore's (`left_changed`: the row changed or was removed after the reset). A refusal before the reset (the old-row lookup or the new-name pre-check) writes none. **find-missing** (source `ad_find_missing`, `emitRowNameHeld` in `pkg/api/find_missing_lookup.go`) writes exactly one per row per sweep whose mark attempt had tick reason `tmux_name_held`, whatever the mark's outcome, with the same field set: `launch` and `outcome` null; `tmux_session_name` the row's recorded name; `tmux_socket` the socket the lookup used; `store_id` this store's, as for every source; the holder fields from the row's lookup (`heldHolderFacts`), so `carries_this_id` false and `current_launch` null when the holder is another store's session, and the holder fields null when more than one listing entry matches the name; `lookup_outcome` the lookup's token (`gone` or `leftover`); `row_result` `marked_missing` (the mark applied), `left_changed` (the row was changed or absent) or `still_pending` (the mark failed in the store, with `store_error`); no `leftover_count`. The sweep never touches the holding session (see [`find-missing`](#find-missing)). Never a label value, the id a label names, another row's id or session-environment content (SR-9.3, SR-9.4, SR-14, SR-15) |
 | `ad.kill.called` | `ad_kill` | Exactly one per kill call (`runKill` in `pkg/api/kill.go`, behind the exported `Kill` and `agent-director-admin kill-finished`), on every return path, so `Client.Kill`, direct callers and the admin verb all get it; fail-open (a trail-write failure never changes the result). A call on a closed `Client` returns `ErrClientClosed` before `Kill` runs and emits nothing. Emitted by `killRun.emit` (`pkg/api/kill_trail.go`). Carries `instance_id`; `tmux_session_name` (the recorded name, empty when there is no row); `outcome` (`ok` or the err_name the CLI would print, from `errorName`; `ErrSpawnNotResumable` only for the operator-only opt-in on a live row); `lookup_outcome` (the lookup's outcome token, or `not_run` when no lookup ran: unknown id, a finished row without the operator-only opt-in, the operator-only opt-in on a live row, an unusable recorded name, an unusable socket directory); `followup_outcome` (the follow-up lookup's token, `not_run` when none ran); `kill_sent` (as in the result); `pane_killed` (whether a pane kill was sent); `process_check` (`gone`, `alive`, `unreadable` or `not_recorded` whenever a process check ran, on the Gone path or after a kill; after an expired wait `alive` when the agent still counted as running, else `gone` with survivors listed, except that the wait after the follow-up on this id's own abandoned launch, which never reads the agent, keeps its `unreadable` or `not_recorded`, survivors listed or not, beside that follow-up's `followup_outcome` (b.myx); `not_run` when none ran); `agent_pid` (the pid of the agent process that was checked, null when no check read one); `survivor_pids` (the pane processes of the labelled session, or of the sessions of this id's own abandoned launch the operator-only opt-in ended together with those sessions' agent pane processes wherever their panes now are, still running when the wait ended, `[]` otherwise); `include_finished` (whether the operator-only finished-row opt-in was set: true only for `agent-director-admin kill-finished`, whose `caller_process` is `agent-director-admin`); and the AD-collected `caller_process`, `caller_pid`, `caller_hostname`, `caller_user`. A human uses `agent_pid` and `survivor_pids` in docs/operator-actions.md procedure. Never session-environment content or another row's id (SR-6.4, SR-14, SR-15) |
-| `ad.provenance.disagree` | the verb that decided (`ad_kill`; `ad_send_keys` for both keys verbs, `send-keys` and `pause`, told apart by `verb`; `ad_spawn` for plain spawn's re-lookup after "duplicate session", reason `scope_value`, and for reuse's old-row lookup and its re-lookup after "duplicate session"; `ad_resume` for `resume`'s pre-launch lookup and its re-lookup after "duplicate session"; `ad_find_missing`; `ad_expire`) | Written only when a verb call meets a disagreement, never in the normal case: at most once per reason per verb call, or per reason per row per sweep; fail-open. Emitted through the shared `emitProvenanceDisagree` (`pkg/api/provenance_disagree.go`), which drops duplicates and unknown reasons. `reason` is one of six: `server_restarted`, `server_mismatch`, `adopted` (a lost create reply's identity adopted and written), `duplicate_label` (two sessions with the current label), `scope_value` (an `@ad_owner` value at the global, server or global-window scope) or `name_changed` (Ours found under a name other than the recorded one); `pid_mismatch` is retired. Also carries `instance_id`, `verb`, `tmux_socket`, `tmux_session_name` (the recorded name), `tmux_session_id` (the session concerned, null when none), `current_session_name` (on `name_changed` only, null otherwise), `server` (`match`, `restarted`, `differs` or `unknown`), `verdict` (the lookup's outcome token), `action` (what the verb did; `kill` writes `kill_sent` or `nothing_sent`; `send-keys` and `pause` write send facts, not submission proof: `keys_sent` (input attempted with no recorded send error), `text_sent` (`SubmissionUnconfirmedDetails.KeysSent` is true, including non-timeout paste failures; otherwise a text/key timeout or failed Enter after text) or `nothing_sent` (no input attempt, including after `pause`'s failed `C-u`, or any remaining send error); plain spawn its held-name row result `ended`, `left_changed` or `still_pending`; `resume` and reuse `refused` or `proceeded` at their pre-launch lookup, and their restore's row result `restored`, `left_changed` or `still_pending` after "duplicate session") and the `caller_*` identity. **resume** (source `ad_resume`, `verb` `resume`, written by `emitFinishedRowDisagree` in `pkg/api/finished_launch.go`, over `emitLookupDisagree`) writes each distinct reason at most once per call, on a refusal too, never `adopted` (`resume` adopts nothing). Its pre-launch lookup's records (the lookup's reasons and `name_changed`) are written right after the decision, before any write, with `action` `refused` or `proceeded`. After "duplicate session" the re-lookup's records follow `ad.resume.restored`, with every reason the pre-launch lookup already wrote skipped and `action` the restore's row result; a `name_changed` record there names the row's own session, every other reason the name's holder (else the own session). `tmux_socket` is the lookup's socket and `tmux_session_name` the recorded name. **reuse** (source `ad_spawn`, `verb` `spawn`, written by the same `emitFinishedRowDisagree` with reuse's values) follows the same rules: each distinct reason at most once per call, never `adopted`; its old-row lookup's records right after the decision, before pre-trust and the reset, with `action` `refused` or `proceeded`; after "duplicate session" the re-lookup's records after `ad.spawn.reuse_restored`, skipping reasons already written, with `action` the restore's row result. `tmux_session_name` is the row's recorded (old) name, never the requested one, and `name_changed` compares against it. **send-keys and pause** (source `ad_send_keys`, `verb` `send-keys` or `pause`, written by the shared `keysRun.emitDisagree` in `pkg/api/pane_keys.go`) collect their reasons as `kill` does: the first lookup's, `name_changed`, a failed pane listing's, `adopted` only when the adoption write applied, and the follow-up lookup's; they write none when the call made no lookup. `pause` writes its records before its wait, so the wait's outcome neither adds nor removes one. `read-pane` writes none. **find-missing** (`verb` `find-missing`, written by `emitDisagree` in `pkg/api/find_missing.go` once the row's write has settled) writes one record per distinct reason per row per sweep, in the order above, and none for a row judged without a lookup (a row whose recorded session name cannot be used included) or a row whose lookup was not called. Its reasons are the lookup's own, `name_changed`, `adopted` (only when the adoption write applied) and those of an adoption pane listing that did not answer; each record carries the fields of the observation that produced its reason. A lookup reason carries the lookup's `server` and `verdict` and the lookup's session as `tmux_session_id` (the Ours session; null when none), with that session's stored name as `current_session_name` on `name_changed`. A reason only the listing reported (`server_mismatch`, on a no-server reply while the recorded server process is not gone) carries the listing's `server` (`differs`), its `verdict` (`different_server`) and `tmux_session_id` null. A reason both reported is written once, with the lookup's fields. `tmux_socket` is the socket the lookup used; `action` is the row's outcome: `marked_missing`, `left_live` (a `pending` row whose agent is alive and whose note is `provenance_conflict` included: it keeps that note), `left_unreported` (a live `pending` row noted `unreported`, or found already noted so, and left `pending`, b.kdf), `left_unverified`, `left_changed` (a guarded write, adoption included, found the row changed or absent) or `store_error`. **expire** (source `ad_expire`, `verb` `expire`, written by `expireRun.emitRow` in `pkg/api/expire_trail.go` once the row's delete attempt has settled) writes one record per distinct reason per row per run, and none for a row with no reason, a row kept for an unusable recorded name, a `process_alive` row or a row whose lookup was Skipped. Its reasons are the lookup's own and `name_changed`; it never writes `adopted`, because `expire` never adopts. `tmux_socket` is the socket the lookup used, `tmux_session_id` and `current_session_name` come from the lookup's session, `server` and `verdict` from the lookup (`not_run` when none ran), and `action` is the row's outcome: `deleted`, the row's kept reason (such as `ours` or `leftover_running`), or `left_changed` (another caller removed the row first). The caller identity is collected at most once per run (`lazyCaller`). Never a label's content or another row's id (SR-14, SR-15) |
+| `ad.provenance.disagree` | the verb that decided (`ad_kill`; `ad_send_keys` for both keys verbs, `send-keys` and `pause`, told apart by `verb`; `ad_spawn` for plain spawn's re-lookup after "duplicate session", reason `scope_value`, and for reuse's old-row lookup and its re-lookup after "duplicate session"; `ad_resume` for `resume`'s pre-launch lookup and its re-lookup after "duplicate session"; `ad_find_missing`; `ad_expire`) | Written only when a verb call meets a disagreement, never in the normal case: at most once per reason per verb call, or per reason per row per sweep; fail-open. Built by the shared `writeProvenanceDisagree` (`pkg/api/provenance_disagree.go`) with the caller-selected emitter (`emitProvenanceDisagree` is its legacy synchronous wrapper), which drops duplicates and unknown reasons; `pause` attempts its emissions before its wait (admission and durability: [Reusable writer](#reusable-writer)). `reason` is one of six: `server_restarted`, `server_mismatch`, `adopted` (a lost create reply's identity adopted and written), `duplicate_label` (two sessions with the current label), `scope_value` (an `@ad_owner` value at the global, server or global-window scope) or `name_changed` (Ours found under a name other than the recorded one); `pid_mismatch` is retired. Also carries `instance_id`, `verb`, `tmux_socket`, `tmux_session_name` (the recorded name), `tmux_session_id` (the session concerned, null when none), `current_session_name` (on `name_changed` only, null otherwise), `server` (`match`, `restarted`, `differs` or `unknown`), `verdict` (the lookup's outcome token), `action` (what the verb did; `kill` writes `kill_sent` or `nothing_sent`; `send-keys` and `pause` write send facts, not submission proof: `keys_sent` (input attempted with no recorded send error), `text_sent` (`SubmissionUnconfirmedDetails.KeysSent` is true, including non-timeout paste failures; otherwise a text/key timeout or failed Enter after text) or `nothing_sent` (no input attempt, including after `pause`'s failed `C-u`, or any remaining send error); plain spawn its held-name row result `ended`, `left_changed` or `still_pending`; `resume` and reuse `refused` or `proceeded` at their pre-launch lookup, and their restore's row result `restored`, `left_changed` or `still_pending` after "duplicate session") and the `caller_*` identity. **resume** (source `ad_resume`, `verb` `resume`, written by `emitFinishedRowDisagree` in `pkg/api/finished_launch.go`, over `emitLookupDisagree`) writes each distinct reason at most once per call, on a refusal too, never `adopted` (`resume` adopts nothing). Its pre-launch lookup's records (the lookup's reasons and `name_changed`) are written right after the decision, before any write, with `action` `refused` or `proceeded`. After "duplicate session" the re-lookup's records follow `ad.resume.restored`, with every reason the pre-launch lookup already wrote skipped and `action` the restore's row result; a `name_changed` record there names the row's own session, every other reason the name's holder (else the own session). `tmux_socket` is the lookup's socket and `tmux_session_name` the recorded name. **reuse** (source `ad_spawn`, `verb` `spawn`, written by the same `emitFinishedRowDisagree` with reuse's values) follows the same rules: each distinct reason at most once per call, never `adopted`; its old-row lookup's records right after the decision, before pre-trust and the reset, with `action` `refused` or `proceeded`; after "duplicate session" the re-lookup's records after `ad.spawn.reuse_restored`, skipping reasons already written, with `action` the restore's row result. `tmux_session_name` is the row's recorded (old) name, never the requested one, and `name_changed` compares against it. **send-keys and pause** (source `ad_send_keys`, `verb` `send-keys` or `pause`, written by the shared `keysRun.emitDisagree` in `pkg/api/pane_keys.go`) collect their reasons as `kill` does: the first lookup's, `name_changed`, a failed pane listing's, `adopted` only when the adoption write applied, and the follow-up lookup's; they write none when the call made no lookup; the outcome of `pause`'s wait neither adds nor removes one. `read-pane` writes none. **find-missing** (`verb` `find-missing`, written by `emitDisagree` in `pkg/api/find_missing.go` once the row's write has settled) writes one record per distinct reason per row per sweep, in the order above, and none for a row judged without a lookup (a row whose recorded session name cannot be used included) or a row whose lookup was not called. Its reasons are the lookup's own, `name_changed`, `adopted` (only when the adoption write applied) and those of an adoption pane listing that did not answer; each record carries the fields of the observation that produced its reason. A lookup reason carries the lookup's `server` and `verdict` and the lookup's session as `tmux_session_id` (the Ours session; null when none), with that session's stored name as `current_session_name` on `name_changed`. A reason only the listing reported (`server_mismatch`, on a no-server reply while the recorded server process is not gone) carries the listing's `server` (`differs`), its `verdict` (`different_server`) and `tmux_session_id` null. A reason both reported is written once, with the lookup's fields. `tmux_socket` is the socket the lookup used; `action` is the row's outcome: `marked_missing`, `left_live` (a `pending` row whose agent is alive and whose note is `provenance_conflict` included: it keeps that note), `left_unreported` (a live `pending` row noted `unreported`, or found already noted so, and left `pending`, b.kdf), `left_unverified`, `left_changed` (a guarded write, adoption included, found the row changed or absent) or `store_error`. **expire** (source `ad_expire`, `verb` `expire`, written by `expireRun.emitRow` in `pkg/api/expire_trail.go` once the row's delete attempt has settled) writes one record per distinct reason per row per run, and none for a row with no reason, a row kept for an unusable recorded name, a `process_alive` row or a row whose lookup was Skipped. Its reasons are the lookup's own and `name_changed`; it never writes `adopted`, because `expire` never adopts. `tmux_socket` is the socket the lookup used, `tmux_session_id` and `current_session_name` come from the lookup's session, `server` and `verdict` from the lookup (`not_run` when none ran), and `action` is the row's outcome: `deleted`, the row's kept reason (such as `ours` or `leftover_running`), or `left_changed` (another caller removed the row first). The caller identity is collected at most once per run (`lazyCaller`). Never a label's content or another row's id (SR-14, SR-15) |
 | `ad.expire.kept` | `ad_expire` | Exactly one per row `expire` kept, per run, written by `expireRun.emitRow` (`pkg/api/expire_trail.go`) once the row's outcome is final, `changed_since_examined` and `store_error` included; fail-open (a trail-write failure never changes the run's result). A deleted row and a row another caller removed first get none. Carries exactly `instance_id`, `reason` (the kept reason: `empty_session_name`, `control_char_session_name`, `rewritten_session_name` (an unusable recorded name, checked before every other reason, with no tmux call), `process_alive`, `tmux_skipped`, `leftover_running`, `ours`, `tmux_server_changed`, `provenance_conflict`, `cant_tell`, `tmux_unavailable`, `changed_since_examined` or `store_error` as built; the list is not closed), `tmux_session_name` (the recorded name, JSON-encoded like every trail field, so a control character below 0x20 appears escaped (DEL as is) and a byte that is not valid UTF-8 appears as U+FFFD) and `source`. Never session-environment content, a label value or another row's id (SR-12.5, SR-14, SR-15) |
-| `ad.spawn.displayed_state_transition` | none: the line carries no `source` field | One per entry into and exit from a Displayed State, `idle_screen` (or, exit only, a `needs_intelligence` 0.16 or 0.17 stored) (see [Displayed State reporting](#displayed-state-reporting)), emitted by `emitDisplayTransitions` / `emitDisplayTransitionsContext` through `displayTransition.emitContext` (`internal/store/display.go`) only after the write that made the change has committed, and fail-open: a trail-write failure changes nothing. An entry or a settled exit comes from the `status`, `get` or `list` read that commits it (`ObserveNeedsIntelligence` or `ObserveIdleScreen`); an immediate exit (`ended`, `missing`, a command's state write, `find-missing`'s repair of a stale `check_permission` row) comes from that write's own transaction, which drains the `display_exit` marker. A rolled-back write emits none, and a read that cannot commit emits none. A read whose COMMIT overruns its zero-wait work budget (`immediateWorkBudget`, or an earlier call deadline) and then lands (`branch=operation_guard`) also emits none, because `observationLanded`'s zero-wait re-read cannot confirm it while the abandoned operation holds the slot; the stored observation is correct, that read returns the previous display, and a later read shows the committed one, with `since` from the earlier read (an accepted SR-5.1 gap, Bug b.c55). Carries exactly `instance_id`, `prior_state`, `new_state` and `ts` (RFC 3339 UTC, millisecond precision: the transition's own time, the read's time for an entry or settled exit and the statement's clock for an immediate exit), plus the envelope's `event`. A Displayed State change never writes `ad.spawn.state_transition`. |
+| `ad.spawn.displayed_state_transition` | none: the line carries no `source` field | One per entry into and exit from a Displayed State, `idle_screen` (or, exit only, a `needs_intelligence` 0.16 or 0.17 stored) (see [Displayed State reporting](#displayed-state-reporting)), emitted by `emitDisplayTransitions` / `emitDisplayTransitionsContext` through `displayTransition.emitContext` (`internal/store/display.go`) only after the write that made the change has committed, and fail-open: a trail-write failure changes nothing. An entry or a settled exit comes from the selected state read or `find-missing` check that commits it (`ObserveNeedsIntelligenceOutcome` or `ObserveIdleScreenOutcome`); an immediate exit (`ended`, `missing`, a command's state write, a Codex turn start, a pane adoption, or a shared repair of a stale `check_permission` row) comes from that write's own transaction, which drains the `display_exit` marker. A rolled-back write emits none, and a read that cannot commit emits none. A read whose COMMIT overruns its zero-wait work budget (`immediateWorkBudget`, or an earlier call deadline) and then lands (`branch=operation_guard`) also emits none, because `observationLanded`'s zero-wait re-read cannot confirm it while the abandoned operation holds the slot; the stored observation is correct, that read returns the previous display, and a later read shows the committed one, with `since` from the earlier read (an accepted SR-5.1 gap, Bug b.c55). Carries exactly `instance_id`, `prior_state`, `new_state` and `ts` (RFC 3339 UTC, millisecond precision: the transition's own time, the committing check's time for an entry or settled exit and the statement's clock for an immediate exit), plus the envelope's `event`. A Displayed State change never writes `ad.spawn.state_transition`. |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
 
 ### Sources
@@ -15312,10 +16566,11 @@ The `source` field identifies which emitter wrote the line:
 | Value | Emitter |
 |-------|---------|
 | `ad_hook` | `internal/hook/handler.go` — the hook ingestion handler (`ad.hook.fired`); `internal/hook/gate.go` — `ad.hook.ignored` on the hook path (`emitIgnored`) and `ad.hook.pane_is_grandparent` (`emitPaneIsGrandparent`); `internal/hook/noexec.go` — `ad.hook.ignored` `no_exec_form` (`emitNoExecForm`), called from the no-verb run in `cmd/agent-director/noverb.go` |
-| `ad_spawn_store` | `internal/store/cursor_permission.go` — authenticated Cursor admission and a tool proof's move to `working` (`ad.spawn.state_transition`); `internal/store/codex_turn.go` — the read-time Codex turn end (`ad.spawn.state_transition`, `EndCodexTurn`); `internal/store/hook_writes.go` — the gated hook writes (`ad.spawn.state_transition`, and SessionStart's `ad.session.archived` / `ad.session.archive_failed`); `internal/store/session_history.go` — `ad.session.jsonl_healed` (also for the Codex hook heal) |
+| `ad_spawn_store` | `internal/store/cursor_permission.go` — authenticated Cursor admission and a tool proof's move to `working` (`ad.spawn.state_transition`); `internal/store/codex_turn.go` — the sampled Codex turn end (`ad.spawn.state_transition`, `EndCodexTurnSample`); `internal/store/hook_writes.go` — the gated hook writes (`ad.spawn.state_transition`, and SessionStart's `ad.session.archived` / `ad.session.archive_failed`); `internal/store/session_history.go` — `ad.session.jsonl_healed` (also for the Codex hook heal) |
 | `ad_store` | `internal/store/permission.go` — shared permission mutation emitter and writer constants; `internal/store/cursor_permission.go` — gateway admission, timeout, native and proof mutations |
 | `ad_decide` | `pkg/api/decide.go` and `cmd/agent-director/spawn_cmd.go` — decide verb |
-| `ad_find_missing` | The find-missing sweep: `pkg/api/find_missing_writes.go` — the mark, Codex-move and note ticks (`markMissingSameLife`, `markEndedSameLife`, `writeLivenessNote`, `writeUnreportedNote`); `internal/store/find_missing_writes.go` — the `permission_orphan_closeout` ticks of the requests its mark or Codex move closed (`MarkMissingIfSameLife`, `MarkEndedIfSameLife`, after its commit, through `emitOrphanCloseoutTick` in `internal/store/recovery.go`); `pkg/api/find_missing_lookup.go` — the `ad.launch.name_held` record through `emitNameHeld` (`emitRowNameHeld`); `pkg/api/find_missing.go` — the `ad.provenance.disagree` records through `pkg/api/provenance_disagree.go` (`emitDisagree`) |
+| `ad_find_missing` | Shared active recovery: `pkg/api/find_missing_writes.go` — sweep/find-missing mark, Codex-move and note ticks (`markMissingSameLife`, `markEndedSameLife`, `writeLivenessNote`, `writeUnreportedNote`); `internal/store/find_missing_writes.go` — sweep/find-missing `permission_orphan_closeout` ticks of the requests its mark or Codex move closed (`MarkMissingIfSameLife`, `MarkEndedIfSameLife`, after its commit, through `emitOrphanCloseoutTick` in `internal/store/recovery.go`); `pkg/api/find_missing_lookup.go` — the `ad.launch.name_held` record through `emitNameHeld` (`emitRowNameHeld`); `pkg/api/find_missing.go` — the `ad.provenance.disagree` records through `pkg/api/provenance_disagree.go` (`emitDisagree`) |
+| `ad_recovery` | Read- and pause-made `ad.find_missing.tick` records, including orphan-closeout ticks; source selection follows [Shared active checks](#shared-active-checks). |
 | `relay_hook` | `internal/hook/permission.go` and `cmd/agent-director/trail_emit_cmd.go` — relay-attempt completion |
 | `ad_polling` | `internal/hook/permission.go` — resume observed on hook return |
 | `ad_send_keys` | `pkg/api/sendkeys_trail.go` — send-keys' `ad.send_keys.called` (`emitSendKeysCalled`, called from `Client.SendKeys` in `pkg/api/sendkeys.go`; per invocation, carries the relay-guard evaluation and `row_state`); `pkg/api/pane_keys.go` — the keys verbs' shared `ad.provenance.disagree` emit (`keysRun.emitDisagree`, through `pkg/api/provenance_disagree.go`), called by `pkg/api/sendkeys.go` (`verb` `send-keys`) and `pkg/api/pause.go` (`verb` `pause`; pause writes no call event) |
@@ -15403,7 +16658,34 @@ the decision's `ad.row_mutation.committed` before the same Client call's
 `ad.decide.called`. Concurrent legacy synchronous emissions share the mutex
 but have no cross-caller chronological ordering guarantee. The fields map is
 copied and `tool_input` stripped at admission and again at serialization;
-nested values must remain immutable until delivery.
+nested values must remain immutable until delivery. pkg/api's recovery records
+(`recoveryTrail`) bound each record's write wait to 50 ms from the operation
+context: Background for the CLI, the Client read verbs and the exported
+`RepairCheckPermission`, which takes none. Admission never waits, a full queue
+rejects at once, and an accepted event stays with the trail worker. In the
+store, the two recovery observers bound theirs to 50 ms from the call context
+(`emitObservationTransitions`), and guarded recovery writes emit within their
+own `operationContext(0)` allowance (1 s, capped by the call context).
+Pause's provenance and API terminal tick use `recoveryTrail` with the original
+Pause context, each with the same 50 ms cap. Its concrete Codex terminal store
+write uses `WithTerminalReportingContext` alongside `WithRecoveryTickSource`:
+after confirmed COMMIT, one 50 ms allowance derived from that original context
+bounds the whole display-exit/request-closeout reporting batch. Cancellation
+or an earlier deadline shortens it; expiry does not skip later admissions or
+change `CondApplied`. SQL acquisition, busy waits, guards, closure, family
+refresh, commit and cleanup retain their existing transaction policy. This
+view bounds reporting, not the entire Pause call; it shares the owning store's
+pool and must not be closed independently. **Must use:** callers needing this
+terminal reporting bound reuse the scoped view, not a replacement transaction
+or worker. Unscoped terminal writers and other legacy hook/command/reuse
+emitters remain synchronous (`legacyTrail` for shared API writers); `decide`
+passes its call context.
+
+Pause's terminal reporting order is retained display exits, then each closed
+request's new denial mutation and orphan-closeout tick, then the API terminal
+tick. Existing decisions emit no new denial. Mutation source/writer remain
+`ad_store`/`find_missing`; Pause orphan/terminal ticks use `ad_recovery`, while
+sweep/find-missing ticks use `ad_find_missing`.
 
 `ErrPending` means accepted but write/fsync not confirmed before context
 expiry. The same worker retains ownership without replacement workers for
@@ -15498,7 +16780,7 @@ written, harmlessly:
    once the pending grace period has passed since its launch start. A
    row with no session id (typically a spawn's or reuse's launch), whose
    `resume` step 3 refuses once the row is `missing`, also gets the step
-   after that (`launchInProgressNoSessionStep`, b.uey): once `find-missing`
+   after that (`launchInProgressNoSessionStep`, b.uey): once a shared check
    marks it `missing`, if `get` still shows no session id, spawn the id
     again with the reuse opt-in and the row's agent, in their one
    spelling (`spawn.ReuseSpawn`), for Claude/Codex. Cursor instead uses
@@ -15512,8 +16794,8 @@ written, harmlessly:
 3. `session_id` populated → otherwise `ErrNoSessionId`. A
    Spawn killed before its first SessionStart hook fired has no
    rotated session id to point `--resume` at, nor does a spawn's or
-   reuse's launch that never reported in and that `find-missing` marked
-   `missing` (the step-2 refusal of its `pending` row named this
+   reuse's launch that never reported in and that a shared active check
+   marked `missing` (the step-2 refusal of its `pending` row named this
    recourse). For Claude/Codex, spawn again
    with the same id, opting in to reuse with `reuse_finished`
     (`--reuse-finished` on the CLI) and the row's agent (`--agent` on the
@@ -15972,7 +17254,7 @@ refused:
 | Removed, nothing restored | "there is no row left to resume; later, a spawn of the id starts afresh" (`resumeRemovedRetry`) | "retry later" |
 
 A row that changed or stays `pending` may still be `pending`, and until
-`find-missing` marks it `missing` (once the pending grace period has
+a shared active check marks it `missing` (once the pending grace period has
 passed since its launch start) a retried `resume` is refused as a launch
 in progress (`ErrSpawnNotResumable`) and a retried opted-in spawn
 collides (`ErrInstanceIdCollision`). A removed row leaves `resume` nothing
@@ -16050,9 +17332,10 @@ this section names no command for them.
   and a different explicit session name. (SR-18.5 lists no such case; WD
   2026-09-29 STORE.)
 
-The reuse alternatives in those two holder cases apply to Claude/Codex only.
-Cursor callers wait or follow the explicit unique-id fresh recovery in the
-caller contract; no same-id reuse or agent switch is enabled.
+Cursor supports same-agent reuse and agent switches under the
+[finished-id reuse](#reuse-of-a-finished-id) and [life rules](usage.md#naming-the-agent).
+For recovery that must preserve the original row and artifacts, follow the
+[caller contract](caller-contract.md#cursor-operation-boundaries).
 
 A `resume` or reuse right after `pause` returns, or right after an agent's
 natural exit, can get "appears to still be stopping" while the agent's
@@ -16147,8 +17430,8 @@ otherwise. This is what stops a row from asserting a dead pointer: an
 un-messaged, freshly-restarted agent has a NULL `jsonl_path`, not a path to a file
 that was never written. A stat error other than not-exist (e.g. a permission
 wall) is treated conservatively as "not present". The provisional NULL is not
-lossy — the resume fallback recomputes the path, and `find-missing` heals the
-row once the transcript appears (below).
+lossy — the resume fallback recomputes the path, and a shared active check
+heals the row once the transcript appears (below).
 
 **Session-history archival on rotation (b.v2c AC6).** Cursor same-launch rotation
 uses the required atomic publication described in
@@ -16175,15 +17458,16 @@ back starts another new life. An applied restore returns the pre-reuse
 agent and life, with their visible history and records, while deleted
 requests remain deleted and closed records remain closed.
 
-**Lazy transcript healing in `find-missing` (b.v2c AC3).** `find-missing`
-already sweeps every live row; on each sweep it also lists Claude rows with a NULL
+**Lazy transcript healing (b.v2c AC3).** A
+[shared active check](#shared-active-checks) (a state read of the row, or
+`find-missing` for every live row) also takes each Claude row with a NULL
 `jsonl_path` (provisional — a session that started before its transcript was
-written), recomposes each path the same way the resume fallback does, `os.Stat`s
+written), recomposes its path the same way the resume fallback does, `os.Stat`s
 it, and records it when present. So the normal case — an agent starts, and a caller
-messages it an hour later — heals with no operator intervention. Per-row errors
-are logged and skipped; healing never aborts the sweep.
+messages it an hour later — heals with no operator intervention. A per-row error
+skips that row; healing never aborts the check.
 
-**The hook heal for Codex rows.** `find-missing` heals Claude rows, which
+**The hook heal for Codex rows.** The shared active checks heal Claude rows, which
 Claude's hooks never do. A Codex row is healed by its own hooks as well: after
 an applied write of a Codex hook without `agent_id`, `healCodexTranscript`
 fills a NULL `jsonl_path` from the payload's path through `HealJsonlPath`
@@ -16282,9 +17566,12 @@ manual kills, and accumulated history: `find-missing` (reconcile),
 `expire` (finished-row cleanup), and `agent-director-admin`'s `delete`
 (a human's force-removal on the operator tool, not on any agent surface,
 and not a cleanup or recovery step; see [`delete`](#delete)).
-`find-missing` judges each live row by its agent process and consults
-tmux only for a row whose process cannot be checked. A row it marks
-`missing` is the sweep's judgement on the evidence available to it, not
+`find-missing` applies the [shared active checks](#shared-active-checks)
+to all agents, as state reads do to the rows they select. Liveness judges
+each live row by its agent process and consults tmux only for a row whose
+process cannot be checked, never for a Cursor row with a recorded gateway;
+eligible display samples read panes separately.
+A row marked `missing` is a judgement on the evidence available, not
 proof that the agent has exited. `expire` removes finished rows older than
 the retention window whose agent is gone (its process not seen running and
 no tmux session of the agent), and keeps and reports the others. The verbs
@@ -16295,8 +17582,9 @@ schedule for the sweeps](#the-schedule-for-the-sweeps)).
 
 ### Probe layer (`internal/probe`)
 
-`internal/probe` reads facts about one process, by pid. It holds three
-readers, each picked by build tag at compile time:
+`internal/probe` reads facts about one process, by pid, and selects one
+user's processes. It holds four readers, each picked by build tag at compile
+time:
 
 - the [start-time reader](#start-time-reader-procchecker-starttimego)
   (`ProcChecker`, `NewProcChecker()`): the one reader every process
@@ -16307,7 +17595,11 @@ readers, each picked by build tag at compile time:
   `parent_command` and `pane_command` trail fields only, never evidence.
 - the [parent-pid reader](#parent-pid-reader-parentpidreader-ppidgo)
   (`ParentPIDReader`, `NewParentPIDReader()`): the hook's
-  `ad.hook.pane_is_grandparent` check only, never evidence.
+  `ad.hook.pane_is_grandparent` diagnostic, Cursor's direct-child binding
+  check and the Darwin verifier's descendant exclusions.
+- the uid selection reader (`UIDProcessReader`, `NewUIDProcessReader()`):
+  the kernel's effective-uid process selection on darwin, an error elsewhere;
+  used only by the Darwin journal verifier.
 
 Beside them, `SelfPIDNamespace()` (`pidns.go`; b.kdf, b.146 rule 14) reads
 the calling process's own pid namespace: on Linux the target of
@@ -16341,9 +17633,10 @@ Files:
 | `starttime.go`, `starttime_{linux,darwin,unsupported}.go`, `starttime_{linux,darwin}_core.go` | The start-time reader: the interface, `NewProcChecker()`, the per-OS wiring (`defaultProcRoot`; `fetchKinfoPID`) and the build-tag-free cores (`linuxStartTimeReader`, `darwinStartTimeReader`, `unsupportedProcChecker`). |
 | `commname.go`, `commname_{linux,darwin,unsupported}.go`, `commname_{linux,darwin}_core.go` | The command-name reader, laid out the same way. |
 | `ppid.go`, `ppid_{linux,darwin,unsupported}.go`, `ppid_{linux,darwin}_core.go` | The parent-pid reader, laid out the same way (`linuxParentPIDReader`, `darwinParentPIDReader`, `unsupportedParentPIDReader`). |
+| `uidprocs.go`, `uidprocs_darwin.go`, `uidprocs_unsupported.go` | `UIDProcessReader`, `NewUIDProcessReader()`, the build-tag-free `darwinUIDProcessReader` and `unsupportedUIDProcessReader`, with Darwin wiring through `fetchKinfoUID`. |
 | `pidns.go`, `pidns_{linux,darwin,unsupported}.go`, `pidns_linux_core.go` | `SelfPIDNamespace`, the per-OS `selfPIDNamespace` and the build-tag-free Linux core `linuxSelfPIDNamespace` (b.kdf). |
 | `parse_linux_stat.go` | `parseLinuxStatWithState` (field 3 state, field 4 ppid, field 22 start time, anchored on the last `)`) and `ErrLinuxStatMalformed`. |
-| `parse_kinfo.go` | The kinfo_proc constants and the per-entry extractors `parseKinfoStartTime`, `parseKinfoStat`, `parseKinfoComm` and `parseKinfoPPID`; `formatDarwinProcStartTime`; `ErrKinfoLayoutDrift`. |
+| `parse_kinfo.go` | The kinfo_proc constants and the per-entry extractors `parseKinfoStartTime`, `parseKinfoStat`, `parseKinfoComm` and `parseKinfoPPID`; selection parser `parseKinfoPIDs`; `formatDarwinProcStartTime` and its inverse `ParseDarwinProcStartTime`; `ErrKinfoLayoutDrift`. |
 | `errno.go` | The errno classifiers `classifyLinuxErrno` / `classifyDarwinErrno` and their `procDisposition` values (see the table below). |
 
 **`ErrProbeUnsupported`.** No verb returns it: the removed environment
@@ -16353,15 +17646,17 @@ catalogue and the client error classes stay unchanged (SR-1.7). An OS with
 no per-OS reader does not return it either: its readers answer unreadable
 for every pid.
 
-**macOS kinfo_proc layout.** On darwin all three readers read the pid's single
-KERN_PROC_PID `kinfo_proc` entry (never KERN_PROCARGS2). `parse_kinfo.go`
-carries a family of XNU-version-sensitive constants:
+**macOS kinfo_proc layout.** On darwin the three per-pid readers read one
+KERN_PROC_PID `kinfo_proc` entry; the uid reader reads KERN_PROC_UID's array
+of entries. None reads KERN_PROCARGS2. `parse_kinfo.go` carries a family of
+XNU-version-sensitive constants:
 
 - `kinfoProcSize` (sizeof struct kinfo_proc = 648): every extractor
   refuses an entry that does not fit (`entryOffset`), a short entry
-  included.
-- `kinfoProcPIDOffset` (40, extern_proc.p_pid): read by no extractor; it
-  anchors the `p_stat` and `p_comm` derivations.
+  included; `parseKinfoPIDs` requires a whole number of entries.
+- `kinfoProcPIDOffset` (40, extern_proc.p_pid): `parseKinfoPIDs` reads it
+  from each selected entry; it also anchors the `p_stat` and `p_comm`
+  derivations.
 - `kinfoProcStartSecOffset` / `kinfoProcStartUsecOffset` (0 and 8): the
   `kp_proc.p_starttime` timeval aliases the head of extern_proc's leading
   `p_un` union, so `tv_sec` sits at the very start of the entry and
@@ -16370,7 +17665,8 @@ carries a family of XNU-version-sensitive constants:
 - `kinfoProcStatOffset` (36, `extern_proc.p_stat`, a char): `p_un` (16) +
   `p_vmspace` (8) + `p_sigacts` (8) + `p_flag` (4) = 36, from
   `<bsd/sys/proc.h>`, just before `p_pid` at 40 (3 bytes of padding align
-  the pid). The start-time reader uses it to recognise a zombie. Its known
+  the pid). The start-time reader uses it to recognise a zombie, and the
+  selection parser as an entry-alignment guard. Its known
   values are `kinfoStatSIDL` (1) through `kinfoStatSZOMB` (5, a zombie);
   `parseKinfoStat` treats any value outside that range as drift.
 - `kinfoProcCommOffset` (243) and `kinfoProcCommLen` (17,
@@ -16385,10 +17681,11 @@ All are pinned to XNU 11.x (macOS 14 / 15) off the same LP64 header basis
 and are NOT a kernel ABI guarantee: a future macOS major that resizes the
 struct silently drifts them. Each extractor checks its fields against a
 plausibility guard and, when an entry fails, returns `ErrKinfoLayoutDrift`,
-a distinct sentinel that wraps nothing. Drift fails **open**: the
-start-time reader answers unreadable (never gone) and the command-name
-and parent-pid readers answer none, so a hook whose parent start time is
-unreadable is ignored, never applied.
+a distinct sentinel that wraps nothing. The start-time reader answers
+unreadable (never gone), and the command-name and parent-pid readers answer
+none, so a hook whose parent start time is unreadable is ignored. Selection
+drift fails **closed**: `UIDProcessReader` returns an error with no partial
+list, and the Darwin cutover refuses `process_inventory_unreadable`.
 
 **macOS-major bump policy.** When supporting a new macOS major: compile
 the matching XNU sources (Apple publishes them at
@@ -16406,6 +17703,8 @@ KERN_PROC_PID sysctl). A drift in the start-time or state offsets changes
 every process judgement's answers on darwin (to unreadable); a drift in
 the command-name offsets empties `parent_command` and `pane_command`; a
 drift in `kinfoEprocPPIDOffset` writes no `ad.hook.pane_is_grandparent`.
+Drift in `kinfoProcPIDOffset`, `kinfoProcStatOffset` or `kinfoProcSize` also
+fails uid selection, refusing every Darwin cutover.
 The plausibility guards
 are a safety net, not a substitute for the bump.
 
@@ -16429,7 +17728,9 @@ adoption) and to `Expire` (each row's `process_alive` check and its
 lookups); and `cmd/agent-director` wires one into the hook
 handler (`hook.HandleConfig.ParentProc`, beside the command-name and
 parent-pid readers)
-to read the hook parent's start time for the gate.
+to read the hook parent's start time for the gate. The Darwin journal
+verifier also uses it for process reconciliation, helper exclusions and
+the final identity recheck.
 The [shared tmux lookup](#shared-tmux-lookup) declares its own
 `tmux.ProcChecker` with the same method, which `NewProcChecker()` satisfies
 structurally, so `internal/tmux` never imports this package. In-process
@@ -16438,12 +17739,8 @@ tests fake it with
 real-process proof (this package's tests, `test/realtmux`) uses
 `NewProcChecker()`.
 
-```go
-type ProcChecker interface {
-    StartTime(pid int) (start string, alive bool, known bool)
-}
-func NewProcChecker() ProcChecker
-```
+`ProcChecker.StartTime` and `NewProcChecker` are declared in
+`internal/probe/starttime.go`; the result contract is below.
 
 `StartTime(pid)` answers exactly one of:
 
@@ -16458,7 +17755,10 @@ already records: on Linux field 22 of `/proc/<pid>/stat` verbatim; on darwin
 the KERN_PROC_PID entry's `p_starttime` as `<tv_sec>.<tv_usec>`
 (`formatDarwinProcStartTime`). Callers compare it byte-for-byte with their
 recorded value; a different start time means the pid was reused. The reader
-never reads a process environment and never reads the clock.
+never reads a process environment and never reads the clock. For ordering,
+the Darwin verifier must use `ParseDarwinProcStartTime`, the inverse of the
+formatter: the component after the dot is a whole count of microseconds,
+not a decimal fraction, and only the canonical unpadded form is accepted.
 
 `NewProcChecker()` picks the implementation by build tag:
 
@@ -16532,16 +17832,16 @@ layout drift) is `(0, false)`; it never errors, logs or reads an
 environment. `NewParentPIDReader()` picks the implementation by build
 tag, and the cores are build-tag-free like the start-time reader's.
 `cmd/agent-director`'s `hookParentProc` wires it into the hook handler
-as `HandleConfig.ParentProc`'s `PPID`. Its one use is
+as `HandleConfig.ParentProc`'s `PPID` for
 `ad.hook.pane_is_grandparent`'s check: after the gate refuses a `pending`
 row's SessionStart with `pid_mismatch`, one read of the parent's own
 parent pid, compared with the row's `pane_pid` (see "Pane is the hook's
 grandparent" in [Hooks move a row only for its own
-agent](#hooks-move-a-row-only-for-its-own-agent)); no other hook reads
-it. It is **never
-evidence**: no ownership, liveness, launch or hook-gate decision reads
-it, and no code may use it to walk ancestry or to identify a hook's
-agent.
+agent](#hooks-move-a-row-only-for-its-own-agent)); no other hook reads it.
+Cursor uses it for its independent runtime direct-child binding check.
+The Darwin journal verifier uses it with start identities to exclude its
+helpers and descendants. It does not establish liveness or identify a
+hook's agent; no hook ancestry resolver may be reintroduced.
 
 #### The ancestry resolver is retired
 
@@ -16581,6 +17881,18 @@ answers:
 | Unknown: unreadable, or a pid-only identity that reads alive (`ProcUnknown`) | Decided by the tmux lookup of the row's socket (see [`find-missing`](#find-missing), "The tmux path"), unless its recorded session name cannot be used: then it is left unverified with a note of its own and no tmux call (see "Unusable recorded name" under [`find-missing`](#find-missing)). A pid-only identity that reads gone is marked like any gone process. |
 | Absent: no process identity recorded (`ProcNone`) | Decided by the tmux lookup, as unknown, with the same unusable-name exception. |
 
+**Cursor rows.** A live Cursor row whose gateway is recorded (`pane_pid` and
+`pane_starttime`) is judged by that gateway alone (`cursorGatewayProof`; see
+[Cursor gateway and current-launch binding](#cursor-gateway-and-current-launch-binding)),
+never by the tmux lookup or the unusable-name rule: alive is handled as an
+alive process, unknown leaves the row unverified with `probe_eacces`, and only
+an exact gone verdict marks it `missing`. The gateway is sampled before the
+pending-launch protections: an exact gone verdict overrides pending grace and
+a live launch owner, while any other verdict leaves them in force with the
+gateway outcome inapplicable (SR-3.3). A Cursor row with no recorded
+gateway, or checked by a provider without the gateway adapter, follows the
+table above.
+
 No process environment is read. A child process of the agent, or any other
 process that carries the row's `AGENT_DIRECTOR_INSTANCE_ID`, never keeps a
 row live, and a live agent whose environment lacks the id is not marked.
@@ -16599,7 +17911,7 @@ launch starts it NULL). The notes in use are:
 
 | Note | Written when |
 | --- | --- |
-| `probe_eacces` | The process evidence is unknown and the lookup is Ours, unreadable, tmux unavailable or not called; also a row judged unknown by the pane its adoption found. |
+| `probe_eacces` | The process evidence is unknown and the lookup is Ours, unreadable, tmux unavailable or not called; also a row judged unknown by the pane its adoption found, and a Cursor row whose recorded gateway reads unknown (no lookup). |
 | `process_not_seen_session_present` | No process evidence is recorded and the lookup is Ours, unless the adoption listing decided otherwise (see "Adoption of a lost reply" under [`find-missing`](#find-missing)). |
 | `process_not_seen_tmux_unchecked` | No process evidence is recorded and the lookup is unreadable, tmux unavailable or not called. |
 | `tmux_server_changed` | The lookup is Can't tell, a different server. |
@@ -16642,7 +17954,7 @@ The rules, applied by the note writer `writeLivenessNote`
 - A mark clears both columns in the same write (below), and every hook
   row-update path clears them too, `unreported` included.
 
-**The same-life guard (SR-11.6).** Every write the sweep makes to a row is
+**The same-life guard (SR-11.6).** Every liveness write the shared checker makes is
 one statement guarded on a live state and the row snapshot the sweep read
 (or the one its adoption write produced): the mark
 (`MarkMissingIfSameLife`), the Codex move (`MarkEndedIfSameLife`), the note
@@ -16680,7 +17992,8 @@ plus the adoption write before it.
    `permission_orphan_closeout` tick.
 2. Only when the mark applied, exactly one `ad.find_missing.tick` with
    `prior_state`, `new_state` `missing`, the mark's `reconciliation_reason`
-   and source `ad_find_missing` (plus `lookup_outcome`, and
+   and source `ad_find_missing` for sweep/find-missing or `ad_recovery` for
+   state reads (plus `lookup_outcome`, and
    `tmux_session_name` for `tmux_name_held`, on a mark the lookup decided).
 
 Trail writes are fail-open: a failed one never changes the sweep's result.
@@ -16689,8 +18002,9 @@ Trail writes are fail-open: a failed one never changes the sweep's result.
 Codex row's agent that ends reports it (the `SessionEnd` hook records
 `end_reported_at`, and the row's state stays as it was; see [The
 agent-aware hook classifier](#the-agent-aware-hook-classifier)). Nothing
-else tells the row its agent is gone, so the sweep and `pause` make the
-move once the process is proven gone:
+else tells the row its agent is gone, so a
+[shared active check](#shared-active-checks) (state read or `find-missing`)
+and `pause` make the move once the process is proven gone:
 
 - **The rule.** A live Codex row whose agent process is judged `ProcGone`
   and that holds an end report is moved to `ended` in place of `missing`,
@@ -16708,12 +18022,12 @@ move once the process is proven gone:
   tick emitter: the guarded `MarkEndedIfSameLife` (the transaction with the
   request and subagent closes, above), then, when it applied, one
   `ad.find_missing.tick` with `prior_state` the state replaced, `new_state`
-  `ended`, `reconciliation_reason` `proc_absent` and source
-  `ad_find_missing`. It takes the narrow `EndedMover` interface, which
+  `ended`, `reconciliation_reason` `proc_absent` and source selected by
+  [Shared active checks](#shared-active-checks). It takes the narrow `EndedMover` interface, which
   `FindMissingStore` and `PauseStore` both embed, so the verbs make the one
   write and no other. It makes no tmux call and writes no
   `ad.spawn.state_transition`.
-- **The result lists.** The move's outcome is never listed: the row is in
+- **The result lists.** The row remains in `checks`, but is in
   neither `ids` nor `count`, nor `unverified_ids`, since it is settled and
   not marked missing. The adopted-pane path keeps its
   `ad.provenance.disagree` action value `marked_missing` for it; no new
@@ -16796,32 +18110,35 @@ and result lists are unchanged.
 row past its grace period whose launch owner is provably alive
 (`spawn.LaunchOwnerAlive`: the owner's pid namespace equals this
 process's, and the owner's pid is alive with its recorded start time) is
-left untouched like one inside its grace period: no write, no tick, no
-tmux call, in neither list. So a `spawn` or `resume` stalled past the
-grace period is neither marked `missing` (after which it would start an
-agent no row tracks) nor noted `unreported` under it. A row with no owner recorded
-(from before schema v6, a launch that could not read its own start time or
-namespace, or a launch whose hold has ended), an owner in another or
+excluded from live-agent checks like one inside its grace period: no
+liveness write, tick or tmux call, in neither list. A Cursor row's recorded
+gateway is still sampled first; only its exact loss overrides either
+protection (see "Cursor rows" above). Eligible transcript healing still
+runs through [Shared active checks](#shared-active-checks). So a `spawn` or
+`resume` stalled past the grace period is neither marked `missing` (after
+which it would start an agent no row tracks) nor noted `unreported` under
+it. A row with no owner recorded (from before schema v6, a launch that
+could not read its own start time or namespace, or a launch whose hold has
+ended), an owner in another or
 unreadable pid namespace, and an owner gone or unreadable are judged by the
 grace period alone, as before. A launch's hold ends when the launch does
 (see "v6 columns" under [`internal/store`](#internalstore)), so a
 long-lived process that ran it (the MCP server, a Go caller) does not hold
 the row, unless the release of that hold failed on all of its three tries,
 when the row is not judged until the process exits. A `spawn` killed after
-sending its create leaves its labelled session, which the sweep adopts as
+sending its create leaves its labelled session, which a check adopts as
 for a lost reply.
 
-**`missing` is a judgement, not proof.** A row marked `missing` is the
-sweep's judgement on the evidence available to it, not proof that the agent
+**`missing` is a judgement, not proof.** A row marked `missing` is a check's judgement on available evidence, not proof that the agent
 has exited. Neither `ended` nor `missing` means that the agent is dead or
 that its row is safe to delete (SR-18.2).
 
 Where agent-visible text states it (decision-0930e):
 
-- Full sentence ("`missing` is the sweep's judgement on the evidence
-  available to it, not proof that the agent has exited"): `find-missing`'s
-  description, where `missing` is produced; the `state` result field of
-  `status` and `get`; `list`'s `spawns`; and `find-missing`'s `ids`. The
+- Full sentence ("`missing` is a check's judgement on available evidence,
+  not proof that the agent has exited"): canonical `sweep`'s description;
+  the `state` result field of `status` and `get`; `list`'s `spawns`; and
+  the `ids` field shared by `sweep` and `find-missing`. The
   result fields reach only the generated references and `surface.json`,
   never `help` or MCP `tools/list`, so they cost no agent tokens.
 - Short form: the `kill`, `resume`, `pause` and `expire`
@@ -16852,36 +18169,36 @@ whose session runs or cannot be checked (`kept_ids`, with each reason in
 window. A run as another user, as root or against another tmux server can
 wrongly delete rows (see [Cron user invariant](#cron-user-invariant)).
 Agent-visible text carries this as `expire`'s Description sentence; `kill`
-and `find-missing` carry only the short pointer `expireCleanupPointer`
+and `sweep` carry only the short pointer `expireCleanupPointer`
 ("Agents never run expire (operator-scheduled finished-row cleanup).") in
 `pkg/api/manifest/manifest.go`, which keeps `help` under its size guard.
 
 ### `find-missing`
 
-`pkg/api/find_missing.go` (the verb), `find_missing_lookup.go` (the tmux
+`pkg/api/sweep.go` (the canonical facade and result projection),
+`find_missing.go` (retained aliases and common runner), `find_missing_lookup.go` (the tmux
 path), `find_missing_writes.go` (the per-row writers), `sweep_socket.go`
 (the no-socket rule) and `agent_pane.go` (`adoptInSweep`, the adoption
 step). The evidence model, notes, guard and marking order are in
 [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user).
 
-1. `ListLiveSpawnIdentities` returns every row where `state NOT IN (ended,
-   missing)`, `pending` included, each carrying its state, its launch start
-   (`launch_started_at` in milliseconds, read through
-   `decodeLaunchStartedAt`), its recorded session name, liveness note, row
-   snapshot, recorded `pid` + `proc_starttime`, launch identity (token,
-   socket, server and pane identity), launch owner, agent and end report
-   (`end_reported_at` in milliseconds). No stored value fails the read; a list
-   error is the sweep's only error. The rows are judged in instance-id
-   order, so the per-socket stop and the budget's cut-off fall on the same
-   rows on every run. The sweep reads its injected clock once, after the
-   list.
-2. A `pending` row inside the pending grace period is not judged at all
+1. `findMissingChecked` selects all agents in one `RecoveryRows(nil, settle)`
+   snapshot and sorts by instance ID before `checkActiveRows`. This lightweight
+   projection carries the sampled row/launch/process/turn/request-epoch identity
+   needed by the adapters, including CWD for native proof. Finished rows skip
+   liveness, turn, permission, display and transcript checks; only late exact
+   native proof remains eligible. A selection failure fails the sweep. Legacy
+   providers without `RecoveryRows` retain only their live-identity and
+   provisional-transcript capabilities, as described under
+   [shared active checks](#shared-active-checks).
+2. A `pending` row inside the pending grace period receives no live-agent checks
    (SR-11.2; `store.InsidePendingGrace`). Its age is the sweep's clock minus
    its launch start, and it is inside while that age is below the setting;
    a launch start in the future counts as inside. The row gets no liveness
    check, no start-time read, no mark, no liveness-note write or clear, no
    `ad.find_missing.tick`, no permission close-out and no tmux call, and it
-   is in neither `ids` nor `unverified_ids`. The rule is the same for a
+   is in neither `ids` nor `unverified_ids`. Eligible provisional transcript
+   healing remains available. The rule is the same for a
    fresh spawn's, a reuse's and a `resume`'s launch: `started_at` (for a
    resumed row, the original spawn's time) plays no part. A `pending` row
    whose launch start is absent or cannot be read (NULL, not an integer,
@@ -16891,11 +18208,14 @@ step). The evidence model, notes, guard and marking order are in
    (`spawn.LaunchOwnerAlive`) is left untouched the same way (b.kdf; see "A
    launch in progress is not judged" under
    [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
+   A Cursor row's recorded gateway is still sampled first (a pid and
+   start-time read); only its exact loss overrides either protection (see
+   "Cursor rows" there).
    Any other row past the grace period, and every row in another live
    state, goes on to the steps below. The setting is `pending_grace_seconds` in the `[tmux]` table
    (60 s by default; unset, its derived minimum when that is larger),
    read through `config.Tmux.EffectivePendingGrace` and
-   handed to the sweep by `Client.FindMissing` together with the client's
+   handed to the sweep by `Client.Sweep` together with the client's
    clock; its minimum rule and the unset rule are in
    [`[tmux]` timing settings](#tmux-timing-settings). The hook's
    SessionStart wait for its launch's identity write uses the same
@@ -16913,14 +18233,19 @@ step). The evidence model, notes, guard and marking order are in
    does not lengthen a SessionStart's wait past 540 s: that wait ends at
    its cap, on the monotonic clock, or earlier (the hook gate's
    residuals).
-3. Every other row is judged by its agent process (`judgeLiveRow`; the
+3. An eligible Cursor row with a recorded gateway is judged by
+   `cursorGatewayProof` alone ("Cursor rows" under
+   [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user));
+   exact loss is projected before its deferred guarded write.
+   Other live rows use their agent process (`judgeLiveRow`; the
    evidence model in
    [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)):
    alive leaves a `pending` row whose pane is recorded `pending` and notes
    it `unreported` (`aliveRow`; not written when already noted so, and a
    `provenance_conflict` note is kept) and clears any other row's note,
    gone marks it `proc_absent` (`goneRow`: a Codex row that holds an end
-   report is moved to `ended` instead, listed nowhere), and neither makes a
+   report is moved to `ended` instead, excluded from `ids` and
+   `unverified_ids` but retained in `checks`), and neither makes a
    tmux call. This holds
    whatever the recorded session name is. A row judged by the pane its
    adoption found (`adoptedPaneRow`) follows the same rule: alive notes a
@@ -16938,23 +18263,16 @@ step). The evidence model, notes, guard and marking order are in
    `name_changed`, `adopted` (only when the adoption write applied) and a
    failed adoption listing's reasons, each carrying the server and verdict
    of the observation that produced it.
-7. Provisional transcripts are healed (`healProvisionalTranscripts`, b.v2c
-   AC3): each live Claude row with a session id and no `jsonl_path` has its path
-   recomposed and recorded once the file exists. Per-row errors are logged
-   and skipped.
-8. `Client.FindMissing` then repairs stale `check_permission` rows
-   (`RepairCheckPermission`, b.146 rule 9 and problem 3) on a fresh read
-   of the live rows: a relay-on row in `check_permission` none of whose
-   requests holds it (still awaits an answer and is not proven gone; b.omt)
-   and none of whose relay hooks may still
-   run (a request a close of the row's requests closed is not judged) moves to `waiting` when
-   `idle_since` is set on a Claude row, else to `working`; Codex always
-   repairs to `working`, in
-   one guarded write with one `ad.find_missing.tick`
-   (`stale_check_permission`). Repaired rows are in neither result list;
-   errors are logged and never fail the sweep (see "The row after the last
-   answer" under [Permission relay](#permission-relay)). The exported
-   `FindMissing` does not run it.
+7. The same selected pass performs eligible Codex turn completion, Claude
+   transcript healing, stale permission repair and display observation through
+   the registered [shared adapters](#shared-active-checks). It does not perform
+   another live-row selection or a second recovery pass.
+8. `finish` attempts deferred Cursor closure and late exact native proof through
+   persistence-only seams. Per-row errors and unconfirmed commits never count
+   as successful marks or suppress independent selected work. `ids`/`count`
+   count committed missing marks, `unverified_ids`/`unverified` retain their
+   liveness-note meanings, and neither counts a Codex move to `ended`, turn
+   completion, permission repair, display change or transcript/proof write.
 
 **Unusable recorded name (SR-3.2, SR-11.3, SR-11.4).** In
 `judgeLiveRow`'s branch for unknown or absent process evidence, before
@@ -16979,9 +18297,10 @@ gone still decides the row), then the unusable name, then the lookup. The
 row is never marked from tmux evidence; removing it is a human's decision
 (docs/operator-actions.md).
 
-**The tmux path (SR-11.3, SR-3.15).** Only rows whose process evidence is
-unknown or absent, and whose recorded session name can be used, reach
-tmux. The run holds one `tmux.Sweep` (see
+**The tmux path (SR-11.3, SR-3.15).** For liveness, only rows whose process
+evidence is unknown or absent, and whose recorded session name can be used,
+reach tmux, never a Cursor row with a recorded gateway; eligible display samples reuse the same lookups (see
+[Shared active checks](#shared-active-checks)). The run holds one `tmux.Sweep` (see
 [Sweep](#sweep-sweepgo)): one lookup per socket per run, taken by the first
 row that needs it and shared by every later row of that socket, each row
 judged against its own launch (the shared `rowLaunch`: instance id, token,
@@ -17059,12 +18378,16 @@ pane listing), the Sweep makes no more calls there. `sweep_budget_seconds`
 cumulative tmux wait on the injected clock; once it is spent every
 remaining row is not called and gets the notes above, and is looked at
 again on the next run. A run spends at most the budget plus one call on
-tmux. `Client.FindMissing` passes the value from
+tmux. `Client.Sweep` passes the value from
 `config.Tmux.EffectiveSweepBudget`. tmux problems never fail the sweep.
 
-**The result.** `ids` / `count` are the rows marked `missing` this sweep,
+**The result.** `checks` retains the sorted fixed selection, including finished,
+removed and unattempted rows; see [Sweep results](caller-contract.md#sweep-results).
+It consumes shared outcomes independently of the counters. `ids` / `count`
+are the rows marked `missing` this sweep,
 on process or tmux evidence. A Codex row the sweep moved to `ended` is
-counted and listed nowhere. `unverified` / `unverified_ids` are the rows
+excluded from `ids` and `unverified_ids` and their counts, but retained in
+`checks`. `unverified` / `unverified_ids` are the rows
 left live with a note, whether the note was written or already current,
 an unusable-name note included; never a `pending` row inside the grace
 period or held by its launch's owner. A row whose guarded write
@@ -17072,18 +18395,20 @@ missed or failed in the store, a row found alive (its note cleared or
 none to clear, or a live `pending` row's `provenance_conflict` kept) and a
 live `pending` row noted `unreported` (or found already noted so) are in
 neither list; `get` and `list` show the note. Both lists are sorted and
-never null, on a failure too: the live-row read's error, and
-`ErrClientClosed` from `Client.FindMissing` on a closed Client, come with
-an empty `FindMissingResult` (counts 0, `IDs` and `UnverifiedIDs` non-nil
-and empty), as a sweep that judged no row does (b.hbt). The verb adds no
-verb-level error; `ErrProbeUnsupported` stays in its error list (SR-1.7)
-but is never returned.
+never null, on a failure too: the selection read's error, and
+`ErrClientClosed` from `Client.Sweep` or its alias on a closed Client, come with
+an empty `SweepResult` (counts 0, `Checks`, `IDs` and `UnverifiedIDs` non-nil
+and empty). These errors are not successful empty sweeps. The verb's
+manifest error list declares `ErrStoreBusy`, for a selection read that did
+not finish within its bound (nothing was checked), and keeps
+`ErrProbeUnsupported` (SR-1.7), which is never returned.
 
 **Go API (Appendix F.4).**
 
-- `FindMissing(ctx, s FindMissingStore, t FindMissingTmux, pc ProcChecker,
+- `Sweep(ctx, s FindMissingStore, t FindMissingTmux, pc ProcChecker,
   pendingGrace, sweepBudget time.Duration, now func() time.Time,
-  lg FindMissingLogger) (FindMissingResult, error)` is exported. It uses
+  lg FindMissingLogger) (SweepResult, error)` is exported; `FindMissing`
+  delegates with its unchanged signature. It uses
   the values it is given, with no fallback and no minimum check; it never
   reads `time.Now` itself.
 - `FindMissingStore`: `ListLiveSpawnIdentities`, the guarded
@@ -17096,20 +18421,20 @@ but is never returned.
   requests and entries itself; the interface has no separate close.
 - `FindMissingTmux`: `TmuxLookup` plus `ListPanes(socket)`; `TmuxClient`,
   `*tmux.Client` and `tmuxfix.Recorder` satisfy it.
-- `Client.FindMissing` passes the Client's store, tmux client, start-time
-  reader, `EffectivePendingGrace`, `EffectiveSweepBudget`, clock and logger,
-  then, when the sweep returned no error, runs
-  `RepairCheckPermission(store, relayView(), logger)` (exported, with its
-  own `CheckPermissionRepairStore`: `ListLiveSpawnIdentities`,
-  `PermissionRequestsForSpawn` and `RepairCheckPermissionIfSameLife`).
+- `Client.Sweep` supplies the Client's context-bound store, relay view,
+  effective grace/budget, clock, logger and settle read to `findMissingChecked`.
+  `Client.FindMissing` delegates to it. The shared pass owns permission repair;
+  there is no second live-row sweep.
+  Exported `RepairCheckPermission` retains its permission-only seam for callers
+  that supply `CheckPermissionRepairStore`.
 
 | File | Holds | Must use |
 | --- | --- | --- |
 | `find_missing_lookup.go` | `lookupRow` (SR-11.3's table), `oursRow`, `adoptedPaneRow`, `lookupMarkRow`, `emitRowNameHeld`, `notCalledNote` (each row's `tmux.Launch` comes from the shared `rowLaunch`, `lookup_outcome.go`). | The one mapping from a sweep row's lookup to its mark or note; a sweep never decides a row from a `tmux.Result` another way. |
-| `find_missing_writes.go` | The per-row outcome writers, shared by the process path and the tmux path: `markMissingSameLife` (the pinned marking order: guarded `MarkMissingIfSameLife`, whose transaction also closes the row's open permission requests and running subagent entries, then one `ad.find_missing.tick` with any extra fields the tmux path passes), `markEndedSameLife` (the Codex end: guarded `MarkEndedIfSameLife` through `EndedMover`, whose transaction makes the same closes, then one `ad.find_missing.tick` with `new_state` `ended`, the reason and extra fields the caller passes; never listed; shared by the sweep's two gone-process paths, `goneRow`, and by `pause`), `writeLivenessNote` (skips a note equal to the one read; the guarded `SetLivenessNoteIfSameLife`; the SR-11.4 tick rule in `noteTickReason`, emitted by `emitNoteTick`), `clearLivenessNote` (no write for a row with no note; the guarded `ClearLivenessIfSameLife`, no tick) and `writeUnreportedNote` (b.kdf: no write for a row already noted `unreported`; the guarded `NoteUnreportedIfSameLife`; the same tick rule through `emitNoteTick`; never listed; its caller `aliveRow` never passes a row noted `provenance_conflict`). Each takes the snapshot to guard on (the read one, or the adoption's) and returns a `findMissingWrite`; a changed, absent or failed write ticks nothing and lists the row nowhere, and a store error is logged through `logFindMissing`. | The only way a sweep marks, notes or clears a row: every mark, Codex move, note write, clear and `unreported` note (process or tmux evidence, adopted or not) goes through these five writers; a Codex row's move to `ended` is made only by `markEndedSameLife`, for a row whose process is proven gone and that holds an end report; never call the guarded store writes, write a tick or deny permission requests for a sweep row another way. |
+| `find_missing_writes.go` | The per-row outcome writers, shared by the process path and the tmux path: `markMissingSameLife` (the pinned marking order: guarded `MarkMissingIfSameLife`, whose transaction also closes the row's open permission requests and running subagent entries, then one `ad.find_missing.tick` with any extra fields the tmux path passes), `markEndedSameLife` (the Codex end: guarded `MarkEndedIfSameLife` through `EndedMover`, whose transaction makes the same closes, then one `ad.find_missing.tick` with `new_state` `ended`, the reason and extra fields the caller passes; not in `ids` or `unverified_ids`; shared by the sweep's two gone-process paths, `goneRow`, and by `pause`), `writeLivenessNote` (skips a note equal to the one read; the guarded `SetLivenessNoteIfSameLife`; the SR-11.4 tick rule in `noteTickReason`, emitted by `emitNoteTick`), `clearLivenessNote` (no write for a row with no note; the guarded `ClearLivenessIfSameLife`, no tick) and `writeUnreportedNote` (b.kdf: no write for a row already noted `unreported`; the guarded `NoteUnreportedIfSameLife`; the same tick rule through `emitNoteTick`; not in `ids` or `unverified_ids`; its caller `aliveRow` never passes a row noted `provenance_conflict`). Each takes the snapshot to guard on (the read one, or the adoption's) and returns a `findMissingWrite`; a changed, absent or failed write ticks nothing and adds to neither list. All selected rows remain in `checks`; store errors are logged through `logFindMissing`. | The only way a sweep marks, notes or clears a row: every mark, Codex move, note write, clear and `unreported` note (process or tmux evidence, adopted or not) goes through these five writers; a Codex row's move to `ended` is made only by `markEndedSameLife`, for a row whose process is proven gone and that holds an end report; never call the guarded store writes, write a tick or deny permission requests for a sweep row another way. |
 | `sweep_socket.go` | `sweepSockets.forRow(recorded)`: the socket a sweep row's calls use, the caller's resolved at most once per run for rows that record none, creating nothing; a refused resolution gives tmux unavailable, then not called. It implements SR-3.3's socket rule for a sweep (a recorded socket exactly as recorded; none recorded: the caller's socket, resolved as tmux would through `rowSocket` / `spawn.ResolveQuerySocket`, creating nothing, LFR H1), with SR-3.15's stop after a refusal. | The shared no-socket helper: every sweep (`find-missing`, and `expire` for each row that reaches its lookup) takes a row's socket from one `sweepSockets` per run; never resolve a sweep row's socket another way. |
 
-`missing` is the sweep's judgement on the evidence available to it, not
+`missing` is a check's judgement on available evidence, not
 proof that the agent has exited.
 
 ### `expire`
@@ -17119,7 +18444,7 @@ proof that the agent has exited.
 `expire` deletes a finished row only when its agent's recorded process is
 not seen running and tmux shows no session of the agent; every other
 selected row is kept and reported (SR-12). A `missing` row is
-`find-missing`'s judgement on the evidence available to it, not proof that
+a check's judgement on available evidence, not proof that
 the agent has exited, and neither `ended` nor `missing` makes a row safe to
 delete by itself (SR-18.2).
 
@@ -17349,7 +18674,7 @@ tmux environment (the same `TMUX` / `TMUX_TMPDIR`). A run as another
 user, as root or against another tmux server can mark live rows
 `missing`: their agent processes may read unreadable, and the lookup
 then asks a server that holds none of their sessions and answers Gone.
-Such a mark is the sweep's judgement on the evidence available to it,
+Such a mark is a check's judgement on available evidence,
 not proof that the agent has exited. The consequences for a caller
 (`kill`'s success on a finished row is not verification; on the wrong
 tmux server, a wrongly marked row, `kill`'s no-op success and a reuse
@@ -17394,12 +18719,11 @@ reuse and switches follow the shared finished-row lifecycle.
    retained, otherwise `missing`, on process evidence (`proc_absent`);
    a row with no process evidence is marked when its socket's lookup finds
    no session of its current launch (`tmux_absent`, or `tmux_name_held`
-   when another session now holds its name). `missing` is the
-   sweep's judgement on the evidence available to it, not proof that the
+   when another session now holds its name). `missing` is a check's judgement on available evidence, not proof that the
    agent has exited. This step is
    **required first**: `resume` refuses any non-terminal row with
    `ErrSpawnNotResumable`, so a row still frozen at `waiting`/`working`
-   cannot be resumed until `find-missing` moves it to `ended` or `missing`.
+   cannot be resumed until recovery moves it to `ended` or `missing`.
 2. **`resume`** — relaunches each finished row with its recorded agent in a
    fresh tmux session under the same `instance_id`, restoring saved environment.
    Claude uses `claude --resume`; Codex uses its own resume command. Their
@@ -17512,7 +18836,7 @@ adds it here.
 
 | Name | Class | Returned by | What the caller does |
 | --- | --- | --- | --- |
-| `ErrTmuxSendKeys` | GONE | `send-keys`, `pause` | Only that the row's session is not there: no session of this agent was found (nothing sent, or, when the Enter failed after the text, the text may be typed but not submitted). The row stays live until `find-missing` marks it; to relaunch the id, follow the [live-row sequence](#live-row-sequence). |
+| `ErrTmuxSendKeys` | GONE | `send-keys`, `pause` | Only that the row's session is not there: no session of this agent was found (nothing sent, or, when the Enter failed after the text, the text may be typed but not submitted). The row stays live until recovery marks it; to relaunch the id, follow the [live-row sequence](#live-row-sequence). |
 | `ErrTmuxCaptureFailed` | GONE | `read-pane` | As `ErrTmuxSendKeys`: only that the row's session is not there; nothing was read. |
 | `ErrTmuxUnresponsive` | UNAVAILABLE (transient) | `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `spawn` | tmux did not answer usably. Retry later with backoff and a retry cap, and alert when the cap is reached. The description says whether anything was sent first (for `kill`: "the kill was sent and may or may not have taken effect"; for `send-keys` and `pause` after a timed-out text or Enter call, or `pause`'s `C-u`: "the keys may have been delivered"). Where `send-keys`' text may be in the pane, its description ends with the next step in place of "retry later", and the caller follows that step instead of sending the text again: after a timed-out text call, `read-pane`, then `send-keys` with empty text (Enter only) if the text is typed, otherwise the same `send-keys`; after a failed or timed-out Enter, `send-keys` with empty text, which submits it. `pause` keeps "retry later": a retried `pause` sends `C-u` before typing `/exit` (see [`pause`](#pause)). For `resume` it also means the row's own session or agent "appears to still be stopping" or "appears to still be starting" (the starting-session bullet under [Reading a refusal](#reading-a-refusal)), that this id's own abandoned launch "appears to still be starting" (the abandoned-launch bullet there), or that more than one session's name matches the recorded name. After `resume`'s "duplicate session" the description ends with the retry sentence the restore picks, in place of "retry later" unless the row was restored: "do not retry until get shows the row ended or missing" when the row changed or stays `pending`, and "there is no row left to resume; later, a spawn of the id starts afresh" when it was removed (see [After "duplicate session"](#after-duplicate-session)). For `spawn` with the reuse opt-in it means the same at the old-row lookup (the row's own session or agent still stopping or starting, this id's own abandoned launch still starting, an unreadable answer, or more than one session's name matching the requested name; nothing was changed, retry later), the same cases at the re-lookup after "duplicate session" (then the row is restored, and the description ends "retry later" when it was restored or removed, else "do not retry until get shows the row ended or missing"), or a launch timeout after the reset (the row was reset and stays `pending`; the launch-timeout bullet under [Retrying](#retrying)). |
 | `ErrTmuxKillFailed` | UNAVAILABLE | `kill` only | The agent process still runs after `kill`, cannot be checked while its labelled session is still there, or runs while no session or pane of the launch was found (no kill sent). The description says which. Retry `kill` later with backoff and a cap; alert when the cap is reached; never delete the row. |
@@ -17682,11 +19006,13 @@ adds it here.
 
 ### Liveness authority
 
-- The row state, kept honest by `find-missing`, is the liveness authority.
-  There is no liveness verb, and `get`, `status` and `list` judge no
-  liveness from tmux: their only tmux calls sample a working Claude or Codex
-  row's own pane for `idle_screen` (see [Displayed State reporting](#displayed-state-reporting)),
-  and a failed sample only resets that observation, never the row's state.
+- The row state is the liveness authority; there is no liveness verb.
+  `get`, `status`, `list` and `find-missing` judge the rows they select
+  through the same [shared active checks](#shared-active-checks), including
+  their tmux liveness fallback. `process_liveness` reports the recorded agent
+  process beside the state and never moves it. A failed `idle_screen` pane sample resets
+  its baseline and records a failed display attempt, never the row's state (see
+  [Displayed State reporting](#displayed-state-reporting)).
 - With `[state] settle_ms` set, `status`, `get` and `list` report ordinary
   raw-state changes up to the settle time late; nothing marks them as late.
   [Displayed States](#displayed-state-reporting) instead settle through
@@ -17703,7 +19029,7 @@ adds it here.
   It is not a liveness verb: the row state stays the authority (see
   [`read-pane`](#read-pane)).
 - `ended` and `missing` are not proof that the agent exited: `missing` is
-  the sweep's judgement on the evidence available to it.
+  the shared check's judgement on the evidence available to it.
 - Only the row's own agent moves the row: a hook applies only when its
   parent process is the row's recorded pane process (see
   [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)).
@@ -17723,7 +19049,9 @@ adds it here.
   row with no launch start counts as past the grace period. Nor does it
   judge a `pending` row, however old, while the `spawn` or `resume` that
   began its launch is still running in the sweep's pid namespace and holds
-  the row (b.kdf); a launch ends its hold when it ends. The sweeps'
+  the row (b.kdf); a launch ends its hold when it ends. Only an exact
+  Cursor gateway loss overrides either protection (see "Cursor rows" under
+  [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)). The sweeps'
   per-run tmux time budget is 15 s by default and configurable
   (`sweep_budget_seconds`): once a `find-missing` run has spent it waiting
   on tmux, the run makes no more tmux calls, and every row still needing a
@@ -17738,9 +19066,12 @@ adds it here.
   process with an end report is moved to `ended`, otherwise `missing`, so a session kept by
   `remain-on-exit` or a respawned pane never keeps the row live; a session
   existing never does. A process that reads alive with its recorded start
-  time keeps the row live whatever tmux shows. tmux is asked only when the
-  process cannot be checked (unreadable, a pid-only identity that reads
-  alive, or no process recorded), on the row's recorded socket.
+  time keeps the row live whatever tmux shows. For liveness, tmux is asked
+  only when the process cannot be checked (unreadable, a pid-only identity
+  that reads alive, or no process recorded), on the row's recorded socket,
+  and never for a Cursor row with a recorded gateway (see "Cursor rows" under
+  [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user));
+  display sampling is separate.
 - Past the pending grace period, `find-missing` marks a `pending` row
   `missing` when its agent process is dead or unrecorded and no session
   carries its current label, whatever holds its name, and never while one
@@ -17760,7 +19091,8 @@ adds it here.
   launch no longer running, the row stays `pending` and gets
   `liveness_note` `unreported`, within the grace period plus one
   `find-missing` period (see "Launch pending" below for what the caller
-  does). Both depend on `find-missing` being scheduled.
+  does). A state read of the row applies the same checks; other rows
+  depend on `find-missing` being scheduled.
 - `find-missing` returns none of the seven tmux errors, and no tmux answer
   fails the sweep; its only error is a failure to read the store. When it
   must ask tmux, the answer decides per row: the row's session is not there
@@ -17778,7 +19110,7 @@ adds it here.
   reuse and a `resume` restore their rows instead). While tmux stays
   unavailable, `find-missing` cannot mark the row; it stays unverified. So
   a retry with the reuse opt-in returns `ErrInstanceIdCollision` until
-  tmux is back and a `find-missing` run past the pending grace period
+  tmux is back and a check past the pending grace period
   marks the row `missing`.
 
 ### Launch pending
@@ -17942,7 +19274,7 @@ terminology, not evidence of an agent switch.
 - The agent-visible texts state the two consequences through one
   constant, `sameEnvConsequences` in `pkg/api/manifest/manifest.go`: the
   `kill` description and spawn's `reuse_finished` parameter text carry it,
-  so the two sites stay identical. The `find-missing` description does
+  so the two sites stay identical. The canonical `sweep` description does
   not repeat it (the help size guard leaves no room): it says a run in the
   wrong environment can mark live rows `missing` and points to `kill` for
   what a wrong server leads to. `expire` states its own wrong-server
@@ -17965,7 +19297,7 @@ follows this bounded, paced sequence (SR-18.6). Where it is stated
 - `kill`'s manifest description states it in a short form: the same six
   steps and limits, without the rationale. The one constant
   `liveRowSequence` in `pkg/api/manifest/manifest.go` holds it.
-- `find-missing`'s and `spawn`'s descriptions end with one sentence that
+- `sweep`'s and `spawn`'s descriptions end with one sentence that
   points to it (constant `liveRowSequencePointer`): "To end a live row
   (pending included) and relaunch its id, follow the live-row sequence in
   kill's description." Every surface that shows one description shows all
@@ -18034,8 +19366,9 @@ the section that describes it in detail.
   are not valid UTF-8) can never be matched to its session; the
   [unusable-name guard](#unusable-name-guard-unusablego) classifies it.
   Every verb that would look such a row up returns `ErrInternal` with no
-  tmux call, [`find-missing`](#find-missing) gives the row a note of its
-  own when its process cannot decide it, and [`expire`](#expire) keeps it
+  tmux call, a [shared active check](#shared-active-checks) (a state read or
+  [`find-missing`](#find-missing)) gives the row a note of its own when its
+  process cannot decide it, and [`expire`](#expire) keeps it
   on every run with a reason of its own. Besides hand-edited rows, this
   covers rows created between 2026-05-18 and the b.gqe fix of 2026-05-27
   (commit `dab3a80`) whose default names took a `.` from their id.
@@ -18072,16 +19405,10 @@ the section that describes it in detail.
   ends in `ErrPauseTimeout`, because `pause` reads no screen text and so
   cannot count the lines (see "The Codex line clear" under
   [`pause`](#pause)).
-- **A Codex row keeps its last state after an agent exit outside `pause`.**
-  Codex's `SessionEnd` records an end report and does not move the row, so
-  a Codex agent that exits any other way (a `/exit` typed at the pane, a
-  crash, a kill) leaves the row in its last state, with the agent gone,
-  until `find-missing` or `pause` sees the process gone and the row holds
-  an end report: then the row reads `ended`. A row with no end report reads
-  `missing` only once `find-missing` sees the process gone; `pause` never
-  marks `missing`. Until then `send-keys` returns `ErrTmuxSendKeys` and `read-pane`
-  `ErrTmuxCaptureFailed` (see "The Codex move to `ended`" under
-  [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
+- **A Codex exit needs process reconciliation.** `SessionEnd` records an
+  end report without changing state. [Shared active checks](#shared-active-checks)
+  reconcile a proven exit to `ended` with that report or `missing` without
+  it. `pause` can also reconcile `ended`; it never marks `missing`.
 - **A command left running after Esc on a Codex agent outlives it.** `pause`
   and `kill` end the agent's process tree with its pane, except a command
   that left Codex's session and runs outside the sandbox (a daemonised
@@ -18119,26 +19446,24 @@ the section that describes it in detail.
   - a pane answer whose sender died leaves `pane_answer` `intent`, its key
     possibly typed, and the request open until a retry with a fresh hash
     or `record-pane-answer`;
-  - the PostToolUse close closes only allows, and only a request recorded
-    from v7 on; a deny at the dialog made outside agent-director needs
-    `record-pane-answer`.
+  - no tool hook closes a Claude or Codex request (see "The PostToolUse
+    close (rule 13)"), so an answer at the dialog made outside
+    agent-director needs `record-pane-answer`.
 - **The dialog hold (b.146 step 2c).** For Claude and Codex, it holds plain
   `send-keys` without a pane hash, and `pause` (b.zdz), until a hook proves
   the request gone. Cursor's validated exact-request invocation proof can
   also prove a denied request gone while preserving its earlier verdict
   and reason (see [The dialog hold](#the-dialog-hold-step-2c)).
   The Claude/Codex hook-specific limits are:
-  - after an allow, the hold lasts until the tool has run (on a Codex row,
-    until an eligible main turn ends); after a deny of an eligible main request,
-    until that turn ends, even when no dialog is left; an
-    `Escape` to stop the agent right after a deny needs a caller that
-    looked and sends the pane's hash;
-  - a subagent's denied request (`agent_id` set) is proven only by the
-    agent's end: no `PostToolUse` follows a deny, the main agent's `Stop`
-    and idle prompt do not cover it, and `SubagentStop` (registered, for
-    subagent capture) proves no request gone. Until the Spawn ends, only a hashed send
-    gets through. On a Codex row this holds for a subagent's allowed request
-    too;
+  - after an allow or a deny of an eligible main request, the hold lasts
+    until that turn ends, even when no dialog is left (no tool hook proves a
+    Claude or Codex request; b.wbs); an `Escape` to stop the agent right
+    after an answer needs a caller that looked and sends the pane's hash;
+  - a subagent's request (`agent_id` set), allowed or denied, is not
+    covered by the main agent's `Stop` or idle prompt: on a Claude row its
+    subagent's `SubagentStop` proves it (b.wbs). Until then, or until the
+    Spawn ends if Claude Code sends no `SubagentStop` for that subagent or
+    the row is Codex's, only a hashed send gets through;
   - when Claude's Stop and idle-prompt Notification are both lost, or
     Codex's single Stop or Interrupt is lost, the hold lasts until
     someone looks or the Spawn ends;
@@ -18151,26 +19476,20 @@ the section that describes it in detail.
     that passes the hash of a pane it read without judging it lets the
     Enter through;
   - `pause` has no way past it (b.zdz): it takes no pane hash, so a held
-    `waiting` row (after a subagent's denied request, until the Spawn
-    ends) is stopped only by `kill` or by a caller that looked and sends
+    `waiting` row (after a subagent's request, until its `SubagentStop` or
+    the Spawn's end) is stopped only by `kill` or by a caller that looked and sends
     `/exit` with a hashed `send-keys`, which neither clears a draft first,
     as `pause`'s `C-u` does, nor waits for `ended` (see
     [`pause`](#pause));
   - unproven closed requests of live Spawns are kept past
     `relay.permission_request_cap` (see "Cap-based GC" under
     [Permission relay](#permission-relay)), so requests no hook proves
-    before their Spawn ends (a subagent's denied request, say) can keep
+    before their Spawn ends (a Codex subagent's request, say) can keep
     the table above the cap until then.
-- **Codex rows hold longer (b.ssz).** A Codex row has no `tool_ran` proof
-  and no idle-prompt Notification (see "The relay on Codex rows" under
+- **Codex rows hold longer (b.ssz).** A Codex row has no subagent turn-end
+  proof and no idle-prompt Notification (see "The relay on Codex rows" under
   [Permission relay](#permission-relay)), which costs:
-  - after an allow, the hold of plain `send-keys` and `pause`, and of the
-    row's moves to `working` when the allow was answered at the pane
-    outside agent-director, lasts until the turn ends, not until the tool
-    has run;
   - a subagent's request, allowed or denied, holds until the agent ends;
-  - a fallen-back allow closes only through `record-pane-answer` or a pane
-    answer; nothing closes it on its own;
   - a lost `Stop` or `Interrupt` hook leaves the turn's requests unproven
     until the next turn ends (one end signal per turn);
   - Esc while a relay hook polls makes the request fall back and stay open
@@ -18200,11 +19519,11 @@ the section that describes it in detail.
     `Stop` on a user interrupt), until the idle-prompt Notification, once
     the agent idles, or the next turn's `Stop`;
   - a subagent's request (`agent_id` set) answered at the pane outside
-    agent-director is never proven by a turn end, so it holds the row's
-    moves to `working` until `record-pane-answer`, its tool's
-    `PostToolUse` or the row's end;
-  - a request recorded in the second a `Stop` or idle prompt started is
-    not proven by it and holds until a later turn-end proof; a next-turn
+    agent-director is never proven by the main turn's end, so it holds the
+    row's moves to `working` until `record-pane-answer`, its subagent's
+    `SubagentStop` (Claude rows; b.wbs) or the row's end;
+  - a request recorded in the second a `Stop`, idle prompt or `SubagentStop`
+    started is not proven by it and holds until a later turn-end proof; a next-turn
     request recorded between Claude Code sending such a hook and the hook
     process's start, in an earlier second, could still be proven (very
     unlikely);
@@ -18291,9 +19610,9 @@ the section that describes it in detail.
   - a nested `claude`'s and a teammate pane's hooks are ignored, and their
     work is not reflected in the row;
   - a row whose create reply was lost takes no hook, and stays `pending`,
-    until `kill`, `send-keys`, `pause` or `find-missing` adopts its pane by
-    `@ad_pane`; after the adoption an idle agent's row stays `pending`
-    until the agent's next hook, and past the grace period `find-missing`
+    until `kill`, `send-keys` or a shared active check adopts its
+    pane by `@ad_pane`; after the adoption an idle agent's row stays `pending`
+    until the agent's next hook, and past the grace period a check
     notes it `unreported` for a caller that reads the pane;
   - a SessionStart that arrives before its launch's identity write waits
     for it, bounded by the pending grace period, so only an identity write
@@ -18301,20 +19620,22 @@ the section that describes it in detail.
     also ends 540 s after it began, so with a grace period above 540 s the
     hook stops waiting while `find-missing` still counts the row as inside
     its grace period; the row stays `pending` until the agent's next hook
-    (noted `unreported` by `find-missing` past the grace period), with its
+    (noted `unreported` by a check past the grace period), with its
     `no_pane_recorded` record;
   - a SessionStart hook killed before its write (a long store wait under a
     raised `busy_timeout_ms`, capped at math.MaxInt32 ms but not at the hook's remaining time, or any other death) or
     otherwise lost leaves its agent's row `pending` until the agent's next
-    hook; `find-missing` notes it `unreported` within the pending grace
-    period plus one `find-missing` period, and the caller reads the pane
+    hook; a check notes it `unreported` on a state read of the row, or
+    within the pending grace period plus one `find-missing` period, and the
+    caller reads the pane
     and answers with `allow_pending`; recovery from `pending`, stale states and gone
-    agents depends on `find-missing` being scheduled (see "The cap and the
+    agents uses [Shared active checks](#shared-active-checks), with scheduled
+    `find-missing` covering rows no caller reads (see "The cap and the
     hook timeout" under
     [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent));
   - a Claude Code version that does not run exec-form hooks applies no
     hook: each hook writes `ad.hook.ignored` `no_exec_form`, and rows stay
-    `pending` until `kill` or until `find-missing` marks them `missing`,
+    `pending` until `kill` or until shared recovery marks them `missing`,
     noted `unreported` while the agent runs (no hook of theirs clears the
     note; the README states the minimum version);
   - a UserPromptSubmit held because a noted `unreported` row has a
@@ -18655,7 +19976,7 @@ for process exit and `decide` for relay delivery or legacy settlement:
    A finished row never reaches this check (step 2).
 6. **`waiting` row: the tmux phase.** Resolve the row's socket (an unusable socket
    directory → `ErrTmuxNotAvailable`), then acquire the shared input writer
-   lock only if native launch state exists. Failure returns `ErrInternal`
+   lock when the row has a launch token. Failure returns `ErrInternal`
    with no input. Hold that lock through this call's input phase. Then one
    lookup by the row's current
    label and, on Ours, one pane listing; then `C-u`, a key send
@@ -18733,18 +20054,19 @@ infer that any prompt is present from a missing end event.
 
 **Why the relay guard (b.zdz).** A relay-on row can read `waiting` while
 one of its requests is not proven gone (a subagent's request after the
-main agent's `Stop`, which proves only durably eligible requests with no `agent_id`; a
+main agent's `Stop`, which proves only durably eligible requests with no
+`agent_id`, and before that subagent's `SubagentStop`; a
 request recorded before v7 on an agent already idle at the upgrade), so
 an unguarded `pause`'s Enter could answer a dialog the dialog hold
 protects. **No way past the hold.** `pause` takes no pane hash, so the
 hold lasts until each request is proven gone by the agent-specific rules
 of [The dialog hold](#the-dialog-hold-step-2c), "Proofs by agent", whatever is done
-at the pane. Claude's denied subagent request gets no `PostToolUse` and its
-main-agent `Stop` does not prove it; Codex has no tool-run proof and its
-main-agent `Stop` or `Interrupt` does not prove a subagent's request,
-allowed or denied. Those requests hold `pause` until the agent-specific
-close; Codex's move to `ended` requires its verified process gone and
-its end report recorded. A
+at the pane. Neither agent's main-agent `Stop` (or Codex `Interrupt`)
+proves a subagent's request, allowed or denied: on a Claude row it holds
+`pause` until that subagent's `SubagentStop` (b.wbs), and on a Codex row,
+or for a Claude subagent that sends none, until the agent-specific close;
+Codex's move to `ended` requires its verified process gone and its end
+report recorded. A
 caller that has read the pane and answered any dialog on it types
 `/exit` itself with a `send-keys` whose `expect_pane_sha256` is the pane
 it judged, which the hold lets through, or ends the Spawn with `kill`
@@ -18757,9 +20079,9 @@ does not wait for `ended`, so the caller polls `get` or `status`
 (docs/permissions.md, "Send-keys interaction"; the help text, at its size
 cap, carries only the way past `ErrDialogMaybeOpen`).
 
-A Claude `pause` never writes the row's state; the adoption and the relay
-guard's `hook_gone_at` (on an `ErrRelayFallenBack` refusal) are its only
-store writes. A Codex `pause` may also write the move to `ended` (step 1
+A Claude `pause` never writes the row's state. Its store writes include
+adoption, the relay guard's `hook_gone_at` (on an `ErrRelayFallenBack` refusal)
+and input-journal records. A Codex `pause` may also write the move to `ended` (step 1
 and the wait's check), through the one guarded write and its records (see
 "The Codex move to `ended`" under [Degraded-mode reconciliation + cron
 user](#degraded-mode-reconciliation--cron-user)): the move's
@@ -18769,8 +20091,10 @@ event of its own and no `ad.spawn.state_transition`. **Trail:** it writes at mos
 `ad.provenance.disagree` per distinct reason per call, with verb `pause`
 and source `ad_send_keys` (the action values as for `send-keys`; a failed
 `C-u` is `nothing_sent`), only for those reasons, none in the normal case
-or on a relay guard refusal (no lookup), and before the wait, so the
-wait's outcome neither adds nor removes one (see
+or on a relay guard refusal (no lookup). Emission is attempted before the
+wait; an accepted record may remain with the trail worker after the bounded
+durability wait ends ([Reusable writer](#reusable-writer)). The wait's
+outcome neither adds nor removes one (see
 [`ad.*` event namespace](#ad-event-namespace)).
 
 **Why `C-u` first** (b.9o4). A failed `pause` can leave `/exit` typed and
@@ -18801,33 +20125,35 @@ and Enter are then submitted with it as a prompt, the row goes `working` and
 `pause` ends in `ErrPauseTimeout` (a known limitation, below). The one call
 is one tmux action, so the clear costs the same as a single `C-u`.
 
-**Worst case** (SRD SR-13.2, the one source for this bound): the tmux
-phase is at most one lookup, one pane listing, the `C-u` call (one call
-however many presses it carries), the `/exit`
-call, the Enter call and one follow-up lookup, 3Q + 3A + 6W, **11.1 s** at
-the defaults. The Codex end check (step 1) and the wait's checks make no tmux call. The relay guard (step 4) makes no tmux call; its store read,
-and its `hook_gone_at` write on an `ErrRelayFallenBack` refusal (which
-ends the call before the tmux phase), come before it. The configured pause wait (`pause.timeout_seconds`, default
-30 s, from 1 to 9223372036 s, a missing key or 0 giving the default) is
-separate and comes on top.
+**Bounds and writes.** With an input session, pause records manual
+interference and rechecks captured admission and the physical target before
+clear, text and Enter. Those checks add lookups/listings; the call is not
+bounded by a single lookup/listing inventory. Each tmux operation retains its
+configured limit, and session admission keeps its original deadline; see
+[Ordinary input delivery](#ordinary-input-delivery). The Codex end check and
+wait's state checks make no tmux call. Adoption, relay `hook_gone_at` and input
+journal writes remain separate from the Codex-only move to `ended`.
+The configured pause wait (`pause.timeout_seconds`, default 30 s, from 1 to
+9223372036 s, a missing key or 0 giving the default) starts after successful
+dispatch; it does not bound the preceding admission/keys work.
 
 Pause is one-shot; no incremental progress callback.
 
 ### kill vs find-missing
 
-`kill` never changes the row's state; `find-missing` marks it (a
-Codex row that reported its end is moved to `ended` instead). Cursor also has
-[fatal cleanup and public read reconciliation](#cursor-gateway-and-current-launch-binding)
+`kill` never changes the row's state; [shared active checks](#shared-active-checks)
+mark it `missing` (a Codex row that reported its end moves to `ended` instead).
+Cursor also has [fatal cleanup](#cursor-gateway-and-current-launch-binding)
 that can mark its current launch `missing`.
 After a successful `kill`:
 
 1. The row stays in its live state (`waiting`, `pending` and so on) until
-   a terminal writer applies; Cursor public reads can reconcile its lost gateway.
+   a terminal writer applies; a selected state read can reconcile its exit.
 2. `find-missing` marks it `missing` once it judges the agent process
    gone, from the row's recorded process identity. Only when that process
    cannot be checked (unreadable, a pid-only identity that reads alive, or
    no identity recorded) does it consult
-   tmux, and then it marks the row when the lookup finds no session of the
+   tmux, never for a Cursor row with a recorded gateway, and then it marks the row when the lookup finds no session of the
    row's current launch (see [`find-missing`](#find-missing)). For a
    `pending` row, a caller first
    waits out the pending grace period (step 2 of the
@@ -18837,12 +20163,11 @@ After a successful `kill`:
    sequence's step 5, not marked.
 3. `status` or `get` then shows `missing`, or `ended` if the agent's own
    SessionEnd hook moved the row first (or, on a Codex row that reported its
-   end, if `find-missing` or `pause` moved it), and either write turns the row's
+   end, if a shared check or `pause` moved it), and either write turns the row's
    running subagent entries `lost` (`agent_gone`; see
    [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries)); `kill` alone changes none.
    Neither is proof that the agent
-   exited: `missing` is the sweep's judgement on the evidence available to
-   it.
+   exited: `missing` is a check's judgement on available evidence.
 
 A caller that ends a live row to relaunch its id follows the
 [live-row sequence](#live-row-sequence), which bounds and paces these
@@ -19032,49 +20357,15 @@ detects this case via the presence of `pkg/api/go.mod`.
 
 ### ErrSchemaMismatch on upgrade
 
-Schema upgrades are **gated**, not automatic: an older-than-binary database
-(v1 through v13) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
-administrator has placed a valid `migrate-authorized` sentinel next to the DB
-file. Only then does the migration chain run: the v1→v2 hop (DROP+CREATE
-`permission_requests`, no row preservation), the v2→v3 hop (five
-`spawns` ADD COLUMN, no backfill), the v3→v4 hop (CREATE
-`session_history`, no backfill), the v4→v5 hop (thirteen ADD COLUMN
-across `spawns` and `session_history`, no backfill, then CREATE `store_meta`
-with one new store id), the v5→v6 hop (three `spawns` ADD COLUMN, the
-launch owner, no backfill), the v6→v7 hop (twenty ADD COLUMN across
-`permission_requests` and `spawns`, the relay's delivery facts, then the
-proof of finished rows' requests), the v7→v8 hop (two `spawns` ADD
-COLUMN, the settle columns, then every row backfilled as settled) and/or the
-v8→v9 hop (six column renames, three `spawns` ADD COLUMN, CREATE `subagents`
-and `subagent_launches`, then every row backfilled as a Claude row; see [Store upgrade to agent-generic
-names](#store-upgrade-to-agent-generic-names)), then the separate v9→v10
-Cursor binding-table hop, v10→v11 eligibility hop, v11→v12 family-history
-hop, v12→v13 Codex startup / Claude capacity provenance hop, v13→v14
-display observation and ownership hop and v14→v15 Codex turn hop, walking
-from the DB's `user_version` up to `schemaVersion` in one pass.
-`ErrSchemaMismatch` fires when `user_version > 15` — meaning the store was
-written by a binary newer than the current one — or when a current store
-has no valid store id, which only a hand edit causes, or an authorized
-migration refuses incompatible eligibility column shape/values, including
-eligible known-child requests, incompatible family-history definitions/values,
-invalid Codex startup / Claude capacity provenance, or an incompatible or
-invalid display observation, pane baseline, timeout override, ownership or
-fallback column, or an incompatible or invalid Codex turn column (see "ErrSchemaMismatch
-recovery" and [Family reporting](#family-reporting)). The failed hop rolls
-back while earlier committed hops remain; retry authorization must match the
-resulting version. Rolling a release back after migration to v14 or v15 requires
-restoring the genuine pre-upgrade `state.db` with its matching WAL/SHM set.
-No supported in-place reverse path crosses v15 → v14, v14 → v13, v13 → v12, v11 → v10,
-v10 → v9 or v9 → v8. The emergency downgrade recipes in
-docs/migration-guide.md §5 provide v12 → v11 for genuine family-only v12
-stores; that recipe cannot operate on v13, v14 or v15. Further reversal stops at v11.
-The older recipes cover v8 → v7: the two settle columns,
-keeping the store id; v7 → v6: the twenty v7 columns, keeping the store
-id; v6 → v5: the three launch-owner columns, keeping the store id; v5 →
-v4: the thirteen columns and `store_meta`, for a store at v8 or older; a
-re-migration after a rollback to v4 creates a new store id.
+Schema upgrades require authorization, and pre-v16 stores also need the
+administrator window described
+under [ErrSchemaMismatch recovery](#errschemamismatch-recovery). Current native
+input authority never falls back to legacy files. Supported earlier reverse
+recipes and the restore-only policy belong in
+[migration-guide.md §5](migration-guide.md#emergency-downgrade-recipe); operator
+steps belong in the [runbook](operator-actions.md#going-back-to-the-previous-release).
 
-Bumping `schemaVersion` beyond 15 requires:
+Bumping `schemaVersion` requires:
 
 1. Add a `migrateVNtoVN1` hop in `internal/store/schema.go` and append a
    `migrationStep{from: N, apply: migrateVNtoVN1}` entry to the `migrationSteps`
@@ -19292,10 +20583,12 @@ the upgrade and way-back cases (`epic-12-install`):
   `config.toml.bak.<ts>`, and the previous release's install that
   `old-layout.sh` runs also leaves `settings.json.bak.<ts>`, which each later
   install and uninstall names (see "No copy of `settings.json`"): expect them.
-- The way-back case reads the steps from `/work/source` at run time and
-  compares the way-back text of `docs/operator-actions.md` and of the install
-  skill's `SKILL.md` with its own copy, word for word, so a change to a step
-  in either file turns it red.
+- The way-back case validates the install skill's absolute recovery pointer,
+  resolves its repository path under `/work/source` and compares the canonical
+  operator procedure with its executable fixture, normalizing Markdown links
+  and whitespace. `test/install-sh/current_layout_rollback_test.go` follows
+  the same pointer and checks the canonical section's exact bytes against
+  that fixture. Neither check depends on deployed GitHub content.
 - The driver keeps only about 330 characters of a case's output head and 600 of
   its `xtrace` tail in `details`, so a case that checks several things collects
   its failures and repeats them, trimmed, in its last line.
@@ -19466,7 +20759,7 @@ except to assert that such a hook is ignored. Instead:
   prefixes the typed command (for example
   `AGENT_DIRECTOR_RELAY_MODE=on`), and `--pane <target>` types into
   another pane on the row's socket (a split pane, for the teammate case).
-  `--agent claude|codex|cursor` (default `claude`) names the agent the hook is
+  `--agent claude|codex` (default `claude`) names the agent the hook is
   for: `codex` types `agent-director hook --agent codex`, for a Codex row
   whose pane process is the Codex stand-in. **Must use:** a case that fires
   a Codex hook from a pane passes `--agent codex` to `pane-hook.sh`, and
@@ -19551,9 +20844,10 @@ not current Cursor receipt, execution or authenticated acceptance evidence.
 
 `spec/tla/` holds bee b.zuj's TLA+ model of the Phase 1 LABEL design, its
 model-check suite and the runner. b.zuj owns the model and its results. The
-repo copy is vendored byte for byte under SHA-256 pins, with three
-exceptions, `Phase4.tla`, `Phase5Hook.tla` and `ci/mkci.py`. `Phase4.tla`
-carries bee b.66h's launch-scoped-actions change. Its knobs default to off.
+repo copy is vendored byte for byte under SHA-256 pins, with four
+exceptions: `Phase4.tla`, `Phase5Hook.tla`, `ci/mkci.py` and
+`jobs/lib/tlcjob.sh`. `Phase4.tla` carries bee b.66h's launch-scoped-actions
+change. Its knobs default to off.
 With them off, the model's steps are identical to b.zuj CI run 4, but
 distinct-state counts under `VIEW CIView` can vary between runs. Bee b.y88
 then changed only comments in both files, which now name
@@ -19563,9 +20857,11 @@ subagent-record change: subagent records behind four knobs (`Sub`,
 `SubNoGate`, `SubNoClose`, `SubOnTerminal`) that default to off. With them
 off, the model's steps are identical to run 4's, and a cfg without a `VIEW`
 reaches run 4's distinct-state count exactly. Run 4's verdicts do not cover
-the changed file until a `make tla` run passes.
+the changed file until a `make tla` run passes. `jobs/lib/tlcjob.sh` carries
+the SANY, storage-guard and stop-after-cap behavior described below; its
+fake-checker tests do not establish real model-check results.
 [`spec/tla/PROVENANCE.txt`](../spec/tla/PROVENANCE.txt) records the
-source, the pin list, the delivering run, the b.66h, b.y88 and b.xjn
+source, the pin list, the delivering run, the b.66h, b.y88, b.xjn and b.osa
 changes, the layout and the TLC build: `tla2tools.jar` rev `4260e47`,
 committed because that nightly build has no immutable upstream URL.
 
@@ -19604,7 +20900,7 @@ count exactly (11,387,737, 109,518 and 833,740). The historical suite carries
 list. No run was made on the dev host: every verdict is a scheduler result
 and every one matches the expectation (the PASS runs complete, the controls,
 limits and probes failing on their target). It is not wired into `make tla`
-or `ci/suite.tsv`, and `ci/run_ci.sh` never reads it.
+or `ci/suite.tsv`: its 11-column inventory is not a runner-format manifest.
 
 The E2 Task1 `Hold36hCx.tla` eligibility overlay has an
 [accepted exact-revision receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/gate-passed/e2t1-summary.txt)
@@ -19655,7 +20951,7 @@ as follows:
   startup prompts with `send-keys` on its `pending` row;
 - the *operator* resumes and kills by hand.
 
-The model has three specs:
+The default LABEL model has three specs:
 
 - `Phase4Split.tla` (65 runs) and `Phase4.tla` (5 runs: the unsplit
   cross-check `ci_smoke_*`, plus `ci_C7` and `ci_L1`). Together they model:
@@ -19777,9 +21073,15 @@ The model's limits:
 - **`ci_C7` uses `remain-on-exit`**, a setting that is out of scope.
 - **Phase5Hook covers one instance id** and no label lookup.
 
-**The manifest and tiers.** [`spec/tla/ci/suite.tsv`](../spec/tla/ci/suite.tsv)
-has 92 rows. Its columns are group, spec, cfg, cap_s, expect, tier and
-what. Its groups are g1, g2, g3, g4a, g4b, g5a, g5b, g5c and g6.
+**The manifest and tiers.** A manifest has seven tab-separated columns:
+group, spec, cfg, cap_s, expect, tier and what. An optional eighth, props,
+lists the expected violation properties, comma-separated, or `-` for a pass
+row. Every row has the same width. Module names match
+`[A-Za-z][A-Za-z0-9_]*`; each named `<spec>.tla` must exist in the spec
+directory, including modules outside the selected tier or groups.
+
+The default [`spec/tla/ci/suite.tsv`](../spec/tla/ci/suite.tsv) has 92 rows
+and seven columns. Its groups are g1, g2, g3, g4a, g4b, g5a, g5b, g5c and g6.
 
 | Tier | Runs | Contents | Scheduler time |
 |---|---|---|---|
@@ -19842,16 +21144,17 @@ nothing here changes it).**
    with no row. Its Can't-tell refusal on an unreadable lookup is not in
    the model.
 4. Environment assumptions:
-   - the jobs need a scheduler timeout of at least the group budget plus
-     margin, and at least 24 GiB;
-   - `tlcjob.sh`'s comment about the scheduler timeout is stale;
+   - the scheduler must honor the requested resources; the runner checks
+     reported timeout and memory as described below;
    - the job image's base is not pinned by digest.
 
-**How to run it.** Only an operator runs `make tla`. Agents never
-submit. They may run `make tla-print` and the runner tests.
+**How to run it.** `make tla` and `make tla-parse` submit scheduler jobs;
+run them only with the operator's go-ahead, which an agent's assignment can
+carry.
 
 ```
 make tla-print                          # the plan and the pin check; submits nothing
+make tla-parse TLA_CHANNEL=<channel id> TLA_JOBSCHED=<absolute path to the scheduler CLI>
 make tla TLA_CHANNEL=<channel id> TLA_JOBSCHED=<absolute path to the scheduler CLI>
 ```
 
@@ -19866,24 +21169,24 @@ The variables:
 - `TLA_TIER` is `fast` (the default) or `full`.
 - `TLA_GROUPS` lists the groups to run, space-separated, in the order
   given. The default is every manifest group.
-- `TLA_SPEC_DIR` and `TLA_SUITE` point at another copy of the three specs
-  and another manifest. An override is not pinned. The jar and the job
-  image files always come from the pinned tree, and so do the cfgs the
-  manifest names from `ci/cfg/`. A manifest may also name cfgs in the `cfg/`
-  directory next to it (`launch/cfg/`, `subagent/cfg/`); those are not
-  pinned.
+- `TLA_SPEC_DIR` holds any model's modules and local helpers; every `.tla`
+  directly in that directory is packaged into each job. Its default is
+  `spec/tla/`, where every packaged module must have a provenance pin.
+- `TLA_SUITE` names the manifest, defaulting to `spec/tla/ci/suite.tsv`.
+  Overridden specs and manifests are not pinned. The jar, job image files
+  and cfgs from `ci/cfg/` always come from the pinned tree. An overriding
+  manifest may also name cfgs in its adjacent `cfg/` directory; those are
+  not pinned. A cfg present in both locations is refused.
 
 The host needs `bash`, `sha256sum` and `jq`. The runner reads the
 scheduler's `--json` output with `jq`. The scheduler's dispatcher must
 already be running: `make tla` never starts or stops it.
 
-TLC and java never run on this host, nor in a local container. The runner
-builds job contexts, submits them, polls them and reads their logs. The
-checker runs only inside each job's container on the scheduler's remote
-host. Nothing local builds the job image. `make tla` is a host target only
-because the scheduler CLI is a host tool. It runs nothing built from the
-repo and never opens `~/.config/agent-director`, so it does not breach the rule
-that nothing built runs on the host.
+SANY, TLC and Java run only in the scheduler's remote job containers. The
+local runner builds job contexts, submits them, waits and reads their logs;
+it never builds the job image. `make tla` and `make tla-parse` are host
+targets because the scheduler CLI is a host tool. They run nothing built
+from the repo and never open `~/.config/agent-director`.
 
 The runner, [`spec/tla/ci/run_ci.sh`](../spec/tla/ci/run_ci.sh), runs in
 this order:
@@ -19892,7 +21195,7 @@ this order:
    - the tier;
    - the tools;
    - every pin in `PROVENANCE.txt`, and the jar's size;
-   - the manifest's rows and groups;
+   - the manifest's rows, modules, cfgs and groups;
    - that `TLA_CHANNEL` is set;
    - that the CLI resolves;
    - that `$TMPDIR` lies outside the repo;
@@ -19903,26 +21206,67 @@ this order:
    is down would run whenever it next starts. Any failure prints
    `FAIL <step> -- <reason>` and a `CI-VERDICT FAIL (<reason>, tier <t>)`
    line, submits nothing, and exits 1.
-2. **A parse-only job** over every spec module gates the rest. Its submit
-   reply carries the scheduler's limits. The run timeout must cover the
-   largest selected group budget plus 300 s (10500 s for either tier with
-   every group), and the
-   memory must be at least 24 GiB. Otherwise the runner waits for that
-   job to end, then fails with nothing more submitted.
+2. **A SANY and evaluation job** has a 600 s budget. It runs SANY on every
+   distinct manifest module, in first-occurrence order, regardless of tier
+   or group. `make tla-parse` (`run_ci.sh --parse`) stops after this SANY-only
+   job. For `make tla`, the same job then evaluates the first cfg per module
+   in the selected tier with TLC simulation at depth 1, regardless of group.
+   Both checks must pass before any exhaustive group is submitted.
 3. **One job per non-empty group,** strictly one at a time, in manifest
-   order or `TLA_GROUPS`'s order. Each job runs with `--network off`. A job's budget is the sum of
+   order or `TLA_GROUPS`'s order. A job's budget is the sum of
    each run's cap plus 20 s, plus 120 s, at most 10200 s.
+
+Every submit specifies `--network off --memory 28g --disk 20g` and
+`--timeout <job budget + 300>s`; the first job requests 900 s. Each submit
+reply must report a timeout covering that job's request and at least
+24 GiB memory. Otherwise the runner waits for the submitted job to end,
+then fails without submitting another. It does not validate reported disk
+limits. Inside the job, `DISKCAP_MB=15000` guards TLC's metadir, including
+states, queue and fingerprints.
+
+The runner blocks on `jobsched wait <id> --timeout 9m`, with the CLI in the
+background and the shell awaiting it so signal traps can fire. A `timeout`
+answer triggers a status check for completion, dispatcher health and overrun
+before another wait. Interrupts also request status. The recognized end states
+are `succeeded`, `failed`, `timed-out`, `disk-exceeded`, `out-of-memory`,
+`build-failed`, `cancelled`, `rejected` and `infrastructure-error`.
+Wait errors and unknown or unreadable answers fail closed.
+
+`jobs/lib/tlcjob.sh` reads runs from `WORK` (default `/work`). A
+`<Module> - sany` entry invokes SANY and reports `sany:<Module>` with
+`PARSE-OK` or `PARSE-FAIL(...)`. Success requires exit zero, semantic
+processing of the requested root, and no recognized diagnostic record;
+empty output fails, while error-like words in module names are harmless.
+Time or disk caps take precedence and report `INCOMPLETE(...)`. After one,
+the job starts no further SANY or TLC run: later entries get
+`SKIPPED(after-cap)`.
+
+Scheduler caps (`timed-out`, `disk-exceeded`, `out-of-memory`) retain genuine
+verdicts; missing verdicts on the capped group's rows or parse-only `sany:`
+rows become `INCOMPLETE(<state>)`. After either kind of cap, the runner
+submits no later group and reports each unrun planned row as
+`FAIL <cfg> NOT-RUN(after-cap)`. When `make tla`'s first job caps, every planned
+row is `NOT-RUN(after-cap)`; a scheduler cap's state shows on stderr's
+`# job parse: <state>` line. Any cap fails the normal or parse-only summary,
+even if every available verdict succeeds or no log is available. A `cancelled`
+job fails naming `cancelled` after cleanup and log retrieval, submits nothing
+further, and is not an INCOMPLETE cap.
 
 Job contexts, logs and the per-run directory:
 
 - Contexts and logs live in a per-run directory under `$TMPDIR`, which the
   runner prints.
 - A context is kept until its job ends, then removed.
-- Logs are fetched through the scheduler's `results` and always kept.
+- Available logs are fetched through the scheduler's `results` and kept.
+  Unavailable logs produce a diagnostic; cleanup failures are also reported.
 - The output is one line per run, then the `CI-VERDICT` line with ok/total,
-  minutes and tier.
-- A run is ok only when its result matches its expectation. INCOMPLETE,
-  ERROR, SKIPPED and NO-VERDICT are never ok.
+  minutes and tier. Parse-only output is one `PASS|FAIL sany:<Module>
+  <result>` line per module, then `CI-VERDICT PASS|FAIL (<ok>/<total> modules
+  parse, <minutes> min, parse-only)`.
+- Each row uses its last verdict. A run is ok only when its result matches
+  its expectation (and the props column, when supplied). INCOMPLETE,
+  ERROR, SKIPPED, NOT-RUN and NO-VERDICT are never ok. Cap failure is
+  retained independently of these row counts.
 - The exit status is 0 only on PASS. Nothing is retried.
 
 **Interrupts.** On SIGINT, SIGTERM or SIGHUP the runner exits 130 with
@@ -19932,9 +21276,8 @@ Job contexts, logs and the per-run directory:
 |---|---|
 | Still queued | Cancels it in effect: removes the job's context, so the scheduler rejects the job when it reaches the head of the queue. |
 | Already building or running | Keeps the context. The job finishes on the scheduler, because the scheduler has no cancel operation. |
+| Already ended | Removes the context and fetches its available run log. |
 | State unreadable | Keeps the context (fail safe). |
-
-The logs are always kept.
 
 **Evidence.** b.zuj CI run 4 (full tier, 92/92 ok, controls violating as
 expected), whose job ids and SHA-256s
@@ -19942,20 +21285,32 @@ expected), whose job ids and SHA-256s
 
 **Runner tests (`test/tla/`, reusable test fixtures).** Package `tla_test`
 calls `sandboxguard.Require()` from `TestMain`. It runs the real runner
-against a fake scheduler CLI and never runs TLC, java, docker or a real
-scheduler. The suite's files:
+against a fake scheduler CLI and the real job script against fake Java.
+No JVM, model checker, job image or real scheduler runs. The suite's files:
 
-- **`rig_test.go`** has three parts:
-  - the fake `jobsched`. Its scripted answers for `list`, `submit`,
-    `status` and `results` come from per-call plan files. Holds make a
-    call block. It serves canned run logs built from a verdict table;
+- **`testdata/jobsched`** is the fake `jobsched`. Its scripted answers for
+  `list`, `submit`, `wait`, `status` and `results` come from per-call plan
+  files. Holds block a call. It serves canned run logs built from a verdict
+  table. `test/sandbox/requiresandbox` runs it too.
+- **`rig_test.go`** has two parts:
   - never-call shims for `java`, `docker`, `podman`, `tlc` and `tlc2`;
-  - the `rig` fixture: `newRig`, `private` (a copy of `spec/tla/` that a
-    test may change), `plan`, `verdict`, `expectAll`, `hold` and `run`,
-    with a clean environment, `TLA_POLL_S=0` and a `TMPDIR` outside the
-    repo.
+  - the `rig` fixture: `newRig` (which installs the fake `jobsched` and the
+    shims), `private` (a copy of `spec/tla/` that a test may change),
+    `plan`, `verdict`, `expectAll`, `hold` and `run`, with a clean environment and a `TMPDIR` outside the repo. Optional
+    per-call clock values drive overrun checks without real waiting.
 - **`runner_test.go`** covers the job order and tiers, the ok rules, the
   fail-closed paths and the overrides.
+- **`models_test.go`** covers arbitrary modules and helpers, default-tree
+  pins, SANY-only mode and gating, explicit limits, waits and refusals,
+  scheduler end states (caps and cancellation), and stopping after caps,
+  including in the first job. Duplicate-verdict cases check that caps remain
+  failures and the depth-1 gate uses the last verdict.
+- **`tlcjob_test.go`** provides `runTLCJob`, `fakeJobJava` and `jobVerdicts`.
+  It invokes the actual job script with a private `WORK` path containing a
+  space, fake Java and a fake budget clock. It checks SANY evidence and
+  diagnostics, time and disk caps overriding success, skipped later runs,
+  and the final `JOB-VERDICT`. The disk case writes a small queue into the
+  actual metadir with a lowered guard; it does not allocate 15000 MB.
 - **`interrupt_test.go`** covers the interrupt cases above.
 - **`props_test.go`** covers the props column: the shipped launch and
   subagent suites (a table, one subtest each, with a `print` subtest that
@@ -19963,7 +21318,7 @@ scheduler. The suite's files:
   `subagent/cfg/`, the subagent groups' budgets (2740, 1940 and 8400 s), the
   props ok rule, and the preflight refusals for bad props or an ambiguous or
   missing cfg.
-- **`provenance_test.go`** has six tests:
+- **`provenance_test.go`** checks:
   - every pin matches its file, and only `.gitattributes`,
     `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `subagent/`, `settle/`
     and `codex/` (each of the last two has its own pin list)
@@ -19978,15 +21333,18 @@ scheduler. The suite's files:
     run set's knob on (except the knobs-off `sx_eq_Sns`), and each cfg's
     comment names the run set's `README.md` and no `tickets/` path;
   - the runner names no checker or container command;
-  - `make -n tla` and `make -n tla-print` run only the runner, none of
-    `all`, `test` and `test-sandbox` reaches it, and `make tla-print` contacts no scheduler.
+  - all three `tla` targets invoke only the runner, none of `all`, `test`
+    and `test-sandbox` reaches it, and `make tla-print` contacts no scheduler.
 
 **Must use:** every test of `spec/tla/ci/run_ci.sh` or the `tla` make
-targets goes in `test/tla/` and uses its `rig` and fake `jobsched`. Never
-write another scheduler double, and never call a real scheduler. A test
-that changes vendored files uses `rig.private`, never the worktree's
-`spec/tla/`. Run the package with `-count=1` after a runner change. The Go
+targets goes in `test/tla/` and uses its `rig`. The one exception,
+`requiresandbox`'s follow of the `tla-parse` sandbox advice, runs the same
+fake `jobsched`. Never write another scheduler double, and never call a
+real scheduler. A test that changes vendored files uses `rig.private`,
+never the worktree's `spec/tla/`. Run the package with `-count=1` after a runner change. The Go
 test cache does not track files that only the runner subprocess reads.
+Tests of `jobs/lib/tlcjob.sh` reuse `runTLCJob`, `fakeJobJava` and
+`jobVerdicts` in the same package.
 
 ### CI lane
 
@@ -20027,8 +21385,8 @@ the same groups. Adding or dropping a slug in `test/docker-epics.txt`
 needs no workflow edit.
 
 `.github/workflows/lint.yml` runs static checks that build nothing, on
-every PR and push to `main`. Its one `lint` job runs
-`make release-shellcheck` (shellcheck over
+every PR and push to `main`. Its one `lint` job runs two checks. The
+first is `make release-shellcheck` (shellcheck over
 `skills/release-agent-director/gates/**/*.sh`), first installing
 shellcheck from apt if the runner image lacks it. The job runs on
 `ubuntu-24.04`, not `ubuntu-latest`, because the image's Ubuntu release
@@ -20038,8 +21396,12 @@ change to the scripts. Move the pin on purpose, with the new version's
 findings fixed. The job logs `shellcheck --version`. It is that target's
 only automated caller; no `/release` phase runs it. The target exits 1
 when shellcheck is not on PATH. `SHELLCHECK_OPTIONAL=1` makes it skip
-instead, printing that nothing was checked; no workflow sets it. A new
-lint check is one more step in the `lint` job, with
+instead, printing that nothing was checked; no workflow sets it. The
+second, after an `actions/setup-go` step that reads `go.mod` (gofmt's
+output can change between Go versions), is `make fmt-check`. It fails and
+lists each tracked Go file (from `git ls-files`, so untracked scratch
+trees don't count) that is not gofmt-clean; the workflow is its only
+automated caller (b.7ep). A new lint check is one more step in the `lint` job, with
 `if: ${{ !cancelled() }}` so it still reports after an earlier check
 fails.
 
@@ -20085,7 +21447,7 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 
 **Coverage.** The harness includes per-verb success and documented-error cases, CI wiring and the nondeterministic.json completeness check. `serve` and `hook` are excluded — they are non-callable and carry no envelope contract.
 
-**Error-coverage contract.** Every callable verb with non-empty `ErrorNames` has at least one error-path subtest in `test/envelope-diff/error_cases.go` asserting that CLI and Client envelopes carry an identical `err_name` and a matching `err_description` (prefix-match policy documented in `test/envelope-diff/nondeterministic.md`). `TestErrorTableCoverage` is the CI gate enforcing this: it iterates `manifest.CallableVerbs()` and fails if any verb with non-empty `ErrorNames` lacks a corresponding row in `errorCases` (`error_cases.go`, plus the appended `error_cases_spawn_tmux.go` rows), so new error sentinels cannot land without coverage — analogous to the `nondeterministic.json` completeness gate that enforces every callable verb is represented in the non-determinism manifest. Two entries are explicitly exempted: `ErrTemplateExists` for `make-template` (its `err_description` embeds an absolute temp-dir path that the prefix-match policy cannot normalize across the two fixture copies on Linux; `ErrTemplateNameUnsafe` provides alternative make-template coverage) and `ErrProbeUnsupported` for `find-missing` (no verb returns it; it stays catalogued and in `find-missing`'s `ErrorNames` by SR-1.7, so its row stays in `errorCases` and counts for `TestErrorTableCoverage`, while the row's skip hook skips the subtest on every platform; the empty-store success path covers find-missing on CI).
+**Error-coverage contract.** Every callable verb with non-empty `ErrorNames` has at least one error-path subtest in `test/envelope-diff/error_cases.go` asserting that CLI and Client envelopes carry an identical `err_name` and a matching `err_description` (prefix-match policy documented in `test/envelope-diff/nondeterministic.md`). `TestErrorTableCoverage` is the CI gate enforcing this: it iterates `manifest.CallableVerbs()` and fails if any verb with non-empty `ErrorNames` lacks a corresponding row in `errorCases` (`error_cases.go`, plus the appended `error_cases_spawn_tmux.go` rows), so new error sentinels cannot land without coverage — analogous to the `nondeterministic.json` completeness gate that enforces every callable verb is represented in the non-determinism manifest. Two entries are explicitly exempted: `ErrTemplateExists` for `make-template` (its `err_description` embeds an absolute temp-dir path that the prefix-match policy cannot normalize across the two fixture copies on Linux; `ErrTemplateNameUnsafe` provides alternative make-template coverage) and `ErrProbeUnsupported` for both `sweep` and `find-missing` (no verb returns it; it stays catalogued and in their `ErrorNames` by SR-1.7, so each verb's row stays in `errorCases` and counts for `TestErrorTableCoverage`, while the row's skip hook skips the subtest on every platform; the finished-row success cases cover them on CI).
 
 **`descContains`.** The prefix-match policy compares descriptions only up to the first `:` (what follows, such as a minted id, may differ between the two runs), so the text that shows which path produced an `err_name` goes unchecked. An `errorCase` may therefore set the optional `descContains []string`: phrases that both the CLI and the Client `err_description` must contain. The spawn tmux rows use it; rows without it keep the prefix check alone.
 
@@ -20095,7 +21457,7 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 
 `test/smoke/go/` is the canonical home for the Go-side smoke test. Its purpose is to exercise every callable verb through `pkg/api.Client` exactly as an external consumer would — no subprocess invocations, no access to `internal/` implementation details.
 
-**Verb coverage.** `manifest.CallableVerbs()` drives the verb list (17 verbs). `help`, `serve`, `trail-emit`, `hook` and `cursor-host` have `Callable=false` and are excluded.
+**Verb coverage.** `manifest.CallableVerbs()` drives the verb list. `help`, `serve`, `trail-emit`, `hook` and `cursor-host` have `Callable=false` and are excluded.
 
 **Import constraint.** The smoke target imports only `pkg/api`, `pkg/api/manifest`, `pkg/api/apitest` (for `SeedSpawn`), and `internal/testsupport/*`. Imports of `internal/api`, `internal/store`, or any other `internal/` package are prohibited and enforced at test time by `test/smoke/go/import_graph_test.go` (Task c8). This keeps the smoke test honest as a consumer: if `pkg/api` does not expose something, the smoke test cannot reach around it.
 
@@ -20140,7 +21502,11 @@ rather than reinvent raw-connection row setup or backdating; each helper
 uses `t.TempDir()` and never touches `~/.config/agent-director`.
 
 The versioned migration fixture and `seedV10EligibilityFixture` provide
-migration preservation, reentry and refusal setup. Request factories,
+migration preservation, reentry and refusal setup. `v17ColumnSpecs` and
+`seedV16PermissionHistory` extend that fixture for provenance, and
+`v19ColumnSpecs` / `v19ColumnNames` name the state/process evidence columns;
+`v20ColumnSpecs` adds the display evidence and observation writer columns for preservation and convergence
+fixtures. Input-import fixtures stay at genuine v15 rather than current-minus-one. Request factories,
 `SeedDecideFixtureAgent` optional RelayRequest seeds and `newPAEnvAgent`
 optional origin control provide reusable request-origin setup. Cursor reporter
 fixtures provide synthetic kernel/runtime/pane evidence and an exec-command
@@ -20148,7 +21514,40 @@ seam. Controller authorization fixtures reuse `cursorfix` request scenarios,
 `terminalPair`, lock/transport seams and the shared pane environment. They exercise
 actual AD controller/store/pipe paths against synthetic runtime authority;
 seeded store rows alone do not establish controller behavior. Future authors
-MUST reuse these fixtures for their respective responsibilities. Cursor
+MUST reuse these fixtures for their respective responsibilities.
+
+Deterministic request timing MUST reuse `requestController.clock` in
+`request_jobs.go`: `requestClock.Now` / `AfterFunc` and `requestTimer.Stop`.
+`realRequestClock` preserves the production time functions. Tests install a
+concurrency-safe clock before admission, directly or through the unexported,
+production-nil `Options.configureRequests` callback before input/controller
+work. Callbacks must not run inline from `AfterFunc`, and timers must preserve
+Stop semantics. Protocol, store and lifecycle-flush timing remains real; keep
+the test clock aligned during admitted live work. Captured identity, sequence
+and original-deadline guards remain mandatory.
+
+Cross-package SQLite boundary fixtures MUST reuse
+`internal/testsupport/sqliteobserve/observer.go` for real-driver statement,
+row, commit-result and close hooks, and `store.ObserveSQLiteForTest` in
+`sqlite_observation.go` to install the wrapper
+on a quiescent owning Store before context views or operations start. It keeps
+the production connector, path, busy timeout, single connection, foreign keys
+and FULL initialization; normal opens install no wrapper. Observer callbacks
+must be immutable or synchronized. Before stopping observation, release barriers
+and stop new calls. The returned stop waits for the existing operation slot and
+sole lease, including native cleanup, before restoring the unwrapped pool. A
+context failure leaves the observed pool attached, possibly already retired
+or closed; only retry stop until restoration succeeds. Successful stop is
+idempotent; context views made under observation must not be reused afterward.
+Fixtures own boundary callbacks; this seam adds no global observer or replay.
+Public Client tests use the test-only `api.ObserveClientSQLiteForTest` shim
+over that same owning-store seam, including post-projection/pre-BEGIN races;
+they must not install a separate observer or pool.
+
+`observeQueuedRequest` / `requestCompletion` observe completion even
+when an initial guard refuses before `protocol.writes`; `refuseProvenDecision`
+checks the pre-`confirm_by` refusal and unchanged request. Reuse these observers for
+queued-response tests. Cursor
 mutation-trail checks reuse `cursorTrailEnv`, `TrailMark`/`TrailEventsSince`,
 `BeforeCursorTrailExecForTest` (the existing transaction observer) and
 `storefix.InjectWriteFailure` for committed-row observation and failure cuts;
@@ -20158,13 +21557,27 @@ a save that never ran observes each deferral through the observer that
 `api.SetCursorMissingDeferredForTest` sets (nil in production; available to
 `pkg/api`'s own tests through `export_test.go`); do not add another
 deferral observer. To force that deferral, see
-`WriteFailMissingDeadlineOverrun` under `InjectWriteFailure` below.
+`WriteFailMissingDeadlineOverrun` under `InjectWriteFailure` below. A public
+Client test whose next zero-wait call follows that forced deferral waits on
+that Client's own store through the test-only `api.WaitClientStoreForTest` (a
+bounded `GetSpawnWithin`), never on a separate Store's pool and never by
+sleeping.
 
-**Agent of a seeded row (current schema v15).** The store refuses to insert a
-row whose `Agent` is not `claude`, `codex` or `cursor` (`store.ErrRowAgentInvalid`, see
+**Trail blocking and drain (reusable test fixtures).** Serial `pkg/api` tests
+must reuse `holdTrail` and `drainTrail` in `trail_emitters_test.go`, not inline
+writer-lock holders. `holdTrail` first drains earlier bounded records and
+requires zero pending work, then uses the co-located `trailEncodingGate` to
+hold the singleton's real mutex during JSON encoding. Its idempotent release
+and cleanup unblock the holder; take status baselines after acquisition.
+After release, `drainTrail` waits up to five seconds for a sentinel on that
+same FIFO worker before assertions read accepted records from disk. Neither
+helper makes acceptance a durability guarantee while the writer is held.
+
+**Agent of a seeded row (current schema v20).** The store refuses to insert a
+row whose `Agent` is not `claude`, `codex`, `cursor` or `droid` (`store.ErrRowAgentInvalid`, see
 "v9 columns" under [`internal/store`](#internalstore)), so every storefix
 insert sets `Agent: store.AgentClaude` (`defaultSpawn`); a test that needs a
-`codex` or `cursor` row, or an end report, sets `Spawn.Agent` itself or seeds through
+`codex`, `cursor` or `droid` row, or an end report, sets `Spawn.Agent` itself or seeds through
 `apitest.SeedSpawn` with `WithAgent` / `WithEndReportedAt` (see [apitest Seed*
 factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)). A
 test builds a `store.Spawn` for `InsertPending` or `ResetForReuse` with an
@@ -20260,7 +21673,7 @@ cutoff. Tests of the time boundary itself supply their own cutoff.
 
 **`InjectWriteFailure(t, dbPath, kind, instanceID)`** makes one kind of
 write to one id's rows fail on the concrete `*store.Store` (SR-20.3). The
-eight kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
+kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) include:
 
 - `WriteFailReuseArchive`: an insert or update of the id's
   `session_history` entry (`ResetForReuse`'s archive, whose failure holds
@@ -20306,7 +21719,7 @@ eight kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
   entries or claimable launches (through the foreign keys' cascade: `delete`'s
   and `expire`'s), the liveness close of the five closing writes (Claude's ended
   write, `MarkMissingIfSameLife`, the Codex `MarkEndedIfSameLife` used by
-  `find-missing` and `pause`, resume's move and reuse's reset; see
+  the shared active checks and `pause`, resume's move and reuse's reset; see
   [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries): its UPDATE of a running
   entry and its DELETE of a claimable launch, each trigger firing per affected
   row, so a close fails only when the row has a running entry or a claimable
@@ -20321,16 +21734,32 @@ eight kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
   deadline's error (wrapping `context.DeadlineExceeded`), not the injected
   failure: the Cursor terminal marks `MarkCursorMissingIfSameLaunch` (the
   save `get`, `status` and `list` then defer) and
-  `MarkFailedCursorRuntimeMissing`, each with an allowance of up to 1 s. A
-  write the overrun cut short may still hold the store for a moment, so a
+  `MarkFailedCursorRuntimeMissing`, and the shared active checks' mark
+  (`RecoveryWrites.MarkMissingIfSameLife`, from a state read or
+  `find-missing`), each with an allowance of up to 1 s. A write the overrun
+  cut short may still hold the store for a moment, so a
   test whose next zero-wait write or read must run waits for the store first
-  (for example with `GetSpawnWithin`, as storefix's `observeSpawn` does).
+  (for example with `GetSpawnWithin`, as storefix's `observeSpawn` does; a
+  public Client test uses `api.WaitClientStoreForTest`, above).
   Matched writes with no deadline spin far longer before they fail:
-  `find-missing`'s mark (`MarkMissingIfSameLife`), resume's and reuse's
+  `Store.MarkMissingIfSameLife`, resume's and reuse's
   restore of a `missing` row, and `SeedSpawn` of a `missing` row. Install
   it after seeding, and only where none of those runs. **Must use:** a test
   that forces a Cursor missing-row save to be deferred by its own deadline
   installs this kind.
+
+Native input additionally uses `WriteFailInputAttempt` (attempt INSERT,
+including UPSERT), `WriteFailInputTextIntent` (positive-byte attempt INSERT),
+`WriteFailInputCurrent` (launch/current UPDATE), and `WriteFailInputAuthority`
+(only the `native_input_authority` metadata-key INSERT). Other metadata keys
+and direct attempt UPDATE do not match these insert cuts. Instance targets use
+bound bookkeeping. `InjectWriteFailure` returns an optional idempotent early
+remover and still registers cleanup; overlapping installations retain scope.
+The existing test-only `ts-helper install-write-failure/remove-write-failure`
+commands bridge shell consumers to the same `writefailfix.Install`/`Handle.Remove`
+with an opaque handle. They open only an existing raw DB, without Store.Open
+or migration, so genuine legacy fixtures stay legacy. Actual FULL/WAL
+observation triggers are separate from intentional failure injection.
 
 How it works:
 
@@ -20350,7 +21779,7 @@ How it works:
 
 Single trigger source: the trigger SQL lives only in the leaf package
 `internal/testsupport/writefailfix` (`Kind`, `Kinds()`, `Install`,
-`Handle.Remove`; imports only `database/sql` and `fmt`). `internal/store`'s
+`Handle.Remove` and handle encoding; a leaf with standard-library imports). `internal/store`'s
 own write-failure tests are in its external test package (`store_test`),
 which can import `storefix`, for example
 `internal/store/store_errors_test.go`.
@@ -20671,15 +22100,28 @@ way a test builds an old-layout install and runs `install.sh` against it.
   user manager, and the shared loose copy of `install.sh` has the repo's
   `schedule/` beside it (a case that wants none builds its own copy).
 - `h.Snapshot(ignore...)` and `moveDiff(want, got)` compare two trees for the
-  refusal tests (a refusal changes nothing); paths a read-only store read
-  may create (an empty `-wal` and a `-shm`) are ignored by name.
+  refusal tests. `h.PhysicalSnapshot()` reuses the walker without opening
+  SQLite and also records exact file SHA/mode/size/mtime and directory mtime;
+  use it for strict no-touch refusals, including WAL/SHM creation/removal.
   `moveWant{...}.Check` and `runMoveRefusals` are the assertion and table
   drivers.
 - `testdata/v0.11.1-store.sql` is a v0.11.1 store (schema v5) with rows;
   `testdata/standin/main.go` builds the stand-in binary, whose `version`
   result (built with `-X` flags) gives an earlier release's, without
   `config_dir` or naming another one, and which as `serve` runs until its stdin
-  closes, as a Claude Code session's MCP server does.
+  closes, as a Claude Code session's MCP server does. The cutover fixture
+  uses its opt-in `SCHED_TEST_DELEGATE_EXEC` to replace the stand-in process
+  when delegating, so the stand-in is not itself a live mutator. Without
+  that opt-in, delegation catches INT/HUP unless ignored at start, returns
+  the delegate's status, and leaves TERM at Go's default.
+- Schedule tests must reuse `moveShared.ScheduleProbe` for help-capability
+  cases: it pairs the synthetic stand-in with the current admin, selects help
+  through `SCHED_TEST_HELP` and delegates other verbs through
+  `SCHED_TEST_DELEGATE`. It does not represent a real release; released-pair
+  compatibility uses the actual release binaries.
+- Reuse `schedRunRecovery` (`schedule_test.go`) to execute rendered recovery
+  commands from cron, manual advice or a service payload adapted to cron form.
+  It checks the empty recovery result and never executes `expire`.
 - `testdata/claude-mcp/` holds the stand-in `claude` (`claude.sh`) and the
   captures it replays for `claude mcp get agent-director`, one directory per
   Claude Code version. `INDEX.tsv` lists every case (file, version, exit,
@@ -20742,6 +22184,228 @@ malformed-launch remedies, including Cursor; keep literal repair/rerun there.
 the old directory, and never an edit of `install.sh` to make a case run. A
 fixture that the product's output depends on (the `claude mcp get`
 captures) is replaced by a real capture, not hand-edited.
+
+### install-sh genuine-release fixture (reusable test fixture)
+
+`test/install-sh/release_fixture_test.go` builds a released pair from its
+git tag or commit, as the release builds it, for the cases that start from a
+genuine previous install rather than the stand-in.
+
+- `releaseBuildOf(rev)` exports the commit with `git archive` and builds
+  `agent-director` and `agent-director-admin` once per test binary run with
+  `CGO_ENABLED=0`, `-trimpath` and the release's `-X` version and commit stamps
+  (the version from that commit's `pkg/ts-bun-client/package.json`). It
+  returns the pair and that commit's `install.sh`. A rev not in the checkout
+  wraps `errReleaseAbsent`. `releaseFixtureShutdown`, which `TestMain`
+  calls, removes the builds.
+- `genuineRelease(t, tag)` skips the case with `SKIP: git tag <tag> is not
+  in this checkout` when the tag is absent and fails it on any other error.
+  Scheduler jobs have no network, so a job's context must carry the tags
+  its cases use, and its log must show those cases passing, not skipped.
+- `h.InstallRelease(r)` installs the release's pair with its own `install.sh`
+  into a move-fixture home and returns the installed `agent-director`, whose
+  `list` it checks. v0.17.3 makes a v15 store and v0.16.0 a v14 one;
+  `rollbackReleasedPair` builds the current-layout rollback's released pair
+  from its commit.
+- `crossing_preflight_test.go` adds the outcome helpers that check an
+  `install.sh` outcome envelope (`preflightEnvelopes`,
+  `assertOutcomeEnvelope`), pre-flight's refusal with install.sh's own reason
+  (`assertOwnRefusal`) or a relayed `--check-only` refusal
+  (`assertCheckOnlyRelayed`), over any `moveHome`, and a strict no-touch refusal
+  (`assertRefusedUnchanged`), and `crossingCase`, a genuine v0.17.3 home for
+  the native-input cutover's pre-flight cases, with a Darwin stand-in
+  (`standInDarwin`) that logs any macOS-only tool reached.
+  `assertRefusedUnchanged` can leave out the size and mtime of named
+  directories, for a refusal that made and removed restore copies in them;
+  every entry is still compared.
+- For the restore preconditions, `crossing_preflight_test.go` also has
+  `newGenuineOldHome` (v0.11.1's genuine old layout, so a move is due),
+  `newCopiesCrossing` (a v0.17.3 home where every item a restore copies
+  exists) and `withLinkDir` (the managed PATH link in `~/links`), and
+  `restore_copies_test.go` has `restoreCopyNames` (every name under HOME
+  with the copies' pattern). Both files use them.
+- `newCrossingCaseOf(t, tag)` is a `crossingCase` from another release's
+  genuine install (v0.16.0's v14 store). For a store holding agents,
+  `crossing_live_rows_test.go` has `crossingLiveRowSQL(id, state)`, the one
+  statement that adds a row to a genuine v0.16.0 or v0.17.3 store with its
+  agent gone (a recorded process that is not running), so that release's
+  `find-missing` marks it `missing`, and `assertLiveRefused`, which checks
+  pre-flight's `agents_live` refusal of those rows exactly. A case needing
+  such a row uses them, never SQL of its own.
+
+**Must use:** a test that needs a previous release's own binaries, or an
+install made by them, builds them with `releaseBuildOf` or
+`genuineRelease`; never a second builder of a released pair. Tests that
+enumerate restore-copy names under the fixture HOME after a run must use
+`restoreCopyNames`; inspect other copy locations and in-run state
+explicitly. Stores laid
+from a release's SQL keep their own fixtures. `advice_follow.sh`'s `need_old_release` (the `v0.11.1`
+cases) is the one bash builder left.
+
+### install-sh cutover-outcome fixture (reusable test fixture)
+
+`test/install-sh/cutover_outcome_fixture_test.go` routes the delegating
+stand-in's `migrate-journal` attempt through the existing administrator
+child runner, a FIFO barrier or a canned response. It reuses the
+[move](#install-sh-move-fixture-reusable-test-fixture) and
+[genuine-release](#install-sh-genuine-release-fixture-reusable-test-fixture)
+fixtures and builds the child binary once per package run. A control file
+under `h.Root` chooses real execution, a named child row, a canned response,
+`block` with a `ready`/`go` FIFO handshake, or `signal` cancellation on a
+group signal; an optional after-hook runs before output is relayed. Files
+keep the selection available when a printed retry is followed literally.
+Other verbs, `--check-only`, `--help` and
+attempts without a control file use the real administrator.
+
+- Signal cases reach each phase through FIFO handshakes, never sleeps:
+  a before-start tool, `signal` cancellation, the real child's cutover
+  commit, or the first post-attempt snapshot blocked in `standin` before
+  delegation (TERM ends that Go helper). The router's supervisor preserves
+  output/status; delegated calls reset its recording traps and `exec`,
+  and cancellation reaps its blocker before reporting.
+- `Start` accepts a bash path for file or piped installs. The installer
+  leads the group; the pipe's source writer and optional stdout reader
+  join it. It returns `*moveRunning`, reusing `Signal`'s guard against
+  process-group reuse, and reaps every pipe member. `ReaderEnded` proves
+  the reader has exited before releasing a commit barrier.
+  Before-start rows also use GNU bash 3.2.57 from `AD_TEST_BASH32` when the
+  job image provides it.
+- `Check` reuses `preflightEnvelopes` for cause equality, checks unchanged
+  relays/refusals and the second-envelope rule, verifies kept paths, and
+  rejects possible-commit wording for `not_committed`.
+- `Follow` runs the printed retry with only its backup placeholder replaced;
+  piped advice repeats the original pipe. `runAdvice` also follows direct
+  verification commands.
+
+**Must use:** installer tests needing a chosen cutover outcome use
+`newCutoverFixture` and its checks; extend its modes instead of adding
+another router or child runner. Interrupt cases use its `Start` and signal
+modes instead of their own process-group setup.
+
+### install-sh operator-procedure follower (reusable test fixture)
+
+`test/install-sh/operator_actions_follow_test.go` follows
+`docs/operator-actions.md`'s procedures literally, from the outcome a
+[cutover-outcome](#install-sh-cutover-outcome-fixture-reusable-test-fixture)
+or [genuine-release](#install-sh-genuine-release-fixture-reusable-test-fixture)
+case leaves (J43 to J45).
+
+- `opsDocSection(t, heading)` cuts a section, from its heading to the next
+  heading of the same or higher level outside a fence. `Pin` requires its
+  key phrases word for word, `Block` returns the one `sh` block holding a
+  string, `Inline` the one inline command with a prefix, and `Fill` replaces
+  only the doc's placeholders, failing on one absent or left.
+  `docSection(t, rel, heading)` cuts a section of another repo file the same
+  way; J47 (`upgrade_skill_follow_test.go`) reads the upgrade skill with it.
+- `newOpsShell(h)` is one bash in HOME with the toolbox as its only `PATH`,
+  so no case stand-in runs; shell variables last between its commands.
+  `Run` waits up to `moveWait` for a command; `RunWithin` takes a longer
+  bound, for a whole install.
+- `newPutBack(t, h, res, env)` follows "Putting back a kept install" from
+  the last envelope's details: `Checks` runs the three checks in order and
+  stops at the first that fails (checks 1 and 2 only for the moved form),
+  `InPlace` renames the copies back, and `Moved` runs the moved form's six
+  steps, undoing its renames when step 5's `list` fails.
+- `opsStash(t, h)` copies `h.Root` aside and returns a function putting it
+  back, for a follow of one way on from an outcome whose test then follows
+  the other.
+
+**Must use:** a test that follows an `operator-actions.md` procedure reads
+it with `opsDocSection` and runs it in an `opsShell`; never a second reader
+of these procedures. Put-back check 1 sees every process in the container,
+so these tests are serial and no temp path, test name or `go test` command
+line beside them holds the string `agent-director-admin`.
+
+### journalfix: pre-cutover stores for admin tests (reusable test fixture)
+
+`internal/testsupport/journalfix` lays a genuine pre-cutover store from
+`test/install-sh/testdata/pre-cutover-v14.sql` (v0.16.0's fresh schema) or
+`pre-cutover-v15.sql`, for the native-input cutover's tests outside
+internal/store and test/install-sh.
+
+- `PreCutoverStore(t, dir, version)` loads version 14 or 15 into
+  `<dir>/state.db` as `advice_follow.sh`'s `pre_cutover_store` does: WAL mode,
+  closed, mode 0600 in a 0700 directory. It finds the SQL from its own source
+  file, so any package's test can call it.
+- `Authorize(t, db)` writes the `migrate-authorized` sentinel beside `db`,
+  from the store's version to the current one, read from a fresh store.
+
+**Must use:** a test outside internal/store and test/install-sh that needs a
+pre-cutover store uses journalfix. internal/store keeps `makeVersionedDB`;
+test/install-sh keeps the genuine-release fixture above and the bash
+`pre_cutover_store`.
+
+### migrate-journal fault seams and child runner (reusable test fixtures)
+
+These fail a `migrate-journal` attempt at a chosen point, over
+[journalfix](#journalfix-pre-cutover-stores-for-admin-tests-reusable-test-fixture)'s
+stores or a current one; the child runner and the installer stand-in,
+`journalInstaller`, follow them:
+
+- `store.SetInputMigrationFaultsForTest` installs `store.InputMigrationFaults`:
+  `AfterStepCommit` (a step's commit reported unconfirmed),
+  `BeforeCutoverCommit` and `AfterCutoverCommitBegan` (either side of the
+  cutover gate), `CutoverCommit` (wraps the cutover's COMMIT),
+  `AttemptTimeout` (replaces the 30 s deadline; negative has already passed)
+  and `BusyTimeoutMs` (the snapshot read's and the open's busy timeout).
+- `adminapi.SetJournalVerifierForTest` replaces the quiescence verifier, so a
+  test can fail any of an attempt's three verifications.
+- `journalProcRoot` is the Linux verifier's `/proc`, package-internal to
+  `internal/adminapi`, pointed at temporary files to exercise readable and
+  unreadable process evidence and the unreadable-inventory refusal; start
+  identities still come from real `/proc`.
+
+All three are process-wide, and production leaves them at their defaults; a
+test that sets one restores it through `t.Cleanup` and does not call
+`t.Parallel`.
+
+The Darwin verifier has three further must-use test components:
+
+- `journal_migration_darwin_fixture_test.go` is the one seam fixture:
+  `darwinTestHost` supplies the process table through `procfix.Checker` and
+  renders listings; `darwinTestFS` wraps real files with case folding,
+  kernel aliases and recorded/refused lookups. `blockDarwinLookup` blocks
+  and joins a lookup, optionally skipping earlier matching calls.
+  Extend it for core, containment and advice tests; never add a second fake
+  host or filesystem wrapper.
+- `TestMain`'s `--journal-fixed-helper` mode in `journal_migration_test.go`
+  calls `journalFixedHelperChild` in `journal_migration_darwin_helper_test.go`.
+  It is the one fixed-path re-exec helper for environment, output and
+  process-group tests; extend its switch. Other invocations keep the sandbox
+  guard.
+- `journalContainmentHost` in `journal_migration.go` selects the containment
+  host rule and filesystem for in-package tests. It is a host choice, not
+  fault injection; set it only in serial tests and restore it in `t.Cleanup`.
+
+`TestMigrateJournalAdminChild` (`cmd/agent-director-admin`) runs the real
+administrator's `run`, signal handling included, in a child of the test
+binary with those seams armed, which a built binary cannot do.
+`AD_ADMIN_CHILD` names the seams, `AD_ADMIN_CHILD_ARGS` holds the argv as
+JSON, and at its seam the child writes `ready` on fd 3 and, where the seam
+waits, reads `go` on fd 4, so the parent can signal it at a known point.
+`TestMigrateJournalCommitState` drives it. The
+[installer outcome fixture](#install-sh-cutover-outcome-fixture-reusable-test-fixture)
+also routes attempts through it by row name, with argv after `--` when
+`AD_ADMIN_CHILD_ARGS` is absent; non-handshake rows need neither fd.
+The `signal-after-fifo` row instead takes FIFO paths through `AD_TEST_READY`
+and `AD_TEST_GO`, for captures that preserve no extra descriptors.
+
+`journalInstaller(t, db, migrate)` (`internal/adminapi`'s tests) stands in
+for an action's "re-run this release's installer with a new
+--journal-backup", by install.sh's own route for the store at `db`: before
+the native-input cutover it writes the authorization for the store's version
+and runs migrate-journal (`migrate`, with the journal flags and a new
+backup); after it, it writes the authorization for a store older than the
+release and opens the store as `agent-director list` does. The action's own
+migrate-journal run follows it in the caller. G9, G12, G13 and G15 use it;
+G15's Darwin follows live in `advice_follow_journal_darwin_seams_test.go`.
+
+**Must use:** a test that fails a `migrate-journal` attempt at a chosen point
+uses these seams, and one that runs the real administrator with seams or
+real signals adds an `AD_ADMIN_CHILD` value to `TestMigrateJournalAdminChild`;
+a literal follow in `internal/adminapi` of an action that re-runs the
+installer uses `journalInstaller`; never a second seam, child runner or
+installer stand-in.
 
 ### Which tmux test double to use
 
@@ -20922,6 +22586,8 @@ parses reply text.
   for any): once or N times (`Times`), or always (`Times` 0). Any failure
   kind, `FailSocketDenied` included, can be scripted on every call kind.
   `Applied` applies the table effect before the failure.
+  Reuse `tmuxfix.KeyCall(key)` to select a named key in scripts, hooks and queries;
+  recorded calls and failures retain `CallSendKey`, never a synthetic text/Enter call.
 - **Hooks.** Session hooks `ReplaceSessionAfter` (same stored name, new id
   and panes, a given label) and `RemoveSessionAfter` fire once after the
   next matching call. `AfterCall` hooks run on every matching call;
@@ -21765,14 +23431,8 @@ verb shows (SR-20.2, SR-20.3). The package doc comment (`doc.go`, "#
 Schema-v5 seeding and store reads") and each option's doc comment say the
 same. For writing `[tmux]` settings, see the config writer subsection above.
 
-**Signature.**
-
-```go
-func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error)
-```
-
-The options are variadic and trailing, so positional call sites compile
-unchanged. When two options set the same column, the later one wins.
+`SeedSpawn` in `pkg/api/apitest/seeds.go` takes trailing variadic
+`SpawnOption` values, so positional call sites compile unchanged. When two options set the same column, the later one wins.
 
 **Options, by group:**
 
@@ -21843,7 +23503,7 @@ unchanged. When two options set the same column, the later one wins.
   reports `settled` until `stampMs` plus that time. Without it the row is
   settled (below). **Must use** it to seed a row whose change has not
   settled; never write the columns with raw SQL.
-- Agent (current schema v15): `WithAgent(agent string)` stores `agent` as the
+- Agent (current schema v20): `WithAgent(agent string)` stores `agent` as the
   row's `agent` column, exactly as given and in place of `SeedSpawn`'s
   default `claude` (any text, so a row whose agent is outside `claude`,
   `codex` and `cursor` can be seeded; the store's own writes refuse one, see "v9
@@ -21989,7 +23649,9 @@ values, except for a row the test inserted itself.
     `SpawnColumns.EndReportedAt`, `SpawnColumns.SubagentTracking`; 1 on a
     default seed) included; v13's context provenance is read through the store
     context projection, not this helper. v8's settle columns are read with
-    `ReadSettle`; v12 family history uses `ReadFamilyHistory` (below). Each comes
+    `ReadSettle`; v12 family history uses `ReadFamilyHistory` (below); v14's
+    `display_exit` is read with `ReadDisplayExit` (see
+    [Displayed State reporting](#displayed-state-reporting)). Each comes
     back as `any`: nil for NULL,
     otherwise the stored storage class (`int64`, `float64`, `string` or
     `[]byte`). TIMESTAMP columns come back as stored text.
@@ -22033,6 +23695,9 @@ values, except for a row the test inserted itself.
   - Rejects an `id` that is not 16 lowercase hex and writes nothing. A store
     with no `store_id` row or no `store_meta` table gives an error wrapping
     `ErrNoStoreID`.
+  - On a current empty store, the matching native authority marker changes in
+    the same transaction; existing native records or a mismatched marker refuse.
+    Reuse this helper for deterministic fixture identity, not a separate SQL update.
   - A store opened before the call keeps the id it read, so seed before
     opening the client or store under test.
 - `OtherStoreID(id) string`
@@ -22076,7 +23741,7 @@ values, except for a row the test inserted itself.
 every surface (CLI JSON, MCP results, the TypeScript client) with no settle
 time, and check them with one:
 
-- `SeedReadSurfaceStore(dbPath)` seeds the fixed store the goldens are
+- `SeedReadSurfaceStore(dbPath, writerPID ...int)` seeds the fixed store the goldens are
   taken on: a row in every state, rows whose raw state flapped through
   hooks and came back, permission requests, and a waiting parent and child
   with a working grandchild; every shown time is pinned. Its
@@ -22086,7 +23751,9 @@ time, and check them with one:
   ignore and a read with one must report. Family history is scrambled
   independently through `ReadSurfaceSettledFamily` (the opposite binary
   value at the same fixed stamp). The ts-helper's
-  `seed-read-surface-store` calls it.
+  `seed-read-surface-store --writer-pid` calls it with the long-lived test
+  process; the pending row also binds its pane to that identity. Ordinary
+  rows carry no synthetic pane. Reuse `ReadSurfaceProcessOptions` above.
 - `LoadReadSurfaceCases(t, dir)` reads the case table
   (`cmd/agent-director/testdata/settle_off/cases.json`: 32 serialized cases
   shared across config variants, `settle_ms` missing and 0);
@@ -22097,11 +23764,45 @@ time, and check them with one:
 - `ReadSurfaceCases.CheckSettleOn(t, c, got)` checks a case's output under
   `SettleOnConfig` against its golden: the same document with each
   `state` and `family_state` read from their independent settled histories,
-  `list`'s state filter and limit applied to the
-  settled state.
+  `list`'s state filter and limit applied to stored settled state before
+  active checks, retaining those IDs after any recovery.
 - `SeedSettleFilterRows(dbPath, nowMs)` and `SettleFilterIDs(rows,
   settled, limit, states...)` seed and select the rows that pin `list
   --state` on the settled state ahead of the limit.
+- `AssertConfirmationsShape(t, out)` is the one check of a result's
+  `process_liveness` and `confirmations` shape: exactly three records of five
+  keys, the enums, valid nulls/timestamps, display source `pane` when present,
+  and no nested wrapper or family record. It also validates every `sweep` /
+  `find-missing` `checks` entry and its exact completion/reason shape.
+  Confirmed and failed display
+  records are supported. `NormalizeReadSurfaceProbes(t, out, from, to, first, c)`
+  runs it and pins each row's first process confirmation in `first`, one
+  `map[string]string` shared across all cases over a seeded store. The first
+  confirmation must equal `checked_at` within that call; later reads retain
+  it, while only `checked_at` must lie within each current call. `c` supplies
+  the `ReadSurfaceCase` identity for status, which omits `instance_id`.
+  It replaces both validated process times with `ReadSurfaceProbed` (the
+  goldens' `probed-by-this-read`). It also validates a failed pane attempt
+  with no prior confirmation against the call window and normalizes only
+  its `checked_at`; every other byte stays unchanged.
+  `ReadSurfaceSettledConfirmation(id)` is the state record a settle-on read
+  must report. The CLI and MCP settle-off/on tests run them on every output;
+  `pkg/ts-bun-client/test/internal/readSurface.ts` supplies the Bun counterpart,
+  `normalizeProbes(out, fromMs, toMs, first, instanceID)` and `PROBED`, using
+  the same first-versus-latest checks, a per-store `Map<string, string>` and
+  an instance ID for status. The ts-helper's
+  `seed-read-surface-store` prints the settle-on records. **Must use:**
+  read-surface and sweep tests check confirmations through these, never a second
+  normalizer or shape check.
+- `needsIntelligenceClient` (`pkg/api/needs_intelligence_test.go`) accepts an
+  optional existing `tmuxfix.Recorder`, keeping its injected clock and default
+  behavior. Its read and sweep tests inspecting observational side effects
+  must reuse this seam.
+- `CheckPaneConfirmationWire` (`pkg/api/apitest/display.go`) checks a sampled
+  single row on CLI/MCP: exact first confirmation, source, status and reason,
+  equal times on the first sample, and latest `checked_at` inside the current
+  call window. It calls `AssertConfirmationsShape`; sampled wire tests must
+  reuse it.
 
 **Family-history helpers** (`pkg/api/apitest/family.go`):
 
@@ -22276,8 +23977,8 @@ skipping a whole file without a reason.
 `descriptions_kill.go` in the same package hold the cases `resume`, the
 shared lookup and `kill` add; `descriptions_live_row.go` holds SR-18.6's
 live-row sequence in the short form only `kill`'s manifest description
-states, and the one-sentence pointer to it that ends the `find-missing` and
-`spawn` descriptions; `descriptions_find_missing.go` holds `find-missing`'s
+states, and the one-sentence pointer to it that ends the `sweep` and
+`spawn` descriptions; `descriptions_find_missing.go` holds canonical `sweep`'s
 own description texts; `descriptions_expire.go` holds `expire`'s
 Description and result-field texts and SR-18.7's cleanup guidance (full
 form and pointer); `descriptions_held.go` holds the held-name cases
@@ -22296,7 +23997,8 @@ renamed or that MCP did not decode before 0.11.0;
 `descriptions_pane.go` holds the pane verbs'
 (`read-pane`, `send-keys`, `pause`) cases; `descriptions_dialog.go` holds
 `ErrDialogMaybeOpen`'s proof text per agent, `DescDialogMaybeOpenClaude`
-(Claude Code's proofs, and never an Interrupt) and `DescDialogMaybeOpenCodex`
+(the main agent's turn end and the asking subagent's `SubagentStop`, and
+never an `Interrupt` or `PostToolUse`; b.wbs) and `DescDialogMaybeOpenCodex`
 (the main agent's `Stop` or `Interrupt`, and no `PostToolUse` or
 `tool_use_id`), and `DescProvenGoneHow` for the manifest's field text; `descriptions_kill_optin.go`
 holds the cases of `kill`'s finished-row opt-in;
@@ -22356,7 +24058,8 @@ package doc comment (`doc.go`, "# Description helper") says the same.
 `proven_gone_how` text asserts it with `DescDialogMaybeOpenClaude`,
 `DescDialogMaybeOpenCodex` or `DescProvenGoneHow` (`descriptions_dialog.go`),
 the Codex case naming the main agent's `Stop` or `Interrupt` and never a
-`PostToolUse`, the Claude case never an `Interrupt`; never its own phrases.
+`PostToolUse`, the Claude case never an `Interrupt` or a `PostToolUse`;
+never its own phrases.
 
 **API:**
 
@@ -22615,7 +24318,7 @@ the Codex case naming the main agent's `Stop` or `Interrupt` and never a
       UTC, the form `get` shows. The other form, "dead", "gone" and any
       statement that the refusal ends are must-nots. `NoSessionID`
       (typically a spawn's or reuse's launch, b.uey) requires the step
-      after find-missing (`noSessionStep`): "once find-missing marks it
+      after shared recovery (`noSessionStep`): "once a shared check marks it
       missing, if get still shows no session id, spawn the id again with"
       the reuse opt-in in its one spelling (`reuseOptIn`), before "nothing
       was written"; without it, "session id", the reuse opt-in and "spawn
@@ -22706,7 +24409,7 @@ the Codex case naming the main agent's `Stop` or `Interrupt` and never a
       pointer and the pointer's opening are must-nots. Check it with
       `AssertAgentTextCase`.
     - `LiveRowPointer`: the pointer sentence, verbatim, that ends the
-      `find-missing` and `spawn` descriptions.
+      `sweep` and `spawn` descriptions.
     - `DescLiveRowPointer()`: the pointer case. It requires
       `LiveRowPointer`; the short form's opening and key phrases of every
       step are must-nots, so a text that restates any step fails. Check
@@ -22716,25 +24419,29 @@ the Codex case naming the main agent's `Stop` or `Interrupt` and never a
       form) and how many times it carries the pointer. Neither counts the
       other. Use them to check that `kill` states the sequence once and no
       pointer, and every other verb states it zero times.
-  - Find-missing (`descriptions_find_missing.go`, SR-18.9):
-    - `DescFindMissingGrace()`: `find-missing`'s pending grace statement
+  - Sweep and its find-missing alias (`descriptions_find_missing.go`, SR-18.9):
+    The helper names are retained; grace and liveness pins apply to canonical
+    `sweep`, while `find-missing` has a short compatibility pointer.
+
+    - `DescFindMissingGrace()`: `sweep`'s pending grace statement
       (a pending row is not judged inside the pending grace period,
       measured from its launch start; the default from
-      `config.DefaultPendingGraceSeconds`; a resume's launch included).
+      `config.DefaultPendingGraceSeconds`; a resume's launch included; an
+      exact Cursor gateway loss overrides it).
       Check it with `AssertAgentTextCase` on `FindMissingOwnText`.
-    - `FindMissingOwnText(text)`: the part of `find-missing`'s description
+    - `FindMissingOwnText(text)`: the part of the canonical `sweep` description
       before `LiveRowPointer`, so a check covers its own sentences only. It
       panics when `text` does not carry the pointer, so a description that
       lost the pointer fails the calling test.
-    - `DescFindMissingManifest()`: `find-missing`'s liveness and
+    - `DescFindMissingManifest()`: `sweep`'s liveness and
       same-environment rules (SR-18.9, SR-18.7, SR-3.8), by key phrase:
       liveness only from the agent process; tmux, on the row's recorded
       socket, only for a row whose process cannot be checked or was never
       recorded; the agents' user and tmux environment, and a run as another
       user, as root or against another tmux server can mark live rows
       `missing`; for SR-18.7's two consequences, the pointer to kill
-      (`findMissingKillPointer`: "See kill for what a wrong server leads
-      to."), which states them in full. The environment probe-set scan
+      (`findMissingKillPointer`: "see kill."), which states them in full.
+      The environment probe-set scan
       and "on ambiguous evidence" are must-nots. Check it with
       `AssertAgentTextCase` on `FindMissingOwnText`.
     - `DescFindMissingField(f)`, with `FindMissingField` values
@@ -22746,10 +24453,10 @@ the Codex case naming the main agent's `Stop` or `Interrupt` and never a
       `AssertAgentTextCase`.
     - `DescMissingNotProof()`: SR-18.2's statement for any text that
       describes `missing` (a manifest description or result field, a Go
-      doc): the sweep's judgement on the evidence available to it, not proof
+      doc): a check's judgement on available evidence, not proof
       that the agent has exited. Its must-nots are claims that `ended` or
       `missing` means dead or safe to delete; negations pass. It applies
-      at the full sites only (decision-0930e): the `find-missing`
+      at the full sites only (decision-0930e): the `sweep`
       description, the `state` / `spawns` / `ids` result fields and Go
       docs; such a text must not carry the short form as well.
     - `DescMissingNotProofShort()`: SR-18.2's short form for the four
@@ -22792,14 +24499,15 @@ the Codex case naming the main agent's `Stop` or `Interrupt` and never a
       default retention, same user and tmux environment, keeps and reports
       rows it cannot prove gone, agents never run it, "zero window").
     - `DescCleanupPointer()`: the short pointer (`expireCleanupPointer`)
-      the `kill` and `find-missing` Descriptions carry instead. It
+      the `kill` and `sweep` Descriptions carry instead. It
       requires "Agents never run expire" and
       "operator-scheduled finished-row cleanup", and rejects the full
       sentence's phrases ("at the default retention", the
       keeps-and-reports phrase, "zero window"), so the full sentence
       cannot come back at those sites and push help stdout past its
       recorded count (`helpStdoutBytes`) or the hard cap (`helpHardCap`).
-      Check `find-missing`'s on `FindMissingOwnText`.
+      Check the canonical `sweep`'s on `FindMissingOwnText`; `find-missing`
+      carries only a compatibility pointer.
     - Both cleanup cases reject the schedule claims ("cron", "crontab",
       "daily", "hourly", "nightly", "weekly", "runs every"): no text says
       or implies a schedule is installed.
@@ -22807,7 +24515,7 @@ the Codex case naming the main agent's `Stop` or `Interrupt` and never a
       to the manifest: `TestExpireDescription`,
       `TestExpireResultFieldTexts` (one subtest per field) and
       `TestCleanupGuidanceInDescriptions` (full form at `expire`, pointer
-      at `kill` and `find-missing`). `TestSurfaceJSONMirrorsManifest`
+      at `kill` and `sweep`). `TestSurfaceJSONMirrorsManifest`
       carries them to `surface.json`, and
       `TestManifestTextsNameNoSessionEndingCommand` runs `AssertAgentText`
       over every verb, parameter and result field, `expire`'s included.
@@ -22959,7 +24667,7 @@ the Codex case naming the main agent's `Stop` or `Interrupt` and never a
   `DescLiveRowSequence`, and one of a text that points to it through
   `DescLiveRowPointer` or `LiveRowPointer`; how often a text states either
   goes through `LiveRowSequenceCount` or `LiveRowPointerCount`. A check
-  of `find-missing`'s own sentences cuts them with `FindMissingOwnText`. A
+  of the canonical `sweep`'s own sentences cuts them with `FindMissingOwnText`. A
   check of a text that points to docs/operator-actions.md
   goes through `PointsToOperatorActions` or `OperatorActionsTitle`. Never
   spell the sequence's phrases, the pointer or the section title as
@@ -23185,7 +24893,8 @@ A new `pkg/api` fixture gets a test's own `TMUX_TMPDIR` through
 carry the detail.
 
 - `runFindMissing(s, pc, fmSweep{...})` runs one sweep: the one place the
-  unit tests call `api.FindMissing`. By default it passes a fresh
+  unit tests call `api.FindMissing`, or `api.Sweep` with `fmSweep.canonical`.
+  Both reuse the same fixture. By default it passes a fresh
   `tmuxfix.Recorder` as the `FindMissingTmux` (no server, so every lookup
   is Gone), the pending grace period and sweep budget from
   `internal/config`'s defaults (`fmGrace`, `fmBudget`), a
@@ -23222,11 +24931,13 @@ carry the detail.
   writer `find_missing`) then one `permission_orphan_closeout` tick, then the
   row's one `ad.find_missing.tick` (prior state, new state, reason, source),
   and no other event, no `ad.spawn.state_transition` included. `moveWant`
-  names the states, the deny reason and the tokens. It serves the move to
+  names the states, the deny reason, the tokens and an optional source
+  (`ad_find_missing` by default; `ad_recovery` for read/pause checks).
+  It serves the move to
   `ended` and the mark to `missing`, so the two are compared by the same
   helper.
 
-**Must use:** every `find-missing` sweep test in `pkg/api` calls the sweep
+**Must use:** every exported `Sweep` / `FindMissing` test in `pkg/api` calls the sweep
 through `runFindMissing` (or `mustSweep` / `mustFindMissing`) with a
 `tmuxfix.Recorder` and `procfix.Checker`; it never adds a second store,
 tmux or process-checker fake and never waits in real time. A test of what
@@ -23349,7 +25060,7 @@ The files are package `api_test`; their doc comments carry the detail.
 - `apitest.SeedDecideFixtureAgent(t, relayMode, agent, requests ...store.RelayRequest)`
   is `SeedDecideFixture` for the selected agent. Optional request seeds carry
   explicit eligibility through `SeedRelayRequest`; old calls retain their
-  existing defaults. Cursor seeds have a valid synthetic launch token.
+  existing defaults. Cursor seeds have a valid synthetic launch token and session.
   `SeedDecideFixture` is it with Claude.
 - `newRelayEnvAgent(t, hook, agent)` (`relay_delivery_test.go`) is
   `newRelayEnv` on a row of that agent; a Codex row's request A records no
@@ -23374,6 +25085,9 @@ The files are package `api_test`; their doc comments carry the detail.
   state must expect that. Its
   no-op evidence callback is fixture authority, not real runtime or rawOutput
   proof; controller tests separately validate execution evidence.
+  `paEnv.withPermissionWriter` keeps the shared synthetic binding in place
+  during current store-only decision/ack writes; reuse it rather than seeding
+  owner fields or fabricating a second binding.
 - `codexKinds` (`codex_reporting_test.go`) lists the five kinds of Codex
   request, the `tool_name` and the `tool_input` as the relay hook stores them.
 
@@ -23516,8 +25230,10 @@ each file's doc comments carry the detail.
     sessionID)` applies the agent's SessionStart through
     `apitest.ApplyAgentHook` once, after the first call of a kind;
     `e.rowWriteAfter(t, call, r)` makes a non-hook versioned write (the
-    lost-reply variant); both fail the test if they did not apply or never
-    ran;
+    lost-reply variant), including process/display evidence changes that input
+    admission must ignore; both fail the test if they did not apply or never
+    ran. Reuse their `beforeJournalLoad` schedule for a one-shot real store write
+    after the first launch read and before any tmux operation;
   - call lists and assertions: `paneReadCalls`, `paneSendCalls`,
     `paneTextCalls`, `withFollowUp(calls)`, `paneWriteCalls`;
     `recordedCall(c)`, the kind the lists compare, which gives a key send
@@ -23539,7 +25255,9 @@ each file's doc comments carry the detail.
     not applied).
   - `pause`'s own pieces: `e.pause` /
     `e.pauseWithin(ctx, timeoutSeconds, p)` / `e.pauseClient`,
-    `pauseParams`, `exitText`; pause's call lists with the line clear
+    `pauseParams`, `exitText`; `pauseWithin` uses a per-call store view for
+    `ad_recovery` while preserving the injected error/count wrapper.
+    Pause's call lists with the line clear
     before `/exit`, `pauseSendCalls`, `pauseTextCalls` and
     `pauseClearCalls`; `e.endAsAgent(t, r)` (ends the row
     as its own agent, a SessionEnd through `apitest.ApplyAgentHook` with the
@@ -23738,8 +25456,11 @@ each file's doc comments carry the detail.
     a heading that exists exactly once in its doc, and that a list of required sites
     all carry a pointer.
   - The anchor check: `TestREADMEAnchorLinksResolve` checks that every
-    relative link in the hand-written user docs (`mdUserDocs`) names an existing
-    path and every anchored `.md` link resolves to exactly one heading.
+    relative link in the hand-written user docs (`mdUserDocs`) and the install
+    and upgrade skills (`mdSkills`), and every link to a file on the repo's
+    main branch (`mdRepoBlobRe`), names an existing path, and every anchored
+    `.md` link resolves to exactly one heading. A skill may link nothing
+    else, and the install skill must link the upgrade skill.
     `TestREADMESectionHeadings` checks that each pointed-to heading exists
     exactly once, the "Caller contract: tmux refusal classes" heading of
     this document included, and that the first sentence of "Operator
@@ -24187,13 +25908,13 @@ emptiness on success means a non-empty stderr is an unambiguous failure signal.
 
 | Subcommand | Key flags | Result shape |
 | --- | --- | --- |
-| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--agent` (the row's agent, `claude`, `codex` or `cursor`, via `apitest.WithAgent`; default `claude`), `--no-subagent-tracking` (stores tracking 0 via `apitest.WithNoSubagentTracking`; default tracking 1, including with `--agent codex` or `--agent cursor`; Cursor listings still force false/empty), `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`), `--no-pre-trust` (records the pre-trust opt-out via `apitest.WithNoPreTrust`; default pre-trust allowed), `--no-launch-identity` (a row from before the release: no launch token, socket or identity, via `apitest.WithNoLaunchToken`; not with `--socket`) | `{"instance_id": "..."}` |
+| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--agent` (the row's agent, `claude`, `codex`, `cursor` or `droid`, via `apitest.WithAgent`; default `claude`), `--no-subagent-tracking` (stores tracking 0 via `apitest.WithNoSubagentTracking`; default tracking 1 for any seeded agent; Cursor and pane-only listings still force false/empty), `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`), `--no-pre-trust` (records the pre-trust opt-out via `apitest.WithNoPreTrust`; default pre-trust allowed), `--no-launch-identity` (a row from before the release: no launch token, socket or identity, via `apitest.WithNoLaunchToken`; not with `--socket`) | `{"instance_id": "..."}` |
 | `seed-parent-child` | `--store`, `--parent-id`, `--child-id` | `{"parent_id": "...", "child_id": "..."}` |
 | `seed-permission-request` | `--store`, `--spawn-id`, `--tool`, `--created-ago-seconds` (backdates `created_at`; past the relay window the request has fallen back), `--hook-gone-ago-seconds` (records `hook_gone_at` that long ago), both through `apitest.AgePermissionRequest` | `{"request_id": <number>, "request_token": "..."}` |
 | `seed-template` | `--templates-dir`, `--name`, `--body` | `{"path": "..."}` |
 | `seed-empty-store` | `--store` | `{"path": "..."}` |
 | `seed-row-session` | `--store`, `--id`, `--capture` (the row's pane's capture text; empty uses the fake's default), `--tables-dir` (default `$FAKE_TMUX_TABLES`, else the table beside the socket) | `{"socket": "...", "session_id": "...", "pane_id": "...", "table": "..."}` |
-| `seed-read-surface-store` | `--store` (b.3ie: the read-surface goldens' store, through `apitest.SeedReadSurfaceStore`) | `{"ids": [...], "settled": {"<raw state>": "<settled state>", ...}}`: the row ids in seeding order and, per raw state, the settled state its rows were scrambled to, which a read with a settle time reports |
+| `seed-read-surface-store` | `--store`, `--writer-pid` (long-lived caller; b.3ie: the read-surface goldens' store, through `apitest.SeedReadSurfaceStore`) | `{"ids": [...], "settled": {"<raw state>": "<settled state>", ...}, "settled_confirmations": {"<id>": {...}, ...}}`: the row ids in seeding order; per raw state, the settled state its rows were scrambled to, which a read with a settle time reports; and per row the state record that read reports (`apitest.ReadSurfaceSettledConfirmation`) |
 | `set-settle` | `--store`, `--id`, `--settled`, `--stamp-ms` (b.3ie: an existing row's settle columns, through `apitest.SetSettle`) | `{"instance_id": "..."}` |
 | `write-family-transition` | `--store`, `--id`, `--state` (default `working`), `--settle-ms` (default 0); real gated lifecycle write for the family restart collector | `{"instance_id": "..."}` |
 | `seed-subagent` | `--store`, `--instance-id` (an existing row; both required, else exit 1 with `<flags>: required` on stderr and nothing written), `--subagent-id` (a UUID when empty), `--state`, `--close-reason`, `--session-id`, `--type`, `--description`, `--model`, `--tool-use-id`, `--run-mode` (each applied when non-empty), `--parent-type` and `--parent-id` (both or neither), `--first-started-at-ms`, `--started-at-ms`, `--stopped-at-ms`, `--lost-at-ms` (each applied when given), `--confirmed` (default true: a record; false: an unconfirmed observation that `list-subagents` never returns), all through `apitest.SeedSubagent` | `{"instance_id": "...", "subagent_id": "..."}` |
@@ -24217,8 +25938,16 @@ combined with `--socket`: that call exits 1 with "--socket and
 --no-launch-identity cannot be combined" and creates no store.
 
 **Must use:** a TypeScript test that needs a row of one agent seeds it with
-`seed-spawn --agent <claude|codex|cursor>`; without the flag the row is a Claude
+`seed-spawn --agent <claude|codex|cursor|droid>`; without the flag the row is a Claude
 row.
+
+`seed-spawn --writer-pid <pid>` opts ordinary read fixtures into the caller
+process identity through `ReadSurfaceProcessOptions`, with no pane by default.
+`--writer-keep-pane` additionally binds the owned pane to that exact identity
+for command/read composition. Generic seed defaults are unchanged. Tests that
+need both must reuse these flags; `seedFallenBackRelayRow` accepts the optional
+writer PID and passes both. The display-surface seed commands likewise accept
+`--writer-pid` for their shared factories.
 
 `seed-spawn --context-fixture <name>` instead selects the named `contextfix`
 sample's agent, session and transcript, writing the evidence beside the
@@ -24269,12 +25998,7 @@ because testplans run it from the read-only source mount as
 
 **Bun integration — `TS_HELPER_PATH`.**
 
-`pkg/ts-bun-client/bunfig.toml` registers `./test/setup.ts` as a Bun preload:
-
-```toml
-[test]
-preload = ["./test/setup.ts"]
-```
+`pkg/ts-bun-client/bunfig.toml` registers `./test/setup.ts` as a Bun preload.
 
 `test/setup.ts` runs `make ts-helper` synchronously (via `Bun.spawnSync`)
 before any test starts.  On success it sets `process.env.TS_HELPER_PATH` to
@@ -24491,8 +26215,8 @@ Three static assertions are enforced by grepping test file contents:
 | (b) | Every smoke file imports `withTempHome` and calls it. |
 | (c) | Every smoke file outside the allow-list contains `instanceof Err` or `toBeInstanceOf(Err`. |
 
-Allow-list for (c): `version`, `expire`, `find-missing`. `version` has no
-verb-level error names; `expire` and `find-missing` do have documented errors.
+Allow-list for (c): `version`, `expire`, `sweep`, `find-missing`. `version` has no
+verb-level error names; `expire`, `sweep` and `find-missing` do have documented errors.
 The allow-list exempts their smoke-file assertion, not their public error contract.
 
 **Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `coverage` phase in the `/release` skill, against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks: `go-smoke.yml`, `integration.yml` and `lint.yml` (see [CI lane](#ci-lane)), `doc-drift.yml` and `pre-release-verify-mac.yml`; release-blocking gates run locally so they execute against exactly the tree being tagged.
@@ -24693,9 +26417,9 @@ any level: it holds no sub-heading and no code-block line led by `#`. An excepti
 and fails (`requireAllHit`); a user-doc exception named by a heading that its
 file does not have is dropped, which is how a section is added to the list
 before its doc exists, but a missing `SKILL.md` heading fails, as the skill
-always has both. The installed skill has no repo docs, so its way-back
-section restates `docs/operator-actions.md`'s word for word (links reduced to
-their text). **Must use:** a new place that has to name the old directory
+always has both. The installed skill's way-back section uses an absolute
+pointer to the canonical operator procedure; it needs no sibling repo docs.
+**Must use:** a new place that has to name the old directory
 is added to `oldPathRules` with its reason, never allowed by loosening the
 matcher. A user doc that needs to point at the old directory links to one of
 the exempt sections instead of naming it.
@@ -24705,7 +26429,7 @@ the exempt sections instead of naming it.
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
 `prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
-b.8yq, b.4a1, b.qgr, b.uc7 and b.1ce, `helperdeps` b.q6s). Those tests run
+b.8yq, b.4a1, b.qgr, b.uc7, b.1ce and b.osa, `helperdeps` b.q6s). Those tests run
 `make` against the real repo Makefile with a fake container engine or tool on
 PATH, never a real container, and assert on what the recipe produced. They
 exec no built binary and open no store, so they carry no sandbox guard.
@@ -24726,7 +26450,11 @@ harness matrix is that step's output, that each secret reaches only the
 `pr_epic` job, and that a workflow calls `make release-shellcheck` and none
 sets `SHELLCHECK_OPTIONAL`. It also runs `make release-shellcheck` with a
 fake shellcheck, absent and present: with shellcheck present the target
-checks every gate script even under `SHELLCHECK_OPTIONAL=1`. It reads `.github/workflows/`, or the directory in
+checks every gate script even under `SHELLCHECK_OPTIONAL=1`. It runs
+`make fmt-check` in a scratch git repo, where a tracked unformatted file
+fails it and an untracked one doesn't, and against this repo, which must
+pass, and checks that a workflow runs `make fmt-check` after
+`actions/setup-go`. It reads `.github/workflows/`, or the directory in
 `WORKFLOWS_UNDER_TEST` (local to that package), to prove the fails-before
 direction against pre-fix workflows.
 
@@ -24763,8 +26491,11 @@ bypass, that `make -n`, the build-only targets and `make -j8 test-docker`
 still run outside the sandbox, that in the sandbox
 `make -j8 test-docker generate` runs every goal's tools, and that the
 advice, run as printed, exits 0: for `make generate` it runs
-`go generate` in the "container", and for `make generate test-docker`
-also `test-docker`'s go builds on the host. The fake engine runs a sandbox-image
+`go generate` in the "container", for `make generate test-docker`
+also `test-docker`'s go builds on the host, and for `make generate tla-parse`
+and `make tla-parse generate`, with `TLA_CHANNEL` and `TLA_JOBSCHED` on the
+command line, also `make tla-parse` on the host, whose real runner passes its
+SANY-only job through `test/tla`'s fake `jobsched` (b.osa). The fake engine runs a sandbox-image
 command with docker and podman on its PATH that fail, as the real image has
 no container engine.
 
@@ -24799,8 +26530,8 @@ environment. `cmdinject` still joins `RepoRoot(t)` and `Makefile` itself, so
 ### TS envelope-diff regression
 
 `pkg/ts-bun-client/test/envelope-diff.test.ts` is the TypeScript counterpart to
-Epic 3's Go-side envelope-diff harness. Both suites run the same 17 callable
-verbs against identical SQLite fixtures and assert that the CLI subprocess
+Epic 3's Go-side envelope-diff harness. Both suites run the same callable
+verbs (`VERBS`, `pkg/ts-bun-client/src/internal/verbs.ts`) against identical SQLite fixtures and assert that the CLI subprocess
 output and the Bun Client wrapper output are structurally identical —
 catching any divergence introduced by argv construction, JSON parameter
 marshalling, or stdout-envelope deserialization in the TS Client.
@@ -24881,17 +26612,12 @@ execution required, completes in under 1 second:
 | (d) | `nondeterministic.json` contains an entry for every verb in `VERBS`. |
 | (e) | `assertEnvelopesEqual` call count equals `loadIgnorePathsForVerb` call count. |
 
-Allow-list for (c): `version`, `expire`, `find-missing`.
+Allow-list for (c): `version`, `expire`, `sweep`, `find-missing`.
 
 **`make envelope-diff-ts`.**
 
-The Makefile target builds all three required binaries incrementally, then
-runs the two test files:
-
-```
-envelope-diff-ts: _require-sandbox agent-director ts-helper fake-tmux
-    cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
-```
+The target in `Makefile` builds all three required binaries incrementally,
+then runs `envelope-diff.test.ts` and `envelope-diff-invariants.test.ts`.
 
 It runs only in the sandbox (`make sandbox CMD="make envelope-diff-ts"`):
 outside it `_require-sandbox` refuses before any build starts (see

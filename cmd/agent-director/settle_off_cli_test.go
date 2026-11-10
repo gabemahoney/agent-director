@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -25,7 +26,12 @@ import (
 // no other byte changed. And b.zpv: a state filter naming no Displayed State
 // reads the 0.15 query again, so those two state-filtered list goldens,
 // recaptured, return to its row order (the order before the regeneration
-// above); no other byte changed.
+// above); no other byte changed. E4 shared recovery (b.x9o) fixes membership
+// before checks and uses the stored displayed-state selection query: the same
+// two goldens change row order only, matching the scheduler's captured output;
+// every row's bytes remain unchanged. And b.x9o E4's process_liveness and
+// confirmations, recaptured on every row after family_state, each probed
+// process record's times as apitest.ReadSurfaceProbed; no other byte changed.
 const settleOffCaptureEnv = "AGENT_DIRECTOR_CAPTURE_SETTLE_OFF_GOLDENS"
 
 // TestSettleOffCLI: with [state] settle_ms unset or 0, status, get and list
@@ -41,12 +47,15 @@ func TestSettleOffCLI(t *testing.T) {
 				t.Fatalf("SeedReadSurfaceStore: %v", err)
 			}
 			v.WriteConfig(t, filepath.Join(directorDir(home), "config.toml"))
+			first := make(map[string]string)
 			for _, c := range cases.Cases {
+				from := time.Now()
 				stdout, stderr, code := runCLIWithHome(t, home, c.CLIArgs()...)
 				if code != 0 || stderr != "" {
 					t.Errorf("%s %q: exit %d, stderr %q; want 0 and empty", c.Name, c.CLIArgs(), code, stderr)
 					continue
 				}
+				stdout = apitest.NormalizeReadSurfaceProbes(t, stdout, from, time.Now(), first, c)
 				if capture && v.Name == "unset" {
 					if err := os.WriteFile(cases.GoldenPath(c.Name), []byte(stdout), 0o644); err != nil {
 						t.Fatalf("capture %s: %v", c.Name, err)

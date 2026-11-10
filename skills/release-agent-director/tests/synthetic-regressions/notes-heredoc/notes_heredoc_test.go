@@ -14,20 +14,20 @@
 //
 // DESIGN
 // ======
-// 1. Skip     : testing.Short() → skip (network/slow guard), bun not on
-//               PATH → skip (dependency guard).
-// 2. Ephemeral repo: t.TempDir() — Go cleans it up automatically after
-//               the test (pass or fail).
-// 3. Git setup: git init, user.email, user.name (required for commits).
-// 4. Baseline : create README, commit, tag v0.0.1.
-// 5. Payload  : create another file, commit with a subject containing
-//               `like this`, cat <<EOF, $(date), and ${HOME}.
-// 6. Script   : bun run pkg/ts-bun-client/scripts/generate-release-notes.ts
-//               --from v0.0.1 --repo-root <ephemeral-repo>
-//               Run from the main repo so the script can resolve its own
-//               imports; --repo-root redirects git operations to the
-//               ephemeral repo.
-// 7. Assertions: each shell-special substring appears verbatim in stdout.
+//  1. Skip     : testing.Short() → skip (network/slow guard), bun not on
+//     PATH → skip (dependency guard).
+//  2. Ephemeral repo: t.TempDir() — Go cleans it up automatically after
+//     the test (pass or fail).
+//  3. Git setup: git init, user.email, user.name (required for commits).
+//  4. Baseline : create README, commit, tag v0.0.1.
+//  5. Payload  : create another file, commit with a subject containing
+//     `like this`, cat <<EOF, $(date), and ${HOME}.
+//  6. Script   : bun run pkg/ts-bun-client/scripts/generate-release-notes.ts
+//     --from v0.0.1 --repo-root <ephemeral-repo>
+//     Run from the main repo so the script can resolve its own
+//     imports; --repo-root redirects git operations to the
+//     ephemeral repo.
+//  7. Assertions: each shell-special substring appears verbatim in stdout.
 //
 // WHY SUBJECT, NOT BODY
 // =====================
@@ -158,8 +158,8 @@ func TestNotesHeredocSurvivesVerbatim(t *testing.T) {
 
 	// ── 6. Assertions: each shell-special form appears verbatim ──────────
 	cases := []struct {
-		name    string
-		needle  string
+		name   string
+		needle string
 	}{
 		{"backtick", "`like this`"},
 		{"heredoc-delimiter", "cat <<EOF"},

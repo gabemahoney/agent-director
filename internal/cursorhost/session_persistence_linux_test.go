@@ -4,14 +4,19 @@ package cursorhost
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 )
 
 func TestCursorRecoveryCompletionCannotRestartCancellationDeadline(t *testing.T) {
@@ -305,6 +310,61 @@ func TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking(t *testin
 			}
 			if strings.Contains(string(raw), "initial-must-not-disappear") {
 				t.Fatal("failed initial prompt reached ACP")
+			}
+		})
+	}
+}
+
+// b.x9o, Task t2.7tz.ti.b9: a control put while the configured initial
+// prompt's admitted save blocks retires its epoch, so the store refuses the
+// save before mutation. As on main 443474a9, the prompt is accepted and submit
+// cancels it before dispatch; the next pass records the control, /exit's too,
+// before idle recovery or the intentional end. Any other failure of that save
+// stays fatal.
+func TestCursorInitialPromptSaveControlCancelsAuthorityLossFails(t *testing.T) {
+	// Serial: actual Run, runtime and reporter subprocesses use environment.
+	for _, tc := range []struct{ control, keys string }{
+		{"interrupt", "\x03"},
+		{"exit", "\x15/exit\r"},
+		{"authority loss", ""},
+	} {
+		t.Run(tc.control, func(t *testing.T) {
+			save := newSaveBarrier(t, func(next store.CursorInput) bool {
+				return next.State == store.CursorInputAdmitted && next.Detail == "configured initial prompt"
+			})
+			c := beginCursorSessionWithOptions(t, Options{InitialPrompt: "initial-retired", beforeInputSave: save.before}, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{}}, openTranscript, save.start)
+			defer save.open()
+			if tc.keys == "" {
+				save.fatal(t, c, "initial-retired")
+				return
+			}
+			window := save.control(t, c, tc.keys, "after-initial-retired")
+			want := []string{
+				"submission_accepted durable_admission=false origin=main submission_id=initial-retired text=initial-retired",
+				"user_input origin=main submission_id=initial-retired text=initial-retired",
+				"submission_cancelled control_epoch=* reason=control consumed before dispatch started=false submission_id=initial-retired submission_session_id=synthetic-session-1",
+				"input_control consumed_at=* control=" + tc.control + " count=1 input_epoch=* input_id=*",
+			}
+			pane := []string{"Cursor submission initial cancelled before dispatch: control consumed before dispatch", "Cursor input cancelled; submit a new prompt to continue"}
+			prompts := []string{"after-initial-retired"}
+			if tc.control == "exit" {
+				want = append(want, "session_end intentional=true runtime_gone=true")
+				pane[1], prompts = "Cursor runtime terminated", nil
+			}
+			if !reflect.DeepEqual(window, want) {
+				t.Fatalf("records from the initial prompt:\n%s\nwant:\n%s", strings.Join(window, "\n"), strings.Join(want, "\n"))
+			}
+			paneOrder(t, c, pane...)
+			for _, r := range c.records(t) {
+				if r.Kind == "submission_cancelled" && r.Data.ID == "initial" {
+					if v := c.capturedInput(t, r); v.State != store.CursorInputCancelled || v.Detail != "control consumed before dispatch" {
+						t.Fatalf("initial prompt row = %+v; want cancelled before dispatch", v)
+					}
+				}
+			}
+			rotationNoBytes(t, c, "initial-retired")
+			if got := c.prompts(t); !reflect.DeepEqual(got, prompts) {
+				t.Fatalf("prompts = %q; want only %q, once", got, prompts)
 			}
 		})
 	}

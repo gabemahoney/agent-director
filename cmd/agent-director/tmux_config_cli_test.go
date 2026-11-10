@@ -280,6 +280,9 @@ func assertHungLookup(t *testing.T, errName, desc string, timeout time.Duration)
 func hungKillRow(t *testing.T, timeout time.Duration) (home, id, cfgPath string) {
 	t.Helper()
 	home, id, socket := seedRowOnSocket(t, store.StateWaiting)
+	if _, err := apitest.BindReadSurfaceProcess(stateDB(home), id, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
 	faketmuxfix.Tables{}.Inject(t, socket, faketmuxfix.Hang(tmux.CallLookup).Bound(fakeHangBound))
 	cfgPath = filepath.Join(directorDir(home), "config.toml")
 	writeQueryTimeout(t, cfgPath, timeout)

@@ -49,7 +49,7 @@ For diagnosis and repair see [no exec form](operator-actions.md#a-row-stays-pend
 | `UserPromptSubmit` | — | `working` |
 | `PreToolUse` | `*` (all tools) | `working`; for the `Agent` tool it also writes subagent data, the state result unchanged (see "What the hooks write for subagent records" below) |
 | `PreToolUse` | tool=`AskUserQuestion` | `ask_user` |
-| `PostToolUse` | — | `working`; with `relay_mode=on`, it first proves the permission requests carrying the same `tool_use_id` gone (see "Hooks that prove a request's dialog gone" below), then closes a fallen-back one (see "A request whose tool ran" below); for the `Agent` tool it also writes subagent data, the state result unchanged |
+| `PostToolUse` | — | `working`; for the `Agent` tool it also writes subagent data, the state result unchanged |
 | `PostToolUseFailure` | — | as `PostToolUse`: the tool ran and failed; for the `Agent` tool it also writes subagent data, the state result unchanged |
 | `Stop` | — | `waiting`; with `relay_mode=on` and no `agent_id`, it first proves the main agent's permission requests recorded before it started gone; a main-agent `Stop` also writes subagent data, among it the subagents its `background_tasks` lists, the state result unchanged |
 | `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request holding it (see "A relay row left in `check_permission`" below); any other state: soft refresh. Every applied write records `idle_since` (see "The idle-prompt Notification" below). With `relay_mode=on`, it first proves the main agent's permission requests recorded before it started gone, as `Stop` does |
@@ -58,7 +58,7 @@ For diagnosis and repair see [no exec form](operator-actions.md#a-row-stays-pend
 | `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`, closes the row's permission requests that still await an answer and proves every request of the row gone; see "The agent's end closes its requests" below; it also turns the row's `running` subagent records `lost`, see [usage.md](usage.md#when-an-agent-ends-goes-missing-or-relaunches)) |
 | `SessionEnd` | any other cause (including empty / `clear` / `compact` / auto-compaction) | soft refresh: bumps `last_seen_at`, state unchanged |
 | `SubagentStart` | — | soft refresh: bumps `last_seen_at`, state unchanged, `idle_since` and the settle clock untouched. With `agent_id` it records no session id, and writes the subagent's entry in the same write |
-| `SubagentStop` | — | as `SubagentStart`; with `agent_id` its entry write also applies the subagents its `background_tasks` lists |
+| `SubagentStop` | — | as `SubagentStart`; with `agent_id` its entry write also applies the subagents its `background_tasks` lists. With `relay_mode=on` and `agent_id`, it first proves that subagent's permission requests recorded before that hook began gone |
 
 Unknown event names are treated as soft refreshes — the row's
 `last_seen_at` updates and an info-level log line records the unknown
@@ -99,8 +99,8 @@ Claude Code sends a `Notification` with `notification_type`
   permission requests holds it. A request holds the row while it still
   awaits an answer (until its relay hook confirms a verdict in the store,
   it is closed at the pane, or it is closed with the row by
-  `find-missing`'s mark or the agent's end) and Claude Code has not proven
-  its dialog gone (see "Hooks that prove a request's dialog gone" below).
+  a recovery check's missing mark or the agent's end) and Claude Code has not
+  proven its dialog gone (see "Hooks that prove a request's dialog gone" below).
   The agent's turn ended after its
   last request was answered, and the hook that would have moved the row
   (the turn's `Stop`, after a denied request) was lost. The Notification's
@@ -114,7 +114,7 @@ Claude Code sends a `Notification` with `notification_type`
 
 Every applied write of this Notification, the soft refresh included, sets
 the row's `idle_since` to the current time, and the agent's next applied
-hook clears it (a `SubagentStart` or `SubagentStop` leaves it). `find-missing` reads it when it repairs a relay row left in
+hook clears it (a `SubagentStart` or `SubagentStop` leaves it). Recovery reads it when repairing a relay row left in
 `check_permission`: `waiting` when it is set, `working` when it is not (see
 "PermissionRequest relay path" below).
 
@@ -253,10 +253,10 @@ No Codex tool moves a row to `ask_user`: Codex's question tools
 (`request_user_input` and `request_user_input_async`) read `working` like
 every other tool. Codex has no idle-prompt Notification either. A turn
 returns the row to `waiting` by its `Stop` or `Interrupt`, or, for a turn
-that sends neither (one that ends in an error), by a read that finds the
+that sends neither (one that ends in an error), by a recovery check that finds the
 turn's end in the rollout (see "The Codex turn" below). A Codex row left
-`working` with no such evidence is never repaired: `find-missing` repairs
-only a row stuck at `check_permission` (see "A relay row left in
+`working` with no such evidence is not moved to `waiting`; permission repair
+applies only to a row stuck at `check_permission` (see "A relay row left in
 `check_permission`" below). For action on a stale row see the [caller contract](caller-contract.md#caller-contract).
 
 `Interrupt` is Codex's Esc: it ends the turn the agent was working on. As
@@ -283,16 +283,16 @@ a `/review` thread's hooks record no turn.
 **A turn that ends in an error.** Codex sends no `Stop` for a turn that
 ends in an error (a model at capacity, for one), but its rollout, the row's
 transcript, records the end of every turn as a `task_complete` naming the
-turn. Before it reports, `status`, `get` or `list` moves a Codex row to
-`waiting` when all of these hold:
+turn. An eligible `status`, `get`, `list` or `sweep` check can move
+a Codex row to `waiting` when all of these hold:
 
 - the row's raw state is `working`, and its current turn has not ended;
 - the last turn record in the rollout (`task_started` or `task_complete`)
   is that turn's `task_complete`, errored or not.
 
-`status` and `get` check the row and every live descendant its
-`family_state` counts; `list` checks every row, so its `--state` filter sees
-the move (after any settle time). The trail records one
+Selection and recovery limits follow the
+[caller contract](caller-contract.md#bounded-recovery-on-state-reads).
+A confirmed move writes one
 `ad.spawn.state_transition` from `working` to `waiting` with
 `triggering_event_name` `task_complete`, `cause` `codex_rollout_task_complete`
 and `soft_refresh` false.
@@ -307,9 +307,10 @@ and bumps no `last_seen_at`. What a caller does then is in the
   recorded transcript: an absolute path to a regular file, never a symlink,
   whose name carries the row's session id.
 - The check fails open and waits for no lock: a busy store, an unreadable
-  rollout or any other failure leaves the row `working` for that read,
-  which goes ahead, and a later read checks again.
-- Nothing checks between reads: a row nobody reads stays `working`.
+  rollout or stale evidence cannot confirm the move. The call goes ahead
+  with available stored facts, and a later call checks again.
+- Nothing checks between calls; a scheduled `sweep` can recover the end
+  without an intervening state read.
 
 **Late tool hooks.** A command a turn started can finish after the turn
 ended, so its `PreToolUse` or `PostToolUse` arrives late. A main-thread tool
@@ -375,32 +376,33 @@ report into `ended` is in "How a Codex row ends" below.
 ### How a Codex row ends
 
 A Codex row moves to `ended` only when both hold: the agent process of its
-current launch is proven gone (judged by its recorded start time, as
-`find-missing` judges every row, with no tmux call) and the row holds an end
-report. Two verbs make the move, each through the same guarded write:
+current launch is proven gone (judged by its recorded start time, with no
+tmux call) and the row holds an end report. These operations share the guarded
+move:
 
-- `find-missing`, for every live row it finds gone.
+- `status`, `get`, `list` and `sweep`, for eligible selected rows.
 - `pause`, before it sends any key (in any live state, `pending` included) and
   in each poll while it waits for `ended`.
 
 A Codex row never reads `ended` while its agent runs. An `/exit` typed at the
 pane records the end report only, so the row stays in its last state until
-`find-missing` or `pause` sees the agent gone (what a caller does is in the
+a recovery check or `pause` sees the agent gone (what a caller does is in the
 [caller contract](caller-contract.md#when-a-codex-agent-exits)).
 
-- **Gone, no end report:** `find-missing` marks the row `missing`, as for a
+- **Gone, no end report:** recovery marks the row `missing`, as for a
   Claude row.
 - **Judged on tmux evidence alone** (the process cannot be checked, or was
-  never recorded): `find-missing` marks the row `missing`, whatever report it
+  never recorded): recovery marks the row `missing`, whatever report it
   holds.
 - **The move closes the row's requests** and its `running` subagent records, together (see "The agent's end closes its requests" below).
   The row keeps its end report.
 
-Whichever verb makes the move, it writes `find-missing`'s records: one
+Whichever verb makes the move, it writes the recovery records: one
 `ad.find_missing.tick` with `new_state` `ended` and `reconciliation_reason`
-`proc_absent`, and, for each request it denies, one
-`ad.row_mutation.committed` with `decision_reason` `ended` and
-`writer_process` `find_missing`, which can therefore come from `pause`. It
+`proc_absent` (`source` `ad_recovery` for a state read or `pause`,
+`ad_find_missing` for `sweep`/`find-missing`), and, for each request it denies,
+one `ad.row_mutation.committed` with `decision_reason` `ended` and
+`writer_process` `find_missing`, also from state reads or `pause`. It
 writes no `ad.spawn.state_transition`.
 
 ### Subagent records
@@ -517,9 +519,10 @@ time and get the hook killed without a result or trail record. See
 
 A missed or ignored SessionStart, a startup screen before the first hook,
 or a Codex launch awaiting its first prompt can leave a running agent
-`pending`. Agent-director cannot tell these from the row alone. A scheduled
-`find-missing` notes an alive, past-grace row `unreported`, once its launch
-owner no longer holds it and its pane is recorded or adopted. It keeps
+`pending`. Agent-director cannot tell these from the row alone. An eligible
+state read or a scheduled `sweep` notes an alive, past-grace row
+`unreported`, once its launch owner no longer holds it and its pane is
+recorded or adopted. It keeps
 `launch_started_at` and the first `liveness_unverified_since` of that launch.
 An existing `provenance_conflict` note is kept. A later applied hook clears
 the note; a working move held by a permission request clears only `idle_since`.
@@ -556,12 +559,10 @@ carries it and is the agent itself.
   ignored: only SessionStart and SessionEnd are. Each is a soft refresh
   of the row that also writes the subagent's entry (see "What the hooks
   write for subagent records" below).
-- **Permission requests with `agent_id`:** a subagent's `PostToolUse`
-  proves its request gone by `tool_use_id` like the agent's own, but no
-  `Stop` or idle-prompt Notification does: a background subagent can
-  outlive the main agent's turn. `SubagentStop` is registered, but no
-  subagent event proves a permission request gone (see "Hooks that prove a
-  request's dialog gone").
+- **Permission requests with `agent_id`:** the subagent's own
+  `SubagentStop` proves its requests gone, but the main agent's `Stop` or
+  idle-prompt Notification does not: a background subagent can outlive the
+  main agent's turn (see "Hooks that prove a request's dialog gone").
 
 ### The `ad.hook.ignored` reasons
 
@@ -821,10 +822,10 @@ The relay-mode `PermissionRequest` path is fail-*closed* until its request
 is recorded: any internal error before then, its first store write
 included, or an invalid `--agent`, emits a `deny` decision envelope on stdout before the hook
 exits, so the tool is denied. Once the request is recorded, the hook writes
-only an answer it has first confirmed in the store; any failure after that
-ends with no answer, so the agent asks in its own permission prompt and
-the request reads `fallen_back`. See "PermissionRequest relay path" below
-and [Permissions](permissions.md).
+only an answer it has first confirmed in the store. A failure after recording
+produces no answer, but a late or uncertain commit can retain `delivered`.
+See [Permission relay](caller-contract.md#permission-relay) for delivery and
+recovery, and "PermissionRequest relay path" below for the hook's steps.
 
 ## Fire order
 
@@ -966,31 +967,36 @@ instant, with a 2 s reserve before it for writing the answer and exiting:
 | Instant | What happens there |
 | --- | --- |
 | start + N − 3 s | the poll ends: no verdict yet means the timeout deny |
-| start + N − 2 s | the last moment a store write may commit; later, the hook gives no answer |
+| start + N − 2 s | the write-budget deadline; a final check suppresses output at or after it |
 | start + N | the agent ends the hook |
 | start + N + 2 s | the request's settle instant (`settled_at`), `confirm_by` |
 
-So `timeout_seconds` of 3 or less leaves no time to poll, and at 2 or less
-no time to answer.
+This budget does not bound completion of a COMMIT already in progress.
+See [Permission relay](caller-contract.md#permission-relay) for retained
+acknowledgement without output. `timeout_seconds` of 3 or less leaves no time
+to poll, and at 2 or less no time to answer.
 
 ### The steps
 
 1. The hook records the request and moves the row to `check_permission`
    together, only for the row's own agent. The request carries its token,
-   hook identity, settle instant and payload's tool and agent ids. A Codex
-   request has no `tool_use_id`. Failure before recording returns a deny.
+   hook identity, settle instant and payload's tool and agent ids. A Claude
+   or Codex request has no `tool_use_id`: neither agent's `PermissionRequest`
+   carries one. Failure before recording returns a deny.
 2. It polls its own request at `max(50ms, relay.poll_base_ms +
    uniform(0, relay.poll_jitter_ms))`, stopping by the poll deadline.
-3. A verdict is answered only after its delivery is confirmed in the
-   store and the parent is still the agent that started the hook.
-4. At the deadline, an undecided request receives a confirmed timeout deny.
-   A verdict that arrived first is confirmed instead. The deny changes no state.
+3. An eligible verdict is answered only after its acknowledgement commits
+   and a final check confirms the starting parent and remaining write budget.
+4. At the poll deadline, an eligible undecided request attempts its own timeout
+   deny and acknowledgement. An eligible verdict that arrived first is
+   confirmed instead. Both paths use the same final output check; the deny
+   changes no spawn state.
 
 After recording, a failed confirmation, a changed parent, a deleted
 request or five consecutive failed reads produces empty stdout. The agent
-then asks in its own permission prompt; the request reads `fallen_back`
-once readers see the relay hook gone. See the [caller contract](caller-contract.md#permission-relay)
-for handling this outcome.
+can then ask in its own permission prompt. Empty stdout does not determine
+stored delivery: a committed acknowledgement can remain `delivered`.
+See [Permission relay](caller-contract.md#permission-relay) for handling this outcome.
 
 ### Writing the envelope
 
@@ -1046,9 +1052,7 @@ A request answered at the pane outside agent-director, by a person at
 tmux for example, still awaits an answer in agent-director's records,
 since nothing recorded that answer. It holds the row only until the agent
 proves its dialog gone: the main agent's `Stop` or idle-prompt
-Notification after it, or its tool's `PostToolUse` (an allow; Claude rows
-only). On a Codex row only its `Stop` or Interrupt proves a main-agent
-request. From then
+Notification after it (on a Codex row, its `Stop` or Interrupt). From then
 on the agent's moves to `working` apply again, though the request stays
 open until `record-pane-answer` closes it, so the row can read `waiting`,
 `working` or `ask_user` while one of its requests still awaits an answer.
@@ -1057,9 +1061,9 @@ Limits:
 - A subagent's request (`agent_id` set) is never proven by the main
   agent's turn end, since a background subagent can outlive it. Answered
   at the pane outside agent-director, it holds the row's moves to
-  `working` until `record-pane-answer`, its tool's `PostToolUse` (Claude
-  rows) or the agent's end; the main agent's `Stop` still moves the row to
-  `waiting`.
+  `working` until `record-pane-answer`, its subagent's `SubagentStop`
+  (Claude rows) or the agent's end; the main agent's `Stop` still moves the
+  row to `waiting`.
 - Claude Code sends no `Stop` when a user interrupts a turn, so after a
   deny at the pane that interrupts the turn, the row stays held until the
   idle-prompt Notification (once the agent idles) or the next turn's
@@ -1068,51 +1072,20 @@ Limits:
   turn has one end signal, its `Stop` or Interrupt. When that hook is lost,
   or the turn ends in an error, which sends neither, the row stays held
   until the next turn's `Stop` or Interrupt, or until `record-pane-answer`,
-  after which `find-missing` repairs it to `working`. A read does not move
-  a row in `check_permission` (see [The Codex turn](#the-codex-turn)).
-- A request recorded in the same second a `Stop`, idle prompt or Codex
-  Interrupt started is not proven by it, and holds until a later turn end.
+  after which a shared recovery check can repair it to `working`
+  (see [The Codex turn](#the-codex-turn)).
+- A request recorded in the same second a `Stop`, idle prompt, Codex
+  Interrupt or `SubagentStop` started is not proven by it, and holds until
+  a later proof.
 
 For a missed hook and stale `check_permission` recovery, see
 [Permissions](permissions.md) and the [caller contract](caller-contract.md#permission-relay).
-A scheduled `find-missing` repairs an eligible Claude row to `waiting`
-when `idle_since` is set, otherwise `working`; a Codex row always repairs
-to `working`, since it sends no idle-prompt Notification.
+A recovery check (a state read or `sweep`) repairs an eligible Claude row to
+`waiting` when `idle_since` is set, otherwise `working`; a Codex row always
+repairs to `working`, since it sends no idle-prompt Notification.
 
 A row with the relay off is in `check_permission` while the agent's own
 prompt waits, with no request on record, so neither move applies to it.
-
-### A request whose tool ran
-
-This is a Claude row's close: Codex's requests carry no `tool_use_id`, and a
-Codex `PostToolUse` proves and closes nothing.
-
-A request whose relay hook ended without a confirmed verdict has fallen
-back: Claude Code asks in its own prompt, and nothing the relay records
-says how that prompt was answered. When the prompt is answered allow,
-Claude Code runs the tool, and the agent's `PostToolUse` (or, when the
-tool failed, `PostToolUseFailure`) hook carries the tool use's
-`tool_use_id`, the same one the relay hook recorded on the request.
-
-So on a relay-on agent (`AGENT_DIRECTOR_RELAY_MODE=on`), a `PostToolUse` or
-`PostToolUseFailure` with a `tool_use_id`, with a proof of the dialog gone (see "Hooks that
-prove a request's dialog gone" below):
-
-- reads the row's requests recorded with a `tool_use_id` that carry that
-  `tool_use_id` and still await an answer;
-- judges each one's relay hook as the readers do (its process provably
-  gone, or, when it cannot be checked, its `confirm_by` passed) and skips
-  one whose hook may still answer it;
-- closes each other one only from the row's own agent: `pane_answer` `tool_ran`,
-  `decision` `allow`, `decision_reason` `tool_ran`, `hook_gone_at` when
-  not yet set, and `proven_gone_at` with `proven_gone_how` `tool_ran` when
-  not yet proven, only while the request still awaits an answer. Each close writes `ad.row_mutation.committed` with `writer_process` `hook`.
-
-A matching tool-use hook proves the dialog gone even when the request
-is left open because its relay hook may still answer. It closes only allows:
-a deny runs no tool-use hook. A missed close can leave a request open;
-see [a request answered outside agent-director](permissions.md#a-request-answered-outside-agent-director).
-A different or missing `tool_use_id` closes nothing.
 
 ### The agent's end closes its requests
 
@@ -1123,16 +1096,16 @@ update, closes every request of the row that still awaits an
 answer, plus decided requests without a relay confirmation or completed
 pane answer, including those recorded by an older binary: both the row
 and request changes are written or neither is. Each gets `closed_at`; an
-undecided one is also denied with `decision_reason` `ended` (so a relay
-hook still polling for it reads a deny), and a decided one whose relay
-hook had not confirmed the verdict keeps it. Each deny is written to the
+undecided one also gets a historical deny with `decision_reason` `ended`,
+and a decided one keeps its verdict. Neither authorizes a later relay
+acknowledgement or response. Each deny is written to the
 trail as one `ad.row_mutation.committed` (`writer_process` `hook`), before
-the row's `ad.spawn.state_transition`. `find-missing`'s mark closes a
+the row's `ad.spawn.state_transition`. A recovery check's missing mark closes a
 `missing` row's requests the same way (`decision_reason` `find_missing`),
 and `resume`'s move to `pending` closes any request an older binary
 left open on the finished row (`decision_reason` `ended`,
 `writer_process` `resume`). The move of a Codex row to `ended` (see "How a
-Codex row ends" above), made by `find-missing` or by `pause`, closes them
+Codex row ends" above), made by a recovery check or by `pause`, closes them
 too, as the `ended` close does: `decision_reason` `ended` and
 `writer_process` `find_missing`, so `decide` on such a request returns
 `ErrNoOpenPermissionRequest`. On a non-Cursor row, each of these also
@@ -1140,11 +1113,13 @@ proves every request of the row gone together, closed now or before
 (`proven_gone_how` `agent_gone`; see "Hooks that prove a request's dialog
 gone" below).
 
-A closed request stays closed after a `resume`: it no longer holds the
-resumed agent's moves to `working`, is not listed by `get` or `list`,
-refuses no `send-keys`, and `decide` refuses it, never with
+A closed request stays closed after a `resume`: it no longer awaits an
+answer or holds the resumed agent's moves to `working`, and is omitted from
+`get` and `list`'s `permission_requests`. `decide` refuses it, never with
 `ErrRelayFallenBack` (see
 [permissions.md](permissions.md#a-request-of-a-finished-spawn-is-closed)).
+For Cursor's independent dialog hold and `get.unproven_requests`, see
+[The dialog hold](permissions.md#the-dialog-hold).
 
 ### Hooks that prove a request's dialog gone
 
@@ -1162,21 +1137,20 @@ row's requests not yet proven, as `proven_gone_at` (the hook's clock) and
 
 | Hook | Requests it proves | `proven_gone_how` |
 | --- | --- | --- |
-| `PostToolUse` or `PostToolUseFailure` with a `tool_use_id` (a Claude agent's) | every request carrying that `tool_use_id`, whatever agent-director's records say of it, a subagent's included | `tool_ran` |
 | `Stop` with no `agent_id` | every request with no `agent_id` recorded before the second the hook started, one recorded by an older binary included | `turn_end` |
 | idle-prompt `Notification` with no `agent_id` (a Claude agent's) | as `Stop` | `turn_end` |
 | `Interrupt` with no `agent_id` (a Codex agent's: Esc in a running turn) | as `Stop` | `turn_end` |
+| `SubagentStop` with `agent_id` (a Claude agent's) | every request with that `agent_id` recorded before the second the hook started, allowed, denied or unanswered | `turn_end` |
 
 `turn_end` means the turn of the agent that asked ended after the request
-was written; the main agent's `Stop`, idle-prompt Notification and Codex
-Interrupt prove it for a request with no `agent_id`. No other hook proves
-anything: not `PreToolUse`, not another Notification, not a `Stop`, idle
-prompt or Interrupt carrying `agent_id` (a safety net: Codex sends none),
-not a `SubagentStart` or `SubagentStop`, not a Codex `PostToolUse` (its
-requests carry no `tool_use_id`), and not a `PostToolUse` with another
-`tool_use_id` or none.
+was written: the main agent's for a request with no `agent_id`, the
+subagent's for one with an `agent_id`. No other hook proves anything: not
+`PreToolUse`, not a `PostToolUse` or `PostToolUseFailure` (a Claude or Codex
+request carries no `tool_use_id` to match), not another Notification, not a
+`Stop`, idle prompt or Interrupt carrying `agent_id` (a safety net: Codex
+sends none), not a `SubagentStart`, and not a Codex `SubagentStop`.
 
-- **Written before.** A `Stop`, idle prompt or Interrupt covers only a request whose
+- **Written before.** A `Stop`, idle prompt, Interrupt or `SubagentStop` covers only a request whose
   `created_at` is before the second the hook process started, so one
   recorded in that second or later stays unproven until a later proof. An
   idle prompt can run late, and one that read the requests after the next
@@ -1188,11 +1162,12 @@ requests carry no `tool_use_id`), and not a `PostToolUse` with another
 - **Own agent.** A hook from another process proves nothing.
 - **Fail-open.** A failed proof write logs to `errors.log` and changes
   nothing else; the requests stay unproven until a later proof.
-- **The agent's end.** The terminal `SessionEnd`, `find-missing`'s mark,
+- **The agent's end.** The terminal `SessionEnd`, a recovery check's missing mark,
   the move of a Codex row to `ended` and `resume`'s move prove every request
   of a non-Cursor row gone (`agent_gone`),
   with their close (see "The agent's end closes its
-  requests" above). A retained request of a finished row is proven by the same rule.
+  requests" above). A retained request of a finished row is proven by the same
+  rule.
 - **What a proof releases.** A request proven gone holds no move of the
   row, even while it still awaits an answer (see "A relay row left in
   `check_permission`" above). Proof also releases its dialog hold, but
@@ -1201,13 +1176,13 @@ requests carry no `tool_use_id`), and not a `PostToolUse` with another
   before v7 with `agent_gone` proof are treated as closed by those guards
   (see the [caller contract](caller-contract.md#permission-relay)).
 - **Subagents.** A request with an `agent_id` is proven only by its
-  tool's `PostToolUse` or the agent's end. A denied subagent request runs
-  no tool, so it holds a plain `send-keys` without a pane hash, and
-  `pause`, until the agent ends; one answered at the pane outside
-  agent-director also holds the row's moves to `working` until
-  `record-pane-answer`, its `PostToolUse` or the agent's end. On a Codex
-  row no `PostToolUse` proves anything, so a subagent's request, allowed or
-  denied, holds until the agent ends.
+  subagent's `SubagentStop` or the agent's end, allowed or denied. Until
+  then it holds a plain `send-keys` without a pane hash, and `pause`; one
+  answered at the pane outside agent-director also holds the row's moves to
+  `working` until `record-pane-answer`. If Claude Code sends no
+  `SubagentStop` for that subagent, its requests hold until the agent ends.
+  On a Codex row its `SubagentStop` proves
+  nothing, so a subagent's request holds until the agent ends.
 
 ## References
 

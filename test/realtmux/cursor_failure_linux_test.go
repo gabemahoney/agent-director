@@ -552,3 +552,65 @@ func cursorWorkerOperation(t *testing.T, r cursorfix.Runtime, op, input string, 
 		}
 	}
 }
+
+// b.x9o: real ACP permission admission, actual gateway death, then a sweep
+// without an earlier active read. Observational closeout must send no answer.
+func TestFindMissingCursorPermissionWithoutDispatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real gateway recovery")
+	}
+	const session = "sweep-permission"
+	script := cursorfix.Scenario{SessionID: session, Requests: []json.RawMessage{relayFrame("sweep", "session/request_permission", cursorfix.Permission(session, "sweep-tool", "execute"))}}
+	f, peer, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{Script: &script, Relay: "on", Timeout: 30})
+	if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "request permission"}); err != nil {
+		t.Fatal(err)
+	}
+	request := relayRequests(t, f, launch.ID, 1)[0]
+	st, err := store.Open(f.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	binding, err := st.ReadCursorRuntime(launch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := append([]byte(nil), rawInput(t, peer)...)
+	process, err := os.FindProcess(binding.GatewayPID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "gateway process gone", func() bool { return pidGone(binding.GatewayPID) }, func() string { return procState(binding.GatewayPID) })
+	if row := readRow(t, f.DBPath, launch.ID); row.State == store.StateMissing || row.State == store.StateEnded {
+		t.Fatalf("precondition already recovered: %+v", row)
+	}
+	got, err := f.API.FindMissing(context.Background())
+	if err != nil || got.Count != 1 || len(got.IDs) != 1 || got.IDs[0] != launch.ID {
+		t.Fatalf("sweep=%+v %v", got, err)
+	}
+	after, err := st.GetPermissionRequest(launch.ID, request.RequestToken)
+	if err != nil || !after.Closed() || !after.DeliveredAt.IsZero() || after.ProvenGone() {
+		t.Fatalf("sweep fabricated answer/proof: %+v %v", after, err)
+	}
+	if row := readRow(t, f.DBPath, launch.ID); row.State != store.StateMissing {
+		t.Fatalf("not durably missing: %+v", row)
+	}
+	// b.x9o: the exact gateway loss confirms missing (process) but is no
+	// evidence about the runtime, so no process record is stored and
+	// process_liveness stays unknown; the public read agrees with the store.
+	got2, err := f.API.Get(launch.ID)
+	if err != nil || got2.ProcessLiveness != store.ProcessUnknown || got2.Confirmations.ProcessLiveness.Status != store.ConfirmationUnknown ||
+		got2.Confirmations.State.Source == nil || *got2.Confirmations.State.Source != store.EvidenceProcess {
+		t.Fatalf("get after the sweep: %s %+v, state record %+v, %v; want unknown runtime, missing confirmed by process",
+			got2.ProcessLiveness, got2.Confirmations.ProcessLiveness, got2.Confirmations.State, err)
+	}
+	if row, err := st.GetSpawn(launch.ID); err != nil || row.ProcessEvidence != "" || row.StateConfirmation(store.SettleRead{}).Source != store.EvidenceProcess {
+		t.Fatalf("stored records %q, %+v, %v; want no process record and the missing value's process record", row.ProcessEvidence, row.StateConfirmation(store.SettleRead{}), err)
+	}
+	if !reflect.DeepEqual(before, rawInput(t, peer)) || len(relayReplies(t, peer)) != 0 {
+		t.Fatal("observational sweep dispatched ACP bytes")
+	}
+}

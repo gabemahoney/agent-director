@@ -70,6 +70,10 @@ func TestCursorStartupExecutableFailurePublicReads(t *testing.T) {
 		t.Fatalf("not pending with saved args before read: %+v", before)
 	}
 	t.Logf("production spawn recorded gateway=%d/%s; exact kernel verdict=gone; runtime binding absent; raw before=%+v", pid, start, before)
+	// b.x9o (MI Q2A): an exact gateway loss outranks pending grace, so the
+	// first read, still inside grace, reports missing. The read's terminal
+	// write does not wait; with no competing writer here, the raw row below
+	// shows whether it committed, exactly once.
 	for _, verb := range []string{"Get", "Status", "List"} {
 		t.Run(verb, func(t *testing.T) {
 			for i := 0; i < 2; i++ {
@@ -93,6 +97,7 @@ func TestCursorStartupExecutableFailurePublicReads(t *testing.T) {
 			}
 		})
 	}
+
 	after := readRow(t, f.DBPath, id)
 	if after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 {
 		t.Errorf("public reads did not persist missing exactly once: before=%+v after=%+v", before, after)

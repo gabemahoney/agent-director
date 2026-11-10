@@ -93,17 +93,22 @@ func TestCursorLoadSavedInitialWaitsForIndependentHoldOnce(t *testing.T) {
 	if len(c.prompts(t)) != 0 {
 		t.Fatal("saved initial bypassed independent hold")
 	}
+	c.wait(t, "configured initial captured", func() bool { return rotationRecordCount(c, t, "submission_accepted") == 2 })
+	// A consumed idle provider observation establishes that startup reached its
+	// event loop and checked the still-held initial input before releasing SQL.
+	c.e.runtime.Emit(t, "loaded-idle-barrier", `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"synthetic-session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"idle-barrier"}}}}`+"\n")
+	c.wait(t, "loaded idle observation", func() bool { return rotationRecordCount(c, t, "startup_or_idle_update") == 1 })
 	c.e.exec(t, `UPDATE permission_requests SET decision='deny',proven_gone_at=1 WHERE request_token=?`, token)
-	c.wait(t, "saved initial after actual hold release", func() bool { return len(c.prompts(t)) == 1 })
+	c.idleObservationBarrier(t, "loaded-hold-independently-cleared")
+	if len(c.prompts(t)) != 0 {
+		t.Fatal("idle observation replayed saved input")
+	}
+	c.keys(t, "fresh-explicit-after-load-hold\r")
+	c.wait(t, "saved initial before fresh explicit input", func() bool { return len(c.prompts(t)) == 2 })
 	c.wait(t, "initial completed", func() bool {
-		for _, r := range c.records(t) {
-			if r.Kind == "turn_outcome" {
-				return bytes.Contains(c.pane.bytes(), []byte("Cursor turn complete"))
-			}
-		}
-		return false
+		return rotationRecordCount(c, t, "turn_outcome") == 2 && bytes.Count(c.pane.bytes(), []byte("Cursor turn complete")) == 2
 	})
-	if got := c.prompts(t); len(got) != 1 || got[0] != "saved initial" {
+	if got := c.prompts(t); !reflect.DeepEqual(got, []string{"saved initial", "fresh-explicit-after-load-hold"}) {
 		t.Fatalf("initial replay: %v", got)
 	}
 	c.stop(t)
@@ -113,7 +118,7 @@ func TestCursorLoadSavedInitialWaitsForIndependentHoldOnce(t *testing.T) {
 			methods = append(methods, string(f["method"]))
 		}
 	}
-	if got := strings.Join(methods, ","); got != `"initialize","session/load","session/set_mode","session/prompt"` {
+	if got := strings.Join(methods, ","); got != `"initialize","session/load","session/set_mode","session/prompt","session/prompt"` {
 		t.Fatalf("saved initial mode/load order: %s", got)
 	}
 }
@@ -442,6 +447,27 @@ func TestCursorLoadCanceledReplyCannotPublish(t *testing.T) {
 					}
 					if len(c.prompts(t)) != 0 {
 						t.Fatal("canceled load dispatched saved initial")
+					}
+					if phase != "load" || control == "runtime death" {
+						return
+					}
+					// b.x9o: a control before session confirmation cancels the initial
+					// prompt with the control's record, not a refusal, and finishes
+					// its durable capture as cancelled.
+					controls := 0
+					var controlRecord submissionRecord
+					for _, r := range c.records(t) {
+						switch r.Kind {
+						case "input_control":
+							controls++
+							controlRecord = r
+						case "submission_refused", "held_input_refused":
+							t.Fatalf("cancelled initial prompt became a refusal: %+v", r)
+						}
+					}
+					initial, err := c.e.s.ReadCursorInput(controlRecord.Connection, "initial")
+					if err != nil || controls != 1 || initial.State != store.CursorInputCancelled || initial.Text != "never dispatch" {
+						t.Fatalf("cancelled initial prompt: controls=%d capture=%+v error=%v pane=%s", controls, initial, err, c.pane.bytes())
 					}
 				})
 			}

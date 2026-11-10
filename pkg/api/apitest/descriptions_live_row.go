@@ -54,12 +54,12 @@ func liveRowSteps() []liveRowStep {
 			keys: []string{"wait until its launch start", "unless configured", "never escalate"},
 		},
 		{
-			phrases: []string{"Run find-missing, then check status; repeat about 5 s apart until ended or missing, at most three runs"},
+			phrases: []string{"Run sweep, then check status; repeat about 5 s apart until ended or missing, at most three runs"},
 			keys:    []string{"then check status", "about 5 s apart", "at most three runs"},
 		},
 		{
-			phrases: []string{"Still live: kill once more, wait about 5 s, run find-missing once more and check"},
-			keys:    []string{"kill once more", "wait about 5 s", "find-missing once more"},
+			phrases: []string{"Still live: kill once more, wait about 5 s, run sweep once more and check"},
+			keys:    []string{"kill once more", "wait about 5 s", "sweep once more"},
 		},
 		{
 			phrases: []string{"Still live: escalate to a human"},
@@ -81,15 +81,16 @@ func liveRowSteps() []liveRowStep {
 // and follow the error's class (callers cannot delete a row, b.vqr); (2) for a pending row, wait out
 // its launch start plus the pending grace period
 // (config.DefaultPendingGraceSeconds, a default the operator can change), and
-// inside it wait and check again, never escalate; (3) up to three find-missing
+// inside it wait and check again, never escalate; (3) up to three sweep
 // runs about 5 s apart, each checked with status; (4) one more kill, "wait
-// about 5 s" and a last find-missing; (5) a human; (6) resume or spawn with
+// about 5 s" and a last sweep; (5) a human; (6) resume or spawn with
 // the reuse opt-in in its one spelling (reuseOptInSpelling, b.c4u) and the
 // row's agent, which get shows (SR-4.4), and a caller whose ids agent-director mints spawns
 // fresh.
 // It must not carry the rationale docs/caller-contract.md keeps ("history belongs to a
 // life", "unreachable for good", SR/OFR citations), the long form's or the
-// pointer's opening, or the pointer. Check it with AssertAgentTextCase.
+// pointer's opening, or the pointer, nor run find-missing in steps 3-4 (b.x9o
+// F4: sweep is the verb to run). Check it with AssertAgentTextCase.
 func DescLiveRowSequence() DescCase {
 	req := []string{liveRowShortOpening}
 	for i, s := range liveRowSteps() {
@@ -102,6 +103,7 @@ func DescLiveRowSequence() DescCase {
 		MustNot: []string{
 			"history belongs to a life", "unreachable for good", "SR-", "OFR",
 			liveRowOpening, LiveRowPointer, "never delete",
+			"run find-missing",
 		},
 	}
 }

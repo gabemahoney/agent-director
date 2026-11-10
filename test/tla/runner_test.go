@@ -38,6 +38,7 @@ func TestRunnerFullSuite(t *testing.T) {
 			rows := inTier(shipped(t), tc.tier)
 			r.expectAll(t, rows)
 			r.env["TLA_TIER"] = tc.tier
+			r.plan(t, "wait.g1", "0 timeout", "0 timeout", "0 @ID@ succeeded")
 			r.plan(t, "status.g1", state("queued", false), state("running", false), state("succeeded", true))
 			before, inGit := gitStatus(t, r.tree)
 
@@ -61,9 +62,9 @@ func TestRunnerFullSuite(t *testing.T) {
 			groups := groupsOf(rows)
 			wantCalls := []call{{"list", ""}}
 			for _, job := range append([]string{"parse"}, groups...) {
-				wantCalls = append(wantCalls, call{"submit", job}, call{"status", job})
+				wantCalls = append(wantCalls, call{"submit", job}, call{"wait", job})
 				if job == "g1" {
-					wantCalls = append(wantCalls, call{"status", job}, call{"status", job})
+					wantCalls = append(wantCalls, call{"status", job}, call{"wait", job}, call{"status", job}, call{"wait", job})
 				}
 				wantCalls = append(wantCalls, call{"results", job})
 			}
@@ -111,12 +112,14 @@ func checkJob(t *testing.T, r *rig, job string, runs []string, budget int) {
 	if got, want := r.seen(t, job, "runs"), strings.Join(runs, "\n")+"\n"; got != want {
 		t.Errorf("job %s runs:\n got %q\nwant %q", job, got, want)
 	}
-	if got, want := r.seen(t, job, "limits"), fmt.Sprintf("BUDGET=${BUDGET:-%d}\nDISKCAP_MB=${DISKCAP_MB:-60000}\n", budget); got != want {
+	if got, want := r.seen(t, job, "limits"), fmt.Sprintf("BUDGET=${BUDGET:-%d}\nDISKCAP_MB=${DISKCAP_MB:-15000}\n", budget); got != want {
 		t.Errorf("job %s tlcjob.sh limits = %q, want %q", job, got, want)
 	}
 	ctx := []string{"Dockerfile", "Phase4.tla", "Phase4Split.tla", "Phase5Hook.tla", "runs", "tla2tools.jar", "tlcjob.sh"}
 	for _, line := range runs {
-		ctx = append(ctx, strings.Fields(line)[1]+".cfg")
+		if cfg := strings.Fields(line)[1]; cfg != "-" {
+			ctx = append(ctx, cfg+".cfg")
+		}
 	}
 	if got, want := sortedFields(r.seen(t, job, "ctx")), sortedFields(strings.Join(ctx, " ")); !reflect.DeepEqual(got, want) {
 		t.Errorf("job %s context = %v, want %v", job, got, want)
@@ -192,7 +195,12 @@ func TestRunnerOkRules(t *testing.T) {
 func TestRunnerFailsClosed(t *testing.T) {
 	setEnv := func(k, v string) func(*testing.T, *rig) { return func(_ *testing.T, r *rig) { r.env[k] = v } }
 	planned := func(key string, lines ...string) func(*testing.T, *rig) {
-		return func(t *testing.T, r *rig) { r.plan(t, key, lines...) }
+		return func(t *testing.T, r *rig) {
+			if strings.HasPrefix(key, "status.") {
+				r.plan(t, strings.Replace(key, "status.", "wait.", 1), "0 timeout")
+			}
+			r.plan(t, key, lines...)
+		}
 	}
 	appendTo := func(rel string) func(*testing.T, *rig) {
 		return func(t *testing.T, r *rig) {
@@ -201,7 +209,7 @@ func TestRunnerFailsClosed(t *testing.T) {
 		}
 	}
 	queued := state("queued", false)
-	ended := []string{"list", "submit", "status", "results"}
+	ended := []string{"list", "submit", "wait", "results"}
 	cases := []struct {
 		name   string
 		setup  func(*testing.T, *rig)
@@ -258,15 +266,15 @@ func TestRunnerFailsClosed(t *testing.T) {
 			reason: "dispatcher not running", fail: []string{"job parse (j1-parse) was queued but submit reports the dispatcher is not running"},
 			calls: []string{"list", "submit"}, ctx: "kept"},
 		{name: "status unknown job", setup: planned("status.parse", queued, `3 {"error":"no such job"}`), reason: "status failed",
-			fail: []string{"the job scheduler does not know job parse (j1-parse) (status exit 3)"}, calls: []string{"list", "submit", "status", "status"}, ctx: "kept"},
+			fail: []string{"the job scheduler does not know job parse (j1-parse) (status exit 3)"}, calls: []string{"list", "submit", "wait", "status", "wait", "status"}, ctx: "kept"},
 		{name: "unknown state", setup: planned("status.parse", `0 {"state":"paused","terminal":false,"dispatcher_running":true}`), reason: "unknown job state",
-			fail: []string{"reports state 'paused'"}, calls: []string{"list", "submit", "status"}, ctx: "kept"},
+			fail: []string{"reports state 'paused'"}, calls: []string{"list", "submit", "wait", "status"}, ctx: "kept"},
 		{name: "running marked ended", setup: planned("status.parse", state("running", true)), reason: "unknown job state",
-			fail: []string{"is 'running' but marked ended"}, calls: []string{"list", "submit", "status"}, ctx: "kept"},
+			fail: []string{"is 'running' but marked ended"}, calls: []string{"list", "submit", "wait", "status"}, ctx: "kept"},
 		{name: "dispatcher stops", setup: planned("status.parse", `0 {"state":"queued","terminal":false,"dispatcher_running":false}`), reason: "dispatcher stopped",
-			fail: []string{"the dispatcher stopped while job parse (j1-parse) was queued"}, calls: []string{"list", "submit", "status"}, ctx: "kept"},
-		{name: "timeout too low", setup: planned("submit.parse", `0 {"id":"@ID@","dispatcher_running":true,"timeout_s":10499,"memory":34359738368}`),
-			reason: "scheduler limits too low", fail: []string{"FAIL limits -- the job scheduler gave job parse a run timeout of 10499 s, under the 10500 s needed"},
+			fail: []string{"the dispatcher stopped while job parse (j1-parse) was queued"}, calls: []string{"list", "submit", "wait", "status"}, ctx: "kept"},
+		{name: "timeout too low", setup: planned("submit.parse", `0 {"id":"@ID@","dispatcher_running":true,"timeout_s":899,"memory":34359738368}`),
+			reason: "scheduler limits too low", fail: []string{"FAIL limits -- the job scheduler gave job parse a run timeout of 899 s, under the 900 s needed"},
 			calls: ended, ctx: "gone"},
 		{name: "memory too low", setup: planned("submit.parse", `0 {"id":"@ID@","dispatcher_running":true,"timeout_s":10800,"memory":25769803775}`),
 			reason: "scheduler limits too low", fail: []string{"25769803775 bytes of memory, under the 24 GiB"}, calls: ended, ctx: "gone"},
@@ -353,7 +361,7 @@ func TestRunnerOverrides(t *testing.T) {
 				if !strings.Contains(r.seen(t, "g6", "specs"), broken+"  Phase5Hook.tla") {
 					t.Errorf("the g6 context does not hold the TLA_SPEC_DIR spec:\n%s", r.seen(t, "g6", "specs"))
 				}
-				checkJob(t, r, "parse", []string{"Phase5Hook ci_H_Sns -simulate num=1 -depth 1"}, 600)
+				checkJob(t, r, "parse", parseRuns([]row{byCfg(t, all, "ci_H_Sns")}), 600)
 				if !strings.HasPrefix(res.lines()[0], "FAIL ci_H_Sns ") {
 					t.Errorf("run line = %q, want FAIL ci_H_Sns", res.lines()[0])
 				}

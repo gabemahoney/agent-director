@@ -32,14 +32,35 @@ type ResumePrior struct {
 	// identity, as stored, so the restore writes the previous token back and
 	// the label of the row's earlier launch stays current (amendment 1; LFR H3).
 	Identity LaunchIdentity
+	// StateEvidence and ProcessEvidence are the examined row's applicable
+	// state and process records (Spawn.PriorStateEvidence,
+	// Spawn.PriorProcessEvidence), "" when none applied: the move replaces the
+	// state record and clears the process record, and a failed resume's
+	// restore writes them back, the state record rebound to the restore's
+	// interval, so the earlier launch's evidence is current again with it
+	// and never leaks into the launch the move began.
+	StateEvidence   string
+	ProcessEvidence string
+}
+
+// moveToPendingEvidence is the move's state record: the resume command's
+// durable admission of pending, for the row's life and the token the move
+// writes. Its placeholders are pending twice, the token, pending and the
+// source (moveToPendingEvidenceArgs).
+var moveToPendingEvidence, _ = moveToPendingEvidenceArgs("")
+
+func moveToPendingEvidenceArgs(token string) (string, []any) {
+	return stateEvidenceSet(StatePending, EvidenceCallerCommand, "life_number", "?", nil, []any{nullableStringArg(token)})
 }
 
 // moveToPendingSQL is MoveToPending's one statement (SR-8.3, SR-5.6): the
 // move to pending with its cleared and set columns and the version advance,
 // guarded by a finished state and the examined row snapshot (SR-5.3). pending
 // is an immediate write (immediateStateSet, b.3ie): it reports at once.
-const moveToPendingSQL = `UPDATE spawns
+var moveToPendingSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
+        ` + moveToPendingEvidence + `,
+        process_evidence          = NULL,
         pid                       = NULL,
         proc_starttime            = NULL,
         ended_at                  = NULL,
@@ -83,7 +104,9 @@ const moveToPendingSQL = `UPDATE spawns
 // reads none), launch_token to token, tmux_socket to socket, parent_id to
 // parentID and the three launch-owner columns to owner (the resume records
 // itself as the owner of the launch it begins, b.kdf), each zero value
-// written as NULL; and advances row_version by one. Every other column
+// written as NULL; records the resume command's admission as the state record
+// (pending, caller_command, for the row's life and the new token) and clears
+// the earlier launch's process record; and advances row_version by one. Every other column
 // (session_id, jsonl_path, life_number, no_pre_trust, started_at,
 // last_seen_at, agent and the request fields) is unchanged, and session_history
 // is not touched. It also sets subagent_tracking, the flag of the launch it
@@ -128,7 +151,9 @@ const moveToPendingSQL = `UPDATE spawns
 // (SR-5.8).
 func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner) (res CondResult, movedVersion int64, err error) {
 	const errPrefix = "store: move to pending"
-	args := append(immediateStateArgs(StatePending),
+	_, evidenceArgs := moveToPendingEvidenceArgs(token)
+	args := append(immediateStateArgs(StatePending), evidenceArgs...)
+	args = append(args,
 		positiveInt64Arg(launchStartedAtMillis),
 		nullableStringArg(token), nullableStringArg(socket),
 		nullableStringArg(parentID),
@@ -184,8 +209,10 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 // launch start cleared and the version advanced, guarded by pending and the
 // move's version. The prior state is an immediate write (immediateStateSet,
 // b.3ie): it reports at once, never the move's pending for the settle time.
-const restoreAfterFailedResumeSQL = `UPDATE spawns
+var restoreAfterFailedResumeSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
+        ` + restoredStateEvidence + `,
+        process_evidence          = ?,
         ended_at                  = ?,
         pid                       = ?,
         proc_starttime            = ?,
@@ -215,8 +242,10 @@ const restoreAfterFailedResumeSQL = `UPDATE spawns
 // subagent_tracking (1 for prior.SubagentTracking true, else 0; the earlier
 // launch's flag, SR-9) from prior, and
 // launch_token, tmux_socket and the six server and pane identity columns from
-// prior.Identity, each zero value as NULL; sets launch_started_at to NULL; and
-// advances row_version by one. The texts are bound as the stored text they
+// prior.Identity, each zero value as NULL; writes back prior.ProcessEvidence
+// and prior.StateEvidence, the latter rebound to the restore's raw-state
+// interval (restoredStateEvidenceSet; NULL when none applied); sets
+// launch_started_at to NULL; and advances row_version by one. The texts are bound as the stored text they
 // were read as, never parsed or re-formatted (SR-5.3), so ended_at and
 // liveness_unverified_since read back byte for byte. Every other column is
 // unchanged: parent_id keeps the move's value (RR5b T-h), and
@@ -245,7 +274,9 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		return 0, fmt.Errorf("%s: prior state %q is not %s or %s", errPrefix, prior.State, StateEnded, StateMissing)
 	}
 	id := prior.Identity
-	args := append(immediateStateArgs(prior.State),
+	_, evidenceArgs := restoredStateEvidenceSet(prior.StateEvidence, prior.State)
+	args := append(immediateStateArgs(prior.State), evidenceArgs...)
+	args = append(args, nullableStringArg(prior.ProcessEvidence),
 		nullableStringArg(prior.EndedAtText),
 		positiveIntArg(prior.PID),
 		nullableStringArg(prior.ProcStarttime),

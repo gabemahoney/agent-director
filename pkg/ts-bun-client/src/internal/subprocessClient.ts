@@ -50,6 +50,7 @@ import type {
   RecordPaneAnswerParams, RecordPaneAnswerResult,
   ResumeParams, ResumeResult,
   FindMissingParams, FindMissingResult,
+  SweepParams, SweepResult,
   ExpireParams, ExpireResult,
   MakeTemplateParams, MakeTemplateResult,
   ListParams, ListResult,
@@ -471,7 +472,13 @@ export class SubprocessClient {
     return this.#enqueue<ResumeResult>("resume", params);
   }
 
-  /** findMissing — sweep live Spawns, marking each `missing` (a Codex row with its end report: `ended`) or leaving it unverified on process and tmux evidence; see FindMissingResult. */
+  /** One bounded all-agent check. A transport timeout proves neither rollback nor completion. */
+  async sweep(params: SweepParams = {}): Promise<SweepResult> {
+    this.#assertOpen();
+    return this.#enqueue<SweepResult>("sweep", params);
+  }
+
+  /** Compatibility entry for sweep; uses the retained CLI spelling for older binaries. */
   async findMissing(params: FindMissingParams): Promise<FindMissingResult> {
     this.#assertOpen();
     return this.#enqueue<FindMissingResult>("find-missing", params);

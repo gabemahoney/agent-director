@@ -3,7 +3,6 @@ package api_test
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -75,30 +74,7 @@ func TestClientDecideBoundsDeferredAuditAndPreservesFIFO(t *testing.T) {
 	api.SetProcCheckerForTest(c, e.pc)
 	api.SetSelfPIDNSForTest(c, func() (string, bool) { return relayNS, true })
 	mark := len(readAPITrailLines(t))
-	gate := &trailEncodingGate{entered: make(chan struct{}), release: make(chan struct{})}
-	var once sync.Once
-	release := func() { once.Do(func() { close(gate.release) }) }
-	defer release()
-	holder := make(chan error, 1)
-	go func() {
-		holder <- trail.Emit(context.Background(), "ad.test.client_deadline_holder", map[string]any{"gate": gate})
-	}()
-	select {
-	case <-gate.entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("holder did not enter real writer")
-	}
-	defer func() {
-		release()
-		select {
-		case err := <-holder:
-			if err != nil {
-				t.Error(err)
-			}
-		case <-time.After(3 * time.Second):
-			t.Error("holder did not finish")
-		}
-	}()
+	release := holdTrail(t)
 	before := trail.Default().Status().Pending
 	type outcome struct {
 		result api.DecideResult
@@ -139,12 +115,7 @@ func TestClientDecideBoundsDeferredAuditAndPreservesFIFO(t *testing.T) {
 		t.Errorf("closed client result=%v", err)
 	}
 	release()
-	// A same-worker sentinel acknowledges physical FIFO drain without closing the singleton.
-	drain, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := trail.Emit(drain, "ad.test.client_deadline_drained", nil); err != nil {
-		t.Fatal(err)
-	}
+	drainTrail(t)
 	var events []string
 	for _, row := range readAPITrailLines(t)[mark:] {
 		if row["instance_id"] == e.id && row["request_token"] == storefix.TestRequestTokenA {

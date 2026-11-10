@@ -1,4 +1,9 @@
-## agent-director's two sweeps as crontab lines: find-missing every 2 minutes,
+## Raw templates keep find-missing for released installers that fetch them.
+## New install.sh promotes it to sweep when the binary advertises it in `help`,
+## without running recovery. Manual installation may keep find-missing.
+## Reads share recovery checks on supporting versions; absent or failed checks
+## leave observations old. expire is separate, operator-selected cleanup.
+## agent-director's recovery and cleanup as crontab lines: sweep every 2 minutes,
 ## expire once a day. install.sh --schedule adds the lines below this block to
 ## the crontab of the user it runs as; the same lines are what its warning prints
 ## when no schedule is set up.
@@ -25,13 +30,13 @@
 ##                       passwd entry (cron sets HOME from that entry, and the
 ##                       binary keeps its files in $HOME/.config/agent-director),
 ##                       HOME=<the install's $HOME>. The value is never empty.
-## Run as the agents' user, in the agents' tmux environment: find-missing run
+## Run as the agents' user, in the agents' tmux environment: sweep run
 ## as another user, as root or against another tmux server can wrongly mark
 ## live rows missing, and expire can wrongly delete rows whose agent still
 ## runs. The config directory is $HOME/.config/agent-director, so the sweep
 ## needs the install's HOME (see HOME above). A % in a path is written \% in a
 ## crontab.
 ##
-# agent-director-schedule: the find-missing and expire sweeps (install-agent-director skill, schedule/agent-director.cron)
+# agent-director-schedule: the recovery and expire jobs (install-agent-director skill, schedule/agent-director.cron)
 */2 * * * * @@ENV_PREFIX@@ @@AGENT_DIRECTOR@@ find-missing >/dev/null # agent-director-schedule
 17 3 * * * @@ENV_PREFIX@@ @@AGENT_DIRECTOR@@ expire >/dev/null # agent-director-schedule

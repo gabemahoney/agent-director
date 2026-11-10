@@ -64,7 +64,7 @@ func TestCursorTerminalReadsPreserveRequestEvidence(t *testing.T) {
 				requests[kind] = pr
 			}
 			for i := 0; i < 2; i++ {
-				state, err := cursorStartupRead(c, verb, b.InstanceID)
+				state, _, err := cursorStartupRead(c, verb, b.InstanceID)
 				if err != nil || state != store.StateMissing {
 					t.Fatalf("%s after exact gateway death = %s/%v; want missing", verb, state, err)
 				}
@@ -89,6 +89,7 @@ func TestCursorTerminalReadsPreserveRequestEvidence(t *testing.T) {
 					want.ClosedAt = got.ClosedAt
 					if was.Decision == "" {
 						want.Decision, want.DecisionReason, want.DecidedAt = "deny", store.DecisionReasonFindMissing, got.DecidedAt
+						want.DecisionOrigin = store.DecisionOriginObservation
 						if got.DecidedAt.IsZero() {
 							t.Error("orphan deny lacks timestamp")
 						}

@@ -4,7 +4,7 @@ package api_test
 // Recorder charges every call its full timeout and no pipe-close wait W, so a
 // ceiling's W terms drop out here): kill's on a live row and on a finished row
 // with the opt-in (SR-6.2), with the SR-20.6 kill_exit_wait_ms case through
-// api.New; read-pane's 3Q + A (SR-7.5), send-keys' 3Q + 2A and pause's 3Q + 3A
+// api.New; read-pane's 3Q + A (SR-7.5), guarded send-keys' 9Q + 2A and pause's 9Q + 3A
 // (its line clear before /exit is one more action, b.9o4; no path here enters
 // its wait). Nothing waits in real time.
 
@@ -162,8 +162,8 @@ func TestKillCeilingExitWaitSetting(t *testing.T) {
 	}
 }
 
-// TestPaneVerbsCeilingVirtualTime: each verb's longest path (a failed action
-// whose follow-up lookup answers or times out) charges its ceiling, and its
+// TestPaneVerbsCeilingVirtualTime: these manual fixture paths include target
+// checks before every write and a failure follow-up lookup. Their
 // timeouts charge less with no follow-up, at the defaults and with Q raised
 // above 2A through api.New's config.
 func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
@@ -171,11 +171,11 @@ func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
 	q, a, _ := ceilDefaults()
 	ceilings := map[string]func(q, a time.Duration) time.Duration{
 		"read-pane": func(q, a time.Duration) time.Duration { return 3*q + a },
-		"send-keys": func(q, a time.Duration) time.Duration { return 3*q + 2*a },
-		"pause":     func(q, a time.Duration) time.Duration { return 3*q + 3*a },
+		"send-keys": func(q, a time.Duration) time.Duration { return 9*q + 2*a },
+		"pause":     func(q, a time.Duration) time.Duration { return 9*q + 3*a },
 	}
 	for verb, want := range map[string]time.Duration{"read-pane": 6500 * time.Millisecond,
-		"send-keys": 8500 * time.Millisecond, "pause": 10500 * time.Millisecond} {
+		"send-keys": 17500 * time.Millisecond, "pause": 19500 * time.Millisecond} {
 		if got := ceilings[verb](q, a); got != want {
 			t.Fatalf("%s's ceiling at the defaults = %v; want %v", verb, got, want)
 		}
@@ -211,33 +211,33 @@ func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
 		{"read-pane", "capture times out", tmux.CallCapture, tmux.FailTimeout, nil, paneReadCalls,
 			func(q, a time.Duration) time.Duration { return 2*q + a },
 			func(a time.Duration) apitest.DescCase { return apitest.DescCallTimeout(tmux.CallCapture, a) }},
-		{"send-keys", "Enter fails, follow-up finds Ours", tmux.CallSendEnter, tmux.FailUnrecognized, nil,
+		{"send-keys", "Enter fails, follow-up finds Ours", callEnterKey, tmux.FailUnrecognized, nil,
 			withFollowUp(paneSendCalls), ceilings["send-keys"], func(time.Duration) apitest.DescCase {
-				return apitest.DescUnrecognisedReply(tmux.CallSendEnter, "").AfterEnterFailed(apitest.PaneSendKeys)
+				return apitest.DescUnrecognisedReply(tmux.CallSendKey, "").AfterEnterFailed(apitest.PaneSendKeys)
 			}},
 		{"send-keys", "text times out", tmux.CallSendText, tmux.FailTimeout, nil, paneTextCalls,
-			func(q, a time.Duration) time.Duration { return 2*q + a },
+			func(q, a time.Duration) time.Duration { return 6*q + a },
 			func(a time.Duration) apitest.DescCase {
 				return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendText, a)
 			}},
-		{"send-keys", "Enter times out", tmux.CallSendEnter, tmux.FailTimeout, nil, paneSendCalls,
-			func(q, a time.Duration) time.Duration { return 2*q + 2*a },
+		{"send-keys", "Enter times out", callEnterKey, tmux.FailTimeout, nil, paneSendCalls,
+			func(q, a time.Duration) time.Duration { return 8*q + 2*a },
 			func(a time.Duration) apitest.DescCase {
-				return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendEnter, a)
+				return apitest.DescKeysTimeout(apitest.PaneSendKeys, callEnterKey, a)
 			}},
-		{"pause", "Enter fails, follow-up lookup times out", tmux.CallSendEnter, tmux.FailUnrecognized, followUpTimesOut,
+		{"pause", "Enter fails, follow-up lookup times out", callEnterKey, tmux.FailUnrecognized, followUpTimesOut,
 			withFollowUp(pauseSendCalls), ceilings["pause"], func(time.Duration) apitest.DescCase {
-				return apitest.DescUnrecognisedReply(tmux.CallSendEnter, "").AfterEnterFailed(apitest.PanePause)
+				return apitest.DescUnrecognisedReply(tmux.CallSendKey, "").AfterEnterFailed(apitest.PanePause)
 			}},
 		{"pause", "exit text times out", tmux.CallSendText, tmux.FailTimeout, nil, pauseTextCalls,
-			func(q, a time.Duration) time.Duration { return 2*q + 2*a },
+			func(q, a time.Duration) time.Duration { return 6*q + 2*a },
 			func(a time.Duration) apitest.DescCase {
 				return apitest.DescKeysTimeout(apitest.PanePause, tmux.CallSendText, a)
 			}},
-		{"pause", "Enter times out", tmux.CallSendEnter, tmux.FailTimeout, nil, pauseSendCalls,
-			func(q, a time.Duration) time.Duration { return 2*q + 3*a },
+		{"pause", "Enter times out", callEnterKey, tmux.FailTimeout, nil, pauseSendCalls,
+			func(q, a time.Duration) time.Duration { return 8*q + 3*a },
 			func(a time.Duration) apitest.DescCase {
-				return apitest.DescKeysTimeout(apitest.PanePause, tmux.CallSendEnter, a)
+				return apitest.DescKeysTimeout(apitest.PanePause, callEnterKey, a)
 			}},
 	}
 	for _, sc := range settings {

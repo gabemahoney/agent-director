@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
@@ -39,8 +40,12 @@ func openDB(t *testing.T, dbPath string) *store.Store {
 
 // emptyGetJSON is the row every Get failure encodes: agent_args, labels,
 // permission_requests, unproven_requests and prior_sessions empty, never null,
-// every other field zero (b.4nt).
-const emptyGetJSON = `{"context":` + contextfix.UnknownJSON + `,"instance_id":"","parent_id":"","state":"","family_state":"","cwd":"","agent":"","tmux_session_name":"",` +
+// every other field zero (b.4nt); confirmations keeps its three records, each
+// with all five keys.
+const emptyConfirmationJSON = `{"status":"","confirmed_at":null,"source":null,"checked_at":null,"reason":null}`
+const emptyGetJSON = `{"context":` + contextfix.UnknownJSON + `,"instance_id":"","parent_id":"","state":"","family_state":"",` +
+	`"process_liveness":"","confirmations":{"state":` + emptyConfirmationJSON + `,"process_liveness":` + emptyConfirmationJSON +
+	`,"displayed_state":` + emptyConfirmationJSON + `},"cwd":"","agent":"","tmux_session_name":"",` +
 	`"agent_args":[],"relay_mode":"","jsonl_path":"","session_id":"","labels":{},` +
 	`"started_at":"0001-01-01T00:00:00Z","last_seen_at":"0001-01-01T00:00:00Z","state_changed_at":"0001-01-01T00:00:00Z",` +
 	`"permission_requests":[],"unproven_requests":[],"transcript_status":"","prior_sessions":[]}`
@@ -175,6 +180,8 @@ type recordingGetStore struct {
 	permErr, historyErr error
 	permCalls           int
 	historyLives        []int64
+	history             []store.SessionHistoryEntry
+	afterHistory        func()
 }
 
 func (r *recordingGetStore) GetSpawn(id string) (store.Spawn, error) {
@@ -191,7 +198,13 @@ func (r *recordingGetStore) PermissionRequestsForSpawn(string) ([]store.Permissi
 
 func (r *recordingGetStore) ListSessionHistory(_ string, life int64) ([]store.SessionHistoryEntry, error) {
 	r.historyLives = append(r.historyLives, life)
-	return nil, r.historyErr
+	rows, err := slices.Clone(r.history), r.historyErr
+	if r.afterHistory != nil {
+		next := r.afterHistory
+		r.afterHistory = nil
+		next()
+	}
+	return rows, err
 }
 
 // TestGetReadsAndErrors pins SR-3.1 and SR-5.9 with a recording store: the
@@ -348,4 +361,73 @@ func TestGetAndListHideCodexConfigFolder(t *testing.T) {
 		t.Errorf("Get agent %q, jsonl_path %q; want codex and the rollout path %q", got.Agent, got.JSONLPath, rollout)
 	}
 	folder.assertUnchanged(t, "after get and list")
+}
+
+// snapshotGetStore adds only the explicit validated history capability to the
+// existing narrow provider. The copy belongs to examined; an interleaving runs
+// after acquisition. Legacy GetStore read/error tests keep recordingGetStore.
+type snapshotGetStore struct{ *recordingGetStore }
+
+func (s *snapshotGetStore) ListSessionHistorySnapshot(examined store.Spawn, _ time.Duration) ([]store.SessionHistoryEntry, error) {
+	if examined.Snapshot != s.spawn.Snapshot || examined.Identity != s.spawn.Identity || examined.LifeNumber != s.spawn.LifeNumber {
+		return nil, errSentinel
+	}
+	return s.ListSessionHistory(examined.InstanceID, examined.LifeNumber)
+}
+
+// b.x9o repair05: history sampled before active observations belongs to the
+// exact row revision, launch and life. A final refresh must not reuse stale data.
+func TestGetHistoryFollowsRefreshedIdentity(t *testing.T) {
+	t.Parallel()
+	for _, change := range []string{"unchanged", "session", "life", "launch", "revision", "read error"} {
+		t.Run(change, func(t *testing.T) {
+			f := &snapshotGetStore{&recordingGetStore{spawn: store.Spawn{InstanceID: "history", State: store.StateEnded,
+				SessionID: "current", LifeNumber: 3, Snapshot: store.RowSnapshot{RowVersion: 4, SessionID: "current"},
+				Identity: store.LaunchIdentity{Token: "1111111111111111"}},
+				history: []store.SessionHistoryEntry{{SessionID: "earlier"}}}}
+			wantSessions, wantLives := []string{"earlier"}, []int64{3}
+			var wantErr error
+			if change != "unchanged" {
+				wantSessions = []string{"fresh"}
+				wantLives = append(wantLives, 3)
+				if change == "life" {
+					wantLives[1] = 4
+				}
+				if change == "read error" {
+					wantErr = errSentinel
+				}
+				f.afterHistory = func() {
+					f.history = []store.SessionHistoryEntry{{SessionID: "fresh"}}
+					switch change {
+					case "session":
+						f.spawn.SessionID, f.spawn.Snapshot.SessionID = "next", "next"
+					case "life":
+						f.spawn.LifeNumber++
+					case "launch":
+						f.spawn.Identity.Token = "2222222222222222"
+					default:
+						f.spawn.Snapshot.RowVersion++
+					}
+					f.historyErr = wantErr
+				}
+			}
+			got, err := api.Get(f, api.RelayView{}, "history")
+			if !errors.Is(err, wantErr) || !slices.Equal(f.historyLives, wantLives) {
+				t.Fatalf("Get history lives=%v err=%v; want %v/%v", f.historyLives, err, wantLives, wantErr)
+			}
+			if err != nil {
+				if jsonOf(t, got) != emptyGetJSON {
+					t.Fatalf("history error returned row: %+v", got)
+				}
+				return
+			}
+			var sessions []string
+			for _, prior := range got.PriorSessions {
+				sessions = append(sessions, prior.SessionID)
+			}
+			if !slices.Equal(sessions, wantSessions) || got.SessionID != f.spawn.SessionID || got.TranscriptStatus != "rotated" {
+				t.Fatalf("Get=%+v; want current session %s and history %v", got, f.spawn.SessionID, wantSessions)
+			}
+		})
+	}
 }

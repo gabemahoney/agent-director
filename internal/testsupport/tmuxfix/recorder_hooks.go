@@ -120,7 +120,7 @@ func (r *Recorder) afterCall(c SocketCall) []AfterCallHook {
 	}
 	kept := r.changes[:0]
 	for _, ch := range r.changes {
-		if ch.after != c.Call || (ch.socket != AnySocket && ch.socket != c.Socket) {
+		if !c.matches(ch.after) || (ch.socket != AnySocket && ch.socket != c.Socket) {
 			kept = append(kept, ch)
 			continue
 		}
@@ -129,7 +129,7 @@ func (r *Recorder) afterCall(c SocketCall) []AfterCallHook {
 	r.changes = kept
 	var hooks []AfterCallHook
 	for _, h := range r.afterHooks {
-		if h.call == c.Call || h.call == AnyCall {
+		if c.matches(h.call) || h.call == AnyCall {
 			hooks = append(hooks, h.fn)
 		}
 	}

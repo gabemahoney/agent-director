@@ -57,7 +57,7 @@ func TestCursorImmediateNativeKeyRoutesOnlyItsRequest(t *testing.T) {
 				t.Fatalf("single key routing: %+v", event)
 			}
 			c.choose(event.choiceToken, event.choiceOption)
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, second); err != nil {
 				t.Fatal(err)
 			}
 			if err := completedWrite(t, c.protocol); err != nil {
@@ -107,13 +107,13 @@ func TestCursorNativeFallbackAndRetirement(t *testing.T) {
 			r.settle = time.UnixMilli(time.Now().Add(-time.Millisecond).UnixMilli())
 			r.timeout = r.settle.Add(-requestReserve)
 			e.exec(t, `UPDATE permission_requests SET settled_at=? WHERE request_token=?`, r.settle.UnixMilli(), r.token)
-			err := c.tick()
+			err := continuePermission(c, r)
 			if mode == "native timeout" {
 				if err == nil {
 					t.Fatal("native timeout not reported")
 				}
 				c.choose(r.token, "allow-once")
-				c.tick()
+				continuePermission(c, r)
 				if len(wire.bytes()) != 0 {
 					t.Fatal("timed out revived")
 				}
@@ -121,7 +121,7 @@ func TestCursorNativeFallbackAndRetirement(t *testing.T) {
 			}
 			if mode == "cancelled" {
 				c.choose(r.token, "allow-once")
-				c.tick()
+				continuePermission(c, r)
 				if len(wire.bytes()) != 0 {
 					t.Fatal("cancelled revived")
 				}
@@ -134,7 +134,7 @@ func TestCursorNativeFallbackAndRetirement(t *testing.T) {
 				return
 			}
 			c.choose(r.token, "reject-once")
-			err = c.tick()
+			err = continuePermission(c, r)
 			if mode == "disconnected" {
 				if err == nil {
 					t.Fatal("disconnected native choice reported success")
@@ -192,7 +192,7 @@ func TestCursorPaneClaimsAreNotApprovalAuthority(t *testing.T) {
 				}
 			}
 			c.choose(r.token, "allow-once")
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, r); err != nil {
 				t.Fatal(err)
 			}
 			if claim == "sent" {

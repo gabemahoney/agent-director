@@ -22,24 +22,28 @@ import (
 // manifest description states it (SR-18.9, SR-11.2): a pending row is not
 // judged inside the pending grace period (pending_grace_seconds, its default
 // config.DefaultPendingGraceSeconds), measured from its launch start rather
-// than its started_at, and a pending row can be a resume's launch; never the
-// old claim that the scan judges every pending row. Check it with
-// AssertAgentTextCase on FindMissingOwnText of the description.
+// than its started_at, and a pending row can be a resume's launch; except that
+// neither protection holds a Cursor row whose exact gateway is gone (b.x9o,
+// MI Q2A); never the old claim that the scan judges every pending row. Check
+// it with AssertAgentTextCase on FindMissingOwnText of the description.
 func DescFindMissingGrace() DescCase {
 	return DescCase{
 		Name: "find-missing manifest, pending grace statement",
 		Require: []string{
-			"is not judged inside the pending grace period",
-			fmt.Sprintf("pending_grace_seconds, %d s by default", config.DefaultPendingGraceSeconds),
-			"measured from its launch start, not its started_at",
-			"resume's launch",
+			"Pending launches are protected while launching or within",
+			fmt.Sprintf("pending_grace_seconds (default %d s)", config.DefaultPendingGraceSeconds),
+			"of launch start, not started_at",
+			"an unreadable start is judged at once",
+			"Cursor uses its exact gateway: gone overrides pending protections",
 		},
 		MustNot: []string{"live-state rows (including pending)"},
 	}
 }
 
-// FindMissingOwnText returns the part of find-missing's description before
-// LiveRowPointer, the sentence that ends it (SR-18.6). It panics when text
+// FindMissingOwnText returns the part of the canonical sweep description before
+// LiveRowPointer, the sentence that ends it (SR-18.6). Pass it sweep's text:
+// the find-missing alias carries only a compatibility pointer to sweep, with
+// no LiveRowPointer, and is checked as that pointer. It panics when text
 // does not carry the pointer, so a description that lost it fails the calling
 // test instead of being pinned whole.
 func FindMissingOwnText(text string) string {
@@ -53,7 +57,7 @@ func FindMissingOwnText(text string) string {
 // findMissingKillPointer is find-missing's pointer to kill for SR-18.7's two
 // consequences of a run in the wrong environment, which kill's manifest
 // description states in full (SR-18.7 amendment, b.ssz Epic 4).
-const findMissingKillPointer = "See kill for what a wrong server leads to."
+const findMissingKillPointer = "see kill."
 
 // DescFindMissingManifest is find-missing's liveness and same-environment
 // rules as its manifest description states them (SR-18.9, SR-18.7, SR-3.8),
@@ -72,11 +76,11 @@ func DescFindMissingManifest() DescCase {
 	return DescCase{
 		Name: "find-missing manifest, liveness and same environment",
 		Require: []string{
-			"liveness comes only from its agent process",
-			"whose process cannot be checked or was never recorded is looked up in tmux",
-			"on its recorded socket",
-			"same user", "same tmux environment",
-			"another user", "as root", "another tmux server", "can mark live rows `missing`",
+			"Liveness uses the agent process at its recorded start identity, never children or copied IDs",
+			"Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded)",
+			"once per recorded socket (else caller's)",
+			"Run as the agents' user in their tmux environment",
+			"another user, root or another server can mark live rows missing",
 			findMissingKillPointer,
 		},
 		MustNot: []string{"probe-set", "environ probe", "environment scan", "on ambiguous evidence"},
@@ -97,8 +101,9 @@ const (
 // as the manifest states it (SR-11.7, SR-18.3, SR-18.11), by key phrase. ids:
 // rows marked missing on process or tmux evidence (a dead agent process, or a
 // row whose process could not be checked with no session or pane of its
-// current launch in tmux), a pending row only past the pending grace period,
-// not proof of exit. unverified_ids: rows left unverified with a note,
+// current launch in tmux), a pending row only past the pending grace period
+// and never while its launch runs, except a Cursor row whose exact recorded
+// gateway is gone (b.x9o, MI Q2A), not proof of exit. unverified_ids: rows left unverified with a note,
 // written or already current, never a pending row inside the pending grace
 // period; never the old "left untouched" meaning. Both: a row whose guarded
 // write found it changed or gone, or failed, is in neither list; never null.
@@ -113,6 +118,8 @@ func DescFindMissingField(f FindMissingField) DescCase {
 				"marked `missing`, on process or tmux evidence", "agent process",
 				"could not be checked", "no session or pane of their current launch",
 				"a pending row only past the pending grace period",
+				"never while the spawn, reuse or resume that began its launch still runs",
+				"except a Cursor row whose exact recorded gateway is gone",
 				"not proof that the agent has exited",
 			}, both...),
 			MustNot: []string{"left untouched"},
@@ -132,14 +139,14 @@ func DescFindMissingField(f FindMissingField) DescCase {
 
 // missingNotProofFull is SR-18.2's full statement, by its two key phrases.
 var missingNotProofFull = []string{
-	"is the sweep's judgement on the evidence available to it",
+	"is a check's judgement on available evidence",
 	"not proof that the agent has exited",
 }
 
 // missingNotProofShort is SR-18.2's short form (decision-0930e), verbatim,
 // and missingNotProofShortMarks the phrases that mark a text as carrying it,
 // reworded or not, in its wording since b.7vf or before.
-const missingNotProofShort = "`missing` is not proof of exit (see find-missing)."
+const missingNotProofShort = "`missing` is not proof of exit (see sweep)."
 
 var missingNotProofShortMarks = []string{"is not proof of exit", "is not proof the agent exited"}
 
@@ -170,15 +177,15 @@ func DescMissingNotProof() DescCase {
 
 // DescMissingNotProofShort is SR-18.2's short form (decision-0930e) for the
 // verb Descriptions that reach help and MCP but do not produce missing (kill,
-// resume, pause, expire): "`missing` is not proof of exit
-// (see find-missing).", verbatim. Such a text must not carry the full
-// statement (DescMissingNotProof) instead or as well, nor the claims that
-// present ended or missing as dead or safe to delete. Check it with
-// AssertAgentTextCase.
+// resume, pause, expire): "`missing` is not proof of exit (see sweep).",
+// verbatim. Such a text must not carry the full statement
+// (DescMissingNotProof) instead or as well, the old "(see find-missing)"
+// pointer, nor the claims that present ended or missing as dead or safe to
+// delete. Check it with AssertAgentTextCase.
 func DescMissingNotProofShort() DescCase {
 	return DescCase{
 		Name:    "SR-18.2 short form, missing is not proof the agent exited",
 		Require: []string{missingNotProofShort},
-		MustNot: append(append([]string(nil), missingNotProofFull...), missingNotProofClaims...),
+		MustNot: concatStrings(missingNotProofFull, missingNotProofClaims, []string{"(see find-missing)"}),
 	}
 }

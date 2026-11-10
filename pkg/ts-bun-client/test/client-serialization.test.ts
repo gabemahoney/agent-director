@@ -11,7 +11,7 @@
 import { test, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { SpawnParams, MakeTemplateParams, GetResult, ListRow } from "../src/index.js";
+import type { SpawnParams, MakeTemplateParams, GetResult, ListRow, Confirmation } from "../src/index.js";
 import { homeStore, openClient, runHelper, seedOuterParent, spawnClaude, withProcessEnv } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
 
@@ -67,8 +67,19 @@ test.each([
     const status = await client.status({ instance_id: spawned.instance_id });
     expect(status.state).toBe("pending");
     expect(status.family_state).toBe("working");
-    expect(Object.keys(status).sort()).toEqual(["context", "family_state", "idle_screen_availability", "launch_started_at", "state"]);
+    expect(Object.keys(status).sort()).toEqual(["confirmations", "context", "family_state", "idle_screen_availability", "launch_started_at", "process_liveness", "state"]);
     expect(status.idle_screen_availability).toBe("unavailable");
+    // Only the Helper's gateway is probed for Cursor: its runtime process and
+    // displayed state are explicitly unknown with null evidence, while the
+    // spawn command's admission confirms pending.
+    const unsupported: Confirmation = { status: "unknown", confirmed_at: null, source: null, checked_at: null, reason: "unsupported" };
+    for (const read of [status, row, listed!]) {
+      expect(read.process_liveness).toBe("unknown");
+      expect(read.confirmations.process_liveness).toEqual(unsupported);
+      expect(read.confirmations.displayed_state).toEqual(unsupported);
+      expect(read.confirmations.state).toMatchObject({ status: "confirmed", source: "caller_command", reason: null });
+      expect(read.confirmations.state.checked_at).toBe(read.confirmations.state.confirmed_at);
+    }
     expect(await client.listSubagents({ instance_id: spawned.instance_id })).toEqual({ tracked: false, subagents: [] });
     expect(runHelper("fake-pane-owner", { pid: String(owner.pid), store: storePath, id: spawned.instance_id })).toEqual(identity);
     } finally {

@@ -9,10 +9,16 @@ package api_test
 
 import (
 	"context"
+	"database/sql/driver"
+	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -32,6 +38,178 @@ func enterIdleScreen(t *testing.T, e *paneEnv, c *api.Client, settle time.Durati
 	return assertDisplayState(t, c, e.id, api.StateIdleScreen)
 }
 
+// b.j4p: a turn start on an already-working row, or either adoption write,
+// must discard the earlier baseline and idle episode without changing the
+// permission epoch. Ordinary same-turn updates must keep that evidence.
+func TestIdleScreenTurnAndAdoptionResetBaseline(t *testing.T) {
+	t.Parallel()
+	for _, write := range []string{"turn", "held-turn", "adopt", "find-missing-adopt"} {
+		for _, phase := range []string{"baseline", "candidate", "displayed"} {
+			t.Run(write+"/"+phase, func(t *testing.T) {
+				t.Parallel()
+				e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
+				settle := 5 * time.Second
+				if phase == "baseline" {
+					settle = 0
+				}
+				c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60, StateSettleMs: settle.Milliseconds()})
+				codexHook(t, e.s, e.dbPath, e.id, "UserPromptSubmit", codexfix.ErroredTurn.TurnID, store.StateWorking)
+				if write == "held-turn" {
+					// The legacy request fixture holds working writes without
+					// moving the row to check_permission. This isolates the held
+					// turn writer from a state change's epoch invalidation.
+					if _, err := apitest.SeedPermissionRequest(e.dbPath, e.id, "Bash"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				baselineAt := e.now
+				if phase == "displayed" {
+					enterIdleScreen(t, e, c, settle)
+				} else {
+					observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+					if phase == "candidate" {
+						e.now = e.now.Add(time.Minute)
+						observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+					}
+				}
+				before := e.row(t)
+				if before.PaneSHA256 == "" || before.PaneSinceMillis != baselineAt.UnixMilli() || before.PaneEpoch != before.PermissionEpoch ||
+					(phase != "baseline" && !before.IdleScreenCurrent()) {
+					t.Fatalf("initial %s has no current pane evidence: %+v", phase, before)
+				}
+
+				// A same-turn tool hook (including a held one) or a liveness
+				// note is not a turn/ownership change and must keep the clock.
+				switch write {
+				case "turn", "held-turn":
+					codexHook(t, e.s, e.dbPath, e.id, "PreToolUse", codexfix.ErroredTurn.TurnID, store.StateWorking)
+				case "adopt", "find-missing-adopt":
+					if cr, err := e.s.SetLivenessNoteIfSameLife(e.id, before.Snapshot, "unverified"); err != nil || cr != store.CondApplied {
+						t.Fatalf("liveness note: %v %v", cr, err)
+					}
+				}
+				kept := e.row(t)
+				if kept.PaneSHA256 != before.PaneSHA256 || kept.PaneSinceMillis != before.PaneSinceMillis || kept.PaneEpoch != before.PaneEpoch ||
+					kept.PermissionEpoch != before.PermissionEpoch || kept.DisplayObservation != before.DisplayObservation {
+					t.Fatalf("ordinary update invalidated pane evidence: before=%+v after=%+v", before, kept)
+				}
+				if write == "held-turn" && kept.RowVersion != before.RowVersion {
+					t.Fatal("tool hook was not held by the request")
+				}
+				t.Log("ordinary-update baseline and permission-epoch guards passed")
+
+				start := e.now
+				changeAt := start.Add(30 * time.Second)
+				e.now = changeAt
+				mark := trailMark(t)
+				switch write {
+				case "turn", "held-turn":
+					codexHook(t, e.s, e.dbPath, e.id, "UserPromptSubmit", nextTurn, store.StateWorking)
+				case "adopt":
+					if cr, err := e.s.AdoptIdentityIfUnchanged(e.id, kept.Snapshot, kept.Identity); err != nil || cr != store.CondApplied {
+						t.Fatalf("adoption: %v %v", cr, err)
+					}
+				case "find-missing-adopt":
+					if cr, _, err := e.s.AdoptIdentityIfSameLife(e.id, kept.Snapshot, kept.Identity); err != nil || cr != store.CondApplied {
+						t.Fatalf("find-missing adoption: %v %v", cr, err)
+					}
+				}
+				// TR14-1: the writer's own commit must emit the exit, before
+				// any later observation or lifecycle write can drain it.
+				wantEvents := 0
+				if phase == "displayed" {
+					wantEvents = 1
+				}
+				events := displayEvents(t, mark, e.id)
+				if len(events) != wantEvents {
+					t.Fatalf("immediate writer exit events=%v; want %d before any observing write", events, wantEvents)
+				}
+				// invalidatePaneSet stamps its internal SQL clock, which is
+				// neither injected nor independently available here.
+				if wantEvents == 1 && (events[0]["prior_state"] != api.StateIdleScreen || events[0]["new_state"] != store.StateWorking) {
+					t.Fatalf("immediate writer transition=%v; want idle_screen -> working", events[0])
+				}
+				if exit, err := apitest.ReadDisplayExit(e.dbPath, e.id); err != nil {
+					t.Fatal(err)
+				} else if exit.Valid {
+					t.Fatalf("writer left stored display_exit=%q; want SQL NULL", exit.String)
+				}
+				changed := e.row(t)
+				if changed.State != store.StateWorking || changed.RowVersion != kept.RowVersion+1 {
+					t.Fatalf("%s did not apply on the working row: before=%+v after=%+v", write, kept, changed)
+				}
+				if changed.PermissionEpoch != kept.PermissionEpoch {
+					t.Errorf("%s changed permission_epoch: %d -> %d", write, kept.PermissionEpoch, changed.PermissionEpoch)
+				}
+				if changed.PaneSHA256 != "" || changed.PaneSinceMillis != 0 || changed.PaneEpoch != -1 || changed.ObservationVersion != kept.ObservationVersion+1 {
+					t.Fatalf("%s did not clear pane evidence with one observation advance: sha256=%q since_ms=%d pane_epoch=%d observation_version=%d -> %d",
+						write, changed.PaneSHA256, changed.PaneSinceMillis, changed.PaneEpoch, kept.ObservationVersion, changed.ObservationVersion)
+				}
+
+				// No capture changed. At t0+60 only 30 s of this turn/owner
+				// elapsed; neither an old candidate nor a displayed episode
+				// may supply idle_screen, even while an exit would settle.
+				e.now = start.Add(time.Minute)
+				observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+				after := e.row(t)
+				if after.PaneSHA256 != before.PaneSHA256 || after.PaneSinceMillis != e.now.UnixMilli() || after.PaneEpoch != after.PermissionEpoch {
+					t.Fatalf("first read did not commit a fresh baseline: %+v", after)
+				}
+				if after.PermissionEpoch != before.PermissionEpoch {
+					t.Fatalf("read changed permission_epoch: %d -> %d", before.PermissionEpoch, after.PermissionEpoch)
+				}
+				if events := displayEvents(t, mark, e.id); len(events) != wantEvents {
+					t.Fatalf("post-observation exit events=%v; want %d, with no delayed or duplicate exit", events, wantEvents)
+				}
+			})
+		}
+	}
+}
+
+// b.j4p: a held UserPromptSubmit must clear pane evidence even when its turn
+// id is absent or repeated; without that evidence the same report is a no-op.
+func TestCodexHeldTurnClearsPaneEvidenceWithoutNewID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, turn string }{
+		{"absent", ""}, {"repeated", codexfix.ErroredTurn.TurnID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
+			c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+			codexHook(t, e.s, e.dbPath, e.id, "UserPromptSubmit", tc.turn, store.StateWorking)
+			// As in the turn/adoption regression, the legacy request fixture
+			// isolates the held writer from a permission-state transition.
+			if _, err := apitest.SeedPermissionRequest(e.dbPath, e.id, "Bash"); err != nil {
+				t.Fatal(err)
+			}
+			for _, phase := range []string{"empty", "displayed", "cleared"} {
+				var bump int64
+				if phase == "displayed" {
+					enterIdleScreen(t, e, c, 0)
+					bump = 1
+				}
+				before := e.row(t)
+				codexHook(t, e.s, e.dbPath, e.id, "UserPromptSubmit", tc.turn, store.StateWorking)
+				after := e.row(t)
+				if after.RowVersion != before.RowVersion+bump || after.ObservationVersion != before.ObservationVersion+bump {
+					t.Errorf("%s: row_version %d -> %d, observation_version %d -> %d; want advance %d",
+						phase, before.RowVersion, after.RowVersion, before.ObservationVersion, after.ObservationVersion, bump)
+				}
+				if after.State != store.StateWorking || after.PermissionEpoch != before.PermissionEpoch {
+					t.Errorf("%s changed state/permission_epoch: %s/%d -> %s/%d", phase,
+						before.State, before.PermissionEpoch, after.State, after.PermissionEpoch)
+				}
+				if after.PaneSHA256 != "" || after.PaneSinceMillis != 0 || after.PaneEpoch != -1 || after.IdleScreenCurrent() || after.CommittedDisplay().State != store.StateWorking {
+					t.Fatalf("%s: held turn kept pane evidence: sha256=%q since_ms=%d pane_epoch=%d display=%+v",
+						phase, after.PaneSHA256, after.PaneSinceMillis, after.PaneEpoch, after.CommittedDisplay())
+				}
+				t.Logf("%s: version advance %d, pane evidence absent, permission_epoch unchanged", phase, bump)
+			}
+		})
+	}
+}
+
 // TestIdleScreenSettlementAndActualTransitionTime: with zero and positive
 // settling, entry and exit display exactly at their settle boundary, a
 // delayed read stamps itself rather than the deadline, a clearing keeps the
@@ -45,23 +223,27 @@ func TestIdleScreenSettlementAndActualTransitionTime(t *testing.T) {
 			e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
 			c := e.client(t, apitest.ConfigKeys{StateSettleMs: delay.Milliseconds(), IdleScreenTimeoutSeconds: 60})
 			mark := trailMark(t)
-			observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+			baseline := observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+			assertPaneRecord(t, baseline.Confirmations.DisplayedState, e.now, e.now, "")
 			start := e.now
 			e.now = start.Add(time.Minute)
 			if delay > 0 {
-				observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced) // the entry candidate
+				candidate := observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced) // the entry candidate
+				assertPaneRecord(t, candidate.Confirmations.DisplayedState, start, start, "")
 				e.now = e.now.Add(delay - time.Millisecond)
 				assertDisplayState(t, c, e.id, store.StateWorking)
 				e.now = start.Add(time.Minute + delay + time.Hour) // a delayed first read past the deadline
 			}
 			entered := assertDisplayState(t, c, e.id, api.StateIdleScreen)
 			entryTime := e.now
+			assertPaneRecord(t, entered.Confirmations.DisplayedState, entryTime, entryTime, "")
 			if entered.Since != entryTime.Format(displayTS) || minutes(t, entered) != int64(entryTime.Sub(start)/time.Minute) {
 				t.Fatalf("entry=%+v; want since this read and the floored minutes since %s", entered, start)
 			}
 			e.show("pane 2")
 			if delay > 0 {
 				got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced) // the exit candidate keeps the detail
+				assertPaneRecord(t, got.Confirmations.DisplayedState, entryTime, entryTime, "")
 				if got.Since != entered.Since || minutes(t, got) != minutes(t, entered) {
 					t.Fatalf("clearing changed the detail: %+v; want %+v", got, entered)
 				}
@@ -69,7 +251,8 @@ func TestIdleScreenSettlementAndActualTransitionTime(t *testing.T) {
 				assertDisplayState(t, c, e.id, api.StateIdleScreen)
 				e.now = e.now.Add(time.Millisecond)
 			}
-			observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+			exited := observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+			assertPaneRecord(t, exited.Confirmations.DisplayedState, e.now, e.now, "")
 			for _, ev := range readAPITrailLines(t)[mark:] {
 				if ev["instance_id"] == e.id && ev["event"] == "ad.spawn.state_transition" {
 					t.Errorf("the report impersonated a raw transition: %v", ev)
@@ -105,6 +288,7 @@ func TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 	c := e.client(t, apitest.ConfigKeys{StateSettleMs: settle.Milliseconds(), IdleScreenTimeoutSeconds: 1})
 	old := enterIdleScreen(t, e, c, settle)
 	before := e.row(t)
+	oldAt := e.now
 	for _, state := range []string{store.StateWaiting, store.StateWorking} {
 		if err := seedAgentState(e.s, e.dbPath, e.id, state); err != nil {
 			t.Fatal(err)
@@ -122,7 +306,7 @@ func TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 	// qualify and the old episode starts settling out, still displayed.
 	start := time.UnixMilli(stamp).Add(time.Hour).UTC()
 	e.now = start
-	if got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced); got.Since != old.Since {
+	if got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced); got.Since != old.Since || conf(got.Confirmations.DisplayedState) != conf(old.Confirmations.DisplayedState) {
 		t.Fatalf("settling-out read=%+v; want the old episode %+v", got, old)
 	}
 	// The first qualifying read ends the old episode at once.
@@ -134,10 +318,17 @@ func TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 	}
 	assertDisplayEvent(t, events[0], api.StateIdleScreen, store.StateWorking, e.now)
 	candidate := e.now
+	if row := e.row(t); row.DisplayEvidence != "" {
+		t.Fatal("new candidate inherited old episode evidence")
+	}
 	e.now = candidate.Add(settle - time.Millisecond)
 	observeStatus(t, c, e.id, store.StateWorking, nil)
 	e.now = candidate.Add(settle)
 	got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced)
+	assertPaneRecord(t, got.Confirmations.DisplayedState, e.now, e.now, "")
+	if e.now.Equal(oldAt) {
+		t.Fatal("new episode clock did not move")
+	}
 	if got.Since != e.now.Format(displayTS) || minutes(t, got) != int64(e.now.Sub(start)/time.Minute) {
 		t.Fatalf("new episode inherited the old one: old=%+v new=%+v", old, got)
 	}
@@ -176,10 +367,11 @@ func TestIdleScreenTerminalExitIsImmediate(t *testing.T) {
 			before := e.row(t)
 			mark := trailMark(t)
 			tc.write(t, e)
-			if after := e.row(t); after.DisplayObservation != "" || after.ObservationVersion <= before.ObservationVersion || after.PermissionEpoch != before.PermissionEpoch+1 {
+			if after := e.row(t); after.DisplayObservation != "" || after.DisplayEvidence != "" || after.ObservationVersion <= before.ObservationVersion || after.PermissionEpoch != before.PermissionEpoch+1 {
 				t.Fatalf("the write left the episode: before=%+v after=%+v", before, after)
 			}
-			assertDisplayState(t, c, e.id, tc.state)
+			got := assertDisplayState(t, c, e.id, tc.state)
+			assertPaneRecord(t, got.Confirmations.DisplayedState, time.Time{}, time.Time{}, "")
 			assertDisplayState(t, c, e.id, tc.state)
 			_, stamp, err := apitest.ReadSettle(e.dbPath, e.id)
 			if err != nil {
@@ -201,6 +393,15 @@ func TestIdleScreenTerminalExitIsImmediate(t *testing.T) {
 func TestIdleScreenLeavesCommandGuards(t *testing.T) {
 	t.Parallel()
 	e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
+	// b.j4p: finish identity adoption before the episode starts. This test
+	// checks command guards without an ownership change during send-keys.
+	row := e.row(t)
+	identity, server := row.Identity, e.rec.Servers()[0]
+	identity.ServerPID, identity.ServerStart, identity.ServerStarttime = server.PID, server.Start, server.ProcStart
+	identity.PaneStarttime = apitest.LinuxProcStarttime
+	if cr, err := e.s.AdoptIdentityIfUnchanged(e.id, row.Snapshot, identity); err != nil || cr != store.CondApplied {
+		t.Fatalf("complete launch identity: %v %v", cr, err)
+	}
 	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
 	entered := enterIdleScreen(t, e, c, 0)
 	for _, call := range e.rec.SocketCalls() {
@@ -218,11 +419,14 @@ func TestIdleScreenLeavesCommandGuards(t *testing.T) {
 		t.Errorf("after the refusal: %+v, raw %s; want the same episode on a raw working row", got, e.row(t).State)
 	}
 	e.rec.Reset()
+	beforeSend := e.row(t)
 	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: e.id, Text: "go on"}); err != nil {
 		t.Fatalf("send-keys on a row displayed idle_screen: %v; want delivered", err)
 	}
-	assertTextSent(t, e.rec, apitest.TestSocket, apitest.TestPaneID, "go on")
-	assertEnterSent(t, e.rec, apitest.TestSocket, apitest.TestPaneID)
+	if after := e.row(t); after.RowVersion != beforeSend.RowVersion || after.Identity != beforeSend.Identity {
+		t.Fatalf("send-keys adopted identity: before=%+v after=%+v", beforeSend, after)
+	}
+	assertFallbackPaste(t, e.rec.SocketCalls(), apitest.TestSocket, apitest.TestPaneID, "go on")
 	if got := observeStatus(t, c, e.id, api.StateIdleScreen, nil); got.Since != entered.Since || minutes(t, got) != minutes(t, entered) || e.row(t).State != store.StateWorking {
 		t.Errorf("after send-keys: %+v, raw %s; want the episode %+v on a raw working row", got, e.row(t).State, entered)
 	}
@@ -234,7 +438,7 @@ func TestIdleScreenLeavesCommandGuards(t *testing.T) {
 func TestIdleScreenFamilyIsBinaryAndDetailChildLocal(t *testing.T) {
 	t.Parallel()
 	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
-	parent, err := apitest.SeedSpawn(e.dbPath, "", store.StateWaiting, "", "off", "", false)
+	parent, err := apitest.SeedSpawn(e.dbPath, "", store.StateWaiting, "", "off", "", false, apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +464,12 @@ func TestIdleScreenRawMoveSettlesOut(t *testing.T) {
 			t.Parallel()
 			e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
 			c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
-			enterIdleScreen(t, e, c, 0)
+			entered := enterIdleScreen(t, e, c, 0)
+			first := e.now
+			e.now = e.now.Add(time.Second)
+			entered = observeStatus(t, c, e.id, api.StateIdleScreen, func(a, b store.Spawn) bool { return a.DisplayEvidence != b.DisplayEvidence })
+			assertPaneRecord(t, entered.Confirmations.DisplayedState, first, e.now, "")
+			prior := e.row(t)
 			mark := trailMark(t)
 			if err := seedAgentState(e.s, e.dbPath, e.id, raw); err != nil {
 				t.Fatal(err)
@@ -271,11 +480,79 @@ func TestIdleScreenRawMoveSettlesOut(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if row := e.row(t); row.CommittedDisplay().State != api.StateIdleScreen {
-				t.Fatalf("the hook cleared the episode before any read: %+v", row)
+			retained := e.row(t)
+			if retained.CommittedDisplay().State != api.StateIdleScreen || retained.DisplayEvidence != prior.DisplayEvidence {
+				t.Fatalf("the hook cleared the episode before any read: %+v", retained)
 			}
 			e.now = e.now.Add(time.Second)
-			observeStatus(t, c, e.id, raw, apitest.VersionAdvanced)
+			if entered.Confirmations.DisplayedState.Status != "confirmed" {
+				t.Fatal("hook fixture has no confirmed display")
+			}
+			// fq code-review R1: these exported reads cannot sample a pane.
+			// A refused settle-out must keep the returned episode's record,
+			// as well as its durable bytes. Count the attempted transaction
+			// so skipping settlement entirely cannot make this case pass.
+			var attempts atomic.Int64
+			var refuseCommits atomic.Bool
+			var refusedCommits atomic.Int64
+			stop, err := store.ObserveSQLiteForTest(e.s, func(d driver.Driver) driver.Driver {
+				return sqliteobserve.Wrap(d, sqliteobserve.Hooks{Before: func(_ context.Context, q string) error {
+					if strings.HasPrefix(q, "BEGIN IMMEDIATE") {
+						attempts.Add(1)
+					}
+					if q == "COMMIT" && refuseCommits.Load() {
+						refusedCommits.Add(1)
+						return errors.New("injected settle-out commit failure")
+					}
+					return nil
+				}})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := stop(context.Background()); err != nil {
+					t.Error(err)
+				}
+			}()
+
+			assertRetained := func() {
+				for _, read := range readMain(t, e.s, api.RelayView{Now: func() time.Time { return e.now }}, e.id) {
+					if read.display != api.StateIdleScreen || conf(read.records.DisplayedState) != conf(entered.Confirmations.DisplayedState) {
+						t.Errorf("non-sampling %s changed retained display: %s %s; want %s %s", read.verb, read.display, conf(read.records.DisplayedState), api.StateIdleScreen, conf(entered.Confirmations.DisplayedState))
+					}
+				}
+			}
+			func() {
+				release := apitest.HoldWriteLock(t, e.dbPath, time.Minute)
+				defer release()
+				assertRetained()
+			}()
+			if attempts.Load() < 3 || e.row(t).DisplayEvidence != prior.DisplayEvidence {
+				t.Fatalf("blocked settlement was not exercised without changing evidence: attempts %d", attempts.Load())
+			}
+			refuseCommits.Store(true)
+			assertRetained()
+			refuseCommits.Store(false)
+			if refusedCommits.Load() < 3 || e.row(t).DisplayEvidence != retained.DisplayEvidence || e.row(t).DisplayObservation != retained.DisplayObservation {
+				t.Fatalf("unconfirmed settlement changed the record or missed the cut: refused commits %d", refusedCommits.Load())
+			}
+			var cleared api.StatusResult
+			observeDisplay(t, e.s, e.id, raw, apitest.VersionAdvanced, func() (string, api.StateDetail, error) {
+				var err error
+				cleared, err = api.Status(e.s, api.RelayView{Now: func() time.Time { return e.now }}, e.id)
+				return cleared.State, cleared.StateDetail, err
+			})
+			assertPaneRecord(t, cleared.Confirmations.DisplayedState, time.Time{}, time.Time{}, "")
+			if e.row(t).DisplayEvidence != "" {
+				t.Fatal("settle-out kept old evidence")
+			}
+			for _, read := range readMain(t, e.s, api.RelayView{Now: func() time.Time { return e.now }}, e.id) {
+				if read.display != "" {
+					t.Errorf("settled %s still displays %s", read.verb, read.display)
+				}
+				assertPaneRecord(t, read.records.DisplayedState, time.Time{}, time.Time{}, "")
+			}
 			exitAt := e.now
 			// A day later the row still reads its raw state, displaying nothing.
 			e.now = e.now.Add(24 * time.Hour)

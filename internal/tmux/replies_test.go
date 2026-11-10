@@ -133,6 +133,38 @@ func TestPasteKeysPaneOrderingAndFailures(t *testing.T) {
 	}
 }
 
+// Journal admission is rechecked after buffer preparation and before Enter.
+func TestPasteKeysPaneGuardedStopsBeforeDispatch(t *testing.T) {
+	t.Parallel()
+	for _, stopEnter := range []bool{false, true} {
+		t.Run(map[bool]string{false: "paste", true: "Enter"}[stopEnter], func(t *testing.T) {
+			ok := exitZero("")
+			c, runner := newScripted(t, exitZero("0\t0\n"), ok, ok)
+			refused := errors.New("captured journal admission changed")
+			var gates []bool
+			err := c.PasteKeysPaneGuarded(testSocket, "%3", "literal\ttext", func(enter bool) error {
+				gates = append(gates, enter)
+				if enter == stopEnter {
+					return refused
+				}
+				return nil
+			})
+			if !errors.Is(err, refused) {
+				t.Fatalf("lost admission error: %v", err)
+			}
+			wantGates := []bool{false}
+			last := "delete-buffer"
+			if stopEnter {
+				wantGates, last = []bool{false, true}, "paste-buffer"
+			}
+			calls := runner.Calls()
+			if !slices.Equal(gates, wantGates) || len(calls) != 3 || argvCommand(t, calls[2])[0] != last {
+				t.Fatalf("gates=%v calls=%v; want %v and final %s", gates, calls, wantGates, last)
+			}
+		})
+	}
+}
+
 // replyCase names a subtest after the entry, the call kind and the create name.
 func replyCase(entry string, k tmux.Call, name string) string {
 	if name == "" {

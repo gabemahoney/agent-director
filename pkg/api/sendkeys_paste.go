@@ -6,7 +6,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
@@ -19,6 +18,15 @@ type PasteKeysTmux interface {
 	// exactly one Enter only after the paste succeeds. It never retries text
 	// or Enter, and reports errors as *TmuxCallError (text or Enter send).
 	PasteKeysPane(socket, paneID, text string) error
+}
+
+// GuardedPasteKeysTmux retains SQLite input admission across buffer preparation,
+// paste and Enter. Adapters used with an input journal must provide this method.
+type GuardedPasteKeysTmux interface {
+	PasteKeysTmux
+	// Before each irreversible dispatch, call beforeWrite with false for paste
+	// or true for Enter. Stop on its error; never retry either dispatch.
+	PasteKeysPaneGuarded(socket, paneID, text string, beforeWrite func(enter bool) error) error
 }
 
 // codexPasteRefusal deliberately does not reproduce the composer's parser.
@@ -55,18 +63,58 @@ func codexPasteRefusal(text string) string {
 }
 
 func (r *sendKeysRun) pasteText(paneID, text string) error {
-	r.found.Sent = true
-	if err := r.paste.PasteKeysPane(r.socket, paneID, text); err != nil {
+	var err error
+	refused := false
+	if guarded, ok := r.paste.(GuardedPasteKeysTmux); ok {
+		err = guarded.PasteKeysPaneGuarded(r.socket, paneID, text, func(enter bool) error {
+			if enter {
+				r.found.TextSent = true
+			}
+			if r.beforeWrite != nil {
+				if err := r.beforeWrite(); err != nil {
+					refused = true
+					return err
+				}
+			}
+			if r.env.Context != nil && r.env.Context.Err() != nil {
+				refused = true
+				return r.env.Context.Err()
+			}
+			r.found.Sent, r.found.BytesAttempted = true, len(text)
+			r.found.EnterAttempted = enter
+			return nil
+		})
+	} else {
+		// Journal-backed calls are refused before reaching this compatibility
+		// branch; an older adapter cannot bypass an installed admission guard.
+		r.found.Sent, r.found.BytesAttempted = true, len(text)
+		err = r.paste.PasteKeysPane(r.socket, paneID, text)
+		var call *tmux.CallError
+		r.found.EnterAttempted = err == nil || !errors.As(err, &call) || call.Call != tmux.CallSendText
+	}
+	if err != nil {
+		if !refused && !r.found.Sent {
+			// Preserve fallback's conservative transport-failure contract even
+			// when preparation failed before its first dispatch callback.
+			r.found.Sent, r.found.BytesAttempted = true, len(text)
+		}
 		// A fallback transport error cannot prove what the composer received.
 		// In particular, the legacy manual-path advice to send another Enter
 		// is unsafe here. Keep the existing structured uncertainty contract.
-		a := &inputdelivery.Attempt{Phase: "text_attempted", BytesAttempted: len(text)}
-		var call *tmux.CallError
-		if !errors.As(err, &call) || call.Call != tmux.CallSendText {
-			a.Phase, a.EnterAttempted = "enter_attempted", true
+		a := r.found.deliveryAttempt()
+		reason := "Codex fallback paste transport failed: " + err.Error()
+		if refused {
+			// Before paste, any buffer-cleanup error joined by the transport
+			// must remain visible. After paste, its buffer is already deleted;
+			// omit the guard's pre-input wording because text was dispatched.
+			reason = "input admission changed before paste: " + err.Error()
+			if r.found.TextSent {
+				reason = "input admission changed after paste; Enter was not sent"
+			}
 		}
-		r.found.SendErr = deliveryError(r.row, a, unresolvedOutcome(a), "Codex fallback paste transport failed; inspect get or status and escalate if submission remains unknown: "+err.Error())
+		r.found.SendErr = deliveryError(r.row, a, unresolvedOutcome(a), reason+"; inspect get or status and escalate if submission remains unknown")
 		return r.found.SendErr
 	}
+	r.found.TextSent, r.found.EnterAttempted = true, true
 	return nil
 }

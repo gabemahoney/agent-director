@@ -75,7 +75,7 @@ test("send-keys: error — a request not proven gone → ErrDialogMaybeOpen with
     const store = homeStore(homeDir);
     const id = "smoke-send-keys-hold-id";
     const logPath = path.join(homeDir, "fake-tmux.log");
-    const { token, paneId } = seedFallenBackRelayRow(homeDir, id, "check_permission");
+    const { token, paneId } = seedFallenBackRelayRow(homeDir, id, "check_permission", process.pid);
 
     const got = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
@@ -116,7 +116,8 @@ test("send-keys: negative n_lines rejects before reading or sending, leaving the
     const store = homeStore(homeDir);
     const id = "smoke-send-negative-lines";
     const logPath = path.join(homeDir, "fake-tmux.log");
-    runHelper("seed-spawn", { store, state: "waiting", id, "create-store": true, socket: privateTmuxSocket(homeDir) });
+    runHelper("seed-spawn", { store, state: "waiting", id, "create-store": true, socket: privateTmuxSocket(homeDir),
+      "writer-pid": String(process.pid), "writer-keep-pane": true });
     runHelper("seed-row-session", { store, id });
     using client = await openClient(store);
     const before = await client.get({ instance_id: id });
@@ -126,6 +127,13 @@ test("send-keys: negative n_lines rejects before reading or sending, leaving the
     });
 
     expect(fakeTmuxCalls(logPath)).toEqual([]);
-    expect(await client.get({ instance_id: id })).toEqual(before);
+    // Each get's own probe of the live writer confirms its process record at
+    // that read's clock (b.x9o); every other field is unchanged.
+    const after = await client.get({ instance_id: id });
+    const probed = (r: typeof before) => r.confirmations.process_liveness;
+    expect(probed(after)).toMatchObject({ status: "confirmed", source: "process", reason: null });
+    expect(Date.parse(probed(after).checked_at!)).toBeGreaterThanOrEqual(Date.parse(probed(before).checked_at!));
+    const withoutProbe = (r: typeof before) => ({ ...r, confirmations: { ...r.confirmations, process_liveness: { ...probed(r), confirmed_at: null, checked_at: null } } });
+    expect(withoutProbe(after)).toEqual(withoutProbe(before));
   });
 }, 10_000);

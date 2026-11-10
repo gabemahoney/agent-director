@@ -39,7 +39,7 @@ const (
 func advResumeNoSessionAdvice(agent string) string {
 	return "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing " +
 		"once the pending grace period has passed since its launch start; the row has no session id, so there is no conversation to resume: " +
-		"once find-missing marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished " +
+		"once a shared check marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished " +
 		"(--reuse-finished on the CLI) and agent " + agent + " (--agent " + agent + " on the CLI); nothing was written"
 }
 
@@ -161,7 +161,7 @@ func advResumePendings() []advResumePending {
 
 // TestAdviceFollow_B1_LaunchInProgressFindMissing: refused alike inside the grace period; then find-missing, get,
 // and resume a row with a session id, or (none, b.uey) spawn the id with the reuse opt-in.
-// B1: "... since its launch start; nothing was written" / "... since its launch start; the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI); nothing was written"
+// B1: "... since its launch start; nothing was written" / "... since its launch start; the row has no session id, so there is no conversation to resume: once a shared check marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI); nothing was written"
 func TestAdviceFollow_B1_LaunchInProgressFindMissing(t *testing.T) {
 	t.Parallel()
 	adviceAssertGoDoc(t, "resume.go", "Resume", advResumeLaunchInProgressDoc)
@@ -236,7 +236,7 @@ func TestAdviceFollow_B2_KillOrPauseThenResume(t *testing.T) {
 			fastPausePolls(t)
 			e.endAfterEnter(t, r.killRow)
 			exited := false
-			e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) {
+			e.rec.AfterCall(callEnterKey, func(tmuxfix.SocketCall, error) {
 				if !exited {
 					exited = true
 					advResumeConditionEnds(t, e, r)

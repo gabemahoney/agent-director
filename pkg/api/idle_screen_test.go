@@ -7,15 +7,23 @@ package api_test
 // tests are needs_intelligence_test.go's.
 
 import (
+	"context"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -50,7 +58,7 @@ func newPaneEnv(t *testing.T, spec paneSpec) *paneEnv {
 		spec.state = store.StateWorking
 	}
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	id, err := apitest.SeedSpawn(dbPath, "", spec.state, "", "off", "", true, append([]apitest.SpawnOption{apitest.WithAgent(spec.agent)}, spec.opts...)...)
+	id, err := apitest.SeedSpawn(dbPath, "", spec.state, "", "off", "", true, append([]apitest.SpawnOption{apitest.WithAgent(spec.agent), apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime)}, spec.opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +94,7 @@ func (e *paneEnv) client(t *testing.T, keys apitest.ConfigKeys) *api.Client {
 // "pane 1" and its processes alive; it returns the row's id.
 func (e *paneEnv) addRow(t *testing.T, agent, socket, paneID string, panePID int) string {
 	t.Helper()
-	id, err := apitest.SeedSpawn(e.dbPath, "", store.StateWorking, "", "off", "", false, apitest.WithAgent(agent),
+	id, err := apitest.SeedSpawn(e.dbPath, "", store.StateWorking, "", "off", "", false, apitest.WithAgent(agent), apitest.WithPID(panePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime),
 		apitest.WithLaunchIdentity(store.LaunchIdentity{Token: fmt.Sprintf("%016x", panePID), Socket: socket, PaneID: paneID, PanePID: panePID}))
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +141,67 @@ var paneReaders = []struct {
 	{"list", func(c *api.Client, _ string) error { _, err := c.List(api.ListParams{}); return err }},
 }
 
+// b.x9o: Sweep must own both pane samples, without a public read
+// establishing the baseline or committing the threshold on its behalf.
+func TestIdleScreenSweepOnlyBaselineAndThreshold(t *testing.T) {
+	t.Parallel()
+	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+	before := e.row(t)
+	start := e.now
+	for i := 0; i < 2; i++ {
+		e.now = start.Add(time.Duration(i) * time.Minute)
+		got, err := c.Sweep(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertLists(t, got, nil, nil)
+		apitest.AssertConfirmationsShape(t, jsonOf(t, got))
+		if len(got.Checks) != 1 {
+			t.Fatalf("checks=%+v; want the sampled row", got.Checks)
+		}
+		check := got.Checks[0]
+		wantDisplay := ""
+		if i == 1 {
+			wantDisplay = store.StateIdleScreen
+		}
+		if check.InstanceID != e.id || check.State != store.StateWorking || check.DisplayedState != wantDisplay || check.Completion != "complete" || check.Reason != nil {
+			t.Errorf("sweep %d check=%+v", i, check)
+		}
+		assertPaneRecord(t, check.Confirmations.DisplayedState, e.now, e.now, "")
+		// Store.GetSpawn is a SQLite read only; no Client read has run.
+		row := e.row(t)
+		if row.State != store.StateWorking || row.PaneSHA256 == "" || row.PaneSinceMillis != start.UnixMilli() || row.PaneEpoch != row.PermissionEpoch ||
+			row.ObservationVersion != before.ObservationVersion+int64(i)+1 || row.RowVersion != before.RowVersion || !row.LastSeenAt.Equal(before.LastSeenAt) {
+			t.Fatalf("sweep %d stored observation: before=%+v after=%+v", i, before, row)
+		}
+		display := row.CommittedDisplay()
+		wantRecord := store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: e.now.UnixMilli(), Source: store.EvidencePane, CheckedAtMillis: e.now.UnixMilli()}
+		if rec := row.DisplayConfirmation(display, row.DisplayEvidence); rec != wantRecord {
+			t.Fatalf("sweep record %+v; want %+v", rec, wantRecord)
+		}
+		if i == 0 && display.State != store.StateWorking {
+			t.Fatalf("baseline already displayed idle: %+v", display)
+		}
+		if i == 1 && (display.State != store.StateIdleScreen || display.UnchangedMinutes != 1 || display.SinceMillis != e.now.UnixMilli()) {
+			t.Fatalf("second sweep did not commit threshold: %+v", display)
+		}
+	}
+	captures := 0
+	for _, call := range e.rec.SocketCalls() {
+		switch call.Call {
+		case tmux.CallCapture:
+			captures++
+		case tmux.CallLookup, tmux.CallListPanes:
+		default:
+			t.Errorf("sweep dispatched %+v", call)
+		}
+	}
+	if captures != 2 {
+		t.Fatalf("sweeps captured %d panes, want exactly two", captures)
+	}
+}
+
 // TestIdleScreenObservationBoundaries: whichever surface reads first commits
 // the baseline; identical samples keep its start, a read exactly at the
 // timeout qualifies (since that read, completed minutes floored), a displayed
@@ -151,6 +220,10 @@ func TestIdleScreenObservationBoundaries(t *testing.T) {
 					t.Fatal(err)
 				}
 				start := e.now
+				stored := e.row(t)
+				if rec := stored.DisplayConfirmation(stored.CommittedDisplay(), stored.DisplayEvidence); rec != (store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: start.UnixMilli(), Source: store.EvidencePane, CheckedAtMillis: start.UnixMilli()}) {
+					t.Fatalf("first sample record %+v", rec)
+				}
 				if after := e.row(t); after.ObservationVersion != before.ObservationVersion+1 || after.RowVersion != before.RowVersion ||
 					after.PaneSinceMillis != start.UnixMilli() || after.PaneEpoch != after.PermissionEpoch {
 					t.Fatalf("first read committed no baseline: before=%+v after=%+v", before, after)
@@ -163,6 +236,8 @@ func TestIdleScreenObservationBoundaries(t *testing.T) {
 				assertDisplayState(t, c, e.id, store.StateWorking)
 				e.now = start.Add(timeout)
 				got := assertDisplayState(t, c, e.id, api.StateIdleScreen)
+				entryTime := e.now
+				assertPaneRecord(t, got.Confirmations.DisplayedState, entryTime, entryTime, "")
 				if got.Since != e.now.Format(displayTS) || minutes(t, got) != 20 {
 					t.Fatalf("entry=%+v; want since this read and 20 minutes", got)
 				}
@@ -172,7 +247,9 @@ func TestIdleScreenObservationBoundaries(t *testing.T) {
 					t.Fatalf("minutes=%+v; want 20", got)
 				}
 				e.now = start.Add(timeout + time.Minute)
-				if got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced); minutes(t, got) != 21 || got.Since != start.Add(timeout).Format(displayTS) {
+				continued := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced)
+				assertPaneRecord(t, continued.Confirmations.DisplayedState, entryTime, e.now, "")
+				if got := continued; minutes(t, got) != 21 || got.Since != start.Add(timeout).Format(displayTS) {
 					t.Fatalf("continued=%+v; want 21 minutes since the entry", got)
 				}
 				// A changed fingerprint clears at once (no settle) and restarts the period.
@@ -360,18 +437,35 @@ func TestIdleScreenFailedCaptureResets(t *testing.T) {
 				}
 				exiting := tc.phase == "after" && tc.settle > 0
 				// read is a committing read: working, or the shown detail while the exit settles.
-				read := func(commit apitest.CommitCheck) {
+				read := func(commit apitest.CommitCheck) api.StatusResult {
 					t.Helper()
 					if !exiting {
-						observeStatus(t, c, e.id, store.StateWorking, commit)
-					} else if got := observeStatus(t, c, e.id, api.StateIdleScreen, commit); got.Since != shown.Since || minutes(t, got) != minutes(t, shown) {
+						return observeStatus(t, c, e.id, store.StateWorking, commit)
+					}
+					got := observeStatus(t, c, e.id, api.StateIdleScreen, commit)
+					if got.Since != shown.Since || minutes(t, got) != minutes(t, shown) {
 						t.Fatalf("the detail changed before the exit's deadline: %+v; want %+v", got, shown)
 					}
+					return got
 				}
 				e.now = e.now.Add(time.Second)
 				failed := e.now
 				mark := trailMark(t)
 				read(failedCommit)
+				failedRow := e.row(t)
+				wantRec := store.Confirmation{Status: store.ConfirmationNotConfirmed, CheckedAtMillis: failed.UnixMilli(), Reason: store.ReasonUnreadable}
+				if exiting {
+					at, err := time.Parse(displayTS, shown.Since)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantRec.ConfirmedAtMillis, wantRec.Source = at.UnixMilli(), store.EvidencePane
+				} else if tc.phase != "after" {
+					wantRec.ConfirmedAtMillis, wantRec.Source = displayAt.UnixMilli(), store.EvidencePane
+				}
+				if rec := failedRow.DisplayConfirmation(failedRow.CommittedDisplay(), failedRow.DisplayEvidence); rec != wantRec {
+					t.Fatalf("failed sample record %+v; want %+v", rec, wantRec)
+				}
 				if row := e.row(t); row.PaneSHA256 != "" || row.PaneSinceMillis != 0 || (row.DisplayObservation != "") != exiting {
 					t.Fatalf("a failed sample left the baseline or eligibility: %+v", row)
 				}
@@ -383,7 +477,22 @@ func TestIdleScreenFailedCaptureResets(t *testing.T) {
 					e.now = failed.Add(tc.settle - time.Millisecond)
 				}
 				fresh := e.now
-				read(apitest.VersionAdvanced)
+				got := read(apitest.VersionAdvanced)
+				recovered := wantRec
+				if !exiting {
+					recovered.Status, recovered.Source, recovered.Reason = store.ConfirmationConfirmed, store.EvidencePane, ""
+					recovered.CheckedAtMillis = fresh.UnixMilli()
+					if recovered.ConfirmedAtMillis == 0 {
+						// Settle-zero ended the idle episode; none has no earlier confirmation.
+						recovered.ConfirmedAtMillis = fresh.UnixMilli()
+					}
+				}
+				// While idle still settles out, the successful none candidate cannot confirm it.
+				assertPaneRecord(t, got.Confirmations.DisplayedState, time.UnixMilli(recovered.ConfirmedAtMillis), time.UnixMilli(recovered.CheckedAtMillis), recovered.Reason)
+				row := e.row(t)
+				if rec := row.DisplayConfirmation(row.CommittedDisplay(), row.DisplayEvidence); rec != recovered {
+					t.Errorf("recovered sample record %+v; want %+v", rec, recovered)
+				}
 				if row := e.row(t); row.PaneSinceMillis != fresh.UnixMilli() {
 					t.Fatalf("the next success did not start fresh: %+v", row)
 				}
@@ -438,8 +547,17 @@ func TestIdleScreenSkippedWriteKeepsBaseline(t *testing.T) {
 				e.now = e.now.Add(30 * time.Second)
 				got := observeStatus(t, c, e.id, want, nil)
 				release()
+				reason := store.ReasonUnreadable
+				if failure == "held lock" {
+					reason = store.ReasonBusy
+				}
+				first := start
+				if displayed {
+					first = start.Add(time.Minute)
+				}
+				assertPaneRecord(t, got.Confirmations.DisplayedState, first, e.now, reason)
 				if row := e.row(t); row.ObservationVersion != committed.ObservationVersion || row.DisplayObservation != committed.DisplayObservation ||
-					row.PaneSHA256 != committed.PaneSHA256 || row.PaneSinceMillis != committed.PaneSinceMillis {
+					row.PaneSHA256 != committed.PaneSHA256 || row.PaneSinceMillis != committed.PaneSinceMillis || row.DisplayEvidence != committed.DisplayEvidence {
 					t.Fatalf("a skipped sample changed the row: before=%+v after=%+v", committed, row)
 				}
 				if displayed && (got.Since != shown.Since || minutes(t, got) != minutes(t, shown)) {
@@ -462,8 +580,8 @@ func TestIdleScreenSkippedWriteKeepsBaseline(t *testing.T) {
 
 // TestIdleScreenOlderSampleNeverOverwrites: a write landing between a read's
 // capture and its commit (another reader's newer baseline or reset, a turn, a
-// new launch) refuses the older sample: the read answers its own committed
-// view, the newer write stands and no transition is emitted.
+// new launch) refuses the older sample: the newer write stands, the final
+// stored refresh can report a new launch, and no display transition is emitted.
 func TestIdleScreenOlderSampleNeverOverwrites(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -511,8 +629,12 @@ func TestIdleScreenOlderSampleNeverOverwrites(t *testing.T) {
 			})
 			mark := trailMark(t)
 			got, err := c.Status(e.id)
-			if err != nil || got.State != store.StateWorking || got.StateDetail != (api.StateDetail{}) {
-				t.Fatalf("interrupted read = %+v, %v; want its committed working view", got, err)
+			wantState := store.StateWorking
+			if tc.name == "new launch" {
+				wantState = store.StatePending
+			}
+			if err != nil || got.State != wantState || got.StateDetail != (api.StateDetail{}) {
+				t.Fatalf("interrupted read = %+v, %v; want committed %s without display detail", got, err, wantState)
 			}
 			if !fired.Load() {
 				t.Fatal("the interrupted read made no capture")
@@ -537,7 +659,7 @@ func TestIdleScreenWriteFailureIsLocalToListRow(t *testing.T) {
 	e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
 	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
 	observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
-	other, err := apitest.SeedSpawn(e.dbPath, "", store.StateCheckPermission, "", "on", "", false)
+	other, err := apitest.SeedSpawn(e.dbPath, "", store.StateCheckPermission, "", "on", "", false, apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,8 +688,8 @@ func TestIdleScreenListStopsAnUnansweringSocket(t *testing.T) {
 		{"lookup timeout", tmux.CallLookup, tmux.FailTimeout, 1},
 		{"tmux unavailable", tmux.CallLookup, tmux.FailUnavailable, 1},
 		{"unreadable pane listing", tmux.CallListPanes, tmux.FailUnrecognized, 2},
-		{"no server", tmux.CallLookup, tmux.FailNoServer, 3},
-		{"capture timeout", tmux.CallCapture, tmux.FailTimeout, 9},
+		{"no server", tmux.CallLookup, tmux.FailNoServer, 1},
+		{"capture timeout", tmux.CallCapture, tmux.FailTimeout, 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -695,5 +817,386 @@ func TestIdleScreenUnsampledReadKeepsOnlyCurrentFinding(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Selection limits every adapter, including a child's ended rollout and
+// another row's permission request, before process or pane observation.
+func TestIdleScreenFilteredReadNeverProbesExcludedRows(t *testing.T) {
+	t.Parallel()
+	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+	excluded := []string{e.addRow(t, store.AgentCursor, apitest.TestSocket, "%70", 7070), e.addRow(t, store.AgentClaude, apitest.TestSocket, "%71", 7171)}
+	child := e.id + "-child"
+	path := codexfix.TempRolloutPath(t, codexfix.ErroredTurn.SessionID, true, codexfix.ErroredTurn.Ended())
+	seedCodexTurn(t, e.s, e.dbPath, child, path, e.id, apitest.WithLaunchIdentity(store.LaunchIdentity{Token: "1234567890abcdef", Socket: apitest.TestSocket, PaneID: "%72", PanePID: 7272, PaneStarttime: apitest.LinuxProcStarttime}))
+	excluded = append(excluded, child)
+	req, err := apitest.SeedPermissionRequest(e.dbPath, excluded[1], "Bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]store.Spawn{}
+	for _, id := range excluded {
+		row, err := e.s.GetSpawn(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[id] = row
+	}
+	requestBefore, err := e.s.GetPermissionRequest(excluded[1], req.RequestToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := e.row(t)
+	c := e.client(t, apitest.ConfigKeys{})
+	callsBefore := len(e.pc.StartTimeCalls())
+	got, err := c.List(api.ListParams{TmuxSessionName: row.TmuxSessionName, Limit: 1})
+	if err != nil || len(got.Spawns) != 1 || got.Spawns[0].InstanceID != e.id || got.Spawns[0].FamilyState != store.StateWorking {
+		t.Fatalf("selected list=%+v err=%v", got, err)
+	}
+	for _, id := range excluded {
+		after, err := e.s.GetSpawn(id)
+		if err != nil || !reflect.DeepEqual(after, before[id]) {
+			t.Errorf("excluded %s changed: before=%+v after=%+v err=%v", id, before[id], after, err)
+		}
+	}
+	requestAfter, err := e.s.GetPermissionRequest(excluded[1], req.RequestToken)
+	if err != nil || !reflect.DeepEqual(requestBefore, requestAfter) {
+		t.Fatal("excluded request changed")
+	}
+	for _, pid := range []int{7070, 7171, 7272} {
+		if slices.Contains(e.pc.StartTimeCalls()[callsBefore:], pid) {
+			t.Errorf("excluded process %d was probed", pid)
+		}
+	}
+	for _, call := range e.rec.SocketCalls() {
+		if call.Call == tmux.CallCapture && call.Target != row.Identity.PaneID {
+			t.Errorf("excluded pane captured: %+v", call)
+		}
+	}
+}
+
+// assertPaneRecord checks all five fields, including D2's first confirmation
+// and the independent latest attempt. Zero times mean no evidence/attempt.
+func assertPaneRecord(t *testing.T, got api.Confirmation, first, checked time.Time, reason string) {
+	t.Helper()
+	want := unknownRecord(store.ReasonNoEvidence)
+	if !checked.IsZero() {
+		status, at, source, why := "confirmed", confAt(first), "pane", "-"
+		if first.IsZero() {
+			at, source = "-", "-"
+		}
+		if reason != "" {
+			status, why = "not_confirmed", reason
+		}
+		want = status + "|" + at + "|" + source + "|" + confAt(checked) + "|" + why
+	}
+	if actual := conf(got); actual != want {
+		t.Errorf("display record %s; want %s", actual, want)
+	}
+}
+
+// b.x9o: same-value samples commit only their latest check. Reopened and
+// non-sampling public reads retain the exact record; process/state/family
+// stay independent, and a record-only write emits no transition.
+func TestIdleScreenRecordOnlyAndStoredReads(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		t.Run(agent, func(t *testing.T) {
+			t.Parallel()
+			e := newPaneEnv(t, paneSpec{agent: agent})
+			c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+			first := e.now
+			got := observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+			assertPaneRecord(t, got.Confirmations.DisplayedState, first, first, "")
+			before, mark := e.row(t), trailMark(t)
+			var refreshes atomic.Int64
+			stop, err := api.ObserveClientSQLiteForTest(c, func(d driver.Driver) driver.Driver {
+				return sqliteobserve.Wrap(d, sqliteobserve.Hooks{Before: func(_ context.Context, q string) error {
+					if strings.HasPrefix(q, "WITH RECURSIVE working(id)") {
+						refreshes.Add(1)
+					}
+					return nil
+				}})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := stop(context.Background()); err != nil {
+					t.Error(err)
+				}
+			}()
+			e.now = first.Add(time.Second)
+			got = observeStatus(t, c, e.id, store.StateWorking, func(a, b store.Spawn) bool { return a.DisplayEvidence != b.DisplayEvidence })
+			assertPaneRecord(t, got.Confirmations.DisplayedState, first, e.now, "")
+			after := e.row(t)
+			if refreshes.Load() != 0 {
+				t.Fatal("record-only sample refreshed families")
+			}
+			if before.DisplayEvidence == after.DisplayEvidence || before.ObservationVersion != after.ObservationVersion || before.DisplayObservation != after.DisplayObservation || before.PaneSinceMillis != after.PaneSinceMillis || before.StateEvidence != after.StateEvidence || before.FamilyState != after.FamilyState || before.RowVersion != after.RowVersion {
+				t.Fatal("record-only sample changed the display, baseline, state, family or version")
+			}
+			if events := displayEvents(t, mark, e.id); len(events) != 0 {
+				t.Fatalf("record-only sample emitted %v", events)
+			}
+			reopened, err := store.Open(e.dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			for _, read := range readMain(t, reopened, api.RelayView{}, e.id) {
+				assertPaneRecord(t, read.records.DisplayedState, first, e.now, "")
+			}
+			if row := e.row(t); row.DisplayEvidence != after.DisplayEvidence {
+				t.Fatal("stored read redated evidence")
+			}
+			// Active reads agree at one injected instant, including the sweep
+			// which exposes its record through storage rather than its result.
+			for _, read := range paneReaders {
+				if err := read.read(c, e.id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := c.FindMissing(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if row := e.row(t); row.DisplayEvidence != after.DisplayEvidence {
+				t.Fatal("equivalent active readers disagree")
+			}
+		})
+	}
+}
+
+// b.x9o: a newer record-only commit has no observation-version change; it
+// still fences an older sample and its response-only stale overlay.
+func TestIdleScreenNewerRecordWins(t *testing.T) {
+	t.Parallel()
+	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+	keys := apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60}
+	c, other := e.client(t, keys), e.client(t, keys)
+	start := e.now
+	observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+	before := e.row(t)
+	e.now = start.Add(time.Second)
+	var fired atomic.Bool
+	var newer store.Spawn
+	e.rec.AfterCall(tmux.CallCapture, func(tmuxfix.SocketCall, error) {
+		if fired.CompareAndSwap(false, true) {
+			e.now = start.Add(2 * time.Second)
+			observeStatus(t, other, e.id, store.StateWorking, func(a, b store.Spawn) bool { return a.DisplayEvidence != b.DisplayEvidence })
+			newer = e.row(t)
+			e.now = start.Add(3 * time.Second) // the older sample finishes after the newer commit
+		}
+	})
+	got, err := c.Status(e.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fired.Load() || newer.DisplayEvidence == before.DisplayEvidence || newer.ObservationVersion != before.ObservationVersion {
+		t.Fatal("fixture did not commit a record alone")
+	}
+	if row := e.row(t); row.DisplayEvidence != newer.DisplayEvidence {
+		t.Fatal("older sample overwrote the newer record")
+	}
+	assertPaneRecord(t, got.Confirmations.DisplayedState, start, start.Add(2*time.Second), "")
+}
+
+// b.x9o: a refused COMMIT is an invocation-local failed attempt; a committed
+// observation still owns its display/evidence pair if the final refresh fails.
+func TestIdleScreenCommitAndRefreshFailures(t *testing.T) {
+	t.Parallel()
+	for _, verb := range []string{"status", "get", "list"} {
+		for _, cut := range []string{"commit unconfirmed", "final refresh"} {
+			t.Run(verb+"/"+cut, func(t *testing.T) {
+				t.Parallel()
+				e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+				c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+				start := e.now
+				observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+				before := e.row(t)
+				e.now = start.Add(time.Minute)
+				var observing, committed, refused atomic.Bool
+				injected := errors.New("injected display boundary failure")
+				stop, err := api.ObserveClientSQLiteForTest(c, func(d driver.Driver) driver.Driver {
+					return sqliteobserve.Wrap(d, sqliteobserve.Hooks{
+						Before: func(_ context.Context, q string) error {
+							if q == "BEGIN IMMEDIATE" {
+								observing.Store(false)
+							}
+							if strings.HasPrefix(q, "UPDATE spawns SET display_observation=") {
+								observing.Store(true)
+							}
+							if cut == "commit unconfirmed" && q == "COMMIT" && observing.Load() {
+								refused.Store(true)
+								return injected
+							}
+							if cut == "final refresh" && committed.Load() && strings.HasPrefix(q, "SELECT ") && strings.Contains(q, "FROM spawns") {
+								refused.Store(true)
+								return injected
+							}
+							return nil
+						},
+						AfterCommit: func(context.Context) error {
+							if observing.Load() {
+								committed.Store(true)
+							}
+							return nil
+						},
+					})
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := stop(context.Background()); err != nil {
+						t.Error(err)
+					}
+				}()
+				var displayed string
+				var record api.Confirmation
+				switch verb {
+				case "status":
+					r, er := c.Status(e.id)
+					displayed, record, err = r.DisplayedState, r.Confirmations.DisplayedState, er
+				case "get":
+					r, er := c.Get(e.id)
+					displayed, record, err = r.DisplayedState, r.Confirmations.DisplayedState, er
+				case "list":
+					r, er := c.List(api.ListParams{})
+					err = er
+					if len(r.Spawns) != 1 {
+						t.Fatalf("list lost selected row: %+v %v", r, er)
+					}
+					displayed, record = r.Spawns[0].DisplayedState, r.Spawns[0].Confirmations.DisplayedState
+				}
+				if err != nil || !refused.Load() {
+					t.Fatalf("read did not cross the intended cut: %v refused=%v", err, refused.Load())
+				}
+				after := e.row(t)
+				if cut == "final refresh" {
+					if !committed.Load() || displayed != api.StateIdleScreen || after.CommittedDisplay().State != displayed {
+						t.Fatal("committed display lost on final refresh failure")
+					}
+					assertPaneRecord(t, record, e.now, e.now, "")
+				} else {
+					if displayed != "" || after.DisplayEvidence != before.DisplayEvidence || after.DisplayObservation != before.DisplayObservation || after.ObservationVersion != before.ObservationVersion {
+						t.Fatal("unconfirmed commit advertised or persisted new evidence")
+					}
+					assertPaneRecord(t, record, start, e.now, store.ReasonCommitUnconfirmed)
+					for _, read := range readMain(t, e.s, api.RelayView{}, e.id) {
+						assertPaneRecord(t, read.records.DisplayedState, start, start, "")
+					}
+				}
+			})
+		}
+	}
+}
+
+// b.x9o: a spent tmux budget is a persisted deadline attempt, distinct from
+// capture/ownership failures. No real waiting is needed to exhaust it.
+func TestIdleScreenDeadlineRecord(t *testing.T) {
+	t.Parallel()
+	e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
+	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+	start := e.now
+	observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+	clock := tmuxfix.NewClock(start.Add(time.Second))
+	e.rec.WithVirtualTime(clock, tmux.Timeouts{Query: time.Minute})
+	api.SetClockForTest(c, clock.Now)
+	got, err := c.Status(e.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPaneRecord(t, got.Confirmations.DisplayedState, start, clock.Now(), store.ReasonDeadline)
+	row := e.row(t)
+	want := store.Confirmation{Status: store.ConfirmationNotConfirmed, ConfirmedAtMillis: start.UnixMilli(), Source: store.EvidencePane, CheckedAtMillis: clock.Now().UnixMilli(), Reason: store.ReasonDeadline}
+	if rec := row.DisplayConfirmation(row.CommittedDisplay(), row.DisplayEvidence); rec != want || row.PaneSHA256 != "" {
+		t.Fatalf("deadline record/reset not durable: %+v %+v", rec, row)
+	}
+}
+
+// b.x9o cb review B2: stopped-socket suppression is incomplete coverage;
+// an actual unreadable capture is covered. Live processes bypass liveness tmux.
+func TestSweepStoppedPaneSocketCoverage(t *testing.T) {
+	t.Parallel()
+	for _, fault := range []tmux.Call{tmux.CallLookup, tmux.CallCapture} {
+		t.Run(string(fault), func(t *testing.T) {
+			e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+			second := e.addRow(t, store.AgentClaude, apitest.TestSocket, "%82", apitest.TestPanePID+82)
+			independent := e.addRow(t, store.AgentClaude, apitest.TestSocket+"-independent", "%83", apitest.TestPanePID+83)
+			shared := []string{e.id, second}
+			slices.Sort(shared)
+			c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+			first, err := c.Sweep(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			prior := map[string]api.Confirmation{}
+			for _, row := range first.Checks {
+				if row.Completion != "complete" || row.Confirmations.DisplayedState.Status != "confirmed" {
+					t.Fatalf("baseline = %+v", row)
+				}
+				prior[row.InstanceID] = row.Confirmations.DisplayedState
+			}
+			e.rec.Reset()
+			e.rec.Script(apitest.TestSocket, tmuxfix.Script{Failure: tmux.FailUnavailable, Times: 1}, fault)
+			e.now = e.now.Add(time.Minute)
+			got, err := c.Sweep(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertLists(t, got, nil, nil)
+			apitest.AssertConfirmationsShape(t, jsonOf(t, got))
+			if len(got.Checks) != 3 {
+				t.Fatalf("checks = %+v", got.Checks)
+			}
+			for _, row := range got.Checks {
+				skipped := fault == tmux.CallLookup && row.InstanceID == shared[1]
+				if skipped {
+					if row.Completion != "incomplete" || row.Reason == nil || *row.Reason != "unreadable" {
+						t.Errorf("skipped pane = %+v; want incomplete/unreadable", row)
+					}
+				} else if row.Completion != "complete" || row.Reason != nil {
+					t.Errorf("attempted/independent pane = %+v; want complete", row)
+				}
+				if row.ProcessLiveness != "alive" || row.Confirmations.ProcessLiveness.Status != "confirmed" {
+					t.Errorf("liveness must not use failed socket: %+v", row)
+				}
+				if row.InstanceID != independent && (fault == tmux.CallLookup || row.InstanceID == shared[0]) {
+					old, current := prior[row.InstanceID], row.Confirmations.DisplayedState
+					if current.ConfirmedAt == nil || old.ConfirmedAt == nil || *current.ConfirmedAt != *old.ConfirmedAt || current.Source == nil || *current.Source != "pane" || current.Status != "not_confirmed" {
+						t.Errorf("unsampled pane gained/lost evidence: old=%+v current=%+v", old, current)
+					}
+				}
+				if row.InstanceID == independent && (row.DisplayedState != api.StateIdleScreen || conf(row.Confirmations.DisplayedState) != confirmed(e.now, "pane")) {
+					t.Errorf("independent socket did not progress: %+v", row)
+				}
+			}
+			lookups, captures, otherCaptures := 0, 0, 0
+			for _, call := range e.rec.SocketCalls() {
+				switch call.Call {
+				case tmux.CallLookup:
+					if call.Socket == apitest.TestSocket {
+						lookups++
+					}
+				case tmux.CallCapture:
+					if call.Socket == apitest.TestSocket {
+						captures++
+					} else {
+						otherCaptures++
+					}
+				case tmux.CallListPanes:
+				default:
+					t.Errorf("sweep dispatched action: %+v", call)
+				}
+			}
+			wantCaptures := 2
+			if fault == tmux.CallLookup {
+				wantCaptures = 0
+			}
+			if lookups != 1 || captures != wantCaptures || otherCaptures != 1 {
+				t.Errorf("lookup/shared captures/independent captures=%d/%d/%d; want 1/%d/1", lookups, captures, otherCaptures, wantCaptures)
+			}
+		})
 	}
 }

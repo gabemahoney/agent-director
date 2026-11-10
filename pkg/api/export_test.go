@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"database/sql/driver"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
@@ -72,6 +74,11 @@ var DecideWithSleep = decide
 // StatusSettledForTest exercises optional custom-store dispatch with settling enabled.
 var StatusSettledForTest = statusSettledWithRelay
 
+// GetSettledForTest and ListSettledForTest exercise the same non-sampling
+// projections as Get and List, with the Client's explicit settle clock.
+var GetSettledForTest = getSettled
+var ListSettledForTest = listSettled
+
 // DecideWithinForTest exercises policy with an explicit controlled context;
 // physical deadline tests continue to use DecideWithSleep or the public API.
 var DecideWithinForTest = decideWithin
@@ -83,6 +90,10 @@ const CreatedAtResolution = createdAtResolution
 
 // KillPollInterval is kill's poll interval (killPollInterval, SR-6.1), so no test spells it.
 const KillPollInterval = killPollInterval
+
+// RecoveryTrailWait bounds a recovery check's wait for each trail record's
+// write (recoveryTrailWait, SR-1, SR-3), so no test spells it.
+const RecoveryTrailWait = recoveryTrailWait
 
 // SetPauseTestKnobs lets pause_test override the polling cadence and
 // sleeper without exporting them broadly. Tests pair this with
@@ -181,4 +192,44 @@ func SetStoreContextForTest(c *Client, ctx context.Context) (restore func()) {
 	original := c.st
 	c.st = original.WithContext(ctx)
 	return func() { c.st = original }
+}
+
+// ObserveClientSQLiteForTest reuses the registered real-driver boundary on
+// this Client's owning store; no global observer or replacement store is used.
+// Must use: a public Client boundary test observes SQLite through this seam,
+// never another observer or connection pool.
+func ObserveClientSQLiteForTest(c *Client, wrap func(driver.Driver) driver.Driver) (func(context.Context) error, error) {
+	return store.ObserveSQLiteForTest(c.st, wrap)
+}
+
+// WaitClientStoreForTest waits up to wait for this Client's own store to admit
+// a read of id (GetSpawnWithin; nothing is written), so an operation an earlier
+// call abandoned at its deadline has released the store. Must use: a test whose
+// next zero-wait call on c follows a WriteFailMissingDeadlineOverrun write waits
+// here, never on another Store's pool and never by sleeping.
+func WaitClientStoreForTest(c *Client, id string, wait time.Duration) error {
+	_, err := c.st.GetSpawnWithin(id, wait)
+	return err
+}
+
+// ActiveCheckOutcomesForTest runs the shared checks over rows as a checked
+// read does, with no final projection, and returns each row's outcome log in
+// order as "adapter=result" entries (b.x9o cw deferral S3).
+func ActiveCheckOutcomesForTest(ctx context.Context, source any, view RelayView, rows []Spawn) map[string][]string {
+	run := checkActiveRows(ctx, source, view, store.SettleRead{}, rows, nil, false)
+	out := map[string][]string{}
+	for _, checked := range run.rows {
+		for _, o := range checked.outcomes {
+			out[checked.row.InstanceID] = append(out[checked.row.InstanceID], o.Adapter+"="+o.Result)
+		}
+	}
+	return out
+}
+
+// CheckOutcomeForTest is the outcome result a checked write's error (or, with
+// none, whether it applied) records, and the SR-4.5 reason a failed one gives
+// its field's attempt.
+func CheckOutcomeForTest(err error, applied bool) (result, reason string) {
+	o := activeOutcome("test", applied, err)
+	return o.Result, outcomeReason(o.Result)
 }

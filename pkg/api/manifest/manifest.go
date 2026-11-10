@@ -24,7 +24,6 @@ type VerbDef struct {
 	// Callable is true when the verb is exposed as a synchronous method on
 	// pkg/api.Client. help (informational/CLI-side), serve (long-running MCP
 	// server), and hook (SRD §3.2 fail-open) are Callable: false.
-	// 17 verbs are Callable: true.
 	Callable bool
 
 	// HandleFree is true when the verb can be invoked without a Client handle
@@ -71,6 +70,14 @@ const familyStateText = "Complete stored family (self and live descendants at ev
 
 var familyStateField = FieldDef{Name: "family_state", Type: "string", Description: familyStateText, AllowedValues: []string{"working", "waiting"}}
 
+// processLivenessText and confirmationsText describe the main-field evidence
+// every status, get and list agent result carries (SR-4.1, SR-4.5).
+const processLivenessText = "The recorded agent process at its recorded start identity: alive, exited or unknown. A Helper, tmux session or descendant never makes it alive, and an unreadable start identity, no recorded identity or a protected pending launch leaves it unknown or unconfirmed. Cursor reports unknown (reason unsupported): only its Helper's gateway is probed. Its evidence is confirmations.process_liveness; a live process never confirms or refreshes state."
+const confirmationsText = "Exactly three records, state, process_liveness and displayed_state, each with exactly status (confirmed, not_confirmed, unknown or pending), confirmed_at (RFC3339 UTC with millisecond precision, or null: the first confirmation of this exact returned value and owner in its current stay; later same-value evidence advances only checked_at), source (agent_event, caller_command, process, tmux, pane, transcript or store; null exactly when confirmed_at is), checked_at (the latest attempt, an unsuccessful one included, or null; reading stored facts never advances it) and reason (null when confirmed; otherwise no_evidence, unreadable, busy, stale_observation, deadline, operation_pending, pending_grace, unsupported or commit_unconfirmed). Every key is present and nulls are explicit. confirmed means the returned value has supporting evidence with no later unresolved failed attempt; it does not mean continuous truth since confirmed_at; not_confirmed records a failed latest attempt with its reason, keeping an older applicable confirmed_at or null when none exists; unknown with reason no_evidence has no applicable evidence or attempt; pending means a still-owned operation or pending-launch protection prevented the attempt and promises no retry. store confirms a durable agent-director record or intent, never provider receipt. Settling and the passage of time create no confirmation; state's record follows the settled value shown. displayed_state's record is for the display returned, a Displayed State or none (displayed_state omitted): only a successful sample of the row's own pane confirms it (source pane), a failed sample is its latest attempt, and the display shown while an entry or exit settles keeps its own record; no applicable display evidence or attempt is unknown (reason no_evidence), while a failed latest attempt without an earlier confirmation is not_confirmed with its reason and null confirmed_at/source; For Cursor and pane-only agents it is always unknown (reason unsupported). family_state has no record: its freshness is unconfirmed. Freshness never authorizes a command."
+
+var processLivenessField = FieldDef{Name: "process_liveness", Type: "string", Description: processLivenessText, Nullable: false, AllowEmpty: false, AllowedValues: []string{"alive", "exited", "unknown"}}
+var confirmationsField = FieldDef{Name: "confirmations", Type: "object", Description: confirmationsText, Nullable: false, AllowEmpty: false, AllowedValues: nil}
+
 // stateEnum is the exhaustive set of valid spawn state strings (SRD §6): the
 // lifecycle states a state field reports. Inlined into AllowedValues where
 // state fields appear.
@@ -85,11 +92,11 @@ var displayedStateEnum = []string{"needs_intelligence", "idle_screen"}
 
 // needsIntelligenceText describes the needs_intelligence Displayed State and
 // what both Displayed States share, for all caller surfaces.
-const needsIntelligenceText = "displayed_state carries a report-only Displayed State beside state, never in place of it, and is omitted while none shows. needs_intelligence means an unknown prompt inferred on the agent's screen, one that is not a permission request agent-director knows about; nothing infers it yet, so no row shows it. A permission request never shows needs_intelligence, however long it waits: its row stays check_permission. [state] needs_intelligence_timeout_seconds is still accepted and range-checked (1 to 9223372036) but has no effect. since is the successful read that committed entry into the Displayed State, in RFC3339 UTC with exactly millisecond precision. Clearing retains displayed_state and its detail through settlement. Observation writes never wait and skipped samples retain the committed display. Displayed States are report-only: raw command guards and dialog holds remain authoritative; a waiting live member contributes working to family_state only while it shows idle_screen. No background observation is added."
+const needsIntelligenceText = "displayed_state carries a report-only Displayed State beside state, never in place of it, and is omitted while none shows. needs_intelligence means an unknown prompt inferred on the agent's screen, one that is not a permission request agent-director knows about; nothing infers it yet, so no row shows it. A permission request never shows needs_intelligence, however long it waits: its row stays check_permission. [state] needs_intelligence_timeout_seconds is still accepted and range-checked (1 to 9223372036) but has no effect. since is the successful check that committed entry into the Displayed State, in RFC3339 UTC with exactly millisecond precision. Clearing retains displayed_state and its detail through settlement. Observation writes never wait and skipped samples retain the committed display. Displayed States are report-only: raw command guards and dialog holds remain authoritative; a waiting live member contributes working to family_state only while it shows idle_screen. No background observation is added."
 
 // idleScreenText describes the idle_screen Displayed State and its
 // availability, for all caller surfaces.
-const idleScreenText = "displayed_state idle_screen marks a working Claude or Codex row (its state stays working) whose own pane fingerprint (read-pane's default pane_sha256) stayed identical across successful reads for the row's spawn idle_screen_timeout_seconds, else [state] idle_screen_timeout_seconds (whole seconds, default/zero 1200, range 1 to 9223372036), followed by ordinary settling detected on reads: the agent may be hung or working quietly, so look before acting. Panes are sampled only while callers read status, get or list: nothing observes them between reads, and identical samples are a hint, not proof of inactivity (healthy quiet work can qualify). The first successful read starts the baseline, a changed fingerprint restarts it and clears the condition, and a failed or untrusted capture resets it; an earlier turn or launch supplies no evidence. check_permission and ask_user never qualify. Cursor reports idle_screen_availability unavailable and never this state."
+const idleScreenText = "displayed_state idle_screen marks a working Claude or Codex row (its state stays working) whose own pane fingerprint (read-pane's default pane_sha256) stayed identical across successful samples for the row's spawn idle_screen_timeout_seconds, else [state] idle_screen_timeout_seconds (whole seconds, default/zero 1200, range 1 to 9223372036), followed by ordinary settling detected on checks: the agent may be hung or working quietly, so look before acting. Panes are sampled by eligible status, get, list and sweep/find-missing checks, never in the background. Identical samples are a hint, not proof of inactivity (healthy quiet work can qualify). The first successful sample starts the baseline, a changed fingerprint restarts it and clears the condition, and a failed or untrusted capture resets it; an earlier turn or launch supplies no evidence. check_permission and ask_user never qualify. Cursor and pane-only agents report idle_screen_availability unavailable and never this state."
 
 // displayedStateField is displayed_state on every status, get and list row.
 var displayedStateField = FieldDef{Name: "displayed_state", Type: "string?", Description: "The Displayed State the row shows beside its state, present only while one shows: idle_screen, or needs_intelligence, which nothing shows yet.", Nullable: true, AllowEmpty: false, AllowedValues: displayedStateEnum}
@@ -100,7 +107,12 @@ var unchangedMinutesField = FieldDef{Name: "unchanged_minutes", Type: "int?", De
 
 // availabilityField is idle_screen_availability on every status, get and list
 // row: a capability outcome, never a state.
-var availabilityField = FieldDef{Name: "idle_screen_availability", Type: "string", Description: "Whether idle_screen can apply to the row's agent: available for Claude and Codex, unavailable for Cursor, whose healthy quiet work can leave its pane unchanged. A capability outcome, never a state.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"available", "unavailable"}}
+var availabilityField = FieldDef{Name: "idle_screen_availability", Type: "string", Description: "Whether idle_screen can apply to the row's agent: available for Claude and Codex, unavailable for Cursor and pane-only agents. A capability outcome, never a state.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"available", "unavailable"}}
+
+// paneOnlyContract describes the shared lane on every read surface.
+const paneOnlyContract = "pane_only is the fixed supervised-pane contract: a live row stays pending; all context fields are null, idle_screen_availability is unavailable and list-subagents is tracked false with an empty list. Provider reports are ignored. Plain send-keys requires allow_pending and returns an empty manual result without native proof or deduplication. pause, resume, decide, record-pane-answer and native-delivery inputs are unsupported. Inspection, kill and reconciliation remain available with the experimental flag off."
+
+var integrationModeField = FieldDef{Name: "integration_mode", Type: "string?", Description: "Present only for pane-only agents; omitted for other agents. " + paneOnlyContract, Nullable: true, AllowEmpty: false, AllowedValues: []string{"pane_only"}}
 
 // ReuseOptInSpelling is the reuse opt-in's one spelling in advice every
 // surface shows (b.c4u): its param name, which MCP takes and the TypeScript
@@ -126,24 +138,24 @@ const TmuxSessionNameSpelling = "tmux_session_name (--tmux-session-name on the C
 
 // liveRowSequence is SR-18.6's bounded, paced live-row sequence in its short
 // form (decision-0930b Q6): the same six steps and limits, with no rationale.
-// Only kill's Description states it (it ends killDescription); find-missing
+// Only kill's Description states it (it ends killDescription); sweep
 // and spawn point to it with liveRowSequencePointer, so the sequence has one
 // home and cannot drift. The full sequence with its rationale (steps 2 and 6)
 // lives in docs/caller-contract.md and in docs/architecture.md. It
 // names kill as a documented procedure, which SR-1.4 allows here; it states
 // no timeout other than the pending grace default and the wait between
-// find-missing runs (SR-13.2 is the one source of the ceilings).
+// sweep runs (SR-13.2 is the one source of the ceilings).
 const liveRowSequence = "Live-row sequence (a pending row included): " +
 	"1. kill and check the result; on an error follow its class. " +
 	"2. If pending, wait until its launch start (status) plus the pending grace period (60 s unless configured); inside it, wait and check again, never escalate. " +
-	"3. Run find-missing, then check status; repeat about 5 s apart until ended or missing, at most three runs. " +
-	"4. Still live: kill once more, wait about 5 s, run find-missing once more and check. " +
+	"3. Run sweep, then check status; repeat about 5 s apart until ended or missing, at most three runs. " +
+	"4. Still live: kill once more, wait about 5 s, run sweep once more and check. " +
 	"5. Still live: escalate to a human. " +
 	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with " + ReuseOptInSpelling + " and " + RowAgentPointer + "; callers whose ids agent-director mints spawn fresh."
 
 // liveRowSequencePointer is SR-18.6's one-sentence pointer to the live-row
-// sequence, verbatim. It ends the find-missing and spawn Descriptions (after
-// find-missing's grace sentence), which restate no step: every surface that
+// sequence, verbatim. It ends the sweep and spawn Descriptions (after
+// sweep's grace sentence), which restate no step: every surface that
 // shows one Description shows kill's too, so the pointer always resolves.
 // kill's Description carries liveRowSequence itself; the full sequence with
 // its rationale lives in docs/caller-contract.md and in
@@ -153,11 +165,11 @@ const liveRowSequencePointer = "To end a live row (pending included) and relaunc
 // missingNotProofShort is SR-18.2's short form (decision-0930e), carried by
 // the kill, resume, pause and expire Descriptions in place of the full
 // sentence, since every verb Description reaches help and MCP. The full
-// sentence ("`missing` is the sweep's judgement on the evidence available to
-// it, not proof that the agent has exited") stays in find-missing's
-// Description, where missing is produced, and in the status/get state, list
-// spawns and find-missing ids result fields, which reach neither.
-const missingNotProofShort = "`missing` is not proof of exit (see find-missing)."
+// sentence ("`missing` is a check's judgement on available evidence, not
+// proof that the agent has exited") stays in sweep's Description, and in
+// status/get state, list spawns and both sweep aliases' ids result fields,
+// so the short form points to sweep.
+const missingNotProofShort = "`missing` is not proof of exit (see sweep)."
 
 // unusableNamePointer is the short form of SR-1.7's unusable recorded-name
 // ErrInternal trigger (SR-3.2, SR-1.4; Epic 19 build-lead decision 1),
@@ -170,7 +182,7 @@ const unusableNamePointer = "Unusable recorded name: ErrInternal (see kill)."
 
 // expireCleanupPointer is SR-18.7's cleanup guidance in short form (Epic 15
 // build-lead decision 1, after decision-0930e's precedent), carried by the
-// kill and find-missing Descriptions in place of the full cleanup sentence,
+// kill and sweep Descriptions in place of the full cleanup sentence,
 // since every verb Description reaches help and MCP. The full sentence stays
 // in expireDescription. Keep it at or under 80 bytes.
 const expireCleanupPointer = "Agents never run expire (operator-scheduled finished-row cleanup)."
@@ -232,9 +244,9 @@ const reuseFinishedDescription = "Opt in to reusing an explicit instance_id whos
 	"With no dropped arguments, a successful spawn does not say whether it created a fresh row or reset a finished one. Nonempty dropped_args identifies reuse that switches a finished row's agent; the CLI prints a notice when arguments are dropped. " +
 	"The spawn names its agent (agent, or the template's) and the reused row takes it: to reuse a row for the agent it ran, pass the row's agent, which get shows. " +
 	"Only an agent switch starts a new life; same-agent reuse keeps session history and subagent records but starts a fresh conversation. A switch back also starts with no memory of its earlier lives: resume and get never use or show an earlier life's history. Resume continues only the latest session; older sessions remain listed for inspection only. " +
-	"AD-agent children keep their parent_id; the append-only trail retains earlier lives. Cursor subagent tracking remains unsupported (tracked=false, empty records). " +
+	"AD-agent children keep their parent_id; the append-only trail retains earlier lives. Cursor and pane-only agents have no subagent tracking (tracked=false, empty records). " +
 	"A failed launch conditionally restores the prior row, agent, life and history only while the reset row is unchanged; a create timeout or lost reply never restores. Requests deleted and subagents closed by the reset are not revived. " +
-	"Retrying a failed plain spawn: after a held-name refusal (duplicate session) the row is already ended unless the error says otherwise, so the retry's lookup decides it at once; after any other failed launch the row stays pending and an opted-in retry collides until find-missing marks it missing, which happens only after the pending grace period (60 s by default). " +
+	"Retrying a failed plain spawn: after a held-name refusal (duplicate session) the row is already ended unless the error says otherwise, so the retry's lookup decides it at once; after any other failed launch the row stays pending and an opted-in retry collides until a recovery check (a state read or sweep) marks it missing, past the pending grace period (60 s by default) or sooner when a Cursor row's exact recorded gateway is gone. " +
 	"Feature detection: read the version of the binary that serves the caller: on the CLI the version verb; over MCP the version tool, which reports the running serve process's version until that process restarts; in the TypeScript client binaryVersion (from Client.create() or resolveSystemBinary()), never version(), which is the npm package's version. " +
 	"A release candidate X.Y.Z-rc.N counts as X.Y.Z. A build without a release stamp reports 0.0.0-dev (a make build) or dev (a plain go build); a caller cannot compare it and relies on the older-binary behaviour: " +
 	"an older binary returns ErrInvalidFlags on the CLI and in the TypeScript client, and over MCP silently ignores the parameter, so a finished row gives ErrInstanceIdCollision. " +
@@ -247,11 +259,11 @@ const killDescription = "End the agent of a live row's current launch (pending i
 	"kill finds the session with that launch's label on the row's recorded socket, ends the agent's pane and that session by tmux id, and succeeds only once the agent process and every other process found in the session's panes are gone; otherwise it returns ErrTmuxKillFailed. kill_sent says whether a kill was sent. " +
 	"With no session of the launch found, an agent process gone or not recorded is success, nothing sent; one running in another session's pane has that pane ended and is checked again. " +
 	"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call. " + missingNotProofShort + " " +
-	"kill never changes the row's state: find-missing marks it once its agent process is gone. kill never signals a process itself; one the agent started can outlive a successful kill. " +
+	"kill never changes the row's state: a state read or sweep marks it once its agent process is gone. kill never signals a process itself; one the agent started can outlive a successful kill. " +
 	"On a pending row, before the launch created its session, kill returns kill_sent false and does not stop the launch. kill never ends an earlier launch's session. " +
-	"Success is judged per call: if ErrTmuxKillFailed named a non-agent process outliving the kill, later calls do not track it: a retried kill checks only the agent process. A retry's success means only that the agent is gone; the named process needs a human (see docs/operator-actions.md). If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed; a retried kill is a finished-row no-op. " +
-	"Errors (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): after a kill the agent process or another process of the session's panes ran past the kill exit wait, or the process cannot be checked and its labelled session remains, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's, or tmux holds conflicting labels; no kill was sent (see docs/operator-actions.md). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the agent's tmux server; an operator must fix it. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the caller waits and checks again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. " +
-	"kill must run as the same user and in the same tmux environment as the agents. " + sameEnvConsequences + " " + expireCleanupPointer + " " +
+	"Success is judged per call: after ErrTmuxKillFailed names a non-agent process outliving the kill, a retried kill checks only the agent process and its success means only that the agent is gone; the named process needs a human (see docs/operator-actions.md). If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed; a retried kill is a finished-row no-op. " +
+	"Errors (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): after a kill the agent process or another process of the session's panes ran past the kill exit wait, or the process cannot be checked and its labelled session remains, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's, or tmux holds conflicting labels; no kill was sent (see docs/operator-actions.md). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the agent's tmux server; an operator must fix it. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; wait and check again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. " +
+	"Run kill as the agents' user in their tmux environment. " + sameEnvConsequences + " " + expireCleanupPointer + " " +
 	"A live row whose recorded tmux session name cannot be used (empty, or containing a control character or a character tmux stores differently) gets ErrInternal with no tmux call; removing the row is a human's decision (see docs/operator-actions.md). " +
 	liveRowSequence
 
@@ -263,7 +275,7 @@ const killDescription = "End the agent of a live row's current launch (pending i
 // No verb Description carries it: those reach help, whose size has a
 // hard cap (cmd/agent-director/help_size_test.go); list's state param text
 // carries the filter's part, for MCP tools/list.
-const settledStateText = "With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. While an exit from a Displayed State settles, status, get and list retain its displayed_state, and status and get its committed since and state-specific detail; list has no detail. family_state settles independently. Fields such as state_changed_at and permission_requests follow the live state. Commands (send-keys, decide, pause, resume, kill, find-missing, expire, spawn) keep raw-state guards: a refusal can name a state status does not show yet."
+const settledStateText = "With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, sweep/find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. While an exit from a Displayed State settles, status, get and list retain its displayed_state, and status and get its committed since and state-specific detail; list has no detail. family_state settles independently. Fields such as state_changed_at and permission_requests follow the live state. Commands (send-keys, decide, pause, resume, kill, sweep/find-missing, expire, spawn) keep raw-state guards: a refusal can name a state status does not show yet."
 
 // launchStartLiveSentence ends the launch_started_at texts of status and get
 // and list's spawns text (b.3ie): the field follows the row's live state, so
@@ -278,9 +290,9 @@ const stateChangedAtText = "When the row's raw state last changed: RFC3339 UTC w
 
 // permissionRequestsDescription is the text of the permission_requests field
 // of get's result and of each list row (b.146 rule 15).
-const permissionRequestsDescription = "Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request with no recorded settle instant while undecided). Always a non-null array ([] when empty). Populated only when the row's live state is check_permission; empty array for all other states (a row can read waiting, working or ask_user while a request is still open: follow a tracked request with get-permission). Requests are never delayed by [state] settle_ms, so with it set ordinary raw-state settling can also show any state (even ended or missing) with open requests listed, or check_permission with [], for up to settle_ms; displayed_state settles on reads instead, with no such bound. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 request token, pass to decide verb to target this row; tool_name (string) — the supplied tool name or Cursor action title/plan name; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves). Cursor preserves the received permission/plan params envelope byte for byte, including options and absent/null fields, without adding internal context; requested_at (RFC3339 timestamp) — when the request was recorded; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request), pane_as (string?), proven_gone_at (timestamp?), proven_gone_how (string?) and unproven_since (timestamp?). get and list never wait for the store's write lock."
+const permissionRequestsDescription = "Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request with no recorded settle instant while undecided). Always a non-null array ([] when empty). Populated only when the row's live state is check_permission; empty array for all other states (a row can read waiting, working or ask_user while a request is still open: follow a tracked request with get-permission). Requests are never delayed by [state] settle_ms, so with it set ordinary raw-state settling can also show any state (even ended or missing) with open requests listed, or check_permission with [], for up to settle_ms; displayed_state settles on checks instead, with no such bound. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 request token, pass to decide verb to target this row; tool_name (string) — the supplied tool name or Cursor action title/plan name; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves). Cursor preserves the received permission/plan params envelope byte for byte, including options and absent/null fields, without adding internal context; requested_at (RFC3339 timestamp) — when the request was recorded; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request), pane_as (string?), proven_gone_at (timestamp?), proven_gone_how (string?) and unproven_since (timestamp?). get and list never wait for the store's write lock."
 
-const contextDescription = "Experimental context estimate: agent internals and this output shape have no stable-format guarantee. Always an object with used_tokens (integer?), window_tokens (integer?), fraction (number?; used_tokens divided by window_tokens), source (string?) and as_of (RFC3339 UTC timestamp with millisecond precision?). Unknown retains all five keys with null values. Readings estimate last-response occupancy, never cumulative billing. Claude 2.1.280 first-party pairs automatically composed capacity callbacks with on-demand transcript usage for the same resolved model, response and current live writer, without provider, endpoint or window overrides. Codex 0.159.2 OpenAI requires admitted fresh-startup provenance and a current live writer; existing, resumed or unproven sessions return unknown. Its sequential rollouts pair last_token_usage.total_tokens with the same session's reported usable model_context_window; source codex_jsonl_last_token_usage. as_of is the source measurement time, never read time. Claude and Codex usage is read on demand without a usage cache or wall-clock age cutoff; stored capacity metadata is not cached usage. Missing, malformed, incomplete, unsupported or unresolvable evidence yields unknown; compaction requires later valid usage. Both Cursor versions have successful native interactive captures. Managed ACP lacks the ordinary usage-bearing afterAgentResponse/stop path, exposes only stopReason in prompt results and exposes no manual /summarize command. Both versions have a native shared-resource preCompact executor path; automatic managed delivery remains unqualified. Cursor context is unknown in this build; numeric support is deferred until upstream ACP supplies usage."
+const contextDescription = "Experimental context estimate: agent internals and this output shape have no stable-format guarantee. Always an object with used_tokens (integer?), window_tokens (integer?), fraction (number?; used_tokens divided by window_tokens), source (string?) and as_of (RFC3339 UTC timestamp with millisecond precision?). Unknown retains all five keys with null values. Readings estimate last-response occupancy, never cumulative billing. Claude 2.1.280 first-party pairs automatically composed capacity callbacks with on-demand transcript usage for the same resolved model, response and current live writer, without provider, endpoint or window overrides. Codex 0.159.2 OpenAI requires admitted fresh-startup provenance and a current live writer; existing, resumed or unproven sessions return unknown. Its sequential rollouts pair last_token_usage.total_tokens with the same session's reported usable model_context_window; source codex_jsonl_last_token_usage. as_of is the source measurement time, never read time. Claude and Codex usage is read on demand without a usage cache or wall-clock age cutoff; stored capacity metadata is not cached usage. Missing, malformed, incomplete, unsupported or unresolvable evidence yields unknown; compaction requires later valid usage. Both Cursor versions have successful native interactive captures. Managed ACP lacks the ordinary usage-bearing afterAgentResponse/stop path, exposes only stopReason in prompt results and exposes no manual /summarize command. Both versions have a native shared-resource preCompact executor path; automatic managed delivery remains unqualified. Cursor context is unknown in this build; numeric support is deferred until upstream ACP supplies usage. Pane-only agents always return unknown with all five context fields null."
 
 // subagentsDescription is the text of list-subagents' subagents field: the
 // record's fields, the value sets of its enumerated fields, and the order.
@@ -308,10 +320,10 @@ var deliveryFactFields = []FieldDef{
 	{Name: "attempted_decision", Type: "string?", Description: "The verdict a decide refused as fallen back (ErrRelayFallenBack) tried to record, the latest one; null when none. Stored and shown, never acted on.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"allow", "deny"}},
 	{Name: "attempted_at", Type: "timestamp?", Description: "When that refused decide ran; null when none.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 	{Name: "tool_use_id", Type: "string?", Description: "The hook's tool_use_id or Cursor's supplied toolCallId; null when none was given.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
-	{Name: "pane_answer", Type: "string", Description: "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent or the Cursor gateway recorded its native choice (decision_reason pane); this does not establish ACP delivery, agent receipt or execution. outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: the agent's hooks or validated correlated Cursor execution output established its tool ran. The hook close records decision allow and decision_reason tool_ran; Cursor proof preserves any earlier verdict and non-null reason, filling a missing reason with tool_ran. A request with sent, outside or tool_ran is closed and stays delivery fallen_back.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"none", "intent", "sent", "outside", "tool_ran"}},
+	{Name: "pane_answer", Type: "string", Description: "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent or the Cursor gateway recorded its native choice (decision_reason pane); this does not establish ACP delivery, agent receipt or execution. outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: validated correlated Cursor execution output established its tool ran (in practice never on a Claude or Codex row, whose requests carry no tool_use_id). That close preserves any earlier verdict and non-null reason, inferring allow only when undecided and filling a missing reason with tool_ran. These facts grant no response authority. A request with sent, outside or tool_ran is closed and stays delivery fallen_back.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"none", "intent", "sent", "outside", "tool_ran"}},
 	{Name: "pane_as", Type: "string?", Description: "The verdict a pane answer claims: allow, deny, or unknown (an outside record that did not see the answer); null when none was recorded. Public send-keys and outside records store a claim without screen verification or proof. Before answering ACP, Cursor additionally requires a sent claim to match the actual selected option verdict; an outside record never authorizes an ACP answer.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"allow", "deny", "unknown"}},
 	{Name: "proven_gone_at", Type: "timestamp?", Description: "When the agent proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen), unless it is a Cursor request of an earlier launch of the row.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
-	{Name: "proven_gone_how", Type: "string?", Description: "How it was proven gone. tool_ran: a Claude PostToolUse or PostToolUseFailure carried its tool_use_id, or validated correlated Cursor execution output established that exact tool ran (never on a Codex row). turn_end: the turn of the agent that asked ended after it was written; the main agent's Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified Cursor main Stop/Interrupt proves only a durably main-turn-eligible request recorded before the hook began. Legacy non-Cursor main requests retain eligibility; Cursor unknown-origin and child requests are ineligible even without a child id. Decisions, delivery acknowledgements and pane-answer claims do not grant eligibility. A Cursor request its gateway never answered is instead proven turn_end by the gateway when the prompt turn that asked it completes. agent_gone: its non-Cursor spawn was marked missing, ended or resumed. Null until proven.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"tool_ran", "turn_end", "agent_gone"}},
+	{Name: "proven_gone_how", Type: "string?", Description: "How it was proven gone. tool_ran: validated correlated Cursor execution output established that exact tool ran (in practice never on a Claude or Codex row, whose requests carry no tool_use_id). turn_end: the turn of the agent that asked ended after it was written; the main agent's Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified Cursor main Stop/Interrupt proves only a durably main-turn-eligible request recorded before the hook began; a Claude subagent's SubagentStop proves only that subagent's requests recorded before that hook began. Legacy non-Cursor main requests retain eligibility; Cursor unknown-origin and child requests are ineligible even without a child id. Decisions, delivery acknowledgements and pane-answer claims do not grant eligibility. A Cursor request its gateway never answered is instead proven turn_end by the gateway when the prompt turn that asked it completes. agent_gone: its non-Cursor spawn was marked missing, ended or resumed. Null until proven.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"tool_ran", "turn_end", "agent_gone"}},
 	{Name: "unproven_since", Type: "timestamp?", Description: "For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer's or record-pane-answer's write, or the close of its spawn's requests; a request with no recorded settle instant: its recorded verdict). Null while it still awaits an answer, and once proven gone.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 }
 
@@ -330,6 +342,15 @@ var paneLinesParam = ParamDef{
 	Nullable:      false,
 	AllowEmpty:    false,
 	AllowedValues: nil,
+}
+
+// sweepResultFields is shared by the canonical verb and its retained alias.
+var sweepResultFields = []FieldDef{
+	{Name: "checks", Type: "[]SweepCheck", Description: "Sorted fixed all-agent snapshot, once per selected instance_id, including finished, changed, removed and unattempted rows. Never null; [] when empty. Each entry carries instance_id (string), state (string, the lifecycle value as on status), displayed_state (optional string, omitted when absent), family_state (working or waiting, stored and freshness unconfirmed), idle_screen_availability (available or unavailable), process_liveness (alive, exited or unknown), confirmations (exactly the state, process_liveness and displayed_state records), completion (complete or incomplete) and reason (null for complete; otherwise deadline, busy, unreadable, stale_observation, no_evidence, commit_unconfirmed, unsupported or unattempted). Complete means every eligible adapter was attempted or inapplicable, not that fields were confirmed; an attempted failure can be complete. Interrupted and unattempted rows retain stored applicable evidence with no new evidence timestamps. No input, answer, signal, restart or retry is authorized. An initial selection error fails the call; per-agent failures do not suppress others. Transport termination does not promise a returned partial result or prove rollback. " + processLivenessText + " " + confirmationsText, Nullable: false, AllowEmpty: true, AllowedValues: nil},
+	{Name: "count", Type: "int", Description: "Number of rows this sweep marked `missing` (the length of ids). Codex rows moved to `ended` and other repairs do not increment this count. Zero means no rows were marked missing.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+	{Name: "ids", Type: "[]string", Description: "Sorted IDs of rows this sweep marked `missing`, on process or tmux evidence: rows whose agent process (the SessionStart one or the recorded pane's) is dead, and rows whose process could not be checked and tmux found no session or pane of their current launch; a pending row only past the pending grace period, and never while the spawn, reuse or resume that began its launch still runs, except a Cursor row whose exact recorded gateway is gone, which neither protects. A row whose guarded write found it changed or gone, or failed, is in neither list, and so is a Codex row the sweep moved to `ended` (its agent process gone and an end report held) and a pending row the sweep notes unreported (its agent alive) or finds already noted so. `missing` is a check's judgement on available evidence, not proof that the agent has exited. Never null; [] when none.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+	{Name: "unverified", Type: "int", Description: "Number of live rows this sweep left unverified (the length of unverified_ids).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+	{Name: "unverified_ids", Type: "[]string", Description: "Sorted IDs of live rows this sweep left unverified with a liveness note, whether it wrote the note or found it already current: rows whose agent process could not be checked and which tmux did not mark, for example because their own session is present, tmux could not tell or was unavailable, or tmux was not called, or their recorded tmux session name cannot be used (empty, a control character, or a character tmux stores differently: no tmux call, and a liveness note of its own; removing such a row is a human's decision, see docs/operator-actions.md). Never a pending row inside the pending grace period or while its launch runs. A row whose guarded write found it changed or gone, or failed, a row whose note was cleared, and a pending row noted unreported (its agent alive, no hook reported since its launch; find it by liveness_note in get or list) are in neither list. Never null; [] when none.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 }
 
 // Verbs is the canonical, ordered list of verbs implemented by this binary.
@@ -382,7 +403,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent",
 				Type:          "string",
-				Description:   "The agent to launch: claude (Claude Code), codex (Codex) or cursor (Cursor fresh Linux ACP), case-sensitive; empty or absent means not given. A per-call agent overrides the template's; with neither, ErrAgentMissing; any other value, ErrAgentInvalid. A template's non-empty agent_args are inherited only when the template's agent is this agent, else ErrAgentArgsMismatch (this call's supplied agent_args replace them, including an explicit empty Go/MCP array; CLI/TypeScript empty arrays are omitted). A codex or cursor spawn with any allow, deny or ask entry, from the call or the template, is refused with ErrPermissionsUnsupported. The row records the agent for life; get and list show it.",
+				Description:   "The agent to launch: claude (Claude Code), codex (Codex) or cursor (Cursor fresh Linux ACP), case-sensitive; empty or absent means not given. A per-call agent overrides the template's; with neither, ErrAgentMissing; an unrecognized value, ErrAgentInvalid. Experimental agents require an install opt-in. A template's non-empty agent_args are inherited only when the template's agent is this agent, else ErrAgentArgsMismatch (this call's supplied agent_args replace them, including an explicit empty Go/MCP array; CLI/TypeScript empty arrays are omitted). A codex, cursor or pane-only spawn with any allow, deny or ask entry, from the call or the template, is refused with ErrPermissionsUnsupported. The row records the agent for life; get and list show it.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -436,7 +457,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "relay_mode",
 				Type:          "string",
-				Description:   "on / off. Empty falls back to config defaults.relay_mode (default off). " + olderServeRenamed("relay-mode", "relay_mode") + ".",
+				Description:   "on / off. After template resolution, empty uses off for pane-only agents and config defaults.relay_mode (default off) for other agents. Pane-only agents refuse on with ErrAgentCapabilityUnsupported. " + olderServeRenamed("relay-mode", "relay_mode") + ".",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -445,7 +466,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "extra_env",
 				Type:          "map[string]string",
-				Description:   "Env-var entries injected on the tmux session env, as an object mapping each variable name to its value (on the CLI, a repeatable KEY=VALUE flag). Keys rejected with ErrReservedEnvKey, a template's included, never rewritten: the reserved names AGENT_DIRECTOR_* and HOME with any value (an extra_env HOME would move the agent's hook to another agent-director store; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config), and a key that is not a valid env-var name (empty, or containing '=' or a NUL byte, which tmux would read as a different variable; the message says which); auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed. Cursor: CURSOR_CONFIG_DIR and CURSOR_DATA_DIR must be nonempty absolute, lexically clean paths without control bytes; literal selection only, no expansion or filesystem validation. Directory selection uses existing personal login, without account isolation. Explicit CURSOR_API_KEY or AGENT_CLI_CREDENTIAL_STORE, even empty, is refused with ErrReservedEnvKey before mutation or launch because the credential profile is unreleased. Absent Cursor selectors are not inherited from caller, parent or server. Resume uses saved selection; reuse uses the new resolved request. " + olderServeRenamed("extra-env", "extra_env") + ", so its variables (CLAUDE_CONFIG_DIR and CODEX_HOME included) are not set.",
+				Description:   "Env-var entries injected on the tmux session env, as an object mapping each variable name to its value (on the CLI, a repeatable KEY=VALUE flag). Keys rejected with ErrReservedEnvKey, a template's included, never rewritten: the reserved names AGENT_DIRECTOR_* and HOME with any value (an extra_env HOME would move the agent's hook to another agent-director store; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config), and a key that is not a valid env-var name (empty, or containing '=' or a NUL byte, which tmux would read as a different variable; the message says which); auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed. Cursor: CURSOR_CONFIG_DIR and CURSOR_DATA_DIR must be nonempty absolute, lexically clean paths without control bytes; literal selection only, no expansion or filesystem validation. Directory selection uses existing personal login, without account isolation. Explicit CURSOR_API_KEY or AGENT_CLI_CREDENTIAL_STORE, even empty, is refused with ErrReservedEnvKey before mutation or launch because the credential profile is unreleased. Absent Cursor selectors are not inherited from caller, parent or server. Resume uses saved selection; reuse uses the new resolved request. Pane-only agents refuse their credential and home selectors with ErrReservedEnvKey, even empty or inherited from a template; ambient values of these keys are excluded from the pane. They keep the invoking HOME and offer no alternate-home selector. " + olderServeRenamed("extra-env", "extra_env") + ", so its variables (CLAUDE_CONFIG_DIR and CODEX_HOME included) are not set.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -454,7 +475,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent_args",
 				Type:          "[]string",
-				Description:   "Pass-through argv to the agent program, one argument per array element (on the CLI, the arguments after --). Claude refuses --settings, --output-format and print (-p/--print, clusters included). Session selectors/owned values are refused except on a finished-agent switch: dropped_args reports their removal; the agent starts fresh and resumes nothing. Exact denied long tokens owned as values always refuse. For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position, --remote, --remote-auth-token-env, -c/--config keys at, above or under hooks, tui.disable_paste_burst, features.hooks or its alias features.codex_hooks, and --disable hooks or codex_hooks; with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys. agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat. Cursor accepts --model/-m (split or equals), --mode agent|plan|ask, --plan and one final initial prompt (use -- before a flag-like prompt). Explicit mode is configured through ACP before prompt admission; launch success alone does not confirm it. Other or malformed Cursor arguments return ErrSpawnDeniedFlag; remove the named argument and any owned value, then retry.",
+				Description:   "Pass-through argv to the agent program, one argument per array element (on the CLI, the arguments after --). Claude refuses --settings, --output-format and print (-p/--print, clusters included). Session selectors/owned values are refused except on a finished-agent switch: dropped_args reports their removal; the agent starts fresh and resumes nothing. Exact denied long tokens owned as values always refuse. For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position, --remote, --remote-auth-token-env, -c/--config keys at, above or under hooks, tui.disable_paste_burst, features.hooks or its alias features.codex_hooks, and --disable hooks or codex_hooks; with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys. agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat. Cursor accepts --model/-m (split or equals), --mode agent|plan|ask, --plan and one final initial prompt (use -- before a flag-like prompt). Explicit mode is configured through ACP before prompt admission; launch success alone does not confirm it. Other or malformed Cursor arguments return ErrSpawnDeniedFlag; remove the named argument and any owned value, then retry. Pane-only agents require exactly one --model ID; all other arguments and custom-model selectors are refused, and no positional task is accepted.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -463,7 +484,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "no_pre_trust",
 				Type:          "bool",
-				Description:   "Skip the folder pre-trust. For a claude agent, pre-trust pre-writes projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra_env, otherwise from agent-director's own environment; ~/.claude.json if neither sets it). For a codex agent, it puts the cwd's trust and the hook-trust bypass on the launch's command line and writes no file, so Codex does not stop at its folder-trust prompt. Default off (best-effort pre-trust for Claude/Codex). Cursor grants no trust: failed by default (ACP pre-trust unsupported), skipped with no_pre_trust; permission policy is independent and readiness is not guaranteed. For all three agents, the choice is recorded on the row until the next spawn or reuse, and every resume follows it: no pre-trust is attempted over an opt-out. " + olderServeUndecoded + ".",
+				Description:   "Skip the folder pre-trust. For a claude agent, pre-trust pre-writes projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra_env, otherwise from agent-director's own environment; ~/.claude.json if neither sets it). For a codex agent, it puts the cwd's trust and the hook-trust bypass on the launch's command line and writes no file, so Codex does not stop at its folder-trust prompt. Default off (best-effort pre-trust for Claude/Codex). Cursor grants no trust: failed by default (ACP pre-trust unsupported), skipped with no_pre_trust; permission policy is independent and readiness is not guaranteed. Pane-only agents always report skipped, with no trust grant or trust-file write, regardless of no_pre_trust. The choice is recorded on the row until the next spawn or reuse; agents that support resume follow it, so no pre-trust is attempted over an opt-out. Pane-only rows cannot resume. " + olderServeUndecoded + ".",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -490,7 +511,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "idle_screen_timeout_seconds",
 				Type:          "int",
-				Description:   "This row's idle_screen timeout in whole seconds, 1 to 9223372036, used by every status, get and list in place of their [state] idle_screen_timeout_seconds. 0, null or omitted gives no override. A negative, fractional, non-numeric or larger value is refused with ErrInvalidFlags before anything is written or launched, never clamped. Recorded on the row: resume keeps it; the next spawn or reuse replaces it, clearing it when that call gives none; a reuse whose launch fails restores the earlier one. Cursor rows keep it, but idle_screen is unavailable for them.",
+				Description:   "This row's idle_screen timeout in whole seconds, 1 to 9223372036, used by every status, get and list in place of their [state] idle_screen_timeout_seconds. 0, null or omitted gives no override. A negative, fractional, non-numeric or larger value is refused with ErrInvalidFlags before anything is written or launched, never clamped. Recorded on the row: resume keeps it; the next spawn or reuse replaces it, clearing it when that call gives none; a reuse whose launch fails restores the earlier one. Cursor and pane-only rows keep it, but idle_screen is unavailable for them.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -509,7 +530,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "pre_trust",
 				Type:          "string",
-				Description:   "What the launch's folder-trust pre-trust did. Cursor: no trust grant, failed by default or skipped with no_pre_trust; never ok. For Claude/Codex: ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or CLAUDE_CONFIG_DIR is set but not an absolute path; the file is <CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra_env, otherwise from agent-director's own environment, and ~/.claude.json if neither sets it; for a codex agent, extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
+				Description:   "What the launch's folder-trust pre-trust did. Pane-only agents: always skipped, regardless of no_pre_trust; no trust grant or trust-file write. Cursor: no trust grant, failed by default or skipped with no_pre_trust; never ok. For Claude/Codex: ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or CLAUDE_CONFIG_DIR is set but not an absolute path; the file is <CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra_env, otherwise from agent-director's own environment, and ~/.claude.json if neither sets it; for a codex agent, extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
@@ -523,9 +544,12 @@ var Verbs = []VerbDef{
 			"ErrCwdNotADirectory",
 			"ErrRelayModeInvalid",
 			"ErrSpawnDeniedFlag",
+			"ErrModelMissing",
 			"ErrAgentMissing",
 			"ErrAgentInvalid",
 			"ErrAgentArgsMismatch",
+			"ErrExperimentalAgentDisabled",
+			"ErrAgentCapabilityUnsupported",
 			"ErrPermissionsUnsupported",
 			"ErrReservedEnvKey",
 			"ErrInvalidFlags",
@@ -545,7 +569,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "status",
-		Description: "State: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.",
+		Description: "Check this row; report state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -563,14 +587,17 @@ var Verbs = []VerbDef{
 			{
 				Name:          "state",
 				Type:          "string",
-				Description:   "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + needsIntelligenceText + " " + idleScreenText + " " + settledStateText,
+				Description:   "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is a check's judgement on available evidence, not proof that the agent has exited. " + needsIntelligenceText + " " + idleScreenText + " " + settledStateText,
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: stateEnum,
 			},
 			{Name: "context", Type: "object", Description: contextDescription, Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			familyStateField,
+			processLivenessField,
+			confirmationsField,
 			availabilityField,
+			integrationModeField,
 			displayedStateField, displaySinceField, requestTokenField, toolNameField, unchangedMinutesField,
 			{Name: "tmux_session_name", Type: "string?", Description: "Attach target; present only while displayed_state is.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{
@@ -584,11 +611,12 @@ var Verbs = []VerbDef{
 		},
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
+			"ErrStoreBusy",
 		},
 	},
 	{
 		Name:        "get",
-		Description: "Return the full row: identity, state, session and tmux socket.",
+		Description: "Check this row; return identity, state, session and tmux socket.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -606,12 +634,15 @@ var Verbs = []VerbDef{
 			{Name: "instance_id", Type: "string", Description: "Stable id of the Spawn.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "context", Type: "object", Description: contextDescription, Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
-			{Name: "state", Type: "string", Description: "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + needsIntelligenceText + " " + idleScreenText + " " + settledStateText, Nullable: false, AllowEmpty: false, AllowedValues: stateEnum},
+			{Name: "state", Type: "string", Description: "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is a check's judgement on available evidence, not proof that the agent has exited. " + needsIntelligenceText + " " + idleScreenText + " " + settledStateText, Nullable: false, AllowEmpty: false, AllowedValues: stateEnum},
 			familyStateField,
+			processLivenessField,
+			confirmationsField,
 			availabilityField,
+			integrationModeField,
 			displayedStateField, displaySinceField, requestTokenField, toolNameField, unchangedMinutesField,
 			{Name: "cwd", Type: "string", Description: "Canonicalized cwd.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
-			{Name: "agent", Type: "string", Description: "The agent the row runs: claude (Claude Code), codex (Codex) or cursor (Cursor). Set at spawn, replaced by a reuse, followed by resume.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"claude", "codex", "cursor"}},
+			{Name: "agent", Type: "string", Description: "The agent the row runs. Set at spawn, replaced by a reuse, followed by resume.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"claude", "codex", "cursor"}},
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "tmux_socket", Type: "string?", Description: "The tmux socket the row's launch uses; omitted when the row has no recorded socket.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{Name: "agent_args", Type: "[]string", Description: "Verbatim argv passed through to the agent program.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
@@ -624,8 +655,8 @@ var Verbs = []VerbDef{
 			{Name: "state_changed_at", Type: "timestamp", Description: stateChangedAtText, Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "ended_at", Type: "timestamp?", Description: "Set when state moves to ended (omitted while live).", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{Name: "launch_started_at", Type: "timestamp?", Description: "Start of the launch in progress: RFC3339 UTC with millisecond precision. Present only while the row is pending; omitted otherwise. " + launchStartLiveSentence, Nullable: true, AllowEmpty: false, AllowedValues: nil},
-			{Name: "liveness_unverified_since", Type: "timestamp?", Description: "RFC3339 timestamp of the first sweep that noted this live row (left it unverified, or noted it unreported); kept while later sweeps change liveness_note, unreported included. Cleared to NULL together with liveness_note when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
-			{Name: "liveness_note", Type: "string?", Description: "Reason token of the latest sweep that left this live row unverified (its agent process could not be checked and tmux did not settle it), for example process_not_seen_session_present, process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or provenance_conflict; overwritten when the reason changes. Cleared to NULL together with liveness_unverified_since when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note. Or unreported, on a pending row past the pending grace period: its agent is alive, but no hook has reported since its launch, so it may sit at an agent startup screen or idle at its prompt. The row stays pending. To act on it: read-pane, then send-keys with allow_pending (--allow-pending on the CLI); only a caller that looked should type. A later sweep that finds the agent alive keeps the note; the agent's next hook clears it. unreported never replaces provenance_conflict.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
+			{Name: "liveness_unverified_since", Type: "timestamp?", Description: "RFC3339 timestamp of the first check that noted this live row (left it unverified, or noted it unreported); kept while later checks change liveness_note, unreported included. Cleared to NULL together with liveness_note when a check finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
+			{Name: "liveness_note", Type: "string?", Description: "Reason token of the latest check that left this live row unverified (its agent process could not be checked and tmux did not settle it), for example process_not_seen_session_present, process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or provenance_conflict; overwritten when the reason changes. Cleared to NULL together with liveness_unverified_since when a check finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note. Or unreported, on a pending row past the pending grace period: its agent is alive, but no hook has reported since its launch, so it may sit at an agent startup screen or idle at its prompt. The row stays pending. To act on it: read-pane, then send-keys with allow_pending (--allow-pending on the CLI); only a caller that looked should type. A later check that finds the agent alive keeps the note; the agent's next hook clears it. unreported never replaces provenance_conflict.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{Name: "permission_requests", Type: "[]object", Description: permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "unproven_requests", Type: "[]object", Description: "Every permission request of the row that the agent has not proven gone (proven_gone_at null), less Cursor requests of an earlier launch of the row, oldest first, in any state but ended and missing ([] on those). Unlike permission_requests it also lists requests agent-director's records read closed (delivered, answered at the pane, or recorded answered outside it), each with unproven_since: a request that stays unproven a while after it is a reason to read the pane, since its dialog may still be on it. Elements have the same fields as permission_requests'. While it is not empty, plain send-keys without expect_pane_sha256, and pause, are refused. Always a non-null array. It follows the row's live state: with [state] settle_ms set, a row can read ended or missing with requests here for up to settle_ms.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "transcript_status", Type: "string", Description: "Derived operator-facing summary of the current session's transcript state: 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and prior_sessions is empty — nothing was ever written in the current life), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — the current life has history under a different session id), or 'no_session' (no session_id yet). Session history belongs to a life; 'never_written' and 'rotated' are decided on the same entries prior_sessions lists. Same-agent reuse retains the history; an agent switch or switch back starts a new life with no history. A failed reuse's applied restore returns the pre-reuse life.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"present", "never_written", "rotated", "no_session"}},
@@ -633,11 +664,12 @@ var Verbs = []VerbDef{
 		},
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
+			"ErrStoreBusy",
 		},
 	},
 	{
 		Name:        "send-keys",
-		Description: "Strip CR, keep LF, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512-byte chunks, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else get/status, escalate if unknown. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Strip CR, keep LF, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512B chunks, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. Cleanup: caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -661,7 +693,7 @@ var Verbs = []VerbDef{
 			},
 			{
 				Name: "delivery_request_id", Type: "string",
-				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Existing unresolved native input blocks fallback resends too. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.",
+				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Unresolved or unreadable/corrupt native evidence blocks fallback resends too; discovering old proof never dispatches a different request. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.",
 				Required:    false, Nullable: false, AllowEmpty: true,
 			},
 			{
@@ -728,6 +760,7 @@ var Verbs = []VerbDef{
 			{Name: "record_sha256", Type: "string", Description: "SHA-256 of the exact structured user record.", AllowEmpty: true},
 		},
 		ErrorNames: []string{
+			"ErrAgentCapabilityUnsupported",
 			"ErrInvalidFlags",
 			"ErrSpawnNotFound",
 			"ErrSpawnNotInteractive",
@@ -852,7 +885,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "decide",
-		Description: "Caller's allow/deny on open PermissionRequest (relay_mode=on only): first wins (else ErrAlreadyDecided). Cursor allow: offered allow_once or blocking-plan acceptance; deny: supported rejection; persistent native choices need deliberate pane selection. Up to 1 s for relay-hook ack: delivery delivered/not_confirmed (poll get-permission; ends by confirm_by). Hook gone: immediate ErrRelayFallenBack. ErrNoOpenPermissionRequest (no open token, spawn ended/missing, or dialog may have closed): no pane answer. max_wait_ms blocks required pre-record wait: ErrStoreBusy.",
+		Description: "Caller's allow/deny on open PermissionRequest (relay_mode=on only): first wins (else ErrAlreadyDecided). Cursor allow: offered allow_once or blocking-plan acceptance; deny: supported rejection; persistent native choices need deliberate pane selection. Up to 1 s for relay-hook ack: delivery delivered/not_confirmed (poll get-permission; ends by confirm_by). Hook gone: immediate ErrRelayFallenBack. ErrNoOpenPermissionRequest (absent, closed, proven-gone or obsolete request): no pane answer. max_wait_ms blocks required pre-record wait: ErrStoreBusy.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -903,9 +936,10 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: append([]FieldDef{
-			{Name: "delivery", Type: "string", Description: "delivered: the relay durably acknowledged the verdict before enqueue/write; this is not agent receipt, execution or dialog closure. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack, or ErrAlreadyDecided once answered at the pane.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"delivered", "not_confirmed"}},
+			{Name: "delivery", Type: "string", Description: "delivered: the relay durably acknowledged the verdict before enqueue/write; this is not transport completion, agent receipt, execution or dialog closure. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack, or ErrAlreadyDecided once answered at the pane.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"delivered", "not_confirmed"}},
 		}, deliveryFactFields...),
 		ErrorNames: []string{
+			"ErrAgentCapabilityUnsupported",
 			"ErrMissingRequestToken",
 			"ErrSpawnNotFound",
 			"ErrRelayModeOff",
@@ -920,7 +954,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "get-permission",
-		Description: "Get by request_token. Cursor: full raw permission/plan params envelope, preserving options/absent/null fields, no added connection context. Undecided: decision/decided_at null. Decided may stay open until acked. Outcome: delivery.",
+		Description: "Get by request_token. Cursor retains raw permission/plan params. Undecided: decision/decided_at null. Decided may stay open until acked. Delivery and proof are distinct; a verdict or closeout grants no response authority.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -940,10 +974,10 @@ var Verbs = []VerbDef{
 			{Name: "tool_name", Type: "string", Description: "The supplied tool name (e.g. \"Bash\", \"Write\") or Cursor action title/plan name.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "tool_input", Type: "string", Description: "Raw JSON string, NOT a nested JSON object; consumers parse it themselves. Cursor preserves the complete received permission/plan params envelope byte for byte, including options and absent/null fields, without adding internal context.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "requested_at", Type: "timestamp", Description: "RFC3339 timestamp when the request was recorded.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
-			{Name: "decision", Type: "string?", Description: "\"allow\" or \"deny\" once a verdict is recorded; null while undecided, and for a record-pane-answer claiming unknown. A recorded verdict is not the outcome: read delivery and pane_answer.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"allow", "deny"}},
-			{Name: "decision_reason", Type: "string?", Description: "Canonical decision-reason string: for deny rows operator / timeout / find_missing / ended (find_missing and ended: the request was still undecided when find-missing marked its spawn missing, or when its spawn ended or was resumed, and is closed); pane (a pane answer through send-keys or a Cursor native choice) and pane_outside (record-pane-answer) describe claims, not ACP delivery, receipt or execution proof. tool_ran records tool execution evidence. Initially null while undecided without an outside claim, and for an allow from decide. Validated Cursor execution proof fills a missing reason with tool_ran while preserving any earlier verdict and non-null reason.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"operator", "timeout", "find_missing", "ended", "pane", "pane_outside", "tool_ran"}},
+			{Name: "decision", Type: "string?", Description: "\"allow\" or \"deny\" once a verdict is recorded; null while undecided, and for a record-pane-answer claiming unknown. A recorded verdict does not authorize a response: read delivery, pane_answer and proof separately.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"allow", "deny"}},
+			{Name: "decision_reason", Type: "string?", Description: "Canonical decision-reason string: for deny rows operator / timeout / find_missing / ended (find_missing and ended: the request was still undecided when a shared check marked its spawn missing, or when its spawn ended or was resumed, and is closed); pane (a pane answer through send-keys or a Cursor native choice) and pane_outside (record-pane-answer) describe claims, not ACP delivery, receipt or execution proof. tool_ran records tool execution evidence. Initially null while undecided without an outside claim, and for an allow from decide. Validated Cursor execution proof fills a missing reason with tool_ran while preserving any earlier verdict and non-null reason; this grants no response authority.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"operator", "timeout", "find_missing", "ended", "pane", "pane_outside", "tool_ran"}},
 			{Name: "decided_at", Type: "timestamp?", Description: "RFC3339 timestamp when the verdict was written; null while undecided.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
-			{Name: "delivery", Type: "string", Description: "delivered: the relay durably acknowledged a verdict before enqueue/write; this is not agent receipt, execution or dialog closure. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent. While pane_answer is none or intent the request awaits an answer unless acknowledged or closed with its spawn; a pane answer, record-pane-answer or validated execution proof can close it; with sent, outside or tool_ran it is closed. Derived on every read; a request with no recorded settle instant falls back by its relay window plus 2 s.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"delivered", "not_confirmed", "fallen_back"}},
+			{Name: "delivery", Type: "string", Description: "delivered: the relay durably acknowledged a verdict before enqueue/write; this is not transport completion, agent receipt, execution or dialog closure. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by and grants no authority to a closed or proven-gone request. fallen_back: no ack, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent. While pane_answer is none or intent the request awaits an answer unless acknowledged or closed with its spawn; a pane answer, record-pane-answer or validated execution proof can close it; with sent, outside or tool_ran it is closed. Derived on every read; a request with no recorded settle instant falls back by its relay window plus 2 s.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"delivered", "not_confirmed", "fallen_back"}},
 		}, deliveryFactFields...),
 		ErrorNames: []string{
 			"ErrPermissionRequestNotFound",
@@ -951,7 +985,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "record-pane-answer",
-		Description: "Close a fallen-back request answered outside agent-director; types nothing. Needs read-pane's pane_sha256; too soon: ErrClaimTooSoon.",
+		Description: "Record an outside answer to a fallen-back request; no typing, response authority or proof. Needs read-pane's pane_sha256; too soon: ErrClaimTooSoon.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -992,6 +1026,7 @@ var Verbs = []VerbDef{
 			{Name: "decision_reason", Type: "string", Description: "Always pane_outside.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 		},
 		ErrorNames: []string{
+			"ErrAgentCapabilityUnsupported",
 			"ErrInvalidFlags",
 			"ErrPermissionRequestNotFound",
 			"ErrSpawnNotFound",
@@ -1037,6 +1072,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ErrorNames: []string{
+			"ErrAgentCapabilityUnsupported",
 			"ErrSpawnNotFound",
 			"ErrSpawnNotResumable",
 			"ErrNoSessionId",
@@ -1052,20 +1088,22 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
-		Name:        "find-missing",
-		Description: "Reconcile live rows with their agents. A row's liveness comes only from its agent process, checked by its recorded start time; no process environment is read; no child process or copy of the row's id keeps it alive. A dead agent process marks the row `missing` (a Codex row with an end report: `ended`, not in ids) whatever tmux shows, with no tmux call. Only a row whose process cannot be checked or was never recorded is looked up in tmux, once per socket, on its recorded socket (else the caller's): its own labelled session leaves it unverified (a row with no recorded pane is judged by the pane carrying its launch token, marked if none does), as does an unusable tmux answer; no session of its current launch marks it `missing` whatever holds its name. A session holding the name is never touched (see docs/operator-actions.md). tmux problems never fail the sweep. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Run it as the same user and in the same tmux environment as the agents: a run as another user, as root or against another tmux server can mark live rows `missing`. See kill for what a wrong server leads to. " + expireCleanupPointer + " ErrProbeUnsupported is no longer returned. A pending row (a spawn's, reuse's or resume's launch) is not judged inside the pending grace period (pending_grace_seconds, 60 s by default), measured from its launch start, not its started_at, or while its launch runs: it is in neither list; one with no readable launch start is judged at once. Past its grace, a pending row whose agent runs but no hook reported gets liveness_note unreported: read-pane, and only having looked, send-keys with allow_pending. " + liveRowSequencePointer,
-		Callable:    true,
-		HandleFree:  false,
-		Params:      []ParamDef{},
-		ResultFields: []FieldDef{
-			{Name: "count", Type: "int", Description: "Number of rows this sweep marked `missing` (the length of ids); a Codex row it moved to `ended` is not counted. Zero is a legitimate happy-path result when nothing needed marking.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
-			{Name: "ids", Type: "[]string", Description: "Sorted IDs of rows this sweep marked `missing`, on process or tmux evidence: rows whose agent process (the SessionStart one or the recorded pane's) is dead, and rows whose process could not be checked and tmux found no session or pane of their current launch; a pending row only past the pending grace period, and never while the spawn, reuse or resume that began its launch still runs. A row whose guarded write found it changed or gone, or failed, is in neither list, and so is a Codex row the sweep moved to `ended` (its agent process gone and an end report held) and a pending row the sweep notes unreported (its agent alive) or finds already noted so. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Never null; [] when none.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
-			{Name: "unverified", Type: "int", Description: "Number of live rows this sweep left unverified (the length of unverified_ids).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
-			{Name: "unverified_ids", Type: "[]string", Description: "Sorted IDs of live rows this sweep left unverified with a liveness note, whether it wrote the note or found it already current: rows whose agent process could not be checked and which tmux did not mark, for example because their own session is present, tmux could not tell or was unavailable, or tmux was not called, or their recorded tmux session name cannot be used (empty, a control character, or a character tmux stores differently: no tmux call, and a liveness note of its own; removing such a row is a human's decision, see docs/operator-actions.md). Never a pending row inside the pending grace period or while its launch runs. A row whose guarded write found it changed or gone, or failed, a row whose note was cleared, and a pending row noted unreported (its agent alive, no hook reported since its launch; find it by liveness_note in get or list) are in neither list. Never null; [] when none.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
-		},
-		ErrorNames: []string{
-			"ErrProbeUnsupported",
-		},
+		Name:         "sweep",
+		Description:  "One bounded pass of status/get/list recovery checks on a fixed all-agent snapshot: liveness, missed Codex turn ends, stale check_permission, display, provisional transcripts, late input proof. checks: three confirmations; complete/incomplete coverage, not observation success. No input, answer, restart or signal. Liveness uses the agent process at its recorded start identity, never children or copied IDs; no process environment is read. A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux. Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded), once per recorded socket (else caller's). No session, or (with no recorded pane) no pane with its launch token, marks missing; else an owned session leaves it unverified. Cursor uses its exact gateway: gone overrides pending protections; unknown stays unverified, no tmux fallback. Unusable tmux leaves it unverified; held names are untouched (docs/operator-actions.md). ErrProbeUnsupported: never returned. `missing` is a check's judgement on available evidence, not proof that the agent has exited. Run as the agents' user in their tmux environment: another user, root or another server can mark live rows missing; see kill. " + expireCleanupPointer + " Pending launches are protected while launching or within pending_grace_seconds (default 60 s) of launch start, not started_at; an unreadable start is judged at once. Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending. " + liveRowSequencePointer,
+		Callable:     true,
+		HandleFree:   false,
+		Params:       []ParamDef{},
+		ResultFields: sweepResultFields,
+		ErrorNames:   []string{"ErrProbeUnsupported", "ErrStoreBusy"},
+	},
+	{
+		Name:         "find-missing",
+		Description:  "Compatibility alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.",
+		Callable:     true,
+		HandleFree:   false,
+		Params:       []ParamDef{},
+		ResultFields: sweepResultFields,
+		ErrorNames:   []string{"ErrProbeUnsupported", "ErrStoreBusy"},
 	},
 	{
 		Name:        "expire",
@@ -1118,7 +1156,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent",
 				Type:          "string",
-				Description:   "Bake the template's agent: claude (Claude Code), codex (Codex) or cursor (Cursor fresh Linux ACP), case-sensitive; empty or absent means none, and no agent key is stored. Another value is refused with ErrTemplateMalformed. A non-empty agent_args needs an agent (ErrTemplateAgentMissing): the arguments belong to it. A codex or cursor template with any allow, deny or ask entry is refused with ErrPermissionsUnsupported. A spawn that names no agent takes the template's.",
+				Description:   "Bake the template's agent: claude (Claude Code), codex (Codex) or cursor (Cursor fresh Linux ACP), case-sensitive; empty or absent means none, and no agent key is stored. An unrecognized value is refused with ErrTemplateMalformed. Experimental agents require an install opt-in. A non-empty agent_args needs an agent (ErrTemplateAgentMissing): the arguments belong to it. A codex, cursor or pane-only template with any allow, deny or ask entry is refused with ErrPermissionsUnsupported. A spawn that names no agent takes the template's.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -1127,7 +1165,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "relay_mode",
 				Type:          "string",
-				Description:   "Bake a default relay_mode (on/off). Per-call relay_mode (--relay-mode on the CLI) overrides.",
+				Description:   "Bake a default relay_mode (on/off). Pane-only templates refuse on. If the resolved spawn is pane-only, empty defaults to off. Per-call relay_mode (--relay-mode on the CLI) overrides.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -1136,7 +1174,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent_args",
 				Type:          "[]string",
-				Description:   "Bake default agent argv. Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES the template's array wholesale (not concat). Cursor uses spawn's supported model/mode/initial-prompt subset; unsupported or malformed arguments return ErrSpawnDeniedFlag before writing.",
+				Description:   "Bake default agent argv. Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES the template's array wholesale (not concat). Cursor uses spawn's supported model/mode/initial-prompt subset; unsupported or malformed arguments return ErrSpawnDeniedFlag before writing. Pane-only agents permit only one --model ID and refuse custom-model selectors; a template may omit it for the spawn to supply.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -1145,7 +1183,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "extra_env",
 				Type:          "map[string]string",
-				Description:   "Bake env-var entries. Per-call extra_env (--extra-env on the CLI) merges by key; per-call wins on collision. A key spawn would refuse is refused here by the same check with ErrReservedEnvKey, never rewritten, and no file is written: the reserved names AGENT_DIRECTOR_* and HOME with any value (set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config), and a key that is not a valid env-var name (empty, or containing '=' or a NUL byte; the message says which). Cursor templates additionally refuse explicit CURSOR_API_KEY or AGENT_CLI_CREDENTIAL_STORE, even empty, and require nonempty absolute, lexically clean CURSOR_CONFIG_DIR/CURSOR_DATA_DIR paths without control bytes. These directories select configuration/data with existing personal login, without account isolation. Agent-independent templates defer Cursor checks until the effective agent is resolved.",
+				Description:   "Bake env-var entries. Per-call extra_env (--extra-env on the CLI) merges by key; per-call wins on collision. A key spawn would refuse is refused here by the same check with ErrReservedEnvKey, never rewritten, and no file is written: the reserved names AGENT_DIRECTOR_* and HOME with any value (set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config), and a key that is not a valid env-var name (empty, or containing '=' or a NUL byte; the message says which). Cursor templates additionally refuse explicit CURSOR_API_KEY or AGENT_CLI_CREDENTIAL_STORE, even empty, and require nonempty absolute, lexically clean CURSOR_CONFIG_DIR/CURSOR_DATA_DIR paths without control bytes. These directories select configuration/data with existing personal login, without account isolation. Pane-only templates additionally refuse their credential and home selectors with ErrReservedEnvKey, even empty; these agents keep the invoking HOME and offer no alternate-home selector. Agent-independent templates defer agent-specific checks until the effective agent is resolved at spawn, when inherited entries are checked too.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -1206,20 +1244,22 @@ var Verbs = []VerbDef{
 			"ErrTemplateMalformed",
 			"ErrTemplateAgentMissing",
 			"ErrSpawnDeniedFlag",
+			"ErrExperimentalAgentDisabled",
+			"ErrAgentCapabilityUnsupported",
 			"ErrPermissionsUnsupported",
 			"ErrReservedEnvKey",
 		},
 	},
 	{
 		Name:        "list",
-		Description: "Enumerate rows. Filters AND together. Unordered; callers sort.",
+		Description: "Select rows (filters AND, then limit); check fixed IDs. Unordered.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
 			{
 				Name:          "state",
 				Type:          "[]string",
-				Description:   "Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP. A row matches when its state or its displayed_state is one of the values, so `working` keeps a working row that shows `idle_screen`, and `idle_screen` keeps it too; `needs_intelligence` is accepted and matches only a row showing it. Applied before limit.",
+				Description:   "Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP. A row matches when its state or its displayed_state is one of the values, so `working` keeps a working row that shows `idle_screen`, and `idle_screen` keeps it too; `needs_intelligence` is accepted and matches only a row showing it. Applied before limit. Selection uses stored state/display facts; checks retain those IDs even after a state change.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -1272,16 +1312,17 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. State filtering occurs before limit. A row showing a Displayed State carries displayed_state (string?) beside its state, with since/request_token/tool_name/unchanged_minutes omitted. " + needsIntelligenceText + " " + idleScreenText + " Every row carries idle_screen_availability (string: available for Claude and Codex, unavailable for Cursor), a capability outcome, never a state. Empty array when none match (never null). Each row carries family_state (string: working or waiting). " + familyStateText + " Each row carries agent (string: claude, codex or cursor, the agent it runs) and liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row carries state_changed_at (timestamp), as get's: " + stateChangedAtText + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. State filtering occurs before limit. A row showing a Displayed State carries displayed_state (string?) beside its state, with since/request_token/tool_name/unchanged_minutes omitted. " + needsIntelligenceText + " " + idleScreenText + " Every row carries idle_screen_availability (string: available for Claude and Codex, unavailable for Cursor and pane-only agents), a capability outcome, never a state. Empty array when none match (never null). Each row carries family_state (string: working or waiting). " + familyStateText + " Each row carries process_liveness (string: alive, exited or unknown). " + processLivenessText + " Each row carries confirmations (object). " + confirmationsText + " Each row carries optional integration_mode (string: pane_only; omitted for other agents). " + paneOnlyContract + " Each row carries agent (string: the agent it runs) and liveness_unverified_since (timestamp?, the time a check first noted the row, kept while the note changes) and liveness_note (string?, the latest check's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a check that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a check finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row carries state_changed_at (timestamp), as get's: " + stateChangedAtText + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is a check's judgement on available evidence, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrInvalidFlags",
 			"ErrListInvalidLabel",
+			"ErrStoreBusy",
 		},
 	},
 	{
 		Name:        "list-subagents",
-		Description: "Return an agent's subagent records and their tracked status.",
+		Description: "Agent's subagent records with tracked status.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1296,7 +1337,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "tracked", Type: "bool", Description: "Whether the row's launch registered subagent tracking: false for a row launched before subagent tracking existed, which has no records, and false for a row whose launch registers no subagent events; true for any other row.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "tracked", Type: "bool", Description: "Whether the row's launch registered subagent tracking: false for a row launched before subagent tracking existed, which has no records, and false for a row whose launch registers no subagent events; pane-only agents always return false and an empty subagents list; true for any other row.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "subagents", Type: "[]object", Description: subagentsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
@@ -1305,7 +1346,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "pause",
-		Description: "Send `/exit` to a waiting row; await `ended` for pause.timeout_seconds. Ended/missing: no-op. " + missingNotProofShort + " ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Plain send-keys guards; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Pane-only: always ErrAgentCapabilityUnsupported. Others: ended/missing no-op; waiting: send `/exit`, await `ended` for pause.timeout_seconds. " + missingNotProofShort + " ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. ErrSubmissionUnconfirmed: inspect attempted-input facts (caller-contract.md). Codex: end report + exited agent ends row before keys or in wait. Plain send-keys guards; ErrDialogMaybeOpen: answer dialog, send-keys `/exit` with expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1321,8 +1362,10 @@ var Verbs = []VerbDef{
 		},
 		ResultFields: []FieldDef{},
 		ErrorNames: []string{
+			"ErrAgentCapabilityUnsupported",
 			"ErrSpawnNotFound",
 			"ErrSpawnNotPausable",
+			"ErrSubmissionUnconfirmed",
 			"ErrSendKeysWhileRelayed",
 			"ErrRelayFallenBack",
 			"ErrDialogMaybeOpen",
@@ -1335,7 +1378,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "serve",
-		Description: "Run the long-lived MCP server, JSON-RPC on stdio: CLI verbs except `hook`, `serve`, `trail-emit` and `cursor-host` as tools.",
+		Description: "MCP server (JSON-RPC stdio): CLI verbs except `hook`, `serve`, `trail-emit` and `cursor-host` as tools.",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1354,7 +1397,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "version",
-		Description: "JSON version: {version, commit, config_dir}. CLI aliases: --version, -v.",
+		Description: "JSON: {version, commit, config_dir}. Aliases: --version, -v.",
 		Callable:    true,
 		HandleFree:  true,
 		Params:      []ParamDef{},
@@ -1499,7 +1542,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "timeout",
 				Type:          "int",
-				Description:   "The per-hook timeout, in seconds, spawn wrote for this hook in the agent's settings (the PermissionRequest entry: the relay window). The relay hook's kill instant is its start plus it; the hook never acks a verdict without 2 s left before it. Absent, unparseable or not positive: the loaded config's relay.timeout_seconds.",
+				Description:   "The per-hook timeout, in seconds, spawn wrote for this hook in the agent's settings (the PermissionRequest entry: the relay window). The relay hook's kill instant is its start plus it; the write budget ends 2 s before it. A final parent/deadline check suppresses late output; a late or uncertain commit may retain acknowledgement without an answer. Absent, unparseable or not positive: the loaded config's relay.timeout_seconds.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,

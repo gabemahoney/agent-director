@@ -90,14 +90,14 @@ func TestParallelHookOrdering(t *testing.T) {
 	if state, err := st.GetSpawnState(id); err != nil || state != store.StateCheckPermission {
 		t.Errorf("state = %q (%v) before any row is decided; want check_permission", state, err)
 	}
-	if _, err := st.DecidePermissionRequest(id, p.tokenA, "allow", "", ""); err != nil {
+	if _, err := st.DecidePermissionRequest(id, p.tokenA, "allow", "", store.WriterProcessDecide); err != nil {
 		t.Fatalf("decide A: %v", err)
 	}
 	waitDone(t, p.doneA, "hook A")
 	if d, _ := decided(t, st, id, p.tokenB); d != "" {
 		t.Errorf("row B decided %q after deciding A only", d)
 	}
-	if _, err := st.DecidePermissionRequest(id, p.tokenB, "deny", "not allowed", ""); err != nil {
+	if _, err := st.DecidePermissionRequest(id, p.tokenB, "deny", "not allowed", store.WriterProcessDecide); err != nil {
 		t.Fatalf("decide B: %v", err)
 	}
 	waitDone(t, p.doneB, "hook B")
@@ -125,7 +125,7 @@ func TestPerRowTimeoutIsolation(t *testing.T) {
 	if d, _ := decided(t, st, id, p.tokenB); d != "" {
 		t.Errorf("row B decided %q after A's timeout; want open", d)
 	}
-	if _, err := st.DecidePermissionRequest(id, p.tokenB, "allow", "", ""); err != nil {
+	if _, err := st.DecidePermissionRequest(id, p.tokenB, "allow", "", store.WriterProcessDecide); err != nil {
 		t.Fatalf("decide B: %v", err)
 	}
 	waitDone(t, p.doneB, "hook B")

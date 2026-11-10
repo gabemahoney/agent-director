@@ -14,13 +14,22 @@ import (
 // gateway hook. Startup binding and generic SessionStart history retain their
 // separate contracts. All three publication writes share one transaction.
 func (s *Store) RotateCursorSession(examined Spawn, gate HookGate, next, path string, until time.Time, check CursorCheck) (bool, error) {
+	return s.rotateCursorSession(examined, gate, next, path, until, check, nil)
+}
+
+// beforeAcquire lets tests expire the original deadline after entry validation,
+// before the real acquisition computes its remaining wait. Production passes nil.
+func (s *Store) rotateCursorSession(examined Spawn, gate HookGate, next, path string, until time.Time, check CursorCheck, beforeAcquire func()) (bool, error) {
 	if gate.Cursor == nil || gate.Cursor.Terminated || gate.SessionID != gate.Cursor.SessionID || next == "" || strings.TrimSpace(next) != next || len(next) > 512 || strings.ContainsAny(next, "\x00\r\n") || next == gate.SessionID || path == "" || !time.Now().Before(until) {
 		return false, fmt.Errorf("store: invalid Cursor rotation")
 	}
 	b := *gate.Cursor
 	applied := false
 	prior, state := "", ""
-	err := s.inWriteTx(time.Until(until), func(ctx context.Context, conn *sql.Conn) error {
+	if beforeAcquire != nil {
+		beforeAcquire()
+	}
+	err := s.inWriteTx(max(time.Until(until), 0), func(ctx context.Context, conn *sql.Conn) error {
 		ctx, cancel := context.WithDeadline(ctx, until)
 		defer cancel()
 		row, err := s.cursorAuthority(ctx, conn, b, until, check)
@@ -46,7 +55,7 @@ func (s *Store) RotateCursorSession(examined Spawn, gate HookGate, next, path st
 		if held {
 			state = StateCheckPermission
 		}
-		set, args := s.hookWriteStateSet(state)
+		set, args := s.hookWriteStateEvidenceSet(state, EvidenceAgentEvent)
 		args = append(args, next, path, b.InstanceID)
 		args = append(args, hookGateArgs(gate)...)
 		args = append(args, snapshotMatchArgs(examined.Snapshot)...)

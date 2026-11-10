@@ -36,9 +36,11 @@ const (
 // (DecisionReasonPane, pane_answer sent, decision its claimed verdict), a
 // caller's record of an answer made outside agent-director
 // (DecisionReasonPaneOutside, pane_answer outside, decision the claim or NULL
-// for unknown), and the PostToolUse close (DecisionReasonToolRan, pane_answer
-// tool_ran, decision allow). Each verdict is a claim or an inference, never a
-// reading of Claude Code's screen.
+// for unknown), and the PostToolUse close or validated Cursor execution proof
+// (DecisionReasonToolRan, pane_answer tool_ran, decision allow; the PostToolUse
+// close matches no Claude or Codex request, which carries no tool_use_id;
+// b.wbs). Each verdict is a claim or an inference, never a reading of Claude
+// Code's screen.
 const (
 	DecisionReasonPane        = "pane"
 	DecisionReasonPaneOutside = "pane_outside"
@@ -51,8 +53,9 @@ const (
 // first-class discriminator. The closed set is:
 //
 //   - WriterProcessHook              — the hook verb's relay path, the
-//     PostToolUse close of a request whose tool ran (b.146 rule 13), and the
-//     terminal SessionEnd's close of its Spawn's requests (b.146 rule 12)
+//     PostToolUse close of a request whose tool ran (b.146 rule 13; it
+//     matches no Claude or Codex request, b.wbs), and the terminal
+//     SessionEnd's close of its Spawn's requests (b.146 rule 12)
 //   - WriterProcessCursorHost        — the Cursor gateway's request admission,
 //     timeout decision, native answer claim and correlated execution proof
 //   - WriterProcessDecide            — the decide verb
@@ -138,12 +141,15 @@ const (
 
 // The proven_gone_how values (schema v7; b.146 step 2c): how Claude Code, not
 // agent-director's own records, proved a request's permission dialog gone.
-// ProvenGoneToolRan: the agent's PostToolUse or PostToolUseFailure carried the
-// request's tool_use_id, so its tool ran (a Claude row only). ProvenGoneTurnEnd:
+// ProvenGoneToolRan: its tool ran, by the Cursor gateway's validated execution
+// proof (ProveCursorToolRan) or a Claude PostToolUse or PostToolUseFailure
+// carrying the request's tool_use_id, which no Claude or Codex request has
+// (b.wbs), so in practice Cursor's only. ProvenGoneTurnEnd:
 // the turn of the agent that asked ended after the request was written; the
 // main agent's Stop or idle-prompt Notification, or a Codex main agent's
 // Interrupt (Esc), or a verified Cursor main Stop/Interrupt, proves only a
-// durably main-turn-eligible request. Legacy non-Cursor main requests retain
+// durably main-turn-eligible request; a Claude subagent's SubagentStop proves
+// only that subagent's requests (b.wbs). Legacy non-Cursor main requests retain
 // eligibility; Cursor unknown origin never acquires it from NULL agent_id.
 // A Cursor request the gateway never answered is proven gone by its gateway
 // when the prompt turn that asked it completes (ProveCursorTurnEnded; b.gwj).
@@ -240,6 +246,15 @@ type PermissionRow struct {
 	AdmittedAt           time.Time
 	FallbackAt           time.Time
 	FallbackBasis        string
+
+	// DecisionOrigin is persisted provenance, never inferred from reason.
+	// ResponseState is a pre-emission claim/issue marker, not delivery proof.
+	// Missing admission ownership is historical and grants no new response.
+	DecisionOrigin        string
+	ResponseState         string
+	OwnerLifeNumber       int64 // -1 when historical ownership is unknown
+	OwnerSessionID        string
+	OwnerCursorConnection string
 }
 
 // ProvenGone reports whether Claude Code proved r's permission dialog gone
@@ -376,7 +391,9 @@ const permissionColumns = `pr.request_id, pr.instance_id, pr.tool_name, pr.tool_
        pr.pane_intent_at, pr.closed_at,
        pr.proven_gone_at, COALESCE(pr.proven_gone_how, ''), pr.main_turn_end_eligible,
        COALESCE(pr.owner_launch_token, ''), COALESCE(pr.owner_permission_epoch, -1),
-       pr.admitted_at, pr.fallback_at, COALESCE(pr.fallback_basis, '')`
+       pr.admitted_at, pr.fallback_at, COALESCE(pr.fallback_basis, ''),
+       COALESCE(pr.decision_origin, ''), COALESCE(pr.response_state, ''),
+       COALESCE(pr.owner_life_number, -1), COALESCE(pr.owner_session_id, ''), COALESCE(pr.owner_cursor_connection, '')`
 
 // scanPermissionRow scans one row selected with permissionColumns. The Scan
 // error is returned as is, so callers can still detect sql.ErrNoRows.
@@ -398,7 +415,8 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 		&r.PaneSender.PID, &r.PaneSender.Starttime, &r.PaneSender.PIDNamespace,
 		&intentAt, &closedAt,
 		&provenAt, &r.ProvenGoneHow, &r.MainTurnEndEligible,
-		&r.OwnerLaunchToken, &r.OwnerPermissionEpoch, &admittedAt, &fallbackAt, &r.FallbackBasis)
+		&r.OwnerLaunchToken, &r.OwnerPermissionEpoch, &admittedAt, &fallbackAt, &r.FallbackBasis,
+		&r.DecisionOrigin, &r.ResponseState, &r.OwnerLifeNumber, &r.OwnerSessionID, &r.OwnerCursorConnection)
 	if err != nil {
 		return PermissionRow{}, err
 	}
@@ -495,9 +513,9 @@ func (s *Store) UpsertOpenPermissionRequestResult(instanceID string, gate HookGa
 	insRes, err := tx.Exec(`
 		INSERT INTO permission_requests
 		  (instance_id, request_token, tool_name, tool_input, main_turn_end_eligible,
-           owner_launch_token, owner_permission_epoch, admitted_at)
+           owner_launch_token, owner_permission_epoch, admitted_at, owner_life_number, owner_session_id)
         SELECT ?, ?, ?, ?, agent IS NOT 'cursor', launch_token,
-           permission_epoch + CASE WHEN state = 'check_permission' THEN 0 ELSE 1 END, `+nowMsSQL+` FROM spawns
+           permission_epoch + CASE WHEN state = 'check_permission' THEN 0 ELSE 1 END, `+nowMsSQL+`, life_number, session_id FROM spawns
 		 WHERE instance_id = ? AND `+hookGateSQL+`
 	`, insArgs...)
 	if err != nil {
@@ -695,9 +713,10 @@ func (s *Store) PermissionRequestsForSpawnWithin(instanceID string, maxWait time
 // not closed, a request recorded before schema v7 also being deliverable by
 // its created_at, and its Spawn being live.
 const decideRelayRequestSQL = `UPDATE permission_requests
-	   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+	   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, decision_origin = 'caller'
 	 WHERE instance_id = ? AND request_token = ? AND decision IS NULL
-	   AND delivered_at IS NULL AND pane_answer = 'none' AND closed_at IS NULL
+	   AND delivered_at IS NULL AND pane_answer = 'none' AND response_state IS NULL
+	   AND ` + permissionResponseEligibleSQL + `
 	   AND (settled_at IS NOT NULL OR created_at > ?)
 	   AND NOT EXISTS (SELECT 1 FROM spawns
 	                    WHERE instance_id = ? AND ` + finishedStateGuardSQL + `)
@@ -839,8 +858,10 @@ func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reas
 	// so the trail event carries them without a separate SELECT.
 	const q = `
 		UPDATE permission_requests
-		   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+		   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, decision_origin = ?
 		 WHERE instance_id = ? AND request_token = ? AND decision IS NULL
+		   AND delivered_at IS NULL AND pane_answer = 'none' AND response_state IS NULL
+		   AND closed_at IS NULL AND proven_gone_at IS NULL
 		 RETURNING request_id, tool_name
 	`
 	var reasonArg any
@@ -852,7 +873,11 @@ func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reas
 
 	var requestID int64
 	var toolName string
-	err := s.db.QueryRow(q, decision, reasonArg, instanceID, requestToken).Scan(&requestID, &toolName)
+	origin := DecisionOriginObservation
+	if writerProcess == WriterProcessDecide {
+		origin = DecisionOriginCaller
+	}
+	err := s.db.QueryRow(q, decision, reasonArg, origin, instanceID, requestToken).Scan(&requestID, &toolName)
 	if errors.Is(err, sql.ErrNoRows) {
 		// RowsAffected == 0: either the row was already decided or no row exists.
 		// ErrAlreadyDecided / ErrNoOpenPermissionRequest are distinguished by the

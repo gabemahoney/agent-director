@@ -64,6 +64,16 @@ func displayedRow(t *testing.T, state string) (*store.Store, string, string, []s
 	if committed.CommittedDisplay().State != state {
 		t.Fatalf("setup row is not displayed %s: %+v", state, committed)
 	}
+	// A historical displayed episode can carry a pane record even while a
+	// hook has moved the raw state. Its immediate exit must clear both.
+	execRaw(t, path, `UPDATE spawns SET display_evidence=json_object(
+		'v', ?, 'life', life_number, 'token', launch_token, 'since', ?,
+		'at', ?, 'src', 'pane', 'checked', ?, 'reason', NULL) WHERE instance_id=?`,
+		state, committed.CommittedDisplay().SinceMillis, now.UnixMilli(), now.UnixMilli(), id)
+	committed, err = s.GetSpawn(id)
+	if err != nil || committed.DisplayEvidence == "" {
+		t.Fatalf("display record seed: %+v %v", committed, err)
+	}
 	return s, path, id, samples, now, committed
 }
 
@@ -91,7 +101,7 @@ func TestRepairCheckPermissionEndsDisplayImmediately(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after.State != store.StateWorking || after.DisplayObservation != "" || after.CommittedDisplay().State != store.StateWorking {
+			if after.State != store.StateWorking || after.DisplayObservation != "" || after.DisplayEvidence != "" || after.CommittedDisplay().State != store.StateWorking {
 				t.Errorf("repaired row=%+v; want working with no observation", after)
 			}
 			if after.ObservationVersion != committed.ObservationVersion+1 || after.PermissionEpoch != committed.PermissionEpoch+1 {
@@ -135,6 +145,8 @@ func TestRepairCheckPermissionOfOrdinaryRowEmitsNothing(t *testing.T) {
 // could not read. Writes judge a stored value exactly as reads do: a NUL makes
 // an observation unreadable, and a BLOB holding a valid one shows its display,
 // which a hook keeps and an end or a missing mark exits.
+// Turn starts and adoptions invalidate a readable case-variant observation
+// exactly as a read shows it (b.x9o CR14-2).
 func TestLifecycleWritesIgnoreUnreadableDisplayMetadata(t *testing.T) {
 	validExit := `{"prior_state":"needs_intelligence","new_state":"working","at_ms":1792411205000}`
 	validObservation := `{"state":"needs_intelligence","since_ms":1792411205000,"request_token":"req-a","tool_name":"Bash",` +
@@ -238,8 +250,101 @@ func TestLifecycleWritesIgnoreUnreadableDisplayMetadata(t *testing.T) {
 			})
 		}
 	}
+	// b.x9o CR14-2: readable case-variant keys must invalidate the display a
+	// read shows, even on a same-state write with no other pane/turn evidence.
+	for _, writer := range []string{"Codex turn start", "held Codex turn start", "adoption"} {
+		t.Run(writer+"/case-variant idle display", func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.db")
+			observation := `{"State":"idle_screen","since_ms":1792411205000,"unchanged_minutes":20,` +
+				`"candidate":"","candidate_since_ms":0,"observed_at_ms":1792411205000,"permission_epoch":7}`
+			id, err := apitest.SeedSpawn(path, "lifecycle", store.StateWorking, "", "on", "", true,
+				apitest.WithAgent(store.AgentCodex), apitest.WithPermissionEpoch(7), apitest.WithDisplayObservation(observation))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if writer == "held Codex turn start" {
+				// The legacy request holds a working transition without moving
+				// the working row into check_permission.
+				if _, err := apitest.SeedPermissionRequest(path, id, "Bash", apitest.PermissionOwner("", -1)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			shown := store.DisplayDetail{State: store.StateIdleScreen, SinceMillis: 1792411205000, UnchangedMinutes: 20}
+			// No registered fixture seeds display_evidence; use displayedRow's
+			// pane record so evidence removal cannot pass before the write.
+			execRaw(t, path, `UPDATE spawns SET display_evidence=json_object(
+				'v', ?, 'life', life_number, 'token', launch_token, 'since', ?,
+				'at', ?, 'src', 'pane', 'checked', ?, 'reason', NULL) WHERE instance_id=?`,
+				store.StateIdleScreen, shown.SinceMillis, shown.SinceMillis, shown.SinceMillis, id)
+			before, err := s.GetSpawn(id)
+			if err != nil || before.State != store.StateWorking || before.CommittedDisplay() != shown || before.DisplayEvidence == "" {
+				t.Fatalf("setup display=%+v, raw=%q, evidence=%q, err=%v; want %+v on working with pane evidence",
+					before.CommittedDisplay(), before.State, before.DisplayEvidence, err, shown)
+			}
+			if before.IdleSince != "" || before.PaneSHA256 != "" || before.PaneSinceMillis != 0 || before.PaneEpoch != -1 {
+				t.Fatal("setup has idle_since or pane baseline evidence")
+			}
+			mark, from := store.TrailMark(t), time.Now().Truncate(time.Millisecond)
+			if writer == "adoption" {
+				if got, err := s.AdoptIdentityIfUnchanged(id, before.Snapshot, createdIdentity()); err != nil || got != store.CondApplied {
+					t.Fatalf("adoption=%v %v; want applied", got, err)
+				}
+			} else {
+				// FireHook does not propagate CodexTurnStart. Reuse its gated
+				// seed-pane path with the main-thread UserPromptSubmit flags.
+				err := storefix.WithSeedPane(path, id, func(gate store.HookGate) error {
+					gate.Event, gate.CodexTurnStart = "UserPromptSubmit", true
+					// No turn id: both the stored and incoming turn are absent.
+					outcome, applied, err := s.ApplyHookTransitionResult(id, gate, store.StateWorking, false, gate.Event, "", false)
+					want := store.UpsertUpdated
+					if writer == "held Codex turn start" {
+						want = store.UpsertNoChange
+					}
+					if err == nil && (!applied.Applied || outcome != want) {
+						t.Fatalf("turn start=%v %+v; want %v, applied", outcome, applied, want)
+					}
+					return err
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			to := time.Now()
+			// GetSpawn is a raw read: nothing after the writer may observe or
+			// perform a lifecycle write that could drain its forgotten exit.
+			after, err := s.GetSpawn(id)
+			ordinary := store.DisplayDetail{State: store.StateWorking}
+			if err != nil || after.State != store.StateWorking || after.CommittedDisplay() != ordinary || after.DisplayObservation != "" || after.DisplayEvidence != "" {
+				t.Errorf("after write: raw=%q display=%+v observation=%q evidence=%q err=%v; want ordinary working with no display metadata",
+					after.State, after.CommittedDisplay(), after.DisplayObservation, after.DisplayEvidence, err)
+			}
+			if after.ObservationVersion != before.ObservationVersion+1 || after.PermissionEpoch != before.PermissionEpoch {
+				t.Errorf("version %d -> %d, epoch %d -> %d; want one invalidation and unchanged epoch",
+					before.ObservationVersion, after.ObservationVersion, before.PermissionEpoch, after.PermissionEpoch)
+			}
+			if raw := storedDisplayExit(t, path, id); raw.Valid {
+				t.Errorf("exit still pending after writer: %q", raw.String)
+			}
+			records := store.TrailEventsSince(t, mark, "ad.spawn.displayed_state_transition", id)
+			if len(records) != 1 {
+				t.Fatalf("immediate display records=%v; want one idle_screen-to-working exit", records)
+			}
+			stamp, _ := records[0]["ts"].(string)
+			at, err := time.Parse(lifecycleTS, stamp)
+			if err != nil || at.Before(from) || at.After(to) {
+				t.Fatalf("exit timestamp=%q, err=%v; want within writer call [%s,%s]", stamp, err, from, to)
+			}
+			assertDisplayRecords(t, mark, id, displayRecord{store.StateIdleScreen, store.StateWorking, at})
+		})
+	}
 	// Positive control: a readable pending exit of the row's own is emitted by
-	// the same write, so the cases above are silent because of what they hold.
+	// the same write, so the unreadable-metadata cases above are silent because
+	// of what they hold.
 	t.Run("hook/readable own exit is emitted", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "state.db")
 		id, err := apitest.SeedSpawn(path, "lifecycle", store.StateCheckPermission, "", "on", "", true, apitest.WithDisplayExit(validExit))
@@ -347,19 +452,7 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 			}, map[string]string{parent: store.StateWaiting, id: store.StateWaiting}
 		}},
 		{"pane", store.StateWorking, store.StateIdleScreen, func(t *testing.T) (*store.Store, string, string, time.Time, observation, map[string]string) {
-			path := filepath.Join(t.TempDir(), "state.db")
-			now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
-			// The committed baseline has been unchanged for an hour.
-			id, err := apitest.SeedSpawn(path, "", store.StateWorking, "", "off", "", true, apitest.WithPermissionEpoch(7),
-				apitest.WithPaneBaseline("abc", now.Add(-time.Hour).UnixMilli(), int64(7)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			s, err := store.Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = s.Close() })
+			s, path, id, now := idleBaselineRow(t)
 			return s, path, id, now, func(row store.Spawn) (store.DisplayDetail, map[string]string, error) {
 				return s.ObserveIdleScreen(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
 			}, nil
@@ -443,6 +536,132 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 				assertDisplayRecords(t, mark, id)
 			})
 		}
+	}
+}
+
+// idleBaselineRow is a working row whose committed pane baseline "abc" has
+// been unchanged for an hour at the time it returns, so a sample of "abc"
+// then, with a one-minute timeout, enters idle_screen.
+func idleBaselineRow(t *testing.T) (*store.Store, string, string, time.Time) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
+	id, err := apitest.SeedSpawn(path, "", store.StateWorking, "", "off", "", true, apitest.WithPermissionEpoch(7),
+		apitest.WithPaneBaseline("abc", now.Add(-time.Hour).UnixMilli(), int64(7)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, path, id, now
+}
+
+// b.vch: a caller whose own COMMIT failed (rolled back) does not claim a
+// peer's identical record. The peer, a second Store on the same path, commits
+// the same plan from the same examined row, samples and time after the
+// caller's rollback and before its re-read. The caller gets the
+// unconfirmed-commit error and the previous outcome, the row holds the peer's
+// commit, and the trail holds the peer's display transitions exactly once.
+func TestDisplayObservationFailedCommitClaimsNoPeerRecord(t *testing.T) {
+	type observe func(*store.Store, store.Spawn) (store.DisplayOutcome, error)
+	for _, tc := range []struct {
+		name     string
+		advances bool // the plan advances observation_version; else it changes only display_evidence
+		setup    func(*testing.T) (*store.Store, string, string, observe, []displayRecord)
+	}{
+		{"needs_intelligence observation", true, func(t *testing.T) (*store.Store, string, string, observe, []displayRecord) {
+			s, path, id, samples, now := permissionObservation(t, apitest.WithDisplayObservation(storedNeedsIntelligence))
+			return s, path, id, func(on *store.Store, row store.Spawn) (store.DisplayOutcome, error) {
+				return on.ObserveNeedsIntelligenceOutcome(row, samples, now, store.SettleRead{})
+			}, []displayRecord{{store.StateNeedsIntelligence, store.StateCheckPermission, now}}
+		}},
+		{"idle_screen observation", true, func(t *testing.T) (*store.Store, string, string, observe, []displayRecord) {
+			s, path, id, now := idleBaselineRow(t)
+			return s, path, id, func(on *store.Store, row store.Spawn) (store.DisplayOutcome, error) {
+				return on.ObserveIdleScreenOutcome(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
+			}, []displayRecord{{store.StateWorking, store.StateIdleScreen, now}}
+		}},
+		// A second sample a second after the first changes only the record's checked time.
+		{"idle_screen record only", false, func(t *testing.T) (*store.Store, string, string, observe, []displayRecord) {
+			f := newV5Store(t)
+			id := f.seed(store.StateWorking, "", rowVersionSeed()...)
+			start := time.UnixMilli(evidenceSeedMs)
+			pane := func(on *store.Store, row store.Spawn, at time.Time) (store.DisplayOutcome, error) {
+				return on.ObserveIdleScreenOutcome(row, store.PaneSample{SHA256: "pane"}, at, time.Minute, store.SettleRead{})
+			}
+			commitUnlessBusy(t, func() (store.DisplayDetail, error) {
+				row, err := f.s.GetSpawn(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out, err := pane(f.s, row, start)
+				return out.Display, err
+			})
+			return f.s, f.path, id, func(on *store.Store, row store.Spawn) (store.DisplayOutcome, error) {
+				return pane(on, row, start.Add(time.Second))
+			}, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, path, id, observe, records := tc.setup(t)
+			row, err := s.GetSpawnSettled(id, store.SettleRead{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer peer.Close()
+			lost := errors.New("injected: COMMIT never reached SQLite")
+			var failed, peerStarted atomic.Bool
+			peerDone := make(chan struct{})
+			var peerOut store.DisplayOutcome
+			var peerErr error
+			store.ObserveDecisionExecForTest(t, s, path, func(_ context.Context, q string) error {
+				// The caller's COMMIT never reaches SQLite, so its transaction rolls back.
+				if q == "COMMIT" && failed.CompareAndSwap(false, true) {
+					return lost
+				}
+				return nil
+			}, func(_ context.Context, q string, err error) {
+				if q == "ROLLBACK" && err == nil && failed.Load() && peerStarted.CompareAndSwap(false, true) {
+					peerOut, peerErr = observe(peer, row)
+					close(peerDone)
+				}
+			})
+			mark := store.TrailMark(t)
+			got, err := observe(s, row)
+			select {
+			case <-peerDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the peer never observed after the caller's rollback")
+			}
+			if peerErr != nil || !peerOut.Committed {
+				t.Fatalf("peer=%+v %v; want its identical plan committed", peerOut, peerErr)
+			}
+			if !errors.Is(err, store.ErrCommitUnconfirmedForTest) {
+				t.Errorf("caller err=%v; want the unconfirmed-commit error", err)
+			}
+			if previous := (store.DisplayOutcome{Display: row.CommittedDisplay(), Evidence: row.DisplayEvidence}); !reflect.DeepEqual(got, previous) {
+				t.Errorf("caller outcome=%+v; want the previous %+v, not committed", got, previous)
+			}
+			after, err := peer.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			version := row.ObservationVersion
+			if tc.advances {
+				version++
+			}
+			if after.ObservationVersion != version || after.DisplayEvidence != peerOut.Evidence || after.CommittedDisplay() != peerOut.Display || !tc.advances && after.DisplayEvidence == row.DisplayEvidence {
+				t.Errorf("row=%+v; want the peer's commit %+v at version %d", after, peerOut, version)
+			}
+			assertDisplayRecords(t, mark, id, records...)
+		})
 	}
 }
 
@@ -553,6 +772,96 @@ func TestFallbackClockOfPreV7RequestWithoutCreationTime(t *testing.T) {
 	} {
 		if start, basis := store.FallbackClock(store.AgentClaude, "on", store.PermissionRow{}, o, at); !start.IsZero() || basis != "" {
 			t.Errorf("%+v: clock=%s %q; want none", o, start, basis)
+		}
+	}
+}
+
+// b.x9o: a lost COMMIT reply proves the exact evidence or none. In
+// particular a record-only commit cannot borrow an unchanged version as its
+// proof; a second reader's later record defeats the original landed check.
+func TestDisplayRecordCommitUncertainty(t *testing.T) {
+	for _, kind := range []string{"entry", "record only"} {
+		for _, cut := range []string{"landed", "rolled back", "newer record"} {
+			t.Run(kind+"/"+cut, func(t *testing.T) {
+				f := newV5Store(t)
+				id := f.seed(store.StateWorking, "", rowVersionSeed()...)
+				start := time.UnixMilli(evidenceSeedMs)
+				read := func(s *store.Store) store.Spawn {
+					t.Helper()
+					row, err := s.GetSpawn(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return row
+				}
+				observe := func(s *store.Store, row store.Spawn, at time.Time) (store.DisplayOutcome, error) {
+					return s.ObserveIdleScreenOutcome(row, store.PaneSample{SHA256: "pane"}, at, time.Minute, store.SettleRead{})
+				}
+				commitUnlessBusy(t, func() (store.DisplayDetail, error) {
+					out, err := observe(f.s, read(f.s), start)
+					return out.Display, err
+				})
+				before := read(f.s)
+				now := start.Add(time.Second)
+				if kind == "entry" {
+					now = start.Add(time.Minute)
+				}
+				other, err := store.Open(f.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer other.Close()
+				lost := errors.New("display commit reply lost")
+				var fired atomic.Bool
+				var winner store.Spawn
+				store.ObserveDecisionBoundaryForTest(t, f.s, f.path, func(_ context.Context, q string) error {
+					if q == "COMMIT" && cut == "rolled back" && fired.CompareAndSwap(false, true) {
+						return lost
+					}
+					return nil
+				}, func(context.Context) error {
+					if cut == "rolled back" || !fired.CompareAndSwap(false, true) {
+						return nil
+					}
+					if cut == "newer record" {
+						out, err := observe(other, read(other), now.Add(time.Second))
+						if err != nil || !out.Committed {
+							t.Fatalf("newer record failed: %+v %v", out, err)
+						}
+						winner = read(other)
+					}
+					return lost
+				})
+				out, err := observe(f.s, before, now)
+				if !fired.Load() {
+					t.Fatal("uncertain commit cut never fired")
+				}
+				after := read(other)
+				if cut == "landed" {
+					if err != nil || !out.Committed || out.Evidence == before.DisplayEvidence || out.Evidence != after.DisplayEvidence || out.Display != after.CommittedDisplay() {
+						t.Fatalf("exact landed record not recovered: %+v %v", out, err)
+					}
+					first := start
+					if kind == "entry" {
+						first = now
+					}
+					want := store.Confirmation{Status: store.ConfirmationConfirmed, ConfirmedAtMillis: first.UnixMilli(), CheckedAtMillis: now.UnixMilli(), Source: store.EvidencePane}
+					if rec := after.DisplayConfirmation(out.Display, out.Evidence); rec != want {
+						t.Fatalf("landed record %+v; want %+v", rec, want)
+					}
+					return
+				}
+				if !errors.Is(err, store.ErrCommitUnconfirmedForTest) || out.Committed || out.Evidence != before.DisplayEvidence || out.Display != before.CommittedDisplay() || out.Families != nil {
+					t.Fatalf("unresolved commit claimed evidence: %+v %v", out, err)
+				}
+				want := before
+				if cut == "newer record" {
+					want = winner
+				}
+				if after.DisplayEvidence != want.DisplayEvidence || after.DisplayObservation != want.DisplayObservation || after.ObservationVersion != want.ObservationVersion || after.PaneSinceMillis != want.PaneSinceMillis {
+					t.Fatal("uncertain observer overwrote the committed snapshot")
+				}
+			})
 		}
 	}
 }

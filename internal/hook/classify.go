@@ -220,6 +220,8 @@ type ClassifyResult struct {
 	// none. A PostToolUse or PostToolUseFailure carrying it closes the
 	// fallen-back permission request with the same tool_use_id (ToolRan;
 	// b.146 rule 13) and proves every request with it gone (b.146 step 2c).
+	// Claude's PermissionRequest carries none, so neither ever matches a
+	// request the relay hook recorded (b.wbs).
 	ToolUseID string
 
 	// MainThread is true for a Codex hook from the row's main thread (b.x72):
@@ -237,9 +239,11 @@ type ClassifyResult struct {
 // carrying a tool_use_id: Claude Code ran that tool use, so a permission
 // dialog for it was answered allow (b.146 rule 13).
 //
-// Codex's tool hooks carry a tool_use_id, but its permission requests carry
-// none, so a Codex hook never proves a request's dialog gone this way: it is
-// never true for a Codex result.
+// Claude's and Codex's tool hooks carry a tool_use_id, but neither agent's
+// PermissionRequest does, so their requests are recorded with none and no
+// hook proves one's dialog gone this way (b.wbs; a Claude subagent's request
+// is proven by its SubagentStop instead, SubagentStopped). It is never true
+// for a Codex result.
 func (r ClassifyResult) ToolRan() bool {
 	return r.Agent == store.AgentClaude && r.ToolUseID != "" && (r.EventName == EventNamePostToolUse || r.EventName == EventNamePostToolUseFailure)
 }
@@ -262,7 +266,8 @@ const EventNameStop = "Stop"
 // asked before it is still waiting. A hook carrying an agent_id (a subagent or
 // an in-process teammate) is not one: a background subagent can outlive the
 // main turn, and an Interrupt that carries an agent_id (Codex never sends one,
-// Q3) proves nothing. A Claude result is never an Interrupt turn end:
+// Q3) proves nothing. A Claude subagent's own turn end is SubagentStopped's,
+// not this. A Claude result is never an Interrupt turn end:
 // Claude's table does not know the event. Verified main Cursor Stop and
 // Interrupt also supply turn-end proof; unknown/child origin supplies none.
 // It covers no Cursor gateway request, which is never eligible: before the
@@ -277,6 +282,17 @@ func (r ClassifyResult) TurnEnded() bool {
 		return false
 	}
 	return r.EventName == EventNameStop || r.WaitingIfWorking || ((r.Agent == store.AgentCodex || r.Agent == store.AgentCursor) && r.EventName == EventNameInterrupt)
+}
+
+// SubagentStopped reports whether the result is a Claude subagent's end of
+// turn (b.wbs): a SubagentStop carrying the subagent's agent_id. Claude Code
+// sends it once that subagent has finished responding, so no permission dialog
+// that subagent asked before it is still waiting; one resumed later starts a
+// new turn under the same agent_id, whose requests come after this hook. It is
+// never true for a Codex result (Codex rows do not track subagents, and its
+// SubagentStop proves nothing) or a Cursor one.
+func (r ClassifyResult) SubagentStopped() bool {
+	return r.Agent == store.AgentClaude && r.AgentID != "" && r.EventName == EventNameSubagentStop
 }
 
 // SubagentLifecycle reports whether the result is a SessionStart or

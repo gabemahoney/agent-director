@@ -5,9 +5,12 @@ package cursorhost
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"sort"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -24,18 +27,33 @@ type submissionRecord struct {
 	Token      string `json:"launch_token"`
 	Life       int64  `json:"life_number"`
 	Data       struct {
-		ID         string    `json:"submission_id"`
-		Request    string    `json:"request_id"`
-		Text       string    `json:"text"`
-		Started    bool      `json:"started"`
-		Reason     string    `json:"reason"`
-		ConsumedAt time.Time `json:"consumed_at"`
-		Control    string    `json:"control"`
-		InputID    string    `json:"input_id"`
-		InputEpoch *uint64   `json:"input_epoch"`
-		Count      uint64    `json:"count"`
-		TextSHA256 string    `json:"text_sha256"`
+		ID          string          `json:"submission_id"`
+		Request     string          `json:"request_id"`
+		Text        string          `json:"text"`
+		Started     bool            `json:"started"`
+		Reason      string          `json:"reason"`
+		Completion  string          `json:"completion"`
+		RuntimeGone bool            `json:"runtime_gone"`
+		ConsumedAt  time.Time       `json:"consumed_at"`
+		Control     string          `json:"control"`
+		InputID     string          `json:"input_id"`
+		InputEpoch  *uint64         `json:"input_epoch"`
+		Count       uint64          `json:"count"`
+		Update      json.RawMessage `json:"update"`
+		TextSHA256  string          `json:"text_sha256"`
+		Durable     *bool           `json:"durable_admission"`
+		Written     *int            `json:"bytes_written"`
 	} `json:"data"`
+}
+
+// capturedInput is a recorded submission's durable SQLite capture (b.x9o).
+func (c *cursorSession) capturedInput(t *testing.T, r submissionRecord) store.CursorInput {
+	t.Helper()
+	v, err := c.e.s.ReadCursorInput(r.Connection, r.Data.ID)
+	if err != nil {
+		t.Fatalf("%s %s has no durable capture: %v", r.Kind, r.Data.ID, err)
+	}
+	return v
 }
 
 // Retired-response records preserve numeric JSON-RPC IDs while submission
@@ -214,6 +232,41 @@ func (c *cursorSession) keys(t *testing.T, keys string) {
 	}
 }
 
+// idleObservationBarrier orders two non-authoritative provider observations.
+// The second record proves the first completed the controller path, including
+// its next loop turn. Injected timer/read inactivity is checked separately by
+// TestCursorReplacementControllerDoesNotDiscoverDurableWork.
+func (c *cursorSession) idleObservationBarrier(t *testing.T, label string) {
+	t.Helper()
+	binding, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire []byte
+	var last []byte
+	for _, suffix := range []string{"-first", "-processed"} {
+		last, err = json.Marshal(map[string]any{"sessionId": binding.SessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": label + suffix}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		line, err := json.Marshal(frame{JSONRPC: "2.0", Method: "session/update", Params: last})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire = append(wire, line...)
+		wire = append(wire, '\n')
+	}
+	c.e.runtime.Emit(t, label, string(wire))
+	c.wait(t, label, func() bool {
+		for _, record := range c.records(t) {
+			if record.Kind == "startup_or_idle_update" && bytes.Equal(record.Data.Update, last) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 func (c *cursorSession) records(t *testing.T) []submissionRecord {
 	t.Helper()
 	row, err := c.e.s.GetSpawn(c.e.binding.InstanceID)
@@ -356,4 +409,172 @@ func (c *cursorSession) awaitFailure(t *testing.T, limit time.Duration) error {
 		t.Fatal("gateway exceeded original finite bound")
 		return nil
 	}
+}
+
+// recordWindow renders each record from the first submission_accepted as kind and
+// sorted data; submissions by text, times, epochs and control IDs as "*".
+func recordWindow(t *testing.T, c *cursorSession) []string {
+	t.Helper()
+	row, err := c.e.s.GetSpawn(c.e.binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(row.JSONLPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	var window []string
+	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+		var r struct {
+			Kind string         `json:"kind"`
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(line, &r); err != nil {
+			t.Fatal(err)
+		}
+		if text, ok := r.Data["text"].(string); ok {
+			names[fmt.Sprint(r.Data["submission_id"])] = text
+		}
+		if len(window) == 0 && r.Kind != "submission_accepted" {
+			continue
+		}
+		keys := make([]string, 0, len(r.Data))
+		for k := range r.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		rendered := r.Kind
+		for _, k := range keys {
+			v := r.Data[k]
+			switch k {
+			case "consumed_at", "input_epoch", "control_epoch", "input_id":
+				v = "*"
+			case "submission_id":
+				v = names[fmt.Sprint(v)]
+			}
+			rendered += fmt.Sprintf(" %s=%v", k, v)
+		}
+		window = append(window, rendered)
+	}
+	return window
+}
+
+// paneOrder fails unless the pane shows these lines in this order.
+func paneOrder(t *testing.T, c *cursorSession, lines ...string) {
+	t.Helper()
+	pane := c.pane.bytes()
+	for _, line := range lines {
+		i := bytes.Index(pane, []byte(line+"\r\n"))
+		if i < 0 {
+			t.Fatalf("pane lacks %q in order %q: %s", line, lines, c.pane.bytes())
+		}
+		pane = pane[i+len(line):]
+	}
+}
+
+// saveBarrier blocks the first matching durable input save via Options.beforeInputSave;
+// reuse it to order a control inside one. start signals the first control put (b.x9o).
+type saveBarrier struct {
+	match            func(store.CursorInput) bool
+	entered, release chan struct{}
+	controls         chan struct{}
+	blocked, opened  sync.Once
+}
+
+func newSaveBarrier(t *testing.T, match func(store.CursorInput) bool) *saveBarrier {
+	b := &saveBarrier{match: match, entered: make(chan struct{}), release: make(chan struct{}), controls: make(chan struct{}, 1)}
+	t.Cleanup(b.open)
+	return b
+}
+
+func (b *saveBarrier) before(next store.CursorInput) {
+	if b.match(next) {
+		b.blocked.Do(func() { close(b.entered); <-b.release })
+	}
+}
+
+func (b *saveBarrier) open() { b.opened.Do(func() { close(b.release) }) }
+
+func (b *saveBarrier) start(in *os.File, out io.Writer, emit func(terminalInput), admit func() bool, choices ...func(rune) (string, string, bool)) func() {
+	return terminalLoop(in, out, func(v terminalInput) {
+		emit(v)
+		if v.interrupt || v.text == "/exit" {
+			select {
+			case b.controls <- struct{}{}:
+			default:
+			}
+		}
+	}, admit, choices...)
+}
+
+func (b *saveBarrier) wait(t *testing.T, c *cursorSession) {
+	t.Helper()
+	select {
+	case <-b.entered:
+	case c.endErr = <-c.done:
+		c.ended = true
+		t.Fatalf("gateway ended before the save blocked: %v", c.endErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("save did not block")
+	}
+}
+
+// control puts keys (Ctrl-C or /exit) and releases the save; the control's cancelWait, from
+// the put, bounds the release. Returns recordWindow at Ctrl-C's recovery or /exit's end.
+func (b *saveBarrier) control(t *testing.T, c *cursorSession, keys, followUp string) []string {
+	t.Helper()
+	b.wait(t, c)
+	c.keys(t, keys)
+	c.wait(t, "control put", func() bool { return len(b.controls) == 1 })
+	b.open()
+	if keys == "\x03" {
+		c.wait(t, "idle recovery", func() bool { return bytes.Contains(c.pane.bytes(), []byte("submit a new prompt to continue")) })
+		window := recordWindow(t, c)
+		c.keys(t, followUp+"\r")
+		c.wait(t, "follow-up turn", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
+		c.stop(t)
+		return window
+	}
+	select {
+	case c.endErr = <-c.done:
+		c.ended = true
+	case <-time.After(5 * time.Second):
+		t.Fatal("exit did not stop the gateway")
+	}
+	if c.endErr != nil {
+		t.Fatalf("gateway ended with %v; want a clean exit", c.endErr)
+	}
+	return recordWindow(t, c)
+}
+
+// fatal revokes runtime authority while the save blocks: that failure is not a
+// retired epoch, so it stays fatal and text is never accepted or sent.
+func (b *saveBarrier) fatal(t *testing.T, c *cursorSession, text string) {
+	t.Helper()
+	b.wait(t, c)
+	binding, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	null, err := os.OpenFile("/dev/null", os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer null.Close()
+	// As TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking does.
+	if err := syscall.Dup3(int(null.Fd()), binding.InputFD, syscall.O_CLOEXEC); err != nil {
+		t.Fatal(err)
+	}
+	b.open()
+	c.awaitFailure(t, 5*time.Second)
+	if _, err := c.controllerResult(); err == nil || err.Error() != "Cursor input persistence unconfirmed; no replay: ACP input binding changed" {
+		t.Fatalf("controller error = %v; want the save's unconfirmed persistence", err)
+	}
+	for _, r := range c.records(t) {
+		if r.Kind == "submission_accepted" && r.Data.Text == text {
+			t.Fatalf("failed save accepted its input: %+v", r)
+		}
+	}
+	rotationNoBytes(t, c, text)
 }

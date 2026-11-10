@@ -92,7 +92,7 @@ func fmbSeedRows(t *testing.T, e *killEnv, n int) (ids, sockets []string, notCal
 	return ids, sockets, notCalled
 }
 
-// TestFindMissingBudgetStopsCalls: Client.FindMissing at the default budget (no setting) and at a configured one,
+// TestFindMissingBudgetStopsCalls: Client.Sweep at the default budget (no setting) and at a configured one,
 // each lookup answering Gone after 1 s: calls stop once the budget is spent (the call that spends it is discarded),
 // rows from there get the "not called" notes, and the run succeeds.
 func TestFindMissingBudgetStopsCalls(t *testing.T) {
@@ -116,7 +116,7 @@ func TestFindMissingBudgetStopsCalls(t *testing.T) {
 			c, _ := e.client(t, tc.settings...)
 			start := e.clock.Now()
 
-			res, err := c.FindMissing(context.Background())
+			res, err := c.Sweep(context.Background())
 			if err != nil {
 				t.Fatalf("FindMissing: %v", err)
 			}
@@ -125,6 +125,17 @@ func TestFindMissingBudgetStopsCalls(t *testing.T) {
 				t.Errorf("tmux time = %v; want %v", got, want)
 			}
 			assertLists(t, res, ids[:calls-1], ids[calls-1:])
+			if len(res.Checks) != len(ids) {
+				t.Fatalf("checks = %v; want %d fixed members", res.Checks, len(ids))
+			}
+			for i, check := range res.Checks {
+				if check.InstanceID != ids[i] {
+					t.Errorf("check %d has id %s, want %s", i, check.InstanceID, ids[i])
+				}
+				if i >= calls-1 && (check.Completion != "incomplete" || check.Reason == nil || *check.Reason != "deadline") {
+					t.Errorf("budget-limited row = %+v; want incomplete/deadline", check)
+				}
+			}
 			for _, id := range ids[calls-1:] {
 				if got := e.columns(t, id); got.State != store.StateWorking || got.LivenessNote != notCalled[id] {
 					t.Errorf("%s: state %v note %v; want %s, %s", id, got.State, got.LivenessNote, store.StateWorking, notCalled[id])

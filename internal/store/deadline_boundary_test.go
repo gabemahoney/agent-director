@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 )
 
 // deadlineBoundary wraps the existing SQLite observation connector at the driver boundary.
@@ -33,60 +35,40 @@ func (b *deadlineBoundary) Connect(ctx context.Context) (driver.Conn, error) {
 	if b.afterConnect != nil {
 		b.afterConnect()
 	}
-	return &deadlineBoundaryConn{Conn: c, boundary: b, first: b.opens.Add(1) == 1}, nil
+	return b.wrap(c, b.opens.Add(1) == 1), nil
 }
 
-type deadlineBoundaryConn struct {
-	driver.Conn
-	boundary *deadlineBoundary
-	first    bool
-}
-
-func (c *deadlineBoundaryConn) ExecContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Result, error) {
-	if c.boundary.before != nil {
-		if err := c.boundary.before(ctx, q); err != nil {
-			return nil, err
-		}
-	}
-	r, err := c.Conn.(driver.ExecerContext).ExecContext(ctx, q, args)
-	if c.boundary.afterExec != nil {
-		c.boundary.afterExec(ctx, q, err)
-	}
-	if err == nil && q == "COMMIT" && c.boundary.afterCommit != nil {
-		err = c.boundary.afterCommit(ctx)
-	}
-	return r, err
-}
-
-func (c *deadlineBoundaryConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
-	if c.boundary.before != nil {
-		if err := c.boundary.before(ctx, q); err != nil {
-			return nil, err
-		}
-	}
-	rows, err := c.Conn.(driver.QueryerContext).QueryContext(ctx, q, args)
-	if err == nil && c.boundary.afterNext != nil {
-		return &deadlineBoundaryRows{Rows: rows, afterNext: func(err error) { c.boundary.afterNext(ctx, q, err) }}, nil
-	}
-	return rows, err
-}
-
-type deadlineBoundaryRows struct {
-	driver.Rows
-	afterNext func(error)
-}
-
-func (r *deadlineBoundaryRows) Next(dest []driver.Value) error {
-	err := r.Rows.Next(dest)
-	r.afterNext(err)
-	return err
-}
-
-func (c *deadlineBoundaryConn) Close() error {
-	if c.first && c.boundary.closeFirst != nil {
-		c.boundary.closeFirst()
-	}
-	return c.Conn.Close()
+// Adapt existing fixture hooks to the shared real-driver observation boundary.
+func (b *deadlineBoundary) wrap(c driver.Conn, first bool) *sqliteobserve.Conn {
+	return sqliteobserve.WrapConn(c, sqliteobserve.Hooks{
+		Before: func(ctx context.Context, q string) error {
+			if b.before != nil {
+				return b.before(ctx, q)
+			}
+			return nil
+		},
+		AfterNext: func(ctx context.Context, q string, err error) {
+			if b.afterNext != nil {
+				b.afterNext(ctx, q, err)
+			}
+		},
+		AfterExec: func(ctx context.Context, q string, err error) {
+			if b.afterExec != nil {
+				b.afterExec(ctx, q, err)
+			}
+		},
+		AfterCommit: func(ctx context.Context) error {
+			if b.afterCommit != nil {
+				return b.afterCommit(ctx)
+			}
+			return nil
+		},
+		Close: func() {
+			if first && b.closeFirst != nil {
+				b.closeFirst()
+			}
+		},
+	})
 }
 
 func installDeadlineBoundary(t *testing.T, s *Store, path string) *deadlineBoundary {
@@ -109,6 +91,14 @@ func ObserveDecisionBoundaryForTest(t *testing.T, s *Store, path string, before 
 	t.Helper()
 	b := installDeadlineBoundary(t, s, path)
 	b.before, b.afterCommit = before, afterCommit
+}
+
+// ObserveDecisionExecForTest is ObserveDecisionBoundaryForTest that also sees
+// each statement's result once SQLite has run it (a ROLLBACK that has landed).
+func ObserveDecisionExecForTest(t *testing.T, s *Store, path string, before func(context.Context, string) error, afterExec func(context.Context, string, error)) {
+	t.Helper()
+	b := installDeadlineBoundary(t, s, path)
+	b.before, b.afterExec = before, afterExec
 }
 
 // ErrCommitUnconfirmedForTest is errCommitUnconfirmed for those external recovery tests.

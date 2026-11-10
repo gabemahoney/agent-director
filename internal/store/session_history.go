@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
@@ -42,17 +43,69 @@ type SessionHistoryEntry struct {
 // entries only for refusal classification, never as candidates. They surface
 // the "history exists under a different session id" case (AC6/AC8).
 func (s *Store) ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error) {
+	return s.ListSessionHistoryWithin(instanceID, life, DefaultLockWait)
+}
+
+// ListSessionHistoryWithin bounds the history read without validating a row
+// selected by an earlier operation. ListSessionHistorySnapshot supplies that
+// stronger capability for callers retaining an earlier row projection.
+func (s *Store) ListSessionHistoryWithin(instanceID string, life int64, maxWait time.Duration) ([]SessionHistoryEntry, error) {
+	var out []SessionHistoryEntry
+	err := s.readWithin(maxWait, "store: session history", func(ctx context.Context, conn *sql.Conn) error {
+		var err error
+		out, err = listSessionHistory(ctx, conn, instanceID, life)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListSessionHistorySnapshot reads history in the same bounded read transaction
+// that validates the selected row's revision, launch and life. A changed or
+// unreadable row yields no history usable with examined. The transaction ends
+// before returning; callers must not hold it across external observations.
+func (s *Store) ListSessionHistorySnapshot(examined Spawn, maxWait time.Duration) ([]SessionHistoryEntry, error) {
+	var out []SessionHistoryEntry
+	err := s.readWithin(maxWait, "store: session history snapshot", func(ctx context.Context, conn *sql.Conn) error {
+		if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
+			return err
+		}
+		defer rollbackConn(ctx, conn)
+		var sample lifeScan
+		var life int64
+		dest := append(sample.dest(), &life)
+		if err := conn.QueryRowContext(ctx, `SELECT `+lifeColumns+`, COALESCE(life_number,0)
+			FROM spawns WHERE instance_id=?`, examined.InstanceID).Scan(dest...); err != nil {
+			return err
+		}
+		snapshot, identity := sample.result()
+		if snapshot != examined.Snapshot || identity != examined.Identity || life != examined.LifeNumber {
+			return errDisplaySampleChanged
+		}
+		var err error
+		out, err = listSessionHistory(ctx, conn, examined.InstanceID, life)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func listSessionHistory(ctx context.Context, conn *sql.Conn, instanceID string, life int64) ([]SessionHistoryEntry, error) {
 	const q = `SELECT session_id, COALESCE(jsonl_path, ''), recorded_at
 	             FROM session_history
 	            WHERE instance_id = ?
 	              AND life_number = ?
 	         ORDER BY recorded_at DESC, history_id DESC`
-	rows, err := s.db.Query(q, instanceID, life)
+	out := make([]SessionHistoryEntry, 0)
+	rows, err := conn.QueryContext(ctx, q, instanceID, life)
 	if err != nil {
 		return nil, fmt.Errorf("store: list session history: %w", err)
 	}
 	defer rows.Close()
-	out := make([]SessionHistoryEntry, 0)
 	for rows.Next() {
 		var e SessionHistoryEntry
 		if err := rows.Scan(&e.SessionID, &e.JSONLPath, &e.RecordedAt); err != nil {
@@ -130,9 +183,10 @@ func upsertSessionHistoryEntry(q querier, instanceID, sessionID, jsonlPath strin
 // HealJsonlPath records a now-present transcript path onto a row whose
 // jsonl_path is currently NULL (b.v2c AC3, lazy healing). It writes only when
 // jsonl_path IS NULL so it never clobbers an already-verified path, and only for
-// the given session_id (guarding against a race where the session rotated
-// between the find-missing read and this write). Returns true when a row was
-// updated. Emits an ad.session.jsonl_healed trail event on a successful write.
+// the given session_id. The hook caller checks its authority and payload path;
+// external Claude path sampling uses HealProvisionalTranscript to retain its
+// sampled identity through the write. Returns true when a row was updated.
+// Emits an ad.session.jsonl_healed trail event on a successful write.
 //
 // A write advances row_version by one and leaves launch_started_at
 // unchanged; a guard miss advances nothing (SR-5.2).
@@ -163,6 +217,28 @@ func (s *Store) HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, er
 	return true, nil
 }
 
+// HealProvisionalTranscript commits only the exact provisional Claude row
+// sampled before filesystem access. A reused session string is not identity.
+func (s *Store) HealProvisionalTranscript(pt ProvisionalTranscript, path string) (bool, error) {
+	q := `UPDATE spawns SET jsonl_path=?, ` + rowVersionAdvance + `
+        WHERE instance_id=? AND session_id=? AND jsonl_path IS NULL
+        AND COALESCE(agent,'') IN ('','claude') AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL + `
+        AND observation_version=? AND permission_epoch=? AND COALESCE(life_number,0)=?`
+	args := append([]any{path, pt.InstanceID, pt.SessionID}, liveStateGuardArgs()...)
+	args = append(args, snapshotMatchArgs(pt.Snapshot)...)
+	args = append(args, pt.ObservationVersion, pt.PermissionEpoch, pt.LifeNumber)
+	result, err := s.recoveryExec(pt.InstanceID, q, args)
+	if err != nil || result != CondApplied {
+		return false, err
+	}
+	ctx, cancel := s.operationContext(0)
+	defer cancel()
+	_ = trail.Emit(ctx, "ad.session.jsonl_healed", map[string]any{
+		"instance_id": pt.InstanceID, "session_id": pt.SessionID, "jsonl_path": path, "source": "ad_spawn_store",
+	})
+	return true, nil
+}
+
 // ListProvisionalTranscripts returns the (instance, session id, cwd,
 // config-dir) tuples for every live-state row that has a session_id but
 // a NULL jsonl_path — i.e. a session that started but whose transcript had not
@@ -172,42 +248,61 @@ func (s *Store) HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, er
 // Codex row (whose jsonl_path may stay NULL for good) has none of, so a row
 // whose agent is codex is never listed.
 func (s *Store) ListProvisionalTranscripts() ([]ProvisionalTranscript, error) {
+	return s.ProvisionalTranscriptsFor("")
+}
+
+// ProvisionalTranscriptsFor limits external path sampling to one selected ID.
+func (s *Store) ProvisionalTranscriptsFor(instanceID string) ([]ProvisionalTranscript, error) {
 	placeholders := make([]string, len(liveStates))
 	args := make([]any, len(liveStates))
 	for i, st := range liveStates {
 		placeholders[i] = "?"
 		args[i] = st
 	}
-	q := `SELECT instance_id, session_id, cwd, extra_env
+	q := `SELECT instance_id, session_id, cwd, extra_env, ` + lifeColumns + `, COALESCE(life_number,0), observation_version, permission_epoch
 	        FROM spawns
 	       WHERE jsonl_path IS NULL
 	         AND session_id IS NOT NULL
 	         AND session_id != ''
-	         AND agent <> '` + AgentCodex + `' AND agent <> '` + AgentCursor + `'
+	         AND COALESCE(agent,'') IN ('','claude')
 	         AND state IN (` + joinPlaceholders(placeholders) + `)`
-	rows, err := s.db.Query(q, args...)
+	if instanceID != "" {
+		q += " AND instance_id=?"
+		args = append(args, instanceID)
+	}
+	out := []ProvisionalTranscript{}
+	err := s.readWithin(0, "store: recovery sample", func(ctx context.Context, conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, q, args...)
+		if err != nil {
+			return fmt.Errorf("store: list provisional transcripts: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				pt           ProvisionalTranscript
+				extraEnvJSON string
+			)
+			var life lifeScan
+			dest := append([]any{&pt.InstanceID, &pt.SessionID, &pt.CWD, &extraEnvJSON}, life.dest()...)
+			dest = append(dest, &pt.LifeNumber, &pt.ObservationVersion, &pt.PermissionEpoch)
+			if err := rows.Scan(dest...); err != nil {
+				return fmt.Errorf("store: list provisional transcripts scan: %w", err)
+			}
+			env, derr := decodeExtraEnv(extraEnvJSON)
+			if derr != nil {
+				return fmt.Errorf("store: list provisional transcripts decode extra_env: %w", derr)
+			}
+			pt.Snapshot, pt.Identity = life.result()
+			pt.ConfigDir = env["CLAUDE_CONFIG_DIR"]
+			out = append(out, pt)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("store: list provisional transcripts iterate: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list provisional transcripts: %w", err)
-	}
-	defer rows.Close()
-	out := make([]ProvisionalTranscript, 0)
-	for rows.Next() {
-		var (
-			pt           ProvisionalTranscript
-			extraEnvJSON string
-		)
-		if err := rows.Scan(&pt.InstanceID, &pt.SessionID, &pt.CWD, &extraEnvJSON); err != nil {
-			return nil, fmt.Errorf("store: list provisional transcripts scan: %w", err)
-		}
-		env, derr := decodeExtraEnv(extraEnvJSON)
-		if derr != nil {
-			return nil, fmt.Errorf("store: list provisional transcripts decode extra_env: %w", derr)
-		}
-		pt.ConfigDir = env["CLAUDE_CONFIG_DIR"]
-		out = append(out, pt)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list provisional transcripts iterate: %w", err)
+		return nil, err
 	}
 	return out, nil
 }
@@ -217,10 +312,15 @@ func (s *Store) ListProvisionalTranscripts() ([]ProvisionalTranscript, error) {
 // ExtraEnv["CLAUDE_CONFIG_DIR"] (empty when the key is absent), so find-missing
 // can recompose the transcript path under the correct config dir.
 type ProvisionalTranscript struct {
-	InstanceID string
-	SessionID  string
-	CWD        string
-	ConfigDir  string
+	InstanceID         string
+	SessionID          string
+	CWD                string
+	ConfigDir          string
+	Snapshot           RowSnapshot
+	Identity           LaunchIdentity
+	LifeNumber         int64
+	ObservationVersion int64
+	PermissionEpoch    int64
 }
 
 // joinPlaceholders joins pre-built "?" placeholder tokens with commas. Kept

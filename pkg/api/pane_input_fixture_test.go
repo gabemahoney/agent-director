@@ -19,11 +19,11 @@ import (
 // paneInput is the agent pane's input box as send-keys' and pause's keys
 // calls leave it, as Claude Code's prompt input behaves (b.fji, b.9o4): a
 // text call types its text, C-u deletes to the start of the line, Enter
-// submits the box (an empty box submits nothing), whether it follows a text
-// call or is the named Enter key (paced Claude typing's, b.vr5). box is what
-// is typed and not submitted, submitted the submissions in order. A failed
-// call reached the pane only when it timed out and timeoutsReach is set;
-// onSubmit, when set, runs on each submission.
+// submits the box (an empty box submits nothing): the transport Enter or named
+// Enter key used by send-keys, pause and paced Claude typing (b.vr5). box is what is
+// typed and not submitted, submitted the submissions in order. A failed call
+// reached the pane only when it timed out and timeoutsReach is set; onSubmit,
+// when set, runs on each submission.
 type paneInput struct {
 	timeoutsReach bool
 	box           string
@@ -44,7 +44,7 @@ func watchPaneInput(e *killEnv, pane string, timeoutsReach bool) *paneInput {
 			in.box = in.box[:strings.LastIndex(in.box, "\n")+1]
 		case c.Call == tmux.CallSendText:
 			in.box += c.Text
-		case c.Call == tmux.CallSendEnter || c.Call == tmux.CallSendKey && c.Key == "Enter":
+		case c.Call == tmux.CallSendEnter || recordedCall(c) == callEnterKey:
 			in.submit()
 		default:
 			return

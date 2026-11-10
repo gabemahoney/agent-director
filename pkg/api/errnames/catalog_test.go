@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // TestClassifyKnown verifies that Classify correctly identifies every
@@ -210,5 +213,34 @@ func TestTrimNamePrefix(t *testing.T) {
 func TestCatalogNonEmpty(t *testing.T) {
 	if len(errnames.Catalog) == 0 {
 		t.Fatal("errnames.Catalog is empty")
+	}
+}
+
+// The administrator's existing typed refusal is catalogued without adding
+// a public sentinel or a callable Client/MCP verb error.
+func TestClassifyJournalRefusalAdministratorOnly(t *testing.T) {
+	const name = "ErrJournalMigrationRefused"
+	refusal := &adminapi.JournalRefusal{Reason: "owned mutator still live", Action: "retain maintenance boundary"}
+	for _, err := range []error{refusal, fmt.Errorf("administrator: %w", refusal)} {
+		got, description := errnames.Classify(err)
+		if got != name || description != err.Error() {
+			t.Errorf("Classify(%v) = (%q, %q); want %q with original detail", err, got, description, name)
+		}
+		var detail *adminapi.JournalRefusal
+		if !errors.As(err, &detail) || detail != refusal {
+			t.Errorf("typed refusal detail lost: %v", err)
+		}
+	}
+	for _, verb := range manifest.CallableVerbs() {
+		if slices.Contains(verb.ErrorNames, name) {
+			t.Errorf("administrator refusal leaked into callable verb %s", verb.Name)
+		}
+	}
+	exported, err := errnames.ScanExportedSentinels("../")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(exported, name) {
+		t.Fatal("administrator refusal gained a public API sentinel")
 	}
 }

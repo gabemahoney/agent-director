@@ -11,6 +11,36 @@ import (
 // paneScan.apply, so no stored value fails a read.
 const paneColumns = `idle_screen_timeout_seconds, pane_sha256, pane_since_ms, pane_epoch`
 
+// paneEvidencePresentSQL keeps a held turn start from skipping invalidation
+// when its turn id is absent (or repeated) but pane evidence still exists.
+const paneEvidencePresentSQL = `(pane_sha256 IS NOT NULL OR pane_since_ms IS NOT NULL OR pane_epoch IS NOT NULL
+    OR CASE WHEN json_valid(display_observation) THEN
+      ` + committedDisplayStateSQL + ` = 'idle_screen'
+      OR json_extract(display_observation, '$.candidate') = 'idle_screen' ELSE 0 END)`
+
+// invalidatePaneSet is the SET fragment every turn-start or pane-adoption
+// write must use. It discards the old baseline and idle_screen candidate or
+// display in the same statement, without changing permission ownership or
+// raw-state settling. It preserves ordinary hook observation invalidation
+// when the raw value changes. newStateSQL is the writer's raw-state expression,
+// never input; adoption and held turns pass state to keep other observations.
+// The writer must drain display exits and refresh families in its transaction.
+func invalidatePaneSet(newStateSQL string) string {
+	return `pane_sha256 = NULL, pane_since_ms = NULL, pane_epoch = NULL,
+        display_exit = CASE WHEN ` + committedDisplayStateSQL + ` = 'idle_screen'
+          THEN json_object('prior_state', 'idle_screen', 'new_state', ` + newStateSQL + `, 'at_ms', ` + nowMsSQL + `)
+          ELSE display_exit END,
+        display_evidence = CASE WHEN ` + committedDisplayStateSQL + ` = 'idle_screen' THEN NULL ELSE display_evidence END,
+        display_observation = CASE WHEN json_valid(display_observation) THEN
+            CASE WHEN ` + committedDisplayStateSQL + ` = 'idle_screen' THEN NULL
+              WHEN json_extract(display_observation, '$.candidate') = 'idle_screen' OR state <> ` + newStateSQL + ` THEN
+              CASE WHEN ` + committedDisplayStateSQL + ` = 'needs_intelligence'
+                THEN json_set(display_observation, '$.candidate', '', '$.candidate_since_ms', 0) END
+              ELSE display_observation END
+          ELSE CASE WHEN state = ` + newStateSQL + ` THEN display_observation END END,
+        observation_version = observation_version + 1`
+}
+
 // maxTimeoutSeconds is the largest whole number of seconds a time.Duration
 // holds; a stored override above it reads as none.
 const maxTimeoutSeconds = math.MaxInt64 / int64(time.Second)
@@ -42,9 +72,22 @@ func (p *paneScan) apply(sp *Spawn) {
 }
 
 // PaneSample is one read's capture of a row's own pane: the SHA-256 of the
-// pane text, or "" when the capture failed or cannot be trusted.
+// pane text, or "" when the capture failed or cannot be trusted, with Reason
+// then the SR-4.5 reason it failed (unreadable when unset or invalid).
 type PaneSample struct {
 	SHA256 string
+	Reason string
+}
+
+// failure is why sample established no display, "" for a successful sample.
+func (p PaneSample) failure() string {
+	switch {
+	case p.SHA256 != "":
+		return ""
+	case ValidConfirmationReason(p.Reason):
+		return p.Reason
+	}
+	return ReasonUnreadable
 }
 
 // paneBaseline is a row's committed pane baseline in its current permission
@@ -56,8 +99,9 @@ type paneBaseline struct {
 }
 
 // committedPaneBaseline is row's stored baseline when it belongs to the row's
-// current permission epoch. One from an earlier turn or launch is none, so it
-// can never supply evidence to the current one.
+// current permission epoch. Raw-state changes invalidate it by epoch; turn
+// starts and pane adoptions clear it through invalidatePaneSet even when the
+// raw state stays the same.
 func committedPaneBaseline(row Spawn) paneBaseline {
 	if row.PaneSHA256 == "" || row.PaneSinceMillis <= 0 || row.PaneEpoch != row.PermissionEpoch {
 		return paneBaseline{}

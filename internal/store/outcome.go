@@ -1,5 +1,11 @@
 package store
 
+import "errors"
+
+// CommitUnconfirmed distinguishes an abandoned COMMIT from a refused write.
+// Callers must retain the old view until a later independent read confirms it.
+func CommitUnconfirmed(err error) bool { return errors.Is(err, errCommitUnconfirmed) }
+
 // UpsertOutcome categorizes a store write result for trail emission
 // (SR-A-2.1). The value is returned by ApplyHookTransitionResult and
 // UpsertOpenPermissionRequestResult so hook-layer callers never infer
@@ -17,3 +23,6 @@ const (
 	// UpsertError indicates the call failed.
 	UpsertError UpsertOutcome = "error"
 )
+
+// RecoverySampleChanged identifies evidence rejected by an observation fence.
+func RecoverySampleChanged(err error) bool { return errors.Is(err, errDisplaySampleChanged) }

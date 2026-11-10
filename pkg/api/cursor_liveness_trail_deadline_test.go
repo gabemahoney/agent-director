@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -34,34 +33,8 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 			before := e.columns(t, b.InstanceID)
 			mark := len(readAPITrailLines(t))
 			writer := trail.Default()
+			release := holdTrail(t)
 			baseline := writer.Status()
-			if baseline.Pending != 0 {
-				t.Fatalf("prior audit is still pending: %+v", baseline)
-			}
-			gate := &trailEncodingGate{entered: make(chan struct{}), release: make(chan struct{})}
-			var once sync.Once
-			release := func() { once.Do(func() { close(gate.release) }) }
-			holder := make(chan error, 1)
-			go func() {
-				holder <- trail.Emit(context.Background(), "ad.test.cursor_deadline_holder", map[string]any{"gate": gate})
-			}()
-			// Unblock before joining on every failure/panic path, including fixture cleanup.
-			defer func() {
-				release()
-				select {
-				case err := <-holder:
-					if err != nil {
-						t.Errorf("holder Emit: %v", err)
-					}
-				case <-time.After(5 * time.Second):
-					t.Error("holder did not finish after release")
-				}
-			}()
-			select {
-			case <-gate.entered:
-			case <-time.After(5 * time.Second):
-				t.Fatal("encoder did not acquire the real writer mutex")
-			}
 			heldAt := time.Now()
 			observer, err := store.Open(e.dbPath)
 			if err != nil {
@@ -192,17 +165,13 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 			}
 			restore()
 			pending := writer.Status()
-			if pending.Pending != 2 || pending.Failed != baseline.Failed || pending.Rejected != baseline.Rejected {
-				t.Fatalf("held audit status = %+v; want exactly deny and tick pending without failures/rejections", pending)
+			if pending.Pending != 3 || pending.Failed != baseline.Failed || pending.Rejected != baseline.Rejected {
+				t.Fatalf("held audit status = %+v; want exactly deny, orphan tick and liveness tick pending without failures/rejections", pending)
 			}
 			terminal := e.columns(t, b.InstanceID)
 			t.Logf("%s returned in %v; real mutex still held for %v; pending=%d", verb, got.took, time.Since(heldAt), pending.Pending)
 			release()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := trail.Emit(ctx, "ad.test.cursor_deadline_drained", nil); err != nil {
-				t.Fatalf("FIFO drain: %v", err)
-			}
+			drainTrail(t)
 			if status := writer.Status(); status.Pending != 0 || status.Failed != baseline.Failed || status.Rejected != baseline.Rejected {
 				t.Fatalf("drained audit status: %+v", status)
 			}
@@ -217,7 +186,8 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 				if row["instance_id"] != b.InstanceID {
 					continue
 				}
-				if row["request_token"] != token {
+				liveness := row["event"] == "ad.find_missing.tick" && row["reconciliation_reason"] == "proc_absent"
+				if !liveness && row["request_token"] != token || liveness && row["request_token"] != nil {
 					t.Errorf("unexpected request token: %+v", row)
 				}
 				event, _ := row["event"].(string)
@@ -230,15 +200,19 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 						}
 					}
 				case "ad.find_missing.tick":
-					if row["reconciliation_reason"] != "permission_orphan_closeout" || row["source"] != "ad_find_missing" || row["prior_state"] != nil || row["new_state"] != nil {
+					if liveness {
+						if row["source"] != "ad_recovery" || row["prior_state"] != store.StateCheckPermission || row["new_state"] != store.StateMissing {
+							t.Errorf("liveness tick fields: %+v", row)
+						}
+					} else if row["reconciliation_reason"] != "permission_orphan_closeout" || row["source"] != "ad_recovery" || row["prior_state"] != nil || row["new_state"] != nil {
 						t.Errorf("orphan tick fields: %+v", row)
 					}
 				}
 			}
-			if !reflect.DeepEqual(events, []string{"ad.row_mutation.committed", "ad.find_missing.tick"}) {
-				t.Errorf("audit events = %v; want deny then orphan tick exactly once each", events)
+			if !reflect.DeepEqual(events, []string{"ad.row_mutation.committed", "ad.find_missing.tick", "ad.find_missing.tick"}) {
+				t.Errorf("audit events = %v; want deny, orphan tick and liveness tick exactly once each", events)
 			}
-			t.Log("FIFO drained: pending=0; deny then orphan tick exactly once; terminal row unchanged on new inspection")
+			t.Log("FIFO drained: pending=0; deny, orphan tick and liveness tick exactly once; terminal row unchanged on new inspection")
 		})
 	}
 }

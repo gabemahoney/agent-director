@@ -37,6 +37,7 @@ type outgoingFrame struct {
 	raw      []byte
 	deadline time.Time
 	guard    func() error
+	issue    func() error // one durable claim consumption immediately before I/O
 	done     func(error)
 }
 
@@ -114,7 +115,11 @@ func (p *protocol) send(value any) error {
 	return p.sendGuarded(value, time.Now().Add(transportWriteWait), nil, nil)
 }
 
-func (p *protocol) sendGuarded(value any, deadline time.Time, guard func() error, done func(error)) error {
+func (p *protocol) sendGuarded(value any, deadline time.Time, guard func() error, done func(error), issue ...func() error) error {
+	var claim func() error
+	if len(issue) > 0 {
+		claim = issue[0]
+	}
 	raw, e := json.Marshal(value)
 	if e != nil {
 		return e
@@ -133,7 +138,7 @@ func (p *protocol) sendGuarded(value any, deadline time.Time, guard func() error
 	default:
 	}
 	select {
-	case p.outgoing <- outgoingFrame{raw: append(raw, '\n'), deadline: deadline, guard: guard, done: done}:
+	case p.outgoing <- outgoingFrame{raw: append(raw, '\n'), deadline: deadline, guard: guard, issue: claim, done: done}:
 	default:
 		return fmt.Errorf("ACP output queue exceeds limit")
 	}
@@ -200,6 +205,12 @@ func (p *protocol) writeLoop() {
 					return
 				}
 			}
+			if next.issue != nil {
+				if err := next.issue(); err != nil {
+					result <- writeResult{err: err, prewrite: errors.Is(err, errPromptRetired)}
+					return
+				}
+			}
 			// Authority checks may wait on tmux/kernel/store evidence. They
 			// cannot turn an expired transport frame into a late pipe write.
 			if !time.Now().Before(next.deadline) || p.writeFailed.Load() {
@@ -231,7 +242,7 @@ func (p *protocol) writeLoop() {
 		}
 		timer.Stop()
 		if prewrite {
-			// A retired prompt is known unwritten at the final guard too.
+			// A retired prompt is known unwritten at the final guard or issue.
 			// Other final authority failures retain their fail-closed behavior.
 			if next.done != nil {
 				next.done(err)
@@ -290,12 +301,17 @@ func (p *protocol) requestGuarded(method string, params any, guard func() error,
 	if len(completions) > 0 {
 		done = completions[0]
 	}
+	return p.requestGuardedIssue(method, params, guard, done, nil)
+}
+
+// A prompt's durable issue is consumed once by the existing serialized writer.
+func (p *protocol) requestGuardedIssue(method string, params any, guard func() error, done func(error), issue func() error) (string, error) {
 	if p.pendingID != "" {
 		return "", fmt.Errorf("ACP request already pending")
 	}
 	p.next++
 	id := fmt.Sprint(p.next)
-	if err := p.sendGuarded(map[string]any{"jsonrpc": "2.0", "id": p.next, "method": method, "params": params}, time.Now().Add(transportWriteWait), guard, done); err != nil {
+	if err := p.sendGuarded(map[string]any{"jsonrpc": "2.0", "id": p.next, "method": method, "params": params}, time.Now().Add(transportWriteWait), guard, done, issue); err != nil {
 		return "", err
 	}
 	p.pendingID = id

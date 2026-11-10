@@ -59,7 +59,7 @@ func migrateV11toV12(db *sql.DB) error {
 	if _, err := tx.Exec(`PRAGMA user_version = 12`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitMigrationStep(tx)
 }
 
 // existingFamilyColumns validates compatible reentry before any DDL runs.

@@ -51,7 +51,8 @@ func ReadStoreID(dbPath string) (string, error) {
 //
 // Test-only. No production path ever changes a store's id (SR-5.1). A store
 // opened before the call keeps the id it read when it opened, so seed before
-// opening the client or store under test.
+// opening the client or store under test. A fresh SQLite input-authority marker
+// changes atomically with the id; any existing native records refuse reseeding.
 func SeedStoreID(dbPath, id string) error {
 	if !wellFormedStoreID(id) {
 		return fmt.Errorf("SeedStoreID: id %q is not 16 lowercase hexadecimal characters", id)
@@ -62,9 +63,48 @@ func SeedStoreID(dbPath, id string) error {
 	}
 	defer raw.Close() //nolint:errcheck
 
-	res, err := raw.Exec(`UPDATE store_meta SET value = ? WHERE key = 'store_id'`, id)
+	tx, err := raw.Begin()
 	if err != nil {
-		if missing, perr := storeMetaMissing(raw); perr == nil && missing {
+		return fmt.Errorf("SeedStoreID: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	var oldID, authority string
+	err = tx.QueryRow(`SELECT value FROM store_meta WHERE key = 'store_id'`).Scan(&oldID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("SeedStoreID: %w: no store_id row", ErrNoStoreID)
+	case err != nil:
+		var name string
+		if perr := tx.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'store_meta'`).Scan(&name); errors.Is(perr, sql.ErrNoRows) {
+			return fmt.Errorf("SeedStoreID: %w: no store_meta table", ErrNoStoreID)
+		}
+		return fmt.Errorf("SeedStoreID: read store_id: %w", err)
+	}
+	err = tx.QueryRow(`SELECT value FROM store_meta WHERE key = 'native_input_authority'`).Scan(&authority)
+	switch {
+	case errors.Is(err, sql.ErrNoRows): // historical schemas have no input authority
+	case err != nil:
+		return fmt.Errorf("SeedStoreID: read input authority: %w", err)
+	default:
+		if authority != "sqlite-v1:"+oldID {
+			return fmt.Errorf("SeedStoreID: input authority does not match the original store")
+		}
+		var records int
+		if err := tx.QueryRow(`SELECT (SELECT count(*) FROM input_launches) +
+			(SELECT count(*) FROM input_attempts) + (SELECT count(*) FROM input_imports)`).Scan(&records); err != nil {
+			return fmt.Errorf("SeedStoreID: inspect native records: %w", err)
+		}
+		if records != 0 {
+			return fmt.Errorf("SeedStoreID: cannot change the identity of native records")
+		}
+		if _, err := tx.Exec(`UPDATE store_meta SET value = ? WHERE key = 'native_input_authority'`, "sqlite-v1:"+id); err != nil {
+			return fmt.Errorf("SeedStoreID: update input authority: %w", err)
+		}
+	}
+	res, err := tx.Exec(`UPDATE store_meta SET value = ? WHERE key = 'store_id'`, id)
+	if err != nil {
+		var name string
+		if perr := tx.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'store_meta'`).Scan(&name); errors.Is(perr, sql.ErrNoRows) {
 			return fmt.Errorf("SeedStoreID: %w: no store_meta table", ErrNoStoreID)
 		}
 		return fmt.Errorf("SeedStoreID: update: %w", err)
@@ -76,7 +116,7 @@ func SeedStoreID(dbPath, id string) error {
 	if n == 0 {
 		return fmt.Errorf("SeedStoreID: %w: no store_id row", ErrNoStoreID)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // OtherStoreID returns a well-formed store id (16 lowercase hexadecimal

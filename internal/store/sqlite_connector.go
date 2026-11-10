@@ -195,6 +195,9 @@ func (c sqliteConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	for _, statement := range []string{
 		fmt.Sprintf("PRAGMA busy_timeout = %d", c.busyTimeoutMs),
 		"PRAGMA foreign_keys = 1",
+		// Permission claims must survive before their response can be issued.
+		// FULL is connection-local; a replacement lease needs it as well.
+		"PRAGMA synchronous = FULL",
 	} {
 		if err = ctx.Err(); err != nil {
 			_ = conn.Close()

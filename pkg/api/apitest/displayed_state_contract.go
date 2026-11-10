@@ -51,7 +51,11 @@ func SeedDisplayedStateContract(dbPath string) error {
 	if err := SeedIdleScreenSurface(dbPath); err != nil {
 		return err
 	}
-	_, err := SeedSpawn(dbPath, "plain", store.StateCheckPermission, "", "on", "", false)
+	live, err := ReadSurfaceProcessOptions()
+	if err != nil {
+		return err
+	}
+	_, err = SeedSpawn(dbPath, "plain", store.StateCheckPermission, "", "off", "", false, WithNoPane(), live[0], live[1])
 	return err
 }
 

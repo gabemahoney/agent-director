@@ -116,10 +116,7 @@ func TestPlainSendKeysHeldUntilProven(t *testing.T) {
 					if n := p.prove(t, proof); n != 1 {
 						t.Fatalf("%s proved %d; want request A", pf.name, n)
 					}
-					run := p.sendKeysRun(p.plain("hi"))
-					if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
-						t.Fatalf("plain send-keys once proven = %v, calls %v; want it typed", run.err, paKinds(run.calls))
-					}
+					p.assertTyped(t)
 					if pr := p.request(t, tok); pr.ProvenGoneHow != proof.How {
 						t.Errorf("request A proven_gone_how = %q; want %q", pr.ProvenGoneHow, proof.How)
 					}
@@ -180,7 +177,7 @@ func TestPlainSendKeysHashPassesTheHold(t *testing.T) {
 		{"A acked, unproven, no hash", []r7Step{r7Acked}, "", api.ErrDialogMaybeOpen, nil},
 		{"A acked, unproven, of an earlier launch, no hash", []r7Step{r7Acked, earlierLaunch}, "", api.ErrDialogMaybeOpen, nil},
 		{"A acked, unproven, the pane's hash", []r7Step{r7Acked}, "pane", nil,
-			[]tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter}},
+			paneHashSendCalls},
 		{"A acked, unproven, a stale hash", []r7Step{r7Acked}, "stale", api.ErrPaneChanged, paneReadCalls},
 		{"A's relay hook alive, the pane's hash", []r7Step{r7HookAlive}, "pane", api.ErrSendKeysWhileRelayed, nil},
 		{"A fallen back, the pane's hash", nil, "pane", api.ErrRelayFallenBack, nil},
@@ -320,12 +317,14 @@ func TestUnknownOriginHoldAfterReopen(t *testing.T) {
 				}
 				other := storefix.TestRequestTokenB
 				p.seedRequest(t, other, "independent-tool", relayEnvHook)
-				if ok, err := p.st.DecideRelayRequest(p.r.ID, other, "deny", "", "", time.Time{}, store.DefaultLockWait); err != nil || !ok {
-					t.Fatalf("independent decision %v %v", ok, err)
-				}
-				if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, other, p.now, store.DefaultLockWait, nil); err != nil || !ok {
-					t.Fatalf("independent ack %v %v", ok, err)
-				}
+				p.withPermissionWriter(t, func() {
+					if ok, err := p.st.DecideRelayRequest(p.r.ID, other, "deny", "", "", time.Time{}, store.DefaultLockWait); err != nil || !ok {
+						t.Fatalf("independent decision %v %v", ok, err)
+					}
+					if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, other, p.now, store.DefaultLockWait, nil); err != nil || !ok {
+						t.Fatalf("independent ack %v %v", ok, err)
+					}
+				})
 				if agent == store.AgentCursor {
 					if n := p.prove(t, toolRan(paToolUseID)); n != 0 {
 						t.Fatalf("generic Cursor proof released %d", n)

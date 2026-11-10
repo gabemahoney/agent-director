@@ -144,7 +144,9 @@ var ErrPermissionRequestNotFound = store.ErrPermissionRequestNotFound
 // could not be settled within it. Nothing was recorded, so the call
 // can be retried. Once the verdict has committed, decide never returns it: a
 // bound reached during the wait for the relay hook's ack returns
-// not_confirmed instead. Without a bound decide never returns it.
+// not_confirmed instead. Without a bound decide never returns it. These
+// statements apply to decide; other verbs that list it say in their own
+// Errors when they return it.
 // Re-exported from internal/store.
 var ErrStoreBusy = store.ErrStoreBusy
 
@@ -277,8 +279,8 @@ var ErrTmuxCaptureFailed = tmux.ErrTmuxCaptureFailed
 // or default supplies one. Nothing was written or launched.
 var ErrAgentMissing = spawn.ErrAgentMissing
 
-// ErrAgentInvalid is returned by spawn when the call's agent is not
-// claude, codex or cursor (compared case-sensitively; the empty string is not a
+// ErrAgentInvalid is returned by spawn when the call's agent is unrecognized
+// (compared case-sensitively; the empty string is not a
 // value, it is no agent given). The description quotes the value. Nothing was
 // written or launched. A bad agent in a template is ErrTemplateMalformed.
 var ErrAgentInvalid = spawn.ErrAgentInvalid
@@ -308,3 +310,12 @@ var ErrPermissionsUnsupported = spawn.ErrPermissionsUnsupported
 // need an owner. Give the template its agent, or remove its agent_args.
 // Nothing was written or launched.
 var ErrTemplateAgentMissing = config.ErrTemplateAgentMissing
+
+// ErrExperimentalAgentDisabled means the requested experimental agent is disabled.
+var ErrExperimentalAgentDisabled = spawn.ErrExperimentalAgentDisabled
+
+// ErrAgentCapabilityUnsupported means the pane-only agent does not support the requested capability.
+var ErrAgentCapabilityUnsupported = spawn.ErrAgentCapabilityUnsupported
+
+// ErrModelMissing means the pane-only launch has no explicit model.
+var ErrModelMissing = spawn.ErrModelMissing

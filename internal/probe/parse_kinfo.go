@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // kinfoProcSize is sizeof(struct kinfo_proc) on XNU 11.x (macOS 14 /
@@ -19,10 +22,10 @@ import (
 // XNU sources for that release (Apple publishes them under
 // https://github.com/apple-oss-distributions/xnu) and re-derive
 // kinfoProcSize + kinfoProcPIDOffset (and the identity offsets
-// kinfoProcStartSecOffset / kinfoProcStartUsecOffset / kinfoEprocPPIDOffset
-// and the process-state offset kinfoProcStatOffset below) from the
-// headers, then refresh the comment above + the bump-policy paragraph in
-// docs/architecture.md.
+// kinfoProcStartSecOffset / kinfoProcStartUsecOffset / kinfoEprocPPIDOffset,
+// the process-state offset kinfoProcStatOffset and the command-name offset
+// kinfoProcCommOffset below) from the headers, then refresh the comment
+// above + the bump-policy paragraph in docs/architecture.md.
 //
 // See also: <bsd/sys/proc.h> (extern_proc.p_pid, extern_proc.p_starttime)
 // and <bsd/sys/sysctl.h> (struct kinfo_proc, struct eproc.e_ppid) in the
@@ -33,9 +36,9 @@ const kinfoProcSize = 648
 // kinfoProcPIDOffset is the byte offset of extern_proc.p_pid inside
 // kinfo_proc on XNU 11.x. The eproc tail follows extern_proc, so p_pid
 // lives at extern_proc's offset 40 (its position inside the leading
-// substruct). No extractor reads p_pid; the constant anchors the p_stat and
-// p_comm offset derivations below. Same XNU-version sensitivity as
-// kinfoProcSize.
+// substruct). parseKinfoPIDs reads it from each entry of a KERN_PROC_UID
+// selection, and it anchors the p_stat and p_comm offset derivations below.
+// Same XNU-version sensitivity as kinfoProcSize.
 const kinfoProcPIDOffset = 40
 
 // Process-identity offsets (SR-6.4). These pin the byte positions of the
@@ -125,14 +128,17 @@ const maxPlausibleStartUsec = 1_000_000
 const maxPlausiblePID = 4_194_304
 
 // ErrKinfoLayoutDrift is returned by the entry-granular identity extractors
-// (parseKinfoPPID, parseKinfoStartTime, parseKinfoStat, parseKinfoComm) when
-// a single kinfo_proc entry's bytes fail their field plausibility guards — the
-// signal that the pinned XNU offsets (kinfoEprocPPIDOffset /
-// kinfoProcStart*Offset / kinfoProcStatOffset / kinfoProcCommOffset) have
-// drifted under us, e.g. after a macOS major bump resized struct kinfo_proc.
+// (parseKinfoPPID, parseKinfoStartTime, parseKinfoStat, parseKinfoComm) and
+// the selection parser (parseKinfoPIDs) when a kinfo_proc entry's bytes fail
+// their field plausibility guards — the signal that the pinned XNU offsets
+// (kinfoProcPIDOffset / kinfoEprocPPIDOffset / kinfoProcStart*Offset /
+// kinfoProcStatOffset / kinfoProcCommOffset) have drifted under us, e.g.
+// after a macOS major bump resized struct kinfo_proc.
 //
-// Drift is fail-OPEN: the start-time reader, the command-name reader and the
-// parent-pid reader answer unreadable, never gone. It is a distinct sentinel that wraps nothing,
+// On drift the per-pid readers (start time, command name, parent pid) answer
+// unreadable, never gone, so their callers treat the evidence as unavailable;
+// the uid selection reader returns an error, which refuses the journal
+// migration. It is a distinct sentinel that wraps nothing,
 // so callers that need to branch on drift test
 // errors.Is(err, ErrKinfoLayoutDrift).
 var ErrKinfoLayoutDrift = errors.New("ErrKinfoLayoutDrift")
@@ -258,6 +264,35 @@ func parseKinfoComm(buf []byte, off int) (string, error) {
 	return string(field[:n]), nil
 }
 
+// parseKinfoPIDs extracts extern_proc.p_pid from every kinfo_proc entry of a
+// whole selection buffer (a KERN_PROC_UID result), in the kernel's order. It
+// is build-tag-free for off-darwin unit testing.
+//
+// Returns ErrKinfoLayoutDrift, with no partial list, when the buffer is not a
+// whole number of kinfoProcSize entries, or when any entry's p_pid is outside
+// [0, maxPlausiblePID] or its p_stat fails parseKinfoStat's guard, a second
+// check that each entry starts where kinfoProcSize says it does.
+func parseKinfoPIDs(buf []byte) ([]int, error) {
+	if len(buf)%kinfoProcSize != 0 {
+		return nil, fmt.Errorf("%w: %d-byte selection is not a whole number of entries (kinfoProcSize=%d may be stale for this XNU version)",
+			ErrKinfoLayoutDrift, len(buf), kinfoProcSize)
+	}
+	pids := make([]int, 0, len(buf)/kinfoProcSize)
+	for off := 0; off < len(buf); off += kinfoProcSize {
+		p := off + kinfoProcPIDOffset
+		pid := int(int32(binary.LittleEndian.Uint32(buf[p : p+4])))
+		if pid < 0 || pid > maxPlausiblePID {
+			return nil, fmt.Errorf("%w: p_pid=%d out of range at entry offset %d (kinfoProcPIDOffset=%d may be stale for this XNU version)",
+				ErrKinfoLayoutDrift, pid, off, kinfoProcPIDOffset)
+		}
+		if _, err := parseKinfoStat(buf, off); err != nil {
+			return nil, err
+		}
+		pids = append(pids, pid)
+	}
+	return pids, nil
+}
+
 // formatDarwinProcStartTime renders a kinfo_proc p_starttime timeval into
 // the canonical macOS proc_starttime string: "<tv_sec>.<tv_usec>" — decimal,
 // a single literal dot, NO zero-padding on either component.
@@ -269,4 +304,34 @@ func parseKinfoComm(buf []byte, off int) (string, error) {
 // internal/testsupport/procstarttimefix/procstarttimefix.go (SR-6.4).
 func formatDarwinProcStartTime(sec, usec int64) string {
 	return fmt.Sprintf("%d.%d", sec, usec)
+}
+
+// ParseDarwinProcStartTime is the inverse of formatDarwinProcStartTime: it
+// reads a darwin start identity back into the instant it names, so a caller
+// can order start identities against each other and the clock. The part after
+// the dot is a whole count of microseconds, not a fraction: "1700000000.5" is
+// 5 µs past the second. ok is false for any string formatDarwinProcStartTime
+// cannot produce (a sign, a space, an empty part, another dot, a non-digit,
+// zero padding) and for a value outside parseKinfoStartTime's bounds. Must
+// use: order darwin start identities only through it, never by parsing them
+// again.
+func ParseDarwinProcStartTime(start string) (time.Time, bool) {
+	secText, usecText, found := strings.Cut(start, ".")
+	if !found {
+		return time.Time{}, false
+	}
+	sec, err := strconv.ParseInt(secText, 10, 64)
+	if err != nil || sec <= 0 || sec >= maxPlausibleStartSec {
+		return time.Time{}, false
+	}
+	usec, err := strconv.ParseInt(usecText, 10, 64)
+	if err != nil || usec < 0 || usec >= maxPlausibleStartUsec {
+		return time.Time{}, false
+	}
+	// Only the canonical form round-trips; ParseInt alone accepts a sign and
+	// zero padding.
+	if formatDarwinProcStartTime(sec, usec) != start {
+		return time.Time{}, false
+	}
+	return time.Unix(sec, usec*int64(time.Microsecond)), true
 }

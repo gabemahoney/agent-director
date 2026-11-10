@@ -45,9 +45,9 @@ last=""
 # Exact key sets (docs/caller-contract.md): a status row showing no Displayed
 # State and showing idle_screen; a list row's keys present on a row showing
 # idle_screen and those present only on some.
-status_plain='["context","family_state","idle_screen_availability","state"]'
-status_idle='["context","displayed_state","family_state","idle_screen_availability","since","state","tmux_session_name","unchanged_minutes"]'
-list_keys='["agent","cwd","displayed_state","family_state","idle_screen_availability","instance_id","labels","last_seen_at","permission_requests","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
+status_plain='["confirmations","context","family_state","idle_screen_availability","process_liveness","state"]'
+status_idle='["confirmations","context","displayed_state","family_state","idle_screen_availability","process_liveness","since","state","tmux_session_name","unchanged_minutes"]'
+list_keys='["agent","confirmations","cwd","displayed_state","family_state","idle_screen_availability","instance_id","labels","last_seen_at","permission_requests","process_liveness","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
 list_optional='["ended_at","launch_started_at","liveness_note","liveness_unverified_since","parent_id"]'
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -78,7 +78,7 @@ trap cleanup EXIT
 mkdir -p "$dir"
 agent-director list >/dev/null || fail "agent-director list could not open the store"
 have="$(sqlr "SELECT group_concat(name) FROM pragma_table_info('spawns');")"
-for c in observation_version display_observation display_exit idle_screen_timeout_seconds pane_sha256 pane_since_ms pane_epoch; do
+for c in display_evidence observation_version display_observation display_exit idle_screen_timeout_seconds pane_sha256 pane_since_ms pane_epoch; do
     case ",$have," in
     *",$c,"*) ;;
     *)
@@ -88,10 +88,10 @@ for c in observation_version display_observation display_exit idle_screen_timeou
     esac
 done
 
-# write_config TIMEOUT: no settling, the reader's idle_screen timeout and the
+# write_config TIMEOUT [SETTLE_MS]: the reader's idle_screen timeout and the
 # Codex stand-in as codex.
 write_config() {
-    printf '[state]\nsettle_ms = 0\nidle_screen_timeout_seconds = %s\nneeds_intelligence_timeout_seconds = 30\n[launch]\ncodex_path = "/opt/driver/stand-in-codex/codex"\n' "$1" >"$config"
+    printf '[state]\nsettle_ms = %s\nidle_screen_timeout_seconds = %s\nneeds_intelligence_timeout_seconds = 30\n[launch]\ncodex_path = "/opt/driver/stand-in-codex/codex"\n' "${2:-0}" "$1" >"$config"
 }
 
 # read_row VERB ID: the verb's JSON result for ID; the call must exit 0.
@@ -138,7 +138,7 @@ wait_raw() {
 launch() {
     local agent="$1" id="$2"
     shift 2
-    local cwd sid tp home out event extra payload end
+    local cwd sid tp home out end
     local spawn_extra=() hook_args=()
     cwd="$(mktemp -d /tmp/idle-screen-XXXXXX)"
     cwd="$(cd -P "$cwd" && pwd)"
@@ -165,14 +165,37 @@ launch() {
             sleep 0.1
         done
     fi
-    for event in SessionStart UserPromptSubmit; do
-        extra='{"source":"startup"}'
-        [[ "$event" == SessionStart ]] || extra='{"prompt":"hello","turn_id":"turn-1"}'
-        payload="$(jq -cn --arg e "$event" --arg sid "$sid" --arg tp "$tp" --arg cwd "$cwd" --argjson x "$extra" \
-            '{hook_event_name: $e, session_id: $sid, transcript_path: $tp, cwd: $cwd, model: "stand-in", permission_mode: "default"} + $x')"
-        /opt/driver/pane-hook.sh "${hook_args[@]}" "$id" "$payload" >/dev/null || fail "$event hook on $id exited non-zero"
-    done
+    hook_sid="$sid" hook_tp="$tp" hook_cwd="$cwd" hook_agent_args=("${hook_args[@]}")
+    hook "$id" SessionStart '{"source":"startup"}'
+    hook "$id" UserPromptSubmit '{"prompt":"hello","turn_id":"turn-1"}'
     wait_raw "$id" working
+}
+
+# hook ID EVENT EXTRA: type EVENT's payload, with EXTRA's members, into ID's
+# pane as the latest launch's agent and session (hook_sid, hook_tp, hook_cwd,
+# hook_agent_args); the hook must exit 0.
+hook() {
+    local payload
+    payload="$(jq -cn --arg e "$2" --arg sid "$hook_sid" --arg tp "$hook_tp" --arg cwd "$hook_cwd" --argjson x "$3" \
+        '{hook_event_name: $e, session_id: $sid, transcript_path: $tp, cwd: $cwd, model: "stand-in", permission_mode: "default"} + $x')"
+    /opt/driver/pane-hook.sh "${hook_agent_args[@]}" "$1" "$payload" >/dev/null || fail "$2 hook on $1 exited non-zero"
+}
+
+# settle_working ID: give the latest launch ID's working stay a settled base of
+# working through its own hooks alone (hookStateSet, internal/store/settle.go):
+# a Stop under settle_ms 0 makes working the settled value, and the next prompt
+# under settle_ms 60000 keeps it, because the brief waiting never settled. A
+# read settling for 60 s then reports working, with this last stay's own raw
+# record, while the display's exit is still settling. Run it before the
+# baseline, so the stay it ends in is the one every later read reports.
+settle_working() {
+    hook "$1" Stop '{"stop_hook_active":false,"turn_id":"turn-1"}'
+    wait_raw "$1" waiting
+    write_config 600 60000
+    hook "$1" UserPromptSubmit '{"prompt":"hello again","turn_id":"turn-2"}'
+    wait_raw "$1" working
+    write_config 600
+    [[ "$(col "$1" settled_state)" == working ]] || fail "$1: settled base [$(col "$1" settled_state)]; want working"
 }
 
 # baseline ID: status reads until the committed baseline is the fingerprint
@@ -250,9 +273,13 @@ public)
     # 900 s unchanged: past the configured 600, short of the 1200 default.
     write_config 600
     minutes=() entries=()
+    mkdir -p /tmp/idle-screen-artifacts
+    evidence="/tmp/idle-screen-artifacts/public.jsonl"
+    : >"$evidence"
     for agent in claude codex; do
-        id="pane-$agent"
+        id="pane-$agent-$(cat /proc/sys/kernel/random/uuid)"
         launch "$agent" "$id"
+        settle_working "$id"
         baseline "$id"
         backdate "$id" 900000
         v="$(version "$id")"
@@ -269,19 +296,67 @@ public)
         # Either filter, the Displayed State or the real state (b.zpv), lists the row.
         for filter in idle_screen working; do
             listed="$(agent-director list --state "$filter")" || fail "list --state $filter exited non-zero"
-            jq -e --arg id "$id" --argjson k "$list_keys" --argjson o "$list_optional" \
+            jq -e --arg id "$id" --arg first "$(jq -r .since <<<"$status")" --argjson k "$list_keys" --argjson o "$list_optional" \
                 '[.spawns[] | select(.instance_id == $id)] | length == 1 and (.[0] | .state == "working" and .displayed_state == "idle_screen"
-                and .idle_screen_availability == "available" and (keys - $o) == $k)' <<<"$listed" >/dev/null ||
+                and .idle_screen_availability == "available" and (keys - $o) == $k
+                and (.confirmations | keys == ["displayed_state","process_liveness","state"])
+                and all(.confirmations[]; keys == ["checked_at","confirmed_at","reason","source","status"])
+                and .confirmations.displayed_state.status == "confirmed" and .confirmations.displayed_state.source == "pane"
+                and .confirmations.displayed_state.confirmed_at == $first and .confirmations.displayed_state.reason == null
+                and .confirmations.displayed_state.checked_at >= $first)' <<<"$listed" >/dev/null ||
                 fail "$agent: list --state $filter row: $listed"
         done
         [[ "$(version "$id")" == "$v" ]] || fail "$agent: list re-committed the unchanged display"
         [[ "$(col "$id" state)" == working ]] || fail "$agent: the raw state moved"
         one_record "$id" working idle_screen "$(jq -r .since <<<"$status")"
         minutes+=("$(jq .unchanged_minutes <<<"$status")")
+        # b.x9o: independently launched readers report real owned samples.
+        for reading in "$status" "$get"; do
+            jq -e '.confirmations | keys == ["displayed_state","process_liveness","state"]
+                and all(.[]; keys == ["checked_at","confirmed_at","reason","source","status"])' <<<"$reading" >/dev/null || fail "confirmation shape: $reading"
+            jq -e '.confirmations.displayed_state as $d | $d.status == "confirmed" and $d.source == "pane" and $d.confirmed_at == .since
+                and $d.checked_at >= $d.confirmed_at and $d.reason == null
+                and .process_liveness == "alive" and .confirmations.process_liveness.status == "confirmed"
+                and .confirmations.state.source == "agent_event"' <<<"$reading" >/dev/null || fail "owned pane evidence: $reading"
+        done
+        owner="$(col "$id" "launch_token || '|' || pane_id || '|' || pid || '|' || proc_starttime")"
+        state_record="$(jq -c .confirmations.state <<<"$get")"
+        sock="$(col "$id" tmux_socket)"
+        pane="$(col "$id" pane_id)"
+        session="$(tmux ${sock:+-S "$sock"} display-message -p -t "$pane" '#{session_id}')"
+        label="$(tmux ${sock:+-S "$sock"} show-options -v -t "$session" @ad_owner)"
+        [[ -n "$label" ]] || fail "$agent: session $session carries no @ad_owner label"
+        # Lose only the session's ownership label, so the lookup no longer
+        # finds the launch's own session and the pane sample fails. The actual
+        # agent process and lifecycle stay alive/working; the display's exit
+        # is still settling.
+        write_config 600 60000
+        tmux ${sock:+-S "$sock"} set-option -u -t "$session" @ad_owner
+        observe "$id"
+        failed="$last"
+        jq -e --argjson prior "$get" --argjson state "$state_record" '.state == "working" and .displayed_state == "idle_screen"
+            and .process_liveness == "alive" and .confirmations.process_liveness.status == "confirmed" and .confirmations.state == $state
+            and .confirmations.displayed_state == {status:"not_confirmed", confirmed_at:$prior.confirmations.displayed_state.confirmed_at,
+                source:"pane", checked_at:.confirmations.displayed_state.checked_at, reason:"unreadable"}
+            and .confirmations.displayed_state.checked_at >= $prior.confirmations.displayed_state.checked_at' <<<"$failed" >/dev/null || fail "lost pane borrowed fresh evidence: $failed"
+        [[ "$(col "$id" "launch_token || '|' || pane_id || '|' || pid || '|' || proc_starttime")" == "$owner" ]] || fail "pane observation changed the agent identity"
+        [[ "$(col "$id" "state || '|' || settled_state")" == "working|working" ]] || fail "pane observation moved the lifecycle"
+        stored="$(col "$id" display_evidence)"
+        confirmed_ms="$(date -d "$(jq -r .confirmations.displayed_state.confirmed_at <<<"$failed")" +%s%3N)"
+        checked_ms="$(date -d "$(jq -r .confirmations.displayed_state.checked_at <<<"$failed")" +%s%3N)"
+        jq -e --argjson at "$confirmed_ms" --argjson checked "$checked_ms" '.v == "idle_screen" and .reason == "unreadable" and .src == "pane"
+            and .at == $at and .since == $at and .checked == $checked' <<<"$stored" >/dev/null || fail "failed attempt not durable: $stored"
+        jq -cn --arg agent "$agent" --arg id "$id" --arg owner "$owner" --argjson success "$get" --argjson listed "$listed" --argjson failed "$failed" --argjson stored "$stored" \
+            '{agent:$agent,id:$id,owner:$owner,success:$success,listed:$listed,failed:$failed,stored:$stored}' >>"$evidence"
+        tmux ${sock:+-S "$sock"} set-option -t "$session" @ad_owner "$label"
+        [[ "$(tmux ${sock:+-S "$sock"} show-options -v -t "$session" @ad_owner)" == "$label" ]] || fail "$agent: @ad_owner not restored"
+        write_config 600
+
     done
+    jq -se 'map(.agent) == ["claude", "codex"]' "$evidence" >/dev/null || fail "public evidence lacks an agent's line"
     trail_clean
     jq -cn --argjson m "$(printf '%s\n' "${minutes[@]}" | jq -sc .)" --argjson e "$(printf '%s\n' "${entries[@]}" | jq -sc .)" \
-        '{case: "public", agents: ["claude", "codex"], timeout: 600, minutes: $m, entry_commits: $e, records: [1, 1], raw: "working"}'
+        '{case: "public", agents: ["claude", "codex"], timeout: 600, minutes: $m, entry_commits: $e, entry_records: [1, 1], pane_loss: "not_confirmed/unreadable", raw: "working"}'
     ;;
 override)
     write_config 60
@@ -296,7 +371,7 @@ override)
         [[ "$(sqlr "SELECT COUNT(*) FROM spawns WHERE instance_id = $(q "$id");")" == 0 ]] || fail "$bad: the refusal wrote a row"
         refused=$((refused + 1))
     done
-    id=override
+    id="override-$(cat /proc/sys/kernel/random/uuid)"
     launch claude "$id" --idle-screen-timeout-seconds 7200
     [[ "$(col "$id" idle_screen_timeout_seconds)" == 7200 ]] || fail "the override was not recorded"
     baseline "$id"
@@ -320,8 +395,10 @@ override)
 cursor)
     write_config 60
     old=1577836800000 # 2020-01-01, long before any timeout
-    sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,idle_screen_timeout_seconds,pane_sha256,pane_since_ms,pane_epoch)
-         VALUES('cursor-quiet','working','working',0,'/tmp','cursor','on','ts-cursor-quiet','2222222222222222',7,1,'$(printf 'ab%.0s' {1..32})',$old,7)"
+    # Keep the fixture's agent identity alive across active reads.
+    writer_start="$(python3 -c 'import pathlib,sys; print(pathlib.Path("/proc/"+sys.argv[1]+"/stat").read_text().rsplit(")",1)[1].split()[19])' "$$")"
+    sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,idle_screen_timeout_seconds,pane_sha256,pane_since_ms,pane_epoch,pid,proc_starttime)
+         VALUES('cursor-quiet','working','working',0,'/tmp','cursor','on','ts-cursor-quiet','2222222222222222',7,1,'$(printf 'ab%.0s' {1..32})',$old,7,$$,'$writer_start')"
     before="$(col cursor-quiet "observation_version || '|' || IFNULL(display_observation,'') || '|' || pane_since_ms")"
     quiet="$(read_row status cursor-quiet)"
     jq -e --argjson k "$status_plain" '.state == "working" and .idle_screen_availability == "unavailable" and keys == $k' <<<"$quiet" >/dev/null ||
@@ -332,8 +409,8 @@ cursor)
     no_old_member "$row" "Cursor quiet get"
     [[ "$(col cursor-quiet "observation_version || '|' || IFNULL(display_observation,'') || '|' || pane_since_ms")" == "$before" ]] ||
         fail "a Cursor row was observed by its pane"
-    sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch)
-         VALUES('cursor-asks','check_permission','check_permission',0,'/tmp','cursor','on','ts-cursor-asks','1111111111111111',7)"
+    sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,pid,proc_starttime)
+         VALUES('cursor-asks','check_permission','check_permission',0,'/tmp','cursor','on','ts-cursor-asks','1111111111111111',7,$$,'$writer_start')"
     sql "INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,created_at,settled_at,owner_launch_token,owner_permission_epoch,admitted_at,fallback_at,fallback_basis)
          VALUES('cursor-asks','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}','2019-12-31 23:59:00',$old,'1111111111111111',7,$((old - 1000)),$old,'deadline')"
     # b.zpv: fallen back since 2020, the request keeps its row check_permission.
@@ -348,6 +425,10 @@ cursor)
         fail "availability on every row: $listed"
     [[ "$(records cursor-asks)" == "[]" ]] || fail "the fallen-back Cursor request wrote a record: $(records cursor-asks)"
     [[ "$(records cursor-quiet)" == "[]" ]] || fail "the never-sampled Cursor row wrote a record: $(records cursor-quiet)"
+    for reading in "$quiet" "$last"; do
+        jq -e '.confirmations.displayed_state == {status:"unknown",confirmed_at:null,source:null,checked_at:null,reason:"unsupported"}' <<<"$reading" >/dev/null || fail "Cursor display evidence: $reading"
+    done
+    [[ "$(col cursor-quiet 'display_evidence IS NULL')" == 1 ]] || fail "Cursor stored display evidence"
     trail_clean
     jq -cn --arg q "$(jq -r '[.state, .idle_screen_availability] | join("/")' <<<"$quiet")" \
         --arg a "$(jq -r '[.state, .idle_screen_availability] | join("/")' <<<"$last")" \

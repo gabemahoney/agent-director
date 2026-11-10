@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -73,14 +74,20 @@ exec '` + tmuxPath + `' "$@"
 
 // advPaneOpen opens the production client on f's store running tmuxCommand,
 // with the fixture's query and create timeouts and advPaneActionTimeout.
-func advPaneOpen(t *testing.T, f *killFix, tmuxCommand string) *api.Client {
+func advPaneOpen(t *testing.T, f *killFix, tmuxCommand string, afterEnter ...context.CancelFunc) *api.Client {
 	t.Helper()
 	cfg := filepath.Join(t.TempDir(), "config.toml")
 	apitest.WriteTmuxConfig(t, cfg,
 		apitest.TmuxInt(config.TmuxQueryTimeoutMs, clientTimeouts.Query.Milliseconds()),
 		apitest.TmuxInt(config.TmuxActionTimeoutMs, advPaneActionTimeout.Milliseconds()),
 		apitest.TmuxInt(config.TmuxCreateTimeoutMs, clientTimeouts.Create.Milliseconds()))
-	c, err := api.New(api.Options{StorePath: f.DBPath, ConfigPath: cfg, TmuxCommand: tmuxCommand})
+	opts := api.Options{StorePath: f.DBPath, ConfigPath: cfg, TmuxCommand: tmuxCommand}
+	if len(afterEnter) != 0 {
+		timeouts := clientTimeouts
+		timeouts.Action = advPaneActionTimeout
+		opts.TmuxClient = cancelAfterEnterTmux{Client: tmux.New(tmuxCommand, timeouts), cancel: afterEnter[0]}
+	}
+	c, err := api.New(opts)
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
@@ -90,12 +97,12 @@ func advPaneOpen(t *testing.T, f *killFix, tmuxCommand string) *api.Client {
 
 // advPaneCatRow seeds a waiting row whose agent pane runs cat - and opens the
 // production client on a wrapper whose arm breaks one keys call.
-func advPaneCatRow(t *testing.T) (*killFix, killRow, *api.Client, func(call, how string)) {
+func advPaneCatRow(t *testing.T, afterEnter ...context.CancelFunc) (*killFix, killRow, *api.Client, func(call, how string)) {
 	t.Helper()
 	f := newKillFix(t)
 	r := f.liveRow(t, killRowSpec{Command: []string{"cat", "-"}})
 	wrapper, arm := advPaneWrapper(t)
-	return f, r, advPaneOpen(t, f, wrapper), arm
+	return f, r, advPaneOpen(t, f, wrapper, afterEnter...), arm
 }
 
 // advPaneAssertAdvice fails unless err is ErrTmuxUnresponsive carrying advice word for word.
@@ -212,12 +219,11 @@ func TestAdviceFollow_E5_PauseKeysFailedRetryLaterRealTmux(t *testing.T) {
 			advice: "the text may be typed but not submitted; retry later"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f, r, c, arm := advPaneCatRow(t)
-			arm(tc.call, tc.how)
-			// cat never ends the row: a cancelled context ends the wait at once,
-			// so context.Canceled means C-u, /exit and Enter went through.
 			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
+			defer cancel()
+			f, r, c, arm := advPaneCatRow(t, cancel)
+			arm(tc.call, tc.how)
+			// cat never ends the row: cancel after successful Enter, at the wait.
 			pause := func() error { _, err := c.Pause(ctx, api.PauseParams{InstanceID: r.InstanceID}); return err }
 
 			advPaneAssertAdvice(t, pause(), tc.advice)

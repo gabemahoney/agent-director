@@ -77,6 +77,8 @@ func cursorMissingGuard(row Spawn, b CursorRuntime) (string, []any) {
 	args = append(args, row.Identity.Token, row.LifeNumber, row.Identity.PanePID, row.Identity.PaneStarttime)
 	guard += ` AND COALESCE(tmux_socket,'')=? AND COALESCE(tmux_server_pid,0)=? AND COALESCE(tmux_server_started,0)=? AND COALESCE(tmux_server_starttime,'')=? AND COALESCE(pane_id,'')=? AND COALESCE(jsonl_path,'')=?`
 	args = append(args, row.Identity.Socket, row.Identity.ServerPID, row.Identity.ServerStart, row.Identity.ServerStarttime, row.Identity.PaneID, row.JSONLPath)
+	guard += ` AND observation_version=? AND permission_epoch=?`
+	args = append(args, row.ObservationVersion, row.PermissionEpoch)
 	if cursorRuntimeAbsent(b) {
 		guard += ` AND NOT EXISTS(SELECT 1 FROM cursor_runtimes WHERE bound_instance_id=?)`
 		args = append(args, row.InstanceID)
@@ -150,13 +152,27 @@ func (s *Store) readContext() context.Context {
 	return context.Background()
 }
 
+// CursorMissingReadError identifies only the selected rows whose same-launch
+// gateway proof became stale. Multi-row readers return the other validated
+// rows alongside this error, from the same read snapshot. Other read failures
+// do not permit callers to use partial results.
+type CursorMissingReadError struct {
+	InstanceIDs []string
+}
+
+func (*CursorMissingReadError) Error() string {
+	return "store: Cursor lost gateway changed during read"
+}
+
+func (*CursorMissingReadError) Unwrap() error { return errDisplaySampleChanged }
+
 // A changed snapshot or binding is not permission to report a proven-lost
 // launch as live. A replacement launch, however, retains its own normal state.
 func validateCursorMissingRead(row Spawn, proofs []CursorMissingProof) error {
 	for _, p := range proofs {
 		r := p.Row
 		if row.Agent == AgentCursor && IsLiveState(row.State) && row.InstanceID == r.InstanceID && row.Identity.Token == r.Identity.Token && row.LifeNumber == r.LifeNumber && row.Identity.PanePID == r.Identity.PanePID && row.Identity.PaneStarttime == r.Identity.PaneStarttime {
-			return fmt.Errorf("store: Cursor lost gateway changed during read")
+			return &CursorMissingReadError{InstanceIDs: []string{row.InstanceID}}
 		}
 	}
 	return nil
@@ -176,4 +192,9 @@ func (s *Store) CanDeferCursorMissingWrite(err error) bool {
 // persistence, including cleanup/audit after an already confirmed commit.
 func (s *Store) CursorMissingReadContextErr() error {
 	return s.readContext().Err()
+}
+
+// RecoveryRows projects a fixed lightweight selection under the same proof guard.
+func (s *CursorMissingReads) RecoveryRows(ids []string, settle SettleRead) ([]Spawn, error) {
+	return s.Store.recoveryRows(ids, settle, s.proofs)
 }

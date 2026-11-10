@@ -52,11 +52,14 @@ func cmdWriteFamilyTransition(args []string, stdout, stderr io.Writer) int {
 // the settle-off goldens pin status, get and list on
 // (apitest.SeedReadSurfaceStore, b.3ie), and prints their ids in seeding order
 // and, for each raw state, the settled state its rows were scrambled to
-// (apitest.ReadSurfaceSettled), which a read with a settle time reports.
+// (apitest.ReadSurfaceSettled), which a read with a settle time reports, and
+// for each row the state record that read reports
+// (apitest.ReadSurfaceSettledConfirmation).
 func cmdSeedReadSurfaceStore(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("seed-read-surface-store", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	storePath := fs.String("store", "", "path for the new SQLite store file (required)")
+	writer := fs.Int("writer-pid", 0, "live surface reader process")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -64,7 +67,7 @@ func cmdSeedReadSurfaceStore(args []string, stdout, stderr io.Writer) int {
 		printError(stderr, errors.New("--store is required"))
 		return 1
 	}
-	ids, err := apitest.SeedReadSurfaceStore(*storePath)
+	ids, err := apitest.SeedReadSurfaceStore(*storePath, *writer)
 	if err != nil {
 		printError(stderr, err)
 		return 1
@@ -74,7 +77,11 @@ func cmdSeedReadSurfaceStore(args []string, stdout, stderr io.Writer) int {
 		store.StateCheckPermission, store.StateEnded, store.StateMissing} {
 		settled[s] = apitest.ReadSurfaceSettled(s)
 	}
-	if err := printResult(stdout, map[string]any{"ids": ids, "settled": settled}); err != nil {
+	confirmations := map[string]any{}
+	for _, id := range ids {
+		confirmations[id] = apitest.ReadSurfaceSettledConfirmation(id)
+	}
+	if err := printResult(stdout, map[string]any{"ids": ids, "settled": settled, "settled_confirmations": confirmations}); err != nil {
 		printError(stderr, err)
 		return 1
 	}
@@ -116,10 +123,11 @@ func cmdSetSettle(args []string, stdout, stderr io.Writer) int {
 // cmdSeedSurface seeds the shared precommitted display wire surface seed adds
 // (apitest.SeedNeedsIntelligenceSurface, apitest.SeedIdleScreenSurface) into
 // --store, for the subcommand name.
-func cmdSeedSurface(name string, seed func(string) error, args []string, stdout, stderr io.Writer) int {
+func cmdSeedSurface(name string, seed func(string, ...int) error, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	path := fs.String("store", "", "store path")
+	writer := fs.Int("writer-pid", 0, "live surface reader process")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -127,7 +135,7 @@ func cmdSeedSurface(name string, seed func(string) error, args []string, stdout,
 		printError(stderr, errors.New("--store is required"))
 		return 1
 	}
-	if err := seed(*path); err != nil {
+	if err := seed(*path, *writer); err != nil {
 		printError(stderr, err)
 		return 1
 	}

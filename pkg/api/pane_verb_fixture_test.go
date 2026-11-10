@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -33,6 +34,37 @@ import (
 
 // killStore is send-keys' store too.
 var _ api.SendKeysStore = (*killStore)(nil)
+
+// Preserve the real SQLite authority behind the error-injecting store wrapper.
+// No native capability is created by delegating these operations.
+var _ inputdelivery.Persistence = (*killStore)(nil)
+
+func (w *killStore) ReadInputPreparation(ctx context.Context, id inputdelivery.Identity) (inputdelivery.Identity, error) {
+	return w.st.ReadInputPreparation(ctx, id)
+}
+func (w *killStore) CheckInputGuard(ctx context.Context, launch *inputdelivery.Launch, guard inputdelivery.Guard) error {
+	return w.st.CheckInputGuard(ctx, launch, guard)
+}
+func (w *killStore) ReadInputLaunch(ctx context.Context, token string) (*inputdelivery.Launch, error) {
+	launch, err := w.st.ReadInputLaunch(ctx, token)
+	if write := w.afterInputLaunchRead; err == nil && write != nil {
+		w.afterInputLaunchRead = nil
+		write()
+	}
+	return launch, err
+}
+func (w *killStore) CreateInputLaunch(ctx context.Context, launch inputdelivery.Launch) error {
+	return w.st.CreateInputLaunch(ctx, launch)
+}
+func (w *killStore) BindInputLaunch(ctx context.Context, launch inputdelivery.Launch, guard inputdelivery.Guard) (*inputdelivery.Launch, error) {
+	return w.st.BindInputLaunch(ctx, launch, guard)
+}
+func (w *killStore) ReadInputAttempt(ctx context.Context, launch inputdelivery.Launch, request string) (*inputdelivery.Attempt, error) {
+	return w.st.ReadInputAttempt(ctx, launch, request)
+}
+func (w *killStore) SaveInputAttempt(ctx context.Context, launch inputdelivery.Launch, guard inputdelivery.Guard, attempt *inputdelivery.Attempt) (*inputdelivery.Launch, *inputdelivery.Attempt, error) {
+	return w.st.SaveInputAttempt(ctx, launch, guard, attempt)
+}
 
 // PermissionRequestsForSpawn returns failPermissionRequests' error, else delegates.
 func (w *killStore) PermissionRequestsForSpawn(id string) ([]api.PermissionRow, error) {
@@ -54,26 +86,42 @@ const paneClearKey = "C-u"
 // callClearLine stands, in the call lists below, for a key send of paneClearKey.
 const callClearLine = tmux.CallSendKey + " " + paneClearKey
 
-// recordedCall is c's kind as the call lists compare it: callClearLine for a
-// key send of paneClearKey, else c.Call.
+// callEnterKey selects the real separate key call; the recorder keeps CallSendKey.
+const callEnterKey = tmux.CallSendKey + " Enter"
+
+// recordedCall distinguishes C-u and Enter in exact inventories while the
+// recorder itself retains each real CallSendKey transport operation.
 func recordedCall(c tmuxfix.SocketCall) tmux.Call {
-	if c.Key == paneClearKey {
-		return callClearLine
+	if c.Key == paneClearKey || c.Key == "Enter" {
+		return tmuxfix.KeyCall(c.Key)
 	}
 	return c.Call
 }
 
+// transportCall maps a key-specific fixture selector to the actual tmux call.
+func transportCall(call tmux.Call) tmux.Call {
+	if call == callEnterKey || call == callClearLine {
+		return tmux.CallSendKey
+	}
+	return call
+}
+
 // paneWriteCalls are the call kinds that change tmux: sends, creates, kills and label writes.
-var paneWriteCalls = []tmux.Call{tmux.CallSendText, tmux.CallSendEnter, callClearLine, tmux.CallCreate,
+var paneWriteCalls = []tmux.Call{tmux.CallSendText, tmux.CallSendKey, tmux.CallSendEnter, tmux.CallCreate,
 	tmux.CallKillPane, tmux.CallKillSession, tmux.CallSetLabel}
 
 // The pane verbs' call sequences: a read (lookup, listing, capture), a
-// delivery (lookup, listing, text, Enter) and a text call that failed (no
-// Enter). pause's, which clear the line first, are below.
+// guarded delivery and a text call that failed (no Enter). Every target
+// recheck remains explicit. pause's, which clear the line first, are below.
 var (
-	paneReadCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
-	paneSendCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText, tmux.CallSendEnter}
-	paneTextCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText}
+	paneReadCalls       = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
+	paneKeyBefore       = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes}
+	paneAnswerBeforeKey = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
+	paneHashSendCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture,
+		tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture,
+		tmux.CallSendText, tmux.CallLookup, tmux.CallListPanes, callEnterKey}
+	paneSendCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText, tmux.CallLookup, tmux.CallListPanes, callEnterKey}
+	paneTextCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText}
 	paneListedCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes}
 	paneLookupCalls = []tmux.Call{tmux.CallLookup}
 )
@@ -148,17 +196,22 @@ func (e *killEnv) sendKeys(p api.SendKeysParams) (api.SendKeysResult, error) {
 // The pid namespace reader is unset, so every relay hook is judged "can't
 // tell" (by its confirm_by), as before relay hooks were judged by process.
 func (e *killEnv) sendKeysAt(window time.Duration, now time.Time, p api.SendKeysParams) (api.SendKeysResult, error) {
-	return api.SendKeys(&submissionStore{SendKeysStore: e.store}, e.rec, api.SendKeysEnv{
+	return api.SendKeys(&submissionStore{SendKeysStore: e.store, Persistence: e.store}, e.rec, api.SendKeysEnv{
 		Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return now }, Window: window},
 		Sleep: func(d time.Duration) { now = now.Add(d); e.sleep(d) },
 	}, p)
 }
 
 // sessionStartsWhenPolled supplies b.qcf's real SessionStart on the first
-// terminal poll. Refused lookups never report in; after observes only the hook's
-// write, so callers can retain their full-row no-write assertions.
-func (e *killEnv) sessionStartsWhenPolled(t *testing.T, r killRow, after func()) {
+// terminal poll, with sessionID when given (default "ready-<id>"). Refused
+// lookups never report in; after observes only the hook's write, so callers
+// can retain their full-row no-write assertions.
+func (e *killEnv) sessionStartsWhenPolled(t *testing.T, r killRow, after func(), sessionID ...string) {
 	t.Helper()
+	sid := "ready-" + r.ID
+	if len(sessionID) > 0 {
+		sid = sessionID[0]
+	}
 	done := false
 	e.rec.AfterCall(tmux.CallPaneTerminal, func(c tmuxfix.SocketCall, err error) {
 		if done || err != nil || c.Socket != r.Socket {
@@ -175,7 +228,7 @@ func (e *killEnv) sessionStartsWhenPolled(t *testing.T, r killRow, after func())
 		if row.State != store.StatePending {
 			return
 		}
-		if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", "ready-"+r.ID); !a.Applied {
+		if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", sid); !a.Applied {
 			t.Fatalf("SessionStart during readiness: %+v", a)
 		}
 		if after != nil {
@@ -216,6 +269,10 @@ func (w *killStore) RecordPaneSent(id, token string, intent api.PaneIntent, maxW
 // ReleasePaneIntent delegates.
 func (w *killStore) ReleasePaneIntent(id, token string, intent api.PaneIntent, maxWait time.Duration) (bool, error) {
 	return w.st.ReleasePaneIntent(id, token, intent, maxWait)
+}
+
+func (w *killStore) CheckPaneIntent(ctx context.Context, id, token string, intent api.PaneIntent) error {
+	return w.st.CheckPaneIntent(ctx, id, token, intent)
 }
 
 // sendKeysClient runs Client.SendKeys on a new e.client, for the cases that
@@ -312,7 +369,7 @@ func pauseVerb() paneVerb {
 func (e *killEnv) pauseToWait(r killRow) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) { cancel() })
+	e.rec.AfterCall(callEnterKey, func(tmuxfix.SocketCall, error) { cancel() })
 	_, err := e.pauseWithin(ctx, pauseTimeoutSeconds, pauseParams(r))
 	return err
 }
@@ -374,7 +431,7 @@ func (v paneVerb) assertRefused(t *testing.T, e *killEnv, r killRow, err error, 
 		apitest.AssertDescription(t, err.Error(), want.desc(v.verb),
 			append([]string{r.Token, r.StoreID, apitest.OtherStoreID(r.StoreID)}, want.forbid...)...)
 	}
-	e.assertNoCalls(t, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter, callClearLine)
+	e.assertNoCalls(t, tmux.CallCapture, tmux.CallSendText, callEnterKey, callClearLine)
 	e.assertPaneCalls(t, want.calls...)
 	if e.store.stateReads != 0 {
 		t.Errorf("state reads = %d; want no wait after a refusal", e.store.stateReads)
@@ -599,19 +656,44 @@ func (e *killEnv) rowWriteAfter(t *testing.T, call tmux.Call, r killRow) {
 			return false, err.Error()
 		}
 		res, err := e.st.SetLivenessNoteIfSameLife(r.ID, row.Snapshot, "changed between the row read and the send")
-		if err != nil {
+		if err != nil || res != store.CondApplied {
+			return false, fmt.Sprintf("condition result %d (CondApplied %d), %v", res, store.CondApplied, err)
+		}
+		// b.x9o: a concurrent read's process and display records, freshness
+		// metadata the send's preparation never compares, land in the same window.
+		if row, err = e.st.GetSpawn(r.ID); err != nil {
 			return false, err.Error()
 		}
-		return res == store.CondApplied, fmt.Sprintf("condition result %d (CondApplied %d)", res, store.CondApplied)
+		agent := tmux.SelectAgentProcess(tmux.ProcIdentity{PID: row.PID, Starttime: row.ProcStarttime},
+			tmux.ProcIdentity{PID: row.Identity.PanePID, Starttime: row.Identity.PaneStarttime}).Identity
+		if rec, ok := row.ProcessEvidenceAfter(store.ProcessAttempt{PID: agent.PID, Start: agent.Starttime, Value: store.ProcessAlive}, e.clock.Now().UnixMilli()); ok {
+			if res, err := e.st.RecordProcessEvidence(row, rec); err != nil || res != store.CondApplied {
+				return false, fmt.Sprintf("process record %d, %v", res, err)
+			}
+		}
+		cursorReadSQL(t, e.dbPath, `UPDATE spawns SET display_evidence=json_object(
+			'v','none','life',life_number,'token',launch_token,
+			'at',?,'src','pane','checked',?,'reason',NULL) WHERE instance_id=?`,
+			e.clock.Now().UnixMilli(), e.clock.Now().UnixMilli(), r.ID)
+		changed, err := e.st.GetSpawn(r.ID)
+		if err != nil || changed.DisplayEvidence == row.DisplayEvidence {
+			return false, fmt.Sprintf("display record was not changed: %v", err)
+		}
+		return true, ""
 	})
 }
 
+// beforeJournalLoad is a fixture schedule, never a recorded tmux operation:
+// the first real launch read has returned, before reconciliation calls Load.
+const beforeJournalLoad tmux.Call = "before journal load"
+
 // onceAfter runs write when the first call of kind call returns and fails
 // the test unless it ran (checked at cleanup) and reported applied.
+// Reuse beforeJournalLoad for a real store write before target discovery.
 func (e *killEnv) onceAfter(t *testing.T, call tmux.Call, what string, write func() (applied bool, why string)) {
 	t.Helper()
 	ran := false
-	e.rec.AfterCall(call, func(tmuxfix.SocketCall, error) {
+	run := func() {
 		if ran {
 			return
 		}
@@ -619,7 +701,15 @@ func (e *killEnv) onceAfter(t *testing.T, call tmux.Call, what string, write fun
 		if applied, why := write(); !applied {
 			t.Errorf("%s after %v not applied: %s", what, call, why)
 		}
-	})
+	}
+	if call == beforeJournalLoad {
+		e.store.afterInputLaunchRead = func() {
+			e.assertNoTmuxCall(t)
+			run()
+		}
+	} else {
+		e.rec.AfterCall(call, func(tmuxfix.SocketCall, error) { run() })
+	}
 	t.Cleanup(func() {
 		if !ran {
 			t.Errorf("%s after %v never ran: no %v call was made", what, call, call)
@@ -653,7 +743,7 @@ func (e *killEnv) assertPaneCalls(t *testing.T, want ...tmux.Call) {
 	e.assertKillCalls(t, want...)
 	for _, c := range e.rec.SocketCalls() {
 		switch recordedCall(c) {
-		case tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter, callClearLine:
+		case tmux.CallCapture, tmux.CallSendText, tmux.CallSendKey, callEnterKey, callClearLine:
 			if !killPaneIDRe.MatchString(c.Target) {
 				t.Errorf("%v targets %q; want a pane id", recordedCall(c), c.Target)
 			}
@@ -680,15 +770,15 @@ func (e *killEnv) assertCaptured(t *testing.T, paneID string, nLines int, ansi b
 }
 
 // assertTextSent fails unless rec recorded exactly one text call, typing text
-// (as delivered: CR stripped) into paneID on socket, with Enter asked for.
+// (as delivered: CR stripped) into paneID on socket, with Enter separate.
 func assertTextSent(t *testing.T, rec *tmuxfix.Recorder, socket, paneID, text string) {
 	t.Helper()
 	got := rec.SocketCallsOf(tmux.CallSendText)
 	if len(got) != 1 {
 		t.Fatalf("text calls = %+v; want one to %s", got, paneID)
 	}
-	if c := got[0]; c.Socket != socket || c.Target != paneID || c.Text != text || !c.PressEnter {
-		t.Errorf("text call %q to %q on %s (Enter %v); want %q to %q on %s (Enter true)",
+	if c := got[0]; c.Socket != socket || c.Target != paneID || c.Text != text || c.PressEnter {
+		t.Errorf("text call %q to %q on %s (Enter %v); want %q to %q on %s (Enter false)",
 			c.Text, c.Target, c.Socket, c.PressEnter, text, paneID, socket)
 	}
 }
@@ -696,17 +786,18 @@ func assertTextSent(t *testing.T, rec *tmuxfix.Recorder, socket, paneID, text st
 // assertEnterSent fails unless rec recorded exactly one Enter call, to paneID on socket.
 func assertEnterSent(t *testing.T, rec *tmuxfix.Recorder, socket, paneID string) {
 	t.Helper()
-	if got := rec.SocketCallsOf(tmux.CallSendEnter); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
+	if got := rec.SocketCallsOf(callEnterKey); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
 		t.Errorf("Enter calls = %+v; want one to %s on %s", got, paneID, socket)
 	}
 }
 
-// assertDelivered checks lookup, listing, the specified number of terminal reads
-// (default zero), post-wait ownership checks, literal text, and exactly one
-// Enter to the owned pane. The second lookup/listing is pending Claude's b.qcf guard.
+// assertDelivered checks paneSendCalls (lookup, listing, every target recheck,
+// literal text, one Enter key) with the specified number of terminal reads
+// (default zero) after the first lookup and listing. Terminal reads add pending
+// Claude's post-wait ownership lookup and listing (b.qcf).
 func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string, terminalReads ...int) {
 	t.Helper()
-	calls := slices.Clone(paneListedCalls)
+	calls := slices.Clone(paneSendCalls[:len(paneListedCalls)])
 	if len(terminalReads) > 0 {
 		for range terminalReads[0] {
 			calls = append(calls, tmux.CallPaneTerminal)
@@ -715,27 +806,41 @@ func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string, ter
 			calls = append(calls, paneListedCalls...)
 		}
 	}
-	calls = append(calls, tmux.CallSendText, tmux.CallSendEnter)
+	calls = append(calls, paneSendCalls[len(paneListedCalls):]...)
 	e.assertPaneCalls(t, calls...)
 	assertTextSent(t, e.rec, socket, paneID, text)
 	assertEnterSent(t, e.rec, socket, paneID)
 }
 
-// assertEnterOnly fails unless the calls were the lookup, the pane listing
-// and one Enter to paneID on socket, with nothing typed: a text call, if
-// one is made, types "" into paneID (b.9o4, send-keys with empty text).
+// assertFallbackPaste checks one bracketed paste and one Enter, including
+// the ownership checks immediately before each write.
+func assertFallbackPaste(t *testing.T, calls []tmuxfix.SocketCall, socket, paneID, text string) {
+	t.Helper()
+	want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes,
+		tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText,
+		tmux.CallLookup, tmux.CallListPanes, tmux.CallSendEnter}
+	if !slices.Equal(paKinds(calls), want) {
+		t.Fatalf("fallback calls = %v; want %v", paKinds(calls), want)
+	}
+	for _, c := range calls {
+		if c.Call == tmux.CallSendText || c.Call == tmux.CallSendEnter {
+			if c.Socket != socket || c.Target != paneID {
+				t.Errorf("fallback write = %+v; want pane %s on %s", c, paneID, socket)
+			}
+		}
+		if c.Call == tmux.CallSendText && (c.Text != text || !c.Paste || c.PressEnter) {
+			t.Errorf("fallback text = %+v; want one paste of %q without Enter", c, text)
+		}
+	}
+}
+
+// assertEnterOnly requires all admission checks and one actual Enter key,
+// with no literal transport operation, including an empty-text operation.
 func (e *killEnv) assertEnterOnly(t *testing.T, socket, paneID string) {
 	t.Helper()
-	var got []tmux.Call
-	for _, c := range e.rec.SocketCalls() {
-		if c.Call == tmux.CallSendText && c.Text == "" && c.Socket == socket && c.Target == paneID {
-			continue
-		}
-		got = append(got, recordedCall(c))
-	}
-	if want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendEnter}; !slices.Equal(got, want) {
-		t.Errorf("tmux calls, an empty text call aside = %v; want %v", got, want)
-	}
+	e.assertPaneCalls(t, tmux.CallLookup, tmux.CallListPanes,
+		tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes,
+		tmux.CallLookup, tmux.CallListPanes, callEnterKey)
 	assertEnterSent(t, e.rec, socket, paneID)
 }
 
@@ -743,7 +848,7 @@ func (e *killEnv) assertEnterOnly(t *testing.T, socket, paneID string) {
 // (the Recorder has no name-based send).
 func (e *killEnv) assertNothingSent(t *testing.T) {
 	t.Helper()
-	e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendEnter, callClearLine)
+	e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendKey, tmux.CallSendEnter)
 }
 
 // assertNoCalls fails when a recorded socket-taking call is of any of kinds
@@ -751,7 +856,7 @@ func (e *killEnv) assertNothingSent(t *testing.T) {
 func (e *killEnv) assertNoCalls(t *testing.T, kinds ...tmux.Call) {
 	t.Helper()
 	for _, c := range e.rec.SocketCalls() {
-		if slices.Contains(kinds, recordedCall(c)) {
+		if slices.Contains(kinds, recordedCall(c)) || slices.Contains(kinds, c.Call) {
 			t.Errorf("recorded %v of %q; want no %v", recordedCall(c), c.Target, kinds)
 		}
 	}
@@ -825,9 +930,9 @@ const exitText = "/exit"
 // line clear, /exit and Enter, a failed line clear types nothing after it,
 // and a failed /exit call makes no Enter.
 var (
-	pauseSendCalls  = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, callClearLine, tmux.CallSendText, tmux.CallSendEnter}
-	pauseTextCalls  = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, callClearLine, tmux.CallSendText}
-	pauseClearCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, callClearLine}
+	pauseSendCalls  = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes, callClearLine, tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText, tmux.CallLookup, tmux.CallListPanes, callEnterKey}
+	pauseTextCalls  = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes, callClearLine, tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText}
+	pauseClearCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes, callClearLine}
 )
 
 // pauseTimeoutSeconds is the wait e.pause allows: a row nothing ends stays
@@ -857,6 +962,11 @@ func (e *killEnv) pause(p api.PauseParams) (api.PauseResult, error) {
 // pauseWithin is pause with ctx and the wait's timeout given.
 func (e *killEnv) pauseWithin(ctx context.Context, timeoutSeconds int, p api.PauseParams) (api.PauseResult, error) {
 	now := e.clock.Now()
+	// Retain this narrow fixture's counters and injected failures while giving
+	// its delegated writes the same attribution as production Pause.
+	original := e.store.st
+	e.store.st = original.WithRecoveryTickSource("ad_recovery")
+	defer func() { e.store.st = original }()
 	return api.Pause(ctx, e.store, e.rec, api.PauseEnv{
 		Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return now }, Window: sendKeysWindow()},
 	}, timeoutSeconds, p)
@@ -888,7 +998,7 @@ func (e *killEnv) endAsAgent(t *testing.T, r killRow) (bool, string) {
 // Enter call returns. The test fails unless it ran and applied.
 func (e *killEnv) endAfterEnter(t *testing.T, r killRow) {
 	t.Helper()
-	e.onceAfter(t, tmux.CallSendEnter, "SessionEnd", func() (bool, string) { return e.endAsAgent(t, r) })
+	e.onceAfter(t, callEnterKey, "SessionEnd", func() (bool, string) { return e.endAsAgent(t, r) })
 }
 
 // endAtFirstWait ends r's row as its own agent (endAsAgent) at the pause
@@ -967,7 +1077,7 @@ func (e *killEnv) assertLineClearedTimes(t *testing.T, socket, paneID string, pr
 	textFirst := false
 	for _, c := range e.rec.SocketCalls() {
 		switch {
-		case c.Key != "":
+		case c.Key != "" && c.Key != "Enter":
 			keys = append(keys, c)
 		case c.Call == tmux.CallSendText && len(keys) == 0:
 			textFirst = true
@@ -1046,7 +1156,7 @@ func (e *killEnv) codexExits(t *testing.T, r killRow, markAfterReport *int, sess
 // Enter call returns; the test fails unless it ran. mark is what codexExits fills.
 func (e *killEnv) codexExitsAfterEnter(t *testing.T, r killRow, mark *int, sessionIDs ...string) {
 	t.Helper()
-	e.onceAfter(t, tmux.CallSendEnter, "Codex exit", func() (bool, string) {
+	e.onceAfter(t, callEnterKey, "Codex exit", func() (bool, string) {
 		e.codexExits(t, r, mark, sessionIDs...)
 		return true, ""
 	})
@@ -1063,8 +1173,9 @@ func pauseDisagrees(t *testing.T, id string) []map[string]any {
 func (e *killEnv) turnStartsAfterEnter(t *testing.T, r killRow) {
 	t.Helper()
 	done := false
-	e.rec.AfterCall(tmux.CallSendEnter, func(c tmuxfix.SocketCall, err error) {
-		if done || err != nil || c.Socket != r.Socket || c.Target != r.Spawn.Identity.PaneID {
+	e.rec.AfterCall(tmuxfix.AnyCall, func(c tmuxfix.SocketCall, err error) {
+		enter := c.Call == tmux.CallSendEnter || c.Call == tmux.CallSendKey && c.Key == "Enter"
+		if done || !enter || err != nil || c.Socket != r.Socket || c.Target != r.Spawn.Identity.PaneID {
 			return
 		}
 		done = true

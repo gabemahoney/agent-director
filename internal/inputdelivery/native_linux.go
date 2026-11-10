@@ -16,6 +16,13 @@ import (
 const nativeTerminalSupported = true
 
 func (s *nativeSession) Queue(id Identity) (int, error) {
+	owner, err := probe.ReadTerminalProcess(id.PID)
+	if err != nil {
+		return 0, err
+	}
+	if id.Starttime == "" || owner.Starttime != id.Starttime || owner.PGRP != owner.Foreground {
+		return 0, fmt.Errorf("agent identity or terminal foreground ownership changed")
+	}
 	path := filepath.Join("/proc", strconv.Itoa(id.PID), "fd", "0")
 	tty, err := os.Readlink(path)
 	if err != nil {
@@ -29,6 +36,17 @@ func (s *nativeSession) Queue(id Identity) (int, error) {
 		return 0, err
 	}
 	defer f.Close()
+	var opened, stdin unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &opened); err != nil {
+		return 0, err
+	}
+	if err := unix.Stat(path, &stdin); err != nil {
+		return 0, err
+	}
+	if opened.Mode&unix.S_IFMT != unix.S_IFCHR || opened.Rdev != owner.TTY ||
+		opened.Dev != stdin.Dev || opened.Ino != stdin.Ino || opened.Rdev != stdin.Rdev {
+		return 0, fmt.Errorf("agent stdin is not its observed controlling terminal")
+	}
 	term, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
 	if err != nil {
 		return 0, err
@@ -36,18 +54,24 @@ func (s *nativeSession) Queue(id Identity) (int, error) {
 	if term.Lflag&(unix.ICANON|unix.ECHO) != 0 {
 		return 0, fmt.Errorf("terminal is not raw")
 	}
-	fg, err := unix.IoctlGetInt(int(f.Fd()), unix.TIOCGPGRP)
+	q, err := unix.IoctlGetInt(int(f.Fd()), unix.TIOCINQ)
 	if err != nil {
 		return 0, err
 	}
-	pg, err := unix.Getpgid(id.PID)
+	// Do not publish a queue sample observed across an exit, PID reuse,
+	// foreground change or descriptor replacement. These observations do not
+	// claim to lock the physical target against changes after this call.
+	after, err := probe.ReadTerminalProcess(id.PID)
 	if err != nil {
 		return 0, err
 	}
-	if fg != pg {
-		return 0, fmt.Errorf("agent is not the terminal foreground process group")
+	if err := unix.Stat(path, &stdin); err != nil {
+		return 0, err
 	}
-	return unix.IoctlGetInt(int(f.Fd()), unix.TIOCINQ)
+	if after != owner || opened.Dev != stdin.Dev || opened.Ino != stdin.Ino || opened.Rdev != stdin.Rdev {
+		return 0, fmt.Errorf("agent terminal ownership changed during queue observation")
+	}
+	return q, nil
 }
 
 func ownedTranscripts(id Identity) ([]string, error) {

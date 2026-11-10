@@ -66,7 +66,7 @@ func (s *Store) InsertCursorRequest(b CursorRuntime, req RelayRequest, cap int, 
 			return e
 		}
 		prior = row.State
-		set, args := s.hookWriteStateSet(StateCheckPermission)
+		set, args := s.hookWriteStateEvidenceSet(StateCheckPermission, EvidenceAgentEvent)
 		args = append(args, b.InstanceID)
 		if _, e = conn.ExecContext(ctx, `UPDATE spawns SET `+set+`, last_seen_at=CURRENT_TIMESTAMP, ended_at=NULL, `+launchStartClear+`, `+idleClear+`, liveness_unverified_since=NULL,liveness_note=NULL, `+rowVersionAdvance+` WHERE instance_id=?`, args...); e != nil {
 			return e
@@ -99,6 +99,9 @@ func (s *Store) AckCursorDecision(b CursorRuntime, token string, timeout bool, u
 	var timeoutName string
 	var timeoutWritten bool
 	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
+		if err := permissionResponseDurability(ctx, conn); err != nil {
+			return err
+		}
 		if _, e := s.cursorAuthority(ctx, conn, b, until, check); e != nil {
 			return e
 		}
@@ -154,19 +157,30 @@ func (s *Store) AckCursorDecision(b CursorRuntime, token string, timeout bool, u
 // ClaimCursorPaneAnswer is the durable native arbiter. An external claim made
 // by record-pane-answer never acquires ACP authority. A guarded send-keys
 // intent is consumed only once it has reached sent; the controller waits for
-// that transition. Native delivery is separate from relay delivered_at.
+// that transition. response_state makes consumption irreversible, including
+// after an unconfirmed commit or gateway replacement. Native delivery is
+// separate from relay delivered_at.
 // A committed claim emits the established decision mutation event, fail-open.
 func (s *Store) ClaimCursorPaneAnswer(b CursorRuntime, token, decision string, until time.Time, maxWait time.Duration, check CursorCheck) (bool, error) {
+	if decision != "allow" && decision != "deny" {
+		return false, fmt.Errorf("store: invalid Cursor pane verdict")
+	}
 	var claimed bool
 	var requestID int64
 	var toolName, committedDecision, reason string
 	e := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
+		if err := permissionResponseDurability(ctx, conn); err != nil {
+			return err
+		}
 		if _, e := s.cursorAuthority(ctx, conn, b, until, check); e != nil {
 			return e
 		}
-		e := conn.QueryRowContext(ctx, `UPDATE permission_requests SET pane_answer='sent',pane_as=?,decision=?,decision_reason='pane',decided_at=CURRENT_TIMESTAMP,hook_gone_at=COALESCE(hook_gone_at,?)
- WHERE instance_id=? AND request_token=? AND delivered_at IS NULL AND closed_at IS NULL AND proven_gone_at IS NULL
- AND ((pane_answer='none' AND (decision IS NULL OR settled_at<=?)) OR (pane_answer='sent' AND pane_as=?))
+		e := conn.QueryRowContext(ctx, `UPDATE permission_requests SET pane_answer='sent',pane_as=?,decision=?,decision_reason='pane',decided_at=CURRENT_TIMESTAMP,hook_gone_at=COALESCE(hook_gone_at,?),
+ decision_origin='pane',response_state='native_claimed'
+ WHERE instance_id=? AND request_token=? AND delivered_at IS NULL AND response_state IS NULL
+ AND `+permissionResponseEligibleSQL+`
+ AND ((pane_answer='none' AND (decision IS NULL OR settled_at<=?))
+      OR (pane_answer='sent' AND decision_origin='pane' AND pane_as=?))
  RETURNING request_id,tool_name,decision,decision_reason`, decision, decision, millisArg(time.Now()), b.InstanceID, token, millisArg(time.Now()), decision).Scan(&requestID, &toolName, &committedDecision, &reason)
 		if errors.Is(e, sql.ErrNoRows) {
 			return nil
@@ -187,20 +201,53 @@ func (s *Store) ClaimCursorPaneAnswer(b CursorRuntime, token, decision string, u
 }
 
 // CheckCursorAnswer is the writer's final authority check, including the exact
-// request's durable acknowledgement or native claim. It does not prove receipt.
+// request's durable acknowledgement or native claim. The transport may repeat
+// this check; only IssueCursorAnswer consumes the claim immediately before I/O.
+// Another request's proof may advance the raw-state epoch after this claim;
+// it does not retire this request's captured owner or unconsumed response.
 func (s *Store) CheckCursorAnswer(b CursorRuntime, token string, relay bool, until time.Time, check CursorCheck) error {
+	return s.cursorAnswer(b, token, relay, until, check, false)
+}
+
+// IssueCursorAnswer consumes a confirmed claim once, before transport. An
+// error (including an unknown commit) authorizes no bytes. Repeated callbacks,
+// reopen and gateway replacement cannot replay an issued claim. Provider I/O
+// occurs only after this transaction has returned a confirmed commit.
+func (s *Store) IssueCursorAnswer(b CursorRuntime, token string, relay bool, until time.Time, check CursorCheck) error {
+	return s.cursorAnswer(b, token, relay, until, check, true)
+}
+
+func (s *Store) cursorAnswer(b CursorRuntime, token string, relay bool, until time.Time, check CursorCheck, issue bool) error {
 	// Wait only within the caller's existing response deadline. Revalidate
 	// authority and expiry after acquisition and independent evidence.
 	return s.inWriteTx(max(time.Until(until), 0), func(ctx context.Context, conn *sql.Conn) error {
+		if issue {
+			if err := permissionResponseDurability(ctx, conn); err != nil {
+				return err
+			}
+		}
 		if _, e := s.cursorAuthority(ctx, conn, b, until, check); e != nil {
 			return e
 		}
-		var n int
-		frag := `pane_answer='sent' AND decision_reason='pane'`
+		frag := `pane_answer='sent' AND decision_origin='pane' AND decision IN ('allow','deny') AND decision=pane_as
+ AND response_state='native_claimed'`
+		issued := ResponseNativeIssued
 		if relay {
-			frag = `delivered_at IS NOT NULL AND pane_answer='none'`
+			frag = `delivered_at IS NOT NULL AND pane_answer='none' AND response_state='relay_claimed' AND ` + relayVerdictSQL
+			issued = ResponseRelayIssued
 		}
-		e := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM permission_requests WHERE instance_id=? AND request_token=? AND closed_at IS NULL AND proven_gone_at IS NULL AND `+frag, b.InstanceID, token).Scan(&n)
+		where := `instance_id=? AND request_token=? AND ` + permissionResponseEligibleSQL + ` AND ` + frag
+		var n int64
+		var e error
+		if issue {
+			var res sql.Result
+			res, e = conn.ExecContext(ctx, `UPDATE permission_requests SET response_state=? WHERE `+where, issued, b.InstanceID, token)
+			if e == nil {
+				n, e = res.RowsAffected()
+			}
+		} else {
+			e = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM permission_requests WHERE `+where, b.InstanceID, token).Scan(&n)
+		}
 		if e != nil {
 			return e
 		}
@@ -215,13 +262,15 @@ func (s *Store) CheckCursorAnswer(b CursorRuntime, token string, relay bool, unt
 // under current runtime authority. The gateway must first validate actual
 // execution output; generic completion and plan acceptance are not evidence.
 // Emit only after a committed mutation; an already complete proof is a no-op.
-// The event preserves any earlier decision and reason retained by COALESCE.
+// The event preserves any earlier decision and non-null reason. A missing
+// reason is enriched with tool_ran independently of verdict provenance;
+// this historical enrichment grants no response authority.
 // A committed proof also moves the row from check_permission to working, as
 // Claude's PostToolUse does, but only when no request still holds the row,
 // turnOpen says a prompt turn is open and the request's retained decision is
 // not deny (proveCursorTool).
 func (s *Store) ProveCursorToolRan(b CursorRuntime, token, tool string, turnOpen bool, check CursorCheck) error {
-	return s.proveCursorTool(b, token, tool, true, turnOpen, check)
+	return s.proveCursorTool(b, token, tool, true, turnOpen, check, nil)
 }
 
 // ProveCursorToolFailed proves only the exact completed invocation's dialog
@@ -234,7 +283,18 @@ func (s *Store) ProveCursorToolRan(b CursorRuntime, token, tool string, turnOpen
 // prompt turn is open and the request's retained decision is not deny
 // (proveCursorTool).
 func (s *Store) ProveCursorToolFailed(b CursorRuntime, token, tool string, turnOpen bool, check CursorCheck) error {
-	return s.proveCursorTool(b, token, tool, false, turnOpen, check)
+	return s.proveCursorTool(b, token, tool, false, turnOpen, check, nil)
+}
+
+// CommitCursorProof extends the same proof transaction with exact durable
+// source evidence. No ledger entry exists unless all request/state effects
+// commit too. A matching event is idempotent; a reused identity is refused.
+func (s *Store) CommitCursorProof(p CursorProof, turnOpen bool, check CursorCheck) error {
+	p.Raw = append([]byte(nil), p.Raw...)
+	if err := p.validate(); err != nil {
+		return err
+	}
+	return s.proveCursorTool(p.Owner.Runtime, p.Token, p.Tool, p.Ran, turnOpen, check, &p)
 }
 
 // proveCursorTool writes the proof and, in the same transaction and only when
@@ -251,7 +311,7 @@ func (s *Store) ProveCursorToolFailed(b CursorRuntime, token, tool string, turnO
 // retained decision is deny moves nothing either, whether a delivered deny
 // gets no proof or a failed one keeps its deny: the row keeps
 // check_permission until the turn's Stop.
-func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOpen bool, check CursorCheck) error {
+func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOpen bool, check CursorCheck, proof *CursorProof) error {
 	var written, moved bool
 	var requestID int64
 	var toolName, decision, reason string
@@ -259,13 +319,21 @@ func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOp
 	if ran {
 		set = `,
  pane_answer=CASE WHEN delivered_at IS NULL AND pane_answer IN ('none','intent') THEN 'tool_ran' ELSE pane_answer END,
- decision=COALESCE(decision,'allow'),decision_reason=COALESCE(decision_reason,'tool_ran'),decided_at=COALESCE(decided_at,CURRENT_TIMESTAMP)`
+ decision_origin=CASE WHEN decision IS NULL THEN 'observation' ELSE decision_origin END,
+ decision_reason=COALESCE(decision_reason,'tool_ran'),
+ decision=COALESCE(decision,'allow'),decided_at=COALESCE(decided_at,CURRENT_TIMESTAMP)`
 		incomplete = ` OR (delivered_at IS NULL AND pane_answer IN ('none','intent'))
  OR decision IS NULL OR decision_reason IS NULL OR decided_at IS NULL`
 	}
 	err := s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
 		if _, e := s.cursorAuthority(ctx, conn, b, time.Time{}, check); e != nil {
 			return e
+		}
+		if proof != nil {
+			inserted, e := s.recordCursorProof(ctx, conn, *proof)
+			if e != nil || !inserted {
+				return e
+			}
 		}
 		e := conn.QueryRowContext(ctx, `UPDATE permission_requests SET proven_gone_at=COALESCE(proven_gone_at,?),proven_gone_how=COALESCE(proven_gone_how,?)`+set+`
  WHERE instance_id=? AND request_token=? AND tool_use_id=? AND closed_at IS NULL
@@ -281,7 +349,7 @@ func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOp
 		if !turnOpen || decision == "deny" {
 			return nil
 		}
-		stateSet, stateArgs := s.hookWriteStateSet(StateWorking)
+		stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateWorking, EvidenceAgentEvent)
 		stateArgs = append(stateArgs, b.InstanceID)
 		result, e := conn.ExecContext(ctx, `UPDATE spawns SET `+stateSet+`, last_seen_at=CURRENT_TIMESTAMP, ended_at=NULL, `+launchStartClear+`, `+idleClear+`, liveness_unverified_since=NULL,liveness_note=NULL, `+rowVersionAdvance+`
  WHERE instance_id=? AND state='`+StateCheckPermission+`' AND `+noRequestHoldsRowSQL, stateArgs...)

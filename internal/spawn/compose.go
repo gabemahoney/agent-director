@@ -52,10 +52,13 @@ func ParentIDFromEnv() string {
 // is a file write that follows composition. The caller hands it to RunPreTrust,
 // so the outcome reported is the one the argv carries.
 // Cursor carries failed (no validated grant), or skipped for NoPreTrust.
+// Pane-only agents always carry skipped and describe their generated Files.
 type ComposedLaunch struct {
 	Create   CreateRequest
 	Row      store.Spawn
 	PreTrust PreTrustOutcome
+	// Files contains only nonsecret, AD-generated launch files.
+	Files []LaunchFile
 }
 
 // ComposeLaunch composes the launch of r, a resolved, validated and
@@ -86,7 +89,7 @@ type ComposedLaunch struct {
 // A codex agent's composition also writes nothing in any Codex folder: its
 // settings travel on the command line, and its pre-trust outcome is decided
 // here (CodexPreTrust) because the folder trust is in the argv only on ok. An
-// agent other than claude, codex or cursor gets store.ErrRowAgentInvalid.
+// agent other than claude, codex, cursor or droid gets store.ErrRowAgentInvalid.
 func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 	if err := launchAgentError(r.Agent); err != nil {
 		return ComposedLaunch{}, err
@@ -98,8 +101,16 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 		}
 	}
 	var command []string
+	var files []LaunchFile
 	var carried PreTrustOutcome
-	if r.Agent == store.AgentCursor {
+	if p, ok := paneOnlyAgents[r.Agent]; ok {
+		var err error
+		command, files, err = p.compose(r, p.program(cfg))
+		if err != nil {
+			return ComposedLaunch{}, err
+		}
+		carried = PreTrustSkipped
+	} else if r.Agent == store.AgentCursor {
 		carried = PreTrustFailed
 		if r.NoPreTrust {
 			carried = PreTrustSkipped
@@ -127,12 +138,14 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 
 	return ComposedLaunch{
 		PreTrust: carried,
+		Files:    files,
 		Create: CreateRequest{
 			Agent:             r.Agent,
-			OrdinaryInputSafe: inputdelivery.SafeArgs(r.AgentArgs),
+			OrdinaryInputSafe: !IsPaneOnly(r.Agent) && inputdelivery.SafeArgs(r.AgentArgs),
 			Name:              r.TmuxSessionName,
 			CWD:               r.CWD,
 			Env:               composeEnv(r),
+			ExcludeEnv:        PaneOnlyExcludedEnv(r.Agent),
 			Command:           command,
 			InstanceID:        r.InstanceID,
 		},

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -27,9 +28,20 @@ func TestDisplayCommittedExitReportedDuringCleanup(t *testing.T) {
 		state, family string
 		detail        api.StateDetail
 	}
-	for _, verb := range []string{"status", "get", "list"} {
-		t.Run(verb, func(t *testing.T) {
-			s, path, id, samples, now := permissionObservation(t, apitest.WithDisplayObservation(storedNeedsIntelligence))
+	for _, tc := range []struct {
+		name, verb string
+		clearNote  bool
+	}{
+		{"status", "status", false}, {"get", "get", false}, {"list", "list", false},
+		{"get after liveness clear", "get", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			verb := tc.verb
+			opts := []apitest.SpawnOption{apitest.WithDisplayObservation(storedNeedsIntelligence), apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "earlier", JSONLPath: "/previous", RecordedAt: time.Unix(1700000000, 0)})}
+			if tc.clearNote {
+				opts = append(opts, apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
+			}
+			s, path, id, samples, now := permissionObservation(t, opts...)
 			parent, err := apitest.SeedSpawn(path, "parent", store.StateWaiting, "", "off", "", false)
 			if err != nil {
 				t.Fatal(err)
@@ -47,6 +59,10 @@ func TestDisplayCommittedExitReportedDuringCleanup(t *testing.T) {
 					return out, err
 				case "get":
 					r, err := api.Get(s, view, id)
+					wantHistory := []api.PriorSession{{SessionID: "earlier", JSONLPath: "/previous", RecordedAt: "2023-11-14T22:13:20Z"}}
+					if err == nil && !reflect.DeepEqual(r.PriorSessions, wantHistory) {
+						t.Errorf("history during cleanup=%+v; want %+v", r.PriorSessions, wantHistory)
+					}
 					out[id] = projection{r.State, r.FamilyState, r.StateDetail}
 					return out, err
 				default:
@@ -65,6 +81,25 @@ func TestDisplayCommittedExitReportedDuringCleanup(t *testing.T) {
 			}
 			if row, err := s.GetSpawn(id); err != nil || row.State != store.StateWaiting || row.CommittedDisplay().State != store.StateNeedsIntelligence {
 				t.Fatalf("Stop did not retain the display on raw waiting: %+v %v", row, err)
+			}
+			var noted store.Spawn
+			if tc.clearNote {
+				// b.x9o review06 R1: establish the note after Stop clears it.
+				row, err := s.GetSpawn(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if applied, err := s.SetLivenessNoteIfSameLife(id, row.Snapshot, "probe_eacces"); err != nil || applied != store.CondApplied {
+					t.Fatalf("seed liveness note: %v %v", applied, err)
+				}
+				noted, err = s.GetSpawn(id)
+				if err != nil || noted.LivenessNote != "probe_eacces" || noted.PID <= 0 || noted.ProcStarttime == "" {
+					t.Fatalf("noted exact agent: %+v %v", noted, err)
+				}
+				pc := procfix.New()
+				pc.Set(noted.PID, procfix.Alive(noted.ProcStarttime))
+				pc.Set(noted.Identity.PanePID, procfix.Alive(noted.Identity.PaneStarttime))
+				view.Procs = pc
 			}
 			now = now.Add(time.Hour)
 			reached, free, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -130,6 +165,9 @@ func TestDisplayCommittedExitReportedDuringCleanup(t *testing.T) {
 			after, err := s.GetSpawn(id)
 			if err != nil || after.State != store.StateWaiting || after.DisplayObservation != "" || after.FamilyState != store.StateWaiting {
 				t.Errorf("confirmed exit not durable: %+v %v", after, err)
+			}
+			if tc.clearNote && (after.LivenessNote != "" || after.LivenessUnverifiedSince != "" || after.RowVersion != noted.RowVersion+1) {
+				t.Errorf("liveness clear did not precede committed exit exactly once: noted=%+v after=%+v", noted, after)
 			}
 			if family, _, _, err := apitest.ReadFamilyHistory(path, parent); err != nil || family != store.StateWaiting {
 				t.Errorf("ancestor history=%s %v; want waiting", family, err)

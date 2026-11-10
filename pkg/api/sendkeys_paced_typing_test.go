@@ -8,6 +8,7 @@ package api_test
 // the whole test binary, so these tests are serial.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -16,10 +17,12 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
+	"github.com/google/uuid"
 )
 
 // pacedSend is one send-keys call of these tests: the row's agent, pending
@@ -163,6 +166,38 @@ func paced(enter bool, sizes ...int) []string {
 	return steps
 }
 
+// pacedSQLiteRow, for paced-typing tests: a waiting (or working) Claude row on sqliteSubmission's
+// supported launch, set by its own hooks; paced only for no_enter or expect_pane_sha256 text.
+func pacedSQLiteRow(t *testing.T, working bool) (*nativeSubmissionEnv, killRow) {
+	t.Helper()
+	e, r, _ := sqliteSubmission(t)
+	events := []string{"SessionStart"}
+	if working {
+		events = append(events, "UserPromptSubmit")
+	}
+	for _, event := range events {
+		if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, event, r.Spawn.SessionID); !a.Applied {
+			t.Fatalf("%s hook: %+v; want applied", event, a)
+		}
+	}
+	return e, r
+}
+
+// atPacedPause, for paced-typing tests, runs do once, at the start of e's pause of d once n bytes
+// are typed: a piece's 100 ms before the next piece's checks, or the 500 ms before the Enter's.
+func atPacedPause(e *nativeSubmissionEnv, n int, d time.Duration, do func()) {
+	typed, done := 0, false
+	e.rec.AfterCall(tmux.CallSendText, func(c tmuxfix.SocketCall, _ error) { typed += len(c.Text) })
+	sleep := e.env.Sleep
+	e.env.Sleep = func(pause time.Duration) {
+		if !done && typed == n && pause == d {
+			done = true
+			do()
+		}
+		sleep(pause)
+	}
+}
+
 // oneCall is the steps of n bytes in one call of kind (type or paste), with
 // Enter after it when enter.
 func oneCall(kind string, n int, enter bool) []string {
@@ -193,8 +228,9 @@ func TestSendKeysMacClaudeLongTextPaced(t *testing.T) {
 		{name: "rune across 512 no_enter", agent: claude, paced: true, text: straddle, noEnter: true, want: paced(false, 511, 512, 91)},
 		{name: "not UTF-8", agent: claude, paced: true, text: strings.Repeat("\x80", 600), want: paced(true, 512, 88)},
 		{name: "pending s1023", agent: claude, pending: true, paced: true, text: s1023, want: paced(true, 512, 511)},
+		// Input admission compares the hash again, before the first piece only.
 		{name: "s1023 expect_pane_sha256", agent: claude, paced: true, text: s1023, hash: api.PaneSHA256(""),
-			want: append([]string{"capture"}, paced(true, 512, 511)...)},
+			want: append([]string{"capture", "capture"}, paced(true, 512, 511)...)},
 		{name: "s1023 pane changed", agent: claude, paced: true, text: s1023, hash: api.PaneSHA256("changed"),
 			refused: api.ErrPaneChanged, want: []string{"capture"}},
 	} {
@@ -247,10 +283,10 @@ func TestSendKeysMacClaudePacedFailureMapsAsTypedText(t *testing.T) {
 			func(time.Duration) apitest.DescCase {
 				return apitest.DescUnrecognisedReply(tmux.CallSendText, "").AfterTextFailed()
 			}, 1, true, "nothing_sent"},
-		{"Enter timed out", tmux.FailTimeout, tmux.CallSendKey, func(d time.Duration) apitest.DescCase {
+		{"Enter timed out", tmux.FailTimeout, callEnterKey, func(d time.Duration) apitest.DescCase {
 			return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendEnter, d)
 		}, 2, false, "text_sent"},
-		{"Enter failed, the follow-up lookup found the session", tmux.FailNoServer, tmux.CallSendKey,
+		{"Enter failed, the follow-up lookup found the session", tmux.FailNoServer, callEnterKey,
 			func(time.Duration) apitest.DescCase {
 				return apitest.DescUnrecognisedReply(tmux.CallSendEnter, "").AfterEnterFailed(apitest.PaneSendKeys)
 			}, 2, true, "text_sent"},
@@ -299,22 +335,12 @@ func TestSendKeysMacClaudePacedStopsPartway(t *testing.T) {
 	text := strings.Repeat("s", 1025) // pieces of 512, 512 and 1 bytes
 	all := len(text)
 	// from changes every reread of the row (GetSpawnWithin) as change does,
-	// from the pause of d taken once n bytes are typed: a piece's 100 ms,
-	// before the next piece's reread, or the 500 ms before the Enter's.
+	// from atPacedPause's pause of d once n bytes are typed.
 	from := func(n int, d time.Duration, change func(*api.Spawn) error) func(*testing.T, *nativeSubmissionEnv, killRow) {
 		return func(_ *testing.T, e *nativeSubmissionEnv, _ killRow) {
-			typed := 0
-			e.rec.AfterCall(tmux.CallSendText, func(c tmuxfix.SocketCall, _ error) { typed += len(c.Text) })
-			sleep := e.env.Sleep
-			e.env.Sleep = func(pause time.Duration) {
-				if typed == n && pause == d {
-					e.s.reread = func(row api.Spawn) (api.Spawn, error) {
-						err := change(&row)
-						return row, err
-					}
-				}
-				sleep(pause)
-			}
+			atPacedPause(e, n, d, func() {
+				e.s.reread = func(row api.Spawn) (api.Spawn, error) { err := change(&row); return row, err }
+			})
 		}
 	}
 	beforeEnter := func(change func(*api.Spawn) error) func(*testing.T, *nativeSubmissionEnv, killRow) {
@@ -393,6 +419,298 @@ func TestSendKeysMacClaudePacedStopsPartway(t *testing.T) {
 			if !d.KeysSent || d.Phase != "text_attempted" || enters != 0 || d.RowState != tc.rowState {
 				t.Errorf("details = %+v with %d Enters; want keys_sent, phase text_attempted, no Enter, row_state %q",
 					d, enters, tc.rowState)
+			}
+		})
+	}
+}
+
+// TestSendKeysMacClaudePacedWorkingRowCompletes (Task t2.7tz.6c.yb, F1(b)):
+// on a SQLite-backed working Claude row, a hook that keeps the state
+// (PreToolUse) in the pause after the first piece and one that moves it to
+// waiting (Stop) in the 500 ms before the Enter advance row_version, state and
+// permission_epoch, and the send still completes with every piece and one
+// Enter. The first piece follows the full admission check (Check, lookup,
+// listing, Check) and the caller's hash; each later piece and the Enter follow
+// the row reread (pacedRefusal), then the identity recheck (CheckIdentity,
+// lookup, listing, CheckIdentity). The pane holding the call's own text after
+// the first piece refuses nothing.
+func TestSendKeysMacClaudePacedWorkingRowCompletes(t *testing.T) {
+	// Serial: it sets the process-wide paced-typing selection with api.SetClaudePacedTypingForTest.
+	t.Cleanup(api.SetClaudePacedTypingForTest(true))
+	e, r := pacedSQLiteRow(t, true)
+	text := strings.Repeat("s", 1023) // pieces of 512 and 511 bytes
+	var log []string
+	note := func(step string) func() { return func() { log = append(log, step) } }
+	backend := e.env.Input.(*sqliteDeliveryBackend)
+	backend.beforeCheck, backend.beforeCheckIdentity = note("Check"), note("CheckIdentity")
+	e.s.reread = func(row api.Spawn) (api.Spawn, error) { log = append(log, "read"); return row, nil }
+	e.rec.AfterCall(tmuxfix.AnyCall, func(c tmuxfix.SocketCall, _ error) {
+		if c.Call != tmux.CallSendText {
+			log = append(log, string(recordedCall(c)))
+			return
+		}
+		log = append(log, fmt.Sprintf("type %d", len(c.Text)))
+		e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, c.Text)
+	})
+	sleep := e.env.Sleep
+	e.env.Sleep = func(d time.Duration) { log = append(log, "pause "+d.String()); sleep(d) }
+	hook := func(event string) func() {
+		return func() {
+			if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, event, r.Spawn.SessionID); !a.Applied {
+				t.Fatalf("%s hook: %+v; want applied", event, a)
+			}
+		}
+	}
+	atPacedPause(e, 512, 100*time.Millisecond, hook("PreToolUse"))
+	atPacedPause(e, len(text), 500*time.Millisecond, hook("Stop"))
+	before, err := e.st.GetSpawn(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = e.send(api.SendKeysParams{InstanceID: r.ID, Text: text, ExpectPaneSHA256: api.PaneSHA256("")})
+
+	if err != nil {
+		t.Fatalf("SendKeys: %v; want the send completed", err)
+	}
+	after, err := e.st.GetSpawn(r.ID)
+	if err != nil || after.State != store.StateWaiting || after.RowVersion != before.RowVersion+2 ||
+		after.PermissionEpoch != before.PermissionEpoch+1 {
+		t.Errorf("row after the hooks = %s, row_version %d, permission_epoch %d (%v); want waiting, %d, %d",
+			after.State, after.RowVersion, after.PermissionEpoch, err, before.RowVersion+2, before.PermissionEpoch+1)
+	}
+	lookup, listing, capture := string(tmux.CallLookup), string(tmux.CallListPanes), string(tmux.CallCapture)
+	recheck := []string{"read", "CheckIdentity", lookup, listing, "CheckIdentity"}
+	want := []string{lookup, listing, capture, "read", "Check", lookup, listing, "Check", capture, "type 512", "pause 100ms"}
+	want = append(append(want, recheck...), "type 511", "pause 100ms", "pause 500ms")
+	want = append(append(want, recheck...), string(callEnterKey))
+	if !slices.Equal(log, want) {
+		t.Errorf("checks and calls = %q; want %q", log, want)
+	}
+}
+
+// TestSendKeysMacClaudePacedStopsOnContextOrAuthority (Task t2.7tz.6c.yb): with
+// the macOS selection on, a call past its deadline before the first piece
+// types nothing (not_started), and so does one whose row_version moved after
+// admission, at its manual_input save (Task t2.7tz.ss.dh, T1: the first
+// piece's full admission recheck refuses). Cancelled in a piece's pause or in the 500 ms
+// before the Enter, or with its input authority changed there (the session of
+// a SQLite-backed launch, or the pane's process, which pacedRefusal does not
+// read), it types no further piece, sends no Enter and makes no further tmux
+// call: partial_input_unconfirmed counting the pieces typed, and the
+// cancellation as its reason when it also failed the row's reread. no_enter
+// cancelled in the last pause has typed all its text and succeeds.
+func TestSendKeysMacClaudePacedStopsOnContextOrAuthority(t *testing.T) {
+	// Serial: it sets the process-wide paced-typing selection with api.SetClaudePacedTypingForTest.
+	t.Cleanup(api.SetClaudePacedTypingForTest(true))
+	text := strings.Repeat("s", 1023) // pieces of 512 and 511 bytes
+	const cancelled, authority = "the call was cancelled or reached its deadline", "input authority changed"
+	stopped := func(typed int, why string) api.SubmissionUnconfirmedDetails {
+		reason := "paced Claude typing stopped before the rest of the text because " + why + ", so part of it may be in the input; "
+		if typed == len(text) {
+			reason = "paced Claude typing sent no Enter after the text because " + why + ", so the text may be in the input unsubmitted; "
+		}
+		return api.SubmissionUnconfirmedDetails{Outcome: "partial_input_unconfirmed", Phase: "text_attempted", BytesAttempted: typed,
+			KeysSent: true, RowState: store.StateWaiting, Reason: reason + "read-pane before sending again, and do not resend the text blindly"}
+	}
+	cancelAt := func(typed int, d time.Duration) func(*testing.T, *nativeSubmissionEnv, killRow) {
+		return func(t *testing.T, e *nativeSubmissionEnv, _ killRow) {
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			e.env.Context = ctx
+			atPacedPause(e, typed, d, cancel)
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		sqlite  bool // a SQLite-backed supported launch, sent with expect_pane_sha256; else an unsupported one (macOS)
+		noEnter bool
+		setup   func(*testing.T, *nativeSubmissionEnv, killRow)
+		typed   int
+		want    api.SubmissionUnconfirmedDetails // zero: success
+	}{
+		{name: "deadline passed before the first piece", setup: func(t *testing.T, e *nativeSubmissionEnv, _ killRow) {
+			ctx, cancel := context.WithDeadline(context.Background(), time.Unix(0, 0))
+			t.Cleanup(cancel)
+			e.env.Context = ctx
+		}, want: api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StateWaiting,
+			Reason: "paced Claude typing did not begin because the call was cancelled or reached its deadline; nothing was typed"}},
+		{name: "cancelled after the first piece", setup: cancelAt(512, 100*time.Millisecond), typed: 512, want: stopped(512, cancelled)},
+		{name: "cancelled before the Enter", setup: cancelAt(1023, 500*time.Millisecond), typed: 1023, want: stopped(1023, cancelled)},
+		{name: "cancelled during the reread after the first piece", typed: 512, want: stopped(512, cancelled),
+			setup: func(t *testing.T, e *nativeSubmissionEnv, _ killRow) {
+				ctx, cancel := context.WithCancel(context.Background())
+				t.Cleanup(cancel)
+				e.env.Context = ctx
+				atPacedPause(e, 512, 100*time.Millisecond, func() {
+					e.s.reread = func(api.Spawn) (api.Spawn, error) { cancel(); return api.Spawn{}, context.Canceled }
+				})
+			}},
+		{name: "no_enter cancelled in the last pause", noEnter: true, setup: cancelAt(1023, 100*time.Millisecond), typed: 1023},
+		{name: "session changed after the first piece", sqlite: true, typed: 512, want: stopped(512, authority),
+			setup: func(t *testing.T, e *nativeSubmissionEnv, r killRow) {
+				atPacedPause(e, 512, 100*time.Millisecond, func() {
+					if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", uuid.NewString()); !a.Applied {
+						t.Fatalf("SessionStart with a new session: %+v; want applied", a)
+					}
+				})
+			}},
+		{name: "pane process replaced before the Enter", typed: 1023, want: stopped(1023, authority),
+			setup: func(_ *testing.T, e *nativeSubmissionEnv, r killRow) {
+				atPacedPause(e, 1023, 500*time.Millisecond, func() { e.pc.Set(r.Spawn.Identity.PanePID, procfix.Alive("replaced")) })
+			}},
+		{name: "row changed before the first piece", sqlite: true, want: api.SubmissionUnconfirmedDetails{Outcome: "not_started",
+			Phase: "pre_input", RowState: store.StateWaiting, Reason: "input admission changed after intent"},
+			setup: func(t *testing.T, e *nativeSubmissionEnv, r killRow) {
+				changed := false
+				e.env.Input.(*sqliteDeliveryBackend).afterSave = func(a *api.InputDeliveryAttempt) error {
+					if a.Phase != "manual_input" || changed {
+						return nil
+					}
+					changed = true
+					row, err := e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if res, err := e.st.SetLivenessNoteIfSameLife(r.ID, row.Snapshot, "changed after admission"); err != nil || res != store.CondApplied {
+						t.Fatalf("row_version write at the manual_input save = %d, %v; want applied", res, err)
+					}
+					return nil
+				}
+				t.Cleanup(func() {
+					if !changed {
+						t.Error("no manual_input attempt was saved: the row was never changed")
+					}
+				})
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var e *nativeSubmissionEnv
+			var r killRow
+			hash := ""
+			if tc.sqlite {
+				e, r = pacedSQLiteRow(t, false)
+				hash = api.PaneSHA256("")
+			} else {
+				e = newNativeSubmissionEnv(t)
+				r = e.seedRow(t, killRowSpec{})
+				e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
+			}
+			tc.setup(t, e, r)
+
+			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text, NoEnter: tc.noEnter, ExpectPaneSHA256: hash})
+
+			if tc.want == (api.SubmissionUnconfirmedDetails{}) {
+				if err != nil {
+					t.Fatalf("SendKeys: %v; want success", err)
+				}
+			} else {
+				assertOneName(t, err, "ErrSubmissionUnconfirmed")
+				if got := api.ErrDetails(err); got != tc.want {
+					t.Errorf("details = %+v; want %+v", got, tc.want)
+				}
+			}
+			calls, typed, last := e.rec.SocketCalls(), "", -1
+			for i, c := range calls {
+				if c.Call == tmux.CallSendText {
+					typed, last = typed+c.Text, i
+				}
+			}
+			if typed != text[:tc.typed] || len(ordinaryEnters(e.killEnv)) != 0 || last >= 0 && last != len(calls)-1 {
+				t.Errorf("typed %d bytes, then %v; want the text's first %d, then no call and no Enter",
+					len(typed), paKinds(calls[last+1:]), tc.typed)
+			}
+		})
+	}
+}
+
+// TestSendKeysMacClaudePacedRecordAndAttemptFacts (Task t2.7tz.6c.yb): on a
+// SQLite-backed supported launch, paced text's manual_input attempt is
+// recorded before its first piece, and text over 32 KiB is refused
+// not_started with no tmux call and no attempt recorded; exactly 32 KiB is
+// typed. The error's attempted facts agree with the input sent: a failed
+// Enter, and the input writer's failed cleanup after the Enter or after
+// no_enter text, report every byte typed and whether Enter was attempted.
+func TestSendKeysMacClaudePacedRecordAndAttemptFacts(t *testing.T) {
+	// Serial: it sets the process-wide paced-typing selection with api.SetClaudePacedTypingForTest.
+	t.Cleanup(api.SetClaudePacedTypingForTest(true))
+	text := strings.Repeat("s", 1023)
+	cleanup := errors.New("injected cleanup acknowledgement loss")
+	failCleanup := func(e *nativeSubmissionEnv, _ killRow) {
+		e.env.Input.(*sqliteDeliveryBackend).afterClose = func() error { return cleanup }
+	}
+	sent := func(outcome, phase string, enter bool, reason string) api.SubmissionUnconfirmedDetails {
+		return api.SubmissionUnconfirmedDetails{Outcome: outcome, Phase: phase, BytesAttempted: len(text),
+			EnterMayHaveBeenSent: enter, KeysSent: true, RowState: store.StateWaiting, Reason: reason}
+	}
+	for _, tc := range []struct {
+		name    string
+		text    string
+		noEnter bool // else sent with expect_pane_sha256, which a supported launch types as fallback text
+		setup   func(*nativeSubmissionEnv, killRow)
+		errName string // "": success
+		want    api.SubmissionUnconfirmedDetails
+	}{
+		{name: "over 32 KiB refused", text: strings.Repeat("s", 32<<10+1), noEnter: true, errName: "ErrSubmissionUnconfirmed",
+			want: api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StateWaiting,
+				Reason: "macOS paced Claude typing takes at most 32768 bytes of text; put the prompt in a file and send a short instruction to read it"}},
+		{name: "32 KiB typed", text: strings.Repeat("s", 32<<10), noEnter: true},
+		{name: "Enter failed", text: text, errName: "ErrTmuxUnresponsive",
+			setup: func(e *nativeSubmissionEnv, r killRow) {
+				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailNoServer, Times: 1}, callEnterKey)
+			}, want: sent("submission_unconfirmed", "enter_attempted", true, "text was sent; following Enter failed")},
+		{name: "cleanup failed after the Enter", text: text, setup: failCleanup, errName: "ErrSubmissionUnconfirmed",
+			want: sent("submission_unconfirmed", "enter_attempted", true, "input writer cleanup failed: "+cleanup.Error())},
+		{name: "cleanup failed after no_enter text", text: text, noEnter: true, setup: failCleanup, errName: "ErrSubmissionUnconfirmed",
+			want: sent("partial_input_unconfirmed", "text_attempted", false, "input writer cleanup failed: "+cleanup.Error())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, r := pacedSQLiteRow(t, false)
+			if tc.setup != nil {
+				tc.setup(e, r)
+			}
+			recorded := false
+			e.rec.AfterCall(tmux.CallSendText, func(tmuxfix.SocketCall, error) {
+				if recorded {
+					return
+				}
+				recorded = true
+				if l, a := sqliteAttempt(t, e, r); l.CurrentRequestID == "" || a == nil || a.Phase != "manual_input" || !a.ManualInterference {
+					t.Errorf("attempt at the first piece = %+v; want manual_input recorded before it", a)
+				}
+			})
+			hash := api.PaneSHA256("")
+			if tc.noEnter {
+				hash = ""
+			}
+
+			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: tc.text, NoEnter: tc.noEnter, ExpectPaneSHA256: hash})
+
+			if tc.errName == "" {
+				if err != nil {
+					t.Fatalf("SendKeys: %v; want success", err)
+				}
+			} else {
+				assertOneName(t, err, tc.errName)
+				if got := api.ErrDetails(err); got != tc.want {
+					t.Errorf("details = %+v; want %+v", got, tc.want)
+				}
+			}
+			if tc.want.Outcome == "not_started" {
+				l, lerr := e.st.ReadInputLaunch(context.Background(), r.Token)
+				if lerr != nil || l == nil || l.CurrentRequestID != "" || len(e.rec.SocketCalls()) != 0 {
+					t.Errorf("refused send left launch %+v (%v) after calls %v; want no attempt recorded and no tmux call",
+						l, lerr, paKinds(e.rec.SocketCalls()))
+				}
+				return
+			}
+			typed := ""
+			for _, c := range e.rec.SocketCallsOf(tmux.CallSendText) {
+				typed += c.Text
+			}
+			if enters := len(ordinaryEnters(e.killEnv)); !recorded || typed != tc.text || enters != map[bool]int{false: 1, true: 0}[tc.noEnter] {
+				t.Errorf("typed %d bytes (recorded first: %v) with %d Enters; want all %d, one Enter unless no_enter",
+					len(typed), recorded, enters, len(tc.text))
 			}
 		})
 	}

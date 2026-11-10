@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -52,6 +54,9 @@ type PermissionRequestInfo struct {
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
 	StateDetail
+	// IntegrationMode identifies the fixed pane-only capability contract;
+	// omitted for agents with native integration.
+	IntegrationMode string `json:"integration_mode,omitempty"`
 
 	// Context is an experimental on-demand reading for the current session.
 	Context ContextReading `json:"context"`
@@ -72,13 +77,20 @@ type SpawnRow struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// ProcessLiveness is alive, exited or unknown: the recorded agent
+	// process at its recorded start identity, never its Helper, tmux session
+	// or descendants (Cursor: unknown, unsupported). Present on every row.
+	ProcessLiveness string `json:"process_liveness"`
+	// Confirmations is exactly the state, process_liveness and
+	// displayed_state records (Confirmation). family_state has none.
+	Confirmations Confirmations `json:"confirmations"`
 	// IdleScreenAvailability is, as StatusResult's, available for Claude and
-	// Codex or an absent agent and unavailable for Cursor. Present on every row;
+	// Codex or an absent agent and unavailable for Cursor or pane-only agents. Present on every row;
 	// omitted only from the empty result of a failed call.
 	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
-	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
+	// Agent is the agent the row runs: set by the spawn
 	// that most recently launched the row, followed by
 	// resume, never changed by anything else (SR-1.5).
 	Agent string `json:"agent"`
@@ -130,29 +142,29 @@ type SpawnRow struct {
 	// with millisecond precision. Present only on a pending row; nil (and
 	// omitted from JSON) otherwise (SR-22.2).
 	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
-	// LivenessUnverifiedSince is the RFC3339 timestamp of the first sweep that
+	// LivenessUnverifiedSince is the RFC3339 timestamp of the first check that
 	// noted this live row (left it unverified, or noted it unreported,
-	// b.kdf); it is kept while later sweeps change LivenessNote, unreported
+	// b.kdf); it is kept while later checks change LivenessNote, unreported
 	// included. Nil (and omitted from JSON) when NULL in the store — i.e. no
-	// note: a sweep that finds the agent process alive clears it together
+	// note: a check that finds the agent process alive clears it together
 	// with LivenessNote, except on a pending row it notes unreported and a
 	// pending row noted provenance_conflict, which keeps it. The store
 	// carries it as a COALESCE-scanned string ("" == NULL); Get maps "" to nil
 	// per the ended_at nullable precedent.
 	LivenessUnverifiedSince *string `json:"liveness_unverified_since,omitempty"`
-	// LivenessNote is the reason token of the latest sweep that left this
+	// LivenessNote is the reason token of the latest check that left this
 	// live row unverified (its agent process could not be checked and tmux
 	// did not settle it), for example process_not_seen_session_present,
 	// process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or
-	// provenance_conflict; a later sweep overwrites it when the reason
-	// changes, and a sweep that finds the agent process alive clears it
+	// provenance_conflict; a later check overwrites it when the reason
+	// changes, and a check that finds the agent process alive clears it
 	// together with LivenessUnverifiedSince, except on a pending row it notes
 	// unreported and a pending row noted provenance_conflict, which keeps it.
 	// Or it is unreported, on a pending row past the pending grace period
 	// (b.kdf): its agent is alive, but no hook has reported since its launch,
 	// so it may sit at a Claude Code startup screen or idle at its prompt.
 	// The row stays pending; the caller reads its pane and, only having
-	// looked, sends keys with allow_pending. A later sweep that finds the
+	// looked, sends keys with allow_pending. A later check that finds the
 	// agent alive keeps the note, and the agent's next hook clears it.
 	// unreported never replaces provenance_conflict. Nil (omitted) when NULL
 	// in the store. Same "" == NULL mapping.
@@ -419,11 +431,32 @@ func readSpawnSettled(s GetStore, settle store.SettleRead, instanceID string) (S
 // family_state is the stored family history, which settles
 // independently. launch_started_at, and whether the permission requests are
 // read and shown, key on the raw state (permission requests are never
-// debounced). The row, and each Codex descendant its family_state counts,
-// whose rollout records its turn's end is first moved to waiting
-// (endCodexTurns). It never waits for a state to settle.
+// debounced). Active checks inspect only this row; family state uses stored
+// contributions. It never waits for a state to settle.
 func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID string) (SpawnRow, error) {
-	endCodexTurns(s, instanceID)
+	if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithRecoveryTickSource("ad_recovery")
+	}
+	if _, checked := s.(*activeReadStore); !checked {
+		refresh := activeRefresh(s, settle, false)
+		rows, err := refresh([]string{instanceID}, nil)
+		if err != nil {
+			return emptySpawnRow(), err
+		}
+		if len(rows) != 1 {
+			return emptySpawnRow(), fmt.Errorf("%w: %s", store.ErrSpawnNotFound, instanceID)
+		}
+		run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, true)
+		out, err := getSettled(run, run.view, settle, instanceID)
+		finishErr := run.finish()
+		if err != nil {
+			return emptySpawnRow(), err
+		}
+		if finishErr != nil {
+			return emptySpawnRow(), finishErr
+		}
+		return out, nil
+	}
 	row, reported, err := readSpawnSettled(s, settle, instanceID)
 	if err != nil {
 		return emptySpawnRow(), err
@@ -437,6 +470,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		IdleScreenAvailability:  idleScreenAvailability(row.Agent),
 		CWD:                     row.CWD,
 		Agent:                   row.Agent,
+		IntegrationMode:         integrationMode(row.Agent),
 		TmuxSessionName:         row.TmuxSessionName,
 		TmuxSocket:              row.Identity.Socket,
 		AgentArgs:               row.AgentArgs,
@@ -455,6 +489,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		UnprovenRequests:        []PermissionRequestInfo{},
 		PriorSessions:           []PriorSession{},
 	}
+	out.ProcessLiveness, out.Confirmations = mainFields(s, row, settle)
 
 	// b.v2c AC6/AC8: surface the visible history (the current life's archived
 	// sessions minus the entry for the row's current session id) and derive
@@ -540,8 +575,8 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // With [state] settle_ms set, state is the settled state: a hook-written
 // change shows only once it has held that long, the last settled state until
 // then. Entering, leaving or moving between Displayed States instead times
-// settle_ms from the read that commits its candidate and shows, in
-// displayed_state, from a later successful read that commits it; until then
+// settle_ms from the read or sweep check that commits its candidate and shows, in
+// displayed_state, from a later successful check that commits it; until then
 // displayed_state, since and detail stay the previous display's. Terminal
 // states and command-driven changes show at once. family_state settles
 // independently. The permission requests and launch_started_at follow the
@@ -554,6 +589,12 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for instanceID.
+//   - [ErrStoreBusy]: a zero-wait store read selecting the row, or projecting
+//     its checked result, did not finish within its bound: another operation
+//     of this process held the store's operation slot or connection (another
+//     call's, or an earlier one of this call; an operation keeps them until it
+//     is disposed), another connection held a lock the read needed, or the
+//     read ran out of time.
 //
 // Nondeterminism: the delivery facts depend on the clock and on whether each
 // request's relay hook process runs; with a settle time, so does the state.
@@ -561,22 +602,7 @@ func (c *Client) Get(instanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
 		return emptySpawnRow(), err
 	}
-	proof, err := c.reconcileCursorGateway(instanceID)
-	if err != nil {
-		return emptySpawnRow(), err
-	}
-	var proofs []store.CursorMissingProof
-	if proof != nil {
-		proofs = append(proofs, *proof)
-	}
-	out, err := getSettled(c.st.WithCursorMissingReads(proofs), c.relayView(), c.settleRead(), instanceID)
-	if err != nil {
-		return emptySpawnRow(), err
-	}
-	if err := c.persistCursorMissing(proofs); err != nil {
-		return emptySpawnRow(), err
-	}
-	return out, nil
+	return getSettled(c.st, c.relayView(), c.settleRead(), instanceID)
 }
 
 // Compile-time assertion that *store.Store provides the settled read the

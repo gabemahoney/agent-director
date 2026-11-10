@@ -53,7 +53,7 @@ hooks or typing setting; an option is refused even after the `--`. The full list
 
 A row is `pending` while its launch is in progress and its agent has not
 reported in; it becomes `waiting` once it does. If the agent runs but never
-reports in, `find-missing` notes the row `unreported` (see
+reports in, the shared recovery checks can note it `unreported` (see
 [Maintenance](maintenance.md)).
 
 A Codex agent reports in at its first prompt, not when its screen opens, so
@@ -68,11 +68,11 @@ arguments, or read the pane with `read-pane` and then type with
 After the first prompt the row moves with Codex's own events: a turn's
 prompt and tools read `working`, its end (`Stop`, or Esc) reads `waiting`,
 and a permission request reads `check_permission`. A turn that ends in an
-error sends no event; a later read moves the row to `waiting` (see
+error sends no event; an eligible read or sweep can move it to `waiting` (see
 [The Codex turn](hooks.md#the-codex-turn)). No Codex tool reads `ask_user`.
 A session change in the agent (`/clear`, `/new`, `/fork`, `/resume`) shows
 from the next prompt, and the `SessionEnd` that `/exit` sends leaves the
-row's state as it is, until `find-missing` or `pause` sees the agent gone (see
+row's state as it is, until a recovery check or `pause` sees the agent gone (see
 [How a Codex row ends](hooks.md#how-a-codex-row-ends)). After Codex's `/review` the row can
 read `working` until the next prompt. The events and the limits are in
 [Hooks](hooks.md#hooks-from-a-codex-agent).
@@ -87,11 +87,13 @@ reported `pre_trust` outcome means, is in
 
 `state` is always the agent's own state. Beside it, `displayed_state` reads
 `idle_screen` while a `working` Claude or Codex agent's pane looks the same
-on every read for the
+on successive checks for the
 [configured time](configuration.md#idle-screen-timeout-state); `state` stays
-`working`. It is computed when you call `status`, `get` or `list`; nothing
-runs in the background, so an agent nobody reads never shows it. The
-fields, filtering and what to do are in the
+`working`. Selected `status`, `get`, `list` and `sweep` checks can
+observe it; nothing samples between calls. Its separate
+[confirmation record](caller-contract.md#confirmations) reports evidence for
+the display actually returned, including no display. The fields, filtering
+and what to do are in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
 
 ## Family state
@@ -111,7 +113,8 @@ contributors, including no live members, the aggregate is `waiting`.
 The family then [settles independently](configuration.md#settle-time-state).
 
 Each returned agent's family covers the full stored tree, including members
-hidden by list filters or limits. Resume, reuse and deletion follow the
+hidden by list filters or limits, using their stored contributions without
+checking those hidden members. Resume, reuse and deletion follow the
 stored relationships; deleted connecting rows are not reconstructed. Native
 helpers and subagent records are separate from AD child spawns and do not
 participate. Permissions remain per agent: a descendant's request affects
@@ -222,7 +225,9 @@ launch/conversation identity and submission identities linking accepted input,
 dispatch starts, updates, cancellation and confirmed outcomes; refusals and
 uncertain delivery or completion are recorded separately. A dispatch-start
 record precedes prompt delivery and does not prove Cursor received it.
-Recorded admission does not establish execution or durable resumability.
+Recorded admission does not establish execution or replay authority. The store
+also retains input dispositions and exact proof evidence; neither those records
+nor the transcript reconstruct queued work after gateway loss.
 The transcript is separate from Cursor's native session storage.
 After rotation, `get`'s current session and `prior_sessions` can reference this
 same file within the current life. Same-agent reuse keeps prior references
@@ -574,11 +579,12 @@ Every `running` record of the agent turns `lost` with `close_reason`
 - The agent exits and its row becomes `ended`. A session end that only clears
   or compacts the conversation closes nothing (see
   [Hooks](hooks.md#the-eleven-state-tracking-hooks)). A Codex row becomes
-  `ended` once `find-missing` or `pause` sees its agent gone (see
+  `ended` once a recovery check or `pause` sees its agent gone (see
   [How a Codex row ends](hooks.md#how-a-codex-row-ends)).
-- `find-missing` marks the row `missing` (see
-  [Maintenance](maintenance.md) for scheduling it). A row it leaves live, with
-  an unverified result or the `unreported` note, closes nothing.
+- A [recovery check](caller-contract.md#bounded-recovery-on-state-reads)
+  by a state read or `sweep` marks the row `missing` (see
+  [Maintenance](maintenance.md) for scheduling the sweep). A row left live,
+  with an unverified result or the `unreported` note, closes nothing.
 - The agent begins a new launch, by `resume` or by reuse of its id. `lost_at`
   is the new launch's start, the `launch_started_at` of its `pending` row.
 
@@ -670,11 +676,11 @@ The response is a single permission row:
   "hook_gone_at": null,
   "attempted_decision": null,
   "attempted_at": null,
-  "tool_use_id": "toolu_01ABCDEF",
+  "tool_use_id": null,
   "pane_answer": "none",
   "pane_as": null,
   "proven_gone_at": "2026-05-31T12:00:04.310Z",
-  "proven_gone_how": "tool_ran",
+  "proven_gone_how": "turn_end",
   "unproven_since": null
 }
 ```
@@ -682,9 +688,9 @@ The response is a single permission row:
 `decision_reason` annotates the recorded verdict: `operator` (API deny),
 `timeout` (relay timeout deny), `find_missing`/`ended` (owning-spawn closure),
 `pane` (`send-keys` or a native Cursor choice), `pane_outside` (outside claim),
-or `tool_ran` (tool execution). API allow initially has no reason; later
-validated Cursor execution can fill that missing reason with `tool_ran`,
-while preserving an existing verdict and reason. Failed MCP invocation proof
+or `tool_ran` (Cursor tool execution). API allow initially has no reason; later
+validated successful Cursor execution can fill that missing
+reason with `tool_ran`, preserving an existing verdict and non-null reason. Failed MCP invocation proof
 leaves these fields unchanged. Read `decision` for the
 verdict and the [delivery and proof fields](permissions.md#delivery) for its
 outcome; a reason is not an immutable writer identity.
@@ -697,7 +703,7 @@ Cursor gateway request, or for a
 request recorded by an older agent-director); such a request falls back by
 time, at `confirm_by`. A closed request's `delivery` follows the same
 [delivery rules](permissions.md#delivery) as an open one's: a request with
-a settle instant requires its relay hook's confirmation for `delivered`,
+a settle instant requires an acknowledgement from before closure for `delivered`,
 while requests recorded by an older binary retain their
 [time-derived delivery](permissions.md#requests-recorded-by-an-older-binary).
 A row
@@ -706,16 +712,17 @@ still awaits an answer, so follow each request you track with
 `get-permission`, not only rows in `check_permission`.
 
 `proven_gone_at` and `proven_gone_how` say when and how the agent itself
-showed the request's dialog gone: `tool_ran` (Claude tool execution or
-validated matching Cursor invocation proof, including an exact failed MCP
+showed the request's dialog gone: `tool_ran` (validated matching Cursor
+invocation proof, including an exact failed MCP
 invocation without execution or answer inference; see [Cursor permissions](permissions.md#cursor-spawns)),
 `turn_end` (an eligible main request
-was written before the main turn ended, see [The dialog hold](permissions.md#the-dialog-hold);
+was written before the main turn ended, or a Claude subagent's request
+before that subagent's turn ended, see [The dialog hold](permissions.md#the-dialog-hold);
 or a Cursor request the gateway never answered when its turn ended, see
 [Cursor permissions](permissions.md#cursor-spawns)) or
-`agent_gone` (a non-Cursor agent ended). A Codex agent's request carries
-no `tool_use_id` (it reads `null`) and is never proven by `tool_ran`; see
-[how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows). `delivered` and a pane answer are
+`agent_gone` (a non-Cursor agent ended). A Claude or Codex agent's request
+carries no `tool_use_id` (it reads `null`) and is never proven by
+`tool_ran`. `delivered` and a pane answer are
 agent-director's own records, not proof. `get` lists every request still
 holding the dialog in `unproven_requests`, with `unproven_since`. A request that
 reads `delivered` or closed at the pane but stays unproven for a while is a
@@ -759,8 +766,7 @@ your `--as`, `decision_reason` `pane`. `--as`, `--key` and
 `--expect-pane-sha256` are required; pass the same `--n-lines` you read
 with. agent-director never reads the pane: it compares the hash byte for
 byte, and `--as` is stored as your claim. What each refusal means is in the
-[caller contract](caller-contract.md#permission-relay); on a refusal nothing
-is sent.
+[caller contract](caller-contract.md#permission-relay).
 
 If an outside answer has genuinely not been recorded, use
 `record-pane-answer` (it types nothing). An attached Cursor menu choice is
@@ -771,9 +777,8 @@ agent-director record-pane-answer --request-token "$token" \
     --as unknown --expect-pane-sha256 "$hash"
 ```
 
-Pass `--as unknown` unless you saw how it was answered. On a Claude agent, a
-request whose tool then runs is closed on its own (`decision_reason`
-`tool_ran`); a Codex request is closed only by one of the two calls above.
+Pass `--as unknown` unless you saw how it was answered. A Claude or Codex
+request is closed only by one of the two calls above, or with its spawn.
 A Cursor request can close on validated matching shell execution or a successful
 MCP result under [Cursor permissions](permissions.md#cursor-spawns);
 other tool/plan completion supplies no execution proof. `record-pane-answer`

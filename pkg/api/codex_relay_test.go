@@ -17,7 +17,6 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
-	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -35,8 +34,14 @@ func (p *paEnv) codexState(t *testing.T) string {
 // assertTyped fails unless a plain send-keys on p now types.
 func (p *paEnv) assertTyped(t *testing.T) {
 	t.Helper()
-	if run := p.sendKeysRun(p.plain("hi")); run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
+	run := p.sendKeysRun(p.plain("hi"))
+	if run.err != nil {
 		t.Fatalf("plain send-keys = %v, calls %v; want it typed", run.err, paKinds(run.calls))
+	}
+	if p.isCodex() {
+		assertFallbackPaste(t, run.calls, p.r.Socket, p.r.Spawn.Identity.PaneID, "hi")
+	} else if !slices.Equal(paKinds(run.calls), paneSendCalls) {
+		t.Fatalf("plain send-keys calls %v; want %v", paKinds(run.calls), paneSendCalls)
 	}
 }
 
@@ -127,7 +132,7 @@ func TestCodexEscapePaneAnswerOnFallenBackRequest(t *testing.T) {
 	if run.err != nil {
 		t.Fatalf("Escape pane answer: %v", run.err)
 	}
-	assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "Escape", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+	assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "Escape", paneAnswerBeforeKey...)
 	if pr := p.request(t, tok); pr.PaneAnswer != store.PaneAnswerSent || pr.Decision != "deny" || pr.ProvenGone() {
 		t.Fatalf("request A = %+v; want pane_answer sent, deny, not proven gone", pr)
 	}

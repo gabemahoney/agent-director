@@ -4,8 +4,10 @@ package api_test
 // request into a resumed launch; plain send-keys must remain usable.
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -74,9 +76,22 @@ func TestLegacyRecoveryMigratedV6Store(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "migrate-authorized"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if s, err := store.Open(path); !errors.Is(err, store.ErrSchemaMigrationRequired) {
+		if s != nil {
+			_ = s.Close()
+		}
+		t.Fatalf("sentinel-only runtime open = %v; want ErrSchemaMigrationRequired", err)
+	}
+	// As in the schema fixtures, this test owns an empty legacy root and
+	// supplies the administrator window. Real OS exclusion belongs to adminapi
+	// and installer tests; this case retains the genuine v6 permission rows.
+	if _, err := store.MigrateInputJournal(context.Background(), path, []string{t.TempDir()},
+		filepath.Join(t.TempDir(), "backup"), func(context.Context, string, []string) error { return nil }); err != nil {
+		t.Fatalf("administrator migration v6-to-current: %v", err)
+	}
 	migrated, err := store.Open(path)
 	if err != nil {
-		t.Fatalf("authorized store.Open v6-to-current: %v", err)
+		t.Fatalf("runtime open after administrator migration: %v", err)
 	}
 	t.Cleanup(func() { _ = migrated.Close() })
 	storefix.RegisterStorePath(t, migrated, path)

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -181,7 +182,8 @@ func TestExpireSweepTmuxUnreachable(t *testing.T) {
 }
 
 // TestExpireSweepWrongServer (AC-EXP-10, TLA+ F-7): a sweep on another server marks a live row missing; expire
-// on the agents' server then keeps it as ours and does not delete it.
+// on the agents' server then keeps it as ours and does not delete it. Cursor
+// instead retains an unreadable exact gateway, without a tmux fallback.
 func TestExpireSweepWrongServer(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	for _, rowAgent := range []string{"claude", "cursor"} {
@@ -190,11 +192,30 @@ func TestExpireSweepWrongServer(t *testing.T) {
 			e.rowAgent = rowAgent
 			r := e.seedRow(t, killRowSpec{NoServerIdentity: true, Agent: agentUnreadable})
 			other := tmuxfix.NewRecorder()
+			before := e.columns(t, r.ID)
 
 			fm, err := api.FindMissing(context.Background(), e.st, other, e.pc, e.cfg.EffectivePendingGrace(),
 				e.cfg.EffectiveSweepBudget(), e.clock.Now, &recordingLogger{})
 			if err != nil {
 				t.Fatalf("FindMissing: %v", err)
+			}
+			if rowAgent == "cursor" {
+				assertLists(t, fm, nil, []string{r.ID})
+				after := e.columns(t, r.ID)
+				stamp, _ := after.LivenessUnverifiedSince.(string)
+				if _, err := time.Parse(time.DateTime, stamp); err != nil {
+					t.Fatalf("unknown gateway did not record a valid uncertainty timestamp: %+v", after)
+				}
+				want := before
+				want.LivenessUnverifiedSince, want.LivenessNote = stamp, "probe_eacces"
+				want.RowVersion = before.RowVersion.(int64) + 1
+				if !reflect.DeepEqual(after, want) {
+					t.Fatalf("unknown gateway changed more than its uncertainty note: want=%+v after=%+v", want, after)
+				}
+				if calls := other.SocketCalls(); len(calls) != 0 {
+					t.Fatalf("unknown gateway fell through to tmux: %v", calls)
+				}
+				return
 			}
 			assertLists(t, fm, []string{r.ID}, nil)
 			if got := e.columns(t, r.ID).State; got != store.StateMissing {

@@ -96,11 +96,21 @@ func TestRequestEligibilityWritersReadersAndProof(t *testing.T) {
 					t.Fatalf("list %+v %v", rows, err)
 				}
 			}
-			if ok, err := s.DecideRelayRequest(relayID, tokenA, "deny", "", "", time.Time{}, DefaultLockWait); err != nil || !ok {
+			// The legacy seeding primitive has no current relay admission;
+			// its retained hold/proof eligibility must not confer response authority.
+			if ok, err := s.DecideRelayRequest(relayID, tokenA, "deny", "", "", time.Time{}, DefaultLockWait); err != nil || ok != !tc.legacy {
 				t.Fatalf("decide %v %v", ok, err)
 			}
-			if _, _, ok, err := s.AckRelayDecision(relayID, tokenA, proofAt, DefaultLockWait, nil); err != nil || !ok {
+			if _, _, ok, err := s.AckRelayDecision(relayID, tokenA, proofAt, DefaultLockWait, nil); err != nil || ok != !tc.legacy {
 				t.Fatalf("ack %v %v", ok, err)
+			}
+			got := mustRequest(t, s, tokenA)
+			origin, claim := DecisionOriginCaller, ResponseRelayClaimed
+			if tc.legacy {
+				origin, claim = "", ""
+			}
+			if got.DecisionOrigin != origin || got.ResponseState != claim {
+				t.Fatalf("response authority: %+v", got)
 			}
 			s.Close()
 			var err error
@@ -120,6 +130,15 @@ func TestRequestEligibilityWritersReadersAndProof(t *testing.T) {
 			}
 			if err != nil || n != want {
 				t.Fatalf("turn end %d %v; want %d", n, err, want)
+			}
+			if tc.agent == AgentCursor && tc.child != "" {
+				// b.wbs: a subagent's turn end is Claude's alone; on a Cursor
+				// row it proves even its own child's request nothing.
+				sub := turnEndProof()
+				sub.AgentID = tc.child
+				if n, err := s.ProveRequestsGone(relayID, gate, sub); err != nil || n != 0 {
+					t.Fatalf("subagent turn end on a Cursor row %d %v; want 0", n, err)
+				}
 			}
 			if !tc.want && !tc.legacy {
 				independent := mainReq(tokenB)

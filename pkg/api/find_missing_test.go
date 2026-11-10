@@ -248,15 +248,17 @@ const (
 )
 
 // fmSweep overrides runFindMissing's defaults: fmGrace, fmBudget, a fresh Recorder (no server: every lookup is
-// Gone), a fresh recordingLogger, and, when now is nil, clock (default: one at fmNow) as both the sweep's clock
-// and the Recorder's virtual time.
+// Gone), a fresh recordingLogger, a background context, and, when now is nil, clock (default: one at fmNow) as
+// both the sweep's clock and the Recorder's virtual time.
 type fmSweep struct {
-	grace  time.Duration
-	budget time.Duration
-	now    func() time.Time
-	clock  *tmuxfix.Clock
-	tmux   *tmuxfix.Recorder
-	lg     api.FindMissingLogger
+	ctx       context.Context
+	canonical bool // exercise Sweep through the same legacy-store fixture
+	grace     time.Duration
+	budget    time.Duration
+	now       func() time.Time
+	clock     *tmuxfix.Clock
+	tmux      *tmuxfix.Recorder
+	lg        api.FindMissingLogger
 }
 
 // runFindMissing runs one sweep of s judged by pc: the one place the unit tests call api.FindMissing.
@@ -283,7 +285,13 @@ func runFindMissing(s api.FindMissingStore, pc api.ProcChecker, o fmSweep) (api.
 	if o.lg == nil {
 		o.lg = &recordingLogger{}
 	}
-	return api.FindMissing(context.Background(), s, o.tmux, pc, o.grace, o.budget, o.now, o.lg)
+	if o.ctx == nil {
+		o.ctx = context.Background()
+	}
+	if o.canonical {
+		return api.Sweep(o.ctx, s, o.tmux, pc, o.grace, o.budget, o.now, o.lg)
+	}
+	return api.FindMissing(o.ctx, s, o.tmux, pc, o.grace, o.budget, o.now, o.lg)
 }
 
 // mustSweep is runFindMissing with o, failing the test on a sweep error or, on the fake store, a write not

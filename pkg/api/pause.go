@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -40,9 +42,9 @@ type PauseTmux interface {
 // applied only if the row still has the snapshot Pause examined), the guarded
 // move of a Codex row whose agent is gone and which holds an end report to
 // ended (EndedMover; SR-6.5, SR-7.3) and this store's id, which every label
-// the lookup accepts ends with (SR-3.4). The adoption, hook_gone_at and, on a
-// Codex row only, that move are the only writes pause makes; a Claude row's
-// state is never written by pause. *store.Store satisfies it; tests use the shared killStore fixture, a wrapper over a real
+// the lookup accepts ends with (SR-3.4). Pause also uses its input session to
+// record manual interference under captured admission; it never writes a
+// Claude row's state. *store.Store satisfies it; tests use the shared killStore fixture, a wrapper over a real
 // store that can fail the state read, the requests read or the adoption
 // write.
 type PauseStore interface {
@@ -74,6 +76,7 @@ type PauseStore interface {
 // (SendKeysEnv), so pause's relay guard is evaluated exactly as send-keys'
 // is. The Client builds it from its own readers, clock and configuration.
 type PauseEnv struct {
+	// Input overrides input-writer ownership; nil uses the store-backed native adapter.
 	Input InputDeliveryBackend
 	// Relay judges the Spawn's relay hooks: its start-time reader (which also
 	// judges the lookup's server and an adopted pane, SR-3.3, SR-3.6), its own
@@ -123,6 +126,8 @@ var pauseSleep = time.Sleep
 // Behavior:
 //
 //   - Unknown id: ErrSpawnNotFound from the store.
+//   - Pane-only row in any state: ErrAgentCapabilityUnsupported, before any
+//     state change or tmux call. The remaining rules apply to other agents.
 //   - A Codex row in a live state (pending included) whose agent process is
 //     already gone and which holds an end report (the SessionEnd of its
 //     agent) is moved to ended before any of the rules below, with no tmux
@@ -162,7 +167,7 @@ var pauseSleep = time.Sleep
 //     ErrRelayFallenBack (RelayFallenBackDetails), naming the oldest. It
 //     first records hook_gone_at on every such request with none (waiting
 //     the store's busy timeout, fail-open), so its err_details carry it.
-//  3. A request of the row is not proven gone by Claude Code's hooks:
+//  3. A request of the row is not proven gone by the agent's hooks:
 //     ErrDialogMaybeOpen (DialogMaybeOpenDetails), naming the oldest. A
 //     Cursor request of an earlier launch of the row does not hold
 //     (store.PermissionRow.HoldsDialog).
@@ -171,13 +176,13 @@ var pauseSleep = time.Sleep
 // relay-off row, a row with no permission request and a row whose every
 // request is proven gone, or of an earlier Cursor launch, are not held.
 // Pause takes no pane hash, so it has no way past the hold, which lasts
-// until Claude Code's own hooks prove each request gone, whatever is done at
-// the pane: a background subagent's request answered deny at the pane, for
-// one, gets no PostToolUse, and the main agent's Stop does not prove a
-// subagent's request, so it holds pause until the agent ends. A caller that
-// has read the pane and answered any dialog on it types `/exit` itself, with
-// a send-keys whose expect_pane_sha256 is the pane it judged (which the hold
-// lets through), or kills the Spawn.
+// until the agent's own hooks prove each request gone, whatever is done at
+// the pane: a background subagent's request, allowed or denied, for one, is
+// not proven by the main agent's Stop, so it holds pause until that
+// subagent's SubagentStop on a Claude row (b.wbs), or else until the agent
+// ends. A caller that has read the pane and answered any dialog on it types
+// `/exit` itself, with a send-keys whose expect_pane_sha256 is the pane it
+// judged (which the hold lets through), or kills the Spawn.
 //
 // The lookup's outcomes on a waiting row:
 //
@@ -223,10 +228,10 @@ var pauseSleep = time.Sleep
 //     attempt left typed.
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
-// The calls are at most one lookup, one pane listing, the C-u (one call,
-// however many presses), the text call, the Enter call and, only after an
-// action failure other than a timeout, one follow-up lookup (SR-13.2); the
-// wait is not counted. On any error the wait does not start.
+// With an input session, admission rechecks repeat the lookup and pane listing
+// before clear, text and Enter. Each tmux call retains its configured limit;
+// these checks do not establish a single lookup/listing ceiling for Pause.
+// On any error the wait does not start.
 //
 // The wait, once C-u, `/exit` and Enter went through: the row's state is
 // polled at pausePollInterval until it is `ended` (nil) or timeoutSeconds
@@ -247,8 +252,8 @@ var pauseSleep = time.Sleep
 // move is returned as pause's error. A nil start-time reader makes no move.
 // Client.Pause passes pause.timeout_seconds through
 // config.Pause.EffectiveTimeoutSeconds. Pause never writes a Claude row's
-// state; its only store writes there are the adoption and the relay guard's
-// hook_gone_at, and on a Codex row also the move to ended.
+// state. It can write adoption, the relay guard's hook_gone_at and the input
+// session's manual-interference record; a Codex row can also move to ended.
 //
 // Pause is one-shot: it returns when the row reaches `ended`, when the
 // timeout expires, or when ctx is cancelled. There is no incremental
@@ -256,30 +261,39 @@ var pauseSleep = time.Sleep
 //
 // Trail (SR-3.16, SR-14): Pause writes at most one ad.provenance.disagree
 // record per distinct reason per call (verb pause, source ad_send_keys),
-// fail-open, none in the normal case and none on a path that makes no
+// fail-open under the caller context and the finite per-record reporting bound,
+// none in the normal case and none on a path that makes no
 // lookup (a relay guard refusal included); Client.Pause writes the same
-// records through the same path. The records are written once the tmux phase
-// has decided, before the wait, so the wait's outcome neither adds nor
-// removes one. Each record's action is
+// records through the same path. Emission is attempted once the tmux phase
+// has decided, before the wait; accepted records remain with the trail worker
+// even if the bounded wait for durability ends first. The wait's outcome
+// neither adds nor removes a provenance record. Each record's action is
 // what the call typed, as for send-keys: keys_sent (`/exit` and Enter both
 // went through), text_sent (the `/exit` call timed out, or it went through
 // and the Enter call failed or timed out) or nothing_sent (a failed C-u
-// included: it types no text). Pause writes no other trail event.
+// included: it types no text). Codex end handling also emits ad.find_missing.tick
+// with source ad_recovery (proc_absent and permission_orphan_closeout),
+// ad.row_mutation.committed for denied requests, and any retained
+// ad.spawn.displayed_state_transition, all after the terminal commit.
 //
 // env carries the relay judge (its start-time reader judges the lookup's
 // server, SR-3.3, and an adopted pane, SR-3.6, too) and the intent hold.
 func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeoutSeconds int, params PauseParams) (PauseResult, error) {
-	r := &pauseRun{s: s, caller: callerIdentity(), procs: env.Relay.Procs}
+	r := &pauseRun{s: s, ctx: ctx, caller: callerIdentity(), procs: env.Relay.Procs, now: newRelayJudge(env.Relay).now}
 	delivered, err := r.exit(t, env, params)
-	// The tmux phase has decided: write its ad.provenance.disagree records
-	// now, before the wait. Source ad_send_keys, not a pause source: pause
+	if errors.Is(err, ErrAgentCapabilityUnsupported) {
+		return PauseResult{}, err
+	}
+	// The tmux phase has decided: attempt its ad.provenance.disagree emissions
+	// before the wait, retaining accepted records with the trail worker when
+	// the bounded durability wait ends first. Source ad_send_keys: pause
 	// writes the adoption like send-keys (SR-3.6) and runs the lookup, so
 	// SR-3.16's logging rule applies; SR-3.16's verdict table and SR-7.2 give
 	// pause send-keys' cells (SR-7 covers both verbs), and SR-14's closed
 	// source list has no pause source, so pause writes the keys-sending
 	// source with verb pause and no call event of its own. Exported Pause is
-	// the path Client.Pause shares, so each reason is written once per call.
-	r.emitDisagree("pause", params.InstanceID, r.caller)
+	// the path Client.Pause shares, so each reason is emitted once per call.
+	r.emitDisagree(recoveryTrail(ctx), "pause", params.InstanceID, r.caller)
 	if err != nil || !delivered {
 		return PauseResult{}, err
 	}
@@ -321,6 +335,7 @@ func launchOf(row Spawn) launchKey { return launchKey{token: row.Identity.Token,
 // adoption write applied, the session concerned, the send and the follow-up
 // lookup) the call keeps for its trail.
 type pauseRun struct {
+	ctx context.Context
 	keysRun
 	s PauseStore
 	// caller is the invoking process's identity, collected once per call
@@ -329,6 +344,9 @@ type pauseRun struct {
 	// procs is the start-time reader the Codex end check judges the agent
 	// process with (the relay view's); nil makes no move.
 	procs ProcChecker
+	// now is the relay view's clock, the time of the exited process record
+	// the Codex end's move commits with it (provenExit).
+	now func() time.Time
 	// codex reports that the row is a Codex row whose keys were sent, so the
 	// wait makes the end check; launch is the launch it sent them to.
 	codex  bool
@@ -343,15 +361,22 @@ type pauseRun struct {
 // (markEndedSameLife, reason proc_absent), guarded on the snapshot row holds.
 // attempted is false when no move was made (not a live Codex row, no end
 // report, no reader, or an agent alive, unknown or not recorded); res is the
-// move's result when it was. A store error from the move is err.
+// move's result when it was. A store error from the move is err. The move
+// records the gone process's exited record in its own statement (provenExit),
+// so the ended row never keeps an earlier alive record of it.
 func (r *pauseRun) endIfGone(row Spawn) (res CondResult, attempted bool, err error) {
 	if row.Agent != store.AgentCodex || row.EndReportedAtMillis <= 0 || !store.IsLiveState(row.State) || r.procs == nil {
 		return 0, false, nil
 	}
-	if tmux.JudgeProcess(r.procs, agentProcess(row, row.Identity).Identity) != tmux.ProcGone {
+	identity := agentProcess(row, row.Identity).Identity
+	if tmux.JudgeProcess(r.procs, identity) != tmux.ProcGone {
 		return 0, false, nil
 	}
-	w := markEndedSameLife(r.s, row.InstanceID, row.Snapshot, reasonProcAbsent, nil, nil)
+	s := r.s
+	if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithRecoveryTickSource("ad_recovery").WithTerminalReportingContext(r.ctx)
+	}
+	w := markEndedSameLife(recoveryTickTrail(recoveryTrail(r.ctx), "ad_recovery"), s, row.InstanceID, row.Snapshot, provenExit(identity, clockNow(r.now)), reasonProcAbsent, nil, nil)
 	return w.Res, true, w.Err
 }
 
@@ -375,12 +400,22 @@ func (r *pauseRun) endIfGoneInWait(instanceID string) func() (bool, error) {
 
 // exit is pause's row read, state rules, relay guard and tmux phase, which
 // clears the agent's input line before typing (keysRun.clear). It reports
-// whether C-u, `/exit` and Enter went through, so the wait is due; a finished
-// row, and a Codex row the end check moved to ended, are (false, nil). Every refusal before the lookup makes no tmux call.
-func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, error) {
+// whether C-u, `/exit` and Enter went through, so the wait is due. Pane-only
+// rows are refused in every state. For other agents, a finished row, and a
+// Codex row the end check moved to ended, are (false, nil). Every refusal
+// before the lookup makes no tmux call.
+func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent bool, resultErr error) {
+	if r.ctx != nil {
+		if err := r.ctx.Err(); err != nil {
+			return false, err
+		}
+	}
 	row, err := r.s.GetSpawn(params.InstanceID)
 	if err != nil {
 		return false, err
+	}
+	if spawn.IsPaneOnly(row.Agent) {
+		return false, spawn.PaneOnlyCapabilityError(row.Agent, "pause")
 	}
 
 	// The Codex end check comes first (SR-7.3, MC-4): before the state rules,
@@ -429,12 +464,16 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	}
 	var session InputDeliverySession
 	if row.Identity.Token != "" {
-		session, err = openInputDelivery(env.Input, deliveryIdentity(row, r.s.StoreID()))
+		session, err = openInputDelivery(r.ctx, env.Input, r.s, row, r.s.StoreID(), true)
 		if err != nil {
 			return false, fmt.Errorf("pause: exclusive input writer or delivery journal unavailable; no input attempted")
 		}
 		if session != nil {
-			defer session.Close()
+			defer func() {
+				if err := session.Close(); err != nil {
+					resultErr = inputCleanupError(row, r.found, SendKeysResult{}, resultErr, err)
+				}
+			}()
 		}
 	}
 	r.keysRun = newKeysRun(t, env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
@@ -451,7 +490,27 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 		return false, err
 	}
 	if session != nil {
-		owned := row
+		if err = r.admitInput(r.ctx, session, r.s, func(current Spawn) error {
+			if current.State != store.StateWaiting {
+				return fmt.Errorf("%w: %s is %s", ErrSpawnNotPausable, current.InstanceID, current.State)
+			}
+			guard, err := relayGuard(r.s, newRelayJudge(env.Relay), env.IntentHold, current, SendKeysParams{}, retryLater)
+			if err != nil {
+				return err
+			}
+			return guard.refusal
+		}); err != nil {
+			return false, err
+		}
+		r.beforeWrite = func() error {
+			if r.ctx != nil {
+				if err := r.ctx.Err(); err != nil {
+					return err
+				}
+			}
+			return r.checkInputTarget(session, checkInput)
+		}
+		owned := r.row
 		owned.Identity = r.adoption.Identity
 		if err = recordManualDelivery(session, deliveryIdentity(owned, r.s.StoreID())); err != nil {
 			return false, err
@@ -529,7 +588,8 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // and Enter to the agent's own pane of the row's current launch, by pane id,
 // and polling until the row reaches ended, or until the configured timeout
 // (pause.timeout_seconds in config.toml; a missing key or 0 gives the default,
-// 30 s) elapses. Terminal states (ended/missing) are treated as no-op success.
+// 30 s) elapses. Pane-only rows return ErrAgentCapabilityUnsupported in every
+// state. For other agents, terminal states (ended/missing) are no-op success.
 // Pause is one-shot — no incremental progress callback; ctx cancellation
 // short-circuits the poll.
 //
@@ -538,15 +598,15 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // either) and with no wait, whenever such a send-keys would be
 // (ErrSendKeysWhileRelayed, ErrRelayFallenBack or ErrDialogMaybeOpen, in that
 // order and with the same err_details). It takes no pane hash, so it has no
-// way past the hold (ErrDialogMaybeOpen), which lasts until Claude Code's own
-// hooks prove each request gone, whatever is done at the pane: a subagent's
-// request answered deny at the pane gets no PostToolUse, and the main agent's
-// Stop does not prove it, so it holds Pause until the agent ends. Having read
-// the pane and answered any dialog on it, type `/exit` with SendKeys and
-// ExpectPaneSHA256 of the pane judged (the hold lets it through), or Kill. A
-// Spawn with no permission request, or whose every request is proven gone or
-// is a Cursor request of an earlier launch of the row
-// (store.PermissionRow.HoldsDialog), pauses as before.
+// way past the hold (ErrDialogMaybeOpen), which lasts until the agent's own
+// hooks prove each request gone, whatever is done at the pane: the main
+// agent's Stop does not prove a subagent's request, allowed or denied, so it
+// holds Pause until that subagent's SubagentStop on a Claude row (b.wbs), or
+// else until the agent ends. Having read the pane and answered any dialog on
+// it, type `/exit` with SendKeys and ExpectPaneSHA256 of the pane judged (the
+// hold lets it through), or Kill. A Spawn with no permission request, or
+// whose every request is proven gone or is a Cursor request of an earlier
+// launch of the row (store.PermissionRow.HoldsDialog), pauses as before.
 //
 // A waiting row whose recorded tmux session name cannot be used (it is empty,
 // contains a control character, or contains a character tmux stores
@@ -556,12 +616,20 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //
 // CLI: agent-director pause
 //
-// Input writer or delivery journal failures return ErrInternal before any
-// input is attempted by this pause call.
+// Failure to acquire the input writer or open its delivery journal returns
+// ErrInternal before this call attempts input. After dispatch, an admission or
+// cleanup failure can return ErrSubmissionUnconfirmed with attempted-input
+// facts; cleanup preserves any existing primary error. Follow "Manual input
+// ownership" in docs/caller-contract.md before sending more input.
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
+//   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
+//     cannot be paused; nothing is changed or sent.
 //   - [ErrSpawnNotPausable]: the row's state is not waiting.
+//   - [ErrSubmissionUnconfirmed]: an admission or cleanup failure reports
+//     attempted-input facts without proving submission. Inspect those details
+//     and the session before more input; never blindly replay text or Enter.
 //   - [ErrSendKeysWhileRelayed]: relay_mode is on and a relay hook of the
 //     Spawn may still answer its request (its process runs, or cannot be
 //     checked and its request is open before its confirm_by); nothing was
@@ -573,11 +641,13 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //     ([RelayFallenBackDetails]) name the request and the Spawn's other open
 //     requests. Answer it with a pane answer (SendKeys with its
 //     RequestToken), or close it with RecordPaneAnswer; Pause then stays
-//     held (ErrDialogMaybeOpen) until Claude Code proves it gone.
-//   - [ErrDialogMaybeOpen]: a request of the Spawn is not proven gone by
-//     Claude Code's hooks (its tool's PostToolUse, the main agent's end of
-//     turn after it, or the agent's end), whatever agent-director's records
-//     say of it; nothing was sent. Its err_details
+//     held (ErrDialogMaybeOpen) until the agent proves it gone.
+//   - [ErrDialogMaybeOpen]: a request of the Spawn is not proven gone (on a
+//     Cursor row, the gateway's validated proof that its tool ran; the end of
+//     the asking agent's turn: the main agent's for a request with no
+//     agent_id, and on a Claude row the subagent's SubagentStop for one with
+//     an agent_id; or, on a non-Cursor Spawn, the agent's end), whatever
+//     agent-director's records say of it; nothing was sent. Its err_details
 //     ([DialogMaybeOpenDetails]) name the request, how agent-director's
 //     records say it closed, since when, and the Spawn's other such
 //     requests. A Cursor request of an earlier launch of the row does not
@@ -617,5 +687,5 @@ func (c *Client) Pause(ctx context.Context, params PauseParams) (PauseResult, er
 	// given, 0 included. The relay view and intent hold are send-keys' own
 	// (sendKeysEnv), so pause's relay guard is judged as send-keys' is.
 	env := PauseEnv{Relay: c.relayView(), IntentHold: paneIntentHold(c.cfg.Tmux)}
-	return Pause(ctx, c.st, c.tmuxClient, env, c.cfg.Pause.EffectiveTimeoutSeconds(), params)
+	return Pause(ctx, c.st.WithContext(ctx), c.tmuxClient, env, c.cfg.Pause.EffectiveTimeoutSeconds(), params)
 }

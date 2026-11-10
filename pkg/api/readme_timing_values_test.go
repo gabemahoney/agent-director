@@ -2,7 +2,7 @@ package api_test
 
 // readme_timing_values_test.go pins docs/configuration.md's [tmux] example block and
 // timing table, and the listed user-doc and architecture statements of the
-// [tmux] timing defaults, safe minimums and kill and pause worst cases, to
+// [tmux] timing defaults, safe minimums and kill worst cases and pause bounds, to
 // the internal/config constants, and the user docs' per-agent (Claude Code,
 // Codex) minimum statements to each other (Epic 21, decision 6; SR-15.2). Key names come from
 // config.TmuxKey (SR-20.2), never spelt here. -run TestReadmeTimingValues
@@ -10,6 +10,7 @@ package api_test
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -50,13 +51,12 @@ func keyCode(k config.TmuxKey) string { return "`" + k.Name() + "`" }
 // worstCases recomputes, at the defaults, SR-13.2's two kill paths, (i)
 // 2Q + 2A + E + 4W and (ii) 3Q + 2A + 5W; kill-finished on this id's own
 // abandoned launch, its follow-up then its wait, 3Q + 2A + E + 5W for one
-// session and 2A + 2W for each more (b.myx); and pause's tmux phase
-// 3Q + 3A + 6W (its line clear, C-u, b.9o4, one action call more than kill's
-// path (ii)).
-func worstCases() (kill1, kill2, abandoned, perSession, pause time.Duration) {
+// session and 2A + 2W for each more (b.myx). Guarded input has no aggregate
+// legacy tmux ceiling; its original admission and per-call bounds apply.
+func worstCases() (kill1, kill2, abandoned, perSession time.Duration) {
 	q, a := tmuxDefault(config.TmuxQueryTimeoutMs), tmuxDefault(config.TmuxActionTimeoutMs)
 	e, w := tmuxDefault(config.TmuxKillExitWaitMs), tmuxDefault(config.TmuxPipeCloseWaitMs)
-	return 2*q + 2*a + e + 4*w, 3*q + 2*a + 5*w, 3*q + 2*a + e + 5*w, 2*a + 2*w, 3*q + 3*a + 6*w
+	return 2*q + 2*a + e + 4*w, 3*q + 2*a + 5*w, 3*q + 2*a + e + 5*w, 2*a + 2*w
 }
 
 // normalised collapses each run of whitespace in text to one space, so a
@@ -106,13 +106,13 @@ func statedNumbers(text string, anchors []string) ([]string, error) {
 }
 
 // docTimingStatements lists the pinned prose statements of the timing
-// defaults, minimums and kill and pause worst cases in the user docs and the
+// defaults, minimums and kill worst cases and pause bounds in the user docs and the
 // architecture doc.
 func docTimingStatements() []docStatement {
 	start, window := config.TmuxStartingSessionSeconds, config.TmuxStoppingWindowSeconds
 	pipe, exitWait := config.TmuxPipeCloseWaitMs, config.TmuxKillExitWaitMs
 	fixed := func(vals ...string) func([]string) []string { return func([]string) []string { return vals } }
-	p1, p2, abandoned, perSession, pause := worstCases()
+	p1, p2, abandoned, perSession := worstCases()
 	arch, conf := mdArchitecture, mdConfiguration
 	return []docStatement{
 		{"architecture Stop semantics: kill exit wait default", arch, stopSemanticsTitle,
@@ -128,8 +128,6 @@ func docTimingStatements() []docStatement {
 			[]string{"at most 3Q + 2A + 5W"}, fixed(docSeconds(p2))},
 		{"architecture Stop semantics: kill-finished on this id's own abandoned launch, one session and each more", arch,
 			stopSemanticsTitle, []string{"3Q + 2A + E + 5W (", "2A + 2W ("}, fixed(docSeconds(abandoned), docSeconds(perSession))},
-		{"architecture Stop semantics: pause's tmux phase", arch, stopSemanticsTitle,
-			[]string{"3Q + 3A + 6W,"}, fixed(docSeconds(pause))},
 		{"architecture Stop semantics: pause wait default", arch, stopSemanticsTitle,
 			[]string{"`pause.timeout_seconds`, default"}, fixed(strconv.Itoa(config.Default().Pause.TimeoutSeconds))},
 		{"architecture caller contract: stopping window and starting-session bound", arch, callerContractClassesTitle,
@@ -156,6 +154,14 @@ func docTimingStatements() []docStatement {
 // recomputed from the internal/config constants.
 func TestReadmeTimingValuesStatements(t *testing.T) {
 	t.Parallel()
+	// Guarded input's added target checks invalidate the old aggregate tmux
+	// formula. Preserve the replacement's per-call and admission bounds.
+	pauseBounds := normalised(sectionBody(t, readMD(t, mdArchitecture), stopSemanticsTitle))
+	for _, want := range []string{"Each tmux operation retains its configured limit", "session admission keeps its original deadline"} {
+		if !strings.Contains(pauseBounds, want) {
+			t.Errorf("pause timing contract lacks %q", want)
+		}
+	}
 	docs := map[string]mdDoc{}
 	for _, s := range docTimingStatements() {
 		t.Run(s.name, func(t *testing.T) {
@@ -337,23 +343,24 @@ func TestReadmeTimingValuesAgentMinimum(t *testing.T) {
 	}
 }
 
-// docConfigKeys are the non-[tmux] keys of docs/configuration.md, each with
-// the default it states, from the internal/config constants and Default(), and
-// the "1 to N" range cell it states where the key has a maximum (rng empty
-// otherwise). noExample marks a key the doc's example block leaves out:
-// inject_help_hook, whose default (false) is not what install.sh writes (true),
-// and the three [launch] paths, which the example block shows commented out.
-func docConfigKeys() []struct {
+// docKey is one non-[tmux] key of a user doc's Keys table, with the default it
+// states, from the internal/config constants and Default(), and the "1 to N"
+// range cell it states where the key has a maximum (rng empty otherwise).
+// noExample marks a key the doc's example block leaves out.
+type docKey struct {
 	key, def, rng string
 	noExample     bool
-} {
+}
+
+// docConfigKeys are the non-[tmux] keys of docs/configuration.md. Its example
+// block leaves out inject_help_hook, whose default (false) is not what
+// install.sh writes (true), and the [launch] paths, which it shows commented
+// out.
+func docConfigKeys() []docKey {
 	c := config.Default()
 	b := func(v bool) string { return strconv.FormatBool(v) }
 	rng := func(max int64) string { return "1 to " + itoa(max) }
-	return []struct {
-		key, def, rng string
-		noExample     bool
-	}{
+	return []docKey{
 		{"defaults.relay_mode", c.Defaults.RelayMode, "", false},
 		{"defaults.expire_retention_days", itoa(int64(c.Defaults.ExpireRetentionDays)), rng(int64(config.MaxExpireRetentionDays)), false},
 		{"defaults.disable_ask_user", b(c.Defaults.DisableAskUser), "", false},
@@ -377,78 +384,104 @@ func docConfigKeys() []struct {
 	}
 }
 
-// TestReadmeTimingValuesConfigKeys: docs/configuration.md's Keys table has one
-// row for each non-[tmux] key, in order, whose Default (and, where the key has
-// a maximum, Range) cell states the internal/config value; and the example
-// block's value for each key it lists is the default, and it lists every key
-// except those marked noExample.
+// docExperimentalKeys are the keys of docs/experimental.md. Its example block
+// leaves out droid_path and switches the droid opt-in on (docOptIns).
+func docExperimentalKeys() []docKey {
+	return []docKey{
+		{"launch.droid_path", "unset", "", true},
+		{"experimental.droid", strconv.FormatBool(config.Default().Experimental.Droid), "", false},
+	}
+}
+
+// docOptIns are the example-block values that switch an opt-in on rather than
+// state its default.
+var docOptIns = map[string]string{"experimental.droid": "true"}
+
+// TestReadmeTimingValuesConfigKeys: the Keys tables of docs/configuration.md
+// and docs/experimental.md have one row for each of that doc's keys, in order,
+// whose Default (and, where the key has a maximum, Range) cell states the
+// internal/config value; and each doc's toml example block gives each key it
+// lists the default (or, for an opt-in, the value that switches it on), and
+// lists every key except those marked noExample.
 func TestReadmeTimingValuesConfigKeys(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdConfiguration)
-	keys := docConfigKeys()
-	var rows [][]string
-	for _, line := range strings.Split(sectionBody(t, d, "Keys"), "\n") {
-		if strings.HasPrefix(line, "| `[") {
-			cells := strings.Split(strings.Trim(line, "|"), "|")
-			for i := range cells {
-				cells[i] = strings.Trim(strings.TrimSpace(cells[i]), "`")
+	for _, doc := range []struct {
+		path string
+		keys []docKey
+	}{{mdConfiguration, docConfigKeys()}, {mdExperimental, docExperimentalKeys()}} {
+		t.Run(filepath.Base(doc.path), func(t *testing.T) {
+			t.Parallel()
+			d, keys := readMD(t, doc.path), doc.keys
+			var rows [][]string
+			for _, line := range strings.Split(sectionBody(t, d, "Keys"), "\n") {
+				if strings.HasPrefix(line, "| `[") {
+					cells := strings.Split(strings.Trim(line, "|"), "|")
+					for i := range cells {
+						cells[i] = strings.Trim(strings.TrimSpace(cells[i]), "`")
+					}
+					rows = append(rows, cells)
+				}
 			}
-			rows = append(rows, cells)
-		}
-	}
-	if len(rows) != len(keys) {
-		t.Fatalf("%s Keys table has %d key rows; want %d", d.path, len(rows), len(keys))
-	}
-	for i, k := range keys {
-		t.Run(k.key, func(t *testing.T) {
-			row := rows[i]
-			if len(row) < 3 {
-				t.Fatalf("row %d has %d cells; want key, range, default: %v", i+1, len(row), row)
+			if len(rows) != len(keys) {
+				t.Fatalf("%s Keys table has %d key rows; want %d", d.path, len(rows), len(keys))
 			}
-			section, name, _ := strings.Cut(k.key, ".")
-			if want := "[" + section + "] " + name; row[0] != want {
-				t.Fatalf("row %d names %q; want %q", i+1, row[0], want)
+			for i, k := range keys {
+				t.Run(k.key, func(t *testing.T) {
+					row := rows[i]
+					if len(row) < 3 {
+						t.Fatalf("row %d has %d cells; want key, range, default: %v", i+1, len(row), row)
+					}
+					section, name, _ := strings.Cut(k.key, ".")
+					if want := "[" + section + "] " + name; row[0] != want {
+						t.Fatalf("row %d names %q; want %q", i+1, row[0], want)
+					}
+					if row[2] != k.def {
+						t.Errorf("default cell %q; the constant is %q", row[2], k.def)
+					}
+					if k.rng != "" && row[1] != k.rng {
+						t.Errorf("range cell %q; the constants give %q", row[1], k.rng)
+					}
+				})
 			}
-			if row[2] != k.def {
-				t.Errorf("default cell %q; the constant is %q", row[2], k.def)
+
+			// The toml example blocks, outside [tmux] (TestReadmeTimingValuesExampleBlock).
+			example := map[string]string{}
+			section, inFence, inTOML := "", false, false
+			for _, line := range d.lines {
+				switch line = strings.TrimSpace(line); {
+				case mdFenceRe.MatchString(line):
+					inFence = !inFence
+					inTOML = inFence && strings.TrimLeft(line, "`~") == "toml"
+				case !inTOML, line == "", strings.HasPrefix(line, "#"):
+				case strings.HasPrefix(line, "["):
+					section, _, _ = strings.Cut(strings.TrimPrefix(line, "["), "]")
+				case section != "tmux":
+					kv, _, _ := strings.Cut(line, "#")
+					name, val, _ := strings.Cut(kv, "=")
+					example[section+"."+strings.TrimSpace(name)] = strings.Trim(strings.TrimSpace(val), `"`)
+				}
 			}
-			if k.rng != "" && row[1] != k.rng {
-				t.Errorf("range cell %q; the constants give %q", row[1], k.rng)
+			listed := 0
+			for _, k := range keys {
+				got, ok := example[k.key]
+				want, wantName := k.def, "the default"
+				if v, optIn := docOptIns[k.key]; optIn {
+					want, wantName = v, "the opt-in"
+				}
+				switch {
+				case k.noExample:
+					if ok {
+						t.Errorf("%s example block lists %s = %q; the block leaves it out", d.path, k.key, got)
+					}
+				case !ok || got != want:
+					t.Errorf("%s example block gives %s = %q (present: %v); %s is %q", d.path, k.key, got, ok, wantName, want)
+				default:
+					listed++
+				}
+			}
+			if len(example) != listed {
+				t.Errorf("%s example block has %d non-[tmux] keys; want %d: %v", d.path, len(example), listed, example)
 			}
 		})
-	}
-
-	// The example block, outside [tmux] (TestReadmeTimingValuesExampleBlock).
-	example := map[string]string{}
-	section, inFence := "", false
-	for _, line := range d.lines {
-		switch line = strings.TrimSpace(line); {
-		case mdFenceRe.MatchString(line):
-			inFence = !inFence
-		case !inFence, line == "", strings.HasPrefix(line, "#"):
-		case strings.HasPrefix(line, "["):
-			section, _, _ = strings.Cut(strings.TrimPrefix(line, "["), "]")
-		case section != "tmux":
-			kv, _, _ := strings.Cut(line, "#")
-			name, val, _ := strings.Cut(kv, "=")
-			example[section+"."+strings.TrimSpace(name)] = strings.Trim(strings.TrimSpace(val), `"`)
-		}
-	}
-	listed := 0
-	for _, k := range keys {
-		got, ok := example[k.key]
-		switch {
-		case k.noExample:
-			if ok {
-				t.Errorf("%s example block lists %s = %q; the block leaves it out", d.path, k.key, got)
-			}
-		case !ok || got != k.def:
-			t.Errorf("%s example block gives %s = %q (present: %v); the default is %q", d.path, k.key, got, ok, k.def)
-		default:
-			listed++
-		}
-	}
-	if len(example) != listed {
-		t.Errorf("%s example block has %d non-[tmux] keys; want %d: %v", d.path, len(example), listed, example)
 	}
 }

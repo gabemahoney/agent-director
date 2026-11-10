@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -62,20 +63,23 @@ type securityScene struct {
 // ad.provenance.disagree record, the record written once for the subject
 // ("": the verb's event) with field values it carries, events the
 // arrangement writes for the subject during the call (the agent's own
-// hooks), and extra checks of the call's result.
+// hooks), extra checks of the call's result, and whether the scene's clock
+// starts at the wall clock instead of killClockStart (wallClock: a call that
+// scopes the Client's store reads to a context deadline taken from its clock).
 type securityCase struct {
-	name     string
-	target   killRowSpec
-	holder   securityHolder
-	server   func(e *killEnv, socket string)
-	arrange  func(t *testing.T, s *securityScene)
-	wantErr  error
-	desc     func(s *securityScene) apitest.DescCase
-	disagree bool
-	event    string
-	fields   map[string]any
-	others   []string
-	check    func(t *testing.T, s *securityScene, res any)
+	name      string
+	target    killRowSpec
+	holder    securityHolder
+	server    func(e *killEnv, socket string)
+	arrange   func(t *testing.T, s *securityScene)
+	wantErr   error
+	desc      func(s *securityScene) apitest.DescCase
+	disagree  bool
+	event     string
+	fields    map[string]any
+	others    []string
+	check     func(t *testing.T, s *securityScene, res any)
+	wallClock bool
 }
 
 // securityVerb is one verb under SR-15: its call on the scene's subject, the
@@ -121,6 +125,9 @@ var securityVerbs = slices.Concat([]securityVerb{{
 		return c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: s.subject,
 			TmuxSessionName: s.target.Name, TmuxSessionNameSupplied: true})
 	},
+}, {
+	verb: "sweep", event: "ad.launch.name_held", call: securitySweepCall,
+	record: securityFindMissingRecord, cases: securityFindMissingCases,
 }, {
 	verb: "find-missing", event: "ad.launch.name_held", call: securityFindMissingCall,
 	record: securityFindMissingRecord, cases: securityFindMissingCases,
@@ -243,6 +250,9 @@ func securityEnv() map[string]string { return map[string]string{"SECRET": securi
 func newSecurityScene(t *testing.T, v securityVerb, c securityCase) *securityScene {
 	t.Helper()
 	e := newKillEnv(t)
+	if c.wallClock {
+		e.clock.Advance(time.Now().Sub(e.clock.Now()))
+	}
 	spec := c.target
 	if v.launch {
 		spec.Opts = append(append([]apitest.SpawnOption(nil), spec.Opts...), apitest.WithTmuxSocket(e.defaultSocket))
@@ -345,7 +355,29 @@ func runSecurityVerbs(t *testing.T, verbs []securityVerb) {
 				if jerr != nil {
 					t.Fatalf("marshal result: %v", jerr)
 				}
-				securityAbsent(t, "result", string(out), s)
+				if v.verb == "sweep" || v.verb == "find-missing" {
+					// SR-7.5 deliberately names every agent in this store, including
+					// the other fixture row. Only checks[].instance_id is exempt;
+					// secrets, foreign-store IDs and every other field stay protected.
+					result := res.(api.SweepResult)
+					result.Checks = slices.Clone(result.Checks)
+					var ids []string
+					for i := range result.Checks {
+						ids = append(ids, result.Checks[i].InstanceID)
+						if result.Checks[i].InstanceID == s.other.ID {
+							result.Checks[i].InstanceID = ""
+						}
+					}
+					slices.Sort(ids)
+					want := []string{s.target.ID, s.other.ID}
+					slices.Sort(want)
+					if !slices.Equal(ids, want) {
+						t.Fatalf("all-agent checks = %v; want only store-owned rows %v", ids, want)
+					}
+					securityAbsent(t, "result", jsonOf(t, result), s)
+				} else {
+					securityAbsent(t, "result", string(out), s)
+				}
 				securityAbsent(t, "client log", logs.String(), s)
 				if c.check != nil {
 					c.check(t, s, res)

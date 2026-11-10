@@ -38,6 +38,9 @@
 //	                     state and the time of its last raw state change
 //	                     (apitest.SetSettle; b.3ie).
 //	json-schema          Print the result shapes of every subcommand.
+//	install-write-failure Install canonical failure SQL on an existing temp DB;
+//	                     returns a handle, without opening/migrating a Store.
+//	remove-write-failure  Remove exactly that handle on the same DB.
 package main
 
 import (
@@ -75,6 +78,8 @@ var availableSubcmds = []string{
 	"seed-needs-intelligence-surface",
 	"seed-idle-screen-surface",
 	"set-settle",
+	"install-write-failure",
+	"remove-write-failure",
 	"json-schema",
 }
 
@@ -114,6 +119,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedReadSurfaceStore(args[1:], stdout, stderr)
 	case "set-settle":
 		return cmdSetSettle(args[1:], stdout, stderr)
+	case "install-write-failure", "remove-write-failure":
+		return cmdWriteFailure(args[0], args[1:], stdout, stderr)
 	case "write-family-transition":
 		return cmdWriteFamilyTransition(args[1:], stdout, stderr)
 	case "json-schema":
@@ -140,10 +147,12 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		sessionID          = fs.String("session-id", "", "session_id; non-empty enables resume pre-flight")
 		contextFixture     = fs.String("context-fixture", "", "named sanitized context fixture; seeds its agent, session and transcript")
 		contextWriterPID   = fs.Int("context-writer-pid", 0, "live test-owned process retained by the caller for fresh Codex context")
+		writerPID          = fs.Int("writer-pid", 0, "live caller process for ordinary read-surface fixtures")
+		writerKeepPane     = fs.Bool("writer-keep-pane", false, "retain the owned pane fixture with --writer-pid for command/read composition")
 		createStore        = fs.Bool("create-store", false, "create the store if it does not exist")
 		socket             = fs.String("socket", "", "recorded tmux socket; defaults to apitest.TestSocket (a resume needs its directory to exist)")
 		noPreTrust         = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
-		agent              = fs.String("agent", "", "the row's agent (claude|codex|cursor); empty keeps SeedSpawn's claude (apitest.WithAgent)")
+		agent              = fs.String("agent", "", "the row's agent (claude|codex|cursor|droid); empty keeps SeedSpawn's claude (apitest.WithAgent)")
 		noSubagentTracking = fs.Bool("no-subagent-tracking", false, "disable subagent tracking on the row (apitest.WithNoSubagentTracking); default keeps tracking enabled")
 		noIdentity         = fs.Bool("no-launch-identity", false, "seed a row from before the release: no launch token, socket or identity (apitest.WithNoLaunchToken); not with --socket")
 	)
@@ -164,6 +173,24 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		*id = uuid.NewString()
 	}
 	var opts []apitest.SpawnOption
+	if *writerPID > 0 {
+		live, err := apitest.ReadSurfaceProcessOptions(*writerPID)
+		if err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		opts = live
+		if *writerKeepPane {
+			identity, err := apitest.ContextWriter(*writerPID)
+			if err != nil {
+				printError(stderr, err)
+				return 1
+			}
+			opts = append(opts, apitest.WithLaunchIdentity(identity))
+		} else {
+			opts = append(opts, apitest.WithNoPane())
+		}
+	}
 	if *socket != "" {
 		opts = append(opts, apitest.WithTmuxSocket(*socket))
 	}
@@ -551,7 +578,9 @@ func cmdSeedEmptyStore(args []string, stdout, stderr io.Writer) int {
 // result fields and their JSON types.  This is intentionally a simple
 // observability aid rather than a full JSON Schema document.
 var resultSchemas = map[string]map[string]string{
-	"fake-pane-owner": {"pid": "number", "start": "string"},
+	"install-write-failure": {"handle": "string"},
+	"remove-write-failure":  {"handle": "string"},
+	"fake-pane-owner":       {"pid": "number", "start": "string"},
 	"seed-spawn": {
 		"instance_id": "string",
 	},
@@ -582,8 +611,9 @@ var resultSchemas = map[string]map[string]string{
 	"seed-needs-intelligence-surface": {"seeded": "boolean"},
 	"seed-idle-screen-surface":        {"seeded": "boolean"},
 	"seed-read-surface-store": {
-		"ids":     "array",
-		"settled": "object",
+		"ids":                   "array",
+		"settled":               "object",
+		"settled_confirmations": "object",
 	},
 	"set-settle": {
 		"instance_id": "string",

@@ -1,6 +1,6 @@
 ---
 name: install-agent-director
-description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin (an upgrade from a release that kept its files in the old directory moves that directory first), migrates and opens state.db (authorizing any older-schema upgrade via a one-shot sentinel), migrates config.toml and the templates to the agent names, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up the find-missing and expire sweeps (cron, else systemd user timers; otherwise it warns that nothing schedules them). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
+description: Install agent-director on a machine that does not have it yet. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin, creates and opens state.db, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up recovery (sweep when supported, otherwise find-missing) and separate expire cleanup (cron, else systemd user timers; otherwise it warns that nothing schedules them). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director" or "set up agent-director" on a new machine. To upgrade an existing install, use upgrade-agent-director instead.
 ---
 
 ## First-time install on a brand-new machine
@@ -15,13 +15,15 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 
 The rest of this skill assumes `install.sh` is already on disk (in a
 checkout or alongside SKILL.md). Use the one-liner above to bridge the
-gap on a fresh host, then run the interactive flow below on subsequent
-upgrades.
+gap on a fresh host, or run the interactive flow below for a new install.
+An upgrade, or a re-install of an existing install, follows the upgrade
+skill instead.
 
 ## When to invoke
 
-Trigger phrases: "install agent-director", "set up agent-director",
-"upgrade agent-director on this machine".
+Trigger phrases: "install agent-director", "set up agent-director".
+
+An upgrade of an existing install follows the [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md) step by step.
 
 ## Operator dialog (do BEFORE running install.sh)
 
@@ -30,9 +32,39 @@ them silently. Walk the operator through each choice with
 `AskUserQuestion`, echo the resolved flag set back for confirmation,
 then execute. Keep it tight — five questions, then a confirm.
 
-### Before the questions: which agents, and an old-layout install
+### Before the questions: an existing install, and which agents
 
-Two checks come first. Neither is a question, but each changes what
+**Whether agent-director is already installed.** It is when an install's
+binary and that install's store both exist:
+`~/.config/agent-director/bin/agent-director` and its store (`state.db`
+beside `bin/`, or the `[store] db_path` its `config.toml` names), or the old
+directory's binary and store ("Upgrading an install from the old directory").
+Check with `ls -l ~/.config/agent-director/bin/agent-director ~/.config/agent-director/state.db`.
+Then stop and follow the
+[upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md)
+instead. It also re-installs a working install: a later change to an answer
+below is a flag added at its step 3, such as `--register-mcp`. Anything else
+is a new install, including a stray `agent-director` on PATH and a directory
+an uninstall kept.
+
+**A directory an uninstall kept.** When `~/.config/agent-director` or the old
+directory is there without its binary, the install keeps its store. Establish
+the operator-maintained maintenance window in
+[Upgrading the native-input journal](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal)
+first. Confirm the actual DB, complete invoking-home/additional input roots
+and stopped-writer recovery set. Add `--journal-maintenance-window
+--journal-roots-complete --journal-backup <new-absolute-directory>` to the
+resolved flags, and repeat `--journal-legacy-root <absolute-input-root>` for
+every additional root. These assertions do not stop writers: the operator
+must exclude all old callers, hooks, helpers and launches through committed
+verification. Run one install at a time. When the old directory is there, do
+the "Before you run" steps of "Upgrading an install from the old directory"
+with the operator before the first question.
+
+On macOS, confirm the install runs as the agents' user, not as root, and tell
+the operator macOS may ask them to grant the terminal access to a folder.
+
+One more check comes first. It is not a question, but it changes what
 you ask and what you tell the operator.
 
 **Which agents are on the machine.** agent-director launches Claude Code,
@@ -62,26 +94,6 @@ describes. Then:
   version, compatibility or authentication, and never writes a `[launch]` key.
   A configured missing path can still allow PATH discovery for installation;
   launches keep using the configured whole path, without a PATH fallback.
-
-**Whether this is an upgrade from the old layout.** An earlier release
-kept its files in a directory this release no longer uses, and the
-install moves it, once. Look for it with the check in "Upgrading an
-install from the old directory" below. When it finds one, do that
-section's "before you run" steps with the operator before the first
-question. In short, tell the operator to:
-
-- stop everything that starts agents, then every agent, every
-  `agent-director serve` and every caller (a Claude Code session's own
-  agent-director MCP server is a live `serve`: end that session too);
-  the install refuses (`ErrAgentsLive`) while any of them runs;
-- run the install from a shell agent-director did not start (not one
-  inside an agent's session), from the directory the original install
-  ran in (or one inside the same git repository), so it finds a
-  `local` MCP registration made there;
-- copy a store kept outside agent-director's directory (`[store]
-  db_path`, including one whose `db_path` reaches it through a link
-  inside the directory) first: the upgrade migrates it in place, and
-  the way back needs the copy.
 
 ### How to phrase each question
 
@@ -176,7 +188,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      PATH) and `agent-director-admin` into
      `~/.config/agent-director/admin/`, never on PATH. We need to know where to
      copy both *from*; they must come from the same build.
-   - *Four options:*
+   - *Three options:*
      - **(a) Download a pre-built release from GitHub** *(recommended
        for new users)*. The script `curl -L`s both assets for your
        OS/arch (`agent-director-<os>-<arch>` and
@@ -200,15 +212,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
        there on its own). If you downloaded the two release assets
        yourself, point at both. Flags: `--binary <path>
        --admin-binary <path>`.
-     - **(c) Use whatever `agent-director` is on `PATH` today.** Only
-       makes sense if you're re-installing an existing install (to
-       re-inject the hooks or register MCP, say). No binary flag: run
-       from the installed skill, outside any checkout, install.sh pairs
-       the `agent-director` on PATH with the installed
-       `~/.config/agent-director/admin/agent-director-admin`. For the full
-       lookup order, see "Where install.sh looks for each binary" in
-       step 6 of "What this skill does".
-     - **(d) Build from source now, then install.** Run `make build` in
+     - **(c) Build from source now, then install.** Run `make build` in
        this checkout to produce fresh `./bin/agent-director` and
        `./bin/agent-director-admin`, then point install.sh at them. No
        install.sh change needed: the orchestrator runs `make build`
@@ -230,19 +234,15 @@ previous release". The current installer refuses pre-move binaries with exit 3.
        admin binary's stamp itself.)
      - **In a checked-out tree with Go available but no fresh local
        binary** (missing, or `commit` doesn't match HEAD) → propose
-       **(d)** *build from source*. The orchestrator runs `make build`
+       **(c)** *build from source*. The orchestrator runs `make build`
        to produce a binary that matches the current tree, then points
        install.sh at it.
      - **In a checked-out tree but no Go (or `make build` would fail)**
        → propose **(a)** *download from release* and SAY SO. Don't try
        to use a possibly-stale `./bin/agent-director`.
      - **Not in a checked-out tree** (install.sh was curled to a tmp
-       path, or invoked from an arbitrary directory), `agent-director`
-       on PATH, `~/.config/agent-director/admin/agent-director-admin` present,
-       and the operator wants to re-inject the hooks or register MCP →
-       propose **(c)** *use what is on PATH* (no binary flag).
-     - **Not in a checked-out tree** otherwise, or the operator wants
-       to upgrade → propose **(a)** *download from release*.
+       path, or invoked from an arbitrary directory) → propose **(a)**
+       *download from release*.
 
    **Why the version-check matters:** absent a check, a binary at
    `./bin/agent-director` may have been built off a stale branch or a
@@ -251,7 +251,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    likely intent of "install the current source". install.sh now reads
    the binary's `version` verb and refuses option (b) unless the
    embedded commit matches HEAD — so the orchestrator can safely
-   default to (b) when fresh, and falls through to (d)/(a) when not.
+   default to (b) when fresh, and falls through to (c)/(a) when not.
    Separately, for every option, install.sh refuses (exit 3) unless
    `agent-director` and `agent-director-admin` report the same
    `version` stamp (version and commit), with a real commit: mixing
@@ -262,13 +262,13 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    build"). The fix for both is `make build` in a git checkout (both
    binaries again, stamped) or `--from-release`.
 
-   - *Reversibility:* picking wrong is cheap. The next
-     `uninstall.sh --purge` resets to a clean slate, and you can
-     re-run `install.sh` with a different source any time.
+   - *Reversibility:* picking wrong is cheap. The upgrade skill later
+     installs the latest release over it, and `uninstall.sh --purge`
+     resets to a clean slate.
 
    If `--from-release` is selected but the repo has no releases yet,
    the script exits with a clear error. Don't paper over that —
-   surface it to the operator and loop back to (b) or (d).
+   surface it to the operator and loop back to (b) or (c).
 
 2. **Should the binary go on `PATH` via a symlink? (`--symlink-dir <dir>` or `--no-symlink`)**
 
@@ -298,8 +298,9 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      `PATH`. Otherwise ask explicitly — don't silently fall back to
      (c), because the operator probably wants a working command.
    - *Reversibility:* fully reversible. The uninstall script removes
-     any symlink it created. If you skip and want one later, re-run
-     `install.sh --symlink-dir <dir>`.
+     any symlink it created. If you skip and want one later, follow the
+     [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#3-install)
+     with the original flags plus `--symlink-dir <dir>`.
 
 3. **Register the MCP server with Claude Code? (`--register-mcp`)**
    *(Claude Code only: skip this question when Claude Code is not
@@ -345,7 +346,9 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    - *Default:* (b) — OFF. MCP registration is the right call for
      orchestrator setups, but off-by-default keeps the tool list
      lean for operators who don't need it. Easy to flip on later.
-   - *Reversibility:* fully reversible. To add it later:
+   - *Reversibility:* fully reversible. To add it later, follow the
+     [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#3-install)
+     with the original flags plus `--register-mcp`, or by hand:
      `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`.
      To remove: `claude mcp remove agent-director -s <scope>` or
      `uninstall.sh --mcp-also`.
@@ -399,23 +402,24 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    - *Reversibility:* fully reversible. `uninstall.sh` removes the
      two entries (preserving any other user hooks at those events;
      the entries of an install from before the move too).
-     Re-injecting later is a re-run of `install.sh` without
-     `--no-hooks`.
+     To inject them later, follow the
+     [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#3-install)
+     with the original flags less `--no-hooks`.
 
-5. **Set up the find-missing and expire schedule now? (`--schedule`)**
+5. **Schedule recovery every 2 minutes and expire daily at 03:17? (`--schedule`)**
 
-   - *What this is:* agent-director keeps its rows honest with two
-     sweeps that nothing runs on its own: `agent-director find-missing`
-     (every 2 minutes) marks a row whose agent is gone (killed, crashed,
-     rebooted) as missing, and `agent-director expire` (daily at 03:17)
-     deletes finished rows past their retention. Without a schedule a
-     dead agent's row stays live, a relay row stays in
-     `check_permission`, a killed agent's running subagent records are
-     never turned lost, and finished rows are never expired. The skill
+   - *What this is:* `agent-director sweep` checks all agents once,
+     recovering missed state changes and refreshing observations without
+     a read. On supporting versions, `status`, `get` and `list` run the
+     same checks for returned agents. Absent or failed checks can leave
+     facts old until later evidence arrives. `agent-director expire`
+     separately deletes eligible finished rows past their retention. The skill
      ships ready-made schedule files in `schedule/` beside this
      SKILL.md (a cron file, and a systemd user `.service` and `.timer`
      for each sweep); `--schedule` installs them for the user running
-     the script.
+     the script. The operator chooses the cadence: accept the defaults
+     in this question or choose no and arrange a custom schedule using
+     [Maintenance](https://github.com/gabemahoney/agent-director/blob/main/docs/maintenance.md#scheduling-the-sweeps).
    - *Who must run it:* the sweeps must run as the agents' user, in the
      agents' tmux environment, against the agents' `~/.config/agent-director`.
      Run as another user, as root or against another tmux server, a
@@ -438,24 +442,28 @@ previous release". The current installer refuses pre-move binaries with exit 3.
        run once a cron daemon starts), with a note on stderr and the
        warning below. Re-running replaces
        the entries it added and points them at the current binary, so it
-       never doubles them.
-     - **(b) No: leave it (no flag).** The install ends with a loud
-       warning on stderr that names the exact crontab lines for this
-       install's binary, the shipped files and the full command (this
-       install's own arguments plus `--schedule`) to schedule later. Pick this when the schedule is managed another
-       way (launchd, your own cron line or unit, a config-management
+       never doubles them. It uses the template cadence, replacing any
+       customized cadence in those entries.
+     - **(b) No: leave it (no flag).** Existing commands, cadence and
+       timer enablement stay unchanged. If it does not recognize a schedule,
+       the install warns on stderr and names the exact crontab lines
+       for this install's binary, the shipped files and the full command (this
+       install's own arguments plus `--schedule`) to schedule later. Pick this
+       when the schedule is managed another way (launchd, your own cron line or unit, a config-management
        tool): the install's check sees only the entries `--schedule`
        adds, so it warns anyway; ignore it.
    - *Default:* (a) when the agents run as the user doing the install
-     and nothing already schedules the sweeps; it is the only way the
-     rows stay accurate. (b) when the agents run as another user or
-     the operator schedules another way. The flag is OFF in
-     `install.sh` itself, so the question is where the schedule is
-     decided.
+     and the operator wants the default cadence with no existing schedule.
+     (b) when a schedule already exists, the agents run as another user,
+     or the operator wants a custom cadence or schedules another way.
+     The flag is OFF in `install.sh` itself; pass it only when the operator
+     opts in.
    - *Reversibility:* fully reversible. `uninstall.sh` removes exactly
      the entries `--schedule` added (the tagged crontab lines, or the
      systemd units and their enable links) and does nothing when none are
-     there. A schedule added later is `install.sh --schedule`.
+     there. To add the schedule later, follow the
+     [upgrade skill](https://github.com/gabemahoney/agent-director/blob/main/skills/upgrade-agent-director/SKILL.md#3-install)
+     with the original flags plus `--schedule`.
    - *Curl-pipe first install:* a run piped from `curl` has no
      `schedule/` files beside it, so it fetches the same five files from
      the repository (`raw.githubusercontent.com`, at the release tag with
@@ -464,8 +472,8 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      warning use that copy. A release tag older than the `schedule/`
      directory (a 404; for example `--from-release` on an older tag, or
      the latest release before it shipped) is retried once at `main`, and
-     the `schedule:` fetch line says so. When the fetch fails (no
-     network, no reliable ref, or `main` answers no better), `--schedule`
+     the `schedule:` fetch line says so. When the fetch fails (no network, no
+     reliable ref, or `main` answers no better), `--schedule`
      installs nothing and says why, the warning points at the files on
      `main`, and the rest of the install and its exit status are
      unaffected.
@@ -477,19 +485,6 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    - Ask "ready to run?" with `AskUserQuestion`. Only on an explicit
      "yes" execute the script. A "no" or any modification answer means
      loop back to the relevant question, not silently re-pick.
-   - For an upgrade with unchanged directory and schema, `--keep-prior`
-     provides a binary-only rollback of the matching pair. Without it,
-     use the prior release's own installer and original flags. If the
-     schema changes, follow "Going back to the previous release" before
-     any binary swap; `.prior` alone cannot restore the migrated DB.
-   - On the upgrade that moves the old directory, `--keep-prior`
-     makes no snapshot, so do not offer it as the rollback: the way
-     back is "Going back to the previous release" below, which sets
-     the new directory aside and puts the kept old directory back,
-     and the fallback `--from-release v<old>` does not work across
-     the move (this install.sh refuses a release from before it).
-     Tell the operator before the run that the way back loses
-     everything written since the upgrade.
    - After the run, tell the operator where `agent-director-admin` was
      installed (install.sh's `admin   :` line, just before
      `install.sh: done`) and that it is not on PATH. Do not run it.
@@ -515,9 +510,8 @@ previous release". The current installer refuses pre-move binaries with exit 3.
      `install.sh: err_name=<Name>`, never on the text above it.
 
 Do NOT skip this dialog because flags "look obvious from context".
-The operator may want a non-default path, MCP off, or a `--keep-prior`
-binary rollback snapshot (only with unchanged directory and schema). Inferring
-intent is the failure mode this section exists to prevent.
+The operator may want a non-default path or MCP off. Inferring intent is the
+failure mode this section exists to prevent.
 
 ## What this skill does
 
@@ -536,7 +530,9 @@ This skill runs `install.sh` from the same directory. The script:
    lowercase hex characters; and exactly one of `--sha256` and
    `--admin-sha256` ("would install <the other binary> unverified;
    refusing to install"). Then it runs the
-   following checks in order; any failure aborts with a clear message
+   checks grouped below. With an existing DB, source-binary checks 5–10
+   complete before the first preflight database query; without one, they run
+   after the other preflight checks. A failure aborts with a clear message
    and exit code `2`, or `3`, `4` or `5` where noted:
 
    1. **Whitespace-in-install-path** — `$HOME` must not contain
@@ -552,22 +548,12 @@ This skill runs `install.sh` from the same directory. The script:
       tool is mandatory because step 7 below relies on it to probe
       `--binary` artifacts (never silent-skip per SR-2.2);
       install via `apt install file` / `brew install file-formula`
-      / `dnf install file`. `sqlite3` is mandatory for the
-      schema-migration flow (below): the script reads state.db's
-      ACTUAL `user_version` through the WAL with
-      `sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" <db> "PRAGMA user_version;"`,
-      both to decide whether a migration sentinel is needed and to
-      verify the post-open version. (The one read made before anything
-      is installed, the gate of the config and template migration
-      below, takes the version from the database file's header when
-      that is safe to read and touches nothing, and falls back to the
-      same command with `-readonly`, so that a refusal leaves the
-      store as it found it.) Raw header bytes are subtly wrong
-      for a WAL-mode DB, `-init /dev/null` keeps your `~/.sqliterc` from
-      changing the output, and `<busy_timeout_ms>` is the `[store]
-      busy_timeout_ms` that item 4 reads. Install `sqlite3` via
-      `apt install sqlite3` / `brew install sqlite` /
-      `dnf install sqlite`.
+      / `dnf install file`. `sqlite3` reads the actual `user_version`,
+      including committed WAL state, from the private preflight snapshot and
+      during later authorized store operations and post-open verification; see
+      [the six-step flow](#the-six-steps-installsh-performs). It honors the
+      configured busy timeout and ignores `~/.sqliterc`. Install it via
+      `apt install sqlite3` / `brew install sqlite` / `dnf install sqlite`.
    3. **OS/CPU gate (SR-2.1).** `uname -s` / `uname -m` must report
       `Linux/x86_64` or `Darwin/arm64`; every other combination is refused.
    4. **Store database (`[store] db_path` and `busy_timeout_ms`), the
@@ -736,8 +722,11 @@ This skill runs `install.sh` from the same directory. The script:
       own `install.sh`, fetched from its tag.
 
    **Also in pre-flight: the directory layout, the migration's checks and
-   the live-agent check.** Among the reads of item 4, in this order, and
-   all before anything is installed or changed:
+   the live-agent check.** Establish the layout and paths first. Before any
+   database query below, complete source-binary checks 5–10 and use the
+   candidate administrator's private snapshot, as described in
+   [the six-step flow](#the-six-steps-installsh-performs). These checks all
+   precede installation or moves:
 
    - *The layout.* The old directory is present when anything is at
      that path (a dangling link included), except a link that points to
@@ -922,89 +911,9 @@ This skill runs `install.sh` from the same directory. The script:
    with **exit 5** and the same two ways on, named
    `ErrConfigMalformed` or `ErrTemplateMalformed` as in pre-flight.
 
-   In brief, in order:
-
-   1. **Install the new binary** — already done by step 3/the atomic
-      `mv` above.
-   2. **Read the DB's ACTUAL `user_version`** via
-      `sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" <state.db> "PRAGMA user_version;"`
-      (through the WAL, waiting up to `[store] busy_timeout_ms` for a
-      lock, ignoring `~/.sqliterc` — never assume the version, and this
-      read never uses raw header bytes). No `state.db` on disk (fresh install) →
-      nothing to authorize; step 4 fresh-creates it. A `state.db` that
-      exists but whose version cannot be read, or reads as anything but
-      a whole number (0 or more), stops the install here (**exit 5**): no
-      sentinel is written and the store is not opened. See "An
-      unreadable schema version" below.
-   3. **Write the authorization sentinel** — a file
-      `migrate-authorized` beside state.db
-      (`~/.config/agent-director/migrate-authorized` for the default store)
-      containing `{"from": <actual>, "to": <target>}`, where
-      `<target>` is the schema version this binary requires. **Skipped
-      when `from == target`** (the DB is already current), on a
-      fresh install (no DB), and when the probe below has already run
-      the migration. The install decides with one probe
-      `agent-director list` against the existing store, by the error
-      name (`err_name`) it fails with, never by its message text:
-      - it opens, or fails with `ErrSchemaMismatch`: nothing to
-        authorize (`schema  : state.db at vN; no migration
-        authorization needed`); an `ErrSchemaMismatch` fails step 4's
-        open again, with the store advice.
-      - it opens, and a `migrate-authorized` was already beside
-        state.db before it (left by an earlier run whose store open
-        failed, or written by hand), with state.db above v0: when that
-        sentinel matches, the probe's open runs its migration and
-        consumes it, so the install reads `user_version` again. If the
-        version rose, it prints `schema  : migration vN→vT ran at the
-        probe (agent-director list), authorized by a sentinel written
-        before this install (sentinel <path>)`, and step 5 verifies vT.
-        If not, it prints the line above (`no migration authorization
-        needed`). If that read gives no version, the install stops here
-        (**exit 5**); see "An unreadable schema version" below.
-      - `ErrSchemaMigrationRequired`: its message names `<target>`,
-        and the sentinel authorizes that migration.
-      - `ErrConfigMalformed`: the config file was refused, so the probe
-        never reached state.db. The install stops here (**exit 5**)
-        with no sentinel written; see "A refused config file" below.
-      - any other error: no sentinel is written; the install prints
-        `schema  : state.db at vN; could not tell whether a migration
-        is needed (agent-director list failed: <err_name>)` (`<no
-        err_name>` when the probe's output holds no error envelope)
-        and goes on to step 4, which reports the failure if it
-        persists.
-
-      The sentinel is written to a temp file that `mktemp` creates
-      beside it (`migrate-authorized.tmp.XXXXXX`), then moved into
-      place. If `mktemp` cannot create that file, the install stops here
-      (**exit 5**, `install.sh: writing the migration sentinel FAILED`)
-      with no migration authorized; see "No temp file for the sentinel"
-      below.
-   4. **Trigger exactly one store-opening open** — runs
-      `agent-director list` once. `list` opens the store, so the
-      authorized migration runs and the sentinel is consumed on
-      success; on a fresh install this creates `state.db` (mode 0600)
-      at the current schema version. **NOT `help`/`version`** — those
-      verbs become DB-free (SR-4), so a help-based warmup would never
-      open the store and step 5 would fail on every upgrade. If it
-      fails with `ErrConfigMalformed`, the install stops (**exit 5**)
-      with the config advice, not the store advice, and a fresh install
-      creates no `state.db`; see "A refused config file" below.
-   5. **Verify and fail loudly** — re-reads `user_version` and, when
-      step 3's probe reported a pending migration or ran one, confirms
-      it equals the target. On a mismatch (or if state.db wasn't
-      created) the install **aborts non-zero (exit 5)** with a clear
-      message; for a readable mismatch see "A version mismatch after
-      the store open" below, and for no state.db see "No store after
-      the store open" below. An unreadable version also exits 5 when a migration was
-      expected; with none expected (a fresh install or an
-      already-current store) it is a warning and the install carries
-      on. See "An unreadable schema version" below.
-   6. **Brief hook-failure window (accepted).** Between the binary
-      swap (step 1/3) and the successful step-4 open there is a short
-      (seconds, install-controlled) window in which a concurrently
-      firing hook that runs a store-opening verb against the not-yet-
-      migrated DB gets the admin migration error. This is expected and
-      accepted; it clears the moment step 4 completes.
+   The store upgrade follows [the six-step flow](#the-six-steps-installsh-performs)
+   below. Keep the maintenance boundary through committed verification;
+   concurrent hooks cannot cross the native-input cutover.
 
 6. **Injects persistent hooks** into `~/.claude/settings.json`
    (unless `--no-hooks` was passed):
@@ -1250,7 +1159,14 @@ This skill runs `install.sh` from the same directory. The script:
    says the files came from `main`. A failed fetch changes no exit
    status.
 
-   With `--schedule` the script installs from those files and nothing
+   Raw templates retain `find-missing`; the current installer renders
+   `sweep` only when the target binary advertises it in `help`, otherwise
+   `find-missing`. Existing `find-missing` schedules remain supported.
+   For manual units, follow
+   [Schedule them by hand](https://github.com/gabemahoney/agent-director/blob/main/docs/maintenance.md#schedule-them-by-hand).
+
+   Without `--schedule`, existing commands, cadence and timer enablement
+   stay unchanged. With it, the script installs from those files and nothing
    else, for the user running it, who must own `HOME` and be the agents'
    user:
    - **cron**, when `crontab` works and a cron daemon is running (on
@@ -1288,7 +1204,7 @@ This skill runs `install.sh` from the same directory. The script:
    Installing through cron removes this install's systemd units, and
    installing through systemd removes this install's cron lines (systemd
    is used only where cron is not), so a host is never scheduled twice. A re-run re-points the entries at the
-   current binary and changes nothing already right; an upgrade needs
+   current binary and template cadence; an upgrade needs
    nothing, since the binary's path does not change. A successful step
    prints its `  schedule: ...` lines on stdout, before the `admin   :`
    line (a systemd install adds a second one about `loginctl
@@ -1296,14 +1212,14 @@ This skill runs `install.sh` from the same directory. The script:
    saying a piped run fetched the schedule files. Crontab lines
    whose cron daemon is not running do not count as a schedule.
 
-   When, after all that, no entry of the install's own is present (no
-   tagged crontab line for both sweeps with a cron daemon running, and no
-   installed unit), the script ends with a
-   warning on stderr, after `install.sh: done` (on exit 6, just before
+   When, after all that, the install's entries for both jobs are not found
+   (both tagged cron lines with a running daemon, or all four units), it ends
+   with a warning on stderr, after `install.sh: done` (on exit 6, just before
    the final MCP-failed line). It is not an error and changes no exit
-   status. It says the sweeps are not scheduled and what that costs,
-   names the two crontab lines with this install's binary and
-   environment (the shipped file's, filled in: copy those), says to run
+   status. It explains shared read recovery, stale observations after absent
+   or failed checks, and separate retention cleanup. Schedule presence is
+   not proof that checks ran or confirmed anything. It names the two rendered
+   crontab lines with this install's binary and environment (copy those), says to run
    them as the agents' user, names the shipped files, and gives the
    command to schedule: this run's own command line, each argument
    shell-quoted, with `--schedule` added, after a `cd` to the directory the
@@ -1354,7 +1270,7 @@ umask.
   than `HOME`'s owner.
   It does not touch a launchd job, a Windows task or a cron line or
   unit it did not add (they lack the `agent-director-schedule` tag).
-  It never changes what `find-missing` or `expire` do.
+  It never changes what `sweep`, `find-missing` or `expire` do.
 
 ## When install.sh fails
 
@@ -1391,27 +1307,36 @@ no other exit status has a cause line.
 | `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: the gate of the config and template migration in pre-flight (before anything was installed or changed), step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
 | `ErrConfigMalformed` | AD's `config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path`, `[store] busy_timeout_ms` and the `[launch]` table (`claude_path`, `codex_path`, `cursor_path`); by its migration checks (the question-tool key set more than once under `[defaults]`, or `defaults` set as a key on a line that names the key's old name, a file it cannot read, or a symlinked config.toml the migration cannot write through); with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); after the move, by the re-read of the moved config.toml's store and timeout keys; at apply time, by the migration refusing a config.toml that changed since pre-flight (nothing more is written; the two ways on are the exit 1 row's); or by agent-director at step 3's probe or step 4's store open. While the move is due, pre-flight reads the old directory's copy and the message names it. | Fix the file the message names, then re-run the install with the same flags. A symlink the hooks merge cannot write through also has a `--no-hooks` way out; a symlink the migration cannot write through does not (the migration runs with `--no-hooks` too): fix the link, or make the rename in the file's source. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 5 and step 6 of "What this skill does", "A refused config file" and "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
 | `ErrTemplateMalformed` | A stored template was refused by install.sh's pre-flight check for the migration of config.toml and the templates (a line before its first table header that the check cannot read, the old name of the arguments key set twice or together with `agent_args`, a file it cannot read, or a symlinked template the migration cannot write through; all before anything was installed or changed), or, at apply time, a template that changed since pre-flight (the same two ways on as the exit 1 row). | Fix the template the message names, then re-run the install with the same flags. See "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
-| `ErrSchemaMismatch` | Step 4's store open: newer store, invalid store id, or authorized migration refusing eligibility column shape/values (including eligible known-child requests). | Identify the cause from the actual error envelope. Use a matching binary for a newer store; invalid metadata requires stopped-writer backup/restore or human recovery, never DB edits to bypass eligibility validation. See "ErrSchemaMismatch recovery". |
-| `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`: `[store] db_path` changed after pre-flight, or something removed or moved the store after the open); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open", "No store after the store open" and "No temp file for the sentinel". |
+| `ErrJournalMigrationRefused` | A crossing upgrade of the native-input journal was refused: by pre-flight, before anything was installed or changed, or by the cutover before it changed the previous install's store, after which the installer put the previous install back. The install is as it was before the run; the envelope's `details.refusal` gives the reason and action. | Keep the maintenance boundary, fix the reported cause, then re-run this release's installer with a new `--journal-backup` directory. A store at schema v16 or later that pre-flight cannot read needs a human: see [A store at schema v16 or later that the upgrade cannot read](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#a-store-at-schema-v16-or-later-that-the-upgrade-cannot-read). Each reason's next step is in [Upgrade refusal reasons](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrade-refusal-reasons). For `agents_live` (live agent rows, no move due), ask the operator to stop the agents (do not end agents yourself) as [its passage](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#installsh-refuses-with-errjournalmigrationrefused) says; `agent_rows_unreadable` is in the same table. |
+| `ErrJournalMigrationIncomplete` | A crossing upgrade's install did not finish successfully (the cutover may still have committed), and the installer did not put the previous install back: this release stays installed. `details.cutover` says whether the cutover committed (`not_committed`, `committed` or `unknown`). | Keep the maintenance boundary, fix the reported cause, then re-run this release's installer with a new `--journal-backup` directory; the message prints the command. For `committed` or `unknown`, then run the administrator's direct verification retry it prints until it exits 0 with `authority: "sqlite"`. Never reset the version or reconstruct replayable journals. See [`install.sh` stops with `ErrJournalMigrationIncomplete`](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#installsh-stops-with-errjournalmigrationincomplete). |
+| `ErrSchemaMismatch` | Step 4's store open: newer store, invalid store id, incompatible or uncommitted current-schema input authority, or authorized migration refusing eligibility column shape/values (including eligible known-child requests). | Identify the cause from the actual error envelope. Use a matching binary for a newer store; invalid metadata requires stopped-writer backup/restore or human recovery, never DB edits to bypass eligibility validation. See "ErrSchemaMismatch recovery". |
+| `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`: `[store] db_path` changed after pre-flight, or something removed or moved the store after the open); or step 3's `mktemp` could not create the sentinel's temp file; or, on a crossing upgrade, the put-back of the previous install could not finish, leaving it partly restored. That last one is told apart by the line `the restore could not finish` and kept copies in `details.copies`, not by its reason: a relayed `migrate-journal` refusal keeps its own reason, and `restore_incomplete` is the reason only when nothing was relayed. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open", "No store after the store open" and "No temp file for the sentinel"; for a restore that could not finish, [Putting back a kept install](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#putting-back-a-kept-install). |
 | `ErrMoveConflict` | Pre-flight, before anything was installed or changed: AD's old and new directories cannot be moved as they are. The first line names the one cause: the new directory is a dangling link or not a directory; the old directory is a dangling link; both directories exist (the message gives each one's store time); the old directory is a link or not a directory, or its `config.toml`, `templates`, one template or its store is a link while the move is due; a `[store] db_path` or `[log] error_log_path` whose place cannot be resolved against the old directory; or a store that is itself a link. On a host that has only the old directory, the Go client's `MakeTemplate` and the CLI's `make-template` run with `--store-path` create `~/.config/agent-director/templates/` themselves, so running either before the install makes both directories exist (the CLI's `make-template` without `--store-path` refuses with `ErrOldLayout` and creates nothing). | Change nothing else: the message names the cause and its remedy (docs/operator-actions.md, "`install.sh` refuses with `ErrMoveConflict`"). Apply that remedy, then re-run with the same flags. Where both directories exist, ask the operator which one holds the install in use before setting the other aside by renaming it (never delete either); a new directory holding only `templates` that `make-template` made is the one to set aside, then copy any template wanted from it into the moved directory's `templates`. |
 | `ErrAgentsLive` | Pre-flight (and again at the move's first step), before anything was installed or changed, while the move is due: a row in a live state (`pending`, `waiting`, `working`, `check_permission`, `ask_user`) in the old store, a process running the old binary (a Claude Code session's own `agent-director serve --stdio` counts), live rows that could not be read (the store stayed busy past its timeout, or is unreadable), or a process check that did not run (no `/proc`, no usable `ps` or `lsof`: check by hand). | Stop whatever starts agents, then every agent, every `serve` and every caller (ask the operator; do not end agents yourself), run `find-missing` with the old binary's path the message prints for a row whose agent is already gone, and re-run from a shell agent-director did not start. A re-run reads the rows again. See "Upgrading an install from the old directory" and "`install.sh` refuses with `ErrAgentsLive`" in docs/operator-actions.md. |
 | `ErrMoveFailed` | The move failed before its rename (a full disk is the usual cause; a fifo, socket or device in the old directory; a temp directory inside either AD directory), or the install was interrupted before the rename. The partial new directory was removed and the old directory is untouched. A signal after the rename also exits here, saying the move finished: the old directory is then the kept `~/.agent-director.pre-move-*`, and the new directory holds the complete copy. | Fix the cause the message names (free space on the disk that holds `~/` and on the one that holds the temp directory, move a fifo or socket out of the old directory, set `TMPDIR` outside both AD directories), then re-run with the same flags. A leftover `.move-incomplete` is handled by the re-run. After the move had finished, the re-run just continues from the new directory. See "`install.sh` stops with `ErrMoveFailed`" in docs/operator-actions.md. |
 | any other name | Step 4's store open failed with that agent-director `err_name` (`ErrSchemaMigrationRequired`, say). It is `ErrStoreOpen` when the open's output held no error envelope, or an envelope whose `err_name` is not a plain `Err…` name. | The message advises a re-run: a migration this install authorized was not consumed, and a re-run retries it. If the re-run fails with the same name, it needs a human: show the operator the error above the cause line. |
 
 Remedy classes: re-run as is (`ErrVersionUnreadable`; `ErrMoveFailed`
-once its cause is fixed; `ErrAgentsLive` once the agents are stopped);
+once its cause is fixed; `ErrAgentsLive` and `ErrJournalMigrationRefused`'s
+`agents_live` once the agents are stopped, and its `agent_rows_unreadable`
+once the store is free);
 fix the file or directory the message names, then re-run
 (`ErrConfigMalformed`, `ErrTemplateMalformed`, `ErrMoveConflict`);
+fix the reported cause, then re-run with a new `--journal-backup`
+directory (`ErrJournalMigrationRefused`; `ErrJournalMigrationIncomplete`,
+then the verification retry after a `committed` or `unknown` cutover);
 read the envelope for `ErrSchemaMismatch` (a matching binary for a newer
 store; stopped-writer restore or human recovery for invalid metadata);
 stop for a human (`ErrSchemaVerifyFailed`, a repeated unknown name).
 
 `ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
-`ErrAgentsLive` and `ErrMoveFailed` are install.sh's own names: no
-agent-director verb returns them. `ErrConfigMalformed` and
-`ErrTemplateMalformed` are agent-director's own catalogued names, which
-install.sh also gives for its pre-flight and migration checks of the
-two file kinds. Whatever the name, do NOT delete state.db, and never
+`ErrAgentsLive`, `ErrMoveFailed` and `ErrJournalMigrationIncomplete` are
+install.sh's own names: no agent-director verb returns them.
+`ErrConfigMalformed` and `ErrTemplateMalformed` are agent-director's own
+catalogued names, which install.sh also gives for its pre-flight and
+migration checks of the two file kinds. `ErrJournalMigrationRefused` is
+`agent-director-admin migrate-journal`'s name, which install.sh also gives
+for its own pre-flight checks of a crossing upgrade. Whatever the name, do NOT delete state.db, and never
 delete the old directory or its kept copy to get past a refusal.
 
 ## Uninstall
@@ -1737,8 +1662,11 @@ and nowhere else.
 is NEWER than the DB (an upgrade), the store refuses to touch the DB
 on its own — it will not silently migrate under an agent. Instead it
 requires an administrator to authorize exactly that one transition by
-placing a sentinel file next to state.db. `install.sh` is that
-administrator action, so the install writes the sentinel for you.
+placing a sentinel file next to state.db. `install.sh` writes it for you.
+The native-input cutover also requires the maintained maintenance window,
+complete roots, backup and administrator verification above. Ordinary opens
+refuse the entire older-schema chain before any hop, even with an exact
+preexisting sentinel. A sentinel alone cannot authorize this cutover.
 
 ### The sentinel
 
@@ -1936,83 +1864,72 @@ Make the change it names, then re-run the install with the same flags.
 
 ### The six steps `install.sh` performs
 
-`state.db` below is the database the section above names.
+`state.db` means the actual configured database, including a custom path.
+Before these steps, the installer resolves and validates both candidates
+(platform, architecture, version pair and capabilities) before its first SQL
+query. Preflight version, table and live-row reads use the candidate admin's
+`snapshot-store`: it copies a consistent DB and committed WAL under OS locks
+into a private directory, without SQLite opening the original. Busy,
+unreadable or hot-journal evidence refuses; a live-row refusal leaves the
+original DB, sidecars and directory unchanged. Download and snapshot temporary
+files use `/tmp`; move staging honors the chosen `TMPDIR` only after checking
+that neither its lexical path nor its physical target is inside the old or
+new installation. See the operator runbook for the maintenance boundary.
 
-1. **Install the new binaries** (atomic `mv` into
-   `~/.config/agent-director/bin/`, and `agent-director-admin` into
-   `~/.config/agent-director/admin/`). On the upgrade that moves the old
-   directory, the move runs first (step 2 of "What this skill does"), and
-   the migration of `config.toml` and the templates runs after this step
-   and before step 2 below.
-2. **Read the ACTUAL `user_version`** via
-   `sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" <state.db> "PRAGMA user_version;"`
-   (through the WAL, waiting up to `[store] busy_timeout_ms` for a
-   lock, ignoring `~/.sqliterc`). No `state.db` on disk → fresh
-   install, skip to step 4. An existing `state.db` whose version cannot
-   be read, or reads as anything but a whole number (0 or more), fails
-   the install (exit 5) before any sentinel is written or the store is
-   opened; see below.
-3. **Write the sentinel** `{"from":<actual>,"to":<target>}` beside
-   state.db — **skipped when `from == to`** (already current), on a
-   fresh install, and when the probe below has already run the
-   migration. `<target>` is the schema version the new binary
-   requires; the install learns it from the binary's own migration
-   refusal message. A probe `agent-director list` against the existing
-   store decides, by its `err_name`: an open or `ErrSchemaMismatch`
-   needs no authorization; but when a sentinel was already beside a
-   state.db above v0 before an open, the probe's open may have run its
-   migration, so step 3 reads the version again and, if it rose,
-   reports `migration vN→vT ran at the probe (agent-director list), ...`
-   as the migration step 5 verifies (a read that gives no version stops
-   the install, exit 5); `ErrSchemaMigrationRequired` names
-   `<target>` and gets the sentinel; `ErrConfigMalformed` stops the
-   install (exit 5, no sentinel; see "A refused config file" below);
-   any other error writes no sentinel, prints `could not tell whether a
-   migration is needed (agent-director list failed: <err_name>)` and
-   goes on to step 4. The sentinel goes through a temp file that
-   `mktemp` creates beside it (`migrate-authorized.tmp.XXXXXX`) and is
-   moved into place; if `mktemp` cannot create that file, the install
-   stops (exit 5, no migration authorized; see "No temp file for the
-   sentinel" below).
-4. **Open the store once** with `agent-director list` (a store-opening
-   verb — *not* `help`/`version`, which are DB-free per SR-4). The
-   authorized migration runs and the sentinel is consumed; a fresh
-   install creates state.db at the current version. `ErrConfigMalformed`
-   here stops the install (exit 5) with the config advice; see "A
-   refused config file" below.
-5. **Check state.db is there.** The open succeeded, so no file at
-   state.db's path fails the install (exit 5); see "No store after the
-   store open" below. Then, when a migration was expected (step 3
-   authorized one, or its probe ran one), **verify** the post-open
-   `user_version` equals the target, and **fail the install loudly**
-   (exit 5) if it does not; see "A version mismatch after the store
-   open" below. An unreadable version also fails (exit 5) when a
-   migration was expected; with none expected it is a warning and the
-   install carries on. See below.
-6. **A brief hook-failure window is accepted.** For the few seconds
-   between the binary swap and the successful step-4 open, a hook that
-   opens the store sees the migration error; it clears once step 4
-   finishes.
+1. **Install both new binaries** atomically. An old-directory move runs first;
+   config/template migration follows the swap, before the store upgrade.
+2. **Read the actual `user_version`**, through SQLite and its WAL with
+   `[store] busy_timeout_ms`, ignoring `~/.sqliterc`. A missing DB is a fresh
+   install. An existing DB whose read fails or is not a whole number stops
+   with exit 5 before authorization; it is never treated as a fresh install.
+3. **Probe and authorize the exact transition.** `agent-director list`
+   supplies the target through `ErrSchemaMigrationRequired`. Write
+   `{"from":<actual>,"to":<target>}` beside the resolved DB, using a temporary
+   file and atomic move. A preexisting sentinel does not let this probe run
+   the native-input cutover. The retained probe-version recheck handles any
+   successful older migration path; current/no-DB cases need no sentinel.
+   `ErrConfigMalformed` stops before authorization. Other errors authorize
+   nothing and are reported by the following open. A sentinel-temp failure
+   stops with exit 5; retain the report and correct its cause.
+4. **Run the authorized open.** A pending migration without committed input
+   authority requires the journal flags above. The installer invokes the
+   installed `agent-director-admin --store-path <actual-db> migrate-journal`
+   with maintenance/root assertions, the new backup directory and additional
+   roots. It backs up before any schema hop, imports under the maintenance
+   boundary, commits and verifies SQLite authority, then attempts retirement.
+   The installer settles a failed attempt itself: it puts the previous install
+   back when the previous install's store is unchanged and the previous release predates the
+   cutover
+   (`ErrJournalMigrationRefused`, the install as before the run), or else
+   leaves this release installed to complete forward
+   (`ErrJournalMigrationIncomplete`); a put-back that cannot finish ends
+   `ErrSchemaVerifyFailed`. Each ends with exit 5; keep the boundary and follow
+   [Exit 5's cause line](#exit-5s-cause-line). Run one upgrade at a time. Ordinary
+   `agent-director list` handles a fresh or already-current store. `help` and
+   `version` do not open it.
+5. **Verify the result.** A missing DB after successful open fails. When a
+   migration was expected, its post-open `user_version` must equal the target;
+   a mismatch or unreadable version fails with exit 5. With none expected,
+   an unreadable post-open version is a warning. The administrator's
+   `authority: "sqlite"` means committed authority was verified;
+   `retirement_pending: true` does not return authority to files.
+6. **Release the maintenance boundary only after verification.** Restart
+   compatible callers; do not permit old hooks, helpers or launchers during
+   the swap or cutover. A failed verification keeps the boundary in place.
 
 ### Recovering an older-than-binary DB (the migration path)
 
-If a Claude session reports `ErrSchemaMigrationRequired` — i.e.
-state.db is OLDER than the installed binary — the recovery is simply
-**re-run this install skill** (or `bash install.sh` with your usual
-flags). The install reads the current version, writes the one-shot
-sentinel, opens the store to migrate, and verifies the result. There
-is no `rm state.db` step and no data loss: the migration preserves
-your Spawn history. If the install's step 5 fails verification, do NOT
-delete state.db. If it reports `actual user_version: <unreadable>`,
-see "An unreadable schema version" below. If it reports a readable
-version that differs from the expected one, see "A version mismatch
-after the store open" below. If it reports `state.db was not created by
-the store open`, see "No store after the store open" below.
-
-An operator can also author the sentinel by hand (write the JSON
-above, then run any store-opening verb once), but re-running the
-install is the supported path and does the version reads and
-verification for you.
+For `ErrSchemaMigrationRequired`, rerun this install from an independent
+shell with the original flags and the journal maintenance/root/backup flags
+above. Keep failed backups and choose a new absolute directory for each
+attempt. The installer reads the actual version, authorizes it and verifies
+the result; neither a hand-authored sentinel nor an ordinary opener suffices.
+Never delete the DB or reset its version. For an
+`ErrJournalMigrationIncomplete` whose cutover is `committed` or `unknown`,
+follow the direct administrator-verification retry in
+[Operator actions](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal).
+For a step-5 unreadable version, readable mismatch or missing DB, use the
+corresponding sections below while preserving the maintenance boundary.
 
 ### An unreadable schema version
 
@@ -2112,8 +2029,9 @@ that is not the target, the install exits 5 with `schema migration
 verification FAILED`, the `expected user_version: <T>` and `actual
 user_version: <A>` lines, advice, and last the cause line
 `install.sh: err_name=ErrSchemaVerifyFailed`: a human decides what
-follows. The store open (`agent-director
-list`) succeeded, and a successful open leaves state.db at `v<T>`: any
+follows. The selected store open succeeded (ordinary `list` or the
+administrator cutover in [the six-step flow](#the-six-steps-installsh-performs)),
+and a successful open leaves state.db at `v<T>`: any
 authorized migration has run, and its sentinel is consumed. Yet the
 read after the open gives `v<A>`, so state.db changed after the open,
 or the read is wrong. Do NOT delete state.db.
@@ -2134,7 +2052,7 @@ or the read is wrong. Do NOT delete state.db.
 
 ### No store after the store open
 
-When step 4's store open (`agent-director list`) succeeds but step 5
+When step 4's selected store open succeeds but step 5
 finds no file at state.db's path, the install exits 5 with:
 
     install.sh: state.db was not created by the store open
@@ -2158,17 +2076,20 @@ finds no file at state.db's path, the install exits 5 with:
 
 With `[store] db_path` set, the headline and the `state.db:` line name
 that store's path (see "Which database install.sh checks" above).
-agent-director takes its store's path only from `[store] db_path` in
-`~/.config/agent-director/config.toml`: no `AGENT_DIRECTOR_*` environment
-variable moves it, and install.sh passes it no store-path flag. install.sh
-read `db_path` in pre-flight, so a missing store means one of: `db_path`
-changed after pre-flight, something removed or moved the store after the
-open, or the installed agent-director opens its store somewhere other
-than where install.sh expects. The cause line names
+The quoted diagnostic's `list` and config-resolution explanation applies to
+the ordinary branch: it receives no store-path flag and resolves `[store] db_path`
+again when opening. The administrator cutover receives the captured path
+explicitly, so a later config change cannot redirect that open. Removal or
+movement after either selected open can leave the expected path missing.
+The cause line names
 `ErrSchemaVerifyFailed`, which needs a human: only the operator knows
 whether the config was edited or a cleanup ran. The new binaries are
 already in place (and the PATH symlink, if any), but the hooks were not
 merged and MCP was not registered.
+
+The config-path steps below describe the ordinary branch. For the administrator
+cutover, [the canonical operator procedure](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal)
+owns verification and recovery.
 
 1. Check `db_path` in the config file the report names. If it changed
    after the install started, agent-director opened its store at the new
@@ -2291,10 +2212,16 @@ forward, and the install will not downgrade a DB.
 **state.db has no valid store id** (the error says "store has no
 valid store id"): the DB is at the binary's version but its
 `store_meta` table or `store_id` row is missing or malformed. Only a
-hand edit of state.db leaves it that way. Restore the copy of
-state.db (with its `-wal` and `-shm` files) taken before the install
-(install.sh does not make one), then re-run the install so it
-migrates that copy. Writes made since the install are lost.
+hand edit of state.db leaves it that way. Follow
+[Going back to the previous release](#going-back-to-the-previous-release)
+with the matching stopped-writer recovery set; a later backup cannot repair
+the missing identity. Do not manufacture a store id.
+
+**Native-input authority is missing or mismatched:** preserve the DB and
+input evidence and keep all writers stopped. Do not add or edit the authority
+marker, reset the version, or fall back to legacy files. Follow the
+[operator runbook](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal)
+for administrator verification or matching pre-upgrade restoration.
 
 **Authorized migration refuses eligibility metadata** (the error names
 "v10→v11 incompatible main-turn eligibility column" or "invalid main-turn
@@ -2359,7 +2286,9 @@ independently of state.db in every case.
 
 An earlier release kept its files in `~/.agent-director`. This release keeps
 them in `~/.config/agent-director`, and `install.sh` moves the old directory,
-once, on the first upgrade. Check for it before the first question:
+once, on the first upgrade. Its binary is `~/.agent-director/bin/agent-director`
+and its store `~/.agent-director/state.db`, or the `[store] db_path` its
+`config.toml` names. Check for it before the first question:
 
 ```sh
 ls -ld ~/.agent-director ~/.config/agent-director
@@ -2399,101 +2328,8 @@ checked. Delete the kept directory once the upgrade is confirmed.
 
 ## Going back to the previous release
 
-For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10, v10→v11, v11→v12, v12→v13, v13→v14 and v14→v15,
-the old-layout steps below do not apply. Before upgrading, stop agents, servers and callers
-and keep a copy of the actual store (`[store] db_path` when set), including its `-wal` and
-`-shm` files.
-To roll back, stop them again, restore that pre-upgrade copy and install the
-previous release with its own `install.sh` and the original install flags.
-Restore the store with its companion files, removing a `-wal` or `-shm`
-that the copy lacks, as in step 4 below. This loses all writes made since
-the backup. The installer does not make this backup; a binary swap cannot
-make a v15 store readable by a v9, v10, v11, v12, v13 or v14 binary. There is
-no supported in-place downgrade from v15. The tested v12→v11 family-history
-recipe applies only to a genuine family-only v12 store and cannot operate
-on v13, v14 or v15; see the migration guide's emergency downgrade recipe. No supported
-in-place reverse path crosses v11→v10 or v10→v9. A copy made after migration
-cannot replace the pre-upgrade backup. Without a pre-upgrade copy, stop
-and obtain human help.
-
-The numbered procedure below applies only to an upgrade that moved
-`~/.agent-director` to `~/.config/agent-director` and retained a
-`~/.agent-director.pre-move-*` directory. Whatever was written since that
-upgrade is lost: the previous release reads the directory as it was before
-the move.
-
-1. Stop whatever starts agents, then every agent, every `serve` and every
-   caller. Remove the schedule `install.sh --schedule` added, if any, because
-   its entries run the binary in the directory step 2 sets aside: delete the
-   crontab lines tagged `agent-director-schedule` (`crontab -e`), or disable
-   the timers and delete the four units:
-
-   ```sh
-   systemctl --user disable --now agent-director-find-missing.timer agent-director-expire.timer
-   rm -- ~/.config/systemd/user/agent-director-find-missing.service ~/.config/systemd/user/agent-director-find-missing.timer ~/.config/systemd/user/agent-director-expire.service ~/.config/systemd/user/agent-director-expire.timer
-   systemctl --user daemon-reload
-   ```
-
-   (Use `$XDG_CONFIG_HOME/systemd/user/` when that is set to an absolute path.
-   `uninstall.sh` would also remove the binaries and hooks: do not run it for
-   this.)
-2. Set the new directory aside:
-
-   ```sh
-   mv -- ~/.config/agent-director ~/.config/agent-director.after-upgrade-$(date +%Y%m%d-%H%M%S)
-   ```
-
-3. If `~/.agent-director` exists again (something recreated it since the
-   upgrade), set it aside too. Then rename the newest kept directory back. It
-   holds the store, `config.toml` and templates as they were before the upgrade.
-
-   ```sh
-   mv -- ~/.agent-director ~/.agent-director.recreated-$(date +%Y%m%d-%H%M%S)
-   ls -d ~/.agent-director.pre-move-*
-   mv -- ~/.agent-director.pre-move-<newest> ~/.agent-director
-   ```
-
-   Run the first command only when the old path exists. The newest name is the
-   one with the latest timestamp.
-4. A store kept outside AD's directory (`[store] db_path`) was migrated in
-   place by the upgrade. Put back the copy made before the upgrade: `state.db`
-   with its `-wal` and `-shm`, deleting a `-wal` or `-shm` the copy lacks. Skip
-   this when the store was inside the directory.
-5. In `~/.claude/settings.json`, remove only the entries that hold a hook
-   command starting with `~/.config/agent-director/bin/agent-director` (written
-   out with your home directory). Leave every other entry. Check the result is
-   valid JSON.
-6. From the directory the upgrade ran in (for a `local` registration made
-   inside a git repository, any directory of that repository), remove AD's MCP
-   registration, if there is one, in the scope `claude mcp get agent-director`
-   shows. A name registered in several scopes needs this once per scope:
-
-   ```sh
-   claude mcp get agent-director
-   claude mcp remove agent-director -s <scope>
-   ```
-
-7. From the same directory, install the previous release with that release's
-   own `install.sh`, fetched from its tag, with the flags the original install
-   used (`--register-mcp`, `--no-hooks`, `--symlink-dir` and the rest). It puts
-   back its help hooks. Its `--register-mcp` registers nothing with the current
-   Claude Code (it prints `registration failed (continuing anyway)`), so when
-   step 6 showed a registration, add it back by hand, in the scope step 6
-   showed (`local`, `user` or `project`), with the old path:
-
-   ```sh
-   claude mcp add agent-director -s <scope> -- ~/.agent-director/bin/agent-director serve --stdio
-   claude mcp get agent-director
-   ```
-
-   This release's `install.sh` cannot install the previous release: it refuses
-   an earlier release's binaries.
-8. Change back by hand what was changed by hand to the new path after the
-   upgrade: help hooks in the `settings.json` of other `CLAUDE_CONFIG_DIR`
-   folders, Codex MCP and help entries, scripts, `$PATH` entries and an MCP
-   registration made by hand.
-9. Start the caller's previous version.
-
-Delete the `after-upgrade` and `recreated` directories once the previous
-release is confirmed working; `uninstall.sh --purge` removes them.
+Follow [Going back to the previous release](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#going-back-to-the-previous-release)
+in the operator runbook, with the operator's explicit authorization. It owns
+the current-layout restore procedure and all nine old-layout steps, including
+the complete recovery set, later-write loss and uncertain-input reconciliation
+before any older runtime restarts. Keep the maintenance boundary throughout.

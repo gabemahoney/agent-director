@@ -1,13 +1,14 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 )
 
-// schemaDDL is the canonical schema v15 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v20 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -100,7 +101,11 @@ import (
 // claude_capacity provenance without backfilling existing sessions or usage.
 // v14 adds the display observation and ownership columns; v15 (b.x72) adds
 // nullable codex_turn and codex_turn_ended, the Codex turns the row's hooks
-// and reads recorded (codex_turn.go), with no backfill.
+// and reads recorded (codex_turn.go), with no backfill. v19 adds the
+// nullable main-field evidence state_evidence, settled_evidence and
+// process_evidence (confirmations.go), with no backfill; v20 adds the
+// nullable display_evidence (confirmations.go) and observation_writer, the
+// last observer commit's token (display.go), with no backfill.
 // The column order matches the corresponding migration steps.
 //
 // subagents holds one row per entry, a record (confirmed) or an observation
@@ -122,7 +127,7 @@ import (
 //
 // Both cascade from spawns, so expire's guarded delete and the admin delete
 // remove a row's entries and claimable launches with the row.
-const schemaDDL = cursorRuntimeDDL + `
+const schemaDDL = cursorRuntimeDDL + inputDeliveryDDL + cursorObligationsDDL + `
 CREATE TABLE IF NOT EXISTS spawns (
     instance_id                TEXT PRIMARY KEY,
     parent_id                  TEXT REFERENCES spawns(instance_id) ON DELETE SET NULL,
@@ -177,7 +182,12 @@ CREATE TABLE IF NOT EXISTS spawns (
     pane_since_ms              INTEGER,
     pane_epoch                 INTEGER,
     codex_turn                 TEXT,
-    codex_turn_ended           TEXT
+    codex_turn_ended           TEXT,
+    state_evidence             TEXT,
+    settled_evidence           TEXT,
+    process_evidence           TEXT,
+    display_evidence           TEXT,
+    observation_writer         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -219,6 +229,11 @@ CREATE TABLE IF NOT EXISTS permission_requests (
     admitted_at INTEGER,
     fallback_at INTEGER,
     fallback_basis TEXT,
+    decision_origin TEXT,
+    response_state TEXT,
+    owner_life_number INTEGER,
+    owner_session_id TEXT,
+    owner_cursor_connection TEXT,
     UNIQUE(instance_id, request_token)
 );
 CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(instance_id, decision);
@@ -291,6 +306,8 @@ type migrationStep struct {
 	from int
 	// apply runs the DDL and stamps user_version = from+1 in one tx.
 	apply func(db *sql.DB) error
+	// inputCutover requires a live administrator window, not just a sentinel.
+	inputCutover bool
 }
 
 // migrationSteps is the ordered registry of single-version upgrades. Steps are
@@ -314,6 +331,11 @@ var migrationSteps = []migrationStep{
 	{from: 12, apply: migrateV12toV13},
 	{from: 13, apply: migrateV13toV14},
 	{from: 14, apply: migrateV14toV15},
+	{from: 15, inputCutover: true, apply: migrateV15toV16},
+	{from: 16, apply: migrateV16toV17},
+	{from: 17, apply: migrateV17toV18},
+	{from: 18, apply: migrateV18toV19},
+	{from: 19, apply: migrateV19toV20},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
@@ -336,6 +358,10 @@ var migrationSteps = []migrationStep{
 // authorization sentinel (see authorizeMigration) — the DB itself is never
 // touched on a refused open, preserving byte-identity.
 func ensureSchema(db *sql.DB, dbPath string) error {
+	return ensureSchemaWithInputWindow(db, dbPath, nil)
+}
+
+func ensureSchemaWithInputWindow(db *sql.DB, dbPath string, window *inputMigrationWindow) error {
 	var version int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("store: read user_version: %w", err)
@@ -347,8 +373,7 @@ func ensureSchema(db *sql.DB, dbPath string) error {
 	case version == 0:
 		return createSchema(db)
 	case version > schemaVersion:
-		return fmt.Errorf("%w: found user_version=%d, want %d",
-			ErrSchemaMismatch, version, schemaVersion)
+		return schemaNewerThanRelease(version)
 	default:
 		// Older-than-binary: never auto-migrate. Require an administrator
 		// authorization sentinel that exact-matches this DB's actual version
@@ -356,9 +381,16 @@ func ensureSchema(db *sql.DB, dbPath string) error {
 		// writes. authorizeMigration returns the refusal error verbatim on
 		// any miss.
 		if err := authorizeMigration(dbPath, version); err != nil {
-			return err
+			return withInputMigrationCause(CauseAuthorizationMissing, err)
 		}
-		if err := runMigrationChain(db, version); err != nil {
+		// Inspect the complete chain before any hop: a preexisting sentinel
+		// is never a route around the native-journal maintenance window.
+		for _, step := range migrationSteps {
+			if step.from >= version && step.inputCutover && window == nil {
+				return buildMigrationRefusal(version)
+			}
+		}
+		if err := runMigrationChainWithInputWindow(db, version, window); err != nil {
 			return err
 		}
 		// Migration committed. Consume the authorization as part of the same
@@ -370,12 +402,29 @@ func ensureSchema(db *sql.DB, dbPath string) error {
 	}
 }
 
+// schemaNewerThanRelease refuses a store this binary's schema predates.
+func schemaNewerThanRelease(version int) error {
+	return withInputMigrationCause(CauseStoreNewerThanRelease, fmt.Errorf("%w: found user_version=%d, want %d",
+		ErrSchemaMismatch, version, schemaVersion))
+}
+
 // runMigrationChain applies single-version migration steps in ascending order
 // until the DB reaches schemaVersion. It is only reached after authorization
 // has been granted. Each step is individually transactional; if a step fails
 // the chain aborts with the DB stamped at the last successfully-committed
 // version, and the open fails.
 func runMigrationChain(db *sql.DB, from int) error {
+	return runMigrationChainWithInputWindow(db, from, nil)
+}
+
+// runMigrationChainWithInputWindow is runMigrationChain inside an
+// administrator's window, which the cutover step requires. The window also
+// records what the attempt committed: until the cutover commit begins, the end
+// of its work context stops the chain before the next step, and each ordinary
+// step's commit is recorded (inputMigrationWindow.applyStep); once it began,
+// the remaining steps run to completion.
+func runMigrationChainWithInputWindow(db *sql.DB, from int, window *inputMigrationWindow) error {
+	window.setStage(inputStageChain)
 	version := from
 	for version < schemaVersion {
 		step, ok := migrationStepFrom(version)
@@ -386,13 +435,41 @@ func runMigrationChain(db *sql.DB, from int) error {
 			return fmt.Errorf("%w: no migration step from user_version=%d toward %d",
 				ErrSchemaMismatch, version, schemaVersion)
 		}
-		if err := step.apply(db); err != nil {
+		var err error
+		if step.inputCutover {
+			err = migrateInputJournal(db, window, version+1)
+		} else {
+			err = window.applyStep(db, step)
+		}
+		if err != nil {
 			return err
 		}
 		version++
 	}
+	window.setStage(inputStageOpen)
 	return nil
 }
+
+// commitMigrationStep commits an ordinary schema step. A COMMIT error keeps
+// its text and is marked errCommitUnconfirmed: the step may have landed. Every
+// ordinary step commits through it; one that commits any other way turns an
+// unconfirmed COMMIT into a failed step that claims nothing committed.
+func commitMigrationStep(tx *sql.Tx) error {
+	if err := tx.Commit(); err != nil {
+		return stepCommitError{err}
+	}
+	return nil
+}
+
+// stepCommitError is a schema step's COMMIT error: its text, matched by
+// errors.Is as errCommitUnconfirmed.
+type stepCommitError struct{ err error }
+
+func (e stepCommitError) Error() string { return e.err.Error() }
+
+func (e stepCommitError) Unwrap() error { return e.err }
+
+func (e stepCommitError) Is(target error) bool { return target == errCommitUnconfirmed }
 
 // migrationStepFrom returns the registered step that upgrades away from the
 // given version, if one exists.
@@ -414,35 +491,64 @@ func buildMigrationRefusal(current int) error {
 		ErrSchemaMigrationRequired, current, schemaVersion)
 }
 
-// createSchema runs the v-current (schemaVersion) DDL, inserts the store's
-// store_id when none exists (SR-5.4), and stamps user_version, in a single tx.
-// It may run on a DB whose tables already exist (user_version stamped back to
-// 0); the IF NOT EXISTS DDL and the guarded insert then keep the existing
-// tables and id.
-// PRAGMA user_version cannot take a bound parameter, so the version is
-// interpolated from a trusted package constant — never user input.
+// createSchema creates only a genuinely empty database. A reset stamp on an
+// existing schema cannot bypass the administrator-only journal import.
 func createSchema(db *sql.DB) error {
-	tx, err := db.Begin()
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("store: begin schema tx: %w", err)
+		return err
 	}
-	if _, err := tx.Exec(schemaDDL); err != nil {
-		_ = tx.Rollback()
+	defer conn.Close()
+	if err := inputDurability(ctx, conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	defer rollbackConn(ctx, conn)
+	var version, count int
+	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	// Another fresh opener may have completed while this one waited.
+	if version == schemaVersion {
+		return nil
+	}
+	if version != 0 {
+		return ErrSchemaMismatch
+	}
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return withInputMigrationCause(CauseNativeInputStateInconsistent, fmt.Errorf("%w: existing schema has a reset version; administrator inspection is required", ErrSchemaMismatch))
+	}
+	if _, err := conn.ExecContext(ctx, schemaDDL); err != nil {
 		return fmt.Errorf("store: apply schema: %w", err)
 	}
-	if err := insertStoreIDOnce(tx); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("store: create schema: %w", err)
+	id, err := newStoreID()
+	if err != nil {
+		return err
 	}
-	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("store: set user_version: %w", err)
+	if _, err := conn.ExecContext(ctx, insertStoreIDOnceSQL, id); err != nil {
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit schema tx: %w", err)
+	if _, err := conn.ExecContext(ctx, `INSERT INTO store_meta(key,value) VALUES(?,?)`, inputAuthorityKey, inputAuthorityVersion+id); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("store: commit fresh schema: %w", err)
 	}
 	return nil
 }
+
+// Direct step calls have no administrator exclusion boundary. The authorized
+// chain passes its verified window to migrateInputJournal instead.
+func migrateV15toV16(db *sql.DB) error { return migrateInputJournal(db, nil, 16) }
 
 // migrateV1toV2 upgrades a v1 database to v2 inside a single transaction.
 // The permission_requests table is DROP+CREATE — v1 rows are not preserved
@@ -482,7 +588,7 @@ CREATE INDEX idx_permission_requests_decision_decided_at ON permission_requests(
 		_ = tx.Rollback()
 		return fmt.Errorf("store: v1→v2 stamp user_version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitMigrationStep(tx); err != nil {
 		return fmt.Errorf("store: commit v1→v2 migration tx: %w", err)
 	}
 	return nil
@@ -534,7 +640,7 @@ func migrateV2toV3(db *sql.DB) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("store: v2→v3 stamp user_version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitMigrationStep(tx); err != nil {
 		return fmt.Errorf("store: commit v2→v3 migration tx: %w", err)
 	}
 	return nil
@@ -571,7 +677,7 @@ CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(claud
 		_ = tx.Rollback()
 		return fmt.Errorf("store: v3→v4 stamp user_version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitMigrationStep(tx); err != nil {
 		return fmt.Errorf("store: commit v3→v4 migration tx: %w", err)
 	}
 	return nil
@@ -656,7 +762,7 @@ func migrateV4toV5(db *sql.DB) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("store: v4→v5 stamp user_version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitMigrationStep(tx); err != nil {
 		return fmt.Errorf("store: commit v4→v5 migration tx: %w", err)
 	}
 	return nil
@@ -714,7 +820,7 @@ func migrateV5toV6(db *sql.DB) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("store: v5→v6 stamp user_version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitMigrationStep(tx); err != nil {
 		return fmt.Errorf("store: commit v5→v6 migration tx: %w", err)
 	}
 	return nil
@@ -869,7 +975,7 @@ func migrateV6toV7(db *sql.DB) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("store: v6→v7 stamp user_version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitMigrationStep(tx); err != nil {
 		return fmt.Errorf("store: commit v6→v7 migration tx: %w", err)
 	}
 	return nil
@@ -950,7 +1056,7 @@ func migrateV7toV8(db *sql.DB) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("store: v7→v8 stamp user_version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitMigrationStep(tx); err != nil {
 		return fmt.Errorf("store: commit v7→v8 migration tx: %w", err)
 	}
 	return nil
@@ -1169,7 +1275,7 @@ func migrateV8toV9(db *sql.DB) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("store: v8→v9 stamp user_version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitMigrationStep(tx); err != nil {
 		return fmt.Errorf("store: commit v8→v9 migration tx: %w", err)
 	}
 	return nil

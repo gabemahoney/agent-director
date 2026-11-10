@@ -46,6 +46,9 @@ func TestUninstallScheduleCron(t *testing.T) {
 		after   string // the crontab after; "" none left
 	}{
 		{name: "only-the-tagged-lines-go", crontab: func(h *moveHome) string { return foreign + schedCronBlock(h, "") }, after: foreign},
+		{name: "legacy-commands-use-the-same-marker", crontab: func(h *moveHome) string {
+			return foreign + strings.ReplaceAll(schedCronBlock(h, ""), " sweep ", " find-missing ")
+		}, after: foreign},
 		{name: "foreign-lines-between-ours-stay-in-order", crontab: func(h *moveHome) string {
 			b := strings.SplitAfter(schedCronBlock(h, ""), "\n")
 			return b[0] + "MAILTO=me\n" + b[1] + "0 * * * * /usr/bin/other\n" + b[2]

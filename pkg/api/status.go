@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -17,6 +19,9 @@ type StatusStore interface {
 // CLI.
 type StatusResult struct {
 	StateDetail
+	// IntegrationMode identifies the fixed pane-only capability contract;
+	// omitted for agents with native integration.
+	IntegrationMode string `json:"integration_mode,omitempty"`
 	// TmuxSessionName is present while a Displayed State is shown
 	// (DisplayedState).
 	TmuxSessionName string `json:"tmux_session_name,omitempty"`
@@ -35,8 +40,15 @@ type StatusResult struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// ProcessLiveness is alive, exited or unknown: the recorded agent
+	// process at its recorded start identity, never its Helper, tmux session
+	// or descendants (Cursor: unknown, unsupported). Present on every result.
+	ProcessLiveness string `json:"process_liveness"`
+	// Confirmations is exactly the state, process_liveness and
+	// displayed_state records (Confirmation). family_state has none.
+	Confirmations Confirmations `json:"confirmations"`
 	// IdleScreenAvailability is whether idle_screen can apply to the row's
-	// agent: available for Claude, Codex or an absent agent, unavailable for Cursor
+	// agent: available for Claude, Codex or an absent agent, unavailable for Cursor or pane-only agents
 	// (IdleScreenAvailable, IdleScreenUnavailable). Present on every result;
 	// omitted only from the empty result of a failed call.
 	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
@@ -92,11 +104,34 @@ func Status(s StatusStore, v RelayView, instanceID string) (StatusResult, error)
 // settle (b.3ie). With a settle time, and a store that provides the settled
 // read, the state is the settled state (store.SettleRead's derivation, in the
 // read's own statement); launch_started_at still keys on the raw state. The
-// row, and each Codex descendant its family_state counts, whose rollout
-// records its turn's end is first moved to waiting (endCodexTurns). It never
-// waits.
+// selected row alone receives active checks. Family state reads stored
+// contributions without inspecting descendants. It never waits for a change.
 func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead, instanceID string) (StatusResult, error) {
-	endCodexTurns(s, instanceID)
+	if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithRecoveryTickSource("ad_recovery")
+	}
+	if _, checked := s.(*activeReadStore); !checked {
+		if _, rich := s.(permissionStatusReader); rich {
+			refresh := activeRefresh(s, settle, true)
+			rows, err := refresh([]string{instanceID}, nil)
+			if err != nil {
+				return StatusResult{}, err
+			}
+			if len(rows) == 0 {
+				return StatusResult{}, fmt.Errorf("%w: %s", store.ErrSpawnNotFound, instanceID)
+			}
+			run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, false)
+			out, err := statusSettledWithRelay(run, run.view, settle, instanceID)
+			finishErr := run.finish()
+			if err != nil {
+				return StatusResult{}, err
+			}
+			if finishErr != nil {
+				return StatusResult{}, finishErr
+			}
+			return out, nil
+		}
+	}
 	if r, ok := s.(permissionStatusReader); ok {
 		row, err := r.SpawnStatusRow(instanceID, settle)
 		if err != nil {
@@ -104,8 +139,10 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		}
 		display, family := displayed(s, v, settle, row)
 		out := StatusResult{State: row.ReportedState, StateDetail: stateDetail(display), FamilyState: family,
+			IntegrationMode:        integrationMode(row.Agent),
 			IdleScreenAvailability: idleScreenAvailability(row.Agent),
 			LaunchStartedAt:        launchStartedAt(row.State, row.LaunchStartedAtMillis), Context: contextOf(row.ContextEvidence())}
+		out.ProcessLiveness, out.Confirmations = mainFields(s, row, settle)
 		if out.DisplayedState != "" {
 			out.TmuxSessionName = row.TmuxSessionName
 		}
@@ -120,16 +157,17 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: reported, FamilyState: evidence.FamilyState, LaunchStartedAt: launchStartedAt(raw, launchMillis),
-			IdleScreenAvailability: idleScreenAvailability(evidence.Agent), Context: contextOf(evidence)}, nil
+		return withUnknownMainFields(StatusResult{State: reported, FamilyState: evidence.FamilyState, LaunchStartedAt: launchStartedAt(raw, launchMillis),
+			IntegrationMode:        integrationMode(evidence.Agent),
+			IdleScreenAvailability: idleScreenAvailability(evidence.Agent), Context: contextOf(evidence)}, evidence.Agent), nil
 	}
 	if sr, ok := s.(familyStatusReader); ok {
 		reported, raw, family, launchMillis, err := sr.SpawnStatusWithFamily(instanceID, settle)
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: reported, FamilyState: family, LaunchStartedAt: launchStartedAt(raw, launchMillis),
-			IdleScreenAvailability: idleScreenAvailability("")}, nil
+		return withUnknownMainFields(StatusResult{State: reported, FamilyState: family, LaunchStartedAt: launchStartedAt(raw, launchMillis),
+			IdleScreenAvailability: idleScreenAvailability("")}, ""), nil
 	}
 
 	if sr, ok := s.(settledStatusReader); ok && settle.SettleMs > 0 {
@@ -137,20 +175,27 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, nil
+		return withUnknownMainFields(StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, ""), nil
 	}
 	if r, ok := s.(statusReader); ok {
 		state, launchMillis, err := r.SpawnStatus(instanceID)
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: state, LaunchStartedAt: launchStartedAt(state, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, nil
+		return withUnknownMainFields(StatusResult{State: state, LaunchStartedAt: launchStartedAt(state, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, ""), nil
 	}
 	state, err := s.GetSpawnState(instanceID)
 	if err != nil {
 		return StatusResult{}, err
 	}
-	return StatusResult{State: state, IdleScreenAvailability: idleScreenAvailability("")}, nil
+	return withUnknownMainFields(StatusResult{State: state, IdleScreenAvailability: idleScreenAvailability("")}, ""), nil
+}
+
+// withUnknownMainFields gives a narrow store's result, which reads no
+// evidence, its explicit unknown process_liveness and records.
+func withUnknownMainFields(out StatusResult, agent string) StatusResult {
+	out.ProcessLiveness, out.Confirmations = mainFields(nil, Spawn{Agent: agent}, store.SettleRead{})
+	return out
 }
 
 // Status returns the current state (pending/waiting/working/ask_user/
@@ -160,16 +205,17 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 // With [state] settle_ms set, the state is the settled state: a hook-written
 // change shows only once it has held that long, the last settled state until
 // then. Entering, leaving or moving between Displayed States instead times
-// settle_ms from the read that commits its candidate and shows from a later
-// successful read that commits it; until then displayed_state, since and
+// settle_ms from the read or sweep check that commits its candidate and shows from a later
+// successful check that commits it; until then displayed_state, since and
 // detail stay the previous display's. Terminal states and command-driven
 // changes show at once. family_state settles independently. The read never
 // waits.
 //
 // A working Claude or Codex row's own pane is captured on each read and its
-// fingerprint compared with the previous read's: once identical samples have
+// fingerprint compared with the previous sample's: once identical samples have
 // spanned the row's idle_screen timeout, the row reads state working with
-// displayed_state idle_screen. Nothing observes panes between reads.
+// displayed_state idle_screen. Find-missing checks also sample panes;
+// nothing else observes them.
 // idle_screen_availability says whether that can apply to the row's agent
 // (unavailable for Cursor). A permission request never yields a Displayed
 // State: its row reads check_permission however long it waits.
@@ -178,6 +224,12 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for instanceID.
+//   - [ErrStoreBusy]: a zero-wait store read selecting the row, or projecting
+//     its checked result, did not finish within its bound: another operation
+//     of this process held the store's operation slot or connection (another
+//     call's, or an earlier one of this call; an operation keeps them until it
+//     is disposed), another connection held a lock the read needed, or the
+//     read ran out of time.
 //
 // Nondeterminism: none with no settle time; with one, the state depends on
 // the clock. A Displayed State depends on the clock and on the pane samples.
@@ -185,22 +237,7 @@ func (c *Client) Status(instanceID string) (StatusResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return StatusResult{}, err
 	}
-	proof, err := c.reconcileCursorGateway(instanceID)
-	if err != nil {
-		return StatusResult{}, err
-	}
-	var proofs []store.CursorMissingProof
-	if proof != nil {
-		proofs = append(proofs, *proof)
-	}
-	out, err := statusSettledWithRelay(c.st.WithCursorMissingReads(proofs), c.relayView(), c.settleRead(), instanceID)
-	if err != nil {
-		return StatusResult{}, err
-	}
-	if err := c.persistCursorMissing(proofs); err != nil {
-		return StatusResult{}, err
-	}
-	return out, nil
+	return statusSettledWithRelay(c.st, c.relayView(), c.settleRead(), instanceID)
 }
 
 // Compile-time assertion that *store.Store provides every optional status

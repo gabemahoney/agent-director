@@ -14,7 +14,7 @@ import (
 )
 
 // find-missing's SR-11.4 note and tick rules on the tmux path: the lookup decides the note; entry, equal,
-// overwrite and provenance_conflict re-entry (AC-FM-03), stale notes cleared with no tmux call (AC-FM-13), and
+// overwrite and provenance_conflict re-entry (AC-FM-03), stale notes cleared from process proof (AC-FM-13), and
 // Skipped rows' "not called" notes.
 
 // ntPanePID is the unreadable pane process of an "evidence unknown" row.
@@ -266,8 +266,8 @@ func TestFindMissingStaleNoteClearedRealStore(t *testing.T) {
 				t.Errorf("row_version delta %d, note %v, since %v; want %d, NULL, NULL", d, now.LivenessNote, now.LivenessUnverifiedSince, delta)
 			}
 			assertNoteTick(t, before, "r", "")
-			if calls := rec.SocketCalls(); len(calls) != 0 {
-				t.Errorf("tmux calls = %+v; want none", calls)
+			if calls := rec.SocketCalls(); len(calls) != 2 || calls[0].Call != tmux.CallLookup || calls[1].Call != tmux.CallListPanes {
+				t.Errorf("tmux calls = %+v; want one shared lookup and pane listing for display observation", calls)
 			}
 		})
 	}

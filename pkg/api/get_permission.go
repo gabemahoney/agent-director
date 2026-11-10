@@ -63,7 +63,8 @@ type GetPermissionResult struct {
 	Decision *string `json:"decision"`
 	// DecisionReason is initially nil while undecided and for an allow from
 	// Decide. Validated Cursor execution proof fills a missing reason with
-	// tool_ran, preserving any earlier verdict and non-null reason. Pane answers,
+	// tool_ran, preserving any earlier verdict and non-null reason.
+	// This history supplies no response authority. Pane answers,
 	// including Cursor native choices, record a reason for either verdict; an
 	// outside unknown claim records pane_outside with no verdict. A nil pointer
 	// marshals to JSON null.

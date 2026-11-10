@@ -31,6 +31,17 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
+func TestPaneOnlyPublicErrors(t *testing.T) {
+	t.Parallel()
+	for name, err := range map[string]error{
+		"ErrExperimentalAgentDisabled":  api.ErrExperimentalAgentDisabled,
+		"ErrAgentCapabilityUnsupported": api.ErrAgentCapabilityUnsupported,
+		"ErrModelMissing":               api.ErrModelMissing,
+	} {
+		assertOneName(t, fmt.Errorf("wrapped: %w", err), name)
+	}
+}
+
 func TestPublicSurface(t *testing.T) {
 	t.Parallel()
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -55,10 +66,11 @@ func TestPublicSurface(t *testing.T) {
 		t.Fatalf("package 'api' not found under %s", pkgDir)
 	}
 
+	reachable := surfaceReachableTypes(apiPkg)
 	for _, f := range apiPkg.Files {
 		imp := buildSurfaceImportMap(f)
 		for _, decl := range f.Decls {
-			checkSurfaceDecl(t, decl, imp)
+			checkSurfaceDecl(t, decl, imp, reachable)
 		}
 	}
 }
@@ -283,9 +295,73 @@ func buildSurfaceImportMap(f *ast.File) map[string]string {
 	return m
 }
 
+// surfaceReachableTypes includes private receiver types returned or embedded by
+// the public API. An internal adapter's exported interface methods alone do not
+// make that adapter public; returning one would make its signatures checked.
+func surfaceReachableTypes(pkg *ast.Package) map[string]bool {
+	types := map[string]*ast.TypeSpec{}
+	methods := map[string][]*ast.FuncType{}
+	var roots []ast.Node
+	for _, f := range pkg.Files {
+		for _, decl := range f.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if !d.Name.IsExported() {
+					continue
+				}
+				if d.Recv == nil {
+					roots = append(roots, d.Type)
+				} else {
+					receiver := strings.TrimPrefix(surfaceExprStr(d.Recv.List[0].Type), "*")
+					methods[receiver] = append(methods[receiver], d.Type)
+				}
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					switch spec := spec.(type) {
+					case *ast.TypeSpec:
+						types[spec.Name.Name] = spec
+						if spec.Name.IsExported() {
+							roots = append(roots, spec)
+						}
+					case *ast.ValueSpec:
+						for _, name := range spec.Names {
+							if name.IsExported() {
+								roots = append(roots, spec)
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	reachable := map[string]bool{}
+	var visit func(ast.Node)
+	visit = func(n ast.Node) {
+		if n == nil {
+			return
+		}
+		ast.Inspect(n, func(node ast.Node) bool {
+			id, ok := node.(*ast.Ident)
+			if ok && types[id.Name] != nil && !reachable[id.Name] {
+				reachable[id.Name] = true
+				visit(types[id.Name].Type)
+				for _, method := range methods[id.Name] {
+					visit(method)
+				}
+			}
+			return true
+		})
+	}
+	for _, root := range roots {
+		visit(root)
+	}
+	return reachable
+}
+
 // checkSurfaceDecl inspects a top-level declaration and calls t.Errorf for
 // every internal/* path found in an exported signature.
-func checkSurfaceDecl(t *testing.T, decl ast.Decl, imp map[string]string) {
+func checkSurfaceDecl(t *testing.T, decl ast.Decl, imp map[string]string, reachable map[string]bool) {
 	t.Helper()
 	switch d := decl.(type) {
 	case *ast.FuncDecl:
@@ -294,6 +370,10 @@ func checkSurfaceDecl(t *testing.T, decl ast.Decl, imp map[string]string) {
 		}
 		label := d.Name.Name
 		if d.Recv != nil && len(d.Recv.List) > 0 {
+			receiver := strings.TrimPrefix(surfaceExprStr(d.Recv.List[0].Type), "*")
+			if !reachable[receiver] {
+				return
+			}
 			label = fmt.Sprintf("(%s).%s", surfaceExprStr(d.Recv.List[0].Type), d.Name.Name)
 		}
 		checkSurfaceFuncType(t, label, d.Type, imp)

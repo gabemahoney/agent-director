@@ -5,6 +5,11 @@
 // a test runs as an old install's agent-director: `standin serve` prints
 // "ready" and then runs until its stdin closes, as a Claude Code session's MCP
 // server runs until the session ends. Any other verb exits 0, printing nothing.
+// Cutover-outcome cases opt into exec delegation so no stand-in process is
+// left for the real administrator's live-mutator verification to refuse.
+// Non-exec delegation catches non-ignored INT/HUP and returns the delegate's
+// status. The cutover fixture can block the first post-attempt snapshot here;
+// TERM retains Go's default, even when the installer ignores it.
 package main
 
 import (
@@ -12,6 +17,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"os/signal"
+	"syscall"
 )
 
 // Set with -ldflags "-X main.<name>=<value>"; configDir is left out of the
@@ -26,6 +34,88 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "standin: no verb")
 		os.Exit(2)
+	}
+	// Scheduling cases inspect every invocation, including accidental recovery
+	// probes. All other move-fixture consumers retain their original behavior.
+	if path := os.Getenv("SCHED_TEST_LOG"); path != "" {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Fprintln(f, os.Args[1])
+		f.Close()
+	}
+	if os.Args[1] == "help" {
+		switch os.Getenv("SCHED_TEST_HELP") {
+		case "new":
+			fmt.Println(`{"verbs":[{"name":"sweep"},{"name":"find-missing"}]}`)
+		case "legacy":
+			fmt.Println(`{"verbs":[{"name":"find-missing"}]}`)
+		case "malformed":
+			fmt.Println(`{"verbs":[{"name":"sweep"}]`)
+		case "failed":
+			fmt.Println(`{"verbs":[{"name":"sweep"}]}`)
+			os.Exit(1)
+		}
+		return
+	}
+	if delegate := os.Getenv("SCHED_TEST_DELEGATE"); delegate != "" {
+		if marker := os.Getenv("AD_TEST_REREAD_AFTER"); marker != "" {
+			if _, err := os.Stat(marker); err == nil {
+				for _, arg := range os.Args[1:] {
+					if arg == "snapshot-store" {
+						claim, err := os.OpenFile(marker+".reread", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+						if os.IsExist(err) {
+							break
+						}
+						if err != nil {
+							panic(err)
+						}
+						claim.Close()
+						ready, err := os.OpenFile(os.Getenv("AD_TEST_READY"), os.O_WRONLY, 0)
+						if err != nil {
+							panic(err)
+						}
+						if _, err = ready.WriteString("ready\n"); err != nil {
+							panic(err)
+						}
+						ready.Close()
+						goFile, err := os.Open(os.Getenv("AD_TEST_GO"))
+						if err != nil {
+							panic(err)
+						}
+						if _, err = io.ReadFull(goFile, make([]byte, 3)); err != nil {
+							os.Exit(96)
+						}
+						goFile.Close()
+					}
+				}
+			}
+		}
+		if os.Getenv("SCHED_TEST_DELEGATE_EXEC") == "1" {
+			if err := syscall.Exec(delegate, append([]string{delegate}, os.Args[1:]...), os.Environ()); err != nil {
+				panic(err)
+			}
+		}
+		interrupts := make(chan os.Signal, 2)
+		for _, sig := range []os.Signal{os.Interrupt, syscall.SIGHUP} {
+			if !signal.Ignored(sig) {
+				signal.Notify(interrupts, sig)
+			}
+		}
+		defer signal.Stop(interrupts)
+		cmd := exec.Command(delegate, os.Args[1:]...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			if e, ok := err.(*exec.ExitError); ok {
+				if ws, ok := e.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+					os.Exit(128 + int(ws.Signal()))
+				}
+				os.Exit(e.ExitCode())
+			}
+			panic(err)
+		}
+		return
 	}
 	switch os.Args[1] {
 	case "version", "--version", "-v":

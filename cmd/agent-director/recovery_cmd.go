@@ -10,7 +10,17 @@ import (
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// findMissingHandlerWith implements `agent-director find-missing`.
+// sweepHandlerWith implements the canonical all-agent check.
+func sweepHandlerWith(client *pkgapi.Client, args []string) error {
+	fs := flag.NewFlagSet("sweep", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	return writeSweep(client)
+}
+
+// findMissingHandlerWith implements the compatibility alias `find-missing`.
 // The verb takes no flags. Liveness comes only from each agent's process
 // start time, read by the Client's start-time reader (probe.NewProcChecker,
 // selected by build tags). Per-row store warnings route through the
@@ -24,12 +34,13 @@ func findMissingHandlerWith(client *pkgapi.Client, args []string) error {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 
-	result, err := client.FindMissing(context.Background())
+	return writeSweep(client)
+}
+
+func writeSweep(client *pkgapi.Client) error {
+	result, err := client.Sweep(context.Background())
 	if err != nil {
 		return writeVerbError(err)
-	}
-	if result.IDs == nil {
-		result.IDs = []string{}
 	}
 	return writeJSON(os.Stdout, result)
 }

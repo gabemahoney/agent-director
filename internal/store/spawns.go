@@ -34,10 +34,11 @@ const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"
 	AgentCursor = "cursor"
+	AgentDroid  = "droid"
 )
 
 // ErrRowAgentInvalid is returned, wrapped, by InsertPending and ResetForReuse
-// when the row's agent is not exactly claude, codex or cursor (SR-3.1, SR-3.6). The
+// when the row's agent is not exactly claude, codex, cursor or droid (SR-3.1, SR-3.6). The
 // check runs before anything is written, so the database is unchanged. It is
 // the store's own marker, not a catalogued sentinel, and is never aliased in
 // pkg/api (the public agent errors come with the agent input). Callers use
@@ -45,10 +46,10 @@ const (
 var ErrRowAgentInvalid = errors.New("store: row agent must be claude, codex or cursor")
 
 // validateRowAgent returns an error wrapping ErrRowAgentInvalid unless agent
-// is exactly AgentClaude, AgentCodex or AgentCursor. The empty string, which is the column
+// is exactly AgentClaude, AgentCodex, AgentCursor or AgentDroid. The empty string, which is the column
 // default and no agent, and any other spelling are refused.
 func validateRowAgent(agent string) error {
-	if agent != AgentClaude && agent != AgentCodex && agent != AgentCursor {
+	if agent != AgentClaude && agent != AgentCodex && agent != AgentCursor && agent != AgentDroid {
 		return fmt.Errorf("%w: %q", ErrRowAgentInvalid, agent)
 	}
 	return nil
@@ -209,7 +210,7 @@ type Spawn struct {
 	// Full-row reads fill it; SpawnStatusRow does not select it.
 	IdleSince string
 
-	// Agent is the schema-v9 agent column (SR-3.1): claude, codex or cursor.
+	// Agent is the schema-v9 agent column (SR-3.1): claude, codex, cursor or droid.
 	// Full-row reads and SpawnStatusRow fill it; InsertPending and
 	// ResetForReuse write it from a Spawn, refusing any other value
 	// (ErrRowAgentInvalid). Rows that existed at the v9 migration read claude.
@@ -258,7 +259,8 @@ type Spawn struct {
 	// the stored display observation or pane baseline: the observers' commits
 	// (ObserveNeedsIntelligence, ObserveIdleScreen) and the lifecycle writes
 	// that keep or clear the observation (hookStateSet on a raw-state change,
-	// immediateSettleSet, find-missing's check_permission repair).
+	// immediateSettleSet, find-missing's check_permission repair, and turn
+	// starts or adoptions through invalidatePaneSet).
 	// lockedObservationRow refuses a plan made from another version, and
 	// observationLanded recognises its own commit as the next one.
 	ObservationVersion int64
@@ -281,6 +283,21 @@ type Spawn struct {
 	PaneSinceMillis int64
 	PaneEpoch       int64
 
+	// StateEvidence, SettledStateEvidence, ProcessEvidence and
+	// DisplayEvidence are the stored main-field evidence (state_evidence,
+	// settled_evidence and process_evidence, schema v19, and
+	// display_evidence, schema v20; confirmations.go), "" for NULL or a
+	// non-text value: StateConfirmation, ProcessConfirmation and
+	// DisplayConfirmation decode and apply them. Full-row reads and
+	// SpawnStatusRow fill them. No write takes them from a Spawn except a
+	// failed launch's restore, which writes back only an applicable prior
+	// record (PriorStateEvidence, PriorProcessEvidence), and the observers'
+	// guards, which compare DisplayEvidence. They grant no command authority.
+	StateEvidence        string
+	SettledStateEvidence string
+	ProcessEvidence      string
+	DisplayEvidence      string
+
 	// ReportedState is the state status, get and list report (b.3ie): the
 	// settled state a read with a SettleRead that settles derives
 	// (SettleRead.stateExpr; SpawnStatusRow, GetSpawnSettled, ListSpawns with
@@ -290,6 +307,19 @@ type Spawn struct {
 	ReportedState string
 	// FamilyState is the independently settled aggregate of this stored family.
 	FamilyState string
+}
+
+// RawFields returns the full stored-row projection, clearing only the derived
+// presentation fields. It preserves State and every other field, including new
+// fields added to Spawn, so whole-row comparisons remain conservative by default.
+// Consumers comparing stored rows MUST use this projection instead of comparing
+// settled presentation or narrowing the comparison to RowSnapshot. This is a
+// value copy, not a fresh read or an authority check; callers still own their
+// raw-state and revision guards and any permitted preparation transitions.
+func (sp Spawn) RawFields() Spawn {
+	sp.ReportedState = ""
+	sp.FamilyState = ""
+	return sp
 }
 
 // The tracking flag every launch write stores (b.xjn, SR-9): the launch's
@@ -316,7 +346,7 @@ func boolInt(b bool) int {
 // (SRD §7.4 step 2). The caller is expected to have already validated the
 // row and minted any defaults — InsertPending does no semantic checks
 // beyond what SQLite's constraints enforce, and the row's agent: sp.Agent must
-// be exactly claude, codex or cursor, or it returns an error wrapping
+// be exactly claude, codex, cursor or droid, or it returns an error wrapping
 // ErrRowAgentInvalid before writing anything (SR-3.1, SR-3.6). The insert
 // writes the agent explicitly and leaves end_reported_at NULL.
 //
@@ -347,7 +377,11 @@ func boolInt(b bool) int {
 // the settle time. It also writes subagent_tracking (SR-9), the flag of the
 // launch it begins, from sp.Agent: 1 for claude, 0 for codex or cursor
 // (subagentTrackedParamSQL), and the timeout override from
-// sp.IdleScreenTimeoutSeconds (0 as NULL).
+// sp.IdleScreenTimeoutSeconds (0 as NULL). The spawn command's durable
+// admission is the new row's state record (confirmations.go): pending,
+// source caller_command, for life 0, the launch token it writes and the
+// initial permission epoch, stamped with the statement's clock. It records
+// no process evidence: nothing has probed the agent yet.
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -374,8 +408,9 @@ func (s *Store) InsertPending(sp Spawn) error {
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
             launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
             settled_state, state_changed_ms, agent, subagent_tracking,
-            idle_screen_timeout_seconds
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `, ?)
+            idle_screen_timeout_seconds, state_evidence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `, ?,
+            json_object('v', ?, 'life', 0, 'token', ?, 'epoch', 0, 'at', ` + nowMsSQL + `, 'src', ?, 'checked', ` + nowMsSQL + `))
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -396,7 +431,8 @@ func (s *Store) InsertPending(sp Spawn) error {
 		noPreTrust,
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
-	args = append(args, StatePending, sp.Agent, sp.Agent, positiveIntArg(sp.IdleScreenTimeoutSeconds))
+	args = append(args, StatePending, sp.Agent, sp.Agent, positiveIntArg(sp.IdleScreenTimeoutSeconds),
+		StatePending, nullableStringArg(sp.Identity.Token), EvidenceCallerCommand)
 	_, err = s.execFamily(sp.InstanceID, stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
@@ -507,8 +543,8 @@ func (s *Store) getSpawnSettled(instanceID string, r SettleRead, proofs []Cursor
 // other stored value scans normally). The v6 launch-owner columns
 // (launchOwnerColumns) come after lifeColumns, by the same rule, and the v7
 // idle_since, then the v9 agent, end_reported_at and subagent_tracking, and
-// the later columns after them, state_changed_ms and then the pane
-// observation columns (paneColumns) last.
+// the later columns after them, state_changed_ms, the pane observation
+// columns (paneColumns) and the main-field evidence (evidenceColumns) last.
 const spawnColumns = `
         instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, agent_args, relay_mode,
@@ -520,7 +556,8 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, observation_version, COALESCE(display_observation, ''), state_changed_ms, ` + paneColumns
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, observation_version, COALESCE(display_observation, ''), state_changed_ms, ` + paneColumns + `,
+        ` + evidenceColumns
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -569,6 +606,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		claudeCapacity  any
 		life            lifeScan
 		pane            paneScan
+		evidence        evidenceScan
 	)
 	dest := append([]any{
 		&sp.InstanceID, &sp.ParentID, &sp.State, &sp.CWD,
@@ -583,6 +621,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
 	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.ObservationVersion, &sp.DisplayObservation, &sp.StateChangedMillis)
 	dest = append(dest, pane.dest()...)
+	dest = append(dest, evidence.dest()...)
 	if reported {
 		dest = append(dest, &sp.ReportedState, &sp.FamilyState)
 	}
@@ -616,6 +655,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	sp.Snapshot, sp.Identity = life.result()
 	sp.RowVersion = sp.Snapshot.RowVersion
 	pane.apply(&sp)
+	evidence.apply(&sp)
 	return sp, nil
 }
 
@@ -945,12 +985,19 @@ func storeTimestamp(t time.Time) string {
 	return t.UTC().Format(storeTimestampLayout)
 }
 
+// endHeldLaunchEvidence is EndHeldLaunch's state record: tmux's answer
+// establishes ended.
+var endHeldLaunchEvidence, endHeldLaunchEvidenceArgs = currentStateEvidenceSet(StateEnded, EvidenceTmux)
+
 // endHeldLaunchSQL is EndHeldLaunch's one statement: the move to ended, an
 // immediate write (immediateStateSet, b.3ie), the launch start cleared and the
 // version advance, guarded by the insert's state, version and launch start
-// (SR-5.3, SR-5.6, SR-22.3).
-const endHeldLaunchSQL = `UPDATE spawns
+// (SR-5.3, SR-5.6, SR-22.3). tmux's answer proves nothing about an agent
+// process, so the process record is cleared.
+var endHeldLaunchSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
+        ` + endHeldLaunchEvidence + `,
+        ` + clearProcessEvidence + `,
         ended_at = ?,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
@@ -995,8 +1042,11 @@ const endHeldLaunchSQL = `UPDATE spawns
 // It emits no trail event (no ad.spawn.state_transition: only hook-driven
 // writes emit one, SR-14) and makes no tmux call. It is on the concrete
 // *Store only, like InsertPending and RecordLaunchIdentity (Appendix F.4).
+// tmux's duplicate-session answer is the evidence of ended it records
+// (source tmux, confirmations.go).
 func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int64, endedAt time.Time) (CondResult, error) {
-	args := append(immediateStateArgs(StateEnded), storeTimestamp(endedAt),
+	args := append(immediateStateArgs(StateEnded), endHeldLaunchEvidenceArgs...)
+	args = append(args, storeTimestamp(endedAt),
 		instanceID, StatePending, insertLaunchStartedAtMillis)
 	res, err := s.execFamily(instanceID, endHeldLaunchSQL, args...)
 	if err != nil {
@@ -1016,14 +1066,17 @@ func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int
 // carries (SR-3.6, SR-5.2): the six server and pane identity columns and the
 // version advance, as a SET list whose placeholders take adoptIdentityArgs in
 // order. AdoptIdentityIfUnchanged and AdoptIdentityIfSameLife share it; it
+// also invalidates pane evidence and any idle_screen candidate/display
+// (invalidatePaneSet), without changing permission_epoch. It
 // never names launch_token, tmux_socket, the state, the liveness columns,
 // launch_started_at, life_number, no_pre_trust or any request column.
-const adoptIdentitySet = `tmux_server_pid       = ?,
+var adoptIdentitySet = `tmux_server_pid       = ?,
         tmux_server_started   = ?,
         tmux_server_starttime = ?,
         pane_id               = ?,
         pane_pid              = ?,
         pane_starttime        = ?,
+        ` + invalidatePaneSet(`state`) + `,
         ` + rowVersionAdvance
 
 // adoptIdentityArgs returns the bound arguments for adoptIdentitySet, in its
@@ -1039,7 +1092,7 @@ func adoptIdentityArgs(id LaunchIdentity) []any {
 // adoptIdentitySQL is AdoptIdentityIfUnchanged's one statement: the shared
 // identity-column assignment, guarded by the row snapshot the verb examined
 // (SR-3.6, SR-5.3).
-const adoptIdentitySQL = `UPDATE spawns
+var adoptIdentitySQL = `UPDATE spawns
     SET ` + adoptIdentitySet + `
   WHERE instance_id = ? AND ` + snapshotMatchSQL
 
@@ -1053,9 +1106,12 @@ const adoptIdentitySQL = `UPDATE spawns
 // identity (tmux_server_pid, tmux_server_started, tmux_server_starttime) and
 // the agent's pane (pane_id, pane_pid, pane_starttime) from id, a zero value
 // as NULL (so an adoption that found no pane records only the server
-// identity), and advances row_version by exactly one. It never writes
-// id.Token, id.Socket, the state or any other column, and emits no trail
-// event: the verb records adopted on ad.provenance.disagree (SR-14).
+// identity), and advances row_version by exactly one. The same statement
+// invalidates pane evidence and any idle_screen candidate/display, without
+// changing permission_epoch. Its transaction refreshes family history and
+// drains any display exit, emitted only after commit. It never writes
+// id.Token, id.Socket or the state; the verb records adopted on
+// ad.provenance.disagree (SR-14).
 //
 // It returns CondApplied when the write applied; CondChanged, having written
 // nothing, when the row exists but its snapshot differs; CondAbsent when no
@@ -1069,7 +1125,7 @@ const adoptIdentitySQL = `UPDATE spawns
 // and expire never write an adoption.
 func (s *Store) AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot, id LaunchIdentity) (CondResult, error) {
 	args := append(adoptIdentityArgs(id), instanceID)
-	res, err := s.db.Exec(adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
+	res, err := s.execFamily(instanceID, adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
 	if err != nil {
 		return 0, fmt.Errorf("store: adopt identity: %w", err)
 	}

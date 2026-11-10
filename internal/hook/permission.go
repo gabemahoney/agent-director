@@ -27,7 +27,11 @@ const (
 // permissionPayload is the leniently-typed shape the hook payload
 // takes for PermissionRequest events. tool_name + tool_input are
 // preserved verbatim into the row so a future MCP audit can see what
-// was being asked; tool_use_id is recorded with them (b.146 rule 2).
+// was being asked; tool_use_id is recorded with them when the payload
+// carries one (b.146 rule 2). Claude Code's PermissionRequest carries none
+// (its hooks reference: PreToolUse's input without tool_use_id), so a
+// Claude request is recorded with none and no PostToolUse proves it gone
+// (b.wbs).
 type permissionPayload struct {
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
@@ -171,7 +175,8 @@ type relayRun struct {
 //  1. Its first write (b.146 rule 1): the request and the move to
 //     check_permission in ONE gated transaction (store InsertRelayRequest),
 //     carrying the hook's identity (hc.Self: pid, start time, pid
-//     namespace), the payload's tool_use_id and agent_id, and its settle
+//     namespace), the payload's tool_use_id (if any; permissionPayload) and
+//     agent_id, and its settle
 //     instant (rules 2, 14). Its wait for the store's write lock is cut at
 //     the hook's own deadline less the reserve (problem 1), and is zero when
 //     that has passed. When the lock is not taken in time, or the write
@@ -362,6 +367,11 @@ func (r *relayRun) parentCheck() error {
 	if !r.parentIsStarter() {
 		return errParentChanged
 	}
+	// Acquiring the write lock and checking the parent can consume the
+	// original budget. Never turn a late ack/timeout into a fresh allowance.
+	if r.clock.waitLeft() <= 0 {
+		return fmt.Errorf("relay response deadline passed")
+	}
 	return nil
 }
 
@@ -396,6 +406,12 @@ func (r *relayRun) deliver(createdAt time.Time) {
 		r.silent("ack: no decided, unacked request to ack")
 		return
 	}
+	// A commit already in progress can finish after its caller's budget.
+	// The durable acknowledgement remains truthful, but grants no late write.
+	if err := r.parentCheck(); err != nil {
+		r.silent("after ack: %v", err)
+		return
+	}
 	logf(r.logger, "relay: %s for %s token=%s (%s)", decision, r.instanceID, r.token, reason)
 	_, _ = fmt.Fprintln(r.stdout, EncodeDecision(EventNamePermissionRequest, decision, reason))
 	emitResume(r.ctx, r.instanceID, r.token, decision, createdAt)
@@ -419,6 +435,10 @@ func (r *relayRun) timeoutDeny(createdAt time.Time) {
 	}
 	if !denied {
 		r.deliver(createdAt)
+		return
+	}
+	if err := r.parentCheck(); err != nil {
+		r.silent("after timeout deny: %v", err)
 		return
 	}
 	logf(r.logger, "relay: timeout deny for %s token=%s", r.instanceID, r.token)

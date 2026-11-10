@@ -4,8 +4,11 @@ package cursorhost
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,9 +19,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/cursortranscript"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
+
+// b.x9o: Run must return the borrowed PTY only after its actual input decoder
+// retires. Runtime/process exit alone is not evidence of reader retirement.
+func TestCursorRunReturnsTerminalToOwner(t *testing.T) {
+	// Serial: the shared Run fixture owns HOME, reports and signal handlers.
+	ready := make(chan *os.File, 1)
+	var admissions, choices, events atomic.Int32
+	readerPane := &observedWire{}
+	starter := func(in *os.File, out io.Writer, emit func(terminalInput), admit func() bool, choose ...func(rune) (string, string, bool)) func() {
+		readerPane.observe = func(raw []byte) { out.Write(raw) }
+		wrapped := make([]func(rune) (string, string, bool), len(choose))
+		for n, f := range choose {
+			wrapped[n] = func(r rune) (string, string, bool) { choices.Add(1); return f(r) }
+		}
+		restore := terminalLoop(in, readerPane, func(v terminalInput) { events.Add(1); emit(v) }, func() bool { admissions.Add(1); return admit() }, wrapped...)
+		ready <- in
+		return restore
+	}
+	c := beginCursorSessionWithInput(t, "", openTranscript, starter)
+	var slave *os.File
+	select {
+	case slave = <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("real terminal reader did not start")
+	}
+	c.wait(t, "confirmed ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
+	c.stop(t)
+	before, paneBefore := readerPane.bytes(), c.pane.bytes()
+	counts := [3]int32{admissions.Load(), choices.Load(), events.Load()}
+	rawBefore, err := os.ReadFile(c.e.runtime.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalReadByNextOwner(t, c.master, slave)
+	rawAfter, err := os.ReadFile(c.e.runtime.Raw)
+	if err != nil || !bytes.Equal(rawBefore, rawAfter) || len(c.prompts(t)) != 0 {
+		t.Fatalf("post-Run input reached runtime: before=%q after=%q err=%v", rawBefore, rawAfter, err)
+	}
+	if !bytes.Equal(before, readerPane.bytes()) || !bytes.Equal(paneBefore, c.pane.bytes()) || counts != [3]int32{admissions.Load(), choices.Load(), events.Load()} {
+		t.Fatal("post-Run input caused retired-reader admission, choice, event or output")
+	}
+	if bytes.Count(before, []byte("\x1b[?2004l")) != 1 {
+		t.Fatalf("Run lost terminal restoration: %q", before)
+	}
+}
 
 func TestCursorFIFOExactTextAndLifecycle(t *testing.T) {
 	// Serial: verified runtime fixture sets HOME/PATH and Run owns signal handlers.
@@ -214,8 +263,15 @@ func TestCursorControlBypassesSaturatedInputAndPendingReport(t *testing.T) {
 	c.keys(t, "before-wire\r")
 	c.wait(t, "pending actual submission report", func() bool { _, err := os.Stat(filepath.Join(dir, "entered")); return err == nil })
 	var keys strings.Builder
+	digests := map[string]bool{}
 	for i := 0; i < 32; i++ {
 		fmt.Fprintf(&keys, "queued-%02d\r", i)
+		digests[cursortranscript.TextSHA256(fmt.Sprintf("queued-%02d", i))] = true
+	}
+	// Past the mailbox's bounded entries, refusals coalesce into one count.
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&keys, "overflow-%02d\r", i)
+		digests[cursortranscript.TextSHA256(fmt.Sprintf("overflow-%02d", i))] = true
 	}
 	keys.WriteString("~")
 	c.keys(t, keys.String())
@@ -254,6 +310,41 @@ func TestCursorControlBypassesSaturatedInputAndPendingReport(t *testing.T) {
 	if got := c.prompts(t); !reflect.DeepEqual(got, []string{"later-explicit"}) {
 		t.Fatalf("retired work replayed: %q", got)
 	}
+	// b.bqd: each refused text names its digest and consumption time; the
+	// combined overflow has neither. b.x9o: input the control retired keeps its
+	// accepted history without durable admission, is cancelled, never refused,
+	// and every capture is finished.
+	retired := map[string]bool{}
+	refused, overflow := 0, uint64(0)
+	for _, r := range c.records(t) {
+		switch {
+		case r.Kind == "submission_refused" && r.Data.ID == "":
+			if r.Data.TextSHA256 != "" || !r.Data.ConsumedAt.IsZero() || r.Data.Count == 0 {
+				t.Fatalf("overflow refusal = %+v; want a count, no digest and no consumption time", r)
+			}
+			overflow += r.Data.Count
+		case r.Kind == "submission_refused":
+			if !digests[r.Data.TextSHA256] || r.Data.ConsumedAt.IsZero() || retired[r.Data.ID] {
+				t.Fatalf("text refusal = %+v; want a typed text's digest, once, and its consumption time", r)
+			}
+			delete(digests, r.Data.TextSHA256)
+			if v := c.capturedInput(t, r); v.State != store.CursorInputRefused || !v.CapturedAt.Equal(r.Data.ConsumedAt) {
+				t.Fatalf("refusal capture = %+v; want refused, captured at %s", v, r.Data.ConsumedAt)
+			}
+			refused++
+		case r.Kind == "submission_accepted" && r.Data.Text != "before-wire" && r.Data.Text != "later-explicit":
+			if r.Data.Durable == nil || *r.Data.Durable {
+				t.Fatalf("retired input claimed durable admission: %+v", r)
+			}
+			if v := c.capturedInput(t, r); v.State != store.CursorInputCancelled {
+				t.Fatalf("retired input capture = %+v; want cancelled", v)
+			}
+			retired[r.Data.ID] = true
+		}
+	}
+	if overflow == 0 || len(retired)+refused+int(overflow) != 72 {
+		t.Fatalf("typed inputs unaccounted: retired=%d refused=%d overflow=%d", len(retired), refused, overflow)
+	}
 }
 
 func TestCursorQueuedPromptWaitsForEveryDurableHold(t *testing.T) {
@@ -270,6 +361,7 @@ func TestCursorQueuedPromptWaitsForEveryDurableHold(t *testing.T) {
 		}
 		return n == 2
 	})
+	complete := admitProviderPrerequisite(t, c, "queue-prerequisite")
 	b, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
 	if err != nil {
 		t.Fatal(err)
@@ -296,16 +388,21 @@ func TestCursorQueuedPromptWaitsForEveryDurableHold(t *testing.T) {
 	// A normal outcome and closing an unknown-origin request prove neither gone.
 	c.wait(t, "held Stop report verified", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor turn complete")) })
 	c.e.exec(t, `UPDATE permission_requests SET closed_at=? WHERE tool_name='Bash'`, time.Now().UnixMilli())
-	time.Sleep(120 * time.Millisecond)
+	c.idleObservationBarrier(t, "closed-independent-hold")
 	if got := c.prompts(t); len(got) != 1 {
 		t.Fatalf("completion/closed request released another hold: %q", got)
 	}
 	c.e.exec(t, `UPDATE permission_requests SET proven_gone_at=? WHERE tool_name='Bash'`, time.Now().UnixMilli())
-	time.Sleep(120 * time.Millisecond)
+	c.idleObservationBarrier(t, "one-independent-proof")
 	if got := c.prompts(t); len(got) != 1 {
 		t.Fatalf("one proof released independent hold: %q", got)
 	}
 	c.e.exec(t, `UPDATE permission_requests SET proven_gone_at=? WHERE tool_name='Plan'`, time.Now().UnixMilli())
+	c.idleObservationBarrier(t, "all-independent-proofs")
+	if got := c.prompts(t); len(got) != 1 {
+		t.Fatalf("idle SQL observation discovered queued work: %q", got)
+	}
+	complete()
 	c.wait(t, "all independent holds released", func() bool { return len(c.prompts(t)) == 2 })
 	c.stop(t)
 	if got := c.prompts(t); !reflect.DeepEqual(got, []string{"HOLD", "queued-after-holds"}) {
@@ -504,6 +601,82 @@ func TestCursorPromptRetiredAtFinalWriteGuardRemainsKnownUnwritten(t *testing.T)
 	}
 }
 
+func TestCursorPromptRetiredDuringDurableIssueRemainsKnownUnwritten(t *testing.T) {
+	// Serial: actual store authority/CAS and serialized writer, verified live peer.
+	for _, at := range []string{"before issue", "authority callback", "unknown result"} {
+		t.Run(at, func(t *testing.T) {
+			e := newRequestEnv(t, "off", "synthetic-session")
+			wire := &observedWire{}
+			p := newProtocol(wire, strings.NewReader(""))
+			defer p.close()
+			now := time.Now()
+			admitted := store.CursorInput{Owner: store.CursorOwner{StoreID: e.s.StoreID(), Runtime: e.binding}, Generation: 1, SubmissionID: "test-input", Order: 1, Epoch: 0, Text: "issue-retirement", CapturedAt: now, State: store.CursorInputAdmitted, TargetSession: e.binding.SessionID}
+			check := func(store.Spawn) error { return nil }
+			if err := e.s.CaptureCursorInput(context.Background(), admitted, now.Add(time.Second), check); err != nil {
+				t.Fatal(err)
+			}
+			started := admitted
+			started.State, started.RequestID, started.Deadline = store.CursorInputStarted, "1", now.Add(2*time.Second)
+			if err := e.s.AdvanceCursorInput(context.Background(), admitted, started, started.Deadline, check); err != nil {
+				t.Fatal(err)
+			}
+			obligation := &inputObligation{record: started}
+			if at == "before issue" {
+				obligation.retired.Store(true)
+			}
+			calls := 0
+			current := func() bool { calls++; return at != "authority callback" || calls < 2 }
+			issue := func() error {
+				if at == "unknown result" {
+					return errors.New("synthetic unknown issue commit result")
+				}
+				return obligation.issue(*e.rep, started, current)
+			}
+			done := make(chan error, 1)
+			if _, err := p.requestGuardedIssue("session/prompt", map[string]string{"text": admitted.Text}, nil, func(err error) { done <- err }, issue); err != nil {
+				t.Fatal(err)
+			}
+			var result error
+			select {
+			case result = <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("issue did not return")
+			}
+			if len(wire.bytes()) != 0 {
+				t.Fatal("retired or unknown issue wrote prompt bytes")
+			}
+			saved, err := e.s.ReadCursorInput(e.binding.Connection, admitted.SubmissionID)
+			if err != nil || saved.State != store.CursorInputStarted {
+				t.Fatalf("issue changed record: %+v %v", saved, err)
+			}
+			if at == "unknown result" {
+				if result == nil || !strings.Contains(result.Error(), "uncertain") {
+					t.Fatalf("unknown issue became known unwritten: %v", result)
+				}
+				if err := p.notify("session/cancel", map[string]string{"sessionId": e.binding.SessionID}); err == nil {
+					t.Fatal("uncertain transport accepted new output")
+				}
+				return
+			}
+			if !errors.Is(result, errPromptRetired) {
+				t.Fatalf("known unwritten retirement became uncertain: %v", result)
+			}
+			if at == "authority callback" && calls < 2 {
+				t.Fatal("did not reach guarded store issue")
+			}
+			if err := p.notify("session/cancel", map[string]string{"sessionId": e.binding.SessionID}); err != nil {
+				t.Fatalf("retirement poisoned transport: %v", err)
+			}
+			if err := completedWrite(t, p); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(wire.bytes(), []byte("session/cancel")) || bytes.Contains(wire.bytes(), []byte(admitted.Text)) {
+				t.Fatalf("cancel/replay bytes: %s", wire.bytes())
+			}
+		})
+	}
+}
+
 func TestCursorBlockedPaneRenderingCannotDelayCancellation(t *testing.T) {
 	// Serial: verified runtime and reporter use process-wide environment.
 	c := startCursorSession(t, "HOLD")
@@ -594,4 +767,63 @@ func TestCursorBlockedPaneRenderingCannotDelayCancellation(t *testing.T) {
 		t.Fatalf("pane pressure dispatched cancelled queue: %q", got)
 	}
 	c.stop(t)
+}
+
+func TestCursorRepeatedExitPathKeepsOneTermination(t *testing.T) {
+	// Serial: exit consumes its helper, so two genuine exits need two live helpers.
+	// Same-helper repeated/obsolete flush completions are covered separately.
+	for n := 1; n <= 2; n++ {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			c := startCursorSession(t, "HOLD")
+			c.wait(t, "active prompt", func() bool { return len(c.prompts(t)) == 1 })
+			c.keys(t, "/exit\r")
+			select {
+			case err := <-c.done:
+				c.ended, c.endErr = true, err
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("exit did not terminate")
+			}
+			controls := 0
+			for _, r := range c.records(t) {
+				if r.Kind == "submission_terminated" {
+					input, err := c.e.s.ReadCursorInput(r.Connection, r.Data.ID)
+					if err != nil || input.State != store.CursorInputUnresolved || input.RequestID != r.Data.Request || r.Data.Completion != "unconfirmed" || !r.Data.RuntimeGone {
+						t.Fatalf("termination lost uncertainty: input=%+v record=%+v error=%v", input, r, err)
+					}
+				}
+				if r.Kind == "input_control" {
+					controls++
+					if r.Data.Control != "exit" || r.Data.InputID == "" || r.Data.InputEpoch == nil || r.Data.ConsumedAt.IsZero() {
+						t.Fatalf("exit capture lost: %+v", r)
+					}
+				}
+			}
+			row, err := c.e.s.GetSpawn(c.e.binding.InstanceID)
+			if err != nil || row.State != store.StateEnded || controls != 1 || rotationRecordCount(c, t, "session_end") != 1 || rotationRecordCount(c, t, "submission_terminated") != 1 || rotationRecordCount(c, t, "turn_outcome") != 0 || !reflect.DeepEqual(c.prompts(t), []string{"HOLD"}) {
+				t.Fatalf("exit invented completion or replay: row=%+v error=%v records=%+v", row, err, c.records(t))
+			}
+		})
+	}
+}
+
+func TestCursorRepeatedIdleReportsRequireNewControl(t *testing.T) {
+	// Serial: actual idle-control recovery and its guarded waiting report.
+	c := postBootstrapCursorSession(t, "off", "")
+	for n := 1; n <= 2; n++ {
+		c.keys(t, "\x03")
+		c.wait(t, "new idle recovery", func() bool { return bytes.Count(c.pane.bytes(), []byte("submit a new prompt to continue")) == n })
+		c.e.wantState(t, "recovery report", store.StateWaiting)
+		if rotationRecordCount(c, t, "input_control") != n || sessionCancelCount(t, c) != 0 || len(c.prompts(t)) != 0 {
+			t.Fatal("idle report discovered work or reused a control")
+		}
+	}
+	c.keys(t, "explicit-after-reports\r")
+	c.wait(t, "current report permits fresh input", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
+	c.stop(t)
+	if !reflect.DeepEqual(c.prompts(t), []string{"explicit-after-reports"}) {
+		t.Fatal("recovery replayed input")
+	}
 }

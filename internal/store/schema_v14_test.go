@@ -44,6 +44,9 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 				// Later hops' columns too, so the whole-store comparison below
 				// sees only what the v14 hop kept.
 				preAddV14Columns(t, path, v15ColumnSpecs)
+				preAddV14Columns(t, path, v17ColumnSpecs)
+				preAddV14Columns(t, path, v19ColumnSpecs)
+				preAddV14Columns(t, path, v20ColumnSpecs)
 				withRaw(t, path, func(db *sql.DB) {
 					mustExec(t, db, `UPDATE spawns SET permission_epoch=8,observation_version=4,display_observation=?,display_exit=?,
 						idle_screen_timeout_seconds=90,pane_sha256=?,pane_since_ms=1792411208000,pane_epoch=8`,
@@ -55,8 +58,10 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 			}
 			before := dbDump(t, path)
 			id := assertOneStoreID(t, path)
+			expectInputAuthority(before, id)
+			assertReleasedReentry(t, path, 13, 14)
 			writeSentinel(t, dir, 13, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -72,8 +77,13 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 				t.Fatal("migration changed existing lifecycle, identity, hold, answer, proof or timing data")
 			}
 			after := dbDump(t, path)
-			if prefix == len(v14ColumnSpecs) && !reflect.DeepEqual(before, after) {
-				t.Fatal("migration replaced retained ownership, clocks or display candidate")
+			if prefix == len(v14ColumnSpecs) {
+				// New input tables are checked by fresh-schema convergence above.
+				for key, want := range before {
+					if !reflect.DeepEqual(want, after[key]) {
+						t.Fatalf("migration replaced retained %s", key)
+					}
+				}
 			}
 			for _, table := range []string{"session_history", "store_meta", "cursor_runtimes", "subagents", "subagent_launches"} {
 				if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
@@ -92,17 +102,6 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 						t.Fatalf("ownership/defaults: %v", r)
 					}
 				}
-			}
-			for run := 0; run < 2; run++ {
-				if err := migrateV13toV14(s.db); err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(after, dbDump(t, path)) {
-					t.Fatal("reentry changed retained data")
-				}
-			}
-			if err := runMigrationChain(s.db, 14); err != nil {
-				t.Fatal(err)
 			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
@@ -155,7 +154,7 @@ func TestV14MigrationCommitRollback(t *testing.T) {
 	}
 	assertSentinel(t, dir, true)
 	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "PRAGMA journal_mode=WAL") })
-	s, err := Open(path)
+	s, err := openMigrationTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +187,7 @@ func TestV14MigrationDoesNotEnrollEarlierPermissionIntervals(t *testing.T) {
 				mustExec(t, db, `UPDATE permission_requests SET created_at=?`, tc.created)
 			})
 			writeSentinel(t, dir, 13, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -274,7 +273,7 @@ func TestV14MigrationRefusesIncompatiblePartialState(t *testing.T) {
 			}
 			before := dbDump(t, path)
 			writeSentinel(t, dir, 13, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if s != nil {
 				s.Close()
 			}
@@ -310,7 +309,7 @@ func TestV14MigrationRollbackAndCorrectedRetry(t *testing.T) {
 			})
 			before := dbDump(t, path)
 			writeSentinel(t, dir, from, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if s != nil {
 				s.Close()
 			}
@@ -338,7 +337,7 @@ func TestV14MigrationRollbackAndCorrectedRetry(t *testing.T) {
 				}
 				writeSentinel(t, dir, 13, schemaVersion)
 			}
-			s, err = Open(path)
+			s, err = openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -380,7 +379,7 @@ func TestV14MigrationHistoricFallbackUsability(t *testing.T) {
 					withRaw(t, path, func(db *sql.DB) { requestCols = tableColumnNames(t, db, "permission_requests") })
 					before := readQuotedRows(t, path, "permission_requests", "pre", "request_id", requestCols)
 					writeSentinel(t, dir, 13, schemaVersion)
-					s, err := Open(path)
+					s, err := openMigrationTestStore(t, path)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -468,7 +467,7 @@ func TestV14MigrationNewAdmissionsStartClockBesideAmbiguousHistory(t *testing.T)
 				mustExec(t, db, `UPDATE cursor_runtimes SET bound_launch_token=?,bound_gateway_pid=4242,bound_gateway_start='kept-pane'`, testLaunchToken)
 			})
 			writeSentinel(t, dir, 13, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}

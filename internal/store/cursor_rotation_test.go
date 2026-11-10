@@ -37,6 +37,71 @@ func rotationVisibility(t *testing.T, e *cursorTrailEnv, want string, archives i
 		t.Fatalf("atomic independent visibility row=%q runtime=%q path=%q life=%d archives=%d err=%v", row, runtime, path, life, count, err)
 	}
 }
+
+// b.4gm: expiry after valid entry must select zero-wait acquisition, never DefaultLockWait.
+func TestCursorRotationExpiredBeforeAcquireRefusesHeldConnection(t *testing.T) {
+	e, row, gate := rotationStore(t)
+	before, history := hgColumns(t, e.f, row.InstanceID), hgHistory(t, e.f, row.InstanceID)
+	mark := store.TrailMark(t)
+	heldAt := time.Now()
+	release := store.HoldConnectionForTest(t, e.f.s)
+	defer release()
+	until := time.Now().Add(time.Second) // Ample entry headroom; expiry is observed below.
+	var entered, acquireAt time.Time
+	var watchdog *time.Timer
+	watchdogDone := make(chan struct{})
+	defer func() {
+		if watchdog != nil && !watchdog.Stop() {
+			<-watchdogDone
+		}
+	}()
+	checked := false
+	applied, err := store.RotateCursorSessionBeforeAcquireForTest(e.f.s, row, gate, "fresh-session", row.JSONLPath, until, func(store.Spawn) error {
+		checked = true
+		return nil
+	}, func() {
+		entered = time.Now() // This callback is reached only after successful entry validation.
+		expiry, cancel := context.WithDeadline(context.Background(), until)
+		defer cancel()
+		<-expiry.Done() // Observe the real original deadline; this context never reaches production.
+		acquireAt = time.Now()
+		// Failure cleanup only: a passing call returns while the real lease remains held.
+		watchdog = time.AfterFunc(2*time.Second, func() { release(); close(watchdogDone) })
+	})
+	returnedAt := time.Now()
+	if entered.IsZero() || !entered.Before(until) || acquireAt.Before(until) {
+		t.Errorf("did not cross original deadline after valid entry: entered=%v until=%v acquire=%v", entered, until, acquireAt)
+	}
+	if watchdog == nil {
+		t.Error("rotation never reached acquisition boundary")
+	} else {
+		if !watchdog.Stop() {
+			<-watchdogDone
+			t.Error("rotation needed watchdog release instead of bounded acquisition")
+		}
+		watchdog = nil
+	}
+	if elapsed := returnedAt.Sub(acquireAt); elapsed > time.Second || returnedAt.Sub(heldAt) >= 5*time.Second {
+		t.Errorf("expired acquisition exceeded bound before holder safety release: acquisition=%s held=%s", elapsed, returnedAt.Sub(heldAt))
+	}
+	const refused = "ErrStoreBusy: the store's connection was not free within 0 ms: another call of this process held it"
+	if applied || !errors.Is(err, store.ErrStoreBusy) || err.Error() != refused || checked {
+		t.Errorf("expired acquisition: applied=%v err=%v verifier=%v; want exact zero-wait refusal", applied, err, checked)
+	}
+	release() // Joins the holder on failure too; the rotation call has already returned.
+	rotationVisibility(t, e, e.b.SessionID, 0)
+	runtime, readErr := e.f.s.ReadCursorRuntime(row.InstanceID)
+	if readErr != nil || runtime != e.b || !reflect.DeepEqual(before, hgColumns(t, e.f, row.InstanceID)) || !reflect.DeepEqual(history, hgHistory(t, e.f, row.InstanceID)) {
+		t.Errorf("expired rotation published after release: runtime=%+v err=%v", runtime, readErr)
+	}
+	for _, event := range []string{"ad.session.archived", "ad.spawn.state_transition", "ad.row_mutation.committed"} {
+		if events := store.TrailEventsSince(t, mark, event, row.InstanceID); len(events) != 0 {
+			t.Errorf("expired rotation emitted %s: %v", event, events)
+		}
+	}
+	t.Logf("original deadline crossed; acquisition=%s held=%s applied=%v err=%v", returnedAt.Sub(acquireAt), returnedAt.Sub(heldAt), applied, err)
+}
+
 func TestCursorRotationAtomicPublicationAndSuccessiveHistory(t *testing.T) {
 	e, row, gate := rotationStore(t)
 	observer, err := store.Open(e.f.path)

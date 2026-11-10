@@ -110,7 +110,7 @@ func migrateV9toV10(db *sql.DB) error {
 	if _, err = tx.Exec(`PRAGMA user_version = 10`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitMigrationStep(tx)
 }
 
 // RegisterCursorRuntime is conditional on the independently examined launch.
@@ -129,10 +129,20 @@ func (s *Store) RegisterCursorRuntime(row Spawn, b CursorRuntime) (bool, error) 
 	return s.execCursorRuntime(q, args, "store: register Cursor runtime")
 }
 
-func (s *Store) ReadCursorRuntime(id string) (b CursorRuntime, err error) {
-	b.InstanceID = id
-	err = s.db.QueryRow(`SELECT bound_launch_token,bound_life_number,bound_gateway_pid,bound_gateway_start,bound_runtime_pid,bound_runtime_start,bound_connection_id,bound_input_pipe,bound_output_pipe,bound_input_fd,bound_output_fd,bound_session_id,bound_terminated FROM cursor_runtimes WHERE bound_instance_id=?`, id).Scan(&b.Token, &b.Life, &b.GatewayPID, &b.GatewayStart, &b.RuntimePID, &b.RuntimeStart, &b.Connection, &b.InputPipe, &b.OutputPipe, &b.InputFD, &b.OutputFD, &b.SessionID, &b.Terminated)
-	return
+func (s *Store) ReadCursorRuntime(id string) (CursorRuntime, error) {
+	return s.ReadCursorRuntimeWithin(id, DefaultLockWait)
+}
+
+// ReadCursorRuntimeWithin retains bounded admission during active recovery.
+func (s *Store) ReadCursorRuntimeWithin(id string, wait time.Duration) (CursorRuntime, error) {
+	b := CursorRuntime{InstanceID: id}
+	err := s.readWithin(wait, "store: Cursor runtime", func(ctx context.Context, conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx, `SELECT bound_launch_token,bound_life_number,bound_gateway_pid,bound_gateway_start,bound_runtime_pid,bound_runtime_start,bound_connection_id,bound_input_pipe,bound_output_pipe,bound_input_fd,bound_output_fd,bound_session_id,bound_terminated FROM cursor_runtimes WHERE bound_instance_id=?`, id).Scan(&b.Token, &b.Life, &b.GatewayPID, &b.GatewayStart, &b.RuntimePID, &b.RuntimeStart, &b.Connection, &b.InputPipe, &b.OutputPipe, &b.InputFD, &b.OutputFD, &b.SessionID, &b.Terminated)
+	})
+	if err != nil {
+		return CursorRuntime{}, err
+	}
+	return b, nil
 }
 
 // SetCursorRuntimeSession and MarkCursorRuntimeGone preserve the complete
@@ -214,10 +224,13 @@ func (s *Store) MarkCursorMissingIfSameLaunch(row Spawn, b CursorRuntime) (strin
 	if guard == "" {
 		return "", CondChanged, nil
 	}
-	args := append(immediateStateArgs(StateMissing), guardArgs...)
+	// The exact gateway or owned runtime loss is the state record's evidence
+	// (process); it is no process_liveness evidence about the runtime (SR-3.3),
+	// so the process record is cleared.
+	args := append(markMissingArgs(EvidenceProcess, ProcessExit{}), guardArgs...)
 	stmt := markMissingSetSQL + ` WHERE ` + guard
 
-	return s.terminalMarkWithoutWait("store: close lost Cursor launch", stmt, args, row.InstanceID, DecisionReasonFindMissing)
+	return s.terminalMarkWithoutWait("store: close lost Cursor launch", stmt, args, row.InstanceID, DecisionReasonFindMissing, nil)
 }
 
 // MarkFailedCursorRuntimeMissing closes a failed gateway after its caller has
@@ -241,9 +254,12 @@ func (s *Store) MarkFailedCursorRuntimeMissing(row Spawn, b CursorRuntime) (stri
 		guard = "(" + guard + ") OR (" + retiredGuard + ")"
 		guardArgs = append(guardArgs, retiredArgs...)
 	}
-	args := append(immediateStateArgs(StateMissing), guardArgs...)
+	// The exact gateway or owned runtime loss is the state record's evidence
+	// (process); it is no process_liveness evidence about the runtime (SR-3.3),
+	// so the process record is cleared.
+	args := append(markMissingArgs(EvidenceProcess, ProcessExit{}), guardArgs...)
 	stmt := markMissingSetSQL + ` WHERE ` + guard
-	return s.terminalMarkWithoutWait("store: close failed Cursor runtime", stmt, args, row.InstanceID, DecisionReasonFindMissing)
+	return s.terminalMarkWithoutWait("store: close failed Cursor runtime", stmt, args, row.InstanceID, DecisionReasonFindMissing, nil)
 }
 
 // ReadLiveCursorSpawn confines liveness reconciliation to one live Cursor row.

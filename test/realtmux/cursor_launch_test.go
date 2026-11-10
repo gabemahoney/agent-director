@@ -230,12 +230,15 @@ func stopCursorPaneGateways(t testing.TB, f *spawnFix, launch spawned) {
 	// These exact transport observations can arrive before the server process
 	// has retired. They permit proceeding to the bounded death proof below;
 	// none is itself proof that the server or its gateways have exited.
+	// "no current target" is a live server whose last session has closed (an
+	// exited gateway) but which has not exited yet: it lists no panes.
 	serverRetiring := func(result rawResult) bool {
 		_, err := os.Stat(launch.rt.Socket)
 		noServer := result.Stderr == "no server running on "+launch.rt.Socket+"\n"
 		missingSocket := os.IsNotExist(err) && result.Stderr == "error connecting to "+launch.rt.Socket+" (No such file or directory)\n"
 		lostReply := result.Stderr == "server exited unexpectedly\n"
-		return result.Exit == 1 && result.Stdout == "" && (noServer || missingSocket || lostReply)
+		emptyServer := result.Stderr == "no current target\n"
+		return result.Exit == 1 && result.Stdout == "" && (noServer || missingSocket || lostReply || emptyServer)
 	}
 	panes := launch.rt.run(t, "list-panes", "-a", "-F", "#{pane_pid}")
 	if panes.Exit != 0 {

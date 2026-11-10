@@ -30,7 +30,7 @@ func (d *nativeBoundaryDriver) Open(path string) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &deadlineBoundaryConn{Conn: c, boundary: d.boundary, first: first}, nil
+	return d.boundary.wrap(c, first), nil
 }
 
 func installNativeBoundary(t *testing.T, s *Store, path string) (*deadlineBoundary, *nativeBoundaryDriver) {
@@ -192,6 +192,7 @@ func TestDecisionUncooperativeNativeBoundaries(t *testing.T) {
 				}
 				expected := before
 				expected.Decision, expected.DecidedAt = "allow", after.DecidedAt
+				expected.DecisionOrigin = DecisionOriginCaller
 				if !reflect.DeepEqual(after, expected) {
 					t.Errorf("uncertain COMMIT changed unrelated request facts: before=%+v after=%+v", before, after)
 				}

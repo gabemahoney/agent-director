@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
@@ -245,13 +246,17 @@ func DescSendKeysPendingLeftover(instanceID string, sessions []DescSession) Desc
 // "retry later", never "send-keys with empty text". Never "dead" or "gone".
 // Any other call or verb, or the key send for send-keys, panics.
 func DescKeysTimeout(v PaneVerb, call tmux.Call, timeout time.Duration) DescCase {
-	c := DescCallTimeout(call, timeout)
+	transport := call
+	if call == tmuxfix.KeyCall("Enter") {
+		transport = tmux.CallSendKey
+	}
+	c := DescCallTimeout(transport, timeout)
 	c.Name += ", the keys may have been delivered"
 	c.Require = append(withoutPhrases(c.Require, nothingWasDone), keysMayHaveBeenDelivered)
 	c.MustNot = append(append([]string(nil), c.MustNot...), keysMustNot...)
 	consequence := keysMayHaveBeenDelivered
 	switch call {
-	case tmux.CallSendEnter:
+	case tmux.CallSendEnter, tmuxfix.KeyCall("Enter"):
 		c.Require = append(c.Require, textNotSubmitted)
 		consequence += "; " + textNotSubmitted
 	case tmux.CallSendText:
@@ -361,7 +366,13 @@ func DescPaneManifest(v PaneVerb, errorNames []string) DescCase {
 			names = append(names, n)
 		}
 	}
-	req := []string{rowSessionNotThere}
+	meaning := rowSessionNotThere
+	if v == PaneSendKeys {
+		meaning = "GONE: no session"
+	} else if v == PanePause {
+		meaning = "GONE: only it means no session"
+	}
+	req := []string{meaning}
 	for _, n := range names {
 		req = append(req, classStated(n))
 	}

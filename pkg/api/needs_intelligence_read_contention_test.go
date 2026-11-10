@@ -50,7 +50,11 @@ func (s *readLeaseStore) SpawnStatusRow(id string, settle store.SettleRead) (sto
 func (s *readLeaseStore) ListSpawns(f api.ListFilters) ([]api.Spawn, error) {
 	rows, err := s.observationReader.ListSpawns(f)
 	if err == nil && s.afterRow != nil {
-		err = s.afterRow()
+		// Status now selects its fixed ID through ListSpawns as well. Lease
+		// once after that selection, before any optional observation read.
+		after := s.afterRow
+		s.afterRow = nil
+		err = after()
 	}
 	return rows, err
 }
@@ -237,6 +241,18 @@ func TestNeedsIntelligenceSamplingSkipsLeasedConnection(t *testing.T) {
 					}
 					var got api.StatusResult
 					readUnderLease(t, leased, release, func() { got, err = api.Status(s, view, e.id) })
+					if transition == "exit" {
+						// The setup read's write under the held lock was a busy
+						// state attempt (response-only); the skipped read
+						// attempts no write, so its state record stays unknown.
+						if r := got.Confirmations.State; r.Status != store.ConfirmationUnknown || r.ConfirmedAt != nil || r.CheckedAt != nil || r.Reason == nil || *r.Reason != store.ReasonNoEvidence {
+							t.Errorf("skipped observation's state record = %s; want unknown with no attempt", jsonOf(t, r))
+						}
+						if r := want.Confirmations.State; r.Status != store.ConfirmationNotConfirmed || r.Reason == nil || *r.Reason != store.ReasonBusy {
+							t.Errorf("held-lock setup read's state record = %s; want its busy attempt", jsonOf(t, r))
+						}
+						want.Confirmations.State = got.Confirmations.State
+					}
 					if err != nil || !reflect.DeepEqual(got, want) {
 						t.Errorf("skipped observation: %+v %v; want coherent committed %+v", got, err, want)
 					}
@@ -289,7 +305,7 @@ func TestHeldWriteLockReadsWriteOnce(t *testing.T) {
 		read   func(*relayEnv, *readLeaseStore) error
 		writes []string
 	}{
-		{"get", true, get, []string{"RecordPermissionFallbacks"}},
+		{"get", true, get, []string{"ObserveNeedsIntelligence"}},
 		{"get, hook alive", false, get, []string{"ObserveNeedsIntelligence"}},
 		{"list", true, func(e *relayEnv, s *readLeaseStore) error {
 			_, err := api.List(s, e.view(), api.ListParams{})

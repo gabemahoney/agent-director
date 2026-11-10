@@ -51,6 +51,22 @@ type Options struct {
 	// return promptly. Production leaves it nil.
 	afterStartupQueueEnabled func()
 
+	// afterAwaitConsumedWake observes a terminal signal ("signal") or a retired
+	// prompt ("prompt retired") that await consumed, after setting
+	// awaitConsumedWake. It also fires in awaits outside the loop, where no
+	// further pass follows. It runs on the session goroutine, outside locks, and
+	// must return promptly. Production leaves it nil.
+	afterAwaitConsumedWake func(string)
+
+	// beforeInputSave observes each durable input save (held or admitted
+	// capture, held promotion, prompt start) with the record it will write. It
+	// runs in await's worker immediately before the store write, outside mailbox
+	// locks, with control supervision active; any epoch check in that write runs
+	// after it returns. It must return within the save's bound (inputUntil, at
+	// most 3 s from entry), or the save fails with its context error instead.
+	// Production leaves it nil.
+	beforeInputSave func(store.CursorInput)
+
 	// beforeControllerCleanup observes the controller loop's result before any
 	// deferred cleanup can delay or amend it. Setup returns before loop entry are
 	// not observed. It runs on the session goroutine, outside locks, and must
@@ -60,6 +76,10 @@ type Options struct {
 	// afterRuntimeRetired observes the durable retirement before the reporting
 	// worker updates its local proof. Production leaves it nil.
 	afterRuntimeRetired func()
+
+	// configureRequests installs per-run request timing and storage observers
+	// before any controller work or input callbacks. Production leaves it nil.
+	configureRequests func(*requestController)
 }
 
 // Run owns a fresh or latest-loaded Cursor conversation. Follow-ups remain
@@ -235,13 +255,15 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	writer := newPaneDisplay(out)
 	defer writer.stop()
 	inputs := newInputMailbox()
+	initialInput := terminalInput{submission: "initial", text: options.InitialPrompt, at: time.Now(), epoch: inputs.epochValue()}
 	// Initialization/load keeps its original authority even if a control is
 	// queued before the controller consumes it or before publication starts.
 	loadEpoch := inputs.epochValue()
 	requests := newRequestController(rep, protocol, writer)
-	defer requests.cancel()
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
+	defer requests.close()
+	if options.configureRequests != nil {
+		options.configureRequests(requests)
+	}
 	var admission promptAdmission
 	defer admission.disable()
 	inputs.onControl = func() { admission.disable(); requests.generation.Add(1) }
@@ -358,7 +380,28 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	activeCancellation := false
 	idleControl := false
 	var pendingControl map[string]any
+	var pendingControlInput *terminalInput
+	var cancelledInitial *terminalInput
+	inputPrerequisitesChanged := false
 	var stopPublication context.CancelFunc
+	requestPrerequisiteCompleted := func() {
+		inputPrerequisitesChanged = true
+		if requestDeadlineHeld && !requests.open() {
+			requestDeadlineHeld = false
+			// A control's first deadline always wins over phase completion.
+			if busy && !cancelled && cancelAt.IsZero() {
+				resetDeadline(30 * time.Minute)
+			}
+		}
+	}
+	observeExecution := func(params json.RawMessage) error {
+		before := requests.prerequisites
+		e := requests.execution(params)
+		if e == nil && before != requests.prerequisites {
+			requestPrerequisiteCompleted()
+		}
+		return e
+	}
 	verifyModeRuntime := VerifyRuntime
 	if options.verifyModeRuntime != nil {
 		verifyModeRuntime = options.verifyModeRuntime
@@ -411,6 +454,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			if rotating || input.repeatOnly {
 				fmt.Fprint(writer, "Cursor rotation already pending; repeated control ignored\r\n")
 				if pendingControl == nil {
+					pendingControlInput = &input
 					pendingControl = map[string]any{"control": "rotation_repeated", "input_id": input.submission, "count": 1 + input.repeats}
 				}
 				return nil
@@ -430,6 +474,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			kind = "input_closed"
 		}
 		if pendingControl == nil {
+			pendingControlInput = &input
 			pendingControl = map[string]any{"control": kind, "input_id": input.submission, "input_epoch": input.epoch, "consumed_at": input.at, "count": 1 + input.repeats}
 			if active != nil {
 				pendingControl["submission_id"] = active.submission
@@ -449,6 +494,8 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			idleControl = true
 		}
 		if session == "" && options.InitialPrompt != "" {
+			initial := initialInput
+			cancelledInitial = &initial
 			options.InitialPrompt = ""
 			pendingControl["initial_prompt_cancelled"] = true
 			fmt.Fprint(writer, "Cursor initial prompt cancelled before session confirmation\r\n")
@@ -479,6 +526,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		}
 		return nil
 	}
+	// A wake that await consumes never reaches the loop's select, so the loop
+	// takes another pass before it blocks; an intentional end exits at once.
+	awaitConsumedWake := false
 	// Slow persistence and hook completion run serially, but controls and the
 	// original cancellation deadline remain supervised while they finish.
 	await := func(operation func() error) error {
@@ -500,27 +550,156 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					if e := handleControl(*v); e != nil {
 						return e
 					}
+					awaitConsumedWake = true
 				}
 			case <-signals:
 				if e := handleControl(terminalInput{text: "/exit", at: time.Now()}); e != nil {
 					return e
 				}
+				awaitConsumedWake = true
+				if options.afterAwaitConsumedWake != nil {
+					options.afterAwaitConsumedWake("signal")
+				}
 			case e := <-promptFailures:
 				if errors.Is(e, errPromptRetired) {
 					activeRetiredBeforeWrite = true
+					awaitConsumedWake = true
+					if options.afterAwaitConsumedWake != nil {
+						options.afterAwaitConsumedWake("prompt retired")
+					}
 				} else if !intentional && !runtimeEnded {
 					return e
 				}
 			case <-deadline.C:
 				return errACPOperationTimeout
 			case <-childDone:
+				runtimeEnded = true
 				if intentional {
-					runtimeEnded = true
 					continue
 				}
 				return fmt.Errorf("Cursor runtime exited during persistence or reporting")
 			}
 		}
+	}
+	// Only controller-held, actually observed inputs can call these operations.
+	// No store/transcript reader reconstructs a dispatch queue.
+	inputUntil := func() time.Time {
+		until := time.Now().Add(transportWriteWait)
+		if !cancelAt.IsZero() && cancelAt.Add(cancelWait).Before(until) {
+			until = cancelAt.Add(cancelWait)
+		}
+		return until
+	}
+	var inputDispositions []inputDisposition
+	deferInput := func(v *terminalInput, next store.CursorInput) {
+		if v.obligation == nil {
+			v.obligation = &inputObligation{}
+		}
+		o := v.obligation
+		if o.final {
+			return
+		}
+		o.retired.Store(true)
+		o.final = true
+		inputDispositions = append(inputDispositions, inputDisposition{obligation: o, old: o.snapshot(), next: next, until: inputUntil()})
+	}
+	flushInputDispositions := func() error {
+		batch := inputDispositions
+		inputDispositions = nil // each captured observation gets one attempt, even if unconfirmed
+		if len(batch) == 0 {
+			return nil
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if e := await(func() error {
+			for _, d := range batch {
+				if e := d.write(ctx, s); e != nil {
+					return e
+				}
+			}
+			return nil
+		}); e != nil {
+			return fmt.Errorf("Cursor input disposition unconfirmed; no replay: %w", e)
+		}
+		for _, d := range batch {
+			d.obligation.record = d.next
+		}
+		return nil
+	}
+	saveInput := func(v *terminalInput, next store.CursorInput) error {
+		until := inputUntil()
+		if next.State == store.CursorInputStarted && next.Deadline.Before(until) {
+			until = next.Deadline
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), until)
+		defer cancel()
+		bound := *rep
+		bound.binding = next.Owner.Runtime
+		if next.TargetSession != "" {
+			bound.binding.SessionID = next.TargetSession
+		}
+		check := func(row store.Spawn) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !inputs.current(next.Epoch) {
+				return errPromptRetired
+			}
+			if e := VerifyRuntime(bound.binding, false); e != nil {
+				return e
+			}
+			if e := VerifyPane(bound.store, row, bound.cfg); e != nil {
+				return e
+			}
+			if !inputs.current(next.Epoch) {
+				return errPromptRetired
+			}
+			return ctx.Err()
+		}
+		var operation func() error
+		if v.obligation == nil {
+			operation = func() error { return s.CaptureCursorInput(ctx, next, until, check) }
+		} else {
+			old := v.obligation.snapshot()
+			operation = func() error { return s.AdvanceCursorInput(ctx, old, next, until, check) }
+		}
+		if observe := options.beforeInputSave; observe != nil {
+			write := operation
+			operation = func() error {
+				observe(next)
+				return write()
+			}
+		}
+		if e := await(operation); e != nil {
+			return fmt.Errorf("Cursor input persistence unconfirmed; no replay: %w", e)
+		}
+		if v.obligation == nil {
+			v.obligation = &inputObligation{}
+		}
+		v.obligation.record = next
+		return nil
+	}
+	captureInput := func(v *terminalInput, state, detail string) error {
+		// Coalesced overflow is a refusal count, not an admitted submission.
+		if v.submission == "" && v.dropped > 0 {
+			return nil
+		}
+		next := inputEvidence(rep, *v, requests.generation.Load(), state, detail)
+		if state != store.CursorInputAdmitted && state != store.CursorInputHeld {
+			deferInput(v, next)
+			return nil
+		}
+		return saveInput(v, next)
+	}
+	finishInput := func(v *terminalInput, state, detail string) error {
+		if v.obligation == nil {
+			return captureInput(v, state, detail)
+		}
+		v.obligation.retired.Store(true)
+		next := v.obligation.snapshot()
+		next.State, next.Detail = state, detail
+		deferInput(v, next)
+		return nil
 	}
 	record := func(kind string, data any) error {
 		if persistenceFailed {
@@ -534,30 +713,43 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		return e
 	}
 	report := func(event string) error {
-		e := await(func() error { return rep.report(event) })
+		bound := *rep
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		bound.rotationContext = ctx
+		e := await(func() error { return bound.report(event) })
 		if errors.Is(e, errACPOperationTimeout) {
 			return fmt.Errorf("%w (phase=%s, report=%s)", e, phase, event)
 		}
 		return e
 	}
 	reportWaiting := func(event string, check func(func() bool)) error {
-		// A deferred tool_ran proof can be what releases the row's hold, and
-		// nothing re-reports waiting once a later tick stores it.
-		flush := requests.flushProofs()
+		// Persist exact outgoing proofs before waiting can recover admission.
+		flush := requests.flushProofs(proofFlushEvent{kind: proofWaiting, epoch: inputs.epochValue()})
+		defer flush.abandon()
+		bound := *rep
+		bound.rotationContext = flush.ctx
+		var waiting func(func() bool)
+		if check != nil {
+			waiting = func(probe func() bool) { flush.registerWaiting(check, probe) }
+		}
 		until := time.Time{}
 		if !cancelAt.IsZero() {
 			until = cancelAt.Add(cancelWait)
 		}
-		e := await(func() error {
-			if e := flush.write(until); e != nil {
+		if e := await(func() error { return flush.write(until) }); e != nil {
+			return e
+		}
+		flush.settle()
+		if e := flushInputDispositions(); e != nil {
+			return e
+		}
+		return await(func() error {
+			if e := flush.ctx.Err(); e != nil {
 				return e
 			}
-			return rep.reportWaiting(event, check)
+			return bound.reportWaiting(event, waiting)
 		})
-		if e == nil {
-			flush.settle()
-		}
-		return e
 	}
 	confirmGuidance := func(target string, epoch uint64, until time.Time) error {
 		if guidance == nil {
@@ -629,6 +821,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		return nil
 	}
 	cancelSubmission := func(v terminalInput, reason string) error {
+		if e := finishInput(&v, store.CursorInputCancelled, reason); e != nil {
+			return e
+		}
 		inputs.release(v)
 		fmt.Fprintf(writer, "Cursor submission %s cancelled before dispatch: %s\r\n", v.submission, reason)
 		return record("submission_cancelled", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "reason": reason, "started": false, "control_epoch": inputs.epochValue()})
@@ -657,6 +852,34 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", v.submission)
 			}
 		}
+		finalUntil := inputUntil()
+		finalInput := func(v terminalInput, state, detail string) {
+			if v.submission == "" {
+				return
+			}
+			ctx, cancel := context.WithDeadline(context.Background(), finalUntil)
+			defer cancel()
+			var e error
+			if v.obligation == nil {
+				e = s.CaptureCursorInput(ctx, inputEvidence(rep, v, requests.generation.Load(), state, detail), finalUntil, nil)
+			} else {
+				if v.obligation.final {
+					return // the captured terminal attempt is pending or already unconfirmed
+				}
+				v.obligation.retired.Store(true)
+				old := v.obligation.snapshot()
+				switch old.State {
+				case store.CursorInputCompleted, store.CursorInputCancelled, store.CursorInputRefused, store.CursorInputUnresolved, store.CursorInputControl:
+					return
+				}
+				next := old
+				next.State, next.Detail = state, detail
+				e = s.AdvanceCursorInput(ctx, old, next, finalUntil, nil)
+			}
+			if e != nil {
+				fmt.Fprint(writer, "Cursor input final disposition unconfirmed; retained evidence grants no replay\r\n")
+			}
+		}
 		if err != nil {
 			// Best effort: a deferred proof loses its runtime authority at
 			// termination. The cancellation deadline bounds it, so failure
@@ -666,9 +889,43 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			if !cancelAt.IsZero() {
 				until = cancelAt.Add(cancelWait)
 			}
-			_ = requests.flushProofs().write(until)
+			kind := proofFatal
+			if runtimeEnded {
+				kind = proofRuntimeGone
+			}
+			flush := requests.flushProofs(proofFlushEvent{kind: kind, epoch: inputs.epochValue()})
+			_ = flush.write(until)
+			flush.abandon()
 			protocol.close()
 			_ = p.terminate()
+		}
+		for _, d := range inputDispositions {
+			ctx, cancel := context.WithDeadline(context.Background(), finalUntil)
+			if e := d.write(ctx, s); e != nil {
+				fmt.Fprint(writer, "Cursor input final disposition unconfirmed; retained evidence grants no replay\r\n")
+			}
+			cancel()
+		}
+		for _, v := range queue {
+			finalInput(v, store.CursorInputCancelled, "gateway stopped before dispatch")
+		}
+		for _, v := range held {
+			finalInput(v, store.CursorInputRefused, "rotation stopped; input not dispatched")
+		}
+		for _, v := range pending {
+			finalInput(v, store.CursorInputRefused, "gateway stopped before durable admission")
+		}
+		if pendingControlInput != nil {
+			finalInput(*pendingControlInput, store.CursorInputControl, "control during shutdown")
+		}
+		if cancelledInitial != nil {
+			finalInput(*cancelledInitial, store.CursorInputCancelled, "control before session confirmation")
+		}
+		if options.InitialPrompt != "" {
+			finalInput(initialInput, store.CursorInputRefused, "gateway stopped before initial prompt admission")
+		}
+		if active != nil {
+			finalInput(*active, store.CursorInputUnresolved, "gateway stopped; delivery or completion unconfirmed")
 		}
 		select {
 		case e := <-promptFailures:
@@ -731,7 +988,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					}
 					continue
 				}
-				if !finalRecord(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "text": v.text, "consumed_at": v.at, "input_epoch": v.epoch}) {
+				if !finalRecord(cursortranscript.KindInputObserved, map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "text": v.text, "consumed_at": v.at, "input_epoch": v.epoch, "durable_admission": false}) {
 					return
 				}
 				if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "reason": "gateway stopped", "started": false}) {
@@ -795,11 +1052,18 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 			return nil
 		}
-		id, e := protocol.requestGuarded("session/prompt", map[string]any{"sessionId": session, "prompt": []any{map[string]any{"type": "text", "text": v.text}}}, guard, func(e error) {
+		var started store.CursorInput
+		issue := func() error {
+			return v.obligation.issue(boundReporter, started, func() bool { return inputs.current(v.epoch) })
+		}
+		id, e := protocol.requestGuardedIssue("session/prompt", map[string]any{"sessionId": session, "prompt": []any{map[string]any{"type": "text", "text": v.text}}}, guard, func(e error) {
 			if e != nil {
-				promptFailures <- e
+				select {
+				case promptFailures <- e:
+				case <-protocol.closed:
+				}
 			}
-		})
+		}, issue)
 		if e != nil {
 			return e
 		}
@@ -810,6 +1074,19 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		busy = true
 		phase = "prompt"
 		resetDeadline(30 * time.Minute)
+		started = v.obligation.snapshot()
+		started.State, started.RequestID, started.Deadline = store.CursorInputStarted, id, writeDeadline
+		if e = saveInput(&v, started); e != nil {
+			if errors.Is(e, errPromptRetired) {
+				// The start transaction refused before mutation. This epoch can
+				// never become current again; wake its guard only to retire the
+				// known-unwritten prompt and preserve control recovery.
+				activeRetiredBeforeWrite = true
+				close(recorded)
+				return nil
+			}
+			return e
+		}
 		if e = record("submission_started", map[string]any{"submission_id": v.submission, "request_id": id, "delivery": "unconfirmed"}); e != nil {
 			return e
 		}
@@ -822,12 +1099,16 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		defer func() { options.beforeControllerCleanup(err) }()
 	}
 	for {
+		awaitConsumedWake = false
 		if v := inputs.takeControl(); v != nil {
 			if err = handleControl(*v); err != nil {
 				return err
 			}
 		}
 		if activeRetiredBeforeWrite && active != nil {
+			if err = finishInput(active, store.CursorInputCancelled, "retired before write"); err != nil {
+				return err
+			}
 			busy = false
 			cancelled = false
 			phase = "idle"
@@ -843,7 +1124,19 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		}
 		if pendingControl != nil {
 			data := pendingControl
-			pendingControl = nil
+			control := pendingControlInput
+			pendingControl, pendingControlInput = nil, nil
+			if control != nil {
+				if err = captureInput(control, store.CursorInputControl, fmt.Sprint(data["control"])); err != nil {
+					return err
+				}
+			}
+			if cancelledInitial != nil {
+				if err = captureInput(cancelledInitial, store.CursorInputCancelled, "control before session confirmation"); err != nil {
+					return err
+				}
+				cancelledInitial = nil
+			}
 			if err = record(cursortranscript.KindInputControl, data); err != nil {
 				return err
 			}
@@ -876,6 +1169,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				if reason == "" {
 					reason = "starting or cancellation"
 				}
+				if err = captureInput(&input, store.CursorInputRefused, reason); err != nil {
+					return err
+				}
 				data := map[string]any{"submission_id": input.submission, "reason": reason, "count": input.dropped, "text_sha256": input.refusedSHA256}
 				if !input.at.IsZero() {
 					// The combined input capacity overflow has no single consumption time.
@@ -888,6 +1184,10 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				continue
 			}
 			if input.held {
+				if err = captureInput(&input, store.CursorInputHeld, "provisional input"); err != nil {
+					return err
+				}
+				inputPrerequisitesChanged = true
 				if rotating && inputs.current(input.epoch) && input.epoch == rotationEpoch {
 					held = append(held, input)
 					if err = record(cursortranscript.KindInputHeld, map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at}); err != nil {
@@ -897,6 +1197,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					continue
 				}
 				if !inputs.current(input.epoch) || intentional {
+					if err = finishInput(&input, store.CursorInputRefused, "control retired provisional input"); err != nil {
+						return err
+					}
 					inputs.release(input)
 					fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", input.submission)
 					if err = record(cursortranscript.KindHeldInputRefused, map[string]any{"submission_id": input.submission, "reason": "control retired provisional input", "text_sha256": cursortranscript.TextSHA256(input.text), "consumed_at": input.at}); err != nil {
@@ -910,6 +1213,31 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				}
 				continue
 			}
+			if !inputs.current(input.epoch) || intentional || input.sessionID != session {
+				// Admission happened at terminal consumption, before this value
+				// reached the mailbox. Keep that history even when a later control
+				// prevents durable admission and dispatch.
+				if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main", "durable_admission": false}); err != nil {
+					return err
+				}
+				if err = cancelSubmission(input, "control or publication retired input"); err != nil {
+					return err
+				}
+				continue
+			}
+			if err = captureInput(&input, store.CursorInputAdmitted, ""); err != nil {
+				if errors.Is(err, errPromptRetired) {
+					if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main", "durable_admission": false}); err != nil {
+						return err
+					}
+					if err = cancelSubmission(input, "control retired input during admission"); err != nil {
+						return err
+					}
+					continue
+				}
+				return err
+			}
+			inputPrerequisitesChanged = true
 			if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main"}); err != nil {
 				return err
 			}
@@ -925,6 +1253,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		}
 		for len(held) > 0 && (intentional || !inputs.current(held[0].epoch)) {
 			v := held[0]
+			if err = finishInput(&v, store.CursorInputRefused, "control retired provisional input"); err != nil {
+				return err
+			}
 			inputs.release(v)
 			fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", v.submission)
 			if err = record(cursortranscript.KindHeldInputRefused, map[string]any{"submission_id": v.submission, "reason": "control retired provisional input"}); err != nil {
@@ -974,6 +1305,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					stopDeadline()
 					cancelAt = time.Time{}
 					admission.enableQueue()
+					inputPrerequisitesChanged = true
 					recovered = true
 				})
 			}
@@ -983,7 +1315,8 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 			fmt.Fprint(writer, "Cursor input cancelled; submit a new prompt to continue\r\n> ")
 		}
-		if !rotating && !intentional && !busy && (len(queue) > 0 || len(held) > 0) && !requests.open() {
+		if inputPrerequisitesChanged && !rotating && !intentional && !busy && (len(queue) > 0 || len(held) > 0) && !requests.open() {
+			inputPrerequisitesChanged = false
 			eligible := false
 			e := await(func() (e error) { eligible, e = rep.promptEligible(); return e })
 			if e != nil {
@@ -998,9 +1331,21 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 						break
 					}
 					v.sessionID = session
+					next := v.obligation.snapshot()
+					next.State, next.TargetSession = store.CursorInputAdmitted, session
+					accepted := map[string]any{"submission_id": v.submission, "text": v.text, "input_epoch": v.epoch, "consumed_at": v.at, "released_from_hold": true}
+					if err = saveInput(&v, next); err != nil {
+						if !errors.Is(err, errPromptRetired) {
+							return err
+						}
+						// The promotion transaction refused before mutation, so the
+						// row stays held. submit cancels the input before dispatch,
+						// and its retired epoch also ends this promotion.
+						accepted["durable_admission"] = false
+					}
 					held = held[1:]
 					queue = insertSubmission(queue, v)
-					if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": v.submission, "text": v.text, "input_epoch": v.epoch, "consumed_at": v.at, "released_from_hold": true}); err != nil {
+					if err = record(cursortranscript.KindSubmissionAccepted, accepted); err != nil {
 						return err
 					}
 					fmt.Fprintf(writer, "Cursor submission %s accepted after fresh publication\r\n", v.submission)
@@ -1018,11 +1363,21 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				queue = queue[1:]
 			}
 		}
+		if !rotating && !intentional && cancelAt.IsZero() {
+			if err = flushInputDispositions(); err != nil {
+				return err
+			}
+		}
 		if intentional {
 			break
 		}
+		if awaitConsumedWake {
+			// Nothing else wakes the select for it.
+			continue
+		}
 		select {
 		case childErr := <-p.done:
+			runtimeEnded = true
 			if childErr != nil {
 				return childErr
 			}
@@ -1031,17 +1386,13 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			if err = handleControl(terminalInput{text: "/exit", at: time.Now()}); err != nil {
 				return err
 			}
-		case <-ticker.C:
-			if err = requests.tick(); err != nil {
-				return err
+		case wake := <-requests.events:
+			changed, e := requests.continueRequest(wake)
+			if e != nil {
+				return e
 			}
-			if requestDeadlineHeld && !requests.open() {
-				requestDeadlineHeld = false
-				// Cancellation owns its fixed deadline even when it closes
-				// the authorization requests that paused prompt timing.
-				if busy && !cancelled {
-					resetDeadline(30 * time.Minute)
-				}
+			if changed {
+				requestPrerequisiteCompleted()
 			}
 		case <-deadline.C:
 			requests.cancel()
@@ -1156,7 +1507,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 						return err
 					}
 					if !retiredSessions[attribution.Session] && f.Method == "session/update" {
-						if err = requests.execution(f.Params); err != nil {
+						if err = observeExecution(f.Params); err != nil {
 							return err
 						}
 					}
@@ -1225,7 +1576,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 						// Late exact tool proof may discharge its own hold after the prompt
 						// response. Idle/main completion itself still proves nothing.
 						if session != "" {
-							if err = requests.execution(f.Params); err != nil {
+							if err = observeExecution(f.Params); err != nil {
 								return err
 							}
 						}
@@ -1264,7 +1615,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					if err = record("update", map[string]any{"origin": origin, "update": json.RawMessage(f.Params), "submission_id": active.submission, "request_id": activeRequest}); err != nil {
 						return err
 					}
-					if err = requests.execution(f.Params); err != nil {
+					if err = observeExecution(f.Params); err != nil {
 						return err
 					}
 					if textChunk && update.Update.AgentID == "" && text.Type == "text" {
@@ -1355,11 +1706,19 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					return err
 				}
 				// Deferred proofs hold the outgoing binding, which publication retires.
-				flush := requests.flushProofs()
-				if err = await(func() error { return flush.write(cancelAt.Add(cancelWait)) }); err != nil {
+				flush := requests.flushProofs(proofFlushEvent{kind: proofRotation, epoch: rotationEpoch})
+				flushUntil := cancelAt.Add(cancelWait)
+				err = await(func() error { return flush.write(flushUntil) })
+				if err == nil {
+					flush.settle()
+				}
+				flush.abandon()
+				if err != nil {
 					return fmt.Errorf("Cursor rotation refused; a deferred tool proof was not stored: %w", err)
 				}
-				flush.settle()
+				if err = flushInputDispositions(); err != nil {
+					return err
+				}
 				if intentional {
 					continue
 				}
@@ -1429,6 +1788,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				}
 				rotating, cancelled, idleControl, requestDeadlineHeld = false, false, false, false
 				phase = "idle"
+				inputPrerequisitesChanged = true
 				stopDeadline()
 				cancelAt = time.Time{}
 				fmt.Fprint(writer, "Cursor fresh conversation published\r\n> ")
@@ -1551,13 +1911,26 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				if options.InitialPrompt != "" && !intentional && cancelAt.IsZero() && inputs.current(waitingEpoch) {
 					text := options.InitialPrompt
 					options.InitialPrompt = ""
-					v := terminalInput{text: text, sessionID: session, accepted: true, submission: "initial", at: time.Now()}
+					v := initialInput
+					v.text, v.sessionID, v.accepted = text, session, true
 					inputs.mu.Lock()
 					v.epoch = waitingEpoch
 					inputs.count++
 					inputs.bytes += len(text)
 					inputs.mu.Unlock()
-					if err = record(cursortranscript.KindSubmissionAccepted, map[string]any{"submission_id": v.submission, "text": text, "origin": "main"}); err != nil {
+					accepted := map[string]any{"submission_id": v.submission, "text": text, "origin": "main"}
+					if err = captureInput(&v, store.CursorInputAdmitted, "configured initial prompt"); err != nil {
+						if !errors.Is(err, errPromptRetired) {
+							return err
+						}
+						// The admission transaction refused before mutation, so no
+						// row exists. submit cancels a fresh session's prompt
+						// before dispatch, and a loaded session's queue disposal
+						// cancels it.
+						accepted["durable_admission"] = false
+					}
+					inputPrerequisitesChanged = true
+					if err = record(cursortranscript.KindSubmissionAccepted, accepted); err != nil {
 						return err
 					}
 					queue = append(queue, v)
@@ -1593,6 +1966,10 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				default:
 					return fmt.Errorf("Cursor completion reason unavailable")
 				}
+				if err = finishInput(active, store.CursorInputCompleted, completed.Reason); err != nil {
+					return err
+				}
+				inputPrerequisitesChanged = true
 				if err = record("turn_outcome", map[string]any{"stop_reason": completed.Reason, "cancellation_requested": cancelled, "origin": "main", "submission_id": active.submission, "request_id": activeRequest}); err != nil {
 					return err
 				}
@@ -1622,10 +1999,14 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				if !cancelAt.IsZero() {
 					until = cancelAt.Add(cancelWait)
 				}
-				if err = await(func() error { return ended.write(until) }); err != nil {
+				err = await(func() error { return ended.write(until) })
+				if err == nil {
+					ended.settle()
+				}
+				ended.abandon()
+				if err != nil {
 					return err
 				}
-				ended.settle()
 				if rotating {
 					continue
 				}
@@ -1660,20 +2041,34 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		if runtimeEnded {
 			until = time.Now()
 		}
-		flush := requests.flushProofs()
-		if err = flush.write(until); err != nil {
+		kind := proofExit
+		if runtimeEnded {
+			kind = proofRuntimeGone
+		}
+		flush := requests.flushProofs(proofFlushEvent{kind: kind, epoch: inputs.epochValue()})
+		err = flush.write(until)
+		if err == nil {
+			flush.settle()
+		}
+		flush.abandon()
+		if err != nil {
 			return fmt.Errorf("Cursor exit: a deferred tool proof was not stored: %w", err)
 		}
-		flush.settle()
 		if err = p.terminate(); err != nil {
 			return err
 		}
 		runtimeEnded = true
 		if active != nil {
+			if err = finishInput(active, store.CursorInputUnresolved, "runtime terminated; completion unconfirmed"); err != nil {
+				return err
+			}
 			if err = record("submission_terminated", map[string]any{"submission_id": active.submission, "request_id": activeRequest, "runtime_gone": true, "completion": "unconfirmed"}); err != nil {
 				return err
 			}
 			active = nil
+		}
+		if err = flushInputDispositions(); err != nil {
+			return err
 		}
 		if err = VerifyRuntime(rep.binding, true); err != nil {
 			return err

@@ -4,16 +4,17 @@ source /work/source/test/driver/cursor-owned-launch.sh
 export AD_CURSOR_FIX_SETTINGS
 AD_CURSOR_FIX_SETTINGS=$(jq --arg p "$case_dir/new-release" '.+{newRelease:$p}' <<<"$AD_CURSOR_FIX_SETTINGS")
 check_id=setup
-check() { check_id=$1; shift; if ! "$@"; then printf 'ASSERTION_FAILED id=%s instance=%s session=%s dir=%s\n' "$check_id" "$id" "${session:-}" "$case_dir" >&2; return 1; fi; }
+check() { check_id=$1; shift; if ! "$@"; then printf 'ASSERTION_FAILED id=%s instance=%s session=%s dir=%s\n' "$check_id" "$id" "${session:-}" "$case_dir" >&2; return 1; fi; if [[ -n ${check_receipts:-} ]]; then printf '%s\n' "$check_id" >> "$check_receipts"; fi; }
 # Preserve the existing cleanup and driver's private ERR/xtrace channels. Print
 # the stable check before its evidence/owned-process cleanup on any shell error.
-trap 'rc=$?; if ((rc)); then printf "ASSERTION_FAILED id=%s instance=%s dir=%s\n" "$check_id" "$id" "$case_dir" >&2; fi; set +e; pc_export_evidence || true; (exit "$rc"); cleanup_cursor_case; exit "$rc"' EXIT
+pc_cleanup() { local rc=$?; if ((rc)); then printf "ASSERTION_FAILED id=%s instance=%s dir=%s\n" "$check_id" "$id" "$case_dir" >&2; fi; set +e; pc_export_evidence || true; (exit "$rc"); cleanup_cursor_case; exit "$rc"; }
+trap pc_cleanup EXIT
 pc_export_evidence() {
  # The scheduler can bind-mount this fixed test-only path for raw receipt
  # retention; the standard driver's short details field is not a raw archive.
  artifact_dir="/tmp/cursor-pane-controls-artifacts/$id"
  mkdir -m 700 -p "$artifact_dir" || return
- for name in trace.jsonl sent.jsonl raw raw-before-guard scenario want.json initial.json artifact-sha256 source-sha256 inspection.json public.json task3-timing.jsonl held-ids refused-ids; do
+ for name in trace.jsonl sent.jsonl raw raw-before-guard raw-before-closed raw-before-kill scenario want.json initial.json artifact-sha256 source-sha256 inspection.json public.json task3-timing.jsonl held-ids refused-ids obligations-before.json obligations-after.json proof.raw completion.raw proof-processing.json notification-comparison.json closed-barrier.raw closed-processing.json closed-before.json closed-after.json shutdown-wire.json crash.json events.json checks.txt receipt.json; do
   if [[ -f $case_dir/$name ]]; then cp "$case_dir/$name" "$artifact_dir/$name" || return; chmod 600 "$artifact_dir/$name" || return; fi
  done
  pc_export_launch_records "$artifact_dir" "$STORE" "$id" "${path:-}"
@@ -22,7 +23,7 @@ pc_export_launch_records() {
  local out=$1 store=$2 instance=$3 transcript=$4
  if [[ -n $transcript && -f $transcript ]]; then cp "$transcript" "$out/protected.jsonl" || return; chmod 600 "$out/protected.jsonl" || return; fi
  if [[ -f $store ]]; then
-  /opt/driver/sql.sh "$store" -readonly -json "SELECT * FROM spawns WHERE instance_id='$instance'; SELECT * FROM cursor_runtimes WHERE bound_instance_id='$instance'; SELECT * FROM permission_requests WHERE instance_id='$instance'; SELECT * FROM session_history WHERE instance_id='$instance';" > "$out/authority.jsonl" || return
+  /opt/driver/sql.sh "$store" -readonly -json "SELECT * FROM spawns WHERE instance_id='$instance'; SELECT * FROM cursor_runtimes WHERE bound_instance_id='$instance'; SELECT * FROM permission_requests WHERE instance_id='$instance'; SELECT * FROM session_history WHERE instance_id='$instance'; SELECT * FROM cursor_inputs WHERE instance_id='$instance'; SELECT store_id,connection_id,instance_id,proof_id,record,hex(raw) AS raw_hex FROM cursor_proofs WHERE instance_id='$instance';" > "$out/authority.jsonl" || return
   chmod 600 "$out/authority.jsonl" || return
  fi
 }

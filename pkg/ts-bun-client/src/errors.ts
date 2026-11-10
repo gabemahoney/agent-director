@@ -422,6 +422,12 @@ export class ErrRelayModeInvalid extends AgentDirectorError {}
 export class ErrSpawnDeniedFlag extends AgentDirectorError {}
 /** Mirrors ErrReservedEnvKey (package: spawn) */
 export class ErrReservedEnvKey extends AgentDirectorError {}
+/** The requested experimental agent is disabled. */
+export class ErrExperimentalAgentDisabled extends AgentDirectorError {}
+/** The pane-only agent does not support the requested capability. */
+export class ErrAgentCapabilityUnsupported extends AgentDirectorError {}
+/** The pane-only launch has no explicit model. */
+export class ErrModelMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentMissing (package: spawn) */
 export class ErrAgentMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentInvalid (package: spawn) */
@@ -527,9 +533,11 @@ export class ErrPaneAnswerInProgress extends AgentDirectorError {}
 export class ErrClaimTooSoon extends AgentDirectorError {}
 /**
  * Mirrors ErrDialogMaybeOpen (package: api): a plain `sendKeys` without `expect_pane_sha256`, or
- * a `pause`, while a permission request of the Spawn is not proven gone by the agent's hooks
- * (its tool's PostToolUse, the main agent's end of turn after it, or, on a non-Cursor Spawn, the
- * agent's end), whatever agent-director's records say of it; its dialog may still be on the pane.
+ * a `pause`, while a permission request of the Spawn is not proven gone (on a Cursor row, the
+ * gateway's validated proof that its tool ran; the end of the asking agent's turn: the main
+ * agent's for a request with no agent_id, and on a Claude row the subagent's SubagentStop for one
+ * with an agent_id; or, on a non-Cursor Spawn, the agent's end), whatever agent-director's
+ * records say of it; its dialog may still be on the pane.
  * A Cursor request of an earlier launch of the Spawn does not count. Nothing was sent.
  * `errDetails` is a `DialogMaybeOpenDetails`. A plain `sendKeys` whose `expect_pane_sha256`
  * matches the pane is not rejected with it; pass that hash only from a pane a person or LLM
@@ -549,7 +557,8 @@ export class ErrAmbiguousRequest extends AgentDirectorError {}
 /**
  * Mirrors ErrStoreBusy (package: store): decide's `max_wait_ms` bound was reached before its
  * verdict was recorded (another process held the store's write lock). Nothing was recorded, so
- * the call can be retried.
+ * the call can be retried. These statements apply to decide; other verbs that list it say in
+ * their own Errors when they return it.
  */
 export class ErrStoreBusy extends AgentDirectorError {}
 /** Mirrors ErrMissingRequestToken (package: api) */
@@ -608,6 +617,9 @@ const ERROR_TABLE = {
   ErrRelayModeInvalid,
   ErrSpawnDeniedFlag,
   ErrReservedEnvKey,
+  ErrExperimentalAgentDisabled,
+  ErrAgentCapabilityUnsupported,
+  ErrModelMissing,
   ErrAgentMissing,
   ErrAgentInvalid,
   ErrAgentArgsMismatch,

@@ -27,6 +27,18 @@ type pausePTY struct {
 }
 
 func (p pausePTY) SendKeyPane(socket, pane, key string) error {
+	if key == "Enter" {
+		p.c.keys(p.t, "\r")
+		p.c.wait(p.t, "pause exit consumed before dispatch resumes", func() bool {
+			select {
+			case <-p.exitConsumed:
+				return true
+			default:
+				return false
+			}
+		})
+		return os.WriteFile(p.release, nil, 0600)
+	}
 	if key != "C-u" {
 		p.t.Fatalf("unexpected pause key %s", key)
 	}
@@ -43,19 +55,11 @@ func (p pausePTY) SendKeyPaneRepeat(socket, pane, key string, count int) error {
 }
 
 func (p pausePTY) SendKeysPane(socket, pane, text string, enter bool) error {
-	if text != "/exit" || !enter {
+	if text != "/exit" || enter {
 		p.t.Fatalf("pause sent %q enter=%v", text, enter)
 	}
-	p.c.keys(p.t, text+"\r")
-	p.c.wait(p.t, "pause exit consumed before dispatch resumes", func() bool {
-		select {
-		case <-p.exitConsumed:
-			return true
-		default:
-			return false
-		}
-	})
-	return os.WriteFile(p.release, nil, 0600)
+	p.c.keys(p.t, text)
+	return nil
 }
 
 func TestCursorEligiblePublicPauseCancelsAcceptedQueue(t *testing.T) {

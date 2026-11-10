@@ -6,12 +6,15 @@ package store_test
 // hook_gate_session_start_test.go. Rows are seeded through apitest.
 
 import (
+	"errors"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -171,5 +174,203 @@ func TestProvisionalTranscriptHeal(t *testing.T) {
 	}
 	if listed, err := f.s.ListProvisionalTranscripts(); err != nil || len(listed) != 0 {
 		t.Errorf("ListProvisionalTranscripts after the heal = %+v, %v; want none", listed, err)
+	}
+}
+
+// b.x9o: filesystem access may finish after a hook or a new life repeats the
+// same session/path text. Retain the old sample across the real intervening
+// writes; a fresh sample is the positive control for every interleaving.
+func TestProvisionalTranscriptSampleRejectsNewerEvidence(t *testing.T) {
+	for _, change := range []string{"none", "same-session hook", "reused life"} {
+		t.Run(change, func(t *testing.T) {
+			f := newV5Store(t)
+			parent := f.seed(store.StateWaiting, "")
+			id := f.seed(store.StateWaiting, "same-session", apitest.WithLifeNumber(1),
+				apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "older", JSONLPath: "/x/older.jsonl", Life: 1, RecordedAt: time.Unix(100, 0)}))
+			if err := apitest.SeedParentChild(f.path, parent, id); err != nil {
+				t.Fatal(err)
+			}
+			const path = "/x/same-session.jsonl"
+			f.sessionStart(id, "same-session", path, false)
+			sample := func() store.ProvisionalTranscript {
+				t.Helper()
+				rows, err := f.s.ProvisionalTranscriptsFor(id)
+				if err != nil || len(rows) != 1 {
+					t.Fatalf("provisional sample: %+v %v", rows, err)
+				}
+				return rows[0]
+			}
+			old := sample()
+			if change == "same-session hook" {
+				f.sessionStart(id, old.SessionID, path, false)
+			}
+			if change == "reused life" {
+				for _, agent := range []string{store.AgentCodex, store.AgentClaude} {
+					hookTo(store.StateEnded)(t, f, id)
+					fresh := reuseFresh(parent, false)
+					fresh.Agent, fresh.Identity, fresh.CWD = agent, old.Identity, old.CWD
+					r := rrDoReset(t, f, id, fresh)
+					if result, err := f.s.RecordLaunchIdentity(id, r.version, fresh.Identity.Token, old.Identity); err != nil || result != store.CondApplied {
+						t.Fatalf("new life pane: %v %v", result, err)
+					}
+					f.sessionStart(id, old.SessionID, path, false)
+				}
+				if now := sample(); now.LifeNumber != old.LifeNumber+2 || now.SessionID != old.SessionID || now.Identity.Token != old.Identity.Token {
+					t.Fatalf("same-text new-life precondition: old=%+v new=%+v", old, now)
+				}
+			}
+			family := func() [3]any {
+				raw, base, at := familyHistory(t, f, parent)
+				return [3]any{raw, base, at}
+			}
+			before, history, parentFamily := f.rawColumns(id), f.historyAllLives(id), family()
+			wrote, err := f.s.HealProvisionalTranscript(old, path)
+			if err != nil || wrote != (change == "none") {
+				t.Fatalf("old sample commit: wrote=%v err=%v change=%s", wrote, err, change)
+			}
+			if change != "none" {
+				if after := f.rawColumns(id); !reflect.DeepEqual(after, before) {
+					t.Fatalf("stale heal changed winning row: before=%+v after=%+v", before, after)
+				}
+				if wrote, err := f.s.HealProvisionalTranscript(sample(), path); err != nil || !wrote {
+					t.Fatalf("fresh sample failed: %v %v", wrote, err)
+				}
+			}
+			before.JSONLPath, before.RowVersion = path, before.RowVersion.(int64)+1
+			if after := f.rawColumns(id); !reflect.DeepEqual(after, before) || !reflect.DeepEqual(f.historyAllLives(id), history) || family() != parentFamily {
+				t.Fatalf("heal changed more than path/version or family/history: got=%+v want=%+v", after, before)
+			}
+		})
+	}
+}
+
+// historySelectionStore interleaves real lifecycle writes after the fixed row
+// selection and optionally leases the real pool before its final refresh.
+// All history and lifecycle capabilities remain the underlying Store's.
+type historySelectionStore struct {
+	*store.Store
+	afterSelection func()
+	beforeRefresh  func()
+	selections     int
+}
+
+func (s *historySelectionStore) ListSpawns(filters store.ListFilters) ([]store.Spawn, error) {
+	s.selections++
+	if s.selections > 1 && s.beforeRefresh != nil {
+		take := s.beforeRefresh
+		s.beforeRefresh = nil
+		take()
+	}
+	rows, err := s.Store.ListSpawns(filters)
+	if s.selections == 1 && err == nil && s.afterSelection != nil {
+		s.afterSelection()
+	}
+	return rows, err
+}
+
+// b.x9o review06 R2: selection of ended session A precedes a real same-agent
+// reuse and B-to-C rotation. History acquired later must never be labelled as
+// A's snapshot when the final projection is unavailable.
+func TestGetHistoryAcquisitionRejectsReusedLaunch(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		reuse, held bool
+	}{
+		{"replacement refresh succeeds", true, false},
+		{"replacement refresh connection held", true, true},
+		{"validated old pair refresh connection held", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			held := tc.held
+			f := newV5Store(t)
+			opts := []apitest.SpawnOption{apitest.WithLifeNumber(3), apitest.WithJsonlPath("/x/A.jsonl")}
+			if !tc.reuse {
+				opts = append(opts, apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "older", Life: 3, RecordedAt: time.Unix(1, 0)}))
+			}
+			id := f.seed(store.StateEnded, "A", opts...)
+			initial, err := f.s.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			empty, absentErr := api.Get(f.s, api.RelayView{}, id+"-absent")
+			if !errors.Is(absentErr, store.ErrSpawnNotFound) {
+				t.Fatalf("empty failure control: %v", absentErr)
+			}
+			var replacement apitest.SpawnColumns
+			s := &historySelectionStore{Store: f.s}
+			s.afterSelection = func() {
+				if !tc.reuse {
+					replacement = f.rawColumns(id)
+					return
+				}
+				fresh := reuseFresh("", false)
+				r := rrDoReset(t, f, id, fresh)
+				if r.archived != "A" {
+					t.Fatalf("reuse archived %q", r.archived)
+				}
+				if applied, err := f.s.RecordLaunchIdentity(id, r.version, fresh.Identity.Token, fresh.Identity); err != nil || applied != store.CondApplied {
+					t.Fatalf("replacement launch identity: %v %v", applied, err)
+				}
+				f.rotate(id, "B")
+				f.rotate(id, "C")
+				replacement = f.rawColumns(id)
+				if replacement.LifeNumber != int64(3) || replacement.SessionID != "C" || replacement.LaunchToken == initial.Identity.Token {
+					t.Fatalf("same-life replacement not established: %+v", replacement)
+				}
+				if got := f.historyIDs(t, id, 3); !slices.Contains(got, "A") || !slices.Contains(got, "B") || len(got) != 2 {
+					t.Fatalf("replacement history=%v; want A and B", got)
+				}
+			}
+			releases := make(chan func(), 1)
+			if held {
+				s.beforeRefresh = func() { releases <- store.HoldConnectionForTest(t, f.s) }
+			}
+			// A genuinely blocked refresh must still return before the held pool
+			// is released; the guard releases on failure so the suite cannot hang.
+			var got api.SpawnRow
+			done := make(chan struct{})
+			go func() { defer close(done); got, err = api.Get(s, api.RelayView{}, id) }()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("Get waited for the unavailable final projection")
+				select {
+				case release := <-releases:
+					release()
+				default:
+					t.Fatal("Get did not reach its final refresh")
+				}
+				<-done
+			}
+			select {
+			case release := <-releases:
+				release()
+			default:
+			}
+			if s.selections < 2 {
+				t.Fatalf("final refresh not attempted: %d selections", s.selections)
+			}
+			if held && tc.reuse {
+				if !(errors.Is(err, store.ErrStoreBusy) || store.RecoverySampleChanged(err)) || !reflect.DeepEqual(got, empty) {
+					t.Fatalf("unvalidated acquisition returned mixed row/history: %+v %v; want empty stale/busy failure", got, err)
+				}
+			} else {
+				var sessions []string
+				for _, row := range got.PriorSessions {
+					sessions = append(sessions, row.SessionID)
+				}
+				slices.Sort(sessions)
+				wantSession, wantPath, wantHistory := "C", "/x/C.jsonl", []string{"A", "B"}
+				if !tc.reuse {
+					wantSession, wantPath, wantHistory = "A", "/x/A.jsonl", []string{"older"}
+				}
+				if err != nil || got.SessionID != wantSession || got.JSONLPath != wantPath || !slices.Equal(sessions, wantHistory) {
+					t.Fatalf("row/history: %+v %v; want %s with %v", got, err, wantSession, wantHistory)
+				}
+			}
+			if after := f.rawColumns(id); !reflect.DeepEqual(after, replacement) {
+				t.Fatalf("history read changed replacement: before=%+v after=%+v", replacement, after)
+			}
+		})
 	}
 }

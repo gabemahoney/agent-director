@@ -179,6 +179,17 @@ func TestRepairCheckPermission(t *testing.T) {
 // first hook, to waiting.
 func (e *killEnv) resumeOnPane(t *testing.T, r killRow) {
 	t.Helper()
+	e.resumeWritesOnPane(t, r)
+	if err := seedAgentState(e.st, e.dbPath, r.ID, store.StateWaiting); err != nil {
+		t.Fatalf("the resumed agent's first hook: %v", err)
+	}
+}
+
+// resumeWritesOnPane is resume's move to pending and identity write recording
+// r's pane, before the new agent's first hook: a new token, the same life, the
+// saved session id kept and no agent process recorded.
+func (e *killEnv) resumeWritesOnPane(t *testing.T, r killRow) {
+	t.Helper()
 	sp, err := e.st.GetSpawn(r.ID)
 	if err != nil {
 		t.Fatalf("GetSpawn: %v", err)
@@ -190,9 +201,6 @@ func (e *killEnv) resumeOnPane(t *testing.T, r killRow) {
 	}
 	if res, err := e.st.RecordLaunchIdentity(r.ID, moved, token, r.Spawn.Identity); err != nil || res != store.CondApplied {
 		t.Fatalf("RecordLaunchIdentity = %v, %v; want applied", res, err)
-	}
-	if err := seedAgentState(e.st, e.dbPath, r.ID, store.StateWaiting); err != nil {
-		t.Fatalf("the resumed agent's first hook: %v", err)
 	}
 }
 

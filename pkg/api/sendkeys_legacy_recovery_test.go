@@ -85,7 +85,7 @@ func legacyRecoverySend(t *testing.T, e *killEnv, r killRow, now time.Time, toke
 			params.RequestToken, params.As, params.Key, params.Text = token, "allow", "1", ""
 			params.ExpectPaneSHA256 = api.PaneSHA256("startup dialog\n")
 		}
-		return api.SendKeys(&submissionStore{SendKeysStore: e.store}, e.rec, api.SendKeysEnv{Relay: api.RelayView{
+		return api.SendKeys(&submissionStore{SendKeysStore: e.store, Persistence: e.store}, e.rec, api.SendKeysEnv{Relay: api.RelayView{
 			Procs: e.pc, PIDNamespace: func() (string, bool) { return relayNS, true },
 			Now: func() time.Time { return now }, Window: legacyRecoveryWindow}, Sleep: func(d time.Duration) { now = now.Add(d); e.sleep(d) }}, params)
 	})

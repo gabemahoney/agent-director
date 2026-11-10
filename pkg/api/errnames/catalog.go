@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/probe"
@@ -13,7 +14,7 @@ import (
 	api "github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// Entry pairs an err_name string with the sentinel error it names.
+// Entry pairs an err_name string with its sentinel or typed error category.
 // Catalog is walked via errors.Is, so %w-wrapped errors are matched
 // correctly.
 type Entry struct {
@@ -34,8 +35,9 @@ var errInternal = errors.New("ErrInternal")
 // errCatalog for diff hygiene; no current entry wraps another, so
 // first-match order is not load-bearing today.
 //
-// The sentinels here MUST match the exported error variables in pkg/api
-// and the internal/* packages. There is intentionally no parallel list:
+// Entries MUST match the declared errors in pkg/api and internal/* packages,
+// including the separate administrator's typed refusals. No admin-only entry
+// adds an error to a public verb. There is intentionally no parallel list:
 // this Catalog IS the single declaration point for err_name strings.
 // Coherence with pkg/api sentinel variables is enforced by
 // pkg/api/errnames/catalog_test.go and the full test suite (Task 6, ib).
@@ -54,6 +56,9 @@ var Catalog = []Entry{
 	{Name: "ErrRelayModeInvalid", Err: spawn.ErrRelayModeInvalid},
 	{Name: "ErrSpawnDeniedFlag", Err: spawn.ErrSpawnDeniedFlag},
 	{Name: "ErrReservedEnvKey", Err: spawn.ErrReservedEnvKey},
+	{Name: "ErrExperimentalAgentDisabled", Err: spawn.ErrExperimentalAgentDisabled},
+	{Name: "ErrAgentCapabilityUnsupported", Err: spawn.ErrAgentCapabilityUnsupported},
+	{Name: "ErrModelMissing", Err: spawn.ErrModelMissing},
 	{Name: "ErrAgentMissing", Err: spawn.ErrAgentMissing},
 	{Name: "ErrAgentInvalid", Err: spawn.ErrAgentInvalid},
 	{Name: "ErrAgentArgsMismatch", Err: spawn.ErrAgentArgsMismatch},
@@ -125,6 +130,9 @@ var Catalog = []Entry{
 	{Name: "ErrSchemaMismatch", Err: clisetup.ErrSchemaMismatch},
 	{Name: "ErrSchemaMigrationRequired", Err: clisetup.ErrSchemaMigrationRequired},
 	{Name: "ErrOldLayout", Err: clisetup.ErrOldLayout},
+	// The separate administrator command emits this existing typed category.
+	// It is not a public Client/MCP verb error or an additional API sentinel.
+	{Name: "ErrJournalMigrationRefused", Err: &adminapi.JournalRefusal{}},
 	// ErrUnknownVerb, ErrJSONMarshal and ErrTrailWrite come from no verb
 	// handler either: the command binaries write them themselves (a verb the
 	// binary does not know; a JSON result the binary cannot write; a trail

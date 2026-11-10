@@ -171,9 +171,6 @@ func advPaced(fs []advPaneKeysFailure) []advPaneKeysFailure {
 	var out []advPaneKeysFailure
 	for _, f := range fs {
 		f.name, f.paced = "paced: "+f.name, true
-		if f.call == tmux.CallSendEnter {
-			f.call = tmux.CallSendKey
-		}
 		out = append(out, f)
 	}
 	return out
@@ -213,9 +210,9 @@ const (
 func advPaneEnterFailures(timedOut, failed string) []advPaneKeysFailure {
 	once := func(f tmux.Failure) tmuxfix.Script { return tmuxfix.Script{Failure: f, Times: 1} }
 	return []advPaneKeysFailure{
-		{name: "Enter timed out before reaching the pane", call: tmux.CallSendEnter, script: once(tmux.FailTimeout),
+		{name: "Enter timed out before reaching the pane", call: callEnterKey, script: once(tmux.FailTimeout),
 			advice: timedOut},
-		{name: "Enter failed, the follow-up lookup found the session", call: tmux.CallSendEnter,
+		{name: "Enter failed, the follow-up lookup found the session", call: callEnterKey,
 			script: once(tmux.FailNoServer), advice: failed},
 	}
 }
@@ -223,7 +220,7 @@ func advPaneEnterFailures(timedOut, failed string) []advPaneKeysFailure {
 // advPaneEnterSubmitted is a timed-out Enter that submitted what was typed,
 // its description carrying advice.
 func advPaneEnterSubmitted(what, advice string) advPaneKeysFailure {
-	return advPaneKeysFailure{name: "Enter timed out after submitting " + what, call: tmux.CallSendEnter,
+	return advPaneKeysFailure{name: "Enter timed out after submitting " + what, call: callEnterKey,
 		script: tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, reached: true, advice: advice}
 }
 
@@ -389,8 +386,14 @@ func TestAdviceFollow_E20_SendKeysPacedPieceFailedReadPane(t *testing.T) {
 					t.Errorf("description %q advises %q", errText(run.err), resend)
 				}
 			}
-			want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes}
-			for range pieces {
+			// The target's lookup and listing, input admission's before the
+			// first piece and the identity recheck's before each later one; a
+			// relay-guard stop comes before that recheck.
+			want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes}
+			for i := range pieces {
+				if i > 0 {
+					want = append(want, tmux.CallLookup, tmux.CallListPanes)
+				}
 				want = append(want, tmux.CallSendText)
 			}
 			if got := paKinds(run.calls); !slices.Equal(got, want) {
@@ -495,7 +498,7 @@ func advAssertPaneAnswered(t *testing.T, e *killEnv, r killRow, token string, ru
 	if run.err != nil {
 		t.Fatalf("pane answer (send-keys with request_token %s): %v; want it accepted", token, run.err)
 	}
-	assertOneKey(t, run.calls, r.Spawn.Identity.PaneID, "1", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+	assertOneKey(t, run.calls, r.Spawn.Identity.PaneID, "1", paneAnswerBeforeKey...)
 	if pr, err := e.st.GetPermissionRequest(r.ID, token); err != nil || pr.PaneAnswer != store.PaneAnswerSent || pr.Decision != "allow" {
 		t.Errorf("request %s = %+v, %v; want pane_answer sent, decision allow", token, pr, err)
 	}
@@ -711,7 +714,7 @@ func TestAdviceFollow_E7_RelayFallenBackAnswerAtPaneOrRecord(t *testing.T) {
 					if run.err != nil {
 						t.Fatalf("pane answer: %v", run.err)
 					}
-					assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "Escape", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+					assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "Escape", paneAnswerBeforeKey...)
 				} else {
 					p.setPane("answered by a person at tmux\n")
 					p.now = p.now.Add(2 * time.Second) // the refusal recorded hook_gone_at
@@ -764,7 +767,7 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	if run.err != nil {
 		t.Fatalf("pane answer on A once B's hook delivered: %v; want it accepted", run.err)
 	}
-	assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "1", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+	assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "1", paneAnswerBeforeKey...)
 }
 
 // TestAdviceFollow_E7_DecideFallenBackAnswerAtPane: E7 "answer it at the pane
@@ -943,7 +946,7 @@ func TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded(t *testing.T) {
 			t.Fatalf("decide A = %v, %v", ok, err)
 		}
 	}
-	const closedBeforeDelivery = "its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict"
+	const closedBeforeDelivery = "its spawn ended, or a shared check marked it missing, before the request's relay hook delivered a verdict"
 	cases := []struct {
 		name         string
 		steps        []decideStep // in order, before decide
@@ -1112,7 +1115,7 @@ func TestAdviceFollow_E15_CodexFallbackLiteralSafety(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text)
+			assertInputWrites(t, e.killEnv, r, text)
 			if calls := e.rec.SocketCallsOf(tmux.CallSendText); len(calls) != 1 || !calls[0].Paste {
 				t.Fatalf("not one paste: %+v", calls)
 			}
@@ -1123,8 +1126,10 @@ func TestAdviceFollow_E15_CodexFallbackLiteralSafety(t *testing.T) {
 
 // E15 (b.vr5): "put the prompt in a file and send a short instruction to read
 // it" after macOS paced Claude text over 32 KiB is refused before any input,
-// typing and journalling nothing; followed, the instruction is delivered. Text
-// of 32 KiB is typed.
+// typing nothing and recording no input attempt; followed, the instruction is
+// delivered. Text of 32 KiB is typed. This unsupported launch records no
+// attempt for paced text either way; TestSendKeysMacClaudePacedRecordAndAttemptFacts
+// pins the refusal before the record on a supported one.
 func TestAdviceFollow_E15_PacedClaudeTextOver32KiB(t *testing.T) {
 	// Serial: it sets the process-wide paced-typing selection with api.SetClaudePacedTypingForTest.
 	t.Cleanup(api.SetClaudePacedTypingForTest(true))
@@ -1156,8 +1161,8 @@ func TestAdviceFollow_E15_PacedClaudeTextOver32KiB(t *testing.T) {
 			adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "put the prompt in a file and send a short instruction to read it")
 			e.assertNothingSent(t)
 			e.assertNoCalls(t, tmux.CallSendKey)
-			if e.b.current != nil {
-				t.Errorf("journal = %+v; want no entry claiming input", e.b.current)
+			if e.b.current != nil || len(e.b.history) != 0 {
+				t.Errorf("input attempts = %+v, %+v; want no durable input record", e.b.current, e.b.history)
 			}
 			e.assertRowUnchanged(t, r.ID, before)
 
@@ -1195,7 +1200,7 @@ func TestAdviceFollow_E16_CodexFallbackRequiresPasteCapability(t *testing.T) {
 	if err := e.send(p); err != nil {
 		t.Fatal(err)
 	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+	assertInputWrites(t, e.killEnv, r, skpText)
 	if !e.rec.SocketCallsOf(tmux.CallSendText)[0].Paste {
 		t.Fatal("replacement adapter did not paste")
 	}

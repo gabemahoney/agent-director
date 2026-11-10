@@ -12,7 +12,8 @@ import (
 // permission request at the pane: a pane answer through send-keys (rule 8:
 // its intent, then sent, or the intent released), a caller's record of an
 // answer made outside agent-director (record-pane-answer, rule 13), and the
-// PostToolUse close of a request whose tool ran (rule 13). None reads Claude
+// PostToolUse close of a request whose tool ran (rule 13; it matches no Claude
+// or Codex request, which carries no tool_use_id; b.wbs). None reads Claude
 // Code's screen: the verdict each records is a caller's claim (pane_as) or
 // the inference that a tool which ran was allowed.
 
@@ -138,9 +139,27 @@ func paneIntentOwnerArgs(intent PaneIntent) []any {
 	return append([]any{millisArg(intent.At)}, processIdentityArgs(intent.Sender)...)
 }
 
+// CheckPaneIntent keeps the original pane claim across a waited native-input
+// intent commit. It does not renew the claim or choose a response.
+func (s *Store) CheckPaneIntent(ctx context.Context, instanceID, token string, intent PaneIntent) error {
+	return s.WithContext(ctx).readWithin(DefaultLockWait, "store: check pane intent", func(ctx context.Context, conn *sql.Conn) error {
+		args := append([]any{instanceID, token, intent.As}, paneIntentOwnerArgs(intent)...)
+		var matched int
+		err := conn.QueryRowContext(ctx, `SELECT count(*) FROM permission_requests AS pr WHERE pr.instance_id=? AND pr.request_token=? AND pr.pane_as=? AND `+paneIntentOwnerSQL+` AND `+awaitingAnswerSQL, args...).Scan(&matched)
+		if err != nil {
+			return err
+		}
+		if matched != 1 {
+			return ErrNoOpenPermissionRequest
+		}
+		return ctx.Err()
+	})
+}
+
 // paneSentSQL is RecordPaneSent's statement.
 const paneSentSQL = `UPDATE permission_requests
-	   SET pane_answer = 'sent', decision = pane_as, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+	   SET pane_answer = 'sent', decision = pane_as, decision_reason = ?, decided_at = CURRENT_TIMESTAMP,
+	       decision_origin = 'pane'
 	 WHERE instance_id = ? AND request_token = ? AND closed_at IS NULL AND ` + paneIntentOwnerSQL + `
 	 RETURNING request_id, tool_name, decision`
 
@@ -223,7 +242,8 @@ func (s *Store) ReleasePaneIntent(instanceID, requestToken string, intent PaneIn
 
 // paneOutsideSQL is RecordPaneOutside's statement.
 const paneOutsideSQL = `UPDATE permission_requests AS pr
-	   SET pane_answer = 'outside', pane_as = ?, decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+	   SET pane_answer = 'outside', pane_as = ?, decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP,
+	       decision_origin = 'observation'
 	 WHERE pr.instance_id = ? AND pr.request_token = ? AND ` + awaitingAnswerSQL + `
 	 RETURNING request_id, tool_name`
 
@@ -284,30 +304,38 @@ const toolRanCandidatesSQL = `SELECT ` + permissionColumns + `
 
 // closeToolRanSQL is CloseToolRanRequests' statement, run once per request.
 const closeToolRanSQL = `UPDATE permission_requests AS pr
-	   SET pane_answer = 'tool_ran', decision = 'allow', decision_reason = ?, decided_at = CURRENT_TIMESTAMP,
+	   SET pane_answer = 'tool_ran',
+	       decision = COALESCE(pr.decision, 'allow'),
+	       decision_reason = COALESCE(pr.decision_reason, ?),
+	       decision_origin = CASE WHEN pr.decision IS NULL THEN 'observation' ELSE pr.decision_origin END,
+	       decided_at = COALESCE(pr.decided_at, CURRENT_TIMESTAMP),
 	       hook_gone_at = COALESCE(pr.hook_gone_at, ?),
 	       proven_gone_how = CASE WHEN pr.proven_gone_at IS NULL THEN '` + ProvenGoneToolRan + `' ELSE pr.proven_gone_how END,
 	       proven_gone_at = COALESCE(pr.proven_gone_at, ?)
 	 WHERE pr.request_id = ? AND pr.instance_id = ? AND pr.tool_use_id = ? AND ` + awaitingAnswerSQL + `
 	   AND EXISTS (SELECT 1 FROM spawns WHERE instance_id = ? AND agent IS NOT 'cursor' AND ` + hookGateSQL + `)
-	 RETURNING request_token, tool_name`
+	 RETURNING request_token, tool_name, decision, COALESCE(decision_reason, '')`
 
 // CloseToolRanRequests is the PostToolUse close (b.146 rule 13): Claude
 // Code's PostToolUse or PostToolUseFailure for toolUseID means the tool of
-// the request carrying that tool_use_id ran, so its dialog was answered allow.
+// the request carrying that tool_use_id completed, so its dialog is gone.
 // It reads instanceID's requests recorded from schema v7 on whose tool_use_id
 // is toolUseID and which still await an answer, and closes each one whose
 // relay hook gone reports gone (fallen back: the caller judges the hook
 // process, or its settle instant when the process cannot be checked, BEFORE
 // the guarded write reads the record; a request whose hook may still answer
 // it is left alone) with one guarded statement: pane_answer tool_ran,
-// decision allow, decision_reason tool_ran, decided_at, hook_gone_at at
+// preserving any prior decision, non-null reason and origin, inferring an
+// observational allow only if undecided, and filling a missing reason with
+// tool_ran independently of origin; decided_at, hook_gone_at at
 // unless already set, and, unless it is already proven gone, proven_gone_at
 // at with proven_gone_how tool_ran (b.146 step 2c: the tool ran, so its
 // dialog is gone), only while the request still awaits an answer and the
 // hook's gate holds (hookGateSQL: the hook's parent is the row's recorded
 // pane process, SR-22.9). A nil gone closes nothing. An empty toolUseID
-// reads and closes nothing.
+// reads and closes nothing. In practice it closes nothing: Claude's and
+// Codex's PermissionRequest carry no tool_use_id, so no request they record
+// has one to match (b.wbs).
 // Cursor requests require validated ACP execution evidence through
 // ProveCursorToolRan; this generic hook path cannot close them.
 //
@@ -330,15 +358,15 @@ func (s *Store) CloseToolRanRequests(instanceID string, gate HookGate, toolUseID
 		}
 		args := append([]any{DecisionReasonToolRan, millisArg(at), millisArg(at), pr.RequestID, instanceID, toolUseID, instanceID},
 			hookGateArgs(gate)...)
-		var token, toolName string
-		err := s.db.QueryRow(closeToolRanSQL, args...).Scan(&token, &toolName)
+		var token, toolName, decision, reason string
+		err := s.db.QueryRow(closeToolRanSQL, args...).Scan(&token, &toolName, &decision, &reason)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
 		if err != nil {
 			return closed, fmt.Errorf("store: close tool-ran request: %w", err)
 		}
-		emitDecisionCommitted(instanceID, token, pr.RequestID, toolName, "allow", DecisionReasonToolRan, WriterProcessHook)
+		emitDecisionCommitted(instanceID, token, pr.RequestID, toolName, decision, reason, WriterProcessHook)
 		closed = append(closed, token)
 	}
 	return closed, nil

@@ -25,9 +25,9 @@ const (
 // after the server's last session ended either succeeds, or gets one of the
 // two named errors until, after waiting and checking again, it succeeds.
 func TestAdviceFollow_C7_RepeatedKillWhileServerExits(t *testing.T) {
-	// C7 kill manifest: "A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the caller waits and checks again."
+	// C7 kill manifest: "A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; wait and check again."
 	const advice = "A repeated kill right after the last session on its tmux server ends can get " +
-		"ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the caller waits and checks again."
+		"ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; wait and check again."
 	if v, ok := manifest.Lookup("kill"); !ok || !strings.Contains(v.Description, advice) {
 		t.Fatalf("kill's Description lacks the advice %q", advice)
 	}
@@ -59,9 +59,8 @@ func TestAdviceFollow_C7_RepeatedKillWhileServerExits(t *testing.T) {
 			t.Fatalf("repeated kill still fails after %s (answers %v): %s", advKillServerExit, answers, describe(err))
 		}
 		time.Sleep(advKillCheckAgain)
-		if st, err := c.Status(r.InstanceID); err != nil || st.State != "waiting" {
-			t.Fatalf("status while checking again = %+v, %s; want waiting (kill never changes the row)", st, describe(err))
-		}
+		// Kill never changes the row.
+		f.assertRowUnchanged(t, r.InstanceID, r.Before)
 	}
 	t.Logf("answers before the repeated kill succeeded: %v", answers)
 	assertProcs(t, true, r.Reply.PanePID)

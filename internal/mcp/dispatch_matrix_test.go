@@ -89,6 +89,7 @@ func matrixCases() map[string]matrixCase {
 			strings.Repeat("0", 64) + `","n_lines":3}`},
 
 		"list":         {args: `{"limit":10}`},
+		"sweep":        {args: `{}`},
 		"find-missing": {args: `{}`},
 		"expire":       {args: `{"older_than":"7d"}`},
 
@@ -166,7 +167,14 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 
 			d := mcp.NewLiveDispatcher(client)
 
-			_, err = d.Call(context.Background(), mcp.ToolName(v.Name), json.RawMessage(tc.args))
+			result, callErr := d.Call(context.Background(), mcp.ToolName(v.Name), json.RawMessage(tc.args))
+			err = callErr
+			if v.Name == "sweep" || v.Name == "find-missing" {
+				raw, marshalErr := json.Marshal(result)
+				if err != nil || marshalErr != nil || string(raw) != `{"checks":[],"count":0,"ids":[],"unverified":0,"unverified_ids":[]}` {
+					t.Errorf("%s = %s, %v, %v; want exact empty sweep envelope", v.Name, raw, err, marshalErr)
+				}
+			}
 
 			// An args key that is not one of the verb's params is refused
 			// before any decode (b.c4u), which would leave this case

@@ -10,6 +10,7 @@ differs from the rules, the rules win.
 - **Run tests only as docs/engineering-guide.md §10 "Build and test commands" says**, never on the host, because they can rewrite the real agent-director store.
 - **Integration tests** are the Docker testplans "Writing Testplans" below describes.
 - **Fixtures.** Reuse the fixtures whose `docs/architecture.md` headings are marked "(reusable …)". Register a new reusable one the same way and in its doc comment.
+- **Event-driven work and recovery.** Test that time alone creates neither a job nor an idle Helper probe, while finite waits for current work retain their behavior. Choose distinct regressions for shared read/sweep recovery, fixed selection and independently guarded lifecycle/process/display evidence. Reuse existing store, tmux, native-input and Cursor fixtures, injected clocks and causal barriers; retain real process, SQLite and IPC coverage where the claim depends on them. Keep existing native-input, permission and pause authorization, ownership, dialog and ambiguity guards covered.
 - **Advice text.** Adding or changing error advice that tells a caller what to do next needs a literal-follow test that does exactly what it says.
 - **Size guards.** Don't raise a recorded baseline (such as `helpStdoutBytes`) to make a test pass. A few bytes under the hard cap is fine, with the reason in the commit; otherwise stop and ask.
 - **Regression tests** name the Bug's ID in a comment.
@@ -160,12 +161,18 @@ wire detail.
     (`owner_launch_token`, `owner_permission_epoch`, `admitted_at`,
     `fallback_at`, `fallback_basis`) and `spawns.permission_epoch`.
   - `idle-screen` moves a committed baseline's start (`spawns.pane_since_ms`)
-    back instead of waiting out a timeout (a read is the baseline's only
-    writer), and its Cursor case seeds its rows (an
+    back instead of waiting out a timeout (state reads and `sweep` are the
+    baseline's only writers), and its Cursor case seeds its rows (an
     `idle_screen_timeout_seconds` override and an old baseline included) and
     a request, as `needs-intelligence` does.
 
   The exceptions cover those two plans only.
+- `idle-screen` obtains positive
+  pane evidence through real launches/hooks/reads, then removes only the
+  session's `@ad_owner` label while the agent stays alive to test a failed
+  latest attempt retaining its first confirmation. Integration must export
+  `/tmp/idle-screen-artifacts/public.jsonl` before container cleanup. A baseline
+  without `display_evidence` exits unavailable (77), not passed.
 - Lifecycle and read-write coverage lives in
   `internal/store/display_lifecycle_test.go` (find-missing's repair, unreadable
   display metadata, a stored `needs_intelligence` ended at the first read, an
@@ -431,9 +438,11 @@ hook observation, and unresolved native ownership blocking fallback resends.
 `sendkeys_submission_test.go` covers bounded pending Codex and Claude hook
 observation. Tests of manual transport should explicitly choose a manual operation.
 
-Native adapter tests in `internal/inputdelivery` use private temporary launch
-manifests and native JSONL records. Reuse `evidenceSession`, `claudeRecord`,
-`writeEvidence` and the Codex record fixtures. Check exact new content and
+Native adapter/parser tests in `internal/inputdelivery` reuse `evidenceSession`
+with its in-memory `evidencePersistence`, plus private native JSONL records from
+`claudeRecord`, `writeEvidence` and the Codex fixtures. SQLite authority tests
+reuse `sqliteSubmission`/`sqliteDeliveryBackend` in `pkg/api`; the parser fixture
+does not prove persistence. Check exact new content and
 session/process provenance, prefix watermarks, late evidence and durable
 reconciliation. Include an older identical record in a newly discovered Codex
 path so a descriptor discovered after input cannot masquerade as fresh proof.

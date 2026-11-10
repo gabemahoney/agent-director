@@ -65,7 +65,7 @@ func TestLegacyRecoveryMixedModernDelivery(t *testing.T) {
 						return runVerb(e, func() (api.SendKeysResult, error) {
 							now := p.now
 							view.Now = func() time.Time { return now }
-							return api.SendKeys(&submissionStore{SendKeysStore: e.store}, e.rec, api.SendKeysEnv{Relay: view, Sleep: func(d time.Duration) { now = now.Add(d); e.sleep(d) }}, params)
+							return api.SendKeys(&submissionStore{SendKeysStore: e.store, Persistence: e.store}, e.rec, api.SendKeysEnv{Relay: view, Sleep: func(d time.Duration) { now = now.Add(d); e.sleep(d) }}, params)
 						})
 					}
 					// The legacy row alone releases plain keys before its 24-hour window ends.
@@ -119,7 +119,7 @@ func TestLegacyRecoveryMixedModernDelivery(t *testing.T) {
 						want = api.ErrDialogMaybeOpen
 					case "valid_hash":
 						params.ExpectPaneSHA256 = p.hash()
-						calls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter}
+						calls = paneHashSendCalls
 					case "stale_hash":
 						params.ExpectPaneSHA256 = api.PaneSHA256("an earlier dialog\n")
 						want, calls = api.ErrPaneChanged, paneReadCalls

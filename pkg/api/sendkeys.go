@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -137,10 +139,15 @@ type SendKeysParams struct {
 // SendKeysResult carries native proof for a supported ordinary request. Other
 // pane operations return an empty object and make no exact-proof claim.
 type SendKeysResult struct {
-	RequestID    string `json:"request_id,omitempty"`
-	Outcome      string `json:"outcome,omitempty"`
-	SessionID    string `json:"session_id,omitempty"`
-	RecordID     string `json:"record_id,omitempty"`
+	// RequestID identifies the confirmed native request.
+	RequestID string `json:"request_id,omitempty"`
+	// Outcome is submitted when exact native proof confirms the request.
+	Outcome string `json:"outcome,omitempty"`
+	// SessionID is the native session named by the confirming record.
+	SessionID string `json:"session_id,omitempty"`
+	// RecordID is the provider's confirming record ID, when available.
+	RecordID string `json:"record_id,omitempty"`
+	// RecordSHA256 hashes the exact retained bytes of the confirming record.
 	RecordSHA256 string `json:"record_sha256,omitempty"`
 }
 
@@ -148,6 +155,8 @@ type SendKeysResult struct {
 // store and tmux surface (b.146 rules 7, 8 and 14). The Client builds it from
 // its own readers, clock and configuration.
 type SendKeysEnv struct {
+	// Context bounds native admission, persistence and dispatch. Nil has no caller deadline.
+	Context context.Context
 	// Input supplies native readiness, terminal facts, and the durable launch
 	// journal. Nil uses the platform implementation.
 	Input InputDeliveryBackend
@@ -165,7 +174,11 @@ type SendKeysEnv struct {
 	// Sleep pauses between native readiness, drain and submission checks,
 	// pending Claude fallback's terminal/SessionStart readiness and settle,
 	// pending-Codex and pending-Claude hook checks, Cursor gateway verdict
-	// reads, and paced Claude typing's pieces and Enter. Nil uses time.Sleep.
+	// reads, and paced Claude typing's pieces and Enter. An injected Sleep
+	// ignores Context, so the pending Claude wait checks Context after each
+	// pause, and paced typing before each later piece and the Enter. Nil waits
+	// on a timer that Context's end cuts short, or uses time.Sleep without
+	// Context.
 	Sleep func(time.Duration)
 }
 
@@ -252,16 +265,27 @@ type sendKeysGuard struct {
 // first observed waiting. A cooked terminal turns Enter into LF, and raw mode
 // or SessionStart alone can still precede the composer accepting input (b.qcf).
 // It requires a PaneTerminalTmux adapter. Any unmet readiness condition by the
-// deadline, a failed read, a missing capability, or a changed launch, state,
-// pane or guard is ErrSubmissionUnconfirmed with outcome not_started and
-// nothing typed, so the same call can be made again later. The row must remain
-// waiting after SessionStart. It then revalidates the server, session, pane and
-// relay/dialog guards within the same 12 s budget before journalling or typing
-// the literal text and one Enter.
+// deadline (or the call context's earlier one), a failed read, cancellation, a
+// missing capability, a changed launch, state, pane or guard during the wait,
+// or a changed launch or authority at input admission is
+// ErrSubmissionUnconfirmed with outcome not_started and nothing typed, so the
+// same call can be made again later; admission's own state and relay/dialog
+// guard refusals keep their own errors, also with nothing typed. The row must
+// remain waiting after SessionStart. It then revalidates the server, session,
+// pane and relay/dialog guards within the same 12 s budget. Input admission
+// follows the wait and accepts only the launch's initial SessionStart report-in
+// as a row change, a resumed launch's keeping or rotating its session id;
+// journalling and typing the literal text and one Enter follow it.
 // On a macOS host a Claude row's plain text that does not take native delivery
-// and is longer than inputdelivery.ChunkBytes is typed in paced pieces, with
-// the row rechecked before each later piece and the Enter (typePaced,
-// pacedRefusal; b.vr5); longer than pacedTextMaxBytes it is refused not_started.
+// and is longer than inputdelivery.ChunkBytes is typed in paced pieces after
+// input admission and recordManualInput: with an input session, the full input
+// admission check runs before the first piece; before each later piece and the
+// Enter the row and relay guard (pacedRefusal) and, with an input session,
+// input authority (the launch, session, and pane and process identity, not the
+// row version or state) are rechecked; and the call's context and deadline are
+// checked before each later piece and the Enter (typePaced, pacedRefusal;
+// b.vr5). Longer than pacedTextMaxBytes it is refused not_started before any
+// input or durable input record.
 // Pending Codex and Claude fallback input gets bounded hook observation. An
 // unresolved native attempt blocks fallback resends. Manual operations below
 // retain their separate contract and serialize with ordinary delivery. State,
@@ -310,9 +334,10 @@ type sendKeysGuard struct {
 //     the oldest. Only a call that names the request it answers can type on
 //     such a row.
 //  3. Plain without expect_pane_sha256, any request of the row is not proven
-//     gone (b.146 step 2c: no PostToolUse with its tool_use_id (Claude), no
-//     main-agent Stop, idle-prompt Notification or (Codex) Interrupt after it
-//     for a request with no agent_id, and no end of the row's agent recorded), however
+//     gone (b.146 step 2c: no main-agent Stop, idle-prompt Notification or
+//     (Codex) Interrupt after it for a request with no agent_id, no
+//     SubagentStop of its subagent after it for a request with one (Claude;
+//     b.wbs), and no end of the row's agent recorded), however
 //     agent-director's own records say it closed: ErrDialogMaybeOpen with
 //     err_details (DialogMaybeOpenDetails), naming the oldest. A Cursor
 //     request of an earlier launch of the row does not hold
@@ -395,12 +420,16 @@ type sendKeysGuard struct {
 // refusals still end "retry later"; so do a key's and a no_enter text's.
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
-// Manual calls are at most one lookup, one pane listing, one capture, the text
-// or key call (paced Claude text: one per piece), the Enter call and, only
-// after an action failure other than a timeout, one follow-up lookup
-// (SR-13.2). SendKeys never writes the row's state. Native ordinary delivery
-// revalidates ownership and guards before every write and queue sample,
-// within bounded readiness, drain and confirmation loops.
+// Manual admission rechecks may repeat the lookup and pane listing before
+// text, a key or Enter (paced Claude text: one text call per piece; the first
+// preceded by the admission recheck, each later one and the Enter by an
+// input-authority recheck, each with one lookup and one pane listing). When a
+// hash is supplied, the pane is recaptured after waited admission checks
+// before the first dispatch; the following Enter does not compare that hash
+// against this call's own text. An action failure other than a timeout adds
+// one follow-up lookup (SR-13.2). SendKeys never writes the row's state.
+// Ordinary delivery revalidates ownership and guards before every write and
+// queue sample, within bounded readiness, drain and confirmation loops.
 //
 // Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
 // record per distinct reason per call (source ad_send_keys), fail-open, and
@@ -472,12 +501,12 @@ func sendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 	r := &sendKeysRun{s: s, t: t, env: env, j: newRelayJudge(env.Relay),
 		facts: sendKeysFacts{Guard: guardNotApplicable, Caller: callerIdentity()}}
 	err := r.run(params)
-	r.emitDisagree("send-keys", params.InstanceID, r.facts.Caller)
+	r.emitDisagree(legacyTrail, "send-keys", params.InstanceID, r.facts.Caller)
 	return r.facts, r.deliveryResult, err
 }
 
 // run is the send-keys flow; the returned error is SendKeys'.
-func (r *sendKeysRun) run(params SendKeysParams) error {
+func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	plan, err := planSendKeys(params)
 	if err != nil {
 		return err
@@ -490,6 +519,14 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 		return err
 	}
 	r.facts.RowState = row.State
+	paneOnly := spawn.IsPaneOnly(row.Agent)
+	if paneOnly && params.DeliveryRequestID != "" {
+		return spawn.PaneOnlyCapabilityError(row.Agent, "send-keys delivery_request_id")
+	}
+	if paneOnly && plan.answer {
+		return fmt.Errorf("%w: %s has no permission request %s; nothing was sent",
+			store.ErrNoOpenPermissionRequest, row.InstanceID, params.RequestToken)
+	}
 
 	if err := sendKeysStateGuard(row, params); err != nil {
 		return err
@@ -512,15 +549,24 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	if err != nil {
 		return fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
+	if paneOnly {
+		// No native journal, readiness, deduplication or proof applies to this
+		// lane. Retain the ordinary owned-pane, hash and literal input guards.
+		r.keysRun = newKeysRun(r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
+		return r.sendPrepared(plan, params)
+	}
 	if row.Identity.Token != "" {
-		id := deliveryIdentity(row, r.s.StoreID())
-		r.input, err = openInputDelivery(r.env.Input, id)
+		r.input, err = openInputDelivery(r.env.Context, r.env.Input, r.s, row, r.s.StoreID(), plan.answer || plan.key != nil || plan.hash != "" || !plan.enter || plan.text == "")
 		if err != nil {
 			return deliveryNotStarted(row, "exclusive input writer or delivery journal is unavailable")
 		}
 	}
 	if r.input != nil {
-		defer r.input.Close()
+		defer func() {
+			if err := r.input.Close(); err != nil {
+				resultErr = inputCleanupError(row, r.found, r.deliveryResult, resultErr, err)
+			}
+		}()
 		id := deliveryIdentity(row, r.s.StoreID())
 		r.automatic = supportsInput(r.input, id) && ordinary
 		if ordinary {
@@ -546,6 +592,9 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 		if !ok {
 			return deliveryNotStarted(row, "the tmux adapter does not support Codex fallback paste; use a paste-capable adapter")
 		}
+		if _, guarded := paste.(GuardedPasteKeysTmux); r.input != nil && !guarded {
+			return deliveryNotStarted(row, "the tmux adapter does not support guarded Codex fallback paste; use a journal-aware paste adapter")
+		}
 		r.paste = paste
 	}
 	if reason := pacedTextTooLong(row.Agent, plan.text); !r.automatic && reason != "" {
@@ -558,6 +607,12 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 		}
 		r.terminal = terminal
 	}
+	return r.sendPrepared(plan, params)
+}
+
+// sendPrepared shares manual transport and ownership checks with native agents.
+func (r *sendKeysRun) sendPrepared(plan sendKeysPlan, params SendKeysParams) error {
+	row := r.row
 	if plan.enter {
 		// A literal retry after a text call with Enter would type the text
 		// again after its unsubmitted copy (b.9o4); without Enter, or for a
@@ -569,7 +624,7 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 			return pendingLeftoverError(row.InstanceID, leftovers)
 		}
 	}
-	err = r.send(plan, params)
+	err := r.send(plan, params)
 	r.facts.keysFacts = r.found
 	if err == nil && !r.automatic && row.State == store.StatePending && plan.enter && (row.Agent == store.AgentCodex || r.terminal != nil) {
 		return r.confirmLegacySubmission(row)
@@ -577,18 +632,62 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	return err
 }
 
-// send is the tmux phase: the agent's pane, then native ordinary delivery,
-// a pane answer (paneAnswer), or the hash check when asked (paneMatches)
-// followed by a key, fallback paste or literal text; pending Claude fallback
-// text first waits for a raw terminal, SessionStart and its settle, then
-// revalidates its launch and guards within the readiness budget
-// (waitTerminalRaw). A Cursor row's text with Enter also reads its gateway's
-// verdict (typeCursorText). On macOS a Claude row's text longer than
-// inputdelivery.ChunkBytes is typed in paced pieces (typePaced).
+// send is the tmux phase: the agent's pane, the hash check when asked
+// (paneMatches), pending Claude fallback text's wait for a raw terminal,
+// SessionStart and its settle with its launch and guards revalidated within
+// the readiness budget (waitTerminalRaw), then input admission (admitInput).
+// Native ordinary delivery, a pane answer (paneAnswer), a key, fallback paste
+// or literal text follow; on macOS a Claude row's text longer than
+// inputdelivery.ChunkBytes is typed in paced pieces (typePaced). A hash is
+// compared again after admission and before the first write, never after this
+// call's own text. A Cursor row's text with Enter also reads its gateway's
+// verdict (typeCursorText).
 func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	paneID, launch, err := r.targetPane()
 	if err != nil {
 		return err
+	}
+	if !plan.answer && plan.hash != "" {
+		if err := r.paneMatches(paneID, launch, plan, ""); err != nil {
+			return err
+		}
+	}
+	// Pending Claude readiness precedes admission: Admit freezes the row
+	// guard, and the initial same-process SessionStart report-in is the only
+	// row change admission accepts (sameInputPreparation).
+	if r.terminal != nil {
+		if err := r.waitTerminalRaw(paneID, params); err != nil {
+			return err
+		}
+	}
+	if r.input != nil {
+		var rows interface {
+			GetSpawn(string) (Spawn, error)
+		} = r.s
+		if r.terminal != nil {
+			rows = terminalStateReader{SendKeysStore: r.s, state: &r.terminalState}
+		}
+		if err := r.admitInput(r.env.Context, r.input, rows, func(current Spawn) error {
+			if err := sendKeysStateGuard(current, params); err != nil {
+				return err
+			}
+			guard, err := evaluateRelayGuard(r.s, r.j, r.env.IntentHold, current, params)
+			if err != nil {
+				return err
+			}
+			if guard.refusal != nil {
+				return guard.refusal
+			}
+			return nil
+		}); err != nil {
+			return r.terminalRefusal(err)
+		}
+		r.beforeWrite = func() error {
+			if err := r.checkInputTarget(r.input, checkInput); err != nil {
+				return deliveryNotStarted(r.row, "input admission changed after intent")
+			}
+			return nil
+		}
 	}
 	if r.automatic {
 		return r.deliverOrdinary(paneID, launch, plan, params)
@@ -596,22 +695,55 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	if plan.answer {
 		return r.paneAnswer(paneID, launch, plan, params)
 	}
-	if plan.hash != "" {
-		if err := r.paneMatches(paneID, launch, plan, ""); err != nil {
-			return err
-		}
-	}
 	if plan.key != nil {
-		return r.sendKey(paneID, launch, *plan.key)
-	}
-	if r.terminal != nil {
-		if err := r.waitTerminalRaw(paneID, params); err != nil {
-			return err
+		if plan.hash != "" {
+			prior := r.beforeWrite
+			r.beforeWrite = func() error {
+				if prior != nil {
+					if err := prior(); err != nil {
+						return err
+					}
+				}
+				if r.input != nil {
+					if err := checkInput(r.input); err != nil {
+						return err
+					}
+				}
+				if err := r.paneMatches(paneID, launch, plan, ""); err != nil {
+					return err
+				}
+				if r.env.Context != nil && r.env.Context.Err() != nil {
+					return deliveryNotStarted(r.row, "input admission expired during pane capture")
+				}
+				return nil
+			}
 		}
+		return r.sendKey(paneID, launch, *plan.key)
 	}
 	if r.input != nil {
 		if err := r.recordManualInput(); err != nil {
 			return err
+		}
+	}
+	if plan.hash != "" {
+		prior := r.beforeWrite
+		r.beforeWrite = func() error {
+			if prior != nil {
+				if err := prior(); err != nil {
+					return err
+				}
+			}
+			// Admission may have waited while the pane changed. Check after
+			// that wait, but never compare the caller's hash after our text.
+			if !r.found.Sent {
+				if err := r.paneMatches(paneID, launch, plan, ""); err != nil {
+					return err
+				}
+				if r.env.Context != nil && r.env.Context.Err() != nil {
+					return deliveryNotStarted(r.row, "input admission expired during pane capture")
+				}
+			}
+			return nil
 		}
 	}
 	if r.paste != nil {
@@ -660,18 +792,26 @@ func (r *sendKeysRun) sendKey(paneID string, launch tmux.Launch, k paneKey) erro
 			return err
 		}
 	}
+	if r.beforeWrite != nil {
+		if err := r.beforeWrite(); err != nil {
+			return err
+		}
+	}
 	r.found.Sent = true
 	call, err := tmux.CallSendKey, error(nil)
 	if k.name != "" {
+		r.found.EnterAttempted = k.name == "Enter"
 		err = r.t.SendKeyPane(r.socket, paneID, k.name)
 	} else {
 		call = tmux.CallSendText
+		r.found.BytesAttempted = len(k.char)
 		err = r.t.SendKeysPane(r.socket, paneID, k.char, false)
 	}
 	if err != nil {
 		r.found.SendErr = err
 		return r.sendFailed(err, call, launch)
 	}
+	r.found.TextSent = k.char != ""
 	return nil
 }
 
@@ -694,9 +834,8 @@ func (r *sendKeysRun) sendKey(paneID string, launch tmux.Launch, k paneKey) erro
 // step-3 failure is an unnamed error (ErrInternal) saying the key was sent,
 // with err_details (paneKeySentError), so it never reads as a call that sent
 // nothing and invites a blind retry. A step 3 that matches nothing (the
-// request was closed meanwhile, as by its tool's PostToolUse or a close of
-// its Spawn's requests) changes nothing and the call succeeds: the key was
-// sent.
+// request was closed meanwhile, as by a close of its Spawn's requests)
+// changes nothing and the call succeeds: the key was sent.
 func (r *sendKeysRun) paneAnswer(paneID string, launch tmux.Launch, plan sendKeysPlan, params SendKeysParams) error {
 	id, token := r.row.InstanceID, params.RequestToken
 	intent, written, err := r.s.RecordPaneIntent(id, token, params.As, r.env.self(), r.j.now, store.DefaultLockWait,
@@ -715,6 +854,37 @@ func (r *sendKeysRun) paneAnswer(paneID string, launch tmux.Launch, plan sendKey
 	if !written {
 		return fmt.Errorf("%w: %s request %s no longer awaits an answer; nothing was sent",
 			store.ErrNoOpenPermissionRequest, id, token)
+	}
+	priorCheck := r.beforeWrite
+	r.beforeWrite = func() error {
+		if priorCheck != nil {
+			if err := priorCheck(); err != nil {
+				return err
+			}
+		}
+		if checker, ok := r.s.(interface {
+			CheckPaneIntent(context.Context, string, string, PaneIntent) error
+		}); ok {
+			ctx := r.env.Context
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			if err := checker.CheckPaneIntent(ctx, id, token, intent); err != nil {
+				return err
+			}
+		}
+		if r.input != nil {
+			if err := checkInput(r.input); err != nil {
+				return err
+			}
+		}
+		if err := r.paneMatches(paneID, launch, plan, token); err != nil {
+			return err
+		}
+		if r.env.Context != nil && r.env.Context.Err() != nil {
+			return deliveryNotStarted(r.row, "input admission expired during pane capture")
+		}
+		return nil
 	}
 	if err := r.sendKey(paneID, launch, *plan.key); err != nil {
 		r.releaseIntent(id, token, intent)
@@ -877,15 +1047,19 @@ func isInteractiveState(state string) bool {
 // text longer than 512 bytes that does not take native delivery is typed in
 // pieces of at most 512 bytes, 100 ms apart, with Enter 500 ms after the last
 // pause; a reread of the row before each later piece and before the Enter can
-// stop it there, and such text over 32 KiB is refused before any input
-// (b.vr5). Send such text to one row one call at a time: the pieces of
-// concurrent calls can interleave. With ExpectPaneSHA256 it first checks that
-// the pane still has the hash the caller read. Without it, a plain call on a
-// relayed Spawn is refused while any of its permission requests is not proven
-// gone by Claude Code's own hooks (ErrDialogMaybeOpen; b.146 step 2c), less a
-// Cursor request of an earlier launch of the row
-// (store.PermissionRow.HoldsDialog); ExpectPaneSHA256 means a person or LLM
-// judged that exact screen, so never pass it from an automatic flow.
+// stop it there, as can a change of input authority (launch, session, pane or
+// process), cancellation or the call's deadline. Cancellation or the deadline
+// before the first piece types nothing, and such text over 32 KiB is refused
+// before any input (b.vr5). Send such text to one row one call at a time: while
+// one call holds the row's input writer another is refused (not_started), and
+// on a row with no launch token the pieces of concurrent calls can interleave.
+// With ExpectPaneSHA256 it first checks that the pane still has the hash the
+// caller read. Without it, a plain call on a relayed Spawn is refused while any
+// of its permission requests is not proven gone by Claude Code's own hooks
+// (ErrDialogMaybeOpen; b.146 step 2c), less a Cursor request of an earlier
+// launch of the row (store.PermissionRow.HoldsDialog); ExpectPaneSHA256 means a
+// person or LLM judged that exact screen, so never pass it from an automatic
+// flow.
 //
 // A pane answer (RequestToken, As, Key and ExpectPaneSHA256; b.146 rule 8)
 // answers that permission request at the pane once it has fallen back: under
@@ -908,6 +1082,8 @@ func isInteractiveState(state string) bool {
 // CLI: agent-director send-keys
 //
 // Errors:
+//   - [ErrAgentCapabilityUnsupported]: DeliveryRequestID requests native
+//     delivery for a pane-only row; nothing is sent. Omit it for manual input.
 //   - [ErrInvalidFlags]: the params' shape is refused (a pane answer without
 //     As allow or deny, Key or ExpectPaneSHA256, or with Text; As without
 //     RequestToken; Key with Text; NoEnter with neither; a Key that is not a
@@ -931,14 +1107,17 @@ func isInteractiveState(state string) bool {
 //     requests. Answer it with a pane answer, or close it with
 //     RecordPaneAnswer.
 //   - [ErrDialogMaybeOpen]: a plain call without ExpectPaneSHA256 while a
-//     request of the Spawn is not proven gone by Claude Code's hooks (its
-//     tool's PostToolUse, the main agent's end of turn after it, or the
-//     agent's end), whatever agent-director's records say of it; nothing was
-//     sent. Its err_details ([DialogMaybeOpenDetails]) name the request,
-//     how agent-director's records say it closed, since when, and the
-//     Spawn's other such requests. A Cursor request of an earlier launch of
-//     the row does not hold (store.PermissionRow.HoldsDialog). A plain call
-//     whose ExpectPaneSHA256 matches the pane is not refused with it.
+//     request of the Spawn is not proven gone (on a Cursor row, the gateway's
+//     validated proof that its tool ran; the end of the asking agent's turn:
+//     the main agent's for a request with no agent_id, and on a Claude row
+//     the subagent's SubagentStop for one with an agent_id; or, on a
+//     non-Cursor Spawn, the agent's end), whatever agent-director's records
+//     say of it; nothing was sent. Its err_details ([DialogMaybeOpenDetails])
+//     name the request, how agent-director's records say it closed, since
+//     when, and the Spawn's other such requests. A Cursor request of an
+//     earlier launch of the row does not hold
+//     (store.PermissionRow.HoldsDialog). A plain call whose ExpectPaneSHA256
+//     matches the pane is not refused with it.
 //   - [ErrNoOpenPermissionRequest]: a pane answer whose request is not one
 //     of the Spawn's, or is closed with its row or by find-missing; nothing
 //     was sent.
@@ -964,34 +1143,52 @@ func isInteractiveState(state string) bool {
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
 //     was launched on.
-//   - [ErrSubmissionUnconfirmed]: native delivery lacks exact proof, or Codex
-//     fallback was refused before input or had a paste transport failure, or
-//     a macOS Claude row's text to type in paced pieces is over 32 KiB
-//     (outcome not_started, before any input), or pending Claude fallback did
-//     not observe raw input, SessionStart and a 1.5 s settle after first
-//     observing waiting within 12 s, could not read readiness, lost its
-//     launch, waiting state, pane ownership or guards, or has an adapter
-//     without PaneTerminalTmux (outcome not_started: nothing was typed, so the
-//     same call can be made again later), or pending Codex or Claude fallback
-//     lacks bounded hook-derived submission observation, or a macOS Claude
-//     row's paced text timed out on its first piece, failed after it, or was
-//     stopped by the reread before a later piece or its Enter (outcome
+//   - [ErrSubmissionUnconfirmed]: ordinary native delivery lacks exact proof;
+//     Codex fallback was refused before input or had a paste transport
+//     failure; a macOS Claude row's text to type in paced pieces is over
+//     32 KiB (outcome not_started, before any input or durable input record);
+//     manual or permission-pane dispatch, or input cleanup, could not confirm
+//     its outcome; pending Claude fallback did not observe raw input,
+//     SessionStart and a 1.5 s settle after first observing waiting within
+//     12 s, could not read readiness, was cancelled or reached the call's
+//     deadline, lost its launch, waiting state, pane ownership, guards or input
+//     admission, or has an adapter without PaneTerminalTmux (outcome
+//     not_started: nothing was typed, so the same call can be made again
+//     later); a macOS Claude row's paced text was cancelled or reached the
+//     call's deadline before its first piece (outcome not_started: nothing was
+//     typed, though a manual-input record may already be written); a macOS
+//     Claude row's paced text timed out on its first piece, failed after it,
+//     or was stopped before a later piece or its Enter by the row and
+//     relay-guard reread, a change of input authority (launch, session, pane
+//     or process), cancellation or the call's deadline (outcome
 //     partial_input_unconfirmed: part or all of the text may be typed,
-//     unsubmitted), or a Cursor row's gateway refused the submission (outcome
-//     gateway_refused). Structured outcomes distinguish no input, partial
-//     text, possible Enter delivery and a gateway refusal; failed hook
-//     observation carries only keys_sent, submission_confirmed and row_state.
-//     Never replay uncertain text or Enter. Only native attempts support
-//     passive reconciliation with the original delivery_request_id. For
-//     fallback, inspect hook-derived get or status and escalate if submission
-//     remains unknown. On gateway_refused nothing reached Cursor and the
-//     gateway discarded the text: read the pane and get, answer or clear what
-//     holds the input before sending again, or kill and resume.
+//     unsubmitted); pending Codex or Claude fallback lacks bounded hook-derived
+//     submission observation; or a Cursor row's gateway refused the submission
+//     (outcome gateway_refused). Structured outcomes distinguish no input,
+//     partial text, possible Enter delivery and a gateway refusal, and details
+//     retain attempted input facts; failed hook observation carries only
+//     keys_sent, submission_confirmed and row_state. Never replay uncertain
+//     text, Enter or permission keys. Only native attempts support passive
+//     reconciliation with the original delivery_request_id. For fallback,
+//     inspect hook-derived get or status and escalate if submission remains
+//     unknown. On gateway_refused nothing reached Cursor and the gateway
+//     discarded the text: read the pane and get, answer or clear what holds the
+//     input before sending again, or kill and resume.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs; pending Claude fallback on
 // when the agent's terminal takes raw input and this call observes SessionStart.
 func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
+	return c.SendKeysContext(context.Background(), params)
+}
+
+// SendKeysContext carries cancellation and the context's deadline through
+// pending Claude fallback's readiness wait (not_started with nothing typed),
+// input admission, intent commits and macOS paced Claude typing's pauses and
+// between-piece checks (not_started before the first piece,
+// partial_input_unconfirmed after one). A begun transport can still be
+// ambiguous; it is never retried here.
+func (c *Client) SendKeysContext(ctx context.Context, params SendKeysParams) (SendKeysResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SendKeysResult{}, err
 	}
@@ -1003,7 +1200,9 @@ func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
 	// action timeout plus the pipe-close wait plus 2 s. The caller identity
 	// is collected inside agent-director, never from caller-asserted params
 	// (SR-5.2), once per call by sendKeys.
-	facts, result, err := sendKeys(c.st, c.tmuxClient, c.sendKeysEnv(), params)
+	env := c.sendKeysEnv()
+	env.Context = ctx
+	facts, result, err := sendKeys(c.st.WithContext(ctx), c.tmuxClient, env, params)
 	// Exactly one ad.send_keys.called per call past the closed check, on
 	// every outcome (SR-7.4, SR-5.2), fail-open.
 	emitSendKeysCalled(params, facts, err)

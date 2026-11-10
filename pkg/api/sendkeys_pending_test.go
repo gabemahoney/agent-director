@@ -9,16 +9,215 @@ package api_test
 // now waits on raw mode, SessionStart and its settle for pending Claude (b.qcf).
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+func TestPaneOnlyLifecycleWithFlagOff(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{"droid"} {
+		t.Run(agent, func(t *testing.T) {
+			e := newKillEnv(t)
+			e.rowAgent = agent
+			r := e.seedPending(t, pendingFresh, pendingOurs)
+			c, _ := e.client(t) // experimental flags remain at their disabled defaults
+			e.clock.Advance(24 * time.Hour)
+			res, err := c.FindMissing(context.Background())
+			if err != nil || res.Count != 0 {
+				t.Fatalf("elapsed time reconciled a living lane: %+v, %v", res, err)
+			}
+			if row := e.columns(t, r.ID); row.State != store.StatePending {
+				t.Fatalf("live row=%+v", row)
+			}
+			e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "native prompt")
+			pane, err := c.ReadPane(api.ReadPaneParams{InstanceID: r.ID})
+			if err != nil || pane.Pane != "native prompt" {
+				t.Fatalf("ReadPane=%+v, %v", pane, err)
+			}
+			e.rec.AfterCall(tmux.CallKillPane, func(tmuxfix.SocketCall, error) { e.pc.Set(r.AgentPID, procfix.Gone()) })
+			k, err := c.Kill(api.KillParams{InstanceID: r.ID})
+			if err != nil || !k.KillSent {
+				t.Fatalf("Kill=%+v, %v", k, err)
+			}
+			res, err = c.FindMissing(context.Background())
+			if err != nil || res.Count != 1 || res.IDs[0] != r.ID {
+				t.Fatalf("exited row reconciliation=%+v, %v", res, err)
+			}
+			e.clock.Advance(time.Minute)
+			expired, err := c.Expire(olderThan(0))
+			if err != nil || expired.Count != 1 || expired.IDs[0] != r.ID {
+				t.Fatalf("flag-off Expire=%+v, %v", expired, err)
+			}
+		})
+	}
+}
+
+func TestPaneOnlyPlainInputBypassesNativeDelivery(t *testing.T) {
+	// Serial: isolate native lock/evidence paths under a temporary HOME.
+	for _, agent := range []string{"droid"} {
+		t.Run(agent, func(t *testing.T) {
+			home := withTempHome(t)
+			e := newNativeSubmissionEnv(t)
+			e.rowAgent = agent
+			r := e.seedPending(t, pendingFresh, pendingOurs)
+			// The injected backend supports native delivery; even Open followed
+			// by a silent fallback must be visible after the call.
+			in := watchPaneInput(e.killEnv, r.Spawn.Identity.PaneID, false)
+			before := e.columns(t, r.ID)
+			result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "plain input", AllowPending: true})
+			if err != nil || result != (api.SendKeysResult{}) {
+				t.Fatalf("plain lane send=%+v, %v; want empty manual result", result, err)
+			}
+			in.assertSubmittedOnce(t, "plain input")
+			if enters := ordinaryEnters(e.killEnv); len(enters) != 1 || enters[0].Socket != r.Socket || enters[0].Target != r.Spawn.Identity.PaneID {
+				t.Fatalf("manual Enter calls=%+v; want one to the owned pane", enters)
+			}
+			e.assertNoCalls(t, tmux.CallCapture, tmux.CallPaneTerminal)
+			e.assertRowUnchanged(t, r.ID, before)
+			if e.b.opened != 0 || e.b.locked || e.b.current != nil || len(e.b.history) != 0 || e.slept != 0 {
+				t.Fatalf("native activity: opens=%d locked=%t current=%+v history=%+v wait=%v",
+					e.b.opened, e.b.locked, e.b.current, e.b.history, e.slept)
+			}
+			if launch, err := e.st.ReadInputLaunch(context.Background(), r.Token); err != nil || launch != nil {
+				t.Fatalf("native launch journal=%+v, %v; want absent", launch, err)
+			}
+			if files := snapshotTrees(t, []string{filepath.Join(adConfigDir(home), "input")}); len(files) != 0 {
+				t.Fatalf("manual send created native lock/evidence files: %v", files)
+			}
+		})
+	}
+}
+
+func TestPaneOnlyManualInput(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{"droid"} {
+		for _, mode := range []string{"enter", "no enter", "empty", "without opt-in", "changed hash", "failed text", "failed enter"} {
+			t.Run(agent+"/"+mode, func(t *testing.T) {
+				e := newKillEnv(t)
+				e.rowAgent = agent
+				r := e.seedPending(t, pendingFresh, pendingOurs)
+				in := watchPaneInput(e, r.Spawn.Identity.PaneID, true)
+				e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "ready")
+				pane, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
+				if err != nil || pane.Pane != "ready" {
+					t.Fatalf("ReadPane=%+v, %v", pane, err)
+				}
+				e.rec.Reset()
+				p := api.SendKeysParams{InstanceID: r.ID, Text: "first\r\nsecond", AllowPending: true, ExpectPaneSHA256: pane.PaneSHA256}
+				wantError := ""
+				switch mode {
+				case "no enter":
+					p.NoEnter = true
+				case "empty":
+					p.Text = ""
+				case "without opt-in":
+					p.AllowPending = false
+					wantError = "ErrSpawnNotInteractive"
+				case "changed hash":
+					e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "changed")
+					wantError = "ErrPaneChanged"
+				case "failed text":
+					e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallSendText)
+					wantError = "ErrTmuxUnresponsive"
+				case "failed enter":
+					e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, callEnterKey)
+					wantError = "ErrTmuxUnresponsive"
+				}
+				before := e.columns(t, r.ID)
+				res, err := e.sendKeys(p)
+				if wantError != "" {
+					assertOneName(t, err, wantError)
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if res != (api.SendKeysResult{}) {
+					t.Fatalf("manual input returned proof: %+v", res)
+				}
+				e.assertRowUnchanged(t, r.ID, before)
+				texts, enters := e.rec.SocketCallsOf(tmux.CallSendText), e.rec.SocketCallsOf(callEnterKey)
+				if mode == "without opt-in" || mode == "changed hash" {
+					e.assertNothingSent(t)
+					return
+				}
+				wantTexts, wantEnters := 1, 1
+				if mode == "empty" {
+					wantTexts = 0
+				}
+				if mode == "no enter" || mode == "failed text" {
+					wantEnters = 0
+				}
+				if len(texts) != wantTexts || len(enters) != wantEnters {
+					t.Fatalf("text=%+v Enter=%+v; want %d/%d, no replay", texts, enters, wantTexts, wantEnters)
+				}
+				if wantTexts == 1 && (texts[0].Text != "first\nsecond" || texts[0].Target != r.Spawn.Identity.PaneID) {
+					t.Fatalf("manual text=%+v", texts)
+				}
+				if mode == "enter" {
+					in.assertSubmittedOnce(t, "first\nsecond")
+				}
+				if mode == "no enter" && (in.box != "first\nsecond" || len(in.submitted) != 0) {
+					t.Fatalf("unsubmitted input=%+v", in)
+				}
+			})
+		}
+	}
+}
+
+func TestPaneOnlyUnsupportedVerbsWriteNothing(t *testing.T) {
+	// Serial: it checks the shared trail for writes.
+	for _, agent := range []string{"droid"} {
+		t.Run(agent, func(t *testing.T) {
+			p := newPAEnvAgent(t, agent, "")
+			c, _ := p.client(t)
+			for _, operation := range []struct {
+				name, want string
+				run        func() error
+			}{
+				{"pause", "ErrAgentCapabilityUnsupported", func() error { _, err := c.Pause(context.Background(), api.PauseParams{InstanceID: p.r.ID}); return err }},
+				{"resume", "ErrAgentCapabilityUnsupported", func() error { _, err := c.Resume(api.ResumeParams{InstanceID: p.r.ID}); return err }},
+				{"decide", "ErrAgentCapabilityUnsupported", func() error {
+					_, err := c.Decide(api.DecideParams{InstanceID: p.r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "deny"})
+					return err
+				}},
+				{"record-pane-answer", "ErrAgentCapabilityUnsupported", func() error { _, err := c.RecordPaneAnswer(p.outside(storefix.TestRequestTokenA, "deny")); return err }},
+				{"delivery ID", "ErrAgentCapabilityUnsupported", func() error {
+					_, err := c.SendKeys(api.SendKeysParams{InstanceID: p.r.ID, Text: "task", DeliveryRequestID: "attempt", AllowPending: true})
+					return err
+				}},
+				{"request token", "ErrNoOpenPermissionRequest", func() error { _, err := c.SendKeys(p.answer(storefix.TestRequestTokenA, "deny", "Escape")); return err }},
+				{"unknown request", "ErrPermissionRequestNotFound", func() error { _, err := c.RecordPaneAnswer(p.outside("unknown", "deny")); return err }},
+			} {
+				t.Run(operation.name, func(t *testing.T) {
+					before := p.snapshotWrites(t, operation.name, p.r.ID, trustConfig{}, p.r.Socket)
+					assertOneName(t, operation.run(), operation.want)
+					if operation.name == "delivery ID" || operation.name == "request token" {
+						events := readAPITrailLines(t)[before.mark:]
+						if len(events) != 1 || events[0]["event"] != "ad.send_keys.called" || events[0]["instance_id"] != p.r.ID {
+							t.Fatalf("refused send-keys trail=%+v; want only its observational called event", events)
+						}
+						before.mark = trailMark(t)
+					}
+					p.assertWroteNothing(t, before)
+					p.assertNoTmuxCall(t)
+				})
+			}
+		})
+	}
+}
 
 // skpText is the text every case sends.
 const skpText = "first prompt"
@@ -259,43 +458,251 @@ func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 	}
 }
 
-// b.qcf: SessionStart alone does not confirm submission.
 // TestSendKeysPendingRowChangesBeforeSend: on a fresh spawn's or a reuse's
 // pending launch, a gated SessionStart, or a versioned write on a lost reply
-// (the adoption then not applied), between the row read and the send (after
-// the listing, which is all the adoption write follows) still sends to the
-// same pane after SessionStart; a lost reply with no report now refuses (b.qcf).
+// (the adoption then not applied), between the row read and the send keeps
+// the same pane and launch identity. R11B1 (t2.7tz.tb.ib) also covers the
+// earlier empty journal reconciliation window, before target discovery or
+// admission. b.qcf: ordinary fallback text sends after SessionStart, and
+// SessionStart alone does not confirm submission; a row that never reports
+// in refuses not_started with nothing typed. Native delivery is unchanged.
 func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 	t.Parallel()
+	cases := []struct {
+		name    string
+		shape   pendingShape
+		when    tmux.Call
+		session bool
+		native  bool
+	}{
+		{"SessionStart after the listing", pendingOurs, tmux.CallListPanes, true, false},
+		{"lost reply, row write after the listing", pendingLostReply, tmux.CallListPanes, false, false},
+		{"SessionStart before journal load", pendingOurs, beforeJournalLoad, true, false},
+		{"liveness write before journal load", pendingOurs, beforeJournalLoad, false, false},
+		{"native SessionStart before journal load", pendingOurs, beforeJournalLoad, true, true},
+		{"native liveness write before journal load", pendingOurs, beforeJournalLoad, false, true},
+	}
 	for _, k := range skpKinds {
-		t.Run(k.String()+"/SessionStart after the listing", func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedPending(t, k, pendingOurs)
-			e.sessionStartAfter(t, tmux.CallListPanes, r, "sess-start-"+uuid.NewString()[:8])
+		for _, tc := range cases {
+			t.Run(k.String()+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				e := newNativeSubmissionEnv(t)
+				e.env.Input = nil
+				e.clock.Advance(time.Now().Sub(e.clock.Now()))
+				r := e.seedPending(t, k, tc.shape)
+				pane := labelledPane(t, r.Session, r.Token)
+				before := e.adoption(t, r.ID)
+				if launch, err := e.st.ReadInputLaunch(context.Background(), r.Token); err != nil || launch != nil {
+					t.Fatalf("want empty native journal, launch=%+v error=%v", launch, err)
+				}
+				sessionID := uuid.NewString()
+				var raw []byte
+				if tc.native {
+					launch := e.enableSQLiteSubmission(t, r, sessionID)
+					raw = sqliteProofRecord(t, launch, skpText)
+					e.rec.AfterCall(tmuxfix.KeyCall("Enter"), func(tmuxfix.SocketCall, error) {
+						_, attempt := sqliteAttempt(t, e, r)
+						if attempt == nil || attempt.Phase != "enter_attempted" || !attempt.EnterAttempted {
+							t.Fatalf("Enter before committed intent: %+v", attempt)
+						}
+						if err := os.WriteFile(launch.Capability.Transcript, append(raw, '\n'), 0600); err != nil {
+							t.Fatal(err)
+						}
+					})
+				}
+				if tc.session {
+					e.sessionStartAfter(t, tc.when, r, sessionID)
+				} else {
+					e.rowWriteAfter(t, tc.when, r)
+				}
 
-			assertSubmissionUnconfirmed(t, skpSend(e, r.ID), store.StateWaiting)
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 2)
-			if got := e.columns(t, r.ID).State; got == store.StatePending {
-				t.Errorf("state after the SessionStart = %v; want the row turned live", got)
+				result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+				switch {
+				case tc.native:
+					if err != nil {
+						t.Fatalf("SendKeys: %v; details=%+v; calls=%+v", err, api.ErrDetails(err), e.rec.SocketCalls())
+					}
+					assertOrdinaryWrites(t, e.killEnv, r, skpText)
+				case tc.session:
+					assertSubmissionUnconfirmed(t, err, store.StateWaiting)
+					e.assertDelivered(t, r.Socket, pane, skpText, 2)
+				default:
+					e.assertSessionStartMissing(t, err)
+				}
+				if tc.native && (result.Outcome != "submitted" || result.SessionID != sessionID || result.RecordSHA256 != inputdelivery.Hash(raw)) {
+					t.Fatalf("native result=%+v; want exact post-Enter proof", result)
+				}
+				row, err := e.st.GetSpawn(r.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if sqliteInputIdentity(row, e.storeID) != sqliteInputIdentity(r.Spawn, e.storeID) {
+					t.Fatalf("launch identity changed: before=%+v after=%+v", r.Spawn, row)
+				}
+				if row.RowVersion <= r.Spawn.RowVersion {
+					t.Fatal("real preparation write did not advance the captured row version")
+				}
+				if tc.session {
+					if row.State == store.StatePending {
+						t.Errorf("state after the SessionStart = %v; want the row turned live", row.State)
+					}
+				} else {
+					want := before
+					want.RowVersion++
+					if after := e.adoption(t, r.ID); after != want {
+						t.Errorf("adoption = %+v; want only the row write's row_version +1 %+v", after, want)
+					}
+					if n := adoptedRecords(t, "send-keys", r.ID); n != 0 {
+						t.Errorf("adopted records = %d; want none", n)
+					}
+				}
+				if launch, err := e.st.ReadInputLaunch(context.Background(), r.Token); err != nil || (launch != nil) != tc.native {
+					t.Fatalf("plain send invented native authority: launch=%+v error=%v", launch, err)
+				}
+			})
+		}
+	}
+}
+
+// TestSendKeysResumedPendingClaudeAdmission (b.x9o t2.7tz.5c.fd, MI F1): a
+// resumed Claude launch's first SessionStart may keep or rotate its saved
+// session id; after the wait, admission accepts either, the text and one Enter
+// are sent once and the hook check observes the turn, and the store archives a
+// rotated id to session history. A changed launch token, an agent pid other
+// than the adopted pane's, or cancellation at the admission read after the
+// wait is not_started with nothing typed and the last row state read.
+func TestSendKeysResumedPendingClaudeAdmission(t *testing.T) {
+	t.Parallel()
+	for _, change := range []string{"same session id", "rotated session id", "launch token", "agent pid", "cancelled"} {
+		t.Run(change, func(t *testing.T) {
+			t.Parallel()
+			e := newNativeSubmissionEnv(t)
+			e.env.Input = nil // the SQLite journal's real admission; no native capability
+			saved, cwd := "saved-"+uuid.NewString()[:8], t.TempDir()
+			r := e.seedRow(t, killRowSpec{State: store.StateEnded, SessionID: saved, CWD: cwd, NoSession: true,
+				Opts: []apitest.SpawnOption{apitest.WithJsonlPath(apitest.SeedJsonl(t, cwd, saved))}})
+			e.resumeWritesOnPane(t, r)
+			row, err := e.st.GetSpawn(r.ID)
+			if err != nil || row.State != store.StatePending || row.SessionID != saved || row.PID != 0 || row.ProcStarttime != "" {
+				t.Fatalf("resumed row = %+v, %v; want pending with the saved session id and no agent process", row, err)
+			}
+			r.Spawn, r.Token = row, row.Identity.Token
+			e.seedSession(t, &r) // the resumed launch's session, labelled with its new token
+			sessionID := saved
+			if change != "same session id" {
+				sessionID = "rotated-" + uuid.NewString()[:8]
+			}
+			e.sessionStartsWhenPolled(t, r, nil, sessionID)
+			e.turnStartsAfterEnter(t, r)
+			hookReads := 0
+			e.s.read = func(row api.Spawn) (api.Spawn, error) { hookReads++; return row, nil }
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			e.env.Context = ctx
+			admission := false
+			e.rec.AfterCall(tmux.CallListPanes, func(tmuxfix.SocketCall, error) {
+				// The wait's final ownership listing follows its second terminal read.
+				admission = admission || len(e.rec.SocketCallsOf(tmux.CallPaneTerminal)) == 2
+			})
+			e.s.reread = func(row api.Spawn) (api.Spawn, error) {
+				if admission {
+					admission = false
+					switch change {
+					case "launch token":
+						row.Identity.Token = tmuxfix.OtherToken
+					case "agent pid":
+						row.PID = e.newPID()
+					case "cancelled":
+						cancel()
+					}
+				}
+				return row, nil
+			}
+
+			result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+
+			switch change {
+			case "same session id", "rotated session id":
+				if err != nil || result != (api.SendKeysResult{}) {
+					t.Fatalf("resumed send = %+v, %v; want fallback success", result, err)
+				}
+				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 2)
+				if hookReads != 1 {
+					t.Errorf("hook reads = %d; want the turn observed on the first", hookReads)
+				}
+				var want []store.SessionHistoryEntry
+				if change == "rotated session id" {
+					want = []store.SessionHistoryEntry{{SessionID: saved, JSONLPath: row.JSONLPath}}
+				}
+				got, err := e.st.ListSessionHistory(r.ID, row.LifeNumber)
+				if err != nil || len(got) != len(want) || len(want) == 1 && (got[0].SessionID != want[0].SessionID || got[0].JSONLPath != want[0].JSONLPath) {
+					t.Errorf("session history = %+v, %v; want %+v", got, err, want)
+				}
+			default:
+				reason := "input preparation changed launch or authority"
+				if change == "cancelled" {
+					reason = "the call was cancelled or reached its deadline before input; nothing was typed, so the same send-keys can be retried later"
+				}
+				want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StateWaiting, Reason: reason}
+				assertOneName(t, err, "ErrSubmissionUnconfirmed")
+				if got := api.ErrDetails(err); got != want {
+					t.Fatalf("refusal = %+v; want %+v", got, want)
+				}
+				e.assertNothingSent(t)
+				if hookReads != 0 {
+					t.Errorf("hook reads = %d; want none", hookReads)
+				}
 			}
 		})
-		t.Run(k.String()+"/lost reply, row write after the listing", func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedPending(t, k, pendingLostReply)
-			before := e.adoption(t, r.ID)
-			e.rowWriteAfter(t, tmux.CallListPanes, r)
+	}
+}
 
-			e.assertSessionStartMissing(t, skpSend(e, r.ID))
-			want := before
-			want.RowVersion++
-			if after := e.adoption(t, r.ID); after != want {
-				t.Errorf("adoption = %+v; want only the row write's row_version +1 %+v", after, want)
+// TestSendKeysPendingClaudeManualIntentAdoptedIdentity (b.x9o, b.qcf): after
+// pending Claude's wait, fallback records its manual intent under the adopted
+// launch identity (a lost reply's token pane), not the row's stale one. An
+// unconfirmed intent commit refuses not_started with nothing typed and the last
+// row state the call read (waiting), not the pending row it began with.
+func TestSendKeysPendingClaudeManualIntentAdoptedIdentity(t *testing.T) {
+	t.Parallel()
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "recorded", true: "unconfirmed commit"}[fail], func(t *testing.T) {
+			t.Parallel()
+			e := newNativeSubmissionEnv(t)
+			r := e.seedPending(t, pendingFresh, pendingLostReply)
+			pane := labelledPane(t, r.Session, r.Token)
+			e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
+			e.b.current = &api.InputDeliveryAttempt{RequestID: "earlier", Phase: "not_started"}
+			var intent *api.InputDeliveryAttempt
+			e.b.save = func(a *api.InputDeliveryAttempt) error {
+				intent = cloneAttempt(a)
+				if fail {
+					return inputdelivery.ErrUnconfirmed
+				}
+				return nil
 			}
-			if n := adoptedRecords(t, "send-keys", r.ID); n != 0 {
-				t.Errorf("adopted records = %d; want none (the write did not apply)", n)
+			e.sessionStartsWhenPolled(t, r, nil)
+
+			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+
+			row, rowErr := e.st.GetSpawn(r.ID)
+			if rowErr != nil || r.Spawn.Identity.PaneID != "" || row.Identity.PaneID != pane {
+				t.Fatalf("row %+v, %v; want the lost reply's token pane %s adopted", row.Identity, rowErr, pane)
 			}
+			if want := sqliteInputIdentity(row, e.storeID); intent == nil || intent.Phase != "manual_input" || !intent.ManualInterference || intent.Identity != want {
+				t.Fatalf("manual intent = %+v; want manual_input under the adopted identity %+v", intent, want)
+			}
+			if fail {
+				assertOneName(t, err, "ErrSubmissionUnconfirmed")
+				want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StateWaiting,
+					Reason: "cannot persist manual input intent"}
+				if got := api.ErrDetails(err); got != want {
+					t.Fatalf("refusal = %+v; want %+v", got, want)
+				}
+				e.assertNothingSent(t)
+				return
+			}
+			assertSubmissionUnconfirmed(t, err, store.StateWaiting) // no turn hook follows the Enter
+			e.assertDelivered(t, r.Socket, pane, skpText, 2)
 		})
 	}
 }

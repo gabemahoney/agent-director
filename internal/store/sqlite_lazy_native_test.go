@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 )
 
 type observedConnector struct {
@@ -49,7 +51,7 @@ func (d *lazyNativeDriver) Open(path string) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &lazyNativeClose{deadlineBoundaryConn: &deadlineBoundaryConn{Conn: c, boundary: d.boundary}, close: func() {
+	return &lazyNativeClose{Conn: d.boundary.wrap(c, false), close: func() {
 		if d.close != nil {
 			d.close(n)
 		}
@@ -57,11 +59,11 @@ func (d *lazyNativeDriver) Open(path string) (driver.Conn, error) {
 }
 
 type lazyNativeClose struct {
-	*deadlineBoundaryConn
+	*sqliteobserve.Conn
 	close func()
 }
 
-func (c *lazyNativeClose) Close() error { c.close(); return c.deadlineBoundaryConn.Close() }
+func (c *lazyNativeClose) Close() error { c.close(); return c.Conn.Close() }
 
 type lazyPoolObservation struct {
 	b          *deadlineBoundary

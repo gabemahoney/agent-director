@@ -3,7 +3,10 @@
 package cursorhost
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,8 +21,86 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
+
+// requestTestClock adds explicit timer dispatch to the shared injected clock.
+// Advancing runs due callbacks after releasing its lock; AfterFunc never calls
+// a callback inline. Tests consume actual captured wakes from the controller.
+type requestTestClock struct {
+	*tmuxfix.Clock
+	mu        sync.Mutex
+	timers    []*requestTestTimer
+	scheduled int
+}
+type requestTestTimer struct {
+	clock  *requestTestClock
+	at     time.Time
+	fn     func()
+	active bool
+}
+
+func (c *requestTestClock) AfterFunc(d time.Duration, fn func()) requestTimer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	timer := &requestTestTimer{clock: c, at: c.Now().Add(d), fn: fn, active: true}
+	c.timers = append(c.timers, timer)
+	c.scheduled++
+	return timer
+}
+func (t *requestTestTimer) Stop() bool {
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+	active := t.active
+	t.active = false
+	return active
+}
+func (c *requestTestClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.Clock.Advance(d)
+	var due []func()
+	for _, timer := range c.timers {
+		if timer.active && !timer.at.After(c.Now()) {
+			timer.active = false
+			due = append(due, timer.fn)
+		}
+	}
+	c.mu.Unlock()
+	for _, fn := range due {
+		fn()
+	}
+}
+func (c *requestTestClock) counts() (scheduled, active int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, timer := range c.timers {
+		if timer.active {
+			active++
+		}
+	}
+	return c.scheduled, active
+}
+
+// observeRequestSQLite uses the same real driver wrapper as store's native
+// boundary tests. The returned stop waits for native cleanup before unhooking.
+func observeRequestSQLite(t *testing.T, s *store.Store, hooks sqliteobserve.Hooks) func() {
+	t.Helper()
+	stop, err := store.ObserveSQLiteForTest(s, func(d driver.Driver) driver.Driver { return sqliteobserve.Wrap(d, hooks) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := stop(ctx); err != nil {
+			t.Errorf("stop SQLite observer: %v", err)
+		}
+	}
+	t.Cleanup(cleanup)
+	return cleanup
+}
 
 type requestEnv struct {
 	runtime cursorfix.Runtime
@@ -106,7 +187,45 @@ func (e *requestEnv) controller(t *testing.T, wire io.Writer, pane io.Writer) *r
 	t.Helper()
 	p := newProtocol(wire, strings.NewReader(""))
 	t.Cleanup(p.close)
-	return newRequestController(e.rep, p, pane)
+	c := newRequestController(e.rep, p, pane)
+	t.Cleanup(c.close)
+	return c
+}
+
+// permissionWakeFor captures one admitted job, just as its timer does. Tests
+// dispatch only the named job; this helper never discovers retained requests.
+func permissionWakeFor(r *pendingAuthorization) requestWake {
+	return requestWake{storeID: r.storeID, token: r.token, binding: r.binding,
+		generation: r.generation, kind: permissionWait, sequence: r.wait.sequence,
+		deadline: r.wait.deadline}
+}
+
+func continuePermission(c *requestController, r *pendingAuthorization) error {
+	_, err := c.continueRequest(permissionWakeFor(r))
+	return err
+}
+
+func proofWakeFor(r *pendingAuthorization) requestWake {
+	p := r.proof
+	return requestWake{storeID: r.storeID, token: r.token, binding: p.binding,
+		generation: p.event.Generation, kind: proofWait, sequence: r.proofWait.sequence,
+		deadline: p.event.BusyUntil, proofID: p.event.ID}
+}
+
+func continueProof(c *requestController, r *pendingAuthorization) error {
+	_, err := c.continueRequest(proofWakeFor(r))
+	return err
+}
+
+func nextRequestWake(t *testing.T, c *requestController) requestWake {
+	t.Helper()
+	select {
+	case wake := <-c.events:
+		return wake
+	case <-time.After(time.Second):
+		t.Fatal("captured request timer/completion did not deliver its wake")
+		return requestWake{}
+	}
 }
 
 func (e *requestEnv) exec(t *testing.T, query string, args ...any) {
@@ -165,6 +284,20 @@ func (e *requestEnv) decide(t *testing.T, token, decision string) {
 	}
 }
 
+// refuseProvenDecision preserves a retired request while exercising the public caller.
+func (e *requestEnv) refuseProvenDecision(t *testing.T, token, decision string) {
+	t.Helper()
+	before := e.request(t, token)
+	zero := int64(0)
+	_, err := api.Decide(e.s, api.RelayView{}, api.DecideParams{InstanceID: e.binding.InstanceID, RequestToken: token, Decision: decision, MaxWaitMs: &zero})
+	if !errors.Is(err, api.ErrNoOpenPermissionRequest) {
+		t.Fatalf("late decision: %v", err)
+	}
+	if got := e.request(t, token); got != before {
+		t.Fatalf("refused decision changed proven request: before=%+v after=%+v", before, got)
+	}
+}
+
 func (e *requestEnv) admit(t *testing.T, c *requestController, id, method string, params []byte) *pendingAuthorization {
 	t.Helper()
 	before := len(c.requests)
@@ -181,6 +314,41 @@ func (e *requestEnv) admit(t *testing.T, c *requestController, id, method string
 	}
 	t.Fatal("lost request")
 	return nil
+}
+
+// observeQueuedRequest wraps completion while blockProtocol holds the writer.
+// Initial guard refusal calls done without publishing to protocol.writes.
+func observeQueuedRequest(t *testing.T, p *protocol, wrapIssue ...func(func() error) func() error) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	select {
+	case next := <-p.outgoing:
+		if len(wrapIssue) != 0 {
+			next.issue = wrapIssue[0](next.issue)
+		}
+		original := next.done
+		next.done = func(err error) {
+			if original != nil {
+				original(err)
+			}
+			done <- err
+		}
+		p.outgoing <- next
+	case <-time.After(time.Second):
+		t.Fatal("request was not queued behind barrier")
+	}
+	return done
+}
+
+func requestCompletion(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(4 * time.Second):
+		t.Fatal("request completion missing")
+		return nil
+	}
 }
 
 // observedWire allows a committed read before the first response byte is accepted.

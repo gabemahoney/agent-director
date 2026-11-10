@@ -29,7 +29,7 @@ func TestV12MigrationInitializesRawFamiliesAndPreservesRows(t *testing.T) {
 	before := readRawSpawn(t, path, "pre", cols)
 	id := assertOneStoreID(t, path)
 	writeSentinel(t, dir, 11, schemaVersion)
-	s, err := Open(path)
+	s, err := openMigrationTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,19 +69,13 @@ func TestV12MigrationCompatibleReentry(t *testing.T) {
 					mustExec(t, db, `UPDATE spawns SET family_state='working',family_settled_state='waiting',family_changed_ms=123456`)
 				}
 			})
+			assertReleasedReentry(t, path, 11, 12)
 			writeSentinel(t, dir, 11, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			before := dbDump(t, path)
-			if err := migrateV11toV12(s.db); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(before, dbDump(t, path)) {
-				t.Fatal("reentry changed initialized history")
-			}
 			if prefix == 3 {
 				row, err := s.GetSpawnSettled("pre", SettleRead{SettleMs: 1000, NowMs: 123457})
 				if err != nil || row.FamilyState != "waiting" {
@@ -123,7 +117,7 @@ func TestV12MigrationRefusalAndRollback(t *testing.T) {
 			})
 			before := dbDump(t, path)
 			writeSentinel(t, dir, 11, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if s != nil {
 				s.Close()
 			}
@@ -139,7 +133,7 @@ func TestV12MigrationRefusalAndRollback(t *testing.T) {
 			assertSentinel(t, dir, true)
 			if tc.injected {
 				withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "DROP TRIGGER fail_family") })
-				s, err = Open(path)
+				s, err = openMigrationTestStore(t, path)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -183,7 +177,7 @@ func TestV12RecoveryRecipePreservesOwnHistoryAndRemigrates(t *testing.T) {
 		t.Fatalf("unauthorized recovery open=%v", err)
 	}
 	writeSentinel(t, dir, 11, schemaVersion)
-	s, err := Open(path)
+	s, err := openMigrationTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,7 +31,7 @@ func pauseCallTableInvoke(t *testing.T, e *killEnv, r killRow) (bool, error) {
 	if typed {
 		pane := labelledPane(t, r.Session, r.Session.Label.Token)
 		e.assertExitTyped(t, r.Socket, pane)
-		for _, c := range e.rec.SocketCallsOf(tmux.CallSendEnter) {
+		for _, c := range e.rec.SocketCallsOf(callEnterKey) {
 			if c.Socket != r.Socket || c.Target != pane {
 				t.Errorf("Enter to %q on %s; want %q on %s", c.Target, c.Socket, pane, r.Socket)
 			}
@@ -107,7 +107,7 @@ func callTablePause() callTableVerb {
 		name:        "pause",
 		invoke:      pauseCallTableInvoke,
 		firstAction: tmux.CallSendText,
-		actions:     []tmux.Call{callClearLine, tmux.CallSendText, tmux.CallSendEnter},
+		actions:     []tmux.Call{callClearLine, tmux.CallSendText, callEnterKey},
 		cells:       cells,
 		run:         runCallTablePause,
 	}

@@ -34,7 +34,7 @@ func TestV10MigrationReentryAndPreservation(t *testing.T) {
 				from = 10
 			}
 			writeSentinel(t, dir, from, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -81,7 +81,7 @@ func TestV10MigrationRefusalRollback(t *testing.T) {
 			withRaw(t, path, func(db *sql.DB) { mustExec(t, db, tc.ddl) })
 			before := dbDump(t, path)
 			writeSentinel(t, dir, 9, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err == nil {
 				s.Close()
 				t.Fatal("incompatible migration succeeded")

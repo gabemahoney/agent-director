@@ -114,8 +114,9 @@ export interface VerbSummary {
 /**
  * A permission request's delivery state:
  * - `"delivered"`: the relay durably acknowledged a verdict before enqueue/write;
- *   this is not agent receipt, tool execution or dialog closure.
+ *   this is not transport completion, agent receipt, tool execution or dialog closure.
  * - `"not_confirmed"`: no ack yet and the relay hook may still run; it ends by `confirm_by`.
+ *   This grants no response authority to a closed or proven-gone request.
  * - `"fallen_back"`: no ack, and the relay hook is gone (or cannot be checked and `confirm_by`
  *   has passed): no answer from the relay reached the agent. While `pane_answer` is `"none"` or
  *   `"intent"` the request awaits an answer unless acknowledged or closed with its Spawn. A pane
@@ -132,10 +133,11 @@ export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
  *   (`decision_reason` `"pane"`); this does not establish ACP delivery, receipt or proof.
  * - `"outside"`: a caller recorded it answered outside agent-director (`recordPaneAnswer`,
  *   `decision_reason` `"pane_outside"`).
- * - `"tool_ran"`: agent hooks or validated correlated Cursor execution output established
- *   its tool ran. The hook close records `decision` `"allow"` and `decision_reason` `"tool_ran"`;
- *   Cursor proof preserves any earlier verdict and non-null reason, filling a missing reason
- *   with `"tool_ran"`.
+ * - `"tool_ran"`: validated correlated Cursor execution output established its tool ran (in
+ *   practice never on a Claude or Codex row, whose requests carry no `tool_use_id`). That
+ *   close preserves any earlier verdict and non-null reason, inferring allow only when
+ *   undecided and filling a missing reason with `"tool_ran"`. This history supplies no
+ *   response authority.
  * `"sent"`, `"outside"` and `"tool_ran"` close the request; its `delivery` stays `"fallen_back"`.
  */
 export type PaneAnswer = "none" | "intent" | "sent" | "outside" | "tool_ran";
@@ -198,12 +200,13 @@ export interface RequestDelivery {
 }
 /**
  * How agent evidence proved a permission request's dialog gone:
- * - `"tool_ran"`: a Claude PostToolUse or PostToolUseFailure carried its `tool_use_id`, or
- *   validated correlated Cursor execution output established that exact tool ran (never on a Codex row).
+ * - `"tool_ran"`: validated correlated Cursor execution output established that exact tool ran
+ *   (in practice never on a Claude or Codex row, whose requests carry no `tool_use_id`).
  * - `"turn_end"`: the turn of the agent that asked ended after it was written; the main agent's
  *   Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified
  *   Cursor main Stop/Interrupt proves only a durably main-turn-eligible request recorded
- *   before the hook began. Legacy non-Cursor main requests retain eligibility; Cursor
+ *   before the hook began; a Claude subagent's SubagentStop proves only that subagent's
+ *   requests recorded before that hook began. Legacy non-Cursor main requests retain eligibility; Cursor
  *   unknown-origin and child requests remain ineligible even without a child id. Decisions,
  *   delivery acknowledgements and pane-answer claims do not grant eligibility.
  * - `"agent_gone"`: its non-Cursor Spawn was marked missing, ended or resumed.
@@ -235,12 +238,54 @@ export interface PermissionRequestInfo extends RequestDelivery {
 }
 /**
  * Whether `idle_screen` can apply to a row's agent: `"available"` for Claude and Codex,
- * `"unavailable"` for Cursor. A capability outcome, never a state.
+ * `"unavailable"` for Cursor and pane-only agents. A capability outcome, never a state.
  */
 export type IdleScreenAvailability = "available" | "unavailable";
+/** The recorded agent process at its recorded start identity; never a Helper, tmux or a descendant. */
+export type ProcessLiveness = "alive" | "exited" | "unknown";
+/** A main-field confirmation's status. `confirmed` never means continuously true since `confirmed_at`. */
+export type ConfirmationStatus = "confirmed" | "not_confirmed" | "unknown" | "pending";
+/** The kind of evidence behind `confirmed_at`; `store` is a durable agent-director record, never provider receipt. */
+export type ConfirmationSource = "agent_event" | "caller_command" | "process" | "tmux" | "pane" | "transcript" | "store";
+/** Why the latest attempt did not confirm the field. */
+export type ConfirmationReason = "no_evidence" | "unreadable" | "busy" | "stale_observation" | "deadline" | "operation_pending" | "pending_grace" | "unsupported" | "commit_unconfirmed";
+/**
+ * One main field's last-confirmed evidence. Every key is always present; unknown values are null.
+ * `confirmed` means the value has supporting evidence with no later unresolved failed attempt.
+ * A failed latest attempt is `not_confirmed` (or `pending` for a still-owned operation or a
+ * pending-launch protection) and keeps only an older applicable `confirmed_at`.
+ */
+export interface Confirmation {
+    status: ConfirmationStatus;
+    /** First confirmation of this exact returned value and owner in its current stay, RFC3339 UTC milliseconds; null when none is known. Later same-value evidence advances only `checked_at`. */
+    confirmed_at: string | null;
+    /** That evidence's kind; null exactly when `confirmed_at` is. */
+    source: ConfirmationSource | null;
+    /** Latest attempt, an unsuccessful one included; null when none is known. Reading stored facts never advances it. */
+    checked_at: string | null;
+    /** Null when confirmed; otherwise why not. */
+    reason: ConfirmationReason | null;
+}
+/**
+ * Exactly the three main-field records. `displayed_state` covers the display returned, a
+ * Displayed State or none (`displayed_state` omitted): only a successful sample of the row's own
+ * pane confirms it (source `pane`), and the display shown while an entry or exit settles keeps its
+ * own record. `confirmed_at` is the first confirmation in its current stay; later same-value
+ * samples advance only `checked_at`. No applicable evidence or attempt is `unknown`/`no_evidence`.
+ * A failed latest attempt is `not_confirmed` with its reason, even without an earlier confirmation
+ * (`confirmed_at` and `source` then stay null). Cursor's is always unknown (reason `unsupported`).
+ * `family_state` has no record: its freshness is unconfirmed. Freshness never authorizes a command.
+ */
+export interface Confirmations {
+    state: Confirmation;
+    process_liveness: Confirmation;
+    displayed_state: Confirmation;
+}
 /** One Spawn row returned by the list verb. */
 export interface ListRow {
-    /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
+    /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
+    integration_mode?: "pane_only";
+    /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor and pane-only agents. */
     idle_screen_availability: IdleScreenAvailability;
     /** Stable Spawn id. */
     instance_id: string;
@@ -257,7 +302,7 @@ export interface ListRow {
      * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
      * off), this is the settled state: a state a hook wrote shows only once it has held for
      * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
-     * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+     * shows; ended, missing and a state a command wrote (spawn, resume, sweep/find-missing) show at once.
      * Nothing marks a state as late. `family_state` settles independently. Fields such as
      * `state_changed_at` and `permission_requests`, and the verbs that act on the row, follow its
      * live state, which can be newer: a refusal can name a state this field does not show yet.
@@ -265,10 +310,10 @@ export interface ListRow {
     state: string;
     /**
      * The report-only Displayed State the row shows beside `state`, present only while one
-     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across reads), or
+     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across checks), or
      * `needs_intelligence` (an unknown prompt inferred on the agent's screen), which nothing
-     * shows yet. Entering or leaving it times `[state] settle_ms` from the read that commits its
-     * candidate; a later read commits the change. Live command guards follow the raw state.
+     * shows yet. Entering or leaving it times `[state] settle_ms` from the check that commits its
+     * candidate; a later check commits the change. Live command guards follow the raw state.
      */
     displayed_state?: "needs_intelligence" | "idle_screen";
     /**
@@ -280,9 +325,13 @@ export interface ListRow {
      * task success.
      */
     family_state: "working" | "waiting";
+    /** The recorded agent process at its recorded start identity; Cursor is `"unknown"` (unsupported). Never refreshes `state`. */
+    process_liveness: ProcessLiveness;
+    /** Exactly the `state`, `process_liveness` and `displayed_state` records. */
+    confirmations: Confirmations;
     /** Canonicalized working directory. */
     cwd: string;
-    /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
+    /** The agent the row runs. Set at spawn; resume follows it. */
     agent: string;
     /** tmux session name. */
     tmux_session_name: string;
@@ -312,22 +361,22 @@ export interface ListRow {
      */
     launch_started_at?: string | null;
     /**
-     * RFC3339 timestamp of the first sweep that noted this live row (left it
-     * unverified, or noted it `unreported`); kept while later sweeps change
+     * RFC3339 timestamp of the first check that noted this live row (left it
+     * unverified, or noted it `unreported`); kept while later checks change
      * `liveness_note`, `unreported` included. Cleared together with
-     * `liveness_note` when a sweep finds the agent process alive, except on a
+     * `liveness_note` when a check finds the agent process alive, except on a
      * pending row it notes `unreported` and a pending row noted
      * `provenance_conflict`, which keeps it; omitted/null while the row has no
      * note.
      */
     liveness_unverified_since?: string | null;
     /**
-     * Reason token of the latest sweep that left this live row unverified (its
+     * Reason token of the latest check that left this live row unverified (its
      * agent process could not be checked and tmux did not settle it), for
      * example `process_not_seen_session_present`,
      * `process_not_seen_tmux_unchecked`, `probe_eacces`, `tmux_server_changed`
      * or `provenance_conflict`; overwritten when the reason changes. Cleared
-     * together with `liveness_unverified_since` when a sweep finds the agent
+     * together with `liveness_unverified_since` when a check finds the agent
      * process alive, except on a pending row it notes `unreported` and a
      * pending row noted `provenance_conflict`, which keeps it; omitted/null
      * while the row has no note. Or `unreported`, on a pending row past the
@@ -335,7 +384,7 @@ export interface ListRow {
      * its launch, so it may sit at an agent startup screen or idle at its
      * prompt. The row stays pending. To act on it: `readPane`, then `sendKeys`
      * with `allow_pending`; only a caller that looked should type. A later
-     * sweep that finds the agent alive keeps the note; the agent's next hook
+     * check that finds the agent alive keeps the note; the agent's next hook
      * clears it. `unreported` never replaces `provenance_conflict`.
      */
     liveness_note?: string | null;
@@ -358,9 +407,9 @@ export interface SpawnParams {
     /** Named template under ~/.config/agent-director/templates/. */
     template?: string;
     /**
-     * The agent to launch: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor); case-sensitive,
+     * The agent to launch, such as `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor); case-sensitive,
      * empty or absent means not given. Spawn resolves it per call, else from `template`'s
-     * `agent`; with neither, the spawn is refused with `ErrAgentMissing`. Any other value is
+     * `agent`; with neither, the spawn is refused with `ErrAgentMissing`. An unrecognized value is
      * refused with `ErrAgentInvalid`. A template's `agent_args` belong to the template's agent
      * and are refused with `ErrAgentArgsMismatch` when the spawn's agent differs, unless this call
      * passes its own non-empty `agent_args`. The
@@ -484,12 +533,14 @@ export interface StatusParams {
 }
 /** The row's reported lifecycle state. */
 export interface StatusResult {
+    /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
+    integration_mode?: "pane_only";
     /**
      * The report-only Displayed State the row shows beside `state`, present only while one
-     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across reads), or
+     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across checks), or
      * `needs_intelligence` (an unknown prompt inferred on the agent's screen), which nothing
-     * shows yet. Entering or leaving it times `[state] settle_ms` from the read that commits its
-     * candidate; a later read commits the change. Live command guards follow the raw state.
+     * shows yet. Entering or leaving it times `[state] settle_ms` from the check that commits its
+     * candidate; a later check commits the change. Live command guards follow the raw state.
      */
     displayed_state?: "needs_intelligence" | "idle_screen";
     /**
@@ -505,7 +556,7 @@ export interface StatusResult {
     unchanged_minutes?: number;
     /** Attach target, present only while `displayed_state` is. */
     tmux_session_name?: string;
-    /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
+    /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor and pane-only agents. */
     idle_screen_availability: IdleScreenAvailability;
     /** Experimental context estimate for the current session. */
     context: ContextReading;
@@ -521,7 +572,7 @@ export interface StatusResult {
      * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
      * off), this is the settled state: a state a hook wrote shows only once it has held for
      * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
-     * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+     * shows; ended, missing and a state a command wrote (spawn, resume, sweep/find-missing) show at once.
      * Nothing marks a state as late. The verbs that act on the Spawn follow its live state, which
      * can be newer: a refusal can name a state status does not show yet.
      */
@@ -535,6 +586,10 @@ export interface StatusResult {
      * task success.
      */
     family_state: "working" | "waiting";
+    /** The recorded agent process at its recorded start identity; Cursor is `"unknown"` (unsupported). Never refreshes `state`. */
+    process_liveness: ProcessLiveness;
+    /** Exactly the `state`, `process_liveness` and `displayed_state` records. */
+    confirmations: Confirmations;
     /**
      * Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a
      * pending row, omitted otherwise. It follows the row's live state: with `[state] settle_ms`
@@ -568,12 +623,14 @@ export interface GetParams {
 }
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
+    /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
+    integration_mode?: "pane_only";
     /**
      * The report-only Displayed State the row shows beside `state`, present only while one
-     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across reads), or
+     * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across checks), or
      * `needs_intelligence` (an unknown prompt inferred on the agent's screen), which nothing
-     * shows yet. Entering or leaving it times `[state] settle_ms` from the read that commits its
-     * candidate; a later read commits the change. Live command guards follow the raw state.
+     * shows yet. Entering or leaving it times `[state] settle_ms` from the check that commits its
+     * candidate; a later check commits the change. Live command guards follow the raw state.
      */
     displayed_state?: "needs_intelligence" | "idle_screen";
     /**
@@ -587,7 +644,7 @@ export interface GetResult {
     tool_name?: string;
     /** Completed minutes of the committed unchanged pane period; only while `idle_screen`. */
     unchanged_minutes?: number;
-    /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
+    /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor and pane-only agents. */
     idle_screen_availability: IdleScreenAvailability;
     /** Experimental context estimate for the current session. */
     context: ContextReading;
@@ -605,7 +662,7 @@ export interface GetResult {
      * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
      * off), this is the settled state: a state a hook wrote shows only once it has held for
      * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
-     * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+     * shows; ended, missing and a state a command wrote (spawn, resume, sweep/find-missing) show at once.
      * Nothing marks a state as late. While a `displayed_state` exit settles, it, `since` and its
      * detail keep the previous display's committed values, and `family_state` settles
      * independently. Fields such as `state_changed_at` and `permission_requests`, and the verbs
@@ -622,8 +679,12 @@ export interface GetResult {
      * task success.
      */
     family_state: "working" | "waiting";
+    /** The recorded agent process at its recorded start identity; Cursor is `"unknown"` (unsupported). Never refreshes `state`. */
+    process_liveness: ProcessLiveness;
+    /** Exactly the `state`, `process_liveness` and `displayed_state` records. */
+    confirmations: Confirmations;
     cwd: string;
-    /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
+    /** The agent the row runs. Set at spawn; resume follows it. */
     agent: string;
     tmux_session_name: string;
     /** The tmux socket the row's launch uses; omitted when the row has no recorded socket. */
@@ -662,22 +723,22 @@ export interface GetResult {
      */
     launch_started_at?: string | null;
     /**
-     * RFC3339 timestamp of the first sweep that noted this live row (left it
-     * unverified, or noted it `unreported`); kept while later sweeps change
+     * RFC3339 timestamp of the first check that noted this live row (left it
+     * unverified, or noted it `unreported`); kept while later checks change
      * `liveness_note`, `unreported` included. Cleared together with
-     * `liveness_note` when a sweep finds the agent process alive, except on a
+     * `liveness_note` when a check finds the agent process alive, except on a
      * pending row it notes `unreported` and a pending row noted
      * `provenance_conflict`, which keeps it; omitted/null while the row has no
      * note.
      */
     liveness_unverified_since?: string | null;
     /**
-     * Reason token of the latest sweep that left this live row unverified (its
+     * Reason token of the latest check that left this live row unverified (its
      * agent process could not be checked and tmux did not settle it), for
      * example `process_not_seen_session_present`,
      * `process_not_seen_tmux_unchecked`, `probe_eacces`, `tmux_server_changed`
      * or `provenance_conflict`; overwritten when the reason changes. Cleared
-     * together with `liveness_unverified_since` when a sweep finds the agent
+     * together with `liveness_unverified_since` when a check finds the agent
      * process alive, except on a pending row it notes `unreported` and a
      * pending row noted `provenance_conflict`, which keeps it; omitted/null
      * while the row has no note. Or `unreported`, on a pending row past the
@@ -685,7 +746,7 @@ export interface GetResult {
      * its launch, so it may sit at an agent startup screen or idle at its
      * prompt. The row stays pending. To act on it: `readPane`, then `sendKeys`
      * with `allow_pending`; only a caller that looked should type. A later
-     * sweep that finds the agent alive keeps the note; the agent's next hook
+     * check that finds the agent alive keeps the note; the agent's next hook
      * clears it. `unreported` never replaces `provenance_conflict`.
      */
     liveness_note?: string | null;
@@ -863,7 +924,7 @@ export interface GetPermissionResult extends RequestDelivery {
     decision?: "allow" | "deny" | null;
     /**
      * Canonical decision-reason string: "operator" | "timeout" | "find_missing" | "ended" for deny
-     * rows ("find_missing" / "ended": still undecided when find-missing marked its spawn missing, or
+     * rows ("find_missing" / "ended": still undecided when a shared check marked its spawn missing, or
      * when its spawn ended or was resumed, and closed); "pane" | "pane_outside" | "tool_ran" for a
      * request answered through sendKeys or a Cursor native choice ("pane"), recorded outside
      * ("pane_outside"), or carrying tool execution evidence ("tool_ran"). Pane claims do not establish
@@ -1047,17 +1108,38 @@ export interface ResumeResult {
      */
     pre_trust: "ok" | "skipped" | "failed";
 }
-/** Params for the `find-missing` verb, which takes no CLI flags. */
-export interface FindMissingParams {
+/** Params for sweep and its find-missing alias; neither takes CLI flags. */
+export interface SweepParams {
     /**
-     * Accepted but not sent: the `find-missing` CLI verb takes no flags, so
+     * Accepted but not sent: neither CLI spelling takes flags, so
      * this value has no effect. The call is bounded by the Client's
      * `callTimeoutMs` like every other verb.
      */
     timeout_ms?: number;
 }
-/** Rows marked missing, ended or left unverified by the sweep. */
-export interface FindMissingResult {
+/** Retained compatibility name for sweep parameters. */
+export interface FindMissingParams extends SweepParams {
+}
+/** A fixed-snapshot agent, including finished and unattempted rows. */
+export interface SweepCheck {
+    instance_id: string;
+    state: StatusResult["state"];
+    displayed_state?: StatusResult["displayed_state"];
+    /** Stored family projection; its freshness is unconfirmed. */
+    family_state: "working" | "waiting";
+    idle_screen_availability: IdleScreenAvailability;
+    process_liveness: ProcessLiveness;
+    /** Exactly the three independent main-field records, including unknowns. */
+    confirmations: Confirmations;
+    /** Coverage: eligible adapters attempted or inapplicable, not fields confirmed. */
+    completion: "complete" | "incomplete";
+    /** Null when complete. Unattempted work adds no evidence timestamps. */
+    reason: "deadline" | "busy" | "unreadable" | "stale_observation" | "no_evidence" | "commit_unconfirmed" | "unsupported" | "unattempted" | null;
+}
+/** One bounded shared check pass; no input, answer, restart or signal authority. */
+export interface SweepResult {
+    /** Sorted fixed all-agent selection; never null. Failed/remaining rows stay represented. */
+    checks: SweepCheck[];
     /**
      * Number of rows this sweep marked `missing` (the length of `ids`); a Codex
      * row it moved to `ended` is not counted. Zero is a normal result when
@@ -1070,12 +1152,13 @@ export interface FindMissingResult {
      * pane's) is dead, and rows whose process could not be checked and tmux
      * found no session or pane of their current launch; a pending row only past
      * the pending grace period, and never while the spawn, reuse or resume that
-     * began its launch still runs. A row whose guarded write found it changed or
-     * gone, or failed, is in neither list, and so is a Codex row the sweep moved
-     * to `ended` (its agent process gone and an end report held) and a pending
-     * row the sweep notes `unreported` (its agent alive) or finds already noted
-     * so. `missing` is the sweep's judgement on the evidence available to it, not
-     * proof that the agent has exited. Never null; [] when none.
+     * began its launch still runs, except a Cursor row whose exact recorded
+     * gateway is gone, which neither protects. A row whose guarded write found
+     * it changed or gone, or failed, is in neither list, and so is a Codex row
+     * the sweep moved to `ended` (its agent process gone and an end report held)
+     * and a pending row the sweep notes `unreported` (its agent alive) or finds
+     * already noted so. `missing` is a check's judgement on available evidence,
+     * not proof that the agent has exited. Never null; [] when none.
      */
     ids: string[];
     /** Number of live rows this sweep left unverified (the length of `unverified_ids`). */
@@ -1093,6 +1176,9 @@ export interface FindMissingResult {
      * list. Never null; [] when none.
      */
     unverified_ids: string[];
+}
+/** Retained compatibility name for the common sweep result. */
+export interface FindMissingResult extends SweepResult {
 }
 /** The minimum finished-row age for cleanup. */
 export interface ExpireParams {
@@ -1142,10 +1228,10 @@ export interface MakeTemplateParams {
     /** Default working directory to bake in. */
     cwd?: string;
     /**
-     * The agent the template belongs to: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor);
+     * The agent the template belongs to, such as `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor);
      * case-sensitive, empty or absent means not given. Required when the template bakes in
      * `agent_args` (otherwise `ErrTemplateAgentMissing`); a Codex or Cursor template cannot bake in
-     * `allow`, `deny` or `ask` (`ErrPermissionsUnsupported`). Any other value is refused
+     * `allow`, `deny` or `ask` (`ErrPermissionsUnsupported`). An unrecognized value is refused
      * with `ErrTemplateMalformed` (`ErrAgentInvalid` is spawn's per-call refusal). A spawn
      * that names no agent takes it from the template.
      */

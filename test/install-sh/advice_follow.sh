@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J34, J26 retired, and G8 for the binary's ErrOldLayout). Each test
+# (advice inventory J1-J34 and J48, J26 retired, and G8 for the binary's ErrOldLayout). Each test
 # triggers one install.sh refusal, checks the advice text word for word, does
 # exactly what the text says (re-runs the same command, runs the advised
 # command, puts the missing tool on PATH) and checks the promised outcome.
@@ -14,8 +14,10 @@
 # that never touches the network, an instant sleep) and `env -i`, so nothing
 # can reach the real ~/.config/agent-director.
 #
-# ADVICE_FOLLOW_ONLY=<extended regex> runs only the tests whose names match. The
-# move tests (J23-J25, G8) build the previous release's binary from its git tag
+# ADVICE_FOLLOW_ONLY=<extended regex> runs only the tests whose names match.
+# Optional ADVICE_FOLLOW_TS_HELPER names a same-source helper already built in
+# the sandbox; otherwise this script builds it once with its other fixtures.
+# The move tests (J23-J25, G8) build the previous release's binary from its git tag
 # (v0.11.1) when they need it, and skip with the reason in a checkout without it.
 #
 # Advice that does not work as written is a known-broken test: it is skipped
@@ -111,6 +113,11 @@ go_build "$STAMP_OLD" "$ADMIN_OLD" ./cmd/agent-director-admin
 go_build "$STAMP_OTHER" "$ADMIN_OTHER_COMMIT" ./cmd/agent-director-admin
 go_build "" "$BIN_PLAIN" ./cmd/agent-director
 go_build "" "$ADMIN_PLAIN" ./cmd/agent-director-admin
+TS_HELPER="${ADVICE_FOLLOW_TS_HELPER:-$ROOT/bin/ts-helper}"
+if [[ -z "${ADVICE_FOLLOW_TS_HELPER:-}" ]]; then
+    go_build "" "$TS_HELPER" ./test/smoke/ts-helper
+fi
+[[ -x "$TS_HELPER" ]] || die "missing test helper: $TS_HELPER"
 cp "$(type -P true)" "$NO_VERSION" || die "copy true(1)"
 BIN_SHA="$(sha256sum "$BIN" | cut -d' ' -f1)"
 ADMIN_SHA="$(sha256sum "$ADMIN" | cut -d' ' -f1)"
@@ -132,6 +139,8 @@ ADMIN_NUL="$ROOT/bin/agent-director-admin-nul"
 mkdir -p "$ROOT/probe-home"
 HOME="$ROOT/probe-home" "$BIN" list >/dev/null || die "probe list"
 SCHEMA="$("$SQLITE" "$ROOT/probe-home/.config/agent-director/state.db" 'PRAGMA user_version;')"
+# The genuine pre-cutover fixture remains v15 across later schema hops.
+PRE_CUTOVER_SCHEMA=15
 [[ "$SCHEMA" =~ ^[0-9]+$ ]] || die "read schema version: $SCHEMA"
 sed -E "s/^const schemaVersion = [0-9]+$/const schemaVersion = $((SCHEMA + 1))/" \
     "$REPO_ROOT/internal/store/store.go" >"$ROOT/store-newer.go"
@@ -196,6 +205,23 @@ func main() {
 EOF
 (cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT -X main.around=$FAKE_AROUND" -o "$FAKE_AD" .) \
     || die "go build (fake agent-director)"
+
+# J22's after-open move also surrounds the administrator open now used for
+# pre-cutover stores. Delegate to the real administrator, preserving inventory,
+# backup and transaction checks; inject the fixture move only after success,
+# and never after a snapshot, pre-flight's migrate-journal --check-only or
+# its predates probe (migrate-journal --help), none of which opens the store.
+FAKE_ADMIN="$ROOT/bin/admin-around"
+FAKE_ADMIN_AROUND="$ROOT/fake-admin-around.sh"
+cat >"$FAKE_ADMIN_AROUND" <<EOF
+#!/bin/bash
+"$ADMIN" "\$@" || exit
+for arg in "\$@"; do [[ "\$arg" == snapshot-store || "\$arg" == --check-only || "\$arg" == --help ]] && exit 0; done
+if [[ -e "\$HOME/fake-after" ]]; then . "\$HOME/fake-after"; rm "\$HOME/fake-after"; fi
+EOF
+chmod 0755 "$FAKE_ADMIN_AROUND" || die "chmod $FAKE_ADMIN_AROUND"
+(cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT -X main.around=$FAKE_ADMIN_AROUND" -o "$FAKE_ADMIN" .) \
+    || die "go build (administrator after-open fixture)"
 
 # ---- install.sh copies ----------------------------------------------------
 
@@ -336,6 +362,19 @@ SHIM_LOCK_ERR="Error: in prepare, database is locked (5)"
 SQLITE_SHIM="$ROOT/sqlite3-shim"
 cat >"$SQLITE_SHIM" <<EOF
 #!/bin/bash
+# Count only the intended query boundary. J7 defaults to version reads;
+# J24 names the live-row SELECT, independently of version/authority reads.
+if [[ "\${!#}" != *"\${FAKE_SQLITE3_MATCH:-user_version}"* ]]; then exec "$SQLITE" "\$@"; fi
+# Runtime version faults must reach the actual before/after-open connection,
+# while the gate case explicitly selects its private snapshot query, named by
+# the copy's path (opened read-write, b.x9o F1). b.zsj's -readonly move-time
+# reads of the original are in neither phase.
+if [[ "\${FAKE_SQLITE3_MATCH:-user_version}" == user_version ]]; then
+    phase=runtime
+    for arg in "\$@"; do [[ "\$arg" == -readonly ]] && phase=original; done
+    for arg in "\$@"; do [[ "\$arg" == */agent-director.read.*/state.db ]] && phase=preflight; done
+    [[ "\$phase" == "\${FAKE_SQLITE3_PHASE:-runtime}" ]] || exec "$SQLITE" "\$@"
+fi
 n=\$(( \$(cat "\$FAKE_SQLITE3_COUNT" 2>/dev/null || echo 0) + 1 ))
 echo "\$n" >"\$FAKE_SQLITE3_COUNT"
 if [[ "\$n" == "\${FAKE_SQLITE3_FAIL_CALL:-0}" ]]; then
@@ -379,7 +418,7 @@ pass=0 fail=0 skip=0 skip_broken=0 skip_tag=0
 # the checkout lacks.
 T_FAILED=0 T_SKIPPED=0 RUN_N=0 RC=0 OUT="" ERR=""
 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER=""
-FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA=""
+FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 FAKE_SQLITE3_MATCH=user_version FAKE_SQLITE3_PHASE=runtime PATH_EXTRA=""
 # The schedule step's stand-ins (b.wur): CRONTAB_STAND_IN names a crontab program
 # (none: a path that does not exist), CRON_RUNNING says a cron daemon runs.
 CRONTAB_STAND_IN="" CRON_RUNNING=1
@@ -418,10 +457,49 @@ run_in() {
         FAKE_CURL_API_TAG="$FAKE_CURL_API_TAG" \
         FAKE_SQLITE3_FAIL_CALL="$FAKE_SQLITE3_FAIL_CALL" FAKE_SQLITE3_ANSWER="$FAKE_SQLITE3_ANSWER" \
         FAKE_SQLITE3_ERR="$FAKE_SQLITE3_ERR" FAKE_SQLITE3_RC="$FAKE_SQLITE3_RC" FAKE_SQLITE3_COUNT="$home.sqlite3-calls" \
+        FAKE_SQLITE3_MATCH="$FAKE_SQLITE3_MATCH" FAKE_SQLITE3_PHASE="$FAKE_SQLITE3_PHASE" \
         "$@") >"$OUT" 2>"$ERR"
     RC=$?
 }
 run() { local home="$1"; shift; run_in "$home" "$ROOT" "$@"; }
+
+# These fixtures own a maintained empty-input boundary. Give every advised
+# retry a new exclusive backup destination; old completed copies are retained.
+# J34 uses run directly to test absent authorization and additional roots.
+run_journal() {
+    local home="$1"; shift
+    run "$home" "$@" --journal-maintenance-window --journal-roots-complete \
+        --journal-backup "$home.journal-backup-$RUN_N"
+}
+
+# journal_verify <home> [<legacy root>...]: the journal actions' last step as
+# written, "run migrate-journal with a new --backup-dir until it exits 0 with
+# authority "sqlite"": the installed administrator over home's store with the
+# window flags, the same additional roots and a new backup. It fails the case
+# unless that holds.
+journal_verify() {
+    local home="$1" root args=(); shift
+    for root in "$@"; do args+=(--legacy-root "$root"); done
+    run "$home" "$home/.config/agent-director/admin/agent-director-admin" \
+        --store-path "$home/.config/agent-director/state.db" migrate-journal \
+        --maintenance-window --roots-complete --backup-dir "$home.verify-backup-$RUN_N" "${args[@]}"
+    expect_rc 0 "migrate-journal after the installer re-run" || return 1
+    jq -e '.authority == "sqlite"' "$OUT" >/dev/null || bad "migrate-journal after the installer re-run: $(flat "$OUT")"
+}
+
+# Build closed fixture databases from genuine pre-cutover schemas, never by
+# lowering the stamp of a native-authoritative store. These are empty test
+# replacements; production recovery must restore the stopped-writer backup.
+pre_cutover_store() {
+    local db="$1" fixture="${2:-$HERE/testdata/pre-cutover-v15.sql}"
+    rm -f "$db" "$db-wal" "$db-shm"
+    "$SQLITE" "$db" <"$fixture" || return 1
+    # Released stores use WAL. Finish setup and close the connection before
+    # byte snapshots; a DELETE fixture would exercise the ordinary WAL-init
+    # header change instead of sentinel-failure preservation (J15).
+    "$SQLITE" "$db" 'PRAGMA journal_mode=WAL;' >/dev/null || return 1
+    chmod 600 "$db"
+}
 
 # run_advised <home> <cwd> <command text>: run an advised command as written,
 # its words split as a shell splits them (quotes and backslashes, as printf %q
@@ -486,6 +564,15 @@ expect_advice() {
     [[ "$text" == *"$1"* ]] || bad "stderr lacks the advice \"$1\": $text"
 }
 
+# expect_refusal_action <action>: the first ErrJournalMigrationRefused
+# envelope on stderr carries exactly this refusal action, decoded from its
+# JSON (word for word, quotes included).
+expect_refusal_action() {
+    local got
+    got="$(jq -Rr 'fromjson? | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.action' "$ERR" | head -n 1)"
+    [[ "$got" == "$1" ]] || bad "relayed refusal action \"$got\"; want \"$1\""
+}
+
 # advice_after <marker>: the rest of the first stderr line holding marker
 # (fails when there is none).
 advice_after() {
@@ -536,7 +623,7 @@ sentinel() { printf '%s' "$1/.config/agent-director/migrate-authorized"; }
 
 run_test() {
     T_FAILED=0 T_SKIPPED=0 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0
-    FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA="" CRONTAB_STAND_IN="" CRON_RUNNING=1
+    FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 FAKE_SQLITE3_MATCH=user_version FAKE_SQLITE3_PHASE=runtime PATH_EXTRA="" CRONTAB_STAND_IN="" CRON_RUNNING=1
     echo "=== RUN   $1"
     "$1"
     if [[ "$T_FAILED" -ne 0 ]]; then
@@ -1015,8 +1102,9 @@ test_J5_DotfilesSkillNotChecked() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
-# Fail the current hop's second ADD COLUMN after its first DDL. The generated
-# conflicting column is hidden from table_info; repair allows an exact retry.
+# Fail after the current hop's first DDL. Older hops use a conflicting column;
+# the native cutover uses an aborting authority-marker trigger on the genuine
+# pre-cutover database. Repair removes only the injected fault.
 j6_break_hop() {
     case "$SCHEMA" in
         14)
@@ -1040,17 +1128,55 @@ j6_break_hop() {
             "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_turn;
                 ALTER TABLE spawns DROP COLUMN codex_turn_ended;" || return 1
             ;;
+        16|17|18|19|20)
+            local installed
+            installed="$("$TS_HELPER" install-write-failure --store "$1" \
+                --kind input-authority --id native_input_authority)" || return 1
+            J6_FAILURE_HANDLE="$(jq -er '.handle' <<<"$installed")" || return 1
+            ;;
         *) bad "j6_break_hop has no failure injection for v$SCHEMA"; return 1 ;;
     esac
-    "$SQLITE" "$1" "ALTER TABLE spawns ADD COLUMN $J6_CONFLICT_COLUMN TEXT GENERATED ALWAYS AS (NULL) VIRTUAL;
+    if [[ "$SCHEMA" -lt 16 ]]; then
+        "$SQLITE" "$1" "ALTER TABLE spawns ADD COLUMN $J6_CONFLICT_COLUMN TEXT GENERATED ALWAYS AS (NULL) VIRTUAL;" || return 1
+    fi
+    "$SQLITE" "$1" "
         INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent,family_state,family_settled_state,family_changed_ms) VALUES ('j6','ended','/tmp','ad-j6','off','claude','waiting','waiting',0);
         INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,main_turn_end_eligible) VALUES ('j6','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}',1);"
 }
-j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN $J6_CONFLICT_COLUMN;"; }
+j6_repair_hop() {
+    if [[ "$SCHEMA" -ge 16 ]]; then
+        "$TS_HELPER" remove-write-failure --store "$1" --handle "$J6_FAILURE_HANDLE" >/dev/null
+    else
+        "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN $J6_CONFLICT_COLUMN;"
+    fi
+}
+
+# j6_expect_step_failed: the relayed refusal is the cutover's statements
+# failing before its commit: schema_step_failed with its own action, nothing
+# committed.
+J6_ACTION="fix what stopped the schema step, such as disk space, write access or a schema changed by hand, keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+j6_expect_step_failed() {
+    expect_advice '"reason":"schema_step_failed"'
+    expect_refusal_action "$J6_ACTION"
+    expect_advice '"cutover":"not_committed","steps_committed":false'
+}
+
+j6_assert_rollback() {
+    local db="$J6H/.config/agent-director/state.db"
+    [[ "$(db_version "$J6H")" == $PRE_CUTOVER_SCHEMA ]] || bad "failed migration stamped v$SCHEMA"
+    [[ "$("$SQLITE" "$db" '.sha3sum --schema')" == "$J6_BEFORE" ]] || bad "failed migration changed schema or data"
+    if [[ "$SCHEMA" -ge 16 ]]; then
+        [[ "$("$SQLITE" "$db" "SELECT count(*) FROM sqlite_master WHERE name IN ('input_launches','input_attempts','input_imports'); SELECT count(*) FROM store_meta WHERE key='native_input_authority';")" == $'0\n0' ]] \
+            || bad "failed cutover retained native DDL or authority"
+    else
+        [[ "$("$SQLITE" "$db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name='$J6_FIRST_COLUMN';")" == 0 ]] \
+            || bad "failed migration retained its first column addition ($J6_FIRST_COLUMN)"
+    fi
+}
 
 # j6_failing_migration [pre-0.11.0]: install BIN_OLD and ADMIN_OLD (with
 # pre-0.11.0, then make that an install from before 0.11.0: j11_pre_admin),
-# make the store one version older with a failing column addition
+# lay a genuine pre-cutover store with an injected transactional failure
 # (j6_break_hop), and run J6ARGV, an upgrade with --keep-prior, into that
 # failure; leaves HOME in J6H.
 j6_failing_migration() {
@@ -1058,33 +1184,48 @@ j6_failing_migration() {
     run "$J6H" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
     expect_rc 0 "first install" || return 1
     if [[ "${1:-}" == pre-0.11.0 ]]; then j11_pre_admin "$J6H" || return 1; fi
-    "$SQLITE" "$J6H/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));" || { bad "damage store"; return 1; }
+    pre_cutover_store "$J6H/.config/agent-director/state.db" || { bad "damage store"; return 1; }
     j6_break_hop "$J6H/.config/agent-director/state.db" || { bad "damage store"; return 1; }
+    J6_BEFORE="$("$SQLITE" "$J6H/.config/agent-director/state.db" '.sha3sum --schema')"
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
-    run "$J6H" "${J6ARGV[@]}"
-    expect_exit5 ErrStoreOpen "migration step fails" || return 1
-    expect_advice "If this install authorized a migration above, it was NOT consumed; re-running this install will retry it."
-    [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
-    [[ "$(db_version "$J6H")" == $((SCHEMA - 1)) ]] || bad "failed migration stamped v$SCHEMA"
-    [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name='$J6_FIRST_COLUMN';")" == 0 ]] \
-        || bad "failed migration retained its first column addition ($J6_FIRST_COLUMN)"
+    run_journal "$J6H" "${J6ARGV[@]}"
+    if [[ "${1:-}" == pre-0.11.0 ]]; then
+        expect_exit5 ErrJournalMigrationRefused "migration step fails and restores" || return 1
+        expect_advice "install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run."
+        expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+        cmp -s "$J6H/.config/agent-director/bin/agent-director" "$BIN_OLD" || bad "restore did not put back the old CLI"
+        [[ ! -e "$J6H/.config/agent-director/admin/agent-director-admin" ]] || bad "restore retained the newly installed administrator"
+        [[ ! -e "$(sentinel "$J6H")" ]] || bad "restore retained the run's sentinel"
+    else
+        expect_exit5 ErrJournalMigrationIncomplete "migration step fails" || return 1
+        expect_advice "install.sh: the cutover did not commit; this release stays installed."
+        expect_advice "The administrator installed before the run ($J6H/.config/agent-director/admin/agent-director-admin) does not predate the cutover, so there is no earlier release to put back."
+        expect_advice "To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:"
+        expect_installed "$J6H" "$BIN" "$ADMIN"
+        [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
+    fi
+    j6_expect_step_failed
+    j6_assert_rollback
 }
 
-# J6: "If this install authorized a migration above, it was NOT consumed;
-# re-running this install will retry it." The re-run's step-3 probe fails too, and says it could
-# not tell, not that no migration is needed (b.7b4). Once the cause is gone, the
-# re-run's probe runs the migration the left sentinel authorizes: step 3 says
-# so, and step 5 verifies it (b.dzw).
+# J6: "fix what stopped the schema step, such as disk space, write access or a
+# schema changed by hand, keep the maintenance window, then re-run this
+# release's installer with a new --journal-backup, which finishes any pending
+# schema step, then run migrate-journal with a new --backup-dir until it exits
+# 0 with authority "sqlite"", the relayed schema_step_failed action. Repeat the
+# failing transaction with a fresh exclusive backup, then remove only the
+# injected fault, re-run the installer and then migrate-journal. The sentinel alone
+# cannot authorize the early probe (b.7b4, b.dzw; native cutover contract).
 test_J6_MigrationFailedRerunRetries() {
     j6_failing_migration || return
-    run "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
-    expect_exit5 ErrStoreOpen "re-run while the step's cause still holds" || return
-    expect_advice "re-running this install will retry it."
-    local could="  schema  : state.db at v$((SCHEMA - 1)); could not tell whether a migration is needed (agent-director list failed: ErrStoreOpen)"
-    grep -qxF "$could" "$OUT" || bad "no \"$could\" line: $(grep -F "  schema  : " "$OUT")"
-    [[ "$(db_version "$J6H")" == $((SCHEMA - 1)) ]] || bad "store moved off v$((SCHEMA - 1)) on a failed re-run"
+    run_journal "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
+    expect_exit5 ErrJournalMigrationIncomplete "re-run while the step's cause still holds" || return
+    j6_expect_step_failed
+    expect_advice "To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:"
+    j6_assert_rollback
+    [[ "$(db_version "$J6H")" == $PRE_CUTOVER_SCHEMA ]] || bad "store moved off v$PRE_CUTOVER_SCHEMA on a failed re-run"
     j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; return; }
-    run "$J6H" "${J6ARGV[@]}"
+    run_journal "$J6H" "${J6ARGV[@]}"
     expect_rc 0 "re-run once the cause is gone" || return
     [[ "$(db_version "$J6H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J6H"); want v$SCHEMA"
     [[ ! -e "$(sentinel "$J6H")" ]] || bad "sentinel not consumed by the successful migration"
@@ -1102,17 +1243,24 @@ test_J6_MigrationFailedRerunRetries() {
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT owner_launch_token IS NULL AND owner_permission_epoch IS NULL AND admitted_at IS NULL AND fallback_at IS NULL AND fallback_basis IS NULL FROM permission_requests WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated historical ownership or fallback facts"
     fi
-    if [[ "$SCHEMA" == 15 ]]; then
+    if [[ "$SCHEMA" == 15 || "$SCHEMA" -ge 16 ]]; then
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('codex_turn','codex_turn_ended') AND type='TEXT' AND \"notnull\"=0 AND dflt_value IS NULL;")" == 2 ]] \
             || bad "corrected retry did not add both nullable Codex turn columns"
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT codex_turn IS NULL AND codex_turn_ended IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated a Codex turn for the historical spawn"
     fi
-    local ran="  schema  : migration v$((SCHEMA - 1))→v$SCHEMA ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $(sentinel "$J6H"))"
+    if [[ "$SCHEMA" -ge 19 ]]; then
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('state_evidence','settled_evidence','process_evidence','display_evidence') AND type='TEXT' AND \"notnull\"=0 AND dflt_value IS NULL;")" == 4 ]] \
+            || bad "corrected retry did not add the three nullable evidence columns"
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT state_evidence IS NULL AND settled_evidence IS NULL AND process_evidence IS NULL AND display_evidence IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
+            || bad "corrected retry fabricated main-field evidence for the historical spawn"
+    fi
+    local ran="  schema  : authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA (sentinel $(sentinel "$J6H"))"
     grep -qxF "$ran" "$OUT" || bad "no \"$ran\" line: $(grep -F "  schema  : " "$OUT")"
     grep -qF "no migration authorization needed" "$OUT" && bad "step 3 says no migration was needed after its probe ran one"
     grep -qxF "  schema  : migration verified — state.db now at v$SCHEMA" "$OUT" \
         || bad "step 5 did not verify the migration the probe ran: $(flat "$OUT")"
+    journal_verify "$J6H"
 }
 
 # J6 with --keep-prior: re-running as advised keeps the rollback copies of the
@@ -1123,8 +1271,8 @@ test_J6_RerunKeepsPriorRollbackCopy() {
     j11_paths "$J6H"
     cmp -s "$J11C.prior" "$BIN_OLD" || bad "first run did not snapshot the old agent-director"
     cmp -s "$J11A.prior" "$ADMIN_OLD" || bad "first run did not snapshot the old agent-director-admin"
-    run "$J6H" "${J6ARGV[@]}"
-    expect_exit5 ErrStoreOpen "advised re-run while the step's cause still holds" || return
+    run_journal "$J6H" "${J6ARGV[@]}"
+    expect_exit5 ErrJournalMigrationIncomplete "advised re-run while the step's cause still holds" || return
     j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
     j11_not_snapshotted "admin prior" "kept $J11A.prior" "$J11_SAME_PAIR"
     cmp -s "$J11C.prior" "$BIN_OLD" \
@@ -1135,28 +1283,31 @@ test_J6_RerunKeepsPriorRollbackCopy() {
 }
 
 # J6 with --keep-prior on an upgrade from before 0.11.0
-# (test_J11_KeepPriorNoAdminRemoveIt's setup): the advised re-run keeps
-# agent-director.prior and still says "to roll back, remove
-# <agent-director-admin>" (b.2wk); doing that restores the old install.
+# (test_J11_KeepPriorNoAdminRemoveIt's setup): each refusal restores the old
+# CLI and removes the added administrator and sentinel. A retry snapshots the
+# restored CLI again; fixing only the reported cause then completes the upgrade.
 test_J6_RerunPreAdminUpgradeKeepsRemoveAdvice() {
-    local got
     j6_failing_migration pre-0.11.0 || return
     j11_paths "$J6H"
     grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" || bad "first run: no agent-director prior line: $(flat "$OUT")"
     grep -qxF "  admin prior: none (no agent-director-admin was installed); to roll back, remove $J11A" "$OUT" \
         || bad "first run: no remove-it admin prior line: $(flat "$OUT")"
-    run "$J6H" "${J6ARGV[@]}"
-    expect_exit5 ErrStoreOpen "advised re-run while the step's cause still holds" || return
-    j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
-    j11_not_snapshotted "admin prior" none "$J11_SAME_PAIR" "; to roll back, remove $J11A"
+    run_journal "$J6H" "${J6ARGV[@]}"
+    expect_exit5 ErrJournalMigrationRefused "advised re-run while the step's cause still holds" || return
+    grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" || bad "retry did not snapshot the restored CLI"
+    grep -qxF "  admin prior: none (no agent-director-admin was installed); to roll back, remove $J11A" "$OUT" || bad "retry did not recognize the absent administrator"
     cmp -s "$J11C.prior" "$BIN_OLD" \
         || bad "after the advised re-run agent-director.prior is no longer the pre-install binary (rollback copy lost)"
     [[ ! -e "$J11A.prior" ]] || bad "the advised re-run left $J11A.prior, which would pair wrongly"
-    got="$(grep -m1 -F "to roll back, remove " "$OUT")" || return
-    mv "$J11C.prior" "$J11C" || bad "mv $J11C.prior $J11C"
-    rm "${got##*to roll back, remove }" || bad "remove ${got##*to roll back, remove }"
-    cmp -s "$J11C" "$BIN_OLD" || bad "rolled-back agent-director is not the old one"
-    [[ ! -e "$J11A" ]] || bad "agent-director-admin left after the rollback"
+    cmp -s "$J11C" "$BIN_OLD" || bad "restored agent-director is not the old one"
+    [[ ! -e "$J11A" ]] || bad "agent-director-admin left after the restore"
+    [[ ! -e "$(sentinel "$J6H")" ]] || bad "sentinel left after the restore"
+    j6_assert_rollback
+    j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; return; }
+    run_journal "$J6H" "${J6ARGV[@]}"
+    expect_rc 0 "retry after the cause is fixed" || return
+    expect_installed "$J6H" "$BIN" "$ADMIN"
+    [[ "$(db_version "$J6H")" == "$SCHEMA" ]] || bad "successful retry did not finish migration"
 }
 
 # J6: "If state.db is NEWER than this binary (ErrSchemaMismatch), install a
@@ -1202,15 +1353,15 @@ j7_timeout() { printf '%s' "${J7_BUSY_MS:-10000}"; }
 j7_installed() {
     J7H="$(new_home)"
     j7_config
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
     expect_rc 0 "first install"
 }
 
-# j7_older_store: j7_installed, then the store set one version back, so the
-# next install migrates it.
+# j7_older_store: j7_installed, then a genuine pre-cutover fixture so the next
+# explicitly authorized install migrates it.
 j7_older_store() {
     j7_installed || return 1
-    "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
+    pre_cutover_store "$J7H/.config/agent-director/state.db"
 }
 
 # Rename advice needs a store preceding the immutable v8→v9 naming hop.
@@ -1219,27 +1370,29 @@ j7_pre_rename_store() {
     local hop
     hop="$(sed -n 's/^AGENT_RENAME_HOP_VERSION=\([0-9][0-9]*\)$/\1/p' "$INSTALL_SRC")"
     [[ "$hop" == 9 ]] || { bad "unexpected agent-rename hop: $hop"; return 1; }
-    PRE_RENAME_SCHEMA=$((hop - 1))
-    "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $PRE_RENAME_SCHEMA;"
+    pre_cutover_store "$J7H/.config/agent-director/state.db" "$HERE/testdata/v0.11.1-store.sql" || return 1
+    PRE_RENAME_SCHEMA=$(db_version "$J7H")
 }
 
-# j7_run <call> [<answer> [<stderr> [<status>]]]: run J7ARGV in J7H with
-# sqlite3 call <call> (1 is step 2's read of an existing store, the next step
+# j7_run <call> [<answer> [<stderr> [<status> [<query substring> [<phase>]]]]]:
+# run J7ARGV in J7H with matching sqlite3 call <call>
+# (default match user_version: 1 is step 2's existing-store read, the next step
 # 5's; 0 none) printing <stderr> on stderr, then <answer>, and exiting <status>
 # (default 0). Given no <stderr> and an empty or no <answer>, it fails as when a
 # lock outlasts its busy timeout.
 j7_run() {
     ln -sf "$SQLITE_SHIM" "$TOOLBOX/sqlite3"
     FAKE_SQLITE3_FAIL_CALL="$1" FAKE_SQLITE3_ANSWER="${2:-}" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0
+    FAKE_SQLITE3_MATCH="${5:-user_version}" FAKE_SQLITE3_PHASE="${6:-runtime}"
     if [[ $# -ge 3 ]]; then
         FAKE_SQLITE3_ERR="$3" FAKE_SQLITE3_RC="${4:-0}"
     elif [[ -z "$FAKE_SQLITE3_ANSWER" ]]; then
         FAKE_SQLITE3_ERR="$SHIM_LOCK_ERR" FAKE_SQLITE3_RC=5
     fi
     rm -f "$J7H.sqlite3-calls" # count from 1
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
     ln -sf "$SQLITE" "$TOOLBOX/sqlite3"
-    FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0
+    FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 FAKE_SQLITE3_MATCH=user_version FAKE_SQLITE3_PHASE=runtime
 }
 
 # j7_verify_fails <version>: an older store, and an install whose verification
@@ -1310,7 +1463,7 @@ j7_warned() {
 # j7_mismatch: j7_verify_fails with the verification read answering the
 # pre-migration version; checks its advice (state.db's path shell-quoted).
 j7_mismatch() {
-    local t="$SCHEMA" a="$((SCHEMA - 1))" db
+    local t="$SCHEMA" a="$PRE_CUTOVER_SCHEMA" db
     j7_verify_fails "$a" || return 1
     db="$(printf %q "$J7H/.config/agent-director/state.db")"
     expect_advice "actual user_version: $a"
@@ -1320,7 +1473,7 @@ j7_mismatch() {
 # j7_rerun_verified: re-run J7ARGV with the real sqlite3; it reads and verifies
 # the migrated store.
 j7_rerun_verified() {
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
     expect_rc 0 "$1" || return
     grep -qF "(schema v$SCHEMA)" "$OUT" || bad "the re-run did not read the store's version: $(flat "$OUT")"
     [[ "$(db_version "$J7H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J7H"); want v$SCHEMA"
@@ -1333,11 +1486,15 @@ j7_rerun_verified() {
 # maintainers is a human step; not followed.
 test_J7_VersionMismatchRerun() {
     local version
-    for version in $((SCHEMA - 1)) $((SCHEMA + 1)) "$SCHEMA"; do
+    for version in $PRE_CUTOVER_SCHEMA $((SCHEMA + 1)) "$SCHEMA"; do
         j7_mismatch || continue
-        "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $version;"
+        if ((version < SCHEMA)); then
+            pre_cutover_store "$J7H/.config/agent-director/state.db" || continue
+        else
+            "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $version;"
+        fi
         if ((version > SCHEMA)); then
-            run "$J7H" "${J7ARGV[@]}"
+            run_journal "$J7H" "${J7ARGV[@]}"
             expect_exit5 ErrSchemaMismatch "v$version: re-run" || continue
             [[ "$(line_after "install.sh: store open (agent-director list) failed after install")" == *'"err_name":"ErrSchemaMismatch"'* ]] \
                 || bad "v$version: the re-run did not stop at the store open with ErrSchemaMismatch: $(flat "$ERR")"
@@ -1362,7 +1519,7 @@ test_J7_VersionMismatchCheckVersion() {
     for spec in "|" "\$x\`y\`'q\"z.|" "|1234"; do
         IFS='|' read -r HOME_TAG J7_BUSY_MS <<<"$spec"
         j7_mismatch || continue
-        grep -qF "authorized migration v$((SCHEMA - 1))→v$SCHEMA " "$OUT" || bad "HOME $J7H: the install authorized no migration: $(flat "$OUT")"
+        grep -qF "authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA " "$OUT" || bad "HOME $J7H: the install authorized no migration: $(flat "$OUT")"
         if compgen -G "$(sentinel "$J7H")*" >/dev/null; then
             bad "HOME $J7H: the sentinel was not consumed: $(compgen -G "$(sentinel "$J7H")*")"
         fi
@@ -1435,7 +1592,7 @@ test_J7_FailedReadRerun() {
                 bad "$what: an existing state.db reported as a fresh create: $(flat "$OUT")"
             fi
             [[ ! -e "$(sentinel "$J7H")" ]] || bad "$what: a migration was authorized without the store's version"
-            [[ "$(db_version "$J7H")" == $((SCHEMA - 1)) ]] || bad "$what: store moved off v$((SCHEMA - 1)): v$(db_version "$J7H")"
+            [[ "$(db_version "$J7H")" == $PRE_CUTOVER_SCHEMA ]] || bad "$what: store moved off v$PRE_CUTOVER_SCHEMA: v$(db_version "$J7H")"
         fi
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$what: first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         grep -qxF "  actual   user_version: <unreadable>" "$ERR" || bad "$what: no <unreadable> line: $(flat "$ERR")"
@@ -1456,8 +1613,8 @@ test_J7_FailedReadRerun() {
         fi
     done 3<<EOF
 1||$SHIM_LOCK_ERR|5
-1|$((SCHEMA - 1))||10
-1|$((SCHEMA - 1))|Error: stepping, disk I/O error (10)|10
+1|$PRE_CUTOVER_SCHEMA||10
+1|$PRE_CUTOVER_SCHEMA|Error: stepping, disk I/O error (10)|10
 2||$SHIM_LOCK_ERR|5
 2|$SCHEMA||10
 2|||0
@@ -1482,7 +1639,9 @@ j7_not_a_version() {
     if grep -qF -e "invalid number" -e "contact the maintainers" "$ERR"; then
         bad "the read's output reached a printf %d or the version compare: $(flat "$ERR")"
     fi
-    if compgen -G "$(sentinel "$J7H")*" >/dev/null; then
+    if [[ "${3:-}" == retained_sentinel ]]; then
+        [[ "$(cat "$(sentinel "$J7H")")" == "$J7_RETAINED_SENTINEL" ]] || bad "preexisting current-store sentinel changed"
+    elif compgen -G "$(sentinel "$J7H")*" >/dev/null; then
         bad "left in ~/.config/agent-director: $(compgen -G "$(sentinel "$J7H")*")"
     fi
 }
@@ -1515,13 +1674,13 @@ j7_rerun_same() {
 # <changed>|<stdout>|<stderr>.
 test_J7_NotAVersionBeforeOpenRerun() {
     local spec changed call answer err printed stand_in version could want="install.sh: reading state.db's schema version FAILED"
-    for spec in "sqlite3|user_version\n$((SCHEMA - 1))|" "sqlite3|08|" "sqlite3|010|" \
-        "sqlite3|$((SCHEMA - 1))|-- Loading resources from /dev/null" "state.db|-1|"; do
+    for spec in "sqlite3|user_version\n$PRE_CUTOVER_SCHEMA|" "sqlite3|08|" "sqlite3|010|" \
+        "sqlite3|$PRE_CUTOVER_SCHEMA|-- Loading resources from /dev/null" "state.db|-1|"; do
         IFS='|' read -r changed answer err <<<"$spec"
         printed="${err:+$err\n}$answer" # stderr first, as the stand-in prints them
         j7_older_store || continue
         if [[ "$changed" == sqlite3 ]]; then
-            version=$((SCHEMA - 1)) call=1 stand_in="$answer"
+            version=$PRE_CUTOVER_SCHEMA call=1 stand_in="$answer"
         else
             version="$answer" call=0 stand_in=""
             "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $version;"
@@ -1541,7 +1700,7 @@ test_J7_NotAVersionBeforeOpenRerun() {
         j7_rerun_same ErrVersionUnreadable "$call" "$stand_in" "$err" 0 || continue
         [[ "$(db_version "$J7H")" == "$version" ]] || bad "\"$printed\": store moved off v$version: v$(db_version "$J7H")"
         if [[ "$changed" == state.db ]]; then
-            "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
+            pre_cutover_store "$J7H/.config/agent-director/state.db"
         fi
         j7_rerun_verified "\"$printed\": re-run once $changed changed"
     done
@@ -1574,19 +1733,19 @@ test_J7_NotAVersionAfterOpenRerun() {
 
 # J7: "Re-running this install retries the read." and "A re-run gets the same
 # output unless that sqlite3 or state.db changes." when step 3's read after a
-# probe that a sentinel left from before let migrate (the J6 re-run, cause
-# gone) gives no version: exit 5 with no step-3 verdict. The probe consumed the
-# sentinel, so the re-run finds the store current: a failed read's re-run
-# verifies it, a not-a-number read's shows that output in step 5's warning
-# until the sqlite3 changes (b.dzw).
+# successful probe with a preexisting sentinel gives no version: exit 5 with
+# no step-3 verdict (b.dzw). A current store with a stale sentinel reaches this
+# retained installer path. Native migration itself cannot run at the probe;
+# J6 and J34 separately assert that it requires the administrator boundary.
 test_J7_UnreadableAfterProbeRerun() {
     local -a J7ARGV
-    local answer could="tell whether the probe (agent-director list) ran a migration. A sentinel written before this install was beside state.db, and it may have authorized one."
+    local answer before J7_RETAINED_SENTINEL could="tell whether the probe (agent-director list) ran a migration. A sentinel written before this install was beside state.db, and it may have authorized one."
     for answer in "" "[{\"user_version\":$SCHEMA}]"; do
-        j6_failing_migration || continue
-        j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; continue; }
-        J7H="$J6H"
-        J7ARGV=("${J6ARGV[@]}")
+        J7ARGV=("${J7FULL[@]}")
+        j7_installed || continue
+        J7_RETAINED_SENTINEL="{\"from\":$PRE_CUTOVER_SCHEMA,\"to\":$SCHEMA}"
+        printf '%s' "$J7_RETAINED_SENTINEL" >"$(sentinel "$J7H")"
+        before="$("$SQLITE" "$J7H/.config/agent-director/state.db" '.sha3sum --schema')"
         j7_run 2 "$answer" # step 2's read, then step 3's after the probe
         expect_exit5 ErrVersionUnreadable "step 3's read after the probe answered \"$answer\"" || continue
         [[ "$(head -n 1 "$ERR")" == "install.sh: reading state.db's schema version FAILED" ]] \
@@ -1597,19 +1756,21 @@ test_J7_UnreadableAfterProbeRerun() {
         fi
         if [[ -z "$answer" ]]; then
             j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not $could Re-running this install retries the read."
+            j7_rerun_same ErrVersionUnreadable 2 "$answer" || continue
             j7_rerun_verified "re-run once the read works"
         else
-            j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not $could"
-            j7_rerun_same 0 2 "$answer" || continue # no sentinel now: step 5's read is the second
+            j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not $could" retained_sentinel
+            j7_rerun_same ErrVersionUnreadable 2 "$answer" || continue
             j7_rerun_verified "\"$answer\", re-run with the real sqlite3"
         fi
+        [[ "$(cat "$(sentinel "$J7H")")" == "$J7_RETAINED_SENTINEL" ]] || bad "current store consumed a stale sentinel"
+        [[ "$("$SQLITE" "$J7H/.config/agent-director/state.db" '.sha3sum --schema')" == "$before" ]] || bad "probe-read failure/retry changed current schema or data"
     done
 }
 
 # J7: "Re-running this install retries the read." when the agent-rename gate's
 # own read of an existing store fails (a lock outlasting its busy timeout). The
-# gate takes user_version from the database file's header and asks sqlite3 only
-# when the header is no committed value: here a rollback journal with a zeroed
+# gate queries its private snapshot: here a rollback journal with a zeroed
 # header sits beside the store, as journal_mode=PERSIST leaves one. The report
 # names state.db and its cause, nothing under HOME changes and nothing is
 # migrated; the re-run, the lock gone, reads again and migrates config.toml, the
@@ -1624,7 +1785,7 @@ test_J7_GateReadFailedRerun() {
     printf 'claude_args = ["--a"]\n' >"$tpl"
     head -c 512 /dev/zero >"$h/.config/agent-director/state.db-journal"
     before="$(j14_snap "$h")"
-    j7_run 1
+    j7_run 1 "" "$SHIM_LOCK_ERR" 5 user_version preflight
     expect_exit5 ErrVersionUnreadable "the gate's read failed" || return
     [[ "$(head -n 1 "$ERR")" == "install.sh: reading state.db's schema version FAILED" ]] \
         || bad "first stderr line \"$(head -n 1 "$ERR")\""
@@ -2089,11 +2250,11 @@ test_J13_ConfigRefusedFixAndRerun() {
         IFS='|' read -r store config named fix <<<"$spec"
         case "$store" in
             fresh) J7H="$(new_home)" before=none; mkdir -p "$J7H/.config/agent-director" ;;
-            older) j7_older_store || continue; before=$((SCHEMA - 1)) ;;
+            older) j7_older_store || continue; before=$PRE_CUTOVER_SCHEMA ;;
             current) j7_installed || continue; before="$SCHEMA" ;;
         esac
         printf '%b\n' "$config" >"$J7H/.config/agent-director/config.toml"
-        run "$J7H" "${J7ARGV[@]}"
+        run_journal "$J7H" "${J7ARGV[@]}"
         expect_exit5 ErrConfigMalformed "$store store, config \"$named\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$store, \"$named\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         grep -qF '  {"err_name":"ErrConfigMalformed",' "$ERR" || bad "$store, \"$named\": no ErrConfigMalformed envelope: $(flat "$ERR")"
@@ -2129,7 +2290,7 @@ test_J13_ConfigRefusedFixAndRerun() {
         expect_installed "$J7H" "$BIN" "$ADMIN"
         [[ ! -e "$(sentinel "$J7H")" ]] || bad "$store, \"$named\": sentinel left after the re-run"
         if [[ "$store" == older ]]; then
-            grep -qF "authorized migration v$((SCHEMA - 1))→v$SCHEMA " "$OUT" \
+            grep -qF "authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA " "$OUT" \
                 || bad "$store, \"$named\": the re-run did not authorize the pending migration: $(flat "$OUT")"
         elif [[ "$store" == current ]]; then
             # The probe opened the store (no err_name): step 3 says nothing to authorize.
@@ -2158,10 +2319,10 @@ j14_config() {
     esac
 }
 
-# keep_older <db>: mark the store at <db>, so a later check can tell it is the
-# same one, and set it one version back.
+# keep_older <db>: lay and mark a genuine pre-cutover fixture at <db>, so a
+# later check can tell it was migrated in place rather than replaced.
 keep_older() {
-    "$SQLITE" "$1" "CREATE TABLE kept_store (x); PRAGMA user_version = $((SCHEMA - 1));" || bad "mark the store at $1"
+    pre_cutover_store "$1" && "$SQLITE" "$1" "CREATE TABLE kept_store (x);" || bad "mark the store at $1"
 }
 # is_kept <db>: 1 when the store at <db> is one keep_older marked, else 0.
 is_kept() { "$SQLITE" "$1" "SELECT count(*) FROM sqlite_master WHERE name = 'kept_store';"; }
@@ -2179,7 +2340,7 @@ expect_store() {
     fi
     [[ "${4:-}" == migrated ]] || return 0
     [[ "$(is_kept "$db")" == 1 ]] || bad "$ctx: the store at $db is not the one there before"
-    grep -qxF "  schema  : authorized migration v$((SCHEMA - 1))→v$SCHEMA (sentinel $dir/migrate-authorized)" "$OUT" \
+    grep -qxF "  schema  : authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA (sentinel $dir/migrate-authorized)" "$OUT" \
         || bad "$ctx: the run did not authorize the migration beside $db: $(flat "$OUT")"
 }
 
@@ -2205,7 +2366,7 @@ test_J14_DbPathRefusedFixAndRerun() {
         case "$store" in
             older)
                 printf '%b\n' "$fixed" >"$cfg"
-                run "$h" "${J7ARGV[@]}"
+                run_journal "$h" "${J7ARGV[@]}"
                 expect_rc 0 "\"$broken\": first install" || continue
                 kept="$db" ;;
             kept|kept:*)
@@ -2229,7 +2390,7 @@ test_J14_DbPathRefusedFixAndRerun() {
             continue
         fi
         before="$(j14_snap "$h")"
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_exit5 ErrConfigMalformed "config \"$broken\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$broken\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         expect_advice "$advice"
@@ -2240,7 +2401,7 @@ test_J14_DbPathRefusedFixAndRerun() {
             '<unreadable>') chmod 600 "$cfg" ;;
             *) printf '%b\n' "$fixed" >"$cfg" ;;
         esac
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_rc 0 "\"$broken\": re-run after the change to \"$fixed\"" || continue
         if [[ -n "$kept" && "$kept" == "$db" ]]; then
             expect_store "$h" "$db" "\"$broken\"" migrated
@@ -2307,7 +2468,7 @@ test_J14_LaunchRefusedFixAndRerun() {
         mkdir -p "$h/.config/agent-director"
         printf '%b\n' "$broken" >"$cfg"
         before="$(j14_snap "$h")"
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_exit5 ErrConfigMalformed "launch config \"$broken\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$broken\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         expect_advice "config : $cfg"
@@ -2316,7 +2477,7 @@ test_J14_LaunchRefusedFixAndRerun() {
         expect_advice "Nothing was installed or changed. Re-run this install after the change."
         [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$broken\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
         printf '%b\n' "$fixed" >"$cfg"
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_rc 0 "\"$broken\": re-run after the change to \"$fixed\"" || continue
         [[ "$(cat "$cfg")" == "$(printf '%b' "$fixed")" ]] || bad "\"$broken\": config.toml is not the fixed one after the install: $(cat "$cfg")"
         [[ "$("$SQLITE" "$h/.config/agent-director/state.db" 'PRAGMA user_version;')" == "$SCHEMA" ]] \
@@ -2405,7 +2566,7 @@ test_J14_DottedKeysMoveInTurn() {
     keep_older "$db"
     while IFS='|' read -r line advice <&3; do
         before="$(j14_snap "$h")"
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_exit5 ErrConfigMalformed "config line 1 \"$line\"" || return
         expect_advice "line 1 : $line"
         expect_advice "$advice"
@@ -2415,7 +2576,7 @@ test_J14_DottedKeysMoveInTurn() {
 defaults.relay_mode = "on"|Before any header, a dotted key a.b = value sets b under [a]. Move this line, without the defaults. prefix, to under the file's [defaults] header, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.
 store.db_path = "~/custom/s.db"|This sets a store key as a dotted key (store.db_path = ..., say) rather than under a [store] header. Move this line, without the store. prefix, to under the file's [store] header, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.
 EOF
-    run "$h" "${J7ARGV[@]}"
+    run_journal "$h" "${J7ARGV[@]}"
     expect_rc 0 "re-run after both moves, config: $(flat "$cfg")" || return
     expect_store "$h" "$db" "after both moves" migrated
 }
@@ -2429,7 +2590,7 @@ EOF
 # nothing left beside the store and the store unchanged; with mktemp working
 # again, the re-run migrates it.
 test_J15_SentinelTempFailedFixAndRerun() {
-    local spec h db shown sentinel sum
+    local spec h db shown sentinel sum logical_sum backup
     for spec in '|.config/agent-director/state.db' '[store]\ndb_path = "~/custom/s.db"|custom/s.db'; do
         PATH_EXTRA=""
         h="$(new_home)" db="$h/${spec#*|}" shown=state.db
@@ -2439,23 +2600,28 @@ test_J15_SentinelTempFailedFixAndRerun() {
             printf '%b\n' "${spec%%|*}" >"$h/.config/agent-director/config.toml"
             shown="$db"
         fi
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_rc 0 "$shown: first install" || continue
         keep_older "$db"
+        [[ "$("$SQLITE" "$db" 'PRAGMA journal_mode;')" == wal ]] || { bad "$shown: fixture is not a closed released WAL store"; continue; }
         sum="$(sha256sum "$db")"
+        logical_sum="$("$SQLITE" "$db" '.sha3sum --schema')"
         PATH_EXTRA="$SENTINEL_MKTEMP_FAILS"
-        run "$h" "${J7ARGV[@]}"
+        backup="$h.journal-backup-$RUN_N"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_exit5 ErrSchemaVerifyFailed "$shown: mktemp fails beside the sentinel" || continue
         # Its error is above: mktemp's own, naming a template no one can predict.
         [[ "$(head -n 2 "$ERR")" == "mktemp: failed to create file via template '$sentinel.tmp.XXXXXX': Permission denied"$'\n'"install.sh: writing the migration sentinel FAILED" ]] \
             || bad "$shown: stderr does not open with mktemp's error for $sentinel.tmp.XXXXXX, then the failure: $(head -n 2 "$ERR" | tr '\n' '|')"
-        expect_advice "sentinel: $sentinel mktemp could not create a temp file beside it (its error is above), so no migration was authorized: $shown is still at v$((SCHEMA - 1)). The new agent-director does not open it until it is at v$SCHEMA. Fix what mktemp's error names (a directory you cannot write, say, or a full disk), then re-run this install: it authorizes the migration again."
+        expect_advice "sentinel: $sentinel mktemp could not create a temp file beside it (its error is above), so no migration was authorized: $shown is still at v$PRE_CUTOVER_SCHEMA. The new agent-director does not open it until it is at v$SCHEMA. Fix what mktemp's error names (a directory you cannot write, say, or a full disk), then re-run this install: it authorizes the migration again."
         if compgen -G "$sentinel*" >/dev/null; then
             bad "$shown: left beside the store: $(compgen -G "$sentinel*")"
         fi
         [[ "$(sha256sum "$db")" == "$sum" ]] || bad "$shown: the store changed"
+        [[ "$("$SQLITE" "$db" '.sha3sum --schema')" == "$logical_sum" ]] || bad "$shown: schema/data changed"
+        [[ ! -e "$backup/COMPLETE" ]] || bad "$shown: failed sentinel authorized completed cutover backup"
         PATH_EXTRA="" # what mktemp's error named is fixed
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_rc 0 "$shown: re-run with mktemp working" || continue
         expect_store "$h" "$db" "$shown" migrated
         grep -qxF "  schema  : migration verified — $shown now at v$SCHEMA" "$OUT" \
@@ -2504,7 +2670,7 @@ test_J16_DefaultsKeyMoveUnderHeader() {
         printf '%b\n' "$config" >"$cfg"
         if [[ "$config" == '"defaults"'* ]]; then
             before="$(j14_snap "$h")"
-            run "$h" "${J7ARGV[@]}"
+            run_journal "$h" "${J7ARGV[@]}"
             expect_exit5 ErrConfigMalformed "config \"$config\"" || continue
             expect_advice "A quoted key is the same as the bare one. Write it as defaults, without the quotes."
             [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$config\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
@@ -2512,7 +2678,7 @@ test_J16_DefaultsKeyMoveUnderHeader() {
             sed -i "${NAMED_N}s/\"defaults\"/defaults/" "$cfg"
         fi
         before="$(j14_snap "$h")"
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_exit5 ErrConfigMalformed "config \"$(flat "$cfg")\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$config\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         expect_advice "line 1 : $(head -n 1 "$cfg")"
@@ -2522,7 +2688,7 @@ test_J16_DefaultsKeyMoveUnderHeader() {
         expect_advice "Nothing was installed or changed. Re-run this install after the change."
         [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$config\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
         j16_move_keys "$cfg" || continue
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_rc 0 "\"$config\": re-run after the move, config: $(flat "$cfg")" || continue
         expect_installed "$h" "$BIN" "$ADMIN"
         [[ "$(<"$cfg")" == "$(printf '%b' "$merged")" ]] \
@@ -2555,6 +2721,8 @@ j17_remedy() {
         ErrTemplateMalformed) echo fix-template ;;
         ErrSchemaMismatch) echo newer-binary ;;
         ErrSchemaVerifyFailed) echo stop ;;
+        ErrJournalMigrationRefused) echo fix-cutover ;;
+        ErrJournalMigrationIncomplete) echo complete-forward ;;
         ErrMoveConflict) echo apply-message ;;
         ErrAgentsLive) echo stop-agents ;;
         ErrMoveFailed) echo fix-cause ;;
@@ -2581,7 +2749,7 @@ j17_lock() { j7_older_store && j7_run 1; }
 j17_config_refused() {
     j7_older_store || return 1
     printf '[defaults]\nexpire_retention_days = -1\n' >"$J7H/.config/agent-director/config.toml"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
 }
 # j17_template_refused: an older store under a template the agent-rename
 # migration refuses (two claude_args lines). The headline's @J7H@ is J7H.
@@ -2589,16 +2757,22 @@ j17_template_refused() {
     j7_pre_rename_store || return 1
     mkdir -p "$J7H/.config/agent-director/templates" || return 1
     printf 'claude_args = ["--a"]\nclaude_args = ["--b"]\n' >"$J7H/.config/agent-director/templates/t.toml" || return 1
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
 }
 # j17_newer_store: a store one version newer than BIN.
 j17_newer_store() {
     j7_installed || return 1
     "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
 }
 # j17_mismatch: an older store whose step-5 read gives the pre-migration version.
-j17_mismatch() { j7_older_store && j7_run 2 "$((SCHEMA - 1))"; }
+j17_mismatch() { j7_older_store && j7_run 2 "$PRE_CUTOVER_SCHEMA"; }
+# The canonical cutover failure fixture preserves the complete old schema/data
+# and uses the shared write-failure handle, never another trigger definition.
+j17_journal_refused() {
+    j6_failing_migration "$@" || return 1
+    J7H="$J6H" J7ARGV=("${J6ARGV[@]}")
+}
 # j17_fake <mode>: a fresh install of FAKE_AD, J7ARGV with FAKE_AD as
 # --binary, whose `list` does <mode>; J17_RELAY is that list's stderr with
 # every line indented two spaces, as step 4 relays a failed open's.
@@ -2607,7 +2781,7 @@ j17_fake() {
     printf '%s' "$1" >"$J7H/fake-list"
     J7ARGV=(bash "$LOOSE" --binary "$FAKE_AD" --admin-binary "$ADMIN" --no-hooks --no-symlink)
     J17_RELAY="$(env -i HOME="$J7H" "$FAKE_AD" list 2>&1 >/dev/null | sed 's/^/  /')"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
 }
 
 # The move setups reuse the J23-J25 ones (old_home, MOVE_ARGV; defined below,
@@ -2618,7 +2792,7 @@ j17_both_dirs() {
     old_home "$J7H"
     mkdir -p "$J7H/.config/agent-director/templates" || return 1
     printf '# the new config\n' >"$J7H/.config/agent-director/config.toml"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
 }
 # j17_both_dirs_template: the same, the new directory holding only a template
 # (what the table says make-template made; the CLI's make-template is refused
@@ -2629,7 +2803,7 @@ j17_both_dirs_template() {
     old_home "$J7H"
     mkdir -p "$J7H/.config/agent-director/templates" || return 1
     printf '# made by make-template\n' >"$J7H/.config/agent-director/templates/mine.toml"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
 }
 # j17_agents_live: a process running the old binary (a copy of sleep as the old
 # directory's bin/agent-director, J24's); J17_PID is its pid.
@@ -2645,14 +2819,14 @@ j17_agents_live() {
         [[ "$(readlink "/proc/$J17_PID/exe")" == "$phys" ]] && break
         sleep 0.05
     done
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
 }
 # j17_fifo: a fifo in the old directory (J25's), which the move cannot copy.
 j17_fifo() {
     J7H="$(new_home)" J7ARGV=("${MOVE_ARGV[@]}")
     old_home "$J7H"
     mkfifo "$J7H/.agent-director/odd.fifo" || return 1
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
 }
 # j17_reap: stop the process j17_agents_live started, if it still runs.
 j17_reap() {
@@ -2669,6 +2843,8 @@ j17_reap() {
 # fix-config applies the sed <config fix> to config.toml and re-runs (fix-template
 # applies the same sed to the template the headline names: ErrTemplateMalformed,
 # --help's "fix the template the message names, then re-run"),
+# fix-cutover and complete-forward clear only the injected fault and re-run
+# with a fresh backup, preserving the first; the relayed action then verifies;
 # newer-binary installs BIN_NEWER; the move names (the table's rows): apply-message
 # runs the commands the message advises under the marker <config fix> gives, as
 # written (both directories, the new one holding only a template: it is set aside, then the template copied back),
@@ -2681,12 +2857,12 @@ j17_reap() {
 # no Err... name (one holding a cause line, which must stay inside the
 # envelope), or one with an err_name install.sh's own remedies do not name.
 test_J17_ExitFiveCauseLineDecidesRemedy() {
-    local setup headline name fix cause remedy want_bin want_v relayed fifo tname J17_RELAY J17_PID="" J17_COPY="" aside
+    local setup headline name fix cause remedy want_bin want_v relayed fifo tname J17_RELAY J17_PID="" J17_COPY="" aside backup before
     local -a words seen=() argv0=("${J7ARGV[@]}")
     local -a J7ARGV # j17_fake sets its own
     run "$(new_home)" bash "$LOOSE" --help
     expect_rc 0 "install.sh --help" || return
-    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), ErrMoveConflict (the directory layout cannot be moved as it is: the message names the one cause and its remedy; change nothing else, apply the remedy, re-run), ErrAgentsLive (an agent or an agent-director process runs against the old ~/.agent-director, or its live rows could not be read: stop whatever starts agents, then every agent, every serve and every caller, and re-run; a re-run reads the rows again), ErrMoveFailed (moving ~/.agent-director to ~/.config/agent-director failed before the rename, a full disk being the usual cause: the partial new directory was removed and the old directory is untouched; fix the cause and re-run), or, when the store open fails another way, agent-director'"'"'s own err_name. ErrTemplateMalformed is agent-director'"'"'s own catalogued name (errnames.Catalog); fix the template the message names, then re-run.'* ]] \
+    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), ErrMoveConflict (the directory layout cannot be moved as it is: the message names the one cause and its remedy; change nothing else, apply the remedy, re-run), ErrAgentsLive (an agent or an agent-director process runs against the old ~/.agent-director, or its live rows could not be read: stop whatever starts agents, then every agent, every serve and every caller, and re-run; a re-run reads the rows again), ErrMoveFailed (moving ~/.agent-director to ~/.config/agent-director failed before the rename, a full disk being the usual cause: the partial new directory was removed and the old directory is untouched; fix the cause and re-run), or, when the store open fails another way, agent-director'"'"'s own err_name. ErrTemplateMalformed is agent-director'"'"'s own catalogued name (errnames.Catalog); fix the template the message names, then re-run. ErrMoveConflict, ErrAgentsLive and ErrMoveFailed come from the move of AD'"'"'s directory (SR-11.7), which this release makes once on an upgrade from a release that kept its files in ~/.agent-director, before any binary is replaced; ErrMoveConflict and ErrAgentsLive are raised in pre-flight, changing nothing. They are install.sh'"'"'s own names, as ErrVersionUnreadable is, not agent-director'"'"'s. An upgrade that crosses the native-input journal cutover adds three: ErrJournalMigrationRefused (pre-flight refused, or the cutover refused and the installer put the previous install back: the install is as before the run; fix the reported cause, then re-run with a new --journal-backup directory), ErrJournalMigrationIncomplete (the install did not finish successfully, though the cutover may have committed, and this release stays installed; follow the message, then docs/operator-actions.md "install.sh stops with ErrJournalMigrationIncomplete") and ErrSchemaVerifyFailed for a restore that could not finish (needs a human; put the listed copies back as docs/operator-actions.md "Putting back a kept install" describes). ErrJournalMigrationIncomplete is install.sh'"'"'s own name.'* ]] \
         || bad "--help lacks the cause-line contract: $(flat "$OUT")"
     while IFS='|' read -r setup headline name fix <&3; do
         j17_reap
@@ -2706,41 +2882,60 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
         seen+=("$name")
         want_bin="$BIN" want_v="$SCHEMA"
         case "$remedy" in
-            rerun) run "$J7H" "${J7ARGV[@]}" ;;
+            rerun) run_journal "$J7H" "${J7ARGV[@]}" ;;
             fix-config)
                 sed -i "$fix" "$J7H/.config/agent-director/config.toml"
-                run "$J7H" "${J7ARGV[@]}" ;;
+                run_journal "$J7H" "${J7ARGV[@]}" ;;
             fix-template)
                 # The template the headline names (no other file is touched), then re-run.
                 [[ "$headline" == "install.sh: template "*" sets claude_args more than once; refusing to install." ]] || bad "$setup: the headline does not name a template: $headline"
                 sed -i "$fix" "$J7H/.config/agent-director/templates/t.toml"
-                run "$J7H" "${J7ARGV[@]}" ;;
+                run_journal "$J7H" "${J7ARGV[@]}" ;;
             newer-binary)
                 want_bin="$BIN_NEWER" want_v=$((SCHEMA + 1))
                 run "$J7H" bash "$LOOSE" --binary "$BIN_NEWER" --admin-binary "$ADMIN" --no-hooks --no-symlink ;;
+            fix-cutover|complete-forward)
+                if [[ "$remedy" == fix-cutover ]]; then
+                    expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+                else
+                    expect_advice "To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:"
+                fi
+                j6_expect_step_failed
+                j6_assert_rollback
+                backup="$J7H.journal-backup-$((RUN_N - 1))"
+                [[ -f "$backup/COMPLETE" ]] || { bad "$setup: no stopped-writer backup"; continue; }
+                before="$(j14_snap "$backup")"
+                j6_repair_hop "$J7H/.config/agent-director/state.db" || { bad "$setup: resolve reported cause"; continue; }
+                run_journal "$J7H" "${J7ARGV[@]}"
+                [[ "$(j14_snap "$backup")" == "$before" ]] || bad "$setup: retry changed the original backup"
+                [[ -f "$J7H.journal-backup-$((RUN_N - 1))/COMPLETE" ]] || bad "$setup: no new verification backup"
+                [[ ! -e "$(sentinel "$J7H")" ]] || bad "$setup: successful verification left the sentinel"
+                expect_rc 0 "$setup: the installer re-run" || continue
+                journal_verify "$J7H" # then migrate-journal, as the action says
+                ;;
             apply-message)
                 # The message names the cause and its remedy: its commands, as written, under the marker in <config fix> (a
                 # rename, never a delete), then the re-run.
                 [[ -z "$J17_COPY" ]] || aside="$(aside_of "$fix")"
                 follow_cmds "$J7H" "$fix" || continue
-                run "$J7H" "${J7ARGV[@]}" ;;
+                run_journal "$J7H" "${J7ARGV[@]}" ;;
             stop-agents)
                 # Stop what runs against the old directory (here the one process the message lists), then re-run.
                 [[ -n "$J17_PID" ]] || { bad "$setup: no process to stop"; continue; }
                 [[ "$(flat "$ERR")" == *"Processes running the old binary (pid, executable): $J17_PID "* ]] \
                     || bad "$setup: the message does not list pid $J17_PID: $(flat "$ERR")"
                 j17_reap
-                run "$J7H" "${J7ARGV[@]}" ;;
+                run_journal "$J7H" "${J7ARGV[@]}" ;;
             fix-cause)
                 # The cause the message names, a fifo to remove or move out of the old directory, then the re-run.
                 fifo="$(sed -n "s|^install\.sh: moving .* failed: cannot copy \(.*\): it is not a regular file.*|\1|p" "$ERR")"
                 [[ -n "$fifo" ]] || { bad "$setup: the message names no cause to fix: $(flat "$ERR")"; continue; }
                 run_advised "$J7H" "$ROOT" "rm -- $(printf '%q' "$fifo")"
                 expect_rc 0 "$setup: remove $fifo" || continue
-                run "$J7H" "${J7ARGV[@]}" ;;
+                run_journal "$J7H" "${J7ARGV[@]}" ;;
             rerun-once)
                 expect_advice "re-running this install will retry it."
-                run "$J7H" "${J7ARGV[@]}"
+                run_journal "$J7H" "${J7ARGV[@]}"
                 expect_exit5 "${cause#install.sh: err_name=}" "$setup: re-run once after \"$cause\""
                 continue ;;
             stop) continue ;;
@@ -2758,6 +2953,8 @@ j17_config_refused|install.sh: agent-director refused its config file (ErrConfig
 j17_template_refused|install.sh: template @J7H@/.config/agent-director/templates/t.toml sets claude_args more than once; refusing to install.|ErrTemplateMalformed|/^claude_args = \["--b"\]$/d
 j17_newer_store|install.sh: store open (agent-director list) failed after install|ErrSchemaMismatch|
 j17_mismatch|install.sh: schema migration verification FAILED|ErrSchemaVerifyFailed|
+j17_journal_refused|install.sh: the cutover did not commit; this release stays installed.|ErrJournalMigrationIncomplete|
+j17_journal_refused pre-0.11.0|install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run.|ErrJournalMigrationRefused|
 j17_fake ok|install.sh: state.db was not created by the store open|ErrSchemaVerifyFailed|
 j17_fake panic|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
 j17_fake odd-name|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
@@ -2889,13 +3086,13 @@ test_J19_BusyTimeoutRefusedFixAndRerun() {
         mkdir -p "$h/.config/agent-director"
         if [[ "$store" == older ]]; then
             printf '%b\n' "$fixed" >"$cfg"
-            run "$h" "${J7ARGV[@]}"
+            run_journal "$h" "${J7ARGV[@]}"
             expect_rc 0 "\"$broken\": first install" || continue
             keep_older "$db"
         fi
         printf '%b\n' "$broken" >"$cfg"
         before="$(j14_snap "$h")"
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_exit5 ErrConfigMalformed "config \"$broken\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$broken\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         expect_advice "config : $cfg line $line"
@@ -2903,7 +3100,7 @@ test_J19_BusyTimeoutRefusedFixAndRerun() {
         expect_advice "Nothing was installed or changed. Re-run this install after the change."
         [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$broken\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
         printf '%b\n' "$fixed" >"$cfg"
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_rc 0 "\"$broken\": re-run after the change to \"$fixed\"" || continue
         if [[ "$store" == older ]]; then
             expect_store "$h" "$db" "\"$broken\"" migrated
@@ -3058,7 +3255,7 @@ EOF
 #             the re-run fails the same way. Contacting the maintainers is a
 #             human step; not followed.
 test_J22_NoStoreAfterOpenCheckAndRerun() {
-    local -a J7ARGV=(bash "$LOOSE" --binary "$FAKE_AD" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+    local -a J7ARGV=(bash "$LOOSE" --binary "$FAKE_AD" --admin-binary "$FAKE_ADMIN" --no-hooks --no-symlink)
     local cause h db cfg moved set_to want_set name put_back moved_sum first
     for cause in db-path moved custom not-back none; do
         h="$(new_home)" db="$h/.config/agent-director/state.db" cfg="$h/.config/agent-director/config.toml"
@@ -3075,13 +3272,13 @@ test_J22_NoStoreAfterOpenCheckAndRerun() {
                     mkdir -p "$h/.config/agent-director"
                     printf '[store]\ndb_path = %s\n' "$want_set" >"$cfg"
                 fi
-                run "$h" "${J7ARGV[@]}"
+                run_journal "$h" "${J7ARGV[@]}"
                 expect_rc 0 "$cause: first install" || continue
                 keep_older "$db"
                 printf 'mkdir "$HOME/attic" && mv "%s" "$HOME/attic/state.db.bak"\n' "$db" >"$h/fake-after" ;;
             none) printf ok >"$h/fake-list" ;;
         esac
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_exit5 ErrSchemaVerifyFailed "$cause: no store after the open" || continue
         [[ "$(head -n 1 "$ERR")" == "install.sh: $name was not created by the store open" ]] \
             || bad "$cause: first stderr line \"$(head -n 1 "$ERR")\"; want \"install.sh: $name was not created by the store open\""
@@ -3099,7 +3296,7 @@ test_J22_NoStoreAfterOpenCheckAndRerun() {
             none) [[ -z "$(find "$h" -type f -name '*.db*')" ]] || bad "$cause: a store under HOME: $(find "$h" -type f -name '*.db*')" ;;
         esac
         first="$ERR"
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         if [[ "$cause" == none ]]; then
             expect_exit5 ErrSchemaVerifyFailed "$cause: re-run" || continue
             cmp -s "$first" "$ERR" || bad "$cause: the re-run failed another way: $(diff "$first" "$ERR")"
@@ -3222,7 +3419,7 @@ move_refused() {
     local h="$1" headline="$2" before p
     shift 2
     before="$(j14_snap "$h")"
-    run "$h" "${MOVE_ARGV[@]}"
+    run_journal "$h" "${MOVE_ARGV[@]}"
     expect_exit5 ErrMoveConflict "$headline" || return 1
     grep -qxF "install.sh: $headline" "$ERR" || { bad "no \"install.sh: $headline\" line: $(flat "$ERR")"; return 1; }
     expect_advice "Nothing was installed or changed. Re-run this install after the change."
@@ -3285,7 +3482,7 @@ test_J23_NewDirDanglingOrNotADirectory() {
             follow_cmds "$h" "Rename it aside, or fix it so it is a directory, then re-run:" || continue
             [[ "$(cat "$cmd")" == "not a directory" ]] || bad "$cause: the aside $cmd does not hold the file"
         fi
-        run "$h" "${MOVE_ARGV[@]}"
+        run_journal "$h" "${MOVE_ARGV[@]}"
         expect_rc 0 "$cause: re-run" || continue
         expect_installed "$h" "$BIN" "$ADMIN"
         [[ -d "$new" && ! -L "$new" ]] || bad "$cause: $new is not a directory after the re-run"
@@ -3304,7 +3501,7 @@ test_J23_OldDirDanglingLink() {
         "It points at $h/nowhere, which does not exist, and is not the compatibility link to $h/.config/agent-director. Remove it, then re-run:" || return
     follow_cmds "$h" "Remove it, then re-run:" || return
     [[ ! -L "$old" ]] || bad "the link is still there"
-    run "$h" "${MOVE_ARGV[@]}"
+    run_journal "$h" "${MOVE_ARGV[@]}"
     expect_rc 0 "re-run" || return
     expect_installed "$h" "$BIN" "$ADMIN"
     [[ "$(db_version "$h")" == "$SCHEMA" ]] || bad "the new store is not at v$SCHEMA"
@@ -3350,7 +3547,7 @@ test_J23_BothPresentSetOneAside() {
             follow_cmds "$h" "$first" || continue
         fi
         [[ -d "$aside" ]] || { bad "$branch: the aside $aside is not there"; continue; }
-        run "$h" "${MOVE_ARGV[@]}"
+        run_journal "$h" "${MOVE_ARGV[@]}"
         if [[ "$branch" == old ]]; then
             expect_rc 0 "$branch: re-run" || continue
             expect_installed "$h" "$BIN" "$ADMIN"
@@ -3412,7 +3609,7 @@ test_J23_LinkInOldDirCopyAndRerun() {
         move_refused "$h" "$want_head" "$marker" || continue
         follow_cmds "$h" "$marker" || continue
         [[ ! -L "$link" ]] || { bad "$what: $link is still a link after the advised commands"; continue; }
-        run "$h" "${MOVE_ARGV[@]}"
+        run_journal "$h" "${MOVE_ARGV[@]}"
         moved "$h" "$what" || continue
         [[ ! -L "$n" && ! -L "$n/config.toml" && ! -L "$n/templates" && ! -L "$n/templates/t1.toml" && ! -L "$n/state.db" ]] \
             || bad "$what: the new directory holds a link: $(find "$n" -type l)"
@@ -3448,7 +3645,7 @@ test_J23_PathKeyUnresolvableMakeDirAndRerun() {
         "Its directory, $o/data, is missing or cannot be read, so install.sh cannot tell whether the path is inside $o, which the move needs to know. $marker" || return
     follow_cmds "$h" "$marker" || return
     [[ -d "$o/data" ]] || bad "$o/data was not made"
-    run "$h" "${MOVE_ARGV[@]}"
+    run_journal "$h" "${MOVE_ARGV[@]}"
     moved "$h" "key" "$n/data/s.db" || return
     grep -qxF "db_path = \"$n/data/s.db\"" "$n/config.toml" || bad "the moved config.toml does not name the new store: $(cat "$n/config.toml")"
 }
@@ -3459,17 +3656,14 @@ test_J23_PathKeyUnresolvableMakeDirAndRerun() {
 # headline first and the old binary and store named, changing nothing.
 agents_live_refused() {
     local h="$1" before after
-    # The read-only open of the old store (SQLite, WAL mode) leaves its state.db-shm
-    # and an empty state.db-wal beside it, and so changes the old directory's
-    # mtime: neither is a change to what the install would move.
-    before="$(j14_snap "$h" | grep -v -E '^\./\.agent-director d |state\.db-(shm|wal)')"
-    run "$h" "${MOVE_ARGV[@]}"
+    before="$(j14_snap "$h")"
+    run_journal "$h" "${MOVE_ARGV[@]}"
     expect_exit5 ErrAgentsLive "$2" || return 1
     [[ "$(head -n 1 "$ERR")" == "install.sh: AD's old directory is in use; refusing to upgrade while an agent or agent-director process runs." ]] \
         || bad "$2: first stderr line \"$(head -n 1 "$ERR")\""
     expect_advice "old binary: $h/.agent-director/bin/agent-director old store : $h/.agent-director/state.db"
     expect_advice "Nothing was installed or changed. Re-run this install after the change."
-    after="$(j14_snap "$h" | grep -v -E '^\./\.agent-director d |state\.db-(shm|wal)')"
+    after="$(j14_snap "$h")"
     [[ "$after" == "$before" ]] || bad "$2: the refusal changed the home: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -n 6)"
 }
 
@@ -3496,7 +3690,7 @@ test_J24_LiveRowFindMissingThenRerun() {
     [[ "$(line_after "$marker")" == "$o/bin/agent-director find-missing" ]] || bad "the find-missing line is \"$(line_after "$marker")\"; want \"$o/bin/agent-director find-missing\""
     follow_cmds "$h" "$marker" || return
     [[ "$(jq -c '.ids' "$OUT")" == '["id-gone"]' ]] || bad "find-missing cleared $(cat "$OUT"); want id-gone"
-    run "$h" "${MOVE_ARGV[@]}"
+    run_journal "$h" "${MOVE_ARGV[@]}"
     moved "$h" "re-run" || return
     run "$h" "$BIN" list
     expect_rc 0 "list after the move" || return
@@ -3528,7 +3722,7 @@ test_J24_RunningOldBinaryStopItThenRerun() {
     kill "$listed" 2>/dev/null
     wait "$pid" 2>/dev/null
     ! kill -0 "$pid" 2>/dev/null || bad "pid $pid still runs after it was stopped"
-    run "$h" "${MOVE_ARGV[@]}"
+    run_journal "$h" "${MOVE_ARGV[@]}"
     moved "$h" "re-run"
 }
 
@@ -3538,17 +3732,20 @@ test_J24_RunningOldBinaryStopItThenRerun() {
 # below, and no advice to stop anything. The advised plain re-run reads them,
 # finds none and moves.
 test_J24_UnreadableRowsPlainRerun() {
-    local h
+    local h before
     old_release_or_skip || return
     h="$(new_home)"
     old_home "$h" store
+    before="$(j14_snap "$h")"
     J7H="$h" J7ARGV=("${MOVE_ARGV[@]}")
-    j7_run 1
+    j7_run 1 "" "$SHIM_LOCK_ERR" 5 'SELECT state,'
+    [[ "$(cat "$h.sqlite3-calls")" == 1 ]] || bad "live-row failure did not reach exactly the intended query"
     expect_exit5 ErrAgentsLive "unreadable rows" || return
     expect_advice "The live rows could not be read (the store was busy past its busy timeout of 10000 ms, or is unreadable), so the install cannot tell whether an agent runs. A re-run reads them again. sqlite3 said: $SHIM_LOCK_ERR Nothing was installed or changed. Re-run this install after the change."
     [[ "$(flat "$ERR")" != *"Stop whatever starts agents"* ]] || bad "a read that failed advises stopping agents: $(flat "$ERR")"
     [[ ! -e "$h/.config" ]] || bad "the refusal made $h/.config"
-    run "$h" "${MOVE_ARGV[@]}"
+    [[ "$(j14_snap "$h")" == "$before" ]] || bad "unreadable live-row refusal changed the old install: $(diff <(printf '%s\n' "$before") <(j14_snap "$h"))"
+    run_journal "$h" "${MOVE_ARGV[@]}"
     moved "$h" "re-run"
 }
 
@@ -3592,7 +3789,7 @@ test_J25_MoveFailedFixCauseAndRerun() {
             PATH_EXTRA="$CP_FAILS"
         fi
         before="$(j14_snap "$o")"
-        run "$h" "${MOVE_ARGV[@]}"
+        run_journal "$h" "${MOVE_ARGV[@]}"
         expect_exit5 ErrMoveFailed "$cause" || continue
         head="$(head -n 1 "$ERR")"
         if [[ "$cause" == fifo ]]; then
@@ -3613,7 +3810,7 @@ test_J25_MoveFailedFixCauseAndRerun() {
         else
             PATH_EXTRA=""
         fi
-        run "$h" "${MOVE_ARGV[@]}"
+        run_journal "$h" "${MOVE_ARGV[@]}"
         moved "$h" "$cause" || continue
         [[ ! -e "$KEPT/odd.fifo" && ! -e "$n/odd.fifo" ]] || bad "$cause: the fifo is still there"
         [[ "$(cat "$n/config.toml")" == "# the old config" ]] || bad "$cause: the moved config.toml is not the old one"
@@ -3694,7 +3891,7 @@ test_J27_MoveDueNeitherAgentOldConfigAdvice() {
         [[ "$which" == codex ]] && prog="$codex"
         [[ "$which" == cursor ]] && prog="$ROOT/cursor-on-path/agent"
         printf '\n[launch]\n%s = "%s"\n' "$key" "$prog" >>"$h/.agent-director/config.toml"
-        run "$h" "${MOVE_ARGV[@]}"
+        run_journal "$h" "${MOVE_ARGV[@]}"
         moved "$h" "$which: the re-run after the old config.toml names the program" || continue
         [[ "$(flat "$ERR")" != *"ErrMoveConflict"* ]] || bad "$which: the re-run refuses with ErrMoveConflict"
         grep -qxF "$key = \"$prog\"" "$h/.config/agent-director/config.toml" \
@@ -3737,7 +3934,7 @@ test_J27_NeitherAgentFollowEachWay() {
             cursor-on-path) PATH_EXTRA="$ROOT/cursor-on-path" ;;
             cursor-path) printf '[launch]\ncursor_path = "%s"\n' "$ROOT/cursor-on-path/agent" >"$cfg" ;;
         esac
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_rc 0 "$way: the re-run" || continue
         expect_installed "$h" "$BIN" "$ADMIN"
         case "$way" in
@@ -3788,7 +3985,7 @@ test_J27_LaunchPathNamesNothingCorrectItAndRerun() {
             j27_refused "$h" "claude is not on PATH, and [launch] claude_path is not set" "codex is not on PATH, and [launch] codex_path is not set" "" "[launch] cursor_path = \"$h/nope/cursor\" names no executable file, and agent is not on PATH" || continue
             printf '[launch]\ncursor_path = "%s"\n' "$ROOT/cursor-on-path/agent" >"$cfg"
         fi
-        run "$h" "${J7ARGV[@]}"
+        run_journal "$h" "${J7ARGV[@]}"
         expect_rc 0 "$which: the re-run after the path is corrected" || continue
         expect_installed "$h" "$BIN" "$ADMIN"
         grep -qF "(program: $claude)" "$OUT" || [[ "$which" != claude ]] || bad "$which: the claude line does not name $claude: $(grep -F '  claude  :' "$OUT")"
@@ -3829,7 +4026,7 @@ test_J28_QuestionToolKeyTwiceKeepOneAndRerun() {
         cfg="$J7H/.config/agent-director/config.toml"
         printf '%b\n' "$config" >"$cfg"
         before="$(j14_snap "$J7H")"
-        run "$J7H" "${J7ARGV[@]}"
+        run_journal "$J7H" "${J7ARGV[@]}"
         expect_exit5 ErrConfigMalformed "config \"$config\"" || continue
         [[ "$(head -n 1 "$ERR")" == "install.sh: config.toml sets the question-tool key more than once under [defaults]; refusing to install." ]] \
             || bad "\"$config\": first stderr line \"$(head -n 1 "$ERR")\""
@@ -3842,7 +4039,7 @@ test_J28_QuestionToolKeyTwiceKeepOneAndRerun() {
         [[ "$(db_version "$J7H")" == "$PRE_RENAME_SCHEMA" ]] || bad "\"$config\": the store is at v$(db_version "$J7H") after the refusal"
         j28_keep_first "$cfg" || continue
         [[ "$(<"$cfg")" == "$(printf '%b' "$want")" ]] || bad "\"$config\": after the advice config.toml is: $(paste -sd'|' "$cfg"); want $(printf '%b' "$want" | paste -sd'|')"
-        run "$J7H" "${J7ARGV[@]}"
+        run_journal "$J7H" "${J7ARGV[@]}"
         expect_rc 0 "\"$config\": re-run after keeping one line" || continue
         [[ "$(db_version "$J7H")" == "$SCHEMA" ]] || bad "\"$config\": store at v$(db_version "$J7H") after the re-run"
         [[ "$(<"$cfg")" == "$(printf '%b' "$want")" ]] || bad "\"$config\": config.toml after the install: $(paste -sd'|' "$cfg")"
@@ -3880,7 +4077,7 @@ test_J28_InlineDefaultsNamingOldKeyMoveUnderHeader() {
         [[ "$hooks" == off ]] || argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink)
         printf '%b\n' "$config" >"$cfg"
         before="$(j14_snap "$J7H")"
-        run "$J7H" "${argv[@]}"
+        run_journal "$J7H" "${argv[@]}"
         expect_exit5 ErrConfigMalformed "hooks $hooks, config \"$config\"" || continue
         if [[ "$hooks" == off ]]; then
             grep -qxF "$head" "$ERR" || bad "hooks off, \"$config\": no \"$head\" line: $(flat "$ERR")"
@@ -3901,7 +4098,7 @@ test_J28_InlineDefaultsNamingOldKeyMoveUnderHeader() {
         fi
         [[ "$(j14_snap "$J7H")" == "$before" ]] || bad "hooks $hooks, \"$config\": the refusal changed $J7H: $(diff <(echo "$before") <(j14_snap "$J7H"))"
         printf '%b\n' "$want" >"$cfg"
-        run "$J7H" "${argv[@]}"
+        run_journal "$J7H" "${argv[@]}"
         expect_rc 0 "hooks $hooks, \"$config\": re-run after the advice" || continue
         [[ "$(db_version "$J7H")" == "$SCHEMA" ]] || bad "hooks $hooks: store at v$(db_version "$J7H") after the re-run"
         grep -qxF 'disable_ask_user = true' "$cfg" || bad "hooks $hooks: config.toml has no disable_ask_user = true: $(paste -sd'|' "$cfg")"
@@ -3939,7 +4136,7 @@ test_J29_TemplateRefusedFollowAdviceAndRerun() {
         file="$J7H/.config/agent-director/templates/t.toml"
         mkdir -p "${file%/*}" && printf '%b\n' "$template" >"$file" || { bad "write the template"; continue; }
         before="$(j14_snap "$J7H")"
-        run "$J7H" "${J7ARGV[@]}"
+        run_journal "$J7H" "${J7ARGV[@]}"
         expect_exit5 ErrTemplateMalformed "template \"$template\"" || continue
         [[ "$(head -n 1 "$ERR")" == "install.sh: template $file $tail; refusing to install." ]] \
             || bad "\"$template\": first stderr line \"$(head -n 1 "$ERR")\"; want \"install.sh: template $file $tail; refusing to install.\""
@@ -3948,7 +4145,7 @@ test_J29_TemplateRefusedFollowAdviceAndRerun() {
         [[ "$(j14_snap "$J7H")" == "$before" ]] || bad "\"$template\": the refusal changed $J7H: $(diff <(echo "$before") <(j14_snap "$J7H"))"
         [[ "$(db_version "$J7H")" == "$PRE_RENAME_SCHEMA" ]] || bad "\"$template\": the store is at v$(db_version "$J7H") after the refusal"
         printf '%b\n' "$want" >"$file"
-        run "$J7H" "${J7ARGV[@]}"
+        run_journal "$J7H" "${J7ARGV[@]}"
         expect_rc 0 "\"$template\": re-run after the advice" || continue
         [[ "$(db_version "$J7H")" == "$SCHEMA" ]] || bad "\"$template\": store at v$(db_version "$J7H") after the re-run"
         [[ "$(<"$file")" == "$(printf '%b' "$want" | sed 's/^claude_args/agent_args/')"$'\n''agent = "claude"' ]] \
@@ -3977,14 +4174,14 @@ test_J29_TemplateUnreadableMakeReadableAndRerun() {
         return
     fi
     before="$(j14_snap "$J7H" 2>/dev/null)"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
     expect_exit5 ErrTemplateMalformed "an unreadable template" || return
     [[ "$(head -n 1 "$ERR")" == "install.sh: cannot read $file, which the agent-rename migration reads; refusing to install." ]] \
         || bad "first stderr line \"$(head -n 1 "$ERR")\""
     expect_advice "Make it readable by you, then re-run this install. Nothing was installed or changed. Re-run this install after the change."
     [[ "$(j14_snap "$J7H" 2>/dev/null)" == "$before" ]] || bad "the refusal changed $J7H: $(diff <(echo "$before") <(j14_snap "$J7H" 2>/dev/null))"
     chmod u+r "$file"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
     expect_rc 0 "re-run after the template is made readable" || return
     [[ "$(db_version "$J7H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J7H") after the re-run"
     grep -qxF 'agent_args = ["--a"]' "$file" || bad "the template is not migrated: $(paste -sd'|' "$file")"
@@ -4018,7 +4215,7 @@ j30_case() {
     fi
     ln -sf "$target" "$file" && chmod 0555 "$dotfiles" || { bad "$kind: link the file"; return 1; }
     before="$(j14_snap "$J7H")"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
     expect_exit5 "$err" "$kind, $way: a link into $dotfiles" || return 1
     [[ "$(head -n 1 "$ERR")" == "install.sh: cannot migrate $file through its symlink; refusing to install." ]] \
         || bad "$kind: first stderr line \"$(head -n 1 "$ERR")\""
@@ -4032,7 +4229,7 @@ j30_case() {
             sum="$(sha256sum "$target" | cut -d' ' -f1)"
             mkdir -p "$J7H/writable" && cp "$target" "$J7H/writable/" && ln -sf "$J7H/writable/${target##*/}" "$file" \
                 || { bad "$kind: point the link at a writable directory"; return 1; }
-            run "$J7H" "${J7ARGV[@]}"
+            run_journal "$J7H" "${J7ARGV[@]}"
             expect_rc 0 "$kind: re-run after the link reaches a writable directory" || return 1
             [[ "$(sha256sum "$target" | cut -d' ' -f1)" == "$sum" ]] || bad "$kind: the old target changed"
             target="$J7H/writable/${target##*/}" ;;
@@ -4045,7 +4242,7 @@ j30_case() {
             fi
             chmod 0555 "$dotfiles"
             sum="$(sha256sum "$target" | cut -d' ' -f1)"
-            run "$J7H" "${J7ARGV[@]}"
+            run_journal "$J7H" "${J7ARGV[@]}"
             expect_rc 0 "$kind: re-run after the rename is made in the target" || return 1
             [[ "$(sha256sum "$target" | cut -d' ' -f1)" == "$sum" ]] || bad "$kind: the install changed the target made by hand" ;;
     esac
@@ -4108,7 +4305,7 @@ EOF
     printf 'claude_args = ["--a"]\n' >"$t1"
     printf 'claude_args = ["--b"]\n' >"$t2"
     PATH_EXTRA="$ROOT/mv-fails"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
     PATH_EXTRA=""
     expect_rc 1 "the move of $t2's new bytes fails" || return
     grep -qxF "install.sh: the agent-rename migration could not write $t2; stopping before the store is opened." "$ERR" \
@@ -4126,7 +4323,7 @@ EOF
     grep -qxF 'agent_args = ["--a"]' "$t1" || bad "$t1 was not migrated before the failure: $(paste -sd'|' "$t1")"
     cfg_baks="$(compgen -G "$cfg.pre-agent-rename.*" | sort)" t1_baks="$(compgen -G "$t1.pre-agent-rename.*" | sort)"
     [[ "$(wc -l <<<"$cfg_baks")" == 1 && "$(wc -l <<<"$t1_baks")" == 1 ]] || bad "copies: config $cfg_baks; t1 $t1_baks"
-    run "$J7H" "${J7ARGV[@]}"
+    run_journal "$J7H" "${J7ARGV[@]}"
     expect_rc 0 "re-run with the cause gone" || return
     [[ "$(db_version "$J7H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J7H") after the re-run"
     grep -qxF 'agent_args = ["--b"]' "$t2" || bad "$t2 is not migrated by the re-run: $(paste -sd'|' "$t2")"
@@ -4168,10 +4365,10 @@ test_J32_HomeNotAbsoluteSetItAndRerun() {
         [[ -z "$(ls -A "$h")" ]] || bad "HOME $how: the refusal created $(ls -A "$h" | paste -sd' ') in $h"
     done
     # The advice, followed: the same command with HOME set to the user's home.
-    run "$h" "${J7ARGV[@]}"
+    run_journal "$h" "${J7ARGV[@]}"
     expect_rc 0 "the same install with HOME set" || return
     expect_installed "$h" "$BIN" "$ADMIN"
-    run "$h" "${J7ARGV[@]}"
+    run_journal "$h" "${J7ARGV[@]}"
     expect_rc 0 "the install run again" || return
     expect_installed "$h" "$BIN" "$ADMIN"
 }
@@ -4199,7 +4396,7 @@ test_G8_OldLayoutRunInstallShThenVerbSucceeds() {
     [[ "$(jq -r .err_description "$ERR")" == "store: this host still has the old agent-director directory and no store in ~/.config/agent-director; run this release's install.sh to move it" ]] \
         || bad "err_description is \"$(jq -r .err_description "$ERR")\""
     [[ "$(j14_snap "$h")" == "$before" ]] || bad "the refusal changed the home: $(diff <(printf '%s\n' "$before") <(j14_snap "$h") | head -n 6)"
-    run "$h" "${MOVE_ARGV[@]}"
+    run_journal "$h" "${MOVE_ARGV[@]}"
     moved "$h" "install.sh as advised" || return
     run "$h" "$BIN" list
     expect_rc 0 "list after install.sh" || return
@@ -4211,8 +4408,8 @@ test_G8_OldLayoutRunInstallShThenVerbSucceeds() {
 
 # J33: an install that sets no schedule up ends with a warning on stderr: "These
 # crontab lines (crontab -e, as that user) run this install's binary:" and the
-# two lines, then "Copy them by hand (...), or let the install script install
-# them, as the user the agents run as:" and the command that does it: `cd <the
+# two lines, then "Copy the rendered cron lines above" and the supported unit
+# recovery verb, followed by the command that installs them: `cd <the
 # directory the install ran in> && bash <this script> <its arguments...>
 # --schedule`, every word shell-quoted (here a script path and a directory with a
 # space, and relative --binary and --admin-binary paths that only resolve in that
@@ -4250,15 +4447,15 @@ EOF
     local -a argv=(--binary ./ad-main --admin-binary ./ad-admin --no-hooks --no-symlink)
     run_in "$h" "$d" bash "$sh" "${argv[@]}"
     expect_rc 0 "a plain install with nothing scheduled" || return
-    grep -qxF "install.sh: WARNING: nothing schedules agent-director's find-missing and expire sweeps on this machine." "$ERR" \
+    grep -qxF "install.sh: WARNING: nothing schedules agent-director's sweep and expire jobs on this machine." "$ERR" \
         || bad "no schedule warning: $(flat "$ERR")"
     # The lines, as printed: the tmux directory in PATH, the installed binary,
     # the marker; no HOME (it is the passwd home here).
     l1="$(line_after "These crontab lines (crontab -e, as that user) run this install's binary:")"
     l2="$(grep -m1 -F -A2 -- "These crontab lines (crontab -e, as that user) run this install's binary:" "$ERR" | tail -n1)"
     l2="${l2#"${l2%%[![:space:]]*}"}"
-    [[ "$l1" == "*/2 * * * * PATH="*":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin $canon find-missing >/dev/null # agent-director-schedule" ]] \
-        || bad "the find-missing line is \"$l1\""
+    [[ "$l1" == "*/2 * * * * PATH="*":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin $canon sweep >/dev/null # agent-director-schedule" ]] \
+        || bad "the sweep line is \"$l1\""
     [[ "$l2" == "17 3 * * * PATH="*":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin $canon expire >/dev/null # agent-director-schedule" ]] \
         || bad "the expire line is \"$l2\""
     [[ "$l1" != *" HOME="* ]] || bad "the lines carry HOME, which is the passwd entry's: $l1"
@@ -4282,11 +4479,11 @@ EOF
     expect_rc 0 "the advised command: $cmd" || return
     expect_installed "$h" "$BIN" "$ADMIN"
     ! grep -q 'WARNING' "$ERR" || bad "the advised install still warns: $(flat "$ERR")"
-    grep -qF "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # agent-director-schedule." "$OUT" \
+    grep -qF "  schedule: cron: sweep every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # agent-director-schedule." "$OUT" \
         || bad "stdout does not say the schedule was added: $(flat "$OUT")"
     [[ -f "$crontab_file" ]] || { bad "the advised command wrote no crontab"; return; }
     text="$(<"$crontab_file")"
-    grep -qxF "$l1" "$crontab_file" || bad "the crontab lacks the find-missing line the warning printed: $text"
+    grep -qxF "$l1" "$crontab_file" || bad "the crontab lacks the sweep line the warning printed: $text"
     grep -qxF "$l2" "$crontab_file" || bad "the crontab lacks the expire line the warning printed: $text"
     n="$(grep -c 'agent-director-schedule' "$crontab_file")"
     [[ "$n" == 3 ]] || bad "$n lines carry the marker (the two jobs and the header comment); want 3: $text"
@@ -4298,9 +4495,81 @@ EOF
     grep -qF "nothing changed" "$OUT" || bad "the repeat does not say nothing changed: $(flat "$OUT")"
 }
 
-# ---- J34: copies of settings.json that earlier releases kept (b.f3n) -----------
+# J34: "To fix: establish the maintenance window (stop old mutators and
+# prevent new old-binary invocations through committed verification), then
+# pass --maintenance-window (install.sh: --journal-maintenance-window)", then
+# the relayed old_or_unverified_mutators action "stop each listed agent_director_mutator (…);
+# keep the maintenance window, then re-run this release's installer with a new
+# --journal-backup, …, then run migrate-journal with a new --backup-dir until
+# it exits 0 with authority "sqlite"". A preexisting sentinel never authorizes
+# the probe: without journal flags pre-flight's --check-only refuses, changing
+# nothing.
+test_J34_JournalMaintenanceStopAndRestartVerification() {
+    local h db prior before extra backup writer input_fd output_fd answer
+    h="$(new_home)" db="$h/.config/agent-director/state.db"
+    extra="$h/custom-input" backup="$h/journal-backup"
+    mkdir -p "${db%/*}" "$extra" || { bad "make private roots"; return; }
+    chmod 700 "${db%/*}" "$extra"
+    "$SQLITE" "$db" <"$HERE/testdata/v0.11.1-store.sql" >/dev/null || { bad "load released fixture"; return; }
+    chmod 600 "$db"
+    prior="$("$SQLITE" "$db" 'PRAGMA user_version')"
+    before="$(sha256sum "$db")"
+    printf '{"from":%s,"to":%s}' "$prior" "$SCHEMA" >"$(sentinel "$h")"
+    for answer in first repeat; do
+        run "$h" "${J7ARGV[@]}"
+        expect_exit5 ErrJournalMigrationRefused "$answer without maintained boundary" || return
+        expect_advice "install.sh: pre-flight refused the journal flags (agent-director-admin migrate-journal --check-only) Nothing was installed or changed."
+        expect_advice "To fix: establish the maintenance window (stop old mutators and prevent new old-binary invocations through committed verification), then pass --maintenance-window (install.sh: --journal-maintenance-window)"
+        expect_advice "Then re-run this release's installer, with a new --journal-backup directory."
+        grep -F '"reason":"maintenance_boundary_required"' "$ERR" >/dev/null || bad "no relayed maintenance_boundary_required refusal: $(flat "$ERR")"
+        [[ "$(sha256sum "$db")" == "$before" ]] || bad "the sentinel let the early probe migrate"
+        [[ -e "$(sentinel "$h")" ]] || bad "the pre-flight refusal consumed the sentinel"
+        [[ ! -e "$backup" ]] || bad "the pre-flight refusal made the backup directory"
+    done
+    # A real still-running incompatible executable, even without an open DB FD.
+    cp /bin/cat "$ROOT/agent-director-inflight" || { bad "copy mutator fixture"; return; }
+    coproc JOURNAL_WRITER { exec "$ROOT/agent-director-inflight"; }
+    writer=$JOURNAL_WRITER_PID input_fd=${JOURNAL_WRITER[1]} output_fd=${JOURNAL_WRITER[0]}
+    printf 'ready\n' >&"$input_fd"
+    read -r -t 5 answer <&"$output_fd" || bad "mutator did not start"
+    [[ "$answer" == ready ]] || bad "mutator readiness"
+    for answer in first repeat; do
+        run "$h" "${J7ARGV[@]}" --journal-maintenance-window --journal-roots-complete --journal-backup "$backup" --journal-legacy-root "$extra"
+        expect_exit5 ErrJournalMigrationRefused "$answer with incompatible process" || true
+        expect_advice "install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run."
+        expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+        [[ ! -e "$h/.config/agent-director/bin/agent-director" && ! -e "$h/.config/agent-director/admin/agent-director-admin" ]] || bad "refusal retained binaries absent before the run"
+        [[ "$(cat "$(sentinel "$h")")" == "{\"from\":$prior,\"to\":$SCHEMA}" ]] || bad "refusal did not restore the original sentinel"
+        grep -F 'old_or_unverified_mutators' "$ERR" >/dev/null || bad "refused before process inventory: $(flat "$ERR")"
+        expect_refusal_action "stop each listed agent_director_mutator (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified; keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+        expect_advice '"cutover":"not_committed","steps_committed":false'
+        kill -0 "$writer" || bad "verification killed the writer"
+        [[ "$(sha256sum "$db")" == "$before" ]] || bad "live mutator did not prevent cutover"
+        [[ ! -e "$backup/COMPLETE" ]] || bad "live mutator allowed completed backup"
+    done
+    # Follow the instruction literally: stop the listed process and await its
+    # exit, re-run the installer with a new --journal-backup, then run
+    # migrate-journal with a new --backup-dir.
+    exec {input_fd}>&-
+    wait "$writer" || bad "writer did not exit cleanly"
+    exec {output_fd}<&-
+    [[ ! -e "$backup" ]] || bad "the refused runs made the backup directory"
+    backup="$h/journal-backup-2"
+    run "$h" "${J7ARGV[@]}" --journal-maintenance-window --journal-roots-complete --journal-backup "$backup" --journal-legacy-root "$extra"
+    expect_rc 0 "same authorized install after actual writer exit" || return
+    [[ "$("$SQLITE" "$db" 'PRAGMA user_version')" == "$SCHEMA" ]] || bad "schema not current"
+    [[ "$("$SQLITE" "$db" "SELECT value FROM store_meta WHERE key='native_input_authority'")" == sqlite-v1:* ]] || bad "no committed input authority"
+    [[ -f "$backup/COMPLETE" && -d "$backup/legacy-2" ]] || bad "backup lacks completion or extra root"
+    [[ "$("$SQLITE" "$backup/database" 'PRAGMA user_version')" == "$prior" ]] || bad "backup is not the prior database"
+    [[ ! -e "$(sentinel "$h")" ]] || bad "authorized migration did not consume sentinel"
+    journal_verify "$h" "$extra"
+    run "$h" "$BIN" list
+    expect_rc 0 "ordinary runtime after committed verification"
+}
 
-# J34: "  settings: copies of settings.json that earlier releases kept may hold its
+# ---- J48: copies of settings.json that earlier releases kept (b.f3n) -----------
+
+# J48: "  settings: copies of settings.json that earlier releases kept may hold its
 # secrets (tokens, say) and can be deleted: <paths>", each path shell-quoted.
 # Under a HOME whose path holds shell characters (no blank: install.sh refuses
 # an install path holding whitespace), a hooks-on install over a settings.json
@@ -4311,8 +4580,8 @@ EOF
 # deleted, the re-run succeeds and names no copy; settings.json keeps its env
 # and both hooks, and the user's file is as it was. uninstall.sh's copy of the
 # line, followed under a HOME holding a space too: uninstall_test.go's
-# TestAdviceFollow_J34_UninstallDeleteNamedCopiesAndRerun.
-test_J34_OldSettingsCopiesDeleteAndRerun() {
+# TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun.
+test_J48_OldSettingsCopiesDeleteAndRerun() {
     local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
     local HOME_TAG="j34,o'q\"\$x\`y\`." h sj own seed line list f token=PLACEHOLDER-TOKEN-not-a-secret-f3n
     local phrase="  settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:"

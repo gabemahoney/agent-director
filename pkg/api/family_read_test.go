@@ -27,7 +27,7 @@ func retainedDisplayFamily(t *testing.T) (*paneEnv, []string, api.StatusResult) 
 	e.now = time.Now().Add(-2 * time.Minute).UTC().Truncate(time.Millisecond)
 	ids := []string{"grandparent", "parent", e.id}
 	for _, id := range ids[:2] {
-		if _, err := apitest.SeedSpawn(e.dbPath, id, store.StateWaiting, "", "off", "", false); err != nil {
+		if _, err := apitest.SeedSpawn(e.dbPath, id, store.StateWaiting, "", "off", "", false, apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -83,12 +83,17 @@ type orderedFamilyStore struct {
 }
 
 func (s orderedFamilyStore) ListSpawns(f api.ListFilters) ([]api.Spawn, error) {
+	limit := f.Limit
+	f.Limit = 0
 	rows, err := s.Store.ListSpawns(f)
 	rank := map[string]int{}
 	for i, id := range s.ids {
 		rank[id] = i
 	}
 	sort.Slice(rows, func(i, j int) bool { return rank[rows[i].InstanceID] < rank[rows[j].InstanceID] })
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
 	return rows, err
 }
 
@@ -361,8 +366,9 @@ func committedFamilyProjection(ids []string, verb string) map[string]familyProje
 
 // b.ob8 B1: a genuine hook that changes ownership after the read's row snapshot
 // but before its exit observation commits refuses that observation. The read
-// returns the whole earlier display/detail/family snapshot, never a mix; the
-// refused observation writes, refreshes and records nothing.
+// returns a coherent stored display/detail/family snapshot, including a new
+// terminal hook seen by the final stored refresh. The refused observation
+// writes and records nothing.
 func TestFamilyExitOwnershipRaceKeepsEarlierSnapshot(t *testing.T) {
 	t.Parallel()
 	for _, verb := range []string{"status", "get", "list"} {
@@ -406,8 +412,12 @@ func TestFamilyExitOwnershipRaceKeepsEarlierSnapshot(t *testing.T) {
 					return raced || err != nil
 				})
 				want := retainedFamilyProjection(ids, entered, verb)
+				if event == "SessionEnd" {
+					want = committedFamilyProjection(ids, verb)
+					want[e.id] = familyProjection{state: store.StateEnded, family: store.StateWaiting}
+				}
 				if !raced || err != nil || !reflect.DeepEqual(got, want) {
-					t.Fatalf("raced read=%+v err=%v raced=%v; want the earlier coherent %+v", got, err, raced, want)
+					t.Fatalf("raced read=%+v err=%v raced=%v; want the coherent stored %+v", got, err, raced, want)
 				}
 				if !reflect.DeepEqual(s.writes, []string{"ObserveNeedsIntelligence"}) {
 					t.Errorf("observations=%v; want one refused exit", s.writes)
@@ -611,6 +621,10 @@ func TestFamilyExitListReportsCommittedState(t *testing.T) {
 				for _, id := range order {
 					want[id] = familyProjection{state: store.StateWaiting, family: store.StateWaiting}
 				}
+			} else {
+				// The stored idle_screen filter selected this member before
+				// recovery; its exit must not remove it from the result.
+				want[e.id] = familyProjection{state: store.StateWaiting, family: store.StateWaiting}
 			}
 			listed := map[string]familyProjection{}
 			for _, r := range got.Spawns {
@@ -745,8 +759,12 @@ func TestFamilyMembershipAndReadScope(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "state.db")
+			live, err := apitest.ReadSurfaceProcessOptions()
+			if err != nil {
+				t.Fatal(err)
+			}
 			seed := func(id, state, relay string) {
-				if _, err := apitest.SeedSpawn(dbPath, id, state, "/family/"+id, relay, "", true); err != nil {
+				if _, err := apitest.SeedSpawn(dbPath, id, state, "/family/"+id, relay, "", true, apitest.WithNoPane(), live[0], live[1]); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -790,7 +808,11 @@ func TestFamilyClientReopenUsesDurableIndependentHistory(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	clock := tmuxfix.NewClock(time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC))
-	if _, err := apitest.SeedSpawn(dbPath, "family-reopen", "working", "", "", "", true, apitest.WithSettle("waiting", clock.Now().UnixMilli()+settleMax)); err != nil {
+	live, err := apitest.ReadSurfaceProcessOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apitest.SeedSpawn(dbPath, "family-reopen", "working", "", "", "", true, apitest.WithSettle("waiting", clock.Now().UnixMilli()+settleMax), apitest.WithNoPane(), live[0], live[1]); err != nil {
 		t.Fatal(err)
 	}
 	if err := apitest.SetFamilyHistory(dbPath, "family-reopen", "working", "waiting", clock.Now().UnixMilli()); err != nil {
@@ -811,7 +833,7 @@ func TestFamilyClientReopenUsesDurableIndependentHistory(t *testing.T) {
 func TestFamilyCursorStoredMembershipWhileWriterHeld(t *testing.T) {
 	// Serial: deadline-sensitive held writer fixture runs outside the parallel wave.
 	e, c, b, _ := cursorReadLaunch(t)
-	if _, err := apitest.SeedSpawn(e.dbPath, "family-parent", "waiting", "/family-parent", "", "", false); err != nil {
+	if _, err := apitest.SeedSpawn(e.dbPath, "family-parent", "waiting", "/family-parent", "", "", false, apitest.WithPID(b.RuntimePID), apitest.WithProcStarttime(b.RuntimeStart), apitest.WithNoPane()); err != nil {
 		t.Fatal(err)
 	}
 	if err := apitest.SeedParentChild(e.dbPath, "family-parent", b.InstanceID); err != nil {

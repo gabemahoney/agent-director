@@ -1,6 +1,7 @@
 package realtmux_test
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,9 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // A Codex agent's hooks and its kill on real tmux (E4-T3 T5; SRD SR-6.5,
@@ -301,6 +305,133 @@ func TestCodexKillLeavesTheRowAsItWas(t *testing.T) {
 			if after := readRow(t, p.DBPath, p.s.ID); !reflect.DeepEqual(after, before) {
 				t.Errorf("row changed by kill:\n  before %+v\n  after  %+v", before, after)
 			}
+		})
+	}
+}
+
+// b.x9o, doc-review R7: literally follow permissions.md's held-spawn exit
+// procedure. Each polling verb gets a fresh launch; no state read, sweep or
+// pause can reconcile the exit before that verb. Reuse the Docker stand-in's
+// real /exit hook, the Codex launch fixture and the public CLI caller.
+func TestAdviceFollowCodexHeldExitReadPolling(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/permissions.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advice := "agent-director send-keys --instance-id <id> --text /exit \\\n       --expect-pane-sha256 <H>"
+	if !strings.Contains(string(doc), advice) || !strings.Contains(string(doc), "Poll `get` or `status` until the row reads `ended`") {
+		t.Fatal("held-spawn exit advice changed; recheck its literal follow")
+	}
+	for _, poll := range []string{"get", "status"} {
+		t.Run(poll, func(t *testing.T) {
+			f := newCodexFix(t)
+			script, err := os.ReadFile(codexDriverStandIn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const prompt = "codex-exit>"
+			// Set the empty prompt immediately before the interactive shell;
+			// the noninteractive stand-in discards an inherited PS1.
+			tail := "exec bash --noprofile --norc -i"
+			if strings.Count(string(script), tail) != 1 {
+				t.Fatal("stand-in shell tail changed")
+			}
+			script = []byte(strings.Replace(string(script), tail, "export PS1='"+prompt+" '\n"+tail, 1))
+			onPath(t, program(t, "codex", string(script)))
+			onPath(t, f.bin) // the stand-in's SessionEnd uses this built CLI
+			s := f.mustLaunchWith(t, api.SpawnParams{InstanceID: newInstanceID("cx-exit"), Agent: "codex", RelayMode: "on"})
+			h := f.fire(t, s.ID, f.CWD)
+			h.assertHookRan(t)
+			if err := os.WriteFile(h.Rec.path("session-id"), []byte(h.SessionID), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			pid := h.Rec.pid(t)
+			// A delivered request still holds the dialog until native proof. It
+			// needs no fallen-back answer, so step 1 can inspect the empty prompt.
+			request, err := apitest.SeedPermissionRequest(f.DBPath, s.ID, "Bash",
+				apitest.PermissionDecision("allow", ""), apitest.PermissionDelivered(time.Now()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, err := store.Open(f.DBPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			pr, err := st.GetPermissionRequest(s.ID, request.RequestToken)
+			if err != nil || pr.AwaitsAnswer() || pr.ProvenGone() {
+				t.Fatalf("request must be answered but unproven: %+v, %v", pr, err)
+			}
+			cli := newPaneCaller(t, f.spawnFix, "CLI", f.bin)
+			plain := map[string]any{"instance_id": s.ID, "text": "/exit"}
+			raw, err := cli.call("send-keys", plain)
+			var refusal struct {
+				Name string `json:"err_name"`
+			}
+			if err == nil || json.Unmarshal(raw, &refusal) != nil || refusal.Name != "ErrDialogMaybeOpen" {
+				t.Fatalf("plain exit must be held: %s, %v", raw, err)
+			}
+			t.Logf("plain send-keys /exit: %s", raw)
+			read := func() api.ReadPaneResult {
+				t.Helper()
+				raw := cli.must("read-pane", map[string]any{"instance_id": s.ID})
+				var pane api.ReadPaneResult
+				if err := json.Unmarshal(raw, &pane); err != nil {
+					t.Fatal(err)
+				}
+				return pane
+			}
+			// Step 1: inspect the pane. Only read-pane waits for the shell's
+			// first empty prompt; no unrelated read supplies an observation.
+			var first api.ReadPaneResult
+			waitFor(t, "empty stand-in prompt", func() bool {
+				first = read()
+				return strings.TrimSpace(first.Pane) == prompt
+			}, func() string { return fmt.Sprintf("pane %q", first.Pane) })
+			t.Logf("step 1 read-pane: %+v", first)
+			// Step 2: read again, inspect the exact empty prompt and use only
+			// this read's hash. No draft is cleared or silently submitted.
+			second := read()
+			if strings.TrimSpace(second.Pane) != prompt || second.PaneSHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(second.Pane))) {
+				t.Fatalf("second read is not the inspected empty prompt: %+v", second)
+			}
+			t.Logf("step 2 read-pane: %+v", second)
+			before := readRow(t, f.DBPath, s.ID)
+			if before.State != "waiting" || before.EndReportedAt != nil || before.EndedAt != nil {
+				t.Fatalf("before exit: %+v", before)
+			}
+			// Step 3: the documented command, through the real CLI adapter.
+			plain["expect_pane_sha256"] = second.PaneSHA256
+			t.Logf("step 3 send-keys /exit --expect-pane-sha256 %s: %s", second.PaneSHA256, cli.must("send-keys", plain))
+			waitFor(t, "SessionEnd hook completes", func() bool { return h.Rec.has("exit-hook.exit") }, nil)
+			if got := readFileTrim(t, h.Rec.path("exit-hook.exit")); got != "0" {
+				t.Fatalf("SessionEnd exit %q: %s", got, readFileTrim(t, h.Rec.path("exit-hook.err")))
+			}
+			waitPidGone(t, pid)
+			unreconciled := readRow(t, f.DBPath, s.ID)
+			if unreconciled.State != "waiting" || unreconciled.EndedAt != nil || unreconciled.EndReportedAt == nil {
+				t.Fatalf("only the end report should be stored before polling: %+v", unreconciled)
+			}
+			t.Logf("process gone; direct store before %s: state=%v end_reported_at=%v ended_at=%v", poll,
+				unreconciled.State, unreconciled.EndReportedAt, unreconciled.EndedAt)
+			// Step 4: only this documented verb can perform reconciliation.
+			var response struct {
+				State string `json:"state"`
+			}
+			waitFor(t, poll+" reconciles ended", func() bool {
+				raw = cli.must(poll, map[string]any{"instance_id": s.ID})
+				if err := json.Unmarshal(raw, &response); err != nil {
+					t.Fatal(err)
+				}
+				return response.State == "ended"
+			}, func() string { return string(raw) })
+			after := readRow(t, f.DBPath, s.ID)
+			if after.State != "ended" || after.EndedAt == nil || after.EndReportedAt != unreconciled.EndReportedAt ||
+				after.PID != before.PID || after.ProcStarttime != before.ProcStarttime || after.SessionID != before.SessionID {
+				t.Fatalf("durable ended result lost exit/launch identity: %+v", after)
+			}
+			t.Logf("step 4 %s: %s; durable state=%v ended_at=%v end_reported_at=%v", poll, raw,
+				after.State, after.EndedAt, after.EndReportedAt)
 		})
 	}
 }

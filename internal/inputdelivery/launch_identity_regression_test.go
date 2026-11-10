@@ -47,7 +47,7 @@ func TestPrepareProbeOmitsHookIdentityButLaunchRetainsIt(t *testing.T) {
 				"CODEX_HOME":                  filepath.Join(root, "codex"),
 			}
 			id := Identity{StoreID: "0123456789abcdef", Token: "fedcba9876543210", InstanceID: "new-row", Agent: agent, Socket: "/new/socket", CWD: root}
-			command, launchEnv, err := Prepare(id, []string{program}, env, true)
+			command, launchEnv, err := Prepare(id, []string{program}, env, true, &evidencePersistence{})
 			if err != nil {
 				t.Fatal(err)
 			}

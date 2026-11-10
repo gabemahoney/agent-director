@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# The fake scheduler CLI that the rig (rig_test.go) installs as jobsched;
+# test/sandbox/requiresandbox runs it too, to follow make tla-parse advice
+# (b.osa). It logs every call to $FAKE_DIR/calls and keeps what each submit's
+# context held under $FAKE_DIR/seen/<job>/. The Nth call for a key (list,
+# submit.<job>, wait.<job>, status.<job>, results.<job>) answers line N of
+# $FAKE_DIR/plan.<key> (the last line once they run out), else a default; a
+# line is "<exit code> <stdout>", with @ID@ standing for the job id.
+# $FAKE_DIR/hold.<cmd> makes that call mark held.<cmd> and block. results
+# writes a run log from $FAKE_DIR/verdicts ("<cfg, parse:cfg or sany:module>\t<result>"
+# lines, in order); an empty result omits that verdict, and a parse run without
+# any override gets PARSE-OK. Optional plan.clock.<key> lines set $FAKE_DIR/now
+# as that key's Nth call answers, for tests that replace date with a clock shim.
+set -u
+d=$FAKE_DIR cmd=$1 id=
+shift
+printf '%s %s\n' "$cmd" "$*" >>"$d/calls"
+hold() {
+  if [ -e "$d/hold.$1" ]; then
+    sleep 30 & sleeper=$!
+    trap 'kill "$sleeper" 2>/dev/null; wait "$sleeper" 2>/dev/null; exit 1' TERM INT
+    : >"$d/held.$1"
+    wait "$sleeper"; exit 1
+  fi
+}
+answer() {
+  local n line now
+  n=$(( $(cat "$d/count.$1" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" >"$d/count.$1"
+  if [ -f "$d/plan.$1" ]; then
+    line=$(sed -n "${n}p" "$d/plan.$1"); [ -n "$line" ] || line=$(tail -n 1 "$d/plan.$1")
+  else
+    line=$2
+  fi
+  if [ -f "$d/plan.clock.$1" ]; then
+    now=$(sed -n "${n}p" "$d/plan.clock.$1"); [ -n "$now" ] || now=$(tail -n 1 "$d/plan.clock.$1")
+    echo "$now" >"$d/now"
+  fi
+  line=${line//@ID@/$id}
+  printf '%s\n' "${line#* }"
+  exit "${line%% *}"
+}
+case $cmd in
+list)
+  hold list
+  answer list '0 {"summary":{"dispatcher_running":true}}' ;;
+submit)
+  args=("$@")
+  ctx= name= timeout_s=10800
+  while [ $# -gt 0 ]; do
+    case $1 in --context) ctx=$2; shift ;; --name) name=$2; shift ;; --timeout) timeout_s=${2%s}; shift ;; esac
+    shift
+  done
+  job=${name#tla-}
+  id="j$(grep -c '^submit ' "$d/calls")-$job"
+  s="$d/seen/$job"; mkdir -p "$s"
+  printf '%s\n' "${args[@]}" >"$s/submit-args"
+  cp "$ctx/runs" "$s/runs"
+  ls "$ctx" >"$s/ctx"
+  ls "$(dirname "$ctx")" >"$s/ctxdir"
+  grep -E '^(BUDGET|DISKCAP_MB)=' "$ctx/tlcjob.sh" >"$s/limits"
+  (cd "$ctx" && sha256sum *.tla) >"$s/specs"
+  (cd "$ctx" && if compgen -G './*.cfg' >/dev/null; then sha256sum ./*.cfg; fi) >"$s/cfgs"
+  hold submit
+  answer "submit.$job" "0 {\"id\":\"$id\",\"dispatcher_running\":true,\"timeout_s\":$timeout_s,\"memory\":34359738368}" ;;
+wait)
+  id=$1; job=${id#*-}
+  hold wait
+  answer "wait.$job" '0 @ID@ succeeded' ;;
+status)
+  id=$1; job=${id#*-}
+  answer "status.$job" '0 {"state":"succeeded","terminal":true,"dispatcher_running":true}' ;;
+results)
+  id=$1; job=${id#*-}; log="$d/logs/$job.log"
+  mkdir -p "$d/logs"; : >"$log"
+  while read -r spec cfg flags; do
+    key=$cfg found=no
+    if [ "$cfg" = - ] && [ "$flags" = sany ]; then
+      cfg=sany:$spec; key=$cfg
+    elif [ "$job" = parse ]; then
+      key=parse:$cfg
+    fi
+    while IFS=$'\t' read -r k res; do
+      [ "$k" = "$key" ] || continue
+      found=yes
+      [ -z "$res" ] || echo "VERDICT $cfg checks=inv result=$res distinct=42 depth=3 secs=7" >>"$log"
+    done <"$d/verdicts"
+    if [ "$job" = parse ] && [ "$found" = no ]; then
+      echo "VERDICT $cfg checks=parse result=PARSE-OK distinct=1 depth=1 secs=1" >>"$log"
+    fi
+  done <"$d/seen/$job/runs"
+  answer "results.$job" "0 {\"paths\":{\"run_log\":\"$log\"},\"present\":{\"run_log\":true}}" ;;
+*) echo "{\"error\":\"unknown command $cmd\"}"; exit 64 ;;
+esac

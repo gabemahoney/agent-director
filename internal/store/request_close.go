@@ -26,7 +26,7 @@ import (
 // denied with the close's reason and marked closed. It returns what it closed
 // for the trail.
 var denyOrphanedRequestsSQL = `UPDATE permission_requests AS pr
-    SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, closed_at = ?
+    SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, closed_at = ?, decision_origin = 'observation'
   WHERE pr.instance_id = ? AND pr.decision IS NULL AND ` + awaitingAnswerSQL + `
   RETURNING request_id, request_token, tool_name`
 

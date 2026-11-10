@@ -6,8 +6,8 @@
  * pkg/api/manifest/manifest.go. It includes every verb where `Callable: true`
  * and excludes the three non-callable verbs (help, serve, hook).
  *
- * Currently 17 callable verbs: spawn, status, get, send-keys, read-pane,
- * kill, decide, get-permission, record-pane-answer, resume, find-missing,
+ * Currently 18 callable verbs: spawn, status, get, send-keys, read-pane,
+ * kill, decide, get-permission, record-pane-answer, resume, sweep, find-missing,
  * expire, make-template, list, list-subagents, pause, version.
  *
  * NOTE: `help` has `Callable: false` in manifest.go (source of truth); it is
@@ -26,6 +26,7 @@ export const VERBS = [
   "get-permission",
   "record-pane-answer",
   "resume",
+  "sweep",
   "find-missing",
   "expire",
   "make-template",

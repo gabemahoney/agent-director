@@ -10,10 +10,10 @@
 // version site and enforces it via the check-source-of-truth.ts gate, which
 // CI must run before any release step.  This test (AC-4) proves that:
 //
-//  A. the gate catches a NEW authoritative site (a package.json with "version"
-//     in a directory that is not excluded);
-//  B. the gate does NOT fire for prose mentions of a version in docs/ (false-
-//     positive guard).
+//	A. the gate catches a NEW authoritative site (a package.json with "version"
+//	   in a directory that is not excluded);
+//	B. the gate does NOT fire for prose mentions of a version in docs/ (false-
+//	   positive guard).
 //
 // DESIGN
 // ======
@@ -23,16 +23,16 @@
 // in, so the fixtures never enter the real tree, where a sibling test or
 // release gate scanning it would see them (b.9qj).
 //
-//  Sub-case A (drift):
-//   1. Create tools/test-violation/package.json with
-//      {"name":"violation","version":"9.9.9"}.
-//   2. Run the gate from the repo root; capture stderr.
-//   3. Assert exit code != 0, and that stderr names the offending file and
-//      carries the gate key "invariant.source-of-truth".
+//	Sub-case A (drift):
+//	 1. Create tools/test-violation/package.json with
+//	    {"name":"violation","version":"9.9.9"}.
+//	 2. Run the gate from the repo root; capture stderr.
+//	 3. Assert exit code != 0, and that stderr names the offending file and
+//	    carries the gate key "invariant.source-of-truth".
 //
-//  Sub-case B (false positive):
-//   1. Create docs/_test-fixture.md with prose mentioning "version 9.9.9".
-//   2. Run the gate; assert exit 0 and that stderr is empty.
+//	Sub-case B (false positive):
+//	 1. Create docs/_test-fixture.md with prose mentioning "version 9.9.9".
+//	 2. Run the gate; assert exit 0 and that stderr is empty.
 //
 // DEPENDENCY
 // ==========

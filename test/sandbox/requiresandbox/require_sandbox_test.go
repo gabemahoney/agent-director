@@ -31,6 +31,10 @@
 // builds it with the binaries, so test-docker's builds include it. Since b.q6s
 // its recipe also runs go list, to write its dependency file.
 //
+// b.osa: make tla-parse joined the host goals; the mixed generate/tla-parse
+// advice is followed through the repo's spec/tla runner and test/tla's fake job
+// scheduler.
+//
 // Like the other test/sandbox suites it drives a copy of the Makefile under test
 // in a temp tree, with logging fake go, bun and docker on PATH, and runs no repo
 // binary, so it needs no sandboxguard TestMain.
@@ -53,6 +57,10 @@
 // and sandbox_marker_test_docker_generate_j8 fail, and so does every check that
 // uses generateAndBuilds: TestRequireSandbox_AdviceFollow's test-docker cells
 // and TestRequireSandbox_AdviceKeepsValues.
+// Before b.osa's fix, or with tla-parse joining _REQUIRE_SANDBOX_HOST_GOALS
+// only after the advice is built, TestRequireSandbox_AdviceFollow's
+// generate_tla_parse and tla_parse_generate cells fail, and so does
+// TestRequireSandbox_RefusesOutsideSandbox.
 package sandboxrequiresandbox_test
 
 import (
@@ -335,7 +343,7 @@ func TestRequireSandbox_RefusesOutsideSandbox(t *testing.T) {
 	// sandbox image lacks, or check or print the host's own setup. Listed by
 	// hand, so that dropping one from the Makefile's _REQUIRE_SANDBOX_HOST_GOALS
 	// fails its cell.
-	hostOnly := []string{"_sandbox-preflight", "release-shellcheck", "tla", "tla-print"}
+	hostOnly := []string{"_sandbox-preflight", "release-shellcheck", "tla", "tla-parse", "tla-print"}
 	makeTargets := targetsOf(rules(t, filepath.Join(root, "Makefile")), func(rule, string) bool { return true })
 	hostGoals := slices.Clone(engine)
 	for _, tg := range hostOnly {
@@ -584,9 +592,10 @@ var generateAndBuilds = []string{"go generate ./...", "go build ./cmd/agent-dire
 const testDockerGenerateAdvice = `make test-docker 'EPIC=harness-smoke' && ` +
 	`make sandbox 'EPIC=harness-smoke' CMD="make generate 'EPIC=harness-smoke'"`
 
-// follow runs advice in root with bash, as printed, and checks that it exits 0
-// and that its tool calls, the container engine's left out, are wantCalls.
-func follow(t *testing.T, root string, env []string, advice string, wantCalls []string) {
+// follow runs advice in root with bash, as printed, checks that it exits 0
+// and that its tool calls, the container engine's left out, are wantCalls, and
+// returns its output.
+func follow(t *testing.T, root string, env []string, advice string, wantCalls []string) string {
 	t.Helper()
 	code, out, calls := run(t, root, env, "bash", "-c", advice)
 	calls = slices.DeleteFunc(calls, func(c string) bool { return strings.HasPrefix(c, "docker ") })
@@ -596,19 +605,49 @@ func follow(t *testing.T, root string, env []string, advice string, wantCalls []
 	if got := briefCalls(calls); !slices.Equal(got, briefCalls(wantCalls)) {
 		t.Errorf("%s ran %q, want %q; output:\n%s", advice, calls, wantCalls, out)
 	}
+	return out
 }
 
-// TestRequireSandbox_AdviceFollow (b.8yq, b.4a1, b.qgr): the refusal's advice,
-// run as printed, exits 0 and runs the goals' go calls: go generate in the
-// (fake) container, where the guard passes, and test-docker's builds on the
+// tlaTree links root's spec/tla to the repo's, so make tla-parse runs the real
+// runner there, and returns a copy of test/tla's fake job scheduler, which
+// logs to $FAKE_DIR (b.osa).
+func tlaTree(t *testing.T, root string) string {
+	t.Helper()
+	repo := sandboxtest.RepoRoot(t)
+	if err := os.Mkdir(filepath.Join(root, "spec"), 0o755); err != nil {
+		t.Fatalf("make spec/: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(repo, "spec", "tla"), filepath.Join(root, "spec", "tla")); err != nil {
+		t.Fatalf("link spec/tla: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, "test", "tla", "testdata", "jobsched"))
+	if err != nil {
+		t.Fatalf("read the fake job scheduler: %v", err)
+	}
+	jobsched := filepath.Join(t.TempDir(), "jobsched")
+	if err := os.WriteFile(jobsched, data, 0o755); err != nil {
+		t.Fatalf("write the fake job scheduler: %v", err)
+	}
+	return jobsched
+}
+
+// TestRequireSandbox_AdviceFollow (b.8yq, b.4a1, b.qgr, b.osa): the refusal's
+// advice, run as printed, exits 0 and runs the goals' go calls: go generate in
+// the (fake) container, where the guard passes, and test-docker's builds on the
 // host, where its container engine is (docker fails in the fake container).
+// tla-parse runs on the host too, before or after the sandbox, and its runner
+// passes through the fake job scheduler the command line names.
 func TestRequireSandbox_AdviceFollow(t *testing.T) {
 	root := tree(t)
+	jobsched := tlaTree(t, root)
+	tlaVars := []string{"TLA_CHANNEL=C0TESTCHAN", "TLA_JOBSCHED=" + jobsched}
+	tlaQuoted := `'TLA_CHANNEL=C0TESTCHAN' 'TLA_JOBSCHED=` + jobsched + `'`
 	for _, tc := range []struct {
 		name      string
 		args, env []string
 		advice    string
 		wantCalls []string
+		tlaParse  bool // the advice runs make tla-parse, whose SANY-only job must pass
 	}{
 		{name: "generate", args: []string{"generate"}, advice: `make sandbox CMD="make generate"`,
 			wantCalls: []string{"go generate ./..."}},
@@ -625,13 +664,46 @@ func TestRequireSandbox_AdviceFollow(t *testing.T) {
 		{name: "generate_sandbox_cmd", args: []string{"generate", "sandbox", "CMD=go version"},
 			advice:    `make sandbox CMD="make generate" && make sandbox 'CMD=go version'`,
 			wantCalls: []string{"go generate ./...", "go version"}},
+		// b.osa: tla-parse keeps its place on the host, with the TLA variables.
+		{name: "generate_tla_parse", args: append([]string{"generate", "tla-parse"}, tlaVars...),
+			advice:    `make sandbox ` + tlaQuoted + ` CMD="make generate ` + tlaQuoted + `" && make tla-parse ` + tlaQuoted,
+			wantCalls: []string{"go generate ./..."}, tlaParse: true},
+		{name: "tla_parse_generate", args: append([]string{"tla-parse", "generate"}, tlaVars...),
+			advice:    `make tla-parse ` + tlaQuoted + ` && make sandbox ` + tlaQuoted + ` CMD="make generate ` + tlaQuoted + `"`,
+			wantCalls: []string{"go generate ./..."}, tlaParse: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			code, out, _ := run(t, root, tc.env, append([]string{"make"}, tc.args...)...)
+			env, fake := tc.env, t.TempDir()
+			if tc.tlaParse {
+				// With no verdicts, the fake's parse job gives every module PARSE-OK.
+				if err := os.WriteFile(filepath.Join(fake, "verdicts"), nil, 0o644); err != nil {
+					t.Fatalf("write verdicts: %v", err)
+				}
+				env = append(slices.Clone(env), "FAKE_DIR="+fake)
+			}
+			code, out, _ := run(t, root, env, append([]string{"make"}, tc.args...)...)
 			if code != 2 || !strings.Contains(out, "Run it in the sandbox: "+tc.advice+"\n") {
 				t.Fatalf("make %s: exit %d, want 2 with the advice %q; output:\n%s", strings.Join(tc.args, " "), code, tc.advice, out)
 			}
-			follow(t, root, tc.env, tc.advice, tc.wantCalls)
+			out = follow(t, root, env, tc.advice, tc.wantCalls)
+			if !tc.tlaParse {
+				return
+			}
+			if !regexp.MustCompile(`(?m)^CI-VERDICT PASS \(3/3 modules parse, \d+ min, parse-only\)$`).MatchString(out) {
+				t.Errorf("%s: no passing parse-only verdict; output:\n%s", tc.advice, out)
+			}
+			data, err := os.ReadFile(filepath.Join(fake, "calls"))
+			if err != nil {
+				t.Fatalf("the fake job scheduler was never called: %v", err)
+			}
+			calls := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+			var cmds []string
+			for _, c := range calls {
+				cmds = append(cmds, strings.Fields(c)[0])
+			}
+			if !slices.Equal(cmds, []string{"list", "submit", "wait", "results"}) || !strings.Contains(calls[1], " --name tla-parse --channel C0TESTCHAN ") {
+				t.Errorf("scheduler calls = %q, want list, then the tla-parse job's submit to C0TESTCHAN, wait and results", calls)
+			}
 		})
 	}
 }

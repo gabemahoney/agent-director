@@ -96,7 +96,13 @@ func TestLifecycleFamilyRefreshAbsoluteDeadline(t *testing.T) {
 			if reached.Load() != 1 {
 				t.Fatalf("actual %s boundary reached %d times", phase, reached.Load())
 			}
-			if applied.Applied || !errors.Is(err, ErrStoreBusy) || !errors.Is(err, ctx.Err()) {
+			// The operation's independent deadline timer can fire before ctx's.
+			// Assert the phase's cause without depending on timer delivery order.
+			wantCause := context.DeadlineExceeded
+			if phase == "family refresh cancellation" {
+				wantCause = context.Canceled
+			}
+			if applied.Applied || !errors.Is(err, ErrStoreBusy) || !errors.Is(err, wantCause) {
 				t.Errorf("family refresh lost precommit cancellation contract: applied=%+v err=%v", applied, err)
 			}
 			if phase == "family refresh cancellation" && (err == nil || !strings.Contains(err.Error(), "before commit")) {

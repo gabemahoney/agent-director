@@ -6,7 +6,7 @@ package api_test
 // err_details' state included), decide (ErrRelayFallenBack's err_details
 // state included), find-missing, resume, pause, kill (its finished-row opt-in
 // too), expire and spawn's collision pre-checks (plain and reuse). One test
-// per guard, each through a Client whose status shows the other state. The
+// per guard, each through a Client configured to report the other state. The
 // store's guard reads and guarded writes are internal/store's
 // settle_guards_test.go. Last, only the read surfaces read the settled state.
 
@@ -44,15 +44,21 @@ func (e *killEnv) settleClient(t *testing.T) *api.Client {
 }
 
 // unsettle makes id's raw state a hook's change at `at` from reported, which
-// c reports until it has held the settle time, and checks that c's status
-// shows reported. Call it once c's clock is set.
-func unsettle(t *testing.T, c *api.Client, dbPath, id, reported string, at time.Time) {
+// the settled projection reports until it has held the settle time. Check
+// that projection without an active read repairing the command's precondition.
+// Public settled-read dispatch is covered in settle_read_test.go.
+func unsettle(t *testing.T, _ *api.Client, dbPath, id, reported string, at time.Time) {
 	t.Helper()
 	if err := apitest.SetSettle(dbPath, id, reported, at.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := c.Status(id); err != nil || got.State != reported {
-		t.Fatalf("Status(%s) = %+v, %v; want %s while the raw change settles", id, got, err, reported)
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got, err := s.SpawnStatusRow(id, store.SettleRead{SettleMs: settleMax, NowMs: at.UnixMilli()}); err != nil || got.ReportedState != reported {
+		t.Fatalf("stored projection(%s) = %+v, %v; want %s while the raw change settles", id, got, err, reported)
 	}
 }
 
@@ -286,7 +292,8 @@ var settledReadNames = map[string]bool{"ReportedState": true, "GetSpawnSettled":
 // settledReadFiles are the only production files that may name them: the
 // derivation and the store reads, and status, get and list.
 var settledReadFiles = []string{"internal/store/settle.go", "internal/store/family.go", "internal/store/spawns.go", "internal/store/spawn_status.go", "internal/store/list.go", "internal/store/cursor_missing_read.go", "internal/store/display.go", "pkg/api/display.go",
-	"pkg/api/client.go", "pkg/api/status.go", "pkg/api/get.go", "pkg/api/list.go"}
+	"pkg/api/client.go", "pkg/api/status.go", "pkg/api/get.go", "pkg/api/list.go",
+	"pkg/api/active_checks.go", "pkg/api/sweep.go", "pkg/api/find_missing.go", "pkg/api/find_missing_repair.go"}
 
 // TestOnlyTheReadSurfacesReadTheSettledState: no production file outside
 // settledReadFiles names the settled read, so no guard can act on the

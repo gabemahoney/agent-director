@@ -76,8 +76,8 @@ func TestCLICodexDialogHeldUntilAnInterruptProvesItGone(t *testing.T) {
 }
 
 // TestCLIClaudeDialogHoldKeepsItsText: the same refusal on a Claude row keeps
-// its shipped description (the PostToolUse with its tool_use_id and the end of
-// the main agent's turn), unchanged by the Codex wording.
+// its own description (the end of the main agent's turn and the subagent's
+// SubagentStop; b.wbs), unchanged by the Codex wording.
 func TestCLIClaudeDialogHoldKeepsItsText(t *testing.T) {
 	h := newGateHome(t)
 	const id = "id-cli-hold-claude-text"

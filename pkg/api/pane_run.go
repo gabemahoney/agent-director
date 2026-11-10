@@ -25,6 +25,8 @@ type paneTmux interface {
 // verb's gone sentinel and what its pane refusals say was not done, and what
 // the run found for the verbs that record it.
 type paneRun struct {
+	// sweep shares active-check socket stops, cached listings and budgets.
+	sweep   *tmux.Sweep
 	t       paneTmux
 	pc      ProcChecker
 	row     Spawn
@@ -87,6 +89,17 @@ func (r *paneRun) ours(res tmux.Result, launch tmux.Launch) (string, tmux.Launch
 // r.listing: no server or no socket is the gone error, anything else Can't
 // tell's error; nothing is done.
 func (r *paneRun) listPanes(launch tmux.Launch) ([]tmux.Pane, error) {
+	if r.sweep != nil {
+		listing := r.sweep.ListPanes(r.t, launch)
+		if listing.Listed {
+			return listing.Panes, nil
+		}
+		r.listing = listing.Result
+		if r.listing.Verdict == tmux.Gone {
+			return nil, r.goneError()
+		}
+		return nil, cantTellError(r.listing, r.cantTellRefusal(tmux.CallListPanes))
+	}
 	panes, err := r.t.ListPanes(r.socket)
 	if err == nil {
 		return panes, nil

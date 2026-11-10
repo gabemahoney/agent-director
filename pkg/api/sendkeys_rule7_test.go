@@ -26,20 +26,27 @@ var (
 	r7HookAlive r7Step = func(_ *testing.T, p *paEnv) { p.pc.Set(relayEnvHook.PID, procfix.Alive(relayEnvHook.Starttime)) }
 	// r7Acked: decide's allow on A, acked by its relay hook.
 	r7Acked r7Step = func(t *testing.T, p *paEnv) {
-		if ok, err := p.st.DecideRelayRequest(p.r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide,
-			time.Time{}, store.DefaultLockWait); err != nil || !ok {
-			t.Fatalf("decide = %v, %v", ok, err)
-		}
-		if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, storefix.TestRequestTokenA, p.now, store.DefaultLockWait, nil); err != nil || !ok {
-			t.Fatalf("ack = %v, %v", ok, err)
+		p.withPermissionWriter(t, func() {
+			if ok, err := p.st.DecideRelayRequest(p.r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide,
+				time.Time{}, store.DefaultLockWait); err != nil || !ok {
+				t.Fatalf("decide = %v, %v", ok, err)
+			}
+			if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, storefix.TestRequestTokenA, p.now, store.DefaultLockWait, nil); err != nil || !ok {
+				t.Fatalf("ack = %v, %v", ok, err)
+			}
+		})
+		if pr := p.request(t, storefix.TestRequestTokenA); pr.DecisionOrigin != store.DecisionOriginCaller || pr.ResponseState != store.ResponseRelayClaimed {
+			t.Fatalf("ack authority: %+v", pr)
 		}
 	}
 	// r7Decided: decide's allow on A, not acked.
 	r7Decided r7Step = func(t *testing.T, p *paEnv) {
-		if ok, err := p.st.DecideRelayRequest(p.r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide,
-			time.Time{}, store.DefaultLockWait); err != nil || !ok {
-			t.Fatalf("decide = %v, %v", ok, err)
-		}
+		p.withPermissionWriter(t, func() {
+			if ok, err := p.st.DecideRelayRequest(p.r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide,
+				time.Time{}, store.DefaultLockWait); err != nil || !ok {
+				t.Fatalf("decide = %v, %v", ok, err)
+			}
+		})
 	}
 	// r7Outside: A recorded answered outside agent-director.
 	r7Outside r7Step = func(t *testing.T, p *paEnv) {
@@ -129,7 +136,7 @@ func TestSendKeysRule7(t *testing.T) {
 		{"A's token, A answered outside agent-director", []r7Step{r7Outside}, tokA, store.ErrAlreadyDecided, `pane_answer "outside"`},
 		{"A's token, A closed by find-missing's mark, the row resumed", []r7Step{r7Mark, r7Resume}, tokA, store.ErrAlreadyDecided, `"find_missing"`},
 		{"A's token, A open when the row ended, the row resumed", []r7Step{r7End, r7Resume}, tokA, store.ErrNoOpenPermissionRequest,
-			"its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict"},
+			"its spawn ended, or a shared check marked it missing, before the request's relay hook delivered a verdict"},
 		{"an unknown token", nil, "dddddddd-dddd-4ddd-addd-dddddddddddd", store.ErrNoOpenPermissionRequest, "has no permission request"},
 		{"A's token, A fallen back", nil, tokA, nil, ""},
 	}

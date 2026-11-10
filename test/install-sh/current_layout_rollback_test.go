@@ -1,9 +1,8 @@
 package installsh_test
 
 import (
-	"bytes"
+	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +13,28 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the previous release and runs both installers")
 	}
-	doc, err := os.ReadFile("../../docs/operator-actions.md")
+	const skillPath = "../../skills/install-agent-director/SKILL.md"
+	skill, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pointer, ok := strings.Cut(string(skill), "## Going back to the previous release\n")
+	if !ok {
+		t.Fatal("install skill recovery pointer missing")
+	}
+	_, link, ok := strings.Cut(pointer, "Follow [Going back to the previous release](")
+	if !ok {
+		t.Fatal("install skill recovery link missing")
+	}
+	target, _, ok := strings.Cut(link, ")")
+	const sourceURL = "https://github.com/gabemahoney/agent-director/blob/main/"
+	if !ok || target != sourceURL+"docs/operator-actions.md#going-back-to-the-previous-release" {
+		t.Fatalf("install skill recovery link changed: %q", target)
+	}
+	// The absolute URL also works beside a standalone install.sh. Resolve its
+	// repository path in the frozen source so the offline test follows this
+	// candidate's canonical procedure, rather than an unrelated deployed version.
+	doc, err := os.ReadFile(filepath.Join("../..", strings.TrimPrefix(strings.Split(target, "#")[0], sourceURL)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,45 +42,64 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	if !ok {
 		t.Fatal("rollback advice heading missing")
 	}
-	for _, copy := range []struct{ path, end string }{
-		{"../../skills/install-agent-director/SKILL.md", ""},
-		{"../../tickets/testplans/b.75s/t1.75s.f7/t2.75s.f7.wb/t2.75s.f7.wb.md", "\nEOF\n"},
-	} {
-		b, err := os.ReadFile(copy.path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, got, found := strings.Cut(string(b), "## Going back to the previous release\n")
-		if copy.end != "" {
-			var complete bool
-			got, _, complete = strings.Cut(got, copy.end)
-			if !complete {
-				t.Fatalf("%s: incomplete expected recovery text", copy.path)
-			}
-			got += "\n"
-		}
-		if !found || got != section {
-			t.Fatalf("%s: complete recovery text differs from operator advice", copy.path)
-		}
+	const expectedPath = "../../tickets/testplans/b.75s/t1.75s.f7/t2.75s.f7.wb/t2.75s.f7.wb.md"
+	b, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, got, found := strings.Cut(string(b), "## Going back to the previous release\n")
+	got, _, complete := strings.Cut(got, "\nEOF\n")
+	if !found || !complete || got+"\n" != section {
+		t.Fatalf("%s: complete recovery text differs from linked operator advice", expectedPath)
 	}
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10, v10→v11, v11→v12, v12→v13, v13→v14 and v14→v15, the old-layout steps below do not apply",
-		"stop agents, servers and callers and keep a copy of the actual",
-		"store (`[store] db_path` when set), including its `-wal` and `-shm` files",
-		"restore that pre-upgrade copy and install the previous release with its own",
-		"`install.sh` and the original install flags",
+		"including schema v9→v10 through v19→v20, the old-layout steps below do not apply",
+		"stop all writers and keep a copy of the actual store (`[store] db_path` when set), its existing `-wal`/`-shm`, and all legacy input evidence",
+		"Keep provider logs/transcripts outside those roots too",
+		"maintain the same exclusion, preserve the post-upgrade evidence",
+		"restore the matching pre-upgrade DB and input evidence at their original paths",
 		"removing a `-wal` or `-shm` that the copy lacks",
-		"and the original install flags",
-		"This loses all writes made since the backup",
-		"The installer does not make this backup",
-		"A copy made after migration cannot replace the pre-upgrade backup",
-		"make a v15 store readable by a v9, v10, v11, v12, v13 or v14 binary",
-		"There is no supported in-place downgrade from v15",
-		"The tested v12→v11 family-history recipe applies only to a genuine family-only v12 store and cannot operate on v13, v14 or v15",
+		"Keep original launch-lock inodes; do not replace or delete them",
+		"Install the matching previous release with its own `install.sh` and the original flags",
+		"omitting `--schedule` to preserve a custom cadence",
+		"Before restarting any older runtime, restore `find-missing` as the recovery command in every schedule that runs `sweep`",
+		"the tagged cron line (`crontab -e`), the service `ExecStart`, or a schedule you made another way",
+		"keeping your chosen cadence and environment",
+		"After editing a service, run `systemctl --user daemon-reload`",
+		"Then reconcile uncertain attempts against the preserved evidence",
+		"restoration loses all later writes and can lose proof of input that already reached an agent",
+		"Never replay an attempt merely because the restored copy lacks its proof",
+		"The journal cutover creates a separate stopped-writer backup before schema changes; other installer steps do not supply this complete recovery set",
+		"A copy made after migration cannot replace the pre-upgrade set",
+		"Schema v20 display evidence has no supported reverse recipe",
+		"Schema v19 confirmation evidence has no supported reverse recipe",
+		"Schema v18 Cursor input and proof evidence has no supported reverse recipe",
+		"Schema v17 permission provenance and response claims have no supported reverse recipe",
+		"Schema v16 has no in-place downgrade or replayable file-journal export",
+		"A binary swap or version reset cannot undo these changes",
+		"Schema v15, v14 and v13 are also restore-only",
+		"The v12→v11 family-history recipe applies only to genuine family-only v12 stores; it cannot operate on v13–v20",
+		"Without that set, or while an uncertain attempt remains unreconciled, stop and obtain human help",
 	} {
 		if !strings.Contains(advice, phrase) {
 			t.Fatalf("rollback advice changed; recheck the literal follow: missing %q", phrase)
+		}
+	}
+	// b.x9o: the migration guide's v20 extension prescribes this same
+	// stopped-writer restore, exercised below against the current binary.
+	migration, err := os.ReadFile("../../docs/migration-guide.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phrase := range []string{
+		"**Current recovery policy.** Schemas v20, v19, v18, v17 and v16 are restore-only.",
+		"The v20 display columns and v19 evidence columns have no reverse recipe: restore the stopped-writer pre-upgrade set, losing all later writes, and never drop the columns or reset the version.",
+		"This illustrates the historical pattern, not a recipe for v9 through v20. Never merely reset the version pragma.",
+		"recipe below is only for genuine family-only v12, never v13–v20 or a hand-reset store.",
+	} {
+		if !strings.Contains(strings.Join(strings.Fields(string(migration)), " "), phrase) {
+			t.Fatalf("migration recovery advice changed; recheck the literal follow: missing %q", phrase)
 		}
 	}
 	previous, script := rollbackReleasedPair(t)
@@ -109,9 +148,14 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			preservedQuery := "SELECT launch_token,life_number,row_version,pid,proc_starttime,pane_id,pane_pid,pane_starttime FROM spawns; SELECT * FROM permission_requests; SELECT * FROM session_history; SELECT * FROM store_meta;"
 			preserved := h.Sqlite(db, preservedQuery)
 			h.S, h.Pair = moveFixture(t), moveFixture(t).Current
+			originalFlags := append([]string(nil), h.Flags...)
+			h.authorizeJournalMigration()
 			moveMustInstall(t, h)
 			if v, current := h.migStoreVersion(db), moveCurrentVersion(t, h); v != current {
 				t.Fatalf("upgrade schema = %s; want %s", v, current)
+			}
+			if got := h.Sqlite(db, "SELECT name FROM pragma_table_info('spawns') WHERE name IN ('state_evidence','settled_evidence','process_evidence','display_evidence') ORDER BY name;"); got != "display_evidence\nprocess_evidence\nsettled_evidence\nstate_evidence\n" {
+				t.Fatalf("current upgrade lacks confirmation columns: %q", got)
 			}
 			if got := h.Sqlite(db, "SELECT name FROM pragma_table_info('spawns') WHERE name IN ('codex_startup','claude_capacity') ORDER BY name;"); got != "claude_capacity\ncodex_startup\n" {
 				t.Fatalf("v13 upgrade lacks both provenance columns: %q", got)
@@ -128,13 +172,35 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			postUpgradeCopy := rollbackStoreCopy(t, db)
 			// Stop the post-upgrade writer too; its WAL must not survive restore.
 			h.HoldSQLite(db, "PRAGMA wal_autocheckpoint=0; UPDATE spawns SET cwd='/after', labels='{}' WHERE instance_id='before'; INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent) VALUES ('after','ended','/after','ad-after','off','claude');").Kill()
+			// Preserve the later evidence before either restore. Inspect a separate
+			// copy so SQLite cannot checkpoint or remove its saved WAL/SHM.
+			postUpgradeEvidence := rollbackStoreCopy(t, db)
+			inspection := filepath.Join(t.TempDir(), "state.db")
+			rollbackRestoreStore(t, h, inspection, postUpgradeEvidence)
+			if got := h.Sqlite(inspection, "SELECT instance_id,cwd FROM spawns ORDER BY instance_id; SELECT count(*) FROM input_attempts; SELECT count(*) FROM input_launches;"); got != "after|/after\nbefore|/after\n0\n0\n" {
+				t.Fatalf("preserved evidence must retain later writes and establish no input to reconcile before older runtime use: %q", got)
+			}
 			rollbackRestoreStore(t, h, db, postUpgradeCopy)
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
 				t.Fatalf("copy made after migration replaced the required pre-upgrade backup: %+v", got)
 			}
 			rollbackRestoreStore(t, h, db, backup)
 			h.S, h.Pair = &old, previous
+			h.Flags = originalFlags
 			moveMustInstall(t, h) // previous release's own installer, same flags
+			// b.x9o: restored schedules must use the older binary's recovery verb.
+			// Cadence and environment are operator edits, not installer defaults.
+			restored := filepath.Join(h.New, "bin", "agent-director")
+			if got := h.Run(restored, "find-missing"); got.Code != 0 {
+				t.Fatalf("restored previous release cannot run scheduled recovery: %+v", got)
+			}
+			got := h.Run(restored, "sweep")
+			var refusal struct {
+				ErrName string `json:"err_name"`
+			}
+			if err := json.Unmarshal([]byte(got.Stderr), &refusal); err != nil || got.Code == 0 || refusal.ErrName != "ErrUnknownVerb" {
+				t.Fatalf("restored previous release must refuse sweep as unknown: %+v (decode: %v)", got, err)
+			}
 			if got := h.Run(filepath.Join(h.New, "bin", "agent-director"), "get", "--instance-id", "before"); got.Code != 0 || !strings.Contains(got.Stdout, "original-session") || !strings.Contains(got.Stdout, "/before") {
 				t.Fatalf("restored previous release cannot read original row: %+v", got)
 			}
@@ -185,31 +251,14 @@ func rollbackRestoreStore(t *testing.T, h *moveHome, db string, backup map[strin
 	}
 }
 
-// Build the exact released baseline, rather than stamping today's binary v9.
+// Build the exact released baseline (v0.12.0's commit, schema v9) with the
+// genuine-release fixture, rather than stamping today's binary v9. A missing
+// revision fails the test.
 func rollbackReleasedPair(t *testing.T) (movePair, string) {
 	t.Helper()
-	const revision = "ccb41e075695609b084292f52c36512f3665d210"
-	src := t.TempDir()
-	archive := exec.Command("git", "archive", revision)
-	archive.Dir = "../.."
-	b, err := archive.Output()
+	r, err := releaseBuildOf("ccb41e075695609b084292f52c36512f3665d210")
 	if err != nil {
-		t.Fatalf("archive released baseline: %v", err)
+		t.Fatalf("released baseline: %v", err)
 	}
-	untar := exec.Command("tar", "-x", "-C", src)
-	untar.Stdin = bytes.NewReader(b)
-	if out, err := untar.CombinedOutput(); err != nil {
-		t.Fatalf("extract released baseline: %v: %s", err, out)
-	}
-	pair := movePair{filepath.Join(src, "bin", "agent-director"), filepath.Join(src, "bin", "agent-director-admin")}
-	for _, build := range []struct{ output, pkg string }{{pair.Main, "./cmd/agent-director"}, {pair.Admin, "./cmd/agent-director-admin"}} {
-		flags := "-X " + moveVersPkg + ".Version=0.12.0 -X " + moveVersPkg + ".Commit=" + revision
-		cmd := exec.Command("go", "build", "-ldflags", flags, "-o", build.output, build.pkg)
-		cmd.Dir = src
-		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("build released baseline: %v: %s", err, out)
-		}
-	}
-	return pair, filepath.Join(src, "skills", "install-agent-director", "install.sh")
+	return r.Pair, r.Install
 }

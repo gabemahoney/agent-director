@@ -67,19 +67,21 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[defaults] disable_context_fullness` | `true`, `false` | `false` | Claude launches only; Codex and Cursor ignore it. `true` turns off [experimental context fullness](caller-contract.md#experimental-context-fullness) for the launch, leaving Claude Code's status lines alone; `false` wraps them (see [settings](settings.md#what---settings-carries)). A change takes effect at the next launch (spawn, reuse or resume). |
 | `[relay] poll_base_ms` | ms | 100 | Wait between a relay hook's polls for a decision (never under 50 ms; 0 or negative gives that floor plus jitter). |
 | `[relay] poll_jitter_ms` | ms | 100 | Random time added to each poll wait; 0 or negative adds none. |
-| `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit: the agent ends the hook that long after it starts. A request has this less 3 s to be decided (see [The relay hook's time limit](#the-relay-hooks-time-limit)). |
+| `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit; its decision window is 3 s shorter (see [The relay hook's time limit](#the-relay-hooks-time-limit)). For Cursor, the full value is the decision window from admission, followed by a separate four-second settlement reserve; see [Cursor spawns](permissions.md#cursor-spawns). |
 | `[relay] permission_request_cap` | 0 or more | 1000 | Permission requests kept before the oldest closed ones go; 0 is unbounded, negative gives the default. |
 | `[pause] timeout_seconds` | 1 to 9223372036 | 30 | How long `pause` waits for the agent to exit. |
 | `[pre_trust] lock_wait_seconds` | 1 to 9223372036 | 12 | How long `spawn` and `resume` of a Claude agent wait for Claude Code's lock on `.claude.json`. On timeout the launch goes ahead with `pre_trust` `failed`. Codex pre-trust takes no lock, so a Codex launch never waits and ignores this key. |
 | `[store] db_path` | path | `~/.config/agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores); a relative path is joined onto `~/.config/agent-director`. Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
-| `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | How long a call, or a Cursor gateway storing a tool's proof, waits for a locked store before it fails. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
-| `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new `state` or raw family aggregate must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
+| `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | A call's locked-store wait, and each Cursor tool proof's fixed window from its first persistence attempt. Retries do not renew that window; [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries) define control and exit precedence. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
+| `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. Hold time for a new `state`, raw family aggregate or observed display candidate; it creates no confirmation evidence (see [Settle time](#settle-time-state)). |
 | `[state] needs_intelligence_timeout_seconds` | 1 to 9223372036 | 30 | Nothing: accepted and range-checked, so existing files keep loading (see [Needs-intelligence timeout](#needs-intelligence-timeout-state)). |
-| `[state] idle_screen_timeout_seconds` | 1 to 9223372036 | 1200 | How long a `working` Claude or Codex agent's pane must look the same on every read before `status`, `get` and `list` can show `displayed_state` `idle_screen` (see [Idle-screen timeout](#idle-screen-timeout-state)). |
+| `[state] idle_screen_timeout_seconds` | 1 to 9223372036 | 1200 | Minimum span between matching owned-pane captures for a `working` Claude or Codex row to qualify for `idle_screen`; not a sampling schedule (see [Idle-screen timeout](#idle-screen-timeout-state)). |
 | `[launch] claude_path` | absolute path or `~/` path | unset | The program a `claude` spawn, reuse or resume runs; a `~/` path is joined onto `HOME` at load. Empty or unset runs `claude` from the `PATH` of the agents' tmux server; set it when that `PATH` differs from the caller's. A set path runs as written: no `PATH` lookup and no shell parsing, and agent-director does not check the program. A change takes effect at the next launch (spawn, reuse or resume). Keep it on one line (`claude_path = "<path>"`, or single quotes, no backslash): `install.sh` refuses anything else (see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template)). When it names an executable file, `install.sh` runs it for every Claude Code command it issues. |
 | `[launch] codex_path` | absolute path or `~/` path | unset | The program a `codex` spawn, reuse or resume runs, in the same form and under the same refusals as `claude_path`: empty or unset runs `codex` from the `PATH` of the agents' tmux server, a set path runs as written with no `PATH` lookup and no shell parsing, and a change takes effect at the next launch. One line, as for `claude_path`. When it names an executable file, `install.sh` counts Codex as installed; it never runs it. Codex installed with npm needs the native program here: see [Requirements](install.md#requirements). |
 | `[launch] cursor_path` | absolute path or `~/` path | unset | The Cursor runtime program for a `cursor` spawn, reuse or resume. Empty or unset runs `agent` from the agents' tmux server `PATH`. A `~/` path expands against `HOME` at config load. A set value is one whole executable path, with no shell parsing, `PATH` lookup or fallback, not a command plus arguments. It has the same config-value refusals as the other launch paths; agent-director does not check the executable in advance. The current loaded setting takes effect at the next launch (spawn, reuse or resume); changing it does not overwrite saved cwd, arguments, environment or group configuration. Installer presence discovery does not change this setting. Cursor lifecycle limits are in [Usage](usage.md#fresh-cursor-use). |
 | `[log] error_log_path` | path | `~/.config/agent-director/errors.log` | Where hooks and the CLI append errors (stderr if it cannot be opened); a relative path is joined onto `~/.config/agent-director`. |
+
+`[experimental]` holds internal, unsupported opt-ins; see [experimental.md](experimental.md).
 
 ## Refused values
 
@@ -108,6 +110,11 @@ at once, and at 2 or less the hook gives no answer, so the agent asks in
 its own permission prompt. An agent keeps the value in force when it was
 launched (`spawn` or `resume`).
 
+Cursor keeps launch-time settings for its separate
+[request bounds](permissions.md#cursor-spawns). Admitted requests may poll their
+own decisions and retry their own proofs within those bounds; the hook's
+`poll_*` settings do not control these waits.
+
 ## Waits that keep their time limits
 
 Three waits keep their time limits whatever `busy_timeout_ms` is:
@@ -135,8 +142,9 @@ on CLI, MCP and the Go and TypeScript clients:
   value only once that value has held for T; until then it shows the last
   settled value. Every change of value restarts the wait; a repeat of the
   same state does not. Nothing marks a state as late. `list --state` filters
-  on the settled `state` `list` shows, or on its
-  [`displayed_state`](caller-contract.md#needs-intelligence-and-idle-screen-rows).
+  on stored settled state or display before checking the selected rows;
+  [retained membership](caller-contract.md#bounded-recovery-on-state-reads)
+  can therefore return a refreshed value that no longer matches.
 - **What `family_state` shows.** Apply T once to the
   [raw family aggregate](usage.md#family-state), independently of ordinary
   own-state settling. A retained `idle_screen` display contributes
@@ -155,8 +163,9 @@ on CLI, MCP and the Go and TypeScript clients:
   immediately.
 - **Flaps never show.** A change that comes back within T is never seen: a
   working agent that reads `waiting` for a moment reads `working` throughout.
-- **Own state at once.** `ended` and `missing`, and a state a command sets (`spawn`,
-  `resume`, `find-missing`), show at once. A row that its own agent moves
+- **Own state at once.** `ended` and `missing`, and a state a command or
+  recovery check sets (`spawn`, `resume`, a state read or `sweep`),
+  show at once. A row that its own agent moves
   out of `missing` or `ended` waits like any other change: it reads
   `missing` or `ended` for T, then the new state.
 - **Short turns are invisible.** A settled `waiting` agent that gets a
@@ -171,7 +180,7 @@ on CLI, MCP and the Go and TypeScript clients:
   instead settles through successful observations; T does not bound its
   delay from a raw-state change.
 - **Verbs act on the live state.** `send-keys`, `decide`, `pause`,
-  `resume`, `kill`, `find-missing`, `expire` and `spawn` judge a row's
+  `resume`, `kill`, `sweep`, `expire` and `spawn` judge a row's
   latest state, which can be newer than what `status` shows, so a verb can
   refuse on a state `status` does not show yet; the refusal is a named
   error. Permission requests are never delayed. Ordinary raw-state reporting
@@ -186,6 +195,10 @@ on CLI, MCP and the Go and TypeScript clients:
   change, a reported value can have held for less than the new interval.
   A wall-clock step back delays settling; a jump forward can settle early.
 
+Settling preserves the shown value's [confirmation](caller-contract.md#confirmations).
+It creates neither evidence nor attempt times. A retained display keeps its
+own record until its exit commits; `since` still dates committed display entry.
+
 ## Needs-intelligence timeout (`[state]`)
 
 `[state] needs_intelligence_timeout_seconds` is accepted with whole seconds
@@ -196,10 +209,11 @@ value or one above the maximum is refused (see
 
 ## Idle-screen timeout (`[state]`)
 
-`[state] idle_screen_timeout_seconds` is how long a `working` Claude or
-Codex agent's pane must look the same on every `status`, `get` and `list`
-before they show `displayed_state` `idle_screen` (its `state` stays
-`working`). How panes are sampled is in the
+`[state] idle_screen_timeout_seconds` is the minimum span of matching
+owned-pane captures that qualifies a `working` Claude or Codex row for
+`idle_screen`. Eligible `status`, `get`, `list` and `sweep` checks
+sample it; the timeout schedules no check and confirms nothing by itself.
+Sampling and baseline resets are defined in the
 [caller contract](caller-contract.md#unchanged-panes).
 
 - **Range.** Whole seconds from 1 to 9223372036. A missing key, or 0, reads
@@ -231,12 +245,12 @@ Whole integers, never below the safe minimum.
 |---|---|---|---|---|
 | `starting_session_seconds` | s | 300 | **60** | Until a session is this old, it counts as "still starting, retry later", not a conflict. |
 | `stopping_window_seconds` | s | 90 | **30** | How long after an agent ends it counts as "still stopping, retry later". |
-| `pending_grace_seconds` | s | 60 or more | **30** or more | How long `find-missing` leaves a new launch alone, and how long its SessionStart hook waits for the launch to be recorded (at most 540 s). No maximum. |
+| `pending_grace_seconds` | s | 60 or more | **30** or more | How long shared recovery skips a new launch's live-agent checks (an exact Cursor gateway loss is still judged), and how long its SessionStart hook waits for the launch to be recorded (at most 540 s). No maximum. |
 | `query_timeout_ms` | ms | 1500 | none | Each tmux lookup and pane listing. |
 | `action_timeout_ms` | ms | 2000 | none | Each tmux kill, key send, pane capture and pane terminal read. |
 | `create_timeout_ms` | ms | 5000 | none | The tmux call that creates a session. |
 | `pipe_close_wait_ms` | ms | 100 | none | How long a tmux call waits for its output pipes after its process exits. |
-| `sweep_budget_seconds` | s | 15 | none | Total tmux time per `find-missing` or `expire` run. |
+| `sweep_budget_seconds` | s | 15 | none | Total tmux time per `sweep`, `expire` or shared state-read check invocation; see [bounded recovery](caller-contract.md#bounded-recovery-on-state-reads). |
 | `kill_exit_wait_ms` | ms | 5000 | none | How long `kill` waits for the agent process to exit. |
 
 - **Grace period minimum.** 30 s, or `create_timeout_ms` + `pipe_close_wait_ms`

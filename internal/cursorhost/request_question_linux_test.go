@@ -150,7 +150,7 @@ func TestCursorCompetingDecisionsStayRequestScoped(t *testing.T) {
 			case "timeout":
 				permission.timeout = time.Now().Add(-time.Millisecond)
 			}
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, permission); err != nil {
 				t.Fatal(err)
 			}
 			if err := completedWrite(t, c.protocol); err != nil {
@@ -158,7 +158,7 @@ func TestCursorCompetingDecisionsStayRequestScoped(t *testing.T) {
 			}
 			before := wire.bytes()
 			c.choose(permission.token, "allow-always")
-			c.tick()
+			continuePermission(c, permission)
 			if !bytes.Equal(before, wire.bytes()) || bytes.Count(before, []byte{'\n'}) != 1 {
 				t.Fatalf("request answered more than once: %s", wire.bytes())
 			}
@@ -167,7 +167,7 @@ func TestCursorCompetingDecisionsStayRequestScoped(t *testing.T) {
 				t.Fatal("plan inherited permission decision")
 			}
 			c.choose(plan.token, "reject")
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, plan); err != nil {
 				t.Fatal(err)
 			}
 			if err := completedWrite(t, c.protocol); err != nil {
@@ -204,7 +204,7 @@ func TestCursorConcurrentAPIPaneArbitration(t *testing.T) {
 	}
 	c.choose(r.token, "reject-once")
 	close(start)
-	if err := c.tick(); err != nil {
+	if err := continuePermission(c, r); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
@@ -212,7 +212,7 @@ func TestCursorConcurrentAPIPaneArbitration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.tick(); err != nil {
+	if err := continuePermission(c, r); err != nil {
 		t.Fatal(err)
 	}
 	// A competing transaction may make the final authority check fail closed.
@@ -246,9 +246,9 @@ func TestCursorConcurrentAPIPaneArbitration(t *testing.T) {
 		t.Fatal("response acquired neither durable relay ack nor native claim")
 	}
 	before := wire.bytes()
-	c.tick()
+	continuePermission(c, r)
 	c.choose(r.token, "allow-always")
-	c.tick()
+	continuePermission(c, r)
 	if !bytes.Equal(before, wire.bytes()) {
 		t.Fatalf("competing writers replayed their answer: %s", wire.bytes())
 	}

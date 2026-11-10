@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -115,8 +116,25 @@ func TestCursorCurrentRuntimePublicPaths(t *testing.T) {
 					pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
 					return err == nil && strings.Contains(pane.Pane, ready)
 				}, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
+				path := readRow(t, f.DBPath, id).JSONLPath.(string)
 				caller.must("send-keys", map[string]any{"instance_id": id, "text": "selected runtime effect", "allow_pending": verb == "resume"})
-				waitFor(t, "selected runtime completed prompt", func() bool { return readRow(t, f.DBPath, id).State == store.StateWaiting }, func() string { return fmt.Sprint(second.Frames(t)) })
+				waitFor(t, "selected runtime completed this prompt and reported waiting", func() bool {
+					if readRow(t, f.DBPath, id).State != store.StateWaiting {
+						return false
+					}
+					for _, prompt := range panePrompts(t, second) {
+						if prompt.Text != "selected runtime effect" {
+							continue
+						}
+						for _, record := range paneRecords(t, path) {
+							if record.Kind == "turn_outcome" && record.Data.Request == prompt.Request && record.Session == prompt.Session {
+								pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
+								return err == nil && strings.Contains(pane.Pane, "Cursor turn complete")
+							}
+						}
+					}
+					return false
+				}, func() string { return fmt.Sprint(second.Frames(t)) })
 				if verb == "resume" {
 					after := readRow(t, f.DBPath, id)
 					if after.CWD != before.CWD || after.AgentArgs != before.AgentArgs || after.ExtraEnv != before.ExtraEnv || after.SessionID != before.SessionID || after.LifeNumber != before.LifeNumber {
@@ -203,6 +221,7 @@ func TestCursorBadRuntimeDoesNotFallback(t *testing.T) {
 				}
 				caller.must(call, params) // Launch succeeds; runtime startup is asynchronous.
 				id := params["instance_id"].(string)
+				agePendingLaunch(t, f.DBPath, id, (config.Tmux{}).EffectivePendingGrace())
 				waitFor(t, "failed runtime is process-backed missing", func() bool { row, err := f.API.Get(id); return err == nil && row.State == store.StateMissing }, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
 				if !reflect.DeepEqual(frames, runtime.Frames(t)) {
 					t.Fatal("bad configured runtime fell back to PATH agent")

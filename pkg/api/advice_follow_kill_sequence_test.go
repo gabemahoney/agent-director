@@ -20,15 +20,15 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// advKillPace is the sequence's "about 5 s" between find-missing runs and after step 4's kill.
+// advKillPace is the sequence's "about 5 s" between sweep runs and after step 4's kill.
 const advKillPace = 5 * time.Second
 
 // advKillSteps are the six steps of the live-row sequence, word for word.
 var advKillSteps = []string{
 	"1. kill and check the result; on an error follow its class.",
 	"2. If pending, wait until its launch start (status) plus the pending grace period (60 s unless configured); inside it, wait and check again, never escalate.",
-	"3. Run find-missing, then check status; repeat about 5 s apart until ended or missing, at most three runs.",
-	"4. Still live: kill once more, wait about 5 s, run find-missing once more and check.",
+	"3. Run sweep, then check status; repeat about 5 s apart until ended or missing, at most three runs.",
+	"4. Still live: kill once more, wait about 5 s, run sweep once more and check.",
 	"5. Still live: escalate to a human.",
 	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with reuse_finished (--reuse-finished on the CLI) and the row's agent, which get shows; callers whose ids agent-director mints spawn fresh.",
 }
@@ -132,7 +132,7 @@ func advKillCreateTimedOut(late bool) func(*testing.T, *killEnv, *api.Client) ad
 }
 
 // advKillSeq is one run of the live-row sequence on id through c: what it
-// waited at step 2, the find-missing runs, whether step 4 ran and step 6's branch.
+// waited at step 2, the sweep runs, whether step 4 ran and step 6's branch.
 type advKillSeq struct {
 	e      *killEnv
 	c      *api.Client
@@ -161,11 +161,11 @@ func (s *advKillSeq) finished(t *testing.T) bool {
 	return st == store.StateEnded || st == store.StateMissing
 }
 
-// findMissing runs find-missing once.
-func (s *advKillSeq) findMissing(t *testing.T) {
+// sweep runs sweep once.
+func (s *advKillSeq) sweep(t *testing.T) {
 	t.Helper()
-	if _, err := s.c.FindMissing(context.Background()); err != nil {
-		t.Fatalf("find-missing: %v", err)
+	if _, err := s.c.Sweep(context.Background()); err != nil {
+		t.Fatalf("sweep: %v", err)
 	}
 	s.sweeps++
 }
@@ -202,13 +202,13 @@ func (s *advKillSeq) run(t *testing.T, wantConversation bool, afterFirstKill fun
 		s.e.clock.Advance(d)
 		s.waited += d
 	}
-	// Step 3: at most three find-missing runs about 5 s apart.
+	// Step 3: at most three sweep runs about 5 s apart.
 	done := false
 	for run := 1; run <= 3 && !done; run++ {
 		if run > 1 {
 			s.e.clock.Advance(advKillPace)
 		}
-		s.findMissing(t)
+		s.sweep(t)
 		done = s.finished(t)
 	}
 	if !done {
@@ -216,7 +216,7 @@ func (s *advKillSeq) run(t *testing.T, wantConversation bool, afterFirstKill fun
 		s.step4 = true
 		s.kill(t, "step 4")
 		s.e.clock.Advance(advKillPace)
-		s.findMissing(t)
+		s.sweep(t)
 		if !s.finished(t) {
 			t.Fatalf("step 5: row %s still %s after step 4; the sequence escalates to a human", s.id, s.state(t).State)
 		}
@@ -292,7 +292,7 @@ func TestAdviceFollow_C11_LiveRowSequence(t *testing.T) {
 				limit++
 			}
 			if s.sweeps > limit {
-				t.Errorf("find-missing runs = %d; want at most %d", s.sweeps, limit)
+				t.Errorf("sweep runs = %d; want at most %d", s.sweeps, limit)
 			}
 		})
 	}

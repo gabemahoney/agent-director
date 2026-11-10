@@ -58,14 +58,29 @@ func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error 
 	return r.reportIdentity(event, waiting, "")
 }
 
+func (r *reporter) reportCurrent() error {
+	if r.rotationContext != nil {
+		return r.rotationContext.Err()
+	}
+	return nil
+}
+
 // reportIdentity publishes a rotation through the same direct-parent hook.
 // The binding remains outgoing until the hook transaction has committed.
+// A cancelled rotation still reaches Start refusal and its final bounded SQL
+// reconciliation; cancellation cannot fabricate either publication or rollback.
 func (r *reporter) reportIdentity(event string, waiting func(func() bool), next string, rotationUntil ...time.Time) error {
+	if err := r.reportCurrent(); err != nil && next == "" {
+		return err
+	}
 	if err := VerifyTranscriptPath(r.path); err != nil {
 		return err
 	}
 	terminated := event == "SessionEnd"
 	if err := VerifyRuntime(r.binding, terminated); err != nil {
+		return err
+	}
+	if err := r.reportCurrent(); err != nil && next == "" {
 		return err
 	}
 	row, err := r.store.GetSpawn(r.binding.InstanceID)
@@ -76,7 +91,13 @@ func (r *reporter) reportIdentity(event string, waiting func(func() bool), next 
 		return fmt.Errorf("Cursor launch changed")
 	}
 	beforeVersion := row.Snapshot.RowVersion
+	if err := r.reportCurrent(); err != nil && next == "" {
+		return err
+	}
 	if err = VerifyPane(r.store, row, r.cfg); err != nil {
+		return err
+	}
+	if err := r.reportCurrent(); err != nil && next == "" {
 		return err
 	}
 	if terminated {
@@ -125,6 +146,9 @@ func (r *reporter) reportIdentity(event string, waiting func(func() bool), next 
 	// child runtime can become its immediate parent.
 	cmd := exec.CommandContext(ctx, r.exe, "hook", "--agent", "cursor")
 	cmd.Stdin = bytes.NewReader(raw)
+	if err := ctx.Err(); err != nil && next == "" {
+		return err
+	}
 	if waiting != nil {
 		snapshot := *r
 		waiting(func() bool { return snapshot.verifyReport(event, beforeVersion, true) == nil })
@@ -192,6 +216,9 @@ func (r *reporter) reportIdentity(event string, waiting func(func() bool), next 
 	}
 	if commandErr != nil {
 		return fmt.Errorf("Cursor report failed")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return r.verifyReport(event, beforeVersion, false)
 }

@@ -79,8 +79,11 @@ var errRelayNotApplied = errors.New("store: relay request not applied")
 const relayInsertSQL = `INSERT INTO permission_requests
 	  (instance_id, request_token, tool_name, tool_input,
 	   hook_pid, hook_starttime, hook_pidns, tool_use_id, agent_id, settled_at, main_turn_end_eligible,
-       owner_launch_token, owner_permission_epoch, admitted_at)
-	SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, launch_token, permission_epoch, ` + nowMsSQL + `
+       owner_launch_token, owner_permission_epoch, admitted_at, owner_life_number, owner_session_id,
+       owner_cursor_connection)
+	SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, launch_token, permission_epoch, ` + nowMsSQL + `,
+       life_number, session_id, (SELECT bound_connection_id FROM cursor_runtimes
+         WHERE bound_instance_id = spawns.instance_id AND spawns.agent = 'cursor')
     FROM spawns WHERE instance_id = ?`
 
 // InsertRelayRequest is the relay hook's first write (b.146 rule 1): in ONE
@@ -118,7 +121,7 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 	)
 	// check_permission with its settle columns (b.146's request rows are
 	// never debounced; only the row's reported state settles, b.3ie).
-	stateSet, stateArgs := s.hookWriteStateSet(StateCheckPermission)
+	stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateCheckPermission, EvidenceAgentEvent)
 	q, args := gatedHookUpdate(instanceID, gate,
 		stateSet+`, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, `+launchStartClear+`, `+idleClear,
 		stateArgs, req.TranscriptPath, req.TranscriptPresent)
@@ -194,9 +197,10 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 
 // ackRelayDecisionSQL is AckRelayDecision's one statement.
 const ackRelayDecisionSQL = `UPDATE permission_requests
-	   SET delivered_at = ?
+	   SET delivered_at = ?, response_state = 'relay_claimed'
 	 WHERE instance_id = ? AND request_token = ?
-	   AND decision IS NOT NULL AND delivered_at IS NULL AND pane_answer = 'none'
+	   AND ` + relayVerdictSQL + ` AND delivered_at IS NULL AND pane_answer = 'none'
+	   AND response_state IS NULL AND ` + permissionResponseEligibleSQL + `
 	 RETURNING decision, COALESCE(decision_reason, '')`
 
 // AckRelayDecision is the relay hook's ack (b.146 rule 3): one statement
@@ -214,9 +218,9 @@ const ackRelayDecisionSQL = `UPDATE permission_requests
 // for the lock gets no ack). A non-nil error from it rolls the transaction
 // back, writing nothing, and is returned as it is.
 //
-// A request find-missing's mark closed (closed_at set) is acked like any
-// other: its verdict, or the mark's deny of one that was undecided, still
-// reaches a relay hook whose parent is alive.
+// Closed, proven-gone and obsolete-owner requests cannot be acknowledged,
+// even while the hook's parent lives. Historical/observational verdicts never
+// acquire response authority. The claim is consumed once, before emission.
 //
 // acked is false, with no error, when the statement matched no request
 // (absent, undecided, already acked, or answered at the pane). Only an acked
@@ -226,6 +230,9 @@ func (s *Store) AckRelayDecision(instanceID, requestToken string, at time.Time, 
 	var decision, reason string
 	var acked bool
 	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
+		if err := permissionResponseDurability(ctx, conn); err != nil {
+			return err
+		}
 		if check != nil {
 			if err := check(); err != nil {
 				return err
@@ -249,9 +256,11 @@ func (s *Store) AckRelayDecision(instanceID, requestToken string, at time.Time, 
 
 // denyRelayTimeoutSQL is DenyRelayTimeout's one statement.
 const denyRelayTimeoutSQL = `UPDATE permission_requests
-	   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, delivered_at = ?
+	   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, delivered_at = ?,
+	       decision_origin = 'timeout', response_state = 'relay_claimed'
 	 WHERE instance_id = ? AND request_token = ?
-	   AND decision IS NULL AND pane_answer = 'none'
+	   AND decision IS NULL AND delivered_at IS NULL AND pane_answer = 'none'
+	   AND response_state IS NULL AND ` + permissionResponseEligibleSQL + `
 	 RETURNING request_id, tool_name`
 
 // DenyRelayTimeout is the relay hook's timeout deny (b.146 rule 3): one
@@ -276,6 +285,9 @@ func (s *Store) DenyRelayTimeout(instanceID, requestToken string, at time.Time, 
 		toolName  string
 	)
 	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
+		if err := permissionResponseDurability(ctx, conn); err != nil {
+			return err
+		}
 		if check != nil {
 			if err := check(); err != nil {
 				return err

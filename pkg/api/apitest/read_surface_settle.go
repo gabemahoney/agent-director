@@ -3,9 +3,9 @@ package apitest
 // read_surface_settle.go — the read-surface cases with a settle time (b.3ie):
 // over SeedReadSurfaceStore's store, whose rows are scrambled to read as
 // ReadSurfaceSettled(state), status, get and list must give each case's
-// settle-off golden with only the state changed: no field added or dropped, no
-// state outside the seven, every other value kept, and list's state filter
-// and limit applied to the settled state.
+// settle-off golden with only the state and its state record changed: no
+// field added or dropped, no state outside the seven, every other value kept,
+// and list's state filter and limit applied to the settled state.
 
 import (
 	"encoding/json"
@@ -25,16 +25,18 @@ var SettleOnConfig = fmt.Sprintf("[state]\nsettle_ms = %d\n", config.MaxStateSet
 // CheckSettleOn fails t unless got, case c's output (one JSON document) under
 // SettleOnConfig over SeedReadSurfaceStore's store, is what the settle time
 // makes of the case's golden: status and get give the golden with its state
-// read as its settled state; list gives, in seeding order, the rows of the
-// unfiltered list golden whose settled state matches c's state filter, at
-// most c's limit, each with its state read as settled.
+// read as its settled state, with that value's state record; list gives, in
+// seeding order, the rows of the unfiltered list golden whose settled state
+// matches c's state filter, at most c's limit, each read as settled. got has
+// passed NormalizeReadSurfaceProbes.
 func (cs ReadSurfaceCases) CheckSettleOn(t testing.TB, c ReadSurfaceCase, got string) {
 	t.Helper()
 	gotDoc := parseJSONDoc(t, c.Name+" output", got)
 	var want map[string]any
 	switch c.Verb {
 	case "status", "get":
-		want = settledRow(t, parseJSONDoc(t, c.Name+" golden", cs.Golden(t, c.Name)))
+		id, _ := c.Params["instance_id"].(string)
+		want = settledRow(t, parseJSONDoc(t, c.Name+" golden", cs.Golden(t, c.Name)), id)
 	case "list":
 		want = cs.settledList(t, c)
 	default:
@@ -61,7 +63,7 @@ func (cs ReadSurfaceCases) settledList(t testing.TB, c ReadSurfaceCase) map[stri
 	}
 	rows := []any{}
 	for _, r := range all {
-		row := settledRow(t, r.(map[string]any))
+		row := settledRow(t, r.(map[string]any), "")
 		if len(rows) < limit && (filter == nil || slices.Contains(filter, row["state"].(string))) {
 			rows = append(rows, row)
 		}
@@ -69,9 +71,11 @@ func (cs ReadSurfaceCases) settledList(t testing.TB, c ReadSurfaceCase) map[stri
 	return map[string]any{"spawns": rows}
 }
 
-// settledRow returns a copy of row with its state read as settled
-// (ReadSurfaceSettled), failing t when row has no state among the seven.
-func settledRow(t testing.TB, row map[string]any) map[string]any {
+// settledRow returns a copy of row (row id's, or its own instance_id's when id
+// is "") with its state read as settled (ReadSurfaceSettled) and that value's
+// state record (ReadSurfaceSettledConfirmation), failing t when row has no
+// state among the seven or no confirmations.
+func settledRow(t testing.TB, row map[string]any, id string) map[string]any {
 	t.Helper()
 	state, _ := row["state"].(string)
 	if !slices.Contains(readSurfaceStates, state) {
@@ -82,6 +86,19 @@ func settledRow(t testing.TB, row map[string]any) map[string]any {
 		out[k] = v
 	}
 	out["state"] = ReadSurfaceSettled(state)
+	if id == "" {
+		id, _ = row["instance_id"].(string)
+	}
+	records, ok := row["confirmations"].(map[string]any)
+	if !ok {
+		t.Fatalf("golden row %v: no confirmations", row)
+	}
+	settled := make(map[string]any, len(records))
+	for k, v := range records {
+		settled[k] = v
+	}
+	settled["state"] = ReadSurfaceSettledConfirmation(id)
+	out["confirmations"] = settled
 	family, ok := row["family_state"].(string)
 	if !ok || !slices.Contains([]string{store.StateWorking, store.StateWaiting}, family) {
 		t.Fatalf("invalid golden family_state: %v", row)
@@ -102,6 +119,10 @@ type SettleFilterRow struct{ ID, Raw, Reported string }
 // So list --state waiting --limit 1 with a settle time is sf-settled, which a
 // filter applied after the limit would miss.
 func SeedSettleFilterRows(dbPath string, nowMs int64) ([]SettleFilterRow, error) {
+	live, err := ReadSurfaceProcessOptions()
+	if err != nil {
+		return nil, err
+	}
 	rows := []SettleFilterRow{
 		{"sf-unsettled-1", store.StateWaiting, store.StateWorking},
 		{"sf-unsettled-2", store.StateWaiting, store.StateWorking},
@@ -109,7 +130,7 @@ func SeedSettleFilterRows(dbPath string, nowMs int64) ([]SettleFilterRow, error)
 		{"sf-to-working", store.StateWorking, store.StateWaiting},
 	}
 	for _, r := range rows {
-		var opts []SpawnOption
+		opts := []SpawnOption{WithNoPane(), live[0], live[1]}
 		if r.Reported != r.Raw {
 			opts = append(opts, WithSettle(r.Reported, nowMs))
 		}

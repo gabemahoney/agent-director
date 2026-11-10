@@ -13,7 +13,7 @@ import { ErrListInvalidLabel } from "../../src/index.js";
 
 test("list: happy path — returns seeded spawns array", async () => {
   await withTempHome(async (homeDir) => {
-    runHelper("seed-spawn", { store: homeStore(homeDir), state: "working", id: "smoke-list-id", "create-store": true });
+    runHelper("seed-spawn", { store: homeStore(homeDir), state: "working", "writer-pid": String(process.pid), id: "smoke-list-id", "create-store": true });
     using client = await openClient(homeStore(homeDir));
     const row = (await client.list({})).spawns.find((r) => r.instance_id === "smoke-list-id");
     expect(row?.state).toBe("working");
@@ -34,7 +34,7 @@ test("list: a codex row shows agent codex", async () => {
 test("list: a check_permission row carries its open requests with their delivery facts (b.146 rule 15)", async () => {
   await withTempHome(async (homeDir) => {
     const store = homeStore(homeDir);
-    runHelper("seed-spawn", { store, state: "check_permission", id: "smoke-list-cp-id", "relay-mode": "on", "create-store": true });
+    runHelper("seed-spawn", { store, state: "check_permission", "writer-pid": String(process.pid), id: "smoke-list-cp-id", "relay-mode": "on", "create-store": true });
     const token = runHelper("seed-permission-request", { store, "spawn-id": "smoke-list-cp-id", tool: "Bash" })["request_token"];
     using client = await openClient(store);
     const row = (await client.list({})).spawns.find((r) => r.instance_id === "smoke-list-cp-id");

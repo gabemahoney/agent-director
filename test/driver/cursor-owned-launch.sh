@@ -13,7 +13,7 @@ mkdir -m 700 -p "$HOME/.config/agent-director" "$TMUX_TMPDIR" "$case_dir/cwd" "$
 STORE="$case_dir/override.db"
 id="co-$(node -e 'console.log(require("crypto").randomUUID())')"
 export AD_CURSOR_FIX_SETTINGS
-AD_CURSOR_FIX_SETTINGS=$(jq -cn --arg dir "$case_dir" '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}')
+AD_CURSOR_FIX_SETTINGS=$(jq -cn --arg dir "$case_dir" '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused"),events:($dir+"/events.json")}')
 export AD_CURSOR_FIX_SOURCE="$SOURCE_DIR/internal/testsupport/cursorfix/runtime.js"
 cat > "$case_dir/index.js" <<'RUNTIME'
 #!/bin/sh
@@ -43,7 +43,7 @@ cleanup_cursor_case() {
   if declare -F sql >/dev/null; then
    sql -readonly -json "SELECT state,session_id,pane_pid FROM spawns WHERE instance_id='$id'; SELECT request_token,tool_use_id,decision,settled_at,delivered_at,proven_gone_at FROM permission_requests WHERE instance_id='$id';" >&2 || true
   fi
-  for artifact in scenario trace.jsonl permission.json error pause-error; do
+  for artifact in scenario trace.jsonl raw sent.jsonl commits.jsonl permission.json error pause-error; do
    if [[ -f $case_dir/$artifact ]]; then
     printf 'CASE_ARTIFACT %s\n' "$artifact" >&2
     cat "$case_dir/$artifact" >&2 || true
@@ -61,7 +61,7 @@ trap cleanup_cursor_case EXIT
 ad() { local verb=$1; shift; local selection=(); if [[ $verb == spawn ]]; then selection=(--extra-env "CURSOR_CONFIG_DIR=$CURSOR_CONFIG_DIR" --extra-env "CURSOR_DATA_DIR=$CURSOR_DATA_DIR"); fi; agent-director "$verb" --home "$HOME" --store-path "$STORE" "${selection[@]}" "$@"; }
 sql() { /opt/driver/sql.sh "$STORE" "$@"; }
 row_state() { sql "SELECT state FROM spawns WHERE instance_id='$id';"; }
-wait_state() { local want=$1 deadline=$((SECONDS+15)); while [[ $(row_state) != "$want" ]]; do (( SECONDS < deadline )); sleep 0.05; done; }
+wait_state() { local want=$1 deadline=$((SECONDS+15)); while [[ $(row_state) != "$want" ]]; do (( SECONDS < deadline )) || return 1; sleep 0.05; done; }
 load_identity() {
  gateway=$(sql "SELECT pane_pid FROM spawns WHERE instance_id='$id';")
  pane=$(sql "SELECT pane_id FROM spawns WHERE instance_id='$id';")
@@ -69,11 +69,17 @@ load_identity() {
  session=$(sql "SELECT session_id FROM spawns WHERE instance_id='$id';")
  [[ $gateway =~ ^[0-9]+$ && $runtime =~ ^[0-9]+$ && $pane =~ ^%[0-9]+$ && -n $session ]]
  [[ $(sql "SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='$id' AND s.agent='cursor' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;") == 1 ]]
+ # Compare the captured identities with independent kernel facts before any loss.
+ [[ $(proc_start "$gateway") == "$(sql "SELECT bound_gateway_start FROM cursor_runtimes WHERE bound_instance_id='$id';")" ]]
+ [[ $(proc_start "$runtime") == "$(sql "SELECT bound_runtime_start FROM cursor_runtimes WHERE bound_instance_id='$id';")" ]]
+}
+proc_start() {
+ node -e 'const s=require("fs").readFileSync("/proc/"+process.argv[1]+"/stat","utf8");const f=s.slice(s.lastIndexOf(")")+2).split(" ");if(f[0]==="Z")process.exit(1);console.log(f[19])' "$1"
 }
 proc_gone() {
  node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' "$1"
 }
-wait_gone() { local pid=$1 deadline=$((SECONDS+15)); until proc_gone "$pid"; do (( SECONDS < deadline )); sleep 0.05; done; }
+wait_gone() { local pid=$1 deadline=$((SECONDS+15)); until proc_gone "$pid"; do (( SECONDS < deadline )) || return 1; sleep 0.05; done; }
 spawn_cursor() { ad spawn --agent cursor --instance-id "$id" --cwd "$case_dir/cwd" --no-pre-trust "$@" | jq -e --arg id "$id" '.instance_id==$id and .pre_trust=="skipped"' >/dev/null; }
 frames() { if [[ -f $case_dir/trace.jsonl ]]; then cat "$case_dir/trace.jsonl"; fi; }
 evidence() {
@@ -108,7 +114,7 @@ relay_observe() {
  cat > "$case_dir/observer" <<OBSERVER
 #!/bin/bash
 set -euo pipefail
-/opt/driver/sql.sh -readonly -json '$STORE' 'SELECT request_token,decision,delivered_at FROM permission_requests ORDER BY request_id;' | jq -c 'select(length>0)' >> '$case_dir/commits.jsonl'
+/opt/driver/sql.sh -readonly -json '$STORE' 'SELECT request_token,decision,delivered_at,decision_origin,response_state,proven_gone_at FROM permission_requests ORDER BY request_id;' | jq -c 'select(length>0)' >> '$case_dir/commits.jsonl'
 OBSERVER
  chmod 700 "$case_dir/observer"
 }
@@ -183,7 +189,8 @@ relay_gate_after_ack() {
  cat > "$case_dir/gate-bin/tmux" <<GATE
 #!/bin/bash
 set -euo pipefail
-if [[ -f '$case_dir/gate-armed' ]] && [[ \$(/opt/driver/sql.sh -readonly '$STORE' 'SELECT count(*) FROM permission_requests WHERE delivered_at IS NOT NULL;' 2>/dev/null || echo 0) != 0 ]]; then
+if [[ -f '$case_dir/gate-armed' ]] && { [[ '$gate_check' == native-choice ]] || [[ \$(/opt/driver/sql.sh -readonly '$STORE' 'SELECT count(*) FROM permission_requests WHERE response_state IS NOT NULL;' 2>/dev/null || echo 0) != 0 ]]; }; then
+ if [[ '$gate_check' == native-choice && " \$* " != *' list-panes '* ]]; then exec '$real_tmux' "\$@"; fi
  if [[ '$gate_check' == final ]]; then
   # Each CheckCursorAnswer ends in one list-panes. Allow the worker's
   # initial guard; hold the second guard running under the transport timer.

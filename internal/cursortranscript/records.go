@@ -15,6 +15,11 @@ const (
 	KindInputControl       = "input_control"
 )
 
+// KindInputObserved records accepted input the gateway stopped before durable
+// admission (durable_admission false), followed by its cancellation. It is
+// neither an acceptance nor a refusal, so send-keys passes over it.
+const KindInputObserved = "input_observed"
+
 // TextSHA256 is the hex SHA-256 of a submitted text. A refusal that is the
 // text's first verdict records it as text_sha256, beside the input's
 // consumed_at, so a sender can tell its own refusal from another's, an

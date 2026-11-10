@@ -58,6 +58,11 @@ func TestCursorCleanupRetirementWaitsForCurrentGateway(t *testing.T) {
 	}{
 		{name: "retiring", stderr: "server exited unexpectedly\n", exit: 1},
 		{name: "unknown-process-needs-proof", stderr: "server exited unexpectedly\n", exit: 1, unknown: true},
+		// b.x9o: the server outlives its last session (the full-suite
+		// queued-exit cleanup); still only the death proof ends the wait.
+		{name: "empty-server", stderr: "no current target\n", exit: 1},
+		{name: "empty-server-unknown-process-needs-proof", stderr: "no current target\n", exit: 1, unknown: true},
+		{name: "empty-server-unexpected-output", stdout: "untrusted output\n", stderr: "no current target\n", exit: 1, wantErrors: true},
 		{name: "arbitrary-error", stderr: "permission denied\n", exit: 1, wantErrors: true},
 		{name: "wrong-exit", stderr: "server exited unexpectedly\n", exit: 2, wantErrors: true},
 		{name: "unexpected-output", stdout: "untrusted output\n", stderr: "server exited unexpectedly\n", exit: 1, wantErrors: true},

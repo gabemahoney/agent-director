@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/url"
 	"reflect"
 	"strings"
@@ -53,6 +54,20 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 					t.Fatal(err)
 				}
 				before := cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)
+				if verdict != "dead" {
+					// b.x9o: shared checks preserve pending grace for an alive or
+					// unknown gateway. Advancing the clock alone performs no recovery.
+					grace, err := c.Get(row.InstanceID)
+					if err != nil || grace.State != store.StatePending || !reflect.DeepEqual(before, cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)) {
+						t.Fatalf("pending grace mutated current launch: %+v %v", grace, err)
+					}
+					e.clock.Advance(time.Minute + time.Second)
+					if !reflect.DeepEqual(before, cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)) {
+						t.Fatal("time alone performed recovery")
+					}
+				}
+				// b.x9o (MI Q2A): an exact gateway loss outranks pending grace, so
+				// a dead gateway's first read, inside grace, reports missing.
 				getStarted := time.Now()
 				got, err := c.Get(row.InstanceID)
 				getFinished := time.Now()
@@ -68,6 +83,16 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 				}
 				if got.State != want {
 					t.Fatalf("read current gateway: got %s want %s", got.State, want)
+				}
+				// b.x9o: the projected loss is this read's own still-owned
+				// attempt, its deferred write not yet durable; the Helper's
+				// gateway is never evidence about the runtime process.
+				if r := got.Confirmations.State; verdict == "dead" && (r.Status != store.ConfirmationPending || r.ConfirmedAt != nil ||
+					r.Source != nil || r.CheckedAt == nil || r.Reason == nil || *r.Reason != store.ReasonOperationPending) {
+					t.Fatalf("projected missing state record %s; want pending, operation_pending, no confirmation", conf(got.Confirmations.State))
+				}
+				if got.ProcessLiveness != store.ProcessUnknown || conf(got.Confirmations.ProcessLiveness) != unknownRecord(store.ReasonUnsupported) {
+					t.Fatalf("Cursor process_liveness %s %s; want unknown, unsupported", got.ProcessLiveness, conf(got.Confirmations.ProcessLiveness))
 				}
 				if got.InstanceID != row.InstanceID || got.Agent != store.AgentCursor || got.SessionID != row.SessionID || got.JSONLPath != row.JSONLPath {
 					t.Fatalf("read changed current launch identity: %+v", got)
@@ -97,9 +122,28 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 						if after["spawns"]["family_state"] != store.StateWaiting || after["spawns"]["family_settled_state"] != store.StateWorking || changed < getStarted.UnixMilli() || changed > getFinished.UnixMilli() {
 							t.Fatalf("terminal persistence did not record the family transition independently: %+v", after["spawns"])
 						}
+						// The exact gateway loss is the missing value's state record
+						// (process), for the resumed launch; the read stamps it.
+						var evidence struct {
+							V, Token, Src string
+							Life, Epoch   int64
+							At, Checked   int64
+						}
+						if raw, ok := after["spawns"]["state_evidence"].(string); !ok || json.Unmarshal([]byte(raw), &evidence) != nil ||
+							evidence.V != store.StateMissing || evidence.Src != store.EvidenceProcess || evidence.Life != row.LifeNumber ||
+							evidence.Token != row.Identity.Token || evidence.Epoch != after["spawns"]["permission_epoch"] ||
+							evidence.At < getStarted.UnixMilli() || evidence.At > getFinished.UnixMilli() || evidence.Checked != evidence.At {
+							t.Fatalf("terminal close state record = %v; want missing from process for life %d, launch %s, its epoch, stamped by the read",
+								after["spawns"]["state_evidence"], row.LifeNumber, row.Identity.Token)
+						}
+						// The immediate write's settled value is missing itself, so no
+						// earlier value's settled record survives it.
+						if after["spawns"]["settled_evidence"] != nil {
+							t.Fatalf("terminal close kept settled record %v", after["spawns"]["settled_evidence"])
+						}
 						for column, value := range before["spawns"] {
 							switch column {
-							case "state", "settled_state", "state_changed_ms", "ended_at", "last_seen_at", "liveness_unverified_since", "liveness_note", "launch_started_at", "row_version", "family_state", "family_settled_state", "family_changed_ms":
+							case "state", "settled_state", "state_changed_ms", "ended_at", "last_seen_at", "liveness_unverified_since", "liveness_note", "launch_started_at", "row_version", "family_state", "family_settled_state", "family_changed_ms", "state_evidence", "settled_evidence":
 								continue
 							case "permission_epoch", "observation_version", "display_observation":
 								// Exact invalidation/reset expectations are checked above.
@@ -112,8 +156,19 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 					} else if !reflect.DeepEqual(before, after) {
 						t.Fatalf("best-effort missing projection partially mutated launch/binding/request: before=%+v after=%+v", before, after)
 					}
-				} else if !reflect.DeepEqual(before, after) {
-					t.Fatal("unknown/living gateway changed row")
+				} else {
+					note := "unreported"
+					if verdict == "unknown" {
+						note = "probe_eacces"
+					}
+					current := after["spawns"]
+					if current["liveness_note"] != note || current["liveness_unverified_since"] == nil || current["row_version"] != before["spawns"]["row_version"].(int64)+1 {
+						t.Fatalf("wrong pending note: %+v", current)
+					}
+					before["spawns"]["liveness_note"], before["spawns"]["liveness_unverified_since"], before["spawns"]["row_version"] = note, current["liveness_unverified_since"], current["row_version"]
+					if !reflect.DeepEqual(before, after) {
+						t.Fatalf("pending note changed unrelated row/request/runtime: before=%+v after=%+v", before, after)
+					}
 				}
 			})
 		}

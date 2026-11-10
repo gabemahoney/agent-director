@@ -3,7 +3,7 @@
 Human-only procedures. Automated callers (programs, scripts, agents, MCP
 clients) must not perform them.
 
-`kill-finished` and `delete` are verbs of `agent-director-admin`
+`kill-finished`, `delete`, `migrate-journal` and `snapshot-store` are verbs of `agent-director-admin`
 (`~/.config/agent-director/admin/agent-director-admin`, never on PATH). Run it by that
 full path, only with a human's explicit approval for that run.
 
@@ -120,16 +120,17 @@ does not undo a turn or its effects.
 
 Manual input does not reset native delivery eligibility. To return to
 native ordinary input, use a fresh supported launch with an empty composer;
-`resume` does not provide that contract. Do not delete or edit input journals
-to bypass an unresolved attempt.
+`resume` does not provide that contract. Do not delete or edit stored input
+records or provider evidence to bypass an unresolved attempt. A released lock,
+timeout or uncertain database commit does not prove that input was not delivered.
 
 A manual `send-keys` can also return `ErrSubmissionUnconfirmed`
 with `outcome: "not_started"` when it cannot own the input writer or read or
 save its journal. `pause` returns `ErrInternal` for these failures. That call
 sent nothing. Let any active writer finish, then
-re-issue the call. For a persistent refusal, check access to the private
-[delivery evidence directory](settings.md#ordinary-delivery-launch-settings)
-as the agents' user. Preserve its evidence; never clear it to force input.
+re-issue the call. For a persistent refusal, check access to the configured
+database and private [delivery evidence directory](settings.md#ordinary-delivery-launch-settings)
+as the agents' user. Preserve both; never clear either to force input.
 
 ## A finished row's own old session
 
@@ -164,8 +165,9 @@ launch", "no valid instance id"), naming each session by `$N` ("and N more":
 use step 1). Inspect each session first (steps 1 to 3), then:
 
 1. A leftover or "no valid instance id" session: if not wanted, end it (steps 4
-   and 5); on a `pending` row, first wait until `find-missing` marks it
-   `missing` and check the session still shows the `session_created` you noted.
+   and 5); on a `pending` row, first wait until a recovery check (a state read
+   or `sweep`) marks it `missing` and check the session still shows the
+   `session_created` you noted.
 2. "This id's own abandoned launch": `kill-finished` ends them all (not on a
    `pending` row).
 3. Rerun the refused command; if the error said the row was not restored, only
@@ -260,9 +262,9 @@ returns `ErrTmuxCaptureFailed`, while the agent process runs. A human decides:
    end the pane by id if not wanted. In no pane: recheck its start time, then
    `kill '<pid>'`. Do the same for a survivor.
 4. Run `agent-director kill --instance-id <id>` again, or wait for
-   `find-missing` to mark the row `missing` (a Codex row whose agent reported
-   its end: `ended`), then resume or respawn as the
-   [caller contract](caller-contract.md) says.
+   a recovery check (a state read or `sweep`) to mark the row `missing`
+   (a Codex row whose agent reported its end: `ended`), then resume or respawn
+   as the [caller contract](caller-contract.md) says.
 
 ## A command left running after Esc on a Codex agent
 
@@ -355,11 +357,11 @@ fixes it:
 `send-keys` or `pause` (with "not adopted": the next item). Read the quoted
 session's label (steps 1 and 2), list its panes (step 4b), look (step 3), then:
 
-- Nothing of value runs there: end the session (steps 4 and 5); `find-missing`
-  then marks the row; resume or reuse the id.
+- Nothing of value runs there: end the session (steps 4 and 5); a recovery check
+  (a state read or `sweep`) then marks the row; resume or reuse the id.
 - Another program someone uses runs there: leave it, remove only its claim with
   `tmux -u -S '<socket>' set-option -t '<session id>' -u @ad_owner`, and tell
-  its owner; `find-missing` then settles the row.
+  its owner; a recovery check (a state read or `sweep`) then settles the row.
 - The agent runs in another pane (its `ps` pid matches the row's): leave it;
   only the pane verbs fail, and `agent-director kill` still ends the session.
 
@@ -369,10 +371,12 @@ The row stays `pending` with the agent working and no pane recorded. Read the
 session's label (steps 1 and 2): its second field is the launch token. In its
 panes (step 4b), the agent's `@ad_pane` is `<token> <pane id>`.
 
-- Wanted agent: leave it; `find-missing` adopts its pane after the grace period.
-- No pane carries the token: `find-missing` marks the row `missing` though the
-  agent may still run. End the session with `agent-director kill` while the row
-  is live, by hand once `missing` (steps 4 and 5), then resume or reuse the id.
+- Wanted agent: leave it; a recovery check (a state read or `sweep`) adopts
+  its pane after the grace period.
+- No pane carries the token: a recovery check (a state read or `sweep`) marks
+  the row `missing` though the agent may still run. End the session with
+  `agent-director kill` while the row is live, by hand once `missing`
+  (steps 4 and 5), then resume or reuse the id.
 
 ## A `pending` row with no launch start or token
 
@@ -383,8 +387,9 @@ agent-director process started before it.
 1. Restart any `agent-director` process (`serve` too) from before the upgrade.
 2. Find the agent's session by the row's recorded name (step 1); read its
    environment (step 2b) and look (step 3). Unwanted: end it (steps 4 and 5).
-   Wanted, or someone else's: leave it; `find-missing` marks the row `missing`
-   once nothing of it runs. Then resume or reuse the id.
+   Wanted, or someone else's: leave it; a recovery check (a state read or
+   `sweep`) marks the row `missing` once nothing of it runs. Then resume or
+   reuse the id.
 
 ## Stopping a set of agents before a binary change
 
@@ -406,6 +411,266 @@ binary changes. Never delete a row or edit `state.db`.
    row and no session of the set remains. Stop every `serve`, then change the
    binary, keeping a copy of the previous one.
 
+For a native-input journal upgrade, this set must include every writer that
+can reach the store or its input roots, including untracked callers. Keep
+launchers, hooks, helpers, in-flight commands and all `serve` processes stopped
+through committed verification. Check actual process start times and access;
+stored `ended`/`missing`, a successful finished-row `kill` no-op and absent tmux
+sessions do not prove exit. Follow the maintenance window below.
+
+## Upgrading the native-input journal
+
+This upgrade moves operational input records into SQLite. Every upgrade of an
+existing store below schema v16 crosses it, once; a fresh install or a store at
+schema v16 or later does not. `install.sh` checks the journal flags (step 3) in
+pre-flight, where a refusal changes nothing, and runs the cutover at its store
+step, after the binary swap.
+
+Run it from an independent shell as the agents' user, never as root, with
+explicit operator authorization. The administrator checks actual processes and
+never kills them:
+
+- On Linux it reads `/proc`.
+- On macOS it lists the user's processes with the system `/usr/sbin/lsof` and
+  reads access-control entries with `/bin/ls`, at those paths. Run as root, it
+  refuses with `process_inventory_unreadable`. macOS may ask for consent to read
+  a protected folder: answer it.
+- Any other host refuses with `process_inventory_unsupported`, changing
+  nothing.
+
+**One run at a time.** Start no second `install.sh` or `migrate-journal`
+against the same install until the first has ended. A second run can let old
+binaries run unseen by the first one's checks, and if it commits the cutover,
+a release the first run restored refuses the store with `ErrSchemaMismatch`.
+
+1. Establish and maintain the stopped-writer boundary above. Include the
+   actual configured database and every legacy input root. The invoking
+   `HOME`'s `.config/agent-director/input` and `.agent-director/input` roots are
+   included even with a custom database. Declare every additional root used
+   by another invoking home or installation; do not infer roots from the DB's
+   directory. Prevent privileged or untracked writers from starting too.
+   The check does not look for renamed copies of agent-director, so stopping
+   every caller and `serve` is the guard.
+2. Keep the matching prior release and a stopped-writer copy of the actual
+   DB, its existing `-wal`/`-shm`, and all legacy evidence before upgrading.
+   Preserve provider logs/transcripts outside those roots separately. Do not
+   open the only backup with a newer binary. The journal cutover also creates
+   an exclusive backup before any schema hop; it does not replace copies
+   needed before an old-directory move or config/template rewrite.
+3. Run this release's installer with the original flags plus:
+
+   ```sh
+   bash install.sh --journal-maintenance-window --journal-roots-complete --journal-backup /absolute/new-backup-directory --journal-legacy-root /absolute/additional/input
+   ```
+
+   Omit the last pair when no extra root exists; repeat it for each extra
+   root. The backup directory must not exist and must be outside all input
+   roots. A failed backup stays incomplete: keep it and use a new directory
+   on retry. `COMPLETE` attests to a finished copy. Its `manifest.json` maps
+   `database`, `database-wal`, `database-shm` and numbered `legacy-N` trees to
+   their original paths. Original lock files stay in place and are not copied.
+4. Keep the boundary until the administrator reports `authority: "sqlite"`
+   and the installer verifies the target version. Before commit the legacy
+   records remain authoritative; after commit SQLite remains authoritative
+   even with `retirement_pending: true`. Retained operational files are then
+   evidence, not permission to run an older writer. Logs, transcripts and
+   original launch locks are preserved. Restart only compatible callers.
+
+A refusal's envelope gives its `reason` and `action`, and the process `pid`,
+`starttime` and `role` when available; [Upgrade refusal
+reasons](#upgrade-refusal-reasons) gives each reason's next step. After a
+`committed` or `unknown` outcome, once the installer's re-run has finished any
+pending schema step, keep the boundary and retry administrator verification
+directly:
+
+```sh
+~/.config/agent-director/admin/agent-director-admin --store-path /absolute/actual-state.db migrate-journal --maintenance-window --roots-complete --backup-dir /absolute/new-verification-backup --legacy-root /absolute/additional/input
+```
+
+Use the same invoking `HOME`, actual DB and complete root list as the failed
+run; omit or repeat `--legacy-root` as in step 3. Choose a new exclusive backup
+directory. This retry backup can contain the already-migrated store: retain
+the original pre-upgrade recovery backup separately. Require exit 0 and
+`authority: "sqlite"`; an authority field on an error is not successful
+verification. An already-current store needs no new sentinel. Rerunning the
+installer on it uses ordinary `list` and does not replace this administrator
+verification. If the schema transition is still pending, step 3 supplies its
+authorization.
+
+A failed cutover ends `install.sh` with exit 5. Its last stderr line names the
+cause (`install.sh: err_name=<Name>`), and the JSON envelope above it carries
+`details.cutover`, which says whether the cutover committed. Linux and macOS
+give the same outcomes:
+
+| Cause line | `details.cutover` | Installed afterwards | Next |
+|---|---|---|---|
+| `ErrJournalMigrationRefused` | `not_committed` | As before the run | [Refused](#installsh-refuses-with-errjournalmigrationrefused) |
+| `ErrSchemaVerifyFailed`, after `the restore could not finish`, with `details.copies` | `not_committed` | Partly restored | [Putting back a kept install](#putting-back-a-kept-install) |
+| `ErrJournalMigrationIncomplete` | `not_committed` | This release | [Stopped](#installsh-stops-with-errjournalmigrationincomplete) |
+| `ErrJournalMigrationIncomplete` | `committed`, `unknown` or unreadable | This release | [Stopped](#installsh-stops-with-errjournalmigrationincomplete) |
+
+A cutover that committed, or may have, switched authority: never reset the
+version or reconstruct replayable journals. Recovery is
+[restore-only](#going-back-to-the-previous-release).
+
+Installer preflight reads a private consistent database/WAL snapshot through
+the candidate administrator; it leaves the original DB, sidecars and directory
+unchanged on a live/unreadable refusal. Candidate platform, architecture and
+version checks precede the first database query. Busy or hot-journal snapshot
+refusals need their cause resolved before retry. The operator-only
+[`snapshot-store` reference](admin-reference.md#snapshot-store) describes the
+private destination; it is not a recovery backup or migration authorization.
+
+### Upgrade refusal reasons
+
+Each reason is `details.refusal.reason` in the envelope, and its action is
+`details.refusal.action`; the installer's message repeats both as `reason:` and
+`action:` lines. Actions name `migrate-journal`'s flag with `install.sh`'s
+spelling beside it.
+
+**Retry**, below, is how most actions end: re-run this release's installer with
+a new `--journal-backup` directory, which finishes any pending schema step, then
+run the [direct verification retry](#upgrading-the-native-input-journal) with a
+new `--backup-dir` until it exits 0 with `authority: "sqlite"`. Each new backup
+directory must be absolute, must not exist yet, and must lie outside every
+legacy input root and AD's old and new directories. A pre-flight refusal makes
+no backup, so its `--journal-backup` directory can be given again.
+
+**Store changed** is "no" for a reason only reached before the backup. "Envelope"
+means `details.cutover` says: `not_committed` with `details.steps_committed`
+`false` leaves the store unchanged, `true` means earlier schema steps raised its
+version, `committed` means the cutover committed, and `unknown` means it may
+have.
+
+The flag checks, which pre-flight's `--check-only` and `migrate-journal` make
+first:
+
+| Reason | Means | Store changed | Next step |
+|---|---|---|---|
+| `maintenance_boundary_required` | `--journal-maintenance-window` was not given. | No | Establish the maintenance window (steps 1 and 2 above), then pass it. |
+| `legacy_roots_not_established` | `--journal-roots-complete` was not given. | No | Declare every additional root with `--journal-legacy-root`, then pass `--journal-roots-complete`. |
+| `invoking_home_unavailable` | `HOME` is not an absolute home directory. | No | Run with `HOME` set to the invoking user's absolute home directory. |
+| `legacy_root_not_absolute` | A `--journal-legacy-root` is relative. | No | Give every root as an absolute path. |
+| `legacy_root_not_clean` | A `--journal-legacy-root` is not in clean form. | No | Give every root with no trailing `/`, no repeated `/` and no `.` or `..` element. |
+| `absolute_backup_required` | `--journal-backup` is missing or relative. | No | Pass a new absolute directory outside every legacy input root. |
+| `backup_inside_legacy_root` | `--journal-backup` lies inside a legacy input root. | No | Choose one outside every legacy input root. |
+| `backup_exists` | `--journal-backup` already exists. | No | Keep it (it may be an earlier attempt's backup) and choose one that does not exist yet. |
+| `backup_unreadable` | A parent of `--journal-backup` is missing or cannot be searched. | No | Choose one whose parent directories exist and can be searched. |
+
+The process and root checks, which `migrate-journal` makes before its lock,
+inside the cutover step and after its commit:
+
+| Reason | Means | Store changed | Next step |
+|---|---|---|---|
+| `legacy_root_unreadable` | A legacy root, or a directory above it, cannot be read or searched. | Envelope | Make each root and its parents readable and searchable by the user running the upgrade, keep the window, then Retry. |
+| `legacy_root_symlink` | `migrate-journal`: the store path, `HOME` or a legacy root has a link in it. `install.sh`, in pre-flight: `~/.config/agent-director` is a link. | Envelope; `install.sh`'s: no | `migrate-journal`'s: make them real paths, keep the window, then Retry. `install.sh`'s: replace the link with the directory it points to (below), then re-run this release's installer with a new `--journal-backup` directory. |
+| `legacy_root_access_unestablished` | The store or a legacy root is not owned by and private to the user, or carries an access-control entry, or its entries cannot be read. | Envelope | Make the store and every legacy root owned by the user running the upgrade (a repair by hand, path by path, not a recursive `chown`), then private to it: `chmod 0600` the store, `chmod 0700` each root, remove any access-control entry (`chmod -N <path>`). Keep the window, then Retry. |
+| `process_inventory_unreadable` | The process inventory as a whole could not be read (on macOS, see below). | Envelope | Run as the agents' user with every mounted file system reachable or unmounted (on Linux, with `/proc` mounted and readable), keep the window, then Retry; report it if it persists. |
+| `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | Envelope | Make every mounted file system reachable or unmount it, or answer any privacy consent prompt; keep the maintenance window, then Retry. |
+| `old_or_unverified_mutators` | Listed processes may still write (roles below). | Envelope | Stop each listed `agent_director_mutator` (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified. Keep the maintenance window, then Retry. |
+| `process_inventory_unsupported` | The host is neither Linux x86_64 nor macOS arm64. | No | Run the upgrade on a supported host. |
+
+The store's causes:
+
+| Reason | Means | Store changed | Next step |
+|---|---|---|---|
+| `migration_lock_held` | Another administrator's `migrate-journal` holds `<store>.input-migration.lock`. | Envelope | Let that run finish, then Retry. |
+| `migration_lock_unestablished` | The lock file exists, but whether a process holds it cannot be checked. | Envelope | Only once no administrator runs (check 1 of [Putting back a kept install](#putting-back-a-kept-install)), `rm -- '<store>.input-migration.lock'`, then Retry. On a read-only file system the `rm` fails: make it writable first. |
+| `authorization_missing` | No migration authorization for the store's version. | No | Retry: the installer writes it. |
+| `store_version_unreadable` | The store's version could not be read from a private copy. | No | Stop every process that holds the store open, make it a readable SQLite database, leave room in `TMPDIR` for a copy of it, then Retry. |
+| `store_newer_than_release` | A newer release made the store. | No | Install that release or a later one. |
+| `backup_failed` | The journal backup could not be made; it stays incomplete. | No | Keep it. Make the store and everything under the legacy roots readable regular files and directories, choose a new backup directory with room for their copy, then Retry. |
+| `store_open_failed` | The store could not be opened. | Envelope | Point `[store] db_path` at the existing store, in a directory the user can write, and make it a readable and writable SQLite database owned by that user. If it already is one, its metadata is damaged: inspect it or restore its pre-upgrade copy. Then Retry. |
+| `store_busy` | Another process holds the store. | Envelope | Stop every process that holds it open, keep the window, then Retry. |
+| `schema_step_failed` | A schema step failed. | Envelope | Fix its cause (disk space, write access, a schema changed by hand), keep the window, then Retry. |
+| `legacy_writer_active` | An old agent-director process holds a legacy launch lock. | Envelope | Stop it, keep the window, then Retry. |
+| `legacy_evidence_unestablished` | Launch evidence under a legacy root cannot be read or written, or is not this store's, or the store records one launch token twice. | Envelope | Make the evidence readable and writable by the user and remove what is not this store's; for a token recorded twice, inspect the store or restore its pre-upgrade copy. Keep the window, then Retry. |
+| `native_input_state_inconsistent` | The store's native-input state was changed by hand. | Envelope | Inspect the store or restore its pre-upgrade copy, keep the window, then Retry. |
+| `attempt_deadline` | The attempt passed its time limit. | Envelope | Make it finish in time (a less busy disk for the store and the backup), keep the window, then Retry. |
+| `migration_incomplete_or_commit_unknown` | The attempt did not finish: either it could not confirm whether its cutover committed (`details.cutover` `unknown`), or the cutover committed and the rest of the schema chain did not (`committed`). | Envelope | Keep the window, then Retry. |
+| `committed_verification_incomplete` | The cutover committed; the check after it did not pass. | Yes | Keep the window, stop any listed process, then run the direct verification retry with a new `--backup-dir` until it exits 0 with `authority: "sqlite"`. |
+
+The installer's own reasons, and the one both tools write:
+
+| Reason | Means | Store changed | Next step |
+|---|---|---|---|
+| `cutover_state_unreadable` | A store at schema v16 or later whose `store_meta` table cannot be read. | No | [A store at schema v16 or later that the upgrade cannot read](#a-store-at-schema-v16-or-later-that-the-upgrade-cannot-read). |
+| `native_input_authority_missing` | A store at schema v16 or later with no native-input authority recorded. | No | The same. |
+| `agents_live` | With no move due, the store holds rows in a live state (`pending`, `waiting`, `working`, `check_permission`, `ask_user`). The message lists each row's state and instance id, with the command that stops its agent. | No | Stop each listed agent with the command under it, clear the row of an agent you have established is gone with `find-missing` (as the agents' user), then re-run the same install command from a shell agent-director did not start ([the commands](#installsh-refuses-with-errjournalmigrationrefused)). |
+| `agent_rows_unreadable` | With no move due, the store's agent rows could not be read, so pre-flight cannot tell whether an agent is live. The message gives sqlite3's error. | No | Re-run the same install command once the store is no longer busy. If the rows still cannot be read, inspect the store with that error. |
+| `check_only_unestablished` | `--check-only` gave neither `{}` with exit 0 nor an envelope. | No | Install this release's `agent-director-admin` with this release's `agent-director` (`--admin-binary`, or both from one checkout or release), then re-run; report it if it persists. |
+| `backup_inside_install_directory` | With a move due, `--journal-backup` lies inside `~/.agent-director` or `~/.config/agent-director`, or its place there cannot be judged. | No | Choose a directory outside both, then re-run. When the message says `To fix: repair the path …`, first repair that directory's path: rename aside any part of it that is not a directory, make each part one the user can enter, break any link loop, and make its file identity readable. |
+| `previous_release_unknown` | The previous install's `agent-director-admin` answered `migrate-journal --help` with neither exit 0 nor exit 1 with `ErrUnknownVerb`. The message names it, and its output. | No | Make it runnable, or remove it if it is not that release's, then re-run with the same flags. |
+| `restore_copies_unavailable` | The copies a restore needs could not be made (the message's `item`, `copy` and `cause` lines). | No | Make room or write access beside the installed binaries, the store and the managed PATH link; if the sentinel beside the store is not a regular file, or an installed binary or the managed PATH entry is neither a link nor a regular file, remove that entry; then re-run with the same flags. Remove each `not removed:` copy the message names, by that name. |
+| `outcome_unestablished` | `migrate-journal` exited with no envelope. | Envelope (`unknown`) | [`install.sh` stops with `ErrJournalMigrationIncomplete`](#installsh-stops-with-errjournalmigrationincomplete). |
+| `restore_incomplete` | The restore could not finish, and no `migrate-journal` envelope was relayed. When one was, the unfinished restore keeps that envelope's own reason and action. | No | [Putting back a kept install](#putting-back-a-kept-install). |
+| An `err_name` | `migrate-journal` or `--check-only` ended with that error and no refusal: `ErrInvalidFlags`, `ErrConfigMalformed` or `ErrStoreOpen`. | Envelope | Fix what its `err_description` names (`config.toml` for `ErrConfigMalformed`, the store's path and permissions for `ErrStoreOpen`), then follow the cause line's section. |
+| `interrupted` | INT, TERM or HUP stopped the run. | Envelope; before `migrate-journal` started, no; during a run that then committed, yes | `migrate-journal`, before its cutover commit: `the attempt was interrupted before its cutover commit; keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority "sqlite"` (Retry). `install.sh`, before `migrate-journal` started: `re-run this release's installer with a new --journal-backup directory, and let it finish`. `install.sh`, during a `migrate-journal` run that then committed: `re-run this release's installer with a new --journal-backup directory, which finishes the install, then run the administrator's verification retry until it exits 0 with authority sqlite`; the hook, MCP and schedule steps have not run, and the re-run does them. |
+
+Once `migrate-journal` has failed, the installer ignores further interrupts
+until it has settled the outcome. When it can detect one, the message says it
+arrived and was ignored; an ignored INT or HUP leaves no note.
+
+To replace a linked `~/.config/agent-director` with the directory it points to:
+
+```sh
+target=$(cd -P ~/.config/agent-director && pwd -P)
+rm -- ~/.config/agent-director
+mv -- "$target" ~/.config/agent-director
+```
+
+**Roles.** On both hosts, `agent_director_mutator`
+(`stop_and_restart_after_cutover`) is the only role: readable evidence shows
+that the program's file name contains `agent-director` or the process holds
+the store or a file under a legacy root. Any other process needs no action,
+including one the check cannot fully inspect, such as a non-dumpable Linux
+process or an incomplete macOS open-file entry.
+
+**On macOS:**
+
+- An access-control entry on the database or a legacy root: remove it, for
+  example `chmod -N <path>`, then Retry.
+- `process_inventory_unreadable`: for a mounted file system `lsof` cannot
+  reach, make it reachable or unmount it; for a run as root, run as the agents'
+  user; for a failed process selection or listing, or a process missing from
+  the selection, Retry with a new backup directory, and report it if it
+  persists.
+- `inventory_deadline`: make every mount reachable or unmount it, or answer
+  any consent prompt, then Retry.
+
+### A store at schema v16 or later that the upgrade cannot read
+
+`install.sh` refused in pre-flight and changed nothing:
+`cutover_state_unreadable` means the store's `store_meta` table cannot be read,
+and `native_input_authority_missing` means it records no native-input
+authority, which only a hand edit leaves. Keep writers stopped and read the
+authority from a private copy, with `store` set to the message's `state.db`
+path (Apple's sqlite3 cannot open the copy read-only, so it is opened
+read-write):
+
+```sh
+store='<state.db path>'
+d=$(mktemp -d)
+if [ -n "$d" ] && cp -p -- "$store" "$d/state.db" &&
+  { [ ! -e "$store-wal" ] || cp -p -- "$store-wal" "$d/state.db-wal"; }
+then
+  sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+  rc=$?
+else
+  echo 'private copy failed: nothing was read' >&2
+  rc=1
+fi
+rm -rf -- "$d"
+[ "$rc" = 0 ]
+```
+
+The `rm -rf` removes only the private copy. `private copy failed` means
+nothing was read: fix the failure and read again, or get help. A `sqlite-v1:`
+value means the authority is recorded: re-run the install. Anything else
+(nothing, or an error): restore the stopped-writer pre-upgrade copy of the
+store as [Going back to the previous release](#going-back-to-the-previous-release)
+describes, or get help. Never write `store_meta` by hand.
+
 ## agent-director was installed outside the caller's switch-over
 
 Pre-upgrade agents may still run, and the caller's old version cannot use the
@@ -415,7 +680,7 @@ migrated store. Stop the caller and whatever starts agents (step 1 of
 **Forward** (preferred; keeps every write since the upgrade):
 
 1. Identify the live pre-upgrade agents from the set the caller was running
-   and end each by hand, then run `agent-director find-missing`. Missing
+   and end each by hand, then run `agent-director sweep`. Missing
    `tmux_socket` and `launch_started_at` identify older rows without spawn
    identity; handle those as "A `pending` row with no launch start or token"
    says. Schema 9→10→11 preserves existing identity fields, so populated
@@ -482,8 +747,8 @@ The `advice` in the second record follows the row's agent. Fix it per
 
 A Codex agent reports in at its first prompt, not at its start, so a fresh
 Codex row is `pending` until then; this is not a fault. These causes leave a row
-`pending` past the pending grace period, noted `unreported` by `find-missing`
-(the agent runs but no hook reported), or `missing` (the agent's process is
+`pending` past the pending grace period, noted `unreported` (the agent runs
+but no hook reported), or `missing` (the agent's process is
 gone). The `pid_mismatch` cause has its own item above. Look at the pane
 first, read-only, as step 3 of "Inspect and end a session by hand" does: Codex
 usually says what it refuses. Whatever the cause, end and relaunch each
@@ -559,8 +824,8 @@ against a folder you accept that in.
 
 `ErrTmuxNotAvailable` ("not the tmux server the agent was launched on"), or
 the `liveness_note` `tmux_server_changed`: the recorded socket now reaches
-another server. Find the old server's process and decide; `find-missing`
-settles the row once it is gone.
+another server. Find the old server's process and decide; a recovery check
+(a state read or `sweep`) settles the row once it is gone.
 
 ## A stray `@ad_owner` value or a duplicate label
 
@@ -830,21 +1095,147 @@ Then either:
 2. Or take the way back to the previous release:
    [Going back to the previous release](#going-back-to-the-previous-release).
 
+## `install.sh` refuses with `ErrJournalMigrationRefused`
+
+`install.sh` (exit 5, `err_name=ErrJournalMigrationRefused`) stopped a
+crossing upgrade with the install as it was before the run. Either pre-flight
+refused, before any change (the message says `Nothing was installed or
+changed.`), or `migrate-journal` refused its attempt before changing the
+previous install's store and the installer put the previous install back (`the
+previous install was put back as it was before the run.`). The binaries, the migration sentinel and the
+managed PATH link are as before the run. After an old-layout move, the old
+directory is back, and this run's `~/.config/agent-director` was set aside as
+`~/.config/agent-director.after-upgrade-<YYYYmmdd-HHMMSS>` (`-2`, `-3` and so on
+when that name is taken), or emptied when it is a link; a `move    : undone:`
+line on stderr says which. The previous install's store was not changed. After
+a move, the set-aside directory's store, the one the attempt ran on, may hold
+earlier schema steps it committed; the previous release never reads it, and
+putting the install back reverted no database.
+
+The envelope above the cause line gives the reason and action, which the
+message repeats. Check which release is installed:
+
+```sh
+agent-director version
+```
+
+Then:
+
+1. Fix the cause from [Upgrade refusal reasons](#upgrade-refusal-reasons),
+   keeping the maintenance boundary.
+2. Re-run this release's installer with a new `--journal-backup` directory.
+   The message prints the command, with `<new-backup-directory>` to replace
+   (a piped install says to run the same install command again). The re-run
+   moves the old directory again; delete a set-aside directory once the
+   upgrade is confirmed.
+
+**Live agents** (`agents_live`, with no move due). The message lists each
+row in a live state, and under it the command that stops its agent, run with
+the installed binary, which is still the previous release's:
+
+```sh
+~/.config/agent-director/bin/agent-director pause --instance-id <id>  # a waiting row
+~/.config/agent-director/bin/agent-director kill --instance-id <id>   # any other live row
+```
+
+Stop whatever starts agents (a scheduler, a loop, a caller) first. A row
+whose agent you have established is gone stays live until
+`~/.config/agent-director/bin/agent-director find-missing` clears it; run it
+as the agents' user, in their tmux environment. A `missing` row does not
+prove the agent stopped: a run as another user or against another tmux server
+can mark a running agent missing
+([Scheduling the sweeps](maintenance.md#scheduling-the-sweeps)). Then re-run
+the same install command from a shell agent-director did not start:
+pre-flight made nothing, so the same `--journal-backup` directory can be given
+again.
+
+## `install.sh` stops with `ErrJournalMigrationIncomplete`
+
+`install.sh` (exit 5, `err_name=ErrJournalMigrationIncomplete`) did not finish
+the install successfully and left this release installed; the cutover may still
+have committed. `details.cutover` and the
+message say which case it is, and the message gives the reason and action.
+
+- **`not_committed`, not restored** (`the cutover did not commit; this release
+  stays installed.`). The message says why the installer did not restore:
+  earlier schema steps committed, the store's version changed during the
+  attempt, or the release installed before the run does not predate the
+  cutover. Fix the cause from [Upgrade refusal
+  reasons](#upgrade-refusal-reasons), then re-run this release's installer
+  with a new `--journal-backup` directory; the message prints the command.
+- **`committed`, `unknown` or unreadable** (`the cutover attempt did not finish
+  successfully; this release stays installed.`). The cutover committed, or may
+  have, and the previous release cannot open the store. Fix the reported cause;
+  for `migration_lock_held`, let the other administrator's run end. Re-run this
+  release's installer with a new `--journal-backup` directory, which finishes
+  any pending schema step, then run the [direct verification
+  retry](#upgrading-the-native-input-journal) until it exits 0 with
+  `authority: "sqlite"`. The message prints both commands, with
+  `<new-backup-directory>` and `<new-verification-backup-directory>` to
+  replace.
+- **`outcome_unestablished`** (`the installer could not establish how the
+  attempt ended`). `migrate-journal` exited with no envelope, so
+  `details.cutover` is `unknown`. The installer kept its copies: the message
+  lists each as `kept copy: <copy> -> <where it belongs>`, and `details.copies`
+  holds them. Complete forward as for `unknown`, or put them back after the
+  checks in [Putting back a kept install](#putting-back-a-kept-install).
+- **Interrupted** (reason `interrupted`): see its row in [Upgrade refusal
+  reasons](#upgrade-refusal-reasons).
+
+**The store moved past the previous release.** An attempt on a store at schema
+v14 or earlier, in place or outside the moved directory (`[store] db_path`, or
+a store reached through a link inside it), runs earlier schema steps, each
+committing on its own, before the cutover. When it ends before its cutover
+commit, `details.cutover` is `not_committed` and `details.steps_committed`
+`true`: the version was raised, so the previous release cannot open the store
+and this release stays. The message says the installer cannot put the previous
+release back and gives both ways on: the re-run command, which completes
+forward, or the way back.
+
+The way back restores the store from the journal backup directory the message
+names, which `migrate-journal` filled before any schema step. Keep writers
+stopped. `COMPLETE` must exist, and `manifest.json`'s `Database` names the
+store; `database`, `database-wal` and `database-shm` are its copies:
+
+```sh
+backup='<journal backup directory>'
+ls -- "$backup/COMPLETE"
+db=$(jq -r .Database "$backup/manifest.json")
+rm -f -- "$db-wal" "$db-shm"
+cp -p -- "$backup/database" "$db"
+if [ -e "$backup/database-wal" ]; then cp -p -- "$backup/database-wal" "$db-wal"; fi
+if [ -e "$backup/database-shm" ]; then cp -p -- "$backup/database-shm" "$db-shm"; fi
+```
+
+The legacy input roots are unchanged, because no cutover committed; the
+backup's `legacy-<k>/` holds the copy of `manifest.json`'s `Roots[k]`. Then
+install the previous release as [Going back to the previous
+release](#going-back-to-the-previous-release) describes; after an old-layout
+move, follow its numbered steps, where this restore takes the place of step 4.
+Restoring loses every write made after the backup, which the maintenance
+boundary prevents; reconcile uncertain attempts before an older runtime
+resumes.
+
 ## `install.sh` warns that nothing schedules the sweeps
 
 `install.sh` ended with `install.sh: WARNING: nothing schedules agent-director's
-find-missing and expire sweeps on this machine.` It comes after `install.sh:
+sweep and expire jobs on this machine.` (`find-missing` replaces `sweep` when
+the target binary's help does not advertise it.) It comes after `install.sh:
 done`; when the MCP registration failed (exit 6), it comes just before the last
 line, `install.sh: installed, but the MCP registration failed`. The exit status
-is unchanged and nothing is broken, but until `find-missing` runs, a row whose
-agent was killed, crashed or lost in a reboot stays live, and until `expire`
-runs, finished rows are never deleted.
+is unchanged. Absent or failed checks leave observations old; reads also
+perform the shared checks on supporting versions. `expire` separately removes
+eligible finished rows. See [Maintenance](maintenance.md#scheduling-the-sweeps)
+for cadence and evidence limits.
 
 Without `--schedule`, the warning means this install's own entries for both
 sweeps are not there: no tagged cron lines for both with a cron daemon running,
 and not all four units. With `--schedule`, it adds a line, `--schedule was asked
 for and installed nothing:` (or `could not schedule the sweeps:` when it put the
 cron lines in anyway), that gives the reason.
+
+Copy the rendered cron lines from the warning. For manual units, follow
+[Schedule them by hand](maintenance.md#schedule-them-by-hand).
 
 The warning, with or without `--schedule`, also prints the exact command to run
 again: `cd <the directory the install ran in> && bash <script> <the original
@@ -916,25 +1307,226 @@ reason other than "no crontab", it says so and leaves the crontab alone: remove
 the lines tagged `agent-director-schedule` with `crontab -e`. It does the same
 when it cannot write the crontab back.
 
+## Putting back a kept install
+
+This puts the previous release back from the copies a crossing upgrade kept:
+after a restore that could not finish (`ErrSchemaVerifyFailed`, the message
+`the restore could not finish; the install is partly restored`, and
+`details.copies`, whatever the reason: a relayed `migrate-journal` refusal
+keeps its own, and `restore_incomplete` is the reason only when nothing was
+relayed), after `ErrJournalMigrationIncomplete` with reason
+`outcome_unestablished`, or from the copies a killed run left. After an
+unfinished automatic restore, the previous install's store is unchanged, and so
+is an original store kept inside a pre-move directory. After an
+`outcome_unestablished` or killed run, the store may have changed: the checks
+below decide whether a put-back is possible. Putting binaries or directories
+back rolls back no step committed in the store the attempt ran on
+(`details.attempt_store`). If any check
+below fails, put nothing back and complete forward as "[`install.sh` stops with
+`ErrJournalMigrationIncomplete`](#installsh-stops-with-errjournalmigrationincomplete)"
+says.
+
+**The copies.** Each is named `<path>.restore-<YYYYmmdd-HHMMSS>.<suffix>`,
+beside the `<path>` it copies, with its mode: the two installed binaries, the
+migration sentinel beside the store, and the managed PATH link. The link's copy
+is a directory of that name holding the copied link, `agent-director`, in the
+`--symlink-dir` directory. That is outside the install directory, so
+`uninstall.sh --purge` does not remove it. When the upgrade moves the old
+directory, nothing inside the old or new directory is copied: the pre-move
+directory, `~/.agent-director.pre-move-<YYYYmmdd-HHMMSS>`, is the copy.
+
+The envelope lists what was kept in `details.copies`, one `{"copy": "<path>",
+"belongs_at": "<path>"}` entry each (a link's entry names the link inside its
+directory); what the restore could not remove in `details.remove`; and the
+store the attempt ran on in `details.attempt_store`. The message prints them as
+`kept copy: <copy> -> <belongs_at>`, `still to remove: <path>` and `set aside:
+<path>` lines. A killed run reports nothing: its copies share one timestamp,
+each belongs at its own name without `.restore-<YYYYmmdd-HHMMSS>.<suffix>` (a
+link's, at its directory's place), and the store is the configured one. Use
+one run's copies only. Remove copies you do not put back one by one, by name,
+once the upgrade is settled; never by a wildcard.
+
+**The checks**, in this order, on `details.attempt_store`:
+
+1. No administrator holds the migration lock: no `agent-director-admin` process
+   runs, so this prints nothing.
+
+   ```sh
+   ps -A -o pid= -o args= | grep '[a]gent-director-admin'
+   ```
+
+2. The store has no native-input authority. Read it from a private copy
+   (Apple's sqlite3 cannot open the copy read-only, so it is opened
+   read-write):
+
+   ```sh
+   store='<details.attempt_store>'
+   d=$(mktemp -d)
+   if [ -n "$d" ] && cp -p -- "$store" "$d/state.db" &&
+     { [ ! -e "$store-wal" ] || cp -p -- "$store-wal" "$d/state.db-wal"; }
+   then
+     sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+     rc=$?
+   else
+     echo 'private copy failed: nothing was read' >&2
+     rc=1
+   fi
+   rm -rf -- "$d"
+   [ "$rc" = 0 ]
+   ```
+
+   The query runs only on a full copy: the database and, when there is one,
+   its `-wal`. Only two results mean no authority: exit 0 with nothing
+   printed, or exit 1 with sqlite3's error naming `no such table: store_meta`
+   as the only output. A `sqlite-v1:` value means the cutover committed:
+   complete forward. Anything else, `private copy failed` included, leaves the
+   outcome unknown: put nothing back, and complete forward or fix the failure
+   and run the checks again. The `rm -rf` removes only the private copy.
+
+   One exception, only after an unfinished automatic restore: when that
+   restore emptied a linked `~/.config/agent-director` (its directory holds
+   only `.move-incomplete`) and `details.attempt_store` lay in it, the store is
+   gone and check 2 has nothing to read. Skip check 2 then: after an
+   unfinished automatic restore, the original store kept in the pre-move
+   directory is unchanged, and that is the store the put-back returns. After
+   an `outcome_unestablished` or killed run, a store check 2 cannot read is
+   never skipped.
+3. The copied release opens the store: its `list` exits 0. In place, run the
+   `agent-director` entry's `copy` (or, with no such entry, the restore already
+   put it back: `~/.config/agent-director/bin/agent-director`):
+
+   ```sh
+   '<copy>' list
+   ```
+
+   It comes last because it runs an old binary. After a move it is step 5
+   below.
+
+**In place** (no entry's `belongs_at` is `~/.agent-director`), after the three
+checks: rename each `details.copies` entry onto its `belongs_at`, the
+`agent-director` binary last, then remove only the `details.remove` paths and
+each now-empty link-copy directory. Never copy over an installed file, and stop
+if a `belongs_at` is a directory or a link to one: `mv` would put the copy
+inside it.
+
+```sh
+mv -f -- '<copy>' '<belongs_at>'
+rm -- '<details.remove path>'
+rmdir -- '<link copy directory>'
+```
+
+**After an old-layout move** (an entry's `belongs_at` is `~/.agent-director`),
+run every step in one shell, starting with `aside= occupant= nested=`:
+
+1. Run checks 1 and 2 on `details.attempt_store`.
+2. Set `~/.config/agent-director` aside, unless the restore already did: skip
+   this step when the `set aside:` line or `details.attempt_store` names a
+   `~/.config/agent-director.after-upgrade-<YYYYmmdd-HHMMSS>` directory, when
+   `~/.config/agent-director` is absent, or when it is a link whose directory
+   holds only `.move-incomplete`. Otherwise rename it, or, when it is a link,
+   the link itself (no trailing slash; do not empty it here):
+
+   ```sh
+   aside=~/.config/agent-director.after-upgrade-$(date +%Y%m%d-%H%M%S)
+   [ ! -e "$aside" ] && mv -- ~/.config/agent-director "$aside"
+   ```
+
+   If `~/.config/agent-director` is still there, the name was taken: run both
+   lines again.
+3. Set `premove` to the `copy` of the entry whose `belongs_at` is
+   `~/.agent-director`: `premove='<copy>'`. If `~/.agent-director` exists (the
+   restore stopped because it was occupied, or something recreated it), look
+   at it (`ls -la ~/.agent-director`) and set it aside, or the rename in step 4
+   fails or puts the pre-move directory inside it. When `premove` lies inside
+   `~/.agent-director` (the occupant appeared while the restore ran), first
+   rename it out to the free name it ends in:
+
+   ```sh
+   nested=$premove
+   premove=~/"${nested##*/}"
+   mv -- "$nested" "$premove"
+   ```
+
+   Only then set the occupant aside:
+
+   ```sh
+   occupant=~/.agent-director.recreated-$(date +%Y%m%d-%H%M%S)
+   mv -- ~/.agent-director "$occupant"
+   ```
+
+4. Rename the pre-move directory back:
+
+   ```sh
+   mv -- "$premove" ~/.agent-director
+   ```
+
+5. Check 3, last:
+
+   ```sh
+   ~/.agent-director/bin/agent-director list
+   ```
+
+   If it does not exit 0, undo, in reverse order, only the renames this
+   procedure made, then complete forward:
+
+   ```sh
+   mv -- ~/.agent-director "$premove"
+   if [ -n "$occupant" ]; then mv -- "$occupant" ~/.agent-director; fi
+   if [ -n "$nested" ]; then mv -- "$premove" "$nested"; fi
+   if [ -n "$aside" ]; then mv -- "$aside" ~/.config/agent-director; fi
+   ```
+
+6. Once `list` exits 0: when step 2 renamed a link, rename it back, empty its
+   target and write the move's marker in it, as the restore does:
+
+   ```sh
+   if [ -L "$aside" ]; then mv -- "$aside" ~/.config/agent-director && find ~/.config/agent-director/ -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && : >~/.config/agent-director/.move-incomplete; fi
+   ```
+
+   Then rename every other `details.copies` entry onto its `belongs_at`, as in
+   place, the managed-link copy in the `--symlink-dir` directory included, so
+   `agent-director` on `PATH` runs the previous release again. Then remove only
+   the `details.remove` paths and the empty link-copy directory.
+
+Delete the set-aside and `recreated` directories once the previous release is
+confirmed working.
+
 ## Going back to the previous release
 
 For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10, v10→v11, v11→v12, v12→v13, v13→v14 and v14→v15,
-the old-layout steps below do not apply. Before upgrading, stop agents, servers and callers
-and keep a copy of the actual store (`[store] db_path` when set), including its `-wal` and
-`-shm` files.
-To roll back, stop them again, restore that pre-upgrade copy and install the
-previous release with its own `install.sh` and the original install flags.
-Restore the store with its companion files, removing a `-wal` or `-shm`
-that the copy lacks, as in step 4 below. This loses all writes made since
-the backup. The installer does not make this backup; a binary swap cannot
-make a v15 store readable by a v9, v10, v11, v12, v13 or v14 binary. There is
-no supported in-place downgrade from v15. The tested v12→v11 family-history
-recipe applies only to a genuine family-only v12 store and cannot operate
-on v13, v14 or v15; see the migration guide's emergency downgrade recipe. No supported
-in-place reverse path crosses v11→v10 or v10→v9. A copy made after migration
-cannot replace the pre-upgrade backup. Without a pre-upgrade copy, stop
-and obtain human help.
+including schema v9→v10 through v19→v20, the old-layout steps below do not
+apply. Before upgrading, stop all writers and keep a copy of the actual store
+(`[store] db_path` when set), its existing `-wal`/`-shm`, and all legacy input
+evidence. Keep provider logs/transcripts outside those roots too. The journal
+cutover creates a separate stopped-writer backup before schema changes;
+other installer steps do not supply this complete recovery set.
+
+To roll back, maintain the same exclusion, preserve the post-upgrade evidence,
+and restore the matching pre-upgrade DB and input evidence at their original
+paths. Restore the DB with its companion files, removing a `-wal` or `-shm`
+that the copy lacks, as in step 4 below. Keep original launch-lock inodes;
+do not replace or delete them. Install the matching previous release with its
+own `install.sh` and the original flags, omitting `--schedule` to preserve a
+custom cadence. Before restarting any older runtime, restore `find-missing`
+as the recovery command in every schedule that runs `sweep`: the tagged cron line
+(`crontab -e`), the service `ExecStart`, or a schedule you made another way,
+keeping your chosen cadence and environment. After editing a service, run
+`systemctl --user daemon-reload`. Then reconcile uncertain attempts against
+the preserved evidence: restoration loses all later writes and can lose proof
+of input that already reached an agent.
+Never replay an attempt merely because the restored copy lacks its proof.
+
+Schema v20 display evidence has no supported reverse recipe.
+Schema v19 confirmation evidence has no supported reverse recipe.
+Schema v18 Cursor input and proof evidence has no supported reverse recipe.
+Schema v17 permission provenance and response claims have no supported reverse
+recipe. Schema v16 has no in-place downgrade or replayable file-journal
+export. A binary swap or version reset cannot undo these changes. Schema v15,
+v14 and v13 are also restore-only. The v12→v11 family-history recipe applies
+only to genuine family-only v12 stores; it cannot operate on v13–v20. No
+supported reverse path crosses v11→v10 or v10→v9. A copy made after migration
+cannot replace the pre-upgrade set. Without that set, or while an uncertain
+attempt remains unreconciled, stop and obtain human help.
 
 The numbered procedure below applies only to an upgrade that moved
 `~/.agent-director` to `~/.config/agent-director` and retained a
@@ -978,7 +1570,9 @@ the move.
 4. A store kept outside AD's directory (`[store] db_path`) was migrated in
    place by the upgrade. Put back the copy made before the upgrade: `state.db`
    with its `-wal` and `-shm`, deleting a `-wal` or `-shm` the copy lacks. Skip
-   this when the store was inside the directory.
+   this when the store was inside the directory. Restore any additional
+   legacy input roots from the same stopped-writer copy, preserving original
+   launch locks and keeping post-upgrade evidence for reconciliation.
 5. In `~/.claude/settings.json`, remove only the entries that hold a hook
    command starting with `~/.config/agent-director/bin/agent-director` (written
    out with your home directory). Leave every other entry. Check the result is
@@ -1011,8 +1605,11 @@ the move.
 8. Change back by hand what was changed by hand to the new path after the
    upgrade: help hooks in the `settings.json` of other `CLAUDE_CONFIG_DIR`
    folders, Codex MCP and help entries, scripts, `$PATH` entries and an MCP
-   registration made by hand.
-9. Start the caller's previous version.
+   registration made by hand, and any schedule you made another way, which
+   must run `find-missing` (the previous release has no `sweep`).
+9. Reconcile uncertain input against the preserved post-upgrade evidence
+   before restarting any older runtime; a restored record cannot prove later
+   input was never delivered. Then start the caller's previous version.
 
 Delete the `after-upgrade` and `recreated` directories once the previous
 release is confirmed working; `uninstall.sh --purge` removes them.

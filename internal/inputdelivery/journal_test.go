@@ -1,44 +1,9 @@
 package inputdelivery
 
 import (
-	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
-
-func TestJournalRetainsRequestOwnership(t *testing.T) {
-	t.Parallel()
-	s, first := evidenceSession(t)
-	first.Phase, first.BytesAttempted = "enter_attempted", len(first.Payload)
-	if err := s.Save(first); err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewAttempt(first.Identity, "another prompt", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Save(second); err != nil {
-		t.Fatal(err)
-	}
-	// A new reader models recovery after the writer process has exited.
-	s = &nativeSession{dir: s.dir, manifest: s.manifest}
-	current, err := s.Load()
-	if err != nil || !reflect.DeepEqual(current, second) {
-		t.Fatalf("current=%+v, %v", current, err)
-	}
-	owned, err := s.LoadRequest(first.RequestID)
-	if err != nil || !reflect.DeepEqual(owned, first) {
-		t.Fatalf("recovered=%+v, %v", owned, err)
-	}
-	if got, err := s.LoadRequest("unknown"); err != nil || got != nil {
-		t.Fatalf("unknown=%+v, %v", got, err)
-	}
-	st, err := os.Stat(filepath.Join(s.dir, "attempt.json"))
-	if err != nil || st.Mode().Perm()&0077 != 0 {
-		t.Fatalf("journal privacy: %v, %v", st, err)
-	}
-}
 
 func TestJournalRejectsCorruptIntent(t *testing.T) {
 	t.Parallel()
@@ -68,11 +33,8 @@ func TestJournalRejectsCorruptIntent(t *testing.T) {
 					a.Proof.RawSHA256 = "wrong"
 				}
 			}
-			if err := s.Save(a); err != nil {
-				t.Fatal(err)
-			}
-			if a, err := s.Load(); err == nil {
-				t.Fatalf("corrupt intent loaded: %+v", a)
+			if err := s.validateAttempt(a); err == nil {
+				t.Fatalf("corrupt intent accepted: %+v", a)
 			}
 		})
 	}
@@ -131,11 +93,11 @@ func TestNativeLockRejectsConcurrentWriter(t *testing.T) {
 	// Serial: launchDir uses HOME, which this test isolates.
 	t.Setenv("HOME", t.TempDir())
 	id := Identity{StoreID: "0123456789abcdef", Token: "fedcba9876543210"}
-	first, err := (Native{}).Open(id)
+	first, err := (Native{Store: &evidencePersistence{}}).Open(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := (Native{}).Open(id)
+	second, err := (Native{Store: &evidencePersistence{}}).Open(id)
 	if err == nil {
 		second.Close()
 		t.Error("concurrent writer acquired the launch lock")
@@ -143,11 +105,20 @@ func TestNativeLockRejectsConcurrentWriter(t *testing.T) {
 	if err = first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	third, err := (Native{}).Open(id)
+	third, err := (Native{Store: &evidencePersistence{}}).Open(id)
 	if err != nil {
 		t.Fatalf("lock was not released: %v", err)
 	}
-	if err = third.Close(); err != nil {
+	// A lost descriptor makes cleanup fail. Releasing its OS lock cannot
+	// make this abandoned session eligible to authorize another write.
+	native := third.(*nativeSession)
+	if err := native.lock.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if err = third.Close(); err == nil {
+		t.Fatal("failed lock cleanup reported success")
+	}
+	if err = native.Check(); err == nil {
+		t.Fatal("failed cleanup regained authority")
 	}
 }

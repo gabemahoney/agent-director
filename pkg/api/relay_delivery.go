@@ -13,10 +13,11 @@ import (
 const (
 	// DeliveryDelivered: the request's relay hook acked a verdict (committed
 	// delivered_at) before enqueueing or writing the reply. This is not proof
-	// of agent receipt, tool execution or dialog closure.
+	// of transport completion, agent receipt, tool execution or dialog closure.
 	DeliveryDelivered = "delivered"
 	// DeliveryNotConfirmed: no ack yet, and the relay hook may still be
-	// alive; it never lasts past confirm_by.
+	// alive; it never lasts past confirm_by. This grants no response authority
+	// to a closed or proven-gone request.
 	DeliveryNotConfirmed = "not_confirmed"
 	// DeliveryFallenBack: no ack, and the relay hook is gone (or cannot be
 	// checked and its settle instant has passed): no answer from the relay
@@ -33,6 +34,10 @@ const (
 // exported verb functions (Status, Get, List, GetPermission, Decide,
 // RepairCheckPermission) passes its own.
 type RelayView struct {
+	active          *activeCheckProviders
+	provisional     map[string]ProvisionalTranscript
+	provisionalOnly map[string]bool
+	checked         map[string]*activeCheckedRow
 	// Procs reads a recorded relay hook's start time. nil judges every hook
 	// "can't tell".
 	Procs ProcChecker
@@ -52,9 +57,10 @@ type RelayView struct {
 	NeedsIntelligenceTimeout time.Duration
 
 	// samplePane captures a working Claude or Codex row's own pane for its
-	// idle_screen observation (Client.paneSampler, one per read); nil samples
-	// no pane, as a caller of the exported verb functions, which have no tmux,
-	// does.
+	// idle_screen observation. checkActiveRows sets it for one check pass from
+	// the invocation's tmux provider, sharing that pass's sweep budget and
+	// per-socket stops (sampleActivePane); nil samples no pane, as a caller of
+	// the exported verb functions, which have no tmux, does.
 	samplePane func(Spawn) store.PaneSample
 	// idleScreenTimeout is the Client's configured idle_screen timeout for rows
 	// without their own override; only a view that samples panes uses it. Zero
@@ -110,10 +116,12 @@ type RequestDelivery struct {
 	// intent (a pane answer through send-keys was started; whether its key
 	// was typed is unknown), sent (its key was sent or Cursor recorded a native
 	// choice; neither establishes ACP delivery, receipt or proof), outside (a caller
-	// recorded it answered outside agent-director) or tool_ran (agent hooks or
-	// validated correlated Cursor execution output established its tool ran).
-	// The hook close records allow/tool_ran; Cursor proof preserves an earlier
-	// verdict and non-null reason, filling a missing reason with tool_ran.
+	// recorded it answered outside agent-director) or tool_ran (validated
+	// correlated Cursor execution output established its tool ran; in practice
+	// never on a Claude or Codex row, whose requests carry no tool_use_id).
+	// That close preserves an earlier verdict and non-null reason, inferring
+	// allow only when undecided and filling a missing reason with tool_ran.
+	// This history supplies no response authority.
 	PaneAnswer string `json:"pane_answer"`
 	// PaneAs is the verdict a pane answer claims: allow, deny, or unknown (an
 	// outside record that did not see the answer); null when none was
@@ -127,15 +135,16 @@ type RequestDelivery struct {
 	// holds plain send-keys without a pane hash, and pause (b.zdz), to its
 	// live Spawn (ErrDialogMaybeOpen).
 	ProvenGoneAt *time.Time `json:"proven_gone_at"`
-	// ProvenGoneHow is how: tool_ran (its tool's PostToolUse or
-	// PostToolUseFailure, by tool_use_id, or validated correlated Cursor
-	// execution output for that exact request), turn_end (the turn of the agent
-	// that asked ended after it: the main agent's Stop, idle-prompt
+	// ProvenGoneHow is how: tool_ran (validated correlated Cursor execution
+	// output for that exact request; in practice never on a Claude or Codex
+	// row, whose requests carry no tool_use_id), turn_end (the turn of the
+	// agent that asked ended after it: the main agent's Stop, idle-prompt
 	// Notification, Codex Interrupt or verified Cursor Stop/Interrupt proves
 	// only durably main-turn-eligible requests with no child identity recorded
-	// before the hook began; Cursor unknown-origin and child requests remain
-	// ineligible) or agent_gone (its non-Cursor Spawn was marked missing, ended
-	// or resumed); null until then.
+	// before the hook began, and a Claude subagent's SubagentStop proves that
+	// subagent's requests recorded before that hook began (b.wbs); Cursor
+	// unknown-origin and child requests remain ineligible) or agent_gone (its
+	// non-Cursor Spawn was marked missing, ended or resumed); null until then.
 	ProvenGoneHow *string `json:"proven_gone_how"`
 	// UnprovenSince is, for a request not proven gone that no longer awaits
 	// an answer in agent-director's own records, when its record stopped
@@ -277,12 +286,11 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 //
 // A request closed with its Spawn (b.146 rule 12; closed_at: find-missing's
 // mark, the terminal SessionEnd's move to ended, or resume's move to pending)
-// is derived by the same rules, so each value keeps its meaning and never
-// goes back: it is delivered only when its relay hook acked (a hook whose
-// parent is still alive may yet ack the verdict recorded on it, or the
-// close's deny of an undecided one), not_confirmed while that hook may still
-// run, and fallen_back once it is gone or past confirm_by: no answer from the
-// relay reached the agent. A closed request no longer awaits an answer, so
+// is derived by the same rules, so each value keeps its meaning: delivered
+// retains an earlier durable ack. Closure cannot authorize a later ack,
+// even while the hook's parent lives; not_confirmed reports no ack while
+// the hook may still run, and fallen_back follows its disappearance or
+// confirm_by. A closed request no longer awaits an answer, so
 // get and list do not show it, and decide refuses it as closed
 // (ErrNoOpenPermissionRequest, or ErrAlreadyDecided for the mark's deny),
 // never as fallen back; for a request recorded before schema v7 a close's
@@ -429,8 +437,18 @@ const readerLockWait time.Duration = 0
 // the read that found them is answered as it is. It reports whether it
 // attempted the write, and the write's error.
 func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (bool, error) {
+	attempted, _, err := recordGoneOutcome(s, at, maxWait, slots)
+	return attempted, err
+}
+
+// recordGoneOutcome also reports whether a guarded observation was persisted;
+// an attempted write whose samples were all stale is not a committed check.
+func recordGoneOutcome(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (bool, bool, error) {
 	if len(slots) == 0 {
-		return false, nil
+		return false, false, nil
+	}
+	if checked, ok := s.(*activeReadStore); ok {
+		return checked.recordGone(at, maxWait, slots)
 	}
 	var stored map[int64]time.Time
 	var err error
@@ -448,14 +466,14 @@ func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (b
 			}
 		}
 		if len(ids) == 0 {
-			return false, nil
+			return false, false, nil
 		}
 		stored, err = r.RecordHookGone(at, maxWait, ids...)
 	} else {
-		return false, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return true, err
+		return true, false, err
 	}
 
 	for _, sl := range slots {
@@ -463,7 +481,7 @@ func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (b
 			sl.d.HookGoneAt = &t
 		}
 	}
-	return true, nil
+	return true, len(stored) > 0, nil
 }
 
 // paneAnswerOf is pr's pane_answer as the wire gives it: none for a row built
@@ -482,7 +500,8 @@ func paneAnswerOf(pr PermissionRow) string {
 // margins) has passed. Call it BEFORE reading the record a decision rests on
 // (rule 5's check-before-read note): a gone hook writes nothing more. The
 // agent's PostToolUse close of a request whose tool ran judges the request's
-// hook with it (cmd/agent-director wires it into the hook verb).
+// hook with it (cmd/agent-director wires it into the hook verb); that close
+// matches no Claude or Codex request, which carries no tool_use_id (b.wbs).
 func RelayHookGone(v RelayView, pr PermissionRow) bool {
 	j := newRelayJudge(v)
 	switch j.hook(pr) {
@@ -563,11 +582,20 @@ func judgedOpenInfos(r *judgedRequestSet, j relayJudge) []PermissionRequestInfo 
 // readJudgedRequests reads every permission request of instanceID through
 // read, once, by the check-before-read rule (readManyJudged).
 func readJudgedRequests(read func(string) ([]PermissionRow, error), j relayJudge, instanceID string) (*judgedRequestSet, error) {
+	if checked := j.view.checked[instanceID]; checked != nil && checked.judged != nil {
+		return checked.judged, checked.permissionErr
+	}
 	rows, verdicts, err := readManyJudged(func() ([]PermissionRow, error) { return read(instanceID) }, j)
 	if err != nil {
 		return nil, err
 	}
-	return &judgedRequestSet{rows: rows, verdicts: verdicts}, nil
+	judged := &judgedRequestSet{rows: rows, verdicts: verdicts}
+	if checked := j.view.checked[instanceID]; checked != nil {
+		// A final row refresh may have invalidated the earlier request sample.
+		// Reuse this new check-before-read sample throughout response assembly.
+		checked.judged = judged
+	}
+	return judged, nil
 }
 
 // judgedSpawnInfos projects every request of r, one read

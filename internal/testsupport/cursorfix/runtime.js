@@ -10,7 +10,8 @@ function artifact(operation, input) {
  }
  return result;
 }
-if(process.argv[2]==='worker-server') {
+const workerArgs = SETTINGS.workerArgs || ['worker-server'];
+if(process.argv[2]===workerArgs[0]) {
  fs.writeFileSync(SETTINGS.workerPID,String(process.pid));
  fs.writeFileSync(SETTINGS.workerPID+'.selection.json',JSON.stringify(selection));
  let last='';
@@ -34,12 +35,23 @@ if(process.argv[2]==='worker-server') {
 fs.writeFileSync(SETTINGS.pid, String(process.pid));
 fs.writeFileSync(SETTINGS.pid+'.selection.json',JSON.stringify(Object.fromEntries(
  ['CURSOR_CONFIG_DIR','CURSOR_DATA_DIR','CURSOR_API_KEY','AGENT_CLI_CREDENTIAL_STORE'].map(key=>[key,process.env[key] ?? null]))));
-if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,'worker-server'],{stdio:'ignore',detached:true}).unref();
+if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,...workerArgs],{stdio:SETTINGS.workerStdio || 'ignore',detached:true}).unref();
 function send(frame) {
  const line=JSON.stringify({jsonrpc:'2.0',...frame});
  if(SETTINGS.sent) fs.appendFileSync(SETTINGS.sent,line+'\n');
  process.stdout.write(line+'\n');
 }
+// An explicit test-owned batch, never synthesized from gateway/store state.
+let lastEvents = '';
+setInterval(()=>{
+ if(!SETTINGS.events || !fs.existsSync(SETTINGS.events)) return;
+ const command=JSON.parse(fs.readFileSync(SETTINGS.events,'utf8'));
+ if(command.id===lastEvents) return;
+ if(typeof command.id!=='string' || !command.id || typeof command.raw!=='string') throw Error('invalid synthetic ACP event batch');
+ lastEvents=command.id;
+ if(SETTINGS.sent) fs.appendFileSync(SETTINGS.sent,command.raw);
+ process.stdout.write(command.raw);
+},10);
 // Observe raw chunks before readline can hide a partial response. The optional
 // observer is synchronous and opens its own committed store connection.
 process.stdin.on('data', chunk => {

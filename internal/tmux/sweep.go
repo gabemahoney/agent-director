@@ -189,5 +189,25 @@ func (st *sweepSocket) stopOn(r Result) Result {
 	return r
 }
 
+// Spent reports whether this run's budget is spent, so a skipped row or a
+// discarded call can be told from a stopped socket or a failed call.
+func (s *Sweep) Spent() bool {
+	return s.spent >= s.budget
+}
+
 // skipped is the result of a row the sweep did not call tmux for.
 func skipped() Result { return Result{Skipped: true} }
+
+// CapturePane shares this invocation's budget and socket stop state with its
+// lookups and listings. A failed capture is no sample, and stops no socket.
+func (s *Sweep) CapturePane(row Launch, capture func() (string, error)) (string, bool) {
+	if !s.open(s.socket(row.Socket)) {
+		return "", false
+	}
+	var pane string
+	var err error
+	if !s.timed(func() { pane, err = capture() }) || err != nil {
+		return "", false
+	}
+	return pane, true
+}

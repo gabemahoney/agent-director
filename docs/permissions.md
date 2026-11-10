@@ -21,9 +21,7 @@ A `permissions` block has up to three string arrays:
   permission confirmations caused by these entries.
 
 The pattern grammar is Claude Code's; bare tool names match every
-invocation of that tool (`AskUserQuestion` denies every AUQ — see the
-empirical confirmation in
-`reference/permissions-deny-tool-name-research.md`).
+invocation of that tool (`AskUserQuestion` denies every AUQ).
 
 ## Cursor spawns
 
@@ -90,7 +88,8 @@ connected pane choices are available and `decide` is refused. Native choices
 have a separate 30-minute lifetime: from admission with relay off, or from
 relay settlement with relay on. After settlement, a fresh deliberate choice
 can resolve a still-open connected native request, even with an unacknowledged
-recorded decision. The [caller contract](caller-contract.md#permission-relay)
+recorded decision, provided no response was already claimed and the request
+is neither closed nor proven gone. The [caller contract](caller-contract.md#permission-relay)
 owns fallback actions, expired choices, uncertain output and disconnects.
 
 Direct supported question cancellation rejects that question without resolving
@@ -106,12 +105,17 @@ The exact failed invocation proves only that its permission dialog is gone,
 using `proven_gone_how` `tool_ran`; it does not establish that the underlying
 server action ran or succeeded. It preserves decision, reason, decision time,
 delivery and pane-answer fields, without inferring an allow or pane answer.
+Proof that the tool ran preserves an existing verdict and non-null reason;
+it infers allow only when undecided and fills a missing reason with `tool_ran`.
+These historical facts grant no permission to send a response.
 Status alone and other failed or ambiguous MCP output supply no proof.
 Only this validated invocation proof, a turn's end for a request the gateway
 never answered (below), or the owning launch ending, releases their hold.
-A proof that finds the store locked by another writer is retried, and is
-stored before the row next reports waiting, publishes a rotated conversation
-or ends intentionally ([when it fails](caller-contract.md#cursor-operation-boundaries)).
+A proof that finds the store locked has its own fixed retry window. Its exact
+evidence and request effects commit together before waiting, rotation
+publication or intentional end can succeed. Stored evidence cannot replay an
+input or permission response after gateway loss; persistence and completion
+limits are in the [caller contract](caller-contract.md#cursor-operation-boundaries).
 Other execution evidence remains conservative. Ending a launch establishes no
 per-request proof: gateway or runtime death leaves `proven_gone_at` and
 `proven_gone_how` unchanged, including on requests already reading `delivered`.
@@ -129,10 +133,10 @@ unless a decision was already recorded, and still reads as awaiting an
 answer, but it no longer holds the row or the dialog. The row then reads
 `waiting` unless another request still holds it; after `/clear` or `/new` the
 rotation publishes `waiting` on the same terms and held input can be admitted.
-Nothing is delivered for it later: its pane keys are gone, and a later
-`decide` records a verdict that never reaches the agent. For what
-`send-keys`, `pause` and `decide` meet on such a request, see the
-[caller contract](caller-contract.md#permission-relay). Not retired: a request
+Nothing is delivered for it later: its pane keys are gone and a later
+`decide` cannot record a new verdict. Its refusal and possible attempted-decision
+history depend on `confirm_by`; those phases and the `send-keys`/`pause`
+holds are in the [caller contract](caller-contract.md#permission-relay). Not retired: a request
 already answered (`delivered`, or answered at the pane), which keeps its
 [dialog hold](#the-dialog-hold), and one whose tool already ran, which is
 proven `tool_ran` instead.
@@ -217,8 +221,7 @@ The setting controls Claude and Codex. For Cursor, either value retains
 synthesized `permissions.deny` array. The string `"AskUserQuestion"` is
 a bare tool name — Claude Code's matcher treats it as "deny every use
 of the AUQ tool" *and* removes the tool from the deferred-tool registry
-(the model never sees its schema). Confirmed in
-`reference/permissions-deny-tool-name-research.md`.
+(the model never sees its schema).
 
 Recommended for orchestrator-driven setups where every agent should
 make its own decisions rather than prompting a human. The deny is
@@ -271,7 +274,7 @@ spawner's. The spawn picks the server by `$TMUX`, else by `TMUX_TMPDIR`
 
 When the two stores differ, the agent's hook events go to the other
 store and the row stays `pending`, with no error to the caller:
-`find-missing` notes it `unreported` while the agent runs and marks it
+a shared check notes it `unreported` while the agent runs and marks it
 `missing` once the agent's process is gone. If no server was running, a
 spawn with an alternate `HOME` (or `--home`) starts the shared server
 with that `HOME`, and every later Spawn on that server sends its hook
@@ -307,9 +310,7 @@ hook fires, and its row stays `pending`.
 agent-director **does not strip** this flag. A caller passing
 `--dangerously-skip-permissions` through `agent_args` bypasses Claude
 Code's permission engine entirely — the per-Spawn `permissions` block
-becomes irrelevant for that Spawn. This is intentional per the PRD
-(the supervisor exposes the same trust boundary as the operator's own
-shell).
+becomes irrelevant for that Spawn.
 
 Operators who want to restrict callers from using this flag should not
 let untrusted parties spawn Claude instances through agent-director.
@@ -344,7 +345,8 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
      open request in `permission_requests`, keyed by the composite
      `(instance_id, request_token)`: both are written or neither
      is. The request carries the hook's own process identity (pid, start
-     time and pid namespace) and the payload's `tool_use_id`. Concurrent
+     time and pid namespace) and the payload's `agent_id` (a Claude or
+     Codex payload carries no `tool_use_id`). Concurrent
      requests for the same Spawn each get their own row and are decided
      independently. Oldest *closed* rows (those no longer awaiting an
      answer) are evicted in the same transaction when the table exceeds
@@ -382,15 +384,15 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
    only an answer at the pane, or a record of one, closes it (see
    "Answering at the pane" below).
 7. From the request's first write until the agent's own hooks prove its
-   dialog gone (its tool ran, on a Claude row; the agent's turn ended; or
-   the agent ended), a plain
+   dialog gone (on a Cursor row, its tool ran; the turn of the agent that
+   asked ended; or the agent ended), a plain
    `send-keys` without a pane hash to the spawn is refused with
    `ErrDialogMaybeOpen`, whatever agent-director's records say of the
    request (see "The dialog hold" below).
 
 ### Envelope wire format
 
-SRD §6.3 / Claude Code 2.x nested shape (a Codex agent gets the same
+Claude Code 2.x nested shape (a Codex agent gets the same
 envelope, unchanged):
 
 ```json
@@ -412,7 +414,7 @@ envelope, unchanged):
   field is omitted entirely (Claude Code drops empty messages
   silently).
 
-### Fail-closed boundary (SRD §6.4)
+### Fail-closed boundary
 
 When `AGENT_DIRECTOR_RELAY_MODE=on` the hook handler treats every
 failure before the request is recorded as a deny — provided the event is
@@ -424,13 +426,15 @@ would be applied to the in-flight tool and race the legitimate
 PermissionRequest process.
 
 Once the request is recorded, the hook writes only an answer it has first
-confirmed in the store, and every failure ends with **no answer**: the hook
-exits 0 with empty stdout, the agent asks in its own permission prompt,
-and the request falls back (its `delivery` reads `fallen_back` once a
-reader finds the hook gone). Claude Code acts on a hook's JSON whatever
-its exit code, so an answer written before its confirmation could reach
-the agent while `decide` and `get-permission` report that it did not. SRD
-§6.4 enumerates the failure modes:
+confirmed in the store. A failed or uncertain confirmation, or a failed final
+budget or parent check, ends with **no answer**: the hook exits 0 with empty
+stdout. With no persisted acknowledgement, the request reads `fallen_back`
+once a reader finds the hook gone. An acknowledgement that commits late,
+or whose successful commit result is lost, can remain `delivered` despite
+zero response output. That history permits no replay and does not prove the
+agent received an answer. Claude Code acts on a hook's JSON whatever its
+exit code, so confirmation must precede output.
+The failure modes are:
 
 | Failure | Outcome |
 |---|---|
@@ -440,9 +444,9 @@ the agent while `decide` and `get-permission` report that it did not. SRD
 | stdin payload read failure | silent exit 0 (event name unknowable) |
 | Classify failure (unparseable payload) | silent exit 0 (event name unknowable) |
 | The first write (the request and `check_permission`) fails, or its wait for the store's write lock reaches 2 s before the agent ends the hook | deny envelope; nothing recorded |
-| The poll reaches its end (3 s before the agent ends the hook) | `timeout` deny recorded and confirmed, then a deny envelope |
+| The poll reaches its end (3 s before the agent ends the hook) | A still-eligible request gets a recorded and confirmed `timeout` deny, then a deny envelope; lost authority or budget means no answer |
 | The hook's parent process is no longer the agent that started it | no answer |
-| The confirmation or the timeout deny fails, or cannot commit by 2 s before the agent ends the hook | no answer |
+| The confirmation or timeout deny fails, its outcome is uncertain, or the final budget check finds 2 s or less before the agent ends the hook | no answer; a committed acknowledgement can remain |
 | `ctx.Done()` during poll | no answer |
 | Row preempted (`sql.ErrNoRows` during poll) | no answer |
 | Read-retry budget exhausted (5 consecutive read errors) | no answer |
@@ -489,10 +493,11 @@ the window.
 
 **The hook keeps the last 3 s for itself.** Counted back from that instant:
 
-- 2 s before it, the hook's last store write may commit. A write that
-  cannot commit by then is not made: the first write gives way to a deny,
-  a later one to no answer (see "Fail-closed boundary" above). The 2 s are
-  left for writing the answer and exiting.
+- 2 s before it is the write budget's deadline. No acknowledgement or
+  timeout deny starts with that budget exhausted, and output requires a
+  final check that time remains. A commit already in progress can finish
+  late and retain its acknowledgement, but emits no answer (see
+  "Fail-closed boundary" above). The reserve is for writing the answer and exiting.
 - 3 s before it, the poll ends and the hook makes its `timeout` deny,
   whose own wait for the store's write lock may take the next second.
 - 2 s after it is the request's settle instant (`settled_at`), its
@@ -620,16 +625,10 @@ differences:
   a `Stop` does; it also moves the row to `waiting`. An Interrupt that
   carries an `agent_id` proves nothing; Codex sends none. This is safe only
   while Codex never reports a subagent's interrupt as the main agent's.
-- **No tool-ran proof.** Codex requests carry no `tool_use_id`, and a
-  Codex `PostToolUse` neither proves a request gone nor closes one. So after
-  a main-agent allow the hold lasts until the turn ends (its `Stop` or
-  Interrupt), not until the tool has run.
-- **A subagent's approval holds until the agent ends.** A subagent's request,
-  allowed or denied, is proven only by the end of the agent, so it holds a
-  plain `send-keys` without a pane hash, and `pause`, until then.
-- **A fallen-back allow never closes on its own.** No `PostToolUse` close
-  exists, so a fallen-back request closes only through `record-pane-answer`
-  or a pane answer (see [A request answered outside agent-director](#a-request-answered-outside-agent-director)).
+- **A subagent's request holds until the agent ends.** A Codex
+  `SubagentStop` proves nothing, so a subagent's request, allowed or denied,
+  is proven only by the end of the agent: it holds a plain `send-keys`
+  without a pane hash, and `pause`, until then.
 - **Escape at a fallen-back main-agent dialog.** When a fallen-back
   main-agent request is answered with `Escape` (a pane answer, `--as deny
   --key Escape`), the Interrupt leaves the row `waiting` and the request
@@ -651,7 +650,7 @@ differences:
   start second" under [Known limitations](#known-limitations)), but does not
   close it: close it with `record-pane-answer --as deny` and the hash of a
   `read-pane` you looked at, once the hook has been gone 2 s.
-- **A row left in `check_permission`.** `find-missing` repairs a Codex row
+- **A row left in `check_permission`.** Recovery repairs a Codex row
   to `working`, never to `waiting` (see
   [A relay row left in check_permission](hooks.md#a-relay-row-left-in-check_permission)).
 
@@ -663,8 +662,12 @@ a fail-closed deny.
 
 Only the first accepted verdict is recorded. Concurrent later calls receive
 `ErrAlreadyDecided`. A request that has fallen back is refused with
-`ErrRelayFallenBack`; a closed request cannot accept a verdict. Success
-reports delivery separately from the recorded decision (see "Delivery"
+`ErrRelayFallenBack`; a closed or proven-gone request cannot accept a new verdict.
+A deliberate current pane choice competes with `decide`; a pending or completed
+pane answer excludes relay acknowledgement. A stored verdict alone, a historical
+closeout, an outside-answer record or execution proof cannot authorize a response.
+The request's own timeout may deny only while that request remains eligible.
+Success reports delivery separately from the recorded decision (see "Delivery"
 below). For recovery, follow [Permission relay](caller-contract.md#permission-relay).
 
 Depending on the request's current state, `decide` returns one of
@@ -672,12 +675,12 @@ these outcomes:
 
 - No row at all → `ErrNoOpenPermissionRequest`.
 - Request has a recorded decision → `ErrAlreadyDecided` (including a
-  request the relay hook denied at its timeout, one `find-missing` denied
-  when it marked the spawn `missing`, and one closed at the pane with a
-  verdict).
-- Row was closed with its spawn, by `find-missing`'s mark or by the
+  request the relay hook denied at its timeout, one denied by
+  shared recovery's mark (`decision_reason` `find_missing`), and one closed
+  at the pane with a verdict).
+- Row was closed with its spawn, by shared recovery's mark or by the
   spawn's end, before its relay hook confirmed a verdict, with a verdict
-  `find-missing` did not write (one recorded before the close, or the
+  the missing mark did not write (one recorded before the close, or the
   `ended` deny) → `ErrNoOpenPermissionRequest`, whether or not the spawn
   was resumed since (see "A request of a finished spawn is closed" below).
 - Row is still open but its spawn is `ended` or `missing` →
@@ -698,12 +701,12 @@ error messages and can act on them programmatically.
 ### A request of a finished spawn is closed
 
 A request whose spawn is `ended` or `missing` is closed, decided or not:
-its agent is gone (or judged gone by `find-missing`), so no relay hook of
+its agent is gone (or judged gone by shared recovery), so no relay hook of
 it can deliver a verdict. `decide` records nothing for it and answers
 with an existing error name:
 
 - a decided request → `ErrAlreadyDecided`, except one closed (see below)
-  before its relay hook confirmed a verdict that `find-missing` did not
+  before its relay hook confirmed a verdict that the missing mark did not
   write → `ErrNoOpenPermissionRequest`;
 - an open request (one an earlier release left open) →
   `ErrNoOpenPermissionRequest`, whose message says the request is closed
@@ -718,10 +721,10 @@ recorded. `send-keys` refuses an `ended` or
 
 A spawn's open requests close together with these changes:
 
-- `find-missing`'s mark of the spawn `missing`;
+- a recovery check's mark of the spawn `missing`;
 - the agent's terminal SessionEnd, which moves the spawn to `ended`;
 - the move of a Codex spawn to `ended` once its agent is gone with an end
-  report, made by `find-missing`, or by `pause` before its keys or while it
+  report, made by a recovery check, or by `pause` before its keys or while it
   waits (see [How a Codex row ends](hooks.md#how-a-codex-row-ends));
 - `resume`'s move of the finished spawn to `pending`, as a backstop for a
   request an older binary left open on the finished spawn.
@@ -734,33 +737,34 @@ Every request that still awaits an answer is closed (`closed_at` is set).
 The close also includes a decided request without a relay confirmation or
 completed pane answer, even when recorded by an older binary:
 
-- an undecided request gets `decision` `deny` with `decision_reason`
-  `find_missing` (the mark) or `ended` (the other three), so a relay hook
-  still polling for it reads that deny (and returns it, once confirmed, if
-  its agent is still the one that started it). `decide` on the
+- an undecided request gets a historical `decision` `deny` with `decision_reason`
+  `find_missing` (the mark) or `ended` (the other three). This deny cannot
+  be acknowledged or emitted by the relay. `decide` on the
   mark's deny returns `ErrAlreadyDecided`, and on the `ended` deny
   `ErrNoOpenPermissionRequest`;
 - a decided request whose relay hook had not confirmed the verdict keeps
-  it (a hook whose agent still runs may still confirm and return
-  it); `decide` on it returns `ErrNoOpenPermissionRequest`, whose message
-  says the request is closed (its spawn ended, or `find-missing` marked it
+  it, without permission for a later acknowledgement or response;
+  `decide` on it returns `ErrNoOpenPermissionRequest`, whose message
+  says the request is closed (its spawn ended, or a shared check marked it
   missing, before its relay hook delivered a verdict), nothing was
-  recorded, and not to answer it at the pane (`ErrAlreadyDecided` once its
-  hook has confirmed it).
+  recorded, and not to answer it at the pane. An acknowledgement recorded
+  before closure retains `ErrAlreadyDecided`.
 
 Each deny is written to the trail as one `ad.row_mutation.committed`
 (`writer_process` `find_missing`, `hook` or `resume`). The mark's deny and the
-Codex move's `ended` deny both carry `find_missing`, so that writer can come
-from `pause`.
+Codex move's `ended` deny both carry `find_missing`, so that writer can also
+come from a state read or `pause`.
 
 A closed request stays closed after a `resume`: it no longer awaits an
-answer, so `get` and `list` do not show it, it no longer holds the spawn in
-`check_permission` or off `working`. On non-Cursor spawns, it is also proven
-gone, so it never refuses `send-keys`.
+answer, so it is omitted from `get` and `list`'s `permission_requests` and
+no longer holds the spawn in `check_permission` or off `working`. On
+non-Cursor spawns, it is also proven gone, so it never refuses `send-keys`.
+Cursor's independent dialog hold and `get.unproven_requests` follow
+[The dialog hold](#the-dialog-hold).
 `decide` refuses it as above, never with `ErrRelayFallenBack`.
 `get-permission` still reads it by its token, and its `delivery` follows
-the rules in "Delivery" below like any request's: `delivered` once its hook
-confirmed, `not_confirmed` while that hook may still run, `fallen_back`
+the rules in "Delivery" below like any request's: `delivered` if its relay
+acknowledged before closure, `not_confirmed` while that hook may still run, `fallen_back`
 once it is gone (or cannot be checked and `confirm_by` has passed). A
 spawn marked `missing` or ended by its agent never keeps an open request.
 
@@ -771,9 +775,10 @@ time the request is read, by `decide`, `get`, `list` and `get-permission`;
 the only writes for them are `hook_gone_at` and the time the request fell
 back. `proven_gone_at` and
 `proven_gone_how` are written by the agent's own hooks, validated Cursor
-invocation proof or a Cursor turn's end, by the close of its spawn's requests
-and, for a spawn already finished, by the upgrade to this release, never by a
-reader (see "The dialog hold" below):
+invocation proof or a Cursor turn's end, by the close of a non-Cursor spawn's
+requests above (even when a state read's recovery check makes it) and, for a
+non-Cursor spawn already finished, by the upgrade to this release; working
+out delivery never writes them (see "The dialog hold" below):
 
 The `delivery` and `confirm_by` descriptions below apply to requests
 with a settle instant. Requests recorded by an older binary retain the
@@ -781,16 +786,16 @@ with a settle instant. Requests recorded by an older binary retain the
 
 | Field | Meaning |
 |---|---|
-| `delivery` | `delivered`: the relay durably acknowledged a verdict before output, without proving receipt. `not_confirmed`: no acknowledgement yet and the request relay may still answer. `fallen_back`: no confirmation, and the hook is gone, or cannot be checked and `confirm_by` has passed: the relay is no longer confirmed to answer. While `pane_answer` is `none` or `intent` the request awaits an answer unless valid execution proof or owning-spawn closure resolves it; a pane answer or `record-pane-answer` can also close it; with `sent`, `outside` or `tool_ran` it is closed and stays `fallen_back`. |
+| `delivery` | `delivered`: the relay durably acknowledged a verdict before output; this proves neither transport completion, receipt, execution nor dialog closure. `not_confirmed`: no acknowledgement and the relay may still run; a closed or proven-gone request cannot gain authority from this state. `fallen_back`: no acknowledgement and the hook is gone, or cannot be checked and `confirm_by` has passed. A completed pane answer also reads `fallen_back`. Delivery is separate from whether a request is answerable or its dialog is proven gone. |
 | `confirm_by` | The request's fixed settle instant: hook end plus 2 s for Claude/Codex, or the Cursor decision deadline plus 4 s. `not_confirmed` never lasts past it. |
 | `hook_alive` | `true` or `false` by the check below; `null` when it cannot tell. |
 | `hook_gone_at` | When a reader first found the request fallen back; `null` until then. |
 | `attempted_decision`, `attempted_at` | The verdict a `decide` refused with `ErrRelayFallenBack` tried to record, and when; shown, never acted on. |
-| `tool_use_id` | The `tool_use_id` of the agent's hook input, or Cursor's supplied `toolCallId`; `null` when it gave none (always, on a Codex row). |
-| `pane_answer` | `none`: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered). `intent`: a pane answer through `send-keys` was started, and whether its key was typed is unknown. `sent`: its key was sent or a Cursor native choice was recorded; neither establishes ACP delivery, receipt or proof. `outside`: a caller recorded it answered outside agent-director (`record-pane-answer`). `tool_ran`: Claude Code reported its tool ran, or the Cursor gateway validated matching execution; see [Cursor spawns](#cursor-spawns). `sent`, `outside` and `tool_ran` close the request. See "Answering at the pane" below. |
+| `tool_use_id` | Cursor's supplied `toolCallId`; `null` on a Claude or Codex row, whose `PermissionRequest` carries no `tool_use_id`. |
+| `pane_answer` | `none`: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered). `intent`: a pane answer through `send-keys` was started, and whether its key was typed is unknown. `sent`: its key was sent or a Cursor native choice was recorded; neither establishes ACP delivery, receipt or proof. `outside`: a caller recorded it answered outside agent-director (`record-pane-answer`). `tool_ran`: the Cursor gateway validated matching execution; see [Cursor spawns](#cursor-spawns). `sent`, `outside` and `tool_ran` close the request. See "Answering at the pane" below. |
 | `pane_as` | The verdict a pane answer claims: `allow`, `deny`, or `unknown` (a record whose caller did not see the answer); `null` when none was recorded. Public pane operations store the caller's claim without screen interpretation or verdict verification. Cursor additionally requires a sent claim to match the actual selected option before answering ACP; native choices derive the verdict from that option. An outside claim never supplies ACP approval authority or proof. |
 | `proven_gone_at` | When the agent's own hooks, validated Cursor invocation proof or a Cursor turn's end established the request's dialog gone; `null` until then. agent-director's own records (`delivered`, a pane answer, `record-pane-answer`) are no proof. While it is `null` on a live relay-on spawn, a plain `send-keys` without a pane hash is refused with `ErrDialogMaybeOpen`, except for a Cursor request of an earlier launch. |
-| `proven_gone_how` | `tool_ran`: a Claude `PostToolUse`/`PostToolUseFailure` carried its `tool_use_id`, or Cursor supplied validated matching invocation proof (never on a Codex row); the exact failed MCP invocation proves dialog closure only, as defined in [Cursor spawns](#cursor-spawns). `turn_end`: an eligible main request was written before the main turn ended; a missing `agent_id` alone does not establish eligibility. See [The dialog hold](#the-dialog-hold). On Cursor, the gateway retired the request unanswered when its turn ended (see [Cursor spawns](#cursor-spawns)). `agent_gone`: a non-Cursor spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded. Cursor terminal closes leave proof unchanged. `null` until proven. |
+| `proven_gone_how` | `tool_ran`: Cursor supplied validated matching invocation proof (never on a Claude or Codex row); the exact failed MCP invocation proves dialog closure only, as defined in [Cursor spawns](#cursor-spawns). `turn_end`: an eligible main request was written before the main turn ended, or a Claude subagent's request before that subagent's turn ended; a missing `agent_id` alone does not establish eligibility. See [The dialog hold](#the-dialog-hold). On Cursor, the gateway retired the request unanswered when its turn ended (see [Cursor spawns](#cursor-spawns)). `agent_gone`: a non-Cursor spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded. Cursor terminal closes leave proof unchanged. `null` until proven. |
 | `unproven_since` | For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer, its `record-pane-answer`, or the close of its spawn's requests; for a request recorded by an older binary, its recorded verdict). `null` while it still awaits an answer, and once it is proven gone. |
 
 **`decision` is not the outcome.** `decision` is the verdict recorded,
@@ -802,7 +807,7 @@ caller's claim (`null` for a record claiming `unknown`).
 **`decision_reason`** annotates the verdict: `operator` (API deny),
 `timeout` (relay timeout deny), `find_missing`/`ended` (owning-spawn closure),
 `pane` (public `send-keys` claim or native Cursor choice), `pane_outside`
-(outside claim), or `tool_ran` (tool execution). API allow initially has no
+(outside claim), or `tool_ran` (Cursor tool execution). API allow initially has no
 reason; later validated Cursor execution can fill it with `tool_ran` without
 replacing an earlier verdict or non-null reason. Earlier deny/operator,
 timeout, pane and outside reasons remain intact. Failed MCP invocation proof
@@ -912,22 +917,22 @@ waits, as on Claude, for the turn's Stop.
 A row whose Stop came while a request still held it, or whose next hook is
 lost, stays in `check_permission` until a later hook moves it (on a Cursor
 row, the next accepted prompt's `working` report once nothing holds it), or
-the idle-prompt Notification (Claude rows only) or a scheduled `find-missing`
+the idle-prompt Notification (Claude rows only) or a recovery check
 moves it to `waiting` or `working` (see
 [hooks.md](hooks.md#a-relay-row-left-in-check_permission)).
 The relay hook's timeout deny itself leaves the row's state as it is. A
 request answered at the pane outside agent-director still awaits an
 answer, since nothing recorded the answer, but it stops holding the row
 once the agent's hooks prove it gone: the main agent's `Stop` or idle-prompt
-Notification after it, or (Claude rows) its tool's `PostToolUse`; on a Codex
-row, its `Stop` or Interrupt. Main-turn proof applies only to the eligible
-requests described in [The dialog hold](#the-dialog-hold). The request stays open
+Notification after it; on a Codex row, its `Stop` or Interrupt. Main-turn
+proof applies only to the eligible requests described in
+[The dialog hold](#the-dialog-hold). The request stays open
 until `record-pane-answer` closes it, and once the row has left
 `check_permission`, `get` and `list` no longer list it; `get-permission`
 does. A subagent's request is not proven by the main agent's turn end, so
 answered that way it holds the row's moves to `working` until
-`record-pane-answer`, its tool's `PostToolUse` (Claude rows) or the spawn's
-end.
+`record-pane-answer`, its subagent's `SubagentStop` (Claude rows) or the
+spawn's end.
 
 ### Requests recorded by an older binary
 
@@ -948,17 +953,17 @@ that binary judged it:
 - Fallen back and still undecided, such a request is open and fallen back
   like any other: a plain `send-keys` to its spawn, and `pause`, are
   refused with `ErrRelayFallenBack` until it is closed, by a pane answer, by
-  `record-pane-answer`, or with its spawn (the spawn ends, or `find-missing`
-  marks it `missing`). This holds in every live state of the spawn, so a
-  request left open before the upgrade (its dialog answered at the pane
+  `record-pane-answer`, or with its spawn (the spawn ends, or
+  [shared recovery](caller-contract.md#bounded-recovery-on-state-reads)
+  marks it `missing` on a state read or `sweep`). This holds in
+  every live state of the spawn, so a request left open before the upgrade (its dialog answered at the pane
   after its relay hook was killed, for example) refuses plain `send-keys`
   once you upgrade: close it with `record-pane-answer --as unknown` and the
   `pane_sha256` of a `read-pane` you looked at. `decide` does not close
   it: once the spawn has left `check_permission` or recorded a later
   request, `decide` on it returns `ErrNoOpenPermissionRequest` (see
   below), while plain `send-keys` is still refused with
-  `ErrRelayFallenBack` on its account. Its PostToolUse does not close it
-  (no `tool_use_id` is recorded for it).
+  `ErrRelayFallenBack` on its account.
 - At upgrade, every such request of a live spawn starts with no proof that
   its dialog is gone (`proven_gone_at` `null`), so it holds a plain
   `send-keys` without a pane hash, and `pause`, to its spawn
@@ -972,19 +977,18 @@ that binary judged it:
   first plain `send-keys` needs a person or an LLM to read the pane and
   send with that read's `pane_sha256`, and so does stopping it (see
   "`pause`" under "Send-keys interaction" below).
-- `decide` records a verdict on it only before its window less 1 s, and
-  returns at once, with no wait for a confirmation such a hook never
-  writes. Refused from then, it first waits until `confirm_by` (at most
-  3 s; under `--max-wait-ms` that ends sooner it returns `ErrStoreBusy`
-  instead) and reads the request again (a request already answered at the
-  pane is `ErrAlreadyDecided` at once, with no wait): decided meanwhile
-  (normally the hook's own timeout deny, `decision_reason` `timeout`) →
-  `ErrAlreadyDecided`; still open → `ErrRelayFallenBack` only while the
-  spawn is still in `check_permission` with no other open request and none
-  recorded after this one, otherwise `ErrNoOpenPermissionRequest` (do not
-  answer it at the pane). Eviction at the cap keeps the spawn's newest
-  request while this one is open, so a later request stays visible to that
-  check.
+- A migrated request with unknown ownership cannot accept a new `decide`
+  verdict, even before its relay cutoff. The delivery rules above retain
+  historical results; they do not grant response authority. Before the
+  cutoff, an undecided request is refused with `ErrNoOpenPermissionRequest`.
+  Once its window less 1 s has elapsed, the compatibility path first waits
+  until `confirm_by` (at most 3 s; `ErrStoreBusy` if `--max-wait-ms` cannot
+  cover that wait), then reads it again. An existing verdict or completed
+  pane answer retains its own refusal. A still-open request gets
+  `ErrRelayFallenBack`, with the submitted verdict kept only as attempted,
+  if the spawn remains in `check_permission` with no other open request and
+  none recorded later; otherwise it gets `ErrNoOpenPermissionRequest`.
+  See [Permission relay](caller-contract.md#permission-relay) for handling.
 
 ### Unanswered permission requests
 
@@ -1054,10 +1058,10 @@ release time:
   `ErrAlreadyDecided`).
 
 A plain retry after the relay hook has ended can get `ErrDialogMaybeOpen`
-instead, until the agent's hooks prove the request gone: after an allow, when
-its tool has run (on a Codex row, when an eligible main turn ends); after a
-deny of an eligible main request, when the main agent's turn ends (its `Stop` or idle-prompt Notification, or a Codex
-Interrupt).
+instead, until the agent's hooks prove the request gone: for an eligible
+main request, allowed or denied, when the main agent's turn ends (its `Stop`
+or idle-prompt Notification, or a Codex Interrupt); for a Claude subagent's
+request, when that subagent's turn ends (its `SubagentStop`).
 
 `ErrRelayFallenBack` (from a plain `send-keys`, `pause` and `decide`)
 carries `err_details`, an object with:
@@ -1119,10 +1123,9 @@ it does not prove that any dialog is open.
 
 `pause` takes no pane hash, so it has no way past the dialog hold, which
 lasts until the agent's own hooks prove each request gone, whatever is
-done at the pane. A subagent's request denied at the pane gets no
-`PostToolUse`, and the main agent's `Stop` does not prove a subagent's
-request, so it holds `pause` until the spawn's agent ends; on a Codex row
-that holds for a subagent's request allowed as well (see
+done at the pane. The main agent's `Stop` does not prove a subagent's
+request, allowed or denied, so it holds `pause` until that subagent's
+`SubagentStop` (Claude rows) or the spawn's agent ends (see
 [How the hold differs on Codex rows](#how-the-hold-differs-on-codex-rows)). To stop a held
 spawn, `kill` it, or have a person or an LLM do what `pause` would:
 
@@ -1144,8 +1147,8 @@ spawn, `kill` it, or have a person or an LLM do what `pause` would:
    ```
 
 4. Poll `get` or `status` until the row reads `ended`: `send-keys` does
-   not wait for it as `pause` does. A Codex row reads `ended` only after
-   `find-missing` or `pause` sees its agent gone (see the
+   not wait for it as `pause` does. These reads can reconcile a Codex row's
+   exit once it reported its end and its agent is gone (see the
    [caller contract](caller-contract.md#when-a-codex-agent-exits)).
 
 Never pass the hash from an automatic flow (see "The look-and-send path"
@@ -1166,8 +1169,9 @@ a live hook's verdict or deny does only if both:
   write); and
 - The agent kills the hook more than 1 s after its per-hook timeout.
 
-A relay hook of this release commits its last store write at least 2 s
-before the agent ends it, and its `confirm_by` is that end plus 2 s.
+The hook's write budget ends 2 s before its scheduled kill, and its
+`confirm_by` is that kill plus 2 s. A commit already in progress may finish
+later; the final budget check suppresses response output in that case.
 Nothing stored shows a hook stuck delivering, so this race is not closed
 for a call that carries a pane hash (a pane answer, or a plain call that
 passes the dialog hold). A plain call without one stays refused after
@@ -1189,9 +1193,9 @@ prove it gone:
 
 | `proven_gone_how` | Proof |
 |---|---|
-| `tool_ran` | A Claude agent's `PostToolUse` or `PostToolUseFailure` carrying the request's `tool_use_id`: the tool ran, so its dialog was answered. Any Claude request with that id, a subagent's included. Cursor requires current conversation/launch-bound invocation proof for the exact request and tool id; accepted shell and MCP output and the failed invocation's proof-only meaning are defined in [Cursor spawns](#cursor-spawns). Generic completed/failed status is insufficient. Never on a Codex row. |
-| `turn_end` | The turn of the agent that asked ended after the request was written. An owned main-agent `Stop`, Claude idle-prompt Notification or Codex/Cursor main Interrupt proves only a request durably eligible for main-turn proof, with no child id, recorded before the second the report started. Missing child identity alone never establishes eligibility. |
-| `agent_gone` | For non-Cursor spawns, `find-missing`'s mark of the spawn `missing`, the agent's terminal `SessionEnd`, or `resume`'s move of the finished spawn to `pending`: every request of the spawn. Upgrading the store proves every request of a non-Cursor spawn already `ended` or `missing` the same way. Cursor terminal closes leave proof unchanged; see [Cursor spawns](#cursor-spawns). |
+| `tool_ran` | Cursor only: current conversation/launch-bound invocation proof for the exact request and tool id; accepted shell and MCP output and the failed invocation's proof-only meaning are defined in [Cursor spawns](#cursor-spawns). Generic completed/failed status is insufficient. A Claude or Codex request carries no `tool_use_id`, so no `PostToolUse` proves one. |
+| `turn_end` | The turn of the agent that asked ended after the request was written. An owned main-agent `Stop`, Claude idle-prompt Notification or Codex/Cursor main Interrupt proves only a request durably eligible for main-turn proof, with no child id, recorded before the second the report started. Missing child identity alone never establishes eligibility. An owned Claude `SubagentStop` proves that subagent's requests (its `agent_id`) recorded before the second the hook started, allowed, denied or unanswered. |
+| `agent_gone` | For non-Cursor spawns, a recovery check's mark of the spawn `missing`, the agent's terminal `SessionEnd`, or `resume`'s move of the finished spawn to `pending`: every request of the spawn. Upgrading the store proves every request of a non-Cursor spawn already `ended` or `missing` the same way. Cursor terminal closes leave proof unchanged; see [Cursor spawns](#cursor-spawns). |
 
 Main-turn eligibility is stored independently of child identity and survives
 restart. Historical non-Cursor main/child behavior is preserved: main
@@ -1201,9 +1205,10 @@ requests and new unknown-origin requests remain ineligible, including
 those with a null child id. An explicit ineligible value remains ineligible.
 A known child cannot gain main-turn proof even with contradictory stored
 metadata. Child or unknown-origin completion, interruption or session end
-is not proof; only matching tool-invocation evidence, the owning launch
-ending (the spawn closing, or `resume` replacing the launch) or, for a Cursor
-request the gateway never answered, its turn's end (`turn_end`; see
+is not proof, except a Claude subagent's own `SubagentStop` for its
+requests; otherwise only matching Cursor tool-invocation evidence, the owning
+launch ending (the spawn closing, or `resume` replacing the launch) or, for
+a Cursor request the gateway never answered, its turn's end (`turn_end`; see
 [Cursor spawns](#cursor-spawns)) can release an ineligible request. A
 decision, delivery acknowledgement, pane answer or recorded outside answer
 never grants eligibility.
@@ -1222,10 +1227,10 @@ Cursor spawn, one of an earlier launch excepted; see
 `send-keys` without `expect_pane_sha256` is refused with
 `ErrDialogMaybeOpen` and nothing is sent, in every live state of the
 spawn. `ErrSendKeysWhileRelayed` and `ErrRelayFallenBack` are checked
-first. In practice the hold lasts, after an allow, until the request's
-tool has run (on a Codex row, until an eligible main turn ends), and after a
-deny of an eligible main request, until the main agent's turn ends. Ineligible requests retain the child/unknown
-protection described above. A spawn
+first. In practice the hold on a Claude or Codex row lasts, after an allow
+or a deny, until the turn of the agent that asked ends: the main agent's for
+an eligible main request, a Claude subagent's own for its requests. Other
+ineligible requests retain the child/unknown protection described above. A spawn
 with no unproven permission request has no dialog hold (one that never asked
 for a permission included), but can still have a relay or fallback hold.
 A spawn with the relay off has none of these holds.
@@ -1313,8 +1318,8 @@ agent-director send-keys --instance-id <id> --request-token <T> \
 - It records `pane_answer` `sent`, `decision` the `--as` value and
   `decision_reason` `pane`, written to the trail as one
   `ad.row_mutation.committed` (`writer_process` `send_keys`), unless the
-  request was closed meanwhile (its tool's PostToolUse close, or a close
-  with its spawn): that close wins, and the call still succeeds, since the
+  request was closed meanwhile (with its spawn, for one): that close wins,
+  and the call still succeeds, since the
   key was sent.
 - When the key send fails, or that last write does, it releases its
   intent, trying up to 3 times within 10 s: the request stays
@@ -1374,104 +1379,59 @@ through the keys the check exists to stop.
 For Cursor, a validated exact-request execution can also close an
 unacknowledged request with `pane_answer` `tool_ran` and prove it gone. A
 recorded outside answer sends nothing and cannot authorize an ACP approval;
-plan acceptance and generic completion are not execution proof. The
-PostToolUse close described below is Claude-only.
+plan acceptance and generic completion are not execution proof.
 
 A genuinely unrecorded outside answer leaves its request fallen back and
 a plain `send-keys` refused until it is closed. An attached Cursor menu
 choice is recorded automatically; see [pane usage](usage.md#answer-a-request-at-the-pane).
 Once closed, a plain `send-keys` without a pane hash
 is still held (`ErrDialogMaybeOpen`) until the agent's hooks prove the request
-gone. Two ways close it:
+gone. Close it with `record-pane-answer` (it types nothing); on a Claude or
+Codex row no tool hook closes it, since its request carries no
+`tool_use_id`:
 
-1. **`record-pane-answer`** (it types nothing):
+```sh
+agent-director record-pane-answer --request-token <T> \
+    --as allow|deny|unknown --expect-pane-sha256 <H> [--n-lines N]
+```
 
-   ```sh
-   agent-director record-pane-answer --request-token <T> \
-       --as allow|deny|unknown --expect-pane-sha256 <H> [--n-lines N]
-   ```
+Pass `--as unknown` unless the answer was seen; the claim is stored,
+never checked. It is accepted when T is fallen back, no pane answer
+through `send-keys` on it is still being sent, its relay hook has been
+gone at least 2 s (from its `hook_gone_at`, written now when it has
+none, or from its `confirm_by` when that is earlier and the hook is
+judged by time: it cannot be checked, or the request was recorded
+by an older binary), and, under the store's write lock, the pane still
+has hash H. It
+records `pane_answer` `outside`, `pane_as` and `decision` the claim
+(`decision` `null` for `unknown`) and `decision_reason` `pane_outside`,
+written to the trail as one `ad.row_mutation.committed`
+(`writer_process` `record_pane_answer`), and returns them.
 
-   Pass `--as unknown` unless the answer was seen; the claim is stored,
-   never checked. It is accepted when T is fallen back, no pane answer
-   through `send-keys` on it is still being sent, its relay hook has been
-   gone at least 2 s (from its `hook_gone_at`, written now when it has
-   none, or from its `confirm_by` when that is earlier and the hook is
-   judged by time: it cannot be checked, or the request was recorded
-   by an older binary), and, under the store's write lock, the pane still
-   has hash H. It
-   records `pane_answer` `outside`, `pane_as` and `decision` the claim
-   (`decision` `null` for `unknown`) and `decision_reason` `pane_outside`,
-   written to the trail as one `ad.row_mutation.committed`
-   (`writer_process` `record_pane_answer`), and returns them.
-   - **Why the 2 s.** The agent draws its prompt only after the relay
-     hook ends, so a pane read in between may not show it yet, and the
-     hash of that read would still match. Too soon, or while the relay
-     hook may still answer the request, is `ErrClaimTooSoon`, whose
-     `err_details` give `hook_alive`, `hook_gone_at` and `not_before`:
-     `null` only while the relay hook is seen running; otherwise
-     `hook_gone_at` plus 2 s, or `confirm_by` plus 2 s for a hook judged
-     by time when that is earlier (also while such a hook may still
-     answer). Retry at `not_before`: a retry then is not refused as too
-     soon, and one before it gets the same refusal and `not_before`.
-   - Its other refusals: `ErrPermissionRequestNotFound` (no request has the
-     token), `ErrNoOpenPermissionRequest` (closed with its spawn),
-     `ErrAlreadyDecided` (confirmed, or already closed at the pane),
-     `ErrPaneAnswerInProgress`, `ErrPaneChanged`, `ErrStoreBusy`, and the
-     tmux errors of `read-pane`.
-2. **The PostToolUse close** (Claude rows only: a Codex request carries no
-   `tool_use_id`, so a fallen-back Codex request closes only by the first
-   way). When the agent's `PostToolUse` or
-   `PostToolUseFailure` hook carries the `tool_use_id` of a fallen-back
-   request recorded from this release on, the tool ran, so its prompt was
-   answered allow: the hook records `pane_answer` `tool_ran`, `decision`
-   `allow` and `decision_reason` `tool_ran`, only while the request still
-   awaits an answer and its relay hook is judged gone (see
-   [hooks.md](hooks.md#a-request-whose-tool-ran)). It closes only allows:
-   Claude Code runs no hook for a deny at its prompt. That hook can fail
-   too, so this close is a help, not a guarantee. The same hook proves the
-   request gone (`tool_ran`), whether or not it closes it.
+- **Why the 2 s.** The agent draws its prompt only after the relay
+  hook ends, so a pane read in between may not show it yet, and the
+  hash of that read would still match. Too soon, or while the relay
+  hook may still answer the request, is `ErrClaimTooSoon`, whose
+  `err_details` give `hook_alive`, `hook_gone_at` and `not_before`:
+  `null` only while the relay hook is seen running; otherwise
+  `hook_gone_at` plus 2 s, or `confirm_by` plus 2 s for a hook judged
+  by time when that is earlier (also while such a hook may still
+  answer). Retry at `not_before`: a retry then is not refused as too
+  soon, and one before it gets the same refusal and `not_before`.
+- Its other refusals: `ErrPermissionRequestNotFound` (no request has the
+  token), `ErrNoOpenPermissionRequest` (closed with its spawn),
+  `ErrAlreadyDecided` (confirmed, or already closed at the pane),
+  `ErrPaneAnswerInProgress`, `ErrPaneChanged`, `ErrStoreBusy`, and the
+  tmux errors of `read-pane`.
 
 #### Recovering a wedged relayed spawn
 
-The hook-specific sequence below describes Claude and Codex. For Cursor,
-follow [the caller contract](caller-contract.md#permission-relay): a recorded
-unacknowledged decision can still leave a connected native request answerable
-after settlement. An `ErrAlreadyDecided` alone establishes no receipt.
-
-At the window's end the relay hook normally denies the request itself
-(see "Relay timeout default and override" above): `decide` then returns
-`ErrAlreadyDecided` (`decision_reason` `timeout`) and there is nothing to
-recover. A relayed spawn is wedged when its relay hook died or was killed
-without answering: `decide`, a plain `send-keys` and `pause` return
-`ErrRelayFallenBack`. Recover it through agent-director, **never through
-raw tmux**:
-
-1. Take the request's facts from the error's `err_details` (or
-   `get-permission`). If `decide` returns `ErrAlreadyDecided` instead, the
-   relay hook or another caller answered the request and there is nothing
-   to recover; if it returns `ErrNoOpenPermissionRequest`, the request is
-   closed or its prompt cannot be shown to wait: do not answer it at the
-   pane. If a plain `send-keys` is still refused with `ErrRelayFallenBack`
-   on that request (a stale record from an older binary), close it
-   with step 4.
-2. `read-pane`, and have a person or an LLM look at it.
-3. If the request's prompt waits there, answer it with `send-keys` and its
-   `request_token`, the key and verdict chosen, and that read's
-   `pane_sha256`.
-4. If it was answered already, close it with `record-pane-answer` (`--as
-   unknown` unless the answer was seen).
-5. Both are audited: `ad.send_keys.called` (with `guard_evaluation`
-   `released` for a pane answer let through) and the request's
-   `ad.row_mutation.committed`.
-6. Neither proves the request gone: a plain `send-keys` without a pane
-   hash, and `pause`, stay held (`ErrDialogMaybeOpen`) until the agent's hooks
-   prove it (after a deny of an eligible main request, normally the turn's `Stop`; on a Codex row, the
-   turn's `Stop` or Interrupt, after an allow too). To type before that,
-   read the pane again and send with that read's `pane_sha256`; to stop
-   the spawn, see "`pause`" under "Send-keys interaction" above. On Cursor,
-   the hash passes only the API's hold: a gateway refusal returns
-   `gateway_refused`. Follow [Cursor input outcomes](caller-contract.md#cursor-input-outcomes)
-   for recovery, including kill and resume if the hold cannot be cleared.
+Follow [Permission relay](caller-contract.md#permission-relay) for polling,
+uncertain commits and fallback recovery, and
+[Answer a request at the pane](usage.md#answer-a-request-at-the-pane) for
+commands. Cursor input holds follow
+[Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
+`ErrAlreadyDecided` alone proves neither receipt nor dialog closure.
 
 ### Known limitations
 
@@ -1483,14 +1443,15 @@ processes, never the agent's screen. These cases are not covered:
   no pane answer is recorded through agent-director. They do not say
   whether the agent's permission prompt still waits: someone at the pane
   may already have answered it. Until such a request is closed
-  (`record-pane-answer`, or the PostToolUse close of a Claude row's allow),
+  (`record-pane-answer`),
   a plain `send-keys` is refused, and `get` lists it while the spawn is in
   `check_permission`. Until the agent's hooks also prove it gone (the main
-  agent's `Stop` or idle-prompt Notification after it, or a Claude row's tool's
-  `PostToolUse`; on a Codex row its `Stop` or Interrupt), the spawn stays in
+  agent's `Stop` or idle-prompt Notification after it, or for a subagent's
+  request its `SubagentStop`; on a Codex row the main agent's `Stop` or
+  Interrupt), the spawn stays in
   `check_permission` until a later hook
   moves it out (`Stop` on Claude/Codex, or Claude's `AskUserQuestion`), its moves to
-  `working` are held, and `find-missing` does not repair the row; after a
+  `working` are held, and shared checks do not repair the row; after a
   deny at a Claude pane that interrupts the turn (Claude Code sends no `Stop`
   then), that lasts until the idle-prompt Notification or the next turn's
   `Stop`. Once it is closed, a plain `send-keys` without a pane hash stays
@@ -1500,12 +1461,12 @@ processes, never the agent's screen. These cases are not covered:
   stands for, so a plain `send-keys` is not refused, and its Enter can
   answer that prompt. The dialog hold starts at the request's first write,
   so it does not cover this case.
-- **A confirmed answer not returned.** The relay hook confirms its verdict
-  or its timeout deny at least 2 s before the agent ends it, then writes
-  it. A hook that dies or stalls past the agent's kill between the two
-  leaves the request reading `delivered` while the agent never received
-  the answer: `decide` on it returns `ErrAlreadyDecided`, which advises no
-  pane answer. The request is not proven gone, so a plain `send-keys`
+- **A confirmed answer not returned.** A late or uncertain acknowledgement
+  commit, or a hook that dies between acknowledgement and output, can leave
+  `delivered` with no answer received. See
+  [Permission relay](caller-contract.md#permission-relay) for this distinction
+  and recovery. `decide` on it returns `ErrAlreadyDecided`. Without proof the
+  request is not known gone, so a plain `send-keys`
   without a pane hash is held (`ErrDialogMaybeOpen`) and `get` lists it in
   `unproven_requests` until someone looks at the pane.
 - **Between the capture and the key.** The pane can change between
@@ -1524,40 +1485,41 @@ processes, never the agent's screen. These cases are not covered:
   before drawing its prompt can let a caller record the request answered
   before the prompt appears. The request stays unproven, so a plain
   `send-keys` without a pane hash is held until the agent's hooks prove it gone.
-- **A subagent's denied request.** A request carrying an `agent_id` (a
-  subagent's or an in-process teammate's) is proven gone only by its
-  tool's `PostToolUse` or by the spawn's end: the main agent's `Stop` and
-  idle-prompt Notification do not cover it, since a background subagent
-  can outlive the main turn, and the subagent's own stop hook
-  (`SubagentStop`) proves no request gone. A deny runs no tool, so after a denied
-  subagent request a plain `send-keys` without a pane hash, and `pause`,
-  are held until the spawn's agent ends; only a person or an LLM who
-  looked, sending with the pane's hash, gets keys through. A subagent's
-  request answered at the pane outside agent-director also holds the
-  spawn's moves to `working` until `record-pane-answer`, its tool's
-  `PostToolUse` or the spawn's end. On a Codex row no tool-ran proof
-  exists, so an allowed subagent request is held the same way (see
+- **A subagent's request.** A request carrying an `agent_id` (a
+  subagent's or an in-process teammate's) is proven gone only by a
+  `SubagentStop` with that `agent_id` (Claude rows) or by the spawn's end,
+  whether it was allowed or denied: the main agent's `Stop` and idle-prompt
+  Notification do not cover it, since a background subagent can outlive the
+  main turn. Until then a plain `send-keys` without a pane hash, and
+  `pause`, are held; only a person or an LLM who looked, sending with the
+  pane's hash, gets keys through. A subagent's request answered at the pane
+  outside agent-director also holds the spawn's moves to `working` until
+  `record-pane-answer`, its `SubagentStop` or the spawn's end. If Claude
+  Code sends no `SubagentStop` for that agent, and on a Codex row, whose
+  `SubagentStop` proves nothing, the hold lasts until the spawn's agent ends
+  (see
   [How the hold differs on Codex rows](#how-the-hold-differs-on-codex-rows)).
 - **A request recorded in the hook's start second.** A `Stop`,
   idle-prompt Notification or Codex/Cursor main Interrupt proves only eligible
   main requests recorded
-  before the second it started, so one recorded in that second stays unproven, holding plain
+  before the second it started, and a Claude `SubagentStop` only that
+  subagent's, so one recorded in that second stays unproven, holding plain
   `send-keys` (and, while it awaits an answer, the spawn's moves to
-  `working`) until a later turn end.
-- **Lost end-of-turn hooks.** After a denied eligible main request (on a Codex row, an
-  allowed one too), if both the turn's `Stop` and the idle-prompt
-  Notification are lost (on a Codex row, its one end hook: the `Stop` or
-  Interrupt), a plain `send-keys` without a pane hash stays held until
-  someone looks and sends with the pane's hash, or the spawn ends.
-- **A key to stop a busy agent after a deny.** An `Escape` sent to stop the
-  agent is a plain `send-keys`: right after a deny (on a Codex row, an allow
-  too) it is held until the turn ends, so it needs a person or an LLM to look and send it with the
-  pane's hash.
+  `working`) until a later proof.
+- **Lost end-of-turn hooks.** After an eligible main request, if both the
+  turn's `Stop` and the idle-prompt Notification are lost (on a Codex row,
+  its one end hook: the `Stop` or Interrupt), a plain `send-keys` without a
+  pane hash stays held until someone looks and sends with the pane's hash,
+  or the spawn ends.
+- **A key to stop a busy agent after an answer.** An `Escape` sent to stop
+  the agent is a plain `send-keys`: right after an allow or a deny it is
+  held until the turn ends, so it needs a person or an LLM to look and send
+  it with the pane's hash.
 - **`pause` has no way past the hold.** `pause` takes no pane hash, so a
   relay-on spawn with a request not proven gone refuses it
   (`ErrDialogMaybeOpen`) until the agent's hooks prove the request gone: after
-  a denied subagent request (on a Codex row, an allowed one too), until the
-  spawn's agent ends; after a request
+  a subagent's request, until that subagent's `SubagentStop` (Claude rows)
+  or the spawn's agent ends; after a request
   recorded by an older binary on an agent already idle at its prompt when
   you upgraded, until its next turn ends. Stopping such a spawn needs
   `kill`, or a person or an LLM who looks at the pane and sends `/exit`
@@ -1597,6 +1559,3 @@ processes, never the agent's screen. These cases are not covered:
   <https://docs.claude.com/en/docs/claude-code/iam#permission-rules>
 - Claude Code settings file:
   <https://docs.claude.com/en/docs/claude-code/settings>
-- Empirical investigation (gitignored, in-repo):
-  `reference/permissions-deny-tool-name-research.md`,
-  `reference/claude-settings-research.md`

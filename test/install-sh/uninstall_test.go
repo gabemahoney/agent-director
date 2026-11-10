@@ -504,7 +504,7 @@ func TestUninstallRemovesHookEntriesBesideOddValues(t *testing.T) {
 	}
 }
 
-// The old-copies advice each script prints (b.f3n, J34), before the
+// The old-copies advice each script prints (b.f3n, J48), before the
 // shell-quoted paths it names.
 const (
 	installOldCopies   = "  settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:"
@@ -537,15 +537,15 @@ func oldCopiesNamed(t *testing.T, out, phrase string) []string {
 	return strings.Split(strings.TrimSuffix(string(words), "\x00"), "\x00")
 }
 
-// TestAdviceFollow_J34_UninstallDeleteNamedCopiesAndRerun (b.f3n): J34,
-// uninstall.sh's copy of install.sh's advice (advice_follow.sh's test_J34),
+// TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun (b.f3n): J48,
+// uninstall.sh's copy of install.sh's advice (advice_follow.sh's test_J48),
 // "copies of settings.json that earlier releases kept may hold its secrets
 // (tokens, say) and can be deleted: <paths>". Under a HOME holding a space and
 // shell characters, the line names exactly the settings.json.bak.<ts> copies,
 // not a user's settings.json.bak.before-mcp; with what it names deleted, the
 // re-run prints no such line, and settings.json and the user's file are as they
 // were.
-func TestAdviceFollow_J34_UninstallDeleteNamedCopiesAndRerun(t *testing.T) {
+func TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
 	}
@@ -584,7 +584,7 @@ func TestAdviceFollow_J34_UninstallDeleteNamedCopiesAndRerun(t *testing.T) {
 // install, its re-run and uninstall.sh each leave no settings.json.bak.* and
 // keep the env; with --no-hooks they leave settings.json byte for byte. Copies
 // an earlier release left are kept as they were, and each run names exactly
-// them on one line (J34's advice); a user's own settings.json.bak.before-mcp is
+// them on one line (J48's advice); a user's own settings.json.bak.before-mcp is
 // kept and never named.
 func TestSettingsBackupNotKept(t *testing.T) {
 	const (

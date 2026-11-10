@@ -378,6 +378,7 @@ describe("get", () => {
         runHelper("seed-spawn", {
           store,
           id: "id-get-1",
+          "writer-pid": String(process.pid),
           state: "waiting",
           "create-store": true,
         });
@@ -552,18 +553,24 @@ describe("send-keys", () => {
           ignorePaths: loadIgnorePathsForVerb("send-keys"),
         });
 
-        // Each run: one lookup, one pane listing, then the text and Enter by
-        // pane id, all on the row's socket (SR-7.2, SR-3.7).
+        // Each run retains the initial target and revalidates it before writes.
+        // All reads and both input actions use the row's socket and pane.
         for (const log of [logCli, logClient]) {
           const calls = fakeTmuxCalls(log);
           expect(calls.map((argv) => argv.slice(1, 5))).toEqual([
             ["-u", "-S", socket, "display-message"], // the lookup: its server identity read first (b.47f)
             ["-u", "-S", socket, "list-panes"],
+            ["-u", "-S", socket, "display-message"],
+            ["-u", "-S", socket, "list-panes"],
+            ["-u", "-S", socket, "display-message"],
+            ["-u", "-S", socket, "list-panes"],
             ["-u", "-S", socket, "send-keys"],
+            ["-u", "-S", socket, "display-message"],
+            ["-u", "-S", socket, "list-panes"],
             ["-u", "-S", socket, "send-keys"],
           ]);
-          expect(calls[2].slice(4)).toEqual(["send-keys", "-t", paneId, "-l", "--", "hello"]);
-          expect(calls[3].slice(4)).toEqual(["send-keys", "-t", paneId, "Enter"]);
+          expect(calls[6].slice(4)).toEqual(["send-keys", "-t", paneId, "-l", "--", "hello"]);
+          expect(calls[9].slice(4)).toEqual(["send-keys", "-t", paneId, "Enter"]);
         }
       } finally {
         cleanup();
@@ -1235,14 +1242,16 @@ describe("find-missing", () => {
     "success path",
     async () => {
       const { homeA, storeB, cleanup } = prepareStores((store) => {
-        runHelper("seed-empty-store", { store });
+        runHelper("seed-spawn", { store, id: "finished", state: "ended", "create-store": true });
       });
       try {
         const cli = runCli(["find-missing"], cliEnv(homeA));
         expect(cli.exitCode).toBe(0);
 
         using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
-        const ts = await client.findMissing({});
+        const ts = await client.findMissing({ timeout_ms: 1 });
+        const unknown = {status: "unknown", confirmed_at: null, source: null, checked_at: null, reason: "no_evidence"} as const;
+        expect(ts).toEqual({checks: [{instance_id: "finished", state: "ended", family_state: "waiting", idle_screen_availability: "available", process_liveness: "unknown", completion: "complete", reason: null, confirmations: {state: unknown, process_liveness: unknown, displayed_state: unknown}}], count: 0, ids: [], unverified: 0, unverified_ids: []});
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("find-missing"),
@@ -1255,7 +1264,39 @@ describe("find-missing", () => {
   );
 
   // No error path: find-missing no longer returns ErrProbeUnsupported (kept by
-  // SR-1.7); it is in NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
+  // SR-1.7), and this suite has no deterministic ErrStoreBusy fixture; it is in
+  // NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
+});
+
+describe("sweep", () => {
+  test(
+    "success path",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id: "finished", state: "ended", "create-store": true });
+      });
+      try {
+        const cli = runCli(["sweep"], cliEnv(homeA));
+        expect(cli.exitCode).toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        const ts = await client.sweep({ timeout_ms: 1 });
+        const unknown = {status: "unknown", confirmed_at: null, source: null, checked_at: null, reason: "no_evidence"} as const;
+        expect(ts).toEqual({checks: [{instance_id: "finished", state: "ended", family_state: "waiting", idle_screen_availability: "available", process_liveness: "unknown", completion: "complete", reason: null, confirmations: {state: unknown, process_liveness: unknown, displayed_state: unknown}}], count: 0, ids: [], unverified: 0, unverified_ids: []});
+
+        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+          ignorePaths: loadIgnorePathsForVerb("sweep"),
+        });
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  // No error path: sweep no longer returns ErrProbeUnsupported (kept by
+  // SR-1.7), and this suite has no deterministic ErrStoreBusy fixture; it is in
+  // NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
 });
 
 // ── expire ────────────────────────────────────────────────────────────────────
@@ -1480,6 +1521,7 @@ describe("list", () => {
         runHelper("seed-spawn", {
           store,
           id: "row-list-a",
+          "writer-pid": String(process.pid),
           state: "waiting",
           "create-store": true,
         });

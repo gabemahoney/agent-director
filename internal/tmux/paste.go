@@ -14,6 +14,15 @@ import (
 // A private named buffer avoids the shared default buffer and clipboard, and
 // stdin keeps payloads out of argv parsing and its size limit.
 func (c *Client) PasteKeysPane(socket, paneID, text string) (err error) {
+	return c.PasteKeysPaneGuarded(socket, paneID, text, nil)
+}
+
+// PasteKeysPaneGuarded preserves one paste and one Enter while allowing the
+// caller to recheck its journal admission immediately before either dispatch.
+// beforeWrite(false) gates paste; beforeWrite(true) gates Enter. A refusal
+// stops this call without replaying input. Buffer preparation grants no input
+// authority, so the first check follows the potentially waited buffer load.
+func (c *Client) PasteKeysPaneGuarded(socket, paneID, text string, beforeWrite func(enter bool) error) (err error) {
 	// paste-buffer silently ignores a pane in copy mode or with input disabled.
 	// Inspect tmux facts, never the application's screen. As with other pane
 	// input, callers must exclude concurrent operators changing the pane.
@@ -44,9 +53,19 @@ func (c *Client) PasteKeysPane(socket, paneID, text string) (err error) {
 	if failure := c.runFailure(CallSendText, res); failure != nil {
 		return failure
 	}
+	if beforeWrite != nil {
+		if err = beforeWrite(false); err != nil {
+			return err
+		}
+	}
 	if err = c.runAction(CallSendText, socket, []string{"paste-buffer", "-p", "-r", "-d", "-b", buffer, "-t", paneID}); err != nil {
 		return err
 	}
 	pasted = true // -d deleted our buffer; even a failed Enter must not replay it.
+	if beforeWrite != nil {
+		if err = beforeWrite(true); err != nil {
+			return err
+		}
+	}
 	return c.runAction(CallSendEnter, socket, []string{"send-keys", "-t", paneID, "Enter"})
 }

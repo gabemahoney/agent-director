@@ -169,24 +169,32 @@ type PaneKeySentDetails struct {
 	RequestToken string `json:"request_token"`
 }
 
-// SubmissionUnconfirmedDetails describes a refused or unconfirmed native or
-// Codex fallback paste attempt, pending Claude fallback input refused before
-// input (not_started), pending Codex or Claude fallback input without a
-// bounded hook-derived observation, or a Cursor submission its gateway refused.
-// Outcome is not_started, partial_input_unconfirmed, submission_unconfirmed or
-// gateway_refused (KeysSent and EnterMayHaveBeenSent true, Phase
-// enter_attempted, Reason the gateway's recorded reason; nothing reached
-// Cursor), or empty for a failed hook observation.
+// SubmissionUnconfirmedDetails reports delivery or dispatch facts for native,
+// manual, permission-pane and pause input and its cleanup, refused or failed
+// Codex fallback paste, pending Claude fallback input refused before input
+// (not_started, cancellation included), pending Codex or Claude fallback input
+// without a bounded hook-derived observation, or a Cursor submission its
+// gateway refused. Outcome is not_started, partial_input_unconfirmed,
+// submission_unconfirmed or gateway_refused (KeysSent and EnterMayHaveBeenSent
+// true, Phase enter_attempted, Reason the gateway's recorded reason; nothing
+// reached Cursor), or empty for a failed hook observation.
 // RowState is the last raw state read, not a synthetic state or proof that the
 // prompt remains unsubmitted.
 type SubmissionUnconfirmedDetails struct {
-	RequestID            string `json:"request_id,omitempty"`
-	Outcome              string `json:"outcome"`
-	Phase                string `json:"phase"`
-	BytesAttempted       int    `json:"bytes_attempted"`
-	EnterMayHaveBeenSent bool   `json:"enter_may_have_been_sent"`
-	LastQueue            *int   `json:"last_queue,omitempty"`
-	Reason               string `json:"reason"`
+	// RequestID identifies the native attempt when one was recorded.
+	RequestID string `json:"request_id,omitempty"`
+	// Outcome classifies delivery or dispatch; empty selects legacy fallback details.
+	Outcome string `json:"outcome"`
+	// Phase is the attempt or dispatch phase reported by this call, not proof of persistence.
+	Phase string `json:"phase"`
+	// BytesAttempted counts text bytes that may have been sent, not received bytes.
+	BytesAttempted int `json:"bytes_attempted"`
+	// EnterMayHaveBeenSent records possible Enter dispatch, not submission proof.
+	EnterMayHaveBeenSent bool `json:"enter_may_have_been_sent"`
+	// LastQueue is the last observed terminal input-queue length, if available.
+	LastQueue *int `json:"last_queue,omitempty"`
+	// Reason explains why the call could not confirm submission.
+	Reason string `json:"reason"`
 	// KeysSent means input was attempted and may have reached the pane.
 	KeysSent bool `json:"keys_sent"`
 

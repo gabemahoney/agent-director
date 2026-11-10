@@ -15,7 +15,9 @@ import (
 // find-missing does not judge that row while the owner is provably alive and
 // its launch holds the row. A spawn stalled past the pending grace period is
 // then neither marked missing (and then starts an agent no row tracks) nor
-// noted unreported under it. The launch ends its hold when it ends: its identity
+// noted unreported under it. A Cursor row whose exact recorded gateway is gone
+// is the one exception: the owner does not protect it, so the check marks it
+// missing. The launch ends its hold when it ends: its identity
 // write clears the owner, and ReleaseLaunchOwner does on every other path
 // that leaves the row pending, so a launch run by a long-lived process (the
 // MCP server, or a Go caller of pkg/api) does not hold the row for that

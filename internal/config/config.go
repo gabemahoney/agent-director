@@ -56,15 +56,16 @@ import (
 
 // Config is the top-level configuration tree. Field layout mirrors SRD §11.
 type Config struct {
-	Defaults Defaults `toml:"defaults"`
-	Relay    Relay    `toml:"relay"`
-	Pause    Pause    `toml:"pause"`
-	PreTrust PreTrust `toml:"pre_trust"`
-	Store    Store    `toml:"store"`
-	State    State    `toml:"state"`
-	Log      Log      `toml:"log"`
-	Tmux     Tmux     `toml:"tmux"`
-	Launch   Launch   `toml:"launch"`
+	Defaults     Defaults     `toml:"defaults"`
+	Relay        Relay        `toml:"relay"`
+	Pause        Pause        `toml:"pause"`
+	PreTrust     PreTrust     `toml:"pre_trust"`
+	Store        Store        `toml:"store"`
+	State        State        `toml:"state"`
+	Log          Log          `toml:"log"`
+	Tmux         Tmux         `toml:"tmux"`
+	Launch       Launch       `toml:"launch"`
+	Experimental Experimental `toml:"experimental"`
 }
 
 // Defaults holds per-invocation default behavior toggles.
@@ -487,21 +488,25 @@ func (s Store) EffectiveDbPath() (string, error) {
 	return expandTilde(DefaultDbPath, home), nil
 }
 
-// Launch holds the optional launch path of each agent (SR-5.0): the program
-// the first element of the pane's command is, for every launch of that agent
-// (spawn, reuse_finished, resume). A key that is unset or empty means the
-// program is launched by its name, claude, codex or agent (Cursor), found on
-// the PATH of the pane's environment.
+// Experimental holds independent, default-off agent opt-ins.
+type Experimental struct {
+	Droid bool `toml:"droid"`
+}
+
+// Launch holds the optional executable selection for each agent (SR-5.0),
+// used by spawn, reuse_finished and, for agents that support it, resume.
+// A key that is unset or empty selects the program by its name: claude,
+// codex, agent (Cursor) or droid, found on the PATH of the pane's environment.
 //
 // A value is an absolute path, or "~/" followed by a path, which Load joins
-// onto HOME (as [store] db_path's "~/" is). Load refuses anything else with
-// ErrConfigMalformed's description naming the key (launchRefusals): a blank
-// value, a relative path, "~" alone, "~user/...", and a "~/" value while HOME
-// is unset or empty. Nothing else is checked: Load and the launch make no file
-// or network I/O for these keys, so a path that names nothing gives what a
-// missing claude gives (the row stays pending and find-missing marks it
-// missing). Nothing is stored on the row; each launch reads the config in
-// force. Unknown keys under [launch] are ignored, as under any table.
+// onto HOME (as [store] db_path's "~/" is). DroidPath also accepts a bare
+// executable name, resolved on the pane's PATH. Load refuses other relative
+// paths, whitespace-only values, "~" alone, "~user/...", and a "~/" value
+// while HOME is unset or empty, with ErrConfigMalformed's description naming
+// the key (launchRefusals). It does not check whether the executable exists;
+// a missing program fails when launched. Nothing is stored on the row; each
+// launch reads the config in force. Unknown keys under [launch] are ignored,
+// as under any table.
 type Launch struct {
 	// ClaudePath is the program Claude launches run, as Load resolved it
 	// ("" when unset).
@@ -510,10 +515,12 @@ type Launch struct {
 	// unset). A Codex launch runs it in place of codex.
 	CodexPath  string `toml:"codex_path"`
 	CursorPath string `toml:"cursor_path"`
+	// DroidPath accepts an executable name, absolute path, or ~/ path.
+	DroidPath string `toml:"droid_path"`
 }
 
 // launchRefusals returns the description of each refused [launch] value, in
-// key order (claude_path, codex_path, cursor_path), or nil when every value loads. home is
+// key order (claude_path, codex_path, cursor_path, droid_path), or nil when every value loads. home is
 // the user's home directory as Load read it ("" when unset), which a "~/"
 // value needs.
 func (l Launch) launchRefusals(home string) []string {
@@ -522,16 +529,25 @@ func (l Launch) launchRefusals(home string) []string {
 		{"claude_path", l.ClaudePath},
 		{"codex_path", l.CodexPath},
 		{"cursor_path", l.CursorPath},
+		{"droid_path", l.DroidPath},
 	} {
+		allowed := "an absolute path or start with \"~/\""
+		withoutHome := "an absolute path"
+		if k.name == "droid_path" {
+			allowed = "a bare executable name, an absolute path or start with \"~/\""
+			withoutHome = "a bare executable name or an absolute path"
+		}
 		switch {
 		case k.value == "", filepath.IsAbs(k.value):
+		case k.name == "droid_path" && !strings.ContainsAny(k.value, "/\\~ \t\r\n\x00") && !strings.HasPrefix(k.value, "-") && k.value != "." && k.value != "..":
+			// Droid also accepts a bare executable name, resolved by the pane PATH.
 		case strings.HasPrefix(k.value, "~/"):
 			if home == "" {
-				out = append(out, fmt.Sprintf("%s = %q, which must be an absolute path or start with \"~/\", but HOME is unset or empty so \"~/\" cannot be resolved; use an absolute path",
-					k.name, k.value))
+				out = append(out, fmt.Sprintf("%s = %q, which must be %s, but HOME is unset or empty so \"~/\" cannot be resolved; use %s",
+					k.name, k.value, allowed, withoutHome))
 			}
 		default:
-			out = append(out, fmt.Sprintf("%s = %q, which must be an absolute path or start with \"~/\"", k.name, k.value))
+			out = append(out, fmt.Sprintf("%s = %q, which must be %s", k.name, k.value, allowed))
 		}
 	}
 	return out
@@ -639,7 +655,8 @@ func (e *ConfigError) Unwrap() error {
 //
 // Load also refuses a [launch] claude_path, codex_path or cursor_path that is neither
 // empty, an absolute path nor "~/..." with HOME set (launchRefusal, SR-5.0),
-// and joins a "~/" value onto HOME (resolvePaths).
+// and joins a "~/" value onto HOME (resolvePaths). The same rules apply to
+// droid_path, which additionally accepts a bare executable name for the pane's PATH.
 //
 // Load then validates the [tmux] table (SR-4.1): a negative value of any key,
 // and a positive value below its key's safe minimum, are refused, never
@@ -936,6 +953,7 @@ func resolvePaths(cfg Config, home string) Config {
 	cfg.Launch.ClaudePath = expandTilde(cfg.Launch.ClaudePath, home)
 	cfg.Launch.CodexPath = expandTilde(cfg.Launch.CodexPath, home)
 	cfg.Launch.CursorPath = expandTilde(cfg.Launch.CursorPath, home)
+	cfg.Launch.DroidPath = expandTilde(cfg.Launch.DroidPath, home)
 	return cfg
 }
 

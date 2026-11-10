@@ -186,7 +186,7 @@ func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
+	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -233,7 +233,7 @@ func TestCallableVerbsExcludesNonCallable(t *testing.T) {
 func TestCallableVerbsOrder(t *testing.T) {
 	want := []string{
 		"spawn", "status", "get", "send-keys", "read-pane", "kill",
-		"decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire",
+		"decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire",
 		"make-template", "list", "list-subagents", "pause", "version",
 	}
 	got := manifest.CallableVerbs()
@@ -284,9 +284,9 @@ func TestHandleFreeVerbsIsVersionOnly(t *testing.T) {
 // ── Field markers ────────────────────────────────────────────────────────────
 
 // TestAllowedValuesHaveAtLeastTwoEntries asserts that any field with a non-nil
-// AllowedValues slice has at least 2 entries — an enum with one value is a
-// constant, not an enum.
+// AllowedValues slice has at least 2 entries, except the optional lane marker.
 func TestAllowedValuesHaveAtLeastTwoEntries(t *testing.T) {
+	markers := 0
 	for _, verb := range manifest.Verbs {
 		for _, p := range verb.Params {
 			if p.AllowedValues != nil && len(p.AllowedValues) < 2 {
@@ -295,11 +295,21 @@ func TestAllowedValuesHaveAtLeastTwoEntries(t *testing.T) {
 			}
 		}
 		for _, f := range verb.ResultFields {
+			if f.Name == "integration_mode" {
+				markers++
+				if (verb.Name != "get" && verb.Name != "status") || f.Type != "string?" || !f.Nullable || f.AllowEmpty || !reflect.DeepEqual(f.AllowedValues, []string{"pane_only"}) {
+					t.Errorf("%s integration_mode = %+v; want optional pane_only literal", verb.Name, f)
+				}
+				continue
+			}
 			if f.AllowedValues != nil && len(f.AllowedValues) < 2 {
 				t.Errorf("Verb %q result field %q: AllowedValues has %d entry (want ≥2 or nil)",
 					verb.Name, f.Name, len(f.AllowedValues))
 			}
 		}
+	}
+	if markers != 2 {
+		t.Errorf("integration_mode fields = %d; want get and status", markers)
 	}
 }
 
@@ -590,7 +600,8 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	assertErrorNames(t, "spawn", "Spawn", false, "ErrCwdMissing", "ErrCwdNotAPath", "ErrCwdNotFound", "ErrCwdNotADirectory",
 		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey", "ErrInvalidFlags", "ErrInstanceIdCollision",
 		"ErrTmuxSessionNameInvalid", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate", "ErrTmuxUnresponsive", "ErrTmuxSessionConflict",
-		"ErrAgentMissing", "ErrAgentInvalid", "ErrAgentArgsMismatch", "ErrPermissionsUnsupported", "ErrTemplateAgentMissing")
+		"ErrAgentMissing", "ErrAgentInvalid", "ErrAgentArgsMismatch", "ErrPermissionsUnsupported", "ErrTemplateAgentMissing",
+		"ErrExperimentalAgentDisabled", "ErrModelMissing", "ErrAgentCapabilityUnsupported")
 	conflict := goDocErrorBulletText(t, "Spawn", "ErrTmuxSessionConflict")
 	for _, phrase := range []string{`after "duplicate session"`, "the new row is ended"} {
 		if !strings.Contains(conflict, phrase) {
@@ -605,10 +616,11 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 }
 
 // TestListHasSRDErrorNames pins list's, and Client.List's "Errors:" list, to
-// exactly its label k=v parse rejection (SRD §13.1) and ErrInvalidFlags, the
-// shared layer's refusal of a negative limit (b.c4n).
+// exactly its label k=v parse rejection (SRD §13.1), ErrInvalidFlags, the
+// shared layer's refusal of a negative limit (b.c4n), and ErrStoreBusy, a
+// zero-wait selection or projection read that did not finish within its bound.
 func TestListHasSRDErrorNames(t *testing.T) {
-	assertErrorNames(t, "list", "List", true, "ErrInvalidFlags", "ErrListInvalidLabel")
+	assertErrorNames(t, "list", "List", true, "ErrInvalidFlags", "ErrListInvalidLabel", "ErrStoreBusy")
 }
 
 // TestListSubagentsHasSRDErrorNames pins list-subagents', and
@@ -626,11 +638,12 @@ func TestKillHasSRDErrorNames(t *testing.T) {
 }
 
 // TestPauseHasSRDErrorNames pins pause's to exactly SR-1.7's seven names and
-// the three relay refusals of the plain send-keys it is held as (b.zdz).
+// the three relay refusals of the plain send-keys it is held as (b.zdz), plus
+// ErrSubmissionUnconfirmed for uncertain input delivery.
 func TestPauseHasSRDErrorNames(t *testing.T) {
-	assertErrorNames(t, "pause", "Pause", true, "ErrPauseTimeout", "ErrSpawnNotFound", "ErrSpawnNotPausable",
+	assertErrorNames(t, "pause", "Pause", true, "ErrAgentCapabilityUnsupported", "ErrPauseTimeout", "ErrSpawnNotFound", "ErrSpawnNotPausable",
 		"ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
-		"ErrSendKeysWhileRelayed", "ErrRelayFallenBack", "ErrDialogMaybeOpen")
+		"ErrSendKeysWhileRelayed", "ErrRelayFallenBack", "ErrDialogMaybeOpen", "ErrSubmissionUnconfirmed")
 }
 
 // TestReadPaneHasInteractErrorNames pins read-pane's to exactly SR-1.7's five
@@ -645,7 +658,7 @@ func TestReadPaneHasInteractErrorNames(t *testing.T) {
 // malformed key, b.vpb), ErrCwdNotFound and ErrCwdNotADirectory (a row whose
 // saved cwd is gone or not a directory, b.vit).
 func TestResumeHasSRDErrorNames(t *testing.T) {
-	assertErrorNames(t, "resume", "Resume", true, "ErrCwdNotADirectory", "ErrCwdNotFound", "ErrJsonlMissing", "ErrJsonlNeverWritten", "ErrNoSessionId",
+	assertErrorNames(t, "resume", "Resume", true, "ErrAgentCapabilityUnsupported", "ErrCwdNotADirectory", "ErrCwdNotFound", "ErrJsonlMissing", "ErrJsonlNeverWritten", "ErrNoSessionId",
 		"ErrReservedEnvKey", "ErrSpawnNotFound", "ErrSpawnNotResumable", "ErrTmuxNotAvailable", "ErrTmuxSessionConflict",
 		"ErrTmuxSessionCreate", "ErrTmuxUnresponsive")
 }
@@ -655,7 +668,7 @@ func TestResumeHasSRDErrorNames(t *testing.T) {
 // extra_env key, reserved or malformed (b.66q), and the two agent refusals
 // ErrTemplateAgentMissing and ErrPermissionsUnsupported (SR-1.6).
 func TestMakeTemplateHasErrorNames(t *testing.T) {
-	assertErrorNames(t, "make-template", "MakeTemplate", true, "ErrTemplateNameUnsafe", "ErrTemplateExists",
+	assertErrorNames(t, "make-template", "MakeTemplate", true, "ErrExperimentalAgentDisabled", "ErrAgentCapabilityUnsupported", "ErrTemplateNameUnsafe", "ErrTemplateExists",
 		"ErrTemplateMalformed", "ErrReservedEnvKey", "ErrTemplateAgentMissing", "ErrPermissionsUnsupported", "ErrSpawnDeniedFlag")
 }
 
@@ -665,7 +678,7 @@ func TestMakeTemplateHasErrorNames(t *testing.T) {
 // a pane answer's write lock; and step 2c's hold of a plain call while a
 // request is not proven gone.
 func TestSendKeysHasInteractErrorNames(t *testing.T) {
-	assertErrorNames(t, "send-keys", "SendKeys", true, "ErrSendKeysWhileRelayed", "ErrSpawnNotFound",
+	assertErrorNames(t, "send-keys", "SendKeys", true, "ErrAgentCapabilityUnsupported", "ErrSendKeysWhileRelayed", "ErrSpawnNotFound",
 		"ErrSpawnNotInteractive", "ErrSubmissionUnconfirmed", "ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
 		"ErrInvalidFlags", "ErrRelayFallenBack", "ErrDialogMaybeOpen", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided",
 		"ErrPaneAnswerInProgress", "ErrPaneChanged", "ErrStoreBusy")
@@ -674,7 +687,7 @@ func TestSendKeysHasInteractErrorNames(t *testing.T) {
 // TestRecordPaneAnswerHasErrorNames pins record-pane-answer's (b.146 rule 13)
 // to exactly its thirteen names, as Client.RecordPaneAnswer's "Errors:" list.
 func TestRecordPaneAnswerHasErrorNames(t *testing.T) {
-	assertErrorNames(t, "record-pane-answer", "RecordPaneAnswer", true, "ErrInvalidFlags", "ErrPermissionRequestNotFound",
+	assertErrorNames(t, "record-pane-answer", "RecordPaneAnswer", true, "ErrAgentCapabilityUnsupported", "ErrInvalidFlags", "ErrPermissionRequestNotFound",
 		"ErrSpawnNotFound", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided", "ErrClaimTooSoon", "ErrPaneAnswerInProgress",
 		"ErrPaneChanged", "ErrStoreBusy", "ErrTmuxNotAvailable", "ErrTmuxCaptureFailed", "ErrTmuxUnresponsive",
 		"ErrTmuxSessionConflict")
@@ -808,5 +821,27 @@ func TestExperimentalContextContract(t *testing.T) {
 		if !strings.Contains(text, phrase) {
 			t.Errorf("subagent context description lacks %q", phrase)
 		}
+	}
+}
+
+// Both public spellings share fields and flags; the short legacy description
+// points to the canonical safety contract rather than duplicating help text.
+func TestSweepAliasManifest(t *testing.T) {
+	canonical, ok := manifest.Lookup("sweep")
+	if !ok {
+		t.Fatal("missing sweep")
+	}
+	alias, ok := manifest.Lookup("find-missing")
+	if !ok {
+		t.Fatal("missing find-missing")
+	}
+	if alias.Description != "Compatibility alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety." {
+		t.Errorf("alias description = %q", alias.Description)
+	}
+	if len(canonical.Params) != 0 || len(alias.Params) != 0 {
+		t.Error("recovery gained verb-specific parameters")
+	}
+	if !reflect.DeepEqual(canonical.ResultFields, alias.ResultFields) || !reflect.DeepEqual(canonical.ErrorNames, alias.ErrorNames) {
+		t.Error("alias contract differs from sweep")
 	}
 }

@@ -109,7 +109,7 @@ test("public-surface: Client exposes no migrate method (SR-1)", () => {
   // Client class rather than the .d.ts goldens, so it holds independently
   // of golden regeneration: even if someone regenerates the surface goldens
   // after accidentally adding a migrate verb, this test still fails.
-  const forbidden = ["migrate", "migrateSchema", "runMigration", "schemaMigrate"];
+  const forbidden = ["migrate", "migrateSchema", "runMigration", "schemaMigrate", "migrateJournal", "journalMigrate"];
 
   const seen = new Set<string>();
   for (
@@ -139,8 +139,8 @@ test("public-surface: Client exposes no migrate method (SR-1)", () => {
   ).toBe(true);
 
   // The tracked .d.ts goldens must also stay migration-free (no method, option
-  // or param), the refusal's error class (b.cm7) aside. This part is
-  // golden-derived (informational), but the runtime checks above are the
+  // or param), the refusal's error class (b.cm7) aside.
+  // This part is golden-derived (informational), but the runtime checks above are the
   // load-bearing, regeneration-proof guarantee.
   for (const f of TRACKED) {
     const golden = fs.readFileSync(path.join(fixtureDir, `${f}.golden`), "utf-8");
@@ -182,6 +182,16 @@ function interfaceBody(src: string, name: string): string {
 
 const typesGolden = () =>
   fs.readFileSync(path.join(fixtureDir, "types.d.ts.golden"), "utf-8");
+
+test("public-surface: pane-only reads retain optional integration_mode", () => {
+  for (const iface of ["GetResult", "StatusResult", "ListRow"]) {
+    expect(interfaceBody(typesGolden(), iface)).toMatch(/\bintegration_mode\?\s*:\s*"pane_only"\s*;/);
+  }
+  const errors = fs.readFileSync(path.join(fixtureDir, "errors.d.ts.golden"), "utf-8");
+  for (const name of ["ErrExperimentalAgentDisabled", "ErrAgentCapabilityUnsupported", "ErrModelMissing"]) {
+    expect(errors).toContain(`class ${name} extends AgentDirectorError`);
+  }
+});
 
 test.each(["StatusResult", "GetResult", "ListRow"])(
   "public-surface: %s carries required binary family_state",
@@ -282,7 +292,9 @@ test("public-surface: extra_env is INPUT-only — absent from GetResult & ListRo
 });
 
 test("public-surface: FindMissingResult carries unverified count and ids (SR-8)", () => {
-  const body = interfaceBody(typesGolden(), "FindMissingResult");
+  expect(typesGolden()).toMatch(/interface FindMissingResult extends SweepResult/);
+  const body = interfaceBody(typesGolden(), "SweepResult");
+  expect(body).toMatch(/\bchecks\s*:\s*SweepCheck\[\]/);
   expect(body, "FindMissingResult must declare a numeric unverified count").toMatch(
     /\bunverified\s*:\s*number/
   );
@@ -297,7 +309,8 @@ test("public-surface: state stays a plain string — no union/enum (SR-8.3 guard
   // types must resolve to the bare `string` type — never `state: "pending" |
   // …` and never an enum reference. This is the TS twin of the Go
   // TestStateEnumByteIdentity named pin.
-  const golden = typesGolden();
+  // Confirmations' `state` is the lifecycle field's record (b.x9o), not the field.
+  const golden = typesGolden().replace(interfaceBody(typesGolden(), "Confirmations"), "");
   const stateDecls = golden.match(/^\s*state\s*[?]?\s*:\s*[^;]+;/gm) ?? [];
   expect(stateDecls.length, "expected at least one `state:` declaration").toBeGreaterThan(0);
   for (const decl of stateDecls) {
@@ -306,7 +319,7 @@ test("public-surface: state stays a plain string — no union/enum (SR-8.3 guard
     // (a plain array of strings). Anything containing `|` (a union) or a quote
     // (a string-literal enum member) is a forbidden state-enum widening.
     expect(
-      rhs === "string" || rhs === "string[]",
+      rhs === "string" || rhs === "string[]" || rhs === 'StatusResult["state"]',
       `state must stay a plain string / string[], got \`${decl.trim()}\` — SR-8.3 forbids a union/enum`
     ).toBe(true);
   }
@@ -365,3 +378,37 @@ test.each(["StatusResult", "GetResult", "ListRow"])(
     }
   }
 );
+
+test.each(["StatusResult", "GetResult", "ListRow", "SweepCheck"])(
+  "public-surface: %s requires process_liveness and confirmations (b.x9o)", (iface) => {
+    const body = interfaceBody(typesGolden(), iface);
+    expect(body).toMatch(/\bprocess_liveness\s*:\s*ProcessLiveness\s*;/);
+    expect(body).toMatch(/\bconfirmations\s*:\s*Confirmations\s*;/);
+  }
+);
+
+test("public-surface: Confirmations holds exactly three records of exactly five nullable keys (b.x9o)", () => {
+  const golden = typesGolden();
+  // Member declarations only: JSDoc lines start with "*" or "/".
+  const members = (iface: string) => interfaceBody(golden, iface).split("\n").map((l) => l.trim())
+    .filter((l) => l !== "" && !l.startsWith("*") && !l.startsWith("/"));
+  expect(members("Confirmations")).toEqual(["state: Confirmation;", "process_liveness: Confirmation;", "displayed_state: Confirmation;"]);
+  expect(members("Confirmation")).toEqual(["status: ConfirmationStatus;", "confirmed_at: string | null;",
+    "source: ConfirmationSource | null;", "checked_at: string | null;", "reason: ConfirmationReason | null;"]);
+  const union = (name: string) => golden.match(new RegExp(`export type ${name} = ([^;]+);`))?.[1].replace(/\s+/g, " ").trim();
+  expect(union("ProcessLiveness")).toBe(`"alive" | "exited" | "unknown"`);
+  expect(union("ConfirmationStatus")).toBe(`"confirmed" | "not_confirmed" | "unknown" | "pending"`);
+  expect(union("ConfirmationSource")).toBe(`"agent_event" | "caller_command" | "process" | "tmux" | "pane" | "transcript" | "store"`);
+  expect(union("ConfirmationReason")).toBe(`"no_evidence" | "unreadable" | "busy" | "stale_observation" | "deadline" | "operation_pending" | "pending_grace" | "unsupported" | "commit_unconfirmed"`);
+});
+
+test("public-surface: only status, get and list agent results carry confirmations or process_liveness (b.x9o)", () => {
+  const golden = typesGolden();
+  const carriers = new Set(["StatusResult", "GetResult", "ListRow", "SweepCheck", "Confirmations"]);
+  for (const [, name] of golden.matchAll(/^export interface (\w+)/gm)) {
+    if (carriers.has(name!)) continue;
+    // Nested requests, subagents, receipts, details and errors gain no wrapper.
+    expect(interfaceBody(golden, name!), `${name} must not declare confirmations or process_liveness`).not.toMatch(
+      /^\s*(confirmations|process_liveness)\??\s*:/m);
+  }
+});

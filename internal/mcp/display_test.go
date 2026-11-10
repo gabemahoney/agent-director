@@ -2,8 +2,13 @@ package mcp_test
 
 import (
 	"encoding/json"
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -49,5 +54,42 @@ func TestDisplayMCPWire(t *testing.T) {
 	}
 	for id, agent := range apitest.DisplayWireOrdinary {
 		apitest.CheckOrdinaryWire(t, read("status", id), agent)
+	}
+}
+
+// b.x9o: the live tools carry the same durable pane record and latest failed
+// attempt as CLI/Go; no request or child gains a confirmation wrapper.
+func TestDisplayMCPConfirmation(t *testing.T) {
+	e := newEnv(t)
+	const id = "display-confirmation"
+	e.seed(t, id, store.StateWorking)
+	if _, err := apitest.BindReadSurfaceProcess(e.storePath, id, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	e.rec.SeedRowSession(t, e.storePath, id)
+	first := ""
+	for _, reason := range []string{"", "unreadable"} {
+		if reason != "" {
+			e.rec.Script(apitest.TestSocket, tmuxfix.Script{Failure: tmux.FailUnrecognized}, tmux.CallCapture)
+		}
+		for _, verb := range []string{"status", "get", "list"} {
+			params := map[string]any{}
+			if verb != "list" {
+				params["instance_id"] = id
+			}
+			from := time.Now()
+			raw := []byte(toolText(t, callTool(t, e.d, verb, paramJSON(t, params))))
+			to := time.Now()
+			if verb == "list" {
+				var list struct {
+					Spawns []json.RawMessage `json:"spawns"`
+				}
+				if err := json.Unmarshal(raw, &list); err != nil || len(list.Spawns) != 1 {
+					t.Fatalf("list %s: %v", raw, err)
+				}
+				raw = list.Spawns[0]
+			}
+			first = apitest.CheckPaneConfirmationWire(t, raw, first, reason, from, to)
+		}
 	}
 }

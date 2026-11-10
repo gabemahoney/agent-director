@@ -46,7 +46,7 @@ func skSecSends(delivered bool) func(*testing.T, *securityScene, any) {
 			}
 		}
 		for _, c := range s.e.rec.SocketCalls() {
-			if (c.Call == tmux.CallSendText || c.Call == tmux.CallSendEnter) && planted[c.Target] {
+			if (c.Call == tmux.CallSendText || c.Call == tmux.CallSendEnter || c.Call == tmux.CallSendKey) && planted[c.Target] {
 				t.Errorf("%v targets planted pane %s", c.Call, c.Target)
 			}
 		}
@@ -124,10 +124,11 @@ func securitySendKeysCases(state string) []securityCase {
 			check:    skSecSends(false),
 		},
 		{
-			name:   "ours, keys typed into the agent's pane",
-			target: killRowSpec{State: state},
-			fields: fields("ok"),
-			check:  skSecSends(true),
+			name:      "ours, keys typed into the agent's pane",
+			target:    killRowSpec{State: state},
+			fields:    fields("ok"),
+			check:     skSecSends(true),
+			wallClock: pending, // b.qcf's wait reads the store under a context deadline from the clock
 		},
 	}
 }

@@ -32,7 +32,7 @@ import (
 func paKinds(calls []tmuxfix.SocketCall) []tmux.Call {
 	out := make([]tmux.Call, 0, len(calls))
 	for _, c := range calls {
-		out = append(out, c.Call)
+		out = append(out, recordedCall(c))
 	}
 	return out
 }
@@ -87,12 +87,13 @@ func TestReadPaneSHA256AndSendKeysHashCheck(t *testing.T) {
 		if n == 0 {
 			wantLines = api.DefaultReadPaneLines
 		}
-		if run.err != nil || !slices.Equal(paKinds(run.calls), []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture,
-			tmux.CallSendText, tmux.CallSendEnter}) {
+		if run.err != nil || !slices.Equal(paKinds(run.calls), paneHashSendCalls) {
 			t.Fatalf("send-keys with read-pane's hash (n_lines %d) = %v, calls %v; want the capture, then the text and Enter", n, run.err, paKinds(run.calls))
 		}
-		if c := run.calls[2]; c.Target != pane || c.NLines != wantLines || c.ANSI {
-			t.Errorf("capture = %+v; want %s, %d lines, no escapes", c, pane, wantLines)
+		for _, c := range run.calls {
+			if c.Call == tmux.CallCapture && (c.Target != pane || c.NLines != wantLines || c.ANSI) {
+				t.Errorf("capture = %+v; want %s, %d lines, no escapes", c, pane, wantLines)
+			}
 		}
 	}
 
@@ -164,10 +165,10 @@ func TestSendKeysNoEnterAndKey(t *testing.T) {
 			case tc.enter:
 				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, tc.text)
 			case tc.p.Key != "":
-				assertOneKey(t, e.rec.SocketCalls(), r.Spawn.Identity.PaneID, tc.p.Key, tmux.CallLookup, tmux.CallListPanes)
+				assertOneKey(t, e.rec.SocketCalls(), r.Spawn.Identity.PaneID, tc.p.Key, paneKeyBefore...)
 			default:
 				calls := e.rec.SocketCalls()
-				if !slices.Equal(paKinds(calls), paneTextCalls) || calls[2].Text != tc.text || calls[2].PressEnter {
+				if !slices.Equal(paKinds(calls), paneTextCalls) || calls[len(calls)-1].Text != tc.text || calls[len(calls)-1].PressEnter {
 					t.Errorf("calls = %+v; want %v, %q typed with no Enter", calls, paneTextCalls, tc.text)
 				}
 			}
@@ -249,7 +250,7 @@ func TestPaneAnswerSendsOneKeyAfterItsIntent(t *testing.T) {
 				if run.err != nil {
 					t.Fatalf("pane answer: %v", run.err)
 				}
-				assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, tc.key, tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+				assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, tc.key, paneAnswerBeforeKey...)
 				if atKey == nil || atKey.PaneAnswer != store.PaneAnswerIntent || atKey.PaneAs != tc.as || atKey.PaneSender != paSender ||
 					!atKey.PaneIntentAt.Equal(stamped) || !atKey.HookGoneAt.Equal(stamped) || atKey.Decision != "" {
 					t.Fatalf("request A as the key went out = %+v; want intent %s committed by %+v at %v, after the capture", atKey, tc.as, paSender, stamped)
@@ -288,7 +289,7 @@ func TestPaneAnswerSenderDiesBetweenIntentAndSent(t *testing.T) {
 	firstPane := p.text
 	p.sks = &paDyingStore{killStore: p.store, die: true}
 	first := p.sendKeysRun(p.answer(tok, "allow", "1"))
-	assertOneKey(t, first.calls, p.r.Spawn.Identity.PaneID, "1", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+	assertOneKey(t, first.calls, p.r.Spawn.Identity.PaneID, "1", paneAnswerBeforeKey...)
 	if pr := p.request(t, tok); pr.PaneAnswer != store.PaneAnswerIntent || pr.PaneSender != paSender || !pr.PaneIntentAt.Equal(p.now) {
 		t.Fatalf("request A after the first sender died = %+v; want its intent left", pr)
 	}
@@ -332,7 +333,7 @@ func TestPaneAnswerSenderDiesBetweenIntentAndSent(t *testing.T) {
 	if third.err != nil {
 		t.Fatalf("retry once the first sender is dead: %v", third.err)
 	}
-	assertOneKey(t, third.calls, p.r.Spawn.Identity.PaneID, "2", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+	assertOneKey(t, third.calls, p.r.Spawn.Identity.PaneID, "2", paneAnswerBeforeKey...)
 	if pr := p.request(t, tok); pr.PaneAnswer != store.PaneAnswerSent || pr.Decision != "deny" || pr.PaneSender != p.self {
 		t.Errorf("request A after the retry = %+v; want sent, deny, by the second sender", pr)
 	}

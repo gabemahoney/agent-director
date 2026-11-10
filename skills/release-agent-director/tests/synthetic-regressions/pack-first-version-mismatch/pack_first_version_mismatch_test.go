@@ -11,19 +11,19 @@
 //
 // DESIGN
 // ======
-// 1. Pre-req  : requires `bun` on PATH; test is skipped if `bun` is absent.
-// 2. Mutation : none — the mismatch is induced by passing --target-version 9.9.9
-//               while pkg/ts-bun-client/package.json remains at "0.0.0".
-// 3. Gate     : bash skills/release-agent-director/gates/pack/pack-first.sh
-//               --target-version 9.9.9
-//               is run from repo root.
-// 4. Assertions: (a) gate exits non-zero; (b) stderr contains an SR-14 JSON
-//                object with gate=="pack.first"; (c) stderr mentions both
-//                observed version "0.0.0" and expected version "9.9.9".
-// 5. Cleanup  : pack-first.sh writes into a per-test t.TempDir() (via
-//               PACK_OUTPUT_DIR) rather than the shared repo-root dist/, so
-//               the ephemeral tarball is auto-cleaned by the Go test runner
-//               and concurrent tests never collide — no dist/ removal needed.
+//  1. Pre-req  : requires `bun` on PATH; test is skipped if `bun` is absent.
+//  2. Mutation : none — the mismatch is induced by passing --target-version 9.9.9
+//     while pkg/ts-bun-client/package.json remains at "0.0.0".
+//  3. Gate     : bash skills/release-agent-director/gates/pack/pack-first.sh
+//     --target-version 9.9.9
+//     is run from repo root.
+//  4. Assertions: (a) gate exits non-zero; (b) stderr contains an SR-14 JSON
+//     object with gate=="pack.first"; (c) stderr mentions both
+//     observed version "0.0.0" and expected version "9.9.9".
+//  5. Cleanup  : pack-first.sh writes into a per-test t.TempDir() (via
+//     PACK_OUTPUT_DIR) rather than the shared repo-root dist/, so
+//     the ephemeral tarball is auto-cleaned by the Go test runner
+//     and concurrent tests never collide — no dist/ removal needed.
 //
 // SLOW TEST
 // =========

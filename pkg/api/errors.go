@@ -36,12 +36,15 @@ var ErrClientClosed = errors.New("api: client is closed")
 var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 
 // ErrSubmissionUnconfirmed means ordinary delivery was refused or remains
-// unconfirmed. SubmissionUnconfirmedDetails distinguishes not_started,
-// partial_input_unconfirmed and submission_unconfirmed for both native delivery
-// and Codex fallback paste, not_started for pending Claude fallback input
-// whose terminal, SessionStart, 1.5 s settle since first observing waiting,
-// or launch and guard revalidation was not ready within 12 s (nothing typed;
-// the same call can be made again later), and gateway_refused for a Cursor row's
+// unconfirmed, or manual, permission-pane or pause dispatch or input cleanup
+// could not confirm its outcome. SubmissionUnconfirmedDetails distinguishes
+// not_started, partial_input_unconfirmed and submission_unconfirmed for native
+// delivery, Codex fallback paste and that dispatch, not_started for pending
+// Claude fallback input whose terminal, SessionStart, 1.5 s settle since first
+// observing waiting, or launch and guard revalidation was not ready within
+// 12 s, whose wait was cancelled or reached the call's deadline, or whose input
+// admission then refused it (nothing typed; the same call can be made again
+// later), and gateway_refused for a Cursor row's
 // gateway refusing the submission. Native delivery requires durable exact
 // transcript proof; pending Codex and Claude fallback use bounded hook
 // observation, whose failure carries only KeysSent, SubmissionConfirmed and
@@ -184,10 +187,12 @@ var ErrPaneChanged = errors.New("ErrPaneChanged")
 // step 2c), so no hook of the agent has shown its dialog gone, the dialog may
 // still be on the pane, and typed keys, an Enter above all, would land on it;
 // and it is not a Cursor request of an earlier launch. A request is proven
-// gone by its tool's PostToolUse or PostToolUseFailure (the same tool_use_id;
-// Claude rows only), on a Cursor row by the gateway's validated completed or
-// failed update of its exact tool_use_id under the launch that admitted it,
-// by a turn end under the turn_end rule (store.ProvenGoneTurnEnd; the
+// gone, on a Cursor row, by the gateway's validated completed or failed
+// update of its exact tool_use_id under the launch that admitted it (no
+// Claude or Codex request carries a tool_use_id, so no tool-ran proof
+// applies to one; b.wbs), by a turn end under the turn_end rule (the main
+// agent's for a request with no agent_id; on a Claude row, a subagent's
+// SubagentStop for that subagent's requests; store.ProvenGoneTurnEnd; the
 // proven_gone_how field of get-permission gives which hooks prove it and
 // which requests they cover), or, on a non-Cursor row, by its Spawn's end
 // (marked missing, ended, or resumed). agent-director's own records prove nothing: a

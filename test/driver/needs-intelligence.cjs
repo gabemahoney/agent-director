@@ -39,10 +39,10 @@ const MAX_READS = 5;
 const BUSY_RETRY_MS = 10000;
 // The lowest valid timeout: the key still loads, and has no effect.
 const TIMEOUT_S = 1;
-const STATUS_KEYS = ['context', 'family_state', 'idle_screen_availability', 'state'];
+const STATUS_KEYS = ['confirmations', 'context', 'family_state', 'idle_screen_availability', 'process_liveness', 'state'];
 const DETAIL_KEYS = ['displayed_state', 'since', 'request_token', 'tool_name', 'unchanged_minutes', 'stuck_reason'];
 // A list row's keys present on every row, and those present only on some.
-const LIST_KEYS = ['agent', 'cwd', 'family_state', 'idle_screen_availability', 'instance_id', 'labels', 'last_seen_at', 'permission_requests', 'relay_mode', 'started_at', 'state', 'state_changed_at', 'tmux_session_name'];
+const LIST_KEYS = ['agent', 'confirmations', 'cwd', 'family_state', 'idle_screen_availability', 'instance_id', 'labels', 'last_seen_at', 'permission_requests', 'process_liveness', 'relay_mode', 'started_at', 'state', 'state_changed_at', 'tmux_session_name'];
 const LIST_OPTIONAL = ['ended_at', 'launch_started_at', 'liveness_note', 'liveness_unverified_since', 'parent_id'];
 const q = value => "'" + String(value).replaceAll("'", "''") + "'";
 const availability = agent => agent === 'cursor' ? 'unavailable' : 'available';
@@ -117,8 +117,10 @@ const OLD = Date.parse('2020-01-01T00:00:00.000Z');
 const OWNER = '1111111111111111';
 const EPOCH = 7;
 
+// Read observations check the actual owner, so keep this fixture process live.
+const ownerStart = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8').split(')').at(-1).trim().split(/\s+/)[19];
 function seed(id, agent, relay = 'on') {
- sql(`INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch) VALUES(${q(id)},'check_permission','check_permission',0,'/tmp',${q(agent)},${q(relay)},${q('ts-' + id)},${q(OWNER)},${EPOCH})`);
+ sql(`INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch,pid,proc_starttime) VALUES(${q(id)},'check_permission','check_permission',0,'/tmp',${q(agent)},${q(relay)},${q('ts-' + id)},${q(OWNER)},${EPOCH},${process.pid},${q(ownerStart)})`);
 }
 // A request owned by the spawn's current launch and interval, its confirm_by
 // at in milliseconds, long past; stored, the fallback clock is at too, else
@@ -135,6 +137,9 @@ function check(verb, row, id, agent) {
  assert.equal(row.state, 'check_permission', `${label}: state`);
  assert.equal(row.idle_screen_availability, availability(agent), `${label}: idle_screen_availability`);
  for (const key of DETAIL_KEYS) assert.ok(!(key in row), `${label}: row carries ${key}`);
+ // SR-4.5: exactly three confirmation records, each of the same five keys.
+ assert.deepEqual(Object.keys(row.confirmations).sort(), ['displayed_state', 'process_liveness', 'state'], `${label}: confirmations`);
+ for (const record of Object.values(row.confirmations)) assert.deepEqual(Object.keys(record).sort(), ['checked_at', 'confirmed_at', 'reason', 'source', 'status'], `${label}: confirmation keys`);
  if (verb === 'status') {
   assert.deepEqual(Object.keys(row).sort(), STATUS_KEYS, `${label}: status keys`);
   return;

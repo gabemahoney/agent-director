@@ -1,18 +1,18 @@
 # lint: static checks that build nothing and run no container.
 #
-# Today it runs one check, `make release-shellcheck`: shellcheck over the
-# /release gate scripts (skills/release-agent-director/gates/). This
-# workflow is that target's automated caller (b.ug8). Before it, nothing
-# ran the target, and the target passed whenever shellcheck was missing.
-# It runs on every PR as well as on push to main: it takes seconds, so it
-# is not the heavyweight pre-merge suite the operator ruled out for the
-# Docker harness (b.ug8).
+# It runs two checks: `make release-shellcheck`, shellcheck over the
+# /release gate scripts (skills/release-agent-director/gates/), and
+# `make fmt-check`, which fails when a tracked Go file is not gofmt-clean.
+# This workflow is each target's automated caller (b.ug8, b.7ep). Before
+# it, nothing ran either, and release-shellcheck passed whenever shellcheck
+# was missing. It runs on every PR as well as on push to main: it takes
+# seconds, so it is not the heavyweight pre-merge suite the operator ruled
+# out for the Docker harness (b.ug8).
 #
-# Adding a check (planned: b.7ep gofmt, b.hhi go vet): add one step to the
+# Adding a check (planned: b.hhi go vet): add one step to the
 # lint job that runs the check's make target, with
 # `if: ${{ !cancelled() }}` so it still runs and reports when an earlier
-# check failed. A Go check also needs the pinned actions/setup-go step the
-# other workflows use, placed before it.
+# check failed. A Go check goes after the actions/setup-go step.
 #
 # Local actionlint
 # ----------------
@@ -66,3 +66,14 @@ jobs:
 
       - name: shellcheck the release gate scripts
         run: make release-shellcheck
+
+      # gofmt's output can change between Go versions, so it comes from
+      # go.mod's Go, the version the sandbox image installs.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        if: ${{ !cancelled() }}
+        with:
+          go-version-file: 'go.mod'
+
+      - name: gofmt the tracked Go files
+        if: ${{ !cancelled() }}
+        run: make fmt-check

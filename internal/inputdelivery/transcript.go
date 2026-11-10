@@ -4,9 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
+	"github.com/gabemahoney/agent-director/internal/inputjournal"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,16 +14,7 @@ import (
 const maxTranscriptBytes = 32 << 20
 
 func readBounded(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err == nil && int64(len(data)) > limit {
-		return nil, fmt.Errorf("native evidence exceeds read bound")
-	}
-	return data, err
+	return inputjournal.ReadEvidence(path, limit)
 }
 
 func (s *nativeSession) paths(id Identity) ([]string, error) {
@@ -73,6 +63,11 @@ func (s *nativeSession) Watermark(id Identity) (map[string]Watermark, error) {
 		nativeSessionID = previous.NativeSessionID
 	}
 	for _, p := range paths {
+		if s.ctx != nil {
+			if err := s.ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		data, err := readBounded(p, maxTranscriptBytes)
 		if os.IsNotExist(err) {
 			if id.Agent == "codex" {
@@ -132,6 +127,11 @@ func (s *nativeSession) Confirm(a *Attempt) (*Proof, error) {
 	}
 	var proof *Proof
 	for _, p := range paths {
+		if s.ctx != nil {
+			if err := s.ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		data, err := readBounded(p, maxTranscriptBytes)
 		if os.IsNotExist(err) {
 			continue
@@ -178,7 +178,7 @@ func (s *nativeSession) Confirm(a *Attempt) (*Proof, error) {
 					a.Watermark = map[string]Watermark{}
 				}
 				a.Watermark[p] = mark
-				if err = s.Save(a); err != nil {
+				if err = s.save(a, true); err != nil {
 					return nil, err
 				}
 			}
@@ -249,106 +249,8 @@ func (s *nativeSession) codexMetadata(data []byte, id Identity) (string, time.Ti
 }
 
 func (s *nativeSession) matchRecord(line []byte, a *Attempt, session string) (string, bool) {
-	var r struct {
-		Type, UUID, SessionID, CWD, Version string
-		IsSidechain                         bool
-		Message                             struct {
-			Role    string
-			Content json.RawMessage
-		}
-		Payload struct {
-			Type, Role, ID string
-			Content        []struct{ Type, Text string }
-			Metadata       struct {
-				Kinds []string `json:"content_item_kinds"`
-			} `json:"internal_chat_message_metadata_passthrough"`
-		}
-	}
-	if json.Unmarshal(line, &r) != nil {
-		return "", false
-	}
-	if a.Identity.Agent == "claude" {
-		if r.Type != "user" || r.Message.Role != "user" || r.IsSidechain || r.SessionID != session || r.CWD != a.Identity.CWD || r.Version != "2.1.280" {
-			return "", false
-		}
-		if _, err := uuid.Parse(r.UUID); err != nil {
-			return "", false
-		}
-		var text string
-		if json.Unmarshal(r.Message.Content, &text) != nil {
-			return "", false
-		}
-		return r.UUID, ClaudeExact(text, a.Payload)
-	}
-	p := r.Payload
-	if r.Type != "response_item" || p.Type != "message" || p.Role != "user" {
-		return "", false
-	}
-	userText := false
-	for _, k := range p.Metadata.Kinds {
-		if k == "user.text" {
-			userText = true
-		}
-	}
-	if !userText || len(p.Content) == 0 {
-		return "", false
-	}
-	var text strings.Builder
-	for _, c := range p.Content {
-		if c.Type != "input_text" {
-			return "", false
-		}
-		text.WriteString(c.Text)
-	}
-	return p.ID, text.String() == a.Payload
+	return inputjournal.MatchRecord(line, a, session)
 }
 
-// ClaudeExact consumes either the literal payload, its whole pinned wrapper,
-// or each known write segment literally/wrapped. Wrapper IDs must pair exactly;
-// no trimming, substring matching, or joining different user records is allowed.
-func ClaudeExact(text, payload string) bool {
-	if text == payload {
-		return true
-	}
-	if rest, ok := consumeWrapper(text, payload); ok && rest == "" {
-		return true
-	}
-	parts, err := Chunks(payload)
-	if err != nil {
-		return false
-	}
-	for _, part := range parts {
-		if strings.HasPrefix(text, part) {
-			text = strings.TrimPrefix(text, part)
-			continue
-		}
-		rest, ok := consumeWrapper(text, part)
-		if !ok {
-			return false
-		}
-		text = rest
-	}
-	return text == ""
-}
-
-func consumeWrapper(text, part string) (string, bool) {
-	const opening = "\n\n<pasted_content id=\""
-	if !strings.HasPrefix(text, opening) {
-		return "", false
-	}
-	tail := strings.TrimPrefix(text, opening)
-	id, tail, ok := strings.Cut(tail, "\">\n")
-	if !ok || id == "" {
-		return "", false
-	}
-	for _, c := range id {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return "", false
-		}
-	}
-	end := part + "\n</pasted_content id=\"" + id + "\">\n"
-	if !strings.HasPrefix(tail, end) {
-		return "", false
-	}
-	return strings.TrimPrefix(tail, end), true
-}
+// ClaudeExact matches the complete payload through the canonical pinned parser.
+func ClaudeExact(text, payload string) bool { return inputjournal.ClaudeExact(text, payload) }

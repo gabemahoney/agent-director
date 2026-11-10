@@ -61,10 +61,22 @@ type SocketCall struct {
 	Cwd     string
 	Envs    map[string]string
 	Command []string
+	// ExcludeEnv records the lane's ambient client/session exclusions.
+	ExcludeEnv []string
 	// Token, InstanceID and StoreID are NewSession's and SetLabel's label
 	// arguments (the session label's second, fourth and fifth fields; WD
 	// 2026-09-29 STORE); Token is also the pane label's first field.
 	Token, InstanceID, StoreID string
+}
+
+// KeyCall selects a particular SendKeyPane key in scripts, hooks and call
+// queries. Recorded calls and CallError.Call retain the actual CallSendKey
+// transport kind; selecting Enter never synthesizes a combined text/Enter call.
+// Tests must reuse KeyCall for key-specific scripts, hooks and queries.
+func KeyCall(key string) tmux.Call { return tmux.CallSendKey + " " + tmux.Call(key) }
+
+func (c SocketCall) matches(call tmux.Call) bool {
+	return c.Call == call || c.Call == tmux.CallSendKey && c.Key != "" && KeyCall(c.Key) == call
 }
 
 // effect applies a call's table effect on the socket's table and returns
@@ -81,7 +93,7 @@ func (r *Recorder) do(c SocketCall, eff effect) (any, error) {
 	r.socketCalls = append(r.socketCalls, c)
 	st := r.socket(c.Socket)
 	hasServer := st.server != nil || c.Call == tmux.CallCreate
-	s, scripted := r.takeScript(c.Socket, c.Call)
+	s, scripted := r.takeScript(c)
 	var ans any
 	var fail *tmux.CallError
 	switch {
@@ -221,6 +233,25 @@ func (r *Recorder) PasteKeysPane(socket, paneID, text string) error {
 	return r.sendKeysPane(socket, paneID, text, true, true)
 }
 
+// PasteKeysPaneGuarded invokes the same admission gates as the real transport.
+func (r *Recorder) PasteKeysPaneGuarded(socket, paneID, text string, beforeWrite func(bool) error) error {
+	if beforeWrite != nil {
+		if err := beforeWrite(false); err != nil {
+			return err
+		}
+	}
+	if err := r.sendKeysPane(socket, paneID, text, false, true); err != nil {
+		return err
+	}
+	if beforeWrite != nil {
+		if err := beforeWrite(true); err != nil {
+			return err
+		}
+	}
+	_, err := r.do(SocketCall{Call: tmux.CallSendEnter, Socket: socket, Target: paneID}, sendEffect(paneID, tmux.CallSendEnter))
+	return err
+}
+
 func (r *Recorder) sendKeysPane(socket, paneID, text string, pressEnter, paste bool) error {
 	textCall := SocketCall{Call: tmux.CallSendText, Socket: socket, Target: paneID, Text: text, PressEnter: pressEnter, Paste: paste}
 	if _, err := r.do(textCall, sendEffect(paneID, tmux.CallSendText)); err != nil || !pressEnter {
@@ -326,8 +357,13 @@ func (r *Recorder) SetLabel(socket, sessionID, paneID, token, instanceID, storeI
 // returns its reply with the error; with Script.Applied, any other scripted
 // failure adds the session (labelled by the same rule) and returns no reply.
 func (r *Recorder) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (tmux.CreateReply, error) {
+	return r.NewSessionWithEnvExclusions(socket, name, cwd, envs, command, token, instanceID, storeID, nil)
+}
+
+// NewSessionWithEnvExclusions records the same create, including lane exclusions.
+func (r *Recorder) NewSessionWithEnvExclusions(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, excluded []string) (tmux.CreateReply, error) {
 	c := SocketCall{Call: tmux.CallCreate, Socket: socket, Target: name, Cwd: cwd, Envs: envs,
-		Command: command, Token: token, InstanceID: instanceID, StoreID: storeID}
+		Command: command, Token: token, InstanceID: instanceID, StoreID: storeID, ExcludeEnv: append([]string(nil), excluded...)}
 	ans, err := r.do(c, r.createEffect(socket, name, token, instanceID, storeID))
 	reply, _ := ans.(tmux.CreateReply)
 	return reply, err
@@ -372,7 +408,7 @@ func (r *Recorder) SocketCallsOf(call tmux.Call) []SocketCall {
 	defer r.mu.Unlock()
 	var out []SocketCall
 	for _, c := range r.socketCalls {
-		if c.Call == call {
+		if c.matches(call) {
 			out = append(out, c)
 		}
 	}

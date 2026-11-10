@@ -58,7 +58,7 @@ func TestV7MigrationKeepsV6Rows(t *testing.T) {
 	f := makeV6Fixture(t, t.TempDir())
 	storeID := assertOneStoreID(t, f.path)
 	writeSentinel(t, f.dir, 6, schemaVersion)
-	if got := openStoreID(t, Open, f.path); got != storeID {
+	if got := openStoreID(t, func(path string) (*Store, error) { return openMigrationTestStore(t, path) }, f.path); got != storeID {
 		t.Errorf("StoreID() after the hop = %q; want %q kept", got, storeID)
 	}
 	assertSentinel(t, f.dir, false)
@@ -96,8 +96,11 @@ func TestV7MigrationKeepsV6Rows(t *testing.T) {
 	if ok, err := s.DecideRelayRequest(f.id, f.open, "allow", "", WriterProcessDecide, openCreated, DefaultLockWait); err != nil || ok {
 		t.Errorf("decide at a cutoff not before created_at = %v, %v; want refused (fallen back by time)", ok, err)
 	}
-	if ok, err := s.DecideRelayRequest(f.id, f.open, "allow", "", WriterProcessDecide, openCreated.Add(-time.Second), DefaultLockWait); err != nil || !ok {
-		t.Errorf("decide at a cutoff before created_at = %v, %v; want written", ok, err)
+	if ok, err := s.DecideRelayRequest(f.id, f.open, "allow", "", WriterProcessDecide, openCreated.Add(-time.Second), DefaultLockWait); err != nil || ok {
+		t.Errorf("decide at a cutoff before created_at = %v, %v; want refused (unknown historical authority)", ok, err)
+	}
+	if pr, err := s.GetPermissionRequest(f.id, f.open); err != nil || pr.DecisionOrigin != "" || pr.ResponseState != "" || pr.OwnerLifeNumber != -1 {
+		t.Fatalf("migration invented authority: %+v %v", pr, err)
 	}
 }
 
@@ -114,7 +117,7 @@ func TestV7MigrationProvesFinishedRowsRequests(t *testing.T) {
 	writeSentinel(t, f.dir, 6, schemaVersion)
 
 	from := time.Now().Truncate(time.Millisecond)
-	s, err := Open(f.path)
+	s, err := openMigrationTestStore(t, f.path)
 	to := time.Now()
 
 	if err != nil {
@@ -228,7 +231,7 @@ func TestDowngradeV7ToV6_KeepsRowsThenRemigrates(t *testing.T) {
 	}
 
 	writeSentinel(t, filepath.Dir(path), 6, schemaVersion)
-	if got := openStoreID(t, Open, path); got != storeID {
+	if got := openStoreID(t, func(path string) (*Store, error) { return openMigrationTestStore(t, path) }, path); got != storeID {
 		t.Errorf("StoreID() after re-migration = %q; want %q", got, storeID)
 	}
 	assertV7Defaults(t, path, id)

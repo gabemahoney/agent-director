@@ -63,9 +63,9 @@ func (r *Recorder) Script(socket string, s Script, calls ...tmux.Call) *Recorder
 
 // takeScript returns the script answering a call of kind call on socket and
 // uses it up once. Callers hold r.mu.
-func (r *Recorder) takeScript(socket string, call tmux.Call) (Script, bool) {
+func (r *Recorder) takeScript(call SocketCall) (Script, bool) {
 	for _, sc := range r.scripts {
-		if sc.call != call || (sc.socket != AnySocket && sc.socket != socket) {
+		if !call.matches(sc.call) || (sc.socket != AnySocket && sc.socket != call.Socket) {
 			continue
 		}
 		if sc.s.Times == 0 {

@@ -28,15 +28,34 @@ func liveStateGuardArgs() []any {
 // with the liveness-field clear and the launch-start clear folded in, and the
 // version advance, guarded by a live state and the examined row snapshot
 // (SR-5.2, SR-5.3, SR-11.3, SR-11.6). missing is an immediate write
-// (immediateStateSet, b.3ie): it reports at once.
+// (immediateStateSet, b.3ie): it reports at once. Its state record
+// (markMissingEvidence) names the evidence the mark acted on, and its process
+// record is the exited record of the agent process whose proven exit it acted
+// on, NULL for any other mark (terminalProcessEvidenceSet); their placeholders
+// follow immediateStateSet's (markMissingArgs).
 var markMissingSetSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
+        ` + markMissingEvidence + `,
+        ` + terminalProcessEvidenceSet + `,
         ended_at                  = CURRENT_TIMESTAMP,
         last_seen_at              = CURRENT_TIMESTAMP,
         liveness_unverified_since = NULL,
         liveness_note             = NULL,
         ` + launchStartClear + `,
         ` + rowVersionAdvance
+
+var markMissingEvidence, _ = currentStateEvidenceSet(StateMissing, "")
+
+// markMissingArgs returns the SET arguments of markMissingSetSQL for a mark
+// on evidence from src: process for a gone agent process, tmux for a session
+// lookup, "" for a mark whose caller names none (no record). exit is the
+// recorded agent process whose proven exit the mark acted on (its exited
+// record), the zero ProcessExit for none.
+func markMissingArgs(src string, exit ProcessExit) []any {
+	_, evidence := currentStateEvidenceSet(StateMissing, src)
+	args := append(immediateStateArgs(StateMissing), evidence...)
+	return append(args, terminalProcessEvidenceArgs(exit)...)
+}
 
 var markMissingIfSameLifeSQL = markMissingSetSQL + `
   WHERE instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
@@ -130,12 +149,18 @@ var clearLivenessIfSameLifeSQL = `UPDATE spawns
 // guard alone does. It is taken under the write lock and every write advances
 // row_version (SR-5.2), so a mark that applied found the row unchanged since
 // the read.
+//
+// This direct mark names no evidence source, so missing gets no state record
+// and the row's process record is cleared; the shared checks' nonwaiting
+// writer (RecoveryWrites.MarkMissingIfSameLifeFrom) records the process or
+// tmux evidence it acted on, and the exited record of a process proven gone
+// (confirmations.go).
 func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (priorState string, res CondResult, err error) {
-	args := append(immediateStateArgs(StateMissing), instanceID)
+	args := append(markMissingArgs("", ProcessExit{}), instanceID)
 	args = append(args, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
 	return s.terminalMarkIfSameLife("store: mark missing if same life", markMissingIfSameLifeSQL, args,
-		instanceID, DecisionReasonFindMissing)
+		instanceID, DecisionReasonFindMissing, nil)
 }
 
 // markEndedIfSameLifeSQL is MarkEndedIfSameLife's one statement: the mark's
@@ -144,9 +169,16 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 // an end report, read as decodeEndReportedAt reads it (an integer above zero;
 // NULL, zero, a negative and any other stored type are no report). The
 // statement never writes end_reported_at: the report stays set. ended is an
-// immediate write (immediateStateSet, b.3ie): it reports at once.
+// immediate write (immediateStateSet, b.3ie): it reports at once. The proven
+// process exit, with the verified end report, is its state record (source
+// process), and the exited record of that process is its process record in
+// the same statement (terminalProcessEvidenceSet; markEndedArgs).
+var markEndedEvidence, markEndedEvidenceArgs = currentStateEvidenceSet(StateEnded, EvidenceProcess)
+
 var markEndedIfSameLifeSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
+        ` + markEndedEvidence + `,
+        ` + terminalProcessEvidenceSet + `,
         ended_at                  = CURRENT_TIMESTAMP,
         last_seen_at              = CURRENT_TIMESTAMP,
         liveness_unverified_since = NULL,
@@ -200,12 +232,55 @@ var markEndedIfSameLifeSQL = `UPDATE spawns
 // It returns the prior state and CondApplied when the transaction committed;
 // CondChanged or CondAbsent, with the prior state "", otherwise. A store failure
 // is returned as a wrapped error with a zero CondResult (SR-5.8).
+//
+// This form names no exited process, so the move clears the row's process
+// record; MarkEndedIfSameLifeFrom records the exited record of the process
+// the caller proved gone.
 func (s *Store) MarkEndedIfSameLife(instanceID string, examined RowSnapshot) (priorState string, res CondResult, err error) {
-	args := append(immediateStateArgs(StateEnded), instanceID)
-	args = append(args, liveStateGuardArgs()...)
-	args = append(args, snapshotMatchArgs(examined)...)
+	args := endedIfSameLifeArgs(instanceID, examined, ProcessExit{})
 	return s.terminalMarkIfSameLife("store: mark ended if same life", markEndedIfSameLifeSQL, args,
-		instanceID, DecisionReasonEnded)
+		instanceID, DecisionReasonEnded, nil)
+}
+
+// MarkEndedIfSameLifeFrom is MarkEndedIfSameLife recording, in the move's own
+// statement, exit's exited record as the row's process record
+// (terminalProcessEvidenceSet): exit is the recorded agent process whose
+// proven exit the caller acted on. recorded reports that the move applied and
+// stored that record; it is false when the statement stored NULL (a Cursor
+// row, an exit naming no process the row records, no exit).
+func (s *Store) MarkEndedIfSameLifeFrom(instanceID string, examined RowSnapshot, exit ProcessExit) (priorState string, res CondResult, recorded bool, err error) {
+	args := endedIfSameLifeArgs(instanceID, examined, exit)
+	priorState, res, err = s.terminalMarkIfSameLife("store: mark ended if same life", markEndedIfSameLifeSQL, args,
+		instanceID, DecisionReasonEnded, &recorded)
+	return priorState, res, recorded && err == nil && res == CondApplied, err
+}
+
+// endedIfSameLifeArgs returns markEndedIfSameLifeSQL's arguments for the move
+// of instanceID guarded on examined and proven by exit.
+func endedIfSameLifeArgs(instanceID string, examined RowSnapshot, exit ProcessExit) []any {
+	args := append(markEndedArgs(exit), instanceID)
+	args = append(args, liveStateGuardArgs()...)
+	return append(args, snapshotMatchArgs(examined)...)
+}
+
+// markEndedArgs returns the SET arguments of markEndedIfSameLifeSQL for a move
+// proven by exit.
+func markEndedArgs(exit ProcessExit) []any {
+	args := append(immediateStateArgs(StateEnded), markEndedEvidenceArgs...)
+	return append(args, terminalProcessEvidenceArgs(exit)...)
+}
+
+// WithTerminalReportingContext returns a per-call view whose legacy terminal
+// writer bounds post-commit reporting by ctx and observationTrailWait. The
+// whole batch shares that finite allowance, so no record can wait longer.
+// Accepted records remain owned by the existing trail worker after the wait.
+// SQL admission, transaction waits and commit outcomes are unchanged. The
+// view shares its pool with s and must not be closed independently.
+// Callers needing bounded terminal reporting must reuse this view; do not replace the transaction or trail worker.
+func (s *Store) WithTerminalReportingContext(ctx context.Context) *Store {
+	scoped := *s
+	scoped.terminalReportingContext = ctx
+	return &scoped
 }
 
 // terminalMarkIfSameLife is the transaction MarkMissingIfSameLife and
@@ -213,7 +288,8 @@ func (s *Store) MarkEndedIfSameLife(instanceID string, examined RowSnapshot) (pr
 // statement stmt with args, and, when it applied, the close of the row's
 // requests with reason and of its subagent records at one instant, the commit
 // and the post-commit emits (writer find_missing). Their docs state each step.
-func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, instanceID, reason string) (priorState string, res CondResult, err error) {
+// recorded is terminalMarkOnConn's.
+func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, instanceID, reason string, recorded *bool) (priorState string, res CondResult, err error) {
 	// The pool has one connection: everything below runs on conn, never
 	// through s.db, which would wait for it.
 	ctx := context.Background()
@@ -232,7 +308,7 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 		}
 	}()
 
-	prior, res, closed, err := terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
+	prior, res, closed, err := terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason, recorded)
 	if err != nil || res != CondApplied {
 		return "", res, err
 	}
@@ -247,25 +323,40 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
 	committed = true
-	emitDisplayTransitions(exits)
+	// Keep reporting separate from the transaction context: only callers
+	// requesting a bounded reporting view change the legacy emit policy.
+	reportCtx := ctx
+	if s.terminalReportingContext != nil {
+		var cancel context.CancelFunc
+		reportCtx, cancel = context.WithTimeout(s.terminalReportingContext, observationTrailWait)
+		defer cancel()
+	}
+	emitDisplayTransitionsContext(reportCtx, exits)
 
-	emitTerminalCloseout(ctx, closed, instanceID, reason)
+	emitTerminalCloseout(reportCtx, closed, instanceID, reason, s.recoveryTickSource)
 	return prior, CondApplied, nil
 }
 
 // terminalMarkWithoutWait is the Cursor reconciliation path. One operation
 // context bounds SQL, connection cleanup and post-commit audit; inWriteTxContext
 // preserves confirmed commits even when cleanup reaches that deadline.
-func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, instanceID, reason string) (string, CondResult, error) {
+func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, instanceID, reason string, recorded *bool) (string, CondResult, error) {
 	ctx, cancel := s.operationContext(0)
 	defer cancel()
 	var prior string
 	var res CondResult
 	var closed []closedRequest
 	var exits []displayTransition
+	// A timed-out operation may still scan its result. Keep that storage
+	// private until the transaction confirms completion.
+	var processRecorded bool
+	var recordDest *bool
+	if recorded != nil {
+		recordDest = &processRecorded
+	}
 	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
-		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
+		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason, recordDest)
 		if err == nil && res == CondApplied {
 			exits, err = takeDisplayExits(ctx, conn, instanceID)
 			if err != nil {
@@ -278,16 +369,22 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
+	if recorded != nil {
+		*recorded = processRecorded
+	}
 	if res == CondApplied {
 		emitDisplayTransitionsContext(ctx, exits)
-		emitTerminalCloseout(ctx, closed, instanceID, reason)
+		emitTerminalCloseout(ctx, closed, instanceID, reason, s.recoveryTickSource)
 	}
 	return prior, res, nil
 }
 
 // terminalMarkOnConn shares the guarded terminal update and atomic request /
 // subagent closure. The caller owns the transaction and emits only after commit.
-func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt string, args []any, instanceID, reason string) (string, CondResult, []closedRequest, error) {
+// A non-nil recorded receives, once the update applied, whether it stored a
+// process record: the statement's own terminalProcessEvidenceSet decides
+// that, so it is read back under the same write lock.
+func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt string, args []any, instanceID, reason string, recorded *bool) (string, CondResult, []closedRequest, error) {
 	var prior string
 	err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
 	switch {
@@ -310,6 +407,11 @@ func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt str
 		// refused it.
 		return "", CondChanged, nil, nil
 	}
+	if recorded != nil {
+		if err := conn.QueryRowContext(ctx, `SELECT process_evidence IS NOT NULL FROM spawns WHERE instance_id = ?`, instanceID).Scan(recorded); err != nil {
+			return "", 0, nil, fmt.Errorf("%s: process record: %w", errPrefix, err)
+		}
+	}
 
 	at := storeNowMillis()
 	closed, err := closeOrphanedRequests(ctx, conn, instanceID, reason, at)
@@ -322,10 +424,10 @@ func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt str
 	return prior, CondApplied, closed, nil
 }
 
-func emitTerminalCloseout(ctx context.Context, closed []closedRequest, instanceID, reason string) {
+func emitTerminalCloseout(ctx context.Context, closed []closedRequest, instanceID, reason string, sources ...string) {
 	for _, c := range closed {
 		c.emitDenyContext(ctx, instanceID, reason, WriterProcessFindMissing)
-		emitOrphanCloseoutTickContext(ctx, instanceID, c.token)
+		emitOrphanCloseoutTickContext(ctx, instanceID, c.token, sources...)
 	}
 }
 
@@ -494,9 +596,12 @@ var adoptIdentityIfSameLifeSQL = `UPDATE spawns
 // tmux_server_starttime) and the agent's pane (pane_id, pane_pid,
 // pane_starttime) from id, a zero value as NULL, and advances row_version by
 // exactly one (SR-5.2), through the identity-column assignment it shares with
-// AdoptIdentityIfUnchanged. It never writes id.Token, id.Socket, the state,
+// AdoptIdentityIfUnchanged. The same statement invalidates pane evidence and
+// any idle_screen candidate/display without changing permission_epoch; its
+// transaction refreshes families and drains any display exit for emission
+// after commit. It never writes id.Token, id.Socket, the state,
 // the liveness columns, launch_started_at, life_number, no_pre_trust or any
-// request column, and emits no trail event: the sweep records adopted on
+// request column: the sweep records adopted on
 // ad.provenance.disagree (SR-14).
 //
 // It returns CondApplied and now, the row's snapshot after the write (what
@@ -507,9 +612,9 @@ var adoptIdentityIfSameLifeSQL = `UPDATE spawns
 // is returned as a wrapped error with a zero CondResult, never as a
 // CondResult value (SR-5.8).
 //
-// now needs no read: the snapshot holds none of the six identity columns, so
-// the applied write changed only row_version, by exactly one, from the value
-// the guard matched. The guarded statement alone decides whether it applied.
+// now needs no read: among the snapshot's columns, the applied write changes
+// only row_version, by exactly one, from the value the guard matched. The
+// guarded statement alone decides whether it applied.
 //
 // Only find-missing calls it (SR-3.6; LFR H2); kill, send-keys and pause use
 // AdoptIdentityIfUnchanged.
@@ -545,16 +650,21 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 // it advances permission_epoch, advances observation_version, clears the
 // display observation and, when the row showed either Displayed State as
 // committed, records the display exit that the transaction drains and emits
-// after commit.
+// after commit, and clears that display's record (keepDisplayEvidence). The durable request records that no longer hold the row
+// are its state record's evidence (source store, confirmations.go).
 var repairCheckPermissionSQL = `UPDATE spawns
     SET state = ` + repairNewStateSQL + `,
         permission_epoch = permission_epoch + 1,
         display_exit = CASE WHEN ` + committedDisplayStateSQL + ` IS NOT NULL
           THEN json_object('prior_state', ` + committedDisplayStateSQL + `, 'new_state', ` + repairNewStateSQL + `, 'at_ms', ` + nowMsSQL + `)
           ELSE display_exit END,
+        ` + keepDisplayEvidence + `,
         display_observation = NULL,
         observation_version = observation_version + 1,
         settled_state = ` + repairNewStateSQL + `,
+        settled_evidence = NULL,
+        state_evidence = json_object('v', ` + repairNewStateSQL + `, 'life', life_number, 'token', launch_token,
+          'epoch', permission_epoch + 1, 'at', ` + nowMsSQL + `, 'src', '` + EvidenceStore + `', 'checked', ` + nowMsSQL + `),
         state_changed_ms = ` + nowMsSQL + `,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
@@ -565,8 +675,9 @@ var repairCheckPermissionSQL = `UPDATE spawns
 
 // repairNewStateSQL is the state the repair writes: waiting when idle_since
 // is set on a non-Codex row, working otherwise. Its two placeholders are
-// waiting and working; the statement uses it three times (state, the display
-// exit and the settled value), so the caller repeats the pair.
+// waiting and working; the statement uses it four times (state, the display
+// exit, the settled value and the state record), so the caller repeats the
+// pair.
 const repairNewStateSQL = `CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END`
 
 // RepairCheckPermissionIfSameLife is find-missing's repair of a stale
@@ -608,7 +719,7 @@ const repairNewStateSQL = `CASE WHEN idle_since IS NOT NULL AND agent <> '` + Ag
 func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowSnapshot) (newState string, res CondResult, err error) {
 	const errPrefix = "store: repair check_permission if same life"
 	var args []any
-	for range 3 {
+	for range 4 {
 		args = append(args, StateWaiting, StateWorking)
 	}
 	args = append(args, instanceID, StateCheckPermission)

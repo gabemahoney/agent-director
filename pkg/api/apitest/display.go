@@ -1,6 +1,7 @@
 package apitest
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +14,22 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
+
+// ReadDisplayExit reads only id's stored display_exit, preserving SQL NULL.
+// Registered in docs/architecture.md, Displayed State reporting; use it to
+// check a lifecycle writer drained its exit without an observing write.
+func ReadDisplayExit(dbPath, id string) (sql.NullString, error) {
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return sql.NullString{}, fmt.Errorf("ReadDisplayExit: %w", err)
+	}
+	defer raw.Close()
+	var exit sql.NullString
+	if err := raw.QueryRow("SELECT display_exit FROM spawns WHERE instance_id = ?", id).Scan(&exit); err != nil {
+		return sql.NullString{}, fmt.Errorf("ReadDisplayExit %s: %w", id, err)
+	}
+	return exit, nil
+}
 
 // PermissionOption overrides exact request facts without advancing any clocks.
 type PermissionOption func(map[string]any)
@@ -99,11 +116,51 @@ func SetPermissionFacts(dbPath string, requestID int64, opts ...PermissionOption
 	return nil
 }
 
+// ReadSurfaceProcessOptions keeps surface fixtures live while their caller inspects
+// them. A short-lived seed helper must name its long-lived caller explicitly.
+// Live reporting fixtures must reuse these process options.
+func ReadSurfaceProcessOptions(writerPID ...int) ([]SpawnOption, error) {
+	pid := os.Getpid()
+	if len(writerPID) > 0 && writerPID[0] != 0 {
+		pid = writerPID[0]
+	}
+	identity, err := ContextWriter(pid)
+	if err != nil {
+		return nil, err
+	}
+	return []SpawnOption{WithPID(pid), WithProcStarttime(identity.PaneStarttime)}, nil
+}
+
+// BindReadSurfaceProcess gives an existing reporting fixture a live agent process,
+// preserving its launch token, state, requests and clocks. A recorded pane follows
+// that same process; a row without a pane keeps none. The caller keeps writer alive.
+// Reuse this helper to bind an existing reporting fixture to its live process.
+func BindReadSurfaceProcess(dbPath, id string, writerPID int) (store.LaunchIdentity, error) {
+	writer, err := ContextWriter(writerPID)
+	if err != nil {
+		return writer, err
+	}
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return writer, err
+	}
+	defer raw.Close()
+	_, err = raw.Exec(`UPDATE spawns SET pid=?, proc_starttime=?,
+		pane_pid=CASE WHEN pane_id IS NOT NULL THEN ? ELSE pane_pid END,
+		pane_starttime=CASE WHEN pane_id IS NOT NULL THEN ? ELSE pane_starttime END
+		WHERE instance_id=?`, writerPID, writer.PaneStarttime, writerPID, writer.PaneStarttime, id)
+	return writer, err
+}
+
 // SeedNeedsIntelligenceSurface seeds needs-intelligence-claude, -codex and
 // -cursor, check_permission rows each with one open fallen-back request (token
 // A) and the needs_intelligence display 0.16/0.17 committed for it, which no
 // read reports (b.zpv), and the ordinary row ordinary.
-func SeedNeedsIntelligenceSurface(dbPath string) error {
+func SeedNeedsIntelligenceSurface(dbPath string, writerPID ...int) error {
+	live, err := ReadSurfaceProcessOptions(writerPID...)
+	if err != nil {
+		return err
+	}
 	since := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
 	// The row's permission epoch and the observation's agree: an observation
 	// of another epoch is a finished episode, not the committed one.
@@ -114,20 +171,24 @@ func SeedNeedsIntelligenceSurface(dbPath string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := SeedSpawn(dbPath, id, store.StateCheckPermission, "/tmp", "on", "", true, WithAgent(agent), WithNoPane(), WithStartedAt(since.Add(-time.Hour)), WithPermissionEpoch(epoch), WithDisplayObservation(string(observation))); err != nil {
+		if _, err := SeedSpawn(dbPath, id, store.StateCheckPermission, "/tmp", "on", "", true, WithAgent(agent), WithNoPane(), WithStartedAt(since.Add(-time.Hour)), WithPermissionEpoch(epoch), WithDisplayObservation(string(observation)), live[0], live[1]); err != nil {
 			return err
 		}
 		if _, err := SeedPermissionRequest(dbPath, id, "Bash", PermissionToken(storefix.TestRequestTokenA), PermissionTimes(since.Add(-time.Hour), since.Add(-time.Hour), since.Add(-time.Minute), time.Time{}, since.Add(-time.Minute), store.FallbackDeadline)); err != nil {
 			return err
 		}
 	}
-	_, err := SeedSpawn(dbPath, "ordinary", store.StateWorking, "/tmp", "off", "", false)
+	_, err = SeedSpawn(dbPath, "ordinary", store.StateWorking, "/tmp", "off", "", false, WithNoPane(), live[0], live[1])
 	return err
 }
 
 // SeedIdleScreenSurface seeds idle-screen-claude and -codex, displayed since that
 // instant, and ordinary-cursor, a working Cursor row; read them under SettleOnConfig.
-func SeedIdleScreenSurface(dbPath string) error {
+func SeedIdleScreenSurface(dbPath string, writerPID ...int) error {
+	live, err := ReadSurfaceProcessOptions(writerPID...)
+	if err != nil {
+		return err
+	}
 	since := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
 	const epoch = 3
 	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
@@ -138,11 +199,11 @@ func SeedIdleScreenSurface(dbPath string) error {
 		}
 		if _, err := SeedSpawn(dbPath, "idle-screen-"+agent, store.StateWorking, "/tmp", "off", "", true, WithAgent(agent), WithStartedAt(since.Add(-time.Hour)),
 			WithPermissionEpoch(epoch), WithDisplayObservation(string(observation)),
-			WithPaneBaseline(strings.Repeat("ab", 32), since.Add(-21*time.Minute).UnixMilli(), int64(epoch))); err != nil {
+			WithPaneBaseline(strings.Repeat("ab", 32), since.Add(-21*time.Minute).UnixMilli(), int64(epoch)), WithNoPane(), live[0], live[1]); err != nil {
 			return err
 		}
 	}
-	_, err := SeedSpawn(dbPath, "ordinary-cursor", store.StateWorking, "/tmp", "off", "", true, WithAgent(store.AgentCursor), WithNoPane())
+	_, err = SeedSpawn(dbPath, "ordinary-cursor", store.StateWorking, "/tmp", "off", "", true, WithAgent(store.AgentCursor), WithNoPane(), live[0], live[1])
 	return err
 }
 
@@ -430,4 +491,51 @@ func ObserveDisplayRead(t testing.TB, probe DisplayProbe, id, want string, commi
 		}
 	}
 	return got
+}
+
+// CheckPaneConfirmationWire checks a sampled row's exact display record and
+// shape. first is the stay's first confirmation (empty on its first read);
+// latest checked_at must fall inside this public call's [from,to] window.
+// Must use: a sampled pane-display test checks the display record through
+// this, never a second wire check.
+func CheckPaneConfirmationWire(t testing.TB, raw []byte, first, reason string, from, to time.Time) string {
+	t.Helper()
+	AssertConfirmationsShape(t, string(raw))
+	var row struct {
+		State         string `json:"state"`
+		Confirmations map[string]struct {
+			Status  string  `json:"status"`
+			At      *string `json:"confirmed_at"`
+			Source  *string `json:"source"`
+			Checked *string `json:"checked_at"`
+			Reason  *string `json:"reason"`
+		} `json:"confirmations"`
+	}
+	if err := json.Unmarshal(raw, &row); err != nil {
+		t.Fatal(err)
+	}
+	rec := row.Confirmations["displayed_state"]
+	if rec.At == nil || rec.Checked == nil || rec.Source == nil {
+		t.Fatalf("pane record lacks its evidence: %s", raw)
+	}
+	if first == "" {
+		first = *rec.At
+		if first != *rec.Checked {
+			t.Fatalf("first sample timestamps differ: %s", raw)
+		}
+	}
+	status := "confirmed"
+	if reason != "" {
+		status = "not_confirmed"
+	}
+	why := ""
+	if rec.Reason != nil {
+		why = *rec.Reason
+	}
+	at, err := time.Parse("2006-01-02T15:04:05.000Z", *rec.Checked)
+	if row.State != "working" || rec.Status != status || *rec.Source != "pane" || *rec.At != first || why != reason ||
+		err != nil || at.Before(from.Truncate(time.Millisecond)) || at.After(to) || *rec.Checked < first {
+		t.Fatalf("pane wire record %+v; want %s, first %s, source pane, check in [%s,%s], reason %q", rec, status, first, from, to, reason)
+	}
+	return first
 }

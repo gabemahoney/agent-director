@@ -87,6 +87,34 @@ func newCursorTrailEnv(t *testing.T) *cursorTrailEnv {
 
 func cursorTrailCheck(store.Spawn) error { return nil }
 
+// stateRecord fails t unless the row reads state confirmed by agent_event at a
+// time within [from, to], and returns that record.
+func (e *cursorTrailEnv) stateRecord(t *testing.T, state string, from, to int64) store.Confirmation {
+	t.Helper()
+	sp, err := e.f.s.GetSpawn(e.b.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := sp.StateConfirmation(store.SettleRead{})
+	if sp.State != state || c.Status != store.ConfirmationConfirmed || c.Source != store.EvidenceAgentEvent || c.ConfirmedAtMillis < from || c.ConfirmedAtMillis > to {
+		t.Fatalf("state %s record %+v; want %s confirmed by agent_event in [%d, %d]", sp.State, c, state, from, to)
+	}
+	return c
+}
+
+// sameRecord fails t unless a same-value write left the row's state record
+// as want.
+func (e *cursorTrailEnv) sameRecord(t *testing.T, want store.Confirmation) {
+	t.Helper()
+	sp, err := e.f.s.GetSpawn(e.b.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := sp.StateConfirmation(store.SettleRead{}); c != want {
+		t.Fatalf("same-value request redated the state record: %+v; want %+v", c, want)
+	}
+}
+
 func (e *cursorTrailEnv) requestInput(token string) store.RelayRequest {
 	return store.RelayRequest{RequestToken: token, ToolUseID: "tool-" + token, ToolName: "Bash", ToolInput: `{"command":"private-payload"}`, SettledAt: e.until}
 }
@@ -282,12 +310,26 @@ func TestCursorTrailProofFinalValuesAndDuplicate(t *testing.T) {
 				e.exec(t, `UPDATE permission_requests SET proven_gone_at=1234,proven_gone_how='tool_ran',pane_answer='tool_ran',decision='allow',decided_at='2026-01-01 00:00:00' WHERE request_token='target'`)
 			}
 			before := e.read(t, "target")
+			wantOrigin, wantClaim := store.DecisionOriginObservation, ""
+			switch prior {
+			case "API allow", "operator deny":
+				wantOrigin = store.DecisionOriginCaller
+			case "timeout deny":
+				wantOrigin, wantClaim = store.DecisionOriginTimeout, store.ResponseRelayClaimed
+			case "native pane":
+				wantOrigin, wantClaim = store.DecisionOriginPane, store.ResponseNativeClaimed
+			case "incomplete proof":
+				wantOrigin = "" // unknown historical provenance stays unknown
+			}
 			mark := store.TrailMark(t)
 			seen := e.beforeCommit(t, mark)
 			if err := e.f.s.ProveCursorToolRan(e.b, "target", "tool-target", true, cursorTrailCheck); err != nil {
 				t.Fatal(err)
 			}
 			r := e.assertEvent(t, mark, "target", "update", decision, reason)
+			if r.DecisionOrigin != wantOrigin || r.ResponseState != wantClaim {
+				t.Fatalf("proof changed response authority: %+v", r)
+			}
 			if !*seen || !r.ProvenGone() || r.ProvenGoneHow != "tool_ran" || r.MainTurnEndEligible || r.AgentID != "" {
 				t.Fatalf("proof contract: %+v", r)
 			}
@@ -395,7 +437,11 @@ func TestCursorTrailProofReleasesRowToWorking(t *testing.T) {
 			}
 			t.Run(event+"/"+tc, func(t *testing.T) {
 				e := newCursorTrailEnv(t)
+				// b.x9o: the ACP request is the agent's own event (agent_event)
+				// establishing check_permission, at the write's own time.
+				from := time.Now().UnixMilli()
 				e.insert(t, "target")
+				requested := e.stateRecord(t, store.StateCheckPermission, from, time.Now().UnixMilli())
 				decision := "allow"
 				if tc == "delivered deny" {
 					decision = "deny"
@@ -422,8 +468,10 @@ func TestCursorTrailProofReleasesRowToWorking(t *testing.T) {
 					want = store.StateWorking
 				case "still held":
 					e.insert(t, "independent")
+					e.sameRecord(t, requested)
 				case "repeat proof":
 					e.insert(t, "independent")
+					e.sameRecord(t, requested)
 					prove(true)
 					e.exec(t, `UPDATE permission_requests SET proven_gone_at=1234,proven_gone_how='tool_ran' WHERE request_token='independent'`)
 				case "waiting after Stop":
@@ -443,7 +491,9 @@ func TestCursorTrailProofReleasesRowToWorking(t *testing.T) {
 					t.Fatalf("before proof: state %q, want %q (%v)", before.State, wantBefore, err)
 				}
 				mark := store.TrailMark(t)
+				from = time.Now().UnixMilli()
 				prove(tc != "turn closed")
+				to := time.Now().UnixMilli()
 				if got := e.read(t, "target"); got.ProvenGoneHow != store.ProvenGoneToolRan {
 					t.Fatalf("proof not written: %+v", got)
 				}
@@ -453,7 +503,7 @@ func TestCursorTrailProofReleasesRowToWorking(t *testing.T) {
 				}
 				transitions := store.TrailEventsSince(t, mark, "ad.spawn.state_transition", e.b.InstanceID)
 				if want != store.StateWorking {
-					if len(transitions) != 0 || after.RowVersion != before.RowVersion || after.StateChangedMillis != before.StateChangedMillis || after.IdleSince != before.IdleSince || after.LivenessNote != before.LivenessNote || after.LivenessUnverifiedSince != before.LivenessUnverifiedSince {
+					if len(transitions) != 0 || after.RowVersion != before.RowVersion || after.StateChangedMillis != before.StateChangedMillis || after.IdleSince != before.IdleSince || after.LivenessNote != before.LivenessNote || after.LivenessUnverifiedSince != before.LivenessUnverifiedSince || after.StateEvidence != before.StateEvidence {
 						t.Fatalf("proof without a move changed the row: transitions=%v before=%+v after=%+v", transitions, before, after)
 					}
 					return
@@ -464,6 +514,8 @@ func TestCursorTrailProofReleasesRowToWorking(t *testing.T) {
 				if len(transitions) != 1 || transitions[0]["source"] != "ad_spawn_store" || transitions[0]["prior_state"] != store.StateCheckPermission || transitions[0]["new_state"] != store.StateWorking || transitions[0]["triggering_event_name"] != event || transitions[0]["soft_refresh"] != false {
 					t.Fatalf("proof transition: %v", transitions)
 				}
+				// b.x9o: the tool's ACP result is the agent's event releasing the row.
+				e.stateRecord(t, store.StateWorking, from, to)
 			})
 		}
 	}

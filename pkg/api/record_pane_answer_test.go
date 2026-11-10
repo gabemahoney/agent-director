@@ -158,7 +158,7 @@ func TestRecordPaneAnswerRefusals(t *testing.T) {
 		{"answered outside already", []r7Step{r7Outside}, nil, store.ErrAlreadyDecided, `pane_answer "outside"`},
 		{"the row ended", []r7Step{r7End}, nil, store.ErrNoOpenPermissionRequest, "the spawn is ended"},
 		{"the row ended, then resumed", []r7Step{r7End, r7Resume}, nil, store.ErrNoOpenPermissionRequest,
-			"its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict"},
+			"its spawn ended, or a shared check marked it missing, before the request's relay hook delivered a verdict"},
 		{"the row missing", []r7Step{r7Mark}, nil, store.ErrNoOpenPermissionRequest, "the spawn is missing"},
 	}
 	for _, tc := range cases {

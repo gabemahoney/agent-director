@@ -17,7 +17,6 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
-	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -118,7 +117,7 @@ func TestPauseCodexExitedBeforePause(t *testing.T) {
 				}
 				e.assertNoTmuxCall(t)
 				pauAssertState(t, e, r.ID, store.StateEnded)
-				assertMoveRecords(t, mark, r.ID, moveWant{prior: tc.state, now: store.StateEnded,
+				assertMoveRecords(t, mark, r.ID, moveWant{source: "ad_recovery", prior: tc.state, now: store.StateEnded,
 					denyReason: store.DecisionReasonEnded, reason: "proc_absent", tokens: tokens})
 				pcxAssertNoCallEvent(t, mark, r.ID)
 				for _, tok := range tokens {
@@ -183,7 +182,7 @@ func TestPauseCodexWait(t *testing.T) {
 			e.codexExitsAfterEnter(t, r, mark)
 		}, tries: 1},
 		{name: "alive for two polls, gone at the third", prepare: func(t *testing.T, e *killEnv, r killRow, mark *int) {
-			e.onceAfter(t, tmux.CallSendEnter, "Codex SessionEnd", func() (bool, string) {
+			e.onceAfter(t, callEnterKey, "Codex SessionEnd", func() (bool, string) {
 				why := e.codexSessionEnds(t, r)
 				*mark = trailMark(t)
 				return why == "", why
@@ -213,7 +212,7 @@ func TestPauseCodexWait(t *testing.T) {
 		// An adoption write (SR-3.6) fills in the identity on the SAME launch, as pause's own tmux phase or a
 		// find-missing does: the launch is the token and life, so the row still ends.
 		{name: "an adoption write fills in the identity during the wait", noServer: true, prepare: func(t *testing.T, e *killEnv, r killRow, mark *int) {
-			e.onceAfter(t, tmux.CallSendEnter, "adoption write and Codex exit", func() (bool, string) {
+			e.onceAfter(t, callEnterKey, "adoption write and Codex exit", func() (bool, string) {
 				row, err := e.st.GetSpawn(r.ID)
 				if err != nil {
 					return false, err.Error()
@@ -260,7 +259,7 @@ func TestPauseCodexWait(t *testing.T) {
 				// written before the wait): not part of the move's records.
 				mark = pcxAfterLastDisagree(t, mark, r.ID)
 			}
-			assertMoveRecords(t, mark, r.ID, moveWant{prior: store.StateWaiting, now: store.StateEnded,
+			assertMoveRecords(t, mark, r.ID, moveWant{source: "ad_recovery", prior: store.StateWaiting, now: store.StateEnded,
 				denyReason: store.DecisionReasonEnded, reason: "proc_absent"})
 			pcxAssertNoCallEvent(t, 0, r.ID)
 		})
@@ -280,28 +279,28 @@ func TestPauseCodexWaitDoesNotEnd(t *testing.T) {
 		otherLaunch bool
 	}{
 		{name: "alive, end report", do: func(t *testing.T, e *killEnv, r killRow) {
-			e.onceAfter(t, tmux.CallSendEnter, "Codex SessionEnd", func() (bool, string) {
+			e.onceAfter(t, callEnterKey, "Codex SessionEnd", func() (bool, string) {
 				why := e.codexSessionEnds(t, r)
 				return why == "", why
 			})
 		}},
 		{name: "gone, no end report", do: func(_ *testing.T, e *killEnv, r killRow) {
-			e.setAfterCall(tmux.CallSendEnter, procfix.Gone(), r.AgentPID)
+			e.setAfterCall(callEnterKey, procfix.Gone(), r.AgentPID)
 		}},
 		{name: "unjudgeable, end report", do: func(t *testing.T, e *killEnv, r killRow) {
-			e.onceAfter(t, tmux.CallSendEnter, "Codex SessionEnd", func() (bool, string) {
+			e.onceAfter(t, callEnterKey, "Codex SessionEnd", func() (bool, string) {
 				why := e.codexSessionEnds(t, r)
 				e.pc.Set(r.AgentPID, procfix.Unreadable())
 				return why == "", why
 			})
 		}},
 		{name: "gone, end report, but the row is on another launch (a resume's new token)", do: func(t *testing.T, e *killEnv, r killRow) {
-			e.onceAfter(t, tmux.CallSendEnter, "new launch and Codex exit", func() (bool, string) {
+			e.onceAfter(t, callEnterKey, "new launch and Codex exit", func() (bool, string) {
 				return e.codexOtherLaunch(t, r, false)
 			})
 		}, otherLaunch: true},
 		{name: "gone, end report, but the row is on another launch (a reuse's new launch)", do: func(t *testing.T, e *killEnv, r killRow) {
-			e.onceAfter(t, tmux.CallSendEnter, "new launch and Codex exit", func() (bool, string) {
+			e.onceAfter(t, callEnterKey, "new launch and Codex exit", func() (bool, string) {
 				return e.codexOtherLaunch(t, r, true)
 			})
 		}, otherLaunch: true},
@@ -398,20 +397,19 @@ func TestPauseCodexWaitStoreError(t *testing.T) {
 }
 
 // TestPauseClaudeRowNeverMoved: pause writes no state of a Claude row, even with its process gone and an end
-// report column set: the pre-check leaves it to its state rules and the wait only reads it.
+// report column set: state refusal and dead-pane admission both leave it untouched.
 func TestPauseClaudeRowNeverMoved(t *testing.T) {
 	t.Parallel()
 	for _, rowAgent := range []string{"claude", "cursor"} {
 		t.Run(rowAgent, func(t *testing.T) {
 			withReport := apitest.WithEndReportedAt(codexEndReport)
 			cases := []struct {
-				name    string
-				state   string
-				want    string // "": the wait times out
-				session bool
+				name  string
+				state string
+				want  string
 			}{
 				{name: "working", state: store.StateWorking, want: "ErrSpawnNotPausable"},
-				{name: "waiting, wait times out", state: store.StateWaiting, want: "ErrPauseTimeout"},
+				{name: "waiting, dead pane refuses input", state: store.StateWaiting, want: "ErrInternal"},
 			}
 			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) {
@@ -424,6 +422,7 @@ func TestPauseClaudeRowNeverMoved(t *testing.T) {
 					_, err := e.pauseWithin(context.Background(), 0, pauseParams(r))
 
 					assertOneName(t, err, tc.want)
+					e.assertNothingSent(t)
 					if e.store.endedTries != 0 {
 						t.Errorf("moves to ended attempted = %d; want none for a Claude row", e.store.endedTries)
 					}
@@ -475,8 +474,8 @@ func TestPauseLineClear(t *testing.T) {
 			e.assertExitDeliveredTimes(t, r.Socket, r.Spawn.Identity.PaneID, tc.presses)
 			in.assertSubmittedOnce(t, exitText)
 			for _, c := range e.rec.SocketCalls() {
-				if c.Key != "" && c.Key != paneClearKey {
-					t.Errorf("key send %q; want only %s", c.Key, paneClearKey)
+				if c.Key != "" && c.Key != paneClearKey && c.Key != "Enter" {
+					t.Errorf("key send %q; want only %s and the final Enter", c.Key, paneClearKey)
 				}
 			}
 			pauAssertState(t, e, r.ID, store.StateEnded)

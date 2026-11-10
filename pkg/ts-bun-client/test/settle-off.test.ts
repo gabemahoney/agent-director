@@ -3,7 +3,8 @@
  * client's status, get and list results serialize (JSON.stringify plus a
  * newline) byte for byte to the CLI's goldens in
  * cmd/agent-director/testdata/settle_off, over ts-helper's fixed store
- * (seed-read-surface-store). The case table there drives every surface.
+ * (seed-read-surface-store). The case table there drives every surface; each
+ * read's own process probe times are normalized as the Go surfaces do.
  */
 
 import { test, expect } from "bun:test";
@@ -12,6 +13,7 @@ import * as path from "path";
 import type { Client } from "../src/index.js";
 import { withTempHome } from "./internal/tempHome.js";
 import { runHelper, homeStore, openClient } from "./internal/helper.js";
+import { normalizeProbes } from "./internal/readSurface.js";
 
 const fixtureDir = path.resolve(import.meta.dir, "../../../cmd/agent-director/testdata/settle_off");
 
@@ -41,13 +43,16 @@ function call(client: Client, c: ReadSurfaceCase): Promise<unknown> {
 for (const variant of table.variants) {
   test(`settle-off (${variant.name}): status, get and list match the CLI goldens byte for byte`, async () => {
     await withTempHome(async (homeDir) => {
-      runHelper("seed-read-surface-store", { store: homeStore(homeDir) });
+      runHelper("seed-read-surface-store", { store: homeStore(homeDir), "writer-pid": String(process.pid) });
       if (variant.config !== null) {
         fs.writeFileSync(path.join(homeDir, ".config", "agent-director", "config.toml"), variant.config);
       }
       using client = await openClient(homeStore(homeDir));
+      const first = new Map<string, string>();
       for (const c of table.cases) {
-        const got = JSON.stringify(await call(client, c)) + "\n";
+        const from = Date.now();
+        const result = await call(client, c);
+        const got = normalizeProbes(JSON.stringify(result) + "\n", from, Date.now(), first, String(c.params.instance_id ?? ""));
         const want = fs.readFileSync(path.join(fixtureDir, "golden", `${c.name}.json`), "utf8");
         expect(`${c.name}: ${got}`).toBe(`${c.name}: ${want}`);
       }

@@ -2,7 +2,8 @@
 // operator-only actions that pkg/api keeps out of its exported surface, so
 // that the agent-director CLI, its MCP tools and the Go and TypeScript client
 // libraries expose exactly the same verbs and parameters, and the off-PATH
-// admin binary is the only way to run these two actions.
+// admin binary is the only way to run these actions. MigrateJournal and
+// SnapshotStore use typed store operations without a public Client.
 //
 // pkg/api sets the hooks KillFinished and Delete in its init; any program
 // that imports pkg/api has them set. This package imports nothing from
@@ -81,32 +82,62 @@ type Flag struct {
 
 // Common texts of the verb list.
 const (
-	// errorsText says how every verb reports an error.
+	// errorsText describes errors without migration's structured details.
 	errorsText = "An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1."
 	// noStoreText says which verbs open no store.
 	noStoreText = "It opens no store and loads no config."
 	// sameUserText is the rule every store-backed verb follows.
 	sameUserText = "Run it as the agents' user and in their tmux environment."
-	// idFlagName is the instance-id flag both store-backed verbs take.
+	// idFlagName is the instance-id flag both row-repair verbs take.
 	idFlagName = "--instance-id <id>"
 )
 
 // GlobalFlagsText introduces GlobalFlags in help and docs/admin-reference.md.
-const GlobalFlagsText = "The global flags are agent-director's, parsed and applied the same way: give the ones agent-director's runs use, if any, " +
-	"so that agent-director-admin opens the same store and reaches the same tmux. Each goes before or after the verb, as --flag value or --flag=value."
+const GlobalFlagsText = "For kill-finished and delete, use agent-director's store, home and tmux overrides. migrate-journal uses the configured store unless --store-path overrides it. " +
+	"snapshot-store requires an explicit --store-path and loads no config. Each global flag goes before or after the verb, as --flag value or --flag=value."
 
 // GlobalFlags are agent-director-admin's global flags, the ones agent-director
 // takes (internal/clisetup.ParseGlobalFlags parses them for both binaries), in
 // the order help lists them.
 var GlobalFlags = []Flag{
-	{Name: "--store-path <path>", Description: "Open the store at <path> instead of the configured one ([store] db_path in ~/.config/agent-director/config.toml, by default ~/.config/agent-director/state.db)."},
+	{Name: "--store-path <path>", Description: "Use <path> instead of the configured store ([store] db_path in ~/.config/agent-director/config.toml, by default ~/.config/agent-director/state.db). Required for snapshot-store, which reads the existing source without opening it through SQLite."},
 	{Name: "--home <dir>", Description: "Use <dir> as HOME for this run, so the config, the store and every other ~/ path resolve under it."},
 	{Name: "--tmux-command <path>", Description: "Run <path> as tmux instead of the tmux on PATH."},
-	{Name: "--create-if-missing <true|false>", Description: "With false, refuse a store that does not exist (ErrStoreOpen) and create none of it; with true, or when omitted, create a missing store (parent directories, file and schema)."},
+	{Name: "--create-if-missing <true|false>", Description: "For kill-finished and delete: false refuses a missing store (ErrStoreOpen); true or omitted creates its parent directories, file and schema. migrate-journal and snapshot-store require an existing source and never create it."},
 }
 
 // Verbs is agent-director-admin's verb list, in help order.
 var Verbs = []Verb{
+	{
+		Name:  "snapshot-store",
+		Usage: "agent-director-admin --store-path <absolute-path> snapshot-store --directory <private-directory> [--busy-timeout-ms <ms>]",
+		Description: "Copy a consistent database and committed WAL for installer preflight without opening the original through SQLite or changing its files. " +
+			"The directory must exist, be empty and have mode 0700; the caller removes it after reading the snapshot. " +
+			"Read-only POSIX locks guard capture on Linux and macOS; busy, unreadable, changing or unsupported sources refuse with ErrStoreOpen. " +
+			"No config is loaded and no schema is initialized or migrated. Run in a separate process with no other source database descriptors. " + errorsText,
+		Flags: []Flag{
+			{Name: "--directory <path>", Description: "Absolute path of an existing empty private directory. Required."},
+			{Name: "--busy-timeout-ms <ms>", Description: "Capture and lock-wait budget, in milliseconds, 1 through 2147483647; default 10000."},
+		},
+		Output: "{path}: the private state.db snapshot. Read it with SQLite so committed WAL frames are included; the original remains untouched.",
+	},
+	{
+		Name:  "migrate-journal",
+		Usage: "agent-director-admin migrate-journal --maintenance-window --roots-complete --backup-dir <new-absolute-dir> [--legacy-root <absolute-dir>...] [--check-only]",
+		Description: "Cut over the configured store's legacy native-input journals under an operator-maintained maintenance window. Stop incompatible MCP servers, helpers, hooks, commands and launch preparation and prevent new old-runtime invocations through committed verification. A pending schema transition requires an exact authorization sentinel; already-current verification requires none. Invoking HOME's current and old input roots are always included, even for a custom database; declare every additional root. Unreadable inventory refuses without killing processes. SQLite remains authoritative after commit even if file retirement fails. docs/operator-actions.md Upgrading the native-input journal says what to do for each refusal reason, including the direct verification retry after a committed or uncertain refusal. Recovery restores the stopped-writer backup and matching prior binary: later writes are lost; reconcile uncertain attempts before restarting an older runtime. Never reset the schema version or reconstruct replayable journals. With --check-only it makes only the argument checks the real run makes first (the window and roots assertions; the backup directory absolute, new and outside every legacy root; legacy roots absolute and clean) and opens no store, loads no config, takes no lock and writes nothing. " +
+			"An error prints one JSON envelope on stderr and exits 1: ErrJournalMigrationRefused, ErrInvalidFlags, ErrConfigMalformed or ErrStoreOpen. " +
+			"Its details.cutover says what this attempt committed: not_committed (no cutover commit; details.steps_committed says whether an earlier schema step committed), committed, or unknown (anything else, such as an unconfirmed commit or a migration lock another administrator holds or that cannot be checked); --check-only always reports not_committed. " +
+			"ErrJournalMigrationRefused also carries details.refusal {reason, processes, action} and, from a real run, details.result, whose authority is set when the attempt read it. " +
+			"INT, TERM or HUP before the cutover commit begins stops the attempt with reason interrupted; once that commit has begun, the attempt finishes first; an INT or HUP ignored at start stays ignored. " + sameUserText,
+		Flags: []Flag{
+			{Name: "--maintenance-window", Description: "Assert that the operator has established and will maintain the admission boundary through verification. Required."},
+			{Name: "--roots-complete", Description: "Assert that every legacy input root relevant to this store identity is established and declared. Required."},
+			{Name: "--legacy-root <absolute-dir>", Description: "Additional legacy input root containing store-id/launch-token directories. Repeatable."},
+			{Name: "--backup-dir <new-absolute-dir>", Description: "Exclusive new directory for the stopped-writer database/WAL/SHM and legacy-evidence backup. Required."},
+			{Name: "--check-only", Description: "Make only the argument checks, then exit: {} when they pass, ErrJournalMigrationRefused with details.refusal, details.cutover not_committed and no result when one refuses."},
+		},
+		Output: "{store_id, authority, backup, retirement_pending}; authority sqlite means the committed marker was verified, never permission to restart old mutators. With --check-only, {}.",
+	},
 	{
 		Name:  "kill-finished",
 		Usage: "agent-director-admin kill-finished " + idFlagName,

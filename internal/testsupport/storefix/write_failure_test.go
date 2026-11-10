@@ -391,16 +391,25 @@ func runWrite(t *testing.T, s *store.Store, dbPath string, w proxyWrite, id stri
 // on that id fail, and cleanup lifts them.
 func TestInjectWriteFailure(t *testing.T) {
 	const target, other = "wf-target", "wf-other"
+	// Proven by their production consumers instead: store input_delivery tests,
+	// pkg/api sendkeys_persisted_proof_test and cursorhost request_boundary_linux_test.
+	production := map[storefix.WriteFailureKind]bool{
+		storefix.WriteFailInputAttemptInsert: true, storefix.WriteFailInputTextIntent: true, storefix.WriteFailInputCurrent: true,
+		storefix.WriteFailInputAuthority: true, storefix.WriteFailPermissionResponseIssue: true,
+	}
 	covered := map[storefix.WriteFailureKind]bool{}
 	for _, w := range proxyWrites {
 		covered[w.kind] = true
 	}
 	for _, k := range writefailfix.Kinds() {
-		if !covered[k] {
+		if !covered[k] && !production[k] {
 			t.Fatalf("no proxy write for kind %v", k)
 		}
 	}
 	for _, installed := range writefailfix.Kinds() {
+		if production[installed] {
+			continue
+		}
 		for _, w := range proxyWrites {
 			if w.ownKindOnly && installed != w.kind {
 				continue

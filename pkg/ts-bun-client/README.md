@@ -146,6 +146,10 @@ handling are in the [caller contract](../../docs/caller-contract.md#cursor-opera
 
 Get the current lifecycle state of a Spawn.
 
+`status`, `get`, `list` and `sweep` (also `findMissing`) share
+[bounded recovery](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
+Single-row reads check only that row; read success does not confirm every write.
+
 ```ts
 const result = await client.status({ instance_id: "<id>" });
 console.log(result.state);
@@ -156,6 +160,17 @@ console.log(result.state);
 [Usage](../../docs/usage.md#family-state) defines membership and
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
+
+They also carry `process_liveness: ProcessLiveness` (`"alive" | "exited" |
+"unknown"`) and `confirmations: Confirmations`, with exactly `state`,
+`process_liveness` and `displayed_state`. Each is a `Confirmation`: a non-null
+`status` (`ConfirmationStatus`) and the nullable `confirmed_at`, `source`
+(`ConfirmationSource`), `checked_at` and `reason` (`ConfirmationReason`), all
+five always present. The [caller contract](../../docs/caller-contract.md#confirmations)
+defines the values and when each is `null`. `confirmations.displayed_state`
+describes the returned display, including an omitted `displayed_state` or a
+retained display whose exit is settling. Cursor's record is
+`unknown`/`unsupported`.
 
 `state` is always the lifecycle state. While a row shows a
 Displayed State, `StatusResult`, `GetResult` and each `ListRow` carry it in
@@ -195,7 +210,10 @@ for (const spawn of result.spawns) {
 Each row, like `get`'s result, carries `agent` (`"claude"`, `"codex"` or `"cursor"`), the agent the row runs.
 A `state` filter keeps a row whose `state` or `displayed_state` is one of its
 values, before any `limit`, so `["working"]` keeps a working row that shows
-`"idle_screen"`.
+`"idle_screen"`. Filters and limit select stored IDs before recovery checks.
+The result keeps those IDs even if refreshed values no longer match; it does
+not refill slots or add newly matching rows. Recovery and family freshness
+follow the [caller contract](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
 
 ### listSubagents
 
@@ -221,7 +239,7 @@ or omitted `text` sends the Enter only, submitting what is already typed.
 `no_enter: true` types the text without the Enter, and `key` sends one key
 alone (`"Escape"`, `"Enter"`, `"Up"`, `"Down"`, `"Tab"`, or one character),
 never followed by Enter. With `expect_pane_sha256` (the `pane_sha256` of
-the `readPane` you looked at, with its `n_lines`), nothing is sent if the
+the plain `readPane` you looked at, with its `n_lines`), nothing is sent if the
 pane changed since (`ErrPaneChanged`); on a relayed Spawn a match also
 passes the API's dialog hold (`ErrDialogMaybeOpen`, see "Answering a request at
 the pane" below). Pass it only for a pane a person or an LLM judged, never
@@ -250,7 +268,11 @@ Supported launches, fallback readiness and input restrictions, omitted-ID
 behavior, structured outcomes and recovery are in
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
 Allow sufficient `callTimeoutMs` for that delivery window; a timeout does not
-cancel submission. Cursor sends with Enter can return `ErrSubmissionUnconfirmed`
+cancel submission.
+After confirmed native delivery, a cleanup `ErrInternal` retains the submitted
+receipt through `AgentDirectorError.errDetails`; follow the caller contract's
+cleanup and no-replay rules. No additional typed proof fields are exposed.
+Cursor sends with Enter can return `ErrSubmissionUnconfirmed`
 with `outcome: "gateway_refused"`; see
 [Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes).
 
@@ -299,7 +321,8 @@ console.log(result.pane, result.pane_sha256);
 
 `pane_sha256` is the SHA-256 of exactly the bytes of `pane`; pass it back as
 `sendKeys`' or `recordPaneAnswer`'s `expect_pane_sha256`, with the same
-`n_lines`, when you act on what this pane shows.
+`n_lines`, when you act on what this pane shows. Use the default ANSI-stripped
+read for this guard; the hash of an `ansi: true` read never matches.
 
 `readPane` has no state guard — it works on `pending`, `ended`, and `missing`
 rows as well as live ones. The `allow_pending` flag is accepted for symmetry
@@ -314,8 +337,8 @@ resolves only once the agent process is gone, and returns `{ kill_sent }`:
 `true` when a kill was sent to the agent's pane or its session, `false` when
 none was. On a finished Spawn (`ended` or `missing`) `kill` is a no-op that
 resolves with `kill_sent: false`; that is not verification that the agent
-exited. `kill` never changes the row's state: `find-missing` marks the row once
-its agent process is gone.
+exited. `kill` never changes the row's state: a state read or `sweep` marks it
+once its agent process is gone.
 
 ```ts
 const { kill_sent } = await client.kill({ instance_id: "<id>" });
@@ -327,6 +350,21 @@ retry later), `ErrTmuxSessionConflict` (CONFLICT),
 `ErrTmuxNotAvailable` (ENVIRONMENT) and
 `ErrSpawnNotFound`. None of these proves exit. See the [caller contract](../../docs/caller-contract.md#caller-contract)
 for the live-row sequence and finished-row limits.
+
+### sweep
+
+`client.sweep()` returns `Promise<SweepResult>` for one bounded all-agent pass.
+`checks: SweepCheck[]` carries each selected identity's values, three
+confirmation records and independent `completion`/`reason`. Legacy counters
+remain in the same result. See [Sweep results](../../docs/caller-contract.md#sweep-results)
+for membership, coverage and failure handling.
+
+`findMissing()` remains supported and invokes the CLI's `find-missing` alias;
+`sweep()` invokes `sweep`. `SweepParams`, `SweepResult` and `SweepCheck` are
+exported alongside the retained `FindMissingParams` and `FindMissingResult`
+types. Both parameter types accept `timeout_ms` but ignore it: neither command
+receives that flag. `callTimeoutMs` bounds the transport call; timeout proves
+neither rollback nor completion and need not return partial checks.
 
 ### pause
 
@@ -409,8 +447,8 @@ timing and audit limits are owned by the
 recording no verdict, with `ErrRelayFallenBack` when the request's relay
 settled without acknowledgement, with `ErrStoreBusy` when `max_wait_ms`
 ran out before the verdict was recorded, and with
-`ErrNoOpenPermissionRequest` when no open request has that token or the
-request is closed. Pane answers, retries and closed-request handling are
+`ErrNoOpenPermissionRequest` when no eligible request has that token,
+including a closed, proven-gone or obsolete request. Pane answers, retries and closed-request handling are
 in the [caller contract](../../docs/caller-contract.md#permission-relay). The
 `permission_requests` of `get` and of each `list` row carry the same
 delivery fields, `pane_answer` and `pane_as` included, for requests that
@@ -432,13 +470,14 @@ do not know, read the recorded verdict from `decision` (`null` for a
 `"pane_outside"` `"unknown"` claim) and the outcome from `delivery` and
 `pane_answer`; never read a reason as a verdict.
 
-`proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, Claude's
-tool ran or Cursor supplied validated exact matching invocation proof under
+`proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, Cursor
+supplied validated exact matching invocation proof under
 [Cursor permissions](../../docs/permissions.md#cursor-spawns), including a failed
 MCP invocation that proves dialog closure without inferring execution or changing
 decision, delivery or pane-answer fields;
 `"turn_end"`, an eligible main request's turn ended under the age and identity
-guards, or a Cursor turn ended with the request still unanswered; or
+guards, a Claude subagent's turn ended after its request (its
+`SubagentStop`), or a Cursor turn ended with the request still unanswered; or
 `"agent_gone"`, a non-Cursor agent ended) say when and how the request's
 dialog was proven gone; `"delivered"` and a pane answer are
 agent-director's own records, not proof. `get`'s `unproven_requests` lists
@@ -543,6 +582,14 @@ short-circuit. The library returns the binary's reported version
 verbatim — no leading-`v` stripping, no normalization. Consumers
 comparing two real versions should use a standard semver library;
 agent-director does not export a comparator.
+
+The floor is a construction check, not feature negotiation: an older CLI
+that meets it can lack `sweep` (an unknown-verb error) and return
+`status`/`get`/`list`/`findMissing` results without `process_liveness`,
+`confirmations` or `checks`, which the client does not synthesize. Those
+need the CLI release matching this package ([install guide](../../docs/install.md)).
+`client.binaryVersion` is the installed CLI's version; `client.version()`
+reports this package's version.
 
 **Bash read pattern (for install scripts and non-JS consumers):**
 
@@ -682,7 +729,7 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 | `ErrNoSessionId` | The spawn has no `session_id`, so there is nothing to resume. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |
 | `ErrJsonlMissing` | The current session's transcript is unavailable. Cursor requires its protected gateway transcript; native session availability is decided later during load. Older sessions are never tried. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
-| `ErrProbeUnsupported` | No verb returns it: `find-missing` no longer reads process environments, the only path that returned it. The name stays catalogued (and listed for `find-missing`) so the client still maps it. |
+| `ErrProbeUnsupported` | No verb returns it. The name stays catalogued (and listed for `sweep` and `find-missing`) so the client still maps it. |
 
 **tmux transport** (infrastructure failures at the tmux layer — runtime). Each name has a class: GONE (the row's session is not there), UNAVAILABLE (transient; retry later), CONFLICT (permanent until a human looks), ENVIRONMENT (an environment problem for an operator to fix) or LAUNCH FAILURE (the launch failed).
 
@@ -711,9 +758,9 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 | `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
 | `ErrInvalidDecision` | `decision` was neither `allow` nor `deny`. |
 | `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
-| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or `find-missing` or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when `find-missing` marked it `missing`) before the request relay acknowledged its recorded verdict, `find-missing`'s own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (for a request with a settle instant, `"delivered"` requires durable relay acknowledgement; requests recorded by an older binary retain the [legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary), including derived delivery after expiry even when closed). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
-| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the recorded decision and acknowledgement prevent a second API answer. Acknowledgement does not establish agent receipt or dialog closure; see [Permission relay](../../docs/caller-contract.md#permission-relay). It also includes a request `find-missing` denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`), and one closed at the pane (`pane_answer` `"sent"`, `"outside"` or `"tool_ran"`, with a `decision` or, for an `"unknown"` claim, none): `decide` on it records nothing, not even `attempted_decision`. A pane answer or `recordPaneAnswer` on a request its relay acknowledged, or one already closed at the pane, throws it too. |
-| `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and its precommit budget ran out, including acquisition or SQL work. It does not establish another process held the store. Once the verdict is confirmed committed, `decide` never throws it: a bound reached while it waits for confirmation resolves with `delivery` `"not_confirmed"`. An unconfirmed commit is an internal error instead. Without `max_wait_ms`, `decide` never throws `ErrStoreBusy`. A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` throws it when the store's write lock was not taken within its busy timeout. Recovery and zero-wait semantics are in the [caller contract](../../docs/caller-contract.md#permission-relay). |
+| `ErrNoOpenPermissionRequest` | No eligible permission request matches the `(instance_id, request_token)` pair, including a closed, proven-gone or obsolete request. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or shared recovery or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when shared recovery marked it `missing`) before the request relay acknowledged its recorded verdict, the missing mark's own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (for a request with a settle instant, `"delivered"` requires durable relay acknowledgement; requests recorded by an older binary retain the [legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary), including derived delivery after expiry even when closed). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
+| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the recorded decision and acknowledgement prevent a second API answer. Acknowledgement does not establish agent receipt or dialog closure; see [Permission relay](../../docs/caller-contract.md#permission-relay). It also includes a request shared recovery denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`), and one closed at the pane (`pane_answer` `"sent"`, `"outside"` or `"tool_ran"`, with a `decision` or, for an `"unknown"` claim, none): `decide` on it records nothing, not even `attempted_decision`. A pane answer or `recordPaneAnswer` on a request its relay acknowledged, or one already closed at the pane, throws it too. |
+| `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and its precommit budget ran out, including acquisition or SQL work. It does not establish another process held the store. Once the verdict is confirmed committed, `decide` never throws it: a bound reached while it waits for confirmation resolves with `delivery` `"not_confirmed"`. An unconfirmed commit is an internal error instead. Without `max_wait_ms`, `decide` never throws `ErrStoreBusy`. A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` throws it when the store's write lock was not taken within its busy timeout. Recovery and zero-wait semantics are in the [caller contract](../../docs/caller-contract.md#permission-relay). `status`, `get`, `list`, `sweep` and `findMissing` throw it when a bounded store read does not finish in time; see [Bounded recovery on state reads](../../docs/caller-contract.md#bounded-recovery-on-state-reads). |
 | `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |
 | `ErrAmbiguousRequest` | `request_token` was empty and more than one open request exists for the spawn. |
 
@@ -738,7 +785,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrConfigMalformed` | The CLI refused its config file, `~/.config/agent-director/config.toml`: it cannot be read, does not parse as TOML, or sets a value agent-director refuses (for example a negative `[pause] timeout_seconds`). The description names the file and why: the parse error, or every refused key with its value and the values it allows. Every call that opens the store fails this way until an operator fixes the file. See the caller contract for handling. |
 | `ErrStoreOpen` | The CLI could not open its store; the description says what failed. This includes `HOME` unset or empty with no `home` option (`api: expand config path: …`): every call that opens the store is then refused, whatever `storePath` is. With `createIfMissing: false` it includes a store that does not exist (`database not initialized`); nothing was created. It says nothing about any agent. |
-| `ErrSchemaMismatch` | The CLI refused to open its store: the store was written by a newer agent-director than the binary (`found user_version=<N>, want <M>`), or it has no valid store id. The description says which. Nothing was written, and every call that opens the store fails this way until an operator acts: a newer store needs the agent-director release that wrote it. See Operator actions for recovery. It says nothing about any agent. |
+| `ErrSchemaMismatch` | The CLI refused to open its store: its schema is newer than the binary (`found user_version=<N>, want <M>`), its store id is invalid, or its current-schema input authority is incompatible or uncommitted. The description says which. Nothing was written; an operator must act before store-opening calls can run. A newer store needs the release that wrote it. See [Operator actions](../../docs/operator-actions.md#upgrading-the-native-input-journal) for input-authority recovery. This says nothing about any agent. |
 | `ErrSchemaMigrationRequired` | The CLI refused to open its store: the store is older than the binary and must be migrated first. The description gives both schema versions. Nothing was written, and every call that opens the store fails this way until an administrator migrates the store; no call through this client can. See the caller contract for handling. It says nothing about any agent. |
 | `ErrOldLayout` | The CLI refused to open its store: it was about to open the default store (no `storePath`, and no `[store] db_path` in its config file), no store exists in `~/.config/agent-director`, and the old directory exists. Nothing was created, and every call that opens the store fails this way until an operator runs this release's `install.sh`. See the caller contract for handling. It says nothing about any agent. |
 

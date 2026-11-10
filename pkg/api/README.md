@@ -16,6 +16,7 @@ processes.
   - [SendKeys](#sendkeys)
   - [ReadPane](#readpane)
   - [Kill](#kill)
+  - [Sweep](#sweep)
 - [Permission relay](#permission-relay)
 - [Version mapping](#version-mapping)
 - [Errors](#errors)
@@ -208,6 +209,12 @@ loading or waiting at a startup prompt. A resumed `pending` row keeps its
 session id and history; a caller tells it from a fresh one by its non-empty
 `session_id`, shown by `Get`.
 
+Client `Status`, `Get`, `List` and `Sweep` (also `FindMissing`) share
+[bounded recovery](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
+Single-row reads check only that row. Package-level helpers and custom stores
+run only checks their supplied capabilities support; they do not create
+missing process or tmux providers. Read success does not confirm every write.
+
 ```go
 res, err := c.Status("claude_2026-05-22T18-23-15")
 if err != nil {
@@ -247,6 +254,20 @@ sampling. Only Claude and Codex are eligible for sampling.
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 
+They also expose `ProcessLiveness string` (JSON `process_liveness`:
+`"alive"`, `"exited"` or `"unknown"`) and `Confirmations` (JSON
+`confirmations`), an `api.Confirmations` holding exactly `State`,
+`ProcessLiveness` and `DisplayedState`. Each is an `api.Confirmation`: `Status`,
+never null, and the nullable `*string` fields `ConfirmedAt`, `Source`,
+`CheckedAt` and `Reason` (nil is JSON `null`, never omitted). The
+[caller contract](../../docs/caller-contract.md#confirmations) defines the
+values and when each is `null`. `Confirmations.DisplayedState` describes the
+returned display, including an omitted `DisplayedState`; Cursor's record is
+`unknown`/`unsupported`. A store that supplies no evidence, such as a custom
+store or a narrow status fallback, gets `"unknown"` and unknown records. With a non-nil error,
+the zero result's `ProcessLiveness` and each `Status` are empty strings, outside
+their value sets.
+
 `Get`'s `SpawnRow` and each `ListRow` expose `StateChangedAt time.Time` (JSON
 `state_changed_at`), when the raw state last changed; `StatusResult` does
 not. The [caller contract](../../docs/caller-contract.md#state-change-time)
@@ -257,11 +278,15 @@ defines it and how it differs from `LastSeenAt`, the settled `State` and
 the client was built for [independent state and family
 settling](../../docs/configuration.md#settle-time-state). While a
 Displayed State's exit settles, `Status`, `Get` and `List` retain its
-`DisplayedState`, and `Status` and `Get` its committed `Since` and detail.
+`DisplayedState` and applicable confirmation, and `Status` and `Get` its
+committed `Since` and detail.
 `StateChangedAt` and permission-request lists follow the live state;
 commands keep their raw-state guards. The package-level
 `api.Status`, `api.Get` and `api.List` functions use no settle time and
-sample no pane, so only a `Client` detects `idle_screen`.
+sample no pane: they report stored display evidence without advancing either
+confirmation time. A committed non-sampling exit clears that evidence.
+Package-level `Sweep` (and its `FindMissing` alias) can sample panes when its
+supplied tmux provider supports capture.
 
 For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
 launch-guarded `missing` read result even when the separate terminal write is
@@ -270,7 +295,8 @@ busy or reaches its deadline. This does not confirm durable closure;
 `ended_at` may be absent. The
 [caller contract](../../docs/caller-contract.md#cursor-operation-boundaries)
 defines caller-budget errors, request proof and recovery. Package-level
-`api.Status`, `api.Get` and `api.List` do not check gateway liveness.
+`api.Status`, `api.Get` and `api.List` can check gateway liveness when their
+store and `RelayView.Procs` supply the required capabilities.
 
 ---
 
@@ -298,6 +324,10 @@ Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`,
 encodes as `[]` when empty. The `State` filter keeps a row whose `State` or
 `DisplayedState` (see Status) is one of its values, so `"working"` keeps a
 working row that shows `"idle_screen"`; it is applied before `Limit`.
+Filters and limit select stored IDs before recovery checks. The result keeps
+those IDs even when their refreshed values no longer match, without refilling
+slots or adding newly matching rows. Recovery and family freshness follow the
+[caller contract](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
 `Limit` caps the rows returned; 0 means no cap. Sentinel errors, each returned before the store is
 read: `ErrListInvalidLabel` (label not in `key=value` form) and
 `ErrInvalidFlags` (`Limit` is negative). See `(*Client).List` godoc.
@@ -396,7 +426,11 @@ cannot be used (empty, with a control character, or with a character tmux
 stores differently) returns an error classified `ErrInternal`, with no tmux
 call; nothing was sent.
 
-See `(*Client).SendKeys` godoc.
+`SendKeysContext(ctx, params)` uses the caller's context; `SendKeys` uses a
+background context. Cancellation cannot undo attempted input. A cleanup error
+can accompany a confirmed result: `api.ErrDetails(err)` retains that exact
+result. Follow the [caller contract](../../docs/caller-contract.md#ordinary-text-submission)
+before deciding whether another call is safe. See `(*Client).SendKeys` godoc.
 
 #### `AllowPending` — reaching a `pending` launch
 
@@ -446,11 +480,13 @@ func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 ```
 
 `SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity,
-`IntentHold`, optional `Input` (`InputDeliveryBackend`, nil uses native
-delivery), and optional `Sleep` for native readiness, drain and submission
-checks, pending Claude readiness and settle, pending Codex and Claude hook
-checks, Cursor gateway verdict reads, and the pauses of macOS paced Claude
-typing (nil uses `time.Sleep`). Most callers
+`IntentHold`, optional `Context` (the call's cancellation and deadline, as
+`SendKeysContext` sets), optional `Input` (`InputDeliveryBackend`, nil uses
+native delivery), and optional `Sleep` for native readiness, drain and
+submission checks, pending Claude readiness and settle, pending Codex and
+Claude hook checks, Cursor gateway verdict reads, and the pauses of macOS
+paced Claude typing (nil waits on a timer that `Context`'s end cuts short, or
+uses `time.Sleep` without `Context`). Most callers
 use the Client method, which supplies these.
 Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
 bounding connection and lock waits by the supplied duration.
@@ -469,6 +505,10 @@ paths:
   `PasteKeysPane(socket, paneID, text string) error`. It preserves text and LF in
   one paste, sends one Enter only after paste succeeds, and never retries input.
   Failures use `*TmuxCallError` with the failed text or Enter call.
+- `GuardedPasteKeysTmux` is also required for journal-backed Codex fallback:
+  `PasteKeysPaneGuarded(socket, paneID, text string, beforeWrite func(enter bool) error) error`.
+  It invokes the guard immediately before paste and Enter and stops on refusal,
+  with the same framing and error rules as `PasteKeysTmux`.
 - `PaneTerminalTmux` supports ordinary pending Claude fallback:
   `PaneTerminalRaw(socket, paneID string, maxWait time.Duration) (bool, error)`.
   It reports whether canonical mode, echo and CR-to-NL translation are all off,
@@ -478,7 +518,7 @@ paths:
   failures retain their OS error.
 
 Adapters without the needed capability remain source-compatible but receive a
-pre-input `not_started` refusal on that path. The default client provides both.
+pre-input `not_started` refusal on that path. The default client provides all three.
 See their godoc for each field's contract.
 
 ```go
@@ -552,7 +592,7 @@ launch left behind.
 
 A finished row (`ended`, `missing`) is a no-op success with no tmux call;
 that is not verification that the agent exited. Kill never changes the
-row's state: `find-missing` marks the row once its agent process is gone.
+row's state: a state read or `sweep` marks it once its agent process is gone.
 
 ```go
 res, err := c.Kill(api.KillParams{
@@ -608,6 +648,23 @@ godoc.
 
 ---
 
+### Sweep
+
+`Client.Sweep(ctx)` returns `(SweepResult, error)` for one bounded all-agent
+pass. `SweepResult.Checks` contains a `SweepCheck` per selected identity, with
+values, three confirmation records and independent `Completion`/`Reason` fields.
+The result also retains `Count`, `IDs`, `Unverified` and `UnverifiedIDs`. See
+[Sweep results](../../docs/caller-contract.md#sweep-results) for membership,
+coverage, counters and failure handling.
+
+The exported `Sweep` function accepts the same store, tmux, process checker,
+grace, budget, clock and logger arguments as `FindMissing`. `FindMissing` and
+`Client.FindMissing` remain supported delegating aliases; `SweepResult` aliases
+`FindMissingResult`. Existing `FindMissingStore`, `FindMissingTmux` and
+`FindMissingLogger` interfaces remain accepted. A narrow store can supply only
+live identities and its available checks, so it cannot promise an all-agent
+snapshot and reports unsupported coverage explicitly.
+
 ## Permission relay
 
 `(*Client).Decide` records a verdict on a relayed permission request, waits
@@ -636,19 +693,20 @@ an internal error. Once the verdict is confirmed committed, `Decide` never
 returns `ErrStoreBusy`. Zero-wait semantics and recovery are defined in the
 [caller contract](../../docs/caller-contract.md#permission-relay).
 
-`ErrNoOpenPermissionRequest` means no open request has that token, or the
-request is closed; see the
+`ErrNoOpenPermissionRequest` means no eligible request has that token,
+including a closed, proven-gone or obsolete request; see the
 [caller contract](../../docs/caller-contract.md#permission-relay) for handling.
 A request still awaiting
 an answer when its Spawn ended (its agent's terminal SessionEnd, or the move
-of a Codex Spawn to `ended` by `FindMissing` or by `Pause` once its agent is
-gone with an end report) or when `find-missing` marked it `missing` is closed in the same write, an
+of a Codex Spawn to `ended` by shared recovery or `Pause` once its agent is
+gone with an end report) or when shared recovery marked it `missing` is closed in the same write, an
 undecided one denied with `DecisionReason` `ended` or `find_missing`, and
 stays closed after `Resume`; `Get` and `List` no longer show it. The same
 close includes decided requests without a confirmation or completed pane
 answer, including requests recorded by an older binary.
 `GetPermission` still reads its delivery. For a request with a settle
-instant, `delivered` requires its relay hook's confirmation. Requests
+instant, `delivered` retains an acknowledgement from before closure; closure
+cannot authorize a later response. Requests
 recorded by an older binary retain the
 [legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary),
 including derived delivery after expiry even when closed.
@@ -734,7 +792,7 @@ Common sentinels across verbs:
 | `ErrSpawnNotFound` | No row for the given `instance_id` |
 | `ErrClientClosed` | Called after `Close()` |
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
-| `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id; see [Operator actions](../../docs/operator-actions.md#a-migration-write-failed-after-the-binary-swap) |
+| `ErrSchemaMismatch` | DB schema is newer than the binary, the store has no valid store id, or its current-schema input authority is incompatible or uncommitted; see [Operator actions](../../docs/operator-actions.md#upgrading-the-native-input-journal) |
 | `ErrOldLayout` | From `New`, when it is about to open the default store (no `StorePath`, no `[store] db_path` in `config.toml`), no store exists in `~/.config/agent-director` and the old directory exists. Nothing was created; take no action, a human runs this release's `install.sh` (see [Operator actions](../../docs/operator-actions.md#a-verb-refuses-with-erroldlayout)) |
 | `ErrSpawnNotInteractive` | New input requires a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found. `ended` and `missing` rows are refused even when observing an existing delivery request; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) |
 | `ErrSendKeysWhileRelayed` | The Spawn's request relay may still answer (from `SendKeys` and `Pause`) — the message distinguishes an undecided request from a recorded verdict still being delivered; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling |

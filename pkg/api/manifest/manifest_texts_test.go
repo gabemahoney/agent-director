@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,7 +43,8 @@ func preTrustField(skippedWhy string) apitest.DescCase {
 }
 
 // manifestTextCases lists the texts and their cases: find-missing (SR-18.9,
-// SR-18.7, SR-3.8, SR-11.7, SR-18.3, SR-18.11); kill (SR-18.9, SR-6.1,
+// SR-18.7, SR-3.8, SR-11.7, SR-18.3, SR-18.11); sweep's recovery coverage
+// (SR-3.2) and current-state ErrProbeUnsupported wording (SR-7.4); kill (SR-18.9, SR-6.1,
 // SR-1.7); spawn's launch rules (SR-18.1, SR-9.3, SR-9.4), ErrInternal
 // triggers (AC-CAT-03), param rules (SR-9.2, SR-18.9, SR-18.10, SR-22.6);
 // pre-trust (SR-22.6); launch_started_at (SR-22.2); list's liveness fields
@@ -55,18 +57,23 @@ func preTrustField(skippedWhy string) apitest.DescCase {
 // a negative value is refused (b.c4n).
 func manifestTextCases() []textCase {
 	cases := []textCase{
-		{verb: "find-missing", own: true, c: apitest.DescFindMissingGrace()},
-		{verb: "find-missing", own: true, c: apitest.DescFindMissingManifest()},
+		{verb: "sweep", own: true, c: apitest.DescFindMissingGrace()},
+		{verb: "sweep", own: true, c: apitest.DescFindMissingManifest()},
 		{verb: "find-missing", field: "ids", c: apitest.DescFindMissingField(apitest.FindMissingIDs)},
 		{verb: "find-missing", field: "unverified_ids", c: apitest.DescFindMissingField(apitest.FindMissingUnverifiedIDs)},
-		{verb: "find-missing", own: true, c: tokens("Codex end report, dead process",
-			"A dead agent process marks the row `missing` (a Codex row with an end report: `ended`, not in ids) whatever tmux shows, with no tmux call.")},
-		{verb: "find-missing", field: "count", c: tokens("Codex row moved to ended not counted",
-			"a Codex row it moved to `ended` is not counted")},
+		{verb: "sweep", own: true, c: apitest.DescCase{Name: "recovery coverage beyond liveness, current-state error wording",
+			Require: []string{"One bounded pass of status/get/list recovery checks on a fixed all-agent snapshot: liveness, " +
+				"missed Codex turn ends, stale check_permission, display, provisional transcripts, late input proof.",
+				"ErrProbeUnsupported: never returned."},
+			MustNot: []string{"no longer returned"}}},
+		{verb: "sweep", own: true, c: tokens("Codex end report, dead process",
+			"A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux.")},
+		{verb: "find-missing", field: "count", c: tokens("Codex ended transitions and other repairs not counted",
+			"Codex rows moved to `ended` and other repairs do not increment this count")},
 		{verb: "find-missing", field: "ids", c: tokens("Codex row moved to ended not listed",
 			"so is a Codex row the sweep moved to `ended` (its agent process gone and an end report held)")},
 		{verb: "pause", c: tokens("Codex end report ends the row",
-			"Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait).")},
+			"Codex: end report + exited agent ends row before keys or in wait.")},
 		{verb: "kill", c: apitest.DescKillManifest()},
 		{verb: "spawn", c: apitest.DescSpawnLaunchTimeoutRule()},
 		{verb: "spawn", c: apitest.DescSpawnScanRefusal()},
@@ -79,11 +86,14 @@ func manifestTextCases() []textCase {
 		{verb: "spawn", param: "tmux_session_name", c: tokens("rejects dollar and backslash", `'$'`, `'\'`)},
 		{verb: "spawn", param: "instance_id", c: tokens("rejects control characters", "control character", "ErrInvalidFlags")},
 		{verb: "spawn", param: "instance_id", c: apitest.DescInstanceIDCollision(apitest.CollisionSite{})},
-		{verb: "spawn", param: "no_pre_trust", c: tokens("recorded on the row until the next spawn or reuse", "every resume follows it")},
+		{verb: "spawn", param: "no_pre_trust", c: tokens("recorded on the row until the next spawn or reuse",
+			"The choice is recorded on the row until the next spawn or reuse; agents that support resume follow it, so no pre-trust is attempted over an opt-out.",
+			"Pane-only rows cannot resume.")},
 		{verb: "spawn", param: "no_pre_trust", c: tokens("For a claude agent, pre-trust pre-writes",
 			"For a codex agent, it puts the cwd's trust and the hook-trust bypass on the launch's command line and writes no file",
 			"Cursor grants no trust: failed by default (ACP pre-trust unsupported), skipped with no_pre_trust",
-			"permission policy is independent and readiness is not guaranteed", "For all three agents")},
+			"permission policy is independent and readiness is not guaranteed",
+			"Pane-only agents always report skipped, with no trust grant or trust-file write, regardless of no_pre_trust.")},
 		{verb: "spawn", param: "reuse_finished", c: apitest.DescReuseFinishedParam()},
 		{verb: "resume", c: tokens("pre-trust", "best-effort pre-trust", "unless the row's latest spawn",
 			"no_pre_trust", "pre-trust failure never fails the resume")},
@@ -112,13 +122,15 @@ func manifestTextCases() []textCase {
 				"pane_outside (record-pane-answer) describe claims, not ACP delivery, receipt or execution proof",
 				"tool_ran records tool execution evidence",
 				"Initially null while undecided without an outside claim, and for an allow from decide",
-				"Validated Cursor execution proof fills a missing reason with tool_ran while preserving any earlier verdict and non-null reason"},
+				"Validated Cursor execution proof fills a missing reason with tool_ran while preserving any earlier verdict and non-null reason",
+				"this grants no response authority"},
 			MustNot: []string{"null for open and allow rows", "null while undecided and for allow rows decided by decide"}}},
 		{verb: "get-permission", field: "pane_answer", c: tokens("pane claim versus execution proof",
 			"sent: its key was sent or the Cursor gateway recorded its native choice (decision_reason pane)",
 			"this does not establish ACP delivery, agent receipt or execution",
-			"tool_ran: the agent's hooks or validated correlated Cursor execution output established its tool ran",
-			"Cursor proof preserves any earlier verdict and non-null reason, filling a missing reason with tool_ran")},
+			"tool_ran: validated correlated Cursor execution output established its tool ran (in practice never on a Claude or Codex row, whose requests carry no tool_use_id)",
+			"That close preserves any earlier verdict and non-null reason, inferring allow only when undecided and filling a missing reason with tool_ran",
+			"These facts grant no response authority")},
 		{verb: "get-permission", field: "pane_as", c: tokens("public claims and Cursor option matching",
 			"Public send-keys and outside records store a claim without screen verification or proof",
 			"Cursor additionally requires a sent claim to match the actual selected option verdict",
@@ -127,7 +139,7 @@ func manifestTextCases() []textCase {
 			Require: []string{"in any state but ended and missing ([] on those)", "with [state] settle_ms set", "for up to settle_ms"},
 			MustNot: []string{"the agent is gone"}}},
 		{verb: "get", c: tokens("tmux socket", "tmux socket")},
-		{verb: "find-missing", c: apitest.DescMissingNotProof()},
+		{verb: "sweep", c: apitest.DescMissingNotProof()},
 		{verb: "find-missing", field: "ids", c: apitest.DescMissingNotProof()},
 		{verb: "make-template", param: "relay_mode", c: tokens("per-call spelling", "Per-call relay_mode (--relay-mode on the CLI) overrides.")},
 		{verb: "make-template", param: "extra_env", c: tokens("per-call spelling",
@@ -372,9 +384,9 @@ var liveRowWants = map[string]struct {
 	sequences, pointers int
 	desc                func() apitest.DescCase
 }{
-	"kill":         {sequences: 1, desc: apitest.DescLiveRowSequence},
-	"find-missing": {pointers: 1, desc: apitest.DescLiveRowPointer},
-	"spawn":        {pointers: 1, desc: apitest.DescLiveRowPointer},
+	"kill":  {sequences: 1, desc: apitest.DescLiveRowSequence},
+	"sweep": {pointers: 1, desc: apitest.DescLiveRowPointer},
+	"spawn": {pointers: 1, desc: apitest.DescLiveRowPointer},
 }
 
 // TestLiveRowSequencePerVerb pins SR-18.6 (AC-DOC-05) on every verb: only kill
@@ -393,6 +405,17 @@ func TestLiveRowSequencePerVerb(t *testing.T) {
 		}
 		if want.desc != nil {
 			apitest.AssertAgentTextCase(t, v.Name+" description", v.Description, want.desc())
+		}
+	}
+}
+
+// TestSweepKeepsErrProbeUnsupported: although sweep's Description says it is
+// never returned, ErrProbeUnsupported stays in sweep's and find-missing's
+// ErrorNames, which client error mapping relies on (b.x9o F11).
+func TestSweepKeepsErrProbeUnsupported(t *testing.T) {
+	for _, verb := range []string{"sweep", "find-missing"} {
+		if !slices.Contains(verbOf(t, verb).ErrorNames, "ErrProbeUnsupported") {
+			t.Errorf("%s.ErrorNames lacks ErrProbeUnsupported", verb)
 		}
 	}
 }

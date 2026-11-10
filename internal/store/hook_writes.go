@@ -44,7 +44,9 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // used here. An applied write also records the Codex turn (codexTurnSet:
 // a UserPromptSubmit's current turn, a Stop's or Interrupt's ended turn, and
 // its current turn unless a newer one is current), and so does a held
-// UserPromptSubmit (reportWorkingHeld).
+// UserPromptSubmit (reportWorkingHeld). Either turn-start write invalidates
+// the pane baseline and any idle_screen candidate/display in its statement,
+// even when state stays working, without advancing permission_epoch.
 //
 // A late Codex tool hook (b.x72; codexToolTurn): a PreToolUse or PostToolUse
 // whose turn is not the row's current, not-ended turn
@@ -81,7 +83,8 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // (HookApplied.Applied) with UpsertNoChange and a no-op
 // ad.spawn.state_transition (prior == new, SR-A-2.2), and its only write is
 // clearing idle_since when it is set (any later hook clears it, b.146
-// problem 3); one whose gate does not hold reports its reason and emits
+// problem 3), plus the Codex turn start and pane invalidation above; one
+// whose gate does not hold reports its reason and emits
 // nothing.
 //
 // Not applied: when the UPDATE matched no row, one read after it decides the
@@ -167,7 +170,14 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		// today) leaves it (SR-5.2). The state is written with its settle
 		// columns (hookWriteStateSet, b.3ie): decided in this one statement,
 		// never from priorState, which feeds the trail only.
-		stateSet, stateArgs := s.hookWriteStateSet(newState)
+		stateSet, stateArgs := s.hookWriteStateEvidenceSet(newState, EvidenceAgentEvent)
+		if gate.CodexTurnStart {
+			// codexTurnSet supplies the observation reset. Keep the ordinary
+			// raw-state/settle write, without assigning the observation twice.
+			evidence, evidenceArgs := currentStateEvidenceSet(newState, EvidenceAgentEvent)
+			stateSet = hookStateValueSet + `, ` + evidence
+			stateArgs = append(s.hookStateValueArgs(newState), evidenceArgs...)
+		}
 		set = stateSet + `, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + idleClear
 		if newState != StatePending {
 			set += `, ` + launchStartClear
@@ -370,9 +380,14 @@ const noRequestHoldsRowSQL = `NOT EXISTS (SELECT 1 FROM permission_requests pr
 // state as an immediate write (immediateStateSet, its placeholders
 // immediateStateArgs(StateEnded); b.3ie: a terminal state reports at once),
 // last_seen_at and ended_at to CURRENT_TIMESTAMP, and the launch-start and
-// idle clears.
-const endedTransitionSet = immediateStateSet + `, last_seen_at = CURRENT_TIMESTAMP,
+// idle clears. The agent's SessionEnd is the state record's evidence
+// (agent_event, endedTransitionEvidence; confirmations.go). It proves nothing
+// about the agent process, so the process record is cleared: the ended row
+// reads process_liveness unknown, never its last alive record.
+var endedTransitionSet = immediateStateSet + `, ` + endedTransitionEvidence + `, ` + clearProcessEvidence + `, last_seen_at = CURRENT_TIMESTAMP,
        ended_at = CURRENT_TIMESTAMP, ` + launchStartClear + `, ` + idleClear
+
+var endedTransitionEvidence, endedTransitionEvidenceArgs = currentStateEvidenceSet(StateEnded, EvidenceAgentEvent)
 
 // errEndedNotApplied rolls applyEndedTransition's transaction back when its
 // gated write matched no row; the caller then reads why.
@@ -423,7 +438,7 @@ var errEndedNotApplied = errors.New("store: ended transition not applied")
 // ad.spawn.state_transition (the prior state to ended), fail-open.
 func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
 	const errPrefix = "store: ended transition"
-	q, args := gatedHookUpdate(instanceID, gate, endedTransitionSet, immediateStateArgs(StateEnded), jsonlPath, jsonlPresent)
+	q, args := gatedHookUpdate(instanceID, gate, endedTransitionSet, append(immediateStateArgs(StateEnded), endedTransitionEvidenceArgs...), jsonlPath, jsonlPresent)
 	var (
 		prior  string
 		closed []closedRequest
@@ -531,7 +546,7 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 	const errPrefix = "store: waiting-if-working transition"
 	// Each statement writes waiting with its settle columns (b.3ie); its
 	// WHERE already guarantees a change of value.
-	stateSet, stateArgs := s.hookWriteStateSet(StateWaiting)
+	stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateWaiting, EvidenceAgentEvent)
 	set := stateSet + `, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + launchStartClear + `, ` + idleSet
 	for _, from := range []struct{ state, cond string }{
 		{StateWorking, `state = '` + StateWorking + `'`},
@@ -604,7 +619,9 @@ func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeri
 // idle_since cleared when it is set (clearIdleSinceSQL; any later hook clears
 // it, b.146 problem 3), with a main-thread Codex UserPromptSubmit's turn
 // recorded in the same statement (codexHeldTurnSQL; b.x72), so a read never
-// ends the turn before it; the no-op ad.spawn.state_transition (prior == new ==
+// ends the turn before it. That turn write also invalidates the pane baseline
+// and idle_screen candidate/display without changing permission_epoch. The
+// no-op ad.spawn.state_transition (prior == new ==
 // the state the gate read saw, soft_refresh false, SR-A-2.2) and
 // UpsertNoChange with an applied result; a missing row or a gate that does
 // not hold reports notAppliedReason and emits nothing.
@@ -728,7 +745,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	}
 	// waiting with its settle columns (b.3ie): a hook write, so a move out of
 	// any prior state, pending, missing and ended included, settles.
-	stateSet, stateArgs := s.hookWriteStateSet(StateWaiting)
+	stateSet, stateArgs := s.hookWriteStateEvidenceSet(StateWaiting, EvidenceAgentEvent)
 	q := `UPDATE spawns
 	         SET ` + stateSet + `,
 	             last_seen_at              = CURRENT_TIMESTAMP,

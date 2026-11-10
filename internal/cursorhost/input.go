@@ -9,6 +9,7 @@ import (
 )
 
 type terminalInput struct {
+	obligation   *inputObligation
 	submission   string
 	sessionID    string
 	order        uint64

@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -50,6 +51,94 @@ func columnsByName(shape map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+func TestPermissionV17Migration(t *testing.T) {
+	for _, variant := range []string{"absent", "compatible reentry", "invalid origin", "invalid claim", "negative life", "empty connection", "wrong shape"} {
+		t.Run(variant, func(t *testing.T) {
+			dir := t.TempDir()
+			path := makeVersionedDB(t, dir, 16)
+			seedV16PermissionHistory(t, path)
+			if variant != "absent" {
+				specs := slices.Clone(v17ColumnSpecs)
+				if variant == "wrong shape" {
+					withRaw(t, path, func(db *sql.DB) {
+						mustExec(t, db, "ALTER TABLE permission_requests ADD COLUMN decision_origin INTEGER")
+					})
+				} else {
+					preAddV14Columns(t, path, specs)
+					withRaw(t, path, func(db *sql.DB) {
+						query := map[string]string{
+							"compatible reentry": "UPDATE permission_requests SET decision_origin='observation',owner_life_number=2,owner_session_id='history-session'",
+							"invalid origin":     "UPDATE permission_requests SET decision_origin='automatic'",
+							"invalid claim":      "UPDATE permission_requests SET response_state='delivered'",
+							"negative life":      "UPDATE permission_requests SET owner_life_number=-1",
+							"empty connection":   "UPDATE permission_requests SET owner_cursor_connection=''",
+						}[variant]
+						mustExec(t, db, query)
+					})
+				}
+			}
+			var cols, histories []string
+			withRaw(t, path, func(db *sql.DB) {
+				cols = tableColumnNames(t, db, "permission_requests")
+				histories = tableColumnNames(t, db, "session_history")
+			})
+			before := readQuotedRows(t, path, "permission_requests", "pre", "request_id", cols)
+			history := readRawHistory(t, path, "pre", histories)
+			snapshot := snapshotDBBytes(t, path)
+			if s, err := Open(path); !errors.Is(err, ErrSchemaMigrationRequired) {
+				if s != nil {
+					s.Close()
+				}
+				t.Fatalf("unauthorized migration: %v", err)
+			}
+			assertDBBytesUnchanged(t, path, snapshot)
+			writeSentinel(t, dir, 16, schemaVersion)
+			s, err := openMigrationTestStore(t, path)
+			valid := variant == "absent" || variant == "compatible reentry"
+			if !valid {
+				if s != nil {
+					s.Close()
+				}
+				if !errors.Is(err, ErrSchemaMismatch) {
+					t.Fatalf("invalid migration: %v", err)
+				}
+				if readUserVersion(t, path) != 16 {
+					t.Fatal("failed migration changed stamp")
+				}
+				assertSentinel(t, dir, true)
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				fresh, _ := openTempStore(t)
+				if !reflect.DeepEqual(columnsByName(schemaShape(t, fresh.db)), columnsByName(schemaShape(t, s.db))) {
+					t.Fatal("fresh/migrated schema diverged")
+				}
+				assertSentinel(t, dir, false)
+				for _, token := range []string{tokenA, tokenB} {
+					pr, err := s.GetPermissionRequest("pre", token)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if pr.ResponseState != "" || (variant == "absent" && (pr.DecisionOrigin != "" || pr.OwnerLifeNumber != -1)) {
+						t.Fatalf("migration invented authority: %+v", pr)
+					}
+					if _, _, ack, err := s.AckRelayDecision("pre", token, time.Now(), DefaultLockWait, nil); err != nil || ack {
+						t.Fatalf("historical ack: %v %v", ack, err)
+					}
+				}
+			}
+			if got := readQuotedRows(t, path, "permission_requests", "pre", "request_id", cols); !reflect.DeepEqual(got, before) {
+				t.Fatalf("migration changed historical values: %v != %v", got, before)
+			}
+			if got := readRawHistory(t, path, "pre", histories); !reflect.DeepEqual(got, history) {
+				t.Fatal("session history changed")
+			}
+		})
+	}
 }
 
 // TestFreshStoreSchema checks a new store and a reopen of it: user_version at
@@ -157,19 +246,25 @@ func TestFreshStoreSchema(t *testing.T) {
 	assertColumnSpecs(t, db, []columnSpec{{"spawns", "codex_startup", "TEXT", false, ""}, {"spawns", "claude_capacity", "TEXT", false, ""}})
 	assertColumnSpecs(t, db, v14ColumnSpecs)
 	assertColumnSpecs(t, db, v15ColumnSpecs)
+	assertColumnSpecs(t, db, v17ColumnSpecs)
+	assertColumnSpecs(t, db, v19ColumnSpecs)
+	assertColumnSpecs(t, db, v20ColumnSpecs)
 	// The v14 columns' earlier names are gone; an upgrade's schema is this one.
 	for _, old := range []string{"stuck_version", "stuck_observation", "stuck_exit", "no_screen_change_timeout_seconds"} {
 		if slices.Contains(tableColumnNames(t, db, "spawns"), old) {
 			t.Errorf("spawns keeps the earlier column %s", old)
 		}
 	}
-	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"}, v14ColumnNames("spawns"), v15ColumnNames())
+	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"}, v14ColumnNames("spawns"), v15ColumnNames(), v19ColumnNames(), []string{"display_evidence", "observation_writer"})
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
 		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
 	}
 	wantRequestsTail := append([]string{"created_at"}, v7ColumnNames("permission_requests")...)
 	wantRequestsTail = append(wantRequestsTail, "main_turn_end_eligible")
 	wantRequestsTail = append(wantRequestsTail, v14ColumnNames("permission_requests")...)
+	for _, column := range v17ColumnSpecs {
+		wantRequestsTail = append(wantRequestsTail, column.name)
+	}
 	if cols := tableColumnNames(t, db, "permission_requests"); len(cols) < len(wantRequestsTail) ||
 		!slices.Equal(cols[len(cols)-len(wantRequestsTail):], wantRequestsTail) {
 		t.Errorf("permission_requests columns = %v; want created_at then the v7 and v11 columns last, in order %v", cols, wantRequestsTail)
@@ -221,7 +316,7 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			writeSentinel(t, dir, from, schemaVersion)
 			mark := TrailMark(t)
 
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatalf("Open(authorized v%d): %v", from, err)
 			}
@@ -261,8 +356,10 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			assertV8Defaults(t, path, "pre")
 			assertV9Defaults(t, path, "pre")
 			assertV15Defaults(t, path, "pre")
-			if raw := assertOneStoreID(t, path); raw != id {
-				t.Errorf("StoreID() = %q; raw store_id = %q", id, raw)
+			meta, present := readStoreMeta(t, path)
+			wantMeta := []storeMetaRow{{inputAuthorityKey, inputAuthorityVersion + id, "text"}, {"store_id", id, "text"}}
+			if !present || !wellFormedID.MatchString(id) || !reflect.DeepEqual(meta, wantMeta) {
+				t.Errorf("store metadata = %+v; want exact identity and authority %+v", meta, wantMeta)
 			}
 
 			for _, stale := range []bool{false, true} {
@@ -373,7 +470,7 @@ func TestGateRefusesBadSentinel(t *testing.T) {
 				}
 				// Correct the administrator's evidence and retry the same opener.
 				writeSentinel(t, dir, from, schemaVersion)
-				s, err := Open(path)
+				s, err := openMigrationTestStore(t, path)
 				if err != nil {
 					t.Fatalf("Open after corrected authorization: %v", err)
 				}
@@ -616,7 +713,7 @@ func TestMigrationRollback(t *testing.T) {
 			tc.breakIt(t, path)
 			before := dbDump(t, path)
 			writeSentinel(t, dir, tc.from, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err == nil {
 				_ = s.Close()
 				t.Fatal("Open succeeded; want a migration failure")
@@ -648,7 +745,7 @@ func TestConsumeDeleteFailure_LoudButOpenSucceeds(t *testing.T) {
 	path := makeVersionedDB(t, dir, 1)
 	writeSentinel(t, dir, 1, schemaVersion)
 	withRaw(t, path, func(db *sql.DB) {
-		if err := runMigrationChain(db, 1); err != nil {
+		if err := runMigrationChainWithInputWindow(db, 1, migrationTestWindow(t, path)); err != nil {
 			t.Fatalf("runMigrationChain: %v", err)
 		}
 	})

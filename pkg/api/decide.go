@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
@@ -55,8 +56,8 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // (request_token, tool_name, tool_input, requested_at and its delivery
 // facts), the Spawn's state and its other open requests. The request is
 // closed by a pane answer through SendKeys with its request token, or, when
-// it was answered outside agent-director, by RecordPaneAnswer (or by the
-// agent's PostToolUse for its tool).
+// it was answered outside agent-director, by RecordPaneAnswer (or, on a
+// Cursor row, by the gateway's validated proof that its tool ran).
 //
 // A request recorded before schema v7 (no settle instant on record, its relay
 // hook's identity and ack not recorded) falls back by time, as before the
@@ -257,6 +258,9 @@ func decideWithin(ctx context.Context, s DecideStore, v RelayView, sleep func(ti
 	row, err := c.getSpawn()
 	if err != nil {
 		return DecideResult{}, err
+	}
+	if spawn.IsPaneOnly(row.Agent) {
+		return DecideResult{}, spawn.PaneOnlyCapabilityError(row.Agent, "decide")
 	}
 	if row.RelayMode != "on" {
 		return DecideResult{}, fmt.Errorf("%w: spawn %s relay_mode=%q",
@@ -660,11 +664,12 @@ func closedRequestError(params DecideParams, state string) error {
 //     the verdict as attempted.
 //   - Otherwise ErrAlreadyDecided (first call wins), a request the mark
 //     denied because it was undecided (decision_reason find_missing, as
-//     before) and a closed request a live relay hook acked since included.
+//     before) and a request acknowledged before it was closed included.
+//     Closing a request never permits a later acknowledgement.
 func recordedRefusal(params DecideParams, pr PermissionRow) error {
 	switch {
 	case pr.Closed() && pr.DeliveredAt.IsZero() && pr.DecisionReason != store.DecisionReasonFindMissing:
-		return fmt.Errorf("%w: %s request %s is closed: its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict, so nothing was recorded; do not answer it at the pane",
+		return fmt.Errorf("%w: %s request %s is closed: its spawn ended, or a shared check marked it missing, before the request's relay hook delivered a verdict, so nothing was recorded; do not answer it at the pane",
 			store.ErrNoOpenPermissionRequest, params.InstanceID, params.RequestToken)
 	case pr.PaneAnswered():
 		return paneAnsweredError(params.InstanceID, pr, "nothing was recorded")
@@ -846,6 +851,8 @@ func decideOutcome(err error) string {
 // CLI: agent-director decide
 //
 // Errors:
+//   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
+//     does not support relayed decisions; nothing is recorded.
 //   - [ErrMissingRequestToken]: RequestToken is empty.
 //   - [ErrInvalidFlags]: MaxWaitMs is negative.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
@@ -894,8 +901,12 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 
 	var callErr error
 	defer func() {
+		if errors.Is(callErr, ErrAgentCapabilityUnsupported) {
+			return
+		}
 		// Emit exactly one ad.decide.called per invocation, on every return
-		// path including ErrAlreadyDecided no-ops (SR-A-2.4). Fail-open per
+		// path admitted by the capability gate, including ErrAlreadyDecided
+		// no-ops (SR-A-2.4). Fail-open per
 		// SR-A-3.2: a trail-emit failure is silently discarded.
 		_ = trail.Emit(ctx, "ad.decide.called", map[string]any{
 			"instance_id":               params.InstanceID,

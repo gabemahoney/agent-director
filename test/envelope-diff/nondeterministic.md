@@ -58,13 +58,13 @@ When a verb fails, the harness compares the error envelope fields as follows:
 
 `spawn` returns `instance_id`, generated as a UUID at call time. The CLI's spawn invocation produces UUID A; the Client's spawn invocation produces UUID B. The fixture DB has no row for either value — it is generated, not read. Decision: **non-deterministic**. Selector: `.instance_id`.
 
-**Example 2 — fully deterministic verb (`status`)**
+**Example 2 — deterministic fixture (`find-missing`)**
 
-`status` reads a spawn row from the DB by `instance_id`. Both CLI and Client open the same fixture DB copy, read the same row, and return identical values for `state`, `cwd`, `started_at`, and all other fields. No value is generated at call time. Decision: **deterministic** — empty selector list `[]`.
+`find-missing`'s fixture has only finished rows, which skip live checks; it reads the fixture DB copy's rows and judges them. Both CLI and Client open the same fixture DB copy, read the same rows, and return identical values for every field. No value is generated at call time. Decision: **deterministic** — empty selector list `[]`. This holds for that fixture only: live recovery can record call-time confirmation evidence.
 
 ## Per-verb summary
 
-Every callable verb in `manifest.CallableVerbs()` is a key (17 total). Verbs whose output is entirely fixture-derived carry `[]` and are diffed in full.
+Every callable verb in `manifest.CallableVerbs()` is a key. Verbs whose output is entirely fixture-derived carry `[]` and are diffed in full.
 
 | Verb | Non-deterministic selectors | Reason |
 |---|---|---|
@@ -72,11 +72,11 @@ Every callable verb in `manifest.CallableVerbs()` is a key (17 total). Verbs who
 | `version` | `.version`, `.commit` | CLI stamped with -ldflags; `pkg/api.Version()` returns package default |
 | `decide` | `.attempted_at`, `.hook_gone_at`, `.unproven_since` | the request's delivery facts (b.146 rule 15): `attempted_at` and `hook_gone_at` are written at call time (a refused decide's attempt, a reader that finds the request fallen back), so a run that sets one sets it to its own clock; `delivery`, `confirm_by` and `hook_alive` derive from the fixture row and are diffed. `unproven_since` (b.146 step 2c): the fixture's request is recorded before schema v7, so once decide records its verdict the request reads closed, not proven gone, since its `decided_at`, the whole-second `CURRENT_TIMESTAMP` each run's decide writes on its own store copy; two runs that straddle a second differ. Both envelopes must still carry it non-null (`wantNonNull`, `success_cases.go`) |
 | `expire` | `.ids` | which rows are selected depends on the call-time cutoff (now minus the window); `count`, `kept` and `kept_ids` are diffed; both cases in `success_expire.go` pin `kept` and `kept_ids` through `want`, and `TestEnvelopeDiff_Success/expire/kept` pins `ids` as well |
-| `find-missing` | — | all values fixture-derived |
-| `get` | `.permission_requests[*].attempted_at`, `.permission_requests[*].hook_gone_at` | each request's call-time instants, as for `decide`; every other value is fixture-derived |
+| `find-missing` | — | all values fixture-derived (finished-row fixture, which skips live checks) |
+| `get` | `.confirmations.process_liveness.checked_at`, `.confirmations.process_liveness.confirmed_at`, `.permission_requests[*].attempted_at`, `.permission_requests[*].hook_gone_at` | the read's own probe of the live agent process records its result at call time (b.x9o), so both process-record times are each run's clock; each request's call-time instants, as for `decide`; every other value is fixture-derived |
 | `get-permission` | `.attempted_at`, `.hook_gone_at`, `.request_id`, `.requested_at` | `attempted_at` and `hook_gone_at` are written at call time, as for `decide`. `request_id` and `requested_at` are excluded as the store-assigned columns named in the case's comment (`success_cases.go`): `request_id` is the autoincrement row id, `requested_at` the row's `CURRENT_TIMESTAMP`. Both are written once, when the case seeds its `permission_requests` row, and both store copies carry them, so by the decision tree above they are fixture-derived; the other fields are diffed |
 | `kill` | — | all values fixture-derived |
-| `list` | `.spawns[*].permission_requests[*].attempted_at`, `.spawns[*].permission_requests[*].hook_gone_at` | each request's call-time instants, as for `decide`; every other value is fixture-derived |
+| `list` | `.spawns[*].confirmations.displayed_state.checked_at`, `.spawns[*].confirmations.process_liveness.checked_at`, `.spawns[*].confirmations.process_liveness.confirmed_at`, `.spawns[*].permission_requests[*].attempted_at`, `.spawns[*].permission_requests[*].hook_gone_at` | each row's process-record times, as for `get`; a working row's failed pane attempt records its own checked_at on each call; each request's call-time instants, as for `decide`; every other value is fixture-derived |
 | `list-subagents` | — | all values fixture-derived |
 | `make-template` | `.path` | output path resolved at call time |
 | `pause` | — | all values fixture-derived |
@@ -84,4 +84,5 @@ Every callable verb in `manifest.CallableVerbs()` is a key (17 total). Verbs who
 | `record-pane-answer` | — | all values fixture-derived (the request token and the caller's claim) |
 | `resume` | — | all values fixture-derived |
 | `send-keys` | — | all values fixture-derived |
-| `status` | — | all values fixture-derived |
+| `status` | `.confirmations.process_liveness.checked_at`, `.confirmations.state.checked_at`, `.confirmations.state.confirmed_at` | the fixture row has no live pane, so each run's read marks it missing on its own store copy (tmux evidence, b.x9o) and attempts its process at call time; the records' status, source and reason, and every other value, are fixture-derived |
+| `sweep` | — | as for `find-missing` |

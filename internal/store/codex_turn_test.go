@@ -1,8 +1,8 @@
 package store
 
 // codex_turn_test.go — b.x72's store rules for a Codex turn: which rows a read
-// may end (CodexOpenTurns, over a row's family), the guard of that end
-// (EndCodexTurn), the turn a held UserPromptSubmit records, the turn a Stop or
+// may end (CodexTurnSamples, over the selected rows), the guard of that end
+// (EndCodexTurnSample), the turn a held UserPromptSubmit records, the turn a Stop or
 // Interrupt records, which tool hooks may move a row to working, and a late
 // tool hook racing a turn end. The path through hook.Handle and the API reads
 // is internal/hook/hook_codex_turn_end_test.go's.
@@ -84,6 +84,16 @@ func cxTurnRow(t *testing.T) (s *Store, path, id, rollout string) {
 	return s, path, id, cxOpenRow(t, s, id, "", cxSession, cxTurnID)
 }
 
+// cxSample captures the real revision guards and checks the expected open turn.
+func cxSample(t *testing.T, s *Store, want CodexOpenTurn) CodexTurnSample {
+	t.Helper()
+	samples, err := s.CodexTurnSamples(want.InstanceID)
+	if err != nil || len(samples) != 1 || samples[0].CodexOpenTurn != want {
+		t.Fatalf("CodexTurnSamples = %+v, %v; want %+v", samples, err, want)
+	}
+	return samples[0]
+}
+
 // cxTurns is id's raw codex_turn and codex_turn_ended, as quote() literals.
 func cxTurns(t *testing.T, path, id string) (turn, ended string) {
 	t.Helper()
@@ -105,25 +115,25 @@ func cxRawRow(t *testing.T, s *Store, path, id string) map[string]string {
 	return readRawSpawn(t, path, id, tableColumnNames(t, s.db, "spawns"))
 }
 
-// TestEndCodexTurnGuard (b.x72): a read's turn end applies only to the row the
+// TestEndCodexTurnSampleGuard (b.x72): a read's turn end applies only to the row the
 // read found open, as it still is: a Codex row, raw working, whose current
 // turn is the one the rollout ended, not recorded ended, with that rollout. It
 // moves the row to waiting, records the turn ended, advances row_version,
 // keeps last_seen_at and emits one state transition naming task_complete.
 // Anything else changes nothing and emits nothing.
-func TestEndCodexTurnGuard(t *testing.T) {
+func TestEndCodexTurnSampleGuard(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		after    func(t *testing.T, s *Store, id string) // the row's hooks after the read listed its turn
-		ended    func(CodexOpenTurn) CodexOpenTurn       // the turn the read found ended
-		openNext string                                  // the turn CodexOpenTurns lists afterwards; "": none
+		ended    func(CodexTurnSample) CodexTurnSample   // the turn the read found ended
+		openNext string                                  // the turn CodexTurnSamples lists afterwards; "": none
 		moved    bool
 	}{
 		{name: "the open turn", moved: true},
 		{name: "the turn moved on", after: func(t *testing.T, s *Store, id string) {
 			cxTurnHook(t, s, id, "UserPromptSubmit", cxNextTurn)
 		}, openNext: cxNextTurn},
-		{name: "another rollout", ended: func(o CodexOpenTurn) CodexOpenTurn {
+		{name: "another rollout", ended: func(o CodexTurnSample) CodexTurnSample {
 			o.JSONLPath += ".other"
 			return o
 		}, openNext: cxTurnID},
@@ -137,14 +147,14 @@ func TestEndCodexTurnGuard(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, path, id, rollout := cxTurnRow(t)
-			listed, err := s.CodexOpenTurns("")
-			if want := []CodexOpenTurn{{id, cxSession, rollout, cxTurnID}}; err != nil || !reflect.DeepEqual(listed, want) {
-				t.Fatalf("CodexOpenTurns = %+v, %v; want %+v", listed, err, want)
+			listed, err := s.CodexTurnSamples("")
+			if want := []CodexOpenTurn{{id, cxSession, rollout, cxTurnID}}; err != nil || len(listed) != 1 || listed[0].CodexOpenTurn != want[0] {
+				t.Fatalf("CodexTurnSamples = %+v, %v; want %+v", listed, err, want)
 			}
 			if tc.after != nil {
 				tc.after(t, s, id)
 			}
-			open, err := s.CodexOpenTurns(id)
+			open, err := s.CodexTurnSamples(id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -152,7 +162,7 @@ func TestEndCodexTurnGuard(t *testing.T) {
 				tc.openNext = cxTurnID
 			}
 			if (tc.openNext == "") != (len(open) == 0) || (len(open) == 1 && open[0].Turn != tc.openNext) || len(open) > 1 {
-				t.Fatalf("CodexOpenTurns(%s) = %+v; want turn %q", id, open, tc.openNext)
+				t.Fatalf("CodexTurnSamples(%s) = %+v; want turn %q", id, open, tc.openNext)
 			}
 			ended := listed[0]
 			if tc.ended != nil {
@@ -160,10 +170,10 @@ func TestEndCodexTurnGuard(t *testing.T) {
 			}
 			before, mark := cxRawRow(t, s, path, id), TrailMark(t)
 
-			moved, err := s.EndCodexTurn(ended, DefaultLockWait)
+			moved, err := s.EndCodexTurnSample(ended, DefaultLockWait)
 
 			if err != nil || moved != tc.moved {
-				t.Fatalf("EndCodexTurn = %v, %v; want %v", moved, err, tc.moved)
+				t.Fatalf("EndCodexTurnSample = %v, %v; want %v", moved, err, tc.moved)
 			}
 			after, lines := cxRawRow(t, s, path, id), TrailEventsSince(t, mark, "ad.spawn.state_transition", id)
 			if !tc.moved {
@@ -184,18 +194,18 @@ func TestEndCodexTurnGuard(t *testing.T) {
 				"triggering_event_name": "task_complete", "cause": "codex_rollout_task_complete"} {
 				assertTrailStr(t, lines[0], k, v)
 			}
-			if again, err := s.EndCodexTurn(ended, DefaultLockWait); err != nil || again {
-				t.Errorf("a second EndCodexTurn = %v, %v; want false", again, err)
+			if again, err := s.EndCodexTurnSample(ended, DefaultLockWait); err != nil || again {
+				t.Errorf("a second EndCodexTurnSample = %v, %v; want false", again, err)
 			}
-			if open, err := s.CodexOpenTurns(""); err != nil || len(open) != 0 {
-				t.Errorf("CodexOpenTurns after the end = %+v, %v; want none", open, err)
+			if open, err := s.CodexTurnSamples(""); err != nil || len(open) != 0 {
+				t.Errorf("CodexTurnSamples after the end = %+v, %v; want none", open, err)
 			}
 		})
 	}
 }
 
 // TestCodexLateToolHookRacingTurnEnd (b.x72): a PostToolUse of the row's turn
-// reads the turn open, then the turn ends (a read's EndCodexTurn, or Stop)
+// reads the turn open, then the turn ends (a read's EndCodexTurnSample, or Stop)
 // before its move to working. The move matches nothing and the hook gets the
 // soft refresh it would have got without the race (UpsertUpdated, the version
 // advanced, one soft-refresh line waiting to waiting), never a held report,
@@ -206,8 +216,8 @@ func TestCodexLateToolHookRacingTurnEnd(t *testing.T) {
 		end  func(t *testing.T, s *Store, id, rollout string)
 	}{
 		{"rollout read", func(t *testing.T, s *Store, id, rollout string) {
-			if moved, err := s.EndCodexTurn(CodexOpenTurn{id, cxSession, rollout, cxTurnID}, DefaultLockWait); err != nil || !moved {
-				t.Fatalf("EndCodexTurn = %v, %v; want moved", moved, err)
+			if moved, err := s.EndCodexTurnSample(cxSample(t, s, CodexOpenTurn{id, cxSession, rollout, cxTurnID}), DefaultLockWait); err != nil || !moved {
+				t.Fatalf("EndCodexTurnSample = %v, %v; want moved", moved, err)
 			}
 		}},
 		{"stop", func(t *testing.T, s *Store, id, _ string) {
@@ -279,6 +289,7 @@ func TestCodexHeldUserPromptSubmitRecordsTurn(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, path, id, rollout := cxTurnRow(t)
+			older := cxSample(t, s, CodexOpenTurn{id, cxSession, rollout, cxTurnID})
 			if err := agentHook(s, id, StateCheckPermission, false, "PermissionRequest"); err != nil {
 				t.Fatal(err)
 			}
@@ -330,12 +341,12 @@ func TestCodexHeldUserPromptSubmitRecordsTurn(t *testing.T) {
 			if o, a := cxTurnHook(t, s, id, "PreToolUse", cxNextTurn); o != UpsertUpdated || !a.Applied {
 				t.Fatalf("the new turn's PreToolUse = %v, %+v; want applied", o, a)
 			}
-			open, err := s.CodexOpenTurns(id)
-			if want := []CodexOpenTurn{{id, cxSession, rollout, cxNextTurn}}; err != nil || !reflect.DeepEqual(open, want) {
-				t.Fatalf("CodexOpenTurns = %+v, %v; want %+v", open, err, want)
+			open, err := s.CodexTurnSamples(id)
+			if want := []CodexOpenTurn{{id, cxSession, rollout, cxNextTurn}}; err != nil || len(open) != 1 || open[0].CodexOpenTurn != want[0] {
+				t.Fatalf("CodexTurnSamples = %+v, %v; want %+v", open, err, want)
 			}
-			if moved, err := s.EndCodexTurn(CodexOpenTurn{id, cxSession, rollout, cxTurnID}, DefaultLockWait); err != nil || moved {
-				t.Errorf("EndCodexTurn of the older turn = %v, %v; want false", moved, err)
+			if moved, err := s.EndCodexTurnSample(older, DefaultLockWait); err != nil || moved {
+				t.Errorf("EndCodexTurnSample of the older turn = %v, %v; want false", moved, err)
 			}
 			if got := mustGetSpawn(t, s, id).State; got != StateWorking {
 				t.Errorf("state = %q; want working", got)
@@ -432,9 +443,9 @@ func TestCodexLateTurnEndKeepsNewerTurn(t *testing.T) {
 					t.Fatalf("%d state transition lines; want 1", len(lines))
 				}
 				assertSpawnStateTransitionFields(t, lines[0], id, StateWaiting, StateWorking, tool, false)
-				open, err := s.CodexOpenTurns(id)
-				if want := []CodexOpenTurn{{id, cxSession, rollout, cxNextTurn}}; err != nil || !reflect.DeepEqual(open, want) {
-					t.Errorf("CodexOpenTurns = %+v, %v; want %+v", open, err, want)
+				open, err := s.CodexTurnSamples(id)
+				if want := []CodexOpenTurn{{id, cxSession, rollout, cxNextTurn}}; err != nil || len(open) != 1 || open[0].CodexOpenTurn != want[0] {
+					t.Errorf("CodexTurnSamples = %+v, %v; want %+v", open, err, want)
 				}
 			})
 		}
@@ -467,8 +478,8 @@ func TestCodexToolHookTurnRules(t *testing.T) {
 	}
 	readEnds := func(turn string) step {
 		return func(t *testing.T, s *Store, id, rollout string) {
-			if moved, err := s.EndCodexTurn(CodexOpenTurn{id, cxSession, rollout, turn}, DefaultLockWait); err != nil || !moved {
-				t.Fatalf("EndCodexTurn(%s) = %v, %v; want moved", turn, moved, err)
+			if moved, err := s.EndCodexTurnSample(cxSample(t, s, CodexOpenTurn{id, cxSession, rollout, turn}), DefaultLockWait); err != nil || !moved {
+				t.Fatalf("EndCodexTurnSample(%s) = %v, %v; want moved", turn, moved, err)
 			}
 		}
 	}
@@ -535,12 +546,9 @@ func TestCodexToolHookTurnRules(t *testing.T) {
 	}
 }
 
-// TestCodexOpenTurnsFamily (b.x72, review finding 3): CodexOpenTurns(id)
-// lists the open turn of id's row and of every descendant down stored parent
-// links, whose turns its family_state counts, but no sibling, ancestor or
-// unrelated row; "" lists every row's. A family row whose turn is not open
-// (ended by Stop) is left out.
-func TestCodexOpenTurnsFamily(t *testing.T) {
+// TestCodexTurnSamplesSelection (b.x9o): a selected id grants no descendant
+// probing authority; an empty id selects all open turns. Stopped turns stay out.
+func TestCodexTurnSamplesSelection(t *testing.T) {
 	s, _ := openTempStore(t)
 	rows := map[string]CodexOpenTurn{}
 	for _, r := range []struct{ id, parent string }{
@@ -555,11 +563,11 @@ func TestCodexOpenTurnsFamily(t *testing.T) {
 		id   string
 		want []string
 	}{
-		{"parent", []string{"parent", "child", "grandchild"}},
-		{"child", []string{"child", "grandchild"}},
+		{"parent", []string{"parent"}},
+		{"child", []string{"child"}},
 		{"grandchild", []string{"grandchild"}},
 		{"stopped-child", nil},
-		{"grandparent", []string{"grandparent", "parent", "sibling", "child", "grandchild"}},
+		{"grandparent", []string{"grandparent"}},
 		{"", []string{"grandparent", "parent", "sibling", "child", "grandchild", "unrelated"}},
 		{"no-such-row", nil},
 	} {
@@ -568,12 +576,52 @@ func TestCodexOpenTurnsFamily(t *testing.T) {
 			for _, id := range tc.want {
 				want = append(want, rows[id])
 			}
-			got, err := s.CodexOpenTurns(tc.id)
+			samples, err := s.CodexTurnSamples(tc.id)
+			var got []CodexOpenTurn
+			for _, sample := range samples {
+				got = append(got, sample.CodexOpenTurn)
+			}
 			byID := func(a, b CodexOpenTurn) int { return strings.Compare(a.InstanceID, b.InstanceID) }
 			slices.SortFunc(got, byID)
 			slices.SortFunc(want, byID)
 			if err != nil || !reflect.DeepEqual(got, want) {
-				t.Errorf("CodexOpenTurns(%q) = %+v, %v; want %+v", tc.id, got, err, want)
+				t.Errorf("CodexTurnSamples(%q) = %+v, %v; want %+v", tc.id, got, err, want)
+			}
+		})
+	}
+}
+
+// Sampled recovery must reject a newer hook even when turn/session/path text
+// repeats, and display/request revisions that move independently of row_version.
+func TestEndCodexTurnSampleRejectsNewerEvidence(t *testing.T) {
+	for _, change := range []string{"same turn hook", "new turn", "observation", "permission epoch", "new life"} {
+		t.Run(change, func(t *testing.T) {
+			s, path, id, _ := cxTurnRow(t)
+			samples, err := s.CodexTurnSamples(id)
+			if err != nil || len(samples) != 1 {
+				t.Fatalf("samples=%+v err=%v", samples, err)
+			}
+			switch change {
+			case "same turn hook":
+				cxTurnHook(t, s, id, "PostToolUse", cxTurnID)
+			case "new turn":
+				cxTurnHook(t, s, id, "UserPromptSubmit", cxNextTurn)
+			default:
+				column := map[string]string{"observation": "observation_version", "permission epoch": "permission_epoch", "new life": "life_number"}[change]
+				if _, err := s.db.Exec("UPDATE spawns SET "+column+"="+column+"+1 WHERE instance_id=?", id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := cxRawRow(t, s, path, id)
+			if applied, err := s.EndCodexTurnSample(samples[0], 0); err != nil || applied {
+				t.Fatalf("stale sample applied=%v err=%v", applied, err)
+			}
+			if after := cxRawRow(t, s, path, id); !reflect.DeepEqual(before, after) {
+				t.Fatalf("stale sample changed row: before=%v after=%v", before, after)
+			}
+			row, err := s.GetSpawn(id)
+			if err != nil || row.State != StateWorking || row.FamilyState != StateWorking {
+				t.Fatalf("stale recovery changed family/state: %+v %v", row, err)
 			}
 		})
 	}

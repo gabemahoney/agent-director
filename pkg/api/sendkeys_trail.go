@@ -12,37 +12,33 @@ import (
 // recorded input attempts and transport outcomes, not submission proof.
 // send-keys and pause share them (keysRun.emitDisagree); pause's text is `/exit`.
 //
-//   - sendKeysActionKeysSent: input was attempted with no recorded send error
-//     (text/paste and any requested Enter, or a key).
-//   - sendKeysActionTextSent: structured SubmissionUnconfirmedDetails reports
-//     KeysSent true, including fallback paste failures without a timeout;
-//     otherwise the legacy transport mapping applies: a text/key timeout,
-//     or successful text followed by a failed or timed-out Enter.
-//   - sendKeysActionNothingSent: no input attempt (including after pause's
-//     failed line clear: C-u types no text), or any remaining send error.
-//     The legacy non-timeout text/key failure rule does not override
-//     structured possible-input details.
+//   - sendKeysActionKeysSent: input was attempted with no recorded send error.
+//   - sendKeysActionTextSent: structured details report possible input, including
+//     paste failures; otherwise text was sent before Enter or its admission
+//     failed, or the legacy transport reported a timeout.
+//   - sendKeysActionNothingSent: no text call was made (after a failed line
+//     clear of pause's too: C-u types no text), or the text call failed
+//     other than by timing out.
 const (
 	sendKeysActionKeysSent    = "keys_sent"
 	sendKeysActionTextSent    = "text_sent"
 	sendKeysActionNothingSent = "nothing_sent"
 )
 
-// sendKeysAction is the call's action value from whether text, paste or a key
-// was attempted (sent; a failed line clear before it leaves sent false) and
-// the recorded send error (sendErr), including structured paste uncertainty.
-func sendKeysAction(sent bool, sendErr error) string {
-	if !sent {
+// sendKeysAction retains successful text even when the separate Enter or
+// intervening admission failed. Error call labels alone cannot establish it.
+func sendKeysAction(f keysFacts) string {
+	if !f.Sent {
 		return sendKeysActionNothingSent
 	}
-	if sendErr == nil {
+	if f.SendErr == nil {
 		return sendKeysActionKeysSent
 	}
-	if details, ok := ErrDetails(sendErr).(SubmissionUnconfirmedDetails); ok && details.KeysSent {
+	if details, ok := ErrDetails(f.SendErr).(SubmissionUnconfirmedDetails); ok && details.KeysSent {
 		return sendKeysActionTextSent
 	}
 	var ce *tmux.CallError
-	if errors.As(sendErr, &ce) && (ce.Failure == tmux.FailTimeout || enterFailedAfterText(ce)) {
+	if f.TextSent || errors.As(f.SendErr, &ce) && (ce.Failure == tmux.FailTimeout || enterFailedAfterText(ce)) {
 		return sendKeysActionTextSent
 	}
 	return sendKeysActionNothingSent

@@ -4,6 +4,7 @@ package cursorhost
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -13,6 +14,8 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
+	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 func executionUpdate(session, tool, status, output string) json.RawMessage {
@@ -272,27 +275,103 @@ func TestCursorRowStateAfterLastDeliveredDecision(t *testing.T) {
 				if got := e.request(t, r.token); got.ProvenGoneHow != store.ProvenGoneTurnEnd || got.Decision != "" || !got.DeliveredAt.IsZero() {
 					t.Fatalf("turn's end did not retire the undelivered request: %+v", got)
 				}
-				e.decide(t, r.token, tc.decision)
-				if got := e.request(t, r.token); got.Decision != tc.decision {
-					t.Fatalf("late decision not stored: %+v", got)
+				// t3.7tz.6o.5h.ov / b.gwj: the public fallback branch precedes
+				// the verdict guard at confirm_by. Its retained attempt is history,
+				// never authority to answer this turn_end request.
+				want := e.request(t, r.token)
+				for _, phase := range []struct {
+					name  string
+					after time.Duration
+				}{
+					{"before_confirm_by", -time.Millisecond},
+					{"at_confirm_by", 0},
+					{"after_confirm_by", time.Millisecond},
+				} {
+					t.Run(phase.name, func(t *testing.T) {
+						now := want.SettledAt.Add(phase.after)
+						view := api.RelayView{Now: func() time.Time { return now }}
+						reopened, err := store.Open(e.path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer reopened.Close()
+						wantErr, delivery := api.ErrNoOpenPermissionRequest, api.DeliveryNotConfirmed
+						if phase.after >= 0 {
+							wantErr, delivery = api.ErrRelayFallenBack, api.DeliveryFallenBack
+						}
+						// Follow caller-contract's inspection through a reopened public
+						// getter; proof and finite delivery remain separate facts.
+						var facts api.GetPermissionResult
+						_, _, committed := apitest.RepeatUntilCommitted(func() bool {
+							facts, err = api.GetPermission(reopened, view, api.GetPermissionParams{RequestToken: r.token})
+							if err != nil {
+								t.Fatal(err)
+							}
+							return phase.after < 0 || !e.request(t, r.token).FallbackAt.IsZero()
+						})
+						if !committed {
+							t.Fatal("inspection fallback observation never committed")
+						}
+						if err != nil || facts.Delivery != delivery || !facts.ConfirmBy.Equal(want.SettledAt) || facts.HookAlive != nil ||
+							facts.Decision != nil || facts.DecidedAt != nil || facts.ProvenGoneHow == nil || *facts.ProvenGoneHow != store.ProvenGoneTurnEnd ||
+							facts.ProvenGoneAt == nil || !facts.ProvenGoneAt.Equal(want.ProvenGoneAt) {
+							t.Fatalf("inspect retired request: %+v / %v", facts, err)
+						}
+						if phase.after >= 0 {
+							if want.HookGoneAt.IsZero() {
+								want.HookGoneAt = now
+							}
+							want.FallbackAt, want.FallbackBasis = want.SettledAt, store.FallbackDeadline
+						}
+						if got := e.request(t, r.token); got != want {
+							t.Fatalf("inspection changed history beyond fallback: got=%+v want=%+v", got, want)
+						}
+						// Deliberately attempt and retry the forbidden verdict, including
+						// a separate connection: neither may revive response authority.
+						for _, caller := range []*store.Store{e.s, reopened} {
+							_, err := api.Decide(caller, view, api.DecideParams{InstanceID: e.binding.InstanceID, RequestToken: r.token, Decision: tc.decision})
+							if !errors.Is(err, wantErr) {
+								t.Fatalf("retired decision: %v; want %v", err, wantErr)
+							}
+							if phase.after >= 0 {
+								want.AttemptedDecision, want.AttemptedAt = tc.decision, now
+								d, ok := api.ErrDetails(err).(api.RelayFallenBackDetails)
+								if !ok || d.AttemptedDecision == nil || *d.AttemptedDecision != tc.decision || d.AttemptedAt == nil || !d.AttemptedAt.Equal(now) ||
+									d.ProvenGoneHow == nil || *d.ProvenGoneHow != store.ProvenGoneTurnEnd || d.Decision != nil || d.Delivery != delivery {
+									t.Fatalf("fallback refusal lost historical facts: %+v", d)
+								}
+							}
+							c.choose(r.token, "allow-once") // a delayed choice cannot revive it either
+							if err := continuePermission(c, r); err != nil {
+								t.Fatal(err)
+							}
+							if got := e.request(t, r.token); got != want {
+								t.Fatalf("retired history/authority changed: got=%+v want=%+v", got, want)
+							}
+							if r.queued || r.sent.Load() || !r.terminal.Load() || len(wire.bytes()) != 0 {
+								t.Fatalf("retired request replayed: %q", wire.bytes())
+							}
+						}
+						if _, _, ok := c.key(key); ok {
+							t.Fatal("retired pane key became selectable")
+						}
+						e.wantState(t, "after refused/retried decision", tc.proven)
+					})
 				}
-				if err := c.tick(); err != nil {
-					t.Fatal(err)
-				}
-				if r.queued || r.sent.Load() || len(wire.bytes()) != 0 {
-					t.Fatalf("decision on a retired request reached the peer: %q", wire.bytes())
-				}
+				// Valid late execution may enrich observational history. It is a
+				// separate event, after the undecided request's deadline phases.
 				if err := c.execution(executionUpdate(e.binding.SessionID, tc.kind, "completed", tc.output)); err != nil {
 					t.Fatal(err)
 				}
-				if got := e.request(t, r.token); got.ProvenGoneHow != store.ProvenGoneTurnEnd || !got.DeliveredAt.IsZero() {
-					t.Fatalf("late output changed the retired request: %+v", got)
+				if got := e.request(t, r.token); got.ProvenGoneHow != store.ProvenGoneTurnEnd || !got.DeliveredAt.IsZero() ||
+					got.DecisionOrigin != store.DecisionOriginObservation || got.ResponseState != "" || len(wire.bytes()) != 0 {
+					t.Fatalf("late output changed retired proof or response authority: %+v; bytes=%q", got, wire.bytes())
 				}
 				e.wantState(t, "after the late decision and output", tc.proven)
 				return
 			}
 			e.decide(t, r.token, tc.decision)
-			if err := c.tick(); err != nil {
+			if err := continuePermission(c, r); err != nil {
 				t.Fatal(err)
 			}
 			if err := completedWrite(t, c.protocol); err != nil {

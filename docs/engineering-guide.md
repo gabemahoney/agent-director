@@ -8,13 +8,13 @@ agent-director's engineering rules, then the background for them. Focus on what 
 
 - **Stay generic.** Build a client's request as a capability any caller could use. No client names, behaviour or wording in code, errors or the API.
 - **Serve human, bot and code callers.** Every outcome a caller must act on is machine-readable: an `err_name` or a structured field. English advice is an optional extra. Prefer behaviour that's safe to repeat.
-- **Subscription logins.** Everything must work when the agent is logged in with a subscription account (Claude plan, ChatGPT plan for Codex, Cursor plan), not only with API-key metered billing. Never depend on an API key or an API-only interface.
+- **Subscription logins.** Where an agent offers a subscription login (a Claude plan, a ChatGPT plan for Codex, a Cursor plan), everything must work with it as well as with an API key: never depend on a feature that only works with an API key. An agent that supports only API keys is fine.
 - **Stable provider interfaces.** Build on interfaces the agent provider documents as stable. Disfavor anything experimental, beta, preview or undocumented, because providers drop them (Claude Channels did). If one is the only way, use it as a stated fallback and record what breaks if it's removed.
 - **Every supported agent at once.** A feature covers Claude Code, Codex and Cursor in the same change. Where one can't be supported yet, measure first, make the gap a documented machine-readable outcome (such as `unknown`) and record it on the ticket for the maintainers.
 - **Never hardcode an agent's strings.** No product code branches on any agent's (Claude Code, Codex, Cursor) screen text, patterns, glyphs or layout, because they change without notice. Learn its state from hooks, settings, exit codes, transcripts, and content-agnostic OS facts about its own process (such as terminal raw mode, the foreground process group, or input-queue length). When only the screen can tell, return an `err_name` and leave reading the pane to the caller. Comparing agent-director's own earlier pane captures is fine.
 - **Never press keys for an agent.** agent-director never types raw keys, an answer or a command for an agent to act on, because it can't tell safely what the screen means. Anything that needs keys pressed, such as answering a permission or question prompt agent-director didn't catch, is for an intelligence (a person or agent) reading the screen, using tmux itself. agent-director's part is to report `needs_intelligence` and record the answer with `record-pane-answer`.
 - **Pass agent state through.** agent-director reports an agent's `state` as the agent reports it, never holding, hiding or changing it to look different, such as keeping it `working` while agent-director has more to do, because callers act on what the agent is doing. The one exception is the settle time (`[state] settle_ms`), which only delays showing a change until it holds; today's code also keeps a row `check_permission` through the agent's `working` reports while a permission request awaits an answer. Anything agent-director knows beyond what the agent reports, such as `displayed_state` or `family_state`, goes in its own field, and callers combine the fields themselves.
-- **No daemon, no timer.** agent-director runs only when something calls it or an agent event fires: a command, a hook, or a helper that carries one agent's connection and lives only with that agent. It adds no background service, watcher or periodic check, and nothing that must run when time passes. Recover on the next event or call instead, and say what waits until then.
+- **No daemon or idle polling.** No daemon, always-on service or idle polling. An Agent Helper may carry its own agent connection and block for events; durable operational state stays in SQLite. Finite waits may finish work already in flight, including native pacing/drain, busy/config/store retries, a hook's timeout for its own eligible request, process-exit waits and call-owned cleanup. Recover on eligible events, commands and invocation-only Active Checks; the user chooses any external sweep schedule. Track lifecycle state, recorded-process liveness and display freshness independently, report uncertainty, and never refresh stale lifecycle state merely because a process is alive.
 - **CLI/MCP parity.** Every verb and flag lands on both surfaces through `pkg/api`, except the CLI-only verbs §2 lists.
 - **Never execute on the host.** Run tests and binaries only as §10 "Build and test commands" says, because they can rewrite the real agent-director store.
 - **Schema changes** follow `docs/migration-guide.md`.
@@ -176,8 +176,9 @@ what it regenerates (CI `doc-drift` fails otherwise).
 `make sandbox CMD="make lint"` (`go vet ./...`). Until b.hhi is fixed it
 reports known `unreachable code` findings under
 `skills/release-agent-director/tests/synthetic-regressions/`; it passes when it
-reports nothing else. Formatting: none, because no format check exists yet
-(b.7ep).
+reports nothing else. Formatting: `make sandbox CMD="make fmt-check"`, which
+fails and lists each tracked Go file that is not gofmt-clean (b.7ep); fix one
+with `make sandbox CMD="gofmt -w <file>"`, so gofmt is go.mod's version.
 
 #### Unit tests
 
@@ -205,13 +206,28 @@ model check.
 
 #### Model check
 
-TLA+ with TLC; the suite is in `spec/tla/`. Run it as an isolated job, never on
-the host: `make tla` submits it through the job runner named by `TLA_JOBSCHED`
-and `TLA_CHANNEL`, which your host supplies. `TLA_TIER=fast` is the default, `full` is for releases;
-`make tla-print` shows the plan without submitting. Give a new formal model its
-own `suite.tsv` and `cfg/` folder, like `spec/tla/launch/`, and point
-`TLA_SUITE` and `TLA_SPEC_DIR` at them (see the header of
-`spec/tla/ci/run_ci.sh`).
+TLA+ with TLC; the default suite is in `spec/tla/`. `make tla` submits isolated
+jobs through `TLA_JOBSCHED` and `TLA_CHANNEL`, which your host supplies; the
+checker never runs on the host. `TLA_TIER=fast` is the default, `full` is for
+releases. `make tla-print` shows the plan without contacting the scheduler.
+
+Any model can supply a `suite.tsv` and adjacent `cfg/` folder through
+`TLA_SUITE`, with its modules and local helpers in `TLA_SPEC_DIR`. Every
+`.tla` directly in that directory is packaged. The manifest columns are in
+[Model check](architecture.md#model-check-make-tla). `make tla-parse` submits
+one SANY-only job to parse and import-check every manifest module, regardless
+of tier or group. `make tla` also starts with SANY, then depth-1 evaluation
+of one cfg per module in the selected tier, before exhaustive groups.
+
+Every job requests 28 GiB memory, 20 GiB disk and its budget plus 300 seconds
+timeout. A 15000 MB guard covers TLC's metadir, including queue and fingerprint
+storage. The runner uses `jobsched wait`. A time or disk cap inside the job
+reports `INCOMPLETE(...)`. When the scheduler ends a job `timed-out`,
+`disk-exceeded` or `out-of-memory`, its printed rows without a verdict show
+`INCOMPLETE(<state>)`. Either kind of cap fails the suite and stops further
+submissions. `cancelled` is a named failure, not a cap. See
+[Model check](architecture.md#model-check-make-tla) for row accounting, cleanup
+and log reporting.
 
 ### Fail-fast sandbox guard
 

@@ -147,6 +147,15 @@ func (p *paEnv) seedRequest(t *testing.T, token, toolUseID string, hook api.Proc
 		ToolInput: input, ToolUseID: toolUseID, AgentID: p.agentID, MainTurnEndEligible: p.eligible, Hook: hook, SettledAt: p.now.Add(time.Hour)})
 }
 
+// withPermissionWriter keeps the existing synthetic Cursor binding current
+// for store-only caller/ack assertions; real controller tests own kernel proof.
+func (p *paEnv) withPermissionWriter(t *testing.T, write func()) {
+	t.Helper()
+	if err := storefix.WithSeedPane(p.dbPath, p.r.ID, func(store.HookGate) error { write(); return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // mainAgentStop applies the main agent's Stop (a Codex row's Interrupt) to p's
 // row as the hook handler does: its turn_end proof (requests with no agent_id), then the move to waiting.
 func (p *paEnv) mainAgentStop(t *testing.T) {

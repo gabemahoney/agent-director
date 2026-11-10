@@ -2,12 +2,72 @@ package main_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
+
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // configDirValue is the literal both binaries' version results report as
 // config_dir, whatever HOME is (SR-11.7): no path is resolved.
 const configDirValue = "~/.config/agent-director"
+
+func TestEnvelopeParityPaneOnly(t *testing.T) {
+	for _, agent := range []string{"droid"} {
+		t.Run(agent, func(t *testing.T) {
+			home := t.TempDir()
+			id, err := apitest.SeedSpawn(filepath.Join(home, ".config", "agent-director", "state.db"), "", "pending", t.TempDir(), "off", "", true,
+				apitest.WithAgent(agent), apitest.WithNoSubagentTracking(), apitest.WithLaunchStartedAt(time.Now().Add(-time.Hour).UnixMilli()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := apitest.BindReadSurfaceProcess(stateDB(home), id, os.Getpid()); err != nil {
+				t.Fatal(err)
+			}
+			srv := startServe(t, home)
+			t.Cleanup(srv.kill)
+			srv.initialize(t)
+			first := map[string]string{}
+			for _, verb := range []string{"get", "status", "list"} {
+				args, toolArgs := []string{verb, "--instance-id", id}, `{"instance_id":"`+id+`"}`
+				if verb == "list" {
+					args, toolArgs = []string{verb}, `{}`
+				}
+				fixture := apitest.ReadSurfaceCase{Params: map[string]any{"instance_id": id}}
+				from := time.Now()
+				out, stderr, code := runCLIWithHome(t, home, args...)
+				if code != 0 || stderr != "" {
+					t.Fatalf("%s: %d %s", verb, code, stderr)
+				}
+				var cli, mcp map[string]any
+				out = apitest.NormalizeReadSurfaceProbes(t, out, from, time.Now(), first, fixture)
+				if err := json.Unmarshal([]byte(out), &cli); err != nil {
+					t.Fatal(err)
+				}
+				from = time.Now()
+				mcpOut := srv.callToolOK(t, verb, toolArgs)
+				mcpOut = apitest.NormalizeReadSurfaceProbes(t, mcpOut, from, time.Now(), first, fixture)
+				if err := json.Unmarshal([]byte(mcpOut), &mcp); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(cli, mcp) {
+					t.Fatalf("%s: CLI=%v MCP=%v", verb, cli, mcp)
+				}
+				row := cli
+				if verb == "list" {
+					row = cli["spawns"].([]any)[0].(map[string]any)
+				}
+				if row["integration_mode"] != "pane_only" {
+					t.Fatalf("%s=%v", verb, row)
+				}
+			}
+			srv.stop(t)
+		})
+	}
+}
 
 // TestEnvelopeParityVersion asserts the version envelope shape: exactly the
 // three JSON string fields "version", "commit" and "config_dir" (version and
