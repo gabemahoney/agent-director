@@ -7844,6 +7844,9 @@ or a second copy:
   pane evidence so immediate-exit clearing is non-vacuous.
   `internal/store/confirmations_test.go` `stampEvidence` seeds applicable
   lifecycle, process and none-display records for the shared write matrix.
+- `pkg/api/apitest/display.go` `ReadDisplayExit(dbPath, id)` reads only that
+  row's stored `display_exit`, preserving SQL NULL, so lifecycle tests can
+  check the writer drained it before any observing write.
 - `pkg/api/confirmations_test.go` `readMain` returns status/get/list values and
   all three records, including the display, for paired assertions. Its Cursor
   stored-record case rejects pane evidence as unsupported.

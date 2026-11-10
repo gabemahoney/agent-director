@@ -101,6 +101,7 @@ func TestIdleScreenTurnAndAdoptionResetBaseline(t *testing.T) {
 				start := e.now
 				changeAt := start.Add(30 * time.Second)
 				e.now = changeAt
+				mark := trailMark(t)
 				switch write {
 				case "turn", "held-turn":
 					codexHook(t, e.s, e.dbPath, e.id, "UserPromptSubmit", nextTurn, store.StateWorking)
@@ -113,6 +114,26 @@ func TestIdleScreenTurnAndAdoptionResetBaseline(t *testing.T) {
 						t.Fatalf("find-missing adoption: %v %v", cr, err)
 					}
 				}
+				// TR14-1: the writer's own commit must emit the exit, before
+				// any later observation or lifecycle write can drain it.
+				wantEvents := 0
+				if phase == "displayed" {
+					wantEvents = 1
+				}
+				events := displayEvents(t, mark, e.id)
+				if len(events) != wantEvents {
+					t.Fatalf("immediate writer exit events=%v; want %d before any observing write", events, wantEvents)
+				}
+				// invalidatePaneSet stamps its internal SQL clock, which is
+				// neither injected nor independently available here.
+				if wantEvents == 1 && (events[0]["prior_state"] != api.StateIdleScreen || events[0]["new_state"] != store.StateWorking) {
+					t.Fatalf("immediate writer transition=%v; want idle_screen -> working", events[0])
+				}
+				if exit, err := apitest.ReadDisplayExit(e.dbPath, e.id); err != nil {
+					t.Fatal(err)
+				} else if exit.Valid {
+					t.Fatalf("writer left stored display_exit=%q; want SQL NULL", exit.String)
+				}
 				changed := e.row(t)
 				if changed.State != store.StateWorking || changed.RowVersion != kept.RowVersion+1 {
 					t.Fatalf("%s did not apply on the working row: before=%+v after=%+v", write, kept, changed)
@@ -120,9 +141,9 @@ func TestIdleScreenTurnAndAdoptionResetBaseline(t *testing.T) {
 				if changed.PermissionEpoch != kept.PermissionEpoch {
 					t.Errorf("%s changed permission_epoch: %d -> %d", write, kept.PermissionEpoch, changed.PermissionEpoch)
 				}
-				if changed.PaneSinceMillis != 0 && changed.PaneSinceMillis < changeAt.UnixMilli() {
-					t.Errorf("%s kept baseline at %s, before change at %s", write,
-						time.UnixMilli(changed.PaneSinceMillis).UTC().Format(displayTS), changeAt.Format(displayTS))
+				if changed.PaneSHA256 != "" || changed.PaneSinceMillis != 0 || changed.PaneEpoch != -1 || changed.ObservationVersion != kept.ObservationVersion+1 {
+					t.Fatalf("%s did not clear pane evidence with one observation advance: sha256=%q since_ms=%d pane_epoch=%d observation_version=%d -> %d",
+						write, changed.PaneSHA256, changed.PaneSinceMillis, changed.PaneEpoch, kept.ObservationVersion, changed.ObservationVersion)
 				}
 
 				// No capture changed. At t0+60 only 30 s of this turn/owner
@@ -136,6 +157,9 @@ func TestIdleScreenTurnAndAdoptionResetBaseline(t *testing.T) {
 				}
 				if after.PermissionEpoch != before.PermissionEpoch {
 					t.Fatalf("read changed permission_epoch: %d -> %d", before.PermissionEpoch, after.PermissionEpoch)
+				}
+				if events := displayEvents(t, mark, e.id); len(events) != wantEvents {
+					t.Fatalf("post-observation exit events=%v; want %d, with no delayed or duplicate exit", events, wantEvents)
 				}
 			})
 		}
