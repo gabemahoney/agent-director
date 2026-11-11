@@ -134,7 +134,7 @@ var journalActions = map[string]string{
 	"process_inventory_unreadable":     "run it as the agents' user with every mounted file system reachable or unmounted (on Linux, with the proc file system mounted and readable), keep the maintenance window, " + journalRetry + "; report it if it persists",
 	"inventory_deadline":               "make every mounted file system reachable or unmount it, or answer any privacy consent prompt, keep the maintenance window, " + journalRetry,
 	"old_or_unverified_mutators":       "stop each listed agent_director_mutator (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified; keep the maintenance window, " + journalRetry,
-	"process_inventory_unsupported":    "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64 or Darwin arm64); nothing was changed",
+	"process_inventory_unsupported":    "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64, Linux aarch64 or Darwin arm64); nothing was changed",
 
 	// The store's causes.
 	"migration_lock_held":                    "wait for the other administrator's migrate-journal to finish, " + journalRetry,

@@ -46,20 +46,21 @@ See the SRD (Ideas hive: `t1.jus.x5`) for the full design.
 
 ## Supported platforms (v1)
 
-The supported install hosts are **`linux/amd64`** and **`darwin/arm64`**
-on macOS 13 or later, the oldest macOS the Go 1.27 toolchain's darwin
-binaries run on. `install.sh`'s pre-flight host check (`uname -s` / `uname -m`) admits
-only `Linux/x86_64` and `Darwin/arm64` and exits 2 on any other host,
-`Linux/aarch64` included, before it downloads or writes anything. The
-release builds the CLI for three targets, those two and
-**`linux/arm64`** (see [Build paths](#build-paths)), but no installer
-admits a `linux/arm64` or `darwin/amd64` host. The
-TS Client's npm package ships no CLI binary: it drives the CLI installed
+The supported install hosts are **`linux/amd64`**, **`linux/arm64`** and
+**`darwin/arm64`** on macOS 13 or later, the oldest macOS the Go 1.27
+toolchain's darwin binaries run on. `install.sh`'s pre-flight host check
+(`uname -s` / `uname -m`) admits only `Linux/x86_64`, `Linux/aarch64` and
+`Darwin/arm64` and exits 2 on any other host before downloading or writing.
+Debian 12 (bookworm) is long-term supported on both x86_64 and arm64.
+Release checks target both Linux architectures natively; ARM results are
+currently report-only and amd64 gates remain blocking.
+
+The TS Client's npm package ships no CLI binary: it drives the CLI installed
 on the host (see
 [System-install discovery pipeline](#system-install-discovery-pipeline-bw3q)),
 and its `package.json` declares `"os": ["linux", "darwin"]` and
-`"cpu": ["x64", "arm64"]`. That pair also admits `linux/arm64` and
-`darwin/x64`, where the package installs but `install.sh` installs no
+`"cpu": ["x64", "arm64"]`. That pair also admits `darwin/x64`,
+where the package installs but `install.sh` installs no
 CLI for it to drive.
 
 Each target gets two binaries, `agent-director` and `agent-director-admin`
@@ -71,7 +72,7 @@ Cursor's protected gateway currently runs on Linux only and refuses other
 platforms before starting a runtime. The generic build/install targets above
 do not establish Cursor support. Darwin cross-compilation and synthetic
 Linux fixture passes are not authenticated runtime/platform acceptance.
-The recorded native Linux candidate `2026.10.12-d47ca18`, wire protocol ACP1
+The recorded native linux/amd64 candidate `2026.10.12-d47ca18`, wire protocol ACP1
 and SDK `0.14.1` are distinct evidence. None supplies a minimum Cursor release
 date or establishes earlier-version, macOS, account-model or trust equivalence.
 
@@ -936,7 +937,8 @@ complete history, rollback or successful intentional end.
 ### Cursor authorization dataflow and authority
 
 `authorization.go` owns the version-grounded adapters and shared pre-admission
-question policy for Cursor `2026.10.12-d47ca18` / ACP1 envelopes.
+question policy for Cursor `2026.10.12-d47ca18` / ACP1 envelopes recorded on
+linux/amd64.
 `parseAuthorization` validates the complete permission option list and captured
 `cursor/create_plan` fields, rejects duplicate JSON keys at every depth and retains the original params bytes as `ToolInput`.
 `ToolName` is the supplied title/plan name and `ToolUseID` the actual
@@ -4243,7 +4245,7 @@ The first `txt` entry names the program: a basename containing `agent-director`
 marks a mutator. The program file is never looked up or opened for this check.
 
 After all evidence, start identities are read again and exited processes are
-skipped. On both hosts, missing, unreadable or changed per-process evidence adds
+skipped. On Linux and macOS, missing, unreadable or changed per-process evidence adds
 no finding and cannot erase a positive one. Blockers alone appear under
 `old_or_unverified_mutators`, with role `agent_director_mutator` and action
 `stop_and_restart_after_cutover`. Only pid, first start identity (empty when
@@ -4285,7 +4287,7 @@ chain left incomplete after the cutover committed; the verifier's own refusal
 (`process_inventory_unreadable` for a verifier error that isn't one); then the
 store's cause. A refusal's text is its reason and action, never file
 contents or raw OS text. The Darwin inventory, deadline and access-control
-refusals use this same table, whose actions apply on both supported hosts;
+refusals use this same table, whose actions apply on all supported hosts;
 the [runbook](operator-actions.md#upgrading-the-native-input-journal) owns
 their remedies.
 **Must use:** a new reason goes into `journalActions`, and a new store failure
@@ -4817,9 +4819,11 @@ except the evidence columns' order after a compatible partial evidence-column re
    and none is to be written (the hop renames columns and adds a column and
    two tables). The recipes cover v12 → v11 and v8 and older; none crosses
    v11 → v10, v10 → v9 or v9 → v8.
-   The way back from a v9 store is to restore the copy of `state.db` (with its
-   `-wal` and `-shm` files) taken before the install, then run the
-   previous release's install; every write made since the install is lost.
+   Before restoring a v9 store, check the previous installer's host support
+   as [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release)
+   requires. Restore the copy of `state.db` (with its `-wal` and `-shm`)
+   taken before the install, then run the previous release's install;
+   every write made since the install is lost.
    A store the hop migrated cannot be returned to the Claude-named columns in
    place, so rolling the binary back over it surfaces `ErrSchemaMismatch`
    (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery)). Every
@@ -11683,7 +11687,7 @@ and J9 (an installed admin from another build, refused, then
   ("release <tag> has no agent-director-admin binary"; the advice is to
   install this release or later with `--from-release <tag of this release or
   later>`, or an earlier release with that release's own `install.sh`,
-  fetched from its tag).
+  fetched from its tag (that release's install.sh must support this host)).
 
 **The source-tree version check (b.go9, b.1rs).** When `agent-director`
 comes from `--binary` or the in-repo build (never from PATH, never with
@@ -12841,9 +12845,9 @@ when it replaces `agent-director`, `install.sh` removes any stale
 "admin prior: none" line ending "to roll back, remove <path>", and
 rolling back means removing `agent-director-admin`; a re-run of that
 upgrade keeps `agent-director.prior` and prints the same advice.
-Without `--keep-prior`, rollback is a re-install of the previous tag
-via `install.sh --from-release v<old>`, which refuses a tag before
-0.11.0 (no `agent-director-admin` asset). Neither works across the
+Without `--keep-prior`, reinstall with the previous release's own installer
+and original flags, provided it [supports this host](install.md#requirements).
+Neither binary-only option works across the
 move of the directory (see [Moving agent-director's
 directory](#moving-agent-directors-directory)): the upgrade that makes it
 takes no `--keep-prior` snapshot, and a binary swap cannot undo it, so the
@@ -20278,10 +20282,8 @@ both built by `make release-binaries` with the same version stamp
 | linux | arm64 | ELF 64 LE | yes (no libc dep) |
 | darwin | arm64 | Mach-O 64 LE | n/a (no system linker) |
 
-A build target is not a supported install host. `linux/arm64` is
-built and shipped, but `install.sh`, the only installer, exits 2 on
-`Linux/aarch64`; the supported install hosts are
-`linux/amd64` and `darwin/arm64` (macOS 13 or later). Windows is not supported (SRD §16.1).
+All three targets are supported install hosts: Linux on x86_64 or arm64
+(aarch64), and macOS 13 or later on arm64. Windows is not supported (SRD §16.1).
 
 Linux binaries are statically linked via `CGO_ENABLED=0` plus
 `modernc.org/sqlite` (pure-Go SQLite driver, no libsqlite3
@@ -20485,8 +20487,8 @@ than `go test ./...`.
   test plans run it by that full path, and install.sh's in-repo fallback
   finds it there for the bundled `/opt/skills` copy.
 - Copies all of `test/driver/` to `/opt/driver/`: the driver, its prompt,
-  `db-reset.sh`, and the helpers cases call (`sql.sh`, `pane-hook.sh` and
-  the Docker hook pattern's stand-ins).
+  `db-reset.sh`, `platform-env.sh`, and the helpers cases call (`sql.sh`,
+  `pane-hook.sh` and the Docker hook pattern's stand-ins).
 - Bakes the previous release under `/opt/previous-release` (see
   [The baked previous release](#the-baked-previous-release)).
 - Runs as a non-root `tester` user with `HOME=/home/tester`.
@@ -20498,6 +20500,14 @@ than `go test ./...`.
 - Default command is `/opt/driver/run-testplan.sh`.
 
 The image is built via `make test-image`.
+
+This image and the unit sandbox image (`test/sandbox/Dockerfile`) each build
+natively for the host's architecture, amd64 or arm64, from
+`debian:bookworm-slim` by tag, with no digest pin, `--platform` or emulation.
+Each build's first step fails, naming the identity it found, unless
+`/etc/os-release` says Debian 12 (`ID=debian`, `VERSION_ID=12`), so a tag
+that moves to another Debian major, or a non-Debian base, stops the build
+before anything is installed.
 
 ### Driver
 
@@ -20625,13 +20635,44 @@ cases model that layout. Do not bump `PREV_RELEASE_TAG` unless the new
 previous release still uses the old layout; a bump moves all five pins
 together.
 
+### Host Shim: `host-shim.sh` (reusable driver helper)
+
+`test/driver/host-shim.sh` (at `/opt/driver/host-shim.sh` in the harness)
+runs one genuine Earlier Release's installer to build a test's starting
+state. It resolves real `uname` and `file` only from
+`/usr/local/bin:/usr/bin:/bin`, outside the caller's PATH stand-ins. On
+Linux/aarch64 it checks both binaries with real `file -L -b` for
+`ELF 64-bit LSB` and `aarch64`, then gives only that installer private
+stand-ins: `uname -m` reports `x86_64` and `file` reports aarch64 ELF as
+x86-64 ELF. Other calls and output pass through. The stand-ins are removed
+afterward; later commands and the candidate see the real host. On other
+hosts it executes the command unchanged without requiring `file`.
+
+Usage is `host-shim.sh <command> [<arg>...]`. The command's `--binary` and
+`--admin-binary` name the actual pair. When those flags are absent, use
+`host-shim.sh --installs <binary> <admin-binary> -- <command> [<arg>...]`;
+explicit command flags take precedence for each path. On Linux/aarch64,
+missing paths, missing real `file` or a failed binary check refuse with
+exit 1 and a `host-shim:` diagnostic before the installer runs. Otherwise
+the helper returns the command's status.
+
+Callers are `h.InstallRelease` and CurrentLayoutRollback's initial install
+through `moveInstallReleaseSetup`, `TestScheduleReleasedCompatibility`'s
+released installer through `moveInstallReleasePipedSetup` (with `--installs`
+naming the pair its curl stand-in serves), and `old-layout.sh`.
+
+**Must use:** genuine Earlier Release installer setup goes through this
+helper. A way back, a candidate install and later historical-binary commands
+never do; hand-built legacy layouts remain outside it.
+
 ### Old-layout install from a case: `old-layout.sh` and `tree-snapshot.sh` (reusable driver helpers)
 
 `test/driver/old-layout.sh` (installed at `/opt/driver/old-layout.sh`) builds
 an install of the previous release in the old layout, for the cases that
 upgrade from it or go back to it. `old-layout.sh <abs-home> [--store-outside
-<abs-dir>]` runs the baked release's own `install.sh` in `<abs-home>` (hooks
-on, `--register-mcp`, the default PATH link in `~/.local/bin`), with
+<abs-dir>]` runs the baked release's own `install.sh` through
+[`host-shim.sh`](#host-shim-host-shimsh-reusable-driver-helper) in `<abs-home>`
+(hooks on, `--register-mcp`, the default PATH link in `~/.local/bin`), with
 `HOME=<abs-home>` and that directory as the working directory. When that
 release's own registration registers nothing (current Claude Code refuses its
 form of the `claude mcp add` call), the helper registers the MCP server by
@@ -20760,11 +20801,38 @@ temp-dir plan and a fake `db-reset.sh`, with no store or `sqlite3`; the
   untouched. It never sets the marker to `1`; the harness's smoke-5 case
   covers the reset itself. `DB_RESET_UNDER_TEST=<path>` runs it against
   another copy, to prove the fails-before direction.
+- **`platform_env_test.go`** covers `platform-env.sh` (below): the record's
+  exact fields and Debian 12 values in the sandbox, `null` for each tool
+  removed from `PATH` or failing, a stub tool's first version line kept
+  verbatim and JSON-escaped, and the missing-`sql.sh` note, followed
+  literally.
+- **`release_check_test.go`** and **`release_prepare_test.go`** cover the
+  [Release Check Kit](#release-check-kit-testrelease-check) scripts with stub
+  installers and binaries: the Claude stand-in's lone `--version` under
+  `bash -s`; `check.sh install`'s refusals and its pass-through of verified
+  inputs to the installer; `check.sh run`'s check and `VERDICT` lines; and
+  `prepare.sh`'s archive of the committed tree in both modes, its hashes and
+  its refusals, some followed literally. They build no image and give no ARM
+  evidence.
 
 **Must use:** a test of a `test/driver/` script goes in
 `test/driver-scripts/` and reuses its `newStore`, `holdLock`,
-`start`/`run` and `driverScript` helpers. Never put a Go file in
-`test/driver/`: the image copies that whole directory.
+`start`/`run` (`startIn`/`runIn` in a given directory) and `driverScript`
+helpers. Never put a Go file in `test/driver/`: the image copies that whole
+directory.
+
+### Environment Record: `platform-env.sh` (reusable driver helper)
+
+`test/driver/platform-env.sh` (installed at `/opt/driver/platform-env.sh`)
+prints the Environment Record: one JSON line, `{"platform_env":{...}}`, of
+the platform and tool versions a run used, each field a string or `null` when
+its source or tool is absent. It only reads and always exits 0; it compares
+nothing and gives no verdict. Its header lists the fields. It reads the
+`sqlite3` version through the `sql.sh` beside it; without one, that field is
+`null` and stderr says to copy `sql.sh` too.
+
+**Must use:** every Environment Record comes from this script. A consumer
+copies it together with its `sql.sh`; never fork or reimplement it.
 
 ### Pinned Claude Code version
 
@@ -20792,8 +20860,13 @@ except to assert that such a hook is ignored. Instead:
 
 - **The stand-in** `test/driver/stand-in-claude/claude` (installed at
   `/opt/driver/stand-in-claude/claude`) runs `exec bash --noprofile
-  --norc -i` and ignores its arguments, so the pane process tmux reports
-  at the create is an interactive shell with the same pid. A case selects
+  --norc -i` whatever its arguments, so the pane process tmux reports
+  at the create is an interactive shell with the same pid. Only a lone
+  `--version` differs: it prints `2.1.280 (Claude Code stand-in)` and exits
+  without reading stdin, so it never consumes the rest of an `install.sh` piped to `bash -s`. Spawn's
+  version probe does not accept that line, so a stand-in row keeps the
+  fallback delivery (see [Ordinary input delivery](#ordinary-input-delivery)).
+  A case selects
   it with a PATH prefix on the agent-director command, on the spawn and on
   every resume that should relaunch it:
 
@@ -20909,6 +20982,43 @@ stand-in and fires the hook through `pane-hook.sh`; never hand-roll the
 before the identity write, which uses the delayed-create `tmux` and the
 early-hook stand-in above; never add another way to hold the create
 back.
+
+### Release Check Kit (`test/release-check/`)
+
+The Release Check Kit installs one exact linux-arm64 `agent-director` and
+`agent-director-admin` pair into a disposable `node:24-bookworm` container on a
+native linux/arm64 Docker engine, then checks the installed pair's identity and
+basic operation with the stand-in agents. It is self-contained and comes from
+the same commit as the pair it checks. No Makefile target or CI workflow runs
+it; for its gating status see [Supported platforms (v1)](#supported-platforms-v1).
+
+`test/release-check/prepare.sh`, run inside the agent-director repository,
+makes the kit in one of two forms:
+
+- published, `prepare.sh <tag> <SHA256SUMS> <out-dir>`: the tag's commit,
+  installing that published release;
+- candidate, `prepare.sh --candidate <commit> <expected-version> <SHA256SUMS>
+  <payload-dir> <out-dir>`: that commit, installing the checksummed pair in
+  `<payload-dir>`.
+
+It takes the kit from the commit's own tree with `git archive`, never the
+working tree, uses only git, tar, gzip, jq and a SHA-256 tool, and runs no
+agent-director binary, installer or test. It refuses (exit 2) before writing
+anything to `<out-dir>`. It writes `release-check-kit.tar.gz`,
+`release-check-kit.tar.gz.sha256` and `INSTRUCTIONS.txt`, generic steps for any
+native linux/arm64 engine.
+
+The kit carries that tree's own `install.sh`, `platform-env.sh` with its
+`sql.sh` (see [Environment Record](#environment-record-platform-envsh-reusable-driver-helper)),
+`pane-hook.sh` and both stand-ins (see [Docker hook
+pattern](#docker-hook-pattern-the-stand-in-claude-and-pane-hooksh)). Its
+`Dockerfile` puts the stand-ins first on PATH; `check.sh install` installs the
+pair during the image build, and `check.sh run` checks it in a fresh container.
+
+The [`check.sh`](../test/release-check/check.sh) header owns the kit layout,
+`release.env` and the output lines. The `INSTRUCTIONS.txt` that `prepare.sh`
+writes owns verification, build, the isolated run, the evidence to return,
+cleanup and the outcome contract.
 
 ### Model check (`make tla`)
 
@@ -22289,6 +22399,7 @@ genuine previous install rather than the stand-in.
   Scheduler jobs have no network, so a job's context must carry the tags
   its cases use, and its log must show those cases passing, not skipped.
 - `h.InstallRelease(r)` installs the release's pair with its own `install.sh`
+  through [`host-shim.sh`](#host-shim-host-shimsh-reusable-driver-helper)
   into a move-fixture home and returns the installed `agent-director`, whose
   `list` it checks. v0.17.3 makes a v15 store and v0.16.0 a v14 one;
   `rollbackReleasedPair` builds the current-layout rollback's released pair

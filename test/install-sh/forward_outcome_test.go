@@ -239,7 +239,7 @@ func forwardOutcome(t *testing.T, tc forwardOutcomeCase, wayBack func(f *cutover
 			outcomeLines(t, res.Stderr,
 				"  This attempt committed earlier schema steps before the cutover, so the store has moved past the previous release.",
 				"  The installer cannot put the previous release back: the store has moved, or may have moved, past it.",
-				"  To go back instead, restore the store from the journal backup directory "+journalBackup(h.Flags)+" (filled before any schema step), and install the previous release with its own installer, as docs/operator-actions.md \"Going back to the previous release\" describes.")
+				"  To go back instead, restore the store from the journal backup directory "+journalBackup(h.Flags)+" (filled before any schema step), and install the previous release with its own installer (that release's install.sh must support this host), as docs/operator-actions.md \"Going back to the previous release\" describes.")
 		}
 		if tc.rerun {
 			outcomeLines(t, res.Stderr, "  The administrator installed before the run ("+filepath.Join(h.New, "admin", "agent-director-admin")+") does not predate the cutover, so there is no earlier release to put back.")
