@@ -99,6 +99,81 @@ func followLinkedRootRefusal(t *testing.T, f *cutoverFixture, target string, ref
 	return f.Follow(res, false, backup), backup
 }
 
+// b.jpo: both supported compatibility links must refuse before the swap;
+// removing only the link and following the printed retry crosses successfully.
+func TestAdviceFollow_CompatLinkCrossing(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		name := "absolute"
+		if relative {
+			name = "relative quoted HOME"
+		}
+		t.Run(name, func(t *testing.T) {
+			c := newCrossingCase(t, func(h *moveHome) {
+				if !relative {
+					return
+				}
+				// Exercise shell escaping before even the previous release installs.
+				home := filepath.Join(h.Root, "o'neil")
+				if err := os.Rename(h.Home, home); err != nil {
+					t.Fatal(err)
+				}
+				h.Home, h.Cwd = home, home
+				h.Old = filepath.Join(home, ".agent-director")
+				h.New = filepath.Join(home, ".config", "agent-director")
+			})
+			h := c.h
+			h.Flags = append(h.Flags, c.valid()...)
+			target := h.New
+			if relative {
+				target = ".config/agent-director"
+			}
+			h.Link(target, h.Old)
+			f := newCutoverFixture(t, h)
+			before := h.PhysicalSnapshot()
+			res := f.Install(false, false)
+			checks := "first check [store] db_path in config.toml, ~/.claude/settings.json hooks, MCP registrations, scheduled sweeps, PATH links and entries, and scripts for paths under " + h.Old + " and point them at " + h.New
+			remove := "    rm -- " + moveQuote(h.Old)
+			assertOwnRefusal(t, res, "legacy_root_symlink",
+				checks+", then remove only the link with rm -- "+moveQuote(h.Old)+" (no trailing slash), then re-run this release's installer with a new --journal-backup directory",
+				"install.sh: "+h.Old+" is a link; refusing the native-input cutover.",
+				"  The cutover always checks "+h.Old+"/input and refuses any symbolic link in its path.",
+				"  To fix: "+checks+".",
+				"  Then remove only the link (no trailing slash):",
+				remove,
+				"  Then re-run this release's installer with a new backup directory:")
+			assertRefusedUnchanged(t, h, before)
+			if _, err := os.Lstat(journalBackup(h.Flags)); !os.IsNotExist(err) {
+				t.Errorf("pre-flight refusal created the journal backup or left it uncheckable: %v", err)
+			}
+			calls, err := os.ReadFile(f.Calls)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			for _, call := range strings.Split(string(calls), "\n") {
+				if strings.Contains(call, "migrate-journal") && !strings.Contains(call, "--help") {
+					t.Errorf("compat-link pre-flight refusal reached migrate-journal: %s", call)
+				}
+			}
+			if list := h.Run(c.prev, "list"); list.Code != 0 {
+				t.Errorf("previous release's list after refusal: exit %d: %s", list.Code, list.Stderr)
+			}
+			// This fixture's registrations and managed PATH link already use h.New.
+			// Execute the exact printed removal, then its printed installer retry.
+			if !strings.Contains(res.Stderr, remove+"\n") {
+				t.Fatal("no printed compatibility-link removal command to follow")
+			}
+			if removed := h.Run(h.S.Bash, "-c", strings.TrimPrefix(remove, "    ")); removed.Code != 0 {
+				t.Fatalf("printed link removal: exit %d: %s", removed.Code, removed.Stderr)
+			}
+			if _, err := os.Lstat(h.Old); !os.IsNotExist(err) {
+				t.Fatalf("compatibility link remains after removal: %v", err)
+			}
+			backup := c.newBackup()
+			c.assertCrossed(t, f.Follow(res, false, backup), backup)
+		})
+	}
+}
+
 // J39: "Fix the reported cause, then re-run this release's installer with a
 // new backup directory"; the same restore rows follow file and piped advice.
 func TestAdviceFollow_J39_Restored(t *testing.T) {

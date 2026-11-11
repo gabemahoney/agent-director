@@ -563,7 +563,7 @@ inside the cutover step and after its commit:
 | Reason | Means | Store changed | Next step |
 |---|---|---|---|
 | `legacy_root_unreadable` | A legacy root, or a directory above it, cannot be read or searched. | Envelope | Make each root and its parents readable and searchable by the user running the upgrade, keep the window, then Retry. |
-| `legacy_root_symlink` | `migrate-journal`: the store path, `HOME` or a legacy root has a link in it. `install.sh`, in pre-flight: `~/.config/agent-director` is a link. | Envelope; `install.sh`'s: no | `migrate-journal`'s: make them real paths, keep the window, then Retry. `install.sh`'s: replace the link with the directory it points to (below), then re-run this release's installer with a new `--journal-backup` directory. |
+| `legacy_root_symlink` | `migrate-journal`: the store path, `HOME` or a legacy root has a link in it; the invoking `HOME`'s `~/.agent-director/input` is always checked. `install.sh`, in crossing pre-flight: `~/.config/agent-director` or `~/.agent-director` is a link, including a compatibility link. | Envelope; `install.sh`'s: no | Make the paths real. For a compatibility link at `~/.agent-director`, follow the [checks and link removal below](#installsh-refuses-with-errjournalmigrationrefused). For a linked `~/.config/agent-director`, replace the link with the directory it points to. Keep the window, then Retry. |
 | `legacy_root_access_unestablished` | The store or a legacy root is not owned by and private to the user, or carries an access-control entry, or its entries cannot be read. | Envelope | Make the store and every legacy root owned by the user running the upgrade (a repair by hand, path by path, not a recursive `chown`), then private to it: `chmod 0600` the store, `chmod 0700` each root, remove any access-control entry (`chmod -N <path>`). Keep the window, then Retry. |
 | `process_inventory_unreadable` | The process inventory as a whole could not be read (on macOS, see below). | Envelope | Run as the agents' user with every mounted file system reachable or unmounted (on Linux, with `/proc` mounted and readable), keep the window, then Retry; report it if it persists. |
 | `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | Envelope | Make every mounted file system reachable or unmount it, or answer any privacy consent prompt; keep the maintenance window, then Retry. |
@@ -1128,6 +1128,35 @@ Then:
    (a piped install says to run the same install command again). The re-run
    moves the old directory again; delete a set-aside directory once the
    upgrade is confirmed.
+
+**Compatibility link** (`legacy_root_symlink`). Both `install.sh`'s crossing
+pre-flight and `migrate-journal` refuse a link at `~/.agent-director`, even
+when it points to `~/.config/agent-director`: the cutover always checks
+`~/.agent-director/input`.
+
+Keep the maintenance boundary. Confirm it is that link:
+
+```sh
+ls -ld ~/.agent-director ~/.config/agent-director
+readlink ~/.agent-director
+```
+
+Before removing it, check `[store] db_path` in `config.toml`, hooks in
+`~/.claude/settings.json`, MCP registrations, scheduled sweeps, PATH links
+and entries, and scripts for paths under `~/.agent-director`. Point those
+references at `~/.config/agent-director`, then remove only the link:
+
+```sh
+rm -- ~/.agent-director
+```
+
+Use no trailing slash: this removes the link, leaving its target intact.
+Never replace it with an empty directory: both directories would be present
+and the installer would refuse with `ErrMoveConflict`. Re-run this release's
+installer with a new `--journal-backup` directory, then finish verification
+as [Upgrading the native-input journal](#upgrading-the-native-input-journal)
+describes. Recreate the link only if still needed and only after verification;
+a later `migrate-journal` run would refuse it again.
 
 **Live agents** (`agents_live`, with no move due). The message lists each
 row in a live state, and under it the command that stops its agent, run with

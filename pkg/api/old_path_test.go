@@ -155,6 +155,7 @@ func oldPathRules(t testing.TB) *scanRules {
 	list := []scanException{
 		{file: "internal/layout/old.go", reason: "SR-11.7: the presence rule looks for the old directory"},
 		{file: "internal/adminapi/journal_migration.go", block: "func journalArguments(", reason: "operator-only migration inventories both invoking-home input roots before SQLite cutover"},
+		{file: "internal/adminapi/journal_migration.go", block: "var journalActions", reason: "b.jpo: the verifier's legacy_root_symlink action names the compatibility link at the old directory and its safe removal"},
 		{file: "internal/testsupport/sandboxguard/sandboxguard.go", reason: "SR-14.1: the guard names both directories"},
 		{file: "skills/release-agent-director/gates/coverage/bun-test.sh", reason: "SR-14.1: the gate names both directories"},
 		{file: "skills/release-agent-director/gates/coverage/bun-extra-scripts.sh", reason: "SR-14.1: the gate names both directories"},
@@ -165,6 +166,7 @@ func oldPathRules(t testing.TB) *scanRules {
 		{file: "docs/operator-actions.md", heading: "A verb refuses with `ErrOldLayout`", reason: "SR-11.7: the refusal names the old directory"},
 		{file: "docs/operator-actions.md", heading: "`install.sh` refuses with `ErrMoveConflict`", reason: "SR-11.7: the refusal names the old directory"},
 		{file: "docs/operator-actions.md", heading: "`install.sh` refuses with `ErrAgentsLive`", reason: "SR-11.7: the refusal names the old directory"},
+		{file: "docs/operator-actions.md", heading: "`install.sh` refuses with `ErrJournalMigrationRefused`", reason: "b.jpo: the compatibility-link refusal's fix removes the link at the old directory"},
 		{file: "docs/operator-actions.md", heading: "`install.sh` stops with `ErrMoveFailed`", reason: "SR-11.7: the stop names the old directory"},
 		{file: "docs/operator-actions.md", heading: "Putting back a kept install", reason: "SR-11.7: the moved form puts the pre-move directory back"},
 		{file: "docs/operator-actions.md", heading: "Going back to the previous release", reason: "SR-11.7: going back names the old directory"},

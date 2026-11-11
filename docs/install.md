@@ -440,8 +440,10 @@ holds the old name of the arguments key is refused at spawn, naming
   ```
     settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted: <path> <path>...
   ```
-- A link `~/.agent-director` that points to `~/.config/agent-director` is allowed,
-  for scripts that still name the old path.
+- A link `~/.agent-director` that points to `~/.config/agent-director` is allowed
+  for scripts that still name the old path when the install does not cross the
+  native-input cutover. For a crossing upgrade, follow the
+  [link refusal procedure](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused).
 - Change by hand each entry that names the old path: a `claude mcp add`
   registration the installer did not find, help hooks in the `settings.json` of
   other `CLAUDE_CONFIG_DIR` folders, [Codex MCP and help
@@ -461,11 +463,12 @@ check and fix in Operator actions):
 (the copy failed; the old directory is untouched), and
 [`ErrJournalMigrationRefused`](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused)
 (pre-flight or the journal cutover refused before the previous install's store
-changed, and anything the run changed was put back). A crossing upgrade refuses a
-`~/.config/agent-director` that is a link: replace the link with its directory
-once, as [Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons)
-shows. With no move due, it also refuses while the store holds a live agent
-row (`agents_live`) or its rows cannot be read (`agent_rows_unreadable`);
+changed, and anything the run changed was put back). A crossing upgrade refuses
+a link at `~/.config/agent-director` or `~/.agent-director` in pre-flight
+(`legacy_root_symlink`), including the compatibility link. See
+[Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons) for
+both link cases. With no move due, it also refuses while the store holds a live
+agent row (`agents_live`) or its rows cannot be read (`agent_rows_unreadable`);
 the same table gives each one's next step.
 
 Two other cutover outcomes end with exit 5:
