@@ -428,6 +428,8 @@ export class ErrExperimentalAgentDisabled extends AgentDirectorError {}
 export class ErrAgentCapabilityUnsupported extends AgentDirectorError {}
 /** The pane-only launch has no explicit model. */
 export class ErrModelMissing extends AgentDirectorError {}
+/** A required host credential is unset or empty in agent-director's environment. */
+export class ErrHostCredentialMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentMissing (package: spawn) */
 export class ErrAgentMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentInvalid (package: spawn) */
@@ -620,6 +622,7 @@ const ERROR_TABLE = {
   ErrExperimentalAgentDisabled,
   ErrAgentCapabilityUnsupported,
   ErrModelMissing,
+  ErrHostCredentialMissing,
   ErrAgentMissing,
   ErrAgentInvalid,
   ErrAgentArgsMismatch,

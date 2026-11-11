@@ -44,6 +44,7 @@ func TestClassifyAgentErrors(t *testing.T) {
 		"ErrAgentArgsMismatch":      api.ErrAgentArgsMismatch,
 		"ErrPermissionsUnsupported": api.ErrPermissionsUnsupported,
 		"ErrTemplateAgentMissing":   api.ErrTemplateAgentMissing,
+		"ErrHostCredentialMissing":  api.ErrHostCredentialMissing,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, _ := errnames.Classify(fmt.Errorf("%w: context", sentinel)); got != name {

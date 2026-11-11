@@ -2,9 +2,11 @@ package spawn
 
 import (
 	"fmt"
+	"os"
 	"slices"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/hostenv"
 )
 
 // paneOnlyPolicy supplies the shared lane's launch adapters. New pane-only
@@ -15,6 +17,9 @@ type paneOnlyPolicy struct {
 	program      func(config.Config) string
 	readArgs     func([]string, bool) (string, error)
 	forbiddenEnv []string
+	unsetEnv     []string          // nil retains the forbiddenEnv session unsets
+	forwardEnv   []string          // names only, resolved by tmux at create time
+	sessionEnv   map[string]string // nonsecret AD-owned values, never saved caller env
 	files        []string
 	compose      func(Resolved, string) ([]string, []LaunchFile, error)
 }
@@ -25,6 +30,14 @@ var paneOnlyAgents = map[string]paneOnlyPolicy{
 		program: droidProgram, readArgs: DroidModel, forbiddenEnv: DroidForbiddenEnvKeys,
 		compose: composeDroid,
 		files:   []string{droidSettingsFile},
+	},
+	config.AgentOpenCode: {
+		flag: "opencode", enabled: func(e config.Experimental) bool { return e.OpenCode },
+		program: opencodeProgram, readArgs: OpenCodeModel, forbiddenEnv: OpenCodeForbiddenEnvKeys,
+		compose:    composeOpenCode,
+		unsetEnv:   []string{"OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"},
+		forwardEnv: []string{hostenv.OpenRouterAPIKey},
+		sessionEnv: map[string]string{"OPENCODE_CONFIG_CONTENT": openCodeConfigContent, "OPENCODE_DISABLE_AUTOUPDATE": "1"},
 	},
 }
 
@@ -76,8 +89,19 @@ func validatePaneOnlyEnv(agent string, env map[string]string) error {
 	return nil
 }
 
-// PaneOnlyExcludedEnv returns the keys a lane launch must exclude from both the
-// tmux client and the new session, including an existing server's environment.
+// PaneOnlyExcludedEnv returns the lane's client exclusions. Session values are
+// separately overridden or unset through the policy's session environment.
 func PaneOnlyExcludedEnv(agent string) []string {
 	return slices.Clone(paneOnlyAgents[agent].forbiddenEnv)
+}
+
+// validateHostCredentials checks presence only, after all caller-input checks.
+// Templates do not call it: they launch nothing and may be saved without a key.
+func validateHostCredentials(agent string) error {
+	for _, key := range paneOnlyAgents[agent].forwardEnv {
+		if os.Getenv(key) == "" {
+			return fmt.Errorf("%w: agent %s requires nonempty %s in agent-director's own environment; set it there, never in extra_env, and restart the MCP server after changing it", ErrHostCredentialMissing, agent, key)
+		}
+	}
+	return nil
 }

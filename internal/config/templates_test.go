@@ -220,6 +220,7 @@ func TestLoadTemplateLoadsAgent(t *testing.T) {
 		{"claude", apitest.TemplateFields{Agent: "claude"}, config.TemplateFile{Agent: "claude"}},
 		{"codex", apitest.TemplateFields{Agent: "codex"}, config.TemplateFile{Agent: "codex"}},
 		{"droid", apitest.TemplateFields{Agent: "droid"}, config.TemplateFile{Agent: "droid"}},
+		{"opencode", apitest.TemplateFields{Agent: "opencode"}, config.TemplateFile{Agent: "opencode"}},
 		{"cursor", apitest.TemplateFields{Agent: "cursor"}, config.TemplateFile{Agent: "cursor"}},
 		{"cursor_with_args", apitest.TemplateFields{Agent: "cursor", AgentArgs: []string{"--model", "x"}}, config.TemplateFile{Agent: "cursor", AgentArgs: []string{"--model", "x"}}},
 		{"upper_case_key", apitest.TemplateFields{RawKeys: []string{`AGENT = "codex"`}}, config.TemplateFile{Agent: "codex"}},
@@ -265,6 +266,8 @@ func TestLoadTemplateRefusesAgent(t *testing.T) {
 		text   string // what follows "<name>: "
 	}{
 		{"droid_wrong_case", apitest.TemplateFields{Agent: "Droid"}, config.ErrTemplateMalformed, `agent="Droid" (want claude, codex or cursor)`},
+		{"opencode_wrong_case", apitest.TemplateFields{Agent: "OpenCode"}, config.ErrTemplateMalformed, `agent="OpenCode" (want claude, codex or cursor)`},
+		{"opencode_padded", apitest.TemplateFields{Agent: " opencode"}, config.ErrTemplateMalformed, `agent=" opencode" (want claude, codex or cursor)`},
 		{"cursor_wrong_case", apitest.TemplateFields{Agent: "Cursor"}, config.ErrTemplateMalformed, `agent="Cursor" (want claude, codex or cursor)`},
 		{"wrong_case", apitest.TemplateFields{Agent: "Claude"}, config.ErrTemplateMalformed, `agent="Claude" (want claude, codex or cursor)`},
 		{"upper_case_value", apitest.TemplateFields{Agent: "CODEX"}, config.ErrTemplateMalformed, `agent="CODEX" (want claude, codex or cursor)`},

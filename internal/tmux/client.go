@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 )
@@ -22,6 +23,7 @@ type runner func(name string, args ...string) (stdout []byte, err error)
 // runtime default; tests replace this with a fake.
 func defaultRunner(name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
+	cmd.Env = clientEnv(os.Environ())
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out

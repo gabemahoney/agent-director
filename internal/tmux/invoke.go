@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/hostenv"
 )
 
 // This file holds the call mechanics of the socket-taking call set (SRD
@@ -31,11 +33,11 @@ type Invocation struct {
 	// call's command(s).
 	Args []string
 	// Env is the client's whole environment: the process environment with
-	// every AGENT_DIRECTOR_* variable removed. Cursor creates additionally
+	// every AGENT_DIRECTOR_* and host-only credential variable removed. Cursor creates additionally
 	// exclude ambient Cursor selection; no call adds client environment values.
 	Env []string
-	// Stdin is literal input for commands such as load-buffer. Nil means no
-	// input; it is never interpreted by a shell or tmux's command parser.
+	// Stdin carries load-buffer bytes or a create's quoted source-file text.
+	// It may contain credentials: never log or retain it. Nil means no input.
 	Stdin []byte
 	// Timeout is the call class's timeout (SR-13.1).
 	Timeout time.Duration
@@ -159,14 +161,14 @@ func isExecError(err error) bool {
 	return errors.As(err, &execErr) || errors.As(err, &pathErr)
 }
 
-// clientEnv returns environ with every AGENT_DIRECTOR_* variable removed and
-// nothing else changed (SR-2.2, SR-3.12). The result is never nil: a nil
+// clientEnv removes AGENT_DIRECTOR_* and host-only credentials, leaving
+// everything else unchanged. The result is never nil: a nil
 // exec.Cmd.Env would inherit the whole process environment.
 func clientEnv(environ []string) []string {
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(name, clientEnvPrefix) {
+		if strings.HasPrefix(name, clientEnvPrefix) || hostenv.IsCredential(name) {
 			continue
 		}
 		out = append(out, kv)

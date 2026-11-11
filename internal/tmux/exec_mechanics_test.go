@@ -41,7 +41,7 @@ func execFake(t *testing.T, stdout, stderr, body string) (bin, dir string) {
 		}
 	}
 	bin = filepath.Join(dir, "tmux")
-	script := "#!/bin/sh\nD='" + dir + "'\n" + body + "\n"
+	script := "#!/bin/sh\nD='" + dir + "'\ncase \" $* \" in *' source-file - '*) cat >/dev/null ;; esac\n" + body + "\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -66,8 +66,8 @@ func execPids(path string) []int {
 }
 
 // execCreate runs the create with fixed arguments.
-func execCreate(c *tmux.Client, socket string) (tmux.CreateReply, error) {
-	return c.NewSession(socket, "agent-x", "/tmp", nil, []string{"true"}, execToken, "id-1", tmuxfix.StoreID)
+func execCreate(c *tmux.Client, socket string, forward []string) (tmux.CreateReply, error) {
+	return c.NewSessionWithEnvPolicy(socket, "agent-x", "/tmp", nil, []string{"true"}, execToken, "id-1", tmuxfix.StoreID, nil, nil, forward)
 }
 
 // roomyTimeouts gives every class 3 s, far past the wait, with pipe-close wait w.
@@ -78,6 +78,7 @@ func roomyTimeouts(w time.Duration) tmux.Timeouts {
 // A hung client is killed at its class timeout and reaped; the error names
 // the call and the timeout in seconds, and the wait bounds held pipes.
 func TestExecTimeoutTerminatesAndReaps(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "synthetic-forwarded-key")
 	to := tmux.Timeouts{Query: 100 * time.Millisecond, Action: 200 * time.Millisecond,
 		Create: 300 * time.Millisecond, WaitDelay: 50 * time.Millisecond}
 	calls := []struct {
@@ -89,7 +90,11 @@ func TestExecTimeoutTerminatesAndReaps(t *testing.T) {
 	}{
 		{"lookup", tmux.CallLookup, to.Query, "0.1 s", func(c *tmux.Client, s string) error { _, err := c.Lookup(s); return err }},
 		{"pane kill", tmux.CallKillPane, to.Action, "0.2 s", func(c *tmux.Client, s string) error { return c.KillPane(s, "%1") }},
-		{"create", tmux.CallCreate, to.Create, "0.3 s", func(c *tmux.Client, s string) error { _, err := execCreate(c, s); return err }},
+		{"create/argv", tmux.CallCreate, to.Create, "0.3 s", func(c *tmux.Client, s string) error { _, err := execCreate(c, s, nil); return err }},
+		{"create/stdin", tmux.CallCreate, to.Create, "0.3 s", func(c *tmux.Client, s string) error {
+			_, err := execCreate(c, s, []string{"OPENROUTER_API_KEY"})
+			return err
+		}},
 	}
 	hangs := []struct{ name, prefix string }{
 		{"hang", ""},
@@ -128,12 +133,12 @@ func TestExecTimeoutTerminatesAndReaps(t *testing.T) {
 // An exit 0 whose pipes a grandchild holds returns after the pipe-close wait:
 // success for actions, FailUnrecognized for data calls, reply-driven for create.
 func TestExecPipeCloseWaitPerCallKind(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "synthetic-forwarded-key")
 	const wait = 50 * time.Millisecond
 	fullReply := tmux.CreateReply{SessionID: "$1", ServerPID: 123, ServerStart: 456, PaneID: "%2", PanePID: 789}
 	lookupLine := tmuxfix.SessionLine("$1", 100, 200, 300, "agent-x", "") + "\n"
 	paneLine := tmuxfix.PaneLine("$1", 0, 0, "%1", 42, "") + "\n"
 	cutShort := tmuxfix.Find(tmuxfix.CreateReplies(), "create/reply-cut-short").Stdout
-	createRun := func(c *tmux.Client, s string) (any, error) { return execCreate(c, s) }
 	noValue := func(err error) (any, error) { return nil, err }
 	cases := []struct {
 		name     string
@@ -154,13 +159,34 @@ func TestExecPipeCloseWaitPerCallKind(t *testing.T) {
 			run: func(c *tmux.Client, s string) (any, error) { return c.ListPanes(s) }},
 		{name: "capture", stdout: "pane text\n", wantCut: true,
 			run: func(c *tmux.Client, s string) (any, error) { return c.CapturePaneID(s, "%1", 10, false) }},
-		{name: "create full reply", stdout: tmuxfix.CreateReplyLine(fullReply), run: createRun, want: fullReply},
-		{name: "create partial reply", stdout: cutShort, run: createRun, wantCut: true},
-		{name: "create no reply", run: createRun, wantCut: true},
 		{name: "zero wait still returns/pane kill", zeroWait: true,
 			run: func(c *tmux.Client, s string) (any, error) { return noValue(c.KillPane(s, "%1")) }},
 		{name: "zero wait still returns/lookup", zeroWait: true, stdout: lookupLine, wantCut: true,
 			run: func(c *tmux.Client, s string) (any, error) { return c.Lookup(s) }},
+	}
+	for _, route := range []string{"argv", "stdin"} {
+		var forward []string
+		if route == "stdin" {
+			forward = []string{"OPENROUTER_API_KEY"}
+		}
+		for _, reply := range []struct {
+			name, stdout string
+			want         any
+			cut          bool
+		}{
+			{"full", tmuxfix.CreateReplyLine(fullReply), fullReply, false},
+			{"partial", cutShort, nil, true}, {"none", "", nil, true},
+		} {
+			cases = append(cases, struct {
+				name     string
+				zeroWait bool
+				stdout   string
+				run      func(*tmux.Client, string) (any, error)
+				want     any
+				wantCut  bool
+			}{name: "create/" + route + "/" + reply.name, stdout: reply.stdout, want: reply.want, wantCut: reply.cut,
+				run: func(c *tmux.Client, s string) (any, error) { return execCreate(c, s, forward) }})
+		}
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -469,6 +495,7 @@ func TestExecBinaryNotRunIsUnavailable(t *testing.T) {
 // The child's environment is the caller's minus every AGENT_DIRECTOR_*
 // variable, with locale variables exactly as they were and nothing added.
 func TestExecEnvironmentStripped(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "synthetic-forwarded-key")
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "id-parent")
 	t.Setenv("AGENT_DIRECTOR_EXTRA", "x")
 	t.Setenv("AGENT_DIRECTORX", "kept")
@@ -477,29 +504,41 @@ func TestExecEnvironmentStripped(t *testing.T) {
 	t.Setenv("LC_CTYPE", "")
 	os.Unsetenv("LC_CTYPE") // restored by t.Setenv's cleanup
 
-	bin, dir := execFake(t, "", "", `cat /proc/$$/environ > "$D/env"`)
-	to := roomyTimeouts(50 * time.Millisecond)
-	if err := tmux.New(bin, to).KillPane("/tmp/tmux-1000/default", "%1"); err != nil {
-		t.Fatalf("KillPane: %v", err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "env"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00")
+	for name, run := range map[string]func(*tmux.Client) error{
+		"socket call": func(c *tmux.Client) error { return c.KillPane(testSocket, "%1") },
+		"HasSession":  func(c *tmux.Client) error { _, err := c.HasSession("agent-x"); return err },
+		"create/argv": func(c *tmux.Client) error { _, err := execCreate(c, testSocket, nil); return err },
+		"create/stdin": func(c *tmux.Client) error {
+			_, err := execCreate(c, testSocket, []string{"OPENROUTER_API_KEY"})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bin, dir := execFake(t, tmuxfix.CreateReplyLine(tmuxfix.RecordedCreate), "", `cat /proc/$$/environ > "$D/env"`+"\ncat \"$D/out\"")
+			to := roomyTimeouts(50 * time.Millisecond)
+			if err := run(tmux.New(bin, to)); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "env"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00")
 
-	var want []string
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "AGENT_DIRECTOR_") {
-			want = append(want, kv)
-		}
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("child environment:\n got %q\nwant %q", got, want)
-	}
-	for _, kv := range []string{"AGENT_DIRECTORX=kept", "LANG=C.UTF-8", "LC_ALL=de_DE.UTF-8"} {
-		if !slices.Contains(got, kv) {
-			t.Errorf("child environment lacks %q", kv)
-		}
+			var want []string
+			for _, kv := range os.Environ() {
+				if !strings.HasPrefix(kv, "AGENT_DIRECTOR_") && !strings.HasPrefix(kv, "OPENROUTER_API_KEY=") {
+					want = append(want, kv)
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("child environment:\n got %q\nwant %q", got, want)
+			}
+			for _, kv := range []string{"AGENT_DIRECTORX=kept", "LANG=C.UTF-8", "LC_ALL=de_DE.UTF-8"} {
+				if !slices.Contains(got, kv) {
+					t.Errorf("child environment lacks %q", kv)
+				}
+			}
+		})
 	}
 }

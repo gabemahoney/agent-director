@@ -37,6 +37,7 @@ func TestPaneOnlyPublicErrors(t *testing.T) {
 		"ErrExperimentalAgentDisabled":  api.ErrExperimentalAgentDisabled,
 		"ErrAgentCapabilityUnsupported": api.ErrAgentCapabilityUnsupported,
 		"ErrModelMissing":               api.ErrModelMissing,
+		"ErrHostCredentialMissing":      api.ErrHostCredentialMissing,
 	} {
 		assertOneName(t, fmt.Errorf("wrapped: %w", err), name)
 	}

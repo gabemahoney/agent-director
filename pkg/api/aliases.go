@@ -319,3 +319,6 @@ var ErrAgentCapabilityUnsupported = spawn.ErrAgentCapabilityUnsupported
 
 // ErrModelMissing means the pane-only launch has no explicit model.
 var ErrModelMissing = spawn.ErrModelMissing
+
+// ErrHostCredentialMissing means a required host credential is unset or empty.
+var ErrHostCredentialMissing = spawn.ErrHostCredentialMissing

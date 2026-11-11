@@ -180,46 +180,48 @@ func labelByIDNames(t testing.TB) (names []tmuxfix.StoredName, collider tmuxfix.
 // a session with that id exists, and is labelled only by SetLabel on its id,
 // with the store id last.
 func TestLabelDollarNameByID(t *testing.T) {
-	names, collider := labelByIDNames(t)
-	for _, name := range names {
-		for _, shape := range validLabelShapes(t) {
-			t.Run(name.Raw+"/"+shape.Name, func(t *testing.T) {
-				rt := newRealTmux(t)
-				// Labelled sessions $0, $1, ... up to the one whose id is
-				// the collider's text, as in F3.
-				for n := 0; ; n++ {
-					if n == 32 {
-						t.Fatalf("no session id %s after %d creates", collider.Raw, n)
+	createRoutes(t, func(t *testing.T, forward []string) {
+		names, collider := labelByIDNames(t)
+		for _, name := range names {
+			for _, shape := range validLabelShapes(t) {
+				t.Run(name.Raw+"/"+shape.Name, func(t *testing.T) {
+					rt := newRealTmux(t)
+					// Labelled sessions $0, $1, ... up to the one whose id is
+					// the collider's text, as in F3.
+					for n := 0; ; n++ {
+						if n == 32 {
+							t.Fatalf("no session id %s after %d creates", collider.Raw, n)
+						}
+						if rt.mustCreate(t, createSpec{}).Reply.SessionID == collider.Raw {
+							break
+						}
 					}
-					if rt.mustCreate(t, createSpec{}).Reply.SessionID == collider.Raw {
-						break
+					before := rt.labelState(t)
+					if before.listed[collider.Raw].Label.Kind != tmux.LabelValid {
+						t.Fatalf("session %s is not validly labelled before the create", collider.Raw)
 					}
-				}
-				before := rt.labelState(t)
-				if before.listed[collider.Raw].Label.Kind != tmux.LabelValid {
-					t.Fatalf("session %s is not validly labelled before the create", collider.Raw)
-				}
 
-				c := rt.mustCreate(t, createSpec{Name: name.Raw, InstanceID: newInstanceID(shape.Want.InstanceID), StoreID: shape.Want.StoreID})
-				id := c.Reply.SessionID
-				if _, clash := before.raw[id]; clash {
-					t.Fatalf("create reply names existing session %s", id)
-				}
-				created := rt.labelState(t)
-				assertOnlyLabelChange(t, before, created, id, "", tmux.Label{})
-				if got := created.listed[id].Name; got != name.Stored {
-					t.Errorf("session %s: lookup name = %q, want the stored form %q", id, got, name.Stored)
-				}
+					c := rt.mustCreate(t, createSpec{Name: name.Raw, InstanceID: newInstanceID(shape.Want.InstanceID), StoreID: shape.Want.StoreID, ForwardEnv: forward})
+					id := c.Reply.SessionID
+					if _, clash := before.raw[id]; clash {
+						t.Fatalf("create reply names existing session %s", id)
+					}
+					created := rt.labelState(t)
+					assertOnlyLabelChange(t, before, created, id, "", tmux.Label{})
+					if got := created.listed[id].Name; got != name.Stored {
+						t.Errorf("session %s: lookup name = %q, want the stored form %q", id, got, name.Stored)
+					}
 
-				if err := newClient().SetLabel(rt.Socket, id, c.Reply.PaneID, c.Token, c.InstanceID, c.StoreID); err != nil {
-					t.Fatalf("SetLabel %s: %s", id, describe(err))
-				}
-				labelled := rt.labelState(t)
-				assertOnlyLabelChange(t, created, labelled, id,
-					tmuxfix.LabelValue(c.Token, id, c.InstanceID, c.StoreID), tmuxfix.Valid(c.Token, c.InstanceID, c.StoreID))
-			})
+					if err := newClient().SetLabel(rt.Socket, id, c.Reply.PaneID, c.Token, c.InstanceID, c.StoreID); err != nil {
+						t.Fatalf("SetLabel %s: %s", id, describe(err))
+					}
+					labelled := rt.labelState(t)
+					assertOnlyLabelChange(t, created, labelled, id,
+						tmuxfix.LabelValue(c.Token, id, c.InstanceID, c.StoreID), tmuxfix.Valid(c.Token, c.InstanceID, c.StoreID))
+				})
+			}
 		}
-	}
+	})
 }
 
 // TestLabelStoreIDLast: an instance id with spaces, or whose last word is 16

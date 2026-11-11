@@ -17,6 +17,7 @@ func TestPrepareProbeOmitsHookIdentityButLaunchRetainsIt(t *testing.T) {
 		"AGENT_DIRECTOR_INHERITED_ONLY": "caller-hook-value",
 		"TMUX":                          "/caller/socket,10,0",
 		"TMUX_PANE":                     "%caller",
+		"OPENROUTER_API_KEY":            "synthetic-inherited-key",
 	} {
 		t.Setenv(key, value)
 	}
@@ -45,6 +46,7 @@ func TestPrepareProbeOmitsHookIdentityButLaunchRetainsIt(t *testing.T) {
 				"TMUX_PANE":                   "%new",
 				"CLAUDE_CONFIG_DIR":           filepath.Join(root, "claude"),
 				"CODEX_HOME":                  filepath.Join(root, "codex"),
+				"OPENROUTER_API_KEY":          "synthetic-explicit-key",
 			}
 			id := Identity{StoreID: "0123456789abcdef", Token: "fedcba9876543210", InstanceID: "new-row", Agent: agent, Socket: "/new/socket", CWD: root}
 			command, launchEnv, err := Prepare(id, []string{program}, env, true, &evidencePersistence{})
@@ -53,7 +55,7 @@ func TestPrepareProbeOmitsHookIdentityButLaunchRetainsIt(t *testing.T) {
 			}
 			probe := readCapturedEnvironment(t, filepath.Join(root, "probe.env"))
 			for key := range probe {
-				if strings.HasPrefix(key, "AGENT_DIRECTOR_") || key == "TMUX" || key == "TMUX_PANE" {
+				if strings.HasPrefix(key, "AGENT_DIRECTOR_") || key == "TMUX" || key == "TMUX_PANE" || key == "OPENROUTER_API_KEY" {
 					t.Errorf("version probe retained hook identity %s", key)
 				}
 			}

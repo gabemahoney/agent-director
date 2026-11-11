@@ -10,12 +10,15 @@ package mcp_test
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/mcp"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -68,7 +71,7 @@ func TestMCPSpawnAgentReachesRow(t *testing.T) {
 }
 
 func TestMCPPaneOnlyContract(t *testing.T) {
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			e := newEnv(t)
 			data := toolErrorData(t, callTool(t, e.d, "spawn", paramJSON(t, map[string]any{
@@ -156,5 +159,23 @@ func TestMCPSpawnAgentArgsInheritance(t *testing.T) {
 				t.Errorf("row agent_args = %v; want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMCPMissingHostCredential(t *testing.T) {
+	e := newEnv(t)
+	t.Setenv("OPENROUTER_API_KEY", "")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[experimental]\nopencode = true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.New(api.Options{StorePath: e.storePath, ConfigPath: path, TmuxClient: e.rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	data := toolErrorData(t, callTool(t, mcp.NewLiveDispatcher(client), "spawn", paramJSON(t, map[string]any{"agent": "opencode", "cwd": t.TempDir(), "agent_args": []string{"--model", "openrouter/model"}})))
+	if data.ErrName != "ErrHostCredentialMissing" {
+		t.Fatalf("credential refusal=%+v", data)
 	}
 }

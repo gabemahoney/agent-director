@@ -230,6 +230,9 @@ export declare class ErrAgentCapabilityUnsupported extends AgentDirectorError {
 /** The pane-only launch has no explicit model. */
 export declare class ErrModelMissing extends AgentDirectorError {
 }
+/** A required host credential is unset or empty in agent-director's environment. */
+export declare class ErrHostCredentialMissing extends AgentDirectorError {
+}
 /** Mirrors ErrAgentMissing (package: spawn) */
 export declare class ErrAgentMissing extends AgentDirectorError {
 }

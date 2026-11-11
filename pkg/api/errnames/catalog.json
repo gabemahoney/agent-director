@@ -50,6 +50,11 @@
     "description": ""
   },
   {
+    "name": "ErrHostCredentialMissing",
+    "package": "spawn",
+    "description": "A required host credential is unset or empty in agent-director's own environment; the launch refuses before mutation."
+  },
+  {
     "name": "ErrAgentMissing",
     "package": "spawn",
     "description": ""

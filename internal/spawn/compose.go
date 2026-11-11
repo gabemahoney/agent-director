@@ -3,6 +3,7 @@ package spawn
 import (
 	"maps"
 	"os"
+	"slices"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
@@ -89,7 +90,7 @@ type ComposedLaunch struct {
 // A codex agent's composition also writes nothing in any Codex folder: its
 // settings travel on the command line, and its pre-trust outcome is decided
 // here (CodexPreTrust) because the folder trust is in the argv only on ok. An
-// agent other than claude, codex, cursor or droid gets store.ErrRowAgentInvalid.
+// agent other than claude, codex, cursor, droid or opencode gets store.ErrRowAgentInvalid.
 func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 	if err := launchAgentError(r.Agent); err != nil {
 		return ComposedLaunch{}, err
@@ -146,6 +147,8 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 			CWD:               r.CWD,
 			Env:               composeEnv(r),
 			ExcludeEnv:        PaneOnlyExcludedEnv(r.Agent),
+			UnsetEnv:          slices.Clone(paneOnlyAgents[r.Agent].unsetEnv),
+			ForwardEnv:        slices.Clone(paneOnlyAgents[r.Agent].forwardEnv),
 			Command:           command,
 			InstanceID:        r.InstanceID,
 		},

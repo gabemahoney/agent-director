@@ -19,8 +19,8 @@
 // - package     — short package suffix of the error's origin package
 //                 (e.g. "spawn", "store", "tmux", "config", "probe", "api",
 //                 "clisetup", "adminapi", "errnames").
-// - description — canonical message text (empty for now; downstream Epics
-//                 may fill from doc-strings later). Key is locked in schema.
+// - description — optional agent-neutral text from the catalog entry.
+//                 Key is locked in schema.
 //
 // 2-space indent, trailing newline, deterministic across runs (Catalog
 // slice order, not alphabetical).
@@ -60,6 +60,7 @@ var packageOf = map[string]string{
 	"ErrExperimentalAgentDisabled":  "spawn",
 	"ErrAgentCapabilityUnsupported": "spawn",
 	"ErrModelMissing":               "spawn",
+	"ErrHostCredentialMissing":      "spawn",
 	"ErrAgentMissing":               "spawn",
 	"ErrAgentInvalid":               "spawn",
 	"ErrAgentArgsMismatch":          "spawn",
@@ -156,7 +157,7 @@ func main() {
 		out = append(out, entryOutput{
 			Name:        entry.Name,
 			Package:     pkg,
-			Description: "",
+			Description: entry.Description,
 		})
 	}
 

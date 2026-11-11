@@ -28,12 +28,11 @@ func claudeProgram(cfg config.Config) string {
 	return claudeBinary
 }
 
-// launchAgentError is the composition stop for an agent other than claude,
-// codex or cursor: the row-agent error (store.ErrRowAgentInvalid). nil for all
-// launchable agents.
+// launchAgentError stops composition for an unrecognized agent with the
+// row-agent error (store.ErrRowAgentInvalid). It permits every registered agent.
 func launchAgentError(agent string) error {
 	switch agent {
-	case store.AgentClaude, store.AgentCodex, store.AgentCursor, store.AgentDroid:
+	case store.AgentClaude, store.AgentCodex, store.AgentCursor, store.AgentDroid, store.AgentOpenCode:
 		return nil
 	}
 	return fmt.Errorf("%w: %q", store.ErrRowAgentInvalid, agent)

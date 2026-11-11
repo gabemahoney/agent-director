@@ -16,7 +16,7 @@ import (
 const configDirValue = "~/.config/agent-director"
 
 func TestEnvelopeParityPaneOnly(t *testing.T) {
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			home := t.TempDir()
 			id, err := apitest.SeedSpawn(filepath.Join(home, ".config", "agent-director", "state.db"), "", "pending", t.TempDir(), "off", "", true,

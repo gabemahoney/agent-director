@@ -103,6 +103,9 @@ func (f Failure) String() string {
 // wraps no catalogued sentinel (SR-1.5): the verb layer maps it to verb
 // errors. Its message never carries a label's value.
 type CallError struct {
+	// BeforeCreate marks a definite refusal before invoking tmux, for example
+	// an absent forwarded credential or an unrepresentable create field.
+	BeforeCreate bool
 	// Call is the call that failed.
 	Call Call
 	// Failure classifies the failure.

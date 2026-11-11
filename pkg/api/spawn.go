@@ -290,7 +290,10 @@ func hasControlChar(id string) bool {
 //   - ErrExperimentalAgentDisabled: the requested experimental agent's flag
 //     is off; enable its [experimental] flag before spawning it.
 //   - ErrModelMissing: a pane-only launch has no --model ID after template
-//     resolution; supply one explicit subscription model.
+//     resolution; supply one explicit model in the form the agent requires.
+//   - ErrHostCredentialMissing: a required host credential is unset or empty;
+//     set it in agent-director's own environment and restart an MCP server
+//     after changing it. Nothing is written or launched.
 //   - ErrAgentCapabilityUnsupported: a pane-only launch requests RelayMode
 //     "on"; omit that capability and supervise the owned pane.
 //   - ErrAgentArgsMismatch: the template's agent_args are for another agent
@@ -309,10 +312,11 @@ func hasControlChar(id string) bool {
 //     initial prompt. Unsupported or malformed Cursor arguments are refused;
 //     remove the named argument and any owned value, then retry. Explicit mode is established through
 //     ACP before prompt admission; later runtime failures are asynchronous.
-//     Pane-only agents accept only one split --model ID with a nonempty subscription
-//     model ID. Malformed or duplicate model options, --model=ID, custom:
-//     model IDs and every other argument (including task text) are refused
-//     without echoing rejected values. No model at all is ErrModelMissing.
+//     Pane-only agents accept only one split --model with a nonempty model ID
+//     in the form the agent requires: a subscription or provider-qualified ID.
+//     Malformed or duplicate model options, --model=ID, custom-model IDs, a
+//     wrong or missing provider and every other argument (including task text)
+//     are refused without echoing rejected values. No model at all is ErrModelMissing.
 //   - ErrPermissionsUnsupported: a codex, cursor or pane-only spawn carries
 //     Permissions allow, deny or ask entries (merged with the template's).
 //     Empty lists are allowed.
@@ -329,11 +333,10 @@ func hasControlChar(id string) bool {
 //     CURSOR_DATA_DIR with its existing personal login, without account
 //     isolation; explicit credential-profile selectors and invalid directory
 //     selections are refused too.
-//     Pane-only agents additionally refuse their credential and home
+//     Pane-only agents additionally refuse their credential, configuration and home
 //     selectors, including empty values and keys inherited
 //     from a template. The name before the first '=' is checked, so malformed
-//     variants cannot bypass the refusal. Keep HOME unchanged; this lane
-//     accepts no alternate agent home. Pane-only diagnostics omit values and
+//     variants cannot bypass the refusal. Pane-only agents keep the invoking HOME. Pane-only diagnostics omit values and
 //     raw malformed key text. Nothing is written or launched.
 //   - ErrInvalidFlags: InstanceID contains an ASCII control character, or
 //     IdleScreenTimeoutSeconds is negative or above 9223372036; nothing is

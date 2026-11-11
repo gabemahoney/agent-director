@@ -39,8 +39,14 @@ type CreateRequest struct {
 	Name              string
 	CWD               string
 	Env               map[string]string
-	// ExcludeEnv removes ambient selectors from this create's client and session.
+	// ExcludeEnv removes ambient selectors from this create's client.
 	ExcludeEnv []string
+	// UnsetEnv removes stale session/global values before exec, except values
+	// explicitly set in Env or ForwardEnv. Nil retains ExcludeEnv's legacy unsets.
+	UnsetEnv []string
+	// ForwardEnv names host variables delivered only to the new session on stdin.
+	// It never contains their values.
+	ForwardEnv []string
 	Command    []string
 	Token      string
 	InstanceID string
@@ -125,7 +131,19 @@ func CreateAndLabel(t LaunchTmux, req CreateRequest) CreateOutcome {
 	}
 	var reply tmux.CreateReply
 	var err error
-	if len(req.ExcludeEnv) > 0 {
+	if req.UnsetEnv != nil || len(req.ForwardEnv) > 0 {
+		policy, ok := t.(interface {
+			NewSessionWithEnvPolicy(string, string, string, map[string]string, []string, string, string, string, []string, []string, []string) (tmux.CreateReply, error)
+		})
+		if !ok {
+			return CreateOutcome{Kind: CreateFailed, BeforeCreate: true, Cause: asCallError(tmux.CallCreate, fmt.Errorf("tmux client does not support launch environment policy"))}
+		}
+		unset := req.UnsetEnv
+		if unset == nil {
+			unset = req.ExcludeEnv
+		}
+		reply, err = policy.NewSessionWithEnvPolicy(req.Socket, req.Name, req.CWD, req.Env, req.Command, req.Token, req.InstanceID, req.StoreID, req.ExcludeEnv, unset, req.ForwardEnv)
+	} else if len(req.ExcludeEnv) > 0 {
 		excluding, ok := t.(interface {
 			NewSessionWithEnvExclusions(string, string, string, map[string]string, []string, string, string, string, []string) (tmux.CreateReply, error)
 		})
@@ -141,7 +159,7 @@ func CreateAndLabel(t LaunchTmux, req CreateRequest) CreateOutcome {
 		if ce.Failure == tmux.FailLabel {
 			return labelByID(t, req, reply)
 		}
-		return CreateOutcome{Kind: createFailureKind(ce), Cause: ce}
+		return CreateOutcome{Kind: createFailureKind(ce), BeforeCreate: ce.BeforeCreate, Cause: ce}
 	}
 	if tmux.NeedsLabelByID(req.Name) {
 		return labelByID(t, req, reply)

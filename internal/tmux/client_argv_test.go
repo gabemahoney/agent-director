@@ -2,6 +2,7 @@ package tmux_test
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -368,5 +369,77 @@ func TestNewSessionChain(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestNewSessionForwarding(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "synthetic-forwarded-key")
+	c, r := newScripted(t, exitZero(tmuxfix.CreateReplyLine(tmuxfix.RecordedCreate)))
+	_, err := c.NewSessionWithEnvPolicy(testSocket, "agent-x", "/work", nil, []string{"sleep", "3600"},
+		tmuxfix.Token, "id-1", tmuxfix.StoreID, nil, nil, []string{"OPENROUTER_API_KEY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := r.Only()
+	if got := argvCommand(t, inv); !slices.Equal(got, []string{"start-server", ";", "source-file", "-"}) {
+		t.Fatalf("forwarding argv = %q", got)
+	}
+	want := "'new-session' '-d' '-s' 'agent-x' '-c' '/work' '-e' 'AGENT_DIRECTOR_INSTANCE_ID=id-1' '-e' 'OPENROUTER_API_KEY=synthetic-forwarded-key' '-P' '-F' '" + argvCreateFormat + "' '--' 'sleep' '3600' ; " +
+		"'set-option' '-F' '-t' '=agent-x:' '@ad_owner' 'ad1 " + tmuxfix.Token + " #{session_id} id-1 " + tmuxfix.StoreID + "' ; " +
+		"'set-option' '-p' '-F' '-t' '=agent-x:' '@ad_pane' '" + tmuxfix.Token + " #{pane_id}'\n"
+	if string(inv.Stdin) != want {
+		t.Error("stdin differs from the recorded create-and-label shape")
+	}
+	if strings.Contains(strings.Join(append(slices.Clone(inv.Args), inv.Env...), "\n"), "synthetic-forwarded-key") {
+		t.Error("forwarded value escaped stdin")
+	}
+	if inv.Timeout != testTimeouts.Create || inv.WaitDelay != testTimeouts.WaitDelay {
+		t.Error("forwarding changed create bounds")
+	}
+}
+
+func TestNewSessionForwardingRefusesBeforeCall(t *testing.T) {
+	for _, field := range []string{"missing key", "empty key", "name", "cwd", "environment", "command", "instance id", "token", "store id"} {
+		t.Run(field, func(t *testing.T) {
+			t.Setenv("OPENROUTER_API_KEY", "synthetic-forwarded-key")
+			name, cwd, id, token, storeID := "agent-x", "/work", "id-1", tmuxfix.Token, tmuxfix.StoreID
+			env := map[string]string{}
+			command := []string{"sleep", "3600"}
+			bad := "unrepresentable-synthetic-value\x00"
+			switch field {
+			case "missing key":
+				if err := os.Unsetenv("OPENROUTER_API_KEY"); err != nil {
+					t.Fatal(err)
+				}
+			case "empty key":
+				t.Setenv("OPENROUTER_API_KEY", "")
+			case "name":
+				name = bad
+			case "cwd":
+				cwd = bad
+			case "environment":
+				env["EXAMPLE"] = bad
+			case "command":
+				command = append(command, bad)
+			case "instance id":
+				id = bad
+			case "token":
+				token = bad
+			case "store id":
+				storeID = bad
+			}
+			c, r := newScripted(t)
+			reply, err := c.NewSessionWithEnvPolicy(testSocket, name, cwd, env, command, token, id, storeID, nil, nil, []string{"OPENROUTER_API_KEY"})
+			ce := callError(t, err)
+			if !ce.BeforeCreate || reply != (tmux.CreateReply{}) || len(r.Calls()) != 0 {
+				t.Fatalf("invalid %s was not a definite no-launch: %#v", field, ce)
+			}
+			if strings.Contains(fmt.Sprintf("%#v %v", ce, err), "unrepresentable-synthetic-value") || strings.Contains(err.Error(), "synthetic-forwarded-key") {
+				t.Error("refusal echoed a value")
+			}
+			if strings.HasSuffix(field, "key") && !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
+				t.Error("missing-key refusal does not name the key")
+			}
+		})
 	}
 }

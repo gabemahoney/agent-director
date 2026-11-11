@@ -236,7 +236,7 @@ func makeTemplate(params MakeTemplateParams, cfg config.Config) (MakeTemplateRes
 }
 
 // validateTemplateAgent is make-template's agent checks, in SR-1.4's order
-// (steps 3 to 5): a value other than claude, codex, cursor or droid is ErrTemplateMalformed,
+// (steps 3 to 5): a value other than claude, codex, cursor, droid or opencode is ErrTemplateMalformed,
 // as a bad relay_mode is; a non-empty AgentArgs with no Agent is
 // ErrTemplateAgentMissing. A pane-only template then uses
 // spawn.ValidatePaneOnlySettings with the model optional, refusing unsupported
@@ -309,11 +309,13 @@ func validateTemplateRelayMode(m string) error {
 //     "on"; omit that capability. Nothing is written.
 //   - ErrSpawnDeniedFlag: a Cursor template has unsupported or malformed
 //     agent arguments. Remove the named argument and any owned value, then
-//     retry. Pane-only agents accept no arguments or one split --model ID with a
-//     nonempty subscription model ID. Malformed or duplicate model options,
-//     --model=ID, custom: model IDs and every other argument (including task
-//     text) are refused without echoing rejected values. A pane-only template may
-//     omit the model; the resolved spawn must supply it. Nothing is written.
+//     retry. Pane-only agents accept no arguments or one split --model with a
+//     nonempty model ID in the form the agent requires: a subscription or
+//     provider-qualified ID. Malformed or duplicate model options, --model=ID,
+//     custom-model IDs, a wrong or missing provider and every other argument
+//     (including task text) are refused without echoing rejected values.
+//     A pane-only template may omit the model; the resolved spawn must supply it.
+//     Nothing is written.
 //   - ErrPermissionsUnsupported: Agent is "codex", "cursor" or pane-only and
 //     Permissions holds an allow, deny or ask entry. Empty lists are allowed;
 //     no template is written on refusal.
@@ -330,10 +332,9 @@ func validateTemplateRelayMode(m string) error {
 //     CURSOR_CONFIG_DIR and CURSOR_DATA_DIR with its existing personal login,
 //     without account isolation. Effective Cursor templates also refuse
 //     explicit credential-profile selectors and invalid directory paths.
-//     Pane-only templates additionally refuse their credential and home
+//     Pane-only templates additionally refuse their credential, configuration and home
 //     selectors, even with empty values. The name before the first '=' is checked, so malformed variants
-//     cannot bypass the refusal. Keep HOME unchanged; this lane accepts no
-//     alternate agent home. Pane-only diagnostics omit values and raw
+//     cannot bypass the refusal. Pane-only agents keep the invoking HOME. Pane-only diagnostics omit values and raw
 //     malformed key text. Agent-independent templates defer agent-specific
 //     environment checks until resolution. Nothing is written or replaced.
 //
