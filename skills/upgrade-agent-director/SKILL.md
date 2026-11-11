@@ -105,6 +105,29 @@ stops it, the operator confirming), or the sweep ran in the wrong place
 (step 1's checks find it; then sweep from the agents' environment). Never
 mark, delete or edit rows by hand.
 
+### Read the store schema
+
+Before step 3, resolve `[store] db_path` from the installed `config.toml`
+as [Which database install.sh checks](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#which-database-installsh-checks)
+specifies: an unset or empty value uses `~/.config/agent-director/state.db`
+(`~/.agent-director/state.db` for 0.3.0–0.11.1); `~/` expands against `HOME`;
+an absolute path stays as written; every other value is relative to the
+install directory (`~/.config/agent-director`, or `~/.agent-director` for
+0.3.0–0.11.1), never the shell's working directory. Do not expand `$VAR`.
+Resolve to an absolute path before checking whether the store file exists.
+If there is no store file, record 0. Otherwise replace `<store>` with that
+resolved absolute path, quoted, and read it without opening it with
+agent-director:
+
+```sh
+sqlite3 -batch -init /dev/null -readonly <store> 'PRAGMA user_version;'
+```
+
+If the command fails or does not print one nonnegative integer, stop and
+hand the operator the output. Versions 1–15 cross the native-input journal
+cutover; 0 and versions 16 or above do not. Keep this result for steps 3 and
+4, even after the install changes the schema version.
+
 ## 3. Install
 
 Choose the release tag once for this upgrade, such as `v0.18.1`, and reuse
@@ -121,17 +144,21 @@ hand the operator the output unless they provide a release tag.
 Replace both `<tag>`s below with that tag, so the installer and binaries
 come from the same release.
 
-The journal flags assert the operator's maintenance window: first confirm with
+Only when the schema read above says this upgrade crosses the cutover,
+the journal flags assert the operator's maintenance window: first confirm with
 the operator that steps 1 and 2 of
 [Upgrading the native-input journal](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal)
-hold. Then, from this shell:
+hold. For every upgrade, from this shell:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag> --journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag>
 ```
 
-Add `--journal-legacy-root <dir>` for each additional input root, and the
-original install's other
+For a crossing upgrade, append
+`--journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>`
+and add `--journal-legacy-root <dir>` for each additional input root.
+Otherwise skip that confirmation and pass no journal flags.
+Add the original install's other
 [flags](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#install-from-a-release),
 plus any the operator adds now, such as `--register-mcp`.
 Exit 0: step 4. Exit 5 or 6: step 5. Another exit:
@@ -144,14 +171,16 @@ Exit 0: step 4. Exit 5 or 6: step 5. Another exit:
 ~/.config/agent-director/bin/agent-director list
 ```
 
-`version` shows the release just installed, and `list` exits 0. Then prepare
-the administrator's
+`version` shows the release just installed, and `list` exits 0. If the schema
+read before step 3 said this upgrade does not cross the cutover, verification
+is complete: go to step 6. Otherwise prepare the administrator's
 [verification](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal),
-filled in with the store's path (`[store] db_path`'s, when set), a new backup
+filled in with the store's resolved absolute path under the rules above
+(using the installed config after any old-directory move), a new backup
 directory and step 3's `--journal-legacy-root` list as `--legacy-root`:
 
 ```sh
-~/.config/agent-director/admin/agent-director-admin --store-path ~/.config/agent-director/state.db migrate-journal --maintenance-window --roots-complete --backup-dir <new-absolute-directory>
+~/.config/agent-director/admin/agent-director-admin --store-path <store> migrate-journal --maintenance-window --roots-complete --backup-dir <new-absolute-directory>
 ```
 
 `agent-director-admin` runs only with a human's approval for that run

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -26,6 +27,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 // upgradeSkill is the upgrade skill, from the repo root.
@@ -40,7 +43,7 @@ const upgradeInstallWait = 5 * time.Minute
 // b.5i3: the installer and binaries must come from the same release.
 func upgradeNetworkInstall(t *testing.T, command string) string {
 	t.Helper()
-	m := regexp.MustCompile(`^curl -fsSL https://raw\.githubusercontent\.com/gabemahoney/agent-director/([^/\s]+)/skills/install-agent-director/install\.sh \| bash -s -- --from-release (\S+) `).FindStringSubmatch(command)
+	m := regexp.MustCompile(`^curl -fsSL https://raw\.githubusercontent\.com/gabemahoney/agent-director/([^/\s]+)/skills/install-agent-director/install\.sh \| bash -s -- --from-release (\S+)(?: |$)`).FindStringSubmatch(command)
 	if m == nil {
 		t.Fatalf("step 3 must fetch a release's installer and name its --from-release tag: %q", command)
 	}
@@ -176,6 +179,10 @@ type upgradeFollow struct {
 	sessions              map[string]string // each listed row's tmux session name
 	marked                [][]string        // each find-missing's ids, sorted, in order
 	installs              []moveResult      // each step 3 install
+	installCommands       []string          // commands submitted to the shell
+	journalVerifications  int               // step 4 migrate-journal runs
+	crossing              bool              // schema read before the install
+	store                 string            // store located from the skill and config
 	backup                string            // the last install's --journal-backup
 	steps1                int               // how many times step 1 started
 }
@@ -411,22 +418,70 @@ func (f *upgradeFollow) step2() bool {
 	return false
 }
 
+// readSchema follows the read-only check before step 3. Keep the decision
+// for step 4, after the installer has changed a crossing store's version.
+func (f *upgradeFollow) readSchema() {
+	t := f.t
+	t.Helper()
+	s := docSection(t, upgradeSkill, "Read the store schema")
+	s.Pin("Before step 3, resolve `[store] db_path` from the installed `config.toml` as",
+		"[Which database install.sh checks](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#which-database-installsh-checks)",
+		"specifies: an unset or empty value uses `~/.config/agent-director/state.db` (`~/.agent-director/state.db` for 0.3.0–0.11.1); `~/` expands against `HOME`; an absolute path stays as written; every other value is relative to the install directory (`~/.config/agent-director`, or `~/.agent-director` for 0.3.0–0.11.1), never the shell's working directory. Do not expand `$VAR`.",
+		"Resolve to an absolute path before checking whether the store file exists. If there is no store file, record 0. Otherwise replace `<store>` with that resolved absolute path, quoted, and read it without opening it with agent-director:",
+		"If the command fails or does not print one nonnegative integer, stop and hand the operator the output. Versions 1–15 cross the native-input journal cutover; 0 and versions 16 or above do not. Keep this result for steps 3 and 4, even after the install changes the schema version.")
+	defaultStore := strings.ReplaceAll(s.Inline("~/.config/agent-director/state.db"), "~/", f.h.Home+"/")
+	var config struct {
+		Store struct {
+			DBPath string `toml:"db_path"`
+		} `toml:"store"`
+	}
+	if _, err := toml.DecodeFile(filepath.Join(filepath.Dir(defaultStore), "config.toml"), &config); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	f.store = config.Store.DBPath
+	if f.store == "" {
+		f.store = defaultStore
+	}
+	if strings.HasPrefix(f.store, "~/") {
+		f.store = filepath.Join(f.h.Home, strings.TrimPrefix(f.store, "~/"))
+	} else if !filepath.IsAbs(f.store) {
+		f.store = filepath.Join(filepath.Dir(defaultStore), f.store)
+	}
+	if _, err := os.Stat(f.store); os.IsNotExist(err) {
+		f.crossing = false
+		return
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	res := f.must(s.Fill(s.Block("PRAGMA user_version;"), "<store>", moveQuote(f.store)))
+	version, err := strconv.Atoi(strings.TrimSpace(res.Stdout))
+	if err != nil || version < 0 {
+		t.Fatalf("unreadable schema version %q: %v", res.Stdout, err)
+	}
+	f.crossing = version > 0 && version < 16
+}
+
 // step3 follows "3. Install" and returns the install's result.
 func (f *upgradeFollow) step3() moveResult {
 	t, h := f.t, f.h
 	t.Helper()
 	s := docSection(t, upgradeSkill, "3. Install")
-	s.Pin("The journal flags assert the operator's maintenance window: first confirm with the operator that steps 1 and 2 of",
-		"hold. Then, from this shell:",
-		"Add `--journal-legacy-root <dir>` for each additional input root, and the original install's other",
+	s.Pin("Only when the schema read above says this upgrade crosses the cutover, the journal flags assert the operator's maintenance window: first confirm with the operator that steps 1 and 2 of",
+		"hold. For every upgrade, from this shell:",
+		"For a crossing upgrade, append `--journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>` and add `--journal-legacy-root <dir>` for each additional input root. Otherwise skip that confirmation and pass no journal flags.",
+		"Add the original install's other",
 		"Exit 0: step 4. Exit 5 or 6: step 5. Another exit:")
-	if !f.ask(askWindow) {
+	if f.crossing && !f.ask(askWindow) {
 		t.Fatal("no case here has the operator deny the maintenance window")
 	}
 	block := s.Block("install.sh | bash -s --")
 	networkInstall := upgradeNetworkInstall(t, block)
-	f.backup = f.c.newBackup()
-	pairs := []string{"<new-absolute-directory>", moveQuote(f.backup)}
+	var pairs []string
+	if f.crossing {
+		block += " " + s.Inline("--journal-maintenance-window")
+		f.backup = f.c.newBackup()
+		pairs = append(pairs, "<new-absolute-directory>", moveQuote(f.backup))
+	}
 	if strings.Contains(networkInstall, "<tag>") {
 		pairs = append(pairs, "<tag>", "v"+moveVersion)
 	}
@@ -451,7 +506,9 @@ func (f *upgradeFollow) step3() moveResult {
 		words = append(words, moveQuote(flag))
 	}
 	rest := strings.TrimPrefix(block, networkInstall)
-	res := f.sh.RunWithin(strings.Join(words, " ")+" "+rest, upgradeInstallWait)
+	command := strings.Join(words, " ") + " " + rest
+	f.installCommands = append(f.installCommands, command)
+	res := f.sh.RunWithin(command, upgradeInstallWait)
 	f.installs = append(f.installs, res)
 	return res
 }
@@ -461,8 +518,8 @@ func (f *upgradeFollow) step4() {
 	t := f.t
 	t.Helper()
 	s := docSection(t, upgradeSkill, "4. Verify")
-	s.Pin("`version` shows the release just installed, and `list` exits 0. Then prepare the administrator's",
-		"filled in with the store's path (`[store] db_path`'s, when set), a new backup directory and step 3's `--journal-legacy-root` list as `--legacy-root`:",
+	s.Pin("`version` shows the release just installed, and `list` exits 0. If the schema read before step 3 said this upgrade does not cross the cutover, verification is complete: go to step 6. Otherwise prepare the administrator's",
+		"filled in with the store's resolved absolute path under the rules above (using the installed config after any old-directory move), a new backup directory and step 3's `--journal-legacy-root` list as `--legacy-root`:",
 		"`agent-director-admin` runs only with a human's approval for that run",
 		"show the operator the filled-in command, and run it only once they approve that run; otherwise they run it. It must exit 0 with `\"authority\": \"sqlite\"`. An error goes to step 5.")
 	lines := strings.Split(s.Block("agent-director version"), "\n")
@@ -473,10 +530,14 @@ func (f *upgradeFollow) step4() {
 		t.Errorf("version %q is not the release just installed, %s", got.Stdout, moveVersion)
 	}
 	f.must(lines[1])
-	verify := s.Fill(s.Block("migrate-journal"), "<new-absolute-directory>", moveQuote(f.c.newBackup()))
+	if !f.crossing {
+		return
+	}
+	verify := s.Fill(s.Block("migrate-journal"), "<store>", moveQuote(f.store), "<new-absolute-directory>", moveQuote(f.c.newBackup()))
 	if !f.ask(askVerify) {
 		t.Fatal("no case here has the operator run the verification")
 	}
+	f.journalVerifications++
 	res := f.sh.RunWithin(verify, upgradeInstallWait)
 	var answer struct {
 		Authority string `json:"authority"`
@@ -571,6 +632,9 @@ func (f *upgradeFollow) run() bool {
 				f.afterSweep = nil
 			}
 		}
+		f.readSchema()
+		// SQLite's read-only open can create WAL sidecars. The refusal's
+		// no-touch assertion covers the installer, after that schema read.
 		before := f.h.PhysicalSnapshot()
 		switch res := f.step3(); res.Code {
 		case 0:
@@ -637,11 +701,80 @@ func TestAdviceFollow_J47_UpgradeSkill(t *testing.T) {
 		if len(f.installs) != installs {
 			t.Fatalf("%d installs; want %d", len(f.installs), installs)
 		}
+		if f.journalVerifications != 1 {
+			t.Errorf("crossing follow ran migrate-journal %d times; want once", f.journalVerifications)
+		}
 		c.assertCrossed(t, f.installs[len(f.installs)-1], f.backup)
 		if got := rowStates(c); got != rows {
 			t.Errorf("rows after the upgrade:\n%s\nwant:\n%s", got, rows)
 		}
 	}
+
+	// b.2m7: a store already past the cutover needs no journal work.
+	t.Run("already past cutover", func(t *testing.T) {
+		h := newMoveHome(t)
+		if res := h.Install(); res.Code != 0 {
+			t.Fatalf("fresh install: exit %d: %s", res.Code, res.Stderr)
+		}
+		c := &crossingCase{h: h, db: filepath.Join(h.New, "state.db")}
+		before := moveUserVersion(t, h, c.db)
+		if version, err := strconv.Atoi(before); err != nil || version < 16 {
+			t.Fatalf("fresh store version %q is not past the cutover: %v", before, err)
+		}
+		f := newUpgradeFollow(t, c, newJ47Tmux(t, h), true, yes)
+		if !f.run() {
+			t.Fatal("the follow stopped before the install")
+		}
+		if want := []string{askStop}; !reflect.DeepEqual(f.asked, want) {
+			t.Errorf("non-crossing operator asked %q; want %q", f.asked, want)
+		}
+		if len(f.installs) != 1 || f.installs[0].Code != 0 {
+			t.Fatalf("non-crossing installs: %+v; want one successful install", f.installs)
+		}
+		for _, command := range f.installCommands {
+			if strings.Contains(command, "--journal-") {
+				t.Errorf("non-crossing install passed journal flags: %s", command)
+			}
+		}
+		if f.journalVerifications != 0 {
+			t.Errorf("non-crossing follow ran migrate-journal %d times; want none", f.journalVerifications)
+		}
+		if backups, err := filepath.Glob(filepath.Join(h.Root, "backup-*")); err != nil || len(backups) != 0 {
+			t.Errorf("non-crossing follow made backup directories %q: %v", backups, err)
+		}
+		if after := moveUserVersion(t, h, c.db); after != before {
+			t.Errorf("store version changed from %s to %s", before, after)
+		}
+	})
+
+	// b.2m7 review round 1: follow configured paths from outside the install
+	// directory, including relative, HOME-relative and empty values.
+	t.Run("configured store", func(t *testing.T) {
+		for _, tc := range []struct{ name, value string }{
+			{"relative", "custom.db"},
+			{"home relative", "~/.config/agent-director/custom.db"},
+			{"empty", ""},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				c, x := setup(t, false)
+				if tc.value != "" {
+					custom := filepath.Join(c.h.New, "custom.db")
+					c.h.Sqlite(c.db, ".backup "+moveQuote(custom))
+					c.db = custom
+				}
+				c.h.Write(filepath.Join(c.h.New, "config.toml"), "[store]\ndb_path = "+strconv.Quote(tc.value)+"\n", 0o600)
+				f := newUpgradeFollow(t, c, x, true, yes)
+				if cwd := strings.TrimSpace(f.must("pwd").Stdout); cwd == c.h.New {
+					t.Fatal("the follower must run outside the install directory")
+				}
+				f.readSchema()
+				if !f.crossing || f.store != c.db {
+					t.Fatalf("configured store %q resolved to %q, crossing=%t; want %q and crossing=true", tc.value, f.store, f.crossing, c.db)
+				}
+				passed(t, c, f, f.run(), 1, []string{askStop, askWindow, askVerify}, nil, "row-ended|ended\n")
+			})
+		}
+	})
 
 	t.Run("gone agent swept", func(t *testing.T) {
 		c, x := setup(t, true)
