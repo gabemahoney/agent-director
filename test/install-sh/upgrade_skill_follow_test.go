@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,10 +37,23 @@ const upgradeSweepPause = 100 * time.Millisecond
 // upgradeInstallWait bounds step 3's install, a whole crossing upgrade.
 const upgradeInstallWait = 5 * time.Minute
 
-// upgradeNetworkInstall is step 3's command up to the operator's flags: the
-// network form, install.sh fetched from main and piped to bash with
-// --from-release.
-const upgradeNetworkInstall = "curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release "
+// b.5i3: the installer and binaries must come from the same release.
+func upgradeNetworkInstall(t *testing.T, command string) string {
+	t.Helper()
+	m := regexp.MustCompile(`^curl -fsSL https://raw\.githubusercontent\.com/gabemahoney/agent-director/([^/\s]+)/skills/install-agent-director/install\.sh \| bash -s -- --from-release (\S+) `).FindStringSubmatch(command)
+	if m == nil {
+		t.Fatalf("step 3 must fetch a release's installer and name its --from-release tag: %q", command)
+	}
+	if m[1] != m[2] || !regexp.MustCompile(`^(<tag>|v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?)$`).MatchString(m[1]) {
+		t.Fatalf("step 3 installer ref %q and --from-release %q must name the same release tag, never main", m[1], m[2])
+	}
+	return m[0]
+}
+
+func TestUpgradeSkillReleaseInstaller(t *testing.T) {
+	s := docSection(t, upgradeSkill, "3. Install")
+	upgradeNetworkInstall(t, s.Block("install.sh | bash -s --"))
+}
 
 // upgradeNoRows is list's output with no row, as step 1 and step 2 quote it.
 const upgradeNoRows = `{"spawns":[]}`
@@ -410,9 +424,14 @@ func (f *upgradeFollow) step3() moveResult {
 		t.Fatal("no case here has the operator deny the maintenance window")
 	}
 	block := s.Block("install.sh | bash -s --")
-	if !strings.HasPrefix(block, upgradeNetworkInstall) {
-		t.Fatalf("step 3's command no longer starts %q: %q", upgradeNetworkInstall, block)
+	networkInstall := upgradeNetworkInstall(t, block)
+	f.backup = f.c.newBackup()
+	pairs := []string{"<new-absolute-directory>", moveQuote(f.backup)}
+	if strings.Contains(networkInstall, "<tag>") {
+		pairs = append(pairs, "<tag>", "v"+moveVersion)
 	}
+	block = s.Fill(block, pairs...)
+	networkInstall = upgradeNetworkInstall(t, block)
 	// The one substitution beyond the placeholders: jobs have no network, so
 	// curl's fetch of install.sh becomes cat of the fixture's loose copy of
 	// this tree's install.sh, still piped to bash -s --, and --from-release
@@ -431,8 +450,7 @@ func (f *upgradeFollow) step3() moveResult {
 	for _, flag := range h.Flags {
 		words = append(words, moveQuote(flag))
 	}
-	f.backup = f.c.newBackup()
-	rest := s.Fill(strings.TrimPrefix(block, upgradeNetworkInstall), "<new-absolute-directory>", moveQuote(f.backup))
+	rest := strings.TrimPrefix(block, networkInstall)
 	res := f.sh.RunWithin(strings.Join(words, " ")+" "+rest, upgradeInstallWait)
 	f.installs = append(f.installs, res)
 	return res

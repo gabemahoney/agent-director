@@ -691,7 +691,7 @@ func TestJournalCommitBeforeAttempt(t *testing.T) {
 // The one reason table: every reason any non-test file of this package
 // refuses with (a new host's verifier file included), and every store cause
 // (internal/store's TestInputMigrationCausesComplete keeps that list whole),
-// has its own action, and no action carries a path or OS text.
+// has its own action, and no action carries a host path or OS text.
 func TestJournalReasonTable(t *testing.T) {
 	reasons := append([]string(nil), store.InputMigrationCauses...)
 	refusal := regexp.MustCompile(`journalRefusal\("([a-z_]+)"`)
@@ -717,9 +717,11 @@ func TestJournalReasonTable(t *testing.T) {
 		}
 	}
 	path := regexp.MustCompile(`/[\w.-]`)
+	// b.jpo: home-relative advice paths are allowed; host paths remain forbidden.
+	homePath := regexp.MustCompile(`~/[\w./-]*`)
 	for reason, action := range journalActions {
 		lower := strings.ToLower(action)
-		if path.MatchString(action) {
+		if path.MatchString(homePath.ReplaceAllString(action, "")) {
 			t.Errorf("%s's action carries a path: %s", reason, action)
 		}
 		for _, leak := range []string{"no such file", "permission denied", "not a directory", "too many levels", "operation not permitted", "file exists", "errno"} {
@@ -739,13 +741,14 @@ func TestJournalReasonTable(t *testing.T) {
 // direct run, over a real store. The refusal changes nothing.
 func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 	const retry = ", keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+	const symlinkAction = "make the store path, HOME and every --legacy-root (install.sh: --journal-legacy-root) real paths with no symbolic link in them; the invoking HOME's ~/.agent-director/input root is always checked, so if ~/.agent-director links to ~/.config/agent-director, first check [store] db_path in config.toml, ~/.claude/settings.json hooks, MCP registrations, scheduled sweeps, PATH links and entries, and scripts for paths under ~/.agent-director and point them at ~/.config/agent-director, then remove only the link with rm -- ~/.agent-director (no trailing slash)" + retry
 	for _, tc := range []struct {
-		reason, action string
+		name, reason, action string
 		// refuse makes the attempt over db with opts refuse with reason, and
 		// returns the action's own step.
 		refuse func(t *testing.T, db string, opts *JournalMigrationOptions) (follow func())
 	}{
-		{"process_inventory_unreadable", "run it as the agents' user with every mounted file system reachable or unmounted (on Linux, with the proc file system mounted and readable)" + retry + "; report it if it persists",
+		{"process_inventory_unreadable", "process_inventory_unreadable", "run it as the agents' user with every mounted file system reachable or unmounted (on Linux, with the proc file system mounted and readable)" + retry + "; report it if it persists",
 			func(t *testing.T, _ string, _ *JournalMigrationOptions) func() {
 				file := filepath.Join(t.TempDir(), "proc")
 				if err := os.WriteFile(file, nil, 0o600); err != nil {
@@ -754,7 +757,7 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 				journalProcRoot = file
 				return func() { journalProcRoot = "/proc" }
 			}},
-		{"inventory_deadline", "make every mounted file system reachable or unmount it, or answer any privacy consent prompt" + retry,
+		{"inventory_deadline", "inventory_deadline", "make every mounted file system reachable or unmount it, or answer any privacy consent prompt" + retry,
 			func(t *testing.T, db string, _ *JournalMigrationOptions) func() {
 				expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 				defer cancel()
@@ -763,13 +766,13 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 				t.Cleanup(restore)
 				return restore
 			}},
-		{"process_inventory_unsupported", "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64 or Darwin arm64); nothing was changed",
+		{"process_inventory_unsupported", "process_inventory_unsupported", "this host cannot verify that old mutators are stopped; run the migration on a supported install host (Linux x86_64 or Darwin arm64); nothing was changed",
 			func(t *testing.T, _ string, _ *JournalMigrationOptions) func() {
 				restore := SetJournalVerifierForTest(func(context.Context, string, []string) error { return journalUnsupportedHost() })
 				t.Cleanup(restore)
 				return restore // this Linux host is a supported one
 			}},
-		{"legacy_root_symlink", "make the store path, HOME and every --legacy-root (install.sh: --journal-legacy-root) real paths with no symbolic link in them" + retry,
+		{"legacy_root_symlink/declared_root", "legacy_root_symlink", symlinkAction,
 			func(t *testing.T, _ string, opts *JournalMigrationOptions) func() {
 				real := opts.LegacyRoots[0]
 				link := filepath.Join(filepath.Dir(real), "linked")
@@ -779,7 +782,25 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 				opts.LegacyRoots = []string{link}
 				return func() { opts.LegacyRoots = []string{real} }
 			}},
-		{"legacy_root_unreadable", "make each legacy root and its parent directories readable and searchable by the user running the migration" + retry,
+		// b.jpo: the always-checked HOME root needs explicit compatibility-link
+		// advice even when no --legacy-root names it.
+		{"legacy_root_symlink/home_compatibility_link", "legacy_root_symlink", symlinkAction,
+			func(t *testing.T, _ string, _ *JournalMigrationOptions) func() {
+				real := filepath.Join(os.Getenv("HOME"), ".config", "agent-director")
+				if err := os.MkdirAll(real, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				link := filepath.Join(os.Getenv("HOME"), ".agent-director")
+				if err := os.Symlink(".config/agent-director", link); err != nil {
+					t.Fatal(err)
+				}
+				return func() {
+					if err := os.Remove(link); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}},
+		{"legacy_root_unreadable", "legacy_root_unreadable", "make each legacy root and its parent directories readable and searchable by the user running the migration" + retry,
 			func(t *testing.T, _ string, opts *JournalMigrationOptions) func() {
 				parent := filepath.Dir(opts.LegacyRoots[0])
 				if err := os.Chmod(parent, 0); err != nil {
@@ -793,7 +814,7 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 				}
 			}},
 	} {
-		t.Run(tc.reason, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(func() { journalProcRoot = "/proc" }) // a failed row never leaks its seam
 			dir, db, opts := journalAttempt(t)
 			if _, err := apitest.InitStore(db); err != nil {
