@@ -140,7 +140,7 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   for; see
   [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
 - `--journal-backup <dir>`: choose a new absolute directory for the
-  stopped-writer backup; see
+  stopped-writer backup when crossing the native-input cutover; see
   [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
 - `--journal-legacy-root <dir>`: include an additional absolute legacy input
   root (repeat for each); see

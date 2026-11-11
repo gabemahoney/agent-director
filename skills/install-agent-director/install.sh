@@ -114,7 +114,13 @@
 #                        each. An upgrade of an existing store below schema
 #                        v16 needs the first three journal flags, and this one
 #                        for each additional root; pre-flight refuses without
-#                        the three, changing nothing. See docs/operator-actions.md
+#                        the three, changing nothing. If journal flags are given
+#                        and no cutover is crossed, a completed install warns
+#                        that the flags were unused, names the store's version
+#                        before this install (or says there was no store), and
+#                        says no journal backup was made. A refused install adds
+#                        no such warning.
+#                        See docs/operator-actions.md
 #                        "Upgrading the native-input journal".
 #   -h, --help           Print this text and exit 0.
 #
@@ -417,6 +423,7 @@ JOURNAL_MAINTENANCE=0
 JOURNAL_ROOTS_COMPLETE=0
 JOURNAL_ROOTS=()
 JOURNAL_BACKUP=""
+JOURNAL_FLAGS_GIVEN=0
 
 # GitHub repo slug used by --from-release. Matches go.mod's module path
 # and the /release skill's asset naming.
@@ -462,13 +469,13 @@ while [[ $# -gt 0 ]]; do
         --keep-prior)
             KEEP_PRIOR=1; shift ;;
         --journal-maintenance-window)
-            JOURNAL_MAINTENANCE=1; shift ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_MAINTENANCE=1; shift ;;
         --journal-roots-complete)
-            JOURNAL_ROOTS_COMPLETE=1; shift ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_ROOTS_COMPLETE=1; shift ;;
         --journal-legacy-root)
-            JOURNAL_ROOTS+=("$2"); shift 2 ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_ROOTS+=("$2"); shift 2 ;;
         --journal-backup)
-            JOURNAL_BACKUP="$2"; shift 2 ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_BACKUP="$2"; shift 2 ;;
         --schedule)
             SCHEDULE=1; shift ;;
         -h|--help)
@@ -8289,6 +8296,18 @@ ad_sched_step() {
     SCHED_WARN=1
 }
 
+# Report unused flags only after all install steps, preserving the leading
+# refusal/after-open diagnostic and the MCP failure's final exit-6 line.
+ad_unused_journal_warn() {
+    if [[ "$CUTOVER_CROSSING" -eq 0 && "$JOURNAL_FLAGS_GIVEN" -eq 1 ]]; then
+        if [[ -n "$PREFLIGHT_STORE_VERSION" ]]; then
+            echo "install.sh: warning: $state_db_name was at v${PREFLIGHT_STORE_VERSION} before this install; journal flags were not used and no journal backup was made." >&2
+        else
+            echo "install.sh: warning: there was no store before this install; journal flags were not used and no journal backup was made." >&2
+        fi
+    fi
+}
+
 SCHED_HOW=""
 ad_sched_step
 
@@ -8297,6 +8316,7 @@ if [[ "$MCP_FAILED" -eq 1 ]]; then
     if [[ "$SCHED_WARN" -eq 1 ]]; then
         ad_sched_warn "$SCHED_REASON"
     fi
+    ad_unused_journal_warn
     echo "install.sh: installed, but the MCP registration failed (see above); exit 6" >&2
     exit 6
 fi
@@ -8304,4 +8324,5 @@ echo "install.sh: done. Try: $CANONICAL help"
 if [[ "$SCHED_WARN" -eq 1 ]]; then
     ad_sched_warn "$SCHED_REASON"
 fi
+ad_unused_journal_warn
 } ; exit

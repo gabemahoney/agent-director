@@ -521,6 +521,15 @@ refusals need their cause resolved before retry. The operator-only
 [`snapshot-store` reference](admin-reference.md#snapshot-store) describes the
 private destination; it is not a recovery backup or migration authorization.
 
+### Unused journal flags
+
+When journal flags are given and no cutover is crossed, a completed `install.sh`
+run warns on stderr that the flags were not used and no journal backup was made.
+It names the store's schema version before this install, or says there was no store then.
+The flags' values are not checked. The warning also appears when installation
+finishes with exit 6 because MCP registration failed; a refused install adds
+no such warning. Do not treat `--journal-backup` as a backup in this case.
+
 ### Upgrade refusal reasons
 
 Each reason is `details.refusal.reason` in the envelope, and its action is
