@@ -105,6 +105,7 @@ var Catalog = []Entry{
 	{Name: "ErrDialogMaybeOpen", Err: api.ErrDialogMaybeOpen},
 	{Name: "ErrInvalidDecision", Err: api.ErrInvalidDecision},
 	{Name: "ErrInvalidFlags", Err: api.ErrInvalidFlags},
+	{Name: "ErrTooManyIds", Err: api.ErrTooManyIds},
 	{Name: "ErrMissingRequestToken", Err: api.ErrMissingRequestToken},
 	{Name: "ErrNoOpenPermissionRequest", Err: store.ErrNoOpenPermissionRequest},
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},

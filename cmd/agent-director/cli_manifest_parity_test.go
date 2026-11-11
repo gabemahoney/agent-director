@@ -68,9 +68,10 @@ var flagSetReaders = map[string]bool{
 
 // nonFlagParams are the manifest params a CLI verb takes other than as a flag.
 var nonFlagParams = map[string][]string{
-	"spawn":      {"agent_args"}, // the argv after --
-	"trail-emit": {"sub_verb"},   // the first positional argument
-	"hook":       {"stdin"},      // the hook payload on stdin
+	"get-many":   {"instance_ids"}, // the words after the command are the ids
+	"spawn":      {"agent_args"},   // the argv after --
+	"trail-emit": {"sub_verb"},     // the first positional argument
+	"hook":       {"stdin"},        // the hook payload on stdin
 }
 
 // flagSetReaderFuncs are the functions, by package path and name, that take a

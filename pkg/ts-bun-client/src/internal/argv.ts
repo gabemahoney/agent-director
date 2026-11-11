@@ -7,7 +7,7 @@
  *   [cliPath, ...globalFlags, verbName, ...verbFlags]
  *
  * Rules:
- *   - Long-flag form only (e.g. --cwd, --instance-id).
+ *   - Long-flag form (e.g. --cwd, --instance-id); get-many takes ids as words.
  *   - No shell interpolation, no sh -c.
  *   - Mapping between camelCase method name and kebab CLI verb follows the
  *     same mapping in src/internal/verbs.ts.
@@ -25,6 +25,8 @@
  *     names are refused with ErrReservedEnvKey, the name the CLI gives every
  *     refused extra_env key, thrown from buildArgv, so no subprocess runs
  *     (b.vpb, b.66q; see extraEnvFlags).
+ *   - get-many refuses ids the CLI cannot carry: global-flag names (including
+ *     equals spellings) and NUL bytes, before any subprocess runs.
  *
  * Implements SRD SR-1.2 (argv construction is verb-driven and shell-free).
  *
@@ -37,6 +39,7 @@ import type {
   SpawnParams,
   StatusParams,
   GetParams,
+  GetManyParams,
   SendKeysParams,
   ReadPaneParams,
   KillParams,
@@ -54,6 +57,11 @@ import type {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/** The CLI global flags ParseGlobalFlags takes anywhere in argv. Internal only. */
+export const GLOBAL_FLAGS = [
+  "--store-path", "--home", "--tmux-command", "--create-if-missing",
+] as const;
 
 /**
  * GlobalArgvOptions — values for the global CLI flags (b.32k, b.78b). Each
@@ -165,6 +173,8 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
       return buildStatus(params as StatusParams);
     case "get":
       return buildGet(params as GetParams);
+    case "get-many":
+      return buildGetMany(params as GetManyParams);
     case "send-keys":
       return buildSendKeys(params as SendKeysParams);
     case "read-pane":
@@ -205,6 +215,20 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
 // ---------------------------------------------------------------------------
 // Per-verb builders
 // ---------------------------------------------------------------------------
+
+function buildGetMany(p: GetManyParams): string[] {
+  for (const [i, id] of p.instance_ids.entries()) {
+    if (GLOBAL_FLAGS.some((flag) => id === flag || id.startsWith(`${flag}=`))) {
+      throw new ErrInvalidFlags("get-many", "ErrInvalidFlags",
+        `get-many: id at position ${i + 1} would be consumed as a CLI global flag`);
+    }
+    if (id.includes("\u0000")) {
+      throw new ErrInvalidFlags("get-many", "ErrInvalidFlags",
+        `get-many: id at position ${i + 1} contains a NUL byte, which a CLI argument cannot carry`);
+    }
+  }
+  return ["get-many", ...p.instance_ids];
+}
 
 function buildVersion(): string[] {
   return ["version"];

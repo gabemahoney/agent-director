@@ -410,15 +410,16 @@ previous release". The current installer refuses pre-move binaries with exit 3.
 
    - *What this is:* `agent-director sweep` checks all agents once,
      recovering missed state changes and refreshing observations without
-     a read. On supporting versions, `status`, `get` and `list` run the
-     same checks for returned agents. Absent or failed checks can leave
-     facts old until later evidence arrives. `agent-director expire`
-     separately deletes eligible finished rows past their retention. The skill
-     ships ready-made schedule files in `schedule/` beside this
-     SKILL.md (a cron file, and a systemd user `.service` and `.timer`
-     for each sweep); `--schedule` installs them for the user running
-     the script. The operator chooses the cadence: accept the defaults
-     in this question or choose no and arrange a custom schedule using
+     a read. On supporting versions, `status`, `get`, `get-many` and
+     `list` run the same checks for returned agents. Absent or failed
+     checks can leave facts old until later evidence arrives.
+     `agent-director expire` separately deletes eligible finished rows
+     past their retention. The skill ships ready-made schedule files in
+     `schedule/` beside this SKILL.md (a cron file, and a systemd user
+     `.service` and `.timer` for each sweep); `--schedule` installs them
+     for the user running the script. The operator chooses the cadence:
+     accept the defaults in this question or choose no and arrange a
+     custom schedule using
      [Maintenance](https://github.com/gabemahoney/agent-director/blob/main/docs/maintenance.md#scheduling-the-sweeps).
    - *Who must run it:* the sweeps must run as the agents' user, in the
      agents' tmux environment, against the agents' `~/.config/agent-director`.

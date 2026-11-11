@@ -825,6 +825,20 @@ export interface GetResult {
   unproven_requests: PermissionRequestInfo[];
 }
 
+/** The ids whose full rows are requested, in order. */
+export interface GetManyParams {
+  /** One up to the configured Id Cap (20 by default), none empty or repeated. */
+  instance_ids: string[];
+}
+
+/** Full get rows and ids without a record, each in input order. */
+export interface GetManyResult {
+  /** Exactly get's result for each found id. Always an array, never null. */
+  spawns: GetResult[];
+  /** Ids without a record. Always an array, never null. */
+  not_found: string[];
+}
+
 /**
  * Parameters for sending keys. A call is plain, or a pane answer when
  * `request_token` is set: a pane answer needs `as`, `key` and
@@ -1037,6 +1051,12 @@ export interface RecordPaneAnswerResult {
 // facts as fields (an ErrInternal included: PaneKeySentDetails); it is null for
 // every other error.
 // ---------------------------------------------------------------------------
+
+/** ErrTooManyIds's errDetails: the Id Cap in force for the refusing call. */
+export interface TooManyIdsDetails {
+  /** Maximum number of ids accepted in one call. */
+  id_cap: number;
+}
 
 /**
  * ErrPauseTimeout's errDetails after exit keys were sent but ended was not

@@ -6,6 +6,9 @@ is performed by Claude Code, not by agent-director — this document
 describes the resulting behavior so operators can predict what a Spawn
 will allow / deny / ask for.
 
+[`get-many`](caller-contract.md#reading-many-agents) returns `get`'s full
+result for each ID, with the same fields and guarantees described here.
+
 For Claude Code's own permissions reference, see:
 <https://docs.claude.com/en/docs/claude-code/iam#permission-rules>.
 
@@ -771,7 +774,7 @@ spawn marked `missing` or ended by its agent never keeps an open request.
 ### Delivery
 
 Every relayed request carries its delivery facts. They are worked out each
-time the request is read, by `decide`, `get`, `list` and `get-permission`;
+time the request is read, by `decide`, `get`, `get-many`, `list` and `get-permission`;
 the only writes for them are `hook_gone_at` and the time the request fell
 back. `proven_gone_at` and
 `proven_gone_how` are written by the agent's own hooks, validated Cursor
@@ -870,22 +873,22 @@ bounds the whole call, from its start, and has no default:
   a lock not taken in that time is `ErrInternal`, as before this option.
   A negative value is `ErrInvalidFlags`.
 
-**Reading verbs never wait.** `get`, `list` and `get-permission` write
+**Reading verbs never wait.** `get`, `get-many`, `list` and `get-permission` write
 `hook_gone_at` the first time they find a request fallen back only if the
 store's write lock is free at that moment; otherwise they skip the write
 and report `hook_gone_at` as stored. `list` also skips it once a
 display write of the same read found the lock taken. `decide` always writes
-it (within its bound). `status`, `get`, `list` and `get-permission` record
+it (within its bound). `status`, `get`, `get-many`, `list` and `get-permission` record
 the time a request fell back on the same terms.
 
-**Which requests `get` and `list` show.** A row in `check_permission`
+**Which requests `get`, `get-many` and `list` show.** A row in `check_permission`
 lists, in `permission_requests`, the requests that still await an answer:
 not confirmed by their relay hook and with no pane answer recorded,
 decided or not (a recorded verdict not yet confirmed has not reached the
 agent), and not closed with the spawn. A row can read `waiting`, `working`
 or `ask_user` while one of its requests still awaits an answer, so a caller
 follows each request it tracks with `get-permission`, not only rows in
-`check_permission`. `get` (not `list`) also carries `unproven_requests`:
+`check_permission`. `get` and each `get-many` row (not `list`) also carry `unproven_requests`:
 every request of the row that holds the dialog (see "The dialog hold"
 below), in any state but `ended` and `missing`, with the same fields,
 including those agent-director's records read closed.

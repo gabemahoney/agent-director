@@ -12,6 +12,7 @@ package config_test
 // the largest busy timeout SQLite holds; 60000 ms, MaxStateSettleMs) loads as
 // written; Load refuses a negative value and one above the largest, the way
 // it refuses a [tmux] value, never clamping it.
+// [get_many] id_cap defaults to 20 and has no timeout-derived maximum.
 
 import (
 	"testing"
@@ -53,6 +54,10 @@ func pauseRefusal(v string) string {
 	return "[pause] timeout_seconds = " + v + ", outside its range 1 to 9223372036 seconds"
 }
 
+func idCapRefusal(v string) string {
+	return "[get_many] id_cap = " + v + ", outside its range 1 or more"
+}
+
 func preTrustRefusal(v string) string {
 	return "[pre_trust] lock_wait_seconds = " + v + ", outside its range 1 to 9223372036 seconds"
 }
@@ -74,8 +79,8 @@ func idleScreenRefusal(v string) string {
 }
 
 // TestRangeKeysLoad checks the values Load accepts: the file's value is kept
-// as written; effective timeouts remain positive and settle_ms 0 remains off.
-// Duration-ceiling expectations use int64 to avoid 32-bit literal overflow.
+// as written; effective timeouts and id_cap remain positive, and settle_ms 0
+// remains off. Large-value expectations use int64 to avoid literal overflow.
 func TestRangeKeysLoad(t *testing.T) {
 	idle, idleMax := int64(config.DefaultIdleScreenTimeoutSeconds), config.MaxIdleScreenTimeoutSeconds
 	cases := []struct {
@@ -89,21 +94,22 @@ func TestRangeKeysLoad(t *testing.T) {
 		settle, settleEffective         int // 0 is off, its own value (b.3ie)
 		needsIntelligence               int64
 		idleScreen, idleScreenEffective int64
+		idCap, idCapEffective           int64
 	}{
-		{"missing", rangeKeys{}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, idle, idle},
+		{"missing", rangeKeys{}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, idle, idle, 20, 20},
 		{"zero", rangeKeys{days: "0", relay: "0", pause: "0", preTrust: "0", busyTimeout: "0", settle: "0", needsIntelligence: "0",
-			idleScreen: "0"}, 0, 31, 0, 86400, 0, 30, 0, 12, 0, 10000, 0, 0, 0, 0, idle},
+			idleScreen: "0", idCap: "0"}, 0, 31, 0, 86400, 0, 30, 0, 12, 0, 10000, 0, 0, 0, 0, idle, 0, 20},
 		{"one", rangeKeys{days: "1", relay: "1", pause: "1", preTrust: "1", busyTimeout: "1", settle: "1", needsIntelligence: "1",
-			idleScreen: "1"}, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-		{"default_written", rangeKeys{relay: "86400", pause: "30", preTrust: "12", busyTimeout: "10000", needsIntelligence: "30"}, 31, 31,
-			86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, idle, idle},
-		{"recommended_settle", rangeKeys{settle: "1500"}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 1500, 1500, 30, idle, idle},
+			idleScreen: "1", idCap: "1"}, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+		{"default_written", rangeKeys{relay: "86400", pause: "30", preTrust: "12", busyTimeout: "10000", needsIntelligence: "30", idCap: "20"}, 31, 31,
+			86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, idle, idle, 20, 20},
+		{"recommended_settle", rangeKeys{settle: "1500"}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 1500, 1500, 30, idle, idle, 20, 20},
 		{"state_keys_together", rangeKeys{settle: "1500", needsIntelligence: "5", idleScreen: "60"}, 31, 31, 86400, 86400, 30, 30, 12, 12,
-			10000, 10000, 1500, 1500, 5, 60, 60},
+			10000, 10000, 1500, 1500, 5, 60, 60, 20, 20},
 		{"largest", rangeKeys{days: "106751", relay: "2147483", pause: "9223372036", preTrust: "9223372036",
-			busyTimeout: "2147483647", settle: "60000", needsIntelligence: "9223372036", idleScreen: "9223372036"}, 106751, 106751, 2147483,
+			busyTimeout: "2147483647", settle: "60000", needsIntelligence: "9223372036", idleScreen: "9223372036", idCap: "9223372036854775807"}, 106751, 106751, 2147483,
 			2147483, 9223372036, 9223372036, 9223372036, 9223372036, 2147483647, 2147483647, 60000, 60000, 9223372036, idleMax,
-			idleMax},
+			idleMax, 9223372036854775807, 9223372036854775807},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,6 +128,8 @@ func TestRangeKeysLoad(t *testing.T) {
 					int64(cfg.Relay.EffectiveTimeoutSeconds()), int64(tc.relayEffective)},
 				{"Pause.TimeoutSeconds", int64(cfg.Pause.TimeoutSeconds), tc.pause,
 					int64(cfg.Pause.EffectiveTimeoutSeconds()), tc.pauseEffective},
+				{"GetMany.IdCap", int64(cfg.GetMany.IdCap), tc.idCap,
+					int64(cfg.GetMany.EffectiveIdCap()), tc.idCapEffective},
 				{"PreTrust.LockWaitSeconds", int64(cfg.PreTrust.LockWaitSeconds), tc.preTrust,
 					int64(cfg.PreTrust.EffectiveLockWaitSeconds()), tc.preTrustEffective},
 				{"Store.BusyTimeoutMs", int64(cfg.Store.BusyTimeoutMs), int64(tc.busy),
@@ -200,6 +208,7 @@ func TestRangeKeysRefusalDescription(t *testing.T) {
 			"refused [relay] values: " + relayRefusal("9223372037") + refusalTail},
 		{"relay_int64_min", rangeKeys{relay: "-9223372036854775808"}, nil,
 			"refused [relay] values: " + relayRefusal("-9223372036854775808") + refusalTail},
+		{"id_cap_negative", rangeKeys{idCap: "-1"}, nil, "refused [get_many] values: " + idCapRefusal("-1") + refusalTail},
 		{"pause_negative", rangeKeys{pause: "-1"}, nil, "refused [pause] values: " + pauseRefusal("-1") + refusalTail},
 		{"pause_window_wraps", rangeKeys{pause: "9223372037"}, nil,
 			"refused [pause] values: " + pauseRefusal("9223372037") + refusalTail},
@@ -268,10 +277,10 @@ func TestRangeKeysRefusalDescription(t *testing.T) {
 		{"three_tables", rangeKeys{relay: "-1", pause: "9223372037"}, killNegativeTmux,
 			"refused [relay], [pause] and [tmux] values: " + relayRefusal("-1") + "; " + pauseRefusal("9223372037") +
 				"; " + killNegative + refusalTail},
-		{"every_table", rangeKeys{days: "106752", relay: "2147484", pause: "-1", preTrust: "-1", busyTimeout: "-1",
+		{"every_table", rangeKeys{days: "106752", relay: "2147484", pause: "-1", idCap: "-1", preTrust: "-1", busyTimeout: "-1",
 			settle: "-1"}, killNegativeTmux,
-			"refused [defaults], [relay], [pause], [pre_trust], [store], [state] and [tmux] values: " +
-				retentionRefusal("106752") + "; " + relayRefusal("2147484") + "; " + pauseRefusal("-1") + "; " +
+			"refused [defaults], [relay], [pause], [get_many], [pre_trust], [store], [state] and [tmux] values: " +
+				retentionRefusal("106752") + "; " + relayRefusal("2147484") + "; " + pauseRefusal("-1") + "; " + idCapRefusal("-1") + "; " +
 				preTrustRefusal("-1") + "; " + busyTimeoutRefusal("-1") + "; " + settleRefusal("-1") + "; " + killNegative +
 				refusalTail},
 	}

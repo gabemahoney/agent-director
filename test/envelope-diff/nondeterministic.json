@@ -15,6 +15,13 @@
     ".permission_requests[*].attempted_at",
     ".permission_requests[*].hook_gone_at"
   ],
+  "get-many": [
+    ".spawns[*].confirmations.process_liveness.checked_at",
+    ".spawns[*].confirmations.process_liveness.confirmed_at",
+    ".spawns[*].confirmations.displayed_state.checked_at",
+    ".spawns[*].permission_requests[*].attempted_at",
+    ".spawns[*].permission_requests[*].hook_gone_at"
+  ],
   "get-permission": [
     ".attempted_at",
     ".hook_gone_at",

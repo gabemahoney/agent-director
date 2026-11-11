@@ -1,8 +1,8 @@
 package api_test
 
-// advice_follow_misc_test.go (b.fji F2, F3, G1; b.k6i F11): list's label
+// advice_follow_misc_test.go (b.fji F2, F3, G1; b.k6i F11; b.ic1 F13): list's label
 // refusal, decide's missing request token, get's and list's state_changed_at
-// and api.New's uninitialised store, each followed literally.
+// and api.New's uninitialised store, plus get-many's split advice, followed literally.
 
 import (
 	"errors"
@@ -151,5 +151,35 @@ func TestAdviceFollow_G1_StoreNotInitialized(t *testing.T) {
 				t.Errorf("list on the opened store: %v", err)
 			}
 		})
+	}
+}
+
+// TestAdviceFollow_F13_SplitAtIdCap: F13 "split the ids across calls of at most 20".
+func TestAdviceFollow_F13_SplitAtIdCap(t *testing.T) {
+	t.Parallel()
+	e := newKillEnv(t)
+	ids := manyIDs(21)
+	for _, id := range ids {
+		e.seedRow(t, killRowSpec{ID: id, State: store.StateEnded})
+	}
+	c, _ := e.client(t)
+	_, err := c.GetMany(ids)
+	adviceAssertAdvice(t, err, api.ErrTooManyIds, "split the ids across calls of at most 20")
+	details, ok := api.ErrDetails(err).(api.TooManyIdsDetails)
+	if !ok || details.IdCap != 20 {
+		t.Fatalf("details=%+v", api.ErrDetails(err))
+	}
+	var found []string
+	for start := 0; start < len(ids); start += details.IdCap {
+		result, err := c.GetMany(ids[start:min(start+details.IdCap, len(ids))])
+		if err != nil || len(result.NotFound) != 0 {
+			t.Fatalf("split call: %+v %v", result, err)
+		}
+		for _, row := range result.Spawns {
+			found = append(found, row.InstanceID)
+		}
+	}
+	if jsonOf(t, found) != jsonOf(t, ids) {
+		t.Fatalf("split returned %v; want %v", found, ids)
 	}
 }

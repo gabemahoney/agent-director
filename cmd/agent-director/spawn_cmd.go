@@ -461,6 +461,16 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 	return writeJSON(os.Stdout, res)
 }
 
+// getManyHandlerWith takes every remaining word as an id, unchanged.
+// The global flags were already removed by clisetup.ParseGlobalFlags.
+func getManyHandlerWith(client *pkgapi.Client, args []string) error {
+	res, err := client.GetMany(args)
+	if err != nil {
+		return writeVerbError(err)
+	}
+	return writeJSON(os.Stdout, res)
+}
+
 // listSubagentsHandlerWith implements `agent-director list-subagents`.
 func listSubagentsHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string

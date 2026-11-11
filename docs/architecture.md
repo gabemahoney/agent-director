@@ -1666,9 +1666,12 @@ truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
   <unit>", and `[state] settle_ms` (see
   [Settle time (b.3ie)](#settle-time-b3ie)), refused the same way as
   "outside its range 0 to <max> milliseconds", since 0 is its default
-  (off); every refused key is described in one `*config.ConfigError`,
+  (off). `[get_many] id_cap` refuses only negative integers, as "outside its
+  range 1 or more", with no maximum; callers use `GetMany.EffectiveIdCap`
+  (missing or 0 gives `DefaultGetManyIdCap`, 20).
+  Every refused key is described in one `*config.ConfigError`,
   the tables in the order `[defaults]`, `[relay]`, `[pause]`,
-  `[pre_trust]`, `[store]`, `[state]`, `[tmux]`, each table's keys in table order. The description
+  `[get_many]`, `[pre_trust]`, `[store]`, `[state]`, `[tmux]`, each table's keys in table order. The description
   opens "refused <tables> values: ", the tables with a refused key listed
   as one name, two joined by " and ", or three or more separated by ", "
   with " and " before the last (`nameList`, which also lists a key's
@@ -1778,7 +1781,7 @@ files carry the detail.
 | `unusable.go` | `UnusableKind` and `Unusable(name)`, the unusable recorded-name guard. |
 | `agent_process.go` | `ProcIdentity`, `AgentSource`, `AgentProcess`, `SelectAgentProcess`, `ProcState` and `JudgeProcess`. |
 | `pane_token.go` | `PaneMatch` and `PaneByToken(panes, token)`. |
-| `sweep.go` | `Sweep`, `NewSweep`, `(*Sweep) Lookup`, `PaneLister`, `PaneListing`, `(*Sweep) ListPanes`. |
+| `sweep.go` | `Sweep`, `StoppedSockets`, `NewSweep`, `NewSweepFrom`, `(*Sweep) Lookup`, `PaneLister`, `PaneListing`, `(*Sweep) ListPanes`. |
 | `starting_session.go` | `Elapsed` with `Under`, `SessionAge`, `StartingSessionOutcome` (`StillStopping`, `StillStarting`, `PastBoth`), `StartingSessionInput`, `StartingSessionClass` and `StartingSession`. |
 
 **Entry points.**
@@ -2050,13 +2053,21 @@ takes each session's agent pane by its label's token.
 
 #### Sweep (`sweep.go`)
 
-A `Sweep` serves one `find-missing` or `expire` run (SR-3.15, SR-13.3,
-SR-13.5) and is not for concurrent use.
+A `Sweep` serves one run: a sweep verb's or one Active Check invocation
+(SR-3.15, SR-13.3, SR-13.5). Its stop rule may start from and add to a caller's
+record of stopped sockets. It is not for concurrent use.
 
+- `StoppedSockets` holds only sockets the stop rule stopped, keyed by
+  `Launch.Socket` exactly as passed. Its zero value is empty; successive
+  Sweeps may share it, never concurrently.
 - `NewSweep(c LookupClient, pc ProcChecker, now func() time.Time, budget time.Duration) *Sweep`
-  makes no call and does not read `now`. Callers pass the effective sweep
+  keeps its signature and behaviour, giving the Sweep its own stop record.
+  It makes no call and does not read `now`. Callers pass the effective sweep
   budget (`config.Tmux.EffectiveSweepBudget`); the Sweep reads no
   configuration and no environment.
+- `NewSweepFrom(c LookupClient, pc ProcChecker, now func() time.Time, budget time.Duration, stopped *StoppedSockets) *Sweep`
+  uses the caller's stop record, or a record of its own when nil. Held lookup
+  answers, pane listings and spent budget belong to this Sweep alone.
 - `(*Sweep) Lookup(row Launch, holderName string) Result`: **one lookup per
   socket**, keyed by `row.Socket` exactly as passed (never resolved or
   created). The first row to reach a socket makes its one
@@ -2072,17 +2083,19 @@ SR-13.5) and is not for concurrent use.
   requesting row exactly as a lookup failure (`PaneListing.Result`).
   `expire` never lists panes.
 
-**Stop rule (per socket).** A result on a socket that is Can't tell
-unreadable or tmux unavailable, from the lookup or the pane listing, stops
-that socket: that row gets its real result, and every later row of the
-socket is Skipped with no call, even when its answer is held. Other sockets
+**Stop rule (per socket).** A socket already in the record is stopped from
+the start: no call is made and nothing held is handed out. A lookup or pane
+listing result of Can't tell unreadable or tmux unavailable stops its socket
+and adds it to the record: that row gets its real result, and every later row
+of the socket is Skipped with no call, even when its answer is held. Other sockets
 go on. A different server, a `provenance_conflict` and a no-server or
-no-socket reply stop nothing. `tmux.Result.StopsSocket()` is the one
-predicate for this rule; **must use:** code that stops a socket on a result
-calls it, never its own test of the verdict. `sweepSocket.stopOn` uses it
+no-socket reply stop nothing. A call discarded for spending the budget and
+a failed capture add nothing to the record. `tmux.Result.StopsSocket()` is
+the one predicate for this rule; **must use:** code that stops a socket on a result
+calls it, never its own test of the verdict. `Sweep.stopOn` uses it
 for both liveness fallback and pane sampling
-in [Shared active checks](#shared-active-checks). Selected rows share the
-socket stop rule and cumulative budget.
+in [Shared active checks](#shared-active-checks). Rows within one Sweep share
+the socket stop rule and cumulative budget.
 
 **Budget (on the injected clock).** Each call's time is `now()` at its
 return minus `now()` at its start, added only when positive (a clock stepped
@@ -2102,7 +2115,9 @@ outcome tokens. Callers check `Skipped` first.
 through one `tmux.NewSweep` per run and its `Lookup` and `ListPanes`; never
 call `tmux.Lookup` per row in a sweep, and never re-implement the grouping,
 the stop rule or the budget. `find-missing` and `expire` use it (see
-[`find-missing`](#find-missing) and [`expire`](#expire)).
+[`find-missing`](#find-missing) and [`expire`](#expire)). Code carrying stops
+across Sweeps must use `tmux.StoppedSockets` and `tmux.NewSweepFrom`, never
+its own set of sockets.
 
 #### Starting-session rule (`starting_session.go`)
 
@@ -4653,7 +4668,7 @@ their deadlines at any value of the key:
 | --- | --- | --- |
 | `decide` with `max_wait_ms` | its caller's | the verdict write waits at most what is left of the bound (`ErrStoreBusy`, nothing recorded), and the ack wait ends at the bound; a caller passes at most its deadline minus 1 s |
 | the relay hook | Claude Code's kill, its start plus its `--timeout` | write budget ends 2 s before the kill; a late or uncertain ack/timeout COMMIT may persist, but emits no answer (see the relay lifecycle) |
-| `get`, `list`, `get-permission` | the caller's | their relay-delivery write (`hook_gone_at` and the fallback clock, see [Readers never wait](#readers-never-wait-problem-4)) waits 0 and is skipped when the lock is held |
+| `get`, `get-many`, `list`, `get-permission` | the caller's | their relay-delivery write (`hook_gone_at` and the fallback clock, see [Readers never wait](#readers-never-wait-problem-4)) waits 0 and is skipped when the lock is held |
 
 The other hooks (SessionStart, UserPromptSubmit, PostToolUse and
 PostToolUseFailure with their close of a request whose tool ran, Stop, the
@@ -5213,6 +5228,25 @@ projects already-selected IDs: it never reapplies filters, fills limit slots or
 probes hidden descendants.
 Family fields use the consistent stored projection, with unconfirmed freshness.
 
+**Must reuse for get-many:** `Client.GetMany` calls Get's complete one-ID read,
+`getSettled`, once per ID in order, with a fresh `relayView()` and settle read
+each time. The call makes one `tmux.StoppedSockets` record and sets it on each
+ID's `activeCheckProviders.stoppedSockets`; each ID's Sweep starts from it
+and adds sockets its stop rule stops. Later IDs on a stopped socket make no
+tmux call: pane sampling fails and liveness lookup is unanswered, as for any
+stop-rule skip. Nothing else carries between IDs: each keeps Get's check
+pass, sweep budget, held lookup answers and listings, family refresh and
+projection. A capture timeout stops nothing; no-server and no-socket replies
+are asked again by each ID. `get`, `list`, `status`, `sweep`/`find-missing`
+and `expire` pass no record. There is no batch read or second projection.
+Before any read, `pkg/api` refuses a call with no IDs (`ErrInvalidFlags`), then one with more
+than the Client-loaded Id Cap (`ErrTooManyIds`, a `DetailedError` with
+`TooManyIdsDetails`), then one with an empty or repeated ID (`ErrInvalidFlags`).
+It separates `ErrSpawnNotFound` IDs into `NotFound` and stops on any other
+error with both lists empty.
+Earlier reads' writes stay.
+The Get mechanisms below apply to each ID's read.
+
 **Must reuse for recovery tick attribution:** `Store.WithRecoveryTickSource`
 (`internal/store/recovery.go`) supplies the orphan-closeout tick's source through
 an immutable per-call store view; `recoveryTickTrail`
@@ -5229,7 +5263,7 @@ the complete earlier row, not a lightweight validation row. A final common
 stored projection carries committed changes for the selected families; it is
 not another recovery pass. Context keeps its existing provenance and nullability.
 
-Get uses the optional `ListSessionHistorySnapshot` capability after preceding
+Get, including each GetMany read, uses the optional `ListSessionHistorySnapshot` capability after preceding
 recovery refreshes and before display observation can lease the connection.
 **Must reuse:** this bounded store read validates the full row snapshot, launch
 identity and life and reads history in one SQLite read transaction, ending it
@@ -5328,8 +5362,8 @@ change none of their bound versions (see `processProbe` below).
   Narrow stores without evidence get
   unknown records (`withUnknownMainFields`).
 
-Each row's evidence commits under its own guards; one failed row does not
-suppress another row's eligible work. Cursor's local
+Each row's evidence commits under its own guards; in List and Sweep, one failed
+row does not suppress another row's eligible work. Cursor's local
 stale-proof handling preserves independent List results; genuine selection-wide
 errors and direct-read conflicts retain their existing failure shapes.
 
@@ -9426,12 +9460,12 @@ surface shows spells it `manifest.ReuseOptInSpelling`, "reuse_finished
 - A reused id starts a fresh conversation with no memory of the old
   conversation. Same-agent reuse keeps its life and visible history/records.
   The contract phrases "starts with no memory of its earlier lives" and
-  "resume and get never use or show an earlier life's history" refer to
+  "resume, get and get-many never use or show an earlier life's history" refer to
   agent lives: only a switch ends one. Same-agent reuse retains history
   for inspection, while resume continues only the latest session.
   An exact stored-agent change starts a fresh life, including a switch back.
-  `get` never shows an earlier life's history; `resume` never uses an
-  archived session, even within the current life. Children remain listed
+  `get` and `get-many` never show an earlier life's history; `resume` never
+  uses an archived session, even within the current life. Children remain listed
   and running across either switch (see "History belongs to a life" under
   [internal/store](#internalstore)).
 - Claude session S1 runs and ends, Codex runs and ends on the same id,
@@ -14629,7 +14663,7 @@ durability. The CLI's `--max-wait-ms` (`optionalInt64Value`, so an absent flag i
 
 ### Readers never wait (problem 4)
 
-`get`, `list` and `get-permission` judge every request they return
+`get`, `get-many`, `list` and `get-permission` judge every request they return
 through the Client's `relayView()`. Their relay-delivery write is one
 eligible attempt per request through `recordGone`, with a lock wait of 0
 (`readerLockWait`): `RecordPermissionFallbacks` stores `hook_gone_at` with
@@ -14646,14 +14680,14 @@ differ only for a Cursor relay-off request with zero `admitted_at` and
 nothing. The write happens only if the store's write lock is free at that
 moment; busy or failed, it writes nothing, and the reply reports
 `hook_gone_at` as stored. `decide` writes `hook_gone_at` with its own
-bounded wait. `get` and `list` list a row's requests that still await an
+bounded wait. `get`, `get-many` and `list` list a row's requests that still await an
 answer, decided or not, only while the row is in `check_permission`, so
 never a closed request (closed with its Spawn, or at the pane); `list`
 rows carry `permission_requests` as `get` does. Selected reads use the bounded
 `activePermissionReader`; their display observation and response share
 `readJudgedRequests`. A listed raw `check_permission` row projects actual
 open requests through `judgedOpenInfos`, preserving narrow-provider fallbacks.
-`get` reads a row in any state but `ended` and `missing` and projects both lists
+`get` (also each `get-many` read) reads a row in any state but `ended` and `missing` and projects both lists
 (`judgedSpawnInfos`), oldest first (`created_at`, then request id), each
 request judged once:
 `permission_requests`, the requests that still await an answer
@@ -14672,7 +14706,7 @@ fallback write suppresses later fallback writes; independent selected rows
 retain their own observation attempts. Neither judging nor recording supplies
 permission response authority.
 
-With `[state] settle_ms` set, `status`, `get` and `list` derive the settled state inside
+With `[state] settle_ms` set, `status`, `get`, `get-many` and `list` derive the settled state inside
 their own SELECT from the reader's clock (`SettleRead.stateExpr`), so
 settling adds no read, write or wait; the requests they list follow the
 raw state, never the settled one (see

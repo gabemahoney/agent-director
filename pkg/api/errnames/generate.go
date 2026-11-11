@@ -119,6 +119,7 @@ var packageOf = map[string]string{
 	"ErrDialogMaybeOpen":       "api",
 	"ErrInvalidDecision":       "api",
 	"ErrInvalidFlags":          "api",
+	"ErrTooManyIds":            "api",
 	"ErrMissingRequestToken":   "api",
 
 	// internal/clisetup (b.vma, b.cm7): named by clisetup.Open, before any verb

@@ -255,6 +255,11 @@
     "description": ""
   },
   {
+    "name": "ErrTooManyIds",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrMissingRequestToken",
     "package": "api",
     "description": ""
