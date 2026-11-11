@@ -2,6 +2,7 @@ package tmux_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -175,7 +176,7 @@ func replyCase(entry string, k tmux.Call, name string) string {
 
 // replyCall makes one call of kind k answered by res (an Enter send follows a
 // silent text send) and returns the create's reply and the call's error.
-func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult) (tmux.CreateReply, error) {
+func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult, stdin bool) (tmux.CreateReply, error) {
 	t.Helper()
 	script := []tmux.RunResult{res}
 	if k == tmux.CallSendEnter {
@@ -202,7 +203,11 @@ func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult) (tmux
 	case tmux.CallCapture:
 		_, err = c.CapturePaneID(testSocket, "%0", 10, false)
 	case tmux.CallCreate:
-		reply, err = c.NewSession(testSocket, name, "/tmp", nil, []string{"claude"}, tmuxfix.Token, "agent-x", tmuxfix.StoreID)
+		var forward []string
+		if stdin {
+			forward = []string{"OPENROUTER_API_KEY"}
+		}
+		reply, err = c.NewSessionWithEnvPolicy(testSocket, name, "/tmp", nil, []string{"claude"}, tmuxfix.Token, "agent-x", tmuxfix.StoreID, nil, nil, forward)
 	case tmux.CallSetLabel:
 		err = c.SetLabel(testSocket, "$0", "%0", tmuxfix.Token, "agent-x", tmuxfix.StoreID)
 	default:
@@ -244,7 +249,9 @@ func wantCallError(t *testing.T, err error, k tmux.Call, want tmux.Failure) *tmu
 // create returns its reply on success and with FailLabel (a chained name's
 // label step failed; by id, the same answer is a success), else none.
 func TestReplayReplies(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "synthetic-forwarded-key")
 	entries := append(tmuxfix.Replies(replySocket), tmuxfix.CreateReplies()...)
+	entries = append(entries, tmuxfix.StdinCreateReplies()...)
 	for _, e := range entries {
 		for _, k := range e.Calls() {
 			for _, name := range replyCreateNames(k) {
@@ -253,7 +260,7 @@ func TestReplayReplies(t *testing.T) {
 					if e.ChainOnly && tmux.NeedsLabelByID(name) {
 						want = 0
 					}
-					reply, err := replyCall(t, k, name, e.Result())
+					reply, err := replyCall(t, k, name, e.Result(), strings.HasPrefix(e.Name, "stdin/"))
 					ce := wantCallError(t, err, k, want)
 					var wantReply tmux.CreateReply
 					if want == 0 || want == tmux.FailLabel {
@@ -264,6 +271,9 @@ func TestReplayReplies(t *testing.T) {
 					}
 					if ce == nil {
 						return
+					}
+					if strings.Contains(fmt.Sprintf("%+v %v", *ce, err), "synthetic-forwarded-key") {
+						t.Error("CallError fields or message retained forwarded value")
 					}
 					if k == tmux.CallCreate && (ce.ExitStatus != e.Exit || ce.HadStdout != (e.Stdout != "")) {
 						t.Errorf("ExitStatus %d, HadStdout %v; want %d, %v", ce.ExitStatus, ce.HadStdout, e.Exit, e.Stdout != "")
@@ -304,7 +314,7 @@ func TestReplayEveryCallKind(t *testing.T) {
 		for _, k := range tmuxfix.AllCalls() {
 			for _, name := range replyCreateNames(k) {
 				t.Run(replyCase(tc.name, k, name), func(t *testing.T) {
-					_, err := replyCall(t, k, name, tc.res)
+					_, err := replyCall(t, k, name, tc.res, false)
 					if ce := wantCallError(t, err, k, tc.want); ce.Socket != tc.socket {
 						t.Errorf("Socket = %q, want %q", ce.Socket, tc.socket)
 					}

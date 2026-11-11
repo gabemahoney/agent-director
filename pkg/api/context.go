@@ -14,15 +14,15 @@ import (
 // A known fraction estimates the last response's occupancy, not billing usage.
 type ContextReading struct {
 	// UsedTokens estimates the last response's context occupancy.
-	UsedTokens   *int64     `json:"used_tokens"`
+	UsedTokens *int64 `json:"used_tokens"`
 	// WindowTokens is the context capacity supported by the current evidence.
-	WindowTokens *int64     `json:"window_tokens"`
+	WindowTokens *int64 `json:"window_tokens"`
 	// Fraction is UsedTokens divided by WindowTokens.
-	Fraction     *float64   `json:"fraction"`
+	Fraction *float64 `json:"fraction"`
 	// Source names the evidence used to derive this reading.
-	Source       *string    `json:"source"`
+	Source *string `json:"source"`
 	// AsOf is the usage evidence's timestamp, in UTC.
-	AsOf         *time.Time `json:"as_of"`
+	AsOf *time.Time `json:"as_of"`
 }
 
 func contextOf(e store.SpawnContext) ContextReading {

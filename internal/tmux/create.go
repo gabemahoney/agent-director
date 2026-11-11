@@ -1,6 +1,8 @@
 package tmux
 
 import (
+	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -82,18 +84,56 @@ func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, co
 // server-global copies before exec of the pane command. The command remains
 // the pane's root process. An existing server's globals are never changed.
 func (c *Client) NewSessionWithEnvExclusions(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, exclude []string) (CreateReply, error) {
+	return c.NewSessionWithEnvPolicy(socket, name, cwd, envs, command, token, instanceID, storeID, exclude, exclude, nil)
+}
+
+// NewSessionWithEnvPolicy separates client exclusions, session unsets and host
+// forwarding. Forwarded values are read only here and carried only on stdin;
+// callers and recorders must pass names, never copied credential values.
+// Explicit session values take precedence over unsets. With no forwarding the
+// original argv transport is retained.
+func (c *Client) NewSessionWithEnvPolicy(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, exclude, unset, forward []string) (CreateReply, error) {
 	chained := !NeedsLabelByID(name)
+	if len(forward) > 0 {
+		envs = maps.Clone(envs)
+		if envs == nil {
+			envs = make(map[string]string)
+		}
+		for _, key := range forward {
+			if key == "" || strings.ContainsAny(key, "=\x00") {
+				return CreateReply{}, createRefusal("invalid forwarded environment name")
+			}
+			value := os.Getenv(key)
+			if value == "" {
+				return CreateReply{}, createRefusal(fmt.Sprintf("host environment %q is missing or empty", key))
+			}
+			envs[key] = value
+		}
+	}
 	environ := clientEnv(os.Environ())
 	if envs["AGENT_DIRECTOR_AGENT"] == "cursor" {
 		environ = cursorenv.WithoutSelection(environ)
 	}
-	if len(exclude) > 0 {
+	if len(exclude) > 0 || len(forward) > 0 {
 		environ = slices.DeleteFunc(environ, func(kv string) bool {
 			key, _, _ := strings.Cut(kv, "=")
-			return slices.Contains(exclude, key)
+			return slices.Contains(exclude, key) || slices.Contains(forward, key)
 		})
 	}
-	res := c.invokeEnv(CallCreate, socket, environ, createCommandsWithExclusions(name, cwd, envs, command, token, instanceID, storeID, chained, exclude)...)
+	commands := createCommandsWithExclusions(name, cwd, envs, command, token, instanceID, storeID, chained, unset)
+	var res RunResult
+	if len(forward) == 0 {
+		res = c.invokeEnv(CallCreate, socket, environ, commands...)
+	} else {
+		input, err := createConfig(commands)
+		if err != nil {
+			return CreateReply{}, err
+		}
+		res = c.invokeInput(CallCreate, socket, environ, input, []string{"start-server"}, []string{"source-file", "-"})
+		// source-file prefixes command failures with its input location. Only
+		// this transport accepts that prefix; no arbitrary diagnostic survives.
+		res = privateCreateResult(res, socket)
+	}
 	if res.Status == RunNotStarted || res.Status == RunTimedOut {
 		return CreateReply{}, c.runFailure(CallCreate, res)
 	}
@@ -136,6 +176,10 @@ func createCommands(name, cwd string, envs map[string]string, command []string, 
 }
 
 func createCommandsWithExclusions(name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, chained bool, exclude []string) [][]string {
+	exclude = slices.DeleteFunc(slices.Clone(exclude), func(key string) bool {
+		_, explicit := envs[key]
+		return explicit || key == instanceIDEnv
+	})
 	create := []string{"new-session", "-d", "-s", name, "-c", escapeFormat(cwd), "-e", instanceIDEnv + "=" + instanceID}
 	if envs["AGENT_DIRECTOR_AGENT"] == "cursor" {
 		// Preserve Cursor's create transport. Its gateway filters the runtime
@@ -148,7 +192,7 @@ func createCommandsWithExclusions(name, cwd string, envs map[string]string, comm
 	}
 	rest := make(map[string]string, len(envs))
 	for k, v := range envs {
-		if k != instanceIDEnv && !slices.Contains(exclude, k) {
+		if k != instanceIDEnv {
 			rest[k] = v
 		}
 	}

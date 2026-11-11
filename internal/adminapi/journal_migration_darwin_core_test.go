@@ -3,8 +3,8 @@ package adminapi
 import (
 	"bytes"
 	"context"
-	"debug/macho"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -68,7 +68,7 @@ func TestDarwinJournalFileEvidence(t *testing.T) {
 					}
 				}
 				h.processes[200].files = append(h.processes[200].files, entry)
-				h.check(context.Background(), "old_or_unverified_mutators", h.blocker(200, "agent_director_mutator"))
+				h.check(context.Background(), "old_or_unverified_mutators", h.blocker(200))
 			})
 		}
 	}
@@ -76,7 +76,7 @@ func TestDarwinJournalFileEvidence(t *testing.T) {
 
 func TestDarwinJournalRootFormsAndLookupGate(t *testing.T) {
 	t.Parallel()
-	for _, form := range []string{"outside-refused", "outside", "eval", "kernel", "kernel-error", "eval-error"} {
+	for _, form := range []string{"outside-refused", "outside", "eval", "kernel", "kernel-error", "eval-error", "ancestor-failed"} {
 		t.Run(form, func(t *testing.T) {
 			h := newDarwinTestHost(t)
 			fsys := &darwinTestFS{journalFS: osJournalFS{}, fold: true}
@@ -94,6 +94,14 @@ func TestDarwinJournalRootFormsAndLookupGate(t *testing.T) {
 				fsys.before = func(op, p string) error {
 					if form == "outside-refused" && strings.HasPrefix(p, h.root+"-unrelated") {
 						return syscall.EPERM
+					}
+					return nil
+				}
+				reason = ""
+			case "ancestor-failed":
+				fsys.before = func(op, p string) error {
+					if p == entry.name {
+						return syscall.EIO
 					}
 					return nil
 				}
@@ -125,7 +133,7 @@ func TestDarwinJournalRootFormsAndLookupGate(t *testing.T) {
 			}
 			h.processes[200].files = append(h.processes[200].files, entry)
 			if reason == "old_or_unverified_mutators" {
-				h.check(context.Background(), reason, h.blocker(200, "agent_director_mutator"))
+				h.check(context.Background(), reason, h.blocker(200))
 			} else {
 				h.check(context.Background(), reason)
 			}
@@ -141,160 +149,84 @@ func TestDarwinJournalRootFormsAndLookupGate(t *testing.T) {
 
 func TestDarwinJournalImages(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{
-		"name", "thin-main", "thin-dependency", "thin-test-binary", "test-binary-name",
-		"universal-later", "universal-other", "universal-no-metadata", "universal-not-executable",
-		// SR-2.15 Exemption: only the image finding disappears; other blockers remain.
-		"replaced", "removed", "changed", "changed-main", "replaced-at-open", "removed-at-open", "changed-at-open",
-		"lookup-not-directory", "open-not-directory", "removed-name", "removed-store-holder", "removed-root-holder", "removed-incomplete",
-		"plain", "not-executable", "open-refused", "lookup-refused", "open-eperm", "lookup-eperm", "no-txt", "first-txt",
-	} {
+	// SR-8.6: only the first txt name identifies the program. Its contents,
+	// current identity and availability cannot change that decision.
+	for _, named := range []bool{false, true} {
+		for _, state := range []string{"present", "replaced", "removed", "missing", "incomplete", "unreadable"} {
+			t.Run(fmt.Sprintf("named=%t/%s", named, state), func(t *testing.T) {
+				h := newDarwinTestHost(t)
+				path := h.image
+				if named {
+					path += "-agent-director"
+					h.write(path, []byte("ordinary contents"))
+				}
+				entry := h.file("txt", path)
+				switch state {
+				case "replaced":
+					h.write(path+".new", []byte("replacement contents"))
+					if err := os.Rename(path+".new", path); err != nil {
+						t.Fatal(err)
+					}
+				case "removed":
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				case "missing":
+					path += "-never-existed"
+					entry.name, entry.hasDev, entry.hasIno = path, false, false
+				case "incomplete":
+					entry.hasDev, entry.hasIno, entry.hasType = false, false, false
+				}
+				fsys := &darwinTestFS{journalFS: osJournalFS{}, before: func(op, p string) error {
+					if p == path && state == "unreadable" {
+						return syscall.EACCES
+					}
+					return nil
+				}}
+				h.v.fs = fsys
+				h.processes[200].files = []lsofFile{entry}
+				if named {
+					h.check(context.Background(), "old_or_unverified_mutators", h.blocker(200))
+				} else {
+					h.check(context.Background(), "")
+				}
+				for _, op := range []string{"lstat", "open", "eval", "kernel", "readdir"} {
+					if fsys.saw(op, path) {
+						t.Fatalf("program file inspected through %s", op)
+					}
+				}
+			})
+		}
+	}
+	for _, kind := range []string{"no-txt", "no-txt-store", "no-txt-root", "later-txt-name"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newDarwinTestHost(t)
 			fsys := &darwinTestFS{journalFS: osJournalFS{}}
 			h.v.fs = fsys
-			role := "unverified_process"
-			image := h.image
+			h.processes[200].files = nil
 			switch kind {
-			case "name", "removed-name":
-				image = filepath.Join(filepath.Dir(image), "renamed-agent-director-helper")
-				h.write(image, []byte("unreadable-image-content"))
-				role = "agent_director_mutator"
-			case "thin-main", "thin-dependency":
-				h.write(image, darwinThinImage(t, strings.TrimPrefix(kind, "thin-"), macho.TypeExec))
-				role = "agent_director_mutator"
-			case "thin-test-binary", "test-binary-name":
-				// Q2 ruling (SRD t1.x9o.g1 `## Decisions`): a Go test binary's
-				// metadata names no mutator; its file name still can.
-				role = ""
-				if kind == "test-binary-name" {
-					image = filepath.Join(filepath.Dir(image), "agent-director-admin.test")
-					role = "agent_director_mutator"
-				}
-				h.write(image, darwinThinImage(t, "test-binary", macho.TypeExec))
-			case "universal-later":
-				h.write(image, darwinUniversalImage(t, "other", "dependency"))
-				role = "agent_director_mutator"
-			case "universal-other":
-				h.write(image, darwinUniversalImage(t, "other", "other"))
-				role = ""
-			case "universal-no-metadata":
-				h.write(image, darwinUniversalImage(t, "none", "none"))
-				role = ""
-			case "universal-not-executable":
-				h.write(image, darwinUniversalImage(t, "non-executable", "non-executable"))
-			case "plain":
-				h.write(image, []byte("private-not-an-image"))
-			case "not-executable":
-				h.write(image, darwinThinImage(t, "main", macho.TypeObj))
+			case "no-txt-store":
+				h.processes[200].files = []lsofFile{h.file("4", h.db)}
+			case "no-txt-root":
+				path := filepath.Join(h.root, "held")
+				h.write(path, nil)
+				h.processes[200].files = []lsofFile{h.file("4", path)}
+			case "later-txt-name":
+				mapped := h.image + "-agent-director"
+				h.write(mapped, nil)
+				h.processes[200].files = []lsofFile{h.file("txt", h.image), h.file("txt", mapped)}
 			}
-			h.processes[200].files = []lsofFile{h.file("txt", image)}
-			switch kind {
-			case "replaced", "replaced-at-open":
-				replacement := image + ".new"
-				h.write(replacement, darwinThinImage(t, "main", macho.TypeExec))
-				if kind == "replaced-at-open" {
-					fsys.before = func(op, p string) error {
-						if op == "open" && p == image {
-							return os.Rename(replacement, image)
-						}
-						return nil
-					}
-				} else if err := os.Rename(replacement, image); err != nil {
-					t.Fatal(err)
-				}
-				role = ""
-			case "removed", "removed-name", "removed-store-holder", "removed-root-holder", "removed-incomplete":
-				role = ""
-				switch kind {
-				case "removed-name":
-					// The name wins even with incomplete evidence and an absent image.
-					h.processes[200].files = append(h.processes[200].files, lsofFile{fd: "err"})
-					role = "agent_director_mutator"
-				case "removed-store-holder", "removed-root-holder":
-					path := h.db
-					if kind == "removed-root-holder" {
-						path = filepath.Join(h.root, "held-file")
-						h.write(path, []byte("private-content"))
-					}
-					h.processes[200].files = append(h.processes[200].files, h.file("4", path))
-					role = "agent_director_mutator"
-				case "removed-incomplete":
-					entry := h.file("4", image)
-					entry.hasIno = false
-					h.processes[200].files = append(h.processes[200].files, entry)
-					role = "unverified_process"
-				}
-				if err := os.Remove(image); err != nil {
-					t.Fatal(err)
-				}
-			case "removed-at-open":
-				fsys.before = func(op, p string) error {
-					if op == "open" && p == image {
-						return os.Remove(image)
-					}
-					return nil
-				}
-				role = ""
-			case "changed", "changed-main":
-				if kind == "changed-main" {
-					h.write(image, darwinThinImage(t, "main", macho.TypeExec))
-				}
-				h.start = procstarttimefix.DarwinProcStarttime
-				h.procs.Set(200, procfix.Alive(h.start))
-				role = ""
-			case "changed-at-open":
-				data := darwinThinImage(t, "main", macho.TypeExec)
-				fsys.before = func(op, p string) error {
-					if op == "open" && p == image {
-						return os.WriteFile(image, data, 0600)
-					}
-					return nil
-				}
-				fsys.afterStat = func(op, p string, st journalStat) journalStat {
-					if op == "open" && p == image {
-						st.ctime = h.listedAt // post-start change, without a clock wait
-					}
-					return st
-				}
-				role = ""
-			case "open-refused", "lookup-refused", "open-eperm", "lookup-eperm", "lookup-not-directory", "open-not-directory":
-				op := "open"
-				if strings.HasPrefix(kind, "lookup-") {
-					op = "lstat"
-				}
-				err := syscall.EACCES
-				if strings.HasSuffix(kind, "eperm") {
-					err = syscall.EPERM
-				} else if strings.HasSuffix(kind, "not-directory") {
-					err, role = syscall.ENOTDIR, ""
-				}
-				fsys.before = func(gotOp, p string) error {
-					if gotOp == op && p == image {
-						return err
-					}
-					return nil
-				}
-			case "no-txt":
-				h.processes[200].files = nil
-			case "first-txt":
-				// The first txt is the image; a later mapping's module
-				// metadata must not substitute for the executable.
-				mapped := image + "-mapped"
-				h.write(mapped, darwinThinImage(t, "main", macho.TypeExec))
-				h.processes[200].files = append(h.processes[200].files, h.file("txt", mapped))
-				role = ""
-			}
-			if role == "" {
-				h.check(context.Background(), "")
+			if kind == "no-txt-store" || kind == "no-txt-root" {
+				h.check(context.Background(), "old_or_unverified_mutators", h.blocker(200))
 			} else {
-				h.check(context.Background(), "old_or_unverified_mutators", h.blocker(200, role))
+				h.check(context.Background(), "")
 			}
-			if (kind == "replaced" || kind == "removed" || strings.HasPrefix(kind, "lookup-") || kind == "changed" || kind == "changed-main") && fsys.saw("open", image) {
-				t.Fatal("opened an image without established identity and ctime")
-			}
-			if (strings.HasSuffix(kind, "-at-open") || strings.HasPrefix(kind, "open-")) && !fsys.saw("open", image) {
-				t.Fatal("did not reach the image open")
+			for _, path := range []string{h.image, h.image + "-agent-director"} {
+				for _, op := range []string{"lstat", "open", "eval", "kernel", "readdir"} {
+					if fsys.saw(op, path) {
+						t.Fatalf("program or unrelated mapping inspected through %s", op)
+					}
+				}
 			}
 		})
 	}
@@ -302,34 +234,31 @@ func TestDarwinJournalImages(t *testing.T) {
 
 func TestDarwinJournalSelectionAndReconciliation(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{"other-uid", "zombie", "selection-error", "missing-self", "pid-zero", "missing-listed", "exits", "new-before", "new-between", "new-at-listing", "new-after", "bad-start", "changed-start", "unreadable-first", "unreadable-second", "mutator-precedence", "sorted", "exempt-beside-blocker"} {
+	for _, kind := range []string{"other-uid", "zombie", "selection-error", "missing-self", "pid-zero", "missing-listed", "exits", "new-before", "new-between", "new-at-listing", "new-after", "new-gone", "sorted"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newDarwinTestHost(t)
-			reason := "old_or_unverified_mutators"
-			want := []JournalProcess{h.blocker(200, "unverified_process")}
+			h.processes[200].files = []lsofFile{h.file("4", h.db)}
+			reason := ""
+			var want []JournalProcess
 			switch kind {
 			case "other-uid":
 				h.processes[200].uid++
-				h.processes[200].files = []lsofFile{h.file("4", h.db)}
-				reason, want = "", nil
 			case "zombie":
 				h.procs.Set(200, procfix.Zombie())
-				reason, want = "", nil
 			case "selection-error":
 				h.selectionErr = errors.New("private-kernel-diagnostic")
-				reason, want = "process_inventory_unreadable", nil
+				reason = "process_inventory_unreadable"
 			case "missing-self":
 				delete(h.processes, 100)
-				reason, want = "process_inventory_unreadable", nil
+				reason = "process_inventory_unreadable"
 			case "pid-zero":
 				h.add(0, h.v.euid, 0)
-				reason, want = "process_inventory_unreadable", nil
+				reason = "process_inventory_unreadable"
 			case "missing-listed":
 				h.inListing = func() { delete(h.processes, 200) }
 			case "exits":
 				h.afterListing = func() { h.procs.Set(200, procfix.Gone()) }
-				reason, want = "", nil
-			case "new-before", "new-between", "new-at-listing", "new-after":
+			case "new-before", "new-between", "new-at-listing", "new-after", "new-gone":
 				delete(h.processes, 200)
 				at := h.selectedAt.Add(-time.Microsecond)
 				if kind == "new-between" {
@@ -342,46 +271,22 @@ func TestDarwinJournalSelectionAndReconciliation(t *testing.T) {
 					at = h.listedAt.Add(time.Microsecond)
 				}
 				h.inListing = func() {
-					h.add(200, h.v.euid, 1, h.file("txt", h.image), h.file("4", h.db))
+					h.add(200, h.v.euid, 1, h.file("4", h.db))
 					h.procs.Set(200, procfix.Alive(darwinTestStart(at)))
+					if kind == "new-gone" {
+						h.procs.Set(200, procfix.Gone())
+					}
 				}
-				want[0].Starttime = darwinTestStart(at)
 				if kind == "new-before" {
-					reason, want = "process_inventory_unreadable", nil
+					reason = "process_inventory_unreadable"
+				} else if kind != "new-gone" {
+					reason, want = "old_or_unverified_mutators", []JournalProcess{h.blocker(200)}
+					want[0].Starttime = darwinTestStart(at)
 				}
-				if kind == "new-between" {
-					want[0].Role, want[0].Action = "agent_director_mutator", "stop_and_restart_after_cutover"
-				}
-			case "bad-start":
-				h.procs.Set(200, procfix.Alive("private-invalid-start"))
-				want[0].Starttime = ""
-			case "changed-start":
-				h.processes[200].files = append(h.processes[200].files, h.file("4", h.db))
-				h.afterListing = func() { h.procs.Set(200, procfix.Alive(procstarttimefix.DarwinProcStarttime)) }
-			case "unreadable-first":
-				h.procs.Set(200, procfix.Unreadable())
-				want[0].Starttime = ""
-			case "unreadable-second":
-				h.processes[200].files = append(h.processes[200].files, h.file("4", h.db))
-				h.afterListing = func() { h.procs.Set(200, procfix.Unreadable()) }
-			case "mutator-precedence":
-				h.processes[200].files = append(h.processes[200].files, lsofFile{fd: "err"}, h.file("4", h.db))
-				want[0] = h.blocker(200, "agent_director_mutator")
 			case "sorted":
 				h.add(300, h.v.euid, 1, h.file("4", h.db))
-				h.processes[200].files = nil
-				want = append(want, h.blocker(300, "agent_director_mutator"))
-			case "exempt-beside-blocker":
-				h.add(300, h.v.euid, 1, h.file("4", h.db))
-				want = []JournalProcess{h.blocker(300, "agent_director_mutator")}
-			}
-			switch kind {
-			case "changed-start", "unreadable-first", "unreadable-second", "mutator-precedence", "exempt-beside-blocker":
-				// SR-2.15 Exemption preserves start/mutator precedence and omits
-				// only the process whose removed image is its sole concern.
-				if err := os.Remove(h.image); err != nil {
-					t.Fatal(err)
-				}
+				h.add(250, h.v.euid, 1, h.file("txt", h.image))
+				reason, want = "old_or_unverified_mutators", []JournalProcess{h.blocker(200), h.blocker(300)}
 			}
 			h.check(context.Background(), reason, want...)
 			if h.procs.EnvReads() != 0 {
@@ -395,47 +300,126 @@ func TestDarwinJournalSelectionAndReconciliation(t *testing.T) {
 			}
 		})
 	}
+	for _, kind := range []string{"bad-start", "changed-start", "reused-pid", "unreadable-first", "unreadable-second", "new-unreadable", "new-bad-start"} {
+		for _, mutator := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/mutator=%t", kind, mutator), func(t *testing.T) {
+				h := newDarwinTestHost(t)
+				files := []lsofFile{h.file("txt", h.image), {fd: "err", name: "unreadable unrelated file"}}
+				if mutator {
+					files = append(files, h.file("4", h.db))
+				}
+				h.processes[200].files = files
+				want := h.blocker(200)
+				switch kind {
+				case "bad-start":
+					h.procs.Set(200, procfix.Alive("private-invalid-start"))
+					want.Starttime = ""
+				case "changed-start", "reused-pid":
+					h.afterListing = func() {
+						h.procs.Set(200, procfix.Alive(darwinTestStart(h.listedAt.Add(time.Second))))
+						if kind == "reused-pid" {
+							h.processes[200].files = nil
+						}
+					}
+				case "unreadable-first":
+					h.procs.Set(200, procfix.Unreadable())
+					h.afterListing = func() { h.procs.Set(200, procfix.Alive(h.start)) }
+					want.Starttime = ""
+				case "unreadable-second":
+					h.afterListing = func() { h.procs.Set(200, procfix.Unreadable()) }
+				case "new-unreadable", "new-bad-start":
+					delete(h.processes, 200)
+					h.inListing = func() {
+						h.add(200, h.v.euid, 1, files...)
+						if kind == "new-unreadable" {
+							h.procs.Set(200, procfix.Unreadable())
+						} else {
+							h.procs.Set(200, procfix.Alive("invalid"))
+						}
+					}
+					want.Starttime = ""
+				}
+				if mutator {
+					h.check(context.Background(), "old_or_unverified_mutators", want)
+				} else {
+					h.check(context.Background(), "")
+				}
+			})
+		}
+	}
 }
 
 func TestDarwinJournalHelperExclusions(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{"descendants", "older-child", "helper-gone-at-start", "helper-pid-reused"} {
+	for _, kind := range []string{"descendants", "older-child", "helper-pid-reused"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newDarwinTestHost(t)
 			h.processes[100].files = []lsofFile{h.file("4", h.db)}
 			h.helperFiles = []lsofFile{h.file("4", h.db)}
 			h.inListing = func() { h.add(102, h.v.euid, 101, h.file("4", h.db)); h.add(103, h.v.euid, 102, h.file("4", h.db)) }
 			if kind == "older-child" {
-				h.inListing = func() {
-					h.add(102, h.v.euid, 101, h.file("4", h.db))
-					h.procs.Set(102, procfix.Alive(procstarttimefix.DarwinProcStarttime))
-				}
-				// Selected first, so its earlier start isn't a reconciliation
-				// failure; the helper's parent relation must not exclude it.
+				h.inListing = nil
 				h.add(102, h.v.euid, 101, h.file("4", h.db))
 				h.procs.Set(102, procfix.Alive(procstarttimefix.DarwinProcStarttime))
-			}
-			if kind == "helper-gone-at-start" {
-				h.v.listFiles = func(ctx context.Context, uid int, started func(int)) ([]byte, []byte, error) {
-					started(999)
-					return h.render(uid), nil, nil
-				}
-				h.check(context.Background(), "process_inventory_unreadable")
-				return
-			}
-			if kind == "helper-pid-reused" {
-				h.afterListing = func() { h.procs.Set(101, procfix.Alive(procstarttimefix.DarwinProcStarttime)) }
-				h.check(context.Background(), "process_inventory_unreadable")
-				return
-			}
-			if kind == "older-child" {
-				want := h.blocker(102, "agent_director_mutator")
+				want := h.blocker(102)
 				want.Starttime = procstarttimefix.DarwinProcStarttime
+				h.check(context.Background(), "old_or_unverified_mutators", want)
+			} else if kind == "helper-pid-reused" {
+				// The reused pid no longer has the helper's parent or identity.
+				at := darwinTestStart(h.listedAt.Add(time.Second))
+				h.inListing = nil
+				h.afterListing = func() { h.processes[101].ppid = 1; h.procs.Set(101, procfix.Alive(at)) }
+				want := h.blocker(101)
+				want.Starttime = at
 				h.check(context.Background(), "old_or_unverified_mutators", want)
 			} else {
 				h.check(context.Background(), "")
 			}
 		})
+	}
+	for _, point := range []string{"before-start-read", "after-listing", "after-acl", "unreadable-start", "bad-start"} {
+		for _, mutator := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/mutator=%t", point, mutator), func(t *testing.T) {
+				h := newDarwinTestHost(t)
+				// A selected child is checked when its parent has no confirmed
+				// helper identity, even if the helper subsequently exits.
+				files := []lsofFile{h.file("txt", h.image)}
+				if mutator {
+					files = append(files, h.file("4", h.db))
+				}
+				h.add(102, h.v.euid, 999, files...)
+				startedState := procfix.Gone()
+				if point == "unreadable-start" {
+					startedState = procfix.Unreadable()
+				}
+				if point == "bad-start" {
+					startedState = procfix.Alive("invalid")
+				}
+				if point == "after-listing" {
+					startedState = procfix.Alive(h.start)
+				}
+				if point != "after-acl" {
+					h.v.listFiles = func(ctx context.Context, uid int, started func(int)) ([]byte, []byte, error) {
+						h.procs.Set(999, startedState)
+						started(999)
+						h.procs.Set(999, procfix.Gone())
+						return h.render(uid), nil, nil
+					}
+				}
+				if point == "after-acl" {
+					read := h.v.readACL
+					h.v.readACL = func(ctx context.Context, path string, started func(int)) ([]byte, []byte, error) {
+						started(999) // already gone when its start identity is read
+						return read(ctx, path, started)
+					}
+				}
+				if mutator {
+					h.check(context.Background(), "old_or_unverified_mutators", h.blocker(102))
+				} else {
+					h.check(context.Background(), "")
+				}
+			})
+		}
 	}
 }
 
@@ -558,7 +542,6 @@ func TestDarwinJournalBlockedLookupDeadline(t *testing.T) {
 		{"walk", "readdir", "root", 1, -1},
 		{"kernel", "kernel", "root", 0, -1},
 		{"ancestor", "lstat", "unlinked", 0, -1},
-		{"open", "open", "image", 0, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newDarwinTestHost(t)
@@ -570,8 +553,6 @@ func TestDarwinJournalBlockedLookupDeadline(t *testing.T) {
 				path = h.db
 			case "parent":
 				path = filepath.Dir(h.db)
-			case "image":
-				path = h.image
 			case "unlinked":
 				path = filepath.Join(h.root, "unlinked")
 				h.write(path, []byte("secret"))

@@ -26,8 +26,8 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
-	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"

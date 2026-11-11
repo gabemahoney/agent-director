@@ -132,7 +132,7 @@ func DescReuseFinishedParam() DescCase {
 			"same-agent reuse keeps session history and subagent records but starts a fresh conversation",
 			"Resume continues only the latest session; older sessions remain listed for inspection only",
 			"starts with no memory of its earlier lives",
-			"resume and get never use or show an earlier life's history",
+			"resume, get and get-many never use or show an earlier life's history",
 			"after a held-name refusal (duplicate session)", "decides it at once",
 			"collides until a recovery check (a state read or sweep) marks it missing",
 			fmt.Sprintf("past the pending grace period (%d s by default)", config.DefaultPendingGraceSeconds),

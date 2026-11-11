@@ -3,11 +3,8 @@ package adminapi
 import (
 	"bytes"
 	"context"
-	"debug/buildinfo"
-	"debug/macho"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"os/exec"
 	"path/filepath"
@@ -55,29 +52,23 @@ type darwinProcess struct {
 	start   string
 	started time.Time
 	files   []lsofFile
-	// checked: its files and image are judged.
-	checked bool
-	// mutator and unverified are its findings.
-	mutator, unverified bool
+	mutator bool
 }
 
-// setStart records the first start identity. One that does not parse makes
-// the process unverified, as one that cannot be read does.
+// setStart records a usable first start identity; otherwise it stays empty.
 func (p *darwinProcess) setStart(start string) {
 	if started, ok := probe.ParseDarwinProcStartTime(start); ok {
 		p.start, p.started = start, started
-		return
 	}
-	p.unverified = true
 }
 
 // verify is SR-2.15's check, in its order: the paths and their access-control
 // entries; the selection, with each process's first start identity; one
 // listing; the exclusions; the selection and the listing reconciled; the
-// store's and roots' identities; each process's files and image; the second
-// start identities. Unknown or unreadable evidence refuses, except for a
-// replaced, removed or changed image that meets SR-2.15's exemption. Every
-// file-system lookup runs under bounded, so a blocked one refuses
+// store's and roots' identities; each process's files and program name; the
+// second start identities. Only positive mutator evidence about a process
+// refuses. Whole-inventory failures still refuse. Every file-system lookup
+// runs under bounded, so a blocked one refuses
 // inventory_deadline rather than hold the attempt.
 func (v darwinVerifier) verify(ctx context.Context, dbPath string, roots []string) error {
 	helpers := &darwinHelpers{}
@@ -100,12 +91,11 @@ func (v darwinVerifier) verify(ctx context.Context, dbPath string, roots []strin
 		return err
 	}
 
-	listedAt := v.now().Truncate(time.Microsecond)
 	stdout, stderr, err := v.listFiles(ctx, v.euid, helpers.started(v.procs))
 	if ctx.Err() != nil {
 		return journalRefusal("inventory_deadline")
 	}
-	if err != nil || len(stderr) > 0 || helpers.unreadable() {
+	if err != nil || len(stderr) > 0 {
 		return journalRefusal("process_inventory_unreadable")
 	}
 	listing, err := parseLsofListing(stdout)
@@ -115,7 +105,7 @@ func (v darwinVerifier) verify(ctx context.Context, dbPath string, roots []strin
 
 	starts := &darwinStartReads{procs: v.procs, selected: procs}
 	excluded := v.exclusions(listing, helpers.snapshot(), starts)
-	if err := reconcileDarwinListing(procs, listing, excluded, starts, selectedAt, listedAt); err != nil {
+	if err := reconcileDarwinListing(procs, listing, excluded, starts, selectedAt); err != nil {
 		return err
 	}
 
@@ -132,10 +122,8 @@ func (v darwinVerifier) verify(ctx context.Context, dbPath string, roots []strin
 		if ctx.Err() != nil {
 			return journalRefusal("inventory_deadline")
 		}
-		if p := procs[pid]; p.checked {
-			if err := v.judge(ctx, p, evidence); err != nil {
-				return err
-			}
+		if err := v.judge(ctx, procs[pid], evidence); err != nil {
+			return err
 		}
 	}
 	return v.report(procs, ordered)
@@ -159,7 +147,7 @@ func (v darwinVerifier) selection() (map[int]*darwinProcess, error) {
 		if known && !alive {
 			continue // exited; a zombie answers gone
 		}
-		p := &darwinProcess{unverified: !known}
+		p := &darwinProcess{}
 		if known {
 			p.setStart(start)
 		}
@@ -170,29 +158,20 @@ func (v darwinVerifier) selection() (map[int]*darwinProcess, error) {
 
 // report reads each process's second start identity, after all evidence, and
 // refuses with every process still blocking, sorted by pid. A process gone
-// since is skipped. A changed or unreadable start identity is unverified
-// whatever else was found; otherwise a mutator finding wins over an
-// unverified one. Image replacement, removal or change alone adds no finding,
-// so it is exempt only when no other finding blocks the process.
+// since is skipped. A positive mutator finding survives a changed or
+// unreadable start identity; no other process is reported.
 // Only pid, first start identity, role and action are reported (SR-2.11).
 func (v darwinVerifier) report(procs map[int]*darwinProcess, ordered []int) error {
 	var blockers []JournalProcess
 	for _, pid := range ordered {
 		p := procs[pid]
-		start, alive, known := v.procs.StartTime(pid)
+		_, alive, known := v.procs.StartTime(pid)
 		if known && !alive {
 			continue
 		}
-		process := JournalProcess{PID: pid, Starttime: p.start, Role: "unverified_process", Action: "stop_or_make_inventory_readable"}
-		switch {
-		case !known, p.start == "", start != p.start:
-			// Unverified, whatever else was found.
-		case p.mutator:
-			process.Role, process.Action = "agent_director_mutator", "stop_and_restart_after_cutover"
-		case !p.unverified:
-			continue
+		if p.mutator {
+			blockers = append(blockers, JournalProcess{PID: pid, Starttime: p.start, Role: "agent_director_mutator", Action: "stop_and_restart_after_cutover"})
 		}
-		blockers = append(blockers, process)
 	}
 	if len(blockers) > 0 {
 		return journalRefusal("old_or_unverified_mutators", blockers...)
@@ -223,9 +202,6 @@ func (v darwinVerifier) checkAccessControl(ctx context.Context, path string, hel
 	if ctx.Err() != nil {
 		return journalRefusal("inventory_deadline")
 	}
-	if helpers.unreadable() {
-		return journalRefusal("process_inventory_unreadable")
-	}
 	if err != nil || len(stderr) > 0 || !journalACLPrivate(stdout) {
 		return journalRefusal("legacy_root_access_unestablished")
 	}
@@ -233,35 +209,26 @@ func (v darwinVerifier) checkAccessControl(ctx context.Context, path string, hel
 }
 
 // darwinHelpers are the helper processes the verifier started, each with the
-// start identity read as it started.
+// confirmed start identity read as it started. An unreadable or already-gone
+// helper grants no exclusion; anything it would exclude stays under check.
 type darwinHelpers struct {
 	mu     sync.Mutex
 	starts map[int]string
-	// lost: a helper was not alive when its start identity was read, so its
-	// descendants cannot be told apart.
-	lost bool
 }
 
 func (h *darwinHelpers) started(procs probe.ProcChecker) func(pid int) {
 	return func(pid int) {
-		start, alive, _ := procs.StartTime(pid)
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if !alive {
-			h.lost = true
+		start, alive, known := procs.StartTime(pid)
+		if _, ok := probe.ParseDarwinProcStartTime(start); !known || !alive || !ok {
 			return
 		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
 		if h.starts == nil {
 			h.starts = map[int]string{}
 		}
 		h.starts[pid] = start
 	}
-}
-
-func (h *darwinHelpers) unreadable() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.lost
 }
 
 func (h *darwinHelpers) snapshot() map[int]string {
@@ -294,7 +261,7 @@ func (s *darwinStartReads) of(pid int) darwinStartRead {
 		return r
 	}
 	start, alive, known := s.procs.StartTime(pid)
-	// A process not known to be gone stays under check, unverified.
+	// A process not known to be gone stays under check, even without a start.
 	r := darwinStartRead{start: start, alive: alive || !known}
 	if known && alive {
 		r.started, r.usable = probe.ParseDarwinProcStartTime(start)
@@ -314,14 +281,14 @@ func (s *darwinStartReads) of(pid int) darwinStartRead {
 func (v darwinVerifier) exclusions(listing map[int][]lsofFile, helpers map[int]string, starts *darwinStartReads) map[int]bool {
 	excluded := map[int]bool{v.selfPID: true}
 	parents := map[int]time.Time{}
-	if start, alive, _ := v.procs.StartTime(v.selfPID); alive {
+	if start, alive, known := v.procs.StartTime(v.selfPID); known && alive {
 		if started, ok := probe.ParseDarwinProcStartTime(start); ok {
 			parents[v.selfPID] = started
 		}
 	}
 	for pid, helperStart := range helpers {
-		start, alive, _ := v.procs.StartTime(pid)
-		if started, ok := probe.ParseDarwinProcStartTime(start); alive && ok && start == helperStart {
+		start, alive, known := v.procs.StartTime(pid)
+		if started, ok := probe.ParseDarwinProcStartTime(start); known && alive && ok && start == helperStart {
 			excluded[pid] = true
 			parents[pid] = started
 		}
@@ -353,22 +320,16 @@ func (v darwinVerifier) exclusions(listing map[int][]lsofFile, helpers map[int]s
 }
 
 // reconcileDarwinListing matches the selection with the listing. A selected
-// live process the listing lacks is unverified. A listed process the
-// selection lacks is skipped once gone, unverified when its start identity
-// cannot be read, checked when it started between the selection and the
-// listing, unverified when it started once the listing began, and refuses the
-// run when it started before the selection, which should have found it.
+// live process the listing lacks has no files to judge. A listed process the
+// selection lacks is skipped once gone and otherwise checked, except when
+// its usable start predates the selection, which should have found it.
 // Start identities are compared at microsecond precision.
-func reconcileDarwinListing(procs map[int]*darwinProcess, listing map[int][]lsofFile, excluded map[int]bool, starts *darwinStartReads, selectedAt, listedAt time.Time) error {
+func reconcileDarwinListing(procs map[int]*darwinProcess, listing map[int][]lsofFile, excluded map[int]bool, starts *darwinStartReads, selectedAt time.Time) error {
 	for pid, p := range procs {
-		files, listed := listing[pid]
-		switch {
-		case excluded[pid]:
+		if excluded[pid] {
 			delete(procs, pid)
-		case !listed:
-			p.unverified = true
-		default:
-			p.files, p.checked = files, p.start != ""
+		} else {
+			p.files = listing[pid]
 		}
 	}
 	for pid, files := range listing {
@@ -380,15 +341,11 @@ func reconcileDarwinListing(procs map[int]*darwinProcess, listing map[int][]lsof
 			continue
 		}
 		p := &darwinProcess{files: files}
-		switch {
-		case !r.usable:
-			p.unverified = true
-		case r.started.Before(selectedAt):
-			return journalRefusal("process_inventory_unreadable")
-		case r.started.Before(listedAt):
-			p.start, p.started, p.checked = r.start, r.started, true
-		default:
-			p.start, p.started, p.unverified = r.start, r.started, true
+		if r.usable {
+			if r.started.Before(selectedAt) {
+				return journalRefusal("process_inventory_unreadable")
+			}
+			p.start, p.started = r.start, r.started
 		}
 		procs[pid] = p
 	}
@@ -399,6 +356,7 @@ func reconcileDarwinListing(procs map[int]*darwinProcess, listing map[int][]lsof
 // identities, every identity a root walk reached, and the roots.
 type darwinEvidence struct {
 	store, walked map[journalFileID]bool
+	storeForms    []string
 	roots         []darwinRoot
 }
 
@@ -409,6 +367,19 @@ func (v darwinVerifier) evidence(ctx context.Context, dbPath string, roots []str
 		return nil, err
 	}
 	evidence := &darwinEvidence{store: store, walked: map[journalFileID]bool{}}
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if err := bounded(ctx, func() error {
+			ancestor, _, rest, err := journalDeepestExisting(v.fs, path)
+			if err != nil {
+				return journalRefusal("legacy_root_unreadable")
+			}
+			forms, err := journalPathForms(v.fs, path, ancestor, rest)
+			evidence.storeForms = append(evidence.storeForms, forms...)
+			return err
+		}); err != nil {
+			return nil, err
+		}
+	}
 	for _, root := range roots {
 		var r darwinRoot
 		if err := bounded(ctx, func() (err error) { r, err = journalRootOf(ctx, v.fs, root, evidence.walked); return err }); err != nil {
@@ -436,43 +407,42 @@ func journalStoreIDs(fsys journalFS, dbPath string, ids map[journalFileID]bool) 
 	return nil
 }
 
-// judge classifies one process's listed files by descriptor kind (SR-2.15
-// "Store and roots"), then tests its image ("Image") unless a file already
-// showed it a mutator. Other unverified evidence survives an image exemption.
+// judge tests the first txt entry's program name without inspecting its
+// image, and classifies listed files by descriptor kind (SR-2.15). Incomplete
+// entries use only gated, identity-confirmed paths; other missing evidence
+// adds no finding.
 func (v darwinVerifier) judge(ctx context.Context, p *darwinProcess, evidence *darwinEvidence) error {
-	var image *lsofFile
+	programSeen := false
 	text := map[journalFileID]bool{}
 	for i := range p.files {
 		f := &p.files[i]
 		class := lsofFDClassOf(f.fd)
-		if class == lsofFDText && image == nil {
-			image = f
-		}
-		if class == lsofFDInfoError || class == lsofFDUnknown {
-			p.unverified = true
-			continue
-		}
-		switch lsofKindOf(*f) {
-		case lsofKindUnknown:
-			p.unverified = true
-			continue
-		case lsofKindNonVnode:
-			continue
-		}
-		if !f.hasDev || !f.hasIno {
-			p.unverified = true
-			continue
-		}
-		if class == lsofFDDirectory {
-			continue
-		}
-		if class == lsofFDText {
-			if text[f.id] {
-				continue
+		if class == lsofFDText && !programSeen {
+			programSeen = true
+			if strings.Contains(filepath.Base(f.name), "agent-director") {
+				p.mutator = true
+				return nil
 			}
-			text[f.id] = true
 		}
-		if evidence.store[f.id] || evidence.walked[f.id] {
+		kind := lsofKindOf(*f)
+		if class == lsofFDDirectory || kind == lsofKindNonVnode {
+			continue
+		}
+		fullIdentity := kind == lsofKindVnode && class != lsofFDInfoError && class != lsofFDUnknown && f.hasDev && f.hasIno
+		if fullIdentity {
+			if class == lsofFDText {
+				if text[f.id] {
+					continue
+				}
+				text[f.id] = true
+			}
+			if evidence.store[f.id] || evidence.walked[f.id] {
+				p.mutator = true
+				return nil
+			}
+		} else if matches, err := v.storeAtName(ctx, f.name, evidence); err != nil {
+			return err
+		} else if matches {
 			p.mutator = true
 			return nil
 		}
@@ -480,14 +450,32 @@ func (v darwinVerifier) judge(ctx context.Context, p *darwinProcess, evidence *d
 		if asJournalRefusal(err) {
 			return err
 		}
-		if err != nil {
-			p.unverified = true
-		} else if under {
+		if err == nil && under {
 			p.mutator = true
 			return nil
 		}
 	}
-	return v.judgeImage(ctx, p, image)
+	return nil
+}
+
+// storeAtName tests an incomplete entry only when its absolute listed name
+// matches an unescaped store form. A failed lookup adds no finding; a
+// deadline still refuses the attempt.
+func (v darwinVerifier) storeAtName(ctx context.Context, name string, evidence *darwinEvidence) (bool, error) {
+	if !filepath.IsAbs(name) || !slices.ContainsFunc(evidence.storeForms, func(form string) bool {
+		return !strings.ContainsAny(form, `\^`) && strings.EqualFold(name, form)
+	}) {
+		return false, nil
+	}
+	var matches bool
+	if err := bounded(ctx, func() error {
+		st, err := v.fs.Lstat(name)
+		matches = err == nil && evidence.store[st.id]
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	return matches, nil
 }
 
 // underRoot is the ancestor test for an entry the walk did not find. It runs
@@ -510,114 +498,6 @@ func (v darwinVerifier) underRoot(ctx context.Context, name string, evidence *da
 		return false, err
 	}
 	return slices.ContainsFunc(chain, func(id journalFileID) bool { return slices.Contains(gated, id) }), nil
-}
-
-// judgeImage tests the process's image, its first program-text entry: a
-// mutator by its file name or by its unchanged build metadata. A replaced,
-// removed or changed image adds no finding under SR-2.15's exemption; other
-// evidence remains. A live process with no image, or one that cannot be
-// opened as Mach-O for another reason, is unverified.
-func (v darwinVerifier) judgeImage(ctx context.Context, p *darwinProcess, image *lsofFile) error {
-	switch {
-	case image == nil:
-		p.unverified = true
-		return nil
-	case strings.Contains(filepath.Base(image.name), "agent-director"):
-		p.mutator = true
-		return nil
-	case !image.hasDev || !image.hasIno:
-		p.unverified = true
-		return nil
-	}
-	var mutator, unverified bool
-	if err := bounded(ctx, func() error {
-		mutator, unverified = journalImageFindings(v.fs, image, p.started)
-		return nil
-	}); err != nil {
-		return err
-	}
-	p.mutator = p.mutator || mutator
-	p.unverified = p.unverified || unverified
-	return nil
-}
-
-// journalImageFindings adds no finding for a removed, replaced or post-start
-// changed image (SR-2.15's exemption). It opens only after observing the same
-// identity and a status-change time no later than the start, then checks both
-// again before reading metadata. Other lookup, open and Mach-O failures are
-// unverified.
-func journalImageFindings(fsys journalFS, image *lsofFile, started time.Time) (mutator, unverified bool) {
-	st, err := fsys.Lstat(image.name)
-	if err != nil {
-		return false, !journalLookupAbsent(err)
-	}
-	if st.id != image.id {
-		return false, false // replaced
-	}
-	if st.ctime.Truncate(time.Microsecond).After(started) {
-		return false, false // changed after the process started
-	}
-	f, opened, err := fsys.Open(image.name)
-	if err != nil {
-		return false, !journalLookupAbsent(err)
-	}
-	defer f.Close()
-	if opened.id != image.id || opened.ctime.Truncate(time.Microsecond).After(started) {
-		return false, false // replaced or changed between lookup and open
-	}
-	return journalMachOFindings(f)
-}
-
-// journalMachOFindings reads an image as a thin Mach-O executable, or a
-// universal file whose slices all are, and finds a mutator when any slice's
-// build metadata names this module. debug/buildinfo reads only the first
-// slice of a universal file, so each slice is read on its own. A valid
-// Mach-O with no Go metadata, or metadata naming neither, is neither mutator
-// nor unverified; anything that is not Mach-O, or a read that fails, is
-// unverified.
-func journalMachOFindings(f io.ReaderAt) (mutator, unverified bool) {
-	r := &journalReadRecorder{r: f}
-	var images []io.ReaderAt
-	fat, err := macho.NewFatFile(r)
-	switch {
-	case err == nil:
-		for _, arch := range fat.Arches {
-			if arch.Type != macho.TypeExec {
-				return false, true
-			}
-			images = append(images, io.NewSectionReader(r, int64(arch.Offset), int64(arch.Size)))
-		}
-	case errors.Is(err, macho.ErrNotFat):
-		thin, err := macho.NewFile(r)
-		if err != nil || thin.Type != macho.TypeExec {
-			return false, true
-		}
-		images = append(images, r)
-	default:
-		return false, true
-	}
-	for _, image := range images {
-		if bi, err := buildinfo.Read(image); err == nil && buildInfoNamesModule(bi) {
-			return true, false
-		}
-	}
-	return false, r.failed
-}
-
-// journalReadRecorder notes a read that failed short of the file's end, so an
-// image read cut short is unverified rather than taken for one with no build
-// metadata.
-type journalReadRecorder struct {
-	r      io.ReaderAt
-	failed bool
-}
-
-func (r *journalReadRecorder) ReadAt(p []byte, off int64) (int, error) {
-	n, err := r.r.ReadAt(p, off)
-	if err != nil && !errors.Is(err, io.EOF) {
-		r.failed = true
-	}
-	return n, err
 }
 
 // asJournalRefusal tells a refusal of the whole run from a lookup error that

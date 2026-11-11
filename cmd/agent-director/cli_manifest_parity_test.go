@@ -68,9 +68,10 @@ var flagSetReaders = map[string]bool{
 
 // nonFlagParams are the manifest params a CLI verb takes other than as a flag.
 var nonFlagParams = map[string][]string{
-	"spawn":      {"agent_args"}, // the argv after --
-	"trail-emit": {"sub_verb"},   // the first positional argument
-	"hook":       {"stdin"},      // the hook payload on stdin
+	"get-many":   {"instance_ids"}, // the words after the command are the ids
+	"spawn":      {"agent_args"},   // the argv after --
+	"trail-emit": {"sub_verb"},     // the first positional argument
+	"hook":       {"stdin"},        // the hook payload on stdin
 }
 
 // flagSetReaderFuncs are the functions, by package path and name, that take a
@@ -155,6 +156,8 @@ func TestCLIFlagUsageText(t *testing.T) {
 	for _, tc := range []struct{ verb, flag, want, banned string }{
 		{"spawn", "agent", "claude, codex or cursor", "droid"},
 		{"make-template", "agent", "claude, codex or cursor", "droid"},
+		{"spawn", "agent", "claude, codex or cursor", "opencode"},
+		{"make-template", "agent", "claude, codex or cursor", "opencode"},
 		{"spawn", "extra-env", "CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)", ""},
 		{"make-template", "extra-env", "CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)", ""},
 		{"spawn", "no-pre-trust", "CLAUDE_CONFIG_DIR", "CODEX_HOME"},

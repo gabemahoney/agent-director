@@ -95,7 +95,7 @@ func TestPaneVerbBaseIndexOneReachesPaneByID(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(string(tc.verb), func(t *testing.T) {
 			f := newKillFix(t)
-			r := f.baseIndexOneLostReply(t, tc.state)
+			r := f.baseIndexOneLostReply(t, tc.state, nil)
 			text := paneMarker(t)
 			if tc.verb == apitest.PaneReadPane {
 				text = idtSendAndSee(t, f.realTmux, f.Client, r.Reply.PaneID)

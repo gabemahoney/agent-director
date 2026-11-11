@@ -146,6 +146,15 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		}
 		return d.client.Get(p.InstanceID)
 
+	case "get-many":
+		var p struct {
+			InstanceIDs []string `json:"instance_ids"`
+		}
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
+		}
+		return d.client.GetMany(p.InstanceIDs)
+
 	case "list-subagents":
 		var p struct {
 			InstanceID string `json:"instance_id"`

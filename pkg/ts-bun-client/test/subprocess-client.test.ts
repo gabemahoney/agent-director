@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import type { SweepCheck, SweepResult, Confirmation } from "../src/types.js";
-import { ErrCallTimeout, ErrConsumerSignal, ErrStoreBusy } from "../src/errors.js";
+import { ErrCallTimeout, ErrConsumerSignal, ErrInvalidFlags, ErrStoreBusy, ErrTooManyIds, ErrUnknownVerb } from "../src/errors.js";
 import { PKG_VERSION, openClient, rejection, withProcessEnv } from "./internal/helper.js";
 
 const FIXTURES = path.resolve(import.meta.dir, "fixtures/epic-a");
@@ -25,6 +25,41 @@ afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 function makeClient(fixture: string, extra: Record<string, unknown> = {}) {
   return openClient(path.join(tmp, `${crypto.randomUUID()}.db`), { _cliPath: path.join(FIXTURES, fixture), callTimeoutMs: 5000, ...extra });
 }
+
+test("getMany refuses unsafe ids before starting a subprocess", async () => {
+  const argvFile = path.join(tmp, `${crypto.randomUUID()}-get-many-argv`);
+  await withProcessEnv({ ARGV_FILE: argvFile }, async () => {
+    using client = await makeClient("argv-recorder.sh");
+    const before = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, "utf8") : null;
+    for (const id of ["--home", "--store-path=private", "private\0id"]) {
+      expect(await rejection(client.getMany({ instance_ids: ["safe", id] }))).toBeInstanceOf(ErrInvalidFlags);
+      expect(fs.existsSync(argvFile) ? fs.readFileSync(argvFile, "utf8") : null).toBe(before);
+    }
+    // A rejected call leaves the queue usable; the recorder proves the positive path runs.
+    await client.version({});
+    expect(fs.readFileSync(argvFile, "utf8")).not.toBe(before);
+  });
+});
+
+test.each([
+  ["ErrTooManyIds", ErrTooManyIds, { id_cap: 3 }],
+  ["ErrUnknownVerb", ErrUnknownVerb, undefined],
+] as const)("getMany maps %s from a binary that passes the version probe", async (name, ctor, details) => {
+  const cli = path.join(tmp, `${crypto.randomUUID()}-get-many.sh`);
+  const envelope = { err_name: name, err_description: "fixture refusal", ...(details ? { err_details: details } : {}) };
+  fs.writeFileSync(cli, `#!/bin/sh
+case " $* " in
+  *" version "*) printf '{"version":"0.0.0-dev","commit":"fixture"}\\n'; exit 0;;
+  *" get-many "*) printf '%s\\n' '${JSON.stringify(envelope)}' >&2; exit 1;;
+  *) exit 71;;
+esac
+`, { mode: 0o700 });
+  using client = await openClient(path.join(tmp, `${crypto.randomUUID()}.db`), { _cliPath: cli });
+  const err = await rejection(client.getMany({ instance_ids: ["one", "two", "three", "four"] }));
+  expect(err).toBeInstanceOf(ctor);
+  expect(err).toMatchObject({ verb: "get-many", errName: name, errDescription: "fixture refusal" });
+  expect((err as ErrTooManyIds).errDetails).toEqual(details ?? null);
+});
 
 test("Task3: structured error survives stderr notices before and after audit shutdown", async () => {
   const cli = path.join(tmp, `${crypto.randomUUID()}-audit-notices.sh`);

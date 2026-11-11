@@ -9,7 +9,7 @@ package config
 //   - tmux_session_name   — must be per-invocation (derived from id).
 //   - reuse_finished      — applies to one spawn call only (SR-18.10).
 //
-// Agent (claude, codex, cursor or droid, case-sensitive) is the agent the template's
+// Agent (claude, codex, cursor, droid or opencode, case-sensitive) is the agent the template's
 // agent_args belong to and the one a spawn that names none takes (SR-1.2,
 // SR-2.1); a template that names none supplies none.
 //
@@ -45,27 +45,29 @@ type TemplatePermissions struct {
 }
 
 // The agents a template, a spawn call or a row can name. The values are
-// the store's row values (store.AgentClaude, store.AgentCodex, store.AgentCursor);
+// the store's row agent constants;
 // config cannot import the store, so it holds its own copy for validating
 // template and call input.
 const (
-	AgentClaude = "claude"
-	AgentCodex  = "codex"
-	AgentCursor = "cursor"
-	AgentDroid  = "droid"
+	AgentClaude   = "claude"
+	AgentCodex    = "codex"
+	AgentCursor   = "cursor"
+	AgentDroid    = "droid"
+	AgentOpenCode = "opencode"
 )
 
 // agentPaneOnly owns agent membership and the fixed capability classification.
 // Keep this dependency-free so hooks can use it without launch, tmux or probe
 // machinery; internal/spawn supplies each lane agent's launch adapter.
 var agentPaneOnly = map[string]bool{
-	AgentClaude: false,
-	AgentCodex:  false,
-	AgentCursor: false,
-	AgentDroid:  true,
+	AgentClaude:   false,
+	AgentCodex:    false,
+	AgentCursor:   false,
+	AgentDroid:    true,
+	AgentOpenCode: true,
 }
 
-// ValidAgent reports whether a is exactly claude, codex, cursor or droid. The match is
+// ValidAgent reports whether a is exactly claude, codex, cursor, droid or opencode. The match is
 // case-sensitive and the empty string is not an agent (it means none given).
 func ValidAgent(a string) bool {
 	_, ok := agentPaneOnly[a]
@@ -76,8 +78,14 @@ func ValidAgent(a string) bool {
 // only when enabled for this install. ValidAgent still recognizes disabled agents
 // so their requests reach the experimental gate instead of an invalid-agent error.
 func AgentChoices(e Experimental) string {
+	if e.Droid && e.OpenCode {
+		return "claude, codex, cursor, droid or opencode"
+	}
 	if e.Droid {
 		return "claude, codex, cursor or droid"
+	}
+	if e.OpenCode {
+		return "claude, codex, cursor or opencode"
 	}
 	return "claude, codex or cursor"
 }

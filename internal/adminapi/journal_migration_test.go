@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -210,12 +211,10 @@ func treeState(t *testing.T, dir string) map[string]string {
 	return out
 }
 
-// G9: "stop each listed process (an agent_director_mutator until the cutover
-// is verified; an unverified_process, or make its details readable to the
-// user running the migration), keep the maintenance window, then re-run this
-// release's installer with a new --journal-backup, …, then run migrate-journal
-// with a new --backup-dir until it exits 0 with authority "sqlite"". Actual
-// FD/start identities, no process mocks.
+// G9: stop each listed mutator, keep the maintenance window, then run the
+// installer and migrate-journal with fresh backups until authority is sqlite.
+// The non-dumpable unrelated process needs no action and stays alive throughout.
+// Actual FD/start identities, no process mocks.
 func TestAdviceFollow_G9_JournalInventory(t *testing.T) {
 	for _, kind := range []string{"custom_database", "wal", "shm", "invoking_home_legacy_root", "untracked_mcp", "cursor_helper", "hook", "inflight_command", "launch_preparation", "unreadable_process"} {
 		t.Run(kind, func(t *testing.T) {
@@ -270,7 +269,6 @@ func TestAdviceFollow_G9_JournalInventory(t *testing.T) {
 				}
 				cmd = exec.CommandContext(ctx, exe, "-test.run=^TestJournalInventoryUnreadableProcess$")
 				cmd.Env = append(os.Environ(), "AD_JOURNAL_UNREADABLE_PROCESS=1")
-				role, action = "unverified_process", "stop_or_make_inventory_readable"
 			}
 			stdin, err := cmd.StdinPipe()
 			if err != nil {
@@ -301,10 +299,25 @@ func TestAdviceFollow_G9_JournalInventory(t *testing.T) {
 			if !alive || !known {
 				t.Fatal("child process identity unavailable")
 			}
+			if kind == "unreadable_process" {
+				base := filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid))
+				if _, err := os.Readlink(filepath.Join(base, "exe")); !errors.Is(err, os.ErrPermission) {
+					t.Fatalf("non-dumpable exe readable: %v", err)
+				}
+				if _, err := os.ReadDir(filepath.Join(base, "fd")); !errors.Is(err, os.ErrPermission) {
+					t.Fatalf("non-dumpable descriptors readable: %v", err)
+				}
+			}
 			for i := 0; i < 2; i++ {
 				err := verifyJournalQuiescence(ctx, db, []string{legacy})
+				if kind == "unreadable_process" {
+					if err != nil {
+						t.Fatalf("unrelated unreadable process blocked: %v", err)
+					}
+					continue
+				}
 				var r *JournalRefusal
-				if !errors.As(err, &r) || r.Reason != "old_or_unverified_mutators" || r.Action != "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration, which for an image in a privacy-protected folder means granting the terminal app access to that folder), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\"" {
+				if !errors.As(err, &r) || r.Reason != "old_or_unverified_mutators" || r.Action != "stop each listed agent_director_mutator (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified; keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\"" {
 					t.Fatalf("inventory = %v", err)
 				}
 				found := false
@@ -329,14 +342,14 @@ func TestAdviceFollow_G9_JournalInventory(t *testing.T) {
 					t.Fatal("verification killed writer")
 				}
 			}
-			// Literally: stop the listed process and await its exit, keep the
-			// window, then the installer and migrate-journal, each with a new
-			// backup directory, over db made a real store.
-			if err := stdin.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if err := cmd.Wait(); err != nil {
-				t.Fatal(err)
+			// Stop only a listed mutator; the unrelated child stays alive.
+			if kind != "unreadable_process" {
+				if err := stdin.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := cmd.Wait(); err != nil {
+					t.Fatal(err)
+				}
 			}
 			home := filepath.Join(root, "home")
 			if err := os.Mkdir(home, 0o700); err != nil {
@@ -348,9 +361,7 @@ func TestAdviceFollow_G9_JournalInventory(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := apitest.InitStore(db); err != nil {
-				t.Fatal(err)
-			}
+			db = journalfix.PreCutoverStore(t, root, 15)
 			backups := 0
 			migrate := func() (store.InputMigrationResult, error) {
 				backups++
@@ -359,6 +370,11 @@ func TestAdviceFollow_G9_JournalInventory(t *testing.T) {
 			journalInstaller(t, db, migrate)
 			if r, err := migrate(); err != nil || r.Authority != "sqlite" {
 				t.Fatalf("condition cleared but the migration still refused: %+v %v", r, err)
+			}
+			if kind == "unreadable_process" {
+				if got, alive, known := probe.NewProcChecker().StartTime(cmd.Process.Pid); !alive || !known || got != start {
+					t.Fatal("unrelated child did not stay alive through sqlite authority")
+				}
 			}
 		})
 	}
@@ -374,6 +390,89 @@ func TestJournalInventoryUnreadableProcess(t *testing.T) {
 	}
 	if _, err := io.Copy(os.Stdout, os.Stdin); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestJournalInventoryPartialProcessEvidence(t *testing.T) {
+	// Serial: journalProcRoot is the shared listing seam. Start identities
+	// still come from the real, live parent process, not this temporary tree.
+	for _, kind := range []string{"owner-unreadable", "unreadable-only", "program", "program-unlistable-fds", "store", "wal", "shm", "root"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			db, root := filepath.Join(dir, "store.db"), filepath.Join(dir, "root")
+			if err := os.WriteFile(db, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			previous := journalProcRoot
+			journalProcRoot = t.TempDir()
+			t.Cleanup(func() { journalProcRoot = previous })
+			pid := os.Getppid()
+			base := filepath.Join(journalProcRoot, strconv.Itoa(pid))
+			if kind == "owner-unreadable" {
+				// Reuse G12's self-link fixture: Stat cannot establish an owner.
+				if err := os.Symlink(filepath.Base(base), base); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(base); !errors.Is(err, unix.ELOOP) {
+					t.Fatalf("owner lookup = %v", err)
+				}
+				assertDarwinRefusal(t, verifyJournalQuiescence(context.Background(), db, []string{root}), "")
+				return
+			}
+			start, alive, known := probe.NewProcChecker().StartTime(pid)
+			if !known || !alive {
+				t.Fatal("parent process identity unavailable")
+			}
+			fds := filepath.Join(base, "fd")
+			if err := os.MkdirAll(fds, 0700); err != nil {
+				t.Fatal(err)
+			}
+			// Non-links on either side of the readable entry exercise both
+			// continuing after an unreadable link and retaining a finding.
+			for _, name := range []string{"0", "9"} {
+				if err := os.WriteFile(filepath.Join(fds, name), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if strings.HasPrefix(kind, "program") {
+				if err := os.Symlink(filepath.Join(dir, "agent-director-helper"), filepath.Join(base, "exe")); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "program-unlistable-fds" {
+					if err := os.Chmod(fds, 0); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(fds, 0700) })
+				}
+			} else {
+				if err := os.WriteFile(filepath.Join(base, "exe"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if kind != "unreadable-only" {
+					target := db
+					switch kind {
+					case "wal":
+						target += "-wal"
+					case "shm":
+						target += "-shm"
+					case "root":
+						target = filepath.Join(root, "held")
+					}
+					if err := os.Symlink(target, filepath.Join(fds, "5")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			err := verifyJournalQuiescence(context.Background(), db, []string{root})
+			if kind == "unreadable-only" {
+				assertDarwinRefusal(t, err, "")
+			} else {
+				assertDarwinRefusal(t, err, "old_or_unverified_mutators", JournalProcess{PID: pid, Starttime: start, Role: "agent_director_mutator", Action: "stop_and_restart_after_cutover"})
+			}
+		})
 	}
 }
 
@@ -655,16 +754,7 @@ func TestAdviceFollow_G12_VerifierReasons(t *testing.T) {
 				journalProcRoot = file
 				return func() { journalProcRoot = "/proc" }
 			}},
-		{"process_identity_unreadable", "run it as the agents' user on a host where that user can read every process's identity" + retry,
-			func(t *testing.T, _ string, _ *JournalMigrationOptions) func() {
-				dir := t.TempDir()
-				if err := os.Symlink("999999", filepath.Join(dir, "999999")); err != nil {
-					t.Fatal(err)
-				}
-				journalProcRoot = dir
-				return func() { journalProcRoot = "/proc" }
-			}},
-		{"inventory_deadline", "answer any privacy consent prompt or grant the terminal app access to the folder it names, make every mounted file system reachable or unmount it, or stop processes until the process inventory finishes within the attempt's time limit;" + strings.TrimPrefix(retry, ","),
+		{"inventory_deadline", "make every mounted file system reachable or unmount it, or answer any privacy consent prompt" + retry,
 			func(t *testing.T, db string, _ *JournalMigrationOptions) func() {
 				expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 				defer cancel()

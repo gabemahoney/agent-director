@@ -137,11 +137,28 @@ func uniqueName() string { return "rt-" + uuid.NewString()[:8] }
 // name, the private TMUX_TMPDIR as cwd, stubCommand, a fresh token, a
 // UUID-suffixed instance id, tmuxfix.StoreID and newClient.
 type createSpec struct {
-	Name, Cwd                  string
-	Envs                       map[string]string
-	Command                    []string
-	Token, InstanceID, StoreID string
-	Client                     *tmux.Client
+	Name, Cwd                        string
+	Envs                             map[string]string
+	ExcludeEnv, UnsetEnv, ForwardEnv []string
+	Command                          []string
+	Token, InstanceID, StoreID       string
+	Client                           *tmux.Client
+}
+
+// createRoutes shares outcome tests between the unchanged argv transport and
+// the host-key transport. Its synthetic environment makes these tests serial.
+func createRoutes(t *testing.T, run func(*testing.T, []string)) {
+	t.Helper()
+	for _, route := range []string{"argv", "stdin"} {
+		t.Run(route, func(t *testing.T) {
+			var forward []string
+			if route == "stdin" {
+				t.Setenv("OPENROUTER_API_KEY", "synthetic-forwarded-key")
+				forward = []string{"OPENROUTER_API_KEY"}
+			}
+			run(t, forward)
+		})
+	}
 }
 
 // created is a create's filled-in spec and its reply.
@@ -176,7 +193,7 @@ func (r *realTmux) create(t testing.TB, spec createSpec) (created, error) {
 		spec.Client = newClient()
 	}
 	r.tr.addSocket(r.Socket)
-	reply, err := spec.Client.NewSession(r.Socket, spec.Name, spec.Cwd, spec.Envs, spec.Command, spec.Token, spec.InstanceID, spec.StoreID)
+	reply, err := spec.Client.NewSessionWithEnvPolicy(r.Socket, spec.Name, spec.Cwd, spec.Envs, spec.Command, spec.Token, spec.InstanceID, spec.StoreID, spec.ExcludeEnv, spec.UnsetEnv, spec.ForwardEnv)
 	r.tr.addProc(reply.ServerPID)
 	r.tr.addProc(reply.PanePID)
 	return created{createSpec: spec, Reply: reply}, err

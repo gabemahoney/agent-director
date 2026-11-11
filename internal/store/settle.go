@@ -39,11 +39,10 @@ const committedDisplayStateSQL = committedDisplayStateFunc + `(CAST(state AS BLO
 
 // hookStateSet is the SET fragment of a hook's write of a non-terminal value
 // V, written by the hook process whose settle time is Tw (Store.settleMs). Its
-// placeholders are V, V, V, V, Tw, Tw, V, V, V, Tw, Tw (hookWriteStateSet): the
-// epoch, the observation, the version, the settled value, the two settle
-// tests, the clock and the state, then the settled value's record
-// (settledEvidenceMove, confirmations.go), which follows settled_state
-// exactly. SET sees the row as it was before the statement, so the
+// placeholders are hookStateValueArgs(V), then V twice for the observation
+// and its version (hookWriteStateSet). The settled value's record
+// (settledEvidenceMove, confirmations.go) follows settled_state exactly.
+// SET sees the row as it was before the statement, so the
 // same-value test and the base are decided in this one statement. A raw
 // change also advances permission_epoch and observation_version; it keeps an
 // observation the row shows as a committed display of either Displayed State
@@ -62,18 +61,29 @@ const committedDisplayStateSQL = committedDisplayStateFunc + `(CAST(state AS BLO
 // decoder accepts only flat RFC 8259 objects; json_valid guards it as well,
 // so json_set cannot fail the write even where SQLite's JSON functions read
 // a value differently from that decoder (a BLOB, say).
-var hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
+var hookStateSet = hookStateValueSet + `,
        display_observation = CASE WHEN state = ? THEN display_observation
          WHEN json_valid(display_observation) AND ` + committedDisplayStateSQL + ` IS NOT NULL
          THEN json_set(display_observation, '$.candidate', '', '$.candidate_since_ms', 0)
          ELSE NULL END,
-       observation_version = observation_version + CASE WHEN state = ? THEN 0 ELSE 1 END,
+       observation_version = observation_version + CASE WHEN state = ? THEN 0 ELSE 1 END`
+
+// hookStateValueSet is hookStateSet's raw-state, epoch and settle assignment.
+// A Codex turn start pairs it with invalidatePaneSet instead of the ordinary
+// observation assignment, so each column is assigned once in the statement.
+var hookStateValueSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
        settled_state = CASE WHEN state = ? THEN settled_state
                             WHEN ? = 0 OR ` + nowMsSQL + ` - state_changed_ms >= ? THEN state
                             ELSE COALESCE(NULLIF(settled_state, ''), state) END,
        state_changed_ms = CASE WHEN state = ? THEN state_changed_ms ELSE ` + nowMsSQL + ` END,
        state = ?,
        ` + settledEvidenceMove
+
+// hookStateValueArgs binds the raw value and writer's settle time to
+// hookStateValueSet, including the settled value's evidence move.
+func (s *Store) hookStateValueArgs(v string) []any {
+	return []any{v, v, s.settleMs, s.settleMs, v, v, v, s.settleMs, s.settleMs}
+}
 
 // immediateSettleSet is the settle-column SET fragment of an immediate write
 // of V, for a statement whose own SET writes state = V elsewhere (the reuse
@@ -121,7 +131,7 @@ func (s *Store) hookWriteStateSet(v string) (string, []any) {
 	if isTerminalState(v) {
 		return immediateStateSet, immediateStateArgs(v)
 	}
-	return hookStateSet, []any{v, v, v, v, s.settleMs, s.settleMs, v, v, v, s.settleMs, s.settleMs}
+	return hookStateSet, append(s.hookStateValueArgs(v), v, v)
 }
 
 // hookWriteStateEvidenceSet is hookWriteStateSet followed by the state

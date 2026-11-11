@@ -58,7 +58,7 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --instance-id whose row is finished (ended or missing); a live row, pending included, still collides; no effect without --instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision); success without dropped arguments does not say whether a row was reset; nonempty dropped_args identifies a finished-agent switch and prints a notice")
 	fs.Var(newDecimalInt(&p.IdleScreenTimeoutSeconds, 0), "idle-screen-timeout-seconds", "this row's idle_screen timeout in whole seconds, 1 to 9223372036, in place of [state] idle_screen_timeout_seconds (default 0: none, use the config); recorded on the row, kept by resume, replaced by the next spawn or reuse; a negative or larger value is refused")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
-	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys, HOME (any value) and a template's key that is empty or holds '=' or a NUL byte are refused with ErrReservedEnvKey, a template's included; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential and home selectors, even empty, and keep the invoking HOME with no alternate-home selector; inherited entries are checked when spawn resolves the effective agent")
+	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys, HOME (any value) and a template's key that is empty or holds '=' or a NUL byte are refused with ErrReservedEnvKey, a template's included; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential, configuration and home selectors, even empty, and keep the invoking HOME; inherited entries are checked when spawn resolves the effective agent")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
@@ -233,7 +233,7 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.Agent, "agent", "", "bake the template's agent: claude, codex or cursor (case-sensitive; default: none, no agent key stored)")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "bake a default relay_mode (on/off); pane-only templates refuse on; an empty resolved spawn value defaults to off for pane-only agents")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
-	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys and HOME (any value) are refused with ErrReservedEnvKey, as spawn refuses them, and no template is written; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential and home selectors, even empty, and keep the invoking HOME with no alternate-home selector; inherited entries are checked when spawn resolves the effective agent")
+	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys and HOME (any value) are refused with ErrReservedEnvKey, as spawn refuses them, and no template is written; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential, configuration and home selectors, even empty, and keep the invoking HOME; inherited entries are checked when spawn resolves the effective agent")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
@@ -455,6 +455,16 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
 	res, err := client.Get(id)
+	if err != nil {
+		return writeVerbError(err)
+	}
+	return writeJSON(os.Stdout, res)
+}
+
+// getManyHandlerWith takes every remaining word as an id, unchanged.
+// The global flags were already removed by clisetup.ParseGlobalFlags.
+func getManyHandlerWith(client *pkgapi.Client, args []string) error {
+	res, err := client.GetMany(args)
 	if err != nil {
 		return writeVerbError(err)
 	}

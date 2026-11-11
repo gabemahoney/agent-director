@@ -3,7 +3,6 @@ package adminapi
 import (
 	"context"
 	"errors"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -24,21 +22,12 @@ type journalFileID struct {
 }
 
 // journalStat is what the verifiers read of a file: its identity, its kind
-// (the S_IFMT bits), its permission bits, its owner and its status-change
-// time.
+// (the S_IFMT bits), its permission bits and its owner.
 type journalStat struct {
-	id    journalFileID
-	mode  uint32
-	perm  uint32
-	uid   uint32
-	ctime time.Time
-}
-
-// journalImageFile is an image opened for its Mach-O headers and build
-// metadata.
-type journalImageFile interface {
-	io.ReaderAt
-	io.Closer
+	id   journalFileID
+	mode uint32
+	perm uint32
+	uid  uint32
 }
 
 // journalFS is every file-system lookup the Darwin verifier, the shared path
@@ -52,9 +41,6 @@ type journalFS interface {
 	// ReadDir lists the names in the directory at path, sorted; an error
 	// means the directory cannot be opened or read.
 	ReadDir(path string) ([]string, error)
-	// Open opens path read-only, never following a link or blocking on a
-	// FIFO, and reads the opened file's own status.
-	Open(path string) (journalImageFile, journalStat, error)
 	// EvalSymlinks is path with every link resolved.
 	EvalSymlinks(path string) (string, error)
 	// KernelPath is the paths the kernel reports for an open descriptor of
@@ -63,17 +49,16 @@ type journalFS interface {
 }
 
 // osJournalFS is the production journalFS. It has no build tag: x/sys's
-// Stat_t has Dev, Ino, Mode and Ctim under the same names on Linux and
+// Stat_t has Dev, Ino, Mode and Uid under the same names on Linux and
 // Darwin.
 type osJournalFS struct{}
 
 func journalStatOf(st *unix.Stat_t) journalStat {
 	return journalStat{
-		id:    journalFileID{dev: uint64(uint32(st.Dev)), ino: uint64(st.Ino)},
-		mode:  uint32(st.Mode) & unix.S_IFMT,
-		perm:  uint32(st.Mode) & 0o777,
-		uid:   st.Uid,
-		ctime: time.Unix(st.Ctim.Unix()),
+		id:   journalFileID{dev: uint64(uint32(st.Dev)), ino: uint64(st.Ino)},
+		mode: uint32(st.Mode) & unix.S_IFMT,
+		perm: uint32(st.Mode) & 0o777,
+		uid:  st.Uid,
 	}
 }
 
@@ -98,19 +83,6 @@ func (osJournalFS) ReadDir(path string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
-}
-
-func (osJournalFS) Open(path string) (journalImageFile, journalStat, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, journalStat{}, err
-	}
-	var st unix.Stat_t
-	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
-		f.Close()
-		return nil, journalStat{}, &fs.PathError{Op: "fstat", Path: path, Err: err}
-	}
-	return f, journalStatOf(&st), nil
 }
 
 func (osJournalFS) EvalSymlinks(path string) (string, error) {
@@ -178,9 +150,11 @@ func journalPathElems(path string) []string {
 }
 
 // journalUnderForm reports whether the listed name is the root form or lies
-// under it, each name compared case-insensitively.
+// under it, each name compared case-insensitively. Forms containing lsof's
+// escape characters cannot gate a lookup: the listed name may spell another
+// file.
 func journalUnderForm(name, form string) bool {
-	if !filepath.IsAbs(name) {
+	if !filepath.IsAbs(name) || strings.ContainsAny(form, `\^`) {
 		return false
 	}
 	names, formNames := journalPathElems(filepath.Clean(name)), journalPathElems(form)
@@ -239,21 +213,31 @@ func journalRootOf(ctx context.Context, fsys journalFS, root string, walked map[
 			return r, err
 		}
 	}
+	r.forms, err = journalPathForms(fsys, root, ancestor, rest)
+	return r, err
+}
+
+// journalPathForms is the one forms rule for both roots and store files:
+// the path itself, its resolved form and its kernel forms, with absent
+// components appended to the deepest existing ancestor's forms. Must use:
+// every listed-path gate derives forms here, never by a second rule.
+func journalPathForms(fsys journalFS, path, ancestor string, rest []string) ([]string, error) {
+	forms := []string{path}
 	resolved, err := fsys.EvalSymlinks(ancestor)
 	if err != nil {
-		return r, journalRefusal("legacy_root_unreadable")
+		return nil, journalRefusal("legacy_root_unreadable")
 	}
 	kernel, err := fsys.KernelPath(ancestor)
 	if err != nil {
-		return r, journalRefusal("legacy_root_unreadable")
+		return nil, journalRefusal("legacy_root_unreadable")
 	}
 	for _, base := range append([]string{resolved}, kernel...) {
 		form := filepath.Join(append([]string{base}, rest...)...)
-		if !slices.Contains(r.forms, form) {
-			r.forms = append(r.forms, form)
+		if !slices.Contains(forms, form) {
+			forms = append(forms, form)
 		}
 	}
-	return r, nil
+	return forms, nil
 }
 
 // journalWalk records the identity of root and of every entry under it,

@@ -56,6 +56,13 @@ for (const variant of table.variants) {
         const want = fs.readFileSync(path.join(fixtureDir, "golden", `${c.name}.json`), "utf8");
         expect(`${c.name}: ${got}`).toBe(`${c.name}: ${want}`);
       }
+      const gets = table.cases.filter((c) => c.verb === "get");
+      const ids = [...gets.map((c) => c.params.instance_id as string), "get-many-unknown"];
+      const from = Date.now();
+      const result = await client.getMany({ instance_ids: ids });
+      const got = normalizeProbes(JSON.stringify(result) + "\n", from, Date.now(), first, "");
+      const goldens = gets.map((c) => fs.readFileSync(path.join(fixtureDir, "golden", `${c.name}.json`), "utf8").replace(/\n$/, ""));
+      expect(got).toBe(`{"spawns":[${goldens.join(",")}],"not_found":["get-many-unknown"]}\n`);
     });
   }, 60_000);
 }

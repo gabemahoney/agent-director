@@ -167,7 +167,7 @@ var pauseSleep = time.Sleep
 //     ErrRelayFallenBack (RelayFallenBackDetails), naming the oldest. It
 //     first records hook_gone_at on every such request with none (waiting
 //     the store's busy timeout, fail-open), so its err_details carry it.
-//  3. A request of the row is not proven gone by Claude Code's hooks:
+//  3. A request of the row is not proven gone by the agent's hooks:
 //     ErrDialogMaybeOpen (DialogMaybeOpenDetails), naming the oldest. A
 //     Cursor request of an earlier launch of the row does not hold
 //     (store.PermissionRow.HoldsDialog).
@@ -176,13 +176,13 @@ var pauseSleep = time.Sleep
 // relay-off row, a row with no permission request and a row whose every
 // request is proven gone, or of an earlier Cursor launch, are not held.
 // Pause takes no pane hash, so it has no way past the hold, which lasts
-// until Claude Code's own hooks prove each request gone, whatever is done at
-// the pane: a background subagent's request answered deny at the pane, for
-// one, gets no PostToolUse, and the main agent's Stop does not prove a
-// subagent's request, so it holds pause until the agent ends. A caller that
-// has read the pane and answered any dialog on it types `/exit` itself, with
-// a send-keys whose expect_pane_sha256 is the pane it judged (which the hold
-// lets through), or kills the Spawn.
+// until the agent's own hooks prove each request gone, whatever is done at
+// the pane: a background subagent's request, allowed or denied, for one, is
+// not proven by the main agent's Stop, so it holds pause until that
+// subagent's SubagentStop on a Claude row (b.wbs), or else until the agent
+// ends. A caller that has read the pane and answered any dialog on it types
+// `/exit` itself, with a send-keys whose expect_pane_sha256 is the pane it
+// judged (which the hold lets through), or kills the Spawn.
 //
 // The lookup's outcomes on a waiting row:
 //
@@ -598,15 +598,15 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // either) and with no wait, whenever such a send-keys would be
 // (ErrSendKeysWhileRelayed, ErrRelayFallenBack or ErrDialogMaybeOpen, in that
 // order and with the same err_details). It takes no pane hash, so it has no
-// way past the hold (ErrDialogMaybeOpen), which lasts until Claude Code's own
-// hooks prove each request gone, whatever is done at the pane: a subagent's
-// request answered deny at the pane gets no PostToolUse, and the main agent's
-// Stop does not prove it, so it holds Pause until the agent ends. Having read
-// the pane and answered any dialog on it, type `/exit` with SendKeys and
-// ExpectPaneSHA256 of the pane judged (the hold lets it through), or Kill. A
-// Spawn with no permission request, or whose every request is proven gone or
-// is a Cursor request of an earlier launch of the row
-// (store.PermissionRow.HoldsDialog), pauses as before.
+// way past the hold (ErrDialogMaybeOpen), which lasts until the agent's own
+// hooks prove each request gone, whatever is done at the pane: the main
+// agent's Stop does not prove a subagent's request, allowed or denied, so it
+// holds Pause until that subagent's SubagentStop on a Claude row (b.wbs), or
+// else until the agent ends. Having read the pane and answered any dialog on
+// it, type `/exit` with SendKeys and ExpectPaneSHA256 of the pane judged (the
+// hold lets it through), or Kill. A Spawn with no permission request, or
+// whose every request is proven gone or is a Cursor request of an earlier
+// launch of the row (store.PermissionRow.HoldsDialog), pauses as before.
 //
 // A waiting row whose recorded tmux session name cannot be used (it is empty,
 // contains a control character, or contains a character tmux stores
@@ -641,11 +641,13 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //     ([RelayFallenBackDetails]) name the request and the Spawn's other open
 //     requests. Answer it with a pane answer (SendKeys with its
 //     RequestToken), or close it with RecordPaneAnswer; Pause then stays
-//     held (ErrDialogMaybeOpen) until Claude Code proves it gone.
-//   - [ErrDialogMaybeOpen]: a request of the Spawn is not proven gone by
-//     Claude Code's hooks (its tool's PostToolUse, the main agent's end of
-//     turn after it, or the agent's end), whatever agent-director's records
-//     say of it; nothing was sent. Its err_details
+//     held (ErrDialogMaybeOpen) until the agent proves it gone.
+//   - [ErrDialogMaybeOpen]: a request of the Spawn is not proven gone (on a
+//     Cursor row, the gateway's validated proof that its tool ran; the end of
+//     the asking agent's turn: the main agent's for a request with no
+//     agent_id, and on a Claude row the subagent's SubagentStop for one with
+//     an agent_id; or, on a non-Cursor Spawn, the agent's end), whatever
+//     agent-director's records say of it; nothing was sent. Its err_details
 //     ([DialogMaybeOpenDetails]) name the request, how agent-director's
 //     records say it closed, since when, and the Spawn's other such
 //     requests. A Cursor request of an earlier launch of the row does not

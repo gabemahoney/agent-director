@@ -313,6 +313,59 @@ func opsOldTree(tree moveTree) moveTree {
 	return out
 }
 
+// opsUnreadable takes read access from path, so a follower's copy of it
+// fails while the toolbox stays the shell's only PATH, and returns what gives
+// it back. Only a user other than root is refused.
+func opsUnreadable(t *testing.T, path string) (undo func()) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := fi.Mode().Perm()
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, mode) })
+	if f, err := os.Open(path); err == nil {
+		_ = f.Close()
+		t.Fatalf("%s is still readable at mode 0: its copy cannot be made to fail", path)
+	}
+	return func() {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// opsAuthority is what the native-input authority query prints, stdout and
+// stderr, on a private copy of store's database and, when wal is set, its
+// -wal, so a case can see where the authority lives without opening store.
+func opsAuthority(t *testing.T, h *moveHome, store string, wal bool) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(h.Root, "authority-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	suffixes := []string{""}
+	if wal {
+		suffixes = append(suffixes, "-wal")
+	}
+	for _, suffix := range suffixes {
+		b, err := os.ReadFile(store + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "state.db"+suffix), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, _ := exec.Command(h.S.SQLite, "-batch", "-init", "/dev/null", filepath.Join(dir, "state.db"),
+		"SELECT value FROM store_meta WHERE key = 'native_input_authority';").CombinedOutput()
+	return string(out)
+}
+
 // putBack follows "Putting back a kept install" for one kept outcome, from
 // the last envelope's details.copies, details.remove and
 // details.attempt_store, in one shell.
@@ -323,6 +376,13 @@ type putBack struct {
 	sh  *opsShell
 	res moveResult
 	env cutoverEnvelope
+
+	// unfinished is an unfinished automatic restore's outcome, the only one
+	// whose emptied store check 2 may skip.
+	unfinished bool
+	// fault, if set, runs just before check 2's command and returns what
+	// undoes it, run just after: a copy the check makes fails there only.
+	fault func() (undo func())
 }
 
 func newPutBack(t *testing.T, h *moveHome, res moveResult, env cutoverEnvelope) *putBack {
@@ -334,7 +394,8 @@ func newPutBack(t *testing.T, h *moveHome, res moveResult, env cutoverEnvelope) 
 		"**The checks**, in this order, on `details.attempt_store`:",
 		"1. No administrator holds the migration lock: no `agent-director-admin` process runs, so this prints nothing.",
 		"2. The store has no native-input authority. Read it from a private copy",
-		"Nothing printed, or an error naming `no such table: store_meta`, means no authority. A `sqlite-v1:` value means the cutover committed: complete forward. The `rm -rf` removes only the private copy.",
+		"The query runs only on a full copy: the database and, when there is one, its `-wal`. Only two results mean no authority: exit 0 with nothing printed, or exit 1 with sqlite3's error naming `no such table: store_meta` as the only output. A `sqlite-v1:` value means the cutover committed: complete forward. Anything else, `private copy failed` included, leaves the outcome unknown: put nothing back, and complete forward or fix the failure and run the checks again. The `rm -rf` removes only the private copy.",
+		"One exception, only after an unfinished automatic restore: when that restore emptied a linked `~/.config/agent-director` (its directory holds only `.move-incomplete`) and `details.attempt_store` lay in it, the store is gone and check 2 has nothing to read. Skip check 2 then: after an unfinished automatic restore, the original store kept in the pre-move directory is unchanged, and that is the store the put-back returns. After an `outcome_unestablished` or killed run, a store check 2 cannot read is never skipped.",
 		"3. The copied release opens the store: its `list` exits 0. In place, run the `agent-director` entry's `copy`",
 		"It comes last because it runs an old binary. After a move it is step 5 below.",
 		"after the three checks: rename each `details.copies` entry onto its `belongs_at`, the `agent-director` binary last, then remove only the `details.remove` paths and each now-empty link-copy directory. Never copy over an installed file, and stop if a `belongs_at` is a directory or a link to one",
@@ -358,7 +419,42 @@ func newPutBack(t *testing.T, h *moveHome, res moveResult, env cutoverEnvelope) 
 	if !unfinished && !unestablished {
 		t.Fatalf("outcome %s, reason %q, %d copies does not meet the procedure's entry paragraph", env.ErrName, reason, len(env.Details.Copies))
 	}
-	return &putBack{t: t, h: h, doc: doc, sh: newOpsShell(h), res: res, env: env}
+	return &putBack{t: t, h: h, doc: doc, sh: newOpsShell(h), res: res, env: env, unfinished: unfinished}
+}
+
+// putBackNoAuthority reports whether check 2's result is one of the two the
+// doc reads as no authority: exit 0 with nothing printed, or exit 1 with
+// sqlite3's error naming no such table: store_meta as the only output.
+func putBackNoAuthority(res moveResult) bool {
+	if res.Stdout != "" {
+		return false
+	}
+	switch res.Code {
+	case 0:
+		return res.Stderr == ""
+	case 1:
+		line := strings.TrimSuffix(res.Stderr, "\n")
+		return !strings.Contains(line, "\n") && strings.Contains(line, "no such table: store_meta")
+	}
+	return false
+}
+
+// putBackEmptiedLink reports whether ~/.config/agent-director is a link
+// whose directory holds only .move-incomplete, as a restore that emptied it
+// leaves it.
+func putBackEmptiedLink(t *testing.T, h *moveHome) bool {
+	t.Helper()
+	fi, err := os.Lstat(h.New)
+	if os.IsNotExist(err) {
+		return false
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	entries, err := os.ReadDir(h.New)
+	return err == nil && len(entries) == 1 && entries[0].Name() == ".move-incomplete"
 }
 
 // putBackLink reports whether a details.copies entry is the managed link's,
@@ -383,16 +479,25 @@ func (p *putBack) Checks(moved bool) (int, moveResult) {
 		t.Errorf("check 2 opens its copy -readonly, which Apple's sqlite3 cannot:\n%s", check2)
 	}
 	store := p.env.Details.AttemptStore
-	files, temps := rollbackStoreCopy(t, store), h.tempEntries()
-	res = p.sh.Run(p.doc.Fill(check2, "'<details.attempt_store>'", moveQuote(store)))
-	if !reflect.DeepEqual(rollbackStoreCopy(t, store), files) {
-		t.Errorf("check 2 changed %s's files", store)
-	}
-	if got := h.tempEntries(); !reflect.DeepEqual(got, temps) {
-		t.Errorf("check 2 left TMPDIR holding %v; it held %v", got, temps)
-	}
-	if res.Stdout != "" || (res.Stderr != "" && !strings.Contains(res.Stderr, "no such table: store_meta")) {
-		return 2, res
+	// The doc's one exception skips check 2: an unfinished automatic restore
+	// emptied the linked new directory that held the store.
+	if !p.unfinished || !strings.HasPrefix(store, h.New+"/") || !putBackEmptiedLink(t, h) {
+		files, temps := rollbackStoreCopy(t, store), h.tempEntries()
+		undo := func() {}
+		if p.fault != nil {
+			undo = p.fault()
+		}
+		res = p.sh.Run(p.doc.Fill(check2, "'<details.attempt_store>'", moveQuote(store)))
+		undo()
+		if !reflect.DeepEqual(rollbackStoreCopy(t, store), files) {
+			t.Errorf("check 2 changed %s's files", store)
+		}
+		if got := h.tempEntries(); !reflect.DeepEqual(got, temps) {
+			t.Errorf("check 2 left TMPDIR holding %v; it held %v", got, temps)
+		}
+		if !putBackNoAuthority(res) {
+			return 2, res
+		}
 	}
 	if moved {
 		return 0, res
@@ -506,15 +611,8 @@ func (p *putBack) Moved(beforeList func()) (int, moveResult) {
 			skip = true
 		}
 	}
-	if fi, err := os.Lstat(h.New); os.IsNotExist(err) {
+	if _, err := os.Lstat(h.New); os.IsNotExist(err) || putBackEmptiedLink(t, h) {
 		skip = true
-	} else if err != nil {
-		t.Fatal(err)
-	} else if fi.Mode()&os.ModeSymlink != 0 {
-		entries, err := os.ReadDir(h.New)
-		if err == nil && len(entries) == 1 && entries[0].Name() == ".move-incomplete" {
-			skip = true
-		}
 	}
 	if !skip {
 		aside := p.doc.Block(`[ ! -e "$aside" ] && mv -- ~/.config/agent-director "$aside"`)
@@ -562,7 +660,7 @@ func TestAdviceFollow_J43_V16StoreInspection(t *testing.T) {
 	}
 	doc := opsDocSection(t, "A store at schema v16 or later that the upgrade cannot read")
 	doc.Pin("Keep writers stopped and read the authority from a private copy, with `store` set to the message's `state.db` path",
-		"The `rm -rf` removes only the private copy. A `sqlite-v1:` value means the authority is recorded: re-run the install. Anything else (nothing, or an error): restore the stopped-writer pre-upgrade copy of the store as [Going back to the previous release](#going-back-to-the-previous-release) describes, or get help. Never write `store_meta` by hand.")
+		"The `rm -rf` removes only the private copy. `private copy failed` means nothing was read: fix the failure and read again, or get help. A `sqlite-v1:` value means the authority is recorded: re-run the install. Anything else (nothing, or an error): restore the stopped-writer pre-upgrade copy of the store as [Going back to the previous release](#going-back-to-the-previous-release) describes, or get help. Never write `store_meta` by hand.")
 	back := opsDocSection(t, "Going back to the previous release")
 	back.Pin("Before upgrading, stop all writers and keep a copy of the actual store",
 		"restore the matching pre-upgrade DB and input evidence at their original paths. Restore the DB with its companion files, removing a `-wal` or `-shm` that the copy lacks",
@@ -570,6 +668,18 @@ func TestAdviceFollow_J43_V16StoreInspection(t *testing.T) {
 	inspect := doc.Block("SELECT value FROM store_meta WHERE key = 'native_input_authority';")
 	if strings.Contains(inspect, "-readonly") {
 		t.Errorf("the inspection opens its copy -readonly, which Apple's sqlite3 cannot:\n%s", inspect)
+	}
+	// answer is the paragraph's next step for a result: `private copy failed`,
+	// fix the failure and read again; a sqlite-v1: value, re-run the install;
+	// anything else, nothing or an error, restore the store.
+	answer := func(res moveResult) string {
+		switch {
+		case strings.Contains(res.Stderr, "private copy failed: nothing was read"):
+			return "fix the failure and read again"
+		case strings.HasPrefix(res.Stdout, "sqlite-v1:"):
+			return "re-run the install"
+		}
+		return "restore the store"
 	}
 	for _, tc := range crossingV16Rows {
 		t.Run(tc.reason, func(t *testing.T) {
@@ -583,12 +693,15 @@ func TestAdviceFollow_J43_V16StoreInspection(t *testing.T) {
 			if now := h.tempEntries(); !reflect.DeepEqual(now, temps) {
 				t.Errorf("the inspection left TMPDIR holding %v; it held %v", now, temps)
 			}
-			wantErr := ""
+			wantCode, wantErr := 0, ""
 			if tc.reason == "cutover_state_unreadable" {
-				wantErr = "no such table: store_meta"
+				wantCode, wantErr = 1, "no such table: store_meta"
 			}
-			if got.Stdout != "" || (wantErr == "") != (got.Stderr == "") || !strings.Contains(got.Stderr, wantErr) {
-				t.Fatalf("inspection: stdout %q, stderr %q; want no value and the error %q", got.Stdout, got.Stderr, wantErr)
+			if got.Code != wantCode || got.Stdout != "" || (wantErr == "") != (got.Stderr == "") || !strings.Contains(got.Stderr, wantErr) {
+				t.Fatalf("inspection: exit %d, stdout %q, stderr %q; want exit %d, no value and the error %q", got.Code, got.Stdout, got.Stderr, wantCode, wantErr)
+			}
+			if a := answer(got); a != "restore the store" {
+				t.Fatalf("inspection answers %q; want restore the store", a)
 			}
 			if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
 				// SR-9.3: refuse before restoring; include the extra legacy root.
@@ -625,6 +738,45 @@ func TestAdviceFollow_J43_V16StoreInspection(t *testing.T) {
 			}
 		})
 	}
+
+	// Epic t1.7tz.xc F2: a private copy that could not be made is no reading
+	// of the store. Its result must not send the follower to a restore; once
+	// the failure is fixed, reading again reaches the row's own outcome.
+	t.Run("native_input_authority_missing, private copy fails", func(t *testing.T) {
+		tc := crossingV16Rows[1]
+		if tc.reason != "native_input_authority_missing" {
+			t.Fatalf("crossingV16Rows[1] is %s", tc.reason)
+		}
+		c, kept := crossingV16Refused(t, tc)
+		h := c.h
+		sh := newOpsShell(h)
+		command := doc.Fill(inspect, "'<state.db path>'", moveQuote(c.db))
+		files, temps := rollbackStoreCopy(t, c.db), h.tempEntries()
+		undo := opsUnreadable(t, c.db)
+		got := sh.Run(command)
+		undo()
+		if !reflect.DeepEqual(rollbackStoreCopy(t, c.db), files) {
+			t.Error("the failed inspection changed the store's files")
+		}
+		if now := h.tempEntries(); !reflect.DeepEqual(now, temps) {
+			t.Errorf("the failed inspection left TMPDIR holding %v; it held %v", now, temps)
+		}
+		if a := answer(got); got.Code == 0 || a != "fix the failure and read again" {
+			t.Fatalf("a failed private copy (exit %d, stdout %q, stderr %q) answers %q; want a failing exit and fix the failure and read again", got.Code, got.Stdout, got.Stderr, a)
+		}
+		got = sh.Run(command)
+		if got.Code != 0 || got.Stdout != "" || got.Stderr != "" {
+			t.Fatalf("inspection read again: exit %d, stdout %q, stderr %q; want exit 0, no value and no error", got.Code, got.Stdout, got.Stderr)
+		}
+		if a := answer(got); a != "restore the store" {
+			t.Fatalf("inspection read again answers %q; want restore the store", a)
+		}
+		rollbackRestoreStore(t, h, c.db, kept)
+		h.InstallRelease(c.release)
+		if v := moveUserVersion(t, h, c.db); v != "15" {
+			t.Errorf("restored store at v%s; want v15", v)
+		}
+	})
 }
 
 // J44: "Put the copies listed in details.copies back with mv, as
@@ -679,6 +831,67 @@ func TestAdviceFollow_J44_PutBackKeptInstall(t *testing.T) {
 		}
 		if b, err := os.ReadFile(filepath.Join(occupant[0], "occupant")); err != nil || string(b) != "occupant\n" {
 			t.Errorf("occupant: %q, %v", b, err)
+		}
+	})
+
+	// Epic t1.7tz.xc criterion 1 (Epic t1.7tz.ab's J3): an unfinished
+	// automatic restore emptied the linked new directory that held
+	// details.attempt_store, then its last rename, of the pre-move directory
+	// back, failed. Check 2 has nothing to read, and the doc's one exception
+	// skips it: the put-back returns the unchanged original store.
+	t.Run("unfinished restore emptied the linked new directory", func(t *testing.T) {
+		h := newGenuineOldHome(t)
+		linksInHome(h)
+		f := newCutoverFixture(t, h)
+		f.Choose("child:verify-fails-2")
+		h.WrapTool("mv", `if [[ "${!#}" == `+moveQuote(h.Old)+` ]]; then echo 'mv: injected failure' >&2; exit 1; fi`)
+		target := filepath.Join(h.Root, "linked-parent", "target")
+		if err := os.MkdirAll(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		h.Write(filepath.Join(target, ".move-incomplete"), "", 0o600)
+		// The link appears after pre-flight checked the new path, at the
+		// managed link's copy, as in J39's linked new directory; making and
+		// removing it first leaves its parent directory there.
+		h.Link(target, h.New)
+		if err := os.Remove(h.New); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(h.Home, "links", "agent-director")
+		h.WrapTool("ln", `if [[ "${!#}" == `+moveQuote(link)+`.restore-*/`+moveQuote(filepath.Base(link))+` ]]; then
+    `+moveQuote(h.RealTool("ln"))+` -s -- `+moveQuote(target)+` `+moveQuote(h.New)+` || exit
+fi`)
+		before := h.Snapshot()
+		res := f.Install(false, false)
+		env := opsLastEnvelope(t, res, "ErrSchemaVerifyFailed")
+		store := env.Details.AttemptStore
+		if raw, err := os.Readlink(h.New); err != nil || raw != target {
+			t.Fatalf("%s names %q (%v); want the link to %s", h.New, raw, err, target)
+		}
+		if !strings.HasPrefix(store, h.New+"/") {
+			t.Fatalf("attempt store %s is not inside %s", store, h.New)
+		}
+		if _, err := os.Lstat(store); !os.IsNotExist(err) || !putBackEmptiedLink(t, h) {
+			t.Fatalf("attempt store %s: %v; want it emptied with its linked directory, leaving only .move-incomplete:\n%s", store, err, res.Stderr)
+		}
+		pb := newPutBack(t, h, res, env)
+		if n, list := pb.Moved(oldTreeBack(t, h, before)); n != 0 {
+			t.Fatalf("put-back stopped at step %d: exit %d: %s%s", n, list.Code, list.Stdout, list.Stderr)
+		}
+		if raw, err := os.Readlink(h.New); err != nil || raw != target || !putBackEmptiedLink(t, h) {
+			t.Errorf("%s names %q (%v); want the link to %s, holding only .move-incomplete", h.New, raw, err, target)
+		}
+		if aside, _ := filepath.Glob(h.New + ".after-upgrade-*"); len(aside) != 0 {
+			t.Errorf("set-aside new directories: %v; want none", aside)
+		}
+		if kept, _ := filepath.Glob(h.Old + ".pre-move-*"); len(kept) != 0 {
+			t.Errorf("pre-move directories left: %v", kept)
+		}
+		if got := restoreDescribe(t, link); got != "link\t"+filepath.Join(h.Old, "bin", "agent-director") {
+			t.Errorf("managed link: %s", got)
+		}
+		if got := restoreCopyNames(t, h); len(got) != 0 {
+			t.Errorf("copies left: %v", got)
 		}
 	})
 
@@ -753,6 +966,48 @@ func TestAdviceFollow_J44_PutBackKeptInstall(t *testing.T) {
 			}
 			if d := moveDiff(after, now); d != "" {
 				t.Errorf("the undone put-back changed the home:\n%s", d)
+			}
+		})
+	}
+
+	// Epic t1.7tz.xc F1: check 2 proves no authority only from a full private
+	// copy of details.attempt_store. A moved attempt whose cutover committed,
+	// its outcome unknown, has one copy fail during check 2 only: the follow
+	// stops there, before any rename, put-back or old-release list.
+	for _, tc := range []struct {
+		name string
+		wal  bool // the -wal copy fails, and only the -wal holds the authority
+	}{{"committed move, database copy fails", false}, {"committed move, -wal copy fails", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newGenuineOldHome(t)
+			linksInHome(h)
+			f := newCutoverFixture(t, h)
+			f.Choose("child:exit-after-cutover")
+			res := f.Install(false, false)
+			env := opsLastEnvelope(t, res, "ErrJournalMigrationIncomplete")
+			if env.Details.Refusal["reason"] != "outcome_unestablished" {
+				t.Fatalf("outcome %v; want outcome_unestablished", env.Details.Refusal)
+			}
+			store := env.Details.AttemptStore
+			if got := opsAuthority(t, h, store, true); !strings.HasPrefix(got, "sqlite-v1:") {
+				t.Fatalf("a full copy of %s reads %q; want the committed cutover's sqlite-v1: authority", store, got)
+			}
+			failing := store
+			if tc.wal {
+				failing = store + "-wal"
+				if got := opsAuthority(t, h, store, false); strings.HasPrefix(got, "sqlite-v1:") {
+					t.Fatalf("%s without its -wal reads %q; want the authority only in the -wal", store, got)
+				}
+			}
+			after := h.PhysicalSnapshot()
+			pb := newPutBack(t, h, res, env)
+			pb.fault = func() func() { return opsUnreadable(t, failing) }
+			n, got := pb.Moved(func() { t.Error("the follow reached step 5's old-release list") })
+			if n != 2 || got.Code == 0 || !strings.Contains(got.Stderr, "private copy failed: nothing was read") {
+				t.Errorf("put-back ended at step %d (exit %d, stdout %q, stderr %q); want check 2 to stop it, its copy of %s having failed", n, got.Code, got.Stdout, got.Stderr, failing)
+			}
+			if d := moveDiff(after, h.PhysicalSnapshot()); d != "" {
+				t.Errorf("the follow changed the home:\n%s", d)
 			}
 		})
 	}

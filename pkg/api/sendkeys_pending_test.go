@@ -29,7 +29,7 @@ import (
 
 func TestPaneOnlyLifecycleWithFlagOff(t *testing.T) {
 	t.Parallel()
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			e := newKillEnv(t)
 			e.rowAgent = agent
@@ -68,7 +68,7 @@ func TestPaneOnlyLifecycleWithFlagOff(t *testing.T) {
 
 func TestPaneOnlyPlainInputBypassesNativeDelivery(t *testing.T) {
 	// Serial: isolate native lock/evidence paths under a temporary HOME.
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			home := withTempHome(t)
 			e := newNativeSubmissionEnv(t)
@@ -104,7 +104,7 @@ func TestPaneOnlyPlainInputBypassesNativeDelivery(t *testing.T) {
 
 func TestPaneOnlyManualInput(t *testing.T) {
 	t.Parallel()
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		for _, mode := range []string{"enter", "no enter", "empty", "without opt-in", "changed hash", "failed text", "failed enter"} {
 			t.Run(agent+"/"+mode, func(t *testing.T) {
 				e := newKillEnv(t)
@@ -179,7 +179,7 @@ func TestPaneOnlyManualInput(t *testing.T) {
 
 func TestPaneOnlyUnsupportedVerbsWriteNothing(t *testing.T) {
 	// Serial: it checks the shared trail for writes.
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			p := newPAEnvAgent(t, agent, "")
 			c, _ := p.client(t)

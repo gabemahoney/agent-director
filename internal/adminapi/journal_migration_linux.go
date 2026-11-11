@@ -4,7 +4,6 @@ package adminapi
 
 import (
 	"context"
-	"debug/buildinfo"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,12 +14,14 @@ import (
 )
 
 // journalProcRoot is where the verifier lists processes; tests point it at
-// real temporary files to reach its unreadable-inventory refusals. It is the
+// real temporary files to exercise unreadable entries and inventories. It is the
 // one seam for the listing: a test uses it, never a second one.
 var journalProcRoot = "/proc"
 
 // verifyJournalQuiescence on Linux uses /proc as its evidence basis: each
 // same-user process's start time, executable and descriptor links.
+// Only readable program names and store/root links identify mutators;
+// incomplete evidence about one process adds no finding.
 func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string) error {
 	for _, path := range append([]string{dbPath}, roots...) {
 		if err := verifyJournalPath(path); err != nil {
@@ -43,15 +44,12 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 		}
 		base := filepath.Join(journalProcRoot, entry.Name())
 		info, err := os.Stat(base)
-		if os.IsNotExist(err) {
-			continue
-		}
 		if err != nil {
-			return journalRefusal("process_identity_unreadable")
+			continue
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok {
-			return journalRefusal("process_identity_unreadable")
+			continue
 		}
 		// Private store/root permissions below establish the same-user scope.
 		// Privileged administrators are controlled by the maintained boundary.
@@ -59,54 +57,22 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 			continue
 		}
 		start, alive, known := pc.StartTime(pid)
-		p := JournalProcess{PID: pid, Starttime: start, Role: "unverified_process", Action: "stop_or_make_inventory_readable"}
 		if !known {
-			blockers = append(blockers, p)
+			start = ""
+		}
+		if known && !alive {
 			continue
 		}
-		if !alive {
-			continue
-		}
-		exePath := filepath.Join(base, "exe")
-		exe, err := os.Readlink(exePath)
-		if err != nil {
-			_, alive, known = pc.StartTime(pid)
-			if known && !alive {
-				continue
-			}
-			blockers = append(blockers, p)
-			continue
-		}
-		mutator := strings.Contains(filepath.Base(exe), "agent-director")
-		// Read build metadata only.
-		if bi, err := buildinfo.ReadFile(exePath); err == nil {
-			if buildInfoNamesModule(bi) {
-				mutator = true
-			}
-		} else if f, err := os.Open(exePath); err != nil {
-			blockers = append(blockers, p)
-			continue
-		} else {
-			f.Close()
-		}
+		exe, err := os.Readlink(filepath.Join(base, "exe"))
+		mutator := err == nil && strings.Contains(filepath.Base(exe), "agent-director")
 		fds, err := os.ReadDir(filepath.Join(base, "fd"))
 		if err != nil {
-			_, alive, known = pc.StartTime(pid)
-			if known && !alive {
-				continue
-			}
-			blockers = append(blockers, p)
-			continue
+			fds = nil
 		}
 		for _, fd := range fds {
 			target, err := os.Readlink(filepath.Join(base, "fd", fd.Name()))
-			if os.IsNotExist(err) {
-				continue
-			}
 			if err != nil {
-				blockers = append(blockers, p)
-				mutator = false
-				break
+				continue
 			}
 			target = strings.TrimSuffix(target, " (deleted)")
 			if target == dbPath || target == dbPath+"-wal" || target == dbPath+"-shm" {
@@ -118,14 +84,12 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 				}
 			}
 		}
-		after, alive, known := pc.StartTime(pid)
-		if !known || alive && after != start {
-			blockers = append(blockers, p)
+		_, alive, known = pc.StartTime(pid)
+		if known && !alive {
 			continue
 		}
-		if alive && mutator {
-			p.Role, p.Action = "agent_director_mutator", "stop_and_restart_after_cutover"
-			blockers = append(blockers, p)
+		if mutator {
+			blockers = append(blockers, JournalProcess{PID: pid, Starttime: start, Role: "agent_director_mutator", Action: "stop_and_restart_after_cutover"})
 		}
 	}
 	if len(blockers) > 0 {

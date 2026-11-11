@@ -125,7 +125,7 @@ func TestEndCodexTurnSampleGuard(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		after    func(t *testing.T, s *Store, id string) // the row's hooks after the read listed its turn
-		ended    func(CodexTurnSample) CodexTurnSample       // the turn the read found ended
+		ended    func(CodexTurnSample) CodexTurnSample   // the turn the read found ended
 		openNext string                                  // the turn CodexTurnSamples lists afterwards; "": none
 		moved    bool
 	}{

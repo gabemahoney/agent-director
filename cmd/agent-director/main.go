@@ -103,6 +103,7 @@ func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) ma
 		"spawn":              func(args []string) error { return spawnHandlerWith(client, args) },
 		"status":             func(args []string) error { return statusHandlerWith(client, args) },
 		"get":                func(args []string) error { return getHandlerWith(client, args) },
+		"get-many":           func(args []string) error { return getManyHandlerWith(client, args) },
 		"send-keys":          func(args []string) error { return sendKeysHandlerWith(client, args) },
 		"read-pane":          func(args []string) error { return readPaneHandlerWith(client, args) },
 		"kill":               func(args []string) error { return killHandlerWith(client, args) },
@@ -274,11 +275,13 @@ func runHook() (exit int) {
 	//
 	// The relay hook's timing and identity (b.146 rules 2, 4 and 14): Start,
 	// read above before anything else, and RelayTimeout, the --timeout spawn
-	// wrote, give its kill instant; Start also cuts a Stop's or idle prompt's
-	// turn_end proof (b.omt); Self reads its own pid, start time and
-	// pid namespace once, when it records its request. RelayHookGone judges a
-	// request's relay hook for the PostToolUse close (b.146 rule 13), with
-	// the same readers and relay window the verbs judge it with.
+	// wrote, give its kill instant; Start also cuts a Stop's, idle prompt's or
+	// SubagentStop's turn_end proof (b.omt, b.wbs); Self reads its own pid,
+	// start time and pid namespace once, when it records its request.
+	// RelayHookGone judges a request's relay hook for the PostToolUse close
+	// (b.146 rule 13), with the same readers and relay window the verbs judge
+	// it with; that close matches no Claude or Codex request, which carries no
+	// tool_use_id (b.wbs).
 	args := parseHookArgs(os.Args[2:])
 	hc := hook.HandleConfig{
 		Agent:                args.agent,

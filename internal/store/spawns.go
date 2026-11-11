@@ -31,14 +31,15 @@ var ErrReuseArchive = errors.New("store: reuse archive failed")
 
 // The agents a row can record (spawns.agent, introduced in schema v9, SR-3.1).
 const (
-	AgentClaude = "claude"
-	AgentCodex  = "codex"
-	AgentCursor = "cursor"
-	AgentDroid  = "droid"
+	AgentClaude   = "claude"
+	AgentCodex    = "codex"
+	AgentCursor   = "cursor"
+	AgentDroid    = "droid"
+	AgentOpenCode = "opencode"
 )
 
 // ErrRowAgentInvalid is returned, wrapped, by InsertPending and ResetForReuse
-// when the row's agent is not exactly claude, codex, cursor or droid (SR-3.1, SR-3.6). The
+// when the row's agent is not exactly claude, codex, cursor, droid or opencode (SR-3.1, SR-3.6). The
 // check runs before anything is written, so the database is unchanged. It is
 // the store's own marker, not a catalogued sentinel, and is never aliased in
 // pkg/api (the public agent errors come with the agent input). Callers use
@@ -46,10 +47,10 @@ const (
 var ErrRowAgentInvalid = errors.New("store: row agent must be claude, codex or cursor")
 
 // validateRowAgent returns an error wrapping ErrRowAgentInvalid unless agent
-// is exactly AgentClaude, AgentCodex, AgentCursor or AgentDroid. The empty string, which is the column
+// is exactly AgentClaude, AgentCodex, AgentCursor, AgentDroid or AgentOpenCode. The empty string, which is the column
 // default and no agent, and any other spelling are refused.
 func validateRowAgent(agent string) error {
-	if agent != AgentClaude && agent != AgentCodex && agent != AgentCursor && agent != AgentDroid {
+	if agent != AgentClaude && agent != AgentCodex && agent != AgentCursor && agent != AgentDroid && agent != AgentOpenCode {
 		return fmt.Errorf("%w: %q", ErrRowAgentInvalid, agent)
 	}
 	return nil
@@ -210,7 +211,7 @@ type Spawn struct {
 	// Full-row reads fill it; SpawnStatusRow does not select it.
 	IdleSince string
 
-	// Agent is the schema-v9 agent column (SR-3.1): claude, codex, cursor or droid.
+	// Agent is the schema-v9 agent column (SR-3.1): claude, codex, cursor, droid or opencode.
 	// Full-row reads and SpawnStatusRow fill it; InsertPending and
 	// ResetForReuse write it from a Spawn, refusing any other value
 	// (ErrRowAgentInvalid). Rows that existed at the v9 migration read claude.
@@ -259,7 +260,8 @@ type Spawn struct {
 	// the stored display observation or pane baseline: the observers' commits
 	// (ObserveNeedsIntelligence, ObserveIdleScreen) and the lifecycle writes
 	// that keep or clear the observation (hookStateSet on a raw-state change,
-	// immediateSettleSet, find-missing's check_permission repair).
+	// immediateSettleSet, find-missing's check_permission repair, and turn
+	// starts or adoptions through invalidatePaneSet).
 	// lockedObservationRow refuses a plan made from another version, and
 	// observationLanded recognises its own commit as the next one.
 	ObservationVersion int64
@@ -345,7 +347,7 @@ func boolInt(b bool) int {
 // (SRD §7.4 step 2). The caller is expected to have already validated the
 // row and minted any defaults — InsertPending does no semantic checks
 // beyond what SQLite's constraints enforce, and the row's agent: sp.Agent must
-// be exactly claude, codex, cursor or droid, or it returns an error wrapping
+// be exactly claude, codex, cursor, droid or opencode, or it returns an error wrapping
 // ErrRowAgentInvalid before writing anything (SR-3.1, SR-3.6). The insert
 // writes the agent explicitly and leaves end_reported_at NULL.
 //
@@ -1065,14 +1067,17 @@ func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int
 // carries (SR-3.6, SR-5.2): the six server and pane identity columns and the
 // version advance, as a SET list whose placeholders take adoptIdentityArgs in
 // order. AdoptIdentityIfUnchanged and AdoptIdentityIfSameLife share it; it
+// also invalidates pane evidence and any idle_screen candidate/display
+// (invalidatePaneSet), without changing permission_epoch. It
 // never names launch_token, tmux_socket, the state, the liveness columns,
 // launch_started_at, life_number, no_pre_trust or any request column.
-const adoptIdentitySet = `tmux_server_pid       = ?,
+var adoptIdentitySet = `tmux_server_pid       = ?,
         tmux_server_started   = ?,
         tmux_server_starttime = ?,
         pane_id               = ?,
         pane_pid              = ?,
         pane_starttime        = ?,
+        ` + invalidatePaneSet(`state`) + `,
         ` + rowVersionAdvance
 
 // adoptIdentityArgs returns the bound arguments for adoptIdentitySet, in its
@@ -1088,7 +1093,7 @@ func adoptIdentityArgs(id LaunchIdentity) []any {
 // adoptIdentitySQL is AdoptIdentityIfUnchanged's one statement: the shared
 // identity-column assignment, guarded by the row snapshot the verb examined
 // (SR-3.6, SR-5.3).
-const adoptIdentitySQL = `UPDATE spawns
+var adoptIdentitySQL = `UPDATE spawns
     SET ` + adoptIdentitySet + `
   WHERE instance_id = ? AND ` + snapshotMatchSQL
 
@@ -1102,9 +1107,12 @@ const adoptIdentitySQL = `UPDATE spawns
 // identity (tmux_server_pid, tmux_server_started, tmux_server_starttime) and
 // the agent's pane (pane_id, pane_pid, pane_starttime) from id, a zero value
 // as NULL (so an adoption that found no pane records only the server
-// identity), and advances row_version by exactly one. It never writes
-// id.Token, id.Socket, the state or any other column, and emits no trail
-// event: the verb records adopted on ad.provenance.disagree (SR-14).
+// identity), and advances row_version by exactly one. The same statement
+// invalidates pane evidence and any idle_screen candidate/display, without
+// changing permission_epoch. Its transaction refreshes family history and
+// drains any display exit, emitted only after commit. It never writes
+// id.Token, id.Socket or the state; the verb records adopted on
+// ad.provenance.disagree (SR-14).
 //
 // It returns CondApplied when the write applied; CondChanged, having written
 // nothing, when the row exists but its snapshot differs; CondAbsent when no
@@ -1118,7 +1126,7 @@ const adoptIdentitySQL = `UPDATE spawns
 // and expire never write an adoption.
 func (s *Store) AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot, id LaunchIdentity) (CondResult, error) {
 	args := append(adoptIdentityArgs(id), instanceID)
-	res, err := s.db.Exec(adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
+	res, err := s.execFamily(instanceID, adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
 	if err != nil {
 		return 0, fmt.Errorf("store: adopt identity: %w", err)
 	}

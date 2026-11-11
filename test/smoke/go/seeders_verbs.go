@@ -5,6 +5,7 @@ package smoke_test
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -69,6 +70,19 @@ func init() {
 		},
 		TmuxSocket: func(result any) string {
 			return result.(api.SpawnRow).TmuxSocket
+		},
+	}
+
+	seeders["get-many"] = seederSpec{
+		Manifest: mustVerb("get-many"), SeedKind: seedPendingLaunch, SeedID: "smoke-get-many-id",
+		Happy: func(c *api.Client, id string, _ context.Context) (any, error) { return c.GetMany([]string{id}) },
+		Error: func(c *api.Client, _ context.Context) error {
+			ids := make([]string, 21)
+			for i := range ids {
+				ids[i] = fmt.Sprintf("many-%02d", i)
+			}
+			_, err := c.GetMany(ids)
+			return err
 		},
 	}
 

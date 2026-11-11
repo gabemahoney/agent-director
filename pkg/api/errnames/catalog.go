@@ -20,6 +20,8 @@ import (
 type Entry struct {
 	Name string
 	Err  error
+	// Description is optional agent-neutral text for the generated catalog.
+	Description string
 }
 
 // errInternal is the sentinel Catalog pairs with ErrInternal (b.cm7). No error
@@ -59,6 +61,7 @@ var Catalog = []Entry{
 	{Name: "ErrExperimentalAgentDisabled", Err: spawn.ErrExperimentalAgentDisabled},
 	{Name: "ErrAgentCapabilityUnsupported", Err: spawn.ErrAgentCapabilityUnsupported},
 	{Name: "ErrModelMissing", Err: spawn.ErrModelMissing},
+	{Name: "ErrHostCredentialMissing", Err: spawn.ErrHostCredentialMissing, Description: "A required host credential is unset or empty in agent-director's own environment; the launch refuses before mutation."},
 	{Name: "ErrAgentMissing", Err: spawn.ErrAgentMissing},
 	{Name: "ErrAgentInvalid", Err: spawn.ErrAgentInvalid},
 	{Name: "ErrAgentArgsMismatch", Err: spawn.ErrAgentArgsMismatch},
@@ -102,6 +105,7 @@ var Catalog = []Entry{
 	{Name: "ErrDialogMaybeOpen", Err: api.ErrDialogMaybeOpen},
 	{Name: "ErrInvalidDecision", Err: api.ErrInvalidDecision},
 	{Name: "ErrInvalidFlags", Err: api.ErrInvalidFlags},
+	{Name: "ErrTooManyIds", Err: api.ErrTooManyIds},
 	{Name: "ErrMissingRequestToken", Err: api.ErrMissingRequestToken},
 	{Name: "ErrNoOpenPermissionRequest", Err: store.ErrNoOpenPermissionRequest},
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},

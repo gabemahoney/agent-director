@@ -7,7 +7,7 @@ import (
 )
 
 // Confirmation is one main field's last-confirmed evidence (SR-4.5, SR-4.6),
-// the same five fields on every status, get and list agent result. Every
+// the same five fields on every status, get, get-many and list agent result. Every
 // field is always present; an unknown value is null, never omitted.
 type Confirmation struct {
 	// Status is confirmed (the returned value is supported at ConfirmedAt and

@@ -141,10 +141,11 @@ export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
  *   (`decision_reason` `"pane"`); this does not establish ACP delivery, receipt or proof.
  * - `"outside"`: a caller recorded it answered outside agent-director (`recordPaneAnswer`,
  *   `decision_reason` `"pane_outside"`).
- * - `"tool_ran"`: agent hooks or validated correlated Cursor execution output established
- *   its tool ran. Hook close and successful Cursor proof preserve any earlier verdict and
- *   non-null reason, inferring allow only when undecided and filling a missing reason with
- *   `"tool_ran"`. This history supplies no response authority.
+ * - `"tool_ran"`: validated correlated Cursor execution output established its tool ran (in
+ *   practice never on a Claude or Codex row, whose requests carry no `tool_use_id`). That
+ *   close preserves any earlier verdict and non-null reason, inferring allow only when
+ *   undecided and filling a missing reason with `"tool_ran"`. This history supplies no
+ *   response authority.
  * `"sent"`, `"outside"` and `"tool_ran"` close the request; its `delivery` stays `"fallen_back"`.
  */
 export type PaneAnswer = "none" | "intent" | "sent" | "outside" | "tool_ran";
@@ -209,12 +210,13 @@ export interface RequestDelivery {
 
 /**
  * How agent evidence proved a permission request's dialog gone:
- * - `"tool_ran"`: a Claude PostToolUse or PostToolUseFailure carried its `tool_use_id`, or
- *   validated correlated Cursor execution output established that exact tool ran (never on a Codex row).
+ * - `"tool_ran"`: validated correlated Cursor execution output established that exact tool ran
+ *   (in practice never on a Claude or Codex row, whose requests carry no `tool_use_id`).
  * - `"turn_end"`: the turn of the agent that asked ended after it was written; the main agent's
  *   Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified
  *   Cursor main Stop/Interrupt proves only a durably main-turn-eligible request recorded
- *   before the hook began. Legacy non-Cursor main requests retain eligibility; Cursor
+ *   before the hook began; a Claude subagent's SubagentStop proves only that subagent's
+ *   requests recorded before that hook began. Legacy non-Cursor main requests retain eligibility; Cursor
  *   unknown-origin and child requests remain ineligible even without a child id. Decisions,
  *   delivery acknowledgements and pane-answer claims do not grant eligibility.
  * - `"agent_gone"`: its non-Cursor Spawn was marked missing, ended or resumed.
@@ -823,6 +825,20 @@ export interface GetResult {
   unproven_requests: PermissionRequestInfo[];
 }
 
+/** The ids whose full rows are requested, in order. */
+export interface GetManyParams {
+  /** One up to the configured Id Cap (20 by default), none empty or repeated. */
+  instance_ids: string[];
+}
+
+/** Full get rows and ids without a record, each in input order. */
+export interface GetManyResult {
+  /** Exactly get's result for each found id. Always an array, never null. */
+  spawns: GetResult[];
+  /** Ids without a record. Always an array, never null. */
+  not_found: string[];
+}
+
 /**
  * Parameters for sending keys. A call is plain, or a pane answer when
  * `request_token` is set: a pane answer needs `as`, `key` and
@@ -1035,6 +1051,12 @@ export interface RecordPaneAnswerResult {
 // facts as fields (an ErrInternal included: PaneKeySentDetails); it is null for
 // every other error.
 // ---------------------------------------------------------------------------
+
+/** ErrTooManyIds's errDetails: the Id Cap in force for the refusing call. */
+export interface TooManyIdsDetails {
+  /** Maximum number of ids accepted in one call. */
+  id_cap: number;
+}
 
 /**
  * ErrPauseTimeout's errDetails after exit keys were sent but ended was not

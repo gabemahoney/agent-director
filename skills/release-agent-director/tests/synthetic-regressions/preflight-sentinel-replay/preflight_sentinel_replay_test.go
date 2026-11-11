@@ -14,21 +14,21 @@
 //
 // DESIGN
 // ======
-// 1. Stage a throwaway git repo under t.TempDir() holding a copy of
-//    check-source-of-truth.ts and the authoritative package.json, plus a
-//    stray tools/_sentinel-test/package.json with
-//    {"name":"sentinel-test","version":"0.0.0"}.  Any package.json with a
-//    "version" field outside the designated canonical location triggers SR-16.
-//    The sentinel never enters the real tree, where a sibling test or release
-//    gate scanning it would see it (b.9qj).
-// 2. Run the real wrapper,
-//    bash skills/release-agent-director/gates/preflight/invariant-source-of-truth.sh,
-//    from the staged repo's root: it resolves the repo with
-//    `git rev-parse --show-toplevel` and runs the delegate there.
-// 3. Assert exit code != 0.
-// 4. Assert stderr contains "preflight.invariant-source-of-truth" (the
-//    wrapper's own gate key) AND the sentinel file path (emitted by the
-//    underlying SR-16 script).
+//  1. Stage a throwaway git repo under t.TempDir() holding a copy of
+//     check-source-of-truth.ts and the authoritative package.json, plus a
+//     stray tools/_sentinel-test/package.json with
+//     {"name":"sentinel-test","version":"0.0.0"}.  Any package.json with a
+//     "version" field outside the designated canonical location triggers SR-16.
+//     The sentinel never enters the real tree, where a sibling test or release
+//     gate scanning it would see it (b.9qj).
+//  2. Run the real wrapper,
+//     bash skills/release-agent-director/gates/preflight/invariant-source-of-truth.sh,
+//     from the staged repo's root: it resolves the repo with
+//     `git rev-parse --show-toplevel` and runs the delegate there.
+//  3. Assert exit code != 0.
+//  4. Assert stderr contains "preflight.invariant-source-of-truth" (the
+//     wrapper's own gate key) AND the sentinel file path (emitted by the
+//     underlying SR-16 script).
 //
 // DEPENDENCY
 // ==========

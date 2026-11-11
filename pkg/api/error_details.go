@@ -13,8 +13,8 @@ import (
 // matches through DetailedError), or none for an unnamed error (ErrInternal),
 // and its text is the description. Details is the err_details object, one of
 // RelayFallenBackDetails, PaneAnswerInProgressDetails, ClaimTooSoonDetails,
-// PaneChangedDetails, PaneKeySentDetails, DialogMaybeOpenDetails and
-// PauseTimeoutDetails.
+// PaneChangedDetails, PaneKeySentDetails, DialogMaybeOpenDetails,
+// PauseTimeoutDetails and TooManyIdsDetails.
 //
 // The CLI writes Details as the error envelope's err_details key, the MCP
 // server as its error data's err_details, and the TypeScript client exposes
@@ -41,6 +41,12 @@ func ErrDetails(err error) any {
 		return de.Details
 	}
 	return nil
+}
+
+// TooManyIdsDetails is ErrTooManyIds's err_details from get-many.
+type TooManyIdsDetails struct {
+	// IdCap is the maximum number of ids the Client accepts in one call.
+	IdCap int `json:"id_cap"`
 }
 
 // PauseTimeoutDetails is ErrPauseTimeout's err_details after pause sent the

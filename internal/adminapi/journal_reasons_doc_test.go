@@ -85,11 +85,13 @@ func TestJournalReasonsDocumented(t *testing.T) {
 	}
 	for role, action := range map[string]string{
 		"agent_director_mutator": "stop_and_restart_after_cutover",
-		"unverified_process":     "stop_or_make_inventory_readable",
 	} {
 		if want := role + " (" + action + ")"; !strings.Contains(journalFlat(section), want) {
 			t.Errorf("\"Upgrade refusal reasons\" lacks the role %q", want)
 		}
+	}
+	if strings.Contains(section, "unverified_process") {
+		t.Error("Upgrade refusal reasons still documents the removed unverified_process role")
 	}
 }
 

@@ -135,12 +135,14 @@ func TestKillPendingRefusesOldLabel(t *testing.T) {
 // TestKillBaseIndexOneAdoptsLostReply: with base-index and pane-base-index 1,
 // kill of a pending row with no recorded pane adopts it by @ad_pane and ends it.
 func TestKillBaseIndexOneAdoptsLostReply(t *testing.T) {
-	f := newKillFix(t)
-	r := f.baseIndexOneLostReply(t, "pending")
+	createRoutes(t, func(t *testing.T, forward []string) {
+		f := newKillFix(t)
+		r := f.baseIndexOneLostReply(t, "pending", forward)
 
-	k := f.kill(t, r.InstanceID, 0)
-	k.assertSuccess(t, true)
-	assertProcs(t, true, r.Reply.PanePID)
-	f.assertSession(t, r.Reply.SessionID, false)
-	f.assertAdopted(t, r, "pending")
+		k := f.kill(t, r.InstanceID, 0)
+		k.assertSuccess(t, true)
+		assertProcs(t, true, r.Reply.PanePID)
+		f.assertSession(t, r.Reply.SessionID, false)
+		f.assertAdopted(t, r, "pending")
+	})
 }

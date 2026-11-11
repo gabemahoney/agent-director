@@ -56,8 +56,8 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // (request_token, tool_name, tool_input, requested_at and its delivery
 // facts), the Spawn's state and its other open requests. The request is
 // closed by a pane answer through SendKeys with its request token, or, when
-// it was answered outside agent-director, by RecordPaneAnswer (or by the
-// agent's PostToolUse for its tool).
+// it was answered outside agent-director, by RecordPaneAnswer (or, on a
+// Cursor row, by the gateway's validated proof that its tool ran).
 //
 // A request recorded before schema v7 (no settle instant on record, its relay
 // hook's identity and ack not recorded) falls back by time, as before the

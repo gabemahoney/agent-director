@@ -3,9 +3,6 @@ package adminapi
 import (
 	"bytes"
 	"context"
-	"debug/buildinfo"
-	"debug/macho"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,8 +21,8 @@ import (
 
 // darwinTestHost is the must-use Darwin seam fixture for internal/adminapi:
 // its process table, procfix.Checker, listing renderer, darwinTestFS wrappers
-// and Mach-O builder are shared by verifier, containment and advice tests.
-// Extend these fixtures instead of adding another host, FS wrapper or builder.
+// are shared by verifier, containment and advice tests. The program file is
+// ordinary data; extend this fixture instead of adding another host or wrapper.
 type darwinTestHost struct {
 	t                                       *testing.T
 	v                                       darwinVerifier
@@ -63,9 +60,8 @@ func newDarwinTestHost(t *testing.T) *darwinTestHost {
 	}
 	h.write(h.db, []byte("private-store-content"))
 	h.image = filepath.Join(dir, "ordinary-image")
-	h.write(h.image, darwinThinImage(t, "other", macho.TypeExec))
-	// The synthetic process starts after the real image's ctime. The clock
-	// stays injected; no wait is needed to order real file writes and starts.
+	h.write(h.image, []byte("ordinary program contents"))
+	// Inject selection and process times; no wall-clock wait orders the scan.
 	start := time.Now().Add(time.Hour).Truncate(time.Microsecond)
 	h.start = darwinTestStart(start)
 	h.selectedAt, h.listedAt = start.Add(time.Second), start.Add(2*time.Second)
@@ -194,12 +190,8 @@ func (h *darwinTestHost) check(ctx context.Context, reason string, processes ...
 	return assertDarwinRefusal(h.t, err, reason, processes...)
 }
 
-func (h *darwinTestHost) blocker(pid int, role string) JournalProcess {
-	action := "stop_or_make_inventory_readable"
-	if role == "agent_director_mutator" {
-		action = "stop_and_restart_after_cutover"
-	}
-	return JournalProcess{PID: pid, Starttime: h.start, Role: role, Action: action}
+func (h *darwinTestHost) blocker(pid int) JournalProcess {
+	return JournalProcess{PID: pid, Starttime: h.start, Role: "agent_director_mutator", Action: "stop_and_restart_after_cutover"}
 }
 
 func assertDarwinRefusal(t *testing.T, err error, reason string, processes ...JournalProcess) *JournalRefusal {
@@ -242,14 +234,13 @@ func assertDarwinRefusal(t *testing.T, err error, reason string, processes ...Jo
 
 // darwinTestFS wraps real temporary files. fold simulates APFS case folding;
 // aliases/kernel simulate kernel path forms; before injects refusal/blocking
-// or a file change; afterStat injects metadata timing without a clock wait.
+// or a file change.
 // Every call is recorded, including calls abandoned at the attempt deadline.
 type darwinTestFS struct {
 	journalFS
 	fold            bool
 	aliases, kernel map[string]string
 	before          func(op, path string) error
-	afterStat       func(op, path string, st journalStat) journalStat
 	mu              sync.Mutex
 	calls           []string
 }
@@ -302,11 +293,7 @@ func (f *darwinTestFS) Lstat(path string) (journalStat, error) {
 	if err != nil {
 		return journalStat{}, err
 	}
-	st, err := f.journalFS.Lstat(p)
-	if err == nil && f.afterStat != nil {
-		st = f.afterStat("lstat", path, st)
-	}
-	return st, err
+	return f.journalFS.Lstat(p)
 }
 func (f *darwinTestFS) ReadDir(path string) ([]string, error) {
 	p, err := f.lookup("readdir", path)
@@ -314,17 +301,6 @@ func (f *darwinTestFS) ReadDir(path string) ([]string, error) {
 		return nil, err
 	}
 	return f.journalFS.ReadDir(p)
-}
-func (f *darwinTestFS) Open(path string) (journalImageFile, journalStat, error) {
-	p, err := f.lookup("open", path)
-	if err != nil {
-		return nil, journalStat{}, err
-	}
-	file, st, err := f.journalFS.Open(p)
-	if err == nil && f.afterStat != nil {
-		st = f.afterStat("open", path, st)
-	}
-	return file, st, err
 }
 func (f *darwinTestFS) EvalSymlinks(path string) (string, error) {
 	p, err := f.lookup("eval", path)
@@ -388,97 +364,4 @@ func blockDarwinLookup(t *testing.T, f *darwinTestFS, op, path string, skipMatch
 		}
 	})
 	return entered, release
-}
-
-// darwinThinImage emits a minimal 64-bit Mach-O with Go's inline buildinfo;
-// module "test-binary" is the metadata a newer Go gives this module's test
-// binaries. Validation uses the standard readers; it is fixture setup, not a
-// meta-test.
-func darwinThinImage(t *testing.T, module string, kind macho.Type) []byte {
-	t.Helper()
-	info := make([]byte, 32)
-	copy(info, "\xff Go buildinf:")
-	info[14], info[15] = 8, 2
-	text := "path\texample.test/program\nmod\texample.test/other\tv1.0.0\n"
-	switch module {
-	case "main":
-		text = "path\texample.test/program\nmod\t" + journalModulePath + "\tv1.0.0\n"
-	case "dependency":
-		text += "dep\t" + journalModulePath + "\tv1.0.0\n"
-	case "test-binary":
-		text = "path\t" + journalModulePath + "/internal/adminapi.test\nmod\t" + journalModulePath + "\t(devel)\n"
-	}
-	for _, s := range []string{"go1.22.10", strings.Repeat("x", 16) + text + strings.Repeat("y", 16)} {
-		info = binary.AppendUvarint(info, uint64(len(s)))
-		info = append(info, s...)
-	}
-	if module == "none" {
-		info = make([]byte, len(info))
-	}
-	const offset = 256
-	data := make([]byte, offset+len(info))
-	put := func(off int, n uint32) { binary.LittleEndian.PutUint32(data[off:], n) }
-	put64 := func(off int, n uint64) { binary.LittleEndian.PutUint64(data[off:], n) }
-	put(0, macho.Magic64)
-	put(4, uint32(macho.CpuArm64))
-	put(8, 0)
-	put(12, uint32(kind))
-	put(16, 1)
-	put(20, 152)
-	put(32, uint32(macho.LoadCmdSegment64))
-	put(36, 152)
-	copy(data[40:], "__DATA")
-	put64(56, 0x1000)
-	put64(64, uint64(len(info)))
-	put64(72, offset)
-	put64(80, uint64(len(info)))
-	put(88, 3)
-	put(92, 3)
-	put(96, 1)
-	copy(data[104:], "__go_buildinfo")
-	copy(data[120:], "__DATA")
-	put64(136, 0x1000)
-	put64(144, uint64(len(info)))
-	put(152, offset)
-	copy(data[offset:], info)
-	if _, err := macho.NewFile(bytes.NewReader(data)); err != nil {
-		t.Fatal(err)
-	}
-	if module != "none" {
-		if _, err := buildinfo.Read(bytes.NewReader(data)); err != nil {
-			t.Fatalf("Mach-O fixture metadata: %v", err)
-		}
-	}
-	return data
-}
-
-func darwinUniversalImage(t *testing.T, modules ...string) []byte {
-	t.Helper()
-	data := make([]byte, 8+20*len(modules))
-	binary.BigEndian.PutUint32(data, macho.MagicFat)
-	binary.BigEndian.PutUint32(data[4:], uint32(len(modules)))
-	for i, module := range modules {
-		kind := macho.TypeExec
-		if module == "non-executable" {
-			kind = macho.TypeObj
-		}
-		thin := darwinThinImage(t, module, kind)
-		cpu := uint32(macho.CpuArm64)
-		if i == 0 {
-			cpu = uint32(macho.CpuAmd64)
-		}
-		binary.LittleEndian.PutUint32(thin[4:], cpu)
-		for len(data)%8 != 0 {
-			data = append(data, 0)
-		}
-		at := 8 + 20*i
-		for j, n := range []uint32{cpu, 0, uint32(len(data)), uint32(len(thin)), 3} {
-			binary.BigEndian.PutUint32(data[at+j*4:], n)
-		}
-		data = append(data, thin...)
-	}
-	if _, err := macho.NewFatFile(bytes.NewReader(data)); err != nil {
-		t.Fatal(err)
-	}
-	return data
 }

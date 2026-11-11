@@ -96,11 +96,12 @@ To end a live row (`pending` included) and relaunch its id:
 
 ## Bounded recovery on state reads
 
-`status`, `get`, `list` and `sweep` share eligible recovery checks.
+`status`, `get`, `get-many`, `list` and `sweep` share eligible recovery checks.
 `find-missing` remains a supported alias of `sweep` on CLI and MCP, as do
 Go `FindMissing`/`Client.FindMissing` and TypeScript `findMissing`.
-`status` and `get` check only the named row. `list` selects IDs using the
-stored state, displayed state, other filters and limit before checking them.
+`status` and `get` check only the named row. `get-many` checks each named ID
+in order. `list` selects IDs using the stored state, displayed state, other
+filters and limit before checking them.
 It returns those same IDs after recovery, even if a returned value no longer
 matches the filter; it neither refills limit slots nor adds newly matching rows.
 Invalid filters are refused before checks. Reading a parent does not check
@@ -115,19 +116,64 @@ display and transcript checks; late exact input proof remains eligible.
 Pending grace and a live launch owner protect an unfinished launch, except
 from [exact Cursor gateway loss](#cursor-operation-boundaries).
 
-Work is bounded per call and writes recheck the sampled identity. A stale
-sample, unavailable provider or unconfirmed commit is not successful recovery;
-a successful read does not prove every check ran or committed. Checks never
+Work is bounded per call (per ID for [`get-many`](#reading-many-agents)),
+and writes recheck the sampled identity. A stale sample, unavailable provider or unconfirmed commit is not
+successful recovery; a successful read does not prove every check ran or
+committed. Checks never
 deliver input or permission answers, replay a submission, signal or restart
 an agent. Commands keep their own preconditions. Nothing runs between calls
 unless an operator [schedules the sweeps](maintenance.md#scheduling-the-sweeps).
 
-`status`, `get`, `list`, `sweep` and `find-missing` can fail with
+`status`, `get`, `get-many`, `list`, `sweep` and `find-missing` can fail with
 `ErrStoreBusy` and an empty result when one of the call's bounded store reads
 does not finish in time: other work held the store or a lock the read needed,
-or the read's time ran out. A failure while selecting rows means nothing was
-checked. A later failure of `status`, `get` or `list` leaves observations its
-checks already committed recorded.
+or the read's time ran out. A failure while selecting rows means that selection
+checked nothing. A later failure of `status`, `get`, `get-many` or `list` leaves
+committed observations recorded.
+
+## Reading many agents
+
+To poll many agents, use `list` for their IDs, then one `get-many`:
+
+```sh
+agent-director get-many agent-a agent-b
+```
+
+On the CLI, each word after `get-many` is one ID, unchanged (commas and a
+leading `-` included), except the global flags `--store-path`, `--home`,
+`--tmux-command` and `--create-if-missing`, which the CLI takes anywhere,
+with their values.
+
+Each `spawns` element is exactly that ID's `get` result, with every field and
+guarantee described for `get` in this contract. IDs with no record go to
+`not_found`; an `ended` or `missing` row with a record is found. Both fields
+are always arrays, empty rather than null, each in the order the IDs were given.
+Any other read failure stops the call with both lists empty and no later ID
+read; earlier reads' committed observations stay recorded.
+
+Before reading any agent, `get-many` refuses a call with no IDs (`ErrInvalidFlags`),
+then one with more IDs than [`[get_many] id_cap`](configuration.md#keys)
+(`ErrTooManyIds`), then one with an empty or repeated ID (`ErrInvalidFlags`).
+Empty and repeated IDs are named by their 1-based positions, never their text.
+On `ErrTooManyIds`, split the IDs across calls of at most `err_details.id_cap` IDs.
+
+The result is not a single snapshot: agents are read one after another, so
+`family_state` can disagree between members of one family within a result.
+A large result may reach an MCP caller's model as a file.
+
+Call time grows with the number of IDs and with slow tmux calls. A tmux
+server that answers nothing costs about one
+[`[tmux] query_timeout_ms`](configuration.md#timing-settings-tmux) per server
+under the [stop rule](#unchanged-panes), unless that timeout uses up the rest of an ID's
+[`[tmux] sweep_budget_seconds`](configuration.md#timing-settings-tmux).
+A stalled pane capture costs up to
+[`[tmux] action_timeout_ms`](configuration.md#timing-settings-tmux) per working
+Claude or Codex agent. There is no fixed call-time limit; raise TypeScript's
+`callTimeoutMs` if needed (see the timeout rule above).
+
+A binary without `get-many` refuses it with `ErrUnknownVerb` (CLI and
+TypeScript), or `ErrUnknownTool` over MCP. On either refusal, fall back to
+`get` per ID.
 
 ## Sweep results
 
@@ -412,8 +458,8 @@ lock acquisition.
 
 Codex sends no hook when a turn ends in an error, such as a model at
 capacity. The row reads `working` until a check finds the turn's end in
-Codex's rollout: a `status` or `get` of that row, a `list` selecting it, or
-`sweep` can move it to `waiting` (shown after any
+Codex's rollout: a `status` or `get` of that row, a `get-many` naming it,
+a `list` selecting it, or `sweep` can move it to `waiting` (shown after any
 [settle time](configuration.md#settle-time-state)). Keep polling `status` as for
 any turn. `waiting` does not mean the turn succeeded: read the pane for the
 error before sending more work. The row's `state_changed_at` is the time of
@@ -538,7 +584,8 @@ only while it shows `idle_screen`.
 - **Clearing.** When its pane changes or cannot be sampled, or the agent
   moves on, the row keeps `displayed_state` until the exit candidate settles
   and a check commits the exit. `ended`, `missing` and a state a command sets
-  show at once.
+  show at once. A shown `idle_screen` also ends at once on any Codex turn
+  start or ownership change, including a `waiting` row retaining it.
 - **Trail.** Each entry and exit appends one
   `ad.spawn.displayed_state_transition` trail record with `instance_id`,
   `prior_state`, `new_state`, `event` and `ts`; the trail is audit only and a
@@ -551,7 +598,7 @@ only while it shows `idle_screen`.
 
 ### Unchanged panes
 
-`status`, `get`, `list` and `sweep` sample eligible selected `working`
+`status`, `get`, `get-many`, `list` and `sweep` sample eligible selected `working`
 Claude or Codex rows: the agent's own pane of the current launch, fingerprinted
 as the `pane_sha256` a default `read-pane` returns. Only the fingerprint is
 kept; nothing reads what the pane says.
@@ -580,9 +627,10 @@ kept; nothing reads what the pane says.
 - **Time.** A sample makes up to three tmux calls (a lookup, a pane listing
   and a capture), each bounded by
   [`query_timeout_ms` or `action_timeout_ms`](configuration.md#timing-settings-tmux).
-  Within one call, a tmux server that does not answer a lookup or pane
-  listing is not asked again: its later rows count as failed samples for
-  baseline handling, but their skipped work makes sweep coverage incomplete.
+  Within one call, a tmux server that does not answer a lookup or pane listing
+  is not asked again unless that timeout uses up the rest of an ID's
+  [`[tmux] sweep_budget_seconds`](configuration.md#timing-settings-tmux): its later rows count as failed
+  samples for baseline handling, but their skipped work makes sweep coverage incomplete.
 
 ## Ordinary text submission
 
@@ -1477,9 +1525,9 @@ supplies neither ACP approval authority nor proof.
 - After `decide` returns `delivery` `not_confirmed`, poll `get-permission`
   until `delivery` reads `delivered` or `fallen_back`, which it does by
   `confirm_by`.
-- `get`, `list` and `get-permission` never wait for the store's write lock.
+- `get`, `get-many`, `list` and `get-permission` never wait for the store's write lock.
 - With a [settle time](configuration.md#settle-time-state) set, `status`,
-  `get` and `list` show the settled state with no lateness marker;
+  `get`, `get-many` and `list` show the settled state with no lateness marker;
   [`displayed_state` settling](#needs-intelligence-and-idle-screen-rows)
   depends on successful observations. Verbs act on the live state, so a verb
   can refuse, with a named error, on a state `status` does not show yet.
@@ -1487,7 +1535,7 @@ supplies neither ACP approval authority nor proof.
   `err_name` and `err_description` (in the CLI's error JSON, the MCP
   error's `data`, and the TypeScript client's `errDetails`):
   `ErrRelayFallenBack`, `ErrPaneAnswerInProgress`, `ErrClaimTooSoon`,
-  `ErrPaneChanged`, `ErrDialogMaybeOpen`,
+  `ErrPaneChanged`, `ErrDialogMaybeOpen`, `ErrTooManyIds`,
   [`ErrPauseTimeout`](#when-pause-cannot-confirm-exit), and an `ErrInternal`
   from a pane answer whose key was sent (`key_sent` true: read the pane before you
   send anything again). Read facts from it, never from the description; a

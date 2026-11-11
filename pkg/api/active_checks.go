@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"time"
 
@@ -91,8 +92,9 @@ type sessionHistorySnapshotReader interface {
 	ListSessionHistorySnapshot(Spawn, time.Duration) ([]SessionHistoryEntry, error)
 }
 
-// activeCheckProviders is invocation-owned. Narrow exported helpers have no
-// tmux provider and do not manufacture one from the host environment.
+// activeCheckProviders is invocation-owned, except for get-many's stop record.
+// Narrow exported helpers have no tmux provider and do not manufacture one
+// from the host environment.
 type activeCheckProviders struct {
 	// tickSource changes reporting only; sweep retains its released source.
 	tickSource   string
@@ -101,6 +103,8 @@ type activeCheckProviders struct {
 	budget       time.Duration
 	logger       FindMissingLogger
 	deferred     func(string, error)
+	// stoppedSockets carries only get-many's stopped sockets between ids.
+	stoppedSockets *tmux.StoppedSockets
 }
 
 // activeReadStore holds the fixed selection and its checked projections.
@@ -314,17 +318,27 @@ func (r *activeReadStore) staleProcess(checked *activeCheckedRow, examined Spawn
 
 // probeStillApplies reports whether current, the row read after this
 // invocation's liveness write, is still the row the probe examined as that
-// write left it: after this invocation's own mark, which stored no process
-// record (ProcessRecorded false), a row with none; after any other write (a
-// note, a clear, which never touch process_evidence) or none, a live row with
-// examined's process record. Anything else is a concurrent writer's commit,
-// a terminal move with its own record or a SessionEnd among them, which a
-// sample taken before it must never overwrite (SR-4.7).
-func probeStillApplies(examined, current Spawn, result findMissingRow) bool {
+// write left it. expected is the examined row as this invocation's own
+// writes left it: its observation version advanced once by an applied
+// adoption and, when no verdict write followed, the adoption's snapshot.
+// After this invocation's own mark, which stored no process record
+// (ProcessRecorded false), current must hold none; after any other write (a
+// note, a clear, which never touch process_evidence, the permission interval
+// or observation_version) or none, current must be live with expected's
+// process record, permission interval and exact observation version, and,
+// with no verdict write, expected's snapshot. Anything else is a concurrent
+// writer's commit, a terminal move with its own record, a SessionEnd or an
+// intervening observation among them, which a sample taken before it must
+// never overwrite or absorb (SR-4.7).
+func probeStillApplies(expected, current Spawn, result findMissingRow) bool {
 	if result.marked && result.write.Wrote && result.write.Err == nil && result.write.Res == CondApplied {
 		return current.ProcessEvidence == ""
 	}
-	return store.IsLiveState(current.State) && current.ProcessEvidence == examined.ProcessEvidence
+	if !result.write.Wrote && current.Snapshot != expected.Snapshot {
+		return false
+	}
+	return store.IsLiveState(current.State) && current.ProcessEvidence == expected.ProcessEvidence &&
+		current.PermissionEpoch == expected.PermissionEpoch && current.ObservationVersion == expected.ObservationVersion
 }
 
 func activeOutcome(adapter string, applied bool, err error) activeCheckOutcome {
@@ -388,7 +402,7 @@ func checkActiveRows(ctx context.Context, source any, view RelayView, settle sto
 				s = bounded.RecoveryWrites(rows...)
 			}
 			now := newRelayJudge(view).now
-			live = &findMissingRun{s: s, t: p.tmux, pc: view.Procs, sw: tmux.NewSweep(p.tmux, view.Procs, now, p.budget), lg: p.logger, emit: r.emit, now: now}
+			live = &findMissingRun{s: s, t: p.tmux, pc: view.Procs, sw: tmux.NewSweepFrom(p.tmux, view.Procs, now, p.budget, p.stoppedSockets), lg: p.logger, emit: r.emit, now: now}
 			if capture, ok := p.tmux.(interface {
 				CapturePaneID(string, string, int, bool) (string, error)
 			}); ok {
@@ -601,13 +615,23 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 			r.recordProcess(checked, result.probe, outcomeReason(outcome.Result))
 			return
 		}
+		// expected is the examined row as this invocation's own writes left
+		// it. An applied adoption invalidated pane evidence, advancing
+		// observation_version exactly once, and its snapshot guards the
+		// verdict; any other version is a concurrent writer's.
+		expected := examined
+		adopted := slices.Contains(result.disagree, tmux.ReasonAdopted)
+		if adopted {
+			expected.ObservationVersion++
+			expected.Snapshot = result.guard
+		}
 		// A no-write note still needs current identity before entering counters.
 		if !result.write.Wrote {
 			if reader, ok := r.source.(interface {
 				RecoveryRows([]string, store.SettleRead) ([]Spawn, error)
 			}); ok {
 				current, err := reader.RecoveryRows([]string{row.InstanceID}, r.settle)
-				if err != nil || len(current) != 1 || current[0].Snapshot != result.guard || current[0].ObservationVersion != row.ObservationVersion {
+				if err != nil || len(current) != 1 || current[0].Snapshot != result.guard || current[0].ObservationVersion != expected.ObservationVersion {
 					outcome := activeOutcome("liveness_revalidation", false, err)
 					if err == nil {
 						outcome.Result = "stale"
@@ -627,7 +651,7 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 				r.missing.UnverifiedIDs = append(r.missing.UnverifiedIDs, row.InstanceID)
 			}
 		}
-		if result.write.Wrote && !r.refreshRow(checked) {
+		if (result.write.Wrote || adopted) && !r.refreshRow(checked) {
 			r.staleProcess(checked, examined, result.probe)
 			return
 		}
@@ -637,11 +661,13 @@ func (r *activeReadStore) checkRow(checked *activeCheckedRow, live *findMissingR
 		// MarkEndedIfSameLifeFrom makes the plain mark, which records no
 		// process record, so the switch below follows it up. Any other
 		// follow-up record is bound to the row the probe examined: the
-		// refreshed row must still be what this invocation's own write left
-		// of it.
+		// refreshed row must still be what this invocation's own writes left
+		// of it, at their exact observation version, so an observation that
+		// lands after the revalidation above leaves the attempt stale rather
+		// than lending the commit its version.
 		switch {
 		case result.write.ProcessRecorded:
-		case probeStillApplies(examined, checked.row, result):
+		case probeStillApplies(expected, checked.row, result):
 			r.recordProcess(checked, result.probe, "")
 		default:
 			r.staleProcess(checked, examined, result.probe)
@@ -937,7 +963,7 @@ func (r *activeReadStore) finish() error {
 		// A rejected terminal write is the latest attempt for the stored row
 		// list reports in place of the projected missing (cursorListFallbacks);
 		// an applied one committed its own record. A failed write notes
-		// nothing: status and get already projected, and list falls back only
+		// nothing: status, get and get-many already projected; list falls back only
 		// after a rejection.
 		if err == nil && result != CondApplied {
 			r.stateAttempt(checked, proof.Row, proof.Row.State, outcomeReason(outcome.Result))

@@ -4542,7 +4542,7 @@ EOF
 # J34: "To fix: establish the maintenance window (stop old mutators and
 # prevent new old-binary invocations through committed verification), then
 # pass --maintenance-window (install.sh: --journal-maintenance-window)", then
-# the relayed old_or_unverified_mutators action "stop each listed process (…),
+# the relayed old_or_unverified_mutators action "stop each listed agent_director_mutator (…);
 # keep the maintenance window, then re-run this release's installer with a new
 # --journal-backup, …, then run migrate-journal with a new --backup-dir until
 # it exits 0 with authority "sqlite"". A preexisting sentinel never authorizes
@@ -4585,7 +4585,7 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
         [[ ! -e "$h/.config/agent-director/bin/agent-director" && ! -e "$h/.config/agent-director/admin/agent-director-admin" ]] || bad "refusal retained binaries absent before the run"
         [[ "$(cat "$(sentinel "$h")")" == "{\"from\":$prior,\"to\":$SCHEMA}" ]] || bad "refusal did not restore the original sentinel"
         grep -F 'old_or_unverified_mutators' "$ERR" >/dev/null || bad "refused before process inventory: $(flat "$ERR")"
-        expect_refusal_action "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration, which for an image in a privacy-protected folder means granting the terminal app access to that folder), keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+        expect_refusal_action "stop each listed agent_director_mutator (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified; keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
         expect_advice '"cutover":"not_committed","steps_committed":false'
         kill -0 "$writer" || bad "verification killed the writer"
         [[ "$(sha256sum "$db")" == "$before" ]] || bad "live mutator did not prevent cutover"

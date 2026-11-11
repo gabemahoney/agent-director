@@ -126,7 +126,8 @@ func lsofFDClassOf(fd string) lsofFDClass {
 // lsofVnodeTypes are the TYPE values of file-system entries in lsof's Darwin
 // dialect (dfile.c enter_vnode_info); every other vnode type is printed as a
 // 4-digit octal string, which lsofOctalVnodeType matches. A vnode entry
-// without a device or inode makes its process unverified.
+// without a device or inode is tested through its gated, identity-confirmed
+// path instead.
 var lsofVnodeTypes = []string{"REG", "DIR", "CHR", "BLK", "FIFO", "LINK"}
 
 var lsofOctalVnodeType = regexp.MustCompile(`^[0-7]{4}$`)

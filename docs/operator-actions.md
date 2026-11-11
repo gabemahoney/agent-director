@@ -60,7 +60,7 @@ sign in, sign out or change credentials. An unknown reason does not establish
 an authentication or configuration fault. Resolve surviving work using the
 steps above before the caller contract's explicit fresh-instance procedure.
 A transport failure alone does not authorize deleting a row or adopting an
-unrelated process. Public `get`, `status` and scoped `list` can reconcile a lost
+unrelated process. Public `get`, `get-many`, `status` and scoped `list` can reconcile a lost
 gateway, including one lost before runtime registration; their scope, binding
 conflict refusals and `ErrStoreBusy` behavior are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
@@ -191,7 +191,7 @@ A human removes the row, in order:
    ```
 
    Its `ErrInternal` quotes the exact recorded name with bytes escaped (`list`,
-   `get` and the trail cannot show them).
+   `get`, `get-many` and the trail cannot show them).
 2. Work out the name tmux stores (the `$` escaping is that of tmux 3.2 and 3.3;
    other versions differ, so compare by eye): `.` and `:` become `_`; an invalid
    byte `\` and three octal digits (0xff is `\377`); a control character its
@@ -449,6 +449,8 @@ a release the first run restored refuses the store with `ErrSchemaMismatch`.
    included even with a custom database. Declare every additional root used
    by another invoking home or installation; do not infer roots from the DB's
    directory. Prevent privileged or untracked writers from starting too.
+   The check does not look for renamed copies of agent-director, so stopping
+   every caller and `serve` is the guard.
 2. Keep the matching prior release and a stopped-writer copy of the actual
    DB, its existing `-wal`/`-shm`, and all legacy evidence before upgrading.
    Preserve provider logs/transcripts outside those roots separately. Do not
@@ -563,10 +565,9 @@ inside the cutover step and after its commit:
 | `legacy_root_unreadable` | A legacy root, or a directory above it, cannot be read or searched. | Envelope | Make each root and its parents readable and searchable by the user running the upgrade, keep the window, then Retry. |
 | `legacy_root_symlink` | `migrate-journal`: the store path, `HOME` or a legacy root has a link in it. `install.sh`, in pre-flight: `~/.config/agent-director` is a link. | Envelope; `install.sh`'s: no | `migrate-journal`'s: make them real paths, keep the window, then Retry. `install.sh`'s: replace the link with the directory it points to (below), then re-run this release's installer with a new `--journal-backup` directory. |
 | `legacy_root_access_unestablished` | The store or a legacy root is not owned by and private to the user, or carries an access-control entry, or its entries cannot be read. | Envelope | Make the store and every legacy root owned by the user running the upgrade (a repair by hand, path by path, not a recursive `chown`), then private to it: `chmod 0600` the store, `chmod 0700` each root, remove any access-control entry (`chmod -N <path>`). Keep the window, then Retry. |
-| `process_inventory_unreadable` | The process evidence could not be read (on macOS, see below). | Envelope | Run as the agents' user with every mounted file system reachable or unmounted (on Linux, with `/proc` mounted and readable), keep the window, then Retry; report it if it persists. |
-| `process_identity_unreadable` | A process's identity cannot be read by the user. | Envelope | Run as the agents' user on a host where that user can read every process's identity, keep the window, then Retry. |
-| `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | Envelope | Answer any consent prompt or grant the terminal app access to the folder it names, make every mount reachable or unmount it, or stop processes; keep the window, then Retry. |
-| `old_or_unverified_mutators` | Listed processes may still write (roles below). | Envelope | Stop each listed process, or make an `unverified_process` readable, keep the window, then Retry. |
+| `process_inventory_unreadable` | The process inventory as a whole could not be read (on macOS, see below). | Envelope | Run as the agents' user with every mounted file system reachable or unmounted (on Linux, with `/proc` mounted and readable), keep the window, then Retry; report it if it persists. |
+| `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | Envelope | Make every mounted file system reachable or unmount it, or answer any privacy consent prompt; keep the maintenance window, then Retry. |
+| `old_or_unverified_mutators` | Listed processes may still write (roles below). | Envelope | Stop each listed `agent_director_mutator` (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified. Keep the maintenance window, then Retry. |
 | `process_inventory_unsupported` | The host is outside the supported set: Linux on x86_64 or arm64 (aarch64), and macOS 13 or later on arm64. | No | Run the upgrade on a supported host. |
 
 The store's causes:
@@ -618,36 +619,15 @@ rm -- ~/.config/agent-director
 mv -- "$target" ~/.config/agent-director
 ```
 
-**Roles.** `old_or_unverified_mutators` lists each process with a role and
-action: `agent_director_mutator` (`stop_and_restart_after_cutover`) holds the
-store or a legacy root, or runs agent-director: stop it, and restart it only
-after the cutover is verified. `unverified_process`
-(`stop_or_make_inventory_readable`) could not be checked: stop it, or make its
-details readable to the user running the upgrade.
+**Roles.** On Linux and macOS, `agent_director_mutator`
+(`stop_and_restart_after_cutover`) is the only role: readable evidence shows
+that the program's file name contains `agent-director` or the process holds
+the store or a file under a legacy root. Any other process needs no action,
+including one the check cannot fully inspect, such as a non-dumpable Linux
+process or an incomplete macOS open-file entry.
 
 **On macOS:**
 
-- A process whose program file was replaced, removed or changed after it
-  started (for example, an app that updated itself) is not listed and needs
-  no action only if that file is its sole unverified evidence, its open-file
-  listing is complete, its start time reads the same both times, it holds no
-  store or legacy-root file, and its program's file name does not contain
-  `agent-director`.
-  A changed or unreadable start time still means `unverified_process`;
-  otherwise a store/root holder or an `agent-director` file name means
-  `agent_director_mutator`, even with an incomplete listing; otherwise an
-  incomplete listing means `unverified_process`.
-
-  A process running agent-director's code under a name without `agent-director`,
-  with its program file changed this way and no store/root file open when
-  listed, could still open the store during cutover. The guard is the maintenance
-  window: stop every caller and every `serve` before upgrading, as step 1 of
-  [Upgrading the native-input journal](#upgrading-the-native-input-journal)
-  and [the upgrade skill](../skills/upgrade-agent-director/SKILL.md#1-stop-the-agents)
-  require.
-- An unverified process whose image is in a privacy-protected folder: stop it,
-  or grant the terminal app access to that folder (System Settings, Privacy &
-  Security), then Retry. Any other unverified process: stop it, then Retry.
 - An access-control entry on the database or a legacy root: remove it, for
   example `chmod -N <path>`, then Retry.
 - `process_inventory_unreadable`: for a mounted file system `lsof` cannot
@@ -655,8 +635,8 @@ details readable to the user running the upgrade.
   user; for a failed process selection or listing, or a process missing from
   the selection, Retry with a new backup directory, and report it if it
   persists.
-- `inventory_deadline`: answer the consent prompt or grant the terminal app
-  access, make every mount reachable, or stop processes, then Retry.
+- `inventory_deadline`: make every mount reachable or unmount it, or answer
+  any consent prompt, then Retry.
 
 ### A store at schema v16 or later that the upgrade cannot read
 
@@ -671,17 +651,25 @@ read-write):
 ```sh
 store='<state.db path>'
 d=$(mktemp -d)
-cp -p -- "$store" "$d/state.db"
-if [ -e "$store-wal" ]; then cp -p -- "$store-wal" "$d/state.db-wal"; fi
-sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+if [ -n "$d" ] && cp -p -- "$store" "$d/state.db" &&
+  { [ ! -e "$store-wal" ] || cp -p -- "$store-wal" "$d/state.db-wal"; }
+then
+  sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+  rc=$?
+else
+  echo 'private copy failed: nothing was read' >&2
+  rc=1
+fi
 rm -rf -- "$d"
+[ "$rc" = 0 ]
 ```
 
-The `rm -rf` removes only the private copy. A `sqlite-v1:` value means the
-authority is recorded: re-run the install. Anything else (nothing, or an
-error): restore the stopped-writer pre-upgrade copy of the store as [Going back
-to the previous release](#going-back-to-the-previous-release) describes, or get
-help. Never write `store_meta` by hand.
+The `rm -rf` removes only the private copy. `private copy failed` means
+nothing was read: fix the failure and read again, or get help. A `sqlite-v1:`
+value means the authority is recorded: re-run the install. Anything else
+(nothing, or an error): restore the stopped-writer pre-upgrade copy of the
+store as [Going back to the previous release](#going-back-to-the-previous-release)
+describes, or get help. Never write `store_meta` by hand.
 
 ## agent-director was installed outside the caller's switch-over
 
@@ -1374,15 +1362,35 @@ once the upgrade is settled; never by a wildcard.
    ```sh
    store='<details.attempt_store>'
    d=$(mktemp -d)
-   cp -p -- "$store" "$d/state.db"
-   if [ -e "$store-wal" ]; then cp -p -- "$store-wal" "$d/state.db-wal"; fi
-   sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+   if [ -n "$d" ] && cp -p -- "$store" "$d/state.db" &&
+     { [ ! -e "$store-wal" ] || cp -p -- "$store-wal" "$d/state.db-wal"; }
+   then
+     sqlite3 -batch -init /dev/null "$d/state.db" "SELECT value FROM store_meta WHERE key = 'native_input_authority';"
+     rc=$?
+   else
+     echo 'private copy failed: nothing was read' >&2
+     rc=1
+   fi
    rm -rf -- "$d"
+   [ "$rc" = 0 ]
    ```
 
-   Nothing printed, or an error naming `no such table: store_meta`, means no
-   authority. A `sqlite-v1:` value means the cutover committed: complete
-   forward. The `rm -rf` removes only the private copy.
+   The query runs only on a full copy: the database and, when there is one,
+   its `-wal`. Only two results mean no authority: exit 0 with nothing
+   printed, or exit 1 with sqlite3's error naming `no such table: store_meta`
+   as the only output. A `sqlite-v1:` value means the cutover committed:
+   complete forward. Anything else, `private copy failed` included, leaves the
+   outcome unknown: put nothing back, and complete forward or fix the failure
+   and run the checks again. The `rm -rf` removes only the private copy.
+
+   One exception, only after an unfinished automatic restore: when that
+   restore emptied a linked `~/.config/agent-director` (its directory holds
+   only `.move-incomplete`) and `details.attempt_store` lay in it, the store is
+   gone and check 2 has nothing to read. Skip check 2 then: after an
+   unfinished automatic restore, the original store kept in the pre-move
+   directory is unchanged, and that is the store the put-back returns. After
+   an `outcome_unestablished` or killed run, a store check 2 cannot read is
+   never skipped.
 3. The copied release opens the store: its `list` exits 0. In place, run the
    `agent-director` entry's `copy` (or, with no such entry, the restore already
    put it back: `~/.config/agent-director/bin/agent-director`):

@@ -5,12 +5,25 @@ import (
 	"time"
 )
 
-// Sweep serves one find-missing or expire run (SRD SR-3.15, SR-13.3, SR-13.5,
+// StoppedSockets records only sockets stopped by a Sweep's stop rule, keyed
+// by Launch.Socket exactly as passed. Its zero value is empty. Successive
+// sweeps may share a pointer to it; it is not for concurrent use. Code
+// carrying stops across Sweeps must use it with NewSweepFrom, never its own
+// set of sockets (docs/architecture.md).
+type StoppedSockets struct {
+	sockets map[string]bool
+}
+
+// Sweep serves one run (SRD SR-3.15, SR-13.3, SR-13.5,
 // Appendix F.2; LFR M7): one lookup per socket, taken at the first row of that
 // socket that reaches the Sweep, the stop rule per socket, and the run's tmux
 // time budget, measured with the injected clock. find-missing also takes its
 // adoption pane listing through it (ListPanes), under the same stop rule and
-// budget. A Sweep serves one run and is not for concurrent use.
+// budget. Its stop rule may start from and add to a caller's StoppedSockets
+// record; held answers and the budget belong to this run alone. A Sweep is
+// not for concurrent use. A sweep verb must judge its rows through one Sweep
+// per run, never by calling the package-level Lookup per row or with its own
+// grouping, stop rule or budget (docs/architecture.md).
 //
 // Sockets are keyed by Launch.Socket exactly as passed; the Sweep never
 // resolves or creates a socket. It reads time only through now, reads no
@@ -42,12 +55,11 @@ type Sweep struct {
 	budget  time.Duration
 	spent   time.Duration
 	sockets map[string]*sweepSocket
+	stopped *StoppedSockets
 }
 
 // sweepSocket is what a Sweep holds for one socket.
 type sweepSocket struct {
-	// stopped: the socket's stop rule fired; no more calls or held answers.
-	stopped bool
 	// looked: the lookup call returned within the budget; ans and lookErr
 	// hold its outcome.
 	looked  bool
@@ -65,7 +77,19 @@ type sweepSocket struct {
 // the run's tmux time budget (Appendix F.2). It makes no call and does not
 // read the clock.
 func NewSweep(c LookupClient, pc ProcChecker, now func() time.Time, budget time.Duration) *Sweep {
-	return &Sweep{c: c, pc: pc, now: now, budget: budget, sockets: map[string]*sweepSocket{}}
+	return NewSweepFrom(c, pc, now, budget, nil)
+}
+
+// NewSweepFrom is NewSweep with a caller's stop record. It skips sockets
+// already in stopped and adds sockets only when its stop rule fires. A nil
+// record gives the run its own; no held answers or spent budget are shared.
+// Code carrying stops across Sweeps must use it with StoppedSockets, never
+// its own set of sockets (docs/architecture.md).
+func NewSweepFrom(c LookupClient, pc ProcChecker, now func() time.Time, budget time.Duration, stopped *StoppedSockets) *Sweep {
+	if stopped == nil {
+		stopped = &StoppedSockets{}
+	}
+	return &Sweep{c: c, pc: pc, now: now, budget: budget, sockets: map[string]*sweepSocket{}, stopped: stopped}
 }
 
 // Lookup returns row's result for this run (SR-3.15). On the first row of a
@@ -78,7 +102,7 @@ func NewSweep(c LookupClient, pc ProcChecker, now func() time.Time, budget time.
 // the socket has stopped, and when the row's own call spent the budget.
 func (s *Sweep) Lookup(row Launch, holderName string) Result {
 	st := s.socket(row.Socket)
-	if !s.open(st) {
+	if !s.open(row.Socket) {
 		return skipped()
 	}
 	if !st.looked {
@@ -89,7 +113,7 @@ func (s *Sweep) Lookup(row Launch, holderName string) Result {
 		}
 		st.looked, st.ans, st.lookErr = true, ans, err
 	}
-	return st.stopOn(resultForCall(st.ans, st.lookErr, s.pc, row, holderName))
+	return s.stopOn(row.Socket, resultForCall(st.ans, st.lookErr, s.pc, row, holderName))
 }
 
 // PaneLister is the pane-listing capability a sweep's adoption listing needs
@@ -134,7 +158,7 @@ type PaneListing struct {
 // does not.
 func (s *Sweep) ListPanes(pl PaneLister, row Launch) PaneListing {
 	st := s.socket(row.Socket)
-	if !s.open(st) {
+	if !s.open(row.Socket) {
 		return PaneListing{Result: skipped()}
 	}
 	if !st.listed {
@@ -148,7 +172,7 @@ func (s *Sweep) ListPanes(pl PaneLister, row Launch) PaneListing {
 	if st.listErr == nil {
 		return PaneListing{Listed: true, Panes: slices.Clone(st.panes)}
 	}
-	return PaneListing{Result: st.stopOn(resultForFailure(st.listErr, s.pc, row))}
+	return PaneListing{Result: s.stopOn(row.Socket, resultForFailure(st.listErr, s.pc, row))}
 }
 
 // socket returns what the Sweep holds for socket, creating an empty entry on
@@ -162,10 +186,10 @@ func (s *Sweep) socket(socket string) *sweepSocket {
 	return st
 }
 
-// open reports whether the run may still use st: the budget is not spent and
+// open reports whether the run may still use socket: the budget is not spent and
 // the socket has not stopped.
-func (s *Sweep) open(st *sweepSocket) bool {
-	return s.spent < s.budget && !st.stopped
+func (s *Sweep) open(socket string) bool {
+	return s.spent < s.budget && !s.stopped.sockets[socket]
 }
 
 // timed runs one tmux call, charges its time to the budget (floored at zero)
@@ -181,10 +205,13 @@ func (s *Sweep) timed(call func()) bool {
 }
 
 // stopOn applies the stop rule (Result.StopsSocket) to r, a result for a row
-// of st's socket, and returns r.
-func (st *sweepSocket) stopOn(r Result) Result {
+// of socket, and returns r.
+func (s *Sweep) stopOn(socket string, r Result) Result {
 	if r.StopsSocket() {
-		st.stopped = true
+		if s.stopped.sockets == nil {
+			s.stopped.sockets = make(map[string]bool)
+		}
+		s.stopped.sockets[socket] = true
 	}
 	return r
 }
@@ -201,7 +228,7 @@ func skipped() Result { return Result{Skipped: true} }
 // CapturePane shares this invocation's budget and socket stop state with its
 // lookups and listings. A failed capture is no sample, and stops no socket.
 func (s *Sweep) CapturePane(row Launch, capture func() (string, error)) (string, bool) {
-	if !s.open(s.socket(row.Socket)) {
+	if !s.open(row.Socket) {
 		return "", false
 	}
 	var pane string

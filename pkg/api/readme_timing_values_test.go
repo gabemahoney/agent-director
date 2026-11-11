@@ -371,6 +371,7 @@ func docConfigKeys() []docKey {
 		{"relay.timeout_seconds", itoa(int64(c.Relay.TimeoutSeconds)), rng(int64(config.MaxRelayTimeoutSeconds)), false},
 		{"relay.permission_request_cap", itoa(int64(c.Relay.PermissionRequestCap)), "", false},
 		{"pause.timeout_seconds", itoa(int64(c.Pause.TimeoutSeconds)), rng(int64(config.MaxPauseTimeoutSeconds)), false},
+		{"get_many.id_cap", itoa(int64(c.GetMany.IdCap)), "", false},
 		{"pre_trust.lock_wait_seconds", itoa(int64(c.PreTrust.LockWaitSeconds)), rng(int64(config.MaxPreTrustLockWaitSeconds)), false},
 		{"store.db_path", c.Store.DbPath, "", false},
 		{"store.busy_timeout_ms", itoa(int64(c.Store.BusyTimeoutMs)), rng(int64(config.MaxStoreBusyTimeoutMs)), false},
@@ -385,17 +386,19 @@ func docConfigKeys() []docKey {
 }
 
 // docExperimentalKeys are the keys of docs/experimental.md. Its example block
-// leaves out droid_path and switches the droid opt-in on (docOptIns).
+// leaves out the launch paths and switches both opt-ins on (docOptIns).
 func docExperimentalKeys() []docKey {
 	return []docKey{
 		{"launch.droid_path", "unset", "", true},
 		{"experimental.droid", strconv.FormatBool(config.Default().Experimental.Droid), "", false},
+		{"launch.opencode_path", "unset", "", true},
+		{"experimental.opencode", strconv.FormatBool(config.Default().Experimental.OpenCode), "", false},
 	}
 }
 
 // docOptIns are the example-block values that switch an opt-in on rather than
 // state its default.
-var docOptIns = map[string]string{"experimental.droid": "true"}
+var docOptIns = map[string]string{"experimental.droid": "true", "experimental.opencode": "true"}
 
 // TestReadmeTimingValuesConfigKeys: the Keys tables of docs/configuration.md
 // and docs/experimental.md have one row for each of that doc's keys, in order,

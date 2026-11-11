@@ -11,7 +11,9 @@ package api_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,11 +28,12 @@ import (
 // A27: "enable that flag before creating its launch or template".
 func TestAdviceFollow_A27_EnablePaneOnlyAgent(t *testing.T) {
 	// Serial: it sets HOME for configuration and launch files.
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		for _, template := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/template=%t", agent, template), func(t *testing.T) {
 				e := newSpawnEnv(t)
-				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: []string{"--model", "model"}}
+				t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
+				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: paneOnlyArgs(agent, "model")}
 				call := func(c *api.Client) error {
 					if template {
 						_, err := c.MakeTemplate(api.MakeTemplateParams{Name: "lane", Agent: agent})
@@ -52,22 +55,33 @@ func TestAdviceFollow_A27_EnablePaneOnlyAgent(t *testing.T) {
 // A28: follow each model refusal's instruction to supply one split subscription model.
 func TestAdviceFollow_A28_PaneOnlyModelAdvice(t *testing.T) {
 	// Serial: it sets HOME for launch files.
-	for _, agent := range []string{"droid"} {
-		for _, tc := range []struct {
+	for _, agent := range []string{"droid", "opencode"} {
+		type refusal struct {
 			name   string
 			args   []string
 			want   error
 			advice string
-		}{
+		}
+		cases := []refusal{
 			{"missing", nil, api.ErrModelMissing, "supply exactly one explicit subscription model"},
 			{"joined", []string{"--model=model"}, spawn.ErrSpawnDeniedFlag, "supply --model and its ID as separate arguments"},
 			{"positional", []string{"--model", "model", "task"}, spawn.ErrSpawnDeniedFlag, "remove this argument and any following value; supply only --model ID"},
 			{"duplicate", []string{"--model", "model", "--model", "second"}, spawn.ErrSpawnDeniedFlag, "supply exactly one --model ID"},
 			{"option value", []string{"--model", "--verbose"}, spawn.ErrSpawnDeniedFlag, "--model requires a nonempty ID that is not an option; supply --model ID"},
 			{"custom", []string{"--model", "custom:private"}, spawn.ErrSpawnDeniedFlag, "supply a subscription model ID"},
-		} {
+		}
+		if agent == "opencode" {
+			cases = []refusal{
+				{"missing", nil, api.ErrModelMissing, "supply one explicit model"},
+				{"joined", []string{"--model=openrouter/model"}, spawn.ErrSpawnDeniedFlag, "supply only one split --model openrouter/ID"},
+				{"missing value", []string{"--model"}, spawn.ErrSpawnDeniedFlag, "requires a following openrouter/ID model value"},
+				{"provider", []string{"--model", "other/model"}, spawn.ErrSpawnDeniedFlag, "supply a nonempty openrouter/ID model value"},
+			}
+		}
+		for _, tc := range cases {
 			t.Run(agent+"/"+tc.name, func(t *testing.T) {
 				e := newSpawnEnv(t)
+				t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
 				c := agentClientWithConfig(t, e, "[experimental]\n"+agent+" = true\n")
 				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: tc.args}
 				err := e.checkCreationWrites(t, func() error {
@@ -75,7 +89,7 @@ func TestAdviceFollow_A28_PaneOnlyModelAdvice(t *testing.T) {
 					return err
 				})
 				adviceAssertAdvice(t, err, tc.want, tc.advice)
-				p.AgentArgs = []string{"--model", "subscription-model"}
+				p.AgentArgs = paneOnlyArgs(agent, "subscription-model")
 				if _, err = c.Spawn(p); err != nil {
 					t.Fatal(err)
 				}
@@ -87,7 +101,11 @@ func TestAdviceFollow_A28_PaneOnlyModelAdvice(t *testing.T) {
 // A29: remove an unsupported capability, permission entry or environment key.
 func TestAdviceFollow_A29_PaneOnlySettings(t *testing.T) {
 	// Serial: it sets HOME for launch files.
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
+		key := "FACTORY_API_KEY"
+		if agent == "opencode" {
+			key = "OPENCODE_PERMISSION"
+		}
 		for _, tc := range []struct {
 			name, advice string
 			want         error
@@ -95,12 +113,16 @@ func TestAdviceFollow_A29_PaneOnlySettings(t *testing.T) {
 		}{
 			{"relay", "omit this capability and supervise the owned pane", api.ErrAgentCapabilityUnsupported, func(p *api.SpawnParams) { p.RelayMode = "on" }, func(p *api.SpawnParams) { p.RelayMode = "" }},
 			{"permissions", "remove those entries and handle native permission prompts through the pane", api.ErrPermissionsUnsupported, func(p *api.SpawnParams) { p.Permissions = &api.Permissions{Allow: []string{"Bash"}} }, func(p *api.SpawnParams) { p.Permissions = nil }},
-			{"environment", "remove that key from extra_env", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) { p.ExtraEnv = map[string]string{"FACTORY_API_KEY": "sentinel"} }, func(p *api.SpawnParams) { delete(p.ExtraEnv, "FACTORY_API_KEY") }},
+			{"environment", "remove that key from extra_env", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) { p.ExtraEnv = map[string]string{key: "sentinel"} }, func(p *api.SpawnParams) { delete(p.ExtraEnv, key) }},
+			{"HOME", "remove that entry and keep the invoking HOME", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) {
+				p.ExtraEnv = map[string]string{"HOME": filepath.Join(p.CWD, "wrong-home"), "CALLER_TAG": "kept"}
+			}, func(p *api.SpawnParams) { delete(p.ExtraEnv, "HOME") }},
 		} {
 			t.Run(agent+"/"+tc.name, func(t *testing.T) {
 				e := newSpawnEnv(t)
+				t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
 				c := agentClientWithConfig(t, e, "[experimental]\n"+agent+" = true\n")
-				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: []string{"--model", "model"}}
+				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: paneOnlyArgs(agent, "model")}
 				tc.set(&p)
 				err := e.checkCreationWrites(t, func() error {
 					_, err := c.Spawn(p)
@@ -111,6 +133,21 @@ func TestAdviceFollow_A29_PaneOnlySettings(t *testing.T) {
 				if _, err = c.Spawn(p); err != nil {
 					t.Fatal(err)
 				}
+				if tc.name == "HOME" {
+					calls := e.rec.SocketCallsOf(tmux.CallCreate)
+					if len(calls) != 1 {
+						t.Fatalf("creates = %d; want one accepted launch", len(calls))
+					}
+					if calls[0].Envs["CALLER_TAG"] != "kept" {
+						t.Fatal("correction dropped the caller's ordinary environment entry")
+					}
+					if os.Getenv("HOME") != e.home || slices.Contains(calls[0].ExcludeEnv, "HOME") || slices.Contains(calls[0].UnsetEnv, "HOME") {
+						t.Fatal("correction changed or excluded the invoking HOME")
+					}
+					if home, present := calls[0].Envs["HOME"]; present && home != e.home {
+						t.Fatalf("launch changed HOME to %q", home)
+					}
+				}
 			})
 		}
 	}
@@ -120,7 +157,7 @@ func TestAdviceFollow_A29_PaneOnlySettings(t *testing.T) {
 func TestAdviceFollow_E21_PaneOnlySupervision(t *testing.T) {
 	t.Parallel()
 	adviceAssertManifest(t, "get", "integration_mode", "Plain send-keys requires allow_pending and returns an empty manual result")
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			e := newKillEnv(t)
 			e.rowAgent = agent
@@ -149,7 +186,7 @@ type advAgentFollow struct {
 
 // advAgentFollows are the agents a caller can follow the advice with; Droid
 // cases enable its flag before requesting advice.
-var advAgentFollows = []advAgentFollow{{"claude", "claude"}, {"codex", "codex"}, {"cursor", "cursor"}, {"droid", "droid"}}
+var advAgentFollows = []advAgentFollow{{"claude", "claude"}, {"codex", "codex"}, {"cursor", "cursor"}, {"droid", "droid"}, {"opencode", "opencode"}}
 
 // advAgentSpawn runs p on env, expecting the followed spawn's outcome for agent: one create launching it and a
 // pending row recording it.
@@ -167,6 +204,11 @@ func advAgentSpawn(t *testing.T, env spawnEnv, p api.SpawnParams, agent string) 
 		creates := env.rec.SocketCallsOf(tmux.CallCreate)
 		if len(creates) != 1 || len(creates[0].Command) != 3 || creates[0].Command[0] != "droid" || creates[0].Command[1] != "--settings" {
 			t.Fatalf("followed Droid advice did not launch its settings overlay: %+v", creates)
+		}
+	} else if agent == "opencode" {
+		creates := env.rec.SocketCallsOf(tmux.CallCreate)
+		if len(creates) != 1 || len(creates[0].Command) != 3 || creates[0].Command[0] != "opencode" || creates[0].Command[1] != "--model" {
+			t.Fatalf("followed model advice did not launch OpenCode: %+v", creates)
 		}
 	} else if agent == "cursor" {
 		creates := env.rec.SocketCallsOf(tmux.CallCreate)
@@ -201,10 +243,11 @@ func TestAdviceFollow_A16_AgentMissingPassAgent(t *testing.T) {
 				env := newSpawnEnv(t)
 				p := api.SpawnParams{CWD: t.TempDir(), NoPreTrust: true}
 				want := agentMissingText
-				if f.agent == "droid" {
-					env.c = agentClientWithConfig(t, env, "[experimental]\ndroid = true\n")
-					p.AgentArgs, p.RelayMode = []string{"--model", "model"}, "off"
-					want = strings.Replace(want, "claude, codex or cursor", "claude, codex, cursor or droid", 1)
+				if config.IsPaneOnly(f.agent) {
+					t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
+					env.c = agentClientWithConfig(t, env, "[experimental]\n"+f.agent+" = true\n")
+					p.AgentArgs, p.RelayMode = paneOnlyArgs(f.agent, "model"), "off"
+					want = strings.Replace(want, "claude, codex or cursor", "claude, codex, cursor or "+f.agent, 1)
 				}
 				if viaTemplate {
 					seedAgentTemplate(t, env, apitest.TemplateFields{RelayMode: "on"})
@@ -238,10 +281,11 @@ func TestAdviceFollow_A17_AgentInvalidNameClaudeOrCodex(t *testing.T) {
 				env := newSpawnEnv(t)
 				p := api.SpawnParams{Agent: bad, CWD: t.TempDir(), NoPreTrust: true}
 				want := fmt.Sprintf(agentInvalidTextFmt, bad)
-				if f.agent == "droid" {
-					env.c = agentClientWithConfig(t, env, "[experimental]\ndroid = true\n")
-					p.AgentArgs = []string{"--model", "model"}
-					want = strings.Replace(want, "claude, codex or cursor", "claude, codex, cursor or droid", 1)
+				if config.IsPaneOnly(f.agent) {
+					t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
+					env.c = agentClientWithConfig(t, env, "[experimental]\n"+f.agent+" = true\n")
+					p.AgentArgs = paneOnlyArgs(f.agent, "model")
+					want = strings.Replace(want, "claude, codex or cursor", "claude, codex, cursor or "+f.agent, 1)
 				}
 
 				_, refused := env.c.Spawn(p)
@@ -303,6 +347,7 @@ func TestAdviceFollow_A19_TemplateAgentMissingAddAgentOrDropArgs(t *testing.T) {
 		{"add codex", "codex", apitest.TemplateFields{Agent: "codex", AgentArgs: broken.AgentArgs}},
 		{"add cursor", "cursor", apitest.TemplateFields{Agent: "cursor", AgentArgs: broken.AgentArgs}},
 		{"add droid", "droid", apitest.TemplateFields{Agent: "droid", AgentArgs: broken.AgentArgs}},
+		{"add opencode", "opencode", apitest.TemplateFields{Agent: "opencode", AgentArgs: paneOnlyArgs("opencode", "opus")}},
 		{"remove agent_args, the call names claude", "claude", apitest.TemplateFields{}},
 		{"remove agent_args, the call names codex", "codex", apitest.TemplateFields{}},
 		{"remove agent_args, the call names cursor", "cursor", apitest.TemplateFields{}},
@@ -310,10 +355,15 @@ func TestAdviceFollow_A19_TemplateAgentMissingAddAgentOrDropArgs(t *testing.T) {
 	for _, fix := range fixes {
 		t.Run(fix.name, func(t *testing.T) {
 			env := newSpawnEnv(t)
-			seedAgentTemplate(t, env, broken)
+			brokenForAgent := broken
+			if fix.agent == "opencode" {
+				brokenForAgent.AgentArgs = paneOnlyArgs(fix.agent, "opus")
+			}
+			seedAgentTemplate(t, env, brokenForAgent)
 			p := api.SpawnParams{Agent: fix.agent, CWD: t.TempDir(), Template: "t", NoPreTrust: true}
-			if fix.agent == "droid" {
-				env.c = agentClientWithConfig(t, env, "[experimental]\ndroid = true\n")
+			if config.IsPaneOnly(fix.agent) {
+				t.Setenv("OPENROUTER_API_KEY", "synthetic-template-advice-key")
+				env.c = agentClientWithConfig(t, env, "[experimental]\n"+fix.agent+" = true\n")
 			}
 
 			_, refused := env.c.Spawn(p)
@@ -343,14 +393,18 @@ func TestAdviceFollow_A20_MakeTemplateAgentMissingAddAgentOrDropArgs(t *testing.
 		{"pass codex", func(p *api.MakeTemplateParams) { p.Agent = "codex" }, config.TemplateFile{Agent: "codex", AgentArgs: []string{"--model", "x"}}},
 		{"pass cursor", func(p *api.MakeTemplateParams) { p.Agent = "cursor" }, config.TemplateFile{Agent: "cursor", AgentArgs: []string{"--model", "x"}}},
 		{"pass droid", func(p *api.MakeTemplateParams) { p.Agent = "droid" }, config.TemplateFile{Agent: "droid", AgentArgs: []string{"--model", "x"}}},
+		{"pass opencode", func(p *api.MakeTemplateParams) { p.Agent = "opencode" }, config.TemplateFile{Agent: "opencode", AgentArgs: paneOnlyArgs("opencode", "x")}},
 		{"remove agent_args", func(p *api.MakeTemplateParams) { p.AgentArgs = nil }, config.TemplateFile{}},
 	}
 	for _, fix := range fixes {
 		t.Run(fix.name, func(t *testing.T) {
 			home := withTempHome(t)
 			p := api.MakeTemplateParams{Name: "adv-agent", AgentArgs: []string{"--model", "x"}}
-			if fix.want.Agent == "droid" {
-				writeConfig(t, filepath.Join(adConfigDir(home), "config.toml"), "[experimental]\ndroid = true\n")
+			if fix.want.Agent == "opencode" {
+				p.AgentArgs = paneOnlyArgs(fix.want.Agent, "x")
+			}
+			if config.IsPaneOnly(fix.want.Agent) {
+				writeConfig(t, filepath.Join(adConfigDir(home), "config.toml"), "[experimental]\n"+fix.want.Agent+" = true\n")
 			}
 
 			_, refused := api.MakeTemplate(p)
@@ -482,5 +536,24 @@ func TestAdviceFollow_B13_CodexPendingRowSpawnWithReuse(t *testing.T) {
 	assertCodexLaunch(t, e.rec.SocketCallsOf(tmux.CallCreate)[creates:], e.dbPath, id, codexProgram)
 	if cols := e.columns(t, id); cols.LifeNumber != advSpawnNextLife(missing) {
 		t.Errorf("life = %v after the followed spawn; want the next life %v", cols.LifeNumber, advSpawnNextLife(missing))
+	}
+}
+
+// A30: set the key in this process, then reopen the client as a server restart would.
+func TestAdviceFollow_A30_HostCredential(t *testing.T) {
+	// Serial: it sets HOME and the host credential and observes the shared trail.
+	e := newSpawnEnv(t)
+	t.Setenv("OPENROUTER_API_KEY", "")
+	c := agentClientWithConfig(t, e, "[experimental]\nopencode = true\n")
+	p := api.SpawnParams{Agent: "opencode", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("opencode", "model")}
+	_, err := c.Spawn(p)
+	adviceAssertAdvice(t, err, api.ErrHostCredentialMissing, "set it there, never in extra_env, and restart the MCP server after changing it")
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "synthetic-restarted-key")
+	restarted := agentClientWithConfig(t, e, "[experimental]\nopencode = true\n")
+	if _, err := restarted.Spawn(p); err != nil {
+		t.Fatal(err)
 	}
 }

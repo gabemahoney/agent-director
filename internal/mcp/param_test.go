@@ -49,6 +49,8 @@ func paramRequiredArgs(t *testing.T, e *mcpEnv, v manifest.VerbDef) map[string]a
 		switch p.Name {
 		case "cwd":
 			args[p.Name] = t.TempDir()
+		case "instance_ids":
+			args[p.Name] = []string{paramRow}
 		case "instance_id":
 			args[p.Name] = paramRow
 		case "request_token":

@@ -432,6 +432,42 @@ func CreateReplies() []Entry {
 	}
 }
 
+// StdinCreateReplies records raw tmux 3.2a on 2026-11-07, Subtask
+// t3.m6h.q8.37.uc artifacts/tmux-3.2a-stdin-recording.json. Every call used
+// start-server ; source-file -, a private socket and synthetic values.
+// Derived diagnostic variants are marked synthetic in their Source.
+// Reply wording and round trip match 3.3a (scheduler j20261107134341-b7ad25);
+// generated process ids, timestamps and temp roots differ as expected.
+func StdinCreateReplies() []Entry {
+	const source = "t3.m6h.q8.37.uc artifacts/tmux-3.2a-stdin-recording.json (tmux 3.2a, 2026-11-07); identical wording/field layout on 3.3a, j20261107134341-b7ad25"
+	reply := tmux.CreateReply{SessionID: "$0", ServerPID: 4030050, ServerStart: 1794058755, PaneID: "%0", PanePID: 4030054}
+	live := tmux.CreateReply{SessionID: "$1", ServerPID: 4030050, ServerStart: 1794058755, PaneID: "%1", PanePID: 4030061}
+	ended := tmux.CreateReply{SessionID: "$2", ServerPID: 4030050, ServerStart: 1794058755, PaneID: "%2", PanePID: 4030069}
+	diagnostic := "-:1: unknown command: synthetic-forwarded-key\n"
+	return []Entry{
+		{Name: "stdin/reply", Source: source, Stdout: CreateReplyLine(reply), Create: reply, Want: only(0, tmux.CallCreate)},
+		{Name: "stdin/duplicate", Source: source, Stderr: "duplicate session: anchor\n", Exit: 1, Want: only(tmux.FailDuplicate, tmux.CallCreate)},
+		{Name: "stdin/label-failure-live", Source: source, Stdout: CreateReplyLine(live), Stderr: "no such session: =label-failure-live:\n", Exit: 1,
+			ChainOnly: true, Create: live, Want: only(tmux.FailLabel, tmux.CallCreate)},
+		{Name: "stdin/label-failure-ended", Source: source, Stdout: CreateReplyLine(ended), Stderr: "no such session: =label-failure-ended:\n", Exit: 1,
+			ChainOnly: true, Create: ended, Want: only(tmux.FailLabel, tmux.CallCreate)},
+		{Name: "stdin/server-ended", Source: source + "; kill-server while source-file awaited input: empty exit 0 is uncertain, not success",
+			Want: only(tmux.FailUnrecognized, tmux.CallCreate)},
+		{Name: "stdin/unrecognized", Source: source + "; unknown command substituted for new-session to provoke a parser diagnostic on stdout",
+			Stdout: diagnostic, Exit: 1,
+			Want: only(tmux.FailUnrecognized, tmux.CallCreate), FirstLine: "create diagnostic withheld"},
+		{Name: "stdin/unrecognized-stderr", Source: source + "; synthetic variant: recorded stdout diagnostic moved to stderr, not a new tmux capture",
+			Stderr: diagnostic, Exit: 1,
+			Want: only(tmux.FailUnrecognized, tmux.CallCreate), FirstLine: "create diagnostic withheld"},
+	}
+}
+
+// StdinRoundTripValue and StdinRoundTripCommand are the input bytes and
+// pane_start_command reported by the same 3.2a recording. The cwd is the
+// private temp root plus this value; session environment and label retain it.
+const StdinRoundTripValue = "-quote'\n ; # $ ~ % { } \\ café界;"
+const StdinRoundTripCommand = "sh -c \"exec sleep 3600\" \"-quote'\\n ; # $ ~ % { } \\\\ café界;\"\n"
+
 // Captures returns capture-pane -p answers, returned unchanged: E.10 O4's
 // two lines and 22 empty rows, E.3 P1's text, and an -e capture's SGR bytes.
 func Captures() []Entry {

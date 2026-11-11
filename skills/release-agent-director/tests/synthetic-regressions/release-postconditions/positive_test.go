@@ -114,11 +114,11 @@ func TestReleasePostconditionsPositive(t *testing.T) {
 		name    string
 		cmdVerb string
 	}{
-		{"publish.push-branch",          "git"},
-		{"publish.create-tag",           "git"},
-		{"publish.gh-release",           "gh"},
-		{"publish.npm-publish",          "cd"},
-		{"publish.fast-forward-main",    "git"},
+		{"publish.push-branch", "git"},
+		{"publish.create-tag", "git"},
+		{"publish.gh-release", "gh"},
+		{"publish.npm-publish", "cd"},
+		{"publish.fast-forward-main", "git"},
 		{"publish.delete-remote-branch", "git"},
 	}
 	if len(report.PublishSubsteps) != len(wantSubsteps) {

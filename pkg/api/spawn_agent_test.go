@@ -62,7 +62,7 @@ func (e spawnEnv) checkCreationWrites(t *testing.T, call func() error) error {
 
 func TestPaneOnlyDisabledWritesNothing(t *testing.T) {
 	// Serial: it sets HOME and checks the shared trail.
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		for _, operation := range []string{"spawn", "reuse", "make-template"} {
 			t.Run(agent+"/"+operation, func(t *testing.T) {
 				e := newSpawnEnv(t)
@@ -87,10 +87,11 @@ func TestPaneOnlyDisabledWritesNothing(t *testing.T) {
 
 func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 	// Serial: it sets HOME and the parent environment.
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			e := newSpawnEnv(t)
-			c := agentClientWithConfig(t, e, "[experimental]\ndroid = true\n[defaults]\nrelay_mode = \"on\"\n")
+			t.Setenv("OPENROUTER_API_KEY", "synthetic-api-key")
+			c := agentClientWithConfig(t, e, "[experimental]\n"+agent+" = true\n[defaults]\nrelay_mode = \"on\"\n")
 			if _, err := c.MakeTemplate(api.MakeTemplateParams{Name: "lane", Agent: agent}); err != nil {
 				t.Fatal(err)
 			}
@@ -100,14 +101,14 @@ func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 				return err
 			})
 			assertOneName(t, err, "ErrModelMissing")
-			seedAgentTemplate(t, e, apitest.TemplateFields{Agent: agent, AgentArgs: []string{"--model", "template-model"}, RelayMode: "on"})
+			seedAgentTemplate(t, e, apitest.TemplateFields{Agent: agent, AgentArgs: paneOnlyArgs(agent, "template-model"), RelayMode: "on"})
 			p.Template = "t"
 			err = e.checkCreationWrites(t, func() error {
 				_, err := c.Spawn(p)
 				return err
 			})
 			assertOneName(t, err, "ErrAgentCapabilityUnsupported")
-			p.RelayMode, p.AgentArgs = "off", []string{"--model", "caller-model"}
+			p.RelayMode, p.AgentArgs = "off", paneOnlyArgs(agent, "caller-model")
 			if _, err := apitest.SeedSpawn(e.dbPath, "supervisor", store.StateEnded, t.TempDir(), "off", "", false); err != nil {
 				t.Fatal(err)
 			}
@@ -709,4 +710,164 @@ func TestSpawnReuseSwitchBackForgets(t *testing.T) {
 	rlvAssertLife(t, e, r.ID, reuseLife+2)
 	rlfAssertListed(t, rlfGet(t, e, r.ID), "no_session")
 	assertChildUnchanged()
+}
+
+// paneOnlyArgs supplies the same test model under each adapter's required syntax.
+func paneOnlyArgs(agent, model string) []string {
+	if agent == "opencode" {
+		model = "openrouter/" + model
+	}
+	return []string{"--model", model}
+}
+
+func TestOpenCodeMissingHostKeyWritesNothing(t *testing.T) {
+	// Serial: it sets HOME and the host credential and observes the shared trail.
+	for _, unset := range []bool{false, true} {
+		for _, reuse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("unset=%t/reuse=%t", unset, reuse), func(t *testing.T) {
+				t.Setenv("OPENROUTER_API_KEY", "")
+				if unset {
+					if err := os.Unsetenv("OPENROUTER_API_KEY"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var err error
+				if !reuse {
+					e := newSpawnEnv(t)
+					c := agentClientWithConfig(t, e, "[experimental]\nopencode = true\n")
+					// Saved credentials do not substitute for the invoking process's key.
+					data := t.TempDir()
+					t.Setenv("XDG_DATA_HOME", data)
+					if err := os.MkdirAll(filepath.Join(data, "opencode"), 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(data, "opencode", "auth.json"), []byte(`{"openrouter":{"type":"api","key":"synthetic-saved-auth"}}`), 0600); err != nil {
+						t.Fatal(err)
+					}
+					err = e.checkCreationWrites(t, func() error {
+						_, err := c.Spawn(api.SpawnParams{Agent: "opencode", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("opencode", "model")})
+						return err
+					})
+					if _, templateErr := c.MakeTemplate(api.MakeTemplateParams{Name: "model-later", Agent: "opencode"}); templateErr != nil {
+						t.Fatal(templateErr)
+					}
+				} else {
+					home := withTempHome(t)
+					trust := seedTrustConfig(t, home, trustLacksEntry)
+					e := newKillEnv(t)
+					r := e.seedReusable(t, agentGone, reuseRowSpec{Opts: []apitest.SpawnOption{apitest.WithAgent("opencode")}})
+					c, _ := e.paneOnlyClient(t, "opencode")
+					seedLaneOverlay(t, e.storeID, r.Token)
+					roots := []string{filepath.Join(adConfigDir(home), "launch"), filepath.Join(adConfigDir(home), "templates"), filepath.Dir(r.Socket)}
+					files, before := snapshotTrees(t, roots), e.snapshotReuse(t, r)
+					_, err = c.Spawn(api.SpawnParams{Agent: "opencode", CWD: r.CWD, InstanceID: r.ID, ReuseFinished: true, AgentArgs: paneOnlyArgs("opencode", "model")})
+					e.assertWroteNothing(t, before)
+					trust.check(t, "", false, "after missing-key reuse")
+					assertNoTmuxCalls(t, e.rec)
+					if len(readAPITrailLines(t)) != before.mark {
+						t.Error("missing-key refusal wrote trail")
+					}
+					if diff := files.diff(snapshotTrees(t, roots)); len(diff) != 0 {
+						t.Errorf("missing-key refusal changed files: %v", diff)
+					}
+				}
+				assertOneName(t, err, "ErrHostCredentialMissing")
+				const want = "ErrHostCredentialMissing: agent opencode requires nonempty OPENROUTER_API_KEY in agent-director's own environment; set it there, never in extra_env, and restart the MCP server after changing it"
+				if errText(err) != want {
+					t.Fatalf("missing-key refusal=%q; want %q", errText(err), want)
+				}
+			})
+		}
+	}
+	for _, agent := range []string{"claude", "droid"} {
+		t.Run(agent+" without key", func(t *testing.T) {
+			e := newSpawnEnv(t)
+			t.Setenv("OPENROUTER_API_KEY", "")
+			if err := os.Unsetenv("OPENROUTER_API_KEY"); err != nil {
+				t.Fatal(err)
+			}
+			c := agentClientWithConfig(t, e, "[experimental]\ndroid = true\n")
+			if _, err := c.Spawn(api.SpawnParams{Agent: agent, CWD: t.TempDir(), NoPreTrust: true, AgentArgs: paneOnlyArgs(agent, "model")}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestOpenCodeRecomposesWithoutSavingHostKey(t *testing.T) {
+	// Serial: it sets HOME and the host credential and observes the shared trail.
+	home := withTempHome(t)
+	const secret = "synthetic-host-key-uc-distinctive-47b91"
+	t.Setenv("OPENROUTER_API_KEY", secret)
+	e := newKillEnv(t)
+	c, _ := e.paneOnlyClient(t, "opencode")
+	caller := map[string]string{"CALLER_TAG": "kept", "OPENCODE_DISABLE_AUTOUPDATE": "0"}
+	p := api.SpawnParams{Agent: "opencode", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("opencode", "model"), ExtraEnv: caller}
+	var first store.Spawn
+	var configContent string
+	for _, operation := range []string{"spawn", "reuse", "template"} {
+		if operation == "reuse" {
+			for _, session := range e.rec.Sessions(first.Identity.Socket) {
+				if err := e.rec.KillSessionID(first.Identity.Socket, session.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, applied, err := e.st.MarkMissingIfSameLife(first.InstanceID, first.Snapshot); err != nil || applied != store.CondApplied {
+				t.Fatalf("finish first launch: %v, %v", applied, err)
+			}
+			p.InstanceID, p.ReuseFinished = first.InstanceID, true
+			p.ExtraEnv, p.AgentArgs = first.ExtraEnv, first.AgentArgs
+		}
+		if operation == "template" {
+			if _, err := c.MakeTemplate(api.MakeTemplateParams{Name: "recompose", Agent: p.Agent, AgentArgs: p.AgentArgs, ExtraEnv: caller}); err != nil {
+				t.Fatal(err)
+			}
+			p = api.SpawnParams{Template: "recompose", CWD: p.CWD}
+		}
+		res, err := c.Spawn(p)
+		if strings.Contains(fmt.Sprintf("%+v %v", res, err), secret) {
+			t.Fatal("result/error contains host key")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		row, err := e.st.GetSpawn(res.InstanceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCaller := map[string]string{"CALLER_TAG": "kept", "OPENCODE_DISABLE_AUTOUPDATE": "0"}
+		if !reflect.DeepEqual(row.ExtraEnv, wantCaller) {
+			t.Fatalf("saved caller env=%v; want %v", row.ExtraEnv, wantCaller)
+		}
+		creates := e.rec.SocketCallsOf(tmux.CallCreate)
+		create := creates[len(creates)-1]
+		if operation == "spawn" {
+			first = row
+			configContent = create.Envs["OPENCODE_CONFIG_CONTENT"]
+		}
+		if configContent == "" || create.Envs["OPENCODE_CONFIG_CONTENT"] != configContent || create.Envs["OPENCODE_DISABLE_AUTOUPDATE"] != "1" {
+			t.Fatalf("%s did not recompose native configuration: %+v", operation, create)
+		}
+	}
+	for _, entry := range e.rec.SocketCalls() {
+		if strings.Contains(fmt.Sprintf("%+v", entry), secret) {
+			t.Fatal("socket recorder contains key")
+		}
+	}
+	for _, entry := range e.rec.Calls() {
+		if strings.Contains(fmt.Sprintf("%+v", entry), secret) {
+			t.Fatal("name recorder contains key")
+		}
+	}
+	for _, line := range readAPITrailLines(t) {
+		if strings.Contains(fmt.Sprint(line), secret) {
+			t.Fatal("trail contains key")
+		}
+	}
+	// Includes SQLite and its sidecars, templates, launch artifacts and captured config.
+	for path, entry := range snapshotTrees(t, []string{home, filepath.Dir(e.dbPath)}) {
+		if strings.Contains(string(entry.bytes), secret) {
+			t.Errorf("host key persisted in %s", path)
+		}
+	}
 }

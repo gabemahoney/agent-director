@@ -5,9 +5,9 @@
 // ==========
 // install-verify.sh runs two sub-gates against a packed tarball:
 //
-//   install.clean-env   — npm installs the tarball into a fresh directory
-//   install.verify-pkg  — bun --eval checks that the installed package exports
-//                         Client as a function
+//	install.clean-env   — npm installs the tarball into a fresh directory
+//	install.verify-pkg  — bun --eval checks that the installed package exports
+//	                      Client as a function
 //
 // NOTE: The original test-verify-restage.sh contract mutated
 // verify-installed-pkg.ts and exercised it directly.  install-verify.sh does
@@ -18,14 +18,14 @@
 //
 // DESIGN
 // ======
-// 1. Pack a real tarball via pack-first.sh (bun pm pack).
-// 2. Extract the tarball into a temp dir, replace package/dist/index.js with
-//    a stub that exports Client as a non-function (numeric constant), repack
-//    into a new mutated tarball.
-// 3. Run install-verify.sh --tarball <mutated>.
-// 4. npm install succeeds (the tarball is structurally valid).
-// 5. bun --eval fails because `typeof Client !== 'function'`.
-// 6. Assert exit 1 and stderr contains "gate":"install.verify-pkg".
+//  1. Pack a real tarball via pack-first.sh (bun pm pack).
+//  2. Extract the tarball into a temp dir, replace package/dist/index.js with
+//     a stub that exports Client as a non-function (numeric constant), repack
+//     into a new mutated tarball.
+//  3. Run install-verify.sh --tarball <mutated>.
+//  4. npm install succeeds (the tarball is structurally valid).
+//  5. bun --eval fails because `typeof Client !== 'function'`.
+//  6. Assert exit 1 and stderr contains "gate":"install.verify-pkg".
 //
 // SLOW TEST
 // =========

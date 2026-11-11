@@ -42,6 +42,7 @@ import type {
   SpawnParams, SpawnResult,
   StatusParams, StatusResult,
   GetParams, GetResult,
+  GetManyParams, GetManyResult,
   SendKeysParams, SendKeysResult,
   ReadPaneParams, ReadPaneResult,
   KillParams, KillResult,
@@ -413,6 +414,12 @@ export class SubprocessClient {
   async get(params: GetParams): Promise<GetResult> {
     this.#assertOpen();
     return this.#enqueue<GetResult>("get", params);
+  }
+
+  /** getMany — fetch get's full rows in order, listing ids without a record separately. */
+  async getMany(params: GetManyParams): Promise<GetManyResult> {
+    this.#assertOpen();
+    return this.#enqueue<GetManyResult>("get-many", params);
   }
 
   /**

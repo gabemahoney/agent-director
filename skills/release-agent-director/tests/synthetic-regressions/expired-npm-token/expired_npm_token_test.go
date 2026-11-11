@@ -10,15 +10,15 @@
 //
 // DESIGN
 // ======
-// 1. Write a temp .npmrc containing a clearly-invalid auth token to a
-//    t.TempDir() path.
-// 2. Pass the path via NPM_CONFIG_USERCONFIG in the subprocess environment
-//    so `npm whoami` uses that config instead of the developer's ~/.npmrc.
-//    This approach is preferred over mutating NPM_TOKEN because the system's
-//    ~/.npmrc may override it via the npmrc cascade.
-// 3. Run bash skills/release-agent-director/gates/preflight/npm-whoami.sh.
-// 4. Assert exit code != 0.
-// 5. Assert stderr JSON has "gate":"preflight.npm-whoami".
+//  1. Write a temp .npmrc containing a clearly-invalid auth token to a
+//     t.TempDir() path.
+//  2. Pass the path via NPM_CONFIG_USERCONFIG in the subprocess environment
+//     so `npm whoami` uses that config instead of the developer's ~/.npmrc.
+//     This approach is preferred over mutating NPM_TOKEN because the system's
+//     ~/.npmrc may override it via the npmrc cascade.
+//  3. Run bash skills/release-agent-director/gates/preflight/npm-whoami.sh.
+//  4. Assert exit code != 0.
+//  5. Assert stderr JSON has "gate":"preflight.npm-whoami".
 //
 // The subprocess env is built explicitly from os.Environ(), with
 // NPM_CONFIG_USERCONFIG overridden, so the parent process environment is

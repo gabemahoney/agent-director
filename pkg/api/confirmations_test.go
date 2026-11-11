@@ -484,19 +484,50 @@ func (s *markThenLockStore) MarkEndedIfSameLifeFrom(id string, snap store.RowSna
 // record; the read's follow-up then records the exit it judged.
 type legacyMarkStore struct{ *store.Store }
 
-// interleavedClearStore runs after once, right after the read's liveness-note
-// clear commits and before the read refreshes its row.
-type interleavedClearStore struct {
-	*store.Store
-	after func()
+// interleavedWritesStore is a read's own nonwaiting writers with one-shot hooks,
+// each run before the read refreshes its row: adopted right after an applied
+// adoption, read right after the first row read that follows it (the no-write
+// revalidation), verdict right after a liveness note or clear commits.
+type interleavedWritesStore struct {
+	*store.RecoveryWrites
+	adopted, read, verdict func()
+	adoption               bool
 }
 
-func (s *interleavedClearStore) ClearLivenessIfSameLife(id string, snap store.RowSnapshot) (store.CondResult, error) {
-	res, err := s.Store.ClearLivenessIfSameLife(id, snap)
-	if after := s.after; after != nil {
-		s.after = nil
-		after()
+// runOnce runs hook, if any, and clears it.
+func runOnce(hook *func()) {
+	if f := *hook; f != nil {
+		*hook = nil
+		f()
 	}
+}
+
+func (s *interleavedWritesStore) AdoptIdentityIfSameLife(id string, snap store.RowSnapshot, li store.LaunchIdentity) (store.CondResult, store.RowSnapshot, error) {
+	res, guard, err := s.RecoveryWrites.AdoptIdentityIfSameLife(id, snap, li)
+	if err == nil && res == store.CondApplied {
+		s.adoption = true
+		runOnce(&s.adopted)
+	}
+	return res, guard, err
+}
+
+func (s *interleavedWritesStore) RecoveryRows(ids []string, settle store.SettleRead) ([]store.Spawn, error) {
+	rows, err := s.RecoveryWrites.RecoveryRows(ids, settle)
+	if s.adoption {
+		runOnce(&s.read)
+	}
+	return rows, err
+}
+
+func (s *interleavedWritesStore) SetLivenessNoteIfSameLife(id string, snap store.RowSnapshot, note string) (store.CondResult, error) {
+	res, err := s.RecoveryWrites.SetLivenessNoteIfSameLife(id, snap, note)
+	runOnce(&s.verdict)
+	return res, err
+}
+
+func (s *interleavedWritesStore) ClearLivenessIfSameLife(id string, snap store.RowSnapshot) (store.CondResult, error) {
+	res, err := s.RecoveryWrites.ClearLivenessIfSameLife(id, snap)
+	runOnce(&s.verdict)
 	return res, err
 }
 
@@ -654,9 +685,9 @@ func TestTerminalMovesNeverReportAlive(t *testing.T) {
 			}
 			at := e.clock.Now()
 			moved := at.Add(time.Second)
-			s := &interleavedClearStore{Store: e.st, after: func() { tc.interfere(t, e, r, moved) }}
+			s := &interleavedWritesStore{RecoveryWrites: e.st.RecoveryWrites(), verdict: func() { tc.interfere(t, e, r, moved) }}
 			got, err := api.Status(s, api.RelayView{Procs: e.pc, Now: func() time.Time { return at }}, r.ID)
-			if s.after != nil {
+			if s.verdict != nil {
 				t.Fatal("the read cleared no note; the interleaving never ran")
 			}
 			if err != nil || got.State != tc.state || got.ProcessLiveness != tc.value || conf(got.Confirmations.ProcessLiveness) != tc.response(at, moved) {
@@ -665,6 +696,125 @@ func TestTerminalMovesNeverReportAlive(t *testing.T) {
 			}
 			assertProcess(t, readMain(t, e.st, api.RelayView{}, r.ID), tc.state, tc.value, tc.later(moved))
 		})
+	}
+}
+
+// TestProcessRecordBindsToTheReadsOwnWrites (b.j4p F1): a sweep commits its
+// process attempt only on the row its own writes left, at their exact
+// observation_version: an applied adoption's one advance, or the version a
+// liveness note or clear was guarded on. A pane observation or Codex turn
+// start committed in between, before or after the no-write revalidation or
+// after the verdict write, leaves the attempt response-only and stale, with
+// nothing stored; with none, the record commits.
+func TestProcessRecordBindsToTheReadsOwnWrites(t *testing.T) {
+	t.Parallel()
+	codex := codexSpec(store.StateWorking, agentUnreadable, false, noted...)
+	codex.NoServerIdentity = true
+	unreadable := func(now time.Time) string { return "not_confirmed|-|-|" + confAt(now) + "|unreadable" }
+	alive := func(now time.Time) string { return confirmed(now, "process") }
+	labels := map[string]string{"adopted": "before the revalidation", "read": "after the revalidation", "verdict": "after the write"}
+	for _, tc := range []struct {
+		name   string
+		spec   killRowSpec
+		turn   bool     // the interleaved write is a Codex turn start, not a pane observation
+		at     []string // the interleavedWritesStore hooks it runs at
+		value  string   // with no interleaving: the committed value and record
+		record func(time.Time) string
+	}{
+		{"adopted, note kept", killRowSpec{State: store.StateWorking, Agent: agentUnreadable, NoServerIdentity: true, Opts: noted},
+			false, []string{"read", "adopted"}, store.ProcessUnknown, unreadable},
+		{"adopted Codex row, note kept", codex, true, []string{"read"}, store.ProcessUnknown, unreadable},
+		{"note written", killRowSpec{State: store.StateWorking, Agent: agentUnreadable}, false, []string{"verdict"}, store.ProcessUnknown, unreadable},
+		{"adopted, note written", killRowSpec{State: store.StateWorking, Agent: agentUnreadable, NoServerIdentity: true},
+			false, []string{"verdict"}, store.ProcessUnknown, unreadable},
+		{"note cleared", killRowSpec{State: store.StateWorking, Opts: noted}, false, []string{"verdict"}, store.ProcessAlive, alive},
+	} {
+		for _, at := range append([]string{""}, tc.at...) {
+			name := tc.name + "/no interleaving"
+			if at != "" {
+				name = tc.name + "/observed " + labels[at]
+				if tc.turn {
+					name = tc.name + "/turn started " + labels[at]
+				}
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				e := newKillEnv(t)
+				r := e.seedRow(t, tc.spec)
+				get := func() store.Spawn {
+					sp, err := e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return sp
+				}
+				if tc.turn {
+					codexHook(t, e.st, e.dbPath, r.ID, "UserPromptSubmit", "turn-1", store.StateWorking)
+					// The hook cleared the note; put it back so the sweep's note write stays a no-op.
+					if res, err := e.st.SetLivenessNoteIfSameLife(r.ID, get().Snapshot, "probe_eacces"); err != nil || res != store.CondApplied {
+						t.Fatalf("SetLivenessNoteIfSameLife = %v, %v", res, err)
+					}
+				}
+				seeded := get()
+				ran := false
+				interleave := func() {
+					ran = true
+					// Only the read's own writes precede it: its adoption, then its verdict write.
+					before, want := get(), seeded
+					if tc.spec.NoServerIdentity {
+						want.ObservationVersion++
+						want.Snapshot.RowVersion++
+					}
+					if at == "verdict" {
+						want.Snapshot.RowVersion++
+					}
+					if before.ObservationVersion != want.ObservationVersion || before.Snapshot.RowVersion != want.Snapshot.RowVersion {
+						t.Fatalf("%s: observation_version %d, row_version %d; want %d, %d", at, before.ObservationVersion,
+							before.Snapshot.RowVersion, want.ObservationVersion, want.Snapshot.RowVersion)
+					}
+					if tc.turn {
+						codexHook(t, e.st, e.dbPath, r.ID, "UserPromptSubmit", "turn-2", store.StateWorking)
+					} else if _, _, err := e.st.ObserveIdleScreen(before, store.PaneSample{SHA256: "interleaved"}, e.clock.Now(), time.Minute, store.SettleRead{}); err != nil {
+						t.Fatalf("ObserveIdleScreen: %v", err)
+					}
+					if after := get(); after.ObservationVersion != before.ObservationVersion+1 || after.ProcessEvidence != before.ProcessEvidence ||
+						after.PermissionEpoch != before.PermissionEpoch {
+						t.Fatalf("interleaved write: observation_version %d -> %d, permission_epoch %d -> %d; want one advance, same interval and process record",
+							before.ObservationVersion, after.ObservationVersion, before.PermissionEpoch, after.PermissionEpoch)
+					}
+				}
+				s := &interleavedWritesStore{RecoveryWrites: e.st.RecoveryWrites(seeded)}
+				switch at {
+				case "adopted":
+					s.adopted = interleave
+				case "read":
+					s.read = interleave
+				case "verdict":
+					s.verdict = interleave
+				}
+				now := e.clock.Now()
+				res, err := api.Sweep(context.Background(), s, e.rec, e.pc, e.cfg.EffectivePendingGrace(), e.cfg.EffectiveSweepBudget(),
+					func() time.Time { return now }, nil)
+				if err != nil || len(res.Checks) != 1 {
+					t.Fatalf("Sweep = %+v, %v", res, err)
+				}
+				if at != "" && !ran {
+					t.Fatal("the interleaving never ran; the check would be vacuous")
+				}
+				if tc.spec.NoServerIdentity && get().Identity.ServerPID == 0 {
+					t.Fatal("the sweep adopted no server identity; the check would be vacuous")
+				}
+				value, record, later := tc.value, tc.record(now), tc.record(now)
+				if at != "" {
+					value, record, later = store.ProcessUnknown, "not_confirmed|-|-|"+confAt(now)+"|"+store.ReasonStaleObservation, unknownRecord(store.ReasonNoEvidence)
+				}
+				check := res.Checks[0]
+				if check.ProcessLiveness != value || conf(check.Confirmations.ProcessLiveness) != record {
+					t.Errorf("Sweep process_liveness %s %s; want %s %s", check.ProcessLiveness, conf(check.Confirmations.ProcessLiveness), value, record)
+				}
+				assertProcess(t, readMain(t, e.st, api.RelayView{}, r.ID), store.StateWorking, value, later)
+			})
+		}
 	}
 }
 

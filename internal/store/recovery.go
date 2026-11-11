@@ -300,6 +300,13 @@ func (s *RecoveryWrites) AdoptIdentityIfSameLife(id string, snapshot RowSnapshot
 	if result != CondApplied || err != nil {
 		return result, RowSnapshot{}, err
 	}
+	// The adoption invalidated pane evidence in its own statement. Carry
+	// that known advance into the verdict's observation guard, without a
+	// re-read that could accept an intervening observer's version.
+	if row, ok := s.samples[id]; ok {
+		row.ObservationVersion++
+		s.samples[id] = row
+	}
 	snapshot.RowVersion++
 	return result, snapshot, nil
 }

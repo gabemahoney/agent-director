@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# spec/tla/ci/run_ci.sh: the runner behind `make tla` and `make tla-print`
+# spec/tla/ci/run_ci.sh: the runner behind `make tla`, `make tla-parse` and
+# `make tla-print`
 # (Epic 22). Adapted from bee b.zuj's ci/run_ci.sh (see ../PROVENANCE.txt)
 # with the same suite semantics, plus repo-relative paths, a pin check in
 # place of regenerating the suite, a fail-closed preflight and per-run state
 # under $TMPDIR.
 #
 #   run_ci.sh           submit the suite to the job scheduler and wait for it
+#   run_ci.sh --parse   SANY-check every manifest module in one job, then exit
 #   run_ci.sh --print   print the plan and the pin check, then exit; submits
 #                       nothing and never contacts the scheduler
 #
 # The model is checked ON THE JOB SCHEDULER ONLY. This script never starts the
-# model checker on this host: it builds job contexts, submits them, polls them
+# model checker on this host: it builds job contexts, submits them, waits
 # and reads their logs. The checker runs only inside each job's container on
 # the scheduler's remote host (../jobs/lib/tlcjob.sh).
 #
@@ -26,16 +28,15 @@
 #                 (default: every manifest group, in manifest order). A group
 #                 with no rows in the tier is skipped; a group the manifest
 #                 does not have is refused.
-#   TLA_SPEC_DIR  the directory holding Phase4.tla, Phase4Split.tla and
-#                 Phase5Hook.tla (default: spec/tla/). Specs read from an
-#                 override are not pinned.
+#   TLA_SPEC_DIR  the directory holding the manifest's modules and their local
+#                 helpers (default: spec/tla/). Every .tla there is packaged;
+#                 each must be pinned unless this directory is overridden.
 #   TLA_SUITE     the manifest (default: spec/tla/ci/suite.tsv). An override is
 #                 not pinned. A cfg in spec/tla/ci/cfg/ comes from there and
 #                 must be pinned. An override may also name cfgs in the cfg/
 #                 directory next to it (spec/tla/launch/cfg/ for
 #                 launch/suite.tsv); those are not pinned. A cfg in both is
 #                 refused.
-#   TLA_POLL_S    seconds between status polls (default 30).
 #   TMPDIR        the per-run directory is created under it (default /tmp);
 #                 it must lie outside this repo.
 #
@@ -43,18 +44,25 @@
 #   1. Preflight, before anything is submitted: the tier, the tools, every pin
 #      in ../PROVENANCE.txt (sha256sum; the jar's size too), the manifest, the
 #      channel, the scheduler CLI, and a running dispatcher (`list --json`).
-#      The scheduler has no cancel operation, so a job submitted while the
-#      dispatcher is down would run whenever it next starts.
-#   2. A parse-only job (one cfg per spec module, simulation depth 1, budget
-#      600 s) over the tier's rows of the whole manifest. It gates the rest.
-#      Its submit reports the scheduler's limits: the run timeout must cover
-#      the largest group budget plus 300 s and the memory must be at least
-#      24 GiB, or the run ends FAIL with no group job submitted.
+#      A job submitted while the dispatcher is down would wait for its restart.
+#   2. A parse job (budget 600 s): SANY for every distinct module in every
+#      manifest row, regardless of tier or group. With --parse this is the
+#      only job. Otherwise it also evaluates one cfg per module in the tier
+#      (simulation depth 1), and both checks gate the rest.
+#      Each submit requests 28 GiB memory, 20 GiB disk and its own budget plus
+#      300 s timeout. The reported timeout must cover that request and memory
+#      must be at least 24 GiB, or the runner waits for the job to end and fails.
 #   3. One job per group, strictly one at a time. A job's budget is the sum of
 #      (cap_s + 20) over its runs, plus 120, at most 10200 s; each run keeps
-#      its own cap. DISKCAP_MB is raised to 60000: up to 60 GB of states per
-#      run on the remote's container disk.
-# Every job is submitted with --network off and polled until it ends; its run
+#      its own cap. DISKCAP_MB=15000 guards the checker's metadir (state,
+#      queue and fingerprint storage). After INCOMPLETE, later runs in the
+#      same job are SKIPPED(after-cap), and later groups are NOT-RUN(after-cap).
+#      A cap in the parse job leaves every planned group row NOT-RUN. Any
+#      cap fails the suite, even if a later verdict for that row says PASS.
+#      Scheduler time, disk and memory caps have the same effect; missing
+#      row verdicts are INCOMPLETE(<state>). Existing verdicts are retained.
+# Every job is submitted with --network off and awaited with `jobsched wait`;
+# only a wait timeout or an interrupt asks for `status --json`. Its run
 # log is read through the scheduler's `results --json` and copied into the
 # per-run directory. A job's context is kept intact until the job ends (the
 # scheduler reads it again when the job leaves the queue), then removed; an
@@ -65,6 +73,8 @@
 #   PASS|FAIL <cfg> <result> distinct=<n> secs=<s> -- <what>
 # then
 #   CI-VERDICT PASS|FAIL (<ok>/<total> runs ok, <minutes> min, tier <tier>)
+# With --parse: PASS|FAIL sany:<Module> <result>, then
+#   CI-VERDICT PASS|FAIL (<ok>/<total> modules parse, <minutes> min, parse-only)
 # A run is ok when expect=pass and the result is PASS, or expect=violation and
 # the result is FAIL(...). In a manifest with the props column, a violation
 # row is ok only when the property its result names is one of its props;
@@ -73,9 +83,10 @@
 # only on PASS.
 #
 # Fail closed: a preflight refusal, a refused submit, a submit with no job id,
-# a failed status call (an unknown job), a dispatcher that is not running, an
-# unknown job state, a job past its timeout plus an hour, too-low limits or a
-# failed parse check each print "FAIL <step> -- <reason>" and
+# a failed wait or status call (an unknown job), a stopped dispatcher, an
+# unknown job state, a job past its timeout plus an hour, too-low limits, a
+# cancelled job (after cleanup and log retrieval) or a failed parse check
+# each print "FAIL <step> -- <reason>" and
 # "CI-VERDICT FAIL (<reason>, tier <tier>)" and exit 1. Nothing is retried. A
 # usage error exits 2.
 #
@@ -85,26 +96,29 @@
 # it reaches the head of the queue: in effect a cancel. A job already building
 # or running keeps its context and finishes on its own. When the state cannot
 # be read, the context is kept (fail safe). Logs are always kept, and the
-# runner prints what it did.
+# runner prints what it did. An already ended job's log is fetched after
+# removing its context, as after an ordinary end.
 set -u -o pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # spec/tla/ci
 ROOT="$(dirname "$HERE")"                                # spec/tla
 PROV="$ROOT/PROVENANCE.txt"
-SPECS="Phase4 Phase4Split Phase5Hook"
 PARSE_BUDGET=600
 MAX_BUDGET=10200
 LIMIT_MARGIN_S=300
 MIN_MEMORY=$((24 * 1024 * 1024 * 1024))
 WAIT_MARGIN_S=3600   # after a job leaves the queue: its run timeout plus this (build and fetch)
+WAIT_TIMEOUT=9m      # inspect dispatcher and overrun only when this wait times out
 JAR=tla2tools.jar
 
 PRINT=no
+PARSE_ONLY=no
 case "$#:${1:-}" in
   0:) ;;
   1:--print) PRINT=yes ;;
+  1:--parse) PARSE_ONLY=yes ;;
   *)
-    echo "usage: run_ci.sh [--print]   (settings come from TLA_* variables; see the header)" >&2
+    echo "usage: run_ci.sh [--print|--parse]   (settings come from TLA_* variables; see the header)" >&2
     echo "CI-VERDICT FAIL (usage error)"
     exit 2
     ;;
@@ -115,14 +129,14 @@ SPEC_DIR=${TLA_SPEC_DIR:-$ROOT}
 SUITE=${TLA_SUITE:-$HERE/suite.tsv}
 JS=${TLA_JOBSCHED:-jobsched}
 CHANNEL=${TLA_CHANNEL:-}
-POLL=${TLA_POLL_S:-30}
 T0=$(date +%s)
 RUN_DIR=
 CUR_JOB=
 CUR_ID=
 CUR_CTX=
 CUR_PHASE=   # build (not submitted yet), submit (submit call in flight), submitted
-SLEEP_PID=
+WAIT_PID=
+CAPPED=no    # sticky across every job, including the first parse job
 
 # die <step> <verdict reason> <detail>: the closing lines of any run that does
 # not reach the per-run verdicts.
@@ -149,8 +163,8 @@ drop_ctx() {
 
 # on_interrupt_job: the current job was submitted; ask the scheduler where it
 # is. Queued: remove the context (the dispatch re-check then rejects the job).
-# Building or running: keep the context. Ended: remove it, as after a normal
-# end. Anything unreadable: keep it.
+# Building or running: keep the context. Ended: remove it and fetch its log,
+# as after a normal end. Anything unreadable: keep it.
 # shellcheck disable=SC2317  # reached through the trap below
 on_interrupt_job() {
   local who="${CUR_JOB}${CUR_ID:+ ($CUR_ID)}" out rc st term out2 st2
@@ -179,9 +193,14 @@ on_interrupt_job() {
     building:false|running:false)
       echo "# interrupted: job $who is already $st; it will finish on its own (the scheduler has no cancel operation); its context stays in $CUR_CTX until it ends" >&2
       ;;
-    succeeded:true|failed:true|build-failed:true|infrastructure-error:true|rejected:true)
-      drop_ctx || true
-      echo "# interrupted: job $who had already ended ($st); its context was removed" >&2
+    succeeded:true|failed:true|timed-out:true|out-of-memory:true|disk-exceeded:true|build-failed:true|cancelled:true|rejected:true|infrastructure-error:true)
+      if drop_ctx; then
+        echo "# interrupted: job $who had already ended ($st); its context was removed" >&2
+      else
+        echo "# interrupted: job $who had already ended ($st), but its context $CUR_CTX could not be removed" >&2
+      fi
+      CUR_CTX=
+      fetch_log "$CUR_JOB"
       ;;
     *)
       echo "# interrupted: job $who state unknown (status exit $rc, state '${st:-unreadable}', terminal '${term:-unreadable}'); its context was kept in $CUR_CTX in case the job still needs it" >&2
@@ -192,9 +211,9 @@ on_interrupt_job() {
 # shellcheck disable=SC2317  # reached through the trap below
 on_signal() {
   trap - INT TERM HUP
-  [ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" 2>/dev/null
+  [ -n "$WAIT_PID" ] && kill "$WAIT_PID" 2>/dev/null
   # Also every other background child: a signal that lands between
-  # `sleep "$POLL" &` and `SLEEP_PID=$!` leaves that sleep untracked.
+  # starting `jobsched wait` and `WAIT_PID=$!` leaves that wait untracked.
   # shellcheck disable=SC2046  # one PID per word, intended
   kill $(jobs -p) 2>/dev/null || true
   echo "# interrupted" >&2
@@ -220,10 +239,9 @@ suite_min() { echo $((($(date +%s) - T0) / 60)); }
 
 # --- preflight: settings and tools -----------------------------------------
 case "$TIER" in fast|full) ;; *) die preflight "bad TLA_TIER" "TLA_TIER must be fast or full (got '$TIER'); nothing was submitted" ;; esac
-[[ "$POLL" =~ ^[0-9]+$ ]] || die preflight "bad TLA_POLL_S" "TLA_POLL_S must be a whole number of seconds (got '$POLL')"
 
 need_tools="awk sed grep sha256sum cut tr head cp mkdir mktemp date wc"
-[ "$PRINT" = yes ] || need_tools="$need_tools jq sleep"
+[ "$PRINT" = yes ] || need_tools="$need_tools jq cat"
 for t in $need_tools; do
   command -v "$t" >/dev/null 2>&1 || die preflight "missing tool" "the runner needs '$t' on PATH; nothing was submitted"
 done
@@ -258,8 +276,10 @@ for f in "$JAR" jobs/lib/Dockerfile jobs/lib/tlcjob.sh; do
   if [ -z "${PINNED[$f]:-}" ]; then echo "FAIL pin -- $f has no pin line in PROVENANCE.txt"; PIN_BAD=$((PIN_BAD + 1)); fi
 done
 if [ -z "${TLA_SPEC_DIR:-}" ]; then
-  for s in $SPECS; do
-    if [ -z "${PINNED[$s.tla]:-}" ]; then echo "FAIL pin -- $s.tla has no pin line in PROVENANCE.txt"; PIN_BAD=$((PIN_BAD + 1)); fi
+  for f in "$ROOT"/*.tla; do
+    [ -e "$f" ] || continue
+    s=${f##*/}
+    if [ -z "${PINNED[$s]:-}" ]; then echo "FAIL pin -- $s has no pin line in PROVENANCE.txt"; PIN_BAD=$((PIN_BAD + 1)); fi
   done
 fi
 if [ -z "${TLA_SUITE:-}" ] && [ -z "${PINNED[ci/suite.tsv]:-}" ]; then
@@ -279,9 +299,6 @@ fi
 # --- preflight: the specs and the manifest --------------------------------------
 [ -d "$SPEC_DIR" ] || die preflight "bad TLA_SPEC_DIR" "spec directory '$SPEC_DIR' does not exist; nothing was submitted"
 SPEC_DIR=$(cd "$SPEC_DIR" && pwd)
-for s in $SPECS; do
-  [ -f "$SPEC_DIR/$s.tla" ] || die preflight "spec missing" "$SPEC_DIR/$s.tla does not exist; nothing was submitted"
-done
 if [ ! -f "$SUITE" ] || [ ! -r "$SUITE" ]; then
   die preflight "bad TLA_SUITE" "manifest '$SUITE' is not a readable file; nothing was submitted"
 fi
@@ -291,14 +308,14 @@ fi
 # manifest may add an eighth, props (as launch/suite.tsv): on a violation row
 # the comma-separated properties whose violation is the expected result, on a
 # pass row "-". The first data row sets the width; every row must have it.
-bad_rows=$(awk -F'\t' -v specs=" $SPECS " '
+bad_rows=$(awk -F'\t' '
   /^#/ || /^$/ { next }
   {
     why = ""
     if (!w) w = (NF == 8 ? 8 : 7)
     if (NF != w) why = "has " NF " fields, not " w
     else if ($1 !~ /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ || length($1) > 36) why = "bad group \"" $1 "\""
-    else if (index(specs, " " $2 " ") == 0) why = "unknown spec \"" $2 "\""
+    else if ($2 !~ /^[A-Za-z][A-Za-z0-9_]*$/) why = "bad spec \"" $2 "\""
     else if ($3 !~ /^[A-Za-z0-9_]+$/) why = "bad cfg \"" $3 "\""
     else if ($4 !~ /^[0-9]+$/ || $4 + 0 < 1) why = "bad cap_s \"" $4 "\""
     else if ($5 != "pass" && $5 != "violation") why = "bad expect \"" $5 "\""
@@ -311,18 +328,25 @@ bad_rows=$(awk -F'\t' -v specs=" $SPECS " '
   }' "$SUITE")
 [ -z "$bad_rows" ] || die preflight "bad manifest" "manifest '$SUITE': $(echo "$bad_rows" | head -5 | tr '\n' ';' | sed 's/;$//'); nothing was submitted"
 
-# The tier's rows, in manifest order.
+# All manifest modules for SANY, then the tier's rows, in manifest order.
+SANY_SPECS=()
+declare -A SANY_SEEN=()
 R_GRP=(); R_SPEC=(); R_CFG=(); R_CAP=(); R_EXP=(); R_WHAT=(); R_PROPS=()
 ALL_GROUPS=()
 declare -A HAS_GROUP=()
 while IFS= read -r line; do
   props=
   IFS=$'\t' read -r grp spec c cap expect tier what props <<<"$line"
+  if [ -z "${SANY_SEEN[$spec]:-}" ]; then
+    [ -f "$SPEC_DIR/$spec.tla" ] && [ -r "$SPEC_DIR/$spec.tla" ] || die preflight "spec missing" "$SPEC_DIR/$spec.tla is not a readable file; nothing was submitted"
+    SANY_SEEN[$spec]=1; SANY_SPECS+=("$spec")
+  fi
   if [ -z "${HAS_GROUP[$grp]:-}" ]; then HAS_GROUP[$grp]=1; ALL_GROUPS+=("$grp"); fi
   [ "$TIER" = full ] || [ "$tier" = fast ] || continue
   [ "$expect" = violation ] || props=
   R_GRP+=("$grp"); R_SPEC+=("$spec"); R_CFG+=("$c"); R_CAP+=("$cap"); R_EXP+=("$expect"); R_WHAT+=("$what"); R_PROPS+=("$props")
 done < <(grep -v -e '^#' -e '^$' "$SUITE")
+[ "${#SANY_SPECS[@]}" -gt 0 ] || die preflight "no runs" "the manifest has no modules; nothing was submitted"
 
 # Where each cfg comes from: ci/cfg/ (pinned), else the cfg/ directory next to
 # an overriding manifest (not pinned).
@@ -382,7 +406,7 @@ for i in "${!R_SPEC[@]}"; do
 done
 
 PLAN_GROUPS=(); PLAN_BUDGET=(); PLAN_COUNT=(); SKIPPED_GROUPS=()
-TOTAL_RUNS=0; BIGGEST=0
+TOTAL_RUNS=0
 for g in "${GROUPS_WANTED[@]}"; do
   mapfile -t idx < <(group_rows "$g")
   if [ "${#idx[@]}" -eq 0 ]; then SKIPPED_GROUPS+=("$g"); continue; fi
@@ -390,10 +414,8 @@ for g in "${GROUPS_WANTED[@]}"; do
   b=$(budget "${caps[@]}")
   PLAN_GROUPS+=("$g"); PLAN_BUDGET+=("$b"); PLAN_COUNT+=("${#idx[@]}")
   TOTAL_RUNS=$((TOTAL_RUNS + ${#idx[@]}))
-  [ "$b" -gt "$BIGGEST" ] && BIGGEST=$b
 done
-[ "$TOTAL_RUNS" -gt 0 ] || die preflight "no runs" "the chosen groups have no rows in tier $TIER; nothing was submitted"
-NEED_TIMEOUT=$((BIGGEST + LIMIT_MARGIN_S))
+[ "$PARSE_ONLY" = yes ] || [ "$TOTAL_RUNS" -gt 0 ] || die preflight "no runs" "the chosen groups have no rows in tier $TIER; nothing was submitted"
 
 # --- print-only mode --------------------------------------------------------
 if [ "$PRINT" = yes ]; then
@@ -405,12 +427,12 @@ if [ "$PRINT" = yes ]; then
   [ "$OWN_N" -eq 0 ] || echo "  cfgs:       $OWN_N from $OWN_CFG (next to TLA_SUITE; not pinned)"
   echo "  jobs:       $((1 + ${#PLAN_GROUPS[@]})), one at a time, each with --network off and one notice to TLA_CHANNEL"
   echo "  runs:       $TOTAL_RUNS"
-  echo "  job parse:  ${#PARSE_IDX[@]} runs (one cfg per spec module, simulation depth 1), budget $PARSE_BUDGET s"
+  echo "  job parse:  ${#SANY_SPECS[@]} SANY modules, ${#PARSE_IDX[@]} runs (one cfg per tier module, simulation depth 1), budget $PARSE_BUDGET s"
   for k in "${!PLAN_GROUPS[@]}"; do
     printf '  job %-6s %3d runs, budget %5d s\n' "${PLAN_GROUPS[$k]}:" "${PLAN_COUNT[$k]}" "${PLAN_BUDGET[$k]}"
   done
   for g in "${SKIPPED_GROUPS[@]}"; do echo "  group $g:   no rows in tier $TIER, skipped"; done
-  echo "  limits:     the scheduler must give each job a run timeout of at least $NEED_TIMEOUT s and at least 24 GiB of memory (checked on the parse job's submit)"
+  echo "  limits:     --memory 28g --disk 20g --timeout <job budget + $LIMIT_MARGIN_S>s; 15000 MB metadir guard; reported timeout and at least 24 GiB memory checked on every submit"
   if [ -n "$CHANNEL" ]; then echo "  TLA_CHANNEL: set"; else echo "  TLA_CHANNEL: not set (make tla refuses without it)"; fi
   if command -v "$JS" >/dev/null 2>&1 && [ -x "$(command -v "$JS")" ]; then
     echo "  TLA_JOBSCHED: $JS (found)"
@@ -443,7 +465,11 @@ running=$(jq -r '.summary.dispatcher_running' <<<"$out" 2>/dev/null)
 RUN_DIR=$(mktemp -d "$TBASE_REAL/tla-run.XXXXXX") || die preflight "bad TMPDIR" "cannot create a run directory under '$TBASE'; nothing was submitted"
 mkdir -p "$RUN_DIR/ctx" "$RUN_DIR/logs" "$RUN_DIR/runs" || die preflight "bad TMPDIR" "cannot populate $RUN_DIR; nothing was submitted"
 echo "# run dir: $RUN_DIR (job contexts are removed as their jobs end; logs are kept)" >&2
-echo "# tier $TIER: $TOTAL_RUNS runs in $((1 + ${#PLAN_GROUPS[@]})) jobs" >&2
+if [ "$PARSE_ONLY" = yes ]; then
+  echo "# parse-only: ${#SANY_SPECS[@]} modules in one job" >&2
+else
+  echo "# tier $TIER: $TOTAL_RUNS runs in $((1 + ${#PLAN_GROUPS[@]})) jobs" >&2
+fi
 [ "$OWN_N" -eq 0 ] || echo "# $OWN_N cfgs from $OWN_CFG (next to TLA_SUITE; not pinned)" >&2
 
 # --- one job ----------------------------------------------------------------
@@ -452,20 +478,23 @@ build_ctx() {
   local d="$RUN_DIR/ctx/$1" s c
   mkdir -p "$d" || return 1
   cp "$ROOT/jobs/lib/Dockerfile" "$ROOT/jobs/lib/tlcjob.sh" "$ROOT/$JAR" "$d/" || return 1
-  for s in $SPECS; do cp "$SPEC_DIR/$s.tla" "$d/" || return 1; done
-  sed -i "s/^BUDGET=\${BUDGET:-[0-9]*}/BUDGET=\${BUDGET:-$3}/; s/^DISKCAP_MB=\${DISKCAP_MB:-[0-9]*}/DISKCAP_MB=\${DISKCAP_MB:-60000}/" "$d/tlcjob.sh" || return 1
+  cp "$SPEC_DIR"/*.tla "$d/" || return 1
+  sed -i "s/^BUDGET=\${BUDGET:-[0-9]*}/BUDGET=\${BUDGET:-$3}/; s/^DISKCAP_MB=\${DISKCAP_MB:-[0-9]*}/DISKCAP_MB=\${DISKCAP_MB:-15000}/" "$d/tlcjob.sh" || return 1
   grep -qxF "BUDGET=\${BUDGET:-$3}" "$d/tlcjob.sh" || return 1
   # shellcheck disable=SC2016  # the literal line, not an expansion
-  grep -qxF 'DISKCAP_MB=${DISKCAP_MB:-60000}' "$d/tlcjob.sh" || return 1
+  grep -qxF 'DISKCAP_MB=${DISKCAP_MB:-15000}' "$d/tlcjob.sh" || return 1
   cp "$2" "$d/runs" || return 1
-  while read -r s c _; do cp "${CFG_PATH[$c]}" "$d/" || return 1; done < "$2"
+  while read -r s c _; do
+    [ "$c" = - ] && continue   # SANY needs modules, no cfg
+    cp "${CFG_PATH[$c]}" "$d/" || return 1
+  done < "$2"
 }
 
-# submit_job <job>: sets CUR_ID and SUB_JSON.
+# submit_job <job> <needed timeout>: sets CUR_ID and SUB_JSON.
 submit_job() {
   local rc err running
   CUR_PHASE=submit
-  SUB_JSON=$("$JS" submit --context "$CUR_CTX" --name "tla-$1" --channel "$CHANNEL" --network off --json); rc=$?
+  SUB_JSON=$("$JS" submit --context "$CUR_CTX" --name "tla-$1" --channel "$CHANNEL" --network off --memory 28g --disk 20g --timeout "${2}s" --json); rc=$?
   if [ "$rc" -ne 0 ]; then
     err=$(jq -r '.error // empty' <<<"$SUB_JSON" 2>/dev/null | head -c 300)
     rm -rf "$CUR_CTX"; CUR_CTX=
@@ -489,7 +518,7 @@ check_limits() {
     LIMIT_ERR="submit reported no whole-number timeout_s and memory"; return 1
   fi
   if [ "$t" -lt "$1" ]; then
-    LIMIT_ERR="a run timeout of $t s, under the $1 s needed (a group budget plus $LIMIT_MARGIN_S s)"; return 1
+    LIMIT_ERR="a run timeout of $t s, under the $1 s needed (the job budget plus $LIMIT_MARGIN_S s)"; return 1
   fi
   if [ "$m" -lt "$MIN_MEMORY" ]; then
     LIMIT_ERR="$m bytes of memory, under the 24 GiB ($MIN_MEMORY bytes) needed"; return 1
@@ -497,12 +526,26 @@ check_limits() {
   return 0
 }
 
-# wait_job <job>: polls until the job ends; sets JOB_STATE.
+# wait_job <job>: wait for a terminal answer; sets JOB_STATE. Background the
+# CLI and reap it with the shell's wait, so INT/TERM/HUP still run the trap.
+# Only a timeout needs status, to check the dispatcher and overrun deadline.
 wait_job() {
-  local out rc st term disp deadline=0 tmo
+  local out rc st term disp deadline=0 tmo answer="$RUN_DIR/logs/$1.wait"
   tmo=$(jq -r '.timeout_s // 0' <<<"$SUB_JSON" 2>/dev/null)
   [[ "$tmo" =~ ^[0-9]+$ ]] || tmo=0
   while :; do
+    "$JS" wait "$CUR_ID" --timeout "$WAIT_TIMEOUT" > "$answer" & WAIT_PID=$!
+    wait "$WAIT_PID"; rc=$?; WAIT_PID=
+    [ "$rc" -eq 0 ] || die scheduler "wait failed" "wait for job $1 ($CUR_ID) exited $rc; nothing more was submitted"
+    out=$(cat "$answer")
+    if [ "$out" != timeout ]; then
+      st=${out#"$CUR_ID "}
+      [ "$out" = "$CUR_ID $st" ] || die scheduler "unknown job state" "wait for job $1 ($CUR_ID) returned an unreadable answer; nothing more was submitted"
+      case "$st" in
+        succeeded|failed|timed-out|out-of-memory|disk-exceeded|build-failed|cancelled|rejected|infrastructure-error) JOB_STATE=$st; return 0 ;;
+        *) die scheduler "unknown job state" "wait for job $1 ($CUR_ID) reports state '${st:-unreadable}'; nothing more was submitted" ;;
+      esac
+    fi
     out=$("$JS" status "$CUR_ID" --json); rc=$?
     if [ "$rc" -ne 0 ]; then
       [ "$rc" -eq 3 ] && die scheduler "status failed" "the job scheduler does not know job $1 ($CUR_ID) (status exit 3); nothing more was submitted"
@@ -512,7 +555,7 @@ wait_job() {
     term=$(jq -r '.terminal' <<<"$out" 2>/dev/null)
     disp=$(jq -r '.dispatcher_running' <<<"$out" 2>/dev/null)
     case "$st" in
-      succeeded|failed|build-failed|infrastructure-error|rejected) JOB_STATE=$st; return 0 ;;
+      succeeded|failed|timed-out|out-of-memory|disk-exceeded|build-failed|cancelled|rejected|infrastructure-error) JOB_STATE=$st; return 0 ;;
       queued|building|running) [ "$term" = true ] && die scheduler "unknown job state" "job $1 ($CUR_ID) is '$st' but marked ended; nothing more was submitted" ;;
       *) die scheduler "unknown job state" "job $1 ($CUR_ID) reports state '${st:-unreadable}'; nothing more was submitted" ;;
     esac
@@ -521,8 +564,6 @@ wait_job() {
     if [ "$deadline" -gt 0 ] && [ "$(date +%s)" -ge "$deadline" ]; then
       die scheduler "job overran" "job $1 ($CUR_ID) is still $st more than $WAIT_MARGIN_S s past its $tmo s run timeout; nothing more was submitted"
     fi
-    sleep "$POLL" & SLEEP_PID=$!
-    wait "$SLEEP_PID"; SLEEP_PID=
   done
 }
 
@@ -543,38 +584,70 @@ fetch_log() {
 }
 
 # run_job <job> <runs-file> <budget> <needed timeout>: build, submit, wait,
-# remove the context, fetch the log; sets LOG. Too-low limits end the run once
-# the job has ended.
+# remove the context, fetch the log; sets LOG and remembers any cap in CAPPED.
+# MISSING_VERDICT is the current job's result for rows without a verdict.
+# Cancellation and too-low limits end the run once the job has ended.
 run_job() {
   local limits_ok=yes
+  MISSING_VERDICT=NO-VERDICT
   CUR_PHASE=build; CUR_JOB=$1; CUR_ID=; CUR_CTX="$RUN_DIR/ctx/$1"
   if ! build_ctx "$1" "$2" "$3"; then
     rm -rf "$CUR_CTX"; CUR_CTX=
     die context "context build failed" "cannot build the context for job $1 under $RUN_DIR/ctx; nothing more was submitted"
   fi
-  submit_job "$1"
+  submit_job "$1" "$4"
   check_limits "$4" || limits_ok=no
   [ "$limits_ok" = yes ] || echo "# job $1: the scheduler gives it $LIMIT_ERR; waiting for it to end, then stopping" >&2
   wait_job "$1"
-  rm -rf "$CUR_CTX"
+  rm -rf "$CUR_CTX" || echo "# job $1: ended, but its context $CUR_CTX could not be fully removed" >&2
+  CUR_CTX=
   echo "# job $1: $JOB_STATE after $(suite_min) min (suite clock)" >&2
   fetch_log "$1"
   CUR_JOB=; CUR_ID=; CUR_CTX=; CUR_PHASE=
+  [ "$JOB_STATE" != cancelled ] || die scheduler "job cancelled" "job $1 was cancelled; nothing more was submitted"
+  case "$JOB_STATE" in
+    timed-out|disk-exceeded|out-of-memory)
+      CAPPED=yes; MISSING_VERDICT="INCOMPLETE($JOB_STATE)" ;;
+  esac
+  if [ -n "$LOG" ] && grep -qE '^VERDICT .* result=INCOMPLETE(\(| |$)' "$LOG"; then CAPPED=yes; fi
   [ "$limits_ok" = yes ] || die limits "scheduler limits too low" "the job scheduler gave job $1 $LIMIT_ERR; its limits must be raised first; nothing more was submitted"
 }
 
-# --- the parse-only job first; it gates the rest ------------------------------
+# --- SANY first, then depth-1 evaluation unless --parse; both gate the rest ----
 P="$RUN_DIR/runs/parse"
-for i in "${PARSE_IDX[@]}"; do echo "${R_SPEC[$i]} ${R_CFG[$i]} -simulate num=1 -depth 1"; done > "$P"
-run_job parse "$P" "$PARSE_BUDGET" "$NEED_TIMEOUT"
+for s in "${SANY_SPECS[@]}"; do echo "$s - sany"; done > "$P"
+if [ "$PARSE_ONLY" = no ]; then
+  for i in "${PARSE_IDX[@]}"; do echo "${R_SPEC[$i]} ${R_CFG[$i]} -simulate num=1 -depth 1"; done >> "$P"
+fi
+run_job parse "$P" "$PARSE_BUDGET" "$((PARSE_BUDGET + LIMIT_MARGIN_S))"
 parse_ok=yes
 [ -n "$LOG" ] || parse_ok=no
-for i in "${PARSE_IDX[@]}"; do
-  [ "$parse_ok" = yes ] || break
-  awk -v c="${R_CFG[$i]}" '$1 == "VERDICT" && $2 == c && (/ result=PARSE-OK / || / result=PARSE-OK$/) { f = 1 } END { exit !f }' "$LOG" || parse_ok=no
+SANY_OK=0
+for s in "${SANY_SPECS[@]}"; do
+  res=
+  [ -n "$LOG" ] && res=$(awk -v c="sany:$s" '$1 == "VERDICT" && $2 == c' "$LOG" | tail -1 | sed -n 's/.* result=\([^ ]*\).*/\1/p')
+  res=${res:-$MISSING_VERDICT}
+  if [ "$res" = PARSE-OK ]; then SANY_OK=$((SANY_OK + 1)); tag=PASS; else parse_ok=no; tag=FAIL; fi
+  [ "$PARSE_ONLY" = no ] || echo "$tag sany:$s $res"
 done
-[ "$parse_ok" = yes ] || die parse-check "parse check failed" "the specs do not parse or evaluate (see ${LOG:-no log})"
-echo "# parse check: OK" >&2
+if [ "$PARSE_ONLY" = yes ]; then
+  rmdir "$RUN_DIR/ctx" 2>/dev/null
+  echo "# run dir: $RUN_DIR (logs kept)" >&2
+  if [ "$parse_ok" = yes ] && [ "$CAPPED" = no ]; then tag=PASS; rc=0; else tag=FAIL; rc=1; fi
+  echo "CI-VERDICT $tag ($SANY_OK/${#SANY_SPECS[@]} modules parse, $(suite_min) min, parse-only)"
+  exit "$rc"
+fi
+if [ "$CAPPED" = yes ]; then
+  # Use the ordinary group loop to count and report every planned unrun row.
+  echo "# parse check: capped (see ${LOG:-no log}); no group job will be submitted" >&2
+else
+  for i in "${PARSE_IDX[@]}"; do
+    [ "$parse_ok" = yes ] || break
+    awk -v c="${R_CFG[$i]}" '$1 == "VERDICT" && $2 == c { ok = (/ result=PARSE-OK / || / result=PARSE-OK$/) } END { exit !ok }' "$LOG" || parse_ok=no
+  done
+  [ "$parse_ok" = yes ] || die parse-check "parse check failed" "the specs do not parse or evaluate (see ${LOG:-no log})"
+  echo "# parse check: OK" >&2
+fi
 
 # --- one job per group, one at a time ---------------------------------------
 OK=0; TOTAL=0
@@ -582,6 +655,13 @@ for g in "${SKIPPED_GROUPS[@]}"; do echo "# group $g: no rows in tier $TIER, ski
 for k in "${!PLAN_GROUPS[@]}"; do
   g=${PLAN_GROUPS[$k]}
   mapfile -t idx < <(group_rows "$g")
+  if [ "$CAPPED" = yes ]; then
+    for i in "${idx[@]}"; do
+      TOTAL=$((TOTAL + 1))
+      printf 'FAIL %-24s %-58s distinct=? secs=? -- %s\n' "${R_CFG[$i]}" 'NOT-RUN(after-cap)' "${R_WHAT[$i]}"
+    done
+    continue
+  fi
   R="$RUN_DIR/runs/$g"
   for i in "${idx[@]}"; do echo "${R_SPEC[$i]} ${R_CFG[$i]} @${R_CAP[$i]}"; done > "$R"
   run_job "$g" "$R" "${PLAN_BUDGET[$k]}" "$((PLAN_BUDGET[k] + LIMIT_MARGIN_S))"
@@ -590,7 +670,7 @@ for k in "${!PLAN_GROUPS[@]}"; do
     TOTAL=$((TOTAL + 1))
     v=
     [ -n "$LOG" ] && v=$(awk -v c="$c" '$1 == "VERDICT" && $2 == c' "$LOG" | tail -1)
-    res=$(sed -n 's/.* result=\([^ ]*\).*/\1/p' <<<"$v"); res=${res:-NO-VERDICT}
+    res=$(sed -n 's/.* result=\([^ ]*\).*/\1/p' <<<"$v"); res=${res:-$MISSING_VERDICT}
     dist=$(sed -n 's/.* distinct=\([^ ]*\).*/\1/p' <<<"$v")
     secs=$(sed -n 's/.* secs=\([^ ]*\).*/\1/p' <<<"$v")
     good=no; why=
@@ -613,7 +693,7 @@ done
 rmdir "$RUN_DIR/ctx" 2>/dev/null
 echo "# run dir: $RUN_DIR (logs kept)" >&2
 MIN=$(suite_min)
-if [ "$OK" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+if [ "$CAPPED" = no ] && [ "$OK" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
   echo "CI-VERDICT PASS ($OK/$TOTAL runs ok, $MIN min, tier $TIER)"; exit 0
 else
   echo "CI-VERDICT FAIL ($OK/$TOTAL runs ok, $MIN min, tier $TIER)"; exit 1

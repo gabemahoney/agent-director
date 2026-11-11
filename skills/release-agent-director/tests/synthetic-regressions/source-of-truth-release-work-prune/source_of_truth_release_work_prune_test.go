@@ -24,18 +24,18 @@
 // where a sibling test or release gate scanning it would see them (b.9qj).
 //
 // Sub-case A (.release-work/ pruned, no false positive):
-//   1. Create .release-work/release-v9.9.9/pkg/ts-bun-client/package.json
-//      with a "version" field (this is exactly what the release skill's
-//      bump commit produces inside the worktree — would have triggered P1
-//      pre-fix).
-//   2. Run the gate from the repo root; assert exit 0 and silent stderr.
+//  1. Create .release-work/release-v9.9.9/pkg/ts-bun-client/package.json
+//     with a "version" field (this is exactly what the release skill's
+//     bump commit produces inside the worktree — would have triggered P1
+//     pre-fix).
+//  2. Run the gate from the repo root; assert exit 0 and silent stderr.
 //
 // Sub-case B (sibling violation OUTSIDE .release-work/ still fires):
-//   1. Create tools/test-bvvv/package.json with a "version" field
-//      (this is OUTSIDE .release-work/, so the gate MUST still fire).
-//   2. Run the gate; assert non-zero exit, stderr names the offending
-//      relative path, stderr contains "invariant.source-of-truth", and the
-//      first stderr line is valid JSON with gate == that key.
+//  1. Create tools/test-bvvv/package.json with a "version" field
+//     (this is OUTSIDE .release-work/, so the gate MUST still fire).
+//  2. Run the gate; assert non-zero exit, stderr names the offending
+//     relative path, stderr contains "invariant.source-of-truth", and the
+//     first stderr line is valid JSON with gate == that key.
 //
 // DEPENDENCY
 // ==========

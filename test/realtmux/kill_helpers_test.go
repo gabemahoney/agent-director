@@ -62,6 +62,7 @@ type killRowSpec struct {
 	State      string
 	Token      string
 	InstanceID string
+	ForwardEnv []string              // names forwarded through the stdin create route
 	NoPane     bool                  // a lost create reply: the server identity recorded, no pane
 	PaneID     string                // recorded in place of the reply's pane id (e.g. one the server never issued)
 	Opts       []apitest.SpawnOption // additional row facts, such as the agent whose input contract is tested
@@ -82,7 +83,7 @@ func (f *killFix) liveRow(t *testing.T, spec killRowSpec) killRow {
 	t.Helper()
 	rt := f.realTmux
 	a := f.agentOn(t, rt, createSpec{Name: spec.Name, Command: spec.Command, Token: spec.Token,
-		InstanceID: spec.InstanceID, StoreID: f.StoreID})
+		InstanceID: spec.InstanceID, StoreID: f.StoreID, ForwardEnv: spec.ForwardEnv})
 	endAtCleanup(t, a.Reply.PanePID)
 	if tmux.NeedsLabelByID(a.Name) {
 		if err := f.Client.SetLabel(rt.Socket, a.Reply.SessionID, a.Reply.PaneID, a.Token, a.InstanceID, a.StoreID); err != nil {
@@ -218,12 +219,12 @@ func assertVerbError(t testing.TB, verb string, err error, name string, c apites
 
 // baseIndexOneLostReply sets base-index and pane-base-index 1 on a new
 // server, then makes a row in state with a live session but no recorded pane.
-func (f *killFix) baseIndexOneLostReply(t *testing.T, state string) killRow {
+func (f *killFix) baseIndexOneLostReply(t *testing.T, state string, forward []string) killRow {
 	t.Helper()
 	f.startSession(t, "") // starts the server the options are set on
 	f.must(t, "set-option", "-g", "base-index", "1")
 	f.must(t, "set-option", "-gw", "pane-base-index", "1")
-	r := f.liveRow(t, killRowSpec{State: state, NoPane: true})
+	r := f.liveRow(t, killRowSpec{State: state, NoPane: true, ForwardEnv: forward})
 	if w, i := f.formatInt(t, r.Reply.PaneID, "#{window_index}"), f.formatInt(t, r.Reply.PaneID, "#{pane_index}"); w != 1 || i != 1 {
 		t.Fatalf("agent pane %s is window %d pane %d, want 1.1", r.Reply.PaneID, w, i)
 	}

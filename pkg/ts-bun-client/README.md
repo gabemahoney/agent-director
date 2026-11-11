@@ -147,7 +147,7 @@ handling are in the [caller contract](../../docs/caller-contract.md#cursor-opera
 
 Get the current lifecycle state of a Spawn.
 
-`status`, `get`, `list` and `sweep` (also `findMissing`) share
+`status`, `get`, `getMany`, `list` and `sweep` (also `findMissing`) share
 [bounded recovery](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
 Single-row reads check only that row; read success does not confirm every write.
 
@@ -192,10 +192,30 @@ state last changed; `StatusResult` does not. The
 [caller contract](../../docs/caller-contract.md#state-change-time) defines it
 and how it differs from `last_seen_at`, the settled `state` and `since`.
 
-`status`, `get` and `list` use `[state] settle_ms` in the CLI's
+`status`, `get`, `getMany` and `list` use `[state] settle_ms` in the CLI's
 `~/.config/agent-director/config.toml` for [independent state and family
 settling](../../docs/configuration.md#settle-time-state). Verbs that act on a
 Spawn judge its live state, which can be newer than its reported state.
+
+### getMany
+
+```ts
+const result = await client.getMany({ instance_ids: ["agent-a", "agent-b"] });
+for (const row of result.spawns) {
+  console.log(row.instance_id, row.state);
+}
+console.log(result.not_found);
+```
+
+Returns `GetManyResult`; each `spawns` element is `get`'s `GetResult`, with
+the fields and guarantees described here. Ordering, the Id Cap and read
+failures are defined in the
+[caller contract](../../docs/caller-contract.md#reading-many-agents).
+
+Before running anything, the client refuses with `ErrInvalidFlags` an ID
+equal to `--store-path`, `--home`, `--tmux-command` or `--create-if-missing`,
+starting with one of them followed by `=`, or containing a NUL byte. The
+error names its 1-based position.
 
 ### list
 
@@ -471,13 +491,14 @@ do not know, read the recorded verdict from `decision` (`null` for a
 `"pane_outside"` `"unknown"` claim) and the outcome from `delivery` and
 `pane_answer`; never read a reason as a verdict.
 
-`proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, Claude's
-tool ran or Cursor supplied validated exact matching invocation proof under
+`proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, Cursor
+supplied validated exact matching invocation proof under
 [Cursor permissions](../../docs/permissions.md#cursor-spawns), including a failed
 MCP invocation that proves dialog closure without inferring execution or changing
 decision, delivery or pane-answer fields;
 `"turn_end"`, an eligible main request's turn ended under the age and identity
-guards, or a Cursor turn ended with the request still unanswered; or
+guards, a Claude subagent's turn ended after its request (its
+`SubagentStop`), or a Cursor turn ended with the request still unanswered; or
 `"agent_gone"`, a non-Cursor agent ended) say when and how the request's
 dialog was proven gone; `"delivered"` and a pane answer are
 agent-director's own records, not proof. `get`'s `unproven_requests` lists
@@ -584,7 +605,7 @@ comparing two real versions should use a standard semver library;
 agent-director does not export a comparator.
 
 The floor is a construction check, not feature negotiation: an older CLI
-that meets it can lack `sweep` (an unknown-verb error) and return
+that meets it can lack `sweep` or `getMany` (`ErrUnknownVerb`) and return
 `status`/`get`/`list`/`findMissing` results without `process_liveness`,
 `confirmations` or `checks`, which the client does not synthesize. Those
 need the CLI release matching this package ([install guide](../../docs/install.md)).
@@ -628,12 +649,13 @@ try {
 ```
 
 Every `AgentDirectorError` has `errName`, `errDescription` and `errDetails`:
-the error envelope's optional `err_details` object, or `null`. Seven errors
+the error envelope's optional `err_details` object, or `null`. Eight errors
 carry one, typed as exported interfaces: `ErrRelayFallenBack`
 (`RelayFallenBackDetails`, with `OpenRequestFacts`), `ErrPaneAnswerInProgress`
 (`PaneAnswerInProgressDetails`), `ErrClaimTooSoon` (`ClaimTooSoonDetails`),
 `ErrPaneChanged` (`PaneChangedDetails`), `ErrDialogMaybeOpen`
-(`DialogMaybeOpenDetails`), `ErrPauseTimeout` (`PauseTimeoutDetails`) and
+(`DialogMaybeOpenDetails`), `ErrPauseTimeout` (`PauseTimeoutDetails`),
+`ErrTooManyIds` (`TooManyIdsDetails`) and
 `ErrSubmissionUnconfirmed`
 (`SubmissionUnconfirmedDetails`, for failed fallback hook observation).
 Native, Claude readiness, Claude paced typing, Codex paste and Cursor gateway
@@ -760,7 +782,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 | `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
 | `ErrNoOpenPermissionRequest` | No eligible permission request matches the `(instance_id, request_token)` pair, including a closed, proven-gone or obsolete request. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or shared recovery or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when shared recovery marked it `missing`) before the request relay acknowledged its recorded verdict, the missing mark's own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (for a request with a settle instant, `"delivered"` requires durable relay acknowledgement; requests recorded by an older binary retain the [legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary), including derived delivery after expiry even when closed). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
 | `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the recorded decision and acknowledgement prevent a second API answer. Acknowledgement does not establish agent receipt or dialog closure; see [Permission relay](../../docs/caller-contract.md#permission-relay). It also includes a request shared recovery denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`), and one closed at the pane (`pane_answer` `"sent"`, `"outside"` or `"tool_ran"`, with a `decision` or, for an `"unknown"` claim, none): `decide` on it records nothing, not even `attempted_decision`. A pane answer or `recordPaneAnswer` on a request its relay acknowledged, or one already closed at the pane, throws it too. |
-| `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and its precommit budget ran out, including acquisition or SQL work. It does not establish another process held the store. Once the verdict is confirmed committed, `decide` never throws it: a bound reached while it waits for confirmation resolves with `delivery` `"not_confirmed"`. An unconfirmed commit is an internal error instead. Without `max_wait_ms`, `decide` never throws `ErrStoreBusy`. A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` throws it when the store's write lock was not taken within its busy timeout. Recovery and zero-wait semantics are in the [caller contract](../../docs/caller-contract.md#permission-relay). `status`, `get`, `list`, `sweep` and `findMissing` throw it when a bounded store read does not finish in time; see [Bounded recovery on state reads](../../docs/caller-contract.md#bounded-recovery-on-state-reads). |
+| `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and its precommit budget ran out, including acquisition or SQL work. It does not establish another process held the store. Once the verdict is confirmed committed, `decide` never throws it: a bound reached while it waits for confirmation resolves with `delivery` `"not_confirmed"`. An unconfirmed commit is an internal error instead. Without `max_wait_ms`, `decide` never throws `ErrStoreBusy`. A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` throws it when the store's write lock was not taken within its busy timeout. Recovery and zero-wait semantics are in the [caller contract](../../docs/caller-contract.md#permission-relay). `status`, `get`, `getMany`, `list`, `sweep` and `findMissing` throw it when a bounded store read does not finish in time; see [Bounded recovery on state reads](../../docs/caller-contract.md#bounded-recovery-on-state-reads). |
 | `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |
 | `ErrAmbiguousRequest` | `request_token` was empty and more than one open request exists for the spawn. |
 
@@ -777,7 +799,8 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrInvalidFlags` | CLI flag parsing rejected the invocation; a call carried an old name of a renamed key (thrown before any process starts, naming the new key); `spawn` was given an explicit `instance_id` containing an ASCII control character (0x00–0x1f or 0x7f); `readPane`'s `n_lines` or `list`'s `limit` is negative (0 or omitted gives the default: 25 lines, no cap); `decide` was given a negative `max_wait_ms`; `sendKeys` was given params that do not fit together (a pane answer without `as`, `key` or `expect_pane_sha256` or with `text`; `key` with a non-empty `text`; `no_enter` with neither; `as` without `request_token`; a `key` that is neither a named key nor one character; a malformed hash); or `recordPaneAnswer` was given an `as` other than `"allow"`, `"deny"` or `"unknown"`, or a missing or malformed hash. Nothing was changed, sent or recorded. |
+| `ErrInvalidFlags` | CLI flag parsing rejected the invocation; `getMany` received no IDs, an empty or repeated ID, or an ID the client [cannot pass to the CLI](#getmany); a call carried an old name of a renamed key (thrown before any process starts, naming the new key); `spawn` was given an explicit `instance_id` containing an ASCII control character (0x00–0x1f or 0x7f); `readPane`'s `n_lines` or `list`'s `limit` is negative (0 or omitted gives the default: 25 lines, no cap); `decide` was given a negative `max_wait_ms`; `sendKeys` was given params that do not fit together (a pane answer without `as`, `key` or `expect_pane_sha256` or with `text`; `key` with a non-empty `text`; `no_enter` with neither; `as` without `request_token`; a `key` that is neither a named key nor one character; a malformed hash); or `recordPaneAnswer` was given an `as` other than `"allow"`, `"deny"` or `"unknown"`, or a missing or malformed hash. Nothing was changed, sent or recorded. |
+| `ErrTooManyIds` | `getMany` received more IDs than the configured Id Cap; `errDetails` is `TooManyIdsDetails` with `id_cap`. See [Reading many agents](../../docs/caller-contract.md#reading-many-agents) for handling. |
 
 **CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational):
 

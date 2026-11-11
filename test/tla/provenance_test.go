@@ -220,13 +220,13 @@ func makeRun(t *testing.T, args ...string) (string, error) {
 	return string(out), err
 }
 
-// TestMakeTlaTargets: tla and tla-print only run the runner, no other target
-// reaches it, and tla-print plans without contacting the scheduler.
+// TestMakeTlaTargets: tla, tla-parse (b.osa R2) and tla-print only run the runner;
+// no other target reaches it, and tla-print plans without contacting the scheduler.
 func TestMakeTlaTargets(t *testing.T) {
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make not on PATH")
 	}
-	for target, want := range map[string]string{"tla": "bash spec/tla/ci/run_ci.sh", "tla-print": "bash spec/tla/ci/run_ci.sh --print"} {
+	for target, want := range map[string]string{"tla": "bash spec/tla/ci/run_ci.sh", "tla-parse": "bash spec/tla/ci/run_ci.sh --parse", "tla-print": "bash spec/tla/ci/run_ci.sh --print"} {
 		if out, err := makeRun(t, "-n", target); err != nil || strings.TrimSpace(out) != want {
 			t.Errorf("make -n %s = %q (%v), want only %q", target, out, err, want)
 		}

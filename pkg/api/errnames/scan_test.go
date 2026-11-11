@@ -69,7 +69,7 @@ func TestManifestErrorNames(t *testing.T) {
 	verbs := []manifest.VerbDef{
 		{Name: "verbA", ErrorNames: []string{"ErrFoo", "ErrBar"}},
 		{Name: "verbB", ErrorNames: []string{"ErrBar", "ErrBaz"}}, // ErrBar duplicated
-		{Name: "verbC", ErrorNames: []string{}},                    // empty — no contribution
+		{Name: "verbC", ErrorNames: []string{}},                   // empty — no contribution
 	}
 
 	got := errnames.ManifestErrorNames(verbs)

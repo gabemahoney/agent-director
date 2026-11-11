@@ -81,6 +81,12 @@ func (r *keysRun) sameInputPreparation(current Spawn) bool {
 		expected.Identity = r.adoption.Identity
 		expected.RowVersion++
 		expected.Snapshot.RowVersion++
+		expected.ObservationVersion++
+		expected.PaneSHA256, expected.PaneSinceMillis, expected.PaneEpoch = "", 0, -1
+		// Adoption clears the old idle candidate/display. Accept its payload
+		// only at this exact observation version; any intervening observer
+		// still fails the full-row comparison below.
+		expected.DisplayObservation = current.DisplayObservation
 	}
 	if current.RowVersion < expected.RowVersion {
 		return false

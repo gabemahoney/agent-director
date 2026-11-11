@@ -9,21 +9,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/journalfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 )
 
 func TestAdviceFollow_G15_DarwinJournalEvidence(t *testing.T) {
 	// Serial: the verifier, attempt timeout and HOME are process-wide seams.
 	const retry = "keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
 	for _, tc := range []struct{ kind, reason, action string }{
-		{"privacy", "old_or_unverified_mutators", "stop each listed process (an agent_director_mutator until the cutover is verified; an unverified_process, or make its details readable to the user running the migration, which for an image in a privacy-protected folder means granting the terminal app access to that folder), " + retry},
+		{"privacy", "old_or_unverified_mutators", "stop each listed agent_director_mutator (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified; " + retry},
 		{"mount", "process_inventory_unreadable", "run it as the agents' user with every mounted file system reachable or unmounted (on Linux, with the proc file system mounted and readable), " + retry + "; report it if it persists"},
-		{"consent", "inventory_deadline", "answer any privacy consent prompt or grant the terminal app access to the folder it names, make every mounted file system reachable or unmount it, or stop processes until the process inventory finishes within the attempt's time limit; " + retry},
+		{"consent", "inventory_deadline", "make every mounted file system reachable or unmount it, or answer any privacy consent prompt, " + retry},
 		{"acl", "legacy_root_access_unestablished", "make the store and every legacy root owned by the user running the migration and private to it (chmod 0600 the store, chmod 0700 each root, and remove any access-control entry, for example chmod -N <path>), " + retry},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -39,25 +39,19 @@ func TestAdviceFollow_G15_DarwinJournalEvidence(t *testing.T) {
 			var follow func()
 			switch tc.kind {
 			case "privacy":
-				// G15 "granting the terminal app access to that folder":
-				// lift the fs seam's privacy refusal for the image lookup.
-				fsys.before = func(op, p string) error {
-					if p == h.image {
-						return syscall.EACCES
-					}
-					return nil
-				}
-				follow = func() { fsys.before = nil }
+				// G15's retained row now follows "stop each listed mutator".
+				h.processes[200].files = []lsofFile{h.file("4", h.db)}
+				follow = func() { h.procs.Set(200, procfix.Gone()) }
 			case "mount":
 				// G15 "every mounted file system reachable or unmounted":
 				// clear the system listing's inaccessible-mount warning.
 				h.stderr = []byte("private mount unavailable")
 				follow = func() { h.stderr = nil }
 			case "consent":
-				// G15 "answer any privacy consent prompt": releasing Open
-				// stands for answering the prompt, without sleeping.
+				// G15 "answer any privacy consent prompt": release a bounded
+				// kernel-path lookup, standing for answering the prompt.
 				var release func()
-				entered, release = blockDarwinLookup(t, fsys, "open", h.image)
+				entered, release = blockDarwinLookup(t, fsys, "kernel", h.root)
 				restore := store.SetInputMigrationFaultsForTest(store.InputMigrationFaults{AttemptTimeout: 2 * time.Second})
 				t.Cleanup(restore)
 				follow = func() { release(); fsys.before = nil; restore() }

@@ -93,6 +93,14 @@ func ObserveDecisionBoundaryForTest(t *testing.T, s *Store, path string, before 
 	b.before, b.afterCommit = before, afterCommit
 }
 
+// ObserveDecisionExecForTest is ObserveDecisionBoundaryForTest that also sees
+// each statement's result once SQLite has run it (a ROLLBACK that has landed).
+func ObserveDecisionExecForTest(t *testing.T, s *Store, path string, before func(context.Context, string) error, afterExec func(context.Context, string, error)) {
+	t.Helper()
+	b := installDeadlineBoundary(t, s, path)
+	b.before, b.afterExec = before, afterExec
+}
+
 // ErrCommitUnconfirmedForTest is errCommitUnconfirmed for those external recovery tests.
 var ErrCommitUnconfirmedForTest = errCommitUnconfirmed
 

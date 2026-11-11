@@ -23,10 +23,11 @@
 // MaxPauseTimeoutSeconds; [pre_trust] lock_wait_seconds (b.kr4), with
 // DefaultPreTrustLockWaitSeconds and MaxPreTrustLockWaitSeconds; and [store]
 // busy_timeout_ms (b.c7f), with DefaultStoreBusyTimeoutMs and
-// MaxStoreBusyTimeoutMs.
+// MaxStoreBusyTimeoutMs. [get_many] id_cap defaults to 20 for a missing key
+// or 0; Load refuses a negative value, with no maximum.
 //
-// [state] settle_ms (b.3ie), the settle time of the state status, get and list
-// report, is refused the same way: a negative value and one above
+// [state] settle_ms (b.3ie), the settle time of the state status, get, get-many
+// and list report, is refused the same way: a negative value and one above
 // MaxStateSettleMs. Unlike those keys, 0 is a value of its own, not the
 // default's stand-in: a missing key, or 0, turns the settle time off
 // (DefaultStateSettleMs).
@@ -59,6 +60,7 @@ type Config struct {
 	Defaults     Defaults     `toml:"defaults"`
 	Relay        Relay        `toml:"relay"`
 	Pause        Pause        `toml:"pause"`
+	GetMany      GetMany      `toml:"get_many"`
 	PreTrust     PreTrust     `toml:"pre_trust"`
 	Store        Store        `toml:"store"`
 	State        State        `toml:"state"`
@@ -238,6 +240,36 @@ func (p Pause) refusals() []string {
 	return nil
 }
 
+// DefaultGetManyIdCap is the default number of ids a get-many call accepts.
+// Default and GetMany.EffectiveIdCap share this value so they cannot drift.
+const DefaultGetManyIdCap = 20
+
+// GetMany holds the get-many verb's Id Cap.
+type GetMany struct {
+	// IdCap is the maximum number of ids per call. Read it only through
+	// EffectiveIdCap: a missing key or 0 gives the default. Load refuses
+	// a negative value; there is no maximum.
+	IdCap int `toml:"id_cap"`
+}
+
+// EffectiveIdCap returns the configured positive Id Cap, otherwise
+// DefaultGetManyIdCap (20).
+func (g GetMany) EffectiveIdCap() int {
+	if g.IdCap > 0 {
+		return g.IdCap
+	}
+	return DefaultGetManyIdCap
+}
+
+// refusals returns the description of a negative [get_many] id_cap, or nil.
+// Zero gives the default; every positive value is accepted.
+func (g GetMany) refusals() []string {
+	if g.IdCap < 0 {
+		return []string{fmt.Sprintf("[get_many] id_cap = %d, outside its range 1 or more", g.IdCap)}
+	}
+	return nil
+}
+
 // DefaultPreTrustLockWaitSeconds is the default of pre_trust.lock_wait_seconds,
 // in whole seconds (12): just above the 10 s stale limit of Claude Code's lock
 // on .claude.json, so a lock dir left by a holder killed while holding it goes
@@ -402,7 +434,7 @@ type State struct {
 	IdleScreenTimeoutSeconds int `toml:"idle_screen_timeout_seconds"`
 
 	// SettleMs is the settle time, in whole milliseconds: with a positive
-	// value, the state status, get and list report (and list --state filters
+	// value, the state status, get, get-many and list report (and list --state filters
 	// on) moves to a new value only once a hook-written raw state has held
 	// that long, and reads the last settled value until then; terminal states
 	// and command-written states report at once. 0, or a missing key, turns
@@ -490,16 +522,17 @@ func (s Store) EffectiveDbPath() (string, error) {
 
 // Experimental holds independent, default-off agent opt-ins.
 type Experimental struct {
-	Droid bool `toml:"droid"`
+	Droid    bool `toml:"droid"`
+	OpenCode bool `toml:"opencode"`
 }
 
 // Launch holds the optional executable selection for each agent (SR-5.0),
 // used by spawn, reuse_finished and, for agents that support it, resume.
 // A key that is unset or empty selects the program by its name: claude,
-// codex, agent (Cursor) or droid, found on the PATH of the pane's environment.
+// codex, agent (Cursor), droid or opencode, found on the PATH of the pane's environment.
 //
 // A value is an absolute path, or "~/" followed by a path, which Load joins
-// onto HOME (as [store] db_path's "~/" is). DroidPath also accepts a bare
+// onto HOME (as [store] db_path's "~/" is). DroidPath and OpenCodePath also accept a bare
 // executable name, resolved on the pane's PATH. Load refuses other relative
 // paths, whitespace-only values, "~" alone, "~user/...", and a "~/" value
 // while HOME is unset or empty, with ErrConfigMalformed's description naming
@@ -517,10 +550,12 @@ type Launch struct {
 	CursorPath string `toml:"cursor_path"`
 	// DroidPath accepts an executable name, absolute path, or ~/ path.
 	DroidPath string `toml:"droid_path"`
+	// OpenCodePath accepts an executable name, absolute path, or ~/ path.
+	OpenCodePath string `toml:"opencode_path"`
 }
 
 // launchRefusals returns the description of each refused [launch] value, in
-// key order (claude_path, codex_path, cursor_path, droid_path), or nil when every value loads. home is
+// key order (claude_path, codex_path, cursor_path, droid_path, opencode_path), or nil when every value loads. home is
 // the user's home directory as Load read it ("" when unset), which a "~/"
 // value needs.
 func (l Launch) launchRefusals(home string) []string {
@@ -530,17 +565,18 @@ func (l Launch) launchRefusals(home string) []string {
 		{"codex_path", l.CodexPath},
 		{"cursor_path", l.CursorPath},
 		{"droid_path", l.DroidPath},
+		{"opencode_path", l.OpenCodePath},
 	} {
 		allowed := "an absolute path or start with \"~/\""
 		withoutHome := "an absolute path"
-		if k.name == "droid_path" {
+		if k.name == "droid_path" || k.name == "opencode_path" {
 			allowed = "a bare executable name, an absolute path or start with \"~/\""
 			withoutHome = "a bare executable name or an absolute path"
 		}
 		switch {
 		case k.value == "", filepath.IsAbs(k.value):
-		case k.name == "droid_path" && !strings.ContainsAny(k.value, "/\\~ \t\r\n\x00") && !strings.HasPrefix(k.value, "-") && k.value != "." && k.value != "..":
-			// Droid also accepts a bare executable name, resolved by the pane PATH.
+		case (k.name == "droid_path" || k.name == "opencode_path") && !strings.ContainsAny(k.value, "/\\~ \t\r\n\x00") && !strings.HasPrefix(k.value, "-") && k.value != "." && k.value != "..":
+			// Pane-only agents also accept a bare executable name, resolved by the pane PATH.
 		case strings.HasPrefix(k.value, "~/"):
 			if home == "" {
 				out = append(out, fmt.Sprintf("%s = %q, which must be %s, but HOME is unset or empty so \"~/\" cannot be resolved; use %s",
@@ -591,6 +627,9 @@ func Default() Config {
 		},
 		Pause: Pause{
 			TimeoutSeconds: DefaultPauseTimeoutSeconds,
+		},
+		GetMany: GetMany{
+			IdCap: DefaultGetManyIdCap,
 		},
 		PreTrust: PreTrust{
 			LockWaitSeconds: DefaultPreTrustLockWaitSeconds,
@@ -656,7 +695,7 @@ func (e *ConfigError) Unwrap() error {
 // Load also refuses a [launch] claude_path, codex_path or cursor_path that is neither
 // empty, an absolute path nor "~/..." with HOME set (launchRefusal, SR-5.0),
 // and joins a "~/" value onto HOME (resolvePaths). The same rules apply to
-// droid_path, which additionally accepts a bare executable name for the pane's PATH.
+// droid_path and opencode_path, which additionally accept bare executable names.
 //
 // Load then validates the [tmux] table (SR-4.1): a negative value of any key,
 // and a positive value below its key's safe minimum, are refused, never
@@ -673,7 +712,8 @@ func (e *ConfigError) Unwrap() error {
 // settle_ms (b.3ie): a negative value and one above the key's maximum
 // (MaxExpireRetentionDays, MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds,
 // MaxPreTrustLockWaitSeconds, MaxStoreBusyTimeoutMs, MaxStateSettleMs) are
-// refused, never replaced by the default or capped. A refusal behaves exactly
+// refused, never replaced by the default or capped. [get_many] id_cap is
+// refused only when negative; it has no maximum. A refusal behaves exactly
 // like a malformed file: Load returns a
 // *ConfigError for the file whose Err describes every refused key
 // (validate). A value that is not a TOML integer already fails the parse.
@@ -878,8 +918,8 @@ func keyName(k toml.Key) string {
 // as a list (nameList: "refused [tmux] values: ", "refused [defaults] and
 // [tmux] values: ", "refused [defaults], [relay] and [tmux] values: "), then
 // every refused key's description, tables in the order [defaults], [relay],
-// [pause], [pre_trust], [store], [state], [tmux] and each table in its own
-// order, then
+// [pause], [get_many], [pre_trust], [store], [state], [tmux] and each table
+// in its own order, then
 // missingKeyAdvice. A file refused only for [tmux] values gets the SR-4.1
 // description unchanged. Values are never changed.
 //
@@ -898,6 +938,7 @@ func validate(cfg Config, meta toml.MetaData) error {
 		{"[defaults]", cfg.Defaults.refusals()},
 		{"[relay]", cfg.Relay.refusals()},
 		{"[pause]", cfg.Pause.refusals()},
+		{"[get_many]", cfg.GetMany.refusals()},
 		{"[pre_trust]", cfg.PreTrust.refusals()},
 		{"[store]", cfg.Store.refusals()},
 		{"[state]", cfg.State.refusals()},
@@ -954,6 +995,7 @@ func resolvePaths(cfg Config, home string) Config {
 	cfg.Launch.CodexPath = expandTilde(cfg.Launch.CodexPath, home)
 	cfg.Launch.CursorPath = expandTilde(cfg.Launch.CursorPath, home)
 	cfg.Launch.DroidPath = expandTilde(cfg.Launch.DroidPath, home)
+	cfg.Launch.OpenCodePath = expandTilde(cfg.Launch.OpenCodePath, home)
 	return cfg
 }
 

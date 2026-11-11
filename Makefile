@@ -1,4 +1,4 @@
-.PHONY: all build test generate lint err-coherence nondet-coverage \
+.PHONY: all build test generate lint fmt-check err-coherence nondet-coverage \
         check-doccomments check-sandbox-bypass test-install-sh test-install-sh-advice \
         test-image test-docker list-test-docker-epics \
         test-sandbox sandbox-shell sandbox \
@@ -151,6 +151,22 @@ errnames-json: _require-sandbox
 
 lint:
 	go vet ./...
+
+# fmt-check fails, listing them, when any tracked Go file is not gofmt-clean
+# (b.7ep). It checks git's tracked files, not `.`, so an untracked scratch tree
+# such as .release-work/ never fails it. gofmt's output can change between Go
+# versions, so run it with go.mod's: make sandbox CMD="make fmt-check", or the
+# lint workflow, whose setup-go reads go.mod.
+fmt-check:
+	@tracked=$$(git ls-files -- '*.go') || exit 1; \
+	files=; \
+	if [ -n "$$tracked" ]; then files=$$(gofmt -l $$tracked) || exit 1; fi; \
+	if [ -n "$$files" ]; then \
+		echo "ERROR: fmt-check: these Go files are not gofmt-clean; run gofmt -w on them:" >&2; \
+		echo "$$files" >&2; \
+		exit 1; \
+	fi; \
+	echo "[fmt-check] every tracked Go file is gofmt-clean"
 
 # err-coherence runs the five-way err_name coherence gate. It asserts that:
 #   (a) handler-referenced sentinels ⊆ errnames.Catalog
@@ -494,7 +510,7 @@ _REQUIRE_SANDBOX_GOALS = $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
 _REQUIRE_SANDBOX_HOST_GOALS := test-sandbox sandbox sandbox-shell \
 	_sandbox-preflight _sandbox-build test-install-sh test-install-sh-advice \
 	test-image test-docker \
-	verify-prerelease-linux release-shellcheck tla tla-print
+	verify-prerelease-linux release-shellcheck tla tla-parse tla-print
 _REQUIRE_SANDBOX_ON_HOST = test $(_REQUIRE_SANDBOX_HOST_GOALS)
 # _require_sandbox_lead returns the goals of $(1) that come before the first
 # one that runs in the sandbox: all of them when none does.
@@ -576,7 +592,7 @@ _REQUIRE_SANDBOX_GUARDED := generate surface-json errnames-json \
 # own (release-binaries, sandbox, tla, …).
 # Must use: a new target with a recipe joins this list (a host goal does
 # through _REQUIRE_SANDBOX_HOST_GOALS), unless it lists _require-sandbox.
-_REQUIRE_SANDBOX_WAIT := $(_REQUIRE_SANDBOX_HOST_GOALS) build lint \
+_REQUIRE_SANDBOX_WAIT := $(_REQUIRE_SANDBOX_HOST_GOALS) build lint fmt-check \
 	check-sandbox-bypass list-test-docker-epics \
 	release-binaries \
 	verify-installed-pkg-full bin/ts-helper test/fake-tmux/tmux
@@ -689,8 +705,9 @@ sandbox: _sandbox-build
 	$(_SANDBOX_RUN) bash -c 'exec bash -c "$${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
 
 # ─────────────────────────────────────────────────────────────────────────
-# tla (Epic 22): the TLA+ model check of the LABEL design (bee b.zuj's
-# specs and suite, vendored in spec/tla/; runner spec/tla/ci/run_ci.sh).
+# tla (Epic 22): TLA+ model checks from a manifest. The default is the LABEL
+# design (bee b.zuj's specs and suite, vendored in spec/tla/).
+# Runner: spec/tla/ci/run_ci.sh.
 #
 # An ON-DEMAND design check taken before engineering when the design changes;
 # not CI. Not part of all, test, test-sandbox or any release target, and no
@@ -699,9 +716,9 @@ sandbox: _sandbox-build
 #   tla        submits the suite to the job scheduler and blocks until the
 #              last job ends, streaming one PASS/FAIL line per run and ending
 #              with the runner's CI-VERDICT line; exits non-zero on FAIL. The
-#              fast tier (default) is 10 jobs and about 1.5 h of scheduler
-#              time; the full tier about 6-7 h. Each job sends one notice to
-#              TLA_CHANNEL. It needs the scheduler's dispatcher already
+#              default fast tier has 10 jobs. SANY on every manifest module
+#              and depth-1 evaluation gate the exhaustive groups. Each job
+#              sends one notice to TLA_CHANNEL. It needs the dispatcher already
 #              running (it refuses, before submitting anything, when it is
 #              not) and never starts or stops it. It runs on the host because
 #              the scheduler CLI is a host tool, but never starts the model
@@ -709,8 +726,10 @@ sandbox: _sandbox-build
 #              the scheduler's remote host. Interrupting it cancels a job that
 #              is still queued (its context is removed, so the scheduler
 #              rejects it); a job already building or running finishes on the
-#              scheduler, which has no cancel operation. Run it only with the
-#              operator's go-ahead.
+#              scheduler. Run it only with the operator's go-ahead.
+#   tla-parse  submits one SANY-only job for every distinct manifest module,
+#              regardless of tier or group, and ends with one verdict per
+#              module and CI-VERDICT. Uses the same preflight and scheduler.
 #   tla-print  prints the plan (tier, groups, jobs, runs, budgets, the limits
 #              needed) and the pin check; submits nothing, never contacts the
 #              scheduler. Safe offline.
@@ -722,28 +741,34 @@ sandbox: _sandbox-build
 #                 is meant to be run by its absolute path, so pass that
 #   TLA_TIER      fast (default) or full
 #   TLA_GROUPS    groups to run, space-separated (default: every manifest group)
-#   TLA_SPEC_DIR  directory holding the three .tla specs (default spec/tla/;
-#                 an override is not pinned), e.g. a broken copy under $TMPDIR
+#   TLA_SPEC_DIR  directory holding the model's modules and helpers (default
+#                 spec/tla/). Every .tla is packaged; an override is not pinned.
 #   TLA_SUITE     manifest override (default spec/tla/ci/suite.tsv; an
 #                 override is not pinned)
 # Job contexts and logs go in a per-run directory under $TMPDIR, outside the
-# repo; the runner prints it.
+# repo; the runner prints it. Every job requests 28g memory, 20g disk and its
+# budget plus 300 s timeout, with a 15000 MB guard on TLC's metadir. The runner
+# uses jobsched wait. An INCOMPLETE stops later runs in that job and later
+# group submissions; skipped or unrun rows fail the suite.
 TLA_JOBSCHED ?= jobsched
 TLA_CHANNEL ?=
 TLA_TIER ?= fast
 TLA_GROUPS ?=
 TLA_SPEC_DIR ?=
 TLA_SUITE ?=
-tla tla-print: export TLA_JOBSCHED := $(TLA_JOBSCHED)
-tla tla-print: export TLA_CHANNEL := $(TLA_CHANNEL)
-tla tla-print: export TLA_TIER := $(TLA_TIER)
-tla tla-print: export TLA_GROUPS := $(TLA_GROUPS)
-tla tla-print: export TLA_SPEC_DIR := $(TLA_SPEC_DIR)
-tla tla-print: export TLA_SUITE := $(TLA_SUITE)
+tla tla-parse tla-print: export TLA_JOBSCHED := $(TLA_JOBSCHED)
+tla tla-parse tla-print: export TLA_CHANNEL := $(TLA_CHANNEL)
+tla tla-parse tla-print: export TLA_TIER := $(TLA_TIER)
+tla tla-parse tla-print: export TLA_GROUPS := $(TLA_GROUPS)
+tla tla-parse tla-print: export TLA_SPEC_DIR := $(TLA_SPEC_DIR)
+tla tla-parse tla-print: export TLA_SUITE := $(TLA_SUITE)
 
-.PHONY: tla tla-print
+.PHONY: tla tla-parse tla-print
 tla:
 	bash spec/tla/ci/run_ci.sh
+
+tla-parse:
+	bash spec/tla/ci/run_ci.sh --parse
 
 tla-print:
 	bash spec/tla/ci/run_ci.sh --print

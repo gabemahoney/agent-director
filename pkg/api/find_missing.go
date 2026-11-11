@@ -150,7 +150,7 @@ type FindMissingResult struct {
 	// whose note was already current. A row whose note write found it
 	// changed, or failed in the store, is not counted, and neither is a
 	// pending row noted unreported (b.kdf): its agent process was checked and
-	// is alive, so it is in neither IDs nor UnverifiedIDs; get and list show
+	// is alive, so it is in neither IDs nor UnverifiedIDs; get, get-many and list show
 	// its note.
 	Unverified int `json:"unverified"`
 	// UnverifiedIDs is the sorted slice of instance ids left unverified.
@@ -875,7 +875,7 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 // row is not judged while that process is alive in this caller's pid
 // namespace. Neither protects a Cursor row whose exact recorded gateway is
 // gone: it is marked missing. A row noted unreported is in neither result list. Ages and tmux time are
-// read from the Client's clock. Recovery runs only when called; status/get/list
+// read from the Client's clock. Recovery runs only when called; status/get/get-many/list
 // share the same checks for their fixed selected rows. No schedule is added.
 //
 // The same pass repairs stale check_permission rows (b.146 rule 9): a row with relay_mode on in check_permission none

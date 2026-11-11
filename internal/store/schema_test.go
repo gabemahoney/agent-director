@@ -255,7 +255,7 @@ func TestFreshStoreSchema(t *testing.T) {
 			t.Errorf("spawns keeps the earlier column %s", old)
 		}
 	}
-	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"}, v14ColumnNames("spawns"), v15ColumnNames(), v19ColumnNames(), []string{"display_evidence"})
+	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"}, v14ColumnNames("spawns"), v15ColumnNames(), v19ColumnNames(), []string{"display_evidence", "observation_writer"})
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
 		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
 	}

@@ -83,7 +83,7 @@ func TestAdviceFollow_E14_CodexDialogMaybeOpenNamesItsProofs(t *testing.T) {
 		r7Acked(t, p)
 		err := p.sendKeys(p.plain("hi"))
 		assertDialogMaybeOpen(t, err, tok, store.StateCheckPermission)
-		adviceAssertPhrase(t, err, "(no PostToolUse with its tool_use_id, no end of the main agent's turn after it for a request with no agent_id, and no end of its agent is recorded)")
+		adviceAssertPhrase(t, err, "(no end of the main agent's turn after it for a request with no agent_id, no SubagentStop of its subagent after it for a request with one, and no end of its agent is recorded)")
 		if strings.Contains(errText(err), "Interrupt") {
 			t.Errorf("description %q names an Interrupt; Claude has none", errText(err))
 		}

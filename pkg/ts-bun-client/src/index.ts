@@ -45,6 +45,7 @@ export {
   ErrExperimentalAgentDisabled,
   ErrAgentCapabilityUnsupported,
   ErrModelMissing,
+  ErrHostCredentialMissing,
   ErrAgentMissing,
   ErrAgentInvalid,
   ErrAgentArgsMismatch,
@@ -91,6 +92,7 @@ export {
   ErrStoreBusy,
   ErrMissingRequestToken,
   ErrInvalidFlags,
+  ErrTooManyIds,
   ErrConfigMalformed,
   ErrStoreOpen,
   ErrSchemaMismatch,
@@ -128,6 +130,7 @@ export type {
 
 // err_details shapes (b.146 rule 15), the values of AgentDirectorError.errDetails.
 export type {
+  TooManyIdsDetails,
   PauseTimeoutDetails,
   RelayFallenBackDetails,
   OpenRequestFacts,
@@ -144,6 +147,7 @@ export type {
   SpawnParams, SpawnResult,
   StatusParams, StatusResult, ContextReading,
   GetParams, GetResult,
+  GetManyParams, GetManyResult,
   SendKeysParams, SendKeysResult,
   ReadPaneParams, ReadPaneResult,
   KillParams, KillResult,

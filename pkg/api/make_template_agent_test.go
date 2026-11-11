@@ -29,20 +29,29 @@ const (
 func TestPaneOnlyMakeTemplateRefusalsWriteNothing(t *testing.T) {
 	// Serial: each case uses a temporary HOME and checks the trail.
 	const rejected = "private-lane-sentinel"
-	for _, agent := range []string{"droid"} {
-		for _, tc := range []struct {
+	for _, agent := range []string{"droid", "opencode"} {
+		type refusal struct {
 			name, want string
 			p          api.MakeTemplateParams
-		}{
+		}
+		cases := []refusal{
 			{"joined model", "ErrSpawnDeniedFlag", api.MakeTemplateParams{AgentArgs: []string{"--model=" + rejected}}},
 			{"custom model", "ErrSpawnDeniedFlag", api.MakeTemplateParams{AgentArgs: []string{"--model", "custom:" + rejected}}},
 			{"relay", "ErrAgentCapabilityUnsupported", api.MakeTemplateParams{RelayMode: "on"}},
 			{"allow", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Allow: []string{rejected}}}},
 			{"deny", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Deny: []string{rejected}}}},
 			{"ask", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Ask: []string{rejected}}}},
-			{"forbidden env", "ErrReservedEnvKey", api.MakeTemplateParams{ExtraEnv: map[string]string{"FACTORY_API_KEY": rejected}}},
-			{"empty forbidden env", "ErrReservedEnvKey", api.MakeTemplateParams{ExtraEnv: map[string]string{"FACTORY_HOME_OVERRIDE": ""}}},
-		} {
+		}
+		keys := []string{"FACTORY_API_KEY", "FACTORY_HOME_OVERRIDE"}
+		if agent == "opencode" {
+			keys = []string{"OPENROUTER_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"}
+		}
+		for _, key := range keys {
+			for _, value := range []string{"", rejected} {
+				cases = append(cases, refusal{"env/" + key, "ErrReservedEnvKey", api.MakeTemplateParams{ExtraEnv: map[string]string{key: value}}})
+			}
+		}
+		for _, tc := range cases {
 			for _, existing := range []bool{false, true} {
 				name := "create"
 				if existing {

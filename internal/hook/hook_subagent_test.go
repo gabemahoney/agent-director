@@ -25,7 +25,7 @@ import (
 // b.7tx: even a provider or child with this row's ID cannot report lifecycle,
 // permission, question, context or subagent state for a pane-only launch.
 func TestPaneOnlyReportsIgnored(t *testing.T) {
-	for _, agent := range []string{"droid"} {
+	for _, agent := range []string{"droid", "opencode"} {
 		for _, event := range []string{"SessionStart", "SessionEnd", "Stop", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "SubagentStart", "SubagentStop", "capacity"} {
 			for _, child := range []bool{false, true} {
 				t.Run(agent+"/"+event+"/child="+strconv.FormatBool(child), func(t *testing.T) {
