@@ -91,14 +91,20 @@ as described in that contract.
 
 ## Install from a release
 
-This installs agent-director and its operator tool `agent-director-admin`:
+Choose a release tag, or find the latest with this read-only command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
 ```
 
-It downloads the binaries from the
-[latest release](https://github.com/gabemahoney/agent-director/releases/latest),
+The URL must end in `/releases/tag/<tag>`. Replace both `<tag>`s below with
+that tag to install agent-director and its operator tool `agent-director-admin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag>
+```
+
+It downloads the binaries from that release,
 sets up `~/.config/agent-director/` (and `~/.config` itself, mode `0700`, if
 it is missing), symlinks `agent-director` (see `--symlink-dir`),
 installs `agent-director-admin` at `~/.config/agent-director/admin/` (never on PATH),
@@ -243,15 +249,17 @@ scopes, `claude mcp get` shows one of them: `local` before `user` before
 
 Both assets must come from the same
 [release](https://github.com/gabemahoney/agent-director/releases/latest); this
-needs no clone:
+needs no clone. Choose `<tag>` with the read-only lookup in
+[Install from a release](#install-from-a-release), and replace both `<tag>`s
+below with it:
 
 ```sh
 p=linux-amd64   # or darwin-arm64
-base=https://github.com/gabemahoney/agent-director/releases/latest/download
+base=https://github.com/gabemahoney/agent-director/releases/download/<tag>
 curl -fL -o agent-director "$base/agent-director-$p"
 curl -fL -o agent-director-admin "$base/agent-director-admin-$p"
 chmod +x agent-director agent-director-admin
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --binary ./agent-director --admin-binary ./agent-director-admin
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --binary ./agent-director --admin-binary ./agent-director-admin
 ```
 
 ## Install from inside Claude Code

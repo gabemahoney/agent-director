@@ -11214,12 +11214,13 @@ copies the skill into either. The npm package does not carry it:
    in Claude Code. The skill runs the `install.sh` beside its `SKILL.md`.
 2. **A checkout.** `bash skills/install-agent-director/install.sh` with
    its options.
-3. **The one-liner.** It fetches `install.sh` from `main` and installs
-   the latest release's binaries (it has no `schedule/` beside it, so its
-   schedule step fetches the files it needs):
+3. **The release command.** Choose `<tag>` with the read-only latest-tag lookup
+   in [Install from a release](install.md#install-from-a-release). It fetches
+   `install.sh` and binaries from that same tag (it has no `schedule/` beside
+   it, so its schedule step fetches the files it needs):
 
    ```
-   curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+   curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag>
    ```
 
 Without `--binary` or `--from-release`, a symlinked skill directory

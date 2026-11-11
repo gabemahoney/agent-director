@@ -6,11 +6,19 @@ description: Install agent-director on a machine that does not have it yet. Runs
 ## First-time install on a brand-new machine
 
 If this skill isn't yet on the machine (no checked-out repo, no
-cached `install.sh`), bootstrap the CLI directly from `main` with the
-one-liner advertised in the customer-facing README:
+cached `install.sh`), choose a release tag once. To find the latest, run this
+read-only command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
+```
+
+If curl fails or its URL does not end in `/releases/tag/<tag>`, stop and
+hand the operator the output unless they provide a release tag. Replace both
+`<tag>`s below with that tag so the installer and binaries match:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag>
 ```
 
 The rest of this skill assumes `install.sh` is already on disk (in a
