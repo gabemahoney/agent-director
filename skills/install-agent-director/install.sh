@@ -5320,7 +5320,7 @@ ad_journal_args
 if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]]; then
     if ((PREFLIGHT_STORE_VERSION < INPUT_CUTOVER_VERSION)); then
         CUTOVER_CROSSING=1
-        # The real verifier always checks this HOME's input root, even
+        # The real verifier always checks both HOME input roots, even
         # while a move is due; --check-only does not reject link components.
         if [[ -L "$DEFAULT_INSTALL_ROOT" ]]; then
             echo "install.sh: $DEFAULT_INSTALL_ROOT is a link; refusing the native-input cutover." >&2 || true
@@ -5329,6 +5329,21 @@ if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]]; then
             ad_rerun_advice journal
             ad_outcome_exit ErrJournalMigrationRefused legacy_root_symlink \
                 "replace the link at $DEFAULT_INSTALL_ROOT with the directory it points to, then re-run this release's installer with a new --journal-backup directory" not_committed
+        fi
+        # A compatibility link counts as no old directory for the move, but
+        # the cutover verifier still checks its input root.
+        if [[ -L "$OLD_INSTALL_ROOT" ]]; then
+            printf -v compat_link_quoted "'%s'" "${OLD_INSTALL_ROOT//\'/\'\\\'\'}"
+            echo "install.sh: $OLD_INSTALL_ROOT is a link; refusing the native-input cutover." >&2 || true
+            echo "  Nothing was installed or changed." >&2 || true
+            echo "  The cutover always checks $OLD_INSTALL_ROOT/input and refuses any symbolic link in its path." >&2 || true
+            echo "  To fix: first check [store] db_path in config.toml, ~/.claude/settings.json hooks, MCP registrations, scheduled sweeps, PATH links and entries, and scripts for paths under $OLD_INSTALL_ROOT and point them at $DEFAULT_INSTALL_ROOT." >&2 || true
+            echo "  Then remove only the link (no trailing slash):" >&2 || true
+            printf '    rm -- %s\n' "$compat_link_quoted" >&2 || true
+            echo "  Then re-run this release's installer with a new backup directory:" >&2 || true
+            ad_rerun_advice journal
+            ad_outcome_exit ErrJournalMigrationRefused legacy_root_symlink \
+                "first check [store] db_path in config.toml, ~/.claude/settings.json hooks, MCP registrations, scheduled sweeps, PATH links and entries, and scripts for paths under $OLD_INSTALL_ROOT and point them at $DEFAULT_INSTALL_ROOT, then remove only the link with rm -- $compat_link_quoted (no trailing slash), then re-run this release's installer with a new --journal-backup directory" not_committed
         fi
         if [[ "$MOVE_DUE" -ne 1 ]]; then
             ad_crossing_live_rows_check
