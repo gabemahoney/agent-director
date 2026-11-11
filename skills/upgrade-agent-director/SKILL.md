@@ -5,11 +5,18 @@ description: Upgrade or re-install an existing agent-director install on this ma
 
 # Upgrade agent-director
 
+You can upgrade directly to this release from any earlier agent-director
+release starting at 0.3.0; no intermediate release is needed. Releases 0.1.0–0.2.3
+(`claude-director`, `~/.claude-director`) cannot be upgraded by this installer.
+See [Upgrade](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#upgrade)
+for rules on installing an earlier release or opening a newer store.
+
 Follow the steps in order, as the agents' user. The commands name an install
-in `~/.config/agent-director`. On one that still keeps its files in
+in `~/.config/agent-director` (0.12.0 onward; no directory move). For
+0.3.0–0.11.1 in
 `~/.agent-director` ([the old directory](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#upgrading-an-install-from-the-old-directory)),
 use that directory in steps 1 and 2, and do that section's "Before you run"
-steps with the operator before step 3. Run
+steps with the operator before step 3's one-time move. Run
 [one upgrade at a time](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal).
 
 ## 1. Stop the agents
@@ -70,6 +77,9 @@ ps -A -o pid= -o args= | grep '[a]gent-director serve'
 With no live row, go to step 3. Otherwise stop each one, keeping its id for
 step 6: `pause` a `waiting` row; `kill` any other live row, or one `pause`
 refuses.
+
+For 0.3.0–0.11.1, `pause` and `kill` take `--claude-instance-id` instead of
+`--instance-id`; `list` in steps 1–2 names the id `claude_instance_id`.
 
 ```sh
 ~/.config/agent-director/bin/agent-director pause --instance-id <id>

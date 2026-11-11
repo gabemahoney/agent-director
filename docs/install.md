@@ -316,6 +316,11 @@ valid aliases on a supporting binary; an upgrade needs no schedule rewrite.
 An agent upgrading an install follows the
 [upgrade skill](../skills/upgrade-agent-director/SKILL.md) step by step.
 
+You can upgrade directly to this release from any earlier agent-director
+release starting at 0.3.0; no intermediate release is needed. This installer
+cannot upgrade `claude-director` 0.1.0–0.2.3 in `~/.claude-director`: it would make a fresh
+install beside those files.
+
 An upgrade of an existing store below schema v16 crosses the native-input
 journal cutover, once, and needs the journal flags listed above; a fresh
 install or a store at schema v16 or later needs none. Pre-flight checks those
@@ -331,10 +336,11 @@ Recovery belongs in the
 [operator runbook](operator-actions.md#going-back-to-the-previous-release).
 
 Run the install again by any path above, from a shell agent-director did not
-start (not one inside an agent's session). This release keeps its files in
-`~/.config/agent-director`; an earlier release kept them in `~/.agent-director`.
-When the install finds that old directory, it moves it first. Later upgrades make
-no move: run the install again, with `--keep-prior` to keep the previous
+start (not one inside an agent's session). Releases 0.3.0–0.11.1 keep their
+files in `~/.agent-director`; the installer moves that directory once to
+`~/.config/agent-director`, before the other install steps. Releases 0.12.0
+and later already use the new directory and need no move. Run the install
+again, with `--keep-prior` to keep the previous
 binaries. It brings `state.db` to the current schema; a store newer than the
 binary needs the matching release.
 
