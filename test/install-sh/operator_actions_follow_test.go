@@ -681,6 +681,45 @@ func TestAdviceFollow_J43_V16StoreInspection(t *testing.T) {
 		}
 		return "restore the store"
 	}
+	// wayBack follows "restore the store" for c, whose inspection found no
+	// sqlite-v1: authority. SR-9.3: on Linux/aarch64 the previous release's own
+	// install.sh refuses before any restore, so take the pinned alternative,
+	// "get help": stop with the evidence intact. Elsewhere restore the
+	// pre-upgrade copy and install the previous release, as "Going back" says
+	// in place.
+	wayBack := func(t *testing.T, c *crossingCase, kept map[string][]byte) {
+		t.Helper()
+		h := c.h
+		if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
+			// Include the extra legacy root; read no store until compared.
+			files, temps := rollbackStoreCopy(t, c.db), h.tempEntries()
+			state := *h
+			state.Home = h.Root
+			before := state.PhysicalSnapshot()
+			res := installOld(t, h, c.release)
+			if res.Code != 2 || !strings.Contains(res.Stderr, "install.sh: unsupported host: Linux/aarch64") {
+				t.Fatalf("unshimmed way back: %+v", res)
+			}
+			if !reflect.DeepEqual(rollbackStoreCopy(t, c.db), files) {
+				t.Fatal("refused way back changed the store or its WAL/SHM")
+			}
+			if d := moveDiff(before, state.PhysicalSnapshot()); d != "" {
+				t.Fatalf("refused way back changed the case's files:\n%s", d)
+			}
+			if !reflect.DeepEqual(h.tempEntries(), temps) {
+				t.Fatal("refused way back changed TMPDIR")
+			}
+			return
+		}
+		rollbackRestoreStore(t, h, c.db, kept)
+		if res := installOld(t, h, c.release); res.Code != 0 {
+			t.Fatalf("previous release's unshimmed install: %+v", res)
+		}
+		moveListJSON(t, h, c.prev)
+		if v := moveUserVersion(t, h, c.db); v != "15" {
+			t.Errorf("restored store at v%s; want v15", v)
+		}
+	}
 	for _, tc := range crossingV16Rows {
 		t.Run(tc.reason, func(t *testing.T) {
 			c, kept := crossingV16Refused(t, tc)
@@ -703,39 +742,7 @@ func TestAdviceFollow_J43_V16StoreInspection(t *testing.T) {
 			if a := answer(got); a != "restore the store" {
 				t.Fatalf("inspection answers %q; want restore the store", a)
 			}
-			if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
-				// SR-9.3: refuse before restoring; include the extra legacy root.
-				files := rollbackStoreCopy(t, c.db)
-				state := *h
-				state.Home = h.Root
-				before := state.PhysicalSnapshot()
-				res := installOld(t, h, c.release)
-				if res.Code != 2 || !strings.Contains(res.Stderr, "install.sh: unsupported host: Linux/aarch64") {
-					t.Fatalf("unshimmed way back: %+v", res)
-				}
-				if !reflect.DeepEqual(rollbackStoreCopy(t, c.db), files) {
-					t.Fatal("refused way back changed the store or its WAL/SHM")
-				}
-				if d := moveDiff(before, state.PhysicalSnapshot()); d != "" {
-					t.Fatalf("refused way back changed the case's files:\n%s", d)
-				}
-				if !reflect.DeepEqual(h.tempEntries(), temps) {
-					t.Fatal("refused way back changed TMPDIR")
-				}
-				// Inspection found no sqlite-v1: authority. The pinned alternative
-				// is "get help": stop with the evidence intact, without a restore.
-				return
-			}
-			// Anything but a sqlite-v1: value: restore the pre-upgrade copy and
-			// install the previous release, as "Going back" says in place.
-			rollbackRestoreStore(t, h, c.db, kept)
-			if res := installOld(t, h, c.release); res.Code != 0 {
-				t.Fatalf("previous release's unshimmed install: %+v", res)
-			}
-			moveListJSON(t, h, c.prev)
-			if v := moveUserVersion(t, h, c.db); v != "15" {
-				t.Errorf("restored store at v%s; want v15", v)
-			}
+			wayBack(t, c, kept)
 		})
 	}
 
@@ -771,11 +778,7 @@ func TestAdviceFollow_J43_V16StoreInspection(t *testing.T) {
 		if a := answer(got); a != "restore the store" {
 			t.Fatalf("inspection read again answers %q; want restore the store", a)
 		}
-		rollbackRestoreStore(t, h, c.db, kept)
-		h.InstallRelease(c.release)
-		if v := moveUserVersion(t, h, c.db); v != "15" {
-			t.Errorf("restored store at v%s; want v15", v)
-		}
+		wayBack(t, c, kept)
 	})
 }
 

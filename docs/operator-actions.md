@@ -1190,7 +1190,8 @@ commit, `details.cutover` is `not_committed` and `details.steps_committed`
 `true`: the version was raised, so the previous release cannot open the store
 and this release stays. The message says the installer cannot put the previous
 release back and gives both ways on: the re-run command, which completes
-forward, or the way back.
+forward, or the way back, provided the previous release's own `install.sh`
+[supports this host](install.md#requirements).
 
 The way back restores the store from the journal backup directory the message
 names, which `migrate-journal` filled before any schema step. Keep writers

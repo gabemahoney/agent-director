@@ -4748,7 +4748,7 @@ ad_restore_copy_path() {
 
 # Unlike ad_file_id, identify the link itself. A saved managed link may
 # point to a directory; its successful put-back must not look like mv put
-# the copy inside a late directory. Both hosts' stat default to lstat.
+# the copy inside a late directory. Linux's and macOS's stat both default to lstat.
 ad_restore_id() {
     local id
     id="$(stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null)" || return 1
@@ -4877,7 +4877,7 @@ ad_restore_run() {
         fi
         RESTORE_DONE+="set $DEFAULT_INSTALL_ROOT aside at $RESTORE_ASIDE"$'\n'
     fi
-    # A late directory can absorb mv's source on both hosts. Locate that
+    # A late directory can absorb mv's source on Linux and macOS. Locate that
     # retained directory and stop; never delete the occupant or retry mv.
     if [[ -e "$OLD_INSTALL_ROOT" || -L "$OLD_INSTALL_ROOT" ]]; then
         RESTORE_FAILED="$OLD_INSTALL_ROOT is occupied"
