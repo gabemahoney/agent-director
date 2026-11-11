@@ -97,13 +97,27 @@ mark, delete or edit rows by hand.
 
 ## 3. Install
 
+Choose the release tag once for this upgrade, such as `v0.18.1`, and reuse
+it for every re-run of the install. To find the latest, run this read-only
+command:
+
+```sh
+curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
+```
+
+If curl fails or its URL does not end in `/releases/tag/<tag>`, stop and
+hand the operator the output unless they provide a release tag.
+
+Replace both `<tag>`s below with that tag, so the installer and binaries
+come from the same release.
+
 The journal flags assert the operator's maintenance window: first confirm with
 the operator that steps 1 and 2 of
 [Upgrading the native-input journal](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal)
 hold. Then, from this shell:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release --journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag> --journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>
 ```
 
 Add `--journal-legacy-root <dir>` for each additional input root, and the
