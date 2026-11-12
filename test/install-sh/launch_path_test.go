@@ -209,6 +209,7 @@ func TestLaunchProgramRunsEveryClaudeCall(t *testing.T) {
 // and no call to either agent.
 func TestLaunchRefusals(t *testing.T) {
 	const headline = "install.sh: cannot tell which programs agent-director launches (the [launch] table); refusing to install."
+	const closing = "  install.sh reads [launch] claude_path, codex_path and cursor_path itself, to choose the"
 	for _, tc := range []struct {
 		name string
 		raw  string              // a config.toml written by hand (lines ConfigKeys cannot express)
@@ -220,6 +221,11 @@ func TestLaunchRefusals(t *testing.T) {
 		{name: "second-launch-header", raw: "[launch]\nclaude_path = \"/opt/claude\"\n[launch]\ncodex_path = \"/opt/codex\"\n", line: "line 3  : [launch]"},
 		{name: "dotted-key-before-any-header", raw: "launch.codex_path = \"/opt/codex\"\n", line: "line 1  : launch.codex_path"},
 		{name: "inline-table-before-any-header", raw: "launch = { codex_path = \"/opt/codex\" }\n", line: "line 1  : launch = "},
+		// b.cso: each refusal must name [launch], not the store.
+		{name: "dotted-key-under-launch", raw: "[launch]\na.b = \"x\"\n", line: "line 2  : a.b"},
+		{name: "triple-quotes-under-launch", raw: "[launch]\nclaude_path = \"\"\"/usr/bin/claude\"\"\"\n", line: "line 2  : claude_path"},
+		{name: "dotted-launch-header", raw: "[launch.x]\nclaude_path = \"/usr/bin/claude\"\n", line: "line 1  : [launch.x]"},
+		{name: "utf16-bom-before-launch", raw: "\xff\xfe[launch]\nclaude_path = \"/usr/bin/claude\"\n", line: "line 1  : \xff\xfe[launch]"},
 		{name: "value-with-an-escape", keys: &apitest.ConfigKeys{ClaudePath: "/opt/cl\taude"}, line: "line 2  :   claude_path"},
 		{name: "relative-value", keys: &apitest.ConfigKeys{CodexPath: "bin/codex"}, line: "line 2  :   codex_path"},
 		{name: "relative-cursor", keys: &apitest.ConfigKeys{CursorPath: "bin/agent"}, line: "line 2  :   cursor_path"},
@@ -239,7 +245,7 @@ func TestLaunchRefusals(t *testing.T) {
 
 			res := h.Install()
 
-			moveWant{Code: 5, Err: "ErrConfigMalformed", Stderr: []string{headline, "  config  : " + config, tc.line}, NoStdout: []string{"kept"}}.Check(t, h, res)
+			moveWant{Code: 5, Err: "ErrConfigMalformed", Stderr: []string{headline, "  config  : " + config, tc.line, closing}, NoStdout: []string{"kept"}}.Check(t, h, res)
 			if d := moveDiff(before, h.Snapshot()); d != "" {
 				t.Errorf("a refused install changed HOME:\n%s", d)
 			}
