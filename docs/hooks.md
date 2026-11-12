@@ -268,8 +268,8 @@ conversation goes on.
 
 With `relay_mode=on`, permission requests go to the orchestrator.
 [Permissions](permissions.md#relay-mode) owns decisions, timeouts, delivery
-fields, concurrent requests and retention. Also see
-[requests recorded by an older binary](permissions.md#requests-recorded-by-an-older-binary).
+fields, concurrent requests and retention. Requests with no recorded settle
+instant follow [time-derived delivery](permissions.md#requests-with-no-recorded-settle-instant).
 
 ### Fail-closed boundary
 
@@ -284,8 +284,9 @@ recovery. Do not infer permission readiness from `waiting` alone.
 
 ### The agent's end closes its requests
 
-Unanswered or unconfirmed requests, including those recorded by an older binary,
-close when their spawn ends or is marked `missing`; `resume` does not reopen them.
+Unanswered or unconfirmed requests, including those with no recorded settle
+instant, close when their spawn ends or is marked `missing`; `resume` does not
+reopen them.
 See [A request of a finished spawn is closed](permissions.md#a-request-of-a-finished-spawn-is-closed).
 
 ### Hooks that prove a request's dialog gone

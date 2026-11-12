@@ -531,8 +531,8 @@ Its `HookAlive` is nil. Agent-specific rules are in
 [Cursor permissions](../../docs/permissions.md#cursor-spawns).
 `ErrNoOpenPermissionRequest` means no eligible request has that token.
 Closed requests stay closed after `Resume`; `GetPermission` can still read
-their delivery. Requests recorded by an older binary follow the
-[legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary).
+their delivery. Requests with no recorded settle instant follow
+[time-derived delivery](../../docs/permissions.md#requests-with-no-recorded-settle-instant).
 `ErrRelayFallenBack` carries `RelayFallenBackDetails` from `api.ErrDetails`.
 `SendKeys` answers a pane request using `RequestToken`, `As`, `Key` and
 `ExpectPaneSHA256`. `RecordPaneAnswer` records an outside answer using

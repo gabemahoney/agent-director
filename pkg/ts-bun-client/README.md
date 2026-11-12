@@ -707,8 +707,8 @@ Each error's class is in the
 | `ErrUnknownVerb` | The installed binary does not know the requested verb. |
 | `ErrTrailWrite` | Internal trail-writing failure; no client method returns it. |
 
-Requests recorded by an older binary follow the
-[legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary).
+Requests with no recorded settle instant follow
+[time-derived delivery](../../docs/permissions.md#requests-with-no-recorded-settle-instant).
 
 ## See also
 

@@ -84,7 +84,7 @@ Generic completion and plan acceptance supply no such proof.
 
 Ending a Cursor launch leaves its proof fields unchanged. After resume,
 requests of an earlier launch hold neither input nor pause and are omitted
-from `unproven_requests`. A request recorded by an older binary with no
+from `unproven_requests`. A request with no recorded settle instant and no
 launch on record still holds. For disconnects, uncertain delivery,
 cancellation and proof persistence, follow the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
@@ -313,8 +313,9 @@ no reason. Cursor execution can fill a missing reason without replacing an
 existing verdict or non-null reason; failed MCP proof leaves both unchanged.
 Treat unknown reasons as opaque annotations, not writer identities.
 
-These delivery rules apply to requests with a settle instant. See below for
-[requests recorded by an older binary](#requests-recorded-by-an-older-binary).
+These delivery rules apply to requests with a recorded settle instant.
+[Requests with no recorded settle instant](#requests-with-no-recorded-settle-instant)
+use time-derived delivery.
 
 **Which requests readers show.** `get`, `get-many` and `list` include
 requests still awaiting an answer in `permission_requests` when the row
@@ -333,10 +334,10 @@ in the [caller contract](caller-contract.md#permission-relay).
 Retained requests remain readable after closure. Request retention settings
 are in [Configuration](configuration.md#keys).
 
-### Requests recorded by an older binary
+### Requests with no recorded settle instant
 
-A request recorded by an older binary without hook identity, confirmation
-or a settle instant uses time-derived delivery:
+A request with no recorded settle instant, hook identity or confirmation
+uses time-derived delivery:
 
 - `confirm_by` is `requested_at` plus the relay window plus two seconds;
   `hook_alive` is null.

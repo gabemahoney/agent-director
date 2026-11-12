@@ -15732,10 +15732,10 @@ reserve; this repair imposes no shorter bound on those retained holds.
   runtime caller-facing text (error messages, manifest Descriptions)
   states the margin, either boundary or a release time, and new text MUST
   NOT either. `decide`'s manifest Description states none of them; the
-  pre-v7 wait's bound (at most 3 s) is documented in `docs/permissions.md`
-  ("Requests recorded by an older binary"), and the advice not to answer
-  a refused pre-v7 request at the pane is in `ErrNoOpenPermissionRequest`'s
-  message only.
+  pre-v7 wait's bound (at most 3 s) and the advice not to answer a refused
+  pre-v7 request at the pane are documented in `docs/caller-contract.md`
+  ("Permission relay"), and `ErrNoOpenPermissionRequest`'s message also
+  gives that advice.
 
 - **`pkg/api/decide.go`** — the verb (see "`decide`" above for its flow).
   `DecideStore` is `GetSpawn` and `GetSpawnWithin`, `GetPermissionRequest`

@@ -1726,7 +1726,7 @@ can last until `created_at` plus the configured relay window plus 2 s
 (24 h + 2 s at the default). A decided legacy request with `agent_gone`
 proof contributes no hold.
 
-A request recorded by an older binary takes no new verdict. Until
+A request with no recorded settle instant takes no new verdict. Until
 `requested_at` plus the relay window less 1 s, `decide` on an undecided one
 is `ErrNoOpenPermissionRequest`. After that, `decide` first waits until its
 `confirm_by` (at most 3 s; `ErrStoreBusy` if `--max-wait-ms` cannot cover
