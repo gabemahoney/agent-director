@@ -45,6 +45,10 @@ Launch with exactly one model ID and no task. The pane shows a model display
 name, not the ID: `droid exec --help` maps the current canonical IDs to their
 display names.
 
+Droid's generated settings require user-owned directories from `~/.config`
+down, with no group or other write permission; `agent-director/launch` and
+its descendants must be 0700.
+
 ```sh
 model='<ID>'
 id=$(agent-director spawn --cwd "$PWD" --agent droid -- --model "$model" | jq -r .instance_id)

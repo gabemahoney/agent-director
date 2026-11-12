@@ -8254,8 +8254,11 @@ composition and before pending insert/reuse reset. The token directory is
 0700 and each regular file is created exclusively at 0600 through
 directory-relative, no-follow operations. There is no launch-file I/O between
 that row write and tmux create. Preparation failure rolls back only this
-attempt's files and empty directories; failures retain their causes without
-printing sensitive paths, and incomplete cleanup emits a safe warning.
+attempt's files and empty directories. Ownership/mode refusals identify the
+unsafe component's absolute path, observed UID or mode, and repair so operators
+can fix it; reclaim warnings use the same diagnostic. Other failures retain
+their causes without printing their paths or values, and incomplete cleanup
+emits a safe warning.
 
 **Must use:** reclaim through `ReclaimLaunchFiles` only after definite no-start
 evidence or the existing conditional finish, process/session and launch-start
