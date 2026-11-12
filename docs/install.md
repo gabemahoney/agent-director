@@ -438,6 +438,9 @@ holds the old name of the arguments key is refused at spawn, naming
 **After the upgrade:**
 
 - Restart every `serve` and every caller, TypeScript clients included.
+- Resume each agent stopped for the upgrade, parents first, with
+  `AGENT_DIRECTOR_INSTANCE_ID=<its recorded parent>` set for each child's
+  command only; follow [step 6 of the upgrade skill](../skills/upgrade-agent-director/SKILL.md#6-resume-the-agents).
 - Cursor gateway refusal reporting requires both the caller and the running
   gateway to be agent-director 0.17.2 or later. With a pre-0.17.2 gateway,
   `send-keys` returns `{}` after the 2 s wait for refused text until the row is

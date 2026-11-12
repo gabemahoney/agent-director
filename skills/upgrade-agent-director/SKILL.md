@@ -42,6 +42,9 @@ List the live rows:
 ~/.config/agent-director/bin/agent-director list --state pending,waiting,working,check_permission,ask_user
 ```
 
+Keep each live row's id and `parent_id` from this output for step 6, before
+stopping any row. An empty `parent_id` means no parent.
+
 If it prints `{"spawns":[]}`, skip the checks below and ask the operator.
 Otherwise, while the agents still run, check that this shell is in their
 environment. Each must hold:
@@ -74,8 +77,8 @@ this prints nothing.
 ps -A -o pid= -o args= | grep '[a]gent-director serve'
 ```
 
-With no live row, go to step 3. Otherwise stop each one, keeping its id for
-step 6: `pause` a `waiting` row; `kill` any other live row, or one `pause`
+With no live row, go to step 3. Otherwise stop each one:
+`pause` a `waiting` row; `kill` any other live row, or one `pause`
 refuses.
 
 For 0.3.0–0.11.1, `pause` and `kill` take `--claude-instance-id` instead of
@@ -220,8 +223,35 @@ stop and hand the operator the output.
 Ask the operator to restart whatever starts agents, every `serve` and every
 caller
 ([after the upgrade](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#upgrade)),
-then bring back each agent stopped in step 1:
+then bring back each agent stopped in step 1, parents before children. If a
+row's recorded parent was also stopped in step 1, attempt that parent's
+resume first.
+
+With no recorded parent, use the first resume command below. With a recorded
+parent, check its row first:
+
+```sh
+~/.config/agent-director/bin/agent-director get --instance-id <parent>
+```
+
+If `get` exits 0, use the second resume command, with that recorded parent,
+whatever its state. If it returns `ErrSpawnNotFound`, tell the operator:
+`<id>`'s parent `<parent>` no longer has a row; it will resume with no parent.
+Use the first command. On any other error, stop and hand the operator the
+output.
 
 ```sh
 ~/.config/agent-director/bin/agent-director resume --instance-id <id>
+AGENT_DIRECTOR_INSTANCE_ID=<parent> ~/.config/agent-director/bin/agent-director resume --instance-id <id>
 ```
+
+Set the variable for that command only; never export it, so the shell still
+passes step 1's guard and later resumes use their own recorded parent.
+Keep failed resume commands and their output; continue to their children.
+If a parent's resume failed, use the second command and tell the operator:
+`<id>`'s parent `<parent>` resume failed; its parent link was restored.
+Include that command, its output and the parent's state from `get`. Otherwise,
+only if the parent's `get` shows `ended` or `missing`, tell the operator:
+`<id>`'s parent `<parent>` is not running; its parent link was restored.
+After a create timeout (`ErrTmuxUnresponsive`), do not retry `resume` until
+`get` shows the row `ended` or `missing`.

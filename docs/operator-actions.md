@@ -399,6 +399,8 @@ binary changes. Never delete a row or edit `state.db`.
 
 1. Stop whatever starts agents (the caller's service, schedulers, cron jobs).
 2. List the set: `agent-director list --label <key>=<value>`.
+   Keep each row's id and `parent_id` to resume it with its parent as
+   [step 6 of the upgrade skill](../skills/upgrade-agent-director/SKILL.md#6-resume-the-agents) says.
    `ErrSchemaMismatch` (store newer): use the binary that wrote it.
    `ErrSchemaMigrationRequired` (store older): use the previous binary.
    `ErrConfigMalformed`: fix the value it names.

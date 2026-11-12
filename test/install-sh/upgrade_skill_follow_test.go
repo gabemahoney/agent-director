@@ -9,8 +9,8 @@ package installsh_test
 // skill's placeholders; an operator stand-in answers the skill's questions.
 // The agents' tmux server is one this test starts, which the follower's shell
 // reaches through TMUX_TMPDIR, so the place checks see live pane processes.
-// Step 6 is not followed: resume relaunches each agent, which the toolbox's
-// claude stand-in cannot run.
+// The family cases also follow step 6, with a sleeping Claude stand-in and
+// saved sessions and transcripts so the stopped rows can resume.
 //
 // Nothing here is t.Parallel, as in operator_actions_follow_test.go.
 
@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/google/uuid"
 )
 
 // upgradeSkill is the upgrade skill, from the repo root.
@@ -67,6 +68,7 @@ const (
 	askStop      = "Will you stop whatever starts agents, every serve and every caller, and may each live row listed be stopped?" // step 1
 	askWindow    = `Do steps 1 and 2 of "Upgrading the native-input journal" hold?`                                               // step 3
 	askVerify    = "May the filled-in migrate-journal verification run?"                                                          // step 4
+	askRestart   = "Will you restart whatever starts agents, every serve and every caller?"                                      // step 6
 )
 
 // step1Next is where step 1 leads.
@@ -154,8 +156,15 @@ func j47LiveAgentSQL(id, state, paneID string, pid int, start string) string {
 // upgradeRow is a list row, as the follower reads it.
 type upgradeRow struct {
 	ID      string `json:"instance_id"`
+	Parent  string `json:"parent_id"`
 	State   string `json:"state"`
 	Session string `json:"tmux_session_name"`
+}
+
+// upgradeResumeAttempt keeps a step 6 command and its outcome, failures included.
+type upgradeResumeAttempt struct {
+	ID, Command string
+	Result      moveResult
 }
 
 // upgradeFollow follows the skill's steps in one shell.
@@ -175,7 +184,7 @@ type upgradeFollow struct {
 	// stopped the rows, and after step 2's sweep has left no live row. Each
 	// is an agent a caller started late.
 	afterStop, afterSweep func()
-	stopped               map[string]bool   // the rows step 1 stopped
+	stopped               map[string]string // the rows step 1 stopped and their recorded parents
 	sessions              map[string]string // each listed row's tmux session name
 	marked                [][]string        // each find-missing's ids, sorted, in order
 	installs              []moveResult      // each step 3 install
@@ -185,6 +194,10 @@ type upgradeFollow struct {
 	store                 string            // store located from the skill and config
 	backup                string            // the last install's --journal-backup
 	steps1                int               // how many times step 1 started
+	resumed               []string          // successful step 6 resumes, in order
+	notices               []string          // step 6 advice handed to the operator
+
+	resumeAttempts []upgradeResumeAttempt // all step 6 attempts, in order
 }
 
 // newUpgradeFollow is the follower in c's home, as the agents' user. With
@@ -192,7 +205,7 @@ type upgradeFollow struct {
 // start; without, step 1's move puts it there.
 func newUpgradeFollow(t *testing.T, c *crossingCase, x *j47Tmux, inTmux bool, operator func(string) bool) *upgradeFollow {
 	t.Helper()
-	f := &upgradeFollow{t: t, c: c, h: c.h, sh: newOpsShell(c.h), operator: operator, stopped: map[string]bool{}, sessions: map[string]string{}}
+	f := &upgradeFollow{t: t, c: c, h: c.h, sh: newOpsShell(c.h), operator: operator, stopped: map[string]string{}, sessions: map[string]string{}}
 	f.move = func() { f.must("export TMUX_TMPDIR=" + moveQuote(x.dir)) }
 	if inTmux {
 		f.move()
@@ -296,6 +309,7 @@ func (f *upgradeFollow) stepOne() *opsSection {
 		"for every Claude, Codex and Cursor agent it starts:",
 		"If it prints `started by agent-director`, stop here and hand the upgrade to the user or to a session agent-director did not start, saying why: your own row is live, so the install refuses, and your own hooks would run the new binary mid-upgrade. Do the same if this session has agent-director's MCP tools: their `agent-director serve` must stop too.",
 		"List the live rows:",
+		"Keep each live row's id and `parent_id` from this output for step 6, before stopping any row. An empty `parent_id` means no parent.",
 		"If it prints `"+upgradeNoRows+"`, skip the checks below and ask the operator. Otherwise, while the agents still run, check that this shell is in their environment. Each must hold:",
 		"- `id -un` prints the owner that `ls -ld ~/.config/agent-director` shows, and not `root`.",
 		"- `tmux list-sessions` shows the `tmux_session_name` of each live row whose agent still runs. A live row whose session is not there is one for step 2's sweep to clear, not a failed check. If no live row's session is there, ask the operator whether any of those agents still runs: if one does, this check fails.",
@@ -304,7 +318,7 @@ func (f *upgradeFollow) stepOne() *opsSection {
 		"Move to the agents' own shell and tmux environment and start step 1 again.",
 		"Ask the operator to stop whatever starts agents (a scheduler, a loop, a caller), every `agent-director serve` (each session with agent-director's MCP tools) and every caller, as",
 		"says, and to confirm that you may stop each live row listed. If they say no, stop here and change nothing. Once they confirm, check that no `serve` runs: this prints nothing.",
-		"With no live row, go to step 3. Otherwise stop each one, keeping its id for step 6: `pause` a `waiting` row; `kill` any other live row, or one `pause` refuses.")
+		"With no live row, go to step 3. Otherwise stop each one: `pause` a `waiting` row; `kill` any other live row, or one `pause` refuses.")
 	return s
 }
 
@@ -374,11 +388,11 @@ func (f *upgradeFollow) step1() step1Next {
 	pause, kill := f.stepOneStops(s)
 	for _, r := range rows {
 		if r.State == "waiting" && f.sh.Run(s.Fill(pause, "<id>", r.ID)).Code == 0 {
-			f.stopped[r.ID] = true
+			f.stopped[r.ID] = r.Parent
 			continue
 		}
 		f.must(s.Fill(kill, "<id>", r.ID))
-		f.stopped[r.ID] = true
+		f.stopped[r.ID] = r.Parent
 	}
 	if f.afterStop != nil {
 		f.afterStop()
@@ -613,6 +627,99 @@ func (f *upgradeFollow) step5(res moveResult, before moveTree) int {
 	return 1
 }
 
+// step6 follows "6. Resume the agents" for the resumable family cases.
+func (f *upgradeFollow) step6() {
+	f.t.Helper()
+	s := docSection(f.t, upgradeSkill, "6. Resume the agents")
+	const missing = "`<id>`'s parent `<parent>` no longer has a row; it will resume with no parent."
+	const stopped = "`<id>`'s parent `<parent>` is not running; its parent link was restored."
+	const failedParent = "`<id>`'s parent `<parent>` resume failed; its parent link was restored."
+	s.Pin("Ask the operator to restart whatever starts agents, every `serve` and every caller",
+		"then bring back each agent stopped in step 1, parents before children. If a row's recorded parent was also stopped in step 1, attempt that parent's resume first.",
+		"With no recorded parent, use the first resume command below. With a recorded parent, check its row first:",
+		"If `get` exits 0, use the second resume command, with that recorded parent, whatever its state. If it returns `ErrSpawnNotFound`, tell the operator:",
+		missing, "Use the first command. On any other error, stop and hand the operator the output.",
+		"Set the variable for that command only; never export it, so the shell still passes step 1's guard and later resumes use their own recorded parent.",
+		"Keep failed resume commands and their output; continue to their children.",
+		"If a parent's resume failed, use the second command and tell the operator:", failedParent,
+		"Include that command, its output and the parent's state from `get`. Otherwise, only if the parent's `get` shows `ended` or `missing`, tell the operator:", stopped,
+		"After a create timeout (`ErrTmuxUnresponsive`), do not retry `resume` until `get` shows the row `ended` or `missing`.")
+	if !f.ask(askRestart) {
+		f.t.Fatal("no case here has the operator refuse to restart callers")
+	}
+	commands := strings.Split(s.Block("resume --instance-id"), "\n")
+	if len(commands) != 2 || !strings.HasPrefix(commands[0], "~/.config/") || !strings.HasPrefix(commands[1], "AGENT_DIRECTOR_INSTANCE_ID=<parent> ") {
+		f.t.Fatalf("step 6's resume block is no longer bare, then per-command parent: %q", commands)
+	}
+	var ids []string
+	for id := range f.stopped {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	tell := func(advice, id, parent, details string) {
+		notice := strings.ReplaceAll(s.Fill(advice, "<id>", id, "<parent>", parent), "`", "")
+		notice += details
+		f.notices = append(f.notices, notice)
+		f.t.Log(notice)
+	}
+	attempted := map[string]bool{}
+	failures := map[string]upgradeResumeAttempt{}
+	var resume func(string)
+	resume = func(id string) {
+		if attempted[id] {
+			return
+		}
+		attempted[id] = true
+		parent := f.stopped[id]
+		if _, alsoStopped := f.stopped[parent]; alsoStopped {
+			resume(parent)
+		}
+		command := s.Fill(commands[0], "<id>", id)
+		advice, details := "", ""
+		if parent != "" {
+			get := s.Fill(s.Block("get --instance-id"), "<parent>", parent)
+			res := f.sh.Run(get)
+			if res.Code == 0 {
+				var row upgradeRow
+				if err := json.Unmarshal([]byte(res.Stdout), &row); err != nil {
+					f.t.Fatalf("%s: %v: %q", get, err, res.Stdout)
+				}
+				command = s.Fill(commands[1], "<id>", id, "<parent>", parent)
+				if failure, failed := failures[parent]; failed {
+					advice = failedParent
+					details = fmt.Sprintf("\ncommand: %s\nexit: %d\nstdout: %s\nstderr: %s\nparent state from get: %s",
+						failure.Command, failure.Result.Code, failure.Result.Stdout, failure.Result.Stderr, row.State)
+				} else if row.State == "ended" || row.State == "missing" {
+					advice = stopped
+				}
+			} else {
+				var failure struct {
+					Name string `json:"err_name"`
+				}
+				if err := json.Unmarshal([]byte(res.Stdout+res.Stderr), &failure); err != nil || failure.Name != "ErrSpawnNotFound" {
+					f.t.Fatalf("%s: exit %d, stdout %q, stderr %q", get, res.Code, res.Stdout, res.Stderr)
+				}
+				tell(missing, id, parent, "")
+			}
+		}
+		res := f.sh.Run(command)
+		attempt := upgradeResumeAttempt{ID: id, Command: command, Result: res}
+		f.resumeAttempts = append(f.resumeAttempts, attempt)
+		if res.Code != 0 {
+			failures[id] = attempt
+			f.t.Logf("%s: exit %d\nstdout: %s\nstderr: %s", command, res.Code, res.Stdout, res.Stderr)
+			return
+		}
+		f.resumed = append(f.resumed, id)
+		if advice != "" {
+			tell(advice, id, parent, details)
+		}
+	}
+	for _, id := range ids {
+		resume(id)
+	}
+}
+
 // run follows the skill from step 1 to step 4, or to a "stop here" (false).
 func (f *upgradeFollow) run() bool {
 	t := f.t
@@ -686,6 +793,107 @@ func TestAdviceFollow_J47_UpgradeSkill(t *testing.T) {
 	}
 	// yes is an operator who confirms, and knows of no agent still running.
 	yes := func(q string) bool { return q != askStillRuns }
+	// b.3k7: execute the skill's resume commands rather than assuming that
+	// bringing back each row also brings back its recorded family.
+	for _, name := range []string{"two-level family survives", "missing parent", "ended parent", "parent resume fails"} {
+		t.Run(name, func(t *testing.T) {
+			c, x := setup(t, false)
+			parent, child := "z-parent-"+uuid.NewString(), "a-child-"+uuid.NewString()
+			if name == "two-level family survives" || name == "parent resume fails" {
+				x.liveAgent(t, c, parent)
+			} else {
+				c.h.Sqlite(c.db, crossingLiveRowSQL(parent, "ended"))
+			}
+			x.liveAgent(t, c, child)
+			c.h.Sqlite(c.db, "UPDATE spawns SET parent_id = '"+parent+"' WHERE instance_id = '"+child+"';")
+			for _, id := range []string{parent, child} {
+				c.h.Sqlite(c.db, "UPDATE spawns SET session_id = 'sess-"+id+"' WHERE instance_id = '"+id+"';")
+				c.h.Write(filepath.Join(c.h.Home, ".claude", "projects", "-tmp", "sess-"+id+".jsonl"),
+					`{"type":"summary","sessionId":"sess-`+id+`"}`+"\n", 0o600)
+			}
+			f := newUpgradeFollow(t, c, x, true, yes)
+			if !f.run() {
+				t.Fatal("the follow stopped before verification")
+			}
+			// The installer uses the toolbox's Claude for its version and MCP
+			// probes. Only the resume launches need the sleeping stand-in.
+			claude := c.h.WriteTool("claude", "if [ \"${1:-}\" = --version ]; then echo '"+launchClaudeVersion+"'; exit 0; fi\nexec sleep 600")
+			c.h.Write(filepath.Join(c.h.New, "config.toml"), "[launch]\nclaude_path = "+strconv.Quote(claude)+"\n", 0o600)
+			if name == "missing parent" {
+				// Fixture change: the recorded parent disappears after step 4.
+				c.h.Sqlite(c.db, "DELETE FROM spawns WHERE instance_id = '"+parent+"';")
+			}
+			if name == "parent resume fails" {
+				// b.3k7 review round 1: lose the parent's recorded transcript
+				// after both rows stop, so its resume fails before launch.
+				transcript := filepath.Join(c.h.Home, ".claude", "projects", "-tmp", "sess-"+parent+".jsonl")
+				c.h.Sqlite(c.db, "UPDATE spawns SET jsonl_path = '"+transcript+"' WHERE instance_id = '"+parent+"';")
+				if err := os.Remove(transcript); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.step6()
+			wantParent := parent
+			if name == "missing parent" {
+				wantParent = ""
+			}
+			if got := c.h.Sqlite(c.db, "SELECT state, COALESCE(parent_id, '') FROM spawns WHERE instance_id = '"+child+"';", "-readonly"); got != "pending|"+wantParent+"\n" {
+				t.Errorf("child state|parent_id = %q; want %q", got, "pending|"+wantParent+"\n")
+			}
+			wantOrder := []string{child}
+			if name == "two-level family survives" {
+				wantOrder = []string{parent, child}
+				if got := c.h.Sqlite(c.db, "SELECT state, COALESCE(parent_id, '') FROM spawns WHERE instance_id = '"+parent+"';", "-readonly"); got != "pending|\n" {
+					t.Errorf("root state|parent_id = %q; want pending with no parent", got)
+				}
+			}
+			if !reflect.DeepEqual(f.resumed, wantOrder) {
+				t.Errorf("resume order = %q; want %q", f.resumed, wantOrder)
+			}
+			if name == "parent resume fails" {
+				var attempts []string
+				for _, attempt := range f.resumeAttempts {
+					attempts = append(attempts, attempt.ID)
+				}
+				if want := []string{parent, child}; !reflect.DeepEqual(attempts, want) {
+					t.Fatalf("resume attempts = %q; want %q (no parent retry)", attempts, want)
+				}
+				failure := f.resumeAttempts[0]
+				var envelope struct {
+					Name string `json:"err_name"`
+				}
+				if err := json.Unmarshal([]byte(failure.Result.Stdout+failure.Result.Stderr), &envelope); failure.Result.Code == 0 || err != nil || envelope.Name != "ErrJsonlMissing" {
+					t.Fatalf("parent resume: %+v; want ErrJsonlMissing before launch (%v)", failure.Result, err)
+				}
+				if got := c.h.Sqlite(c.db, "SELECT state, COALESCE(parent_id, '') FROM spawns WHERE instance_id = '"+parent+"';", "-readonly"); got != "missing|\n" {
+					t.Errorf("failed parent state|parent_id = %q; want missing with no parent", got)
+				}
+				if err := x.command("has-session", "-t", "=ad-"+parent).Run(); err == nil {
+					t.Error("the failed parent resume launched a session")
+				}
+			}
+			if name != "two-level family survives" {
+				want := child + "'s parent " + parent + " is not running; its parent link was restored."
+				if name == "missing parent" {
+					want = child + "'s parent " + parent + " no longer has a row; it will resume with no parent."
+				}
+				if name == "parent resume fails" {
+					failure := f.resumeAttempts[0]
+					want = fmt.Sprintf("%s's parent %s resume failed; its parent link was restored.\ncommand: %s\nexit: %d\nstdout: %s\nstderr: %s\nparent state from get: missing",
+						child, parent, failure.Command, failure.Result.Code, failure.Result.Stdout, failure.Result.Stderr)
+				}
+				if !reflect.DeepEqual(f.notices, []string{want}) {
+					t.Errorf("operator advice %q; want %q", f.notices, []string{want})
+				}
+			} else if len(f.notices) != 0 {
+				t.Errorf("live family produced operator advice %q", f.notices)
+			}
+			// Per-command parent context must leave the operator's shell bare.
+			if got := f.must(f.stepOne().Block("AGENT_DIRECTOR_INSTANCE_ID")).Stdout; got != "" {
+				t.Errorf("step 1's guard after the resumes: %q", got)
+			}
+		})
+	}
 	// passed checks a follow that ended with one passing install.
 	passed := func(t *testing.T, c *crossingCase, f *upgradeFollow, ok bool, installs int, asked []string, marked [][]string, rows string) {
 		t.Helper()
