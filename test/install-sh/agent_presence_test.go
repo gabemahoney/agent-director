@@ -189,8 +189,9 @@ func TestAgentCodexOnly(t *testing.T) {
 			if tc.regMCP {
 				args = append(args, "--register-mcp")
 			}
+			c := newMoveMacCase(t, h, "fresh install")
 			before := h.Snapshot()
-			res := h.Install(args...)
+			res := c.Install(args...)
 			want := moveWant{
 				Stdout:   []string{agentNoClaude, agentSkipHook, "  codex   : " + codex + " (version not checked: "},
 				NoStdout: []string{"hooks   : skipped (--no-hooks)", "found from this directory"},

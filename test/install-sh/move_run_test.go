@@ -174,14 +174,65 @@ func moveListHas(t *testing.T, h *moveHome, ids ...string) {
 	}
 }
 
-// moveMustInstall runs install.sh and fails the case unless it exits 0.
-func moveMustInstall(t *testing.T, h *moveHome, args ...string) moveResult {
+// moveMustExit0 fails the case unless install.sh's run res exited 0.
+func moveMustExit0(t *testing.T, res moveResult) moveResult {
 	t.Helper()
-	res := h.Install(args...)
 	if res.Code != 0 {
 		t.Fatalf("install.sh: exit %d\nstdout:\n%s\nstderr:\n%s", res.Code, res.Stdout, res.Stderr)
 	}
 	return res
+}
+
+// moveMustInstall runs install.sh and fails the case unless it exits 0.
+func moveMustInstall(t *testing.T, h *moveHome, args ...string) moveResult {
+	t.Helper()
+	return moveMustExit0(t, h.Install(args...))
+}
+
+// moveCheckSuccessful fails the case unless res and the home tree are what a
+// successful move of an old install leaves: its stdout lines, the kept
+// directory, the no-snapshot line only when prior (--keep-prior was passed),
+// no .prior snapshot, the moved files (moveCheckMoved), a 0700 ~/.config, the
+// new store migrated and the kept one not, and the installed list naming each
+// of ids. before is the snapshot taken before the install.
+func moveCheckSuccessful(t *testing.T, h *moveHome, res moveResult, before moveTree, prior bool, ids ...string) {
+	t.Helper()
+	for _, s := range []string{
+		"  move    : {HOME}/.agent-director -> {HOME}/.config/agent-director",
+		"  moved   : {HOME}/.agent-director -> {HOME}/.config/agent-director (store, config.toml, templates and the rest, checked)",
+		"(the old directory as it was before the move, old binaries included; delete it once the upgrade is confirmed)",
+	} {
+		if !strings.Contains(res.Stdout, h.expand(s)) {
+			t.Errorf("stdout lacks %q:\n%s", s, res.Stdout)
+		}
+	}
+	if !regexp.MustCompile(`(?m)^  kept    : ` + regexp.QuoteMeta(h.Home) + `/` + moveKeptRE + ` \(`).MatchString(res.Stdout) {
+		t.Errorf("stdout has no kept line naming ~/.agent-director.pre-move-<timestamp>:\n%s", res.Stdout)
+	}
+	// The no-snapshot line prints only when --keep-prior was passed.
+	noSnapshot := "--keep-prior made no snapshot on this install"
+	if has := strings.Contains(res.Stdout, noSnapshot); has != prior {
+		t.Errorf("stdout holds the no-snapshot line = %v, want %v:\n%s", has, prior, res.Stdout)
+	}
+	for _, p := range []string{"bin/agent-director.prior", "admin/agent-director-admin.prior"} {
+		if _, err := os.Lstat(filepath.Join(h.New, p)); err == nil {
+			t.Errorf("%s exists: --keep-prior made a snapshot on a moving install", p)
+		}
+	}
+
+	moveCheckMoved(t, h, before)
+	if got := h.Snapshot()[".config"]; got != "dir drwx------" {
+		t.Errorf("~/.config = %q, want a 0700 directory", got)
+	}
+
+	// The new store is migrated and holds the old store's rows (for a store
+	// with a -wal, one of them lived only there); the kept store is not migrated.
+	kept := filepath.Join(h.Home, moveKeptDir(t, h))
+	newV, keptV, current := moveUserVersion(t, h, filepath.Join(h.New, "state.db")), moveUserVersion(t, h, filepath.Join(kept, "state.db")), moveCurrentVersion(t, h)
+	if newV != current || keptV == current {
+		t.Errorf("user_version: new store %s, kept store %s, current schema %s; want new = current != kept", newV, keptV, current)
+	}
+	moveListHas(t, h, ids...)
 }
 
 // moveRichOld builds an old install and adds the shapes SR-11.7 says the copy
@@ -226,8 +277,9 @@ func TestMoveSuccessful(t *testing.T) {
 		args    []string
 		prior   bool
 		sqlite3 string // a WrapTool preamble for sqlite3, if any
+		mac     string // the behaviour SR-9's installer case names, if it is one
 	}{
-		{name: "plain"},
+		{name: "plain", mac: "upgrade with -wal and -shm (b.up4)"},
 		{name: "keep-prior", args: []string{"--keep-prior"}, prior: true},
 		// b.up4, b.x9o F1: SQLite's backup of a WAL-mode store (no -wal) and
 		// the pre-flight snapshot of one with -wal pages (-wal only) have no
@@ -242,50 +294,27 @@ func TestMoveSuccessful(t *testing.T) {
 				h.WrapTool("sqlite3", row.sqlite3)
 			}
 			moveRichOld(t, h)
+			var c *moveMacCase
+			if row.mac != "" {
+				c = newMoveMacCase(t, h, row.mac)
+			}
 			// b.x9o F1: BuildOld has checked the -wal pages; the stand-in's case
 			// also needs the -shm its killed writer leaves.
 			if _, err := os.Stat(filepath.Join(h.Old, "state.db-shm")); row.sqlite3 != "" && err != nil {
 				t.Fatalf("the old store has no -shm: %v", err)
 			}
+			if c != nil {
+				c.WantSidecars(filepath.Join(h.Old, "state.db"))
+			}
 			before := h.Snapshot()
-			res := moveMustInstall(t, h, row.args...)
-
-			for _, s := range []string{
-				"  move    : {HOME}/.agent-director -> {HOME}/.config/agent-director",
-				"  moved   : {HOME}/.agent-director -> {HOME}/.config/agent-director (store, config.toml, templates and the rest, checked)",
-				"(the old directory as it was before the move, old binaries included; delete it once the upgrade is confirmed)",
-			} {
-				if !strings.Contains(res.Stdout, h.expand(s)) {
-					t.Errorf("stdout lacks %q:\n%s", s, res.Stdout)
-				}
+			var res moveResult
+			if c != nil {
+				res = moveMustExit0(t, c.Install(row.args...))
+			} else {
+				res = moveMustInstall(t, h, row.args...)
 			}
-			if !regexp.MustCompile(`(?m)^  kept    : ` + regexp.QuoteMeta(h.Home) + `/` + moveKeptRE + ` \(`).MatchString(res.Stdout) {
-				t.Errorf("stdout has no kept line naming ~/.agent-director.pre-move-<timestamp>:\n%s", res.Stdout)
-			}
-			// The no-snapshot line prints only when --keep-prior was passed.
-			noSnapshot := "--keep-prior made no snapshot on this install"
-			if has := strings.Contains(res.Stdout, noSnapshot); has != row.prior {
-				t.Errorf("stdout holds the no-snapshot line = %v, want %v:\n%s", has, row.prior, res.Stdout)
-			}
-			for _, prior := range []string{"bin/agent-director.prior", "admin/agent-director-admin.prior"} {
-				if _, err := os.Lstat(filepath.Join(h.New, prior)); err == nil {
-					t.Errorf("%s exists: --keep-prior made a snapshot on a moving install", prior)
-				}
-			}
-
-			moveCheckMoved(t, h, before)
-			if got := h.Snapshot()[".config"]; got != "dir drwx------" {
-				t.Errorf("~/.config = %q, want a 0700 directory", got)
-			}
-
-			// The new store is migrated and holds the old store's rows, one of which
-			// lived only in the old -wal; the kept store is not migrated.
-			kept := filepath.Join(h.Home, moveKeptDir(t, h))
-			newV, keptV, current := moveUserVersion(t, h, filepath.Join(h.New, "state.db")), moveUserVersion(t, h, filepath.Join(kept, "state.db")), moveCurrentVersion(t, h)
-			if newV != current || keptV == current {
-				t.Errorf("user_version: new store %s, kept store %s, current schema %s; want new = current != kept", newV, keptV, current)
-			}
-			moveListHas(t, h, "ended-1", "ended-2", "missing-1", "ended-3")
+			// ended-3 lived only in the old -wal.
+			moveCheckSuccessful(t, h, res, before, row.prior, "ended-1", "ended-2", "missing-1", "ended-3")
 		})
 	}
 }

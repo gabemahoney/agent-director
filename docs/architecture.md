@@ -21766,6 +21766,16 @@ Both files ignore blank and `#` lines. Invalid setup lists every error as
 `<file>:<line>: <message>` (without a line for a file-wide error) and makes
 the run incomplete.
 
+#### The `installer` part
+
+The `installer` part runs `test/install-sh`'s focused installer cases: a
+fresh install, an upgrade whose old store has its `-wal` and `-shm`, and an
+upgrade of a cleanly closed WAL store. `install.sh` runs with the Mac's own
+`/bin/bash` and `/usr/bin/sqlite3`; the cases' own store checks use the
+standard SQLite build. Each case logs the tools `install.sh` met, and a
+failed case logs its report. Their helpers are in the
+[install-sh move fixture](#install-sh-move-fixture-reusable-test-fixture).
+
 #### macrun's result model (reusable component)
 
 `tools/macrun/internal/model` is macrun's reusable result model: case IDs,
@@ -22478,21 +22488,31 @@ both (`NewReader` and `NewUninstallReader`).
 
 `test/install-sh/move_fixture_test.go` builds one `$HOME` per case for the
 tests of [Moving agent-director's directory](#moving-agent-directors-directory)
-(`move_preflight_test.go`, `move_run_test.go`, `move_owned_test.go`, and the
-literal-follow cases J23 to J25 and G8 of `advice_follow.sh`). It is the one
-way a test builds an old-layout install and runs `install.sh` against it.
+(`move_preflight_test.go`, `move_run_test.go`, `move_owned_test.go`,
+`move_clean_close_darwin_test.go`, and the literal-follow cases J23 to J25 and
+G8 of `advice_follow.sh`). It is the one way a test builds an old-layout
+install and runs `install.sh` against it.
 
 - `newMoveHome(t)` gives the case its own `HOME`, tools directory (first on
   `PATH`), `TMPDIR` and a loose copy of `install.sh` outside any git
   checkout. `h.BuildOld(opts...)` writes the old directory (`withMoveConfig`,
   `withMoveStore`, `withMoveNoStore`, `withMoveRollbackStore`,
-  `withMoveLive`); `h.Install(args...)` runs the installer and returns
-  `{Code, Stdout, Stderr}`; `h.StartInstall` runs it asynchronously in its
-  own process group for the interrupt cases (`Signal`, `Wait`).
+  `withMoveLive`, and `withMoveClosedStore`: the store in WAL mode, closed
+  cleanly, with no `-wal` and no `-shm`); `h.Install(args...)` runs the
+  installer and returns `{Code, Stdout, Stderr}`; `h.StartInstall` runs it
+  asynchronously in its own process group for the interrupt cases (`Signal`,
+  `Wait`).
 - Seams are stand-ins on `PATH`, never edits of `install.sh`:
   `h.WriteTool(name, script)` replaces a tool (`cp` for a full disk or a
   blocked copy, `sqlite3`, `ps`, `lsof`, `file`, `claude`), and
   `h.WrapTool(name, preamble)` runs a preamble and then the real tool.
+  `install.sh`, `h.RealTool("sqlite3")` and `sqlite3` stand-ins run the
+  toolbox's `sqlite3`, the first on `PATH`. The fixture's own reads, writes
+  and holds run `h.S.SQLite`: `AGENT_DIRECTOR_TEST_SQLITE3` when set (an
+  absolute path to an executable, else the case fails), else the first
+  `sqlite3` on `PATH`. Test code's own store reads, a `WriteTool` script's
+  included, use `h.S.SQLite`, never the toolbox's
+  ([why](#the-tests-environment-on-the-mac)).
   `INSTALL_SH_TEST_PROC_CHECK` selects the process check's branch.
   `INSTALL_SH_TEST_CRONTAB` and `INSTALL_SH_TEST_SYSTEMCTL` name programs that
   do not exist by default, so no case reads or changes the host's crontab or
@@ -22504,6 +22524,20 @@ way a test builds an old-layout install and runs `install.sh` against it.
   use it for strict no-touch refusals, including WAL/SHM creation/removal.
   `moveWant{...}.Check` and `runMoveRefusals` are the assertion and table
   drivers.
+- `moveMustExit0` and `moveCheckSuccessful` (`move_run_test.go`) hold a
+  successful move's exit check and the checks after it; a new upgrade case
+  reuses them instead of copying `TestMoveSuccessful`'s.
+- On darwin, `newMoveMacCase(t, h, behaviour)` wraps an installer case: it
+  logs the `bash` and `sqlite3` that `install.sh` meets, its `Install` lists
+  the store's files before and after `install.sh`, and a failed case logs its
+  behaviour, exit status, `err_name`, `install.sh`'s output and those
+  listings. Its `!darwin` counterpart only calls through, so Linux runs as
+  before. `moveMacSnapshotCopy(t, h)` snapshots a copy of `HOME`, so no SQLite
+  open creates files beside the original store, and
+  `moveMacCheckClosedStore(t, db)` checks by bytes that `db` is a WAL store
+  with no `-wal` or `-shm`. A Mac installer case uses these rather than its
+  own, and keeps Mac-only code in darwin-only files: a `_darwin` suffix,
+  `//go:build !darwin` for the counterpart, no custom tag.
 - `testdata/v0.11.1-store.sql` is a v0.11.1 store (schema v5) with rows;
   `testdata/standin/main.go` builds the stand-in binary, whose `version`
   result (built with `-X` flags) gives an earlier release's, without

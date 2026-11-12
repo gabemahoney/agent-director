@@ -404,7 +404,7 @@ expression on the case names (`make sandbox CMD="env ADVICE_FOLLOW_ONLY=J23 bash
 test/install-sh/advice_follow.sh"`); the Go test that runs the script clears it.
 J23's link case, both J24 live-row cases and G8 build the previous release's
 binary and store from the `v0.11.1` git tag and skip when the checkout lacks
-that tag; `git fetch --tags` brings it in. No workflow runs `test/install-sh`,
+that tag; `git fetch --tags` brings it in. No workflow runs `advice_follow.sh`,
 so a checkout without the tag only skips those cases.
 
 The tests of the install's move of AD's directory (`test/install-sh/move_*_test.go`)

@@ -331,7 +331,7 @@ the ones whose advice is known not to work as written;
 (docs/test-writing-guide.md "Literal-follow tests for error advice"). A few
 of them build the previous release's binary and store from its git tag and
 skip when the checkout lacks it (a checkout without the `v0.11.1` tag; no
-workflow runs `test/install-sh`, so nothing in CI depends on it).
+workflow runs `advice_follow.sh`, so nothing in CI depends on it).
 
 The suite exit code propagates to the caller; output streams live. The
 image is built on first use and cached by the engine's layer cache

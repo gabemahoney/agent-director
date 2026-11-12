@@ -89,7 +89,7 @@ type movePair struct{ Main, Admin string }
 type moveShared struct {
 	Root    string // the shared directory
 	Bash    string // the bash that runs install.sh
-	SQLite  string // the real sqlite3
+	SQLite  string // what the fixture's own reads and holds run (moveOwnSQLite); install.sh runs the toolbox's
 	Install string // install.sh, in no git checkout
 	Toolbox string // the PATH every case sees after its own tools dir
 	// Current is the pair built from this tree. NoConfigDir and OtherDir are
@@ -149,7 +149,7 @@ func moveBuildShared() (*moveShared, error) {
 	if s.Bash, err = exec.LookPath("bash"); err != nil {
 		return nil, err
 	}
-	if s.SQLite, err = exec.LookPath("sqlite3"); err != nil {
+	if s.SQLite, err = moveOwnSQLite(); err != nil {
 		return nil, err
 	}
 	if s.SQLFixt, err = filepath.Abs(filepath.Join("testdata", "v0.11.1-store.sql")); err != nil {
@@ -212,6 +212,31 @@ func moveBuildShared() (*moveShared, error) {
 	s.ScheduleProbe = movePair{probe, s.Current.Admin}
 
 	return s, moveBuildToolbox(s.Toolbox)
+}
+
+// moveOwnSQLite is AGENT_DIRECTOR_TEST_SQLITE3 when it is set, else the first
+// sqlite3 on PATH. On the Mac, macrun sets it to the standard SQLite build,
+// because Apple's sqlite3, first on the tests' PATH there, fails a -readonly
+// open of a cleanly closed WAL store (b.zsj). A set value that is not an
+// executable file by absolute path is an error, never a fall back to PATH,
+// which would point the fixture's checks at Apple's sqlite3 again.
+func moveOwnSQLite() (string, error) {
+	const name = "AGENT_DIRECTOR_TEST_SQLITE3"
+	v := os.Getenv(name)
+	if v == "" {
+		return exec.LookPath("sqlite3")
+	}
+	if !filepath.IsAbs(v) {
+		return "", fmt.Errorf("%s=%q is not an absolute path", name, v)
+	}
+	fi, err := os.Stat(v)
+	if err != nil {
+		return "", fmt.Errorf("%s=%q: %v", name, v, err)
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("%s=%q is not an executable regular file (mode %v)", name, v, fi.Mode())
+	}
+	return v, nil
 }
 
 // moveFakeFile describes ELF the way file(1) does, enough for install.sh's
@@ -581,15 +606,17 @@ func (h *moveHome) StartServe(path string) *moveProc {
 	return h.startProc(exec.Command(path, "serve"), "", "ready")
 }
 
-// HoldSQLite starts the real sqlite3 on db, runs sql in it and leaves it
-// running (killed by Release or Kill). Without -wal checkpointing, a SIGKILL
-// leaves what sql wrote as unflushed pages in db's -wal.
+// HoldSQLite starts the fixture's sqlite3 (moveShared.SQLite) on db, runs sql
+// in it and leaves it running (killed by Release or Kill). Without -wal
+// checkpointing, a SIGKILL leaves what sql wrote as unflushed pages in db's
+// -wal.
 func (h *moveHome) HoldSQLite(db, sql string) *moveProc {
 	h.t.Helper()
 	return h.startProc(exec.Command(h.S.SQLite, "-batch", "-init", "/dev/null", db), sql+"\nSELECT 'ready';\n", "ready")
 }
 
-// Sqlite runs the real sqlite3 on db with input on its stdin.
+// Sqlite runs the fixture's sqlite3 (moveShared.SQLite) on db with input on
+// its stdin.
 func (h *moveHome) Sqlite(db, input string, args ...string) string {
 	h.t.Helper()
 	cmd := exec.Command(h.S.SQLite, append(append([]string{"-batch", "-init", "/dev/null"}, args...), db)...)
@@ -644,6 +671,7 @@ type moveOldSpec struct {
 	store    func(h *moveHome) string
 	noStore  bool
 	rollback bool
+	closed   bool
 	live     []string
 }
 
@@ -665,6 +693,13 @@ func withMoveNoStore() moveOldOpt { return func(s *moveOldSpec) { s.noStore = tr
 
 // withMoveRollbackStore makes the store a rollback-journal one with no -wal.
 func withMoveRollbackStore() moveOldOpt { return func(s *moveOldSpec) { s.rollback = true } }
+
+// withMoveClosedStore leaves the store as WriteStore does: in WAL mode and
+// closed cleanly by its last connection, so it has no -wal and no -shm, the
+// state the last agent-director process leaves after a clean close (b.zsj).
+// withMoveLive rows are written and closed the same way. It does not combine
+// with withMoveRollbackStore, which asks for another journal mode.
+func withMoveClosedStore() moveOldOpt { return func(s *moveOldSpec) { s.closed = true } }
 
 // withMoveLive adds a row in each of states to the store.
 func withMoveLive(states ...string) moveOldOpt {
@@ -701,6 +736,15 @@ func (h *moveHome) BuildOld(opts ...moveOldOpt) {
 	}
 	db := spec.store(h)
 	h.WriteStore(db)
+	if spec.closed {
+		if spec.rollback {
+			h.t.Fatal("withMoveClosedStore and withMoveRollbackStore ask for different journal modes")
+		}
+		if len(spec.live) > 0 {
+			h.Sqlite(db, strings.Join(moveMap(spec.live, moveLiveRow), "\n"))
+		}
+		return
+	}
 	if spec.rollback {
 		h.Sqlite(db, "PRAGMA journal_mode=DELETE;\n"+strings.Join(moveMap(spec.live, moveLiveRow), "\n"))
 		return

@@ -6,3 +6,4 @@
 # A mark whose case reports no result is listed as unmatched and does not change the verdict.
 # A marked case that passes is reported as an unexpected pass.
 # See docs/architecture.md "Mac Tests" for the rest of the rules.
+go:test/install-sh:TestMoveAfterCleanClose	b.zsj	Apple's sqlite3 cannot open a cleanly closed WAL store read-only, so the move's read of the old store fails
