@@ -5458,7 +5458,6 @@ MOVE_CREATED_BASE=0
 MOVE_NEW_IS_LINK=0
 MOVE_CAUSE=""
 MOVE_PREV_EXIT=""
-MOVE_NOTES=""
 MOVE_KEPT_NAME=""
 STORE_SRC_PHYS=""
 stage_bin=""
@@ -5744,9 +5743,8 @@ ad_move_quote() {
 
 # ad_move_key_newvalue <key label> <value as written> — decide the new value
 # of a path key from the old directory's point of view (SR-11.7 "Path
-# keys"). Sets REWRITE_NEWVAL (empty: leave the line as written) and may add
-# a note to MOVE_NOTES. Sets MOVE_CAUSE and fails when the place cannot be
-# resolved.
+# keys"). Sets REWRITE_NEWVAL (empty: leave the line as written). Sets
+# MOVE_CAUSE and fails when the place cannot be resolved.
 REWRITE_NEWVAL=""
 ad_move_key_newvalue() {
     local label="$1" v="$2" form="rel" resolved
@@ -5907,9 +5905,6 @@ ad_move_kept_notes() {
     echo "  kept    : $MOVED_KEPT (the old directory as it was before the move, old binaries included; delete it once the upgrade is confirmed)"
     if [[ "$KEEP_PRIOR" -eq 1 ]]; then
         echo "  prior   : --keep-prior made no snapshot on this install: the new bin and admin directories hold no earlier binary. The way back is operator-actions.md, \"Going back to the previous release\""
-    fi
-    if [[ -n "$MOVE_NOTES" ]]; then
-        printf '%s' "$MOVE_NOTES"
     fi
 }
 
