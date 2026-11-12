@@ -183,6 +183,16 @@ function interfaceBody(src: string, name: string): string {
 const typesGolden = () =>
   fs.readFileSync(path.join(fixtureDir, "types.d.ts.golden"), "utf-8");
 
+test("public-surface: pane-only reads retain optional integration_mode", () => {
+  for (const iface of ["GetResult", "StatusResult", "ListRow"]) {
+    expect(interfaceBody(typesGolden(), iface)).toMatch(/\bintegration_mode\?\s*:\s*"pane_only"\s*;/);
+  }
+  const errors = fs.readFileSync(path.join(fixtureDir, "errors.d.ts.golden"), "utf-8");
+  for (const name of ["ErrExperimentalAgentDisabled", "ErrAgentCapabilityUnsupported", "ErrModelMissing", "ErrHostCredentialMissing"]) {
+    expect(errors).toContain(`class ${name} extends AgentDirectorError`);
+  }
+});
+
 test.each(["StatusResult", "GetResult", "ListRow"])(
   "public-surface: %s carries required binary family_state",
   (iface) => {

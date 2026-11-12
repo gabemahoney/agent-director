@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -32,7 +33,7 @@ const (
 	// may be sampled.
 	IdleScreenAvailable = "available"
 	// IdleScreenUnavailable: idle_screen never applies to the row's agent
-	// (Cursor), which is never sampled.
+	// (Cursor or pane-only agents), which are never sampled.
 	IdleScreenUnavailable = "unavailable"
 )
 
@@ -43,6 +44,14 @@ func idleScreenAvailability(agent string) string {
 		return IdleScreenAvailable
 	}
 	return IdleScreenUnavailable
+}
+
+// integrationMode is omitted for agents with their existing native contract.
+func integrationMode(agent string) string {
+	if spawn.IsPaneOnly(agent) {
+		return "pane_only"
+	}
+	return ""
 }
 
 // StateDetail is shared by get and status: the Displayed State shown and its
@@ -86,7 +95,7 @@ var (
 )
 
 // displayed is status's evaluation through the one all-agent dispatch status,
-// get and list share (observeDisplay), with the row's family. Sampling and
+// get, get-many and list share (observeDisplay), with the row's family. Sampling and
 // persistence are best effort; an uncommitted observation returns the
 // display and family of the original row snapshot, detail included.
 func displayed(s any, v RelayView, settle store.SettleRead, row Spawn) (store.DisplayDetail, string) {
@@ -161,7 +170,7 @@ func observeRow(s any, v RelayView, settle store.SettleRead, row Spawn, read per
 }
 
 // judgedRequestSet is one check-before-read read of every request of a row,
-// with its hook verdicts, which get and list reuse for the row's request
+// with its hook verdicts, which get, get-many and list reuse for the row's request
 // lists and its permission observation.
 type judgedRequestSet struct {
 	rows     []PermissionRow
@@ -331,7 +340,7 @@ func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, ro
 	return out.Display, out.Families, false
 }
 
-// stateDetail is d's Displayed State and detail as status and get report
+// stateDetail is d's Displayed State and detail as status, get and get-many report
 // them: only the fields of the Displayed State shown, none for an ordinary
 // state.
 func stateDetail(d store.DisplayDetail) StateDetail {

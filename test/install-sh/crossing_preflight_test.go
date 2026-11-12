@@ -3,16 +3,21 @@ package installsh_test
 // Pre-flight's native-input cutover decision (SR-2.14 "Pre-flight", SR-2.16
 // "Outcomes"), from genuine previous installs (release_fixture_test.go). A
 // crossing upgrade runs the candidate administrator's migrate-journal
-// --check-only before the swap; every refusal here leaves the home byte for
-// byte as it was. The outcome helpers below (preflightEnvelopes,
-// assertOutcomeEnvelope, assertRefusedUnchanged) are for every case that
-// checks an install.sh outcome envelope.
+// --check-only before the swap, then the restore preconditions (the backup
+// outside AD's directories, the predates probe, the restore's copies); every
+// refusal here leaves the home byte for byte as it was. The outcome helpers
+// below (preflightEnvelopes, assertOutcomeEnvelope, assertOwnRefusal,
+// assertRefusedUnchanged) are for every case that checks an install.sh
+// outcome envelope.
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -75,10 +80,23 @@ func assertOutcomeEnvelope(t *testing.T, line, errName, reason, action, cutover 
 
 // assertRefusedUnchanged fails unless h's home is physically as before (the
 // installed pair, the managed PATH link, the store's files and any sentinel
-// included) and install.sh left nothing in TMPDIR.
-func assertRefusedUnchanged(t *testing.T, h *moveHome, before moveTree) {
+// included) and install.sh left nothing in TMPDIR. touched names directories
+// (relative to HOME) whose size and mtime are left out, for a refusal that
+// made and removed copies in them; every entry in them is still compared.
+func assertRefusedUnchanged(t *testing.T, h *moveHome, before moveTree, touched ...string) {
 	t.Helper()
-	if d := moveDiff(before, h.PhysicalSnapshot()); d != "" {
+	want, got := moveTree{}, h.PhysicalSnapshot()
+	for p, v := range before {
+		want[p] = v
+	}
+	for _, rel := range touched {
+		for _, tr := range []moveTree{want, got} {
+			if v, ok := tr[rel]; ok {
+				tr[rel] = physicalTimes.ReplaceAllString(v, " ")
+			}
+		}
+	}
+	if d := moveDiff(want, got); d != "" {
 		t.Errorf("a pre-flight refusal changed the home:\n%s", d)
 	}
 	if got := h.tempEntries(); len(got) != 0 {
@@ -86,33 +104,156 @@ func assertRefusedUnchanged(t *testing.T, h *moveHome, before moveTree) {
 	}
 }
 
-// crossingCase is a home holding a genuine v0.17.3 install (store v15), with
-// a private extra legacy root and a file to put a backup under.
+// physicalTimes is the size and mtime in a PhysicalSnapshot entry.
+var physicalTimes = regexp.MustCompile(` size=\d+ mtime=-?\d+ `)
+
+// assertOwnRefusal checks res is pre-flight's refusal with install.sh's own
+// reason and action: exit 5, its outcome envelope last, the cause line, and
+// each of lines on stderr before "  Nothing was installed or changed.".
+func assertOwnRefusal(t *testing.T, res moveResult, reason, action string, lines ...string) {
+	t.Helper()
+	envs := preflightEnvelopes(t, res, "ErrJournalMigrationRefused")
+	assertOutcomeEnvelope(t, envs[len(envs)-1], "ErrJournalMigrationRefused", reason, action, "not_committed", nil)
+	for _, line := range append(lines, "  Nothing was installed or changed.") {
+		if !strings.Contains(res.Stderr, line+"\n") {
+			t.Errorf("stderr lacks %q:\n%s", line, res.Stderr)
+		}
+	}
+}
+
+// crossingCase is a home holding a genuine v0.17.3 install (store v15), or
+// the release newCrossingCaseOf names, with a private extra legacy root and a
+// file to put a backup under.
 type crossingCase struct {
 	h       *moveHome
 	release releaseBuild
-	prev    string // v0.17.3's installed agent-director
+	prev    string // the release's installed agent-director
+	version string // its store's user_version
 	root    string // a legacy input root, 0700
 	file    string // a regular file
 	db      string
 	backups int
 }
 
-func newCrossingCase(t *testing.T) *crossingCase {
+// newCrossingCase installs v0.17.3 after each setup has changed the home (its
+// flags, say).
+func newCrossingCase(t *testing.T, setup ...func(h *moveHome)) *crossingCase {
 	t.Helper()
-	r := genuineRelease(t, "v0.17.3")
+	return newCrossingCaseOf(t, "v0.17.3", setup...)
+}
+
+// crossingStoreVersions is the store version each release a crossingCase
+// installs makes.
+var crossingStoreVersions = map[string]string{"v0.16.0": "14", "v0.17.3": "15"}
+
+// newCrossingCaseOf is newCrossingCase from tag's genuine install.
+func newCrossingCaseOf(t *testing.T, tag string, setup ...func(h *moveHome)) *crossingCase {
+	t.Helper()
+	r := genuineRelease(t, tag)
 	h := newMoveHome(t)
 	h.Flags = []string{"--no-hooks"} // the managed PATH link is part of what must not change
-	c := &crossingCase{h: h, release: r, root: filepath.Join(h.Root, "legacy-input"), file: filepath.Join(h.Root, "file"), db: filepath.Join(h.New, "state.db")}
+	for _, f := range setup {
+		f(h)
+	}
+	c := &crossingCase{h: h, release: r, version: crossingStoreVersions[tag], root: filepath.Join(h.Root, "legacy-input"), file: filepath.Join(h.Root, "file"), db: filepath.Join(h.New, "state.db")}
 	c.prev = h.InstallRelease(r)
-	if v := moveUserVersion(t, h, c.db); v != "15" {
-		t.Fatalf("v0.17.3 made a store at v%s; want v15", v)
+	if v := moveUserVersion(t, h, c.db); v != c.version {
+		t.Fatalf("%s made a store at v%s; want v%s", tag, v, c.version)
 	}
 	if err := os.Mkdir(c.root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	h.Write(c.file, "not a directory\n", 0o600)
 	return c
+}
+
+// SR-3.5: genuine setup rejects foreign binaries; its confined Host Shim
+// must not change the host observed by the candidate that follows it.
+func TestCrossingReleaseHostBoundary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and installs v0.17.3")
+	}
+	r := genuineRelease(t, "v0.17.3")
+	for _, setup := range []bool{true, false} {
+		for _, flag := range []string{"--binary", "--admin-binary"} {
+			t.Run(fmt.Sprintf("setup=%t/%s", setup, flag), func(t *testing.T) {
+				h := newMoveHome(t)
+				var db string
+				if setup {
+					// Fresh setup has no declared store: v0.17.3's earlier store
+					// read is outside this Host Shim refusal's contract.
+					old := *h.S
+					old.Install = r.Install
+					h.S, h.Pair = &old, r.Pair
+				} else {
+					h.InstallRelease(r)
+					db = filepath.Join(h.New, "state.db")
+				}
+				path := h.Pair.Main
+				if flag == "--admin-binary" {
+					path = h.Pair.Admin
+				}
+				data, err := os.ReadFile(path)
+				if err != nil || len(data) < 20 || string(data[:4]) != "\x7fELF" {
+					t.Fatalf("expected a genuine ELF binary: %s: %v", path, err)
+				}
+				// J4's foreign-machine construction, with the same real file probe.
+				data[18], data[19] = 183, 0 // aarch64
+				if runtime.GOARCH == "arm64" {
+					data[18] = 62 // x86-64
+				}
+				wrong := filepath.Join(h.Root, "wrong-machine")
+				h.Write(wrong, string(data), 0o755)
+				if flag == "--binary" {
+					h.Pair.Main = wrong
+				} else {
+					h.Pair.Admin = wrong
+				}
+				osName, machine := h.Run(h.RealTool("uname"), "-s"), h.Run(h.RealTool("uname"), "-m")
+				description := h.Run(h.RealTool("file"), "-L", "-b", wrong)
+				if osName.Code != 0 || machine.Code != 0 || description.Code != 0 {
+					t.Fatal("real host or binary description unavailable")
+				}
+				host := strings.TrimSpace(osName.Stdout) + "/" + strings.TrimSpace(machine.Stdout)
+				detected := strings.TrimSuffix(description.Stdout, "\n")
+				if len(detected) > 80 {
+					detected = detected[:80]
+				}
+				wantCode := 2
+				want := fmt.Sprintf("install.sh: %s %s: architecture mismatch (binary appears to be %s; host is %s). Did you pass the wrong %s?\n", flag, wrong, detected, host, flag)
+				if setup && host == "Linux/aarch64" {
+					wantCode = 1
+					want = "host-shim: " + wrong + ": expected aarch64 little-endian ELF; file reports: " + description.Stdout
+				}
+				var files map[string][]byte
+				if db != "" {
+					files = rollbackStoreCopy(t, db)
+				}
+				temps := h.tempEntries()
+				state := *h
+				state.Home = h.Root
+				before := state.PhysicalSnapshot()
+				var res moveResult
+				if setup {
+					res = moveInstallReleaseSetup(t, h)
+				} else {
+					res = h.Install()
+				}
+				if res.Code != wantCode || res.Stderr != want {
+					t.Fatalf("host boundary: exit %d, stderr %q; want %d, %q", res.Code, res.Stderr, wantCode, want)
+				}
+				if db != "" && !reflect.DeepEqual(rollbackStoreCopy(t, db), files) {
+					t.Error("host refusal changed the store or its WAL/SHM")
+				}
+				if d := moveDiff(before, state.PhysicalSnapshot()); d != "" {
+					t.Fatalf("host refusal changed the case's files:\n%s", d)
+				}
+				if !reflect.DeepEqual(h.tempEntries(), temps) {
+					t.Fatal("host refusal changed TMPDIR")
+				}
+			})
+		}
+	}
 }
 
 // newBackup returns a new absolute backup directory path outside every root.
@@ -264,7 +405,7 @@ func (c *crossingCase) assertCrossed(t *testing.T, res moveResult, backup string
 	if res.Code != 0 {
 		t.Fatalf("install: exit %d\nstdout:\n%s\nstderr:\n%s", res.Code, res.Stdout, res.Stderr)
 	}
-	for _, s := range []string{"  cutover : " + c.db + " at v15 crosses the native-input cutover\n", "  journal : "} {
+	for _, s := range []string{"  cutover : " + c.db + " at v" + c.version + " crosses the native-input cutover\n", "  journal : "} {
 		if !strings.Contains(res.Stdout, s) {
 			t.Errorf("stdout lacks %q:\n%s", s, res.Stdout)
 		}
@@ -348,7 +489,7 @@ func TestAdviceFollow_J35_CheckOnlyRefusals(t *testing.T) {
 			return c.valid()
 		}, false},
 		{"darwin trailing slash legacy root", "legacy_root_not_clean", func(t *testing.T, c *crossingCase) []string {
-			c.standInDarwin()
+			standInDarwin(c.h)
 			return append(c.valid(), "--journal-legacy-root", c.root+"/")
 		}, true},
 	} {
@@ -393,7 +534,7 @@ func TestAdviceFollow_J35_CheckOnlyRefusals(t *testing.T) {
 				}
 			}
 			if tc.darwin {
-				c.assertDarwinOnly(t)
+				assertDarwinOnly(t, c.h)
 			}
 		})
 	}
@@ -419,22 +560,38 @@ func TestAdviceFollow_J35_CheckOnlyRefusals(t *testing.T) {
 		}
 		backup := filepath.Join(h.Root, "backup-1")
 		moved := h.Snapshot()
-		res = moveMustInstall(t, h, "--journal-backup", backup)
-		moveCheckMoved(t, h, moved)
-		db := filepath.Join(h.New, "state.db")
-		if v, want := moveUserVersion(t, h, db), moveCurrentVersion(t, h); v != want {
-			t.Errorf("store at v%s; want v%s", v, want)
-		}
-		if got := h.Sqlite(db, "SELECT count(*) FROM store_meta WHERE key='native_input_authority' AND value LIKE 'sqlite-v1:%';", "-readonly"); got != "1\n" {
-			t.Errorf("native-input authority not recorded: %q", got)
-		}
-		if _, err := os.Stat(filepath.Join(backup, "COMPLETE")); err != nil {
-			t.Errorf("backup: %v", err)
-		}
-		if !strings.Contains(res.Stdout, "  journal : ") {
-			t.Errorf("stdout lacks step 4's journal line:\n%s", res.Stdout)
-		}
+		assertMovedCrossed(t, h, moved, h.Install("--journal-backup", backup), backup)
 	})
+}
+
+// assertMovedCrossed fails unless res is a passing upgrade that moved the old
+// layout (moveCheckMoved against moved, the snapshot before the run, unless
+// it is nil) and crossed: the store at this release's version with
+// native-input authority recorded, backup complete, and step 4's journal
+// line.
+func assertMovedCrossed(t *testing.T, h *moveHome, moved moveTree, res moveResult, backup string) {
+	t.Helper()
+	if res.Code != 0 {
+		t.Fatalf("install: exit %d\nstdout:\n%s\nstderr:\n%s", res.Code, res.Stdout, res.Stderr)
+	}
+	if moved != nil {
+		moveCheckMoved(t, h, moved)
+	} else if _, err := os.Lstat(h.Old); err == nil {
+		t.Errorf("%s was not moved", h.Old)
+	}
+	db := filepath.Join(h.New, "state.db")
+	if v, want := moveUserVersion(t, h, db), moveCurrentVersion(t, h); v != want {
+		t.Errorf("store at v%s; want v%s", v, want)
+	}
+	if got := h.Sqlite(db, "SELECT count(*) FROM store_meta WHERE key='native_input_authority' AND value LIKE 'sqlite-v1:%';", "-readonly"); got != "1\n" {
+		t.Errorf("native-input authority not recorded: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(backup, "COMPLETE")); err != nil {
+		t.Errorf("backup: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "  journal : ") {
+		t.Errorf("stdout lacks step 4's journal line:\n%s", res.Stdout)
+	}
 }
 
 // standInCandidate makes the candidate administrator a stand-in (the move
@@ -490,11 +647,10 @@ func (c *crossingCase) candidateRefusal(t *testing.T, res moveResult, flags []st
 // call and fail, so a run that reached one shows it.
 var darwinOnlyTools = []string{"dscl", "sw_vers", "launchctl", "xattr", "codesign", "ditto", "plutil", "defaults", "scutil", "security", "diskutil", "pkgutil"}
 
-// standInDarwin runs the case's installs through install.sh's Darwin
-// branch: uname answers Darwin arm64, file describes every binary as a
-// Mach-O arm64 executable, and each darwinOnlyTools stand-in logs its call.
-func (c *crossingCase) standInDarwin() {
-	h := c.h
+// standInDarwin runs h's installs through install.sh's Darwin branch: uname
+// answers Darwin arm64, file describes every binary as a Mach-O arm64
+// executable, and each darwinOnlyTools stand-in logs its call.
+func standInDarwin(h *moveHome) {
 	branch := moveQuote(filepath.Join(h.Root, "darwin-branch.log"))
 	h.WriteTool("uname", `echo "uname $*" >>`+branch+`; case "${1:-}" in -m) echo arm64 ;; *) echo Darwin ;; esac`)
 	h.WriteTool("file", `echo "file" >>`+branch+`; echo "Mach-O 64-bit executable arm64"`)
@@ -503,15 +659,15 @@ func (c *crossingCase) standInDarwin() {
 	}
 }
 
-// assertDarwinOnly fails unless the run went through the Darwin branch's
+// assertDarwinOnly fails unless h's runs went through the Darwin branch's
 // stand-ins only: no macOS-only tool was called.
-func (c *crossingCase) assertDarwinOnly(t *testing.T) {
+func assertDarwinOnly(t *testing.T, h *moveHome) {
 	t.Helper()
-	branch, _ := os.ReadFile(filepath.Join(c.h.Root, "darwin-branch.log"))
+	branch, _ := os.ReadFile(filepath.Join(h.Root, "darwin-branch.log"))
 	if !strings.Contains(string(branch), "uname -s\n") || !strings.Contains(string(branch), "file\n") {
 		t.Errorf("the runs did not take the Darwin branch through the uname and file stand-ins: %q", branch)
 	}
-	if b, err := os.ReadFile(filepath.Join(c.h.Root, "darwin-tools.log")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(h.Root, "darwin-tools.log")); err == nil {
 		t.Errorf("the Darwin branch called macOS-only tools:\n%s", b)
 	}
 }
@@ -524,50 +680,12 @@ func (c *crossingCase) assertDarwinOnly(t *testing.T) {
 //
 // No released version makes a v16 to v19 store: these are the genuine
 // v0.17.3 store raised by hand, in the shapes SR-8.6 describes.
+//
+// J43 runs the two v16 rows (crossingV16Rows), continuing each with the
+// documented inspection and way back.
 func TestCrossingPreflightStoreState(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and installs v0.17.3")
-	}
-	for _, tc := range []struct{ reason, sql, what, inspect string }{
-		{"cutover_state_unreadable", "DROP TABLE store_meta; PRAGMA user_version=16;", "unreadable",
-			"state.db's store_meta table and its native_input_authority row"},
-		{"native_input_authority_missing", "PRAGMA user_version=16;", "not recorded",
-			"the native_input_authority row of state.db's store_meta table"},
-	} {
-		t.Run(tc.reason, func(t *testing.T) {
-			c := newCrossingCase(t)
-			h := c.h
-			h.Sqlite(c.db, tc.sql)
-			prevErr := func() string {
-				got := h.Run(c.prev, "list")
-				var env struct {
-					ErrName string `json:"err_name"`
-				}
-				if err := json.Unmarshal([]byte(got.Stderr), &env); err != nil || got.Code == 0 || env.ErrName == "" {
-					t.Fatalf("v0.17.3's list on the v16 store: exit %d, stderr %q; want a refusal", got.Code, got.Stderr)
-				}
-				return env.ErrName
-			}
-			wantErr := prevErr()
-			before := h.PhysicalSnapshot()
-			res := h.Install(c.valid()...)
-			envs := preflightEnvelopes(t, res, "ErrJournalMigrationRefused")
-			action := "inspect " + tc.inspect + ", or restore state.db's pre-upgrade copy, as docs/operator-actions.md \"Upgrading the native-input journal\" says, then re-run this install"
-			if len(envs) != 1 {
-				t.Errorf("envelopes %q; want install.sh's own only", envs)
-			}
-			assertOutcomeEnvelope(t, envs[len(envs)-1], "ErrJournalMigrationRefused", tc.reason, action, "not_committed", nil)
-			for _, line := range []string{"install.sh: state.db at v16 is past the native-input cutover, but its native-input authority is " + tc.what,
-				"  state.db: " + c.db, "  Nothing was installed or changed."} {
-				if !strings.Contains(res.Stderr, line+"\n") {
-					t.Errorf("stderr lacks %q:\n%s", line, res.Stderr)
-				}
-			}
-			assertRefusedUnchanged(t, h, before)
-			if got := prevErr(); got != wantErr {
-				t.Errorf("v0.17.3's list refuses with %s after the run; %s before it", got, wantErr)
-			}
-		})
 	}
 	t.Run("v0 store", func(t *testing.T) {
 		h := newMoveHome(t)
@@ -586,4 +704,591 @@ func TestCrossingPreflightStoreState(t *testing.T) {
 			t.Errorf("store at v%s after list; want v%s", v, want)
 		}
 	})
+}
+
+// crossingV16Row is one v16 store pre-flight refuses: the SQL that raises
+// v0.17.3's store to it, and the refusal's wording.
+type crossingV16Row struct{ reason, sql, what, inspect string }
+
+var crossingV16Rows = []crossingV16Row{
+	{"cutover_state_unreadable", "DROP TABLE store_meta; PRAGMA user_version=16;", "unreadable",
+		"state.db's store_meta table and its native_input_authority row"},
+	{"native_input_authority_missing", "PRAGMA user_version=16;", "not recorded",
+		"the native_input_authority row of state.db's store_meta table"},
+}
+
+// crossingV16Refused raises a genuine v0.17.3 store to tc's v16 shape and
+// checks pre-flight's refusal of it. It returns the case and the
+// stopped-writer copy of the v15 store taken before the raise.
+func crossingV16Refused(t *testing.T, tc crossingV16Row) (*crossingCase, map[string][]byte) {
+	t.Helper()
+	c := newCrossingCase(t)
+	h := c.h
+	kept := rollbackStoreCopy(t, c.db)
+	h.Sqlite(c.db, tc.sql)
+	prevErr := func() string {
+		got := h.Run(c.prev, "list")
+		var env struct {
+			ErrName string `json:"err_name"`
+		}
+		if err := json.Unmarshal([]byte(got.Stderr), &env); err != nil || got.Code == 0 || env.ErrName == "" {
+			t.Fatalf("v0.17.3's list on the v16 store: exit %d, stderr %q; want a refusal", got.Code, got.Stderr)
+		}
+		return env.ErrName
+	}
+	wantErr := prevErr()
+	before := h.PhysicalSnapshot()
+	res := h.Install(c.valid()...)
+	envs := preflightEnvelopes(t, res, "ErrJournalMigrationRefused")
+	action := "inspect " + tc.inspect + ", or restore state.db's pre-upgrade copy, as docs/operator-actions.md \"Upgrading the native-input journal\" says, then re-run this install"
+	if len(envs) != 1 {
+		t.Errorf("envelopes %q; want install.sh's own only", envs)
+	}
+	assertOutcomeEnvelope(t, envs[len(envs)-1], "ErrJournalMigrationRefused", tc.reason, action, "not_committed", nil)
+	for _, line := range []string{"install.sh: state.db at v16 is past the native-input cutover, but its native-input authority is " + tc.what,
+		"  state.db: " + c.db, "  Nothing was installed or changed."} {
+		if !strings.Contains(res.Stderr, line+"\n") {
+			t.Errorf("stderr lacks %q:\n%s", line, res.Stderr)
+		}
+	}
+	assertRefusedUnchanged(t, h, before)
+	if got := prevErr(); got != wantErr {
+		t.Errorf("v0.17.3's list refuses with %s after the run; %s before it", got, wantErr)
+	}
+	return c, kept
+}
+
+// newGenuineOldHome builds BuildOld's old layout with v0.11.1's genuine pair
+// at bin/ and admin/, so its administrator predates the cutover
+// (ErrUnknownVerb) and its list is v0.11.1's. Its store is v5, so a run
+// with the move due crosses.
+func newGenuineOldHome(t *testing.T, opts ...moveOldOpt) *moveHome {
+	t.Helper()
+	r := genuineRelease(t, "v0.11.1")
+	h := newMoveHome(t)
+	h.BuildOld(opts...)
+	h.Copy(r.Pair.Main, filepath.Join(h.Old, "bin", "agent-director"), 0o755)
+	h.Copy(r.Pair.Admin, filepath.Join(h.Old, "admin", "agent-director-admin"), 0o755)
+	return h
+}
+
+// assertOldListWorks fails unless the old layout's agent-director (v0.11.1's)
+// lists.
+func assertOldListWorks(t *testing.T, h *moveHome) {
+	t.Helper()
+	if got := h.Run(filepath.Join(h.Old, "bin", "agent-director"), "list"); got.Code != 0 {
+		t.Errorf("v0.11.1's list after the refusal: exit %d: %s", got.Code, got.Stderr)
+	}
+}
+
+// withLinkDir makes ~/links and has h's installs write the managed PATH link
+// there; it returns the directory.
+func withLinkDir(h *moveHome) string {
+	h.t.Helper()
+	dir := filepath.Join(h.Home, "links")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		h.t.Fatal(err)
+	}
+	linkDirAt(h, dir)
+	return dir
+}
+
+// linkDirAt has h's installs write the managed PATH link in dir
+// (--symlink-dir dir in place of --no-symlink).
+func linkDirAt(h *moveHome, dir string) {
+	var flags []string
+	for _, f := range h.Flags {
+		if f != "--no-symlink" {
+			flags = append(flags, f)
+		}
+	}
+	h.Flags = setFlag(flags, "--symlink-dir", dir)
+}
+
+// restoreUnavailableAction is restore_copies_unavailable's fixed action.
+const restoreUnavailableAction = "make room or write access beside the installed binaries, the store and the managed PATH link; if the sentinel beside the store is not a regular file, or an installed binary or the managed PATH entry is neither a link nor a regular file, remove that entry; then re-run this release's installer"
+
+// copyPaths are the items a restore copies in an in-place home.
+type copyPaths struct{ bin, admin, sentinel, link, linkDir string }
+
+// newCopiesCrossing is a crossingCase whose v0.17.3 install has a managed
+// PATH link (~/links/agent-director) and a sentinel an earlier run left
+// beside the store, so every item a restore copies is there.
+func newCopiesCrossing(t *testing.T) (*crossingCase, copyPaths) {
+	t.Helper()
+	var p copyPaths
+	c := newCrossingCase(t, func(h *moveHome) { p.linkDir = withLinkDir(h) })
+	h := c.h
+	p.bin, p.admin = filepath.Join(h.New, "bin", "agent-director"), filepath.Join(h.New, "admin", "agent-director-admin")
+	p.sentinel, p.link = filepath.Join(h.New, "migrate-authorized"), filepath.Join(p.linkDir, "agent-director")
+	if target, err := os.Readlink(p.link); err != nil || target != p.bin {
+		t.Fatalf("v0.17.3's managed link %s names %q (%v); want %s", p.link, target, err, p.bin)
+	}
+	h.Write(p.sentinel, "{\"from\": 14, \"to\": 15}\n", 0o600)
+	return c, p
+}
+
+// unwritable takes write access from dir; the returned func gives it back.
+func unwritable(t *testing.T, dir string) func() {
+	t.Helper()
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := fi.Mode().Perm()
+	if err := os.Chmod(dir, mode&^0o222); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, mode) })
+	return func() {
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// standInBSDStat makes stat answer as BSD's: -c fails, and -f with the forms
+// install.sh uses (%d:%i, %Lp, %m, %u) answers as GNU's -c does. Each call is
+// logged to the returned file.
+func standInBSDStat(h *moveHome) string {
+	log := filepath.Join(h.Root, "stat.log")
+	h.WriteTool("stat", `echo "stat $*" >>`+moveQuote(log)+`
+args=() f=""
+while (($#)); do
+    case "$1" in
+        -c) exit 1 ;;
+        -f) f="$2"; shift 2; continue ;;
+    esac
+    args+=("$1"); shift
+done
+case "$f" in
+    "") exec `+moveQuote(h.RealTool("stat"))+` "${args[@]}" ;;
+    %Lp) f=%a ;;
+    %m) f=%Y ;;
+esac
+exec `+moveQuote(h.RealTool("stat"))+` -c "$f" "${args[@]}"`)
+	return log
+}
+
+// TestAdviceFollow_J36_BackupInsideInstallDirectory: with the old-layout move
+// due from v0.11.1, a journal backup directory inside AD's old or new
+// directory refuses in pre-flight with nothing changed, judged physically
+// (SR-2.14) and on the Darwin branch by file identity, a case variant
+// included (SR-2.15 "Limits"); the advice, followed literally, gives a
+// passing upgrade that moves and crosses. On Linux the case variants pass the
+// check, and an in-place upgrade never runs it. J36: "choose a
+// --journal-backup directory outside AD's old and new directories
+// (~/.agent-director and ~/.config/agent-director), then re-run this
+// release's installer".
+//
+// --check-only refuses a backup whose parent is missing or cannot be looked
+// up (backup_unreadable) before this check runs, so a missing ~/.config is
+// reached through a dangling link, a case variant's parent exists, and the
+// place that cannot be judged is a Darwin identity that cannot be read.
+//
+// When it is AD's directory whose place cannot be judged (~/.config a file,
+// or on Darwin an identity above the old directory that cannot be read), a
+// backup already outside refuses with the repair advice instead: "repair the
+// path of AD's directory that the message names (...), then choose a
+// --journal-backup directory outside ...". Followed literally, the named
+// repair alone, with the same backup, gives a passing upgrade.
+func TestAdviceFollow_J36_BackupInsideInstallDirectory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds v0.11.1 and v0.17.3")
+	}
+	const action = "choose a --journal-backup directory outside AD's old and new directories (~/.agent-director and ~/.config/agent-director), then re-run this release's installer"
+	const repairAction = "repair the path of AD's directory that the message names (rename aside any existing part of it that is not a directory, make each existing part one the user running the install can enter, break any link loop in it, and make its file identity readable), then " + action
+	mkdir := func(t *testing.T, dir string) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		// in is the directory the backup is inside, "old" or "new"; "" when
+		// the check passes it.
+		in       string
+		unjudged bool // its place cannot be judged
+		darwin   bool
+		bsdStat  bool
+		backup   func(t *testing.T, h *moveHome) string
+		// repair, for a backup already outside whose check fails on the
+		// install directory's side (status 2), is the repair stderr names,
+		// done in place of choosing another backup; cause is the line saying
+		// why.
+		repair func(t *testing.T, h *moveHome)
+		cause  func(h *moveHome) string
+	}{
+		{name: "lexically inside the old directory", in: "old", backup: func(t *testing.T, h *moveHome) string {
+			return filepath.Join(h.Old, "backup")
+		}},
+		{name: "through a link into the old directory", in: "old", backup: func(t *testing.T, h *moveHome) string {
+			h.Link(h.Old, filepath.Join(h.Root, "via"))
+			return filepath.Join(h.Root, "via", "backup")
+		}},
+		{name: "by its text through an inner link leading out", in: "old", backup: func(t *testing.T, h *moveHome) string {
+			mkdir(t, filepath.Join(h.Root, "elsewhere"))
+			h.Link(filepath.Join(h.Root, "elsewhere"), filepath.Join(h.Old, "out"))
+			return filepath.Join(h.Old, "out", "backup")
+		}},
+		{name: "under the new directory with no ~/.config yet", in: "new", backup: func(t *testing.T, h *moveHome) string {
+			h.Link(h.New, filepath.Join(h.Root, "to-new"))
+			return filepath.Join(h.Root, "to-new", "backup")
+		}},
+		{name: "darwin identity that cannot be read", in: "old", unjudged: true, darwin: true, backup: func(t *testing.T, h *moveHome) string {
+			odd := filepath.Join(h.Root, "odd")
+			mkdir(t, odd)
+			h.WriteTool("stat", `for a; do :; done
+if [[ "$a" == `+moveQuote(odd)+` ]]; then exit 1; fi
+exec `+moveQuote(h.RealTool("stat"))+` "$@"`)
+			return filepath.Join(odd, "backup")
+		}},
+		{name: "install side: ~/.config is a file", in: "new", unjudged: true,
+			backup: func(t *testing.T, h *moveHome) string {
+				config := filepath.Dir(h.New)
+				if err := os.Remove(config); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				h.Write(config, "not a directory\n", 0o644)
+				return filepath.Join(h.Root, "backup-outside")
+			},
+			cause: func(h *moveHome) string {
+				return "  " + h.New + " cannot be placed: an existing part of it is not a directory or cannot be entered, or its links loop"
+			},
+			repair: func(t *testing.T, h *moveHome) {
+				config := filepath.Dir(h.New)
+				if err := os.Rename(config, config+".aside"); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "install side: darwin identity of the old directory's parent cannot be read", in: "old", unjudged: true, darwin: true,
+			backup: func(t *testing.T, h *moveHome) string {
+				h.WriteTool("stat", `for a; do :; done
+if [[ "$a" == `+moveQuote(h.Home)+` && " $* " == *" %d:%i "* ]]; then exit 1; fi
+exec `+moveQuote(h.RealTool("stat"))+` "$@"`)
+				return filepath.Join(h.Root, "backup-outside")
+			},
+			cause: func(h *moveHome) string {
+				return "  the file identity of " + h.Old + ", or of a directory above it, cannot be read"
+			},
+			repair: func(t *testing.T, h *moveHome) {
+				if err := os.Remove(filepath.Join(h.Tools, "stat")); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "darwin case variant of the old directory with BSD stat", in: "old", darwin: true, bsdStat: true, backup: func(t *testing.T, h *moveHome) string {
+			mkdir(t, filepath.Join(h.Home, ".Agent-Director"))
+			return filepath.Join(h.Home, ".Agent-Director", "backup")
+		}},
+		{name: "darwin case variant of the new directory not made yet", in: "new", darwin: true, backup: func(t *testing.T, h *moveHome) string {
+			mkdir(t, filepath.Join(h.Home, ".config", "Agent-Director"))
+			return filepath.Join(h.Home, ".config", "Agent-Director", "b")
+		}},
+		{name: "linux case variant of the old directory", backup: func(t *testing.T, h *moveHome) string {
+			mkdir(t, filepath.Join(h.Home, ".Agent-Director"))
+			return filepath.Join(h.Home, ".Agent-Director", "backup")
+		}},
+		{name: "linux case variant of the new directory", backup: func(t *testing.T, h *moveHome) string {
+			mkdir(t, filepath.Join(h.Home, ".config", "Agent-Director"))
+			return filepath.Join(h.Home, ".config", "Agent-Director", "b")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newGenuineOldHome(t)
+			if tc.darwin {
+				standInDarwin(h)
+			}
+			var statLog string
+			if tc.bsdStat {
+				statLog = standInBSDStat(h)
+			}
+			backup := tc.backup(t, h)
+			h.Flags = setFlag(h.Flags, "--journal-backup", backup)
+			before := h.PhysicalSnapshot()
+			res := h.Install()
+			if tc.in == "" {
+				// A new tree under HOME holds the backup, so the move's
+				// whole-home check does not apply.
+				assertMovedCrossed(t, h, nil, res, backup)
+				return
+			}
+			dir := map[string]string{"old": h.Old, "new": h.New}[tc.in]
+			want := action
+			lines := []string{"install.sh: the journal backup directory " + backup + " is inside AD's " + tc.in + " directory " + dir + "; refusing to upgrade."}
+			if tc.unjudged {
+				lines = []string{"install.sh: cannot judge whether the journal backup directory " + backup + " is inside AD's " + tc.in + " directory " + dir + "; refusing to upgrade.",
+					"  the file identity of " + filepath.Dir(backup) + ", or of a directory above it, cannot be read"}
+			}
+			if tc.repair != nil {
+				want = repairAction
+				lines = []string{lines[0], tc.cause(h),
+					"  To fix: repair the path " + dir + " as the action below says; choosing another --journal-backup alone does not clear this."}
+			} else if strings.Contains(res.Stderr, "  To fix: ") {
+				t.Errorf("a backup-side refusal says to repair AD's directory:\n%s", res.Stderr)
+			}
+			lines = append(lines, "  This upgrade moves "+h.Old+" to "+h.New+", and a restore renames those directories, which would move or hide a backup inside them.")
+			assertOwnRefusal(t, res, "backup_inside_install_directory", want, lines...)
+			assertRefusedUnchanged(t, h, before)
+			for _, p := range []string{h.New, backup} {
+				if _, err := os.Lstat(p); err == nil {
+					t.Errorf("the refusal made %s", p)
+				}
+			}
+			assertOldListWorks(t, h)
+			if statLog != "" {
+				if b, _ := os.ReadFile(statLog); !strings.Contains(string(b), "stat -L -f %d:%i ") {
+					t.Errorf("the identity rule did not read BSD stat's -f '%%d:%%i':\n%s", b)
+				}
+			}
+
+			outside := filepath.Join(h.Root, "backup-outside")
+			if tc.repair != nil {
+				// The backup is outside already; only the named repair is done.
+				tc.repair(t, h)
+			} else {
+				h.Flags = setFlag(h.Flags, "--journal-backup", outside)
+			}
+			moved := h.Snapshot()
+			assertMovedCrossed(t, h, moved, h.Install(), outside)
+			if tc.darwin {
+				assertDarwinOnly(t, h)
+			}
+		})
+	}
+	t.Run("in place never checks", func(t *testing.T) {
+		c := newCrossingCase(t)
+		backup := filepath.Join(c.h.New, "journal-backup")
+		c.assertCrossed(t, c.h.Install(setFlag(c.valid(), "--journal-backup", backup)...), backup)
+	})
+}
+
+// TestAdviceFollow_J37_RestoreCopiesUnavailable: from a genuine v0.17.3
+// install with a managed PATH link and a leftover sentinel, a copy the
+// restore needs that cannot be made refuses in pre-flight with nothing
+// changed and no copy left, the earlier items' copies removed; following the
+// advice for the item stderr names gives a passing crossing upgrade that
+// writes the managed link again. J37: "make room or write access beside the
+// installed binaries, the store and the managed PATH link; if the sentinel
+// beside the store is not a regular file, or an installed binary or the
+// managed PATH entry is neither a link nor a regular file, remove that entry;
+// then re-run this release's installer".
+func TestAdviceFollow_J37_RestoreCopiesUnavailable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and installs v0.17.3")
+	}
+	const action = restoreUnavailableAction
+	remove := func(t *testing.T, p string) func() {
+		return func() {
+			if err := os.Remove(p); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		item func(p copyPaths) string
+		// cause is the cause's exact text, or "" when it is the tool's own.
+		cause func(p copyPaths) string
+		// block makes the item's copy impossible and returns the advice's
+		// step for it.
+		block func(t *testing.T, h *moveHome, p copyPaths) func()
+	}{
+		{"binary directory unwritable", func(p copyPaths) string { return "agent-director, " + p.bin }, nil,
+			func(t *testing.T, h *moveHome, p copyPaths) func() { return unwritable(t, filepath.Dir(p.bin)) }},
+		{"administrator directory unwritable", func(p copyPaths) string { return "agent-director-admin, " + p.admin }, nil,
+			func(t *testing.T, h *moveHome, p copyPaths) func() { return unwritable(t, filepath.Dir(p.admin)) }},
+		{"store directory unwritable", func(p copyPaths) string { return "the migration sentinel, " + p.sentinel }, nil,
+			func(t *testing.T, h *moveHome, p copyPaths) func() { return unwritable(t, filepath.Dir(p.sentinel)) }},
+		{"link directory unwritable", func(p copyPaths) string { return "the managed PATH link, " + p.link }, nil,
+			func(t *testing.T, h *moveHome, p copyPaths) func() { return unwritable(t, p.linkDir) }},
+		{"sentinel is a link", func(p copyPaths) string { return "the migration sentinel, " + p.sentinel },
+			func(p copyPaths) string { return p.sentinel + " is not a regular file" },
+			func(t *testing.T, h *moveHome, p copyPaths) func() {
+				target := filepath.Join(h.Root, "sentinel-target")
+				h.Write(target, "{\"from\": 14, \"to\": 15}\n", 0o600)
+				remove(t, p.sentinel)()
+				h.Link(target, p.sentinel)
+				return remove(t, p.sentinel)
+			}},
+		{"managed PATH entry is a directory", func(p copyPaths) string { return "the managed PATH link, " + p.link },
+			func(p copyPaths) string { return p.link + " is neither a link nor a regular file" },
+			func(t *testing.T, h *moveHome, p copyPaths) func() {
+				remove(t, p.link)()
+				if err := os.Mkdir(p.link, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return remove(t, p.link)
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, p := newCopiesCrossing(t)
+			h := c.h
+			follow := tc.block(t, h, p)
+			flags := c.valid()
+			before := h.PhysicalSnapshot()
+			res := h.Install(flags...)
+			lines := []string{"install.sh: cannot make the copies a restore needs; refusing to upgrade.", "  item : " + tc.item(p), "  cause:"}
+			if tc.cause != nil {
+				lines = append(lines, "    "+tc.cause(p))
+			}
+			assertOwnRefusal(t, res, "restore_copies_unavailable", action, lines...)
+			assertRefusedUnchanged(t, h, before, ".config/agent-director", ".config/agent-director/bin", ".config/agent-director/admin", "links")
+
+			// v0.17.3's list may need to write beside its store, so it runs
+			// once the advice has given write access back.
+			follow()
+			if got := h.Run(c.prev, "list"); got.Code != 0 {
+				t.Errorf("v0.17.3's list after the refusal: exit %d: %s", got.Code, got.Stderr)
+			}
+			c.assertCrossed(t, h.Install(flags...), journalBackup(flags))
+			if target, err := os.Readlink(p.link); err != nil || target != p.bin {
+				t.Errorf("the managed link %s names %q (%v); want %s", p.link, target, err, p.bin)
+			}
+			if got := restoreCopyNames(t, h); len(got) != 0 {
+				t.Errorf("copies left: %v", got)
+			}
+		})
+	}
+}
+
+// probeStandIn puts a script at admin that logs its arguments to the
+// returned file, emptied first, then runs body.
+func probeStandIn(h *moveHome, admin, body string) string {
+	h.t.Helper()
+	log := filepath.Join(h.Root, "probe.log")
+	for _, p := range []string{admin, log} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			h.t.Fatal(err)
+		}
+	}
+	h.Write(admin, "#!/bin/bash\nprintf '%s\\n' \"$*\" >>"+moveQuote(log)+"\n"+body+"\n", 0o755)
+	return log
+}
+
+// assertNotProbed fails unless res, a passing run, did not probe the previous
+// administrator: no "previous:" line, and log holds no probe.
+func assertNotProbed(t *testing.T, res moveResult, log string) {
+	t.Helper()
+	b, _ := os.ReadFile(log)
+	if strings.Contains(res.Stdout, "  previous: ") || strings.Contains(string(b), "migrate-journal --help") {
+		t.Errorf("a run that does not cross probed the previous administrator (log %q):\n%s", b, res.Stdout)
+	}
+}
+
+// TestAdviceFollow_J38_PreviousReleaseUnknown: a crossing upgrade whose
+// previous administrator gives the predates probe no clear answer refuses in
+// pre-flight with nothing changed, after running it once as exactly
+// migrate-journal --help; the advice followed down either branch (made
+// runnable, or removed so that it is absent) gives a passing crossing
+// upgrade. A run that does not cross never probes. J38: "make the previous
+// agent-director-admin runnable, or remove it if it is not that release's,
+// then re-run this release's installer".
+func TestAdviceFollow_J38_PreviousReleaseUnknown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and installs v0.17.3 and v0.11.1")
+	}
+	const action = "make the previous agent-director-admin runnable, or remove it if it is not that release's, then re-run this release's installer"
+	script := func(body string) func(h *moveHome, admin string) string {
+		return func(h *moveHome, admin string) string { return probeStandIn(h, admin, body) }
+	}
+	for _, tc := range []struct {
+		name   string
+		status int
+		// unclear makes the administrator at admin give no clear answer and
+		// returns the file a script stand-in logs its arguments to, or "".
+		unclear  func(h *moveHome, admin string) string
+		runnable bool // the follow makes it runnable, rather than removing it
+		moveDue  bool
+		// nonCrossing then shows that runs that do not cross never probe.
+		nonCrossing bool
+	}{
+		{name: "not executable", status: 126, runnable: true, unclear: func(h *moveHome, admin string) string {
+			if err := os.Chmod(admin, 0o644); err != nil {
+				h.t.Fatal(err)
+			}
+			return ""
+		}},
+		{name: "dangling link", status: 127, unclear: func(h *moveHome, admin string) string {
+			if err := os.Remove(admin); err != nil {
+				h.t.Fatal(err)
+			}
+			h.Link(filepath.Join(h.Root, "gone"), admin)
+			return ""
+		}},
+		{name: "exit 127", status: 127, unclear: script("exit 127")},
+		{name: "exit 3", status: 3, unclear: script("exit 3"), nonCrossing: true},
+		{name: "exit 1 with no envelope", status: 1, unclear: script("echo 'not an envelope' >&2; exit 1")},
+		{name: "exit 1 with another err_name", status: 1, unclear: script(`echo '{"err_name":"ErrInvalidFlags","err_description":"stand-in"}' >&2; exit 1`)},
+		{name: "killed by a signal", status: 137, unclear: script("kill -KILL $$")},
+		{name: "move due", status: 3, unclear: script("exit 3"), moveDue: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var c *crossingCase
+			var h *moveHome
+			var admin string
+			var flags []string
+			if tc.moveDue {
+				h = newGenuineOldHome(t)
+				admin = filepath.Join(h.Old, "admin", "agent-director-admin")
+			} else {
+				c = newCrossingCase(t)
+				h = c.h
+				admin = filepath.Join(h.New, "admin", "agent-director-admin")
+				flags = c.valid()
+			}
+			log := tc.unclear(h, admin)
+			before := h.PhysicalSnapshot()
+			res := h.Install(flags...)
+			assertOwnRefusal(t, res, "previous_release_unknown", action,
+				"install.sh: cannot tell whether the previous release predates the native-input cutover; refusing to upgrade.",
+				"  previous agent-director-admin: "+admin,
+				fmt.Sprintf("  migrate-journal --help exited with status %d, without exit 0 or exit 1 with ErrUnknownVerb. It said:", tc.status))
+			assertRefusedUnchanged(t, h, before)
+			if log != "" {
+				if b, err := os.ReadFile(log); err != nil || string(b) != "migrate-journal --help\n" {
+					t.Errorf("the probe ran the administrator with %q (%v); want once, as exactly migrate-journal --help", b, err)
+				}
+			}
+			if tc.moveDue {
+				if _, err := os.Lstat(h.New); err == nil {
+					t.Errorf("the refusal made %s", h.New)
+				}
+				assertOldListWorks(t, h)
+			} else if got := h.Run(c.prev, "list"); got.Code != 0 {
+				t.Errorf("v0.17.3's list after the refusal: exit %d: %s", got.Code, got.Stderr)
+			}
+
+			why := "absent"
+			if tc.runnable {
+				if err := os.Chmod(admin, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				why = "migrate-journal --help: ErrUnknownVerb"
+			} else if err := os.Remove(admin); err != nil {
+				t.Fatal(err)
+			}
+			if tc.moveDue {
+				moved := h.Snapshot()
+				res = h.Install()
+				assertMovedCrossed(t, h, moved, res, journalBackup(h.Flags))
+			} else {
+				res = h.Install(flags...)
+				c.assertCrossed(t, res, journalBackup(flags))
+			}
+			if want := "  previous: " + admin + " predates the native-input cutover (" + why + ")\n"; !strings.Contains(res.Stdout, want) {
+				t.Errorf("stdout lacks %q:\n%s", want, res.Stdout)
+			}
+			if !tc.nonCrossing {
+				return
+			}
+			// The store is current now, so with an unclear administrator
+			// again the run does not cross and passes unprobed; so does a run
+			// with no store.
+			log = probeStandIn(h, admin, "exit 3")
+			assertNotProbed(t, moveMustInstall(t, h), log)
+			fresh := newMoveHome(t)
+			log = probeStandIn(fresh, filepath.Join(fresh.New, "admin", "agent-director-admin"), "exit 3")
+			assertNotProbed(t, moveMustInstall(t, fresh), log)
+		})
+	}
 }

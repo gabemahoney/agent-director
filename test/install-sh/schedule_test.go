@@ -1,7 +1,7 @@
 package installsh_test
 
 // install.sh's schedule step (b.wur): recovery and retention have separate
-// operator-selected schedules, and an install that sets none up says so.
+// operator-selected schedules, and an install reports when it cannot find both.
 // The cases drive install.sh against stand-ins for crontab,
 // systemctl and curl (the INSTALL_SH_TEST_CRONTAB, _SYSTEMCTL and
 // _CURL_OVERRIDE switches) and read what it prints and writes: the stand-ins'
@@ -42,7 +42,8 @@ func TestScheduleCapability(t *testing.T) {
 			h.Env["SCHED_TEST_DELEGATE"] = h.S.Current.Main
 			h.Env["SCHED_TEST_LOG"] = filepath.Join(h.Root, "binary.log")
 			stub := schedStub{h}
-			stub.Cron("")
+			// b.dki: an operator's untagged find-missing schedule is invisible to --schedule.
+			stub.Cron("*/2 * * * * /x/agent-director find-missing >/dev/null\n17 3 * * * /x/agent-director expire >/dev/null\n")
 			script := schedScript(t, h, true)
 			wantVerb := "find-missing"
 			if mode == "new" {
@@ -63,9 +64,23 @@ func TestScheduleCapability(t *testing.T) {
 			}
 			want := strings.ReplaceAll(schedCronLines(h, "")[0], " sweep ", " "+wantVerb+" ")
 			wantLines(t, "warning", res.Stderr,
-				"install.sh: WARNING: nothing schedules agent-director's "+wantVerb+" and expire jobs on this machine.",
+				"install.sh: WARNING: could not find active --schedule entries for both agent-director's "+wantVerb+" and expire jobs.",
 				"    "+want,
 				"  Copy the rendered cron lines above. For a unit, fill its placeholders and use "+wantVerb+" as the")
+			wantLines(t, "warning scope", res.Stderr,
+				"install.sh: WARNING: could not find active --schedule entries for both agent-director's "+wantVerb+" and expire jobs.",
+				"  This check sees only the entries --schedule adds; it cannot see schedules made another way",
+				"  (launchd, your own cron line or unit). Already scheduled another way? Ignore this warning,",
+				"  or run --schedule and drop your own entries.")
+			if strings.Contains(res.Stderr, "nothing schedules") {
+				t.Error("warning claims nothing schedules the sweeps despite the operator's untagged entries")
+			}
+			aliasNote := "  Existing schedules running find-missing keep working: it is an alias of sweep."
+			if wantVerb == "sweep" {
+				wantLines(t, "alias compatibility", res.Stderr, aliasNote)
+			} else if strings.Contains(res.Stderr, aliasNote) {
+				t.Error("alias note printed for a binary without sweep support")
+			}
 			// Follow exactly the printed rerun. The capability stand-in uses
 			// the matching current admin, including snapshot-store support;
 			// actual released pairs are checked separately on fresh installs.
@@ -317,7 +332,12 @@ func TestScheduleReleasedCompatibility(t *testing.T) {
 				if backend != "manual" {
 					argv = append(argv, "--schedule")
 				}
-				res := schedRunArgv(t, h, script, true, argv)
+				var res moveResult
+				if installer == "released" {
+					res = moveInstallReleasePipedSetup(t, h, script, argv)
+				} else {
+					res = schedRunArgv(t, h, script, true, argv)
+				}
 				if res.Code != 0 {
 					t.Fatalf("install: %+v", res)
 				}
@@ -392,8 +412,8 @@ func TestScheduleReleasedCompatibility(t *testing.T) {
 const (
 	schedMark = "agent-director-schedule"
 	// schedWarnHead is the first line of the warning an install ends with when
-	// none of its entries is scheduled.
-	schedWarnHead = "install.sh: WARNING: nothing schedules agent-director's sweep and expire jobs on this machine."
+	// its entries for both jobs are not found.
+	schedWarnHead = "install.sh: WARNING: could not find active --schedule entries for both agent-director's sweep and expire jobs."
 	schedRawBase  = "https://raw.githubusercontent.com/gabemahoney/agent-director/"
 	// schedFoundCron and schedFoundSystemd are the stdout lines of an install
 	// that finds its entries in place and leaves them.
@@ -764,7 +784,7 @@ func before(text, a, b string) bool {
 // schedDone is install.sh's closing stdout line of a clean install.
 const schedDone = "install.sh: done. Try: "
 
-// TestScheduleWarning: an install with nothing scheduled ends with a loud
+// TestScheduleWarning: an install that cannot find both entries ends with a loud
 // warning on stderr after its "done" line, naming the lines to add; one whose
 // entries are in place says it found them and does not warn. Without
 // --schedule it changes nothing, and no outcome changes the exit status.
@@ -785,6 +805,10 @@ func TestScheduleWarning(t *testing.T) {
 		want := strings.Join([]string{
 			"",
 			schedWarnHead,
+			"  This check sees only the entries --schedule adds; it cannot see schedules made another way",
+			"  (launchd, your own cron line or unit). Already scheduled another way? Ignore this warning,",
+			"  or run --schedule and drop your own entries.",
+			"  Existing schedules running find-missing keep working: it is an alias of sweep.",
 			"  Recovery runs only when called; state reads also perform the shared checks on supporting versions.",
 			"  Absent or failed checks leave observations old. expire separately removes eligible finished rows.",
 			"  Choose an external cadence for recovery and retention cleanup; neither runs an internal daemon.",
@@ -802,8 +826,6 @@ func TestScheduleWarning(t *testing.T) {
 			"  script install them, as the user the agents run as:",
 			"    " + rerun,
 			"  (--schedule uses cron when crontab works here and a cron daemon runs, else systemd user timers, else it installs nothing.)",
-			"  Already scheduled another way (launchd, your own cron line or unit)? This check sees only the entries",
-			"  --schedule adds, so it warns anyway: ignore this, or run --schedule and drop your own entries.",
 			"",
 		}, "\n")
 		if !strings.HasSuffix(res.Stderr, want) {
@@ -853,6 +875,11 @@ func TestScheduleWarning(t *testing.T) {
 			}
 			if got := strings.Contains(res.Stderr, schedWarnHead); got != row.warn {
 				t.Errorf("warning on stderr = %v, want %v:\n%s", got, row.warn, res.Stderr)
+			}
+			// b.dki: a surviving recovery entry must not be described as no entries.
+			if row.name == "only-find-missing-is-scheduled" {
+				wantLines(t, "partial schedule warning", res.Stderr,
+					"install.sh: WARNING: could not find active --schedule entries for both agent-director's sweep and expire jobs.")
 			}
 			if row.foundLine != "" {
 				wantLines(t, "stdout", res.Stdout, row.foundLine)

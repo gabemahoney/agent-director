@@ -27,7 +27,9 @@ package probe
 // already records: on Linux field 22 of /proc/<pid>/stat verbatim (clock ticks
 // since boot, decimal); on darwin the KERN_PROC_PID entry's p_starttime as
 // "<tv_sec>.<tv_usec>" (formatDarwinProcStartTime). Callers compare it
-// byte-for-byte, never by clock.
+// byte-for-byte for process identity, never by clock. Only the Darwin journal
+// verifier also orders darwin start identities against its selection and
+// listing times, and only through ParseDarwinProcStartTime.
 //
 // The reader never reads a process environment and never reads the clock.
 type ProcChecker interface {

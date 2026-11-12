@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J33, J26 retired, and G8 for the binary's ErrOldLayout). Each test
+# (advice inventory J1-J34 and J48, J26 retired, and G8 for the binary's ErrOldLayout). Each test
 # triggers one install.sh refusal, checks the advice text word for word, does
 # exactly what the text says (re-runs the same command, runs the advised
 # command, puts the missing tool on PATH) and checks the promised outcome.
@@ -24,10 +24,9 @@
 # unless AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1, which runs it and shows it
 # fail.
 #
-# The tests run install.sh unmodified. On a host install.sh refuses (it accepts
-# only Linux/x86_64 and Darwin/arm64, so a Linux/aarch64 sandbox, Docker on
-# Apple silicon, is refused) no J test can run: the script runs none, prints
-# one "advice_follow.sh: SKIP: <reason>" line and exits SKIP_RC (77), which
+# The tests run install.sh unmodified. A refusal of Linux/x86_64,
+# Linux/aarch64 or Darwin/arm64 fails the suite. Other refused hosts print one
+# "advice_follow.sh: SKIP: <reason>" line and exit SKIP_RC (77), which
 # advice_follow_test.go reports as a skip, never a pass.
 
 set -uo pipefail
@@ -59,6 +58,9 @@ gate_err="$(cd "$ROOT" && env -i HOME="$ROOT/gate-home" PATH="$PATH" TMPDIR="$RO
     bash "$INSTALL_SRC" --binary "$ROOT/no-such-binary" --no-hooks --no-symlink 2>&1 >/dev/null)"
 gate_rc=$?
 if [[ "$gate_rc" -eq 2 && "$gate_err" == *"install.sh: unsupported host: $HOST_ARCH."* ]]; then
+    case "$HOST_ARCH" in
+        Linux/x86_64|Linux/aarch64|Darwin/arm64) die "install.sh refused supported host $HOST_ARCH: $gate_err" ;;
+    esac
     echo "advice_follow.sh: SKIP: install.sh refuses $HOST_ARCH hosts; J tests need a supported host"
     printf '%s\n' "$gate_err" | sed 's/^/    /'
     exit "$SKIP_RC"
@@ -209,13 +211,14 @@ EOF
 # J22's after-open move also surrounds the administrator open now used for
 # pre-cutover stores. Delegate to the real administrator, preserving inventory,
 # backup and transaction checks; inject the fixture move only after success,
-# and never after a snapshot or pre-flight's migrate-journal --check-only.
+# and never after a snapshot, pre-flight's migrate-journal --check-only or
+# its predates probe (migrate-journal --help), none of which opens the store.
 FAKE_ADMIN="$ROOT/bin/admin-around"
 FAKE_ADMIN_AROUND="$ROOT/fake-admin-around.sh"
 cat >"$FAKE_ADMIN_AROUND" <<EOF
 #!/bin/bash
 "$ADMIN" "\$@" || exit
-for arg in "\$@"; do [[ "\$arg" == snapshot-store || "\$arg" == --check-only ]] && exit 0; done
+for arg in "\$@"; do [[ "\$arg" == snapshot-store || "\$arg" == --check-only || "\$arg" == --help ]] && exit 0; done
 if [[ -e "\$HOME/fake-after" ]]; then . "\$HOME/fake-after"; rm "\$HOME/fake-after"; fi
 EOF
 chmod 0755 "$FAKE_ADMIN_AROUND" || die "chmod $FAKE_ADMIN_AROUND"
@@ -318,8 +321,7 @@ echo "fake curl: unexpected call: $url" >&2
 exit 7
 EOF
 if ! command -v file >/dev/null 2>&1; then
-    # The sandbox image has no file(1): describe ELF the way it does, enough
-    # for install.sh's architecture probe.
+    # For an image without file(1), describe the headers as the real tool does.
     fake file <<'EOF'
 #!/bin/bash
 p="${!#}"
@@ -328,9 +330,13 @@ case "$(hex 0 4)" in
     7f454c46)
         bits=32; [[ "$(hex 4 1)" == 02 ]] && bits=64
         endian=LSB; [[ "$(hex 5 1)" == 02 ]] && endian=MSB
-        case "$(hex 18 2)" in 3e00) m=x86-64 ;; b700) m="ARM aarch64" ;; *) m="machine 0x$(hex 18 2)" ;; esac
+        machine="$(hex 18 2)"
+        [[ "$endian" != MSB ]] || machine="${machine:2:2}${machine:0:2}"
+        case "$machine" in 3e00) m=x86-64 ;; b700) m="ARM aarch64" ;; 2800) m=ARM ;; *) m="machine 0x$machine" ;; esac
         echo "ELF ${bits}-bit ${endian} executable, ${m}, version 1 (SYSV), statically linked" ;;
-    cffaedfe) echo "Mach-O 64-bit executable" ;;
+    cffaedfe)
+        m=""; [[ "$(hex 4 4)" != 0c000001 ]] || m=" arm64"
+        echo "Mach-O 64-bit${m} executable" ;;
     *) echo "data" ;;
 esac
 EOF
@@ -471,6 +477,21 @@ run_journal() {
         --journal-backup "$home.journal-backup-$RUN_N"
 }
 
+# journal_verify <home> [<legacy root>...]: the journal actions' last step as
+# written, "run migrate-journal with a new --backup-dir until it exits 0 with
+# authority "sqlite"": the installed administrator over home's store with the
+# window flags, the same additional roots and a new backup. It fails the case
+# unless that holds.
+journal_verify() {
+    local home="$1" root args=(); shift
+    for root in "$@"; do args+=(--legacy-root "$root"); done
+    run "$home" "$home/.config/agent-director/admin/agent-director-admin" \
+        --store-path "$home/.config/agent-director/state.db" migrate-journal \
+        --maintenance-window --roots-complete --backup-dir "$home.verify-backup-$RUN_N" "${args[@]}"
+    expect_rc 0 "migrate-journal after the installer re-run" || return 1
+    jq -e '.authority == "sqlite"' "$OUT" >/dev/null || bad "migrate-journal after the installer re-run: $(flat "$OUT")"
+}
+
 # Build closed fixture databases from genuine pre-cutover schemas, never by
 # lowering the stamp of a native-authoritative store. These are empty test
 # replacements; production recovery must restore the stopped-writer backup.
@@ -546,6 +567,15 @@ expect_advice() {
     local text
     text="$(flat "$ERR")"
     [[ "$text" == *"$1"* ]] || bad "stderr lacks the advice \"$1\": $text"
+}
+
+# expect_refusal_action <action>: the first ErrJournalMigrationRefused
+# envelope on stderr carries exactly this refusal action, decoded from its
+# JSON (word for word, quotes included).
+expect_refusal_action() {
+    local got
+    got="$(jq -Rr 'fromjson? | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.action' "$ERR" | head -n 1)"
+    [[ "$got" == "$1" ]] || bad "relayed refusal action \"$got\"; want \"$1\""
 }
 
 # advice_after <marker>: the rest of the first stderr line holding marker
@@ -909,28 +939,62 @@ test_J3_TriedPathsResolved() {
     done
 }
 
-# ---- J4: wrong-architecture --binary ---------------------------------------------
+# ---- J4: wrong-architecture binary flags ----------------------------------------
 
-# J4: "Did you pass the wrong --binary?"
+# J4: "Did you pass the wrong --binary?" / "--admin-binary?" (b.vqr).
+# Both Linux hosts reject all four classes; each refusal is followed with the
+# native pair. Synthetic headers test the probe, not native ARM execution.
 test_J4_ArchMismatchRightBinary() {
-    local h; h="$(new_home)"
-    run "$h" bash "$LOOSE" --binary "$WRONG_ARCH" --admin-binary "$ADMIN" --no-hooks --no-symlink
-    expect_rc 2 "$WRONG_NAME binary on $HOST_ARCH" || return
-    expect_advice "Did you pass the wrong --binary?"
-    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
-    expect_rc 0 "re-run with the right --binary" && expect_installed "$h" "$BIN" "$ADMIN"
+    local h flag kind wrong desc want_format want_machine binary admin want
+    local native_machine=x86-64
+    [[ "$HOST_ARCH" != Linux/aarch64 ]] || native_machine="ARM aarch64"
+    # A complete ELF header in the declared byte order, with no program or
+    # section tables. Merely flipping EI_DATA would corrupt e_machine too.
+    python3 - "$BIN" "$ROOT/bin" <<'PY' || { bad "build J4 synthetic headers"; return; }
+from pathlib import Path
+import struct, sys
+native = Path(sys.argv[1]).read_bytes()
+machine = struct.unpack_from('<H', native, 18)[0]
+root = Path(sys.argv[2])
+headers = {
+    'big-endian': b'\x7fELF\x02\x02\x01' + bytes(9)
+        + struct.pack('>HHIQQQIHHHHHH', 2, machine, 1, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0),
+    'arm32': b'\x7fELF\x01\x01\x01' + bytes(9)
+        + struct.pack('<HHIIIIIHHHHHH', 2, 40, 1, 0, 0, 0, 0, 52, 0, 0, 0, 0, 0),
+    'macho': struct.pack('<IIIIII', 0xfeedfacf, 0x0100000c, 0, 2, 0, 0) + bytes(32),
 }
-
-# J4: "Did you pass the wrong --admin-binary?" (b.vqr)
-test_J4_ArchMismatchRightAdminBinary() {
-    local h; h="$(new_home)"
-    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$WRONG_ARCH_ADMIN" --no-hooks --no-symlink
-    expect_rc 2 "$WRONG_NAME agent-director-admin on $HOST_ARCH" || return
-    expect_advice "install.sh: --admin-binary $WRONG_ARCH_ADMIN: architecture mismatch"
-    expect_advice "Did you pass the wrong --admin-binary?"
-    expect_nothing_installed "$h"
-    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
-    expect_rc 0 "re-run with the right --admin-binary" && expect_installed "$h" "$BIN" "$ADMIN"
+for name, header in headers.items():
+    path = root / name
+    path.write_bytes(header)
+    path.chmod(0o755)
+PY
+    for flag in --binary --admin-binary; do
+        for kind in wrong-machine big-endian arm32 macho; do
+            wrong="$ROOT/bin/$kind"
+            case "$kind" in
+                wrong-machine)
+                    wrong="$WRONG_ARCH"
+                    [[ "$flag" != --admin-binary ]] || wrong="$WRONG_ARCH_ADMIN"
+                    want_format='ELF 64-bit LSB' want_machine="$WRONG_NAME" ;;
+                big-endian) want_format='ELF 64-bit MSB' want_machine="$native_machine" ;;
+                arm32) want_format='ELF 32-bit LSB' want_machine=ARM ;;
+                macho) want_format='Mach-O 64-bit' want_machine=arm64 ;;
+            esac
+            desc="$("$TOOLBOX/file" -L -b "$wrong")" || { bad "file $kind"; continue; }
+            [[ "$desc" == *"$want_format"* && "$desc" == *"$want_machine"* ]] \
+                || { bad "$kind fixture: [$desc]; want $want_format and $want_machine"; continue; }
+            h="$(new_home)" binary="$BIN" admin="$ADMIN"
+            if [[ "$flag" == --binary ]]; then binary="$wrong"; else admin="$wrong"; fi
+            run "$h" bash "$LOOSE" --binary "$binary" --admin-binary "$admin" --no-hooks --no-symlink
+            expect_rc 2 "$flag $kind on $HOST_ARCH" || continue
+            want="install.sh: $flag $wrong: architecture mismatch (binary appears to be ${desc:0:80}; host is $HOST_ARCH). Did you pass the wrong $flag?"
+            grep -qxF "$want" "$ERR" || bad "$flag $kind: missing exact probe message: $(flat "$ERR")"
+            expect_advice "Did you pass the wrong $flag?"
+            expect_nothing_installed "$h"
+            run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
+            expect_rc 0 "re-run with the right $flag after $kind" && expect_installed "$h" "$BIN" "$ADMIN"
+        done
+    done
 }
 
 # ---- J5: source-tree version check -------------------------------------------------
@@ -1126,6 +1190,16 @@ j6_repair_hop() {
     fi
 }
 
+# j6_expect_step_failed: the relayed refusal is the cutover's statements
+# failing before its commit: schema_step_failed with its own action, nothing
+# committed.
+J6_ACTION="fix what stopped the schema step, such as disk space, write access or a schema changed by hand, keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+j6_expect_step_failed() {
+    expect_advice '"reason":"schema_step_failed"'
+    expect_refusal_action "$J6_ACTION"
+    expect_advice '"cutover":"not_committed","steps_committed":false'
+}
+
 j6_assert_rollback() {
     local db="$J6H/.config/agent-director/state.db"
     [[ "$(db_version "$J6H")" == $PRE_CUTOVER_SCHEMA ]] || bad "failed migration stamped v$SCHEMA"
@@ -1154,23 +1228,39 @@ j6_failing_migration() {
     J6_BEFORE="$("$SQLITE" "$J6H/.config/agent-director/state.db" '.sha3sum --schema')"
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
     run_journal "$J6H" "${J6ARGV[@]}"
-    expect_exit5 ErrJournalMigrationRefused "migration step fails" || return 1
-    expect_advice '"reason":"migration_incomplete_or_commit_unknown"'
-    expect_advice "Keep the maintenance boundary and restart administrator verification."
-    [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
+    if [[ "${1:-}" == pre-0.11.0 ]]; then
+        expect_exit5 ErrJournalMigrationRefused "migration step fails and restores" || return 1
+        expect_advice "install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run."
+        expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+        cmp -s "$J6H/.config/agent-director/bin/agent-director" "$BIN_OLD" || bad "restore did not put back the old CLI"
+        [[ ! -e "$J6H/.config/agent-director/admin/agent-director-admin" ]] || bad "restore retained the newly installed administrator"
+        [[ ! -e "$(sentinel "$J6H")" ]] || bad "restore retained the run's sentinel"
+    else
+        expect_exit5 ErrJournalMigrationIncomplete "migration step fails" || return 1
+        expect_advice "install.sh: the cutover did not commit; this release stays installed."
+        expect_advice "The administrator installed before the run ($J6H/.config/agent-director/admin/agent-director-admin) does not predate the cutover, so there is no earlier release to put back."
+        expect_advice "To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:"
+        expect_installed "$J6H" "$BIN" "$ADMIN"
+        [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
+    fi
+    j6_expect_step_failed
     j6_assert_rollback
 }
 
-# J6: "Keep the maintenance boundary and restart administrator verification."
-# Repeat the failing transaction with a fresh exclusive backup, then remove
-# only the injected fault and repeat verification/cutover. The sentinel alone
+# J6: "fix what stopped the schema step, such as disk space, write access or a
+# schema changed by hand, keep the maintenance window, then re-run this
+# release's installer with a new --journal-backup, which finishes any pending
+# schema step, then run migrate-journal with a new --backup-dir until it exits
+# 0 with authority "sqlite"", the relayed schema_step_failed action. Repeat the
+# failing transaction with a fresh exclusive backup, then remove only the
+# injected fault, re-run the installer and then migrate-journal. The sentinel alone
 # cannot authorize the early probe (b.7b4, b.dzw; native cutover contract).
 test_J6_MigrationFailedRerunRetries() {
     j6_failing_migration || return
     run_journal "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
-    expect_exit5 ErrJournalMigrationRefused "re-run while the step's cause still holds" || return
-    expect_advice '"reason":"migration_incomplete_or_commit_unknown"'
-    expect_advice "Keep the maintenance boundary and restart administrator verification."
+    expect_exit5 ErrJournalMigrationIncomplete "re-run while the step's cause still holds" || return
+    j6_expect_step_failed
+    expect_advice "To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:"
     j6_assert_rollback
     [[ "$(db_version "$J6H")" == $PRE_CUTOVER_SCHEMA ]] || bad "store moved off v$PRE_CUTOVER_SCHEMA on a failed re-run"
     j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; return; }
@@ -1209,6 +1299,7 @@ test_J6_MigrationFailedRerunRetries() {
     grep -qF "no migration authorization needed" "$OUT" && bad "step 3 says no migration was needed after its probe ran one"
     grep -qxF "  schema  : migration verified — state.db now at v$SCHEMA" "$OUT" \
         || bad "step 5 did not verify the migration the probe ran: $(flat "$OUT")"
+    journal_verify "$J6H"
 }
 
 # J6 with --keep-prior: re-running as advised keeps the rollback copies of the
@@ -1220,7 +1311,7 @@ test_J6_RerunKeepsPriorRollbackCopy() {
     cmp -s "$J11C.prior" "$BIN_OLD" || bad "first run did not snapshot the old agent-director"
     cmp -s "$J11A.prior" "$ADMIN_OLD" || bad "first run did not snapshot the old agent-director-admin"
     run_journal "$J6H" "${J6ARGV[@]}"
-    expect_exit5 ErrJournalMigrationRefused "advised re-run while the step's cause still holds" || return
+    expect_exit5 ErrJournalMigrationIncomplete "advised re-run while the step's cause still holds" || return
     j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
     j11_not_snapshotted "admin prior" "kept $J11A.prior" "$J11_SAME_PAIR"
     cmp -s "$J11C.prior" "$BIN_OLD" \
@@ -1231,11 +1322,10 @@ test_J6_RerunKeepsPriorRollbackCopy() {
 }
 
 # J6 with --keep-prior on an upgrade from before 0.11.0
-# (test_J11_KeepPriorNoAdminRemoveIt's setup): the advised re-run keeps
-# agent-director.prior and still says "to roll back, remove
-# <agent-director-admin>" (b.2wk); doing that restores the old install.
+# (test_J11_KeepPriorNoAdminRemoveIt's setup): each refusal restores the old
+# CLI and removes the added administrator and sentinel. A retry snapshots the
+# restored CLI again; fixing only the reported cause then completes the upgrade.
 test_J6_RerunPreAdminUpgradeKeepsRemoveAdvice() {
-    local got
     j6_failing_migration pre-0.11.0 || return
     j11_paths "$J6H"
     grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" || bad "first run: no agent-director prior line: $(flat "$OUT")"
@@ -1243,16 +1333,20 @@ test_J6_RerunPreAdminUpgradeKeepsRemoveAdvice() {
         || bad "first run: no remove-it admin prior line: $(flat "$OUT")"
     run_journal "$J6H" "${J6ARGV[@]}"
     expect_exit5 ErrJournalMigrationRefused "advised re-run while the step's cause still holds" || return
-    j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
-    j11_not_snapshotted "admin prior" none "$J11_SAME_PAIR" "; to roll back, remove $J11A"
+    grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" || bad "retry did not snapshot the restored CLI"
+    grep -qxF "  admin prior: none (no agent-director-admin was installed); to roll back, remove $J11A" "$OUT" || bad "retry did not recognize the absent administrator"
     cmp -s "$J11C.prior" "$BIN_OLD" \
         || bad "after the advised re-run agent-director.prior is no longer the pre-install binary (rollback copy lost)"
     [[ ! -e "$J11A.prior" ]] || bad "the advised re-run left $J11A.prior, which would pair wrongly"
-    got="$(grep -m1 -F "to roll back, remove " "$OUT")" || return
-    mv "$J11C.prior" "$J11C" || bad "mv $J11C.prior $J11C"
-    rm "${got##*to roll back, remove }" || bad "remove ${got##*to roll back, remove }"
-    cmp -s "$J11C" "$BIN_OLD" || bad "rolled-back agent-director is not the old one"
-    [[ ! -e "$J11A" ]] || bad "agent-director-admin left after the rollback"
+    cmp -s "$J11C" "$BIN_OLD" || bad "restored agent-director is not the old one"
+    [[ ! -e "$J11A" ]] || bad "agent-director-admin left after the restore"
+    [[ ! -e "$(sentinel "$J6H")" ]] || bad "sentinel left after the restore"
+    j6_assert_rollback
+    j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; return; }
+    run_journal "$J6H" "${J6ARGV[@]}"
+    expect_rc 0 "retry after the cause is fixed" || return
+    expect_installed "$J6H" "$BIN" "$ADMIN"
+    [[ "$(db_version "$J6H")" == "$SCHEMA" ]] || bad "successful retry did not finish migration"
 }
 
 # J6: "If state.db is NEWER than this binary (ErrSchemaMismatch), install a
@@ -1383,7 +1477,7 @@ j7_warned() {
     j7_unreadable "The store open (agent-director list) succeeded and no migration was authorized, so the install carries on. Check the version later with: sqlite3 -batch -init /dev/null -cmd \".timeout $(j7_timeout)\" $db \"PRAGMA user_version;\"" "$1"
     # The schedule warning (b.wur) that ends stderr when nothing is scheduled is
     # not about this step: look at what comes before it.
-    if sed '/^install\.sh: WARNING: nothing schedules /,$d' "$ERR" | grep -qiE 'FAILED|could not|re-run'; then
+    if sed '/^install\.sh: WARNING: could not find active --schedule entries for both /,$d' "$ERR" | grep -qiE 'FAILED|could not|re-run'; then
         bad "the warning speaks as if the install failed: $(flat "$ERR")"
     fi
     j7_schema_unreadable
@@ -1941,7 +2035,8 @@ test_J9_NoCommitStampMakeBuild() {
 
 # J10: "install this release or later: bash $0 --from-release <tag of this
 # release or later>" and "or install an earlier release with that release's own
-# install.sh, fetched from its tag, rather than this one": the missing
+# install.sh (that release's install.sh must support this host), fetched from
+# its tag, rather than this one": the missing
 # agent-director-admin asset of a release before 0.11.0 is refused at once, with
 # no retry and no gh fallback (gh on PATH) and nothing installed; the advised
 # release installs both. (The advice names no 0.11.x tag: every 0.11.x is
@@ -1949,6 +2044,10 @@ test_J9_NoCommitStampMakeBuild() {
 test_J10_PreAdminReleaseInstallNewer() {
     local h cmd tag=v0.10.0
     h="$(new_home)"
+    run "$h" bash "$LOOSE" --help
+    expect_rc 0 "install.sh --help" || return
+    [[ "$(flat "$OUT")" == *"~/.config/agent-director (a binary from an earlier release: install that release with its own install.sh (that release's install.sh must support this host), fetched from its tag; this install reads no store for the check)"* ]] \
+        || bad "--help lacks exit 3's host-qualified earlier-installer advice: $(flat "$OUT")"
     PATH_EXTRA="$GH_DIR"
     FAKE_CURL_ADMIN_STATUS=404
     run "$h" bash "$LOOSE" --from-release "$tag" --no-hooks --no-symlink
@@ -1958,7 +2057,7 @@ test_J10_PreAdminReleaseInstallNewer() {
     grep -qF "asset not yet available" "$ERR" && bad "the agent-director-admin asset was retried"
     grep -qF "gh release download" "$ERR" && bad "the gh fallback was tried"
     expect_advice "- install this release or later: bash $LOOSE --from-release <tag of this release or later>"
-    expect_advice "- or install an earlier release with that release's own install.sh, fetched from its tag, rather than this one"
+    expect_advice "- or install an earlier release with that release's own install.sh (that release's install.sh must support this host), fetched from its tag, rather than this one"
     expect_nothing_installed "$h"
     cmd="$(advice_after "install this release or later: ")" || { bad "no advised command"; return; }
     FAKE_CURL_ADMIN_STATUS="" # the release this install.sh belongs to ships agent-director-admin
@@ -2666,7 +2765,8 @@ j17_remedy() {
         ErrTemplateMalformed) echo fix-template ;;
         ErrSchemaMismatch) echo newer-binary ;;
         ErrSchemaVerifyFailed) echo stop ;;
-        ErrJournalMigrationRefused) echo restart-verification ;;
+        ErrJournalMigrationRefused) echo fix-cutover ;;
+        ErrJournalMigrationIncomplete) echo complete-forward ;;
         ErrMoveConflict) echo apply-message ;;
         ErrAgentsLive) echo stop-agents ;;
         ErrMoveFailed) echo fix-cause ;;
@@ -2714,7 +2814,7 @@ j17_mismatch() { j7_older_store && j7_run 2 "$PRE_CUTOVER_SCHEMA"; }
 # The canonical cutover failure fixture preserves the complete old schema/data
 # and uses the shared write-failure handle, never another trigger definition.
 j17_journal_refused() {
-    j6_failing_migration || return 1
+    j6_failing_migration "$@" || return 1
     J7H="$J6H" J7ARGV=("${J6ARGV[@]}")
 }
 # j17_fake <mode>: a fresh install of FAKE_AD, J7ARGV with FAKE_AD as
@@ -2787,8 +2887,8 @@ j17_reap() {
 # fix-config applies the sed <config fix> to config.toml and re-runs (fix-template
 # applies the same sed to the template the headline names: ErrTemplateMalformed,
 # --help's "fix the template the message names, then re-run"),
-# restart-verification retains maintenance, clears only the injected fault and
-# repeats administrator verification with a fresh backup, preserving the first;
+# fix-cutover and complete-forward clear only the injected fault and re-run
+# with a fresh backup, preserving the first; the relayed action then verifies;
 # newer-binary installs BIN_NEWER; the move names (the table's rows): apply-message
 # runs the commands the message advises under the marker <config fix> gives, as
 # written (both directories, the new one holding only a template: it is set aside, then the template copied back),
@@ -2806,7 +2906,7 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
     local -a J7ARGV # j17_fake sets its own
     run "$(new_home)" bash "$LOOSE" --help
     expect_rc 0 "install.sh --help" || return
-    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), ErrMoveConflict (the directory layout cannot be moved as it is: the message names the one cause and its remedy; change nothing else, apply the remedy, re-run), ErrAgentsLive (an agent or an agent-director process runs against the old ~/.agent-director, or its live rows could not be read: stop whatever starts agents, then every agent, every serve and every caller, and re-run; a re-run reads the rows again), ErrMoveFailed (moving ~/.agent-director to ~/.config/agent-director failed before the rename, a full disk being the usual cause: the partial new directory was removed and the old directory is untouched; fix the cause and re-run), or, when the store open fails another way, agent-director'"'"'s own err_name. ErrTemplateMalformed is agent-director'"'"'s own catalogued name (errnames.Catalog); fix the template the message names, then re-run.'* ]] \
+    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), ErrMoveConflict (the directory layout cannot be moved as it is: the message names the one cause and its remedy; change nothing else, apply the remedy, re-run), ErrAgentsLive (an agent or an agent-director process runs against the old ~/.agent-director, or its live rows could not be read: stop whatever starts agents, then every agent, every serve and every caller, and re-run; a re-run reads the rows again), ErrMoveFailed (moving ~/.agent-director to ~/.config/agent-director failed before the rename, a full disk being the usual cause: the partial new directory was removed and the old directory is untouched; fix the cause and re-run), or, when the store open fails another way, agent-director'"'"'s own err_name. ErrTemplateMalformed is agent-director'"'"'s own catalogued name (errnames.Catalog); fix the template the message names, then re-run. ErrMoveConflict, ErrAgentsLive and ErrMoveFailed come from the move of AD'"'"'s directory (SR-11.7), which this release makes once on an upgrade from a release that kept its files in ~/.agent-director, before any binary is replaced; ErrMoveConflict and ErrAgentsLive are raised in pre-flight, changing nothing. They are install.sh'"'"'s own names, as ErrVersionUnreadable is, not agent-director'"'"'s. An upgrade that crosses the native-input journal cutover adds three: ErrJournalMigrationRefused (pre-flight refused, or the cutover refused and the installer put the previous install back: the install is as before the run; fix the reported cause, then re-run with a new --journal-backup directory), ErrJournalMigrationIncomplete (the install did not finish successfully, though the cutover may have committed, and this release stays installed; follow the message, then docs/operator-actions.md "install.sh stops with ErrJournalMigrationIncomplete") and ErrSchemaVerifyFailed for a restore that could not finish (needs a human; put the listed copies back as docs/operator-actions.md "Putting back a kept install" describes). ErrJournalMigrationIncomplete is install.sh'"'"'s own name.'* ]] \
         || bad "--help lacks the cause-line contract: $(flat "$OUT")"
     while IFS='|' read -r setup headline name fix <&3; do
         j17_reap
@@ -2838,10 +2938,13 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
             newer-binary)
                 want_bin="$BIN_NEWER" want_v=$((SCHEMA + 1))
                 run "$J7H" bash "$LOOSE" --binary "$BIN_NEWER" --admin-binary "$ADMIN" --no-hooks --no-symlink ;;
-            restart-verification)
-                expect_advice "Keep the maintenance boundary and restart administrator verification."
-                expect_advice "A commit may have completed. Never reset the schema or restore replayable input."
-                expect_advice '"reason":"migration_incomplete_or_commit_unknown"'
+            fix-cutover|complete-forward)
+                if [[ "$remedy" == fix-cutover ]]; then
+                    expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+                else
+                    expect_advice "To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:"
+                fi
+                j6_expect_step_failed
                 j6_assert_rollback
                 backup="$J7H.journal-backup-$((RUN_N - 1))"
                 [[ -f "$backup/COMPLETE" ]] || { bad "$setup: no stopped-writer backup"; continue; }
@@ -2851,6 +2954,8 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
                 [[ "$(j14_snap "$backup")" == "$before" ]] || bad "$setup: retry changed the original backup"
                 [[ -f "$J7H.journal-backup-$((RUN_N - 1))/COMPLETE" ]] || bad "$setup: no new verification backup"
                 [[ ! -e "$(sentinel "$J7H")" ]] || bad "$setup: successful verification left the sentinel"
+                expect_rc 0 "$setup: the installer re-run" || continue
+                journal_verify "$J7H" # then migrate-journal, as the action says
                 ;;
             apply-message)
                 # The message names the cause and its remedy: its commands, as written, under the marker in <config fix> (a
@@ -2892,7 +2997,8 @@ j17_config_refused|install.sh: agent-director refused its config file (ErrConfig
 j17_template_refused|install.sh: template @J7H@/.config/agent-director/templates/t.toml sets claude_args more than once; refusing to install.|ErrTemplateMalformed|/^claude_args = \["--b"\]$/d
 j17_newer_store|install.sh: store open (agent-director list) failed after install|ErrSchemaMismatch|
 j17_mismatch|install.sh: schema migration verification FAILED|ErrSchemaVerifyFailed|
-j17_journal_refused|  Keep the maintenance boundary and restart administrator verification.|ErrJournalMigrationRefused|
+j17_journal_refused|install.sh: the cutover did not commit; this release stays installed.|ErrJournalMigrationIncomplete|
+j17_journal_refused pre-0.11.0|install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run.|ErrJournalMigrationRefused|
 j17_fake ok|install.sh: state.db was not created by the store open|ErrSchemaVerifyFailed|
 j17_fake panic|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
 j17_fake odd-name|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
@@ -4385,7 +4491,7 @@ EOF
     local -a argv=(--binary ./ad-main --admin-binary ./ad-admin --no-hooks --no-symlink)
     run_in "$h" "$d" bash "$sh" "${argv[@]}"
     expect_rc 0 "a plain install with nothing scheduled" || return
-    grep -qxF "install.sh: WARNING: nothing schedules agent-director's sweep and expire jobs on this machine." "$ERR" \
+    grep -qxF "install.sh: WARNING: could not find active --schedule entries for both agent-director's sweep and expire jobs." "$ERR" \
         || bad "no schedule warning: $(flat "$ERR")"
     # The lines, as printed: the tmux directory in PATH, the installed binary,
     # the marker; no HOME (it is the passwd home here).
@@ -4436,9 +4542,12 @@ EOF
 # J34: "To fix: establish the maintenance window (stop old mutators and
 # prevent new old-binary invocations through committed verification), then
 # pass --maintenance-window (install.sh: --journal-maintenance-window)", then
-# "Keep the maintenance boundary and restart administrator verification." A
-# preexisting sentinel never authorizes the probe: without journal flags
-# pre-flight's --check-only refuses, changing nothing.
+# the relayed old_or_unverified_mutators action "stop each listed agent_director_mutator (…);
+# keep the maintenance window, then re-run this release's installer with a new
+# --journal-backup, …, then run migrate-journal with a new --backup-dir until
+# it exits 0 with authority "sqlite"". A preexisting sentinel never authorizes
+# the probe: without journal flags pre-flight's --check-only refuses, changing
+# nothing.
 test_J34_JournalMaintenanceStopAndRestartVerification() {
     local h db prior before extra backup writer input_fd output_fd answer
     h="$(new_home)" db="$h/.config/agent-director/state.db"
@@ -4471,17 +4580,26 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
     for answer in first repeat; do
         run "$h" "${J7ARGV[@]}" --journal-maintenance-window --journal-roots-complete --journal-backup "$backup" --journal-legacy-root "$extra"
         expect_exit5 ErrJournalMigrationRefused "$answer with incompatible process" || true
-        expect_advice "Keep the maintenance boundary and restart administrator verification."
-        expect_advice "A commit may have completed. Never reset the schema or restore replayable input."
+        expect_advice "install.sh: pre-flight holder check refused (agent-director-admin migrate-journal --check-only --store-path) Nothing was installed or changed."
+        expect_advice "Then re-run this release's installer, with a new --journal-backup directory."
+        ! grep -qF 'install.sh: pre-flight OK' "$OUT" || bad "incompatible process passed pre-flight"
+        [[ ! -e "$h/.config/agent-director/bin/agent-director" && ! -e "$h/.config/agent-director/admin/agent-director-admin" ]] || bad "refusal retained binaries absent before the run"
+        [[ "$(cat "$(sentinel "$h")")" == "{\"from\":$prior,\"to\":$SCHEMA}" ]] || bad "refusal did not restore the original sentinel"
         grep -F 'old_or_unverified_mutators' "$ERR" >/dev/null || bad "refused before process inventory: $(flat "$ERR")"
+        expect_refusal_action "stop each listed agent_director_mutator (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified; keep the maintenance window, then re-run this release's installer with a new --journal-backup, which finishes any pending schema step, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+        expect_advice '"cutover":"not_committed","steps_committed":false'
         kill -0 "$writer" || bad "verification killed the writer"
         [[ "$(sha256sum "$db")" == "$before" ]] || bad "live mutator did not prevent cutover"
         [[ ! -e "$backup/COMPLETE" ]] || bad "live mutator allowed completed backup"
     done
-    # Follow the instruction literally: end that writer, await exit and restart.
+    # Follow the instruction literally: stop the listed process and await its
+    # exit, re-run the installer with a new --journal-backup, then run
+    # migrate-journal with a new --backup-dir.
     exec {input_fd}>&-
     wait "$writer" || bad "writer did not exit cleanly"
     exec {output_fd}<&-
+    [[ ! -e "$backup" ]] || bad "the refused runs made the backup directory"
+    backup="$h/journal-backup-2"
     run "$h" "${J7ARGV[@]}" --journal-maintenance-window --journal-roots-complete --journal-backup "$backup" --journal-legacy-root "$extra"
     expect_rc 0 "same authorized install after actual writer exit" || return
     [[ "$("$SQLITE" "$db" 'PRAGMA user_version')" == "$SCHEMA" ]] || bad "schema not current"
@@ -4489,8 +4607,59 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
     [[ -f "$backup/COMPLETE" && -d "$backup/legacy-2" ]] || bad "backup lacks completion or extra root"
     [[ "$("$SQLITE" "$backup/database" 'PRAGMA user_version')" == "$prior" ]] || bad "backup is not the prior database"
     [[ ! -e "$(sentinel "$h")" ]] || bad "authorized migration did not consume sentinel"
+    journal_verify "$h" "$extra"
     run "$h" "$BIN" list
     expect_rc 0 "ordinary runtime after committed verification"
+}
+
+# ---- J48: copies of settings.json that earlier releases kept (b.f3n) -----------
+
+# J48: "  settings: copies of settings.json that earlier releases kept may hold its
+# secrets (tokens, say) and can be deleted: <paths>", each path shell-quoted.
+# Under a HOME whose path holds shell characters (no blank: install.sh refuses
+# an install path holding whitespace), a hooks-on install over a settings.json
+# holding an env token, beside two settings.json.bak.<ts> copies an earlier
+# release kept and a user's own settings.json.bak.before-mcp,
+# prints the line once, on stdout, naming exactly the two copies as the shell
+# reads the list, and keeps all three files. With exactly the named paths
+# deleted, the re-run succeeds and names no copy; settings.json keeps its env
+# and both hooks, and the user's file is as it was. uninstall.sh's copy of the
+# line, followed under a HOME holding a space too: uninstall_test.go's
+# TestAdviceFollow_J48_UninstallDeleteNamedCopiesAndRerun.
+test_J48_OldSettingsCopiesDeleteAndRerun() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local HOME_TAG="j34,o'q\"\$x\`y\`." h sj own seed line list f token=PLACEHOLDER-TOKEN-not-a-secret-f3n
+    local phrase="  settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:"
+    local -a copies named
+    h="$(new_home)" sj="$h/.claude/settings.json" own="$h/.claude/settings.json.bak.before-mcp" seed="$h.settings"
+    copies=("$sj.bak.20240101-000000" "$sj.bak.20250101-000000")
+    mkdir -p "$h/.claude" || { bad "make $h/.claude"; return; }
+    printf '{"env":{"GH_TOKEN":"%s"}}\n' "$token" >"$seed"
+    for f in "$sj" "${copies[@]}" "$own"; do
+        cp "$seed" "$f" || { bad "seed $f"; return; }
+    done
+    run "$h" "${argv[@]}"
+    expect_rc 0 "a hooks-on install beside the old copies" || return
+    [[ "$(cat "$OUT" "$ERR" | grep -c 'settings\.json\.bak')" == 1 ]] \
+        || bad "want one line naming copies: $(grep -h 'settings\.json\.bak' "$OUT" "$ERR" | paste -sd'|')"
+    line="$(grep -m1 -F -- "$phrase" "$OUT")"
+    [[ "$line" == "$phrase"* ]] || { bad "stdout lacks a line starting \"$phrase\": $(flat "$OUT")"; return; }
+    list="${line#"$phrase"}" named=()
+    eval "named=($list)" 2>/dev/null || { bad "the list does not parse as shell words: $list"; return; }
+    [[ "$(printf '%s\n' "${named[@]}")" == "$(printf '%s\n' "${copies[@]}")" ]] \
+        || bad "the line names $(printf '[%s]' "${named[@]}"); want $(printf '[%s]' "${copies[@]}")"
+    for f in "${copies[@]}" "$own"; do
+        cmp -s "$f" "$seed" || bad "the install changed or removed $f"
+    done
+    # Delete what the line names, as the shell reads it, and run the install again.
+    rm -- "${named[@]}" || { bad "delete the named copies"; return; }
+    run "$h" "${argv[@]}"
+    expect_rc 0 "the re-run after deleting the named copies" || return
+    ! grep -q 'settings\.json\.bak' "$OUT" "$ERR" || bad "the re-run still names copies: $(grep -h 'settings\.json\.bak' "$OUT" "$ERR")"
+    hooks_injected "$h" || bad "settings.json lacks the hooks: $(<"$sj")"
+    [[ "$(jq -r .env.GH_TOKEN "$sj")" == "$token" ]] || bad "settings.json lost its env: $(<"$sj")"
+    cmp -s "$own" "$seed" || bad "the user's $own changed or is gone"
+    [[ "$(compgen -G "$sj.bak.*")" == "$own" ]] || bad "settings.json.bak.* now: $(compgen -G "$sj.bak.*" | paste -sd'|'); want the user's file alone"
 }
 
 echo "[b.fji install-sh advice-follow] start (schema v$SCHEMA)"

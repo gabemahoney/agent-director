@@ -165,6 +165,26 @@ var successCases = append([]successCase{
 		},
 	},
 
+	{
+		verb: "get-many",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			_, dbPath := apitest.OpenStoreWithRow(t, "many-first", "cd-many-first", store.StateWaiting, "off")
+			if _, err := apitest.SeedSpawn(dbPath, "many-second", store.StateWaiting, "/tmp", "off", "", false); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []string{"many-first", "many-second"} {
+				if _, err := apitest.BindReadSurfaceProcess(dbPath, id, os.Getpid()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return filepath.Dir(dbPath), map[string]any{"ids": []string{"many-second", "many-unknown", "many-first"}}
+		},
+		params:  func(ctx map[string]any) map[string]any { return map[string]any{"instance_ids": ctx["ids"]} },
+		cliArgv: func(ctx map[string]any) []string { return append([]string{"get-many"}, ctx["ids"].([]string)...) },
+		want:    map[string]any{"not_found": []any{"many-unknown"}},
+	},
+
 	// ── send-keys ─────────────────────────────────────────────────────────
 	// A waiting row on a socket of its own; each run's fake table holds the
 	// row's own labelled session and @ad_pane-tagged pane (Ours, agent's pane

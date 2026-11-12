@@ -422,6 +422,14 @@ export class ErrRelayModeInvalid extends AgentDirectorError {}
 export class ErrSpawnDeniedFlag extends AgentDirectorError {}
 /** Mirrors ErrReservedEnvKey (package: spawn) */
 export class ErrReservedEnvKey extends AgentDirectorError {}
+/** The requested experimental agent is disabled. */
+export class ErrExperimentalAgentDisabled extends AgentDirectorError {}
+/** The pane-only agent does not support the requested capability. */
+export class ErrAgentCapabilityUnsupported extends AgentDirectorError {}
+/** The pane-only launch has no explicit model. */
+export class ErrModelMissing extends AgentDirectorError {}
+/** A required host credential is unset or empty in agent-director's environment. */
+export class ErrHostCredentialMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentMissing (package: spawn) */
 export class ErrAgentMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentInvalid (package: spawn) */
@@ -527,9 +535,11 @@ export class ErrPaneAnswerInProgress extends AgentDirectorError {}
 export class ErrClaimTooSoon extends AgentDirectorError {}
 /**
  * Mirrors ErrDialogMaybeOpen (package: api): a plain `sendKeys` without `expect_pane_sha256`, or
- * a `pause`, while a permission request of the Spawn is not proven gone by the agent's hooks
- * (its tool's PostToolUse, the main agent's end of turn after it, or, on a non-Cursor Spawn, the
- * agent's end), whatever agent-director's records say of it; its dialog may still be on the pane.
+ * a `pause`, while a permission request of the Spawn is not proven gone (on a Cursor row, the
+ * gateway's validated proof that its tool ran; the end of the asking agent's turn: the main
+ * agent's for a request with no agent_id, and on a Claude row the subagent's SubagentStop for one
+ * with an agent_id; or, on a non-Cursor Spawn, the agent's end), whatever agent-director's
+ * records say of it; its dialog may still be on the pane.
  * A Cursor request of an earlier launch of the Spawn does not count. Nothing was sent.
  * `errDetails` is a `DialogMaybeOpenDetails`. A plain `sendKeys` whose `expect_pane_sha256`
  * matches the pane is not rejected with it; pass that hash only from a pane a person or LLM
@@ -557,6 +567,11 @@ export class ErrStoreBusy extends AgentDirectorError {}
 export class ErrMissingRequestToken extends AgentDirectorError {}
 /** Mirrors ErrInvalidFlags (package: api) */
 export class ErrInvalidFlags extends AgentDirectorError {}
+/**
+ * Mirrors ErrTooManyIds (package: api). `errDetails` is a `TooManyIdsDetails`
+ * whose `id_cap` is the Id Cap in force; split the ids into calls of at most that many.
+ */
+export class ErrTooManyIds extends AgentDirectorError {}
 /** Mirrors ErrConfigMalformed (package: clisetup) */
 export class ErrConfigMalformed extends AgentDirectorError {}
 /** Mirrors ErrStoreOpen (package: clisetup) */
@@ -594,7 +609,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 60
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 66
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -609,6 +624,10 @@ const ERROR_TABLE = {
   ErrRelayModeInvalid,
   ErrSpawnDeniedFlag,
   ErrReservedEnvKey,
+  ErrExperimentalAgentDisabled,
+  ErrAgentCapabilityUnsupported,
+  ErrModelMissing,
+  ErrHostCredentialMissing,
   ErrAgentMissing,
   ErrAgentInvalid,
   ErrAgentArgsMismatch,
@@ -652,6 +671,7 @@ const ERROR_TABLE = {
   ErrInvalidDecision,
   ErrMissingRequestToken,
   ErrInvalidFlags,
+  ErrTooManyIds,
   // config package
   ErrTemplateNameUnsafe,
   ErrTemplateNotFound,

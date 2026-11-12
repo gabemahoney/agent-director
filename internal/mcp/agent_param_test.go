@@ -10,12 +10,15 @@ package mcp_test
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/mcp"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -31,7 +34,7 @@ func agentSpawnArgs(t *testing.T, cwd string, c ptConfig, extra map[string]any) 
 }
 
 // TestMCPSpawnAgentReachesRow: an MCP spawn's agent is recorded on its row, and
-// the get and list tools show it; an agent other than claude, codex or cursor is
+// the get and list tools show it; an unrecognized agent is
 // ErrAgentInvalid naming it, with nothing created.
 func TestMCPSpawnAgentReachesRow(t *testing.T) {
 	for _, agent := range []string{"claude", "codex", "cursor"} {
@@ -65,6 +68,32 @@ func TestMCPSpawnAgentReachesRow(t *testing.T) {
 		}
 		assertNothingCreated(t, e.d, e.rec)
 	})
+}
+
+func TestMCPPaneOnlyContract(t *testing.T) {
+	for _, agent := range []string{"droid", "opencode"} {
+		t.Run(agent, func(t *testing.T) {
+			e := newEnv(t)
+			data := toolErrorData(t, callTool(t, e.d, "spawn", paramJSON(t, map[string]any{
+				"agent": agent, "cwd": t.TempDir(), "agent_args": []string{"--model", "model"}})))
+			if data.ErrName != "ErrExperimentalAgentDisabled" {
+				t.Fatalf("spawn refusal=%+v", data)
+			}
+			assertNothingCreated(t, e.d, e.rec)
+			id := "lane-" + uuid.NewString()[:8]
+			e.seed(t, id, "pending", apitest.WithAgent(agent), apitest.WithNoSubagentTracking())
+			for _, verb := range []string{"get", "status"} {
+				got := callToolText(t, e.d, verb, paramJSON(t, map[string]any{"instance_id": id}))
+				if string(got["integration_mode"]) != `"pane_only"` || string(got["state"]) != `"pending"` {
+					t.Fatalf("%s=%v", verb, got)
+				}
+			}
+			data = toolErrorData(t, callTool(t, e.d, "pause", paramJSON(t, map[string]any{"instance_id": id})))
+			if data.ErrName != "ErrAgentCapabilityUnsupported" {
+				t.Fatalf("pause refusal=%+v", data)
+			}
+		})
+	}
 }
 
 // TestMCPMakeTemplateWritesAgent: a make_template's agent is written to the
@@ -130,5 +159,23 @@ func TestMCPSpawnAgentArgsInheritance(t *testing.T) {
 				t.Errorf("row agent_args = %v; want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMCPMissingHostCredential(t *testing.T) {
+	e := newEnv(t)
+	t.Setenv("OPENROUTER_API_KEY", "")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[experimental]\nopencode = true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.New(api.Options{StorePath: e.storePath, ConfigPath: path, TmuxClient: e.rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	data := toolErrorData(t, callTool(t, mcp.NewLiveDispatcher(client), "spawn", paramJSON(t, map[string]any{"agent": "opencode", "cwd": t.TempDir(), "agent_args": []string{"--model", "openrouter/model"}})))
+	if data.ErrName != "ErrHostCredentialMissing" {
+		t.Fatalf("credential refusal=%+v", data)
 	}
 }

@@ -19,8 +19,8 @@
 // - package     — short package suffix of the error's origin package
 //                 (e.g. "spawn", "store", "tmux", "config", "probe", "api",
 //                 "clisetup", "adminapi", "errnames").
-// - description — canonical message text (empty for now; downstream Epics
-//                 may fill from doc-strings later). Key is locked in schema.
+// - description — optional agent-neutral text from the catalog entry.
+//                 Key is locked in schema.
 //
 // 2-space indent, trailing newline, deterministic across runs (Catalog
 // slice order, not alphabetical).
@@ -50,21 +50,25 @@ type entryOutput struct {
 // carries no package attribution that reflection can recover.
 var packageOf = map[string]string{
 	// internal/spawn
-	"ErrCwdMissing":             "spawn",
-	"ErrCwdNotAPath":            "spawn",
-	"ErrCwdNotFound":            "spawn",
-	"ErrCwdNotADirectory":       "spawn",
-	"ErrRelayModeInvalid":       "spawn",
-	"ErrSpawnDeniedFlag":        "spawn",
-	"ErrReservedEnvKey":         "spawn",
-	"ErrAgentMissing":           "spawn",
-	"ErrAgentInvalid":           "spawn",
-	"ErrAgentArgsMismatch":      "spawn",
-	"ErrPermissionsUnsupported": "spawn",
-	"ErrInstanceIdCollision":    "spawn",
-	"ErrTmuxSessionNameEmpty":   "spawn",
-	"ErrTmuxSessionNameInvalid": "spawn",
-	"ErrTmuxSessionNameTooLong": "spawn",
+	"ErrCwdMissing":                 "spawn",
+	"ErrCwdNotAPath":                "spawn",
+	"ErrCwdNotFound":                "spawn",
+	"ErrCwdNotADirectory":           "spawn",
+	"ErrRelayModeInvalid":           "spawn",
+	"ErrSpawnDeniedFlag":            "spawn",
+	"ErrReservedEnvKey":             "spawn",
+	"ErrExperimentalAgentDisabled":  "spawn",
+	"ErrAgentCapabilityUnsupported": "spawn",
+	"ErrModelMissing":               "spawn",
+	"ErrHostCredentialMissing":      "spawn",
+	"ErrAgentMissing":               "spawn",
+	"ErrAgentInvalid":               "spawn",
+	"ErrAgentArgsMismatch":          "spawn",
+	"ErrPermissionsUnsupported":     "spawn",
+	"ErrInstanceIdCollision":        "spawn",
+	"ErrTmuxSessionNameEmpty":       "spawn",
+	"ErrTmuxSessionNameInvalid":     "spawn",
+	"ErrTmuxSessionNameTooLong":     "spawn",
 
 	// internal/store
 	"ErrSpawnNotFound":             "store",
@@ -115,6 +119,7 @@ var packageOf = map[string]string{
 	"ErrDialogMaybeOpen":       "api",
 	"ErrInvalidDecision":       "api",
 	"ErrInvalidFlags":          "api",
+	"ErrTooManyIds":            "api",
 	"ErrMissingRequestToken":   "api",
 
 	// internal/clisetup (b.vma, b.cm7): named by clisetup.Open, before any verb
@@ -153,7 +158,7 @@ func main() {
 		out = append(out, entryOutput{
 			Name:        entry.Name,
 			Package:     pkg,
-			Description: "",
+			Description: entry.Description,
 		})
 	}
 

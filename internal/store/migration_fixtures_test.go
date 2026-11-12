@@ -923,21 +923,31 @@ func makeV4HistoryFixture(t *testing.T, dir string) v4HistoryFixture {
 		rotated: "v4-rotated", neverWritten: "v4-never-written", holdsCurrent: "v4-holds-current",
 		interleavedA: "v4-interleaved-a", interleavedB: "v4-interleaved-b", pending: "v4-pending"}
 	f.ids = []string{f.rotated, f.neverWritten, f.holdsCurrent, f.interleavedA, f.interleavedB, f.pending}
+	// Each row's cwd is a real directory outside dir, because resume refuses a
+	// saved cwd that is gone before it looks for a transcript (b.vit).
+	work := t.TempDir()
+	cwd := func(name string) string {
+		p := filepath.Join(work, name)
+		if err := os.Mkdir(p, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", p, err)
+		}
+		return p
+	}
 	// id, parent, state, cwd, tmux name, args, relay, jsonl, session, labels,
 	// started, last seen, ended, pid, proc start, liveness since/note, extra env.
 	spawnRows := [][]any{
-		{f.rotated, nil, "waiting", "/work/rotated", "ad-rotated", `["--model","opus"]`, "off",
+		{f.rotated, nil, "waiting", cwd("rotated"), "ad-rotated", `["--model","opus"]`, "off",
 			"/t/rot-current.jsonl", "sess-rot-current", `{"team":"red"}`,
 			"2026-01-01 10:00:00", "2026-01-01 10:05:00", nil, 4242, "98765", nil, nil, `{"K":"V"}`},
-		{f.neverWritten, nil, "ended", "/work/never", "ad-never", "[]", "off", nil, "sess-nw-current", "{}",
+		{f.neverWritten, nil, "ended", cwd("never"), "ad-never", "[]", "off", nil, "sess-nw-current", "{}",
 			"2026-01-02 10:00:00", "2026-01-02 11:00:00", "2026-01-02 11:00:00", nil, nil, nil, nil, "{}"},
-		{f.holdsCurrent, nil, "working", "/work/holds", "ad-holds", "[]", "off", "/t/hc-current.jsonl", "sess-hc-current", "{}",
+		{f.holdsCurrent, nil, "working", cwd("holds"), "ad-holds", "[]", "off", "/t/hc-current.jsonl", "sess-hc-current", "{}",
 			"2026-01-03 10:00:00", "2026-01-03 10:01:00", nil, 5151, "11111", nil, nil, "{}"},
-		{f.interleavedA, nil, "waiting", "/work/a", "ad-a", "[]", "off", "/t/a-current.jsonl", "sess-a-current", "{}",
+		{f.interleavedA, nil, "waiting", cwd("a"), "ad-a", "[]", "off", "/t/a-current.jsonl", "sess-a-current", "{}",
 			"2026-01-04 09:00:00", "2026-01-04 09:30:00", nil, nil, nil, nil, nil, "{}"},
-		{f.interleavedB, f.interleavedA, "ask_user", "/work/b", "ad-b", "[]", "off", "/t/b-current.jsonl", "sess-b-current",
+		{f.interleavedB, f.interleavedA, "ask_user", cwd("b"), "ad-b", "[]", "off", "/t/b-current.jsonl", "sess-b-current",
 			`{"role":"child"}`, "2026-01-04 09:00:30", "2026-01-04 09:31:00", nil, 6262, "22222", "2026-01-04 09:31:00", "pid gone", "{}"},
-		{f.pending, nil, "pending", "/work/pending", "ad-pending", "[]", "off", nil, nil, "{}",
+		{f.pending, nil, "pending", cwd("pending"), "ad-pending", "[]", "off", nil, nil, "{}",
 			"2026-01-05 12:00:00", "2026-01-05 12:00:00", nil, nil, nil, nil, nil, "{}"},
 	}
 	// instance id, session id, jsonl path, recorded_at.
@@ -1942,10 +1952,13 @@ var v19ColumnSpecs = []columnSpec{
 	{"spawns", "process_evidence", "TEXT", false, ""},
 }
 
-// v20ColumnSpecs is the nullable, unbackfilled display evidence column.
-// Must use: a migration test in this package seeds or names it through
-// these specs.
-var v20ColumnSpecs = []columnSpec{{"spawns", "display_evidence", "TEXT", false, ""}}
+// v20ColumnSpecs are the nullable, unbackfilled display evidence and
+// observation writer columns, in schema order. Must use: a migration test in
+// this package seeds or names them through these specs.
+var v20ColumnSpecs = []columnSpec{
+	{"spawns", "display_evidence", "TEXT", false, ""},
+	{"spawns", "observation_writer", "TEXT", false, ""},
+}
 
 // v19ColumnNames are v19ColumnSpecs' column names, in order.
 // Must use: a migration test in this package reads the v19 columns by
@@ -1953,6 +1966,17 @@ var v20ColumnSpecs = []columnSpec{{"spawns", "display_evidence", "TEXT", false, 
 func v19ColumnNames() []string {
 	var names []string
 	for _, c := range v19ColumnSpecs {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// v20ColumnNames are v20ColumnSpecs' column names, in order.
+// Must use: a migration test in this package reads the v20 columns by
+// these names.
+func v20ColumnNames() []string {
+	var names []string
+	for _, c := range v20ColumnSpecs {
 		names = append(names, c.name)
 	}
 	return names

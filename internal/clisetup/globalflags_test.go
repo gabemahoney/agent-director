@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -252,5 +255,45 @@ func TestExpandTilde(t *testing.T) {
 				t.Errorf("ExpandTilde(%q) = %q, %t; want %q, %t", tc.in, got, ok, tc.want, tc.wantOK)
 			}
 		})
+	}
+}
+
+// Compare with the actual parser registry, so a flag added on either side fails.
+func TestGlobalFlagNamesMatchTypeScript(t *testing.T) {
+	raw, err := os.ReadFile("../../pkg/ts-bun-client/src/internal/argv.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := regexp.MustCompile(`(?s)\bconst\s+GLOBAL_FLAGS\s*=\s*\[([^]]*)\]`).FindSubmatch(raw)
+	if block == nil {
+		t.Fatal("GLOBAL_FLAGS literal not found")
+	}
+	names := regexp.MustCompile(`"(?:[^"\\]|\\.)*"`).FindAllString(string(block[1]), -1)
+	if len(names) == 0 {
+		t.Fatal("GLOBAL_FLAGS literal has no readable names")
+	}
+	client := make(map[string]bool)
+	for _, quoted := range names {
+		name, err := strconv.Unquote(quoted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client[name] {
+			t.Fatalf("duplicate GLOBAL_FLAGS name %q", name)
+		}
+		client[name] = true
+	}
+	parser := clisetup.GlobalFlagNames()
+	if !slices.IsSorted(parser) {
+		t.Errorf("GlobalFlagNames not sorted: %q", parser)
+	}
+	for _, name := range parser {
+		if !client[name] {
+			t.Errorf("parser flag %q missing from GLOBAL_FLAGS", name)
+		}
+		delete(client, name)
+	}
+	for name := range client {
+		t.Errorf("GLOBAL_FLAGS name %q missing from parser registry", name)
 	}
 }

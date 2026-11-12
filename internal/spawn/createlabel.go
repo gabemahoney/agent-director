@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -38,10 +39,18 @@ type CreateRequest struct {
 	Name              string
 	CWD               string
 	Env               map[string]string
-	Command           []string
-	Token             string
-	InstanceID        string
-	StoreID           string
+	// ExcludeEnv removes ambient selectors from this create's client.
+	ExcludeEnv []string
+	// UnsetEnv removes stale session/global values before exec, except values
+	// explicitly set in Env or ForwardEnv. Nil retains ExcludeEnv's legacy unsets.
+	UnsetEnv []string
+	// ForwardEnv names host variables delivered only to the new session on stdin.
+	// It never contains their values.
+	ForwardEnv []string
+	Command    []string
+	Token      string
+	InstanceID string
+	StoreID    string
 }
 
 // CreateKind classifies the outcome of one create-and-label step. The zero
@@ -83,6 +92,8 @@ const (
 
 // CreateOutcome is the result of one create-and-label step.
 type CreateOutcome struct {
+	// BeforeCreate means failure occurred before any tmux create was attempted.
+	BeforeCreate bool
 	// Kind classifies the outcome.
 	Kind CreateKind
 	// Reply is the parsed create reply (CreateLabelled and the two
@@ -114,17 +125,41 @@ func CreateAndLabel(t LaunchTmux, req CreateRequest) CreateOutcome {
 	if req.Agent != "" {
 		command, env, err := inputdelivery.Prepare(inputdelivery.Identity{StoreID: req.StoreID, Token: req.Token, InstanceID: req.InstanceID, Socket: req.Socket, CWD: req.CWD, Agent: req.Agent}, req.Command, req.Env, req.OrdinaryInputSafe, req.Input)
 		if err != nil {
-			return CreateOutcome{Kind: CreateFailed, Cause: asCallError(tmux.CallCreate, err)}
+			return CreateOutcome{Kind: CreateFailed, BeforeCreate: true, Cause: asCallError(tmux.CallCreate, err)}
 		}
 		req.Command, req.Env = command, env
 	}
-	reply, err := t.NewSession(req.Socket, req.Name, req.CWD, req.Env, req.Command, req.Token, req.InstanceID, req.StoreID)
+	var reply tmux.CreateReply
+	var err error
+	if req.UnsetEnv != nil || len(req.ForwardEnv) > 0 {
+		policy, ok := t.(interface {
+			NewSessionWithEnvPolicy(string, string, string, map[string]string, []string, string, string, string, []string, []string, []string) (tmux.CreateReply, error)
+		})
+		if !ok {
+			return CreateOutcome{Kind: CreateFailed, BeforeCreate: true, Cause: asCallError(tmux.CallCreate, fmt.Errorf("tmux client does not support launch environment policy"))}
+		}
+		unset := req.UnsetEnv
+		if unset == nil {
+			unset = req.ExcludeEnv
+		}
+		reply, err = policy.NewSessionWithEnvPolicy(req.Socket, req.Name, req.CWD, req.Env, req.Command, req.Token, req.InstanceID, req.StoreID, req.ExcludeEnv, unset, req.ForwardEnv)
+	} else if len(req.ExcludeEnv) > 0 {
+		excluding, ok := t.(interface {
+			NewSessionWithEnvExclusions(string, string, string, map[string]string, []string, string, string, string, []string) (tmux.CreateReply, error)
+		})
+		if !ok {
+			return CreateOutcome{Kind: CreateFailed, BeforeCreate: true, Cause: asCallError(tmux.CallCreate, fmt.Errorf("tmux client does not support launch environment exclusion"))}
+		}
+		reply, err = excluding.NewSessionWithEnvExclusions(req.Socket, req.Name, req.CWD, req.Env, req.Command, req.Token, req.InstanceID, req.StoreID, req.ExcludeEnv)
+	} else {
+		reply, err = t.NewSession(req.Socket, req.Name, req.CWD, req.Env, req.Command, req.Token, req.InstanceID, req.StoreID)
+	}
 	if err != nil {
 		ce := asCallError(tmux.CallCreate, err)
 		if ce.Failure == tmux.FailLabel {
 			return labelByID(t, req, reply)
 		}
-		return CreateOutcome{Kind: createFailureKind(ce), Cause: ce}
+		return CreateOutcome{Kind: createFailureKind(ce), BeforeCreate: ce.BeforeCreate, Cause: ce}
 	}
 	if tmux.NeedsLabelByID(req.Name) {
 		return labelByID(t, req, reply)

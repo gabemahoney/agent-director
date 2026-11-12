@@ -58,6 +58,9 @@ type ListParams struct {
 // §12 list shape promises so future store-internal additions don't
 // leak silently.
 type ListRow struct {
+	// IntegrationMode identifies the fixed pane-only capability contract;
+	// omitted for agents with native integration.
+	IntegrationMode string `json:"integration_mode,omitempty"`
 	// InstanceID is the stable id of the Spawn.
 	InstanceID string `json:"instance_id"`
 	// ParentID is the id of the spawning Spawn. Omitted from JSON when empty.
@@ -83,11 +86,11 @@ type ListRow struct {
 	// displayed_state records (Confirmation). family_state has none.
 	Confirmations Confirmations `json:"confirmations"`
 	// IdleScreenAvailability is, as StatusResult's, available for Claude and
-	// Codex or an absent agent and unavailable for Cursor. Present on every row.
+	// Codex or an absent agent and unavailable for Cursor or pane-only agents. Present on every row.
 	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`
-	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
+	// Agent is the agent the row runs: set by the spawn
 	// that most recently launched the row, followed by
 	// resume, never changed by anything else (SR-1.5).
 	Agent string `json:"agent"`
@@ -401,6 +404,7 @@ func listRow(r Spawn, reported string, display store.DisplayDetail) ListRow {
 		IdleScreenAvailability:  idleScreenAvailability(r.Agent),
 		CWD:                     r.CWD,
 		Agent:                   r.Agent,
+		IntegrationMode:         integrationMode(r.Agent),
 		TmuxSessionName:         r.TmuxSessionName,
 		RelayMode:               r.RelayMode,
 		Labels:                  r.Labels,

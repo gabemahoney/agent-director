@@ -19,7 +19,7 @@ file, and tmux.
 
 ## Prerequisites
 
-- Linux x86_64 or Apple Silicon (arm64) macOS.
+- Linux on x86_64 or arm64 (aarch64), or macOS 13 or later on arm64 (Apple Silicon).
 - At least one of Claude Code, Codex and Cursor, each on PATH or named by
   `[launch] claude_path` / `codex_path` / `cursor_path` in `config.toml`.
   Cursor needs its standalone `agent` program, not the editor's `cursor`
@@ -30,16 +30,18 @@ file, and tmux.
   `/config`) defaults to "notify", which can put a feedback-draft menu in a
   driven agent's pane that may stop agent-director's input reaching the agent;
   we suggest setting it to "off". For Codex, `codex` (Codex) 0.159.2 or later:
-  its native program, or a wrapper that `exec`s it. An npm-installed `codex`
-  does not qualify: set `[launch] codex_path` in
-  `~/.config/agent-director/config.toml` to the native program.
+  its native program, or a wrapper that `exec`s it.
 - `tmux` 3.2 or later on PATH.
 - `jq`, `sqlite3` and `file` on PATH.
 
 ## Install
 
+Find the latest release tag with this read-only command, then replace both
+`<tag>`s in the install command with the tag at the end of its URL:
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag>
 ```
 
 This installs `agent-director` on your PATH and creates

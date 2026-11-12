@@ -22,7 +22,7 @@ import (
 func uidDir() string { return "tmux-" + strconv.Itoa(os.Getuid()) }
 
 // chdirFor makes dir the working directory for the rest of the test and
-// restores the old one in t.Cleanup (go 1.22 has no t.Chdir).
+// restores the old one in t.Cleanup.
 func chdirFor(t *testing.T, dir string) {
 	t.Helper()
 	old, err := os.Getwd()

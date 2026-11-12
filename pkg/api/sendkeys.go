@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -65,8 +66,10 @@ type SendKeysTmux interface {
 	// SendKeyPane sends one key, by its tmux key name and never typed
 	// literally, to the pane paneID on socket.
 	SendKeyPane(socket, paneID, key string) error
-	// CapturePaneID returns the last nLines lines of the pane paneID on
-	// socket; ansi keeps the escape sequences (tmux's -e flag).
+	// CapturePaneID returns the last nLines rows of the pane paneID on
+	// socket, counted up from the last row with content as
+	// [TmuxClient].CapturePaneID says; ansi keeps the escape sequences
+	// (tmux's -e flag).
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
 }
 
@@ -331,9 +334,10 @@ type sendKeysGuard struct {
 //     the oldest. Only a call that names the request it answers can type on
 //     such a row.
 //  3. Plain without expect_pane_sha256, any request of the row is not proven
-//     gone (b.146 step 2c: no PostToolUse with its tool_use_id (Claude), no
-//     main-agent Stop, idle-prompt Notification or (Codex) Interrupt after it
-//     for a request with no agent_id, and no end of the row's agent recorded), however
+//     gone (b.146 step 2c: no main-agent Stop, idle-prompt Notification or
+//     (Codex) Interrupt after it for a request with no agent_id, no
+//     SubagentStop of its subagent after it for a request with one (Claude;
+//     b.wbs), and no end of the row's agent recorded), however
 //     agent-director's own records say it closed: ErrDialogMaybeOpen with
 //     err_details (DialogMaybeOpenDetails), naming the oldest. A Cursor
 //     request of an earlier launch of the row does not hold
@@ -515,6 +519,14 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 		return err
 	}
 	r.facts.RowState = row.State
+	paneOnly := spawn.IsPaneOnly(row.Agent)
+	if paneOnly && params.DeliveryRequestID != "" {
+		return spawn.PaneOnlyCapabilityError(row.Agent, "send-keys delivery_request_id")
+	}
+	if paneOnly && plan.answer {
+		return fmt.Errorf("%w: %s has no permission request %s; nothing was sent",
+			store.ErrNoOpenPermissionRequest, row.InstanceID, params.RequestToken)
+	}
 
 	if err := sendKeysStateGuard(row, params); err != nil {
 		return err
@@ -536,6 +548,12 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
 		return fmt.Errorf("instance %s: %w", row.InstanceID, err)
+	}
+	if paneOnly {
+		// No native journal, readiness, deduplication or proof applies to this
+		// lane. Retain the ordinary owned-pane, hash and literal input guards.
+		r.keysRun = newKeysRun(r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
+		return r.sendPrepared(plan, params)
 	}
 	if row.Identity.Token != "" {
 		r.input, err = openInputDelivery(r.env.Context, r.env.Input, r.s, row, r.s.StoreID(), plan.answer || plan.key != nil || plan.hash != "" || !plan.enter || plan.text == "")
@@ -589,6 +607,12 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 		}
 		r.terminal = terminal
 	}
+	return r.sendPrepared(plan, params)
+}
+
+// sendPrepared shares manual transport and ownership checks with native agents.
+func (r *sendKeysRun) sendPrepared(plan sendKeysPlan, params SendKeysParams) error {
+	row := r.row
 	if plan.enter {
 		// A literal retry after a text call with Enter would type the text
 		// again after its unsubmitted copy (b.9o4); without Enter, or for a
@@ -600,7 +624,7 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 			return pendingLeftoverError(row.InstanceID, leftovers)
 		}
 	}
-	err = r.send(plan, params)
+	err := r.send(plan, params)
 	r.facts.keysFacts = r.found
 	if err == nil && !r.automatic && row.State == store.StatePending && plan.enter && (row.Agent == store.AgentCodex || r.terminal != nil) {
 		return r.confirmLegacySubmission(row)
@@ -810,9 +834,8 @@ func (r *sendKeysRun) sendKey(paneID string, launch tmux.Launch, k paneKey) erro
 // step-3 failure is an unnamed error (ErrInternal) saying the key was sent,
 // with err_details (paneKeySentError), so it never reads as a call that sent
 // nothing and invites a blind retry. A step 3 that matches nothing (the
-// request was closed meanwhile, as by its tool's PostToolUse or a close of
-// its Spawn's requests) changes nothing and the call succeeds: the key was
-// sent.
+// request was closed meanwhile, as by a close of its Spawn's requests)
+// changes nothing and the call succeeds: the key was sent.
 func (r *sendKeysRun) paneAnswer(paneID string, launch tmux.Launch, plan sendKeysPlan, params SendKeysParams) error {
 	id, token := r.row.InstanceID, params.RequestToken
 	intent, written, err := r.s.RecordPaneIntent(id, token, params.As, r.env.self(), r.j.now, store.DefaultLockWait,
@@ -1059,6 +1082,8 @@ func isInteractiveState(state string) bool {
 // CLI: agent-director send-keys
 //
 // Errors:
+//   - [ErrAgentCapabilityUnsupported]: DeliveryRequestID requests native
+//     delivery for a pane-only row; nothing is sent. Omit it for manual input.
 //   - [ErrInvalidFlags]: the params' shape is refused (a pane answer without
 //     As allow or deny, Key or ExpectPaneSHA256, or with Text; As without
 //     RequestToken; Key with Text; NoEnter with neither; a Key that is not a
@@ -1082,14 +1107,17 @@ func isInteractiveState(state string) bool {
 //     requests. Answer it with a pane answer, or close it with
 //     RecordPaneAnswer.
 //   - [ErrDialogMaybeOpen]: a plain call without ExpectPaneSHA256 while a
-//     request of the Spawn is not proven gone by Claude Code's hooks (its
-//     tool's PostToolUse, the main agent's end of turn after it, or the
-//     agent's end), whatever agent-director's records say of it; nothing was
-//     sent. Its err_details ([DialogMaybeOpenDetails]) name the request,
-//     how agent-director's records say it closed, since when, and the
-//     Spawn's other such requests. A Cursor request of an earlier launch of
-//     the row does not hold (store.PermissionRow.HoldsDialog). A plain call
-//     whose ExpectPaneSHA256 matches the pane is not refused with it.
+//     request of the Spawn is not proven gone (on a Cursor row, the gateway's
+//     validated proof that its tool ran; the end of the asking agent's turn:
+//     the main agent's for a request with no agent_id, and on a Claude row
+//     the subagent's SubagentStop for one with an agent_id; or, on a
+//     non-Cursor Spawn, the agent's end), whatever agent-director's records
+//     say of it; nothing was sent. Its err_details ([DialogMaybeOpenDetails])
+//     name the request, how agent-director's records say it closed, since
+//     when, and the Spawn's other such requests. A Cursor request of an
+//     earlier launch of the row does not hold
+//     (store.PermissionRow.HoldsDialog). A plain call whose ExpectPaneSHA256
+//     matches the pane is not refused with it.
 //   - [ErrNoOpenPermissionRequest]: a pane answer whose request is not one
 //     of the Spawn's, or is closed with its row or by find-missing; nothing
 //     was sent.

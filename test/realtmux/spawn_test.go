@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ type spawnFix struct {
 
 // newSpawnFix isolates HOME, puts the stand-in claude first on PATH, writes
 // generous [tmux] timeouts and opens the client on a fresh store.
-func newSpawnFix(t *testing.T) *spawnFix {
+func newSpawnFix(t *testing.T, extraConfig ...string) *spawnFix {
 	t.Helper()
 	f := newLookupFix(t)
 	home := t.TempDir()
@@ -50,6 +51,15 @@ func newSpawnFix(t *testing.T) *spawnFix {
 		apitest.TmuxInt(config.TmuxQueryTimeoutMs, clientTimeouts.Query.Milliseconds()),
 		apitest.TmuxInt(config.TmuxActionTimeoutMs, clientTimeouts.Action.Milliseconds()),
 		apitest.TmuxInt(config.TmuxCreateTimeoutMs, clientTimeouts.Create.Milliseconds()))
+	if len(extraConfig) > 0 {
+		body, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cfgPath, append(body, []byte("\n"+strings.Join(extraConfig, "\n"))...), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	dbPath := filepath.Join(home, ".config", "agent-director", "state.db")
 	c, err := api.New(api.Options{StorePath: dbPath, ConfigPath: cfgPath, CreateIfMissing: true})
 	if err != nil {
@@ -57,6 +67,107 @@ func newSpawnFix(t *testing.T) *spawnFix {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return &spawnFix{lookupFix: f, API: c, DBPath: dbPath, CWD: t.TempDir()}
+}
+
+// b.7tx: exclusion is tested through production spawn and reuse, with only
+// harmless ambient sentinels. The ordinary agent is the positive control.
+func TestPaneOnlySpawnEnvironmentExclusion(t *testing.T) {
+	for _, agent := range []string{"droid", "claude", "opencode"} {
+		for _, warm := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/warm=%t", agent, warm), func(t *testing.T) {
+				keys := []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE", "OPENROUTER_API_KEY"}
+				if agent == "opencode" {
+					keys = []string{"OPENROUTER_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"}
+				}
+				for _, key := range keys {
+					t.Setenv(key, "harmless-"+key)
+				}
+				t.Setenv(codexRecordDirEnv, t.TempDir())
+				unsetEnv(t, codexHookEnv)
+				stub := filepath.Join(t.TempDir(), "stand-in")
+				if err := os.WriteFile(stub, []byte(codexStubScript), 0700); err != nil {
+					t.Fatal(err)
+				}
+				f := newSpawnFix(t, "[experimental]\ndroid = true\nopencode = true\n[launch]\ndroid_path = "+strconv.Quote(stub)+"\nclaude_path = "+strconv.Quote(stub)+"\nopencode_path = "+strconv.Quote(stub)+"\n")
+				if warm {
+					f.startSession(t, "")
+				}
+				// On a warm server the old global credential must remain unchanged.
+				if agent == "opencode" {
+					t.Setenv("OPENROUTER_API_KEY", "synthetic-fresh-host-key")
+				}
+				check := func(s spawned) {
+					t.Helper()
+					r := codexRecordOf(os.Getenv(codexRecordDirEnv), s.ID)
+					r.waitRecorded(t)
+					pid := s.rt.formatInt(t, s.Row.PaneID.(string), "#{pane_pid}")
+					if r.pid(t) != pid {
+						t.Fatalf("stand-in pid=%d; pane root=%d", r.pid(t), pid)
+					}
+					global := strings.Split(strings.TrimSpace(s.rt.must(t, "show-environment", "-g")), "\n")
+					session := strings.Split(strings.TrimSpace(s.rt.must(t, "show-environment", "-t", s.SessionID)), "\n")
+					pane := procEnviron(t, pid)
+					for _, key := range keys {
+						g, gset := envValue(global, key)
+						wantGlobal := warm || agent == "claude" && key != "OPENROUTER_API_KEY"
+						if gset != wantGlobal || wantGlobal && g != "harmless-"+key {
+							t.Errorf("global %s=%q present=%v; want present=%v unchanged sentinel", key, g, gset, wantGlobal)
+						}
+						_, sset := envValue(session, key)
+						v, pset := envValue(pane, key)
+						switch {
+						case agent == "opencode" && (key == "OPENROUTER_API_KEY" || key == "OPENCODE_CONFIG_CONTENT"):
+							sv, _ := envValue(session, key)
+							if !sset || !pset || sv != v {
+								t.Errorf("target environment disagrees for %s", key)
+							}
+							if key == "OPENROUTER_API_KEY" && v != "synthetic-fresh-host-key" {
+								t.Error("target key did not come from current host")
+							}
+							if key == "OPENCODE_CONFIG_CONTENT" {
+								var content map[string]any
+								if err := json.Unmarshal([]byte(v), &content); err != nil {
+									t.Fatal(err)
+								}
+								if !strings.Contains(v, "{env:OPENROUTER_API_KEY}") || strings.Contains(v, "synthetic-fresh-host-key") || v == "harmless-"+key {
+									t.Error("target config lacks nonsecret provider reference")
+								}
+							}
+						case agent == "opencode" || agent == "droid" && key != "OPENROUTER_API_KEY":
+							if sset || pset {
+								t.Errorf("%s survived exclusion: session=%v pane=%v", key, sset, pset)
+							}
+						case key == "OPENROUTER_API_KEY":
+							if !warm && (sset || pset) {
+								t.Error("cold non-OpenCode pane inherited host key")
+							}
+						default:
+							if !pset || v != "harmless-"+key {
+								t.Errorf("control failed to inherit %s", key)
+							}
+						}
+					}
+					if agent == "opencode" {
+						for _, env := range [][]string{session, pane} {
+							if v, set := envValue(env, "OPENCODE_DISABLE_AUTOUPDATE"); !set || v != "1" {
+								t.Error("auto-update override missing")
+							}
+						}
+					}
+				}
+				args := []string{"--model", "model"}
+				if agent == "opencode" {
+					args[1] = "openrouter/model"
+				}
+				check(f.mustLaunchWith(t, api.SpawnParams{Agent: agent, AgentArgs: args}))
+				if agent == "droid" || agent == "opencode" && !warm {
+					id := newInstanceID("lane-reuse")
+					f.reuseRows(t).seedRow(t, id, uniqueName(), store.StateEnded, store.LaunchIdentity{Token: newToken(t), Socket: f.Socket}, apitest.WithAgent(agent), apitest.WithNoSubagentTracking())
+					check(f.mustLaunchWith(t, api.SpawnParams{Agent: agent, InstanceID: id, ReuseFinished: true, AgentArgs: args}))
+				}
+			})
+		}
+	}
 }
 
 // storeID reads this store's id from the store file.
@@ -159,17 +270,23 @@ func (f *spawnFix) launched(t *testing.T, id string) spawned {
 	return s
 }
 
-// seedResumable seeds an ended row in cwd with args as its stored claude
-// args, the socket spawn resolves, the pre-trust opt-out and a transcript on
-// disk; it returns the row's id and session id.
+// seedResumable seeds an ended row through seedResumableIn.
 func (f *spawnFix) seedResumable(t *testing.T, cwd string, args []string) (id, sessionID string) {
+	t.Helper()
+	return f.seedResumableIn(t, store.StateEnded, cwd, args)
+}
+
+// seedResumableIn seeds a row in state (ended or missing) in cwd with args as
+// its stored claude args, the socket spawn resolves, the pre-trust opt-out and
+// a transcript on disk; it returns the row's id and session id.
+func (f *spawnFix) seedResumableIn(t *testing.T, state, cwd string, args []string) (id, sessionID string) {
 	t.Helper()
 	id, sessionID = newInstanceID("resume"), newInstanceID("sess")
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		t.Fatalf("encode agent args: %v", err)
 	}
-	if _, err := apitest.SeedSpawn(f.DBPath, id, store.StateEnded, cwd, "", sessionID, false,
+	if _, err := apitest.SeedSpawn(f.DBPath, id, state, cwd, "", sessionID, false,
 		apitest.WithRawAgentArgs(string(encoded)), apitest.WithTmuxSocket(f.Socket), apitest.WithNoPreTrust(),
 		apitest.WithJsonlPath(apitest.SeedJsonl(t, cwd, sessionID))); err != nil {
 		t.Fatalf("SeedSpawn %s: %v", id, err)

@@ -110,7 +110,7 @@ func migrateV9toV10(db *sql.DB) error {
 	if _, err = tx.Exec(`PRAGMA user_version = 10`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitMigrationStep(tx)
 }
 
 // RegisterCursorRuntime is conditional on the independently examined launch.

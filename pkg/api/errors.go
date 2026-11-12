@@ -187,10 +187,12 @@ var ErrPaneChanged = errors.New("ErrPaneChanged")
 // step 2c), so no hook of the agent has shown its dialog gone, the dialog may
 // still be on the pane, and typed keys, an Enter above all, would land on it;
 // and it is not a Cursor request of an earlier launch. A request is proven
-// gone by its tool's PostToolUse or PostToolUseFailure (the same tool_use_id;
-// Claude rows only), on a Cursor row by the gateway's validated completed or
-// failed update of its exact tool_use_id under the launch that admitted it,
-// by a turn end under the turn_end rule (store.ProvenGoneTurnEnd; the
+// gone, on a Cursor row, by the gateway's validated completed or failed
+// update of its exact tool_use_id under the launch that admitted it (no
+// Claude or Codex request carries a tool_use_id, so no tool-ran proof
+// applies to one; b.wbs), by a turn end under the turn_end rule (the main
+// agent's for a request with no agent_id; on a Claude row, a subagent's
+// SubagentStop for that subagent's requests; store.ProvenGoneTurnEnd; the
 // proven_gone_how field of get-permission gives which hooks prove it and
 // which requests they cover), or, on a non-Cursor row, by its Spawn's end
 // (marked missing, ended, or resumed). agent-director's own records prove nothing: a
@@ -258,8 +260,8 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     an `older_than` that is in neither duration form, has a leading + or
 //     -, or whose day count is above 106751 (expire), with a description
 //     naming the param and the expected form (b.anw, b.hxn, b.sgw, b.c4n).
-//   - The shared verb layer, for spawn, read-pane, list, decide, send-keys
-//     and record-pane-answer, so the CLI, MCP, the Go client and the
+//   - The shared verb layer, for spawn, read-pane, list, decide, send-keys,
+//     get-many and record-pane-answer, so the CLI, MCP, the Go client and the
 //     TypeScript client all return it: runSpawn returns it (wrapped) when an
 //     explicit instance id contains an ASCII control character (0x00-0x1f or
 //     0x7f) (SR-9.1); ReadPane for a negative NLines and List for a negative
@@ -269,7 +271,8 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     expect_pane_sha256 or with text, and for any other combination its
 //     params do not allow (planSendKeys, b.146 rule 8); record-pane-answer
 //     for a missing token, an as other than allow, deny or unknown, or a
-//     missing or malformed hash (b.146 rule 13).
+//     missing or malformed hash (b.146 rule 13); get-many for no ids, an
+//     empty id or a repeated id, before any agent is read.
 //   - The exported Go function Expire, for a negative retentionDays or a
 //     negative olderThan, before anything runs (b.f4v). Client.Expire passes
 //     the configured retention, from 1 to config.MaxExpireRetentionDays, so
@@ -288,3 +291,7 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 // callable verb lists it, that listing already satisfies check 3, so the
 // exception changes nothing.
 var ErrInvalidFlags = errors.New("ErrInvalidFlags")
+
+// ErrTooManyIds is returned by get-many when the number of ids exceeds the
+// configured Id Cap. TooManyIdsDetails carries that cap in err_details.
+var ErrTooManyIds = errors.New("ErrTooManyIds")

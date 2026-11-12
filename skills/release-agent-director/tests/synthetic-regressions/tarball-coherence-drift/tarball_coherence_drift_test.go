@@ -19,16 +19,16 @@
 //
 // DESIGN
 // ======
-// 1. Pack a clean tarball via pack-first.sh (embedded version "0.0.0").
-// 2. Extract the tarball into a temp dir.
-// 3. Edit package/package.json version to "9.9.9" (post-pack tampering).
-// 4. Repack into a new mutated tarball.
-// 5. Run tarball-and-bump.sh --tarball <mutated> --target 0.0.0.
-//    Sub-check 1 (coherence.tarball-version): "9.9.9" != "0.0.0" → fail.
-//    Sub-check 2 (coherence.bump-commit-integrity): pkg/ts-bun-client/
-//    package.json is at "0.0.0" which matches --target → pass.
-//    Overall: failed; exit 1.
-// 6. Assert exit 1 and stderr contains "gate":"coherence.tarball-version".
+//  1. Pack a clean tarball via pack-first.sh (embedded version "0.0.0").
+//  2. Extract the tarball into a temp dir.
+//  3. Edit package/package.json version to "9.9.9" (post-pack tampering).
+//  4. Repack into a new mutated tarball.
+//  5. Run tarball-and-bump.sh --tarball <mutated> --target 0.0.0.
+//     Sub-check 1 (coherence.tarball-version): "9.9.9" != "0.0.0" → fail.
+//     Sub-check 2 (coherence.bump-commit-integrity): pkg/ts-bun-client/
+//     package.json is at "0.0.0" which matches --target → pass.
+//     Overall: failed; exit 1.
+//  6. Assert exit 1 and stderr contains "gate":"coherence.tarball-version".
 //
 // Cleanup: pack-first.sh writes into a per-test t.TempDir() (via
 // PACK_OUTPUT_DIR) rather than the shared repo-root dist/; mutated tarballs

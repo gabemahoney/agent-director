@@ -3,7 +3,10 @@ package probe
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
 )
@@ -25,6 +28,81 @@ func plantEntry(buf []byte, off int, ppid int32, sec int64, usec int32) {
 // that begins at byte offset off in buf.
 func plantStat(buf []byte, off int, stat byte) {
 	buf[off+kinfoProcStatOffset] = stat
+}
+
+// plantPID adds extern_proc.p_pid to the existing synthetic entry fixture.
+func plantPID(buf []byte, off int, pid int32) {
+	binary.LittleEndian.PutUint32(buf[off+kinfoProcPIDOffset:], uint32(pid))
+}
+
+func TestParseKinfoPIDs(t *testing.T) {
+	t.Parallel()
+	buf := make([]byte, 3*kinfoProcSize)
+	want := []int{0, 4242, maxPlausiblePID}
+	for i, pid := range want {
+		off := i * kinfoProcSize
+		plantEntry(buf, off, 999, darwinStartSec, darwinStartUsec)
+		plantStat(buf, off, kinfoStatSRUN)
+		plantPID(buf, off, int32(pid))
+		binary.LittleEndian.PutUint32(buf[off+kinfoProcPIDOffset+4:], 777) // neighbouring decoy
+	}
+	if got, err := parseKinfoPIDs(buf); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("pids = %v, %v; want %v", got, err, want)
+	}
+	for _, kind := range []string{"short", "ragged", "negative", "above-bound", "bad-first-stat", "bad-last-stat"} {
+		t.Run(kind, func(t *testing.T) {
+			data := append([]byte(nil), buf...)
+			switch kind {
+			case "short":
+				data = data[:kinfoProcSize-1]
+			case "ragged":
+				data = data[:len(data)-1]
+			case "negative":
+				plantPID(data, kinfoProcSize, -1)
+			case "above-bound":
+				plantPID(data, kinfoProcSize, maxPlausiblePID+1)
+			case "bad-first-stat":
+				plantStat(data, 0, 0)
+			case "bad-last-stat":
+				plantStat(data, 2*kinfoProcSize, kinfoStatSZOMB+1)
+			}
+			got, err := parseKinfoPIDs(data)
+			assertKinfoDrift(t, err)
+			if got != nil {
+				t.Fatalf("drift returned partial selection %v", got)
+			}
+		})
+	}
+}
+
+func TestParseDarwinProcStartTime(t *testing.T) {
+	t.Parallel()
+	for _, pair := range [][2]int64{{1, 0}, {darwinStartSec, 5}, {darwinStartSec, darwinStartUsec}, {maxPlausibleStartSec - 1, maxPlausibleStartUsec - 1}} {
+		text := formatDarwinProcStartTime(pair[0], pair[1])
+		got, ok := ParseDarwinProcStartTime(text)
+		want := time.Unix(pair[0], pair[1]*int64(time.Microsecond))
+		if !ok || !got.Equal(want) {
+			t.Errorf("parse %q = %v, %v; want %v", text, got, ok, want)
+		}
+	}
+	fixture, ok := ParseDarwinProcStartTime(procstarttimefix.DarwinProcStarttime)
+	if !ok || !fixture.Equal(time.Unix(darwinStartSec, darwinStartUsec*1000)) {
+		t.Fatal("canonical fixture did not round-trip")
+	}
+	// Microseconds are an integer count: .5 is 5 microseconds, not .5 seconds.
+	var previous time.Time
+	for _, pair := range [][2]int64{{darwinStartSec, 5}, {darwinStartSec, 50}, {darwinStartSec, 500000}, {darwinStartSec + 1, 0}} {
+		got, ok := ParseDarwinProcStartTime(formatDarwinProcStartTime(pair[0], pair[1]))
+		if !ok || !got.After(previous) {
+			t.Fatalf("start order: %v after %v (%v)", got, previous, ok)
+		}
+		previous = got
+	}
+	for _, text := range []string{"", ".", "1.", ".1", "1", "+1.0", "1.+0", "-1.0", "1.-1", " 1.0", "1.0 ", "1.0.1", "x.0", "1.x", "1.1e2", "01.0", "1.00", "0.0", "1.1000000", "999999999999999999999999.0", fmt.Sprintf("%d.0", maxPlausibleStartSec)} {
+		if got, ok := ParseDarwinProcStartTime(text); ok || !got.IsZero() {
+			t.Errorf("invalid %q = %v, %v", text, got, ok)
+		}
+	}
 }
 
 // assertKinfoDrift asserts err is the fail-open drift sentinel and NOT the

@@ -108,31 +108,37 @@ func TestRepliesNoServerOrSocket(t *testing.T) {
 // TestRepliesDuplicateSession checks a second create with a held name is
 // FailDuplicate with the catalogue's reply, and leaves the holder alone.
 func TestRepliesDuplicateSession(t *testing.T) {
-	rt := newRealTmux(t)
-	holder := rt.mustCreate(t, createSpec{})
-	cl, log := newRecordingClient(t)
-	second, err := rt.create(t, createSpec{Name: holder.Name, Client: cl})
+	createRoutes(t, func(t *testing.T, forward []string) {
+		rt := newRealTmux(t)
+		holder := rt.mustCreate(t, createSpec{})
+		cl, log := newRecordingClient(t)
+		second, err := rt.create(t, createSpec{Name: holder.Name, Client: cl, ForwardEnv: forward})
 
-	ans, lerr := newClient().Lookup(rt.Socket)
-	if lerr != nil {
-		t.Fatalf("lookup after the duplicate create: %s", describe(lerr))
-	}
-	if len(ans.Sessions) != 1 || ans.Sessions[0].ID != holder.Reply.SessionID {
-		t.Fatalf("sessions after the duplicate create = %v, want only the holder %s",
-			sessionIDs(ans), holder.Reply.SessionID)
-	}
-	want := tmuxfix.Duplicate(ans.Sessions[0].Name)
-	assertCallError(t, err, tmux.CallCreate, want)
-	assertTriple(t, log.last(t).rawResult, want)
-	if second.Reply != (tmux.CreateReply{}) {
-		t.Errorf("duplicate create returned reply %+v, want none", second.Reply)
-	}
-	if rt.label(t, holder.Reply.SessionID) != tmuxfix.LabelValue(holder.Token, holder.Reply.SessionID, holder.InstanceID, holder.StoreID) {
-		t.Errorf("holder %s's label changed after the duplicate create (the chained label ran)", holder.Reply.SessionID)
-	}
-	if ans.Sessions[0].Label != tmuxfix.Valid(holder.Token, holder.InstanceID, holder.StoreID) {
-		t.Errorf("lookup classifies the holder's label as kind %d, want the holder's valid label", ans.Sessions[0].Label.Kind)
-	}
+		ans, lerr := newClient().Lookup(rt.Socket)
+		if lerr != nil {
+			t.Fatalf("lookup after the duplicate create: %s", describe(lerr))
+		}
+		if len(ans.Sessions) != 1 || ans.Sessions[0].ID != holder.Reply.SessionID {
+			t.Fatalf("sessions after the duplicate create = %v, want only the holder %s",
+				sessionIDs(ans), holder.Reply.SessionID)
+		}
+		want := tmuxfix.Duplicate(ans.Sessions[0].Name)
+		if len(forward) > 0 {
+			want = tmuxfix.Find(tmuxfix.StdinCreateReplies(), "stdin/duplicate")
+			want.Stderr = tmuxfix.Duplicate(holder.Name).Stderr
+		}
+		assertCallError(t, err, tmux.CallCreate, want)
+		assertTriple(t, log.last(t).rawResult, want)
+		if second.Reply != (tmux.CreateReply{}) {
+			t.Errorf("duplicate create returned reply %+v, want none", second.Reply)
+		}
+		if rt.label(t, holder.Reply.SessionID) != tmuxfix.LabelValue(holder.Token, holder.Reply.SessionID, holder.InstanceID, holder.StoreID) {
+			t.Errorf("holder %s's label changed after the duplicate create (the chained label ran)", holder.Reply.SessionID)
+		}
+		if ans.Sessions[0].Label != tmuxfix.Valid(holder.Token, holder.InstanceID, holder.StoreID) {
+			t.Errorf("lookup classifies the holder's label as kind %d, want the holder's valid label", ans.Sessions[0].Label.Kind)
+		}
+	})
 }
 
 // b.qcr: missing paste/cleanup buffers use the same parameterized catalogue
@@ -166,28 +172,62 @@ func sessionIDs(ans tmux.LookupAnswer) []string {
 // TestRepliesCreateReplyFields checks the create reply's five fields equal
 // what tmux reports for the new session and the pane pid is the stub.
 func TestRepliesCreateReplyFields(t *testing.T) {
-	rt := newRealTmux(t)
-	cl, log := newRecordingClient(t)
-	c := rt.mustCreate(t, createSpec{Client: cl})
+	createRoutes(t, func(t *testing.T, forward []string) {
+		rt := newRealTmux(t)
+		cl, log := newRecordingClient(t)
+		c := rt.mustCreate(t, createSpec{Client: cl, ForwardEnv: forward})
 
-	target := "=" + c.Name + ":" // the exact session, its active pane
-	reported := tmux.CreateReply{
-		SessionID:   rt.format(t, target, createReplyFields[0]),
-		ServerPID:   rt.formatInt(t, target, createReplyFields[1]),
-		ServerStart: int64(rt.formatInt(t, target, createReplyFields[2])),
-		PaneID:      rt.format(t, target, createReplyFields[3]),
-		PanePID:     rt.formatInt(t, target, createReplyFields[4]),
-	}
-	if c.Reply != reported {
-		t.Errorf("create reply = %+v, tmux reports %+v", c.Reply, reported)
-	}
-	waitExeced(t, c.Reply.PanePID, stubCommand()[0])
-	if got := procCmdline(t, c.Reply.PanePID); !reflect.DeepEqual(got, stubCommand()) {
-		t.Errorf("pane pid %d runs %q, want the stub %q", c.Reply.PanePID, got, stubCommand())
-	}
-	want := tmuxfix.Find(tmuxfix.CreateReplies(), "create/reply")
-	want.Stdout, want.Create = tmuxfix.CreateReplyLine(reported), reported
-	assertTriple(t, log.last(t).rawResult, want)
+		target := "=" + c.Name + ":" // the exact session, its active pane
+		reported := tmux.CreateReply{
+			SessionID:   rt.format(t, target, createReplyFields[0]),
+			ServerPID:   rt.formatInt(t, target, createReplyFields[1]),
+			ServerStart: int64(rt.formatInt(t, target, createReplyFields[2])),
+			PaneID:      rt.format(t, target, createReplyFields[3]),
+			PanePID:     rt.formatInt(t, target, createReplyFields[4]),
+		}
+		if c.Reply != reported {
+			t.Errorf("create reply = %+v, tmux reports %+v", c.Reply, reported)
+		}
+		waitExeced(t, c.Reply.PanePID, stubCommand()[0])
+		if got := procCmdline(t, c.Reply.PanePID); !reflect.DeepEqual(got, stubCommand()) {
+			t.Errorf("pane pid %d runs %q, want the stub %q", c.Reply.PanePID, got, stubCommand())
+		}
+		want := tmuxfix.Find(tmuxfix.CreateReplies(), "create/reply")
+		if len(forward) > 0 {
+			want = tmuxfix.Find(tmuxfix.StdinCreateReplies(), "stdin/reply")
+		}
+		want.Stdout, want.Create = tmuxfix.CreateReplyLine(reported), reported
+		assertTriple(t, log.last(t).rawResult, want)
+	})
+}
+
+func TestRepliesCreateLabelFailure(t *testing.T) {
+	createRoutes(t, func(t *testing.T, forward []string) {
+		for _, state := range []string{"live", "ended"} {
+			t.Run(state, func(t *testing.T) {
+				rt := newRealTmux(t)
+				rt.mustCreate(t, createSpec{}) // keep the server after the failed create
+				hook := "rename-session renamed"
+				if state == "ended" {
+					hook = "kill-session"
+				}
+				rt.must(t, "set-hook", "-g", "after-new-session", hook)
+				cl, log := newRecordingClient(t)
+				c, err := rt.create(t, createSpec{Name: "label-failure-" + state, Client: cl, ForwardEnv: forward})
+				want := tmuxfix.Find(tmuxfix.StdinCreateReplies(), "stdin/label-failure-"+state)
+				want.Stdout, want.Create = tmuxfix.CreateReplyLine(c.Reply), c.Reply
+				assertTriple(t, log.last(t).rawResult, want)
+				assertCallError(t, err, tmux.CallCreate, want)
+				if c.Reply.SessionID == "" {
+					t.Fatal("label failure lost create reply")
+				}
+				rt.assertSession(t, c.Reply.SessionID, state == "live")
+				if state == "live" && rt.label(t, c.Reply.SessionID) != "" {
+					t.Error("failed chain left a session label")
+				}
+			})
+		}
+	})
 }
 
 // TestRepliesSuccessfulCallStreams checks answers arrive on stdout alone
@@ -290,11 +330,14 @@ func TestRepliesSuccessfulCallStreams(t *testing.T) {
 }
 
 // TestRepliesCaptureStream checks a capture of typed text echoed by cat is
-// the catalogue's E.10 O4 answer on stdout, with empty stderr and exit 0.
+// the catalogue's E.10 O4 answer on stdout, with empty stderr and exit 0, and
+// that the client returns its two rows without the blank rows below them
+// (b.7y8).
 func TestRepliesCaptureStream(t *testing.T) {
 	rt := newRealTmux(t)
 	want := tmuxfix.Find(tmuxfix.Captures(), "capture/O4")
 	text, _, _ := strings.Cut(want.Stdout, "\n")
+	shown := text + "\n" + text + "\n"
 	c := rt.mustCreate(t, createSpec{Command: []string{"cat", "-"}})
 	pane := c.Reply.PaneID
 	if err := newClient().SendKeysPane(rt.Socket, pane, text, true); err != nil {
@@ -304,14 +347,14 @@ func TestRepliesCaptureStream(t *testing.T) {
 	var last string
 	waitFor(t, "pane shows the typed line and cat's copy", func() bool {
 		last, _ = newClient().CapturePaneID(rt.Socket, pane, rows, false)
-		return last == want.Stdout
+		return last == shown
 	}, func() string { return "capture " + strings.ReplaceAll(last, "\n", `\n`) })
 
 	cl, log := newRecordingClient(t)
 	got, err := cl.CapturePaneID(rt.Socket, pane, rows, false)
 	assertCallError(t, err, tmux.CallCapture, want)
 	assertTriple(t, log.last(t).rawResult, want)
-	if got != want.Stdout {
-		t.Errorf("capture = %q, want %q", got, want.Stdout)
+	if got != shown {
+		t.Errorf("capture = %q, want %q", got, shown)
 	}
 }

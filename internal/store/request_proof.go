@@ -22,12 +22,18 @@ import (
 type RequestProof struct {
 	// How is ProvenGoneToolRan (a Claude PostToolUse or PostToolUseFailure:
 	// the requests carrying ToolUseID; never written for a Codex row, whose
-	// requests carry no tool_use_id) or ProvenGoneTurnEnd (the main agent's
-	// Stop or idle-prompt Notification, or a Codex main-agent Interrupt:
-	// every durably eligible request recorded before RecordedBefore).
+	// requests carry no tool_use_id, and never matching a Claude request,
+	// whose PermissionRequest carries none either; b.wbs) or
+	// ProvenGoneTurnEnd (with no AgentID, the main agent's Stop or idle-prompt
+	// Notification, or a Codex main-agent Interrupt: every durably eligible
+	// request recorded before RecordedBefore; with one, a Claude subagent's
+	// SubagentStop: that subagent's requests recorded before RecordedBefore).
 	How string
 	// ToolUseID is, for ProvenGoneToolRan, the hook's tool_use_id.
 	ToolUseID string
+	// AgentID is, for ProvenGoneTurnEnd, the subagent whose turn ended (the
+	// SubagentStop's agent_id; b.wbs); "" is the main agent's turn end.
+	AgentID string
 	// RecordedBefore is, for ProvenGoneTurnEnd, the instant the hook started
 	// (the hook package's HandleConfig.Start, read first thing in the hook
 	// process): the proof covers only requests whose created_at is strictly
@@ -60,7 +66,9 @@ var errTurnEndNoStart = errors.New("store: prove requests gone: turn_end proof w
 // leaves in created_at (its DEFAULT CURRENT_TIMESTAMP), so the text
 // comparison is a time comparison. A request created in the second the hook
 // started, or later, is not covered: one recorded just before the hook in
-// that second stays unproven until a later proof (the safe direction).
+// that second stays unproven until a later proof (the safe direction). A
+// subagent's turn end (p.AgentID) matches that agent's requests instead of
+// the main agent's eligible ones: a subagent's request is never eligible.
 func (p RequestProof) match() (frag string, args []any, ok bool, err error) {
 	switch p.How {
 	case ProvenGoneToolRan:
@@ -71,6 +79,9 @@ func (p RequestProof) match() (frag string, args []any, ok bool, err error) {
 	case ProvenGoneTurnEnd:
 		if p.RecordedBefore.IsZero() {
 			return "", nil, false, errTurnEndNoStart
+		}
+		if p.AgentID != "" {
+			return `pr.agent_id = ? AND pr.created_at < ?`, []any{p.AgentID, storeTimestamp(p.RecordedBefore)}, true, nil
 		}
 		return `pr.main_turn_end_eligible = 1 AND pr.agent_id IS NULL AND pr.created_at < ?`, []any{storeTimestamp(p.RecordedBefore)}, true, nil
 	}
@@ -85,13 +96,21 @@ func (p RequestProof) match() (frag string, args []any, ok bool, err error) {
 //     (the tool ran, so its dialog was answered and is gone), whether or not
 //     agent-director's records say they were answered, and whatever their
 //     agent_id. An empty ToolUseID proves nothing.
-//   - ProvenGoneTurnEnd: requests with MainTurnEndEligible set and no child
-//     identity, written before this hook started. Legacy non-Cursor main
-//     requests preserve their eligibility. Cursor unknown origin and child
-//     requests remain ineligible even without an AgentID: missing identity is
-//     no proof of main origin, and background work can outlive the main turn.
-//     A Cursor request's turn_end comes from its gateway instead, at the
-//     prompt turn's completion (ProveCursorTurnEnded).
+//   - ProvenGoneTurnEnd with no AgentID (the main agent's turn end): requests
+//     with MainTurnEndEligible set and no child identity, written before this
+//     hook started. Legacy non-Cursor main requests preserve their
+//     eligibility. Cursor unknown origin and child requests remain ineligible
+//     even without an AgentID: missing identity is no proof of main origin,
+//     and background work can outlive the main turn. A Cursor request's
+//     turn_end comes from its gateway instead, at the prompt turn's
+//     completion (ProveCursorTurnEnded).
+//   - ProvenGoneTurnEnd with an AgentID (a Claude subagent's SubagentStop;
+//     b.wbs): the requests carrying that agent_id, written before this hook
+//     started, allowed, denied or unanswered: a subagent whose turn has ended
+//     shows no dialog of its own. Another agent's request and the main
+//     agent's are untouched. It proves nothing on a Cursor row: no Cursor
+//     hook reports a child's turn end, and a Cursor child request stays held
+//     like an unknown-origin one.
 //
 // "Written before this hook started" is two cuts, both in the read and in
 // the write. The first is the hook's start (proof.RecordedBefore): only a
@@ -120,10 +139,11 @@ func (s *Store) ProveRequestsGone(instanceID string, gate HookGate, proof Reques
 		return 0, err
 	}
 	// Cursor tool execution requires validated ACP output and exact request
-	// authority through ProveCursorToolRan, never a generic hook tool id.
-	toolGate := ""
-	if proof.How == ProvenGoneToolRan {
-		toolGate = "agent IS NOT 'cursor' AND "
+	// authority through ProveCursorToolRan, never a generic hook tool id; and
+	// a subagent's turn end is Claude's alone (b.wbs).
+	notCursor := ""
+	if proof.How == ProvenGoneToolRan || proof.AgentID != "" {
+		notCursor = "agent IS NOT 'cursor' AND "
 	}
 	var newest sql.NullInt64
 	read := `SELECT MAX(pr.request_id) FROM permission_requests pr
@@ -141,7 +161,7 @@ func (s *Store) ProveRequestsGone(instanceID string, gate HookGate, proof Reques
 	write := `UPDATE permission_requests AS pr
 	    SET proven_gone_at = ?, proven_gone_how = ?
 	  WHERE pr.instance_id = ? AND pr.proven_gone_at IS NULL AND ` + frag + ` AND pr.request_id <= ?
-	    AND EXISTS (SELECT 1 FROM spawns WHERE instance_id = ? AND ` + toolGate + hookGateSQL + `)`
+	    AND EXISTS (SELECT 1 FROM spawns WHERE instance_id = ? AND ` + notCursor + hookGateSQL + `)`
 	args := append([]any{millisArg(at), proof.How, instanceID}, matchArgs...)
 	args = append(args, newest.Int64, instanceID)
 	args = append(args, hookGateArgs(gate)...)

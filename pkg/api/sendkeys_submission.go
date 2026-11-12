@@ -13,14 +13,19 @@ import (
 
 // Exported aliases allow native evidence and durable storage to be injected.
 type InputDeliveryBackend = inputdelivery.Backend
+
 // InputDeliverySession owns a launch's writer lock, durable attempts and evidence reads.
 type InputDeliverySession = inputdelivery.Session
+
 // InputDeliveryIdentity binds delivery to one store, launch and process.
 type InputDeliveryIdentity = inputdelivery.Identity
+
 // InputDeliveryAttempt retains intent and proof for observation, never replay.
 type InputDeliveryAttempt = inputdelivery.Attempt
+
 // InputDeliveryWatermark records the transcript boundary captured before input.
 type InputDeliveryWatermark = inputdelivery.Watermark
+
 // InputDeliveryProof retains an exact native record and its provenance.
 type InputDeliveryProof = inputdelivery.Proof
 

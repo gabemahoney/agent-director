@@ -1,6 +1,7 @@
 package apitest
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +14,22 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
+
+// ReadDisplayExit reads only id's stored display_exit, preserving SQL NULL.
+// Registered in docs/architecture.md, Displayed State reporting; use it to
+// check a lifecycle writer drained its exit without an observing write.
+func ReadDisplayExit(dbPath, id string) (sql.NullString, error) {
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return sql.NullString{}, fmt.Errorf("ReadDisplayExit: %w", err)
+	}
+	defer raw.Close()
+	var exit sql.NullString
+	if err := raw.QueryRow("SELECT display_exit FROM spawns WHERE instance_id = ?", id).Scan(&exit); err != nil {
+		return sql.NullString{}, fmt.Errorf("ReadDisplayExit %s: %w", id, err)
+	}
+	return exit, nil
+}
 
 // PermissionOption overrides exact request facts without advancing any clocks.
 type PermissionOption func(map[string]any)

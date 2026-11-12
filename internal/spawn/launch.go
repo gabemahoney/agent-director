@@ -28,12 +28,11 @@ func claudeProgram(cfg config.Config) string {
 	return claudeBinary
 }
 
-// launchAgentError is the composition stop for an agent other than claude,
-// codex or cursor: the row-agent error (store.ErrRowAgentInvalid). nil for all
-// launchable agents.
+// launchAgentError stops composition for an unrecognized agent with the
+// row-agent error (store.ErrRowAgentInvalid). It permits every registered agent.
 func launchAgentError(agent string) error {
 	switch agent {
-	case store.AgentClaude, store.AgentCodex, store.AgentCursor:
+	case store.AgentClaude, store.AgentCodex, store.AgentCursor, store.AgentDroid, store.AgentOpenCode:
 		return nil
 	}
 	return fmt.Errorf("%w: %q", store.ErrRowAgentInvalid, agent)
@@ -123,8 +122,12 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 		return "", "", err
 	}
 
+	r.LaunchStoreID, r.LaunchToken = s.StoreID(), token
 	c, err := ComposeLaunch(r, cfg)
 	if err != nil {
+		return "", "", err
+	}
+	if err := PrepareLaunchFiles(c, s.StoreID(), token, lg); err != nil {
 		return "", "", err
 	}
 
@@ -138,6 +141,9 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	row.Identity = store.LaunchIdentity{Token: token, Socket: socket}
 	row.LaunchOwner = CurrentLaunchOwner(pc)
 	if err := insertPending(s, row); err != nil {
+		if len(c.Files) > 0 {
+			ReclaimLaunchFiles(s.StoreID(), token, lg)
+		}
 		return "", "", err
 	}
 
@@ -162,6 +168,10 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 		ReleaseLaunchOwner(s, lg, r.InstanceID, token)
 	}
 	if err := plainSpawnCreateError(out, req, launchStart, minted, r.Agent); err != nil {
+		// Duplicate-name cleanup follows the caller's conditional end and lookup.
+		if len(c.Files) > 0 && out.Kind != CreateDuplicate && out.DefinitelyNotStarted() {
+			ReclaimLaunchFiles(s.StoreID(), token, lg)
+		}
 		return "", "", err
 	}
 	return r.InstanceID, preTrust, nil

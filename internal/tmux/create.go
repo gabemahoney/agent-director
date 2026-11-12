@@ -1,7 +1,10 @@
 package tmux
 
 import (
+	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/cursorenv"
@@ -54,8 +57,8 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 // AGENT_DIRECTOR_INSTANCE_ID key in envs is dropped, the -e entry from
 // instanceID being the only one. The client's own environment has every
 // AGENT_DIRECTOR_* variable removed, as for every call. A Cursor create also
-// excludes ambient Cursor selection from the client and marks absent selectors
-// removed in this session, defeating existing-server inheritance.
+// excludes ambient Cursor selection from the client; its gateway filters the
+// runtime's selection before starting it.
 //
 // name, cwd, every -e entry and every command element are passed to tmux as
 // written, an element ending in ";" included: each argv element but the
@@ -73,12 +76,64 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 // FailUnrecognized. The *CallError's ExitStatus and HadStdout tell these
 // apart for the caller.
 func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (CreateReply, error) {
+	return c.NewSessionWithEnvExclusions(socket, name, cwd, envs, command, token, instanceID, storeID, nil)
+}
+
+// NewSessionWithEnvExclusions preserves the create-and-label invocation while
+// excluding keys from its client and session environment and clearing any
+// server-global copies before exec of the pane command. The command remains
+// the pane's root process. An existing server's globals are never changed.
+func (c *Client) NewSessionWithEnvExclusions(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, exclude []string) (CreateReply, error) {
+	return c.NewSessionWithEnvPolicy(socket, name, cwd, envs, command, token, instanceID, storeID, exclude, exclude, nil)
+}
+
+// NewSessionWithEnvPolicy separates client exclusions, session unsets and host
+// forwarding. Forwarded values are read only here and carried only on stdin;
+// callers and recorders must pass names, never copied credential values.
+// Explicit session values take precedence over unsets. With no forwarding the
+// original argv transport is retained.
+func (c *Client) NewSessionWithEnvPolicy(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, exclude, unset, forward []string) (CreateReply, error) {
 	chained := !NeedsLabelByID(name)
+	if len(forward) > 0 {
+		envs = maps.Clone(envs)
+		if envs == nil {
+			envs = make(map[string]string)
+		}
+		for _, key := range forward {
+			if key == "" || strings.ContainsAny(key, "=\x00") {
+				return CreateReply{}, createRefusal("invalid forwarded environment name")
+			}
+			value := os.Getenv(key)
+			if value == "" {
+				return CreateReply{}, createRefusal(fmt.Sprintf("host environment %q is missing or empty", key))
+			}
+			envs[key] = value
+		}
+	}
 	environ := clientEnv(os.Environ())
 	if envs["AGENT_DIRECTOR_AGENT"] == "cursor" {
 		environ = cursorenv.WithoutSelection(environ)
 	}
-	res := c.invokeEnv(CallCreate, socket, environ, createCommands(name, cwd, envs, command, token, instanceID, storeID, chained)...)
+	if len(exclude) > 0 || len(forward) > 0 {
+		environ = slices.DeleteFunc(environ, func(kv string) bool {
+			key, _, _ := strings.Cut(kv, "=")
+			return slices.Contains(exclude, key) || slices.Contains(forward, key)
+		})
+	}
+	commands := createCommandsWithExclusions(name, cwd, envs, command, token, instanceID, storeID, chained, unset)
+	var res RunResult
+	if len(forward) == 0 {
+		res = c.invokeEnv(CallCreate, socket, environ, commands...)
+	} else {
+		input, err := createConfig(commands)
+		if err != nil {
+			return CreateReply{}, err
+		}
+		res = c.invokeInput(CallCreate, socket, environ, input, []string{"start-server"}, []string{"source-file", "-"})
+		// source-file prefixes command failures with its input location. Only
+		// this transport accepts that prefix; no arbitrary diagnostic survives.
+		res = privateCreateResult(res, socket)
+	}
 	if res.Status == RunNotStarted || res.Status == RunTimedOut {
 		return CreateReply{}, c.runFailure(CallCreate, res)
 	}
@@ -117,10 +172,18 @@ func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, co
 // =<name>: always ends in ":", so it is never escaped, and tmux matches it
 // against the name it stores, which is the unescaped name.
 func createCommands(name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, chained bool) [][]string {
+	return createCommandsWithExclusions(name, cwd, envs, command, token, instanceID, storeID, chained, nil)
+}
+
+func createCommandsWithExclusions(name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, chained bool, exclude []string) [][]string {
+	exclude = slices.DeleteFunc(slices.Clone(exclude), func(key string) bool {
+		_, explicit := envs[key]
+		return explicit || key == instanceIDEnv
+	})
 	create := []string{"new-session", "-d", "-s", name, "-c", escapeFormat(cwd), "-e", instanceIDEnv + "=" + instanceID}
 	if envs["AGENT_DIRECTOR_AGENT"] == "cursor" {
-		// A bare -e name removes that variable from this session, including a
-		// value inherited from an existing server. Never alter server globals.
+		// Preserve Cursor's create transport. Its gateway filters the runtime
+		// environment, including values inherited from an existing server.
 		for _, key := range cursorenv.Selectors() {
 			if _, explicit := envs[key]; !explicit {
 				create = append(create, "-e", key)
@@ -137,6 +200,15 @@ func createCommands(name, cwd string, envs map[string]string, command []string, 
 		create = append(create, "-e", kv)
 	}
 	create = append(create, "-P", "-F", createReplyFormat, "--")
+	if len(exclude) > 0 {
+		// Bare new-session -e KEY does not mask a server-global value. Clear
+		// those values before exec instead, without changing server globals.
+		// Pass keys and command argv as positional arguments, never shell text;
+		// exec preserves the pane PID and leaves no shell around the agent.
+		script := strings.Repeat("unset \"$1\" || exit; shift; ", len(exclude)) + "exec \"$@\""
+		create = append(create, "/bin/sh", "-c", script, "sh")
+		create = append(create, exclude...)
+	}
 	create = append(create, command...)
 	if !chained {
 		return [][]string{create}

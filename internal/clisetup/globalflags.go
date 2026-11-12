@@ -3,6 +3,7 @@ package clisetup
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -47,6 +48,35 @@ type GlobalFlags struct {
 // pkgapi.Options.CreateIfMissing; its value is "true" or "false".
 const createIfMissingFlag = "--create-if-missing"
 
+// slot captures a global flag's parsed value and its set sentinel.
+type slot struct {
+	val    *string
+	setRef *bool
+}
+
+// globalFlagSlots is the parser's registry. create-if-missing is captured as
+// text, validated by assign and converted to g.CreateIfMissing after the scan.
+func globalFlagSlots(g *GlobalFlags, createIfMissing *string) map[string]slot {
+	return map[string]slot{
+		"--store-path":      {&g.StorePath, &g.StorePathSet},
+		"--home":            {&g.Home, &g.HomeSet},
+		"--tmux-command":    {&g.TmuxCommand, &g.TmuxCommandSet},
+		createIfMissingFlag: {createIfMissing, &g.CreateIfMissingSet},
+	}
+}
+
+// GlobalFlagNames returns exactly the names ParseGlobalFlags recognizes,
+// sorted, as a fresh slice derived from the parser's own registry.
+func GlobalFlagNames() []string {
+	registry := globalFlagSlots(&GlobalFlags{}, new(string))
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // ParseGlobalFlags pre-scans argv for the four global flags and returns
 // (parsed flags, argv with those flag tokens removed, error).
 //
@@ -75,21 +105,8 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 	var g GlobalFlags
 	out := make([]string, 0, len(argv))
 
-	// recognized maps each global-flag name to a pointer-pair that captures
-	// the parsed value and its "set" sentinel. --create-if-missing's value is
-	// captured as text, checked by assign, and turned into g.CreateIfMissing
-	// after the scan.
-	type slot struct {
-		val    *string
-		setRef *bool
-	}
 	var createIfMissing string
-	recognized := map[string]slot{
-		"--store-path":      {&g.StorePath, &g.StorePathSet},
-		"--home":            {&g.Home, &g.HomeSet},
-		"--tmux-command":    {&g.TmuxCommand, &g.TmuxCommandSet},
-		createIfMissingFlag: {&createIfMissing, &g.CreateIfMissingSet},
-	}
+	recognized := globalFlagSlots(&g, &createIfMissing)
 
 	// assign stores one copy of flag name's value in s. It refuses a
 	// --create-if-missing value other than "true" or "false" at the copy that

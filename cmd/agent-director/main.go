@@ -103,6 +103,7 @@ func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) ma
 		"spawn":              func(args []string) error { return spawnHandlerWith(client, args) },
 		"status":             func(args []string) error { return statusHandlerWith(client, args) },
 		"get":                func(args []string) error { return getHandlerWith(client, args) },
+		"get-many":           func(args []string) error { return getManyHandlerWith(client, args) },
 		"send-keys":          func(args []string) error { return sendKeysHandlerWith(client, args) },
 		"read-pane":          func(args []string) error { return readPaneHandlerWith(client, args) },
 		"kill":               func(args []string) error { return killHandlerWith(client, args) },
@@ -274,11 +275,13 @@ func runHook() (exit int) {
 	//
 	// The relay hook's timing and identity (b.146 rules 2, 4 and 14): Start,
 	// read above before anything else, and RelayTimeout, the --timeout spawn
-	// wrote, give its kill instant; Start also cuts a Stop's or idle prompt's
-	// turn_end proof (b.omt); Self reads its own pid, start time and
-	// pid namespace once, when it records its request. RelayHookGone judges a
-	// request's relay hook for the PostToolUse close (b.146 rule 13), with
-	// the same readers and relay window the verbs judge it with.
+	// wrote, give its kill instant; Start also cuts a Stop's, idle prompt's or
+	// SubagentStop's turn_end proof (b.omt, b.wbs); Self reads its own pid,
+	// start time and pid namespace once, when it records its request.
+	// RelayHookGone judges a request's relay hook for the PostToolUse close
+	// (b.146 rule 13), with the same readers and relay window the verbs judge
+	// it with; that close matches no Claude or Codex request, which carries no
+	// tool_use_id (b.wbs).
 	args := parseHookArgs(os.Args[2:])
 	hc := hook.HandleConfig{
 		Agent:                args.agent,
@@ -355,14 +358,16 @@ type hookArgs struct {
 }
 
 // parseHookArgs parses the hook verb's arguments in one pass, --agent and
-// --timeout in either order (b.146 rule 4; SR-6.1): --agent claude|codex|cursor names
-// the agent whose hook table applies and --timeout N is the per-hook timeout in
+// --timeout in either order (b.146 rule 4; SR-6.1): --agent names the reporting
+// agent (claude, codex or cursor) and --timeout N is the per-hook timeout in
 // seconds spawn writes on the relay hook's settings entry. The hook path never
 // fails on its arguments (SRD §3.2): --timeout absent, unparseable or not
 // positive gives 0, and an argument it does not know, a positional one
 // included, is skipped without costing --agent or --timeout its value, which
 // the rest of the line still gives. --agent's value is not checked here:
-// Handle rejects one other than claude, codex or cursor, as a hook failure.
+// Handle rejects one other than claude, codex or cursor as a hook failure.
+// Reports identified as belonging to pane-only rows are ignored regardless
+// of the reporting agent named here.
 func parseHookArgs(args []string) hookArgs {
 	var seconds int
 	var agent agentFlag
@@ -373,7 +378,7 @@ func parseHookArgs(args []string) hookArgs {
 	// the only parse errors are an unknown flag, a flag with no value left to
 	// take and a malformed flag.
 	fs.Var(lenientValue{newDecimalInt(&seconds, 0)}, "timeout", "the per-hook timeout in seconds spawn wrote for this hook (the relay hook's kill instant is its start plus it)")
-	fs.Var(&agent, "agent", "the agent whose hook this is, claude, codex or cursor (absent: claude)")
+	fs.Var(&agent, "agent", "the reporting agent, claude, codex or cursor (absent: claude; reports identified as belonging to pane-only rows are ignored regardless of this value)")
 	fs.StringVar(&contextSource, "context-source", "", "internal native capacity callback")
 	fs.StringVar(&contextForward, "context-forward", "", "internal original status-line command")
 	rest := args

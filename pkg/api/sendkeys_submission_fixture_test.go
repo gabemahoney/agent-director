@@ -22,6 +22,7 @@ import (
 // deliveryBackend replaces native process/evidence I/O; store and tmux guards stay real.
 type deliveryBackend struct {
 	mu      sync.Mutex
+	opened  int
 	locked  bool
 	current *api.InputDeliveryAttempt
 	history map[string]*api.InputDeliveryAttempt
@@ -45,6 +46,7 @@ func cloneAttempt(a *api.InputDeliveryAttempt) *api.InputDeliveryAttempt {
 func (b *deliveryBackend) Open(api.InputDeliveryIdentity) (api.InputDeliverySession, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.opened++
 	if b.locked {
 		return nil, fmt.Errorf("writer already held")
 	}

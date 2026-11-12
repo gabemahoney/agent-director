@@ -486,7 +486,7 @@ func TestAdviceFollow_H10_AgentMissingFlag(t *testing.T) {
 	}
 
 	flag := advCLIQuoted(t, env.ErrDescription, "pass agent claude, codex or cursor (", " on the CLI)")
-	agent := strings.TrimSuffix(strings.Fields(advCLIQuoted(t, env.ErrDescription, "pass agent ", " or cursor"))[0], ",")
+	agent := strings.TrimSuffix(strings.Fields(advCLIQuoted(t, env.ErrDescription, "pass agent ", " (--agent on the CLI)"))[0], ",")
 	stdout, stderr, code = runSpawnCLI(t, home, fakeDir, append(argv, flag, agent)...)
 	var res spawnResult
 	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil {

@@ -290,9 +290,9 @@ var settledReadNames = map[string]bool{"ReportedState": true, "GetSpawnSettled":
 	"SettleRead": true, "settleRead": true, "Settle": true}
 
 // settledReadFiles are the only production files that may name them: the
-// derivation and the store reads, and status, get and list.
+// derivation and the store reads, and status, get, get-many and list.
 var settledReadFiles = []string{"internal/store/settle.go", "internal/store/family.go", "internal/store/spawns.go", "internal/store/spawn_status.go", "internal/store/list.go", "internal/store/cursor_missing_read.go", "internal/store/display.go", "pkg/api/display.go",
-	"pkg/api/client.go", "pkg/api/status.go", "pkg/api/get.go", "pkg/api/list.go",
+	"pkg/api/client.go", "pkg/api/status.go", "pkg/api/get.go", "pkg/api/get_many.go", "pkg/api/list.go",
 	"pkg/api/active_checks.go", "pkg/api/sweep.go", "pkg/api/find_missing.go", "pkg/api/find_missing_repair.go"}
 
 // TestOnlyTheReadSurfacesReadTheSettledState: no production file outside

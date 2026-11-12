@@ -3,7 +3,9 @@
 // read or write goes through test/driver/sql.sh, the sqlite3 shell with a busy
 // timeout; sql.sh and pane-hook.sh wait out a held lock; run-testplan.sh's
 // diagnostic rerun starts from a fresh db-reset; and db-reset.sh refuses to
-// run outside the harness container (b.8yq). The tests run the scripts
+// run outside the harness container (b.8yq). It also tests the Release Check
+// Kit scripts under test/release-check/ and the Claude stand-in's --version
+// answer, with fake binaries and temp git repos. The tests run the scripts
 // against temp-dir stores and plans, with a real sqlite3, a fake db-reset and
 // fake tmux; nothing touches ~/.config/agent-director, tmux or Docker.
 package driverscripts_test

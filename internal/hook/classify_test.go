@@ -298,6 +298,31 @@ func TestClassifyEventToolRan(t *testing.T) {
 	}
 }
 
+// TestClassifyEventSubagentStopped (b.wbs): only a Claude SubagentStop carrying
+// an agent_id is a subagent's end of turn; one without, another event with an
+// agent_id, and a Codex or Cursor SubagentStop are not.
+func TestClassifyEventSubagentStopped(t *testing.T) {
+	cases := []struct {
+		agent, event, agentID string
+		want                  bool
+	}{
+		{"claude", "SubagentStop", "a1", true},
+		{"claude", "SubagentStop", "", false},
+		{"claude", "SubagentStart", "a1", false},
+		{"claude", "Stop", "a1", false},
+		{"codex", "SubagentStop", "a1", false},
+		{"cursor", "SubagentStop", "a1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.agent+"/"+tc.event+"/agent_id="+tc.agentID, func(t *testing.T) {
+			p := map[string]any{"hook_event_name": tc.event, "agent_id": tc.agentID}
+			if res := classifyAgentMap(t, tc.agent, p); res.SubagentStopped() != tc.want {
+				t.Errorf("SubagentStopped = %v; want %v", res.SubagentStopped(), tc.want)
+			}
+		})
+	}
+}
+
 // TestClassifyCodexMainThreadTurn (b.x72): a Codex hook is from the row's main
 // thread only with no agent_id and a transcript file name carrying its
 // session id; only then does it carry its turn_id, and only one of at most

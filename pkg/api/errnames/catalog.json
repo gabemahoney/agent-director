@@ -35,6 +35,26 @@
     "description": ""
   },
   {
+    "name": "ErrExperimentalAgentDisabled",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrAgentCapabilityUnsupported",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrModelMissing",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrHostCredentialMissing",
+    "package": "spawn",
+    "description": "A required host credential is unset or empty in agent-director's own environment; the launch refuses before mutation."
+  },
+  {
     "name": "ErrAgentMissing",
     "package": "spawn",
     "description": ""
@@ -231,6 +251,11 @@
   },
   {
     "name": "ErrInvalidFlags",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrTooManyIds",
     "package": "api",
     "description": ""
   },

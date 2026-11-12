@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -94,7 +96,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	for _, phrase := range []string{
 		"**Current recovery policy.** Schemas v20, v19, v18, v17 and v16 are restore-only.",
-		"The v20 display column and v19 evidence columns have no reverse recipe: restore the stopped-writer pre-upgrade set, losing all later writes, and never drop the columns or reset the version.",
+		"The v20 display columns and v19 evidence columns have no reverse recipe: restore the stopped-writer pre-upgrade set, losing all later writes, and never drop the columns or reset the version.",
 		"This illustrates the historical pattern, not a recipe for v9 through v20. Never merely reset the version pragma.",
 		"recipe below is only for genuine family-only v12, never v13–v20 or a hand-reset store.",
 	} {
@@ -127,7 +129,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			old := *h.S
 			old.Install = script
 			h.S, h.Pair = &old, previous
-			moveMustInstall(t, h)
+			if res := moveInstallReleaseSetup(t, h); res.Code != 0 {
+				t.Fatalf("released setup install: exit %d: %s\n%s", res.Code, res.Stdout, res.Stderr)
+			}
 			if v := h.migStoreVersion(db); v != "9" {
 				t.Fatalf("released baseline created schema %s; want 9", v)
 			}
@@ -175,6 +179,35 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			// Preserve the later evidence before either restore. Inspect a separate
 			// copy so SQLite cannot checkpoint or remove its saved WAL/SHM.
 			postUpgradeEvidence := rollbackStoreCopy(t, db)
+			if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
+				// SR-9.3: try the unshimmed way back before restoring anything.
+				// Observe bytes before any SQLite read can alter WAL/SHM.
+				state := *h
+				state.Home = h.Root // include the separate journal backup too
+				before, temps := state.PhysicalSnapshot(), h.tempEntries()
+				current, pair, flags := h.S, h.Pair, h.Flags
+				h.S, h.Pair, h.Flags = &old, previous, originalFlags
+				res := h.Install()
+				h.S, h.Pair, h.Flags = current, pair, flags
+				if res.Code != 2 || !strings.Contains(res.Stderr, "install.sh: unsupported host: Linux/aarch64") {
+					t.Fatalf("unshimmed way back: %+v", res)
+				}
+				if !reflect.DeepEqual(rollbackStoreCopy(t, db), postUpgradeEvidence) {
+					t.Fatal("refused way back changed the store or its WAL/SHM")
+				}
+				if d := moveDiff(before, state.PhysicalSnapshot()); d != "" {
+					t.Fatalf("refused way back changed the case's files:\n%s", d)
+				}
+				if !reflect.DeepEqual(h.tempEntries(), temps) {
+					t.Fatal("refused way back changed TMPDIR")
+				}
+				// Keep the completed current install and the later evidence.
+				moveListHas(t, h, "before", "after")
+				if v, want := h.migStoreVersion(db), moveCurrentVersion(t, h); v != want {
+					t.Fatalf("kept current store v%s; want v%s", v, want)
+				}
+				return
+			}
 			inspection := filepath.Join(t.TempDir(), "state.db")
 			rollbackRestoreStore(t, h, inspection, postUpgradeEvidence)
 			if got := h.Sqlite(inspection, "SELECT instance_id,cwd FROM spawns ORDER BY instance_id; SELECT count(*) FROM input_attempts; SELECT count(*) FROM input_launches;"); got != "after|/after\nbefore|/after\n0\n0\n" {

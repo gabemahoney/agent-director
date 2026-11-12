@@ -106,7 +106,7 @@ func migrateV14toV15(db *sql.DB) error {
 	if _, err := tx.Exec(`PRAGMA user_version = 15`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitMigrationStep(tx)
 }
 
 // codexTurnSet is the SET fragment, with its arguments, by which an applied
@@ -118,12 +118,15 @@ func migrateV14toV15(db *sql.DB) error {
 // one that ended) never lets an older turn's late tool hook count as current,
 // while a late Stop or Interrupt of an older turn, landing after the next
 // turn's UserPromptSubmit, keeps that newer turn current. Any other hook
-// records no turn and the fragment is empty. The fragment, when not empty,
-// ends with a comma.
+// records no turn and the fragment is empty. A turn start also invalidates
+// pane evidence and any idle_screen candidate/display (invalidatePaneSet),
+// even on an already-working row. applyWorkingWrite supplies only the
+// raw-state/settle assignment alongside it; permission_epoch still advances
+// only for a raw-state change. The fragment, when not empty, ends with a comma.
 func codexTurnSet(g HookGate) (string, []any) {
 	switch {
 	case g.CodexTurnStart:
-		return `codex_turn = ?, `, []any{nullableStringArg(g.CodexTurn)}
+		return `codex_turn = ?, ` + invalidatePaneSet(`'working'`) + `, `, []any{nullableStringArg(g.CodexTurn)}
 	case g.CodexTurnEnd && g.CodexTurn != "":
 		return `codex_turn = CASE WHEN codex_turn IS NULL OR codex_turn IS codex_turn_ended OR codex_turn IS ? THEN ? ELSE codex_turn END,
  codex_turn_ended = ?, `, []any{g.CodexTurn, g.CodexTurn, g.CodexTurn}
@@ -135,11 +138,13 @@ func codexTurnSet(g HookGate) (string, []any) {
 // (reportWorkingHeld) for a main-thread UserPromptSubmit: idle_since NULLed
 // and codex_turn recorded as an applied one records it (codexTurnSet), with
 // the version advance, only on a row whose gate holds and that has idle_since
-// set or another turn recorded. Its placeholders take the turn
+// set, another turn recorded or pane evidence to invalidate. It invalidates the pane evidence and any
+// idle_screen candidate/display without advancing permission_epoch, even
+// when the held row is still working. Its placeholders take the turn
 // (nullableStringArg), the instance id, the turn again and hookGateArgs.
-const codexHeldTurnSQL = `UPDATE spawns
-    SET ` + idleClear + `, codex_turn = ?, ` + rowVersionAdvance + `
-  WHERE instance_id = ? AND (idle_since IS NOT NULL OR codex_turn IS NOT ?) AND ` + hookGateSQL
+var codexHeldTurnSQL = `UPDATE spawns
+    SET ` + idleClear + `, codex_turn = ?, ` + invalidatePaneSet(`state`) + `, ` + rowVersionAdvance + `
+  WHERE instance_id = ? AND (idle_since IS NOT NULL OR codex_turn IS NOT ? OR ` + paneEvidencePresentSQL + `) AND ` + hookGateSQL
 
 // codexToolTurn reports whether g is a Codex PreToolUse or PostToolUse from
 // the row's main thread carrying its turn: its move to working applies only

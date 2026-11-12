@@ -6,4 +6,4 @@
 // line never stops here.
 module agent-director.invalid/ts-bun-client
 
-go 1.22
+go 1.27.3

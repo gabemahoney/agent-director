@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
@@ -28,6 +30,227 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+func TestPaneOnlyReuseValidationWritesNothing(t *testing.T) {
+	// Serial: refusal snapshots check the shared trail and temporary HOME.
+	for _, agent := range []string{"droid", "opencode"} {
+		type refusal struct{ name, want, key string }
+		cases := []refusal{
+			{"custom model", "ErrSpawnDeniedFlag", ""},
+			{"relay", "ErrAgentCapabilityUnsupported", ""},
+		}
+		keys := []string{"AWS_BEARER_TOKEN_BEDROCK"}
+		if agent == "opencode" {
+			keys = []string{"OPENROUTER_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"}
+		}
+		for _, key := range keys {
+			cases = append(cases, refusal{"inherited environment", "ErrReservedEnvKey", key})
+		}
+		for _, tc := range cases {
+			t.Run(agent+"/"+tc.name, func(t *testing.T) {
+				home := withTempHome(t)
+				e := newKillEnv(t)
+				r := e.seedReusable(t, agentGone, reuseRowSpec{Opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
+				seedLaneOverlay(t, e.storeID, r.Token)
+				c, _ := e.paneOnlyClient(t, agent)
+				p := api.SpawnParams{Agent: agent, CWD: r.CWD, InstanceID: r.ID, ReuseFinished: true, AgentArgs: paneOnlyArgs(agent, "model")}
+				switch tc.name {
+				case "custom model":
+					p.AgentArgs = []string{"--model", "custom:private-lane-sentinel"}
+				case "relay":
+					p.RelayMode = "on"
+				case "inherited environment":
+					p.Template = "lane"
+					body := apitest.TemplateBody(apitest.TemplateFields{Agent: agent, ExtraEnv: map[string]string{tc.key: "private-lane-sentinel"}})
+					if _, err := apitest.SeedTemplate(filepath.Join(adConfigDir(home), "templates"), p.Template, body); err != nil {
+						t.Fatal(err)
+					}
+				}
+				roots := []string{filepath.Join(adConfigDir(home), "launch"), filepath.Join(adConfigDir(home), "templates")}
+				files, before := snapshotTrees(t, roots), e.snapshotReuse(t, r)
+				_, err := c.Spawn(p)
+				assertOneName(t, err, tc.want)
+				if strings.Contains(errText(err), "private-lane-sentinel") {
+					t.Errorf("refusal exposed a rejected value: %v", err)
+				}
+				e.assertWroteNothing(t, before)
+				assertNoTmuxCalls(t, e.rec)
+				if len(readAPITrailLines(t)) != before.mark {
+					t.Error("validation refusal wrote trail")
+				}
+				if diff := files.diff(snapshotTrees(t, roots)); len(diff) != 0 {
+					t.Errorf("refusal changed launch/template files: %v", diff)
+				}
+			})
+		}
+	}
+}
+
+func TestPaneOnlyFilesBeforeStoreWrite(t *testing.T) {
+	// Serial: it owns HOME and observes writes on the fixture clock.
+	for _, agent := range []string{"droid"} {
+		for _, operation := range []string{"insert", "insert collision", "insert preparation error", "reset", "reset changed", "reset absent", "reset error", "reset preparation error"} {
+			t.Run(agent+"/"+operation, func(t *testing.T) {
+				t.Setenv("HOME", t.TempDir())
+				e := newReuseEnv(t)
+				c, _ := e.paneOnlyClient(t, agent)
+				p := api.SpawnParams{Agent: agent, InstanceID: "lane-" + uuid.NewString()[:8], CWD: t.TempDir(), AgentArgs: []string{"--model", "model"}}
+				w := &hookedReuseStore{st: e.st}
+				var before apitest.SpawnColumns
+				oldPath := ""
+				isReset := strings.HasPrefix(operation, "reset")
+				if isReset {
+					r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour, Bare: true, Opts: agentRowOpts(agent)})
+					p.InstanceID, p.ReuseFinished = r.ID, true
+					before = e.columns(t, r.ID)
+					oldPath = seedLaneOverlay(t, e.storeID, r.Token)
+				}
+				if strings.HasSuffix(operation, "preparation error") {
+					dir := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "launch", e.storeID)
+					if err := os.MkdirAll(dir, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chmod(dir, 0500); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+					_, err := api.SpawnWithReuseStore(c, w, p)
+					assertOneName(t, err, "ErrTmuxSessionCreate")
+					if isReset {
+						e.assertRowUnchanged(t, p.InstanceID, before)
+						assertLaneOverlay(t, oldPath, true)
+					} else if _, err := e.st.GetSpawn(p.InstanceID); !errors.Is(err, store.ErrSpawnNotFound) {
+						t.Fatalf("preparation failure wrote row: %v", err)
+					}
+					if len(e.rec.SocketCallsOf(tmux.CallCreate)) != 0 {
+						t.Fatal("failed preparation created session")
+					}
+					return
+				}
+				newPath := ""
+				observe := func() {
+					files, err := filepath.Glob(filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "launch", e.storeID, "*", "droid-settings.json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, path := range files {
+						if path != oldPath {
+							newPath = path
+						}
+					}
+					if newPath == "" {
+						t.Fatal("overlay absent before store write")
+					}
+					if isReset {
+						e.assertRowUnchanged(t, p.InstanceID, before)
+					} else if _, err := e.st.GetSpawn(p.InstanceID); !errors.Is(err, store.ErrSpawnNotFound) {
+						t.Fatalf("row existed before insert: %v", err)
+					}
+					if len(e.rec.SocketCallsOf(tmux.CallCreate)) != 0 {
+						t.Fatal("create preceded preparation/store write")
+					}
+					switch operation {
+					case "insert collision":
+						if _, err := apitest.SeedSpawn(e.dbPath, p.InstanceID, store.StateWaiting, p.CWD, "off", "", false); err != nil {
+							t.Fatal(err)
+						}
+					case "reset changed":
+						if err := e.st.SetParentID(p.InstanceID, ""); err != nil {
+							t.Fatal(err)
+						}
+					case "reset absent":
+						if err := e.st.DeleteSpawn(p.InstanceID); err != nil {
+							t.Fatal(err)
+						}
+					case "reset error":
+						if err := e.st.Close(); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if isReset {
+					w.beforeReset(observe)
+				} else {
+					api.SetClockForTest(c, func() time.Time {
+						if newPath == "" {
+							observe()
+						}
+						return e.clock.Now()
+					})
+				}
+				_, err := api.SpawnWithReuseStore(c, w, p)
+				ok := operation == "insert" || operation == "reset"
+				if operation == "reset error" {
+					assertOneName(t, err, "ErrInternal")
+				} else if ok && err != nil || !ok && !errors.Is(err, spawn.ErrInstanceIdCollision) {
+					t.Fatalf("Spawn=%v", err)
+				}
+				if newPath == "" {
+					t.Fatal("store boundary not reached")
+				}
+				assertLaneOverlay(t, newPath, ok)
+				if oldPath != "" {
+					assertLaneOverlay(t, oldPath, !ok)
+				}
+				if !ok && len(e.rec.SocketCallsOf(tmux.CallCreate)) != 0 {
+					t.Fatal("failed write created session")
+				}
+			})
+		}
+	}
+}
+
+func TestPaneOnlyReuseReclaimGuards(t *testing.T) {
+	// Serial: each case owns HOME for its per-launch files.
+	for _, agent := range []string{"droid"} {
+		for _, mode := range []string{"gone", "unknown", "alive", "ours", "leftover", "changed to alive", "changed to unknown", "reclaim failure"} {
+			t.Run(agent+"/"+mode, func(t *testing.T) {
+				t.Setenv("HOME", t.TempDir())
+				e := newReuseEnv(t)
+				a := agentGone
+				if mode == "unknown" {
+					a = agentUnreadable
+				}
+				if mode == "alive" {
+					a = agentAlive
+				}
+				r := e.seedReusable(t, a, reuseRowSpec{Age: time.Hour, Bare: true, Opts: agentRowOpts(agent)})
+				path := seedLaneOverlay(t, e.storeID, r.Token)
+				switch mode {
+				case "ours":
+					e.seedSession(t, &r.killRow, e.createdBefore(time.Hour))
+				case "leftover":
+					e.seedSession(t, &r.killRow, tmuxfix.WithRowSessionLabel(r.old(), true))
+				case "changed to alive", "changed to unknown":
+					e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
+						p := procfix.Unreadable()
+						if mode == "changed to alive" {
+							p = procfix.Alive(r.AgentStart)
+						}
+						e.pc.Set(r.AgentPID, p)
+					})
+				case "reclaim failure":
+					if err := os.Chmod(filepath.Dir(path), 0500); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(filepath.Dir(path), 0700) })
+				}
+				c, logs := e.paneOnlyClient(t, agent)
+				_, err := c.Spawn(api.SpawnParams{Agent: agent, InstanceID: r.ID, ReuseFinished: true, CWD: r.CWD, AgentArgs: []string{"--model", "model"}})
+				refused := mode == "ours" || mode == "leftover" || mode == "alive"
+				if refused {
+					assertOneName(t, err, "ErrTmuxSessionConflict")
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				assertLaneOverlay(t, path, mode != "gone")
+				if mode == "reclaim failure" && !strings.Contains(logs.String(), "WARN") {
+					t.Fatalf("no reclaim warning: %q", logs.String())
+				}
+			})
+		}
+	}
+}
 
 // rlNewPanesAlive puts the panes of every session a create leaves under its
 // name in e's fake, alive with apitest.DarwinProcStarttime.

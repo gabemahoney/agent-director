@@ -6,16 +6,22 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
+	"golang.org/x/sys/unix"
 )
 
 // journalMigrationFixture extends the canonical released-schema fixture. It
@@ -96,6 +102,20 @@ func (f *journalMigrationFixture) migrate(t *testing.T, verify func(context.Cont
 	return r, err
 }
 
+// migrationFailure is err as the *InputMigrationError every failed attempt
+// returns, checked to carry cause and cutover (SR-2.16 "Commit state").
+func migrationFailure(t *testing.T, err error, cause, cutover string) *InputMigrationError {
+	t.Helper()
+	var failure *InputMigrationError
+	if !errors.As(err, &failure) {
+		t.Fatalf("error is not an *InputMigrationError: %T %v", err, err)
+	}
+	if failure.Cause != cause || failure.Commit.Cutover() != cutover {
+		t.Fatalf("cause %q, cutover %q (%+v); want %q, %q", failure.Cause, failure.Commit.Cutover(), failure.Commit, cause, cutover)
+	}
+	return failure
+}
+
 // R4: concurrent administrators cannot split ownership, and finishing either
 // outcome removes only the temporary store lock, never a legacy launch inode.
 func TestInputJournalMigrationConcurrentAdministrators(t *testing.T) {
@@ -155,6 +175,9 @@ func TestInputJournalMigrationConcurrentAdministrators(t *testing.T) {
 	r, err := MigrateInputJournal(ctx, f.path, []string{f.root}, otherBackup, func(context.Context, string, []string) error { return nil })
 	if err == nil || err.Error() != "another administrator owns the journal migration" || r.Authority != "" {
 		t.Fatalf("concurrent administrator entered: %+v %v", r, err)
+	}
+	if failure := migrationFailure(t, err, CauseMigrationLockHeld, CutoverUnknown); failure.Commit.Lock != InputMigrationLockHeldByOther {
+		t.Fatalf("contender's lock state: %q", failure.Commit.Lock)
 	}
 	if _, err := os.Stat(otherBackup); !os.IsNotExist(err) {
 		t.Fatalf("refused contender began backup: %v", err)
@@ -234,6 +257,9 @@ func TestInputJournalMigrationPreservesUnexpectedLockContent(t *testing.T) {
 	r, err := MigrateInputJournal(ctx, f.path, []string{f.root}, backup, func(context.Context, string, []string) error { return nil })
 	if err == nil || err.Error() != "journal migration lock is not an empty regular file; restart administrator verification" || r.Authority != "" {
 		t.Fatalf("unexpected lock content did not refuse safely: %+v %v", r, err)
+	}
+	if failure := migrationFailure(t, err, CauseMigrationLockUnestablished, CutoverUnknown); failure.Commit.Lock != InputMigrationLockUnreadable {
+		t.Fatalf("unexpected content's lock state: %q", failure.Commit.Lock)
 	}
 	got, err := os.ReadFile(lockPath)
 	if err != nil || !bytes.Equal(got, want) {
@@ -399,6 +425,7 @@ func TestInputJournalMigrationCurrentPrecedenceAndRecovery(t *testing.T) {
 	if err == nil || r.Authority != "sqlite" || !strings.Contains(err.Error(), "SQLite cutover committed; keep the maintenance boundary and restart administrator verification") {
 		t.Fatalf("postcommit uncertainty: %+v %v", r, err)
 	}
+	migrationFailure(t, err, CauseCommittedVerificationIncomplete, CutoverCommitted)
 	if _, err := os.Stat(filepath.Join(r.Backup, "COMPLETE")); err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +527,7 @@ func TestInputJournalMigrationCurrentPrecedenceAndRecovery(t *testing.T) {
 }
 
 func TestInputJournalMigrationBackupFailurePreventsCutover(t *testing.T) {
-	for _, fault := range []string{"unreadable_nested_file", "nonregular_nested_file", "existing_destination", "cancelled"} {
+	for fault, cause := range map[string]string{"unreadable_nested_file": CauseBackupFailed, "nonregular_nested_file": CauseBackupFailed, "existing_destination": CauseBackupExists, "cancelled": ""} {
 		t.Run(fault, func(t *testing.T) {
 			f := newJournalMigrationFixture(t)
 			nested := filepath.Join(f.dir, "logs", "deep", "record")
@@ -535,6 +562,20 @@ func TestInputJournalMigrationBackupFailurePreventsCutover(t *testing.T) {
 			if err == nil || r.Authority != "" {
 				t.Fatalf("failed backup authorized cutover: %+v %v", r, err)
 			}
+			if fault == "cancelled" {
+				// The interrupt, not the stage's cause, names a cancelled attempt.
+				var failure *InputMigrationError
+				if !errors.As(err, &failure) || !failure.Commit.Interrupted || failure.Commit.Cutover() != CutoverNotCommitted {
+					t.Fatalf("cancelled attempt: %+v", failure)
+				}
+				// The checkpoint after the lock sees the cancellation itself,
+				// so no backup starts.
+				if _, err := os.Lstat(backup); !os.IsNotExist(err) {
+					t.Fatalf("cancelled attempt began a backup: %v", err)
+				}
+			} else {
+				migrationFailure(t, err, cause, CutoverNotCommitted)
+			}
 			if _, err := os.Lstat(f.path + ".input-migration.lock"); !os.IsNotExist(err) {
 				t.Fatalf("backup refusal left a per-store migration lock: %v", err)
 			}
@@ -548,6 +589,286 @@ func TestInputJournalMigrationBackupFailurePreventsCutover(t *testing.T) {
 				t.Fatal("backup failure retired input evidence")
 			}
 		})
+	}
+}
+
+// verifierFailure is a verifier's own error type, which callers find through
+// the attempt's *InputMigrationError.
+type verifierFailure struct{}
+
+func (*verifierFailure) Error() string { return "verifier refused the boundary" }
+
+// SR-2.13 validate-first: the verifier, a missing authorization, a newer
+// store, an unreadable version and a lock that cannot be taken refuse before
+// any backup, and leave no lock file of theirs and no private snapshot
+// directory (TMPDIR stays empty).
+func TestInputJournalMigrationRefusesBeforeBackup(t *testing.T) {
+	for _, tc := range []struct {
+		name, cause string
+		cutover     string // not_committed when empty
+		keptLock    bool   // a lock file there before stays as it was
+		damage      func(t *testing.T, f *journalMigrationFixture)
+		path        func(f *journalMigrationFixture) string // the store path given; f.path when nil
+		verify      func(context.Context, string, []string) error
+		check       func(t *testing.T, f *journalMigrationFixture, err error)
+	}{
+		{name: "verifier_refusal", verify: func(context.Context, string, []string) error { return &verifierFailure{} },
+			check: func(t *testing.T, _ *journalMigrationFixture, err error) {
+				var own *verifierFailure
+				if !errors.As(err, &own) || err.Error() != "verifier refused the boundary" {
+					t.Fatalf("verifier's own error lost: %v", err)
+				}
+			}},
+		{name: "authorization_missing", cause: CauseAuthorizationMissing,
+			damage: func(t *testing.T, f *journalMigrationFixture) {
+				if err := os.Remove(filepath.Join(filepath.Dir(f.path), sentinelFilename)); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, f *journalMigrationFixture, err error) {
+				_, openErr := Open(f.path)
+				if !errors.Is(err, ErrSchemaMigrationRequired) || openErr == nil || err.Error() != openErr.Error() {
+					t.Fatalf("authorization refusal %v; the open gives %v", err, openErr)
+				}
+			}},
+		{name: "store_newer_than_release", cause: CauseStoreNewerThanRelease,
+			damage: func(t *testing.T, f *journalMigrationFixture) { stampUserVersion(t, f.path, schemaVersion+1) },
+			check: func(t *testing.T, _ *journalMigrationFixture, err error) {
+				if want := fmt.Sprintf("%v: found user_version=%d, want %d", ErrSchemaMismatch, schemaVersion+1, schemaVersion); !errors.Is(err, ErrSchemaMismatch) || err.Error() != want {
+					t.Fatalf("newer store: %v; want %s", err, want)
+				}
+			}},
+		{name: "store_version_unreadable", cause: CauseStoreVersionUnreadable,
+			damage: func(t *testing.T, f *journalMigrationFixture) {
+				for _, suffix := range []string{"-wal", "-shm"} {
+					if err := os.Remove(f.path + suffix); err != nil && !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(f.path, []byte("not a database\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		// R2-2/R2-3: a lock that cannot be created in the store's directory is
+		// store_open_failed; an existing lock file that cannot be opened keeps
+		// the lock's reason; a store path through a regular file is absent.
+		{name: "store_directory_not_writable", cause: CauseStoreOpenFailed,
+			damage: func(t *testing.T, f *journalMigrationFixture) {
+				t.Cleanup(func() { _ = os.Chmod(filepath.Dir(f.path), 0700) })
+				if err := os.Chmod(filepath.Dir(f.path), 0500); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "lock_file_unopenable", cause: CauseMigrationLockUnestablished, cutover: CutoverUnknown, keptLock: true,
+			damage: func(t *testing.T, f *journalMigrationFixture) {
+				if err := os.WriteFile(f.path+".input-migration.lock", nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(f.path+".input-migration.lock", 0); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "store_path_through_a_regular_file", cause: CauseStoreOpenFailed,
+			path: func(f *journalMigrationFixture) string { return filepath.Join(f.path, "state.db") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newJournalMigrationFixture(t)
+			if tc.damage != nil {
+				tc.damage(t, f)
+			}
+			if tc.verify == nil {
+				tc.verify = func(context.Context, string, []string) error { return nil }
+			}
+			path, cutover := f.path, CutoverNotCommitted
+			if tc.path != nil {
+				path = tc.path(f)
+			}
+			if tc.cutover != "" {
+				cutover = tc.cutover
+			}
+			lock := f.path + ".input-migration.lock"
+			heldBefore, _ := os.Lstat(lock)
+			backup := filepath.Join(t.TempDir(), "backup")
+			before := snapshotDBBytes(t, f.path)
+			tmp := t.TempDir()
+			t.Setenv("TMPDIR", tmp)
+			r, err := MigrateInputJournal(context.Background(), path, []string{f.root}, backup, tc.verify)
+			if err == nil || r.Authority != "" {
+				t.Fatalf("refusal migrated: %+v %v", r, err)
+			}
+			if failure := migrationFailure(t, err, tc.cause, cutover); failure.Commit.StepsCommitted {
+				t.Fatal("a refusal before the backup committed a step")
+			}
+			if _, err := os.Lstat(backup); !os.IsNotExist(err) {
+				t.Fatalf("refusal made a backup directory: %v", err)
+			}
+			if entries, err := os.ReadDir(tmp); err != nil || len(entries) != 0 {
+				t.Fatalf("refusal left the private snapshot behind: %v %v", entries, err)
+			}
+			if after, err := os.Lstat(lock); tc.keptLock {
+				if err != nil || !os.SameFile(heldBefore, after) || after.Mode() != heldBefore.Mode() {
+					t.Fatalf("refusal changed the existing lock file: %v", err)
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("refusal left a migration lock: %v", err)
+			}
+			assertDBBytesUnchanged(t, f.path, before)
+			if tc.check != nil {
+				tc.check(t, f, err)
+			}
+		})
+	}
+}
+
+// The lock check never creates, changes or removes the lock file, and tells
+// a free lock from one another administrator holds and one it cannot read.
+func TestInputMigrationLockHolder(t *testing.T) {
+	lockFile := func(content []byte) func(*testing.T, string) {
+		return func(t *testing.T, lock string) {
+			if err := os.WriteFile(lock, content, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, lock string)
+		want  InputMigrationLockState
+	}{
+		{"absent", func(*testing.T, string) {}, InputMigrationLockFree},
+		{"empty_unheld", lockFile(nil), InputMigrationLockFree},
+		{"held_by_other", func(t *testing.T, lock string) {
+			lockFile(nil)(t, lock)
+			holder, err := os.Open(lock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = holder.Close() })
+			if err := unix.Flock(int(holder.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+				t.Fatal(err)
+			}
+		}, InputMigrationLockHeldByOther},
+		{"non_empty", lockFile([]byte("operator evidence\n")), InputMigrationLockUnreadable},
+		{"directory", func(t *testing.T, lock string) {
+			if err := os.Mkdir(lock, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}, InputMigrationLockUnreadable},
+		{"symlink", func(t *testing.T, lock string) {
+			lockFile(nil)(t, lock+".target")
+			if err := os.Symlink(lock+".target", lock); err != nil {
+				t.Fatal(err)
+			}
+		}, InputMigrationLockUnreadable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := filepath.Join(t.TempDir(), "state.db")
+			lock := db + ".input-migration.lock"
+			tc.setup(t, lock)
+			state := func() (os.FileInfo, []byte) {
+				info, err := os.Lstat(lock)
+				if os.IsNotExist(err) {
+					return nil, nil
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				var content []byte
+				if info.Mode().IsRegular() {
+					if content, err = os.ReadFile(lock); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return info, content
+			}
+			before, content := state()
+			if got := InputMigrationLockHolder(db); got != tc.want {
+				t.Fatalf("lock holder %q; want %q", got, tc.want)
+			}
+			after, afterContent := state()
+			if (before == nil) != (after == nil) {
+				t.Fatalf("lock check created or removed the lock file: before %v after %v", before, after)
+			}
+			if before != nil && (!os.SameFile(before, after) || before.Mode() != after.Mode() || !bytes.Equal(content, afterContent)) {
+				t.Fatal("lock check changed the lock file")
+			}
+		})
+	}
+}
+
+// Every Cause* constant of this package is in InputMigrationCauses, the list
+// the administrator checks for an action, so a new cause cannot miss one.
+func TestInputMigrationCausesComplete(t *testing.T) {
+	listed := map[string]bool{}
+	for _, cause := range InputMigrationCauses {
+		listed[cause] = true
+	}
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset, found := token.NewFileSet(), 0
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.CONST {
+				for _, spec := range gen.Specs {
+					values := spec.(*ast.ValueSpec)
+					for i, id := range values.Names {
+						if !strings.HasPrefix(id.Name, "Cause") {
+							continue
+						}
+						found++
+						var value string
+						if i < len(values.Values) {
+							if lit, ok := values.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+								value, _ = strconv.Unquote(lit.Value)
+							}
+						}
+						if !listed[value] {
+							t.Errorf("%s (%s) is not in InputMigrationCauses", id.Name, fset.Position(id.Pos()))
+						}
+					}
+				}
+			}
+		}
+	}
+	if found != len(InputMigrationCauses) {
+		t.Errorf("%d Cause constants, %d listed causes", found, len(InputMigrationCauses))
+	}
+}
+
+// 3j E3: a caller's context cancelled just before the cutover gate, with no
+// wait for the AfterFunc that also sees it, always rolls the cutover back,
+// because the gate reads the caller's context under its mutex. Under -race.
+func TestInputJournalMigrationGateSeesCallerCancellation(t *testing.T) {
+	var cancelCaller context.CancelFunc
+	t.Cleanup(SetInputMigrationFaultsForTest(InputMigrationFaults{BeforeCutoverCommit: func() { cancelCaller() }}))
+	// Without that read the AfterFunc loses nearly every time, so ten
+	// iterations catch it.
+	for i := 0; i < 10; i++ {
+		f := newJournalMigrationFixture(t)
+		before := dbDump(t, f.path)
+		var ctx context.Context
+		ctx, cancelCaller = context.WithCancel(context.Background())
+		_, err := MigrateInputJournal(ctx, f.path, []string{f.root}, filepath.Join(t.TempDir(), "backup"), func(context.Context, string, []string) error { return nil })
+		cancelCaller()
+		var failure *InputMigrationError
+		if !errors.As(err, &failure) || !failure.Commit.Interrupted || failure.Commit.CutoverBegan || failure.Commit.Cutover() != CutoverNotCommitted {
+			t.Fatalf("iteration %d: cancellation before the gate did not interrupt: %+v %v", i, failure, err)
+		}
+		if !reflect.DeepEqual(before, dbDump(t, f.path)) {
+			t.Fatalf("iteration %d: the cutover was not rolled back", i)
+		}
+		if _, err := os.Lstat(f.path + ".input-migration.lock"); !os.IsNotExist(err) {
+			t.Fatalf("iteration %d: interrupted attempt left its lock: %v", i, err)
+		}
 	}
 }
 

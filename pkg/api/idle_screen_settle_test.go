@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -35,6 +36,178 @@ func enterIdleScreen(t *testing.T, e *paneEnv, c *api.Client, settle time.Durati
 		e.now = e.now.Add(settle)
 	}
 	return assertDisplayState(t, c, e.id, api.StateIdleScreen)
+}
+
+// b.j4p: a turn start on an already-working row, or either adoption write,
+// must discard the earlier baseline and idle episode without changing the
+// permission epoch. Ordinary same-turn updates must keep that evidence.
+func TestIdleScreenTurnAndAdoptionResetBaseline(t *testing.T) {
+	t.Parallel()
+	for _, write := range []string{"turn", "held-turn", "adopt", "find-missing-adopt"} {
+		for _, phase := range []string{"baseline", "candidate", "displayed"} {
+			t.Run(write+"/"+phase, func(t *testing.T) {
+				t.Parallel()
+				e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
+				settle := 5 * time.Second
+				if phase == "baseline" {
+					settle = 0
+				}
+				c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60, StateSettleMs: settle.Milliseconds()})
+				codexHook(t, e.s, e.dbPath, e.id, "UserPromptSubmit", codexfix.ErroredTurn.TurnID, store.StateWorking)
+				if write == "held-turn" {
+					// The legacy request fixture holds working writes without
+					// moving the row to check_permission. This isolates the held
+					// turn writer from a state change's epoch invalidation.
+					if _, err := apitest.SeedPermissionRequest(e.dbPath, e.id, "Bash"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				baselineAt := e.now
+				if phase == "displayed" {
+					enterIdleScreen(t, e, c, settle)
+				} else {
+					observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+					if phase == "candidate" {
+						e.now = e.now.Add(time.Minute)
+						observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+					}
+				}
+				before := e.row(t)
+				if before.PaneSHA256 == "" || before.PaneSinceMillis != baselineAt.UnixMilli() || before.PaneEpoch != before.PermissionEpoch ||
+					(phase != "baseline" && !before.IdleScreenCurrent()) {
+					t.Fatalf("initial %s has no current pane evidence: %+v", phase, before)
+				}
+
+				// A same-turn tool hook (including a held one) or a liveness
+				// note is not a turn/ownership change and must keep the clock.
+				switch write {
+				case "turn", "held-turn":
+					codexHook(t, e.s, e.dbPath, e.id, "PreToolUse", codexfix.ErroredTurn.TurnID, store.StateWorking)
+				case "adopt", "find-missing-adopt":
+					if cr, err := e.s.SetLivenessNoteIfSameLife(e.id, before.Snapshot, "unverified"); err != nil || cr != store.CondApplied {
+						t.Fatalf("liveness note: %v %v", cr, err)
+					}
+				}
+				kept := e.row(t)
+				if kept.PaneSHA256 != before.PaneSHA256 || kept.PaneSinceMillis != before.PaneSinceMillis || kept.PaneEpoch != before.PaneEpoch ||
+					kept.PermissionEpoch != before.PermissionEpoch || kept.DisplayObservation != before.DisplayObservation {
+					t.Fatalf("ordinary update invalidated pane evidence: before=%+v after=%+v", before, kept)
+				}
+				if write == "held-turn" && kept.RowVersion != before.RowVersion {
+					t.Fatal("tool hook was not held by the request")
+				}
+				t.Log("ordinary-update baseline and permission-epoch guards passed")
+
+				start := e.now
+				changeAt := start.Add(30 * time.Second)
+				e.now = changeAt
+				mark := trailMark(t)
+				switch write {
+				case "turn", "held-turn":
+					codexHook(t, e.s, e.dbPath, e.id, "UserPromptSubmit", nextTurn, store.StateWorking)
+				case "adopt":
+					if cr, err := e.s.AdoptIdentityIfUnchanged(e.id, kept.Snapshot, kept.Identity); err != nil || cr != store.CondApplied {
+						t.Fatalf("adoption: %v %v", cr, err)
+					}
+				case "find-missing-adopt":
+					if cr, _, err := e.s.AdoptIdentityIfSameLife(e.id, kept.Snapshot, kept.Identity); err != nil || cr != store.CondApplied {
+						t.Fatalf("find-missing adoption: %v %v", cr, err)
+					}
+				}
+				// TR14-1: the writer's own commit must emit the exit, before
+				// any later observation or lifecycle write can drain it.
+				wantEvents := 0
+				if phase == "displayed" {
+					wantEvents = 1
+				}
+				events := displayEvents(t, mark, e.id)
+				if len(events) != wantEvents {
+					t.Fatalf("immediate writer exit events=%v; want %d before any observing write", events, wantEvents)
+				}
+				// invalidatePaneSet stamps its internal SQL clock, which is
+				// neither injected nor independently available here.
+				if wantEvents == 1 && (events[0]["prior_state"] != api.StateIdleScreen || events[0]["new_state"] != store.StateWorking) {
+					t.Fatalf("immediate writer transition=%v; want idle_screen -> working", events[0])
+				}
+				if exit, err := apitest.ReadDisplayExit(e.dbPath, e.id); err != nil {
+					t.Fatal(err)
+				} else if exit.Valid {
+					t.Fatalf("writer left stored display_exit=%q; want SQL NULL", exit.String)
+				}
+				changed := e.row(t)
+				if changed.State != store.StateWorking || changed.RowVersion != kept.RowVersion+1 {
+					t.Fatalf("%s did not apply on the working row: before=%+v after=%+v", write, kept, changed)
+				}
+				if changed.PermissionEpoch != kept.PermissionEpoch {
+					t.Errorf("%s changed permission_epoch: %d -> %d", write, kept.PermissionEpoch, changed.PermissionEpoch)
+				}
+				if changed.PaneSHA256 != "" || changed.PaneSinceMillis != 0 || changed.PaneEpoch != -1 || changed.ObservationVersion != kept.ObservationVersion+1 {
+					t.Fatalf("%s did not clear pane evidence with one observation advance: sha256=%q since_ms=%d pane_epoch=%d observation_version=%d -> %d",
+						write, changed.PaneSHA256, changed.PaneSinceMillis, changed.PaneEpoch, kept.ObservationVersion, changed.ObservationVersion)
+				}
+
+				// No capture changed. At t0+60 only 30 s of this turn/owner
+				// elapsed; neither an old candidate nor a displayed episode
+				// may supply idle_screen, even while an exit would settle.
+				e.now = start.Add(time.Minute)
+				observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+				after := e.row(t)
+				if after.PaneSHA256 != before.PaneSHA256 || after.PaneSinceMillis != e.now.UnixMilli() || after.PaneEpoch != after.PermissionEpoch {
+					t.Fatalf("first read did not commit a fresh baseline: %+v", after)
+				}
+				if after.PermissionEpoch != before.PermissionEpoch {
+					t.Fatalf("read changed permission_epoch: %d -> %d", before.PermissionEpoch, after.PermissionEpoch)
+				}
+				if events := displayEvents(t, mark, e.id); len(events) != wantEvents {
+					t.Fatalf("post-observation exit events=%v; want %d, with no delayed or duplicate exit", events, wantEvents)
+				}
+			})
+		}
+	}
+}
+
+// b.j4p: a held UserPromptSubmit must clear pane evidence even when its turn
+// id is absent or repeated; without that evidence the same report is a no-op.
+func TestCodexHeldTurnClearsPaneEvidenceWithoutNewID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, turn string }{
+		{"absent", ""}, {"repeated", codexfix.ErroredTurn.TurnID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
+			c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+			codexHook(t, e.s, e.dbPath, e.id, "UserPromptSubmit", tc.turn, store.StateWorking)
+			// As in the turn/adoption regression, the legacy request fixture
+			// isolates the held writer from a permission-state transition.
+			if _, err := apitest.SeedPermissionRequest(e.dbPath, e.id, "Bash"); err != nil {
+				t.Fatal(err)
+			}
+			for _, phase := range []string{"empty", "displayed", "cleared"} {
+				var bump int64
+				if phase == "displayed" {
+					enterIdleScreen(t, e, c, 0)
+					bump = 1
+				}
+				before := e.row(t)
+				codexHook(t, e.s, e.dbPath, e.id, "UserPromptSubmit", tc.turn, store.StateWorking)
+				after := e.row(t)
+				if after.RowVersion != before.RowVersion+bump || after.ObservationVersion != before.ObservationVersion+bump {
+					t.Errorf("%s: row_version %d -> %d, observation_version %d -> %d; want advance %d",
+						phase, before.RowVersion, after.RowVersion, before.ObservationVersion, after.ObservationVersion, bump)
+				}
+				if after.State != store.StateWorking || after.PermissionEpoch != before.PermissionEpoch {
+					t.Errorf("%s changed state/permission_epoch: %s/%d -> %s/%d", phase,
+						before.State, before.PermissionEpoch, after.State, after.PermissionEpoch)
+				}
+				if after.PaneSHA256 != "" || after.PaneSinceMillis != 0 || after.PaneEpoch != -1 || after.IdleScreenCurrent() || after.CommittedDisplay().State != store.StateWorking {
+					t.Fatalf("%s: held turn kept pane evidence: sha256=%q since_ms=%d pane_epoch=%d display=%+v",
+						phase, after.PaneSHA256, after.PaneSinceMillis, after.PaneEpoch, after.CommittedDisplay())
+				}
+				t.Logf("%s: version advance %d, pane evidence absent, permission_epoch unchanged", phase, bump)
+			}
+		})
+	}
 }
 
 // TestIdleScreenSettlementAndActualTransitionTime: with zero and positive
@@ -220,6 +393,15 @@ func TestIdleScreenTerminalExitIsImmediate(t *testing.T) {
 func TestIdleScreenLeavesCommandGuards(t *testing.T) {
 	t.Parallel()
 	e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
+	// b.j4p: finish identity adoption before the episode starts. This test
+	// checks command guards without an ownership change during send-keys.
+	row := e.row(t)
+	identity, server := row.Identity, e.rec.Servers()[0]
+	identity.ServerPID, identity.ServerStart, identity.ServerStarttime = server.PID, server.Start, server.ProcStart
+	identity.PaneStarttime = apitest.LinuxProcStarttime
+	if cr, err := e.s.AdoptIdentityIfUnchanged(e.id, row.Snapshot, identity); err != nil || cr != store.CondApplied {
+		t.Fatalf("complete launch identity: %v %v", cr, err)
+	}
 	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
 	entered := enterIdleScreen(t, e, c, 0)
 	for _, call := range e.rec.SocketCalls() {
@@ -237,8 +419,12 @@ func TestIdleScreenLeavesCommandGuards(t *testing.T) {
 		t.Errorf("after the refusal: %+v, raw %s; want the same episode on a raw working row", got, e.row(t).State)
 	}
 	e.rec.Reset()
+	beforeSend := e.row(t)
 	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: e.id, Text: "go on"}); err != nil {
 		t.Fatalf("send-keys on a row displayed idle_screen: %v; want delivered", err)
+	}
+	if after := e.row(t); after.RowVersion != beforeSend.RowVersion || after.Identity != beforeSend.Identity {
+		t.Fatalf("send-keys adopted identity: before=%+v after=%+v", beforeSend, after)
 	}
 	assertFallbackPaste(t, e.rec.SocketCalls(), apitest.TestSocket, apitest.TestPaneID, "go on")
 	if got := observeStatus(t, c, e.id, api.StateIdleScreen, nil); got.Since != entered.Since || minutes(t, got) != minutes(t, entered) || e.row(t).State != store.StateWorking {

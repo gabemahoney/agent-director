@@ -47,7 +47,13 @@ type TmuxClient interface {
 	// SendKeyPaneRepeat sends the key count times in one call (a Codex row's
 	// pause: 127 C-u).
 	SendKeyPaneRepeat(socket, paneID, key string, count int) error
-	// CapturePaneID returns the last nLines lines of the pane paneID on socket.
+	// CapturePaneID returns the last nLines rows of the pane paneID on
+	// socket, counted up from the last row with content: blank rows below it
+	// are left out, blank rows between content rows count, and a row is
+	// blank when it is whitespace only once ANSI escape sequences are
+	// stripped (b.7y8). read-pane returns this text and the expect_pane_sha256
+	// checks hash it, so an adapter that returns tmux's raw -S -<n> output
+	// (history plus the whole screen) breaks n_lines.
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
 	// NewSession creates the session name on socket with its chained labels,
 	// the session label "ad1 <token> <session id> <instance id> <store id>",
@@ -108,7 +114,7 @@ type Client struct {
 	// records no sender, and the intent is then judged by its time.
 	paneSelf func() ProcessIdentity
 	// cursorMissingDeferred observes each lost Cursor launch's missing-row
-	// save that a status, get, list or find-missing check defers
+	// save that a status, get, get-many, list or find-missing check defers
 	// (activeReadStore.finish), with the launch's instance id and the deferred
 	// error: nil in production. Tests
 	// set it per Client, so a test can tell a documented deferral from a save
@@ -124,7 +130,8 @@ type Client struct {
 // effective relay window and idle_screen timeout, and the check providers
 // (tmux client, pending grace, sweep budget, logger and Cursor deferral
 // observer) from which each check pass builds its own pane sampler. Each call
-// is a fresh view for one read.
+// is a fresh view for one read, including each id of get-many, whose views
+// carry only the call's record of stopped sockets between them.
 func (c *Client) relayView() RelayView {
 	return RelayView{
 		active:            &activeCheckProviders{tmux: c.tmuxClient, pendingGrace: c.cfg.Tmux.EffectivePendingGrace(), budget: c.cfg.Tmux.EffectiveSweepBudget(), logger: c.logger, deferred: c.cursorMissingDeferred},
@@ -136,8 +143,8 @@ func (c *Client) relayView() RelayView {
 	}
 }
 
-// settleRead is the settle time and clock of one status, get or list call
-// (b.3ie): the loaded config's [state] settle_ms, read once at New (a
+// settleRead is the settle time and clock of one status, get or list call, or
+// one get-many id (b.3ie): the loaded config's [state] settle_ms, read once at New (a
 // long-lived Client, such as the MCP server's, keeps the value it started
 // with), and the Client's clock, read now, before the call's store read. With
 // no settle time it is the zero store.SettleRead and reads no clock, so the
@@ -159,7 +166,7 @@ func (c *Client) settleRead() store.SettleRead {
 //  4. Open (or init) the store according to opts.CreateIfMissing, with the
 //     loaded config's [store] busy timeout (Store.EffectiveBusyTimeoutMs),
 //     and hand it the loaded config's [state] settle time
-//     (State.EffectiveSettleMs, b.3ie), which status, get and list also read
+//     (State.EffectiveSettleMs, b.3ie), which status, get, get-many and list also read
 //     from the loaded config.
 //  5. Construct the tmux client: an injected Options.TmuxClient as given,
 //     otherwise the production client for Options.TmuxCommand with the

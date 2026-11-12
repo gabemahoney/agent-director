@@ -73,10 +73,12 @@ type LiveSpawnIdentity struct {
 // the snapshot-match condition compares; the launch owner is read through
 // launchOwnerColumns, as the full-row Spawn reads do. launch_started_at is
 // decoded by decodeLaunchStartedAt and launch_token by decodeLaunchToken, and
-// the nullable columns read NULL as their zero value through COALESCE, so no
-// stored launch start, token, identity or owner value fails the read; the
-// structured columns (labels, agent_args, extra_env) are never read
-// (SR-5.5).
+// the nullable columns read NULL as their zero value through COALESCE. Stored
+// launch starts, tokens and text identity or owner values do not fail the read.
+// A wrong storage class (such as non-numeric text) in row_version, pid,
+// tmux_server_pid, tmux_server_started, pane_pid or launch_owner_pid fails the
+// whole read: these columns are scanned into Go integers. The structured
+// columns (labels, agent_args, extra_env) are never read (SR-5.5).
 //
 // Order is unspecified. Callers that need stable ordering sort the
 // result themselves.
@@ -299,6 +301,13 @@ func (s *RecoveryWrites) AdoptIdentityIfSameLife(id string, snapshot RowSnapshot
 	result, err := s.recoveryExec(id, statement, args)
 	if result != CondApplied || err != nil {
 		return result, RowSnapshot{}, err
+	}
+	// The adoption invalidated pane evidence in its own statement. Carry
+	// that known advance into the verdict's observation guard, without a
+	// re-read that could accept an intervening observer's version.
+	if row, ok := s.samples[id]; ok {
+		row.ObservationVersion++
+		s.samples[id] = row
 	}
 	snapshot.RowVersion++
 	return result, snapshot, nil

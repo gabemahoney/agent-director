@@ -8,7 +8,7 @@ import (
 
 // TestProvenGoneHowTextNamesTheCodexProofs (b.ssz Epic 4, SR-8.2): every verb
 // whose result carries a permission request's delivery facts describes
-// proven_gone_how with Claude's tool_ran proof (never on a Codex row), the
+// proven_gone_how with its tool_ran proof (Cursor's in practice; b.wbs), the
 // turn_end proofs of both agents (the Stop or idle-prompt Notification, a
 // Codex Interrupt) and agent_gone; the committed surface.json mirror test
 // then carries the same text to help, MCP and the docs.

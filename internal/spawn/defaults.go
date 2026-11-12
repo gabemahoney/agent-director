@@ -80,7 +80,8 @@ func PreCheckReadError(err error) error {
 //   - TmuxSessionName ← <sanitize(basename(cwd))>-<id[:8]>. The sanitizer
 //     replaces every char outside [A-Za-z0-9_-] with `-`; an empty or
 //     all-dashes result collapses to the literal `root`.
-//   - RelayMode ← cfg.Defaults.RelayMode if the caller left it empty.
+//   - RelayMode ← off for pane-only agents, cfg.Defaults.RelayMode for other
+//     agents, if it is still empty after template resolution.
 //   - Caller-supplied InstanceID triggers one pre-check read of the
 //     row's state. A live row (`pending` included) returns
 //     ErrInstanceIdCollision, and so does a finished row unless the caller
@@ -100,7 +101,11 @@ func ApplyDefaults(r *Resolved, cfg config.Config, checker CollisionChecker) (ID
 		r.TmuxSessionName = composeSessionName(r.CWD, r.InstanceID)
 	}
 	if r.RelayMode == "" {
-		r.RelayMode = cfg.Defaults.RelayMode
+		if IsPaneOnly(r.Agent) {
+			r.RelayMode = "off"
+		} else {
+			r.RelayMode = cfg.Defaults.RelayMode
+		}
 	}
 	return check, nil
 }

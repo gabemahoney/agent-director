@@ -22,6 +22,9 @@ permission_request_cap = 1000   # 0 = unbounded; negative = use default
 [pause]
 timeout_seconds = 30
 
+[get_many]
+id_cap = 20
+
 [pre_trust]
 lock_wait_seconds = 12
 
@@ -63,13 +66,14 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[defaults] relay_mode` | `on`, `off` | `off` | Whether a spawn relays the agent's permission prompts to `decide`; `--relay-mode` overrides it per call. |
 | `[defaults] expire_retention_days` | 1 to 106751 | 31 | Days a finished row must have ended before `expire` (without `--older-than`) may delete it. |
 | `[defaults] disable_ask_user` | `true`, `false` | `false` | Whether every spawn denies the agent its question-asking tool: Claude Code's `AskUserQuestion`, and for Codex its question tool, turned off for the launch. Cursor denies questions with either value. See [permissions](permissions.md#disable_ask_user-config). |
-| `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether managed launches receive AD guidance: a SessionStart help entry for Claude and Codex, or session-scoped MCP instructions for Cursor. `install.sh` sets `true` unless `--no-hooks`. See [settings](settings.md#defaultsinject_help_hook-config). |
+| `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether managed launches receive AD guidance: a SessionStart help entry for Claude and Codex, or session-scoped MCP instructions for Cursor. `install.sh` sets `true` unless `--no-hooks`; `uninstall.sh` removes the key. See [settings](settings.md#defaultsinject_help_hook-config). |
 | `[defaults] disable_context_fullness` | `true`, `false` | `false` | Claude launches only; Codex and Cursor ignore it. `true` turns off [experimental context fullness](caller-contract.md#experimental-context-fullness) for the launch, leaving Claude Code's status lines alone; `false` wraps them (see [settings](settings.md#what---settings-carries)). A change takes effect at the next launch (spawn, reuse or resume). |
 | `[relay] poll_base_ms` | ms | 100 | Wait between a relay hook's polls for a decision (never under 50 ms; 0 or negative gives that floor plus jitter). |
 | `[relay] poll_jitter_ms` | ms | 100 | Random time added to each poll wait; 0 or negative adds none. |
 | `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit; its decision window is 3 s shorter (see [The relay hook's time limit](#the-relay-hooks-time-limit)). For Cursor, the full value is the decision window from admission, followed by a separate four-second settlement reserve; see [Cursor spawns](permissions.md#cursor-spawns). |
-| `[relay] permission_request_cap` | 0 or more | 1000 | Permission requests kept before the oldest closed ones go; 0 is unbounded, negative gives the default. |
+| `[relay] permission_request_cap` | 0 or more | 1000 | Permission requests kept before the oldest closed ones go; 0 is unbounded, negative gives the default. Closed requests still holding a live spawn's dialog, and a spawn's newest request while it has one awaiting an answer, are kept above the cap. |
 | `[pause] timeout_seconds` | 1 to 9223372036 | 30 | How long `pause` waits for the agent to exit. |
+| `[get_many] id_cap` | 1 or more | 20 | Maximum IDs in one `get-many` call; a larger value allows longer calls and larger results. |
 | `[pre_trust] lock_wait_seconds` | 1 to 9223372036 | 12 | How long `spawn` and `resume` of a Claude agent wait for Claude Code's lock on `.claude.json`. On timeout the launch goes ahead with `pre_trust` `failed`. Codex pre-trust takes no lock, so a Codex launch never waits and ignores this key. |
 | `[store] db_path` | path | `~/.config/agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores); a relative path is joined onto `~/.config/agent-director`. Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
 | `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | A call's locked-store wait, and each Cursor tool proof's fixed window from its first persistence attempt. Retries do not renew that window; [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries) define control and exit precedence. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
@@ -80,6 +84,8 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[launch] codex_path` | absolute path or `~/` path | unset | The program a `codex` spawn, reuse or resume runs, in the same form and under the same refusals as `claude_path`: empty or unset runs `codex` from the `PATH` of the agents' tmux server, a set path runs as written with no `PATH` lookup and no shell parsing, and a change takes effect at the next launch. One line, as for `claude_path`. When it names an executable file, `install.sh` counts Codex as installed; it never runs it. Codex installed with npm needs the native program here: see [Requirements](install.md#requirements). |
 | `[launch] cursor_path` | absolute path or `~/` path | unset | The Cursor runtime program for a `cursor` spawn, reuse or resume. Empty or unset runs `agent` from the agents' tmux server `PATH`. A `~/` path expands against `HOME` at config load. A set value is one whole executable path, with no shell parsing, `PATH` lookup or fallback, not a command plus arguments. It has the same config-value refusals as the other launch paths; agent-director does not check the executable in advance. The current loaded setting takes effect at the next launch (spawn, reuse or resume); changing it does not overwrite saved cwd, arguments, environment or group configuration. Installer presence discovery does not change this setting. Cursor lifecycle limits are in [Usage](usage.md#fresh-cursor-use). |
 | `[log] error_log_path` | path | `~/.config/agent-director/errors.log` | Where hooks and the CLI append errors (stderr if it cannot be opened); a relative path is joined onto `~/.config/agent-director`. |
+
+`[experimental]` holds internal, unsupported opt-ins; see [experimental.md](experimental.md).
 
 ## Refused values
 
@@ -121,7 +127,7 @@ Three waits keep their time limits whatever `busy_timeout_ms` is:
 |---|---|---|
 | `decide --max-wait-ms N` | the caller's deadline | waits for the store at most until N ms after it started (`ErrStoreBusy`, nothing recorded) |
 | the relay hook | the agent ending it | each write waits for the store at most until 2 s before that end; if the store stays busy, its first write gives way to a deny, and any later one to no answer, so the agent asks in its own permission prompt |
-| `status`, `get`, `list`, `get-permission` | the caller's | never wait for the store's write lock |
+| `status`, `get`, `get-many`, `list`, `get-permission` | the caller's | never wait for the store's write lock |
 
 `decide` without `--max-wait-ms` waits up to `busy_timeout_ms` per write,
 and the other hooks can still be killed by a long store wait.
@@ -130,7 +136,7 @@ and the other hooks can still be killed by a long store wait.
 
 While an agent uses tools, its state can flip between `working` and
 `waiting` several times a second. `[state] settle_ms` makes `status`,
-`get` and `list` show a new `state` or `family_state` only once it has held,
+`get`, `get-many` and `list` show a new `state` or `family_state` only once it has held,
 on CLI, MCP and the Go and TypeScript clients:
 
 - **Range.** Whole milliseconds from 0 to 60000. A missing key, or 0, turns
@@ -182,7 +188,7 @@ on CLI, MCP and the Go and TypeScript clients:
   latest state, which can be newer than what `status` shows, so a verb can
   refuse on a state `status` does not show yet; the refusal is a named
   error. Permission requests are never delayed. Ordinary raw-state reporting
-  can show `ended` or `missing` while `get` lists an open request, or
+  can show `ended` or `missing` while `get` or a `get-many` row lists an open request, or
   `check_permission` with none, for up to T. A retained
   [`displayed_state`](caller-contract.md#needs-intelligence-and-idle-screen-rows)
   follows its observation rule.
@@ -209,7 +215,7 @@ value or one above the maximum is refused (see
 
 `[state] idle_screen_timeout_seconds` is the minimum span of matching
 owned-pane captures that qualifies a `working` Claude or Codex row for
-`idle_screen`. Eligible `status`, `get`, `list` and `sweep` checks
+`idle_screen`. Eligible `status`, `get`, `get-many`, `list` and `sweep` checks
 sample it; the timeout schedules no check and confirms nothing by itself.
 Sampling and baseline resets are defined in the
 [caller contract](caller-contract.md#unchanged-panes).

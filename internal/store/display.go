@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -470,6 +472,10 @@ func (s *Store) ObserveNeedsIntelligenceOutcome(examined Spawn, samples []Permis
 	if displayValue(plan.result) != displayValue(previous.Display) || plan.result.SinceMillis != previous.Display.SinceMillis {
 		evidence = ""
 	}
+	writer, err := newObservationWriter()
+	if err != nil {
+		return previous, err
+	}
 	var families map[string]string
 	err = s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
 		row, err := lockedObservationRow(ctx, conn, examined)
@@ -499,8 +505,8 @@ func (s *Store) ObserveNeedsIntelligenceOutcome(examined Spawn, samples []Permis
 				return err
 			}
 		}
-		_, err = conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1,display_evidence=? WHERE instance_id=?`,
-			plan.raw, nullableStringArg(evidence), row.InstanceID)
+		_, err = conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1,display_evidence=?,observation_writer=? WHERE instance_id=?`,
+			plan.raw, nullableStringArg(evidence), writer, row.InstanceID)
 		if err != nil {
 			return err
 		}
@@ -508,7 +514,7 @@ func (s *Store) ObserveNeedsIntelligenceOutcome(examined Spawn, samples []Permis
 		return err
 	})
 	if err != nil {
-		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, nil, evidence) {
+		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, nil, evidence, writer) {
 			return previous, err
 		}
 	}
@@ -548,18 +554,22 @@ func (s *Store) ObserveIdleScreenOutcome(examined Spawn, sample PaneSample, now 
 	if !plan.write && evidence == examined.DisplayEvidence {
 		return previous, nil
 	}
+	writer, err := newObservationWriter()
+	if err != nil {
+		return previous, err
+	}
 	var families map[string]string
 	err = s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
 		if _, err := lockedObservationRow(ctx, conn, examined); err != nil {
 			return err
 		}
 		if !plan.write {
-			_, err := conn.ExecContext(ctx, `UPDATE spawns SET display_evidence=? WHERE instance_id=?`, nullableStringArg(evidence), examined.InstanceID)
+			_, err := conn.ExecContext(ctx, `UPDATE spawns SET display_evidence=?,observation_writer=? WHERE instance_id=?`, nullableStringArg(evidence), writer, examined.InstanceID)
 			return err
 		}
 		args := append([]any{plan.raw}, paneBaselineArgs(baseline, examined.PermissionEpoch)...)
 		_, err := conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1,
- pane_sha256=?,pane_since_ms=?,pane_epoch=?,display_evidence=? WHERE instance_id=?`, append(args, nullableStringArg(evidence), examined.InstanceID)...)
+ pane_sha256=?,pane_since_ms=?,pane_epoch=?,display_evidence=?,observation_writer=? WHERE instance_id=?`, append(args, nullableStringArg(evidence), writer, examined.InstanceID)...)
 		if err != nil {
 			return err
 		}
@@ -567,7 +577,7 @@ func (s *Store) ObserveIdleScreenOutcome(examined Spawn, sample PaneSample, now 
 		return err
 	})
 	if err != nil {
-		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, &baseline, evidence) {
+		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, &baseline, evidence, writer) {
 			return previous, err
 		}
 	}
@@ -592,29 +602,43 @@ func lockedObservationRow(ctx context.Context, conn *sql.Conn, examined Spawn) (
 	return row, nil
 }
 
+// newObservationWriter returns a fresh observation_writer token for one
+// observer commit: 16 random bytes from crypto/rand, hex-encoded. It is never
+// reported outside the store.
+func newObservationWriter() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("store: observation writer token: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
 // observationLanded is the one nonwaiting re-read after an unconfirmed COMMIT
 // (errCommitUnconfirmed): whether this plan's write, with baseline when the
 // observer stored one and evidence, its display record, is what the row now
 // holds; for a record-only commit (plan.write false), the record over the
-// unchanged observation and version. Any doubt, a busy store included,
+// unchanged observation and version. The row must also hold writer, the
+// token this call's commit wrote, so a peer's identical commit after this
+// one rolled back is never claimed as this call's. Any doubt, a busy store included,
 // answers false, and the caller keeps the previous view. It does not wait for
 // the write's own abandoned operation either: a caller released at its
 // deadline while the COMMIT still runs (runConnectionOperation's
 // operation_guard branch) usually finds that operation still holding the
 // store's operation slot, so a COMMIT that lands is then answered as not
 // landed and its transitions are not emitted by this read.
-func (s *Store) observationLanded(examined Spawn, plan observationPlan, baseline *paneBaseline, evidence string) bool {
+func (s *Store) observationLanded(examined Spawn, plan observationPlan, baseline *paneBaseline, evidence, writer string) bool {
 	var row Spawn
+	var stored sql.NullString
 	err := s.readWithin(0, "", func(ctx context.Context, conn *sql.Conn) error {
 		var err error
-		row, err = scanSpawnStatus(conn.QueryRowContext(ctx, `SELECT `+statusRowColumns+` FROM spawns WHERE instance_id=?`, examined.InstanceID), false)
+		row, err = scanSpawnStatusExtra(conn.QueryRowContext(ctx, `SELECT `+statusRowColumns+`, observation_writer FROM spawns WHERE instance_id=?`, examined.InstanceID), false, []any{&stored})
 		return err
 	})
 	version, text := examined.ObservationVersion, examined.DisplayObservation
 	if plan.write {
 		version, text = version+1, plan.text
 	}
-	return err == nil && row.Snapshot == examined.Snapshot && row.PermissionEpoch == examined.PermissionEpoch &&
+	return err == nil && stored.Valid && stored.String == writer && row.Snapshot == examined.Snapshot && row.PermissionEpoch == examined.PermissionEpoch &&
 		row.ObservationVersion == version && row.DisplayObservation == text && row.DisplayEvidence == evidence &&
 		(baseline == nil || committedPaneBaseline(row) == *baseline)
 }

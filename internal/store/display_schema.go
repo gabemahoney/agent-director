@@ -180,5 +180,5 @@ func migrateV13toV14(db *sql.DB) error {
 	if _, err := tx.Exec(`PRAGMA user_version = 14`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitMigrationStep(tx)
 }

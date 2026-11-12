@@ -10,14 +10,14 @@
 //
 // DESIGN
 // ======
-// 1. Query origin for existing tags via `git ls-remote --tags origin`.
-//    Skip gracefully if `git` is absent or if origin has no tags yet.
-// 2. Extract the first plain tag ref (excluding peeled ^{} entries) and
-//    strip the leading "v" to get a bare version number.
-// 3. Invoke bash skills/release-agent-director/gates/preflight/version-novelty-tag.sh
-//    <existing-version> from the repo root.
-// 4. Assert exit code != 0.
-// 5. Assert stderr JSON has "gate":"preflight.version-novelty-tag".
+//  1. Query origin for existing tags via `git ls-remote --tags origin`.
+//     Skip gracefully if `git` is absent or if origin has no tags yet.
+//  2. Extract the first plain tag ref (excluding peeled ^{} entries) and
+//     strip the leading "v" to get a bare version number.
+//  3. Invoke bash skills/release-agent-director/gates/preflight/version-novelty-tag.sh
+//     <existing-version> from the repo root.
+//  4. Assert exit code != 0.
+//  5. Assert stderr JSON has "gate":"preflight.version-novelty-tag".
 //
 // This is a READ-ONLY test — no repo mutations are made and no cleanup is
 // required.
@@ -30,11 +30,11 @@ package existingtag_test
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"os"
 )
 
 // repoRoot walks up from the package's working directory (set by `go test` to

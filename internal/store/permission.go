@@ -36,9 +36,11 @@ const (
 // (DecisionReasonPane, pane_answer sent, decision its claimed verdict), a
 // caller's record of an answer made outside agent-director
 // (DecisionReasonPaneOutside, pane_answer outside, decision the claim or NULL
-// for unknown), and the PostToolUse close (DecisionReasonToolRan, pane_answer
-// tool_ran, decision allow). Each verdict is a claim or an inference, never a
-// reading of Claude Code's screen.
+// for unknown), and the PostToolUse close or validated Cursor execution proof
+// (DecisionReasonToolRan, pane_answer tool_ran, decision allow; the PostToolUse
+// close matches no Claude or Codex request, which carries no tool_use_id;
+// b.wbs). Each verdict is a claim or an inference, never a reading of Claude
+// Code's screen.
 const (
 	DecisionReasonPane        = "pane"
 	DecisionReasonPaneOutside = "pane_outside"
@@ -51,8 +53,9 @@ const (
 // first-class discriminator. The closed set is:
 //
 //   - WriterProcessHook              — the hook verb's relay path, the
-//     PostToolUse close of a request whose tool ran (b.146 rule 13), and the
-//     terminal SessionEnd's close of its Spawn's requests (b.146 rule 12)
+//     PostToolUse close of a request whose tool ran (b.146 rule 13; it
+//     matches no Claude or Codex request, b.wbs), and the terminal
+//     SessionEnd's close of its Spawn's requests (b.146 rule 12)
 //   - WriterProcessCursorHost        — the Cursor gateway's request admission,
 //     timeout decision, native answer claim and correlated execution proof
 //   - WriterProcessDecide            — the decide verb
@@ -138,12 +141,15 @@ const (
 
 // The proven_gone_how values (schema v7; b.146 step 2c): how Claude Code, not
 // agent-director's own records, proved a request's permission dialog gone.
-// ProvenGoneToolRan: the agent's PostToolUse or PostToolUseFailure carried the
-// request's tool_use_id, so its tool ran (a Claude row only). ProvenGoneTurnEnd:
+// ProvenGoneToolRan: its tool ran, by the Cursor gateway's validated execution
+// proof (ProveCursorToolRan) or a Claude PostToolUse or PostToolUseFailure
+// carrying the request's tool_use_id, which no Claude or Codex request has
+// (b.wbs), so in practice Cursor's only. ProvenGoneTurnEnd:
 // the turn of the agent that asked ended after the request was written; the
 // main agent's Stop or idle-prompt Notification, or a Codex main agent's
 // Interrupt (Esc), or a verified Cursor main Stop/Interrupt, proves only a
-// durably main-turn-eligible request. Legacy non-Cursor main requests retain
+// durably main-turn-eligible request; a Claude subagent's SubagentStop proves
+// only that subagent's requests (b.wbs). Legacy non-Cursor main requests retain
 // eligibility; Cursor unknown origin never acquires it from NULL agent_id.
 // A Cursor request the gateway never answered is proven gone by its gateway
 // when the prompt turn that asked it completes (ProveCursorTurnEnded; b.gwj).

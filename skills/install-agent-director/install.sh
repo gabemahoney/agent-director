@@ -73,9 +73,10 @@
 #                        ~/.claude/settings.json help hooks and the
 #                        inject_help_hook = true merge into config.toml.
 #                        settings.json and config.toml are left
-#                        byte-identical (no .bak backup, no edit). Default
-#                        OFF — defaulting to skip would defeat install.sh's
-#                        main value over a bare binary copy.
+#                        byte-identical (no edit, and no config.toml.bak
+#                        backup). Default OFF — defaulting to skip would
+#                        defeat install.sh's main value over a bare
+#                        binary copy.
 #   --keep-prior         Before overwriting an existing binary,
 #                        snapshot it to <target>.prior (overwriting
 #                        any previous .prior). Roll back with
@@ -100,6 +101,37 @@
 #                        user (see "The schedule" below). Default OFF: without
 #                        it, an install with no schedule set up ends with a
 #                        warning on stderr naming the lines to add.
+#   --journal-maintenance-window
+#                        Assert that old writers are excluded for the
+#                        native-input journal upgrade.
+#   --journal-roots-complete
+#                        Assert that every legacy input root is accounted for.
+#   --journal-backup <dir>
+#                        A new absolute directory for the upgrade's
+#                        stopped-writer backup.
+#   --journal-legacy-root <dir>
+#                        An additional absolute legacy input root; repeat for
+#                        each. An upgrade of an existing store below schema
+#                        v16 needs the first three journal flags, and this one
+#                        for each additional root; pre-flight refuses without
+#                        the three, changing nothing. If journal flags are given
+#                        and no cutover is crossed, a completed install warns
+#                        that the flags were unused, names the store's version
+#                        before this install (or says there was no store), and
+#                        says no journal backup was made. A refused install adds
+#                        no such warning.
+#                        See docs/operator-actions.md
+#                        "Upgrading the native-input journal".
+#   --check-holders      Read-only pre-flight holder inventory for a native-input
+#                        cutover. Resolve the candidate binaries and store,
+#                        validate the journal flags and list blocking processes
+#                        with the real migration verifier, then exit 0 (clear)
+#                        or 5 (refused). Skip live-row checks, so agents need
+#                        not be stopped first. With no crossing, no holder check
+#                        is needed. No install, backup, sentinel, hook, MCP,
+#                        schedule or PATH change is made; release downloads and
+#                        store snapshots use temporary files removed at exit.
+#   -h, --help           Print this text and exit 0.
 #
 # The schedule (b.wur). sweep runs shared recovery checks every 2 minutes;
 # expire runs separate retention cleanup daily. State reads share the checks;
@@ -159,7 +191,7 @@
 #      stamps differ or carry no commit stamp, or a binary's `version`
 #      output lacks config_dir or names a directory other than
 #      ~/.config/agent-director (a binary from an earlier release: install
-#      that release with its own install.sh, fetched from its tag; this
+#      that release with its own install.sh (that release's install.sh must support this host), fetched from its tag; this
 #      install reads no store for the check)
 #   4  hook merge failure (~/.claude/settings.json malformed, or holding
 #      more than one JSON document; an empty one is merged as {}), or
@@ -221,6 +253,18 @@
 #      before any binary is replaced; ErrMoveConflict and ErrAgentsLive are
 #      raised in pre-flight, changing nothing. They are install.sh's own
 #      names, as ErrVersionUnreadable is, not agent-director's.
+#      An upgrade that crosses the native-input journal cutover adds three:
+#      ErrJournalMigrationRefused (pre-flight refused, or the cutover
+#      refused and the installer put the previous install back: the install
+#      is as before the run; fix the reported cause, then re-run with a new
+#      --journal-backup directory), ErrJournalMigrationIncomplete (the
+#      install did not finish successfully, though the cutover may have
+#      committed, and this release stays installed; follow the
+#      message, then docs/operator-actions.md "install.sh stops with
+#      ErrJournalMigrationIncomplete") and ErrSchemaVerifyFailed for a
+#      restore that could not finish (needs a human; put the listed copies
+#      back as docs/operator-actions.md "Putting back a kept install"
+#      describes). ErrJournalMigrationIncomplete is install.sh's own name.
 #   6  the MCP registration failed (--register-mcp): `claude mcp add` (or the
 #      `claude mcp remove` before the re-add of a registration that names the
 #      old directory's binary) exited non-zero. Every other step is done: the
@@ -294,6 +338,13 @@
 # server (`claude mcp get agent-director`, from the directory the install
 # runs in). Run the upgrade from a shell AD did not start.
 #
+# The hooks merge rewrites settings.json with no backup copy, as its env can
+# hold tokens (b.f3n). Each install that gets past the hooks step names, on
+# one line and each shell-quoted, the
+# ~/.claude/settings.json.bak.<YYYYmmdd-HHMMSS> copies earlier releases kept
+# (they may hold those tokens and can be deleted), and never deletes them
+# itself.
+#
 # Idempotent: re-running it after a clean install, with the same
 # binaries (a no-flag re-run outside a checkout picks the
 # agent-director on PATH and the installed agent-director-admin, as
@@ -306,13 +357,18 @@
 # and makes no new copy of it), the store is opened
 # (a state.db already at its target version is not migrated) and, with
 # hooks on, settings.json and config.toml are merged again (no hook is
-# added twice), each after a fresh timestamped .bak. With
+# added twice), config.toml after a fresh timestamped .bak. With
 # --register-mcp, `claude mcp add` refuses a name already registered in
 # its scope, so a re-run from a directory where `mcp get agent-director`
 # already shows this install's binary with `serve --stdio` adds nothing, says
 # so, and still returns 0. With --schedule, the entries are replaced, not
 # added (see "The schedule" above): a re-run leaves one copy of each.
 
+# Bash parses this whole block before running it (SR-2.16). A piped install
+# has all its code before its first change, even if an interrupt ends curl
+# in the same process group; a download cut off mid-block runs nothing.
+# The body is deliberately not indented.
+{
 set -euo pipefail
 
 # HOME first, before anything is read or written: every path below is built
@@ -376,6 +432,8 @@ JOURNAL_MAINTENANCE=0
 JOURNAL_ROOTS_COMPLETE=0
 JOURNAL_ROOTS=()
 JOURNAL_BACKUP=""
+JOURNAL_FLAGS_GIVEN=0
+CHECK_HOLDERS=0
 
 # GitHub repo slug used by --from-release. Matches go.mod's module path
 # and the /release skill's asset naming.
@@ -421,13 +479,15 @@ while [[ $# -gt 0 ]]; do
         --keep-prior)
             KEEP_PRIOR=1; shift ;;
         --journal-maintenance-window)
-            JOURNAL_MAINTENANCE=1; shift ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_MAINTENANCE=1; shift ;;
         --journal-roots-complete)
-            JOURNAL_ROOTS_COMPLETE=1; shift ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_ROOTS_COMPLETE=1; shift ;;
         --journal-legacy-root)
-            JOURNAL_ROOTS+=("$2"); shift 2 ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_ROOTS+=("$2"); shift 2 ;;
         --journal-backup)
-            JOURNAL_BACKUP="$2"; shift 2 ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_BACKUP="$2"; shift 2 ;;
+        --check-holders)
+            CHECK_HOLDERS=1; shift ;;
         --schedule)
             SCHEDULE=1; shift ;;
         -h|--help)
@@ -509,8 +569,8 @@ fi
 #                         install a newer agent-director.
 #   ErrSchemaVerifyFailed step 5 found state.db missing, or not at the
 #                         target version, after a successful open; or step 3
-#                         could not create the sentinel's temp file: needs
-#                         a human.
+#                         could not create the sentinel's temp file; or a
+#                         cutover restore could not finish: needs a human.
 #   any other name        step 4's open failed with that agent-director
 #                         err_name (ErrStoreOpen when its stderr held no
 #                         error envelope).
@@ -527,10 +587,13 @@ fi
 #   ErrJournalMigrationRefused  the native-input cutover was refused: in
 #                         pre-flight (the journal flags, or the store's
 #                         cutover state) with nothing changed, or by
-#                         step 4's migrate-journal; the envelope above the
+#                         step 4's migrate-journal with the install restored;
+#                         the envelope above the
 #                         cause line gives the reason and action.
+#   ErrJournalMigrationIncomplete  a failed or uncertain cutover left this
+#                         release installed: complete forward as reported.
 # ErrVersionUnreadable, ErrSchemaVerifyFailed, ErrMoveConflict,
-# ErrAgentsLive and ErrMoveFailed are install.sh's own names, not
+# ErrAgentsLive, ErrMoveFailed and ErrJournalMigrationIncomplete are install.sh's own names, not
 # agent-director error names.
 #
 # Exit 1 is the agent-rename migration's failed write (see the header): it
@@ -540,8 +603,20 @@ fi
 # ad_exit_5 <err_name> — print exit 5's cause line naming <err_name> on
 # stderr, then exit 5.
 ad_exit_5() {
-    echo "install.sh: err_name=$1" >&2
+    echo "install.sh: err_name=$1" >&2 || true
+    # An outcome can be reported from inside EXIT (bash 3.2's errexit
+    # ordering). In that case exit will not run the trap's remaining code.
+    if [[ -n "${CUTOVER_PHASE:-}" ]]; then
+        ad_exit_cleanup
+    fi
     exit 5
+}
+
+# SR-2.16: a closed output stream must not interrupt cutover settlement.
+# Shared reporters also run in pre-flight, so define this before their use;
+# outside the cutover span a failed write keeps its ordinary failure.
+ad_cutover_write_failed() {
+    [[ -n "${CUTOVER_PHASE:-}" ]]
 }
 
 # ad_outcome_exit [--relayed] <err_name> <reason> <action> <cutover>
@@ -561,6 +636,8 @@ ad_exit_5() {
 # envelope (its details.refusal.reason or its err_name), never checked.
 # Print English message lines before calling it, so the envelope sits just
 # above the cause line. A failed envelope write never skips the cause line.
+# ad_exit_5 also performs the span's cleanup before exiting, including when
+# this outcome was reached from the EXIT trap itself.
 ad_outcome_exit() {
     local relayed=0 extra='{}'
     if [[ "${1:-}" == --relayed ]]; then
@@ -572,7 +649,7 @@ ad_outcome_exit() {
         extra="$5"
     fi
     if [[ "$relayed" -eq 0 ]] && { [[ ! "$reason" =~ ^[a-z0-9_]+$ ]] || [[ " $AD_OUTCOME_REASONS " != *" $reason "* ]]; }; then
-        echo "install.sh: internal error: outcome reason $reason is not in AD_OUTCOME_REASONS" >&2
+        echo "install.sh: internal error: outcome reason $reason is not in AD_OUTCOME_REASONS" >&2 || ad_cutover_write_failed
         exit 1
     fi
     jq -nc --arg err_name "$err_name" --arg reason "$reason" --arg action "$action" \
@@ -582,24 +659,101 @@ ad_outcome_exit() {
     ad_exit_5 "$err_name"
 }
 
+# The copies a restore needs (SR-2.16), which pre-flight makes on a crossing
+# upgrade ("Restore preconditions", below). One entry per item, in this
+# order: the binary, the administrator, the sentinel, the managed PATH link.
+# RESTORE_BELONGS[i] is where the item belongs; RESTORE_COPY[i] is its copy,
+# <what it copies>.restore-<RESTORE_TS>.<suffix> beside it (for a link, a
+# directory holding the link under the item's last component; see
+# ad_restore_copy), or empty when nothing was there before the run.
+# RESTORE_KEEP_COPIES keeps remaining copies after an unfinished restore or
+# an unestablished outcome; otherwise EXIT cleanup removes them.
+RESTORE_TS=""
+RESTORE_BELONGS=()
+RESTORE_COPY=()
+RESTORE_KEEP_COPIES=0
+RESTORE_NOT_REMOVED=()
+AD_EXIT_CLEANUP_DONE=0
+
+# ad_restore_copies_remove — remove each copy this run made, by its recorded
+# name only, so another run's copies are never touched. A link's copy is its
+# mktemp -d directory: the link inside it, named as the item, is removed
+# (never its target) only while it is a link, then the directory only while
+# it is empty. Returns 1, listing each copy it could not remove in
+# RESTORE_NOT_REMOVED, when one stays.
+ad_restore_copies_remove() {
+    local i c inner rc=0
+    RESTORE_NOT_REMOVED=()
+    for ((i = 0; i < ${#RESTORE_COPY[@]}; i++)); do
+        c="${RESTORE_COPY[$i]}"
+        if [[ -z "$c" ]]; then
+            continue
+        fi
+        if [[ -d "$c" && ! -L "$c" ]]; then
+            inner="$c/${RESTORE_BELONGS[$i]##*/}"
+            if [[ -L "$inner" ]]; then
+                rm -f -- "$inner" 2>/dev/null || true
+            fi
+            if ! rmdir -- "$c" 2>/dev/null; then
+                RESTORE_NOT_REMOVED+=("$c")
+                rc=1
+            fi
+        elif ! rm -f -- "$c" 2>/dev/null; then
+            RESTORE_NOT_REMOVED+=("$c")
+            rc=1
+        fi
+    done
+    return "$rc"
+}
+
 # ad_exit_cleanup — the install's EXIT cleanup: remove every temp file this
 # install made and has not moved into place (the staged binary copies, the
 # --from-release downloads, the binary and admin temp copies, a migration
 # sentinel's temp file that step 3 never moved into place, and a migration
-# write's temp file). Every EXIT trap of this script runs it, the move's too
-# (ad_move_on_exit), so the move's traps chain onto it rather than replace it.
+# write's temp file and the managed link's temp link), and the restore's
+# copies unless RESTORE_KEEP_COPIES is 1: after a success, a refusal, a
+# post-swap failure and a failed move alike.
+# A SIGKILL leaves the copies, under their documented name pattern. Every
+# EXIT trap of this script runs it, the move's too (ad_move_on_exit), so the
+# move's traps chain onto it rather than replace it.
+# Before removing copies, settle a before-start interrupt even when bash
+# exits on errexit before running the pending signal trap (bash 3.2).
 ad_exit_cleanup() {
+    local exit_rc=$?
     local f
+    [[ "$AD_EXIT_CLEANUP_DONE" -eq 1 ]] && return 0
+    if [[ "${CUTOVER_PHASE:-}" == before_start ]]; then
+        if [[ -n "$CUTOVER_INTERRUPTED" || "$exit_rc" -eq 129 || "$exit_rc" -eq 130 || "$exit_rc" -eq 143 ]]; then
+            if [[ -z "$CUTOVER_INTERRUPTED" ]]; then
+                case "$exit_rc" in
+                    129) CUTOVER_INTERRUPTED=HUP ;;
+                    130) CUTOVER_INTERRUPTED=INT ;;
+                    143) CUTOVER_INTERRUPTED=TERM ;;
+                esac
+            fi
+            CUTOVER_INTERRUPTED_IN=before_start
+            ad_cutover_interrupted_before_start
+        fi
+    fi
+    # S1-S3 and unexpected exits keep the notes due by that point. Inline:
+    # EXIT can run before the later helpers have been defined.
+    if [[ -n "${MOVE_NOTES_DEFERRED:-}" ]]; then
+        printf '%s' "$MOVE_NOTES_DEFERRED" 2>/dev/null || true
+    fi
     for f in "${TMP:-}" "${ADMIN_TMP:-}" "${tmp_bin:-}" "${tmp_admin:-}" \
-        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}"; do
+        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}" "${link_tmp:-}"; do
         if [[ -n "$f" ]]; then
             rm -f "$f"
         fi
     done
+    if [[ "$RESTORE_KEEP_COPIES" -ne 1 ]]; then
+        ad_restore_copies_remove || true
+    fi
     # The schedule step's download directory (b.wur), when an interrupt left it.
     if [[ -n "${sched_tmp:-}" ]]; then
         rm -rf -- "$sched_tmp"
     fi
+    AD_EXIT_CLEANUP_DONE=1
 }
 
 # --------------------------------------------------------------------
@@ -668,19 +822,18 @@ if [[ ${#missing_tools[@]} -gt 0 ]]; then
 fi
 
 # SRD §SR-2.1 / Idea Bee b.fg3: refuse with exit 2 any host outside the
-# supported set {Linux/x86_64, Darwin/arm64}, before anything is
-# downloaded or written. Linux/aarch64 is refused too; b.fg3 deferred
-# it. install.sh is the only installer (the npm package installs nothing
+# supported set {Linux/x86_64, Linux/aarch64, Darwin/arm64}, before anything is
+# downloaded or written. install.sh is the only installer (the npm package installs nothing
 # outside node_modules/), so this is the only host check that can refuse
 # an install. ad_arch_probe (below) checks both source binaries against
 # the pair read here.
 uname_s="$(uname -s)"
 uname_m="$(uname -m)"
 case "${uname_s}/${uname_m}" in
-    Linux/x86_64|Darwin/arm64)
+    Linux/x86_64|Linux/aarch64|Darwin/arm64)
         ;;
     *)
-        echo "install.sh: unsupported host: ${uname_s}/${uname_m}. Supported: Linux/x86_64, Darwin/arm64. See b.fg3 for cross-platform expansion status." >&2
+        echo "install.sh: unsupported host: ${uname_s}/${uname_m}. Supported: Linux/x86_64, Linux/aarch64, Darwin/arm64. See b.fg3 for cross-platform expansion status." >&2
         exit 2
         ;;
 esac
@@ -1040,12 +1193,22 @@ ad_store_db_path() (
             # The decoder also skips a UTF-16 byte-order mark; the reader
             # does not.
             if [[ "$n" -eq 1 && ( "$line" == $'\xff\xfe'* || "$line" == $'\xfe\xff'* ) ]]; then
+                if [[ "${line:2}" =~ $re_header ]]; then
+                    name="${BASH_REMATCH[1]}"
+                    for t in "${tables[@]}"; do
+                        if [[ "$t" == launch ]] && is_table "$name" "$t"; then
+                            set_about "$t"
+                            break
+                        fi
+                    done
+                fi
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "This line starts with the bytes FF FE or FE FF, a UTF-16 byte-order" \
                     "mark, which install.sh does not read. Remove those two bytes:" \
                     "agent-director skips them, so it reads the file the same without them."
             fi
             if [[ "$line" == *'"""'* || "$line" == *"'''"* ]]; then
+                set_about "$table"
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "This line holds \"\"\" or ''', which install.sh reads as the start of a" \
                     "multi-line string. Write each value on one line, as a \"...\" or '...'" \
@@ -1123,6 +1286,13 @@ ad_store_db_path() (
                         "the next header."
                 fi
                 if [[ "$line" =~ $re_header_dotted ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    for t in "${tables[@]}"; do
+                        if is_table "$name" "$t"; then
+                            set_about "$t"
+                            break
+                        fi
+                    done
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "This header names a table within a table ([a.b]), which" \
                         "agent-director does not read: it ignores the lines under this header," \
@@ -1188,6 +1358,7 @@ ad_store_db_path() (
                         "ignores this line. Remove it."
                 fi
                 if [[ "$line" =~ $re_key_dotted ]]; then
+                    set_about "$table"
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "This dotted key sets a key in a table within a table, which" \
                         "agent-director does not read: it ignores this line, or refuses the" \
@@ -1379,7 +1550,7 @@ STORE_SCHEMA_VERSION=20
 # t2.7tz.ab.hh, t2.7tz.ab.p5 and t2.7tz.ab.5w append their own installer
 # reasons to this one line. A test reads it, so keep it on one line in this
 # form, and ad_outcome_exit refuses a self-chosen reason missing from it.
-AD_OUTCOME_REASONS='cutover_state_unreadable native_input_authority_missing check_only_unestablished'
+AD_OUTCOME_REASONS='cutover_state_unreadable native_input_authority_missing check_only_unestablished previous_release_unknown restore_copies_unavailable backup_inside_install_directory outcome_unestablished restore_incomplete interrupted legacy_root_symlink agents_live agent_rows_unreadable'
 
 # >>> ad_agent_rename_migrate (b.ssz) >>>
 #
@@ -1998,11 +2169,15 @@ if [[ -f "$MOVE_MARKER" || -L "$MOVE_MARKER" ]]; then
     marker_kept=""
     IFS= read -r marker_kept <"$MOVE_MARKER" || true
     if [[ -n "$marker_kept" && ( -e "$marker_kept" || -L "$marker_kept" ) ]]; then
-        rm -f "$MOVE_MARKER"
+        if [[ "$CHECK_HOLDERS" -eq 0 ]]; then
+            rm -f "$MOVE_MARKER"
+        fi
     elif [[ "$OLD_PRESENT" -eq 1 ]]; then
         MOVE_PARTIAL=1
     else
-        rm -f "$MOVE_MARKER"
+        if [[ "$CHECK_HOLDERS" -eq 0 ]]; then
+            rm -f "$MOVE_MARKER"
+        fi
     fi
 fi
 
@@ -2553,12 +2728,12 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
     fi
     echo "  release : $RELEASE_REPO_SLUG @ $FROM_RELEASE_TAG ($asset, $admin_asset)"
 
+    # Arm cleanup before either allocation: if the second mktemp fails,
+    # the first file still needs removing. Cleanup accepts unset paths.
+    # The install steps later copy the files' contents into place.
+    trap ad_exit_cleanup EXIT
     tmp_bin="$(mktemp /tmp/agent-director.XXXXXX)"
     tmp_admin="$(mktemp /tmp/agent-director-admin.XXXXXX)"
-    # Defer-cleanup the tempfiles on any exit path. The install steps
-    # later in the script copy their contents into place, so the
-    # tempfiles being cleaned up at script exit is fine.
-    trap ad_exit_cleanup EXIT
 
     # ----------------------------------------------------------------
     # CDN-propagation retry (b.kym).
@@ -2623,7 +2798,7 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
         echo "  Releases before 0.11.0 ship no agent-director-admin binary, so" >&2
         echo "  re-running this command will never find one. Instead:" >&2
         echo "    - install this release or later: bash $0 --from-release <tag of this release or later>" >&2
-        echo "    - or install an earlier release with that release's own install.sh, fetched from its tag, rather than this one" >&2
+        echo "    - or install an earlier release with that release's own install.sh (that release's install.sh must support this host), fetched from its tag, rather than this one" >&2
         exit 3
     }
 
@@ -2841,6 +3016,7 @@ echo "  admin source: $ADMIN_SRC"
 # (e.g. operator passes a darwin-arm64 artifact on a Linux/x86_64 host).
 # Runs file(1) against $BINARY_SRC, and against $ADMIN_SRC (b.vqr), and
 # pattern-matches against the host pair captured by the OS/CPU gate (T1).
+# Supported pairs: Linux/x86_64, Linux/aarch64 and Darwin/arm64.
 # On mismatch: exit 2 with the SR-2.2 message. file(1) is a hard
 # preflight requirement (T2 + required_tools); never silent-skip.
 #
@@ -2859,6 +3035,12 @@ ad_arch_probe() {
         Linux/x86_64)
             if grep -q "ELF 64-bit LSB" <<<"$file_out" \
                 && { grep -q "x86-64" <<<"$file_out" || grep -q "x86_64" <<<"$file_out"; }; then
+                arch_ok=1
+            fi
+            ;;
+        Linux/aarch64)
+            if grep -q "ELF 64-bit LSB" <<<"$file_out" \
+                && grep -q "aarch64" <<<"$file_out"; then
                 arch_ok=1
             fi
             ;;
@@ -3030,7 +3212,7 @@ if [[ "$main_config_dir" != "~/.config/agent-director" || "$admin_config_dir" !=
     echo "  This release keeps AD's files in ~/.config/agent-director, and both of its" >&2
     echo "  binaries report that directory as config_dir in their version result." >&2
     echo "  A binary that does not is from an earlier release, which an earlier" >&2
-    echo "  release's own install.sh installs: fetch that release's install.sh from its" >&2
+    echo "  release's own install.sh installs (that release's install.sh must support this host): fetch that release's install.sh from its" >&2
     echo "  tag and run it, rather than this one. To install this release instead:" >&2
     echo "    - build both binaries from it: $build_advice" >&2
     echo "    - or download release:        rerun with --from-release (omit --binary and --admin-binary)" >&2
@@ -3237,6 +3419,50 @@ ad_journal_args() {
     done
 }
 
+# ad_journal_check_only — run the candidate administrator's migrate-journal
+# --check-only with the explicit store and the run's journal flags. It checks
+# arguments and holders in the current, pre-move layout without opening the
+# store or writing anything. Path access is verified by the real attempt,
+# after the move and this installer's permission preparation.
+# Refuse in pre-flight unless it prints exactly {} with status
+# 0. $ADMIN_SRC is the candidate; $ADMIN_CANONICAL is still the previous
+# install's binary here.
+ad_journal_check_only() {
+    local out rc=0 name action reason
+    ad_prepare_source_binaries
+    out="$("$ADMIN_SRC" --store-path "$state_db" migrate-journal --check-only "${JOURNAL_ARGS[@]}" 2>&1)" || rc=$?
+    if [[ "$rc" -eq 0 && "$out" == "{}" ]]; then
+        return 0
+    fi
+    name="$(ad_err_name "$out")"
+    if [[ "$rc" -ne 0 && "$name" == ErrJournalMigrationRefused ]]; then
+        action="$(printf '%s\n' "$out" | jq -Rr '(fromjson | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.action | strings)?' 2>/dev/null | tail -n1 || true)"
+        reason="$(printf '%s\n' "$out" | jq -Rr '(fromjson | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.reason | strings)?' 2>/dev/null | tail -n1 || true)"
+        case "$reason" in
+            old_or_unverified_mutators|process_inventory_*|inventory_deadline)
+                echo "install.sh: pre-flight holder check refused (agent-director-admin migrate-journal --check-only --store-path)" >&2 ;;
+            *)
+                echo "install.sh: pre-flight refused the journal flags (agent-director-admin migrate-journal --check-only)" >&2 ;;
+        esac
+        echo "  Nothing was installed or changed." >&2
+        if [[ -n "$action" ]]; then
+            echo "  To fix: $action" >&2
+        fi
+        echo "  Then re-run this release's installer, with a new --journal-backup directory." >&2
+        ad_relay_output "$out"
+        ad_exit_5 ErrJournalMigrationRefused
+    fi
+    action="run this release's agent-director-admin as the candidate (the same release as agent-director), then re-run this install; report it if it persists"
+    echo "install.sh: pre-flight could not check the journal flags: agent-director-admin migrate-journal --check-only gave an unexpected result (status ${rc})" >&2
+    echo "  This read-only check must establish both valid journal flags and a clear holder inventory." >&2
+    echo "  Nothing was installed or changed." >&2
+    ad_relay_output "$out"
+    if [[ -n "$name" ]]; then
+        ad_outcome_exit --relayed ErrJournalMigrationRefused "$name" "$action" not_committed
+    fi
+    ad_outcome_exit ErrJournalMigrationRefused check_only_unestablished "$action" not_committed
+}
+
 # ad_is_version <value> — true when <value> is a user_version as sqlite3
 # prints one: a whole number, 0 or more, with no leading zero. Nothing else
 # may reach a printf %d or a version compare (b.hk7). A leading zero would:
@@ -3257,9 +3483,9 @@ ad_got_version() {
 # line of a user_version read that gave no version, with <output>, all the
 # read printed (sqlite3's own error when it failed), indented under it.
 ad_show_unreadable_version() {
-    echo "  actual   user_version: <unreadable>" >&2
+    echo "  actual   user_version: <unreadable>" >&2 || ad_cutover_write_failed
     if [[ -n "$1" ]]; then
-        printf '%s\n' "$1" | sed 's/^/    /' >&2
+        printf '%s\n' "$1" | sed 's/^/    /' >&2 || ad_cutover_write_failed
     fi
 }
 
@@ -3288,21 +3514,21 @@ ad_fail_unreadable_version() {
         failed=1
     fi
     ad_show_unreadable_version "$output"
-    echo "  Reading ${state_db_name}'s user_version (sqlite3 PRAGMA user_version)" >&2
+    echo "  Reading ${state_db_name}'s user_version (sqlite3 PRAGMA user_version)" >&2 || ad_cutover_write_failed
     if [[ "$failed" -eq 1 ]]; then
-        echo "  failed, so the install could not ${could_not}." >&2
+        echo "  failed, so the install could not ${could_not}." >&2 || ad_cutover_write_failed
     else
-        echo "  printed the output above, not a whole number (0 or more), so" >&2
-        echo "  the install could not ${could_not}." >&2
+        echo "  printed the output above, not a whole number (0 or more), so" >&2 || ad_cutover_write_failed
+        echo "  the install could not ${could_not}." >&2 || ad_cutover_write_failed
     fi
     for line in "$@"; do
-        echo "  $line" >&2
+        echo "  $line" >&2 || ad_cutover_write_failed
     done
     if [[ "$failed" -eq 1 ]]; then
-        echo "  Re-running this install retries the read." >&2
+        echo "  Re-running this install retries the read." >&2 || ad_cutover_write_failed
     else
-        echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2
-        echo "  A re-run gets the same output unless that sqlite3 or ${state_db_name} changes." >&2
+        echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2 || ad_cutover_write_failed
+        echo "  A re-run gets the same output unless that sqlite3 or ${state_db_name} changes." >&2 || ad_cutover_write_failed
     fi
     ad_exit_5 ErrVersionUnreadable
 }
@@ -3355,10 +3581,27 @@ ad_agent_rename_gate() {
 # left to the move's live-agents check below, which reads the same store and
 # refuses first (ErrAgentsLive, "the live rows could not be read"): the
 # gate then defers, and runs again once that check has passed.
-if [[ "$MOVE_DUE" -eq 1 ]]; then
+if [[ "$MOVE_DUE" -eq 1 && "$CHECK_HOLDERS" -eq 0 ]]; then
     ad_agent_rename_gate defer
 else
     ad_agent_rename_gate
+fi
+
+# Holder-only mode ends before install-only config/link checks, live-row
+# checks, restore preparation or any installation step. The schema decision
+# uses the same private snapshot as normal pre-flight, never SQLite on the
+# source. Resolve the candidates even when there is no store to snapshot.
+if [[ "$CHECK_HOLDERS" -eq 1 ]]; then
+    ad_prepare_source_binaries
+    if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]] \
+        && ((PREFLIGHT_STORE_VERSION < INPUT_CUTOVER_VERSION)); then
+        ad_journal_args
+        ad_journal_check_only
+        echo "install.sh: holder check passed; nothing was installed or changed."
+    else
+        echo "install.sh: no native-input cutover is crossed; no holder check is needed. Nothing was installed or changed."
+    fi
+    exit 0
 fi
 
 # --------------------------------------------------------------------
@@ -3527,10 +3770,11 @@ ad_migrate_preflight_all
 # its chain of links resolves to, keeping the link
 # (ad_replace_keeping_mode). The write puts a .new beside that file and
 # moves it over the file, so it fails, late (after the binaries are
-# installed, the store migrated and a .bak written), when the links
-# loop, when the resolved file's directory is missing (a dotfiles
-# repository not cloned yet, say), or when that directory cannot be
-# written in (home-manager links into a read-only /nix/store, say). With
+# installed and the store migrated, and, for config.toml, after its .bak
+# is written), when the links loop, when the resolved file's directory is
+# missing (a dotfiles repository not cloned yet, say), or when that
+# directory cannot be written in (home-manager links into a read-only
+# /nix/store, say). With
 # hooks on, such a link is refused here instead, before anything on disk
 # changes: settings.json with exit 4 and config.toml with exit 5
 # (ErrConfigMalformed), as each file's other refusals. A plain file, and
@@ -3917,9 +4161,12 @@ fi
 # cutover or stands in for a verification migrate-journal makes after the
 # swap, and a refusal here leaves every file as it was.
 #   - no store, or v0: not crossing;
-#   - v1 up to INPUT_CUTOVER_VERSION - 1: crossing (CUTOVER_CROSSING=1),
-#     and the candidate administrator's migrate-journal --check-only must
-#     accept the run's journal flags;
+#   - v1 up to INPUT_CUTOVER_VERSION - 1: crossing (CUTOVER_CROSSING=1);
+#     with no move due the store must hold no live row
+#     (ad_crossing_live_rows_check), and the candidate administrator's
+#     migrate-journal --check-only must accept the run's journal flags and
+#     find no blocking process through the real quiescence verifier;
+#     then the restore preconditions (below) run;
 #   - INPUT_CUTOVER_VERSION up to STORE_SCHEMA_VERSION - 1: not crossing
 #     when the native-input authority is recorded; refused when it is
 #     missing (native_input_authority_missing) or unreadable
@@ -3940,38 +4187,1201 @@ ad_cutover_refuse_state() {
     ad_outcome_exit ErrJournalMigrationRefused "$reason" "$action" not_committed
 }
 
-# ad_journal_check_only — run the candidate administrator's migrate-journal
-# --check-only with the run's journal flags (no --store-path: it reads no
-# store), and refuse in pre-flight unless it prints exactly {} with status
-# 0. $ADMIN_SRC is the candidate; $ADMIN_CANONICAL is still the previous
-# install's binary here.
-ad_journal_check_only() {
-    local out rc=0 name action
-    ad_prepare_source_binaries
-    out="$("$ADMIN_SRC" migrate-journal --check-only "${JOURNAL_ARGS[@]}" 2>&1)" || rc=$?
-    if [[ "$rc" -eq 0 && "$out" == "{}" ]]; then
+# ad_crossing_live_rows_check — on a crossing upgrade with no move due,
+# refuse in pre-flight while the store holds a row in a live state
+# (agents_live), or when its rows cannot be read (agent_rows_unreadable),
+# with nothing changed. The holder inventory follows in ad_journal_check_only.
+# With a move due, ad_agents_live_check has already
+# read the old store's rows. The advice runs the installed binary, which here
+# is still the previous release's.
+ad_crossing_live_rows_check() {
+    local bin line state id cmd action
+    printf -v bin '%q' "$CANONICAL"
+    if ! ad_read_live_rows "$state_db"; then
+        action="re-run the same install command once ${state_db_name} is no longer busy (a re-run reads its rows again); if it still cannot be read, inspect $state_db with the error this run reported"
+        echo "install.sh: cannot read ${state_db_name}'s agent rows, so cannot tell whether an agent is live before the native-input cutover; refusing to upgrade." >&2
+        echo "  state.db: $state_db" >&2
+        echo "  The rows could not be read (the store was busy past its busy timeout of ${store_busy_timeout_ms} ms, or is unreadable). sqlite3 said:" >&2
+        printf '%s\n' "$LIVE_ROWS_ERR" | sed 's/^/    /' >&2
+        echo "  Nothing was installed or changed." >&2
+        ad_outcome_exit ErrJournalMigrationRefused agent_rows_unreadable "$action" not_committed
+    fi
+    if [[ -z "$LIVE_ROWS" ]]; then
         return 0
     fi
-    name="$(ad_err_name "$out")"
-    if [[ "$rc" -ne 0 && "$name" == ErrJournalMigrationRefused ]]; then
-        action="$(printf '%s\n' "$out" | jq -Rr '(fromjson | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.action | strings)?' 2>/dev/null | tail -n1 || true)"
-        echo "install.sh: pre-flight refused the journal flags (agent-director-admin migrate-journal --check-only)" >&2
-        echo "  Nothing was installed or changed." >&2
-        if [[ -n "$action" ]]; then
-            echo "  To fix: $action" >&2
+    action="stop each live agent with $bin pause --instance-id <id> (a waiting row) or $bin kill --instance-id <id> (any other live row); only for an agent you have established is gone, clear its row with $bin find-missing, run as the agents' user in their tmux environment (a missing row does not prove the agent stopped: docs/maintenance.md \"Scheduling the sweeps\"); then re-run the same install command from a shell AD did not start"
+    echo "install.sh: ${state_db_name} holds live agents, which the native-input cutover cannot cross; refusing to upgrade." >&2
+    echo "  state.db: $state_db" >&2
+    echo "  Rows in a live state (state, instance id), each followed by the command that stops its agent:" >&2
+    while IFS= read -r line; do
+        state="${line%% *}"
+        id="${line#* }"
+        if [[ "$state" == waiting ]]; then
+            printf -v cmd '%s pause --instance-id %q' "$bin" "$id"
+        else
+            printf -v cmd '%s kill --instance-id %q' "$bin" "$id"
         fi
-        echo "  Then re-run this release's installer, with a new --journal-backup directory." >&2
-        ad_relay_output "$out"
-        ad_exit_5 ErrJournalMigrationRefused
+        echo "    $line" >&2
+        echo "      $cmd" >&2
+    done <<<"$LIVE_ROWS"
+    echo "  Stop whatever starts agents (a scheduler, a loop, a caller) first, so no new one starts." >&2
+    echo "  Only for an agent you have established is gone, clear its row with the installed binary's find-missing, run as the agents' user in their tmux environment:" >&2
+    echo "    $bin find-missing" >&2
+    echo "  A missing row does not prove the agent stopped: a run as another user or against another tmux server can mark a running agent missing (docs/maintenance.md \"Scheduling the sweeps\")." >&2
+    echo "  Nothing was installed or changed. Then re-run the same install command from a shell AD did not start." >&2
+    ad_outcome_exit ErrJournalMigrationRefused agents_live "$action" not_committed
+}
+
+# --------------------------------------------------------------------
+# Restore preconditions (SR-2.14 "Pre-flight", SR-2.16)
+#
+# On a crossing upgrade, after --check-only has passed and before the move
+# and the swap, pre-flight settles what SR-2.16's restore needs, and refuses
+# with nothing changed when it cannot:
+#   - with a move due, the journal backup directory lies outside AD's old and
+#     new directories (backup_inside_install_directory);
+#   - whether the previous release predates the cutover
+#     (previous_release_unknown when its probe gives no clear answer);
+#   - for a release that predates it, the copies the restore puts back
+#     (restore_copies_unavailable).
+# PREV_RELEASE_PREDATES is the decision Task t2.7tz.ab.p5's "When to restore"
+# reads. It describes the administrator binary probed here, never one
+# installed later in the run. A non-crossing run leaves PREV_ADMIN and
+# PREV_RELEASE_PREDATES empty and makes no copy.
+# --------------------------------------------------------------------
+
+# The installed binaries: pre-flight copies them, and the swap replaces them.
+CANONICAL="${DEFAULT_BIN_DIR}/agent-director"
+ADMIN_CANONICAL="$DEFAULT_ADMIN_PATH"
+
+# ad_managed_link_target — print the managed PATH link the swap makes
+# (${SYMLINK_DIR}/agent-director, when linking is on and SYMLINK_DIR is a
+# directory whose path holds no whitespace), or nothing. Once
+# ad_managed_link_decide has run, it prints that decision instead.
+MANAGED_LINK_DECIDED=0
+MANAGED_LINK_DECISION=""
+MANAGED_LINK_RECORD=""
+MANAGED_LINK_SKIP=""
+ad_managed_link_target() {
+    if [[ "$MANAGED_LINK_DECIDED" -eq 1 ]]; then
+        if [[ -n "$MANAGED_LINK_DECISION" ]]; then
+            printf '%s\n' "$MANAGED_LINK_DECISION"
+        fi
+        return 0
     fi
-    action="run this release's agent-director-admin as the candidate (the same release as agent-director), then re-run this install; report it if it persists"
-    echo "install.sh: pre-flight could not check the journal flags: agent-director-admin migrate-journal --check-only gave an unexpected result (status ${rc})" >&2
+    if [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" && -d "$SYMLINK_DIR" && ! "$SYMLINK_DIR" =~ [[:space:]] ]]; then
+        printf '%s\n' "${SYMLINK_DIR}/agent-director"
+    fi
+}
+
+# ad_managed_link_decide — before the copies, fix whether and where the swap
+# makes the managed link, so the swap and the restore's record agree
+# (SR-2.16). While the move is due, a SYMLINK_DIR inside AD's old or new
+# directory (ad_backup_inside: lexically, physically, or by identity on
+# Darwin), or one that cannot be placed against them, gets none
+# (MANAGED_LINK_SKIP says why): the move renames the old directory and
+# replaces the new one, and the restore puts the pre-move directory back
+# whole. An outside one is recorded at SYMLINK_DIR's physical place
+# (MANAGED_LINK_RECORD), so the record names it after the rename; the link
+# itself is never followed.
+ad_managed_link_decide() {
+    local t dir which root rc phys
+    t="$(ad_managed_link_target)"
+    MANAGED_LINK_DECIDED=1
+    MANAGED_LINK_DECISION="$t"
+    MANAGED_LINK_RECORD="$t"
+    MANAGED_LINK_SKIP=""
+    if [[ -z "$t" || "$MOVE_DUE" -ne 1 ]]; then
+        return 0
+    fi
+    dir="$SYMLINK_DIR"
+    if [[ "$dir" != /* ]]; then
+        dir="$PWD/$dir"
+    fi
+    for which in old new; do
+        if [[ "$which" == old ]]; then
+            root="$OLD_INSTALL_ROOT"
+        else
+            root="$DEFAULT_INSTALL_ROOT"
+        fi
+        rc=0
+        ad_backup_inside "$dir" "$root" || rc=$?
+        if [[ "$rc" -eq 0 ]]; then
+            MANAGED_LINK_SKIP="$SYMLINK_DIR is inside AD's $which directory $root, which the move renames or replaces"
+        elif [[ "$rc" -eq 2 ]]; then
+            MANAGED_LINK_SKIP="$SYMLINK_DIR cannot be placed against AD's $which directory $root ($INSIDE_CAUSE)"
+        fi
+        if [[ -n "$MANAGED_LINK_SKIP" ]]; then
+            MANAGED_LINK_DECISION=""
+            MANAGED_LINK_RECORD=""
+            return 0
+        fi
+    done
+    if phys="$(cd -P -- "$dir" 2>/dev/null && pwd -P)"; then
+        MANAGED_LINK_RECORD="${phys%/}/agent-director"
+    fi
+}
+
+# ad_deep_place <absolute path> — set DEEP_BASE to the physical path (cd -P,
+# pwd -P) of the path's deepest existing ancestor-or-self, DEEP_REST to the
+# names below it joined by / (empty when the path exists), and DEEP_PATH to
+# the two joined. A component that is a dangling link is replaced by the
+# path it names and the walk goes on, so the place is judged as the kernel
+# would create it. Fails when that ancestor is not a directory or cannot be
+# entered, or when links loop.
+DEEP_BASE=""
+DEEP_REST=""
+DEEP_PATH=""
+ad_deep_place() {
+    local p rest="" hops=0
+    DEEP_BASE=""
+    DEEP_REST=""
+    DEEP_PATH=""
+    p="$(ad_clean_path "$1")"
+    while [[ ! -e "$p" ]]; do
+        if [[ "$p" != /* ]]; then
+            return 1
+        fi
+        if [[ -L "$p" ]]; then
+            if (( ++hops > 40 )); then
+                return 1
+            fi
+            p="$(ad_resolve_link "$p" 2>/dev/null)" || return 1
+            p="$(ad_clean_path "$p")"
+        else
+            rest="${p##*/}${rest:+/$rest}"
+            p="${p%/*}"
+            p="${p:-/}"
+        fi
+    done
+    if [[ ! -d "$p" ]]; then
+        return 1
+    fi
+    DEEP_BASE="$(cd -P -- "$p" 2>/dev/null && pwd -P)" || return 1
+    DEEP_REST="$rest"
+    if [[ -z "$rest" ]]; then
+        DEEP_PATH="$DEEP_BASE"
+    elif [[ "$DEEP_BASE" == / ]]; then
+        DEEP_PATH="/$rest"
+    else
+        DEEP_PATH="$DEEP_BASE/$rest"
+    fi
+}
+
+# ad_file_id <path> — print <path>'s file identity, device:inode in decimal
+# (GNU stat, then BSD stat).
+ad_file_id() {
+    local id
+    id="$(stat -L -c '%d:%i' "$1" 2>/dev/null || stat -L -f '%d:%i' "$1" 2>/dev/null)" || return 1
+    [[ "$id" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+    printf '%s\n' "$id"
+}
+
+# ad_fold <text> — print <text> with ASCII letters lower-cased (bash 3.2 has
+# no ${x,,}).
+ad_fold() {
+    printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]'
+}
+
+# ad_id_chain — from ad_deep_place's DEEP_BASE and DEEP_REST, fill ID_CHAIN
+# with the identity of DEEP_BASE and of each physical parent up to /, and
+# NAME_CHAIN with the case-folded names below each one down to the judged
+# path. Fails when an identity cannot be read.
+ID_CHAIN=()
+NAME_CHAIN=()
+ad_id_chain() {
+    local p="$DEEP_BASE" names id
+    ID_CHAIN=()
+    NAME_CHAIN=()
+    names="$(ad_fold "$DEEP_REST")"
+    while :; do
+        id="$(ad_file_id "$p")" || return 1
+        ID_CHAIN+=("$id")
+        NAME_CHAIN+=("$names")
+        if [[ "$p" == / ]]; then
+            return 0
+        fi
+        names="$(ad_fold "${p##*/}")${names:+/$names}"
+        p="${p%/*}"
+        p="${p:-/}"
+    done
+}
+
+# ad_backup_inside <backup> <dir> — 0 when <backup> is <dir> or under it,
+# 1 when it is outside, 2 (the cause in INSIDE_CAUSE) when its place cannot
+# be judged. Inside lexically (the cleaned paths), or physically (each
+# path's deepest existing ancestor resolved, as the move places path keys:
+# an inner link leading out still counts lexically, and a path reaching
+# <dir> through a link counts physically). On Darwin also by file identity
+# (SR-2.15 "Limits"): an element of <backup>'s chain with the identity of one
+# of <dir>'s, whose folded names below it are <dir>'s names below its match
+# or begin with them and /, so a case variant cannot escape the check, nor
+# can a containing directory that does not exist yet. For status 2,
+# INSIDE_SIDE says which path could not be judged: dir or backup.
+INSIDE_CAUSE=""
+INSIDE_SIDE=""
+ad_backup_inside() {
+    local b d dir_phys i j dn bn
+    local -a dir_ids dir_names
+    INSIDE_CAUSE=""
+    INSIDE_SIDE=""
+    b="$(ad_clean_path "$1")"
+    d="$(ad_clean_path "$2")"
+    if [[ "$b" == "$d" || "$b" == "$d"/* ]]; then
+        return 0
+    fi
+    INSIDE_SIDE=dir
+    if ! ad_deep_place "$d"; then
+        INSIDE_CAUSE="$d cannot be placed: an existing part of it is not a directory or cannot be entered, or its links loop"
+        return 2
+    fi
+    dir_phys="$DEEP_PATH"
+    if [[ "$uname_s" == Darwin ]]; then
+        if ! ad_id_chain; then
+            INSIDE_CAUSE="the file identity of $DEEP_BASE, or of a directory above it, cannot be read"
+            return 2
+        fi
+        dir_ids=("${ID_CHAIN[@]}")
+        dir_names=("${NAME_CHAIN[@]}")
+    fi
+    INSIDE_SIDE=backup
+    if ! ad_deep_place "$b"; then
+        INSIDE_CAUSE="$b cannot be placed: an existing part of it is not a directory or cannot be entered, or its links loop"
+        return 2
+    fi
+    if [[ "$DEEP_PATH" == "$dir_phys" || "$DEEP_PATH" == "$dir_phys"/* ]]; then
+        return 0
+    fi
+    if [[ "$uname_s" != Darwin ]]; then
+        return 1
+    fi
+    if ! ad_id_chain; then
+        INSIDE_CAUSE="the file identity of $DEEP_BASE, or of a directory above it, cannot be read"
+        return 2
+    fi
+    for ((i = 0; i < ${#ID_CHAIN[@]}; i++)); do
+        for ((j = 0; j < ${#dir_ids[@]}; j++)); do
+            if [[ "${ID_CHAIN[$i]}" != "${dir_ids[$j]}" ]]; then
+                continue
+            fi
+            dn="${dir_names[$j]}"
+            bn="${NAME_CHAIN[$i]}"
+            if [[ -z "$dn" || "$bn" == "$dn" || "$bn" == "$dn"/* ]]; then
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
+# ad_backup_install_dirs_check — with a move due, refuse a journal backup
+# directory inside AD's old or new directory (SR-2.14,
+# backup_inside_install_directory): step 4 creates it after the move, and a
+# restore renames the pre-move directory back and sets the new one aside,
+# which would move or hide it. When the install directory itself cannot be
+# placed or identified, no other backup helps, so the action says to repair
+# that path first.
+ad_backup_install_dirs_check() {
+    local which dir rc action
+    for which in old new; do
+        action="choose a --journal-backup directory outside AD's old and new directories (~/.agent-director and ~/.config/agent-director), then re-run this release's installer"
+        if [[ "$which" == old ]]; then
+            dir="$OLD_INSTALL_ROOT"
+        else
+            dir="$DEFAULT_INSTALL_ROOT"
+        fi
+        rc=0
+        ad_backup_inside "$JOURNAL_BACKUP" "$dir" || rc=$?
+        if [[ "$rc" -eq 1 ]]; then
+            continue
+        fi
+        if [[ "$rc" -eq 0 ]]; then
+            echo "install.sh: the journal backup directory $JOURNAL_BACKUP is inside AD's $which directory $dir; refusing to upgrade." >&2
+        else
+            echo "install.sh: cannot judge whether the journal backup directory $JOURNAL_BACKUP is inside AD's $which directory $dir; refusing to upgrade." >&2
+            echo "  $INSIDE_CAUSE" >&2
+            if [[ "$INSIDE_SIDE" == dir ]]; then
+                action="repair the path of AD's directory that the message names (rename aside any existing part of it that is not a directory, make each existing part one the user running the install can enter, break any link loop in it, and make its file identity readable), then choose a --journal-backup directory outside AD's old and new directories (~/.agent-director and ~/.config/agent-director), then re-run this release's installer"
+                echo "  To fix: repair the path $dir as the action below says; choosing another --journal-backup alone does not clear this." >&2
+            fi
+        fi
+        echo "  This upgrade moves $OLD_INSTALL_ROOT to $DEFAULT_INSTALL_ROOT, and a restore renames those directories, which would move or hide a backup inside them." >&2
+        echo "  Nothing was installed or changed." >&2
+        ad_outcome_exit ErrJournalMigrationRefused backup_inside_install_directory "$action" not_committed
+    done
+}
+
+# ad_prev_release_probe — decide whether the previous install's release
+# predates the cutover (SR-2.14): its administrator (the old layout's while
+# the move is due) absent, or answering migrate-journal --help with exit 1
+# and ErrUnknownVerb, predates it (PREV_RELEASE_PREDATES=1); exit 0 does not
+# (0). The probe passes no global flag, so no release opens a store or reads
+# a config. Any other answer refuses (previous_release_unknown).
+PREV_ADMIN=""
+PREV_RELEASE_PREDATES=""
+ad_prev_release_probe() {
+    local out rc=0 action
+    if [[ "$MOVE_DUE" -eq 1 ]]; then
+        PREV_ADMIN="${OLD_INSTALL_ROOT}/admin/agent-director-admin"
+    else
+        PREV_ADMIN="$DEFAULT_ADMIN_PATH"
+    fi
+    if [[ ! -e "$PREV_ADMIN" && ! -L "$PREV_ADMIN" ]]; then
+        PREV_RELEASE_PREDATES=1
+        echo "  previous: $PREV_ADMIN predates the native-input cutover (absent)"
+        return 0
+    fi
+    out="$("$PREV_ADMIN" migrate-journal --help </dev/null 2>&1)" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        PREV_RELEASE_PREDATES=0
+        echo "  previous: $PREV_ADMIN does not predate the native-input cutover (it has migrate-journal)"
+        return 0
+    fi
+    if [[ "$rc" -eq 1 && "$(ad_err_name "$out")" == ErrUnknownVerb ]]; then
+        PREV_RELEASE_PREDATES=1
+        echo "  previous: $PREV_ADMIN predates the native-input cutover (migrate-journal --help: ErrUnknownVerb)"
+        return 0
+    fi
+    action="make the previous agent-director-admin runnable, or remove it if it is not that release's, then re-run this release's installer"
+    echo "install.sh: cannot tell whether the previous release predates the native-input cutover; refusing to upgrade." >&2
+    echo "  previous agent-director-admin: $PREV_ADMIN" >&2
+    echo "  migrate-journal --help exited with status $rc, without exit 0 or exit 1 with ErrUnknownVerb. It said:" >&2
+    if [[ -n "$out" ]]; then
+        printf '%s\n' "$out" | sed 's/^/    /' >&2 || true
+    fi
     echo "  Nothing was installed or changed." >&2
-    ad_relay_output "$out"
-    if [[ -n "$name" ]]; then
-        ad_outcome_exit --relayed ErrJournalMigrationRefused "$name" "$action" not_committed
+    ad_outcome_exit ErrJournalMigrationRefused previous_release_unknown "$action" not_committed
+}
+
+# ad_restore_copy <path> [regular] — record <path> as an item the restore
+# puts back, with a copy beside it named <path>.restore-<RESTORE_TS>.<suffix>:
+# for a link, a directory created exclusively by mktemp -d holding a new link,
+# named as <path>'s last component, with the same raw target; for a regular
+# file, one created exclusively by mktemp (which never follows a link at the
+# name), with the same bytes and mode. Nothing at <path> records an empty
+# copy. With "regular" (the sentinel) only a regular file is copied, so its
+# bytes are never read or written through a link. Returns 1, the cause in
+# RESTORE_CAUSE and any chosen name in RESTORE_COPY_NAME (for a link, the
+# link inside its directory), when the copy cannot be made; a half-made copy
+# is removed, and nothing this run did not create is overwritten, written
+# through or removed.
+RESTORE_CAUSE=""
+RESTORE_COPY_NAME=""
+ad_restore_copy() {
+    local path="$1" only_regular="${2:-}" name raw out
+    RESTORE_CAUSE=""
+    RESTORE_COPY_NAME=""
+    if [[ ! -e "$path" && ! -L "$path" ]]; then
+        RESTORE_BELONGS+=("$path")
+        RESTORE_COPY+=("")
+        return 0
     fi
-    ad_outcome_exit ErrJournalMigrationRefused check_only_unestablished "$action" not_committed
+    if [[ -n "$only_regular" ]] && [[ -L "$path" || ! -f "$path" ]]; then
+        RESTORE_CAUSE="$path is not a regular file"
+        return 1
+    fi
+    if [[ -L "$path" ]]; then
+        if ! raw="$(readlink "$path" 2>&1)"; then
+            RESTORE_CAUSE="$raw"
+            return 1
+        fi
+        # ln writes its link inside any directory at its destination, so the
+        # link is made in a directory mktemp -d creates exclusively (mode
+        # 0700, never an existing entry), never at a free-looking name.
+        if ! name="$(mktemp -d "${path}.restore-${RESTORE_TS}.XXXXXX" 2>&1)"; then
+            RESTORE_CAUSE="$name"
+            return 1
+        fi
+        RESTORE_COPY_NAME="$name/${path##*/}"
+        if ! out="$(ln -sn -- "$raw" "$RESTORE_COPY_NAME" 2>&1)"; then
+            rmdir -- "$name" 2>/dev/null || true
+            RESTORE_CAUSE="$out"
+            return 1
+        fi
+        if [[ ! -L "$RESTORE_COPY_NAME" || "$(readlink "$RESTORE_COPY_NAME" 2>/dev/null)" != "$raw" ]]; then
+            RESTORE_BELONGS+=("$path")
+            RESTORE_COPY+=("$name")
+            RESTORE_CAUSE="the copy $RESTORE_COPY_NAME is not a link to $raw"
+            return 1
+        fi
+    elif [[ -f "$path" ]]; then
+        if ! name="$(mktemp "${path}.restore-${RESTORE_TS}.XXXXXX" 2>&1)"; then
+            RESTORE_CAUSE="$name"
+            return 1
+        fi
+        RESTORE_COPY_NAME="$name"
+        if ! out="$(cp -- "$path" "$name" 2>&1)" \
+            || ! out="$(chmod "$(ad_mode_of "$path")" "$name" 2>&1)"; then
+            rm -f -- "$name" 2>/dev/null || true
+            RESTORE_CAUSE="$out"
+            return 1
+        fi
+        if ! cmp -s -- "$path" "$name"; then
+            rm -f -- "$name" 2>/dev/null || true
+            RESTORE_CAUSE="the copy $name differs from $path"
+            return 1
+        fi
+    else
+        RESTORE_CAUSE="$path is neither a link nor a regular file"
+        return 1
+    fi
+    RESTORE_BELONGS+=("$path")
+    RESTORE_COPY+=("$name")
+}
+
+# ad_restore_item <item> <path> [regular] — ad_restore_copy, saying on
+# stdout which copy it made, or refusing (restore_copies_unavailable) with
+# every copy this run made removed.
+ad_restore_item() {
+    local c action
+    if ad_restore_copy "$2" "${3:-}"; then
+        if [[ -n "$RESTORE_COPY_NAME" ]]; then
+            echo "  restore : copied $2 to $RESTORE_COPY_NAME (removed when the run ends unless reported as kept)"
+        fi
+        return 0
+    fi
+    action="make room or write access beside the installed binaries, the store and the managed PATH link; if the sentinel beside the store is not a regular file, or an installed binary or the managed PATH entry is neither a link nor a regular file, remove that entry; then re-run this release's installer"
+    ad_restore_copies_remove || true
+    echo "install.sh: cannot make the copies a restore needs; refusing to upgrade." >&2
+    echo "  item : $1, $2" >&2
+    if [[ -n "$RESTORE_COPY_NAME" ]]; then
+        echo "  copy : $RESTORE_COPY_NAME" >&2
+    fi
+    echo "  cause:" >&2
+    printf '%s\n' "$RESTORE_CAUSE" | sed 's/^/    /' >&2 || true
+    for c in ${RESTORE_NOT_REMOVED[@]+"${RESTORE_NOT_REMOVED[@]}"}; do
+        echo "  not removed: $c (an earlier copy this run made; remove it by hand)" >&2
+    done
+    echo "  Nothing was installed or changed." >&2
+    ad_outcome_exit ErrJournalMigrationRefused restore_copies_unavailable "$action" not_committed
+}
+
+# ad_restore_copies_make — make the copies SR-2.16's restore needs, before
+# the move and the swap. ad_exit_cleanup removes remaining copies unless
+# the outcome keeps them. While the move is due the restore puts the whole
+# pre-move directory back, so nothing inside it is copied and the new
+# directory holds no pre-run binary:
+# the binaries are recorded absent, and only a sentinel beside a store
+# outside the old directory (which step 3 writes there) is copied, at its
+# physical place. The managed link is copied where ad_managed_link_decide
+# records it, and not at all when the swap will make none.
+ad_restore_copies_make() {
+    local sentinel
+    trap ad_exit_cleanup EXIT
+    RESTORE_TS="$(ad_ts)"
+    if [[ "$MOVE_DUE" -eq 1 ]]; then
+        RESTORE_BELONGS+=("$CANONICAL" "$ADMIN_CANONICAL")
+        RESTORE_COPY+=("" "")
+        if [[ "$STORE_CLASS" == out || "$STORE_CLASS" == warn ]]; then
+            # A sentinel that is a link stays as it is, for the copy to refuse.
+            sentinel="$(ad_sentinel_path "$state_db")"
+            if [[ ! -L "$sentinel" ]]; then
+                sentinel="$(ad_phys_place "$sentinel")" || sentinel="$(ad_sentinel_path "$state_db")"
+            fi
+            ad_restore_item "the migration sentinel" "$sentinel" regular
+        fi
+    else
+        ad_restore_item agent-director "$CANONICAL"
+        ad_restore_item agent-director-admin "$ADMIN_CANONICAL"
+        ad_restore_item "the migration sentinel" "$(ad_sentinel_path "$state_db")" regular
+    fi
+    ad_managed_link_decide
+    if [[ -n "$MANAGED_LINK_RECORD" ]]; then
+        ad_restore_item "the managed PATH link" "$MANAGED_LINK_RECORD"
+    fi
+}
+
+# --------------------------------------------------------------------
+# Restore and forward completion (SR-2.16)
+# --------------------------------------------------------------------
+
+RESTORE_DONE=""
+RESTORE_FAILED=""
+RESTORE_ASIDE=""
+RESTORE_PREMOVE_AT=""
+RESTORE_FINISHED=()
+MOVE_NOTES_DEFERRED=""
+CUTOVER_PHASE=""
+CUTOVER_INTERRUPTED=""
+CUTOVER_INTERRUPTED_IN=""
+CUTOVER_LATE_INTERRUPT=""
+
+# SR-2.16: before-start signals restore; during the attempt they only record
+# cancellation. migrate-journal receives the process group's signal itself.
+ad_cutover_arm_traps() {
+    CUTOVER_PHASE=before_start
+    trap 'ad_cutover_on_signal INT' INT
+    trap 'ad_cutover_on_signal TERM' TERM
+    trap 'ad_cutover_on_signal HUP' HUP
+    trap '' PIPE
+}
+
+# SR-2.16: settlement and its children ignore further interrupts, with no
+# fork-to-trap window. Go helpers alone can still be ended by TERM.
+ad_cutover_ignore_interrupts() {
+    CUTOVER_PHASE=settling
+    trap '' INT TERM HUP
+}
+
+# SR-2.16: an uninterrupted successful attempt ends the protected span.
+ad_cutover_disarm_traps() {
+    CUTOVER_PHASE=""
+    trap - INT TERM HUP PIPE
+}
+
+ad_cutover_on_signal() {
+    if [[ -z "$CUTOVER_INTERRUPTED" ]]; then
+        CUTOVER_INTERRUPTED="$1"
+        CUTOVER_INTERRUPTED_IN="$CUTOVER_PHASE"
+    fi
+    if [[ "$CUTOVER_PHASE" == before_start ]]; then
+        ad_cutover_interrupted_before_start
+    fi
+    return 0
+}
+
+# No attempt ran: settle the explicit not_committed/no-step outcome through
+# the same restore decision. Also called by EXIT before it removes copies.
+ad_cutover_interrupted_before_start() {
+    ad_cutover_ignore_interrupts
+    set +e
+    OUTCOME_ENVELOPE=""
+    OUTCOME_ERR_NAME=""
+    OUTCOME_OUTPUT=""
+    OUTCOME_CUTOVER=not_committed
+    OUTCOME_STEPS=false
+    OUTCOME_REFUSAL="$(jq -nc --arg action "re-run this release's installer with a new --journal-backup directory, and let it finish" \
+        '{reason: "interrupted", processes: [], action: $action}')"
+    ad_cutover_settle
+}
+
+# SR-2.16: after an interrupted attempt succeeds and step 5 verifies it,
+# stop before hooks/MCP/scheduling and report the committed forward row.
+ad_cutover_interrupted_committed() {
+    ad_cutover_ignore_interrupts
+    set +e
+    OUTCOME_ENVELOPE=""
+    OUTCOME_ERR_NAME=""
+    OUTCOME_OUTPUT=""
+    OUTCOME_CUTOVER=committed
+    OUTCOME_STEPS=unknown
+    OUTCOME_REFUSAL="$(jq -nc --arg action "re-run this release's installer with a new --journal-backup directory, which finishes the install, then run the administrator's verification retry until it exits 0 with authority sqlite" \
+        '{reason: "interrupted", processes: [], action: $action}')"
+    ad_cutover_settle
+}
+
+# Only a crossing move can still be undone. Preserve trailing newlines in
+# its notes while waiting for the outcome; other installs print in place.
+ad_move_note() {
+    local notes
+    if [[ "$CUTOVER_CROSSING" -eq 1 && "$MOVED" -eq 1 ]]; then
+        notes="$("$@"; printf '.')"
+        MOVE_NOTES_DEFERRED+="${notes%.}"
+    else
+        "$@"
+    fi
+}
+
+ad_move_notes_flush() {
+    printf '%s' "$MOVE_NOTES_DEFERRED" 2>/dev/null || true
+    MOVE_NOTES_DEFERRED=""
+}
+
+# A restore invalidates every note about keeping or pointing at the new
+# layout. A partial restore's item report alone describes what remains.
+ad_move_outcome_notes() {
+    case "$1" in
+        restored)
+            MOVE_NOTES_DEFERRED=""
+            if [[ "${MOVED:-0}" -eq 1 ]]; then
+                if [[ -n "$RESTORE_ASIDE" ]]; then
+                    echo "  move    : undone: $OLD_INSTALL_ROOT is back as it was before the run; this run's $DEFAULT_INSTALL_ROOT was set aside as $RESTORE_ASIDE; the re-run moves it again" >&2 || true
+                else
+                    echo "  move    : undone: $OLD_INSTALL_ROOT is back as it was before the run; this run's linked $DEFAULT_INSTALL_ROOT was emptied; the re-run moves it again" >&2 || true
+                fi
+            fi ;;
+        restore_incomplete) MOVE_NOTES_DEFERRED="" ;;
+        *) ad_move_notes_flush ;;
+    esac
+}
+
+# A link copy is held inside the private directory pre-flight made. The
+# put-back and its report name the link itself, never that container.
+ad_restore_copy_path() {
+    local i="$1" c="${RESTORE_COPY[$1]}"
+    if [[ -n "$c" && -d "$c" && ! -L "$c" ]]; then
+        c="$c/${RESTORE_BELONGS[$i]##*/}"
+    fi
+    printf '%s\n' "$c"
+}
+
+# Unlike ad_file_id, identify the link itself. A saved managed link may
+# point to a directory; its successful put-back must not look like mv put
+# the copy inside a late directory. Linux's and macOS's stat both default to lstat.
+ad_restore_id() {
+    local id
+    id="$(stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null)" || return 1
+    [[ "$id" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+    printf '%s\n' "$id"
+}
+
+# Restore only installation files, newest record first, and the old-layout
+# directory last. Capture every diagnostic: reporting must not interrupt a
+# restore, even with both output streams closed. Stop at the first failure.
+ad_restore_run() {
+    RESTORE_KEEP_COPIES=1
+    RESTORE_DONE=""
+    RESTORE_FAILED=""
+    RESTORE_PREMOVE_AT="${MOVED_KEPT:-}"
+    local i b c container err base n nested rc source_id
+    if [[ "${MOVED:-0}" -eq 1 && ( -e "$OLD_INSTALL_ROOT" || -L "$OLD_INSTALL_ROOT" ) ]]; then
+        RESTORE_FAILED="$OLD_INSTALL_ROOT is occupied"
+        return 1
+    fi
+    for ((i = ${#RESTORE_BELONGS[@]} - 1; i >= 0; i--)); do
+        b="${RESTORE_BELONGS[$i]}"
+        if [[ "${MOVED:-0}" -eq 1 && "$b" == "$DEFAULT_INSTALL_ROOT/"* ]]; then
+            continue
+        fi
+        c="$(ad_restore_copy_path "$i")"
+        if [[ -n "$c" ]]; then
+            # mv follows a destination directory (a link to one included).
+            # Refuse it, and check afterwards for one appearing during mv.
+            if [[ -d "$b" ]]; then
+                RESTORE_FAILED="$b is a directory or a link to one"
+                return 1
+            fi
+            container="${RESTORE_COPY[$i]}"
+            if ! source_id="$(ad_restore_id "$c")"; then
+                RESTORE_FAILED="cannot identify the copy $c before its rename"
+                return 1
+            fi
+            rc=0
+            err="$(mv -f -- "$c" "$b" 2>&1)" || rc=$?
+            if [[ ! -e "$c" && ! -L "$c" && -d "$b" && "$(ad_restore_id "$b")" != "$source_id" ]]; then
+                nested="$b/${c##*/}"
+                RESTORE_COPY[$i]="$nested"
+                RESTORE_FAILED="$b became a directory during the rename; the copy is at $nested${err:+: $err}"
+                return 1
+            fi
+            if [[ "$rc" -ne 0 || -e "$c" || -L "$c" || ( ! -e "$b" && ! -L "$b" ) ]]; then
+                RESTORE_FAILED="cannot rename $c to $b${err:+: $err}"
+                return 1
+            fi
+            RESTORE_FINISHED[$i]=1
+            RESTORE_DONE+="put back $b"$'\n'
+            if [[ "$container" != "$c" ]]; then
+                if ! err="$(rmdir -- "$container" 2>&1)"; then
+                    RESTORE_FAILED="cannot remove the empty copy directory $container: $err"
+                    return 1
+                fi
+            fi
+        else
+            if [[ -e "$b" || -L "$b" ]]; then
+                # rm -f removes a link itself, even a link to a directory;
+                # an actual directory (including one appearing late) fails.
+                if [[ -d "$b" && ! -L "$b" ]]; then
+                    RESTORE_FAILED="$b is a directory"
+                    return 1
+                fi
+                if ! err="$(rm -f -- "$b" 2>&1)"; then
+                    RESTORE_FAILED="cannot remove $b: $err"
+                    return 1
+                fi
+                if [[ -e "$b" || -L "$b" ]]; then
+                    RESTORE_FAILED="$b is still present after removal"
+                    return 1
+                fi
+                RESTORE_DONE+="removed $b"$'\n'
+            fi
+            RESTORE_FINISHED[$i]=1
+        fi
+    done
+    if [[ "${MOVED:-0}" -ne 1 ]]; then
+        return 0
+    fi
+    if [[ "$MOVE_NEW_IS_LINK" -eq 1 ]]; then
+        if ! err="$(find "${DEFAULT_INSTALL_ROOT}/" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>&1)"; then
+            RESTORE_FAILED="cannot empty $DEFAULT_INSTALL_ROOT: $err"
+            return 1
+        fi
+        rc=0
+        err="$(find "${DEFAULT_INSTALL_ROOT}/" -mindepth 1 -maxdepth 1 2>&1)" || rc=$?
+        if [[ "$rc" -ne 0 || -n "$err" ]]; then
+            RESTORE_FAILED="$DEFAULT_INSTALL_ROOT could not be verified empty${err:+: $err}"
+            return 1
+        fi
+        # noclobber refuses a late file or link; a directory fails too. The
+        # marker must never truncate an occupant or follow a planted link.
+        if ! err="$( (umask 077; set -C; : >"$MOVE_MARKER") 2>&1)"; then
+            RESTORE_FAILED="cannot write the move marker $MOVE_MARKER: $err"
+            return 1
+        fi
+        RESTORE_DONE+="emptied $DEFAULT_INSTALL_ROOT and wrote its move marker"$'\n'
+    else
+        base="${DEFAULT_INSTALL_ROOT}.after-upgrade-$(ad_ts)"
+        RESTORE_ASIDE="$base"
+        n=1
+        while [[ -e "$RESTORE_ASIDE" || -L "$RESTORE_ASIDE" ]]; do
+            n=$((n + 1))
+            RESTORE_ASIDE="${base}-${n}"
+        done
+        if ! source_id="$(ad_restore_id "$DEFAULT_INSTALL_ROOT")"; then
+            RESTORE_FAILED="cannot identify $DEFAULT_INSTALL_ROOT before setting it aside"
+            RESTORE_ASIDE=""
+            return 1
+        fi
+        rc=0
+        err="$(mv -- "$DEFAULT_INSTALL_ROOT" "$RESTORE_ASIDE" 2>&1)" || rc=$?
+        nested="$RESTORE_ASIDE/${DEFAULT_INSTALL_ROOT##*/}"
+        if [[ ! -e "$DEFAULT_INSTALL_ROOT" && ! -L "$DEFAULT_INSTALL_ROOT" && -d "$nested" && "$(ad_restore_id "$RESTORE_ASIDE")" != "$source_id" ]]; then
+            RESTORE_ASIDE="$nested"
+            RESTORE_FAILED="the set-aside path became occupied; the new directory is at $RESTORE_ASIDE${err:+: $err}"
+            return 1
+        fi
+        if [[ "$rc" -ne 0 || -e "$DEFAULT_INSTALL_ROOT" || -L "$DEFAULT_INSTALL_ROOT" || ! -d "$RESTORE_ASIDE" ]]; then
+            RESTORE_FAILED="cannot set $DEFAULT_INSTALL_ROOT aside at $RESTORE_ASIDE${err:+: $err}"
+            RESTORE_ASIDE=""
+            return 1
+        fi
+        RESTORE_DONE+="set $DEFAULT_INSTALL_ROOT aside at $RESTORE_ASIDE"$'\n'
+    fi
+    # A late directory can absorb mv's source on Linux and macOS. Locate that
+    # retained directory and stop; never delete the occupant or retry mv.
+    if [[ -e "$OLD_INSTALL_ROOT" || -L "$OLD_INSTALL_ROOT" ]]; then
+        RESTORE_FAILED="$OLD_INSTALL_ROOT is occupied"
+        return 1
+    fi
+    if ! source_id="$(ad_restore_id "$MOVED_KEPT")"; then
+        RESTORE_FAILED="cannot identify $MOVED_KEPT before putting it back"
+        return 1
+    fi
+    rc=0
+    err="$(mv -- "$MOVED_KEPT" "$OLD_INSTALL_ROOT" 2>&1)" || rc=$?
+    nested="$OLD_INSTALL_ROOT/${MOVED_KEPT##*/}"
+    if [[ ! -e "$MOVED_KEPT" && ! -L "$MOVED_KEPT" && ( -e "$nested" || -L "$nested" ) && "$(ad_restore_id "$OLD_INSTALL_ROOT")" != "$source_id" ]]; then
+        RESTORE_PREMOVE_AT="$nested"
+        RESTORE_FAILED="$OLD_INSTALL_ROOT became occupied; the pre-move directory is at $nested${err:+: $err}"
+        return 1
+    fi
+    if [[ "$rc" -ne 0 || -e "$MOVED_KEPT" || -L "$MOVED_KEPT" || ! -d "$OLD_INSTALL_ROOT" ]]; then
+        RESTORE_FAILED="cannot put $MOVED_KEPT back at $OLD_INSTALL_ROOT${err:+: $err}"
+        return 1
+    fi
+    RESTORE_PREMOVE_AT=""
+    RESTORE_DONE+="put back $OLD_INSTALL_ROOT"$'\n'
+    return 0
+}
+
+# All kept-copy outcomes use these builders, including one with no attempt
+# envelope and thus no restore. jq alone quotes paths into machine records.
+ad_restore_copies_json() {
+    local i c
+    {
+        for ((i = 0; i < ${#RESTORE_COPY[@]}; i++)); do
+            [[ "${RESTORE_FINISHED[$i]:-0}" -eq 1 ]] && continue
+            c="$(ad_restore_copy_path "$i")"
+            if [[ -n "$c" && ( -e "$c" || -L "$c" ) ]]; then
+                jq -nc --arg c "$c" --arg b "${RESTORE_BELONGS[$i]}" '{copy: $c, belongs_at: $b}'
+            fi
+        done
+        c="${RESTORE_PREMOVE_AT:-${MOVED_KEPT:-}}"
+        if [[ "${MOVED:-0}" -eq 1 && -n "$c" && ( -e "$c" || -L "$c" ) ]]; then
+            jq -nc --arg c "$c" --arg b "$OLD_INSTALL_ROOT" '{copy: $c, belongs_at: $b}'
+        fi
+    } | jq -sc .
+}
+
+ad_restore_remove_json() {
+    local i b
+    {
+        for ((i = 0; i < ${#RESTORE_COPY[@]}; i++)); do
+            [[ -n "${RESTORE_COPY[$i]}" || "${RESTORE_FINISHED[$i]:-0}" -eq 1 ]] && continue
+            b="${RESTORE_BELONGS[$i]}"
+            [[ "${MOVED:-0}" -eq 1 && "$b" == "$DEFAULT_INSTALL_ROOT/"* ]] && continue
+            if [[ -e "$b" || -L "$b" ]]; then
+                jq -nc --arg b "$b" '$b'
+            fi
+        done
+    } | jq -sc .
+}
+
+ad_restore_attempt_store() {
+    local db="$state_db"
+    if [[ -n "$RESTORE_ASIDE" && "$db" == "$DEFAULT_INSTALL_ROOT/"* ]]; then
+        db="${RESTORE_ASIDE}${db#"$DEFAULT_INSTALL_ROOT"}"
+    fi
+    printf '%s\n' "$db"
+}
+
+# The attempt's inputs are explicit globals so an interrupt before its start
+# can use the same settle path without inventing an administrator envelope.
+OUTCOME_RC=0
+OUTCOME_OUTPUT=""
+OUTCOME_ENVELOPE=""
+OUTCOME_ERR_NAME=""
+OUTCOME_CUTOVER=""
+OUTCOME_STEPS=""
+OUTCOME_REFUSAL=""
+OUTCOME_REASON=""
+OUTCOME_ACTION=""
+RESTORE_WHY_NOT=()
+RESTORE_REREAD_PATH=""
+RESTORE_REREAD_OUTPUT=""
+RESTORE_REREAD_VERSION=""
+RESTORE_REREAD_FAILED=0
+
+# Read only structured fields of the last error envelope. Missing commit
+# evidence never becomes proof that the old binaries may run again.
+ad_journal_outcome_read() {
+    OUTCOME_RC="$1"
+    OUTCOME_OUTPUT="$2"
+    OUTCOME_REASON=""
+    OUTCOME_ACTION=""
+    OUTCOME_ENVELOPE="$(printf '%s\n' "$2" | jq -Rc '(fromjson | select(.err_name | strings))?' 2>/dev/null | tail -n1)" || true
+    OUTCOME_ERR_NAME=""
+    OUTCOME_REFUSAL=""
+    OUTCOME_STEPS=unknown
+    OUTCOME_CUTOVER=unestablished
+    if [[ -z "$OUTCOME_ENVELOPE" ]]; then
+        return 0
+    fi
+    OUTCOME_ERR_NAME="$(printf '%s\n' "$OUTCOME_ENVELOPE" | jq -r '.err_name')"
+    OUTCOME_CUTOVER="$(printf '%s\n' "$OUTCOME_ENVELOPE" | jq -r '[.details.cutover?][0] | if . == "not_committed" or . == "committed" or . == "unknown" then . else "unreadable" end')"
+    OUTCOME_STEPS="$(printf '%s\n' "$OUTCOME_ENVELOPE" | jq -r '[.details.steps_committed?][0] | if . == true then "true" elif . == false then "false" else "unknown" end')"
+    OUTCOME_REFUSAL="$(printf '%s\n' "$OUTCOME_ENVELOPE" | jq -c '.details.refusal? // empty')"
+}
+
+# The cross-check reads the store the previous release would open, which
+# can differ from the attempted store after a move. Failure to read is not
+# evidence against a not_committed result (a full disk must allow restore).
+ad_restore_reread() {
+    local rc=0
+    RESTORE_REREAD_PATH="$state_db"
+    if [[ "${MOVED:-0}" -eq 1 ]]; then
+        if [[ -n "$STORE_SRC_PHYS" ]]; then
+            RESTORE_REREAD_PATH="${MOVED_KEPT}${STORE_SRC_PHYS#"$OLD_PHYS"}"
+        else
+            RESTORE_REREAD_PATH="$STORE_PHYS"
+        fi
+    fi
+    RESTORE_REREAD_OUTPUT="$(ad_store_state "$RESTORE_REREAD_PATH" 2>&1)" || rc=$?
+    if [[ "$rc" -eq 143 && "$CUTOVER_PHASE" == settling ]]; then
+        CUTOVER_LATE_INTERRUPT=TERM
+    fi
+    RESTORE_REREAD_VERSION="${RESTORE_REREAD_OUTPUT%%$'\n'*}"
+    if [[ "$rc" -ne 0 ]] || ! ad_is_version "$RESTORE_REREAD_VERSION"; then
+        RESTORE_REREAD_FAILED=1
+        RESTORE_REREAD_VERSION=""
+        return 0
+    fi
+    [[ "$RESTORE_REREAD_VERSION" == "$PREFLIGHT_STORE_VERSION" ]]
+}
+
+# Every restore condition must hold. Collect the independent reasons that
+# disallow it, but re-read only when the first four conditions already hold.
+ad_restore_decide() {
+    RESTORE_WHY_NOT=()
+    RESTORE_REREAD_FAILED=0
+    RESTORE_REREAD_OUTPUT=""
+    RESTORE_REREAD_VERSION=""
+    [[ "$CUTOVER_CROSSING" -eq 1 && "$OUTCOME_CUTOVER" == not_committed ]] || return 1
+    if [[ "$OUTCOME_STEPS" != false ]] && ! [[ "${MOVED:-0}" -eq 1 && -n "$STORE_SRC_PHYS" ]]; then
+        RESTORE_WHY_NOT+=(steps_committed)
+    fi
+    if [[ "$PREV_RELEASE_PREDATES" -ne 1 ]]; then
+        RESTORE_WHY_NOT+=(previous_release_current)
+    fi
+    [[ ${#RESTORE_WHY_NOT[@]} -eq 0 ]] || return 1
+    if ! ad_restore_reread; then
+        RESTORE_WHY_NOT+=(version_changed)
+        return 1
+    fi
+    return 0
+}
+
+# Keep the invocation's spelling, including links and .., when making a
+# relative path absolute. Empty source values still select the defaults.
+ad_rerun_absolute_path() {
+    local p="$1"
+    if [[ -n "$p" && "$p" != /* ]]; then
+        p="${ORIG_PWD%/}/$p"
+    fi
+    printf '%s\n' "$p"
+}
+
+# Schedule advice keeps its exact command. Journal advice replaces every
+# backup value with a deliberately non-executable placeholder, never reusing
+# a backup. Forward advice anchors paths to the original logical cwd and
+# rebases only that cwd after a move; moved installer/source files get a note.
+RERUN_MOVED_FILES=0
+ad_rerun_cmd() {
+    local kind="$1" a has=0 q replace=0 path_arg="" forward=0 moved=0
+    local cwd="$ORIG_PWD" script="${BASH_SOURCE[0]:-}"
+    RERUN_MOVED_FILES=0
+    if [[ "$kind" == journal ]]; then
+        case "${2:-}" in
+            not_restored|forward|unestablished) forward=1 ;;
+        esac
+    fi
+    if [[ "$forward" -eq 1 ]]; then
+        script="$(ad_rerun_absolute_path "$script")"
+        if [[ "${MOVED:-0}" -eq 1 && -z "$RESTORE_ASIDE" ]]; then
+            moved=1
+            case "$cwd" in
+                "$OLD_INSTALL_ROOT"|"$OLD_INSTALL_ROOT/"*)
+                    cwd="${DEFAULT_INSTALL_ROOT}${cwd#"$OLD_INSTALL_ROOT"}" ;;
+            esac
+            case "$script" in
+                "$OLD_INSTALL_ROOT/"*) RERUN_MOVED_FILES=1 ;;
+            esac
+        fi
+    else
+        script="${SCRIPT_DIR}/${script##*/}"
+    fi
+    printf -v SUBST 'cd %q && bash %q' "$cwd" "$script"
+    for a in ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}; do
+        if [[ "$replace" -eq 1 ]]; then
+            SUBST+=' <new-backup-directory>'
+            replace=0
+            continue
+        fi
+        if [[ -n "$path_arg" ]]; then
+            a="$(ad_rerun_absolute_path "$a")"
+            if [[ "$moved" -eq 1 && "$path_arg" != --symlink-dir && "$a" == "$OLD_INSTALL_ROOT/"* ]]; then
+                RERUN_MOVED_FILES=1
+            fi
+            printf -v q ' %q' "$a"
+            SUBST="${SUBST}${q}"
+            path_arg=""
+            continue
+        fi
+        printf -v q ' %q' "$a"
+        SUBST="${SUBST}${q}"
+        if [[ "$kind" == schedule && "$a" == --schedule ]]; then
+            has=1
+        elif [[ "$kind" == journal && "$a" == --journal-backup ]]; then
+            has=1
+            replace=1
+        elif [[ "$forward" -eq 1 ]]; then
+            # These are all flags accepting relative paths. Journal roots
+            # passed --check-only as absolute paths; backup values are
+            # replaced above. Release tags and hashes are not paths.
+            case "$a" in
+                --binary|--admin-binary|--symlink-dir) path_arg="$a" ;;
+            esac
+        fi
+    done
+    if [[ "$has" -eq 0 ]]; then
+        if [[ "$kind" == schedule ]]; then
+            SUBST+=' --schedule'
+        else
+            SUBST+=' --journal-backup <new-backup-directory>'
+        fi
+    fi
+}
+
+ad_rerun_advice() {
+    ad_rerun_cmd "$1" "${2:-}"
+    if [[ "$SCRIPT_REAL" -eq 1 ]]; then
+        printf '    %s\n' "$SUBST" >&2 || true
+    else
+        echo "  run the same install command again, with --journal-backup naming a new directory" >&2 || true
+    fi
+    if [[ "$RERUN_MOVED_FILES" -eq 1 ]]; then
+        echo "  Installer or source files named under $OLD_INSTALL_ROOT now sit under $DEFAULT_INSTALL_ROOT/...; re-run from wherever you keep the installer." >&2 || true
+    fi
+    echo "  The new backup directory must be absolute, must not exist yet, and must lie outside every legacy input root and AD's old and new directories." >&2 || true
+}
+
+# After a committed/unknown outcome, the installer's ordinary list route can
+# finish schema steps but cannot replace migrate-journal's verification.
+ad_verify_retry_cmd() {
+    local a q replace=0
+    printf -v SUBST '%q --store-path %q migrate-journal' "$ADMIN_CANONICAL" "$state_db"
+    for a in ${JOURNAL_ARGS[@]+"${JOURNAL_ARGS[@]}"}; do
+        if [[ "$replace" -eq 1 ]]; then
+            SUBST+=' <new-verification-backup-directory>'
+            replace=0
+            continue
+        fi
+        printf -v q ' %q' "$a"
+        SUBST="${SUBST}${q}"
+        [[ "$a" == --backup-dir ]] && replace=1
+    done
+    return 0
+}
+
+# Human and machine reports share the same kept-item builders.
+ad_restore_kept_message() {
+    ad_restore_copies_json | jq -r '.[] | "  kept copy: " + .copy + " -> " + .belongs_at' >&2 || true
+    ad_restore_remove_json | jq -r '.[] | "  still to remove: " + .' >&2 || true
+    if [[ -n "$RESTORE_ASIDE" ]]; then
+        echo "  set aside: $RESTORE_ASIDE" >&2 || true
+    fi
+}
+
+# Messages run only after the install and copy-retention decision are final.
+# Keep every write best-effort, including pipelines into a closed stderr.
+ad_cutover_message() {
+    local row="$1" why residual=0
+    case "$CUTOVER_INTERRUPTED_IN" in
+        before_start)
+            echo "install.sh: the install was interrupted (SIG${CUTOVER_INTERRUPTED}) after the new binaries were installed and before migrate-journal started; migrate-journal never ran, so nothing was migrated." >&2 || true ;;
+        running)
+            if [[ -n "$OUTCOME_ENVELOPE" ]]; then
+                echo "install.sh: the install was interrupted (SIG${CUTOVER_INTERRUPTED}) while migrate-journal ran; its own outcome follows." >&2 || true
+            elif [[ "$OUTCOME_CUTOVER" == committed ]]; then
+                echo "install.sh: the install was interrupted (SIG${CUTOVER_INTERRUPTED}) while migrate-journal ran. It had already begun the cutover commit, so it finished the cutover and exited 0; the install stopped after checking the store's version, before the hook, MCP and schedule steps." >&2 || true
+            fi ;;
+    esac
+    if [[ -n "$CUTOVER_LATE_INTERRUPT" ]]; then
+        echo "install.sh: an interrupt arrived after migrate-journal's attempt and was ignored, so that the outcome below could be settled; it is the attempt's own." >&2 || true
+    fi
+    case "$row" in
+        restored) echo "install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run." >&2 || true ;;
+        restore_incomplete) echo "install.sh: the restore could not finish; the install is partly restored: $RESTORE_FAILED" >&2 || true ;;
+        not_restored) echo "install.sh: the cutover did not commit; this release stays installed." >&2 || true ;;
+        forward) echo "install.sh: the cutover attempt did not finish successfully; this release stays installed." >&2 || true ;;
+        unestablished) echo "install.sh: the installer could not establish how the attempt ended (migrate-journal exited $OUTCOME_RC with no error envelope); this release stays installed and the copies are kept." >&2 || true ;;
+    esac
+    echo "  reason: $OUTCOME_REASON" >&2 || true
+    echo "  action: $OUTCOME_ACTION" >&2 || true
+    case "$row" in
+        restored)
+            echo "  The binaries, migration sentinel and managed PATH link are as before the run." >&2 || true
+            if [[ "$RESTORE_REREAD_FAILED" -eq 1 ]]; then
+                echo "  The version cross-check at $RESTORE_REREAD_PATH could not be made; the attempt reported not_committed:" >&2 || true
+                printf '%s\n' "$RESTORE_REREAD_OUTPUT" | sed 's/^/    /' >&2 || true
+            fi
+            echo "  Fix the reported cause, then re-run this release's installer with a new backup directory:" >&2 || true
+            ad_rerun_advice journal "$row" ;;
+        not_restored)
+            for why in ${RESTORE_WHY_NOT[@]+"${RESTORE_WHY_NOT[@]}"}; do
+                case "$why" in
+                    steps_committed)
+                        residual=1
+                        if [[ "$OUTCOME_STEPS" == unknown ]]; then
+                            echo "  The attempt did not establish whether earlier schema steps committed; the store may have moved past the previous release." >&2 || true
+                        else
+                            echo "  This attempt committed earlier schema steps before the cutover, so the store has moved past the previous release." >&2 || true
+                        fi ;;
+                    version_changed)
+                        echo "  The store $RESTORE_REREAD_PATH was at v$PREFLIGHT_STORE_VERSION in pre-flight and reads v$RESTORE_REREAD_VERSION after the attempt." >&2 || true ;;
+                    previous_release_current)
+                        echo "  The administrator installed before the run ($PREV_ADMIN) does not predate the cutover, so there is no earlier release to put back." >&2 || true ;;
+                esac
+            done
+            if [[ "$PREV_RELEASE_PREDATES" -eq 1 && ( "$residual" -eq 1 || "$OUTCOME_STEPS" == unknown ) ]]; then
+                echo "  The installer cannot put the previous release back: the store has moved, or may have moved, past it." >&2 || true
+                echo "  To go back instead, restore the store from the journal backup directory $JOURNAL_BACKUP (filled before any schema step), and install the previous release with its own installer (that release's install.sh must support this host), as docs/operator-actions.md \"Going back to the previous release\" describes." >&2 || true
+            fi
+            echo "  To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:" >&2 || true
+            ad_rerun_advice journal "$row" ;;
+        forward|unestablished)
+            if [[ "$OUTCOME_CUTOVER" == committed ]]; then
+                echo "  The cutover committed: the store's input is now in SQLite and the previous release cannot open it." >&2 || true
+            else
+                echo "  Whether the cutover committed is unknown." >&2 || true
+            fi
+            echo "  Never reset the schema or restore replayable input. Keep the maintenance boundary through verification." >&2 || true
+            if [[ "$row" == unestablished ]]; then
+                ad_restore_kept_message
+                echo "  To go back instead, put the kept copies back only after the three checks in docs/operator-actions.md \"Putting back a kept install\"." >&2 || true
+            fi
+            echo "  Fix the reported cause; for migration_lock_held, let the other administrator run end." >&2 || true
+            echo "  Re-run this release's installer with a new backup directory to finish any pending schema step:" >&2 || true
+            ad_rerun_advice journal "$row"
+            echo '  Then run the verification retry until it exits 0 and its result shows "authority": "sqlite", choosing a new verification backup directory for each attempt:' >&2 || true
+            ad_verify_retry_cmd
+            printf '    %s\n' "$SUBST" >&2 || true ;;
+        restore_incomplete)
+            if [[ -n "$RESTORE_DONE" ]]; then
+                printf '%s' "$RESTORE_DONE" | sed 's/^/  /' >&2 || true
+            fi
+            ad_restore_kept_message
+            echo '  Put the copies listed in details.copies back with mv, as docs/operator-actions.md "Putting back a kept install" describes.' >&2 || true
+            if [[ "${MOVED:-0}" -eq 1 ]]; then
+                echo "  Use its moved-install form, which puts the pre-move directory back before checking its list." >&2 || true
+            fi ;;
+    esac
+}
+
+# Settle before printing anything. All envelopes use ad_outcome_exit; the
+# only relay-only row is a complete restore of ErrJournalMigrationRefused.
+ad_cutover_settle() {
+    local row cause=ErrJournalMigrationIncomplete cutover="$OUTCOME_CUTOVER" extra='{}'
+    local copies remove attempt
+    local -a relayed
+    relayed=()
+    if ad_restore_decide; then
+        if ad_restore_run; then
+            row=restored
+            cause=ErrJournalMigrationRefused
+        else
+            row=restore_incomplete
+            cause=ErrSchemaVerifyFailed
+        fi
+    elif [[ "$OUTCOME_CUTOVER" == unestablished ]]; then
+        row=unestablished
+        RESTORE_KEEP_COPIES=1
+    elif [[ "$OUTCOME_CUTOVER" == not_committed ]]; then
+        row=not_restored
+    else
+        row=forward
+    fi
+    case "$cutover" in
+        not_committed|committed|unknown) ;;
+        *) cutover=unknown ;;
+    esac
+    case "$row" in
+        restored|not_restored)
+            OUTCOME_ACTION="fix the reported cause, then re-run this release's installer with a new --journal-backup directory" ;;
+        restore_incomplete)
+            OUTCOME_ACTION='put the copies in details.copies back with mv as docs/operator-actions.md "Putting back a kept install" describes' ;;
+        *)
+            OUTCOME_ACTION="fix the reported cause (let another administrator holding the migration lock end), re-run this release's installer with a new --journal-backup, then run migrate-journal with a new --backup-dir until it exits 0 with authority \"sqlite\""
+            if [[ "$row" == unestablished ]]; then
+                OUTCOME_ACTION+='; or put the kept copies back only after the three checks in docs/operator-actions.md "Putting back a kept install"'
+            fi ;;
+    esac
+    if [[ -n "$OUTCOME_ENVELOPE" ]]; then
+        relayed=(--relayed)
+        if [[ -n "$OUTCOME_REFUSAL" ]]; then
+            OUTCOME_REASON="$(printf '%s\n' "$OUTCOME_REFUSAL" | jq -r --arg name "$OUTCOME_ERR_NAME" '(.reason? | strings) // $name')"
+            OUTCOME_ACTION="$(printf '%s\n' "$OUTCOME_REFUSAL" | jq -r --arg action "$OUTCOME_ACTION" '(.action? | strings) // $action')"
+            extra="$(jq -nc --argjson refusal "$OUTCOME_REFUSAL" '{refusal: $refusal}')"
+        else
+            OUTCOME_REASON="$OUTCOME_ERR_NAME"
+        fi
+    else
+        case "$row" in
+            unestablished) OUTCOME_REASON=outcome_unestablished ;;
+            restore_incomplete) OUTCOME_REASON=restore_incomplete ;;
+            *)
+                OUTCOME_REASON=interrupted
+                OUTCOME_ACTION="$(printf '%s\n' "$OUTCOME_REFUSAL" | jq -r '.action')" ;;
+        esac
+    fi
+    if [[ "$RESTORE_KEEP_COPIES" -eq 1 && "$row" != restored ]]; then
+        copies="$(ad_restore_copies_json)"
+        remove="$(ad_restore_remove_json)"
+        attempt="$(ad_restore_attempt_store)"
+        extra="$(jq -nc --argjson extra "$extra" --argjson copies "$copies" --argjson remove "$remove" \
+            --arg store "$attempt" '$extra + {attempt_store: $store, copies: $copies, remove: $remove}')"
+    fi
+    ad_relay_output "$OUTCOME_OUTPUT" || true
+    ad_move_outcome_notes "$row" || true
+    ad_cutover_message "$row" || true
+    if [[ "$row" == restored && "$OUTCOME_ERR_NAME" == "$cause" ]]; then
+        ad_exit_5 "$cause"
+    fi
+    ad_outcome_exit ${relayed[@]+"${relayed[@]}"} "$cause" "$OUTCOME_REASON" "$OUTCOME_ACTION" "$cutover" "$extra" || true
+}
+
+ad_cutover_outcome() {
+    ad_journal_outcome_read "$1" "$2"
+    ad_cutover_settle
 }
 
 CUTOVER_CROSSING=0
@@ -3979,7 +5389,42 @@ ad_journal_args
 if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]]; then
     if ((PREFLIGHT_STORE_VERSION < INPUT_CUTOVER_VERSION)); then
         CUTOVER_CROSSING=1
+        # The real verifier always checks both HOME input roots, even
+        # while a move is due; keep the link-specific remedy before inventory.
+        if [[ -L "$DEFAULT_INSTALL_ROOT" ]]; then
+            echo "install.sh: $DEFAULT_INSTALL_ROOT is a link; refusing the native-input cutover." >&2 || true
+            echo "  Nothing was installed or changed." >&2 || true
+            echo "  Replace the link with the directory it points to, then re-run this release's installer with a new backup directory:" >&2 || true
+            ad_rerun_advice journal
+            ad_outcome_exit ErrJournalMigrationRefused legacy_root_symlink \
+                "replace the link at $DEFAULT_INSTALL_ROOT with the directory it points to, then re-run this release's installer with a new --journal-backup directory" not_committed
+        fi
+        # A compatibility link counts as no old directory for the move, but
+        # the cutover verifier still checks its input root.
+        if [[ -L "$OLD_INSTALL_ROOT" ]]; then
+            printf -v compat_link_quoted "'%s'" "${OLD_INSTALL_ROOT//\'/\'\\\'\'}"
+            echo "install.sh: $OLD_INSTALL_ROOT is a link; refusing the native-input cutover." >&2 || true
+            echo "  Nothing was installed or changed." >&2 || true
+            echo "  The cutover always checks $OLD_INSTALL_ROOT/input and refuses any symbolic link in its path." >&2 || true
+            echo "  To fix: first check [store] db_path in config.toml, ~/.claude/settings.json hooks, MCP registrations, scheduled sweeps, PATH links and entries, and scripts for paths under $OLD_INSTALL_ROOT and point them at $DEFAULT_INSTALL_ROOT." >&2 || true
+            echo "  Then remove only the link (no trailing slash):" >&2 || true
+            printf '    rm -- %s\n' "$compat_link_quoted" >&2 || true
+            echo "  Then re-run this release's installer with a new backup directory:" >&2 || true
+            ad_rerun_advice journal
+            ad_outcome_exit ErrJournalMigrationRefused legacy_root_symlink \
+                "first check [store] db_path in config.toml, ~/.claude/settings.json hooks, MCP registrations, scheduled sweeps, PATH links and entries, and scripts for paths under $OLD_INSTALL_ROOT and point them at $DEFAULT_INSTALL_ROOT, then remove only the link with rm -- $compat_link_quoted (no trailing slash), then re-run this release's installer with a new --journal-backup directory" not_committed
+        fi
+        if [[ "$MOVE_DUE" -ne 1 ]]; then
+            ad_crossing_live_rows_check
+        fi
         ad_journal_check_only
+        if [[ "$MOVE_DUE" -eq 1 ]]; then
+            ad_backup_install_dirs_check
+        fi
+        ad_prev_release_probe
+        if [[ "$PREV_RELEASE_PREDATES" -eq 1 ]]; then
+            ad_restore_copies_make
+        fi
     elif ((PREFLIGHT_STORE_VERSION < STORE_SCHEMA_VERSION)); then
         case "$PREFLIGHT_AUTHORITY" in
             recorded) ;;
@@ -4042,7 +5487,8 @@ ad_prepare_source_binaries
 #   9. The old directory is renamed to that name.
 #  10. The marker is removed.
 # The move makes no backup of its own: the kept directory holds the
-# original.
+# original. On a crossing upgrade its kept-directory, link and reference
+# notes wait for the cutover outcome: a restore can undo this move.
 #
 # A failure before the rename, an interrupt included, removes the partial new
 # directory (marker included; a linked new directory has its contents
@@ -4063,7 +5509,6 @@ MOVE_CREATED_BASE=0
 MOVE_NEW_IS_LINK=0
 MOVE_CAUSE=""
 MOVE_PREV_EXIT=""
-MOVE_NOTES=""
 MOVE_KEPT_NAME=""
 STORE_SRC_PHYS=""
 stage_bin=""
@@ -4349,9 +5794,8 @@ ad_move_quote() {
 
 # ad_move_key_newvalue <key label> <value as written> — decide the new value
 # of a path key from the old directory's point of view (SR-11.7 "Path
-# keys"). Sets REWRITE_NEWVAL (empty: leave the line as written) and may add
-# a note to MOVE_NOTES. Sets MOVE_CAUSE and fails when the place cannot be
-# resolved.
+# keys"). Sets REWRITE_NEWVAL (empty: leave the line as written). Sets
+# MOVE_CAUSE and fails when the place cannot be resolved.
 REWRITE_NEWVAL=""
 ad_move_key_newvalue() {
     local label="$1" v="$2" form="rel" resolved
@@ -4488,13 +5932,30 @@ ad_move_rewrite_config() {
 # value) or a template (an extra_env value, cwd), each with its fix, left as
 # written. Called after the agent-rename migration, which inserts lines, so
 # the file:line printed is right for the files as the install leaves them; the
-# migration's own copies (*.pre-agent-rename.*) are not searched.
+# migration's own copies (*.pre-agent-rename.*) are not searched. The ordinary
+# call defers these notes on a crossing upgrade, since it may restore; S1's
+# stop reports them directly on stderr as before.
 ad_move_print_references() {
-    local hits
-    hits="$( { grep -n -F -I -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -F -I --exclude='*.pre-agent-rename.*' -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
+    local hits old_re boundary="([/\"']|$)"
+    # Escape the absolute path so only the trailing boundary is a pattern.
+    old_re="$(printf '%s\n' "$OLD_INSTALL_ROOT" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+    local -a patterns=(
+        -e "${old_re}${boundary}"
+        -e '~/\.agent-director'"$boundary"
+        -e '\$HOME/\.agent-director'"$boundary"
+        -e '\$\{HOME\}/\.agent-director'"$boundary"
+    )
+    hits="$( { grep -n -E -I "${patterns[@]}" "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -E -I --exclude='*.pre-agent-rename.*' "${patterns[@]}" "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
     if [[ -n "$hits" ]]; then
-        echo "  references: these lines still name the old directory. They were left as written; change each to the same place under $NEW_ROOT_CLEAN (or remove it) by hand, since the old directory is kept only until you delete it ($1):"
-        printf '%s\n' "$hits" | sed 's/^/    /'
+        echo "  references: these lines still name the old directory. They were left as written; change each to the same place under $NEW_ROOT_CLEAN (or remove it) by hand, since the old directory is kept only until you delete it ($1):" || ad_cutover_write_failed
+        printf '%s\n' "$hits" | sed 's/^/    /' || ad_cutover_write_failed
+    fi
+}
+
+ad_move_kept_notes() {
+    echo "  kept    : $MOVED_KEPT (the old directory as it was before the move, old binaries included; delete it once the upgrade is confirmed)"
+    if [[ "$KEEP_PRIOR" -eq 1 ]]; then
+        echo "  prior   : --keep-prior made no snapshot on this install: the new bin and admin directories hold no earlier binary. The way back is operator-actions.md, \"Going back to the previous release\""
     fi
 }
 
@@ -4578,13 +6039,7 @@ if [[ "$MOVE_DUE" -eq 1 ]]; then
     fi
 
     echo "  moved   : $OLD_INSTALL_ROOT -> $DEFAULT_INSTALL_ROOT (store, config.toml, templates and the rest, checked)"
-    echo "  kept    : $MOVED_KEPT (the old directory as it was before the move, old binaries included; delete it once the upgrade is confirmed)"
-    if [[ "$KEEP_PRIOR" -eq 1 ]]; then
-        echo "  prior   : --keep-prior made no snapshot on this install: the new bin and admin directories hold no earlier binary. The way back is operator-actions.md, \"Going back to the previous release\""
-    fi
-    if [[ -n "$MOVE_NOTES" ]]; then
-        printf '%s' "$MOVE_NOTES"
-    fi
+    ad_move_note ad_move_kept_notes
 
     # Every step from here works in the new directory (SR-11.7).
     if ! state_db="$(ad_store_db_path "${DEFAULT_INSTALL_ROOT}/config.toml" "$HOME" "$DEFAULT_INSTALL_ROOT")"; then
@@ -4636,11 +6091,9 @@ chmod 00755 "$DEFAULT_BIN_DIR"
 # actually manage multiple concurrent versions; we don't.
 # --------------------------------------------------------------------
 
-CANONICAL="${DEFAULT_BIN_DIR}/agent-director"
 MANAGED_LINK=""
 PRIOR="${CANONICAL}.prior"
 TMP="${CANONICAL}.tmp.$$"
-ADMIN_CANONICAL="$DEFAULT_ADMIN_PATH"
 ADMIN_PRIOR="${ADMIN_CANONICAL}.prior"
 ADMIN_TMP="${ADMIN_CANONICAL}.tmp.$$"
 
@@ -4728,27 +6181,36 @@ cp "$BINARY_SRC" "$TMP"
 chmod 0755 "$TMP"
 cp "$ADMIN_SRC" "$ADMIN_TMP"
 chmod 0755 "$ADMIN_TMP"
+# SR-2.16 starts at the first replacement. Keep INT/HUP catchable until
+# migrate-journal starts, so it can cancel rather than inherit an ignore.
+if [[ "$CUTOVER_CROSSING" -eq 1 ]]; then
+    ad_cutover_arm_traps
+fi
 mv "$TMP" "$CANONICAL"
 mv "$ADMIN_TMP" "$ADMIN_CANONICAL"
 
-echo "  binary  : $CANONICAL"
+echo "  binary  : $CANONICAL" || ad_cutover_write_failed
 
 # --------------------------------------------------------------------
 # Optional PATH symlink — agent-director only. agent-director-admin never
 # gets one, under any option (b.vqr).
 # --------------------------------------------------------------------
 
-if [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
+target="$(ad_managed_link_target)"
+if [[ -n "$target" ]]; then
+    link_tmp="${target}.new"
+    ln -sfn "$CANONICAL" "$link_tmp"
+    mv -f "$link_tmp" "$target"
+    link_tmp=""
+    MANAGED_LINK="$target"
+    echo "  symlink : $target → $CANONICAL" || ad_cutover_write_failed
+elif [[ -n "$MANAGED_LINK_SKIP" ]]; then
+    echo "  symlink : skipped — $MANAGED_LINK_SKIP" || ad_cutover_write_failed
+elif [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
     if [[ ! -d "$SYMLINK_DIR" ]]; then
-        echo "  symlink : skipped — $SYMLINK_DIR does not exist"
-    elif [[ "$SYMLINK_DIR" =~ [[:space:]] ]]; then
-        echo "  symlink : skipped — $SYMLINK_DIR contains whitespace"
+        echo "  symlink : skipped — $SYMLINK_DIR does not exist" || ad_cutover_write_failed
     else
-        target="${SYMLINK_DIR}/agent-director"
-        ln -sfn "$CANONICAL" "${target}.new"
-        mv -f "${target}.new" "$target"
-        MANAGED_LINK="$target"
-        echo "  symlink : $target → $CANONICAL"
+        echo "  symlink : skipped — $SYMLINK_DIR contains whitespace" || ad_cutover_write_failed
     fi
 fi
 
@@ -4757,17 +6219,21 @@ fi
 # and each $PATH entry naming that directory, is printed with its fix. The
 # installer changes neither: a link elsewhere, and a shell startup file, are
 # the operator's (SR-11.7).
-if [[ "$MOVED" -eq 1 ]]; then
+ad_move_link_notes() {
+    local old_link old_entry
     for old_link in ${OLD_BIN_LINKS[@]+"${OLD_BIN_LINKS[@]}"}; do
         if [[ "$old_link" == "$MANAGED_LINK" ]]; then
             continue
         fi
-        echo "  old link: $old_link still leads into the old directory's bin, which is kept only until you delete it. Re-point it:"
-        printf '    ln -sfn %q %q\n' "$CANONICAL" "$old_link"
+        echo "  old link: $old_link still leads into the old directory's bin, which is kept only until you delete it. Re-point it:" || ad_cutover_write_failed
+        printf '    ln -sfn %q %q\n' "$CANONICAL" "$old_link" || ad_cutover_write_failed
     done
     for old_entry in ${OLD_BIN_PATH_ENTRIES[@]+"${OLD_BIN_PATH_ENTRIES[@]}"}; do
-        echo "  old PATH: \$PATH names $old_entry, the old directory's bin, which is kept only until you delete it. In your shell startup file (~/.bashrc, ~/.zshrc, ...), replace it with ${DEFAULT_BIN_DIR}, then open a new shell."
+        echo "  old PATH: \$PATH names $old_entry, the old directory's bin, which is kept only until you delete it. In your shell startup file (~/.bashrc, ~/.zshrc, ...), replace it with ${DEFAULT_BIN_DIR}, then open a new shell." || ad_cutover_write_failed
     done
+}
+if [[ "$MOVED" -eq 1 ]]; then
+    ad_move_note ad_move_link_notes
 fi
 
 # --------------------------------------------------------------------
@@ -4814,13 +6280,13 @@ ad_backup_keeping_mode() {
 # ad_migrate_ways_on — the two ways on after a migration step failed, on
 # stderr.
 ad_migrate_ways_on() {
-    echo "  The new binaries are already installed, and the store is not opened. Either:" >&2
-    echo "    - fix the cause, then run this release's install.sh again. It completes the" >&2
-    echo "      migration: it changes nothing in a file already migrated and makes no new" >&2
-    echo "      backup of one, and then it migrates the store. Or" >&2
-    echo "    - take the way back to the previous release: see \"Going back to the" >&2
-    echo "      previous release\" and \"A migration write failed after the binary swap\" in" >&2
-    echo "      docs/operator-actions.md." >&2
+    echo "  The new binaries are already installed, and the store is not opened. Either:" >&2 || ad_cutover_write_failed
+    echo "    - fix the cause, then run this release's install.sh again. It completes the" >&2 || ad_cutover_write_failed
+    echo "      migration: it changes nothing in a file already migrated and makes no new" >&2 || ad_cutover_write_failed
+    echo "      backup of one, and then it migrates the store. Or" >&2 || ad_cutover_write_failed
+    echo "    - take the way back to the previous release: see \"Going back to the" >&2 || ad_cutover_write_failed
+    echo "      previous release\" and \"A migration write failed after the binary swap\" in" >&2 || ad_cutover_write_failed
+    echo "      docs/operator-actions.md." >&2 || ad_cutover_write_failed
 }
 
 # ad_migrate_fail_write <file> <error> — a migration write failed: remove
@@ -4831,10 +6297,10 @@ ad_migrate_fail_write() {
         rm -f "$migrate_tmp"
         migrate_tmp=""
     fi
-    echo "install.sh: the agent-rename migration could not write $1; stopping before the store is opened." >&2
-    echo "  file    : $1" >&2
-    printf '%s\n' "$2" | sed '1s/^/  error   : /;2,$s/^/            /' >&2
-    echo "  $1 is as it was, and every copy this install made is kept." >&2
+    echo "install.sh: the agent-rename migration could not write $1; stopping before the store is opened." >&2 || ad_cutover_write_failed
+    echo "  file    : $1" >&2 || ad_cutover_write_failed
+    printf '%s\n' "$2" | sed '1s/^/  error   : /;2,$s/^/            /' >&2 || ad_cutover_write_failed
+    echo "  $1 is as it was, and every copy this install made is kept." >&2 || ad_cutover_write_failed
     ad_migrate_stop_references
     ad_migrate_ways_on
     exit 1
@@ -4846,7 +6312,7 @@ ad_migrate_fail_write() {
 # (SR-11.7). Nothing when no move ran.
 ad_migrate_stop_references() {
     if [[ "$MOVED" -eq 1 ]]; then
-        ad_move_print_references "$MOVED_KEPT" >&2
+        ad_move_print_references "$MOVED_KEPT" >&2 || ad_cutover_write_failed
     fi
 }
 
@@ -4860,9 +6326,9 @@ ad_migrate_refuse_applied() {
         rm -f "$migrate_tmp"
         migrate_tmp=""
     fi
-    echo "install.sh: the agent-rename migration refuses $2, which pre-flight accepted; stopping before the store is opened." >&2
-    printf '%s\n' "$3" | sed '$d' >&2
-    echo "  $2 changed since pre-flight." >&2
+    echo "install.sh: the agent-rename migration refuses $2, which pre-flight accepted; stopping before the store is opened." >&2 || ad_cutover_write_failed
+    printf '%s\n' "$3" | sed '$d' >&2 || ad_cutover_write_failed
+    echo "  $2 changed since pre-flight." >&2 || ad_cutover_write_failed
     ad_migrate_stop_references
     ad_migrate_ways_on
     ad_exit_5 "$(ad_agent_rename_err_name "$1")"
@@ -4922,7 +6388,7 @@ ad_migrate_apply_file() {
         ad_migrate_fail_write "$file" "$err"
     fi
     migrate_tmp=""
-    echo "  migrate : $file migrated for the agent rename (copy: $bak)"
+    echo "  migrate : $file migrated for the agent rename (copy: $bak)" || ad_cutover_write_failed
 }
 
 if [[ "$AGENT_RENAME_DUE" -eq 1 ]]; then
@@ -4941,14 +6407,14 @@ if [[ "$AGENT_RENAME_DUE" -eq 1 ]]; then
         fi
     done
     if [[ "$migrate_changed" -eq 0 ]]; then
-        echo "  migrate : config.toml and the templates need no agent-rename change"
+        echo "  migrate : config.toml and the templates need no agent-rename change" || ad_cutover_write_failed
     fi
 fi
 
 # The move's other references into the old directory, printed after the
 # migration so their line numbers are those of the files as they now are.
 if [[ "$MOVED" -eq 1 ]]; then
-    ad_move_print_references "$MOVED_KEPT"
+    ad_move_note ad_move_print_references "$MOVED_KEPT"
 fi
 
 # --------------------------------------------------------------------
@@ -4963,11 +6429,13 @@ fi
 #
 # Step 4 invokes migrate-journal exactly when pre-flight's cutover decision
 # found a crossing upgrade (CUTOVER_CROSSING); every other store takes the
-# ordinary list. Every quiescence verification migrate-journal makes stays
-# here, after the swap: pre-flight only refused. Step 5 checks the target
+# ordinary list. The real attempt repeats quiescence verification after the
+# swap; pre-flight's read-only inventory never replaces it. Step 5 checks the target
 # version. Keep incompatible hooks, helpers, servers and launchers excluded
-# through committed verification. A committed or uncertain refusal requires
-# the direct administrator-verification retry in docs/operator-actions.md;
+# through committed verification. A failed attempt restores only when the
+# previous release's store is shown unchanged; all other outcomes keep this
+# release. A committed or uncertain refusal requires the installer re-run
+# and direct administrator-verification retry in docs/operator-actions.md;
 # rerunning this installer on a current schema takes the ordinary list path.
 # SQLite keeps authority after commit even if legacy retirement is pending.
 # --------------------------------------------------------------------
@@ -5001,11 +6469,11 @@ ad_target_version() {
 # re-run after the fix starts over, and its step-3 probe then authorizes any
 # pending migration (b.7b4).
 ad_fail_config_refused() {
-    echo "install.sh: agent-director refused its config file (ErrConfigMalformed)" >&2
-    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2
-    printf '%s\n' "$1" | sed 's/^/  /' >&2
-    echo "  Fix what the error above names in the config file, then re-run this" >&2
-    echo "  install." >&2
+    echo "install.sh: agent-director refused its config file (ErrConfigMalformed)" >&2 || ad_cutover_write_failed
+    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2 || ad_cutover_write_failed
+    printf '%s\n' "$1" | sed 's/^/  /' >&2 || ad_cutover_write_failed
+    echo "  Fix what the error above names in the config file, then re-run this" >&2 || ad_cutover_write_failed
+    echo "  install." >&2 || ad_cutover_write_failed
     ad_exit_5 ErrConfigMalformed
 }
 
@@ -5014,15 +6482,15 @@ if [[ ! -e "$state_db" ]]; then
     # Fresh install: no DB on disk. No sentinel is needed — the step-4
     # open fresh-creates state.db at the binary's current schemaVersion.
     db_version_before=""
-    echo "  schema  : no existing ${state_db_name} — fresh create on first open"
+    echo "  schema  : no existing ${state_db_name} — fresh create on first open" || ad_cutover_write_failed
 else
     db_version_before_rc=0
     db_version_before="$(ad_user_version "$state_db")" || db_version_before_rc=$?
     if ! ad_got_version "$db_version_before_rc" "$db_version_before"; then
         # Without the version no migration can be authorized, and the
         # step-4 open would refuse an older store anyway: stop here.
-        echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2
-        echo "  state.db: $state_db" >&2
+        echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2 || ad_cutover_write_failed
+        echo "  state.db: $state_db" >&2 || ad_cutover_write_failed
         ad_fail_unreadable_version "$db_version_before_rc" "$db_version_before" \
             "tell whether ${state_db_name} needs a migration" \
             "No migration was authorized."
@@ -5081,8 +6549,8 @@ else
             # The probe may have migrated the store, so neither "no
             # migration authorization needed" nor a skipped step 5 would
             # be true: stop here, as step 2 does.
-            echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2
-            echo "  state.db: $state_db" >&2
+            echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2 || ad_cutover_write_failed
+            echo "  state.db: $state_db" >&2 || ad_cutover_write_failed
             ad_fail_unreadable_version "$db_version_probed_rc" "$db_version_probed" \
                 "tell whether the probe (agent-director list) ran a migration" \
                 "A sentinel written before this install was beside ${state_db_name}, and it may" \
@@ -5094,14 +6562,14 @@ else
     fi
 
     if [[ -z "$probe_name" && -n "$target_version" ]]; then
-        echo "  schema  : migration v${db_version_before}→v${target_version} ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $sentinel)"
+        echo "  schema  : migration v${db_version_before}→v${target_version} ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $sentinel)" || ad_cutover_write_failed
     elif [[ -z "$probe_name" || "$probe_name" == ErrSchemaMismatch ]]; then
-        echo "  schema  : ${state_db_name} at v${db_version_before}; no migration authorization needed"
+        echo "  schema  : ${state_db_name} at v${db_version_before}; no migration authorization needed" || ad_cutover_write_failed
     elif [[ -z "$target_version" ]]; then
-        echo "  schema  : ${state_db_name} at v${db_version_before}; could not tell whether a migration is needed (agent-director list failed: ${probe_name})"
+        echo "  schema  : ${state_db_name} at v${db_version_before}; could not tell whether a migration is needed (agent-director list failed: ${probe_name})" || ad_cutover_write_failed
     elif [[ "$db_version_before" == "$target_version" ]]; then
         # Defensive: probe reported a target equal to current. Nothing to do.
-        echo "  schema  : ${state_db_name} already at target v${target_version}; no sentinel written"
+        echo "  schema  : ${state_db_name} already at target v${target_version}; no sentinel written" || ad_cutover_write_failed
     else
         # The temp file sits beside the sentinel, in the store's directory,
         # which [store] db_path may put in a directory other users can write.
@@ -5112,13 +6580,13 @@ else
         # predictable name.
         if ! tmp_sentinel="$(mktemp "${sentinel}.tmp.XXXXXX")"; then
             tmp_sentinel=""
-            echo "install.sh: writing the migration sentinel FAILED" >&2
-            echo "  sentinel: $sentinel" >&2
-            echo "  mktemp could not create a temp file beside it (its error is above), so" >&2
-            echo "  no migration was authorized: ${state_db_name} is still at v${db_version_before}." >&2
-            echo "  The new agent-director does not open it until it is at v${target_version}." >&2
-            echo "  Fix what mktemp's error names (a directory you cannot write, say, or a" >&2
-            echo "  full disk), then re-run this install: it authorizes the migration again." >&2
+            echo "install.sh: writing the migration sentinel FAILED" >&2 || ad_cutover_write_failed
+            echo "  sentinel: $sentinel" >&2 || ad_cutover_write_failed
+            echo "  mktemp could not create a temp file beside it (its error is above), so" >&2 || ad_cutover_write_failed
+            echo "  no migration was authorized: ${state_db_name} is still at v${db_version_before}." >&2 || ad_cutover_write_failed
+            echo "  The new agent-director does not open it until it is at v${target_version}." >&2 || ad_cutover_write_failed
+            echo "  Fix what mktemp's error names (a directory you cannot write, say, or a" >&2 || ad_cutover_write_failed
+            echo "  full disk), then re-run this install: it authorizes the migration again." >&2 || ad_cutover_write_failed
             # A re-run alone does not fix it: someone must make the
             # directory writable or free space first.
             ad_exit_5 ErrSchemaVerifyFailed
@@ -5126,7 +6594,7 @@ else
         printf '{"from": %d, "to": %d}\n' "$db_version_before" "$target_version" > "$tmp_sentinel"
         chmod 0600 "$tmp_sentinel" 2>/dev/null || true
         mv -f "$tmp_sentinel" "$sentinel"
-        echo "  schema  : authorized migration v${db_version_before}→v${target_version} (sentinel $sentinel)"
+        echo "  schema  : authorized migration v${db_version_before}→v${target_version} (sentinel $sentinel)" || ad_cutover_write_failed
     fi
 fi
 
@@ -5138,31 +6606,37 @@ fi
 # cutover with recorded authority whose probe asked for a sentinel.
 # help/version stay DB-free. Capture one invocation's status and diagnostics
 # so they describe the same attempt. Keep the maintenance boundary through
-# verification.
+# verification; a failed crossing attempt settles through SR-2.16 before
+# reporting. exec leaves no intermediate capture shell that a group signal
+# could end before the attempt finishes. The non-crossing list route keeps
+# its existing failure rules.
 open_command=("$CANONICAL" list)
 if [[ "$CUTOVER_CROSSING" -eq 1 ]]; then
     open_command=("$ADMIN_CANONICAL" --store-path "$state_db" migrate-journal "${JOURNAL_ARGS[@]}")
 fi
 open_rc=0
 if [[ "${open_command[0]}" == "$ADMIN_CANONICAL" ]]; then
-    open_err="$("${open_command[@]}" 2>&1)" || open_rc=$?
+    CUTOVER_PHASE=running
+    open_err="$(exec "${open_command[@]}" 2>&1)" || open_rc=$?
 else
     open_err="$("${open_command[@]}" 2>&1 >/dev/null)" || open_rc=$?
 fi
 if [[ "$open_rc" -eq 0 ]]; then
     if [[ "${open_command[0]}" == "$ADMIN_CANONICAL" ]]; then
-        printf "  journal : %s\n" "$open_err"
+        if [[ -z "$CUTOVER_INTERRUPTED" ]]; then
+            ad_cutover_disarm_traps
+        fi
+        printf "  journal : %s\n" "$open_err" || ad_cutover_write_failed
+        ad_move_notes_flush
     fi
 else
+    if [[ "$CUTOVER_CROSSING" -eq 1 ]]; then
+        ad_cutover_ignore_interrupts
+        ad_cutover_outcome "$open_rc" "$open_err"
+    fi
     # A refused config stopped the open before it reached state.db, so the
     # store advice below does not apply (b.7b4).
     open_name="$(ad_err_name "$open_err")"
-    if [[ "$open_name" == ErrJournalMigrationRefused ]]; then
-        printf "%s\n" "$open_err" >&2
-        echo "  Keep the maintenance boundary and restart administrator verification." >&2
-        echo "  A commit may have completed. Never reset the schema or restore replayable input." >&2
-        ad_exit_5 ErrJournalMigrationRefused
-    fi
     if [[ "$open_name" == ErrConfigMalformed ]]; then
         ad_fail_config_refused "$open_err"
     fi
@@ -5205,23 +6679,23 @@ fi
 # first. A re-run that fails the same way means the binary resolves the
 # store differently from ad_store_db_path: the maintainers' turn.
 if [[ ! -f "$state_db" ]]; then
-    echo "install.sh: ${state_db_name} was not created by the store open" >&2
-    echo "  state.db: $state_db" >&2
-    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2
-    echo "  The store open (agent-director list) succeeded, yet there is no store" >&2
-    echo "  at the state.db path above, where install.sh expected it. agent-director" >&2
-    echo "  opens its store at [store] db_path in the config file above" >&2
-    echo "  (~/.config/agent-director/state.db when unset), and install.sh read that file" >&2
-    echo "  before the open. So either db_path changed since and agent-director" >&2
-    echo "  opened a store somewhere else, or something removed or moved the store" >&2
-    echo "  after the open." >&2
-    echo "  Check db_path in the config file, and whether anything (a cleanup, say)" >&2
-    echo "  removed or moved the store. To keep a moved store's sessions, put it" >&2
-    echo "  back at the state.db path above first: with no store there, a re-run" >&2
-    echo "  creates a new, empty one. Then re-run this install: it reads db_path" >&2
-    echo "  again and opens the store there. If a re-run fails this same way, the" >&2
-    echo "  installed agent-director does not open its store where this install.sh" >&2
-    echo "  expects it: contact the maintainers." >&2
+    echo "install.sh: ${state_db_name} was not created by the store open" >&2 || ad_cutover_write_failed
+    echo "  state.db: $state_db" >&2 || ad_cutover_write_failed
+    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2 || ad_cutover_write_failed
+    echo "  The store open (agent-director list) succeeded, yet there is no store" >&2 || ad_cutover_write_failed
+    echo "  at the state.db path above, where install.sh expected it. agent-director" >&2 || ad_cutover_write_failed
+    echo "  opens its store at [store] db_path in the config file above" >&2 || ad_cutover_write_failed
+    echo "  (~/.config/agent-director/state.db when unset), and install.sh read that file" >&2 || ad_cutover_write_failed
+    echo "  before the open. So either db_path changed since and agent-director" >&2 || ad_cutover_write_failed
+    echo "  opened a store somewhere else, or something removed or moved the store" >&2 || ad_cutover_write_failed
+    echo "  after the open." >&2 || ad_cutover_write_failed
+    echo "  Check db_path in the config file, and whether anything (a cleanup, say)" >&2 || ad_cutover_write_failed
+    echo "  removed or moved the store. To keep a moved store's sessions, put it" >&2 || ad_cutover_write_failed
+    echo "  back at the state.db path above first: with no store there, a re-run" >&2 || ad_cutover_write_failed
+    echo "  creates a new, empty one. Then re-run this install: it reads db_path" >&2 || ad_cutover_write_failed
+    echo "  again and opens the store there. If a re-run fails this same way, the" >&2 || ad_cutover_write_failed
+    echo "  installed agent-director does not open its store where this install.sh" >&2 || ad_cutover_write_failed
+    echo "  expects it: contact the maintainers." >&2 || ad_cutover_write_failed
     ad_exit_5 ErrSchemaVerifyFailed
 fi
 chmod 0600 "$state_db" 2>/dev/null || true
@@ -5229,7 +6703,7 @@ db_version_after_rc=0
 db_version_after="$(ad_user_version "$state_db")" || db_version_after_rc=$?
 schema_shown="v${db_version_after}"
 ad_got_version "$db_version_after_rc" "$db_version_after" || schema_shown="<unreadable>"
-echo "  state.db: $(stat -c '%a' "$state_db" 2>/dev/null || stat -f '%Lp' "$state_db") at $state_db (schema ${schema_shown})"
+echo "  state.db: $(stat -c '%a' "$state_db" 2>/dev/null || stat -f '%Lp' "$state_db") at $state_db (schema ${schema_shown})" || ad_cutover_write_failed
 
 migration_expected=0
 [[ -n "$db_version_before" && -n "${target_version:-}" ]] && migration_expected=1
@@ -5242,15 +6716,15 @@ if ! ad_got_version "$db_version_after_rc" "$db_version_after"; then
     # warning says none was authorized, not none expected: step 3 may not
     # have been able to tell whether one was needed.
     if [[ "$migration_expected" -eq 1 ]]; then
-        echo "install.sh: schema migration verification FAILED" >&2
-        echo "  expected user_version: $target_version" >&2
+        echo "install.sh: schema migration verification FAILED" >&2 || ad_cutover_write_failed
+        echo "  expected user_version: $target_version" >&2 || ad_cutover_write_failed
         ad_fail_unreadable_version "$db_version_after_rc" "$db_version_after" "check the migration"
     fi
-    echo "install.sh: warning: ${state_db_name}'s schema version is unreadable after the store open" >&2
+    echo "install.sh: warning: ${state_db_name}'s schema version is unreadable after the store open" >&2 || ad_cutover_write_failed
     ad_show_unreadable_version "$db_version_after"
-    echo "  The store open (agent-director list) succeeded and no migration was" >&2
-    echo "  authorized, so the install carries on. Check the version later with:" >&2
-    printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2
+    echo "  The store open (agent-director list) succeeded and no migration was" >&2 || ad_cutover_write_failed
+    echo "  authorized, so the install carries on. Check the version later with:" >&2 || ad_cutover_write_failed
+    printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2 || ad_cutover_write_failed
 fi
 
 if [[ "$migration_expected" -eq 1 ]]; then
@@ -5288,30 +6762,34 @@ if [[ "$migration_expected" -eq 1 ]]; then
     # quoted with %q: a plain path prints unchanged, and one holding shell
     # characters ($, `, quotes) prints escaped.
     if [[ "$db_version_after" != "$target_version" ]]; then
-        echo "install.sh: schema migration verification FAILED" >&2
-        echo "  expected user_version: $target_version" >&2
-        echo "  actual   user_version: $db_version_after" >&2
-        echo "  The store open (agent-director list) succeeded, and a successful" >&2
-        echo "  open leaves ${state_db_name} at v${target_version}: any authorized migration" >&2
-        echo "  has run, and its sentinel is consumed. Yet the read after the open" >&2
-        echo "  gives v${db_version_after}: ${state_db_name} changed after the open, or the read" >&2
-        echo "  is wrong. Check its version now:" >&2
-        printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2
-        echo "  A re-run of this install reads the version again: below v${target_version} it" >&2
-        echo "  brings ${state_db_name} to v${target_version} again, above v${target_version} it stops" >&2
-        echo "  at the store open (ErrSchemaMismatch), and at v${target_version} it finishes" >&2
-        echo "  the install. If a re-run fails this same way, contact the maintainers." >&2
+        echo "install.sh: schema migration verification FAILED" >&2 || ad_cutover_write_failed
+        echo "  expected user_version: $target_version" >&2 || ad_cutover_write_failed
+        echo "  actual   user_version: $db_version_after" >&2 || ad_cutover_write_failed
+        echo "  The store open (agent-director list) succeeded, and a successful" >&2 || ad_cutover_write_failed
+        echo "  open leaves ${state_db_name} at v${target_version}: any authorized migration" >&2 || ad_cutover_write_failed
+        echo "  has run, and its sentinel is consumed. Yet the read after the open" >&2 || ad_cutover_write_failed
+        echo "  gives v${db_version_after}: ${state_db_name} changed after the open, or the read" >&2 || ad_cutover_write_failed
+        echo "  is wrong. Check its version now:" >&2 || ad_cutover_write_failed
+        printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2 || ad_cutover_write_failed
+        echo "  A re-run of this install reads the version again: below v${target_version} it" >&2 || ad_cutover_write_failed
+        echo "  brings ${state_db_name} to v${target_version} again, above v${target_version} it stops" >&2 || ad_cutover_write_failed
+        echo "  at the store open (ErrSchemaMismatch), and at v${target_version} it finishes" >&2 || ad_cutover_write_failed
+        echo "  the install. If a re-run fails this same way, contact the maintainers." >&2 || ad_cutover_write_failed
         ad_exit_5 ErrSchemaVerifyFailed
     fi
-    echo "  schema  : migration verified — ${state_db_name} now at v${db_version_after}"
+    echo "  schema  : migration verified — ${state_db_name} now at v${db_version_after}" || ad_cutover_write_failed
+fi
+
+if [[ "$CUTOVER_PHASE" == running && -n "$CUTOVER_INTERRUPTED" ]]; then
+    ad_cutover_interrupted_committed
 fi
 
 # --------------------------------------------------------------------
 # Hook injection — additive merge into ~/.claude/settings.json
 #
-# Skipped entirely under --no-hooks: settings.json is not read, not
-# backed up, not written. There's no edit, so there's nothing to back
-# up — leaving settings.json byte-identical to its pre-install state.
+# Skipped entirely under --no-hooks: settings.json is not written,
+# leaving it byte-identical to its pre-install state. With hooks on it is
+# rewritten with no backup copy (b.f3n; see the write below).
 # --------------------------------------------------------------------
 
 # (ad_mode_of is defined above, in the section on AD's directory move, which
@@ -5344,9 +6822,6 @@ ad_replace_keeping_mode() {
     fi
     mv -f "$tmp" "$target"
 }
-
-# (ad_backup_keeping_mode is defined above, with the agent-rename migration's
-# apply step, which copies files first too.)
 
 # The help hooks an earlier release's install.sh wrote name the old
 # directory's binary (SR-11.7). An entry is "ours" the way uninstall.sh tests
@@ -5393,7 +6868,7 @@ else
     # counted first (b.zbg): with none it would write no hooks, and with
     # several it would write several merged documents back. A file holding
     # none (empty, or only whitespace: a touched file, say), which Claude
-    # Code reads as no settings, is merged as {}, after the usual backup. A
+    # Code reads as no settings, is merged as {}. A
     # file holding several is refused here, exit 4, and left as it was,
     # as one that is not valid JSON is.
     if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
@@ -5499,24 +6974,37 @@ else
         [(.hooks | objects) as $h | ("SessionStart", "SessionEnd") as $e | $h[$e] | arrays | .[] | select(ours)] | length
     ' 2>/dev/null || echo 0)
 
-    # Backup-before-edit: snapshot the prior settings.json (if any) into a
-    # timestamped .bak alongside the original so a regressed jq filter is
-    # recoverable. Only the *prior* contents are backed up; in-place
-    # re-runs of the install will keep the most recent pre-edit copy.
-    if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
-        backup_settings="${DEFAULT_SETTINGS_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
-        ad_backup_keeping_mode "$DEFAULT_SETTINGS_PATH" "$backup_settings"
-        echo "  backup  : $backup_settings"
-    fi
-
     # Atomic write: tempfile + mv, keeping an existing file's mode, and
-    # writing through a symlinked settings.json to its target.
+    # writing through a symlinked settings.json to its target. No backup
+    # copy is taken (b.f3n): settings.json's env can hold tokens, and each
+    # run's timestamped copy of them was kept for good. A file the merge
+    # cannot take was refused above, before any write, and a failed write
+    # leaves the file as it was.
     ad_replace_keeping_mode "$DEFAULT_SETTINGS_PATH" "$new_settings"
 
     echo "  hooks   : injected into $DEFAULT_SETTINGS_PATH"
     if [[ "$old_hook_count" =~ ^[0-9]+$ && "$old_hook_count" -gt 0 ]]; then
         echo "  hooks   : removed $old_hook_count hook entries that named the old directory's binary (${OLD_HOOK_PREFIX})"
     fi
+fi
+
+# Copies of settings.json earlier releases kept (b.f3n): their install.sh
+# with hooks on, and their uninstall.sh, copied it to
+# settings.json.bak.<YYYYmmdd-HHMMSS> beside it before each edit, and nothing
+# removed them. settings.json's env can hold tokens, so each run that gets
+# here names every file of that name, all on one line, each path quoted with
+# %q, as the other advice here quotes paths: a plain path prints unchanged,
+# and the list splits into its paths as the shell reads it under any HOME (one
+# holding a space, say). Only that name matches, so a settings.json.bak.<other>
+# the user keeps is not named. None is deleted: even a file of that name may
+# be the user's own. uninstall.sh does the same.
+old_settings_baks=""
+for old_settings_bak in "${DEFAULT_SETTINGS_PATH}".bak.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+    [[ -e "$old_settings_bak" || -L "$old_settings_bak" ]] || continue
+    printf -v old_settings_baks '%s %q' "$old_settings_baks" "$old_settings_bak"
+done
+if [[ -n "$old_settings_baks" ]]; then
+    echo "  settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:${old_settings_baks}"
 fi
 
 # --------------------------------------------------------------------
@@ -5531,6 +7019,9 @@ fi
 # Q4=no (--no-hooks) leaves config.toml untouched — the flag stays at
 # its zero-value default of false.
 # --------------------------------------------------------------------
+
+# (ad_backup_keeping_mode is defined above, with the agent-rename migration's
+# apply step, which copies files first too.)
 
 if [[ "$NO_HOOKS" -eq 0 ]]; then
     CONFIG_TOML="${DEFAULT_INSTALL_ROOT}/config.toml"
@@ -6750,21 +8241,11 @@ ad_sched_install() {
 # --register-mcp (claude mcp add at local scope belongs to the working
 # directory) both depend on it.
 ad_sched_rerun_cmd() {
-    local a has=0 q
-    printf -v SUBST 'cd %q && bash %q' "$ORIG_PWD" "${SCRIPT_DIR}/${BASH_SOURCE[0]##*/}"
-    for a in ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}; do
-        printf -v q ' %q' "$a"
-        SUBST="${SUBST}${q}"
-        if [[ "$a" == --schedule ]]; then
-            has=1
-        fi
-    done
-    if [[ "$has" -eq 0 ]]; then
-        SUBST="${SUBST} --schedule"
-    fi
+    ad_rerun_cmd schedule
 }
 
-# ad_sched_warn <reason> — the loud warning, on stderr: no schedule is set up.
+# ad_sched_warn <reason> — warn on stderr when --schedule entries are not found
+# for both jobs (cron lines without a running daemon do not count).
 # <reason> (may be empty) is why --schedule did not install one. The cron lines
 # are the shipped file's, rendered, and the directory named is where they were
 # read from: beside this script, or ~/.config/agent-director/schedule/ when
@@ -6776,7 +8257,13 @@ ad_sched_warn() {
     ad_sched_verb
     {
         echo
-        echo "install.sh: WARNING: nothing schedules agent-director's ${SCHED_VERB} and expire jobs on this machine."
+        echo "install.sh: WARNING: could not find active --schedule entries for both agent-director's ${SCHED_VERB} and expire jobs."
+        echo "  This check sees only the entries --schedule adds; it cannot see schedules made another way"
+        echo "  (launchd, your own cron line or unit). Already scheduled another way? Ignore this warning,"
+        echo "  or run --schedule and drop your own entries."
+        if [[ "$SCHED_VERB" == sweep ]]; then
+            echo "  Existing schedules running find-missing keep working: it is an alias of sweep."
+        fi
         echo "  Recovery runs only when called; state reads also perform the shared checks on supporting versions."
         echo "  Absent or failed checks leave observations old. expire separately removes eligible finished rows."
         echo "  Choose an external cadence for recovery and retention cleanup; neither runs an internal daemon."
@@ -6832,8 +8319,6 @@ ad_sched_warn() {
             echo "  an install.sh that has them beside it with"
             echo "  --schedule, as that user."
         fi
-        echo "  Already scheduled another way (launchd, your own cron line or unit)? This check sees only the entries"
-        echo "  --schedule adds, so it warns anyway: ignore this, or run --schedule and drop your own entries."
     } >&2
 }
 
@@ -6887,6 +8372,18 @@ ad_sched_step() {
     SCHED_WARN=1
 }
 
+# Report unused flags only after all install steps, preserving the leading
+# refusal/after-open diagnostic and the MCP failure's final exit-6 line.
+ad_unused_journal_warn() {
+    if [[ "$CUTOVER_CROSSING" -eq 0 && "$JOURNAL_FLAGS_GIVEN" -eq 1 ]]; then
+        if [[ -n "$PREFLIGHT_STORE_VERSION" ]]; then
+            echo "install.sh: warning: $state_db_name was at v${PREFLIGHT_STORE_VERSION} before this install; journal flags were not used and no journal backup was made." >&2
+        else
+            echo "install.sh: warning: there was no store before this install; journal flags were not used and no journal backup was made." >&2
+        fi
+    fi
+}
+
 SCHED_HOW=""
 ad_sched_step
 
@@ -6895,6 +8392,7 @@ if [[ "$MCP_FAILED" -eq 1 ]]; then
     if [[ "$SCHED_WARN" -eq 1 ]]; then
         ad_sched_warn "$SCHED_REASON"
     fi
+    ad_unused_journal_warn
     echo "install.sh: installed, but the MCP registration failed (see above); exit 6" >&2
     exit 6
 fi
@@ -6902,3 +8400,5 @@ echo "install.sh: done. Try: $CANONICAL help"
 if [[ "$SCHED_WARN" -eq 1 ]]; then
     ad_sched_warn "$SCHED_REASON"
 fi
+ad_unused_journal_warn
+} ; exit

@@ -2,7 +2,9 @@
 
 ## Requirements
 
-- Linux x86_64 or macOS arm64 (Apple Silicon); no other platform.
+- Linux on x86_64 or arm64 (aarch64), or macOS 13 or later on arm64
+  (Apple Silicon); no other platform. Debian 12 (bookworm) is long-term
+  supported on both x86_64 and arm64.
 - At least one of Claude Code, Codex and Cursor. Each counts as installed when
   its `[launch]` key in `config.toml` (`claude_path`, `codex_path`, `cursor_path`; see
   [configuration](configuration.md)) names an executable file, or its program
@@ -12,7 +14,7 @@
   on PATH or named by `[launch] cursor_path`. The editor's `cursor` command
   does not count. The Cursor gateway currently runs on Linux only; no minimum
   Cursor version or macOS Cursor runtime support is established. The recorded
-  Linux candidate, `2026.10.12-d47ca18`, is not a minimum-version guarantee.
+  linux/amd64 candidate, `2026.10.12-d47ca18`, is not a minimum-version guarantee.
   Compatibility requires ACP protocol 1 with a non-null `agentCapabilities`
   object. Optional capabilities may be omitted for a fresh text session;
   resume additionally requires `loadSession: true`. Requested session, mode
@@ -46,8 +48,8 @@
   It puts a link to its native program on PATH. On Linux x86_64 that program is
   `$HOME/.codex/packages/standalone/releases/<version>-x86_64-unknown-linux-musl/bin/codex`,
   whose `<version>` changes with each update, so leave `codex_path` unset and
-  use the link. Where the native program is on macOS arm64 is not documented
-  here.
+  use the link. Native Codex paths for npm and standalone installs on
+  Linux arm64 and macOS arm64 are not documented here.
 - `tmux` 3.2 or later on PATH (verified: 3.2a and 3.3a), with `remain-on-exit`
   off (the default). No tmux server needs to be running.
 - `HOME` set to an absolute path when `install.sh` or `uninstall.sh` runs: each
@@ -65,6 +67,11 @@
   it, even with `--no-hooks`.
 - With `--from-release`: `curl` and `sleep`. With `--sha256` and
   `--admin-sha256`: either `sha256sum` or `shasum`.
+- On macOS, an upgrade of an existing store reads the user's processes with
+  the system `/usr/sbin/lsof` and access-control entries with `/bin/ls`: run
+  the install as the agents' user, not as root, and grant the terminal access
+  if macOS asks. [Upgrade refusal
+  reasons](operator-actions.md#upgrade-refusal-reasons) gives the remedies.
 
 After validating arguments and the install path, the installer checks all
 required commands for the selected mode before running external commands,
@@ -73,7 +80,8 @@ downloading files or changing the installation. If any are missing, it exits
 
 `gh` is optional for release lookup and download fallback; `curl` remains
 required for release installs. `git`, `ps`, `lsof`, `pgrep`, `getent`, `dscl`,
-`crontab` and `systemctl` remain optional probes or alternatives. Scheduling
+`crontab` and `systemctl` remain optional probes or alternatives, except
+the macOS upgrade tools above. Scheduling
 keeps its [cron/systemd fallback and warnings](#schedule-the-sweeps).
 
 Native confirmed ordinary text delivery has narrower requirements: Linux, the exact
@@ -84,14 +92,20 @@ as described in that contract.
 
 ## Install from a release
 
-This installs agent-director and its operator tool `agent-director-admin`:
+Choose a release tag, or find the latest with this read-only command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
 ```
 
-It downloads the binaries from the
-[latest release](https://github.com/gabemahoney/agent-director/releases/latest),
+The URL must end in `/releases/tag/<tag>`. Replace both `<tag>`s below with
+that tag to install agent-director and its operator tool `agent-director-admin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag>
+```
+
+It downloads the binaries from that release,
 sets up `~/.config/agent-director/` (and `~/.config` itself, mode `0700`, if
 it is missing), symlinks `agent-director` (see `--symlink-dir`),
 installs `agent-director-admin` at `~/.config/agent-director/admin/` (never on PATH),
@@ -103,10 +117,14 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
 - `--from-release [tag]`: download from GitHub Releases (latest, or a tag of
   this release or later). A tag of an earlier release is refused: pass a tag
   of this release or later, or install the earlier release with that
-  release's own `install.sh`, fetched from its tag. To verify, pass both
+  release's own `install.sh`, fetched from its tag, provided it
+  [supports this host](#requirements). To verify, pass both
   `--sha256 <hex>` and `--admin-sha256 <hex>`, or neither.
 - `--binary <path>`, `--admin-binary <path>`: install from explicit binaries
   of the same build.
+- `--check-holders`: strictly read-only process inventory for native-input cutover
+  holders in the current layout, then exit without installing. Use the candidate
+  source and journal flags described under [Upgrade](#upgrade).
 - `--register-mcp`: register the stdio MCP server with Claude Code (Claude Code
   only; a Codex folder's entry is made by hand, see [Set up agent-director in a
   Codex folder](settings.md#set-up-agent-director-in-a-codex-folder)). It runs
@@ -114,8 +132,7 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   `claude` from PATH. By hand, with that
   program for `claude`:
   `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`
-  (the `--` before the path is required; without it Claude Code refuses
-  `--stdio` and registers nothing). See
+  (the `--` before the path is required). See
   [MCP registration](#mcp-registration).
 - `--no-hooks`: leave `~/.claude/settings.json` untouched (see
   [Upgrade](#upgrade) for the old entries it prints) and do not set
@@ -133,7 +150,7 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   for; see
   [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
 - `--journal-backup <dir>`: choose a new absolute directory for the
-  stopped-writer backup; see
+  stopped-writer backup when crossing the native-input cutover; see
   [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
 - `--journal-legacy-root <dir>`: include an additional absolute legacy input
   root (repeat for each); see
@@ -155,9 +172,7 @@ Before it changes anything, `install.sh` looks for each agent (see
   `claude` from PATH; every Claude Code command the installer runs (the version
   line, `claude mcp get`, `add` and `remove`) goes through it.
 - **Codex found:** the program's path, with a note that its version was not
-  checked and the command to check it. `install.sh` never runs Codex, because
-  `codex --version` writes Codex's own files (`tmp/arg0/...`) in the Codex
-  folder it runs against: the default one unless `CODEX_HOME` names another.
+  checked and the command to check it. `install.sh` never runs Codex.
 - **Cursor found:** the standalone `agent` program's path, with a note that
   this is presence only: version and compatibility were not checked and
   `agent` was not run.
@@ -204,24 +219,12 @@ chosen as [above](#claude-code-and-codex). What it does depends on what
 - **Already registered for this install's binary** (its command is this
   install's `agent-director` and its arguments are `serve --stdio`): it says so
   and adds nothing, so running the install again with `--register-mcp` is safe.
-- **Registered under the same name for another command:** the add fails, because
-  Claude Code refuses a name that already exists. The install ends with exit 6
-  (below). If that registration should be replaced, remove it, then run the
-  install again or the add by hand:
-
-  ```sh
-  claude mcp remove agent-director -s <scope>
-  ```
-
+- **Registered under the same name for another command:** the add fails and the
+  install ends with exit 6 (below).
 - **Naming the old directory's binary** (an upgrade): see [Upgrade](#upgrade).
 
-**Exit 6: the registration failed.** `claude mcp add` (or the `claude mcp remove`
-before a re-add) exited non-zero. Every other step is done and kept: the
-binaries, the store, the hooks and the links. The message on stderr shows the
-command that ran, its exit status, its stderr and the command to run by hand;
-the last line says the registration failed. Fix the cause the stderr names,
-then run that command. The read of an existing registration (`claude mcp get`)
-never fails the install.
+**Exit 6: the registration failed.** Every other install step is done and kept;
+see [The MCP registration or deregistration failed (exit 6)](operator-actions.md#the-mcp-registration-or-deregistration-failed-exit-6).
 
 **Which directories see a registration.** A `local` registration made inside a
 git repository is found from every directory of that repository (it is kept
@@ -236,28 +239,32 @@ scopes, `claude mcp get` shows one of them: `local` before `user` before
 
 Both assets must come from the same
 [release](https://github.com/gabemahoney/agent-director/releases/latest); this
-needs no clone:
+needs no clone. Choose `<tag>` with the read-only lookup in
+[Install from a release](#install-from-a-release), and replace both `<tag>`s
+below with it:
 
 ```sh
-p=linux-amd64   # or darwin-arm64
-base=https://github.com/gabemahoney/agent-director/releases/latest/download
+p=linux-amd64   # or linux-arm64 or darwin-arm64
+base=https://github.com/gabemahoney/agent-director/releases/download/<tag>
 curl -fL -o agent-director "$base/agent-director-$p"
 curl -fL -o agent-director-admin "$base/agent-director-admin-$p"
 chmod +x agent-director agent-director-admin
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --binary ./agent-director --admin-binary ./agent-director-admin
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --binary ./agent-director --admin-binary ./agent-director-admin
 ```
 
 ## Install from inside Claude Code
 
-From the root of your clone, link the `install-agent-director` skill once,
-then say **install agent-director** in Claude Code:
+From the root of your clone, link the `install-agent-director` and
+`upgrade-agent-director` skills once, then say **install agent-director** in
+Claude Code, or **upgrade agent-director** for an existing install:
 
 ```sh
-mkdir -p ~/.claude/skills && ln -s "$PWD/skills/install-agent-director" ~/.claude/skills/install-agent-director
+mkdir -p ~/.claude/skills
+for s in install-agent-director upgrade-agent-director; do [ -e ~/.claude/skills/$s ] || [ -L ~/.claude/skills/$s ] || ln -s "$PWD/skills/$s" ~/.claude/skills/$s; done
 ```
 
-The skill asks five questions (source, symlink, MCP, hooks, schedule), then
-runs `install.sh`.
+The install skill asks five questions (source, symlink, MCP, hooks, schedule),
+then runs `install.sh`.
 
 ## Install from source
 
@@ -282,21 +289,20 @@ using the template cadence. Choose the defaults or set your own cadence in
 [Maintenance](maintenance.md#schedule-them-by-hand).
 
 What it installs, how to do it by hand and the same-environment rule are in
-[Maintenance](maintenance.md#scheduling-the-sweeps). An install that finds no
-schedule ends with a warning on stderr: see
-[`install.sh` warns that nothing schedules the sweeps](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
+[Maintenance](maintenance.md#scheduling-the-sweeps). An install that cannot find active
+`--schedule` entries for both jobs ends with a warning on stderr: see
+[The install schedule warning](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
 
 **A piped install** (`curl ... | bash -s -- ...`) has no `schedule/` beside it.
-When `--schedule` is given or nothing is scheduled yet, it fetches the same five
+When `--schedule` is given or its entries are not found, it fetches the same five
 files from `raw.githubusercontent.com` at the release tag (with
 `--from-release`) or, with `--binary`, at the full commit stamp of the binaries,
 all or none, and keeps them in `~/.config/agent-director/schedule/`. When the
-release tag or commit has no `schedule/` (an older release: HTTP 404), it tries
+release tag or commit has no `schedule/` (HTTP 404), it tries
 once more at `main`, and the `schedule:` line says so.
 
-Raw downloadable templates use `find-missing`, so released installers can use
-them with older binaries, including after a 404 fallback to `main`. The current
-installer checks only the target binary's `help`: if it advertises `sweep`,
+Raw downloadable templates use `find-missing`. The installer checks only the
+target binary's `help`: if it advertises `sweep`,
 rendered cron lines, services and advice use `sweep`; otherwise they use
 `find-missing`. Failed or unreadable help also keeps `find-missing`. It never
 runs recovery to discover support. Existing `find-missing` schedules remain
@@ -304,19 +310,62 @@ valid aliases on a supporting binary; an upgrade needs no schedule rewrite.
 
 ## Upgrade
 
-Before crossing the native-input journal upgrade, establish the
-[maintenance window and complete recovery set](operator-actions.md#upgrading-the-native-input-journal),
-including every invoking-home input root and any custom database. Keep old
-writers excluded through committed verification. Use the journal flags listed
-above; they assert the operator's boundary and do not stop processes.
+An agent upgrading an install follows the
+[upgrade skill](../skills/upgrade-agent-director/SKILL.md) step by step.
+
+You can upgrade directly to this release from any earlier agent-director
+release starting at 0.3.0; no intermediate release is needed. This installer
+cannot upgrade `claude-director` 0.1.0–0.2.3 in `~/.claude-director`: it would make a fresh
+install beside those files.
+
+An upgrade of an existing store below schema v16 crosses the native-input
+journal cutover, once, and needs the journal flags listed above; a fresh
+install or a store at schema v16 or later needs none. Follow the
+[maintenance-window procedure](operator-actions.md#upgrading-the-native-input-journal)
+for check timing, the complete recovery set and writer exclusion.
+
+Check holders with the candidate release and the same journal flags planned
+for installation:
+
+```sh
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag> "$@"' upgrade-agent-director --check-holders --journal-maintenance-window --journal-roots-complete --journal-backup /absolute/new-backup-directory --journal-legacy-root /absolute/additional/input
+```
+
+The `pipefail` wrapper makes a failed download fail the check.
+
+Choose `<tag>` once as in [Install from a release](#install-from-a-release)
+and reuse it for both checks and installation, or use `--binary` and
+`--admin-binary` for matching local candidates. Include the original install's
+other flags and any additions in both checks and installation too. Omit the last
+root pair if none is needed; repeat it for every extra root. This strictly
+read-only mode allows live rows. It exits 0 when clear or 5 on refusal,
+listing any holders. With no store, schema v0 or schema v16 or later, it
+reports no check is needed and exits 0. Argument, dependency and source-selection
+errors retain their usual exit codes. Temporary downloads and private snapshots
+are removed at exit; HOME files, the store and sidecars,
+backups, sentinels, hooks, MCP registrations, schedules and links stay unchanged.
+
+The inventory checks the current configured store, its sidecars and the complete
+input roots, resolving aliases. With a directory move due, it checks the old
+store before the move. It does not refuse a store or root merely because it is
+not yet private. Ownership, modes, link components and access-control entries
+are checked by the real migration after the installer prepares the paths.
+An unresolvable inventory path still refuses with `process_inventory_unreadable`.
+
+The candidate administrator also offers strictly read-only
+`--store-path /absolute/actual-state.db migrate-journal --check-only` with
+the corresponding journal flags; without `--store-path`, it checks arguments
+only. See the [operator procedure](operator-actions.md#upgrading-the-native-input-journal).
+
 Recovery belongs in the
 [operator runbook](operator-actions.md#going-back-to-the-previous-release).
 
 Run the install again by any path above, from a shell agent-director did not
-start (not one inside an agent's session). This release keeps its files in
-`~/.config/agent-director`; an earlier release kept them in `~/.agent-director`.
-When the install finds that old directory, it moves it first. Later upgrades make
-no move: run the install again, with `--keep-prior` to keep the previous
+start (not one inside an agent's session). Releases 0.3.0–0.11.1 keep their
+files in `~/.agent-director`; the installer moves that directory once to
+`~/.config/agent-director`, before the other install steps. Releases 0.12.0
+and later already use the new directory and need no move. Run the install
+again, with `--keep-prior` to keep the previous
 binaries. It brings `state.db` to the current schema; a store newer than the
 binary needs the matching release.
 
@@ -399,55 +448,48 @@ store is opened:
 - While the move is due the files are read in the old directory, and the
   migration changes the copies in the new one.
 
-Only this release's installer migrates. A template copied in afterwards that
-holds the old name of the arguments key is refused at spawn, naming
-`agent_args`; one with no `agent` supplies no agent.
+The installer migrates these files only during a schema upgrade. Templates
+added afterwards use `agent_args` for arguments; omitting `agent` leaves
+agent selection to the caller.
 
 **After the upgrade:**
 
 - Restart every `serve` and every caller, TypeScript clients included.
+- Resume each agent stopped for the upgrade, parents first, with
+  `AGENT_DIRECTOR_INSTANCE_ID=<its recorded parent>` set for each child's
+  command only; follow [step 6 of the upgrade skill](../skills/upgrade-agent-director/SKILL.md#6-resume-the-agents).
 - Cursor gateway refusal reporting requires both the caller and the running
-  gateway to be agent-director 0.17.2 or later. With a pre-0.17.2 gateway,
-  `send-keys` returns `{}` after the 2 s wait for refused text until the row is
-  relaunched (`kill` or `pause`, then `resume`). `pause` can itself be refused
-  while input is held; follow
-  [Cursor input outcomes](caller-contract.md#cursor-input-outcomes) for recovery.
-- A link `~/.agent-director` that points to `~/.config/agent-director` is allowed,
-  for scripts that still name the old path.
+  gateway to be agent-director 0.17.2 or later. Relaunch Cursor rows (`kill` or
+  `pause`, then `resume`) to run the installed gateway; follow
+  [Cursor input outcomes](caller-contract.md#cursor-input-outcomes) if input is held.
+- Check, then delete, any `~/.claude/settings.json.bak.<YYYYmmdd-HHMMSS>`
+  files: they may hold your tokens. Install and uninstall keep no
+  copy of `settings.json` and delete none of these, but each names those it
+  finds on one line, each path shell-quoted, ready to paste after `rm --`.
+- A link `~/.agent-director` that points to `~/.config/agent-director` is allowed
+  for scripts that still name the old path when the install does not cross the
+  native-input cutover. For a crossing upgrade, follow the
+  [link refusal procedure](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused).
 - Change by hand each entry that names the old path: a `claude mcp add`
   registration the installer did not find, help hooks in the `settings.json` of
   other `CLAUDE_CONFIG_DIR` folders, [Codex MCP and help
   entries](settings.md#set-up-agent-director-in-a-codex-folder), and scripts or
   test setups that pass the old binary's path.
 - An earlier release is installed with its own `install.sh`, fetched from its
-  tag; this release's `install.sh` refuses an earlier release's binaries (exit
-  3).
+  tag, provided it [supports this host](#requirements); this release's
+  `install.sh` refuses an earlier release's binaries (exit 3).
 
-**Refusals** (exit 5, with every file unchanged; each has its check and fix in
-Operator actions):
-[`ErrMoveConflict`](operator-actions.md#installsh-refuses-with-errmoveconflict)
-(the layout cannot be moved as it is),
-[`ErrAgentsLive`](operator-actions.md#installsh-refuses-with-erragentslive)
-(an agent or an agent-director process still uses the old directory), and
-[`ErrMoveFailed`](operator-actions.md#installsh-stops-with-errmovefailed)
-(the copy failed; the old directory is untouched).
+For upgrade refusals, incomplete cutovers or partial restores, see
+[refusal reasons](operator-actions.md#upgrade-refusal-reasons),
+[cutover recovery](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete)
+and [kept-install recovery](operator-actions.md#putting-back-a-kept-install).
 
-The migration refuses a `config.toml` or a template it cannot read safely, or a
-link it cannot write through (exit 5, `ErrConfigMalformed` or
-`ErrTemplateMalformed`, every file unchanged): see
-[`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template).
-A migration write that fails after the binaries are installed stops the install
-(exit 1, the file as it was, every copy kept), as does a migration that refuses
-a file the checks accepted (exit 5). After a move, each of these two stops also
-prints the lines that still name the old directory, as the move's summary does,
-because a re-run has no move to print them. See
-[A migration write failed after the binary swap](operator-actions.md#a-migration-write-failed-after-the-binary-swap).
+For refused files or failed migration writes, see
+[config and template refusals](operator-actions.md#installsh-refuses-configtoml-or-a-template)
+and [migration-write recovery](operator-actions.md#a-migration-write-failed-after-the-binary-swap).
 
-**Going back** to the previous release is
+For rollback, follow
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
-Binary-only rollback requires an unchanged directory and schema. Restoring a
-pre-upgrade store loses writes since its backup; restoring the kept pre-move
-directory loses writes since the move.
 
 ## Install the TypeScript client
 
@@ -466,7 +508,8 @@ It works on `~/.config/agent-director`, or on the old directory (see
 [Upgrade](#upgrade)) for an install that was never moved. It removes the
 binaries, the PATH link, the help hooks in `~/.claude/settings.json` (those of
 an install from before the move included) and the `inject_help_hook` setting,
-and keeps the directory unless `--purge`. It leaves the MCP and help entries
+and keeps the directory unless `--purge`. Like the install, it names old copies
+of `settings.json` (see [Upgrade](#upgrade)). It leaves the MCP and help entries
 made by hand in Codex folders; remove them as [Set up agent-director in a Codex
 folder](settings.md#set-up-agent-director-in-a-codex-folder) says.
 
@@ -504,11 +547,6 @@ once the upgrade is confirmed.
 - No registration found from that directory (Claude Code answers `No MCP server
   named ...`): it says so; this is not a failure. See
   [which directories see a registration](#mcp-registration).
-- Any other failure: stderr gets the command run, its exit status and its
-  stderr, with the command to run by hand. Every later step, `--purge`
-  included, still runs, and `uninstall.sh` then exits 6.
-
-A name registered in several scopes is refused by `claude mcp remove` without a
-scope, so `--mcp-also` reports that failure. Remove each one by hand with
-`claude mcp remove agent-director -s <scope>`, once per scope
-(`claude mcp get agent-director` shows one scope at a time).
+- Any other failure, a name registered in several scopes included: every later
+  step still runs and `uninstall.sh` exits 6; see
+  [The MCP registration or deregistration failed (exit 6)](operator-actions.md#the-mcp-registration-or-deregistration-failed-exit-6).

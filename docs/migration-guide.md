@@ -56,7 +56,7 @@ wrong-store authority is corruption, not permission to use legacy files.
 importer; `{from:16, apply:migrateV16toV17}` adds permission provenance without
 reimporting input; `{from:17, apply:migrateV17toV18}` adds Cursor evidence tables;
 `{from:18, apply:migrateV18toV19}` adds the state/process evidence columns;
-`{from:19, apply:migrateV19toV20}` adds `display_evidence`.
+`{from:19, apply:migrateV19toV20}` adds `display_evidence` and `observation_writer`.
 Earlier `apply` steps remain unchanged and individually
 transactional. Inspect the actual registry for later work;
 no next schema number is reserved here.
@@ -166,37 +166,40 @@ The engine walks the actual registry; do not fold later changes into settled hop
 
 ### Current schema facts: v19 → v20
 
-`migrateV19toV20` appends nullable, default-free `spawns.display_evidence TEXT`,
-after `process_evidence` on a normal v19 store and in fresh DDL. It records
-the shown display's evidence even when no Displayed State is present; it
-does not change `display_observation` or the v18→v19 step. There is no backfill:
-a newly added column is NULL on existing rows, which then read
-`unknown`/`no_evidence` for display confirmation.
+`migrateV19toV20` appends nullable, default-free `spawns.display_evidence TEXT`
+and then `spawns.observation_writer TEXT`, after `process_evidence` on a normal
+v19 store and in fresh DDL. `display_evidence` records the shown display's
+evidence even when no Displayed State is present; `observation_writer` holds
+the random token of the observer commit that last wrote the display
+observation or record, so an observer whose COMMIT went unanswered confirms
+only its own write. Neither changes `display_observation` or the v18→v19 step.
+There is no backfill: newly added columns are NULL on existing rows, which then
+read `unknown`/`no_evidence` for display confirmation and match no observer's token.
 Neither upgrade time, display `since` nor the pane baseline supplies evidence.
 
 The administrator sentinel gate applies. Before DDL, the transaction validates
-any existing column (exact name and case, TEXT, nullable, no default, not a
-primary key) and all non-null values (TEXT containing a valid JSON object).
-Incompatible shape or data returns `ErrSchemaMismatch` with
-"v19→v20 incompatible spawns.display_evidence" or
+each existing column (exact name and case, TEXT, nullable, no default, not a
+primary key) and all non-null `display_evidence` values (TEXT containing a
+valid JSON object). Incompatible shape or data returns `ErrSchemaMismatch` with
+"v19→v20 incompatible spawns.<column>" or
 "v19→v20 invalid spawns.display_evidence"; the v19 schema, data and stamp remain.
-A compatible partial reentry keeps the column and values in place. Semantic
-record validity and ownership are checked on read; malformed or inapplicable
-records give unknown rather than failing the read.
+A compatible partial reentry keeps present columns and values in place and adds
+the missing one. Semantic record validity and ownership are checked on read;
+malformed or inapplicable records give unknown rather than failing the read.
 
-The addition and stamp 20 commit together. Store identity, input authority,
+The additions and stamp 20 commit together. Store identity, input authority,
 permission/proof tables and existing evidence columns are unchanged.
 `confirmations_schema_test.go` covers convergence, no backfill, reentry,
 refusal and reopen. Recovery is [restore-only](#emergency-downgrade-recipe):
 a v19 binary refuses a v20 store. Authorized re-migration of a restored v19
-backup adds the empty column again.
+backup adds the empty columns again.
 
 ### Current schema facts: v18 → v19
 
 `migrateV18toV19` appends each missing one of three nullable, default-free
 `spawns` columns, `state_evidence TEXT`, `settled_evidence TEXT` and
 `process_evidence TEXT`, in that order; fresh DDL keeps that order before
-the v20 display column.
+the v20 columns.
 Each holds NULL or one JSON object (see "v19 columns" under
 [`internal/store`](architecture.md#internalstore)). There is no backfill: no
 stored timestamp establishes the exact value and owner a record names, so a
@@ -941,8 +944,8 @@ v13→v14 and v14→v15 hops use the same respective definitions; v16 shares
 `inputDeliveryDDL` and commits its input authority with fresh creation. The v17
 permission columns match `v17PermissionColumns`; v18 shares
 `cursorObligationsDDL` with its hop; the three v19 evidence columns match
-`v19EvidenceColumns`, followed by v20's nullable `display_evidence TEXT`
-(`v20DisplayEvidenceColumn`). Future changes must update
+`v19EvidenceColumns`, followed by v20's nullable `display_evidence TEXT` and
+`observation_writer TEXT` (`v20Columns`). Future changes must update
 both fresh DDL and the next hop. The §3 step 4
 `schemaShape` comparison guards that both paths land in the same place. If you
 only touch the hop, fresh installs are stuck on the old schema; if you only
@@ -1025,10 +1028,11 @@ v6 → v5 recipe. Each recipe assumes the store is at its own starting version
 and changes nothing a newer version added, so never skip one.
 
 **Current recovery policy.** Schemas v20, v19, v18, v17 and v16 are restore-only.
-The v20 display column and v19 evidence columns have no reverse recipe:
+The v20 display columns and v19 evidence columns have no reverse recipe:
 restore the stopped-writer pre-upgrade set, losing all later writes, and
-never drop the columns or reset the version. Display evidence is freshness
-metadata only; it carries no authority, delivery or proof fact. A v19 binary
+never drop the columns or reset the version. Display evidence and the
+observation writer token are freshness and commit-confirmation metadata only;
+they carry no authority, delivery or proof fact. A v19 binary
 refuses a v20 store with `ErrSchemaMismatch`. The v18
 Cursor input/proof records preserve accepted work and uncertain issue evidence;
 dropping them cannot establish non-delivery or authorize replay. The v17

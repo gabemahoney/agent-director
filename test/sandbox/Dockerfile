@@ -32,9 +32,33 @@
 
 FROM debian:bookworm-slim
 
-# Go toolchain version. Pinned to match the go.mod `go` directive (go 1.22);
-# 1.22.10 is the patch release the sibling test/Dockerfile also pins, so the
-# in-tree SHA256s below are already vetted.
+# The suites are tested on Debian 12 only (SRD SR-4.1). The bookworm-slim tag
+# is not digest-pinned, so if it ever moves to another Debian major, or the
+# base is not Debian, stop here before anything is installed rather than
+# silently test another platform. /etc/os-release is read as data, never
+# sourced. test/Dockerfile runs the same check.
+RUN os_id=; os_version_id=; \
+    if [ -r /etc/os-release ]; then \
+        while IFS='=' read -r key value || [ -n "$key" ]; do \
+            value=${value#[\"\']}; value=${value%[\"\']}; \
+            case "$key" in \
+                ID) os_id=$value ;; \
+                VERSION_ID) os_version_id=$value ;; \
+            esac; \
+        done < /etc/os-release; \
+        found="ID=${os_id:-<unset>} VERSION_ID=${os_version_id:-<unset>}"; \
+    else \
+        found="no readable /etc/os-release"; \
+    fi; \
+    if [ "$os_id" != debian ] || [ "$os_version_id" != 12 ]; then \
+        echo "ERROR: base image is $found; this image requires Debian 12 (ID=debian VERSION_ID=12)" >&2; \
+        exit 1; \
+    fi
+
+# Go toolchain version. Pinned to match the go.mod `go` directive (go 1.27.3),
+# the same release the sibling test/Dockerfile pins. Release binaries are built
+# in this image, so it is also the release toolchain: darwin binaries need Go
+# 1.24 or later for the LC_UUID load command macOS 26's dyld requires (b.jh2).
 #
 # Bump policy for GO_VERSION + GO_SHA256_AMD64 / _ARM64:
 #   1. Pick the desired version on https://go.dev/dl/ (keep in lockstep with
@@ -46,9 +70,9 @@ FROM debian:bookworm-slim
 #   4. Replace GO_SHA256_AMD64 + GO_SHA256_ARM64 below.
 #   5. Rebuild the image; the in-container sha256sum check verifies the
 #      tarball before extraction, so a stale SHA fails loudly.
-ARG GO_VERSION=1.22.10
-ARG GO_SHA256_AMD64=736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092
-ARG GO_SHA256_ARM64=5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec
+ARG GO_VERSION=1.27.3
+ARG GO_SHA256_AMD64=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+ARG GO_SHA256_ARM64=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
 
 # Bun runtime version. Pinned to match the sibling test/Dockerfile; the bun
 # installer script is SHA-verified below before it is executed.
@@ -85,6 +109,7 @@ RUN apt-get update \
         build-essential \
         ca-certificates \
         curl \
+        file \
         git \
         jq \
         make \

@@ -59,6 +59,13 @@ error:
   alert once, never read it as "dead"; a human runs this release's `install.sh`
   (see [Operator actions](operator-actions.md#a-verb-refuses-with-erroldlayout);
   [Upgrade](install.md#upgrade)).
+- With `HOME` unset or empty, a `--home` (TypeScript `home`) of `~` or
+  `~/…` refuses every call with `ErrInvalidFlags`; with no `--home`, every
+  store-opening call returns `ErrStoreOpen`, even with an absolute
+  `--store-path`. Set `HOME` or pass an absolute `--home`.
+- `ErrJSONMarshal`: the verb succeeded and its changes stand, but its result
+  was lost. Check `get`, `status` or `list` before repeating a call that
+  changes something.
 - Detect features by the binary's version (`agent-director version`, MCP
   `version`, TypeScript `binaryVersion`); `X.Y.Z-rc.N` counts as `X.Y.Z`. The
   `version` result's `config_dir` names the directory the binary keeps its
@@ -96,11 +103,12 @@ To end a live row (`pending` included) and relaunch its id:
 
 ## Bounded recovery on state reads
 
-`status`, `get`, `list` and `sweep` share eligible recovery checks.
+`status`, `get`, `get-many`, `list` and `sweep` share eligible recovery checks.
 `find-missing` remains a supported alias of `sweep` on CLI and MCP, as do
 Go `FindMissing`/`Client.FindMissing` and TypeScript `findMissing`.
-`status` and `get` check only the named row. `list` selects IDs using the
-stored state, displayed state, other filters and limit before checking them.
+`status` and `get` check only the named row. `get-many` checks each named ID
+in order. `list` selects IDs using the stored state, displayed state, other
+filters and limit before checking them.
 It returns those same IDs after recovery, even if a returned value no longer
 matches the filter; it neither refills limit slots nor adds newly matching rows.
 Invalid filters are refused before checks. Reading a parent does not check
@@ -115,19 +123,64 @@ display and transcript checks; late exact input proof remains eligible.
 Pending grace and a live launch owner protect an unfinished launch, except
 from [exact Cursor gateway loss](#cursor-operation-boundaries).
 
-Work is bounded per call and writes recheck the sampled identity. A stale
-sample, unavailable provider or unconfirmed commit is not successful recovery;
-a successful read does not prove every check ran or committed. Checks never
+Work is bounded per call (per ID for [`get-many`](#reading-many-agents)),
+and writes recheck the sampled identity. A stale sample, unavailable provider or unconfirmed commit is not
+successful recovery; a successful read does not prove every check ran or
+committed. Checks never
 deliver input or permission answers, replay a submission, signal or restart
 an agent. Commands keep their own preconditions. Nothing runs between calls
 unless an operator [schedules the sweeps](maintenance.md#scheduling-the-sweeps).
 
-`status`, `get`, `list`, `sweep` and `find-missing` can fail with
+`status`, `get`, `get-many`, `list`, `sweep` and `find-missing` can fail with
 `ErrStoreBusy` and an empty result when one of the call's bounded store reads
 does not finish in time: other work held the store or a lock the read needed,
-or the read's time ran out. A failure while selecting rows means nothing was
-checked. A later failure of `status`, `get` or `list` leaves observations its
-checks already committed recorded.
+or the read's time ran out. A failure while selecting rows means that selection
+checked nothing. A later failure of `status`, `get`, `get-many` or `list` leaves
+committed observations recorded.
+
+## Reading many agents
+
+To poll many agents, use `list` for their IDs, then one `get-many`:
+
+```sh
+agent-director get-many agent-a agent-b
+```
+
+On the CLI, each word after `get-many` is one ID, unchanged (commas and a
+leading `-` included), except the global flags `--store-path`, `--home`,
+`--tmux-command` and `--create-if-missing`, which the CLI takes anywhere,
+with their values.
+
+Each `spawns` element is exactly that ID's `get` result, with every field and
+guarantee described for `get` in this contract. IDs with no record go to
+`not_found`; an `ended` or `missing` row with a record is found. Both fields
+are always arrays, empty rather than null, each in the order the IDs were given.
+Any other read failure stops the call with both lists empty and no later ID
+read; earlier reads' committed observations stay recorded.
+
+Before reading any agent, `get-many` refuses a call with no IDs (`ErrInvalidFlags`),
+then one with more IDs than [`[get_many] id_cap`](configuration.md#keys)
+(`ErrTooManyIds`), then one with an empty or repeated ID (`ErrInvalidFlags`).
+Empty and repeated IDs are named by their 1-based positions, never their text.
+On `ErrTooManyIds`, split the IDs across calls of at most `err_details.id_cap` IDs.
+
+The result is not a single snapshot: agents are read one after another, so
+`family_state` can disagree between members of one family within a result.
+A large result may reach an MCP caller's model as a file.
+
+Call time grows with the number of IDs and with slow tmux calls. A tmux
+server that answers nothing costs about one
+[`[tmux] query_timeout_ms`](configuration.md#timing-settings-tmux) per server
+under the [stop rule](#unchanged-panes), unless that timeout uses up the rest of an ID's
+[`[tmux] sweep_budget_seconds`](configuration.md#timing-settings-tmux).
+A stalled pane capture costs up to
+[`[tmux] action_timeout_ms`](configuration.md#timing-settings-tmux) per working
+Claude or Codex agent. There is no fixed call-time limit; raise TypeScript's
+`callTimeoutMs` if needed (see the timeout rule above).
+
+A binary without `get-many` refuses it with `ErrUnknownVerb` (CLI and
+TypeScript), or `ErrUnknownTool` over MCP. On either refusal, fall back to
+`get` per ID.
 
 ## Sweep results
 
@@ -305,6 +358,15 @@ prompt until its conversation is confirmed; `allow_pending` does not override
 that rule. Hook configuration diagnosis is in
 [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
 
+A first SessionStart can wait up to `pending_grace_seconds` (at most 540 s)
+for the launch to record its pane; Claude's first response waits for it.
+A caller whose store differs from the one its pane's hooks use (an alternate
+`HOME`, `--home` or `--store-path` on a shared tmux server) gets no error:
+the row stays `pending`, noted `unreported` while the agent runs, and goes
+`missing` once it exits. A shared tmux server started with an alternate
+`HOME` sends every later spawn's hooks to that store. Use a
+[separate tmux server](permissions.md#one-spawn-under-another-home-or-store).
+
 ## Experimental context fullness
 
 `status`, `get` and each visible `list-subagents` record include the same
@@ -390,14 +452,18 @@ Callers own any policy for compaction, replacement or unknown readings.
 Use [`family_state`](usage.md#family-state) as a report of currently stored
 family activity. `waiting` means neither task success nor permission or
 readiness to take an action. With [settling](configuration.md#settle-time-state),
-it can still show `waiting` briefly after work begins.
+a family change in either direction, including to `waiting` after the last
+working member stops, shows only after it has held for `settle_ms` (up to
+60 s); until then the previous settled value shows.
 
 Family freshness is unconfirmed: the value is a consistent stored projection,
 not evidence that every member was checked. It has no
 [confirmation](#confirmations) record, and the row's own confirmed records
 say nothing about its descendants. A stopped agent still recorded
 as `working` keeps the raw family working until an existing detector or
-state change records otherwise. Cursor's existing per-agent read projection
+state change records otherwise. A hook payload over 1 MiB is dropped whole,
+so its state or subagent report is lost; a missing report is not proof that
+work ended. Cursor's existing per-agent read projection
 can show `missing` before its terminal write succeeds; family reporting
 continues to use stored states until that write commits.
 
@@ -412,12 +478,16 @@ lock acquisition.
 
 Codex sends no hook when a turn ends in an error, such as a model at
 capacity. The row reads `working` until a check finds the turn's end in
-Codex's rollout: a `status` or `get` of that row, a `list` selecting it, or
-`sweep` can move it to `waiting` (shown after any
+Codex's rollout: a `status` or `get` of that row, a `get-many` naming it,
+a `list` selecting it, or `sweep` can move it to `waiting` (shown after any
 [settle time](configuration.md#settle-time-state)). Keep polling `status` as for
 any turn. `waiting` does not mean the turn succeeded: read the pane for the
 error before sending more work. The row's `state_changed_at` is the time of
 that recovery write, not of the turn's end.
+
+A turn Codex starts without a `UserPromptSubmit` hook leaves the row in the
+previous turn's state (`waiting` if it ended) until its own `Stop` or
+Interrupt; no read ends it.
 
 That move proves none of the turn's permission requests gone. On a relay-on
 row that had a request in that turn, a plain `send-keys` and `pause` can
@@ -538,7 +608,8 @@ only while it shows `idle_screen`.
 - **Clearing.** When its pane changes or cannot be sampled, or the agent
   moves on, the row keeps `displayed_state` until the exit candidate settles
   and a check commits the exit. `ended`, `missing` and a state a command sets
-  show at once.
+  show at once. A shown `idle_screen` also ends at once on any Codex turn
+  start or ownership change, including a `waiting` row retaining it.
 - **Trail.** Each entry and exit appends one
   `ad.spawn.displayed_state_transition` trail record with `instance_id`,
   `prior_state`, `new_state`, `event` and `ts`; the trail is audit only and a
@@ -551,7 +622,7 @@ only while it shows `idle_screen`.
 
 ### Unchanged panes
 
-`status`, `get`, `list` and `sweep` sample eligible selected `working`
+`status`, `get`, `get-many`, `list` and `sweep` sample eligible selected `working`
 Claude or Codex rows: the agent's own pane of the current launch, fingerprinted
 as the `pane_sha256` a default `read-pane` returns. Only the fingerprint is
 kept; nothing reads what the pane says.
@@ -580,9 +651,10 @@ kept; nothing reads what the pane says.
 - **Time.** A sample makes up to three tmux calls (a lookup, a pane listing
   and a capture), each bounded by
   [`query_timeout_ms` or `action_timeout_ms`](configuration.md#timing-settings-tmux).
-  Within one call, a tmux server that does not answer a lookup or pane
-  listing is not asked again: its later rows count as failed samples for
-  baseline handling, but their skipped work makes sweep coverage incomplete.
+  Within one call, a tmux server that does not answer a lookup or pane listing
+  is not asked again unless that timeout uses up the rest of an ID's
+  [`[tmux] sweep_budget_seconds`](configuration.md#timing-settings-tmux): its later rows count as failed
+  samples for baseline handling, but their skipped work makes sweep coverage incomplete.
 
 ## Ordinary text submission
 
@@ -852,6 +924,25 @@ failure or when no path is recorded, recomputes the current session's path
 from the row's cwd and config directory. Codex tries only its current recorded
 path. The refusals write and launch nothing.
 
+Claude recomputes under the row's saved absolute `CLAUDE_CONFIG_DIR`, else
+`~/.claude`; a relative, `~`-prefixed or blank selection is not used, so
+only a still-valid recorded `jsonl_path` finds that transcript. A row saved
+with no selection resumes with pre-trust on `~/.claude.json`, even when the
+pane's environment selects another directory, so the agent may stop at
+Claude Code's folder-trust prompt. Answering it in the pane continues the
+conversation; a fresh spawn or reuse does not.
+
+Before that lookup, for every agent, `resume` checks that the row's saved cwd
+is still a directory agent-director can enter, as `spawn` checks its `cwd`: a
+path that is gone, or a directory that the user agent-director runs as cannot
+enter (no search permission on it, such as mode 000, or on a parent), gives
+`ErrCwdNotFound`, and one that is now a file `ErrCwdNotADirectory`. Nothing is
+written or launched. Recreate the directory at that path, or for a permission
+failure make it enterable by that user, and resume again; the conversation
+continues. Or, for Claude and Codex, spawn the same id with `reuse_finished`,
+the row's agent and an existing `cwd`, which starts a fresh conversation. A
+Cursor row follows the error's fresh-recovery advice instead.
+
 When the current candidates fail, `ErrJsonlNeverWritten` means the recorded
 path is empty and visible current-life history is empty. An archived entry
 for the current session itself does not count as visible history. Otherwise
@@ -948,7 +1039,9 @@ remain unverified.
 `ended` or `missing` Cursor row. It loads only the latest durably reported
 session with its saved configuration; see [Pause and resume](usage.md#pause-and-resume).
 Live and pending rows return `ErrSpawnNotResumable`. No saved session returns
-`ErrNoSessionId`. Missing, unreadable or insecure current protected transcript
+`ErrNoSessionId`. A saved cwd that is gone, cannot be entered or is no longer
+a directory returns `ErrCwdNotFound` or `ErrCwdNotADirectory` (see
+[Transcript recovery](#transcript-recovery)). Missing, unreadable or insecure current protected transcript
 returns `ErrJsonlMissing` before row or launch changes. Older sessions are
 never candidates, even when their native storage or transcripts exist.
 
@@ -1007,6 +1100,8 @@ arguments return `ErrSpawnDeniedFlag` before writing or launching;
 Remove the named argument and any owned value, then retry. Conflicting modes,
 unknown aliases, route-changing arguments and ordinary force/yolo/sandbox/trust
 flags are refused. No compatible additional permission flag is supported.
+agent-director cannot reliably detect Cursor repairing a malformed native
+policy or silently falling back from it.
 Cursor permission-list refusals are in [Permissions](permissions.md#cursor-spawns);
 argument replacement and empty-list semantics are in
 [Settings](settings.md#the-agent-and-its-arguments).
@@ -1329,6 +1424,16 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
 - `ErrTemplateAgentMissing`: a template holds `agent_args` but names no agent,
   at `make-template` or when a `spawn` loads it. Give the template an `agent`,
   or remove its `agent_args`.
+- `ErrTemplateMalformed`: a template sets the arguments key under its old
+  name, holds a reserved key (`template`, `instance_id`, `tmux_session_name`
+  or `reuse_finished`), or sets one key under names differing only in letter
+  case. Use `agent_args`, remove the reserved key and keep one spelling.
+  `make-template` refuses those reserved keys with `ErrInvalidFlags`.
+- `ErrReservedEnvKey`: the merged template and call `extra_env` sets `HOME`
+  (any value), an `AGENT_DIRECTOR_*` key, or a malformed name (empty, or
+  containing `=` or NUL); `make-template` checks its own `extra_env` the
+  same way. Remove the key; select another account as
+  [Multi-Account](multi-account.md) says.
 - `ErrPermissionsUnsupported`: a `codex` or `cursor` spawn or template carries an `allow`,
   `deny` or `ask` entry. Drop the lists; see
   [Permissions](permissions.md#codex-spawns) or
@@ -1399,11 +1504,8 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
     [Permissions](permissions.md#disable_ask_user-config)). Every spelling of
     a value is read (the next word, after `=`, or attached to a short flag),
     and an option is refused even after the `--`. A repeat of a flag the
-    supervisor adds is not refused or removed: when the arguments already
-    carry `--no-daemon`, `--dangerously-bypass-hook-trust` (pre-trust `ok`) or
-    `--enable write_stdin_approval` before any `--`, the supervisor adds no
-    second one, and Codex itself rejects a flag the arguments repeat (see
-    [Codex's layers](settings.md#codexs-layers)).
+    supervisor adds is not refused or removed; see
+    [Codex's layers](settings.md#codexs-layers).
   - `resume` does not apply spawn's argument refusals. It filters recognized
     session selectors and Claude print mode from stored arguments as described
     in [Pause and resume](usage.md#pause-and-resume).
@@ -1425,6 +1527,11 @@ re-encoding, changes their order or spelling. When an original recognized
 required scalar or list option lacks its required value, only literal
 filtering applies and the agent's parser rejects incomplete input.
 
+Not refused: a relative, `~`-prefixed or blank `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME` reaches the agent unchanged, but `pre_trust` reads `failed`
+with a warning and the agent may stop at its folder-trust prompt. Read the
+pane and answer it, or relaunch with an absolute path.
+
 ## Permission relay
 
 For Cursor, use the same request token, decision and delivery fields.
@@ -1441,6 +1548,13 @@ do not replay it. A hook's late or uncertain acknowledgement commit can leave
 Neither a claim nor durable acknowledgement proves transport completion, agent
 receipt, execution or dialog closure.
 
+For Claude and Codex, a relay hook that fails before recording an identifiable
+request denies it. One that cannot read the event or dies before recording,
+or a binary that cannot run, gives no relay answer and leaves the agent's
+native prompt. A prompt with no recorded request holds no input, so a plain
+`send-keys` can answer it. Claude shows its native dialog while the relay
+hook runs; that dialog is not evidence that the hook died.
+
 Every Cursor relay reply, including timeout denial, requires its own durable
 acknowledgement. Failed or missing acknowledgement means no relay answer is
 sent to Cursor. Separately validated cancellation or policy rejection is a
@@ -1450,7 +1564,8 @@ approval as though known absent. See [Cursor permissions](permissions.md#cursor-
 for delivery, proof and request lifetime rules.
 
 For fallback, inspect a connected current menu and make a fresh deliberate
-choice for that request only while it remains eligible and unclaimed.
+choice for that request only while it is not closed or proven gone and no
+response is claimed; an unacknowledged recorded verdict does not prevent it.
 `fallen_back` alone does not guarantee an answerable
 native request. Do not reuse a choice from before the relay deadline, or retry
 an uncertain answer. Terminal cancellation or native timeout cannot revive a
@@ -1464,9 +1579,9 @@ supplies neither ACP approval authority nor proof.
 - After `decide` returns `delivery` `not_confirmed`, poll `get-permission`
   until `delivery` reads `delivered` or `fallen_back`, which it does by
   `confirm_by`.
-- `get`, `list` and `get-permission` never wait for the store's write lock.
+- `get`, `get-many`, `list` and `get-permission` never wait for the store's write lock.
 - With a [settle time](configuration.md#settle-time-state) set, `status`,
-  `get` and `list` show the settled state with no lateness marker;
+  `get`, `get-many` and `list` show the settled state with no lateness marker;
   [`displayed_state` settling](#needs-intelligence-and-idle-screen-rows)
   depends on successful observations. Verbs act on the live state, so a verb
   can refuse, with a named error, on a state `status` does not show yet.
@@ -1474,11 +1589,19 @@ supplies neither ACP approval authority nor proof.
   `err_name` and `err_description` (in the CLI's error JSON, the MCP
   error's `data`, and the TypeScript client's `errDetails`):
   `ErrRelayFallenBack`, `ErrPaneAnswerInProgress`, `ErrClaimTooSoon`,
-  `ErrPaneChanged`, `ErrDialogMaybeOpen`,
+  `ErrPaneChanged`, `ErrDialogMaybeOpen`, `ErrTooManyIds`,
   [`ErrPauseTimeout`](#when-pause-cannot-confirm-exit), and an `ErrInternal`
   from a pane answer whose key was sent (`key_sent` true: read the pane before you
   send anything again). Read facts from it, never from the description; a
   caller that does not use it ignores it.
+
+| Error | `err_details` |
+|---|---|
+| `ErrRelayFallenBack` | The request's `get-permission` fields; `state`; `open_requests`, the agent's other requests awaiting an answer, oldest first, each with `request_token`, `tool_name`, `requested_at`, `delivery`, `hook_alive` and `pane_answer` (`[]` for none, `null` when unreadable). |
+| `ErrDialogMaybeOpen` | The oldest request holding the dialog, with its `get-permission` fields; `state`; `unproven_requests`, the agent's other such requests, oldest first, with the same fields. |
+| `ErrPaneAnswerInProgress` | `request_token`, `pane_as`, `pane_intent_at`, `sender_alive` (`true`, or `null` when uncheckable) and `not_before`. |
+| `ErrPaneChanged` | `n_lines` and the `request_token` named, if any. |
+| `ErrClaimTooSoon` | `hook_alive`, `hook_gone_at` and `not_before`. |
 
 `decide` records no verdict when it refuses with:
 
@@ -1493,7 +1616,9 @@ supplies neither ACP approval authority nor proof.
 - `ErrStoreBusy`: the bound ran out before the verdict could commit.
   This can include store acquisition or SQL work; it does not establish
   that another process or call held the store. Retry only as a new,
-  deliberate call with a fresh budget.
+  deliberate call with a fresh budget. Without `--max-wait-ms`, a write
+  lock not taken within `[store] busy_timeout_ms` is `ErrInternal`
+  instead; a negative bound is `ErrInvalidFlags`.
 - `ErrAlreadyDecided`: a verdict is already recorded (first `decide` wins, and
   the relay hook records a deny of its own when its time runs out,
   `decision_reason` `timeout`), or the request was answered at the pane.
@@ -1505,6 +1630,10 @@ supplies neither ACP approval authority nor proof.
   closed, and stays closed after `resume`. A decided request without a
   relay acknowledgement or completed pane answer is also closed when its
   agent ends or is marked missing; its recorded verdict is preserved.
+  On a closed request, `decide` gets `ErrAlreadyDecided` only for a verdict
+  the relay acknowledged before closure, a completed pane answer or a
+  `find_missing` deny; an `ended` deny or an unacknowledged verdict gets
+  `ErrNoOpenPermissionRequest`.
 
 The positive `--max-wait-ms` bound covers store acquisition, SQL, cleanup
 and reporting under the same original deadline. Expiry prevents new SQL
@@ -1542,9 +1671,14 @@ A pane answer (`send-keys --request-token`) sends nothing when it refuses
 with:
 
 - `ErrPaneChanged`: the pane changed since you read it. Read it again; the
-  error does not carry the new hash.
+  error does not carry the new hash. Volatile lines, such as a spinner or a
+  clock, can cause it.
 - `ErrPaneAnswerInProgress`: another pane answer to this request is still
-  being sent. Do nothing.
+  being sent, or its sender cannot be checked and `not_before` has not
+  passed. Do nothing. A sender that died leaves `pane_answer` `intent`, its
+  key possibly typed: read the pane again, then answer with the fresh hash
+  or use `record-pane-answer`.
+- `ErrStoreBusy`: the store's write lock was not taken in time.
 - `ErrSendKeysWhileRelayed`: a relay hook of the agent may still answer
   its request: answer the request it names with `decide`, or retry later (a
   plain retry can then get `ErrDialogMaybeOpen`, below). Don't decide one
@@ -1556,6 +1690,11 @@ with:
 `record-pane-answer` returns `ErrClaimTooSoon` while the relay hook may still
 answer or has not been gone for 2 s yet, so the prompt may not be drawn:
 retry at `err_details.not_before` (null only while the hook is seen running).
+Its other refusals record nothing: `ErrPermissionRequestNotFound` (no request
+has the token), `ErrNoOpenPermissionRequest` (closed with its spawn),
+`ErrAlreadyDecided` (confirmed, or already closed at the pane),
+`ErrPaneAnswerInProgress`, `ErrPaneChanged`, `ErrStoreBusy` and
+`read-pane`'s tmux errors.
 
 On relay-on rows, while a request is fallen back with no pane answer recorded, a
 plain `send-keys` (no `--request-token`) is refused with
@@ -1563,6 +1702,11 @@ plain `send-keys` (no `--request-token`) is refused with
 other open requests: close it with a pane answer or with
 `record-pane-answer`. While a relay hook of the agent may still answer,
 every `send-keys` is refused with `ErrSendKeysWhileRelayed`.
+
+On Codex, `Escape` while an undecided main-agent request's relay hook polls
+ends the hook: the command does not run and no dialog follows, but the
+request falls back and stays open. Close it with `record-pane-answer --as deny`
+and an inspected read's hash once the hook has been gone 2 s.
 
 A decided request recorded before schema v7 with `proven_gone_how`
 `agent_gone` no longer holds plain `send-keys`, even when its reported
@@ -1582,6 +1726,16 @@ can last until `created_at` plus the configured relay window plus 2 s
 (24 h + 2 s at the default). A decided legacy request with `agent_gone`
 proof contributes no hold.
 
+A request with no recorded settle instant takes no new verdict. Until
+`requested_at` plus the relay window less 1 s, `decide` on an undecided one
+is `ErrNoOpenPermissionRequest`. After that, `decide` first waits until its
+`confirm_by` (at most 3 s; `ErrStoreBusy` if `--max-wait-ms` cannot cover
+it). An existing verdict or completed pane answer then keeps its own refusal;
+a still-open request gets `ErrRelayFallenBack` only while the row is
+`check_permission` with no other open or later request, otherwise
+`ErrNoOpenPermissionRequest`. A pane answer by its token skips that check:
+after `ErrNoOpenPermissionRequest`, do not answer it at the pane.
+
 On relay-off rows, the API does not guard `send-keys` against an open
 permission prompt: keys can reach the prompt and answer it. Cursor's gateway
 still checks prompt admission; see [Cursor input outcomes](#cursor-input-outcomes).
@@ -1595,16 +1749,33 @@ hooks show the request's dialog gone. Follow the request's proof and delivery
 fields. Apart from a Cursor turn's end (below), completing or interrupting the
 main turn does not release a child or unknown-origin request, even when its
 child id is null. See [The dialog hold](permissions.md#the-dialog-hold).
-Nothing is sent. Its
-`err_details` name the oldest such request, how agent-director's records
-say it closed and since when, and the agent's other such requests. Keep
-the keys and retry later. If it is still held after some seconds, have a
-person or an LLM read the pane and, having looked, send with that read's
+Nothing is sent. Keep the keys and retry later. If it is still held after
+some seconds, have a person or an LLM read the pane and, having looked, send with that read's
 `pane_sha256`: a matching hash passes the API's dialog hold, and a changed pane
 is `ErrPaneChanged`. Every other refusal still applies. On Cursor the gateway
 can still refuse the prompt with `gateway_refused`; follow
 [Cursor input outcomes](#cursor-input-outcomes). Never pass
 `--expect-pane-sha256` from an automatic flow.
+
+A matching hash does not close every race: the pane can change between
+capture and key, a key already in flight can land on a dialog that appears
+after the check, identical Claude or Codex dialogs cannot be told apart, and
+a native dialog drawn more than 2 s after its hook ends can appear after
+`record-pane-answer`. The affected request stays unproven and holds plain
+input until someone looks again.
+
+A hook that ends a turn proves gone only the requests recorded before the
+whole second it started. This holds for a main-turn end (Claude's `Stop` or
+idle-prompt Notification, Codex's `Stop` or `Interrupt`) and for a Claude
+subagent's `SubagentStop`, which covers only that subagent's requests. A
+request recorded in that second, even just before the turn ended, stays
+unproven and holds until a later proof.
+
+A shared recovery check repairs a relay-on Claude or Codex row left in
+`check_permission` once no request holds it. A Claude row goes to `waiting`
+while its main-agent idle-prompt Notification still applies, otherwise to
+`working`. `SubagentStart` and `SubagentStop` leave that notification in
+effect; any other applied hook ends it. A Codex row always goes to `working`.
 
 A Cursor row can stay `check_permission` across working reports while a
 genuine unanswered, unproven request holds it; readiness requires the hold to

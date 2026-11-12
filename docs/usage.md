@@ -3,6 +3,9 @@
 Every verb prints JSON on stdout and a typed error on stderr. The full verb and
 flag list is in `cli-reference.md`.
 
+[`get-many`](caller-contract.md#reading-many-agents) returns `get`'s full
+result for each ID, with the same fields and guarantees described here.
+
 ## Naming the agent
 
 A `spawn` names its agent, `claude`, `codex` or `cursor` (case-sensitive), with `--agent` on the call or
@@ -89,7 +92,7 @@ reported `pre_trust` outcome means, is in
 `idle_screen` while a `working` Claude or Codex agent's pane looks the same
 on successive checks for the
 [configured time](configuration.md#idle-screen-timeout-state); `state` stays
-`working`. Selected `status`, `get`, `list` and `sweep` checks can
+`working`. Selected `status`, `get`, `get-many`, `list` and `sweep` checks can
 observe it; nothing samples between calls. Its separate
 [confirmation record](caller-contract.md#confirmations) reports evidence for
 the display actually returned, including no display. The fields, filtering
@@ -208,9 +211,9 @@ put another `--` before the single prompt argument:
 agent-director spawn --cwd "$PWD" --agent cursor -- -- "--explain this project's entry points"
 ```
 
-The initial prompt preserves Unicode and newlines. It is submitted once per
-launch after session configuration and decision holds permit it, including
-saved-argument replay on resume; `/clear` and `/new` do not submit it again.
+The initial prompt preserves Unicode and newlines. It is submitted once, at
+spawn, after session configuration and decision holds permit it; `resume`,
+`/clear` and `/new` do not submit it again.
 
 Other arguments and lifecycle limitations are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries). Permission
@@ -676,11 +679,11 @@ The response is a single permission row:
   "hook_gone_at": null,
   "attempted_decision": null,
   "attempted_at": null,
-  "tool_use_id": "toolu_01ABCDEF",
+  "tool_use_id": null,
   "pane_answer": "none",
   "pane_as": null,
   "proven_gone_at": "2026-05-31T12:00:04.310Z",
-  "proven_gone_how": "tool_ran",
+  "proven_gone_how": "turn_end",
   "unproven_since": null
 }
 ```
@@ -688,40 +691,41 @@ The response is a single permission row:
 `decision_reason` annotates the recorded verdict: `operator` (API deny),
 `timeout` (relay timeout deny), `find_missing`/`ended` (owning-spawn closure),
 `pane` (`send-keys` or a native Cursor choice), `pane_outside` (outside claim),
-or `tool_ran` (tool execution). API allow initially has no reason; later
-hook close or validated successful Cursor execution can fill that missing
+or `tool_ran` (Cursor tool execution). API allow initially has no reason; later
+validated successful Cursor execution can fill that missing
 reason with `tool_ran`, preserving an existing verdict and non-null reason. Failed MCP invocation proof
 leaves these fields unchanged. Read `decision` for the
 verdict and the [delivery and proof fields](permissions.md#delivery) for its
 outcome; a reason is not an immutable writer identity.
 
-`get` and `list` carry the same delivery fields on each request in a row's
+`get`, `get-many` and `list` carry the same delivery fields on each request in a row's
 `permission_requests`; they list only requests that still await an answer,
 never a closed one. `hook_alive` is `null` when agent-director cannot check
 the relay hook's process (for example from another pid namespace, for a
 Cursor gateway request, or for a
-request recorded by an older agent-director); such a request falls back by
+request with no recorded hook identity); such a request falls back by
 time, at `confirm_by`. A closed request's `delivery` follows the same
 [delivery rules](permissions.md#delivery) as an open one's: a request with
-a settle instant requires an acknowledgement from before closure for `delivered`,
-while requests recorded by an older binary retain their
-[time-derived delivery](permissions.md#requests-recorded-by-an-older-binary).
+a recorded settle instant requires an acknowledgement from before closure for
+`delivered`, while a request with no recorded settle instant keeps its
+[time-derived delivery](permissions.md#requests-with-no-recorded-settle-instant).
 A row
 can read `waiting`, `working` or `ask_user` while a request it recorded
 still awaits an answer, so follow each request you track with
 `get-permission`, not only rows in `check_permission`.
 
 `proven_gone_at` and `proven_gone_how` say when and how the agent itself
-showed the request's dialog gone: `tool_ran` (Claude tool execution or
-validated matching Cursor invocation proof, including an exact failed MCP
+showed the request's dialog gone: `tool_ran` (validated matching Cursor
+invocation proof, including an exact failed MCP
 invocation without execution or answer inference; see [Cursor permissions](permissions.md#cursor-spawns)),
 `turn_end` (an eligible main request
-was written before the main turn ended, see [The dialog hold](permissions.md#the-dialog-hold);
+was written before the main turn ended, or a Claude subagent's request
+before that subagent's turn ended, see [The dialog hold](permissions.md#the-dialog-hold);
 or a Cursor request the gateway never answered when its turn ended, see
 [Cursor permissions](permissions.md#cursor-spawns)) or
-`agent_gone` (a non-Cursor agent ended). A Codex agent's request carries
-no `tool_use_id` (it reads `null`) and is never proven by `tool_ran`; see
-[how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows). `delivered` and a pane answer are
+`agent_gone` (a non-Cursor agent ended). A Claude or Codex agent's request
+carries no `tool_use_id` (it reads `null`) and is never proven by
+`tool_ran`. `delivered` and a pane answer are
 agent-director's own records, not proof. `get` lists every request still
 holding the dialog in `unproven_requests`, with `unproven_since`. A request that
 reads `delivered` or closed at the pane but stays unproven for a while is a
@@ -776,9 +780,8 @@ agent-director record-pane-answer --request-token "$token" \
     --as unknown --expect-pane-sha256 "$hash"
 ```
 
-Pass `--as unknown` unless you saw how it was answered. On a Claude agent, a
-request whose tool then runs is closed on its own (`decision_reason`
-`tool_ran`); a Codex request is closed only by one of the two calls above.
+Pass `--as unknown` unless you saw how it was answered. A Claude or Codex
+request is closed only by one of the two calls above, or with its spawn.
 A Cursor request can close on validated matching shell execution or a successful
 MCP result under [Cursor permissions](permissions.md#cursor-spawns);
 other tool/plan completion supplies no execution proof. `record-pane-answer`
@@ -831,10 +834,8 @@ Retaining those values does not establish account or group isolation. Loading
 the latest conversation can leave the row `pending` until its first real
 prompt. After inspecting the pane, submit that prompt with the existing
 `--allow-pending`; confirmation of the current conversation and
-[permission holds](permissions.md#cursor-spawns) still apply. Loading and
-replay do not manufacture `waiting`.
-The saved initial prompt in `agent_args` is submitted once per launch after
-successful load and hold checks. Transient queued, provisionally held and
+[permission holds](permissions.md#cursor-spawns) still apply. Loading does
+not manufacture `waiting`. Transient queued, provisionally held and
 editable draft text are not restored. Session-selector filtering is defined in
 the [Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
 
@@ -845,25 +846,28 @@ requires a fresh supported launch with an empty composer; `allow_pending`
 does not extend native confirmation to resumed conversations.
 
 `resume` replays stored `agent_args` except recognized session selectors and
-their values, and Claude's `-p` / `--print`, so those options cannot replace
-the latest session or request print mode. A value or prompt that spells a
-selector is preserved. When the original Claude arguments include every
+their values, Claude's `-p` / `--print`, and the saved initial prompt, so the
+resumed agent keeps the latest session, stays interactive and waits for your
+next input instead of repeating its original task. The prompt is every
+argument that is neither an option nor an option's value, plus a `--` and
+everything after it. An option's value is kept, even one that spells a
+selector, reads like a prompt or is `--`. An option agent-director does not
+recognize is read as taking no value, so a word after it is dropped too.
+When the original Claude arguments include every
 recognized required value, surviving options keep their meaning and owned
 values. Arguments keep their order and spelling unless removal would change
-their meaning. Only then, prompt tokens move behind surviving options and
-`--`, or an altered short-option cluster is split or re-encoded to preserve
-its options and values. Prompt tokens keep their exact text and order.
+their meaning. Only then is an altered short-option cluster split or
+re-encoded to preserve its options and values.
 If any recognized required Claude scalar or list option originally lacks its value,
-filtering only deletes the selected options, owned values and cluster bytes;
-it preserves the surviving order and spelling, without moving prompts,
-inserting `--` or re-encoding clusters. The agent's own parser handles rejection.
+filtering only deletes the selected options, owned values, cluster bytes and
+prompt; it preserves the surviving order and spelling, without re-encoding
+clusters. The agent's own parser handles rejection.
 Claude's `--forward-home-settings`, `--ref` and `--on-branch`, with their
 values, are also removed when removing an actual `--cloud` / `--remote`
 leaves no parsed `--environment` / `--pool` option with its required value.
 They remain when that context survives, or when no cloud selector was removed.
-The stored list is unchanged. Codex prompt text remains an original argument
-after `--`, and today's per-launch settings take precedence over replayed
-settings. `resume` does not apply spawn's argument refusals; see the
+The stored list is unchanged. Today's Codex per-launch settings take
+precedence over replayed settings. `resume` does not apply spawn's argument refusals; see the
 [argument recognition limits](caller-contract.md#spawn-and-template-input-refusals).
 A resumed Claude row stays `pending` until Claude reports SessionStart,
 then becomes `waiting`; startup or trust waits and missed hooks can prolong

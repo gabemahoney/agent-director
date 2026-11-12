@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // validatePolicy checks observable policy results without constructing a store.
@@ -36,6 +38,76 @@ func validatePolicy(t *testing.T, agent string, args []string, eligible bool, wa
 	entries, readErr := os.ReadDir(cwd)
 	if readErr != nil || len(entries) != 0 {
 		t.Fatalf("Validate wrote files: entries %v, error %v", entries, readErr)
+	}
+}
+
+func TestValidatePaneOnlyPolicy(t *testing.T) {
+	const value = "caller-value-must-not-leak"
+	type policyCase struct {
+		name        string
+		args        []string
+		relay       string
+		permissions *Permissions
+		env         map[string]string
+		want        error
+	}
+	for _, lane := range []struct {
+		agent, model string
+		keys         []string
+		models       []policyCase
+	}{
+		{"droid", value, []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE"}, []policyCase{
+			{name: "custom selector", args: []string{"--model", "custom:" + value}, want: ErrSpawnDeniedFlag},
+		}},
+		{"opencode", "openrouter/" + value, []string{"OPENROUTER_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"}, []policyCase{
+			{name: "nested model ID", args: []string{"--model", "openrouter/provider/" + value}},
+			{name: "missing provider", args: []string{"--model", value}, want: ErrSpawnDeniedFlag},
+			{name: "wrong provider", args: []string{"--model", "other/" + value}, want: ErrSpawnDeniedFlag},
+			{name: "empty ID", args: []string{"--model", "openrouter/"}, want: ErrSpawnDeniedFlag},
+			{name: "NUL", args: []string{"--model", "openrouter/" + value + "\x00"}, want: ErrSpawnDeniedFlag},
+			{name: "invalid UTF8", args: []string{"--model", "openrouter/" + value + "\xff"}, want: ErrSpawnDeniedFlag},
+			{name: "short model", args: []string{"-m", "openrouter/" + value}, want: ErrSpawnDeniedFlag},
+			{name: "control argument", args: []string{"OPENCODE_CONFIG=" + value}, want: ErrSpawnDeniedFlag},
+			{name: "caller auto-update", args: []string{"--model", "openrouter/" + value}, env: map[string]string{"OPENCODE_DISABLE_AUTOUPDATE": "0"}},
+		}},
+	} {
+		t.Run(lane.agent, func(t *testing.T) {
+			t.Setenv("OPENROUTER_API_KEY", "synthetic-policy-key")
+			model := []string{"--model", lane.model}
+			cases := append(lane.models, []policyCase{
+				{name: "accepted", args: model},
+				{name: "absent model", want: ErrModelMissing},
+				{name: "missing value", args: []string{"--model"}, want: ErrSpawnDeniedFlag},
+				{name: "empty model", args: []string{"--model", ""}, want: ErrSpawnDeniedFlag},
+				{name: "option model", args: []string{"--model", "--" + value}, want: ErrSpawnDeniedFlag},
+				{name: "duplicate", args: []string{"--model", lane.model, "--model", lane.model}, want: ErrSpawnDeniedFlag},
+				{name: "equals model", args: []string{"--model=" + lane.model}, want: ErrSpawnDeniedFlag},
+				{name: "other option", args: []string{"--settings=" + value}, want: ErrSpawnDeniedFlag},
+				{name: "task", args: append(slices.Clone(model), value), want: ErrSpawnDeniedFlag},
+				{name: "relay", args: model, relay: "on", want: ErrAgentCapabilityUnsupported},
+			}...)
+			for _, perms := range []*Permissions{{Allow: []string{value}}, {Deny: []string{value}}, {Ask: []string{value}}} {
+				cases = append(cases, policyCase{name: "permission", args: model, permissions: perms, want: ErrPermissionsUnsupported})
+			}
+			// Independent inventory: deleting a production refusal cannot shrink this test.
+			for _, key := range append(lane.keys, "HOME="+value, "AGENT_DIRECTOR_AGENT="+value, "INVALID="+value) {
+				for _, v := range []string{"", value} {
+					cases = append(cases, policyCase{name: "environment/" + key, args: model, env: map[string]string{key: v}, want: ErrReservedEnvKey})
+				}
+			}
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					r := Resolved{SpawnParams: SpawnParams{Agent: lane.agent, CWD: t.TempDir(), AgentArgs: tc.args, RelayMode: tc.relay, Permissions: tc.permissions, ExtraEnv: tc.env}, Experimental: config.Experimental{Droid: true, OpenCode: true}}
+					err := Validate(&r)
+					if !errors.Is(err, tc.want) {
+						t.Fatalf("error=%v; want %v", err, tc.want)
+					}
+					if err != nil && strings.Contains(err.Error(), value) {
+						t.Fatalf("refusal leaked rejected value: %v", err)
+					}
+				})
+			}
+		})
 	}
 }
 

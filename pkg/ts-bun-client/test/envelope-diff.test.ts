@@ -25,7 +25,7 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 
-import { Client, AgentDirectorError } from "../src/index.js";
+import { Client, AgentDirectorError, ErrTooManyIds } from "../src/index.js";
 import {
   runHelper,
   privateTmuxSocket,
@@ -36,6 +36,7 @@ import {
   seedOuterParent,
   spawnClaude,
   makeTemplateClaude,
+  rejection,
 } from "./internal/helper.js";
 import { runCli } from "./internal/cliRunner.js";
 import { assertEnvelopesEqual } from "./internal/structuralDiff.js";
@@ -369,6 +370,43 @@ describe("status", () => {
 });
 
 // ── get ───────────────────────────────────────────────────────────────────────
+
+describe("get-many", () => {
+  test("success path", async () => {
+    const ids = ["many-second", "many-unknown", "many-first"];
+    const { homeA, storeB, cleanup } = prepareStores((store) => {
+      for (const id of ["many-first", "many-second"]) {
+        runHelper("seed-spawn", { store, id, state: "waiting", "writer-pid": String(process.pid), "create-store": true });
+      }
+    });
+    try {
+      const cli = runCli(["get-many", ...ids], cliEnv(homeA));
+      expect(cli.exitCode).toBe(0);
+      using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+      const result = await client.getMany({ instance_ids: ids });
+      expect(result.spawns.map((row) => row.instance_id)).toEqual(["many-second", "many-first"]);
+      expect(result.not_found).toEqual(["many-unknown"]);
+      assertEnvelopesEqual(JSON.parse(cli.stdout), result, { ignorePaths: loadIgnorePathsForVerb("get-many") });
+    } finally { cleanup(); }
+  }, TIMEOUT);
+
+  test("error path: ErrTooManyIds retains id_cap", async () => {
+    const { homeA, storeB, cleanup } = prepareStores((store) => runHelper("seed-empty-store", { store }));
+    try {
+      const ids = Array.from({ length: 21 }, (_, i) => `many-${i}`);
+      const cli = runCli(["get-many", ...ids], cliEnv(homeA));
+      expect(cli.exitCode).not.toBe(0);
+      using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+      const err = await rejection(client.getMany({ instance_ids: ids }));
+      expect(err).toBeInstanceOf(ErrTooManyIds);
+      const e = err as ErrTooManyIds;
+      expect(e.errDetails).toEqual({ id_cap: 20 });
+      assertEnvelopesEqual(JSON.parse(cli.stderr), {
+        err_name: e.errName, err_description: trimNamePrefix(e.errName, e.errDescription), err_details: e.errDetails,
+      }, { ignorePaths: loadIgnorePathsForVerb("get-many") });
+    } finally { cleanup(); }
+  }, TIMEOUT);
+});
 
 describe("get", () => {
   test(

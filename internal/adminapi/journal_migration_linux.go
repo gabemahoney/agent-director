@@ -4,9 +4,6 @@ package adminapi
 
 import (
 	"context"
-	"debug/buildinfo"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,13 +13,31 @@ import (
 	"github.com/gabemahoney/agent-director/internal/probe"
 )
 
+// journalProcRoot is where the verifier lists processes; tests point it at
+// real temporary files to exercise unreadable entries and inventories. It is the
+// one seam for the listing: a test uses it, never a second one.
+var journalProcRoot = "/proc"
+
+// verifyJournalQuiescence on Linux uses /proc as its evidence basis: each
+// same-user process's start time, executable and descriptor links.
+// Only readable program names and store/root links identify mutators;
+// incomplete evidence about one process adds no finding.
 func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string) error {
-	for _, path := range append([]string{dbPath}, roots...) {
-		if err := verifyJournalPath(path); err != nil {
+	stores := []string{dbPath, dbPath + "-wal", dbPath + "-shm"}
+	if journalIsInventoryOnly(ctx) {
+		paths, err := journalInventoryTargets(ctx, osJournalFS{}, append(stores, roots...))
+		if err != nil {
 			return err
 		}
+		stores, roots = paths[:3], paths[3:]
+	} else {
+		for _, path := range append([]string{dbPath}, roots...) {
+			if err := verifyJournalPath(path); err != nil {
+				return err
+			}
+		}
 	}
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(journalProcRoot)
 	if err != nil {
 		return journalRefusal("process_inventory_unreadable")
 	}
@@ -36,82 +51,44 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 		if err != nil || pid == os.Getpid() {
 			continue
 		}
-		base := filepath.Join("/proc", entry.Name())
+		base := filepath.Join(journalProcRoot, entry.Name())
 		info, err := os.Stat(base)
-		if os.IsNotExist(err) {
-			continue
-		}
 		if err != nil {
-			return journalRefusal("process_identity_unreadable")
+			continue
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok {
-			return journalRefusal("process_identity_unreadable")
+			continue
 		}
-		// Private store/root permissions below establish the same-user scope.
-		// Privileged administrators are controlled by the maintained boundary.
+		// The real attempt establishes private store/root permissions. The
+		// pre-preparation inventory retains its same-user process scope;
+		// privileged administrators remain under the maintained boundary.
 		if stat.Uid != uint32(os.Geteuid()) {
 			continue
 		}
 		start, alive, known := pc.StartTime(pid)
-		p := JournalProcess{PID: pid, Starttime: start, Role: "unverified_process", Action: "stop_or_make_inventory_readable"}
 		if !known {
-			blockers = append(blockers, p)
+			start = ""
+		}
+		if known && !alive {
 			continue
 		}
-		if !alive {
-			continue
-		}
-		exePath := filepath.Join(base, "exe")
-		exe, err := os.Readlink(exePath)
-		if err != nil {
-			_, alive, known = pc.StartTime(pid)
-			if known && !alive {
-				continue
-			}
-			blockers = append(blockers, p)
-			continue
-		}
-		mutator := strings.Contains(filepath.Base(exe), "agent-director")
-		// Detect renamed binaries and Go callers embedding this module, even
-		// while their SQLite lease is closed. Read build metadata only.
-		if bi, err := buildinfo.ReadFile(exePath); err == nil {
-			if strings.Contains(bi.Path, "github.com/gabemahoney/agent-director") || bi.Main.Path == "github.com/gabemahoney/agent-director" {
-				mutator = true
-			}
-			for _, dep := range bi.Deps {
-				if dep.Path == "github.com/gabemahoney/agent-director" {
-					mutator = true
-				}
-			}
-		} else if f, err := os.Open(exePath); err != nil {
-			blockers = append(blockers, p)
-			continue
-		} else {
-			f.Close()
-		}
+		exe, err := os.Readlink(filepath.Join(base, "exe"))
+		mutator := err == nil && strings.Contains(filepath.Base(exe), "agent-director")
 		fds, err := os.ReadDir(filepath.Join(base, "fd"))
 		if err != nil {
-			_, alive, known = pc.StartTime(pid)
-			if known && !alive {
-				continue
-			}
-			blockers = append(blockers, p)
-			continue
+			fds = nil
 		}
 		for _, fd := range fds {
 			target, err := os.Readlink(filepath.Join(base, "fd", fd.Name()))
-			if os.IsNotExist(err) {
+			if err != nil {
 				continue
 			}
-			if err != nil {
-				blockers = append(blockers, p)
-				mutator = false
-				break
-			}
 			target = strings.TrimSuffix(target, " (deleted)")
-			if target == dbPath || target == dbPath+"-wal" || target == dbPath+"-shm" {
-				mutator = true
+			for _, path := range stores {
+				if target == path {
+					mutator = true
+				}
 			}
 			for _, root := range roots {
 				if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
@@ -119,59 +96,16 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 				}
 			}
 		}
-		after, alive, known := pc.StartTime(pid)
-		if !known || alive && after != start {
-			blockers = append(blockers, p)
+		_, alive, known = pc.StartTime(pid)
+		if known && !alive {
 			continue
 		}
-		if alive && mutator {
-			p.Role, p.Action = "agent_director_mutator", "stop_and_restart_after_cutover"
-			blockers = append(blockers, p)
+		if mutator {
+			blockers = append(blockers, JournalProcess{PID: pid, Starttime: start, Role: "agent_director_mutator", Action: "stop_and_restart_after_cutover"})
 		}
 	}
 	if len(blockers) > 0 {
 		return journalRefusal("old_or_unverified_mutators", blockers...)
-	}
-	return nil
-}
-
-// Verify every existing path component without following a link. An absent
-// root is known absent only after its existing parent was readable. Private
-// roots establish which unprivileged user can hold operational authority.
-func verifyJournalPath(path string) error {
-	if !filepath.IsAbs(path) {
-		return journalRefusal("legacy_root_not_absolute")
-	}
-	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
-		info, err := os.Lstat(current)
-		if err != nil && !os.IsNotExist(err) {
-			return journalRefusal("legacy_root_unreadable")
-		}
-		if err == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				return journalRefusal("legacy_root_symlink")
-			}
-			if current == path {
-				st, ok := info.Sys().(*syscall.Stat_t)
-				if !ok || st.Uid != uint32(os.Geteuid()) || info.Mode().Perm()&0077 != 0 {
-					return journalRefusal("legacy_root_access_unestablished")
-				}
-			}
-			if info.IsDir() {
-				f, err := os.Open(current)
-				if err != nil {
-					return journalRefusal("legacy_root_unreadable")
-				}
-				_, err = f.Readdirnames(1)
-				f.Close()
-				if err != nil && !errors.Is(err, io.EOF) {
-					return journalRefusal("legacy_root_unreadable")
-				}
-			}
-		}
-		if current == filepath.Dir(current) {
-			break
-		}
 	}
 	return nil
 }

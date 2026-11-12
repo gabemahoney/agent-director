@@ -106,6 +106,10 @@ func TestMigrationStopAfterTheMovePrintsTheReferences(t *testing.T) {
 	t.Run("an-apply-time-refusal-exit-5", func(t *testing.T) {
 		h := newMoveHome(t)
 		refs := migStopOld(h)
+		h.Flags = append(h.Flags, "--keep-prior")
+		oldLink := filepath.Join(h.Tools, "agent-director")
+		h.Link(filepath.Join(h.Old, "bin", "agent-director"), oldLink)
+		h.Env["PATH"] = h.Tools + ":" + filepath.Join(h.Old, "bin") + ":" + h.S.Toolbox
 		// The template is whole when pre-flight reads it in the old directory and
 		// the move copies it; a second claude_args line appears before the migration
 		// applies, as when something edits it in between. The stand-in cp does it as
@@ -115,6 +119,16 @@ func TestMigrationStopAfterTheMovePrintsTheReferences(t *testing.T) {
 		h.Write(filepath.Join(h.Old, "templates", "dup.toml"), "name = \"dup\"\nclaude_args = [\"a\"]\n", 0o644)
 		h.WrapTool("cp", `if [[ "${!#}" == `+moveQuote(filepath.Join(h.New, "admin"))+`/* ]]; then echo 'claude_args = ["b"]' >> `+moveQuote(dup)+`; fi`)
 		res := h.Install()
+		// S1 still exits before the journal attempt. EXIT flushes the move
+		// notes already due; the existing stderr references and cause stay put.
+		if strings.Contains(res.Stdout, "  journal : ") {
+			t.Error("S1 reached the journal attempt")
+		}
+		for _, prefix := range []string{"  kept    : ", "  prior   : ", "  old link: ", "  old PATH: "} {
+			if n := strings.Count(res.Stdout, prefix); n != 1 {
+				t.Errorf("S1 %q count %d; want 1:\n%s", prefix, n, res.Stdout)
+			}
+		}
 
 		moveWant{Code: 5, Err: "ErrTemplateMalformed",
 			Stderr: []string{

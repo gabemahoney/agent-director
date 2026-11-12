@@ -279,8 +279,8 @@ var ErrTmuxCaptureFailed = tmux.ErrTmuxCaptureFailed
 // or default supplies one. Nothing was written or launched.
 var ErrAgentMissing = spawn.ErrAgentMissing
 
-// ErrAgentInvalid is returned by spawn when the call's agent is not
-// claude, codex or cursor (compared case-sensitively; the empty string is not a
+// ErrAgentInvalid is returned by spawn when the call's agent is unrecognized
+// (compared case-sensitively; the empty string is not a
 // value, it is no agent given). The description quotes the value. Nothing was
 // written or launched. A bad agent in a template is ErrTemplateMalformed.
 var ErrAgentInvalid = spawn.ErrAgentInvalid
@@ -310,3 +310,15 @@ var ErrPermissionsUnsupported = spawn.ErrPermissionsUnsupported
 // need an owner. Give the template its agent, or remove its agent_args.
 // Nothing was written or launched.
 var ErrTemplateAgentMissing = config.ErrTemplateAgentMissing
+
+// ErrExperimentalAgentDisabled means the requested experimental agent is disabled.
+var ErrExperimentalAgentDisabled = spawn.ErrExperimentalAgentDisabled
+
+// ErrAgentCapabilityUnsupported means the pane-only agent does not support the requested capability.
+var ErrAgentCapabilityUnsupported = spawn.ErrAgentCapabilityUnsupported
+
+// ErrModelMissing means the pane-only launch has no explicit model.
+var ErrModelMissing = spawn.ErrModelMissing
+
+// ErrHostCredentialMissing means a required host credential is unset or empty.
+var ErrHostCredentialMissing = spawn.ErrHostCredentialMissing

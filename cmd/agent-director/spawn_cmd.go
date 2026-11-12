@@ -53,12 +53,12 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.StringVar(&p.Agent, "agent", "", "claude, codex or cursor (case-sensitive; default: the template's agent; neither gives ErrAgentMissing)")
 	fs.StringVar(&p.InstanceID, "instance-id", "", "explicit instance id (default: minted UUID4)")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
-	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
-	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip the folder pre-trust: for claude, pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra-env, otherwise from agent-director's own environment; ~/.claude.json if neither sets it); for codex, putting the cwd's trust and the hook-trust bypass on the launch's command line (no file is written); Cursor grants no trust: failed by default, skipped with this option; default off (best-effort pre-trust for Claude/Codex); the choice is recorded on the row until the next spawn or reuse and every resume follows it")
+	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (after template resolution, default: off for pane-only agents, config defaults.relay_mode for others; pane-only agents refuse on)")
+	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip the folder pre-trust: for claude, pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json, CLAUDE_CONFIG_DIR from extra-env, otherwise from agent-director's own environment; ~/.claude.json if neither sets it); for codex, putting the cwd's trust and the hook-trust bypass on the launch's command line (no file is written); Cursor grants no trust: failed by default, skipped with this option; default off (best-effort pre-trust for Claude/Codex); pane-only agents always report skipped with no trust grant or trust-file write, regardless of this option; the choice is recorded on the row until the next spawn or reuse and agents that support resume follow it")
 	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --instance-id whose row is finished (ended or missing); a live row, pending included, still collides; no effect without --instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision); success without dropped arguments does not say whether a row was reset; nonempty dropped_args identifies a finished-agent switch and prints a notice")
 	fs.Var(newDecimalInt(&p.IdleScreenTimeoutSeconds, 0), "idle-screen-timeout-seconds", "this row's idle_screen timeout in whole seconds, 1 to 9223372036, in place of [state] idle_screen_timeout_seconds (default 0: none, use the config); recorded on the row, kept by resume, replaced by the next spawn or reuse; a negative or larger value is refused")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
-	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys, HOME (any value) and a template's key that is empty or holds '=' or a NUL byte are refused with ErrReservedEnvKey, a template's included; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config")
+	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys, HOME (any value) and a template's key that is empty or holds '=' or a NUL byte are refused with ErrReservedEnvKey, a template's included; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential, configuration and home selectors, even empty, and keep the invoking HOME; inherited entries are checked when spawn resolves the effective agent")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
@@ -200,7 +200,7 @@ func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
 	fs := flag.NewFlagSet("read-pane", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to read")
-	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "number of trailing pane lines to return (a negative value is refused)")
+	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "number of trailing pane lines to return, counted up from the last line with content (a negative value is refused)")
 	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
 	fs.BoolVar(&p.AllowPending, "allow-pending", false, "accepted for surface symmetry with send-keys; read-pane has no state guard so this flag has no effect")
 	if err := fs.Parse(args); err != nil {
@@ -231,9 +231,9 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.Name, "name", "", "template name (filename-safe; required)")
 	fs.StringVar(&p.CWD, "cwd", "", "bake a default cwd")
 	fs.StringVar(&p.Agent, "agent", "", "bake the template's agent: claude, codex or cursor (case-sensitive; default: none, no agent key stored)")
-	fs.StringVar(&p.RelayMode, "relay-mode", "", "bake a default relay_mode (on/off)")
+	fs.StringVar(&p.RelayMode, "relay-mode", "", "bake a default relay_mode (on/off); pane-only templates refuse on; an empty resolved spawn value defaults to off for pane-only agents")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
-	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys and HOME (any value) are refused with ErrReservedEnvKey, as spawn refuses them, and no template is written; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config")
+	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys and HOME (any value) are refused with ErrReservedEnvKey, as spawn refuses them, and no template is written; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config; pane-only agents additionally refuse their credential, configuration and home selectors, even empty, and keep the invoking HOME; inherited entries are checked when spawn resolves the effective agent")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
@@ -455,6 +455,16 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
 	res, err := client.Get(id)
+	if err != nil {
+		return writeVerbError(err)
+	}
+	return writeJSON(os.Stdout, res)
+}
+
+// getManyHandlerWith takes every remaining word as an id, unchanged.
+// The global flags were already removed by clisetup.ParseGlobalFlags.
+func getManyHandlerWith(client *pkgapi.Client, args []string) error {
+	res, err := client.GetMany(args)
 	if err != nil {
 		return writeVerbError(err)
 	}

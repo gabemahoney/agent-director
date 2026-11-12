@@ -42,6 +42,7 @@ import type {
   SpawnParams, SpawnResult,
   StatusParams, StatusResult,
   GetParams, GetResult,
+  GetManyParams, GetManyResult,
   SendKeysParams, SendKeysResult,
   ReadPaneParams, ReadPaneResult,
   KillParams, KillResult,
@@ -415,6 +416,12 @@ export class SubprocessClient {
     return this.#enqueue<GetResult>("get", params);
   }
 
+  /** getMany — fetch get's full rows in order, listing ids without a record separately. */
+  async getMany(params: GetManyParams): Promise<GetManyResult> {
+    this.#assertOpen();
+    return this.#enqueue<GetManyResult>("get-many", params);
+  }
+
   /**
    * sendKeys — send keystrokes to a Spawn's tmux pane: text (Enter appended unless no_enter) or
    * one key; with request_token, a pane answer to a fallen-back permission request (one key, no
@@ -464,9 +471,9 @@ export class SubprocessClient {
    * filtering stored session selectors, Claude print mode and orphaned cloud
    * controls while preserving other arguments and option-owned values. Claude
    * inputs missing a recognized required value get literal filtering only;
-   * parsed-role preservation applies when all required values are present. Claude
-   * prompts move behind surviving options and --, and altered short clusters are
-   * re-encoded, only when needed to preserve their original parsed meaning. */
+   * parsed-role preservation applies when all required values are present. The
+   * saved prompt is never replayed, and altered Claude short clusters are
+   * re-encoded only when needed to preserve their original parsed meaning. */
   async resume(params: ResumeParams): Promise<ResumeResult> {
     this.#assertOpen();
     return this.#enqueue<ResumeResult>("resume", params);

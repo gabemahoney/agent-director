@@ -666,16 +666,38 @@ func TestMovePathKeyOutwardRewritten(t *testing.T) {
 
 func TestMoveOtherReferencesPrinted(t *testing.T) {
 	h := newMoveHome(t)
-	cfg := moveOldConfig + "\n[launch]\nclaude_path = \"{HOME}/.agent-director/bin/claude\"\n"
+	h.Flags = append(h.Flags, "--keep-prior")
+	// b.mnb: sibling paths are not references into the old directory.
+	cfg := moveOldConfig + "\n[launch]\nclaude_path = \"{HOME}/.agent-director/bin/claude\"\ncodex_path = \"~/.agent-director-data/bin/codex\"\n"
 	h.BuildOld(withMoveConfig(func(h *moveHome) string { return h.expand(cfg) }))
+	oldLink := filepath.Join(h.Tools, "agent-director")
+	h.Link(filepath.Join(h.Old, "bin", "agent-director"), oldLink)
+	h.Env["PATH"] = h.Tools + ":" + filepath.Join(h.Old, "bin") + ":" + h.S.Toolbox
 	tmpl := "name = \"tooling\"\ncwd = \"{HOME}/.agent-director/work\"\n\n[extra_env]\nTOOLS = \"~/.agent-director/tools\"\nPLAIN = \"kept\"\n"
+	tmpl += "SIBLING_DATA = \"~/.agent-director-data/tools\"\nSIBLING_KEPT = \"{HOME}/.agent-director.pre-move-x/tools\"\nSIBLING_ASIDE = \"$HOME/.agent-director.aside-x/tools\"\nSIBLING_NUMBERED = \"{HOME}/.agent-director2/tools\"\nMIXED = \"~/.agent-director-data/tools ~/.agent-director/tools\"\n"
 	h.Write(filepath.Join(h.Old, "templates", "tooling.toml"), h.expand(tmpl), 0o644)
 	res := moveMustInstall(t, h)
+	// A crossing success flushes each deferred note exactly once, only
+	// after the journal result establishes that the move remains in place.
+	kept := filepath.Join(h.Home, moveKeptDir(t, h))
+	for _, line := range []string{
+		"  kept    : " + kept + " (the old directory as it was before the move, old binaries included; delete it once the upgrade is confirmed)",
+		"  prior   : --keep-prior made no snapshot on this install: the new bin and admin directories hold no earlier binary. The way back is operator-actions.md, \"Going back to the previous release\"",
+		"  old link: " + oldLink + " still leads into the old directory's bin, which is kept only until you delete it. Re-point it:",
+		"  old PATH: $PATH names " + filepath.Join(h.Old, "bin") + ", the old directory's bin, which is kept only until you delete it. In your shell startup file (~/.bashrc, ~/.zshrc, ...), replace it with " + filepath.Join(h.New, "bin") + ", then open a new shell.",
+		"  references: these lines still name the old directory. They were left as written; change each to the same place under " + h.New + " (or remove it) by hand, since the old directory is kept only until you delete it (" + kept + "):",
+	} {
+		at, journal := strings.Index(res.Stdout, line+"\n"), strings.Index(res.Stdout, "  journal : ")
+		if strings.Count(res.Stdout, line+"\n") != 1 || journal < 0 || at <= journal {
+			t.Errorf("note must appear once after journal: %q:\n%s", line, res.Stdout)
+		}
+	}
 	for _, s := range []string{
 		"  references: these lines still name the old directory. They were left as written;",
 		"    {HOME}/.config/agent-director/config.toml:9:claude_path = \"{HOME}/.agent-director/bin/claude\"",
 		"    {HOME}/.config/agent-director/templates/tooling.toml:2:cwd = \"{HOME}/.agent-director/work\"",
 		"    {HOME}/.config/agent-director/templates/tooling.toml:6:TOOLS = \"~/.agent-director/tools\"",
+		"    {HOME}/.config/agent-director/templates/tooling.toml:12:MIXED = \"~/.agent-director-data/tools ~/.agent-director/tools\"",
 	} {
 		if !strings.Contains(res.Stdout, h.expand(s)) {
 			t.Errorf("stdout lacks %q:\n%s", s, res.Stdout)
@@ -694,8 +716,10 @@ func TestMoveOtherReferencesPrinted(t *testing.T) {
 	if strings.Contains(res.Stdout[refs:], ".pre-agent-rename.") {
 		t.Errorf("a migration backup is printed as a reference:\n%s", res.Stdout[refs:])
 	}
-	if strings.Contains(res.Stdout, "PLAIN") {
-		t.Errorf("stdout names a line that does not reach the old directory:\n%s", res.Stdout)
+	for _, s := range []string{"PLAIN", "SIBLING_", "config.toml:10:codex_path = \"~/.agent-director-data/bin/codex\""} {
+		if strings.Contains(res.Stdout, s) {
+			t.Errorf("stdout names a line that does not reach the old directory (%q):\n%s", s, res.Stdout)
+		}
 	}
 	// The move leaves every line as written (config.toml is the old one, byte
 	// for byte); the migration then adds the agent to each template, and the

@@ -1,5 +1,5 @@
 // Package api_test exercises the pkg/api public surface from the outside.
-// This file holds the six runnable ExampleClient_* functions that mirror the
+// This file holds the seven runnable ExampleClient_* functions that mirror the
 // README's Verb examples section, and their construction helpers.
 package api_test
 
@@ -268,4 +268,26 @@ func ExampleClient_ListSubagents() {
 	// true
 	// agent-explore stopped
 	// agent-review running
+}
+
+// ExampleClient_GetMany reads two known agents and an unknown id in one call.
+func ExampleClient_GetMany() {
+	c, s, path, _, cleanup := exampleClient()
+	defer cleanup()
+	seedRow(s, path, "agent-a", store.StateEnded, nil)
+	seedRow(s, path, "agent-b", store.StateEnded, nil)
+	// README:start ExampleClient_GetMany
+	result, err := c.GetMany([]string{"agent-b", "unknown", "agent-a"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, row := range result.Spawns {
+		fmt.Println(row.InstanceID, row.State)
+	}
+	fmt.Println("Not found:", result.NotFound)
+	// README:end
+	// Output:
+	// agent-b ended
+	// agent-a ended
+	// Not found: [unknown]
 }

@@ -6,7 +6,12 @@
 #     (preserving any other user hooks), and any entry whose hook
 #     command starts with the old directory's bin/agent-director path
 #     (~/.agent-director/bin/agent-director: the help hooks an install
-#     before the move to ~/.config/agent-director wrote).
+#     before the move to ~/.config/agent-director wrote). A settings.json
+#     holding none of them is left as it is. No copy of settings.json is
+#     kept, as its env can hold tokens (b.f3n); the
+#     settings.json.bak.<YYYYmmdd-HHMMSS> copies earlier releases kept are
+#     named, on one line and each shell-quoted, and left for the user to
+#     delete.
 #   - Remove the schedule `install.sh --schedule` added (b.wur): the
 #     crontab lines tagged `# agent-director-schedule` (every other line of
 #     the crontab kept; the crontab itself removed only when nothing else was
@@ -496,12 +501,22 @@ ad_store_db_path() (
             # The decoder also skips a UTF-16 byte-order mark; the reader
             # does not.
             if [[ "$n" -eq 1 && ( "$line" == $'\xff\xfe'* || "$line" == $'\xfe\xff'* ) ]]; then
+                if [[ "${line:2}" =~ $re_header ]]; then
+                    name="${BASH_REMATCH[1]}"
+                    for t in "${tables[@]}"; do
+                        if [[ "$t" == launch ]] && is_table "$name" "$t"; then
+                            set_about "$t"
+                            break
+                        fi
+                    done
+                fi
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "This line starts with the bytes FF FE or FE FF, a UTF-16 byte-order" \
                     "mark, which install.sh does not read. Remove those two bytes:" \
                     "agent-director skips them, so it reads the file the same without them."
             fi
             if [[ "$line" == *'"""'* || "$line" == *"'''"* ]]; then
+                set_about "$table"
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "This line holds \"\"\" or ''', which install.sh reads as the start of a" \
                     "multi-line string. Write each value on one line, as a \"...\" or '...'" \
@@ -579,6 +594,13 @@ ad_store_db_path() (
                         "the next header."
                 fi
                 if [[ "$line" =~ $re_header_dotted ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    for t in "${tables[@]}"; do
+                        if is_table "$name" "$t"; then
+                            set_about "$t"
+                            break
+                        fi
+                    done
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "This header names a table within a table ([a.b]), which" \
                         "agent-director does not read: it ignores the lines under this header," \
@@ -644,6 +666,7 @@ ad_store_db_path() (
                         "ignores this line. Remove it."
                 fi
                 if [[ "$line" =~ $re_key_dotted ]]; then
+                    set_about "$table"
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "This dotted key sets a key in a table within a table, which" \
                         "agent-director does not read: it ignores this line, or refuses the" \
@@ -933,7 +956,7 @@ done
 
 hook_prefix="${NEW_INSTALL_ROOT}/bin/agent-director"
 old_hook_prefix="${OLD_INSTALL_ROOT}/bin/agent-director"
-# ours, for the filter and the symlink branch's count below: a command
+# ours, for the count and the filter below: a command
 # starting with either directory's bin/agent-director path.
 hook_ours_jq='
     def ours:
@@ -963,17 +986,30 @@ if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
         ' >/dev/null 2>&1; then
         echo "uninstall.sh: ~/.claude/settings.json is valid JSON, but not an object whose hooks hold event lists; leaving it alone" >&2
     elif [[ "$settings_docs" -eq 1 ]]; then
-        if new=$(printf '%s' "$existing" | jq \
+        # The entries the filter removes, those it marks ours, are counted
+        # first. With none, the file is left as it is, with no note (b.f3n):
+        # the filter would rewrite it in jq's layout, filling in the event
+        # lists, with nothing removed.
+        if ! removed=$(printf '%s' "$existing" | jq \
             --arg prefix "$hook_prefix" --arg oldprefix "$old_hook_prefix" "$hook_ours_jq"'
             .hooks //= {}
-            | .hooks.SessionStart //= []
-            | .hooks.SessionEnd //= []
-            | .hooks.SessionStart |= [.[] | select(ours | not)]
-            | .hooks.SessionEnd |= [.[] | select(ours | not)]
+            | [(.hooks.SessionStart // []), (.hooks.SessionEnd // []) | .[] | select(ours)]
+            | length
         '); then
-            settings_edit=1
-        else
             echo "uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone" >&2
+        elif [[ "$removed" -gt 0 ]]; then
+            if new=$(printf '%s' "$existing" | jq \
+                --arg prefix "$hook_prefix" --arg oldprefix "$old_hook_prefix" "$hook_ours_jq"'
+                .hooks //= {}
+                | .hooks.SessionStart //= []
+                | .hooks.SessionEnd //= []
+                | .hooks.SessionStart |= [.[] | select(ours | not)]
+                | .hooks.SessionEnd |= [.[] | select(ours | not)]
+            '); then
+                settings_edit=1
+            else
+                echo "uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone" >&2
+            fi
         fi
     fi
 fi
@@ -1064,16 +1100,11 @@ fi
 # cannot be written through is refused (exit 2), naming what to remove
 # where it comes from; this check never sees a loop or a missing
 # directory, as each edited file resolved to a regular file (-f) above.
-# A settings.json that cannot be written through and holds none of
-# agent-director's hook entries is left alone instead: it would be
-# rewritten (every settings.json holding one JSON document of the shape
-# checked above is) with nothing removed, and a refusal would then stop
-# every uninstall until the link went. A settings.json left alone while
-# its edit is worked out above (not valid JSON, not one document, the
-# wrong outer shape, or the filter failing) is not edited, so its
-# symlink is not checked. The count of entries to remove below runs
-# only after the check has refused the link; should jq fail on it, the
-# file is left alone too, after that check.
+# A settings.json left alone while its edit is worked out above (not
+# valid JSON, not one document, the wrong outer shape, none of
+# agent-director's hook entries, or jq failing) is not edited, so its
+# symlink is not checked: one holding none of those entries never stops
+# an uninstall, link or not.
 # --------------------------------------------------------------------
 
 # ad_link_refuse <file> <what> <remedy>... — report a symlinked <file>
@@ -1101,26 +1132,9 @@ ad_link_refuse() {
 }
 
 if [[ "$settings_edit" -eq 1 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH"; then
-    # The entries the filter above removes: those it marks ours. Only a
-    # file the filter ran on gets here, so this count does not fail
-    # either; should jq fail anyway, the file is left alone with the
-    # filter's note and the uninstall goes on (b.ak5).
-    if ! removed=$(printf '%s' "$existing" | jq \
-        --arg prefix "$hook_prefix" --arg oldprefix "$old_hook_prefix" "$hook_ours_jq"'
-        .hooks //= {}
-        | [(.hooks.SessionStart // []), (.hooks.SessionEnd // []) | .[] | select(ours)]
-        | length
-    '); then
-        settings_edit=0
-        echo "uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone" >&2
-    elif [[ "$removed" -eq 0 ]]; then
-        settings_edit=0
-        echo "uninstall.sh: left $DEFAULT_SETTINGS_PATH alone: it holds no agent-director hook entries, and its symlink cannot be written through"
-    else
-        ad_link_refuse "$DEFAULT_SETTINGS_PATH" "remove agent-director's hook entries from" \
-            "each SessionStart and SessionEnd entry holding a hook whose command starts" \
-            "with $hook_prefix or $old_hook_prefix."
-    fi
+    ad_link_refuse "$DEFAULT_SETTINGS_PATH" "remove agent-director's hook entries from" \
+        "each SessionStart and SessionEnd entry holding a hook whose command starts" \
+        "with $hook_prefix or $old_hook_prefix."
 fi
 
 # --------------------------------------------------------------------
@@ -1173,12 +1187,10 @@ if [[ "$config_edit" -eq 1 ]] && ! ad_link_write_check "$CONFIG_TOML"; then
 fi
 
 if [[ "$settings_edit" -eq 1 ]]; then
-    # Backup-before-edit (symmetric with install.sh) so a regressed
-    # jq filter is recoverable from a timestamped .bak.
-    backup_settings="${DEFAULT_SETTINGS_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
-    ad_backup_keeping_mode "$DEFAULT_SETTINGS_PATH" "$backup_settings"
+    # No backup copy, as install.sh takes none (b.f3n): settings.json's env
+    # can hold tokens. The write is atomic, so a failed one leaves the file
+    # as it was.
     ad_replace_keeping_mode "$DEFAULT_SETTINGS_PATH" "$new"
-    echo "uninstall.sh: backed up prior settings to $backup_settings"
     echo "uninstall.sh: removed help hook entries from $DEFAULT_SETTINGS_PATH"
 fi
 if [[ "$config_edit" -eq 1 ]]; then
@@ -1186,6 +1198,19 @@ if [[ "$config_edit" -eq 1 ]]; then
     ad_backup_keeping_mode "$CONFIG_TOML" "$backup_cfg"
     ad_replace_keeping_mode "$CONFIG_TOML" "$cleaned"
     echo "uninstall.sh: cleared inject_help_hook from $CONFIG_TOML (backup $backup_cfg)"
+fi
+
+# Copies of settings.json earlier releases kept (b.f3n), the files named
+# settings.json.bak.<YYYYmmdd-HHMMSS>, named on one line, each path quoted
+# with %q, as install.sh names them (see its note): never deleted, as a file
+# of that name may be the user's own.
+old_settings_baks=""
+for old_settings_bak in "${DEFAULT_SETTINGS_PATH}".bak.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+    [[ -e "$old_settings_bak" || -L "$old_settings_bak" ]] || continue
+    printf -v old_settings_baks '%s %q' "$old_settings_baks" "$old_settings_bak"
+done
+if [[ -n "$old_settings_baks" ]]; then
+    echo "uninstall.sh: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted:${old_settings_baks}"
 fi
 
 # --------------------------------------------------------------------

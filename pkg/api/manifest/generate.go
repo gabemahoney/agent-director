@@ -52,23 +52,23 @@ type verbOutput struct {
 // paramOutput is the per-parameter shape. AllowedValues is *[]string so
 // nil marshals as JSON null rather than [].
 type paramOutput struct {
-	Name          string   `json:"name"`
-	Type          string   `json:"type"`
-	Description   string   `json:"description"`
-	Required      bool     `json:"required"`
-	Nullable      bool     `json:"nullable"`
-	AllowEmpty    bool     `json:"allow_empty"`
+	Name          string    `json:"name"`
+	Type          string    `json:"type"`
+	Description   string    `json:"description"`
+	Required      bool      `json:"required"`
+	Nullable      bool      `json:"nullable"`
+	AllowEmpty    bool      `json:"allow_empty"`
 	AllowedValues *[]string `json:"allowed_values"`
 }
 
 // fieldOutput is the per-result-field shape. AllowedValues is *[]string so
 // nil marshals as JSON null rather than [].
 type fieldOutput struct {
-	Name          string   `json:"name"`
-	Type          string   `json:"type"`
-	Description   string   `json:"description"`
-	Nullable      bool     `json:"nullable"`
-	AllowEmpty    bool     `json:"allow_empty"`
+	Name          string    `json:"name"`
+	Type          string    `json:"type"`
+	Description   string    `json:"description"`
+	Nullable      bool      `json:"nullable"`
+	AllowEmpty    bool      `json:"allow_empty"`
 	AllowedValues *[]string `json:"allowed_values"`
 }
 

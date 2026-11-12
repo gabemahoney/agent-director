@@ -52,7 +52,7 @@ type SpawnParams struct {
 	// labels also persist into the spawns.labels JSON column.
 	AgentDirectorLabels map[string]string
 
-	// Agent is the agent the spawn is for: "claude", "codex" or "cursor", compared
+	// Agent is the agent the spawn is for, compared
 	// case-sensitively; empty means not given. As the caller sets it, it is
 	// the per-call agent; Resolve fills an empty one from the template's
 	// agent, so after Resolve it is the resolved agent (SR-1.2) and empty
@@ -78,8 +78,10 @@ type SpawnParams struct {
 	// settings tier per Claude Code's merge semantics.
 	Permissions *Permissions
 
-	// RelayMode is "on" / "off" / "" (use config default). Mirrored into
-	// AGENT_DIRECTOR_RELAY_MODE on the session env for the hook.
+	// RelayMode is "on" / "off" / "". Empty inherits the template's value,
+	// then defaults to off for pane-only agents or the config default for
+	// other agents. Pane-only agents refuse on. The resolved value is mirrored
+	// into AGENT_DIRECTOR_RELAY_MODE on the session env for the hook.
 	RelayMode string
 
 	// NoPreTrust opts out of the folder-trust pre-write (PreTrust) into
@@ -113,9 +115,9 @@ type SpawnParams struct {
 	// reuse starts a fresh conversation and retains session history and
 	// subagent records.
 	// Only an agent switch starts a new life; switching back also starts with
-	// no memory of its earlier lives: resume and get never use or show an
-	// earlier life's history. Resume continues only the latest session; older
-	// sessions are listed for inspection only. Go callers link the
+	// no memory of its earlier lives: resume, get and get-many never use or
+	// show an earlier life's history. Resume continues only the latest session;
+	// older sessions are listed for inspection only. Go callers link the
 	// library, so the field exists at compile time; CLI, MCP and TypeScript
 	// callers detect it by the binary's version (the manifest's
 	// reuse_finished text gives each surface's source).
@@ -151,6 +153,13 @@ type Permissions struct {
 // exercise them against synthesized inputs without touching disk.
 type Resolved struct {
 	SpawnParams
+
+	// Experimental is the configuration captured by Resolve for validation.
+	Experimental config.Experimental
+	// LaunchStoreID and LaunchToken are supplied by the launch owner before
+	// composition; they identify generated files without writing them.
+	LaunchStoreID string
+	LaunchToken   string
 
 	// DropResumeArgs is set only from a successful finished reuse snapshot
 	// whose raw stored agent differs exactly from the resolved agent.
@@ -201,7 +210,7 @@ type Resolved struct {
 // The function never mutates p.
 func Resolve(p SpawnParams, cfg config.Config) (Resolved, error) {
 	if p.Template == "" {
-		return Resolved{SpawnParams: p, DisableAskUser: cfg.Defaults.DisableAskUser}, nil
+		return Resolved{SpawnParams: p, DisableAskUser: cfg.Defaults.DisableAskUser, Experimental: cfg.Experimental}, nil
 	}
 
 	tmpl, err := config.LoadTemplate(p.Template)
@@ -260,7 +269,7 @@ func Resolve(p SpawnParams, cfg config.Config) (Resolved, error) {
 		}
 	}
 
-	return Resolved{SpawnParams: merged, InheritedArgsAgent: inheritedArgsAgent, DisableAskUser: cfg.Defaults.DisableAskUser}, nil
+	return Resolved{SpawnParams: merged, InheritedArgsAgent: inheritedArgsAgent, DisableAskUser: cfg.Defaults.DisableAskUser, Experimental: cfg.Experimental}, nil
 }
 
 // mergeStringMap layers `over` on top of `base`. Per-call wins on

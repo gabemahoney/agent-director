@@ -16,10 +16,10 @@ agent-director expire
 [recovery checks as state reads](caller-contract.md#bounded-recovery-on-state-reads).
 Finished rows skip live-agent checks; late exact input proof can still be
 recorded without sending input.
-`status`, `get` and `list` run those checks for their returned agents. Existing
+`status`, `get`, `get-many` and `list` run those checks for their returned agents. Existing
 `find-missing` schedules keep working: it is an alias of `sweep`.
 
-For agents no `status`, `get` or `list` returns, a longer sweep interval
+For agents no `status`, `get`, `get-many` or `list` returns, a longer sweep interval
 delays discovery of exits, missed Codex turn endings, stale permission state
 and display changes that no agent event or command reports, leaving those
 observations older. Discovery or confirmation within one interval is not
@@ -64,11 +64,11 @@ schedules as another user.
 
 An install that does not find entries for both sweeps, with or without
 `--schedule` (both tagged cron lines with a cron daemon running, or all four
-units), ends with a warning on stderr (the exit status is unchanged). It says what is
-unscheduled, names the exact crontab lines for this install's binary and says
-to run them as the agents' user. Its own cron lines in a crontab with no cron
-daemon running do not count as scheduled. It cannot see a schedule you made
-another way (launchd, your own cron line or unit): ignore the warning then. The
+units), ends with a warning on stderr (the exit status is unchanged). It says
+it could not find active `--schedule` entries for both jobs, names the exact
+crontab lines for this install's binary and says to run them as the agents'
+user. Its own cron lines in a crontab with no cron daemon running do not count
+as scheduled. It cannot see a schedule you made another way (launchd, your own cron line or unit): ignore the warning then. The
 reasons it gives and their fixes are in
 [Operator actions](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
 To remove what `--schedule` added, run `uninstall.sh` (see
@@ -176,3 +176,7 @@ conversation:
 ```sh
 agent-director spawn --cwd <dir> --instance-id <id> --reuse-finished --agent <agent>
 ```
+
+If the reboot removed a row's saved cwd (a tmpfs `/tmp` wiped, a container
+restarted), `resume` returns `ErrCwdNotFound` and changes nothing; see
+[Transcript recovery](caller-contract.md#transcript-recovery).
