@@ -1193,12 +1193,22 @@ ad_store_db_path() (
             # The decoder also skips a UTF-16 byte-order mark; the reader
             # does not.
             if [[ "$n" -eq 1 && ( "$line" == $'\xff\xfe'* || "$line" == $'\xfe\xff'* ) ]]; then
+                if [[ "${line:2}" =~ $re_header ]]; then
+                    name="${BASH_REMATCH[1]}"
+                    for t in "${tables[@]}"; do
+                        if [[ "$t" == launch ]] && is_table "$name" "$t"; then
+                            set_about "$t"
+                            break
+                        fi
+                    done
+                fi
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "This line starts with the bytes FF FE or FE FF, a UTF-16 byte-order" \
                     "mark, which install.sh does not read. Remove those two bytes:" \
                     "agent-director skips them, so it reads the file the same without them."
             fi
             if [[ "$line" == *'"""'* || "$line" == *"'''"* ]]; then
+                set_about "$table"
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "This line holds \"\"\" or ''', which install.sh reads as the start of a" \
                     "multi-line string. Write each value on one line, as a \"...\" or '...'" \
@@ -1276,6 +1286,13 @@ ad_store_db_path() (
                         "the next header."
                 fi
                 if [[ "$line" =~ $re_header_dotted ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    for t in "${tables[@]}"; do
+                        if is_table "$name" "$t"; then
+                            set_about "$t"
+                            break
+                        fi
+                    done
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "This header names a table within a table ([a.b]), which" \
                         "agent-director does not read: it ignores the lines under this header," \
@@ -1341,6 +1358,7 @@ ad_store_db_path() (
                         "ignores this line. Remove it."
                 fi
                 if [[ "$line" =~ $re_key_dotted ]]; then
+                    set_about "$table"
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "This dotted key sets a key in a table within a table, which" \
                         "agent-director does not read: it ignores this line, or refuses the" \
@@ -5491,7 +5509,6 @@ MOVE_CREATED_BASE=0
 MOVE_NEW_IS_LINK=0
 MOVE_CAUSE=""
 MOVE_PREV_EXIT=""
-MOVE_NOTES=""
 MOVE_KEPT_NAME=""
 STORE_SRC_PHYS=""
 stage_bin=""
@@ -5777,9 +5794,8 @@ ad_move_quote() {
 
 # ad_move_key_newvalue <key label> <value as written> — decide the new value
 # of a path key from the old directory's point of view (SR-11.7 "Path
-# keys"). Sets REWRITE_NEWVAL (empty: leave the line as written) and may add
-# a note to MOVE_NOTES. Sets MOVE_CAUSE and fails when the place cannot be
-# resolved.
+# keys"). Sets REWRITE_NEWVAL (empty: leave the line as written). Sets
+# MOVE_CAUSE and fails when the place cannot be resolved.
 REWRITE_NEWVAL=""
 ad_move_key_newvalue() {
     local label="$1" v="$2" form="rel" resolved
@@ -5920,8 +5936,16 @@ ad_move_rewrite_config() {
 # call defers these notes on a crossing upgrade, since it may restore; S1's
 # stop reports them directly on stderr as before.
 ad_move_print_references() {
-    local hits
-    hits="$( { grep -n -F -I -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -F -I --exclude='*.pre-agent-rename.*' -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
+    local hits old_re boundary="([/\"']|$)"
+    # Escape the absolute path so only the trailing boundary is a pattern.
+    old_re="$(printf '%s\n' "$OLD_INSTALL_ROOT" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+    local -a patterns=(
+        -e "${old_re}${boundary}"
+        -e '~/\.agent-director'"$boundary"
+        -e '\$HOME/\.agent-director'"$boundary"
+        -e '\$\{HOME\}/\.agent-director'"$boundary"
+    )
+    hits="$( { grep -n -E -I "${patterns[@]}" "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -E -I --exclude='*.pre-agent-rename.*' "${patterns[@]}" "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
     if [[ -n "$hits" ]]; then
         echo "  references: these lines still name the old directory. They were left as written; change each to the same place under $NEW_ROOT_CLEAN (or remove it) by hand, since the old directory is kept only until you delete it ($1):" || ad_cutover_write_failed
         printf '%s\n' "$hits" | sed 's/^/    /' || ad_cutover_write_failed
@@ -5932,9 +5956,6 @@ ad_move_kept_notes() {
     echo "  kept    : $MOVED_KEPT (the old directory as it was before the move, old binaries included; delete it once the upgrade is confirmed)"
     if [[ "$KEEP_PRIOR" -eq 1 ]]; then
         echo "  prior   : --keep-prior made no snapshot on this install: the new bin and admin directories hold no earlier binary. The way back is operator-actions.md, \"Going back to the previous release\""
-    fi
-    if [[ -n "$MOVE_NOTES" ]]; then
-        printf '%s' "$MOVE_NOTES"
     fi
 }
 

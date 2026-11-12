@@ -501,12 +501,22 @@ ad_store_db_path() (
             # The decoder also skips a UTF-16 byte-order mark; the reader
             # does not.
             if [[ "$n" -eq 1 && ( "$line" == $'\xff\xfe'* || "$line" == $'\xfe\xff'* ) ]]; then
+                if [[ "${line:2}" =~ $re_header ]]; then
+                    name="${BASH_REMATCH[1]}"
+                    for t in "${tables[@]}"; do
+                        if [[ "$t" == launch ]] && is_table "$name" "$t"; then
+                            set_about "$t"
+                            break
+                        fi
+                    done
+                fi
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "This line starts with the bytes FF FE or FE FF, a UTF-16 byte-order" \
                     "mark, which install.sh does not read. Remove those two bytes:" \
                     "agent-director skips them, so it reads the file the same without them."
             fi
             if [[ "$line" == *'"""'* || "$line" == *"'''"* ]]; then
+                set_about "$table"
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "This line holds \"\"\" or ''', which install.sh reads as the start of a" \
                     "multi-line string. Write each value on one line, as a \"...\" or '...'" \
@@ -584,6 +594,13 @@ ad_store_db_path() (
                         "the next header."
                 fi
                 if [[ "$line" =~ $re_header_dotted ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    for t in "${tables[@]}"; do
+                        if is_table "$name" "$t"; then
+                            set_about "$t"
+                            break
+                        fi
+                    done
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "This header names a table within a table ([a.b]), which" \
                         "agent-director does not read: it ignores the lines under this header," \
@@ -649,6 +666,7 @@ ad_store_db_path() (
                         "ignores this line. Remove it."
                 fi
                 if [[ "$line" =~ $re_key_dotted ]]; then
+                    set_about "$table"
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "This dotted key sets a key in a table within a table, which" \
                         "agent-director does not read: it ignores this line, or refuses the" \
