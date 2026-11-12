@@ -362,8 +362,26 @@ timeout, to monitor it. See
 
 Permission guards apply in every live state, not only `check_permission`.
 For `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`,
-pane-answer refusals, retry rules and stopping a held spawn, follow the
+pane-answer refusals and retry rules, follow the
 [caller contract](caller-contract.md#permission-relay).
+
+To stop a held spawn, use `kill`, or have a person or an LLM inspect and
+exit it at the pane:
+
+1. Read the pane. Close any fallen-back request with a token-specific
+   pane answer, or `record-pane-answer` if already answered. Answer any
+   remaining dialog after inspecting it.
+2. Read the pane again and check that the agent's prompt is empty.
+   `send-keys` does not clear a draft before appending `/exit`.
+3. Send `/exit` with that read's `pane_sha256`:
+
+   ```sh
+   agent-director send-keys --instance-id <id> --text /exit \
+       --expect-pane-sha256 <H>
+   ```
+
+4. Poll `get` or `status` until the row reads `ended`: `send-keys` does
+   not wait for exit as `pause` does.
 
 For Cursor turn-end recovery and gateway refusals, follow
 [Cursor input outcomes](caller-contract.md#cursor-input-outcomes).

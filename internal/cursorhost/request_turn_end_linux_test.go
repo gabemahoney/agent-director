@@ -16,6 +16,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
 // b.7qb: a turn's end proves turn_end every request of the turn the gateway
 // answered, through the relay or at the pane, and keeps that answer, so the
 // next prompt is admitted. One whose tool proof is still deferred is left for
