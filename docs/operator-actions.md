@@ -1258,8 +1258,8 @@ resumes.
 
 ## `install.sh` warns that nothing schedules the sweeps
 
-`install.sh` ended with `install.sh: WARNING: nothing schedules agent-director's
-sweep and expire jobs on this machine.` (`find-missing` replaces `sweep` when
+`install.sh` ended with `install.sh: WARNING: could not find active --schedule entries
+for both agent-director's sweep and expire jobs.` (`find-missing` replaces `sweep` when
 the target binary's help does not advertise it.) It comes after `install.sh:
 done`; when the MCP registration failed (exit 6), it comes just before the last
 line, `install.sh: installed, but the MCP registration failed`. The exit status

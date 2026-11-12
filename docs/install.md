@@ -299,12 +299,12 @@ using the template cadence. Choose the defaults or set your own cadence in
 [Maintenance](maintenance.md#schedule-them-by-hand).
 
 What it installs, how to do it by hand and the same-environment rule are in
-[Maintenance](maintenance.md#scheduling-the-sweeps). An install that finds no
-schedule ends with a warning on stderr: see
-[`install.sh` warns that nothing schedules the sweeps](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
+[Maintenance](maintenance.md#scheduling-the-sweeps). An install that cannot find active
+`--schedule` entries for both jobs ends with a warning on stderr: see
+[The install schedule warning](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
 
 **A piped install** (`curl ... | bash -s -- ...`) has no `schedule/` beside it.
-When `--schedule` is given or nothing is scheduled yet, it fetches the same five
+When `--schedule` is given or its entries are not found, it fetches the same five
 files from `raw.githubusercontent.com` at the release tag (with
 `--from-release`) or, with `--binary`, at the full commit stamp of the binaries,
 all or none, and keeps them in `~/.config/agent-director/schedule/`. When the

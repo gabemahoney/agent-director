@@ -1438,7 +1438,7 @@ j7_warned() {
     j7_unreadable "The store open (agent-director list) succeeded and no migration was authorized, so the install carries on. Check the version later with: sqlite3 -batch -init /dev/null -cmd \".timeout $(j7_timeout)\" $db \"PRAGMA user_version;\"" "$1"
     # The schedule warning (b.wur) that ends stderr when nothing is scheduled is
     # not about this step: look at what comes before it.
-    if sed '/^install\.sh: WARNING: nothing schedules /,$d' "$ERR" | grep -qiE 'FAILED|could not|re-run'; then
+    if sed '/^install\.sh: WARNING: could not find active --schedule entries for both /,$d' "$ERR" | grep -qiE 'FAILED|could not|re-run'; then
         bad "the warning speaks as if the install failed: $(flat "$ERR")"
     fi
     j7_schema_unreadable
@@ -4447,7 +4447,7 @@ EOF
     local -a argv=(--binary ./ad-main --admin-binary ./ad-admin --no-hooks --no-symlink)
     run_in "$h" "$d" bash "$sh" "${argv[@]}"
     expect_rc 0 "a plain install with nothing scheduled" || return
-    grep -qxF "install.sh: WARNING: nothing schedules agent-director's sweep and expire jobs on this machine." "$ERR" \
+    grep -qxF "install.sh: WARNING: could not find active --schedule entries for both agent-director's sweep and expire jobs." "$ERR" \
         || bad "no schedule warning: $(flat "$ERR")"
     # The lines, as printed: the tmux directory in PATH, the installed binary,
     # the marker; no HOME (it is the passwd home here).

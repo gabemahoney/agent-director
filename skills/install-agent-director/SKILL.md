@@ -1,6 +1,6 @@
 ---
 name: install-agent-director
-description: Install agent-director on a machine that does not have it yet. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin, creates and opens state.db, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up recovery (sweep when supported, otherwise find-missing) and separate expire cleanup (cron, else systemd user timers; otherwise it warns that nothing schedules them). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director" or "set up agent-director" on a new machine. To upgrade an existing install, use upgrade-agent-director instead.
+description: Install agent-director on a machine that does not have it yet. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin, creates and opens state.db, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up recovery (sweep when supported, otherwise find-missing) and separate expire cleanup (cron, else systemd user timers; otherwise it warns that it could not find active --schedule entries for both jobs). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director" or "set up agent-director" on a new machine. To upgrade an existing install, use upgrade-agent-director instead.
 ---
 
 ## First-time install on a brand-new machine
@@ -506,7 +506,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
    - Read the `schedule:` lines (before `admin   :`; none when the step
      only warns, except the line saying a piped run fetched the schedule
      files) to the operator, and show them any
-     `install.sh: WARNING: nothing schedules ...` block on stderr, which
+     `install.sh: WARNING: could not find active --schedule entries for both ...` block on stderr, which
      comes after `install.sh: done` (on exit 6, just before the final
      `installed, but the MCP registration failed` line) and is not an
      error: the exit status is unchanged. When it appears, either the

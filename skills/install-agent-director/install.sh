@@ -8173,7 +8173,8 @@ ad_sched_rerun_cmd() {
     ad_rerun_cmd schedule
 }
 
-# ad_sched_warn <reason> — the loud warning, on stderr: no schedule is set up.
+# ad_sched_warn <reason> — warn on stderr when --schedule entries are not found
+# for both jobs (cron lines without a running daemon do not count).
 # <reason> (may be empty) is why --schedule did not install one. The cron lines
 # are the shipped file's, rendered, and the directory named is where they were
 # read from: beside this script, or ~/.config/agent-director/schedule/ when
@@ -8185,7 +8186,13 @@ ad_sched_warn() {
     ad_sched_verb
     {
         echo
-        echo "install.sh: WARNING: nothing schedules agent-director's ${SCHED_VERB} and expire jobs on this machine."
+        echo "install.sh: WARNING: could not find active --schedule entries for both agent-director's ${SCHED_VERB} and expire jobs."
+        echo "  This check sees only the entries --schedule adds; it cannot see schedules made another way"
+        echo "  (launchd, your own cron line or unit). Already scheduled another way? Ignore this warning,"
+        echo "  or run --schedule and drop your own entries."
+        if [[ "$SCHED_VERB" == sweep ]]; then
+            echo "  Existing schedules running find-missing keep working: it is an alias of sweep."
+        fi
         echo "  Recovery runs only when called; state reads also perform the shared checks on supporting versions."
         echo "  Absent or failed checks leave observations old. expire separately removes eligible finished rows."
         echo "  Choose an external cadence for recovery and retention cleanup; neither runs an internal daemon."
@@ -8241,8 +8248,6 @@ ad_sched_warn() {
             echo "  an install.sh that has them beside it with"
             echo "  --schedule, as that user."
         fi
-        echo "  Already scheduled another way (launchd, your own cron line or unit)? This check sees only the entries"
-        echo "  --schedule adds, so it warns anyway: ignore this, or run --schedule and drop your own entries."
     } >&2
 }
 
