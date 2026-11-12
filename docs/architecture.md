@@ -1126,7 +1126,7 @@ window. State effects require both the proof's original and flush's captured
 |---|---|
 | Ctrl-C interruption | The correlated turn completion takes `endTurn`, then `reportWaiting("Stop")`; idle-control recovery also calls `reportWaiting("Stop")`. Each waiting flush precedes input dispositions and reporting, within the first control's deadline. |
 | `/clear` or `/new` | Outgoing prompt completion takes `endTurn` even while rotating. `rotate_new` flushes outgoing proofs and input dispositions before `reportIdentity`/`RotateCursorSession`, within the original cancellation bound. Missing required proof refuses publication. |
-| Ordinary prompt completion | Captures unanswered tokens in `endTurn`, then flushes deferred proofs before the Stop report. Each operation retains its original busy bound. |
+| Ordinary prompt completion | Captures the turn's requests without pending or stored tool proof in `endTurn`, answered or not, then flushes deferred proofs before the Stop report. Each operation retains its original busy bound. |
 | Waiting reports | Startup SessionStart and turn/idle-control Stop use `reportWaiting`: proofs, input dispositions, then report/admission recovery. An active cancellation deadline clips the proof wait. |
 | Intentional `/exit`, eligible pause or signal | Flushes before runtime termination, outside `await`, through remaining original proof windows. Failure is fatal. A confirmed proof may outlast cancellation, preserving evidence while later finalization fails and the row becomes `missing`, not `ended`. |
 | Fatal cleanup / already-gone runtime | Fatal cleanup is best effort within the original cancellation deadline, or three seconds from failure if none exists. An already-gone runtime gets one attempt per proof without busy retries; death grants no authority. The initiating failure still decides cleanup. |
@@ -1139,26 +1139,43 @@ preserving NULL-agent/Claude/Codex compatibility. Main-turn proof still requires
 durable eligibility plus NULL child identity; actual unknown-origin admission
 never grants it. No child tracking or main conversation replacement is inferred.
 
-**A turn's end retires its unanswered requests (b.gwj).** Once a prompt turn
-is over, a request still awaiting an answer no longer outranks the agent's
-own report. At every prompt completion, whatever the stop reason and before
-the session loop's rotation check, so a turn ended by `/clear` or `/new` is
-covered, `requestController.endTurn` snapshots the current conversation's
-requests the gateway never answered: none queued or sent, and none with a
-deferred proof, which the Stop's or rotation's flush stores as `tool_ran`.
-The snapshot retains its exact binding, token list, sequence and first busy
-deadline; later requests cannot join it. Abandonment and exact-sequence settlement
-prevent a stale worker from retiring a later snapshot's requests.
+**A turn's end proves its requests gone.** At every prompt completion,
+whatever the stop reason and before the session loop's rotation check,
+`requestController.endTurn` snapshots the current binding's requests not
+already settled by a turn end (`turnEnded`) and with neither pending (`proof`)
+nor stored (`lastProof`) tool proof. Answered (`sent`) and in-flight (`queued`)
+requests are included; `/clear` and `/new` completion use the same path.
+Pending proofs stay with the Stop's or rotation's `tool_ran` flush, and stored
+proofs are never listed again. The snapshot retains its exact binding, token
+list, sequence and first busy deadline; later requests cannot join it.
+Abandonment and exact-sequence settlement prevent stale settlement.
+
 `turnEnd.write` runs in `await` and calls `ProveCursorTurnEnded`, which proves
-`turn_end` on those still matching `holdsRowSQL`, under the same
-`cursorAuthority` check as the tool proofs; it writes no decision, delivery or
-pane answer and emits no trail event. It waits out the busy window, or the
-cancellation deadline when a control runs; any failure is fatal, as a failed
-Stop report is. `turnEnd.settle` then marks those requests retired and
-terminal and removes their pane keys, so no later decision is delivered. The
-Stop that follows, or `RotateCursorSession`, finds nothing of that turn
-holding and writes `waiting`. A delivered or pane-answered request keeps its
-unproven dialog hold. A later `decide` on an undecided retired request returns
+`turn_end` on listed requests still unproven and not closed, under the same
+`cursorAuthority` check as the tool proofs. It writes only the proof columns,
+preserving decision, delivery and pane answer, and emits no trail event.
+It waits out the busy window, or the cancellation deadline when a control
+runs; any failure is fatal, as a failed Stop report is. `turnEnd.settle`
+marks every matching snapshot request `turnEnded`. Only requests unanswered
+at snapshot time are also retired and terminal, with pane keys removed.
+Answered and queued requests retain their response path: setting them terminal
+or retired could fail an answer already issued by the store. The store proof
+releases their dialog hold; the following Stop or `RotateCursorSession`
+settles the row to `waiting` once no request holds it.
+
+An answer not yet issued is refused by the store's proof condition. When
+`CheckCursorAnswer` or `IssueCursorAnswer` finds that only `turn_end` proof
+disqualifies an otherwise eligible claim, its transactional re-read returns
+`ErrCursorAnswerTurnEnded`; deadline, owner and claim checks still apply.
+`answerRefusal` maps it to `errAnswerTurnEnded`. The writer's `knownUnwritten`
+classification handles that error at the final guard or issue without writing
+bytes, publishing to `writes`, setting `writeFailed` or closing the transport.
+The callback marks the request terminal and prints
+`Cursor turn ended before its answer was written; nothing sent`.
+An answer whose issue already committed still writes; other authority failures
+retain their existing handling.
+
+A later `decide` on an undecided retired request returns
 `ErrNoOpenPermissionRequest` without a write before `confirm_by`. At or after
 that instant, `decideWithin` reaches `refuseFallenBack` before the verdict
 guard: it returns `ErrRelayFallenBack` and may record attempted-decision and
@@ -1400,7 +1417,8 @@ envelopes. `Authorizations` remains the captured permission/plan factory;
 and publishes `Paused` before blocking the event loop until `Release`.
 `AfterAnswers` and `WaitForRelease` control subsequent correlated updates;
 `CompleteBeforeAnswers` allows a normal turn outcome with requests still
-outstanding; the gateway then retires any still unanswered (`turn_end`).
+outstanding; the gateway then proves the turn's requests gone (`turn_end`),
+except those with pending or stored tool proof.
 `WaitForRelease` keeps its unconditional prompt-completion gate. The explicit
 private `WaitForAfterAnswersRelease` selector instead gates `AfterAnswers` on
 both actual answers and `Runtime.Release`; with `CompleteBeforeAnswers`, a
@@ -2974,7 +2992,7 @@ columns to this same list. None has a CHECK constraint or an index.
 | `pane_sender_pid`, `pane_sender_starttime`, `pane_sender_pidns` | INTEGER, TEXT, TEXT | a pane answer's intent | The process that sends the pane answer's key (`SendKeysEnv.Self`), judged as a relay hook is (`relayJudge.sender`); NULL when it could not read itself, and NULLed when it releases its intent. |
 | `pane_intent_at` | INTEGER (epoch ms) | a pane answer's intent | When the intent was written, read inside `RecordPaneIntent`'s transaction after its `PaneCheck` (so it is the commit's instant, not the call's start): the key of the sender's own later writes (`paneIntentOwnerSQL`) and the start of `paneIntentHold` for a sender that cannot be checked. NULLed with the sender when the intent is released; never cleared by age. |
 | `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): shared recovery's mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed; a decided pre-v7 request without an ack or completed pane answer is closed too, preserving its verdict. |
-| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor invocation proof (`CommitCursorProof`), a Cursor turn's end (`ProveCursorTurnEnded`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (a `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, which no Claude or Codex request records, b.wbs, or authenticated exact-request Cursor invocation proof under [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority), where a failed MCP invocation proves only dialog closure; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt, and a Claude subagent's `SubagentStop` proves that subagent's requests (its `agent_id`) created before that second, b.wbs; on Cursor, the gateway proves the requests it never answered when their prompt turn completes, b.gwj), `agent_gone` (on a non-Cursor row only: a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`), unless it is a Cursor request of an earlier launch (`PermissionRow.HoldsDialog`), and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (the writes and reads the `holdsRowSQL` Must use entry under [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility) lists; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
+| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor invocation proof (`CommitCursorProof`), a Cursor turn's end (`ProveCursorTurnEnded`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (a `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, which no Claude or Codex request records, b.wbs, or authenticated exact-request Cursor invocation proof under [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority), where a failed MCP invocation proves only dialog closure; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt, and a Claude subagent's `SubagentStop` proves that subagent's requests (its `agent_id`) created before that second, b.wbs; on Cursor, the gateway proves every request of the completing prompt turn not already proven or closed, answered or not; pending tool proofs retain their flush path), `agent_gone` (on a non-Cursor row only: a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`), unless it is a Cursor request of an earlier launch (`PermissionRow.HoldsDialog`), and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (the writes and reads the `holdsRowSQL` Must use entry under [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility) lists; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
 | `spawns.idle_since` | TEXT (`CURRENT_TIMESTAMP`) | the idle-prompt Notification | When the main agent's idle-prompt Notification last landed; NULLed by every other applied hook (`idleClear`). |
 
 ### v11 columns: durable main-turn proof eligibility
@@ -14850,7 +14868,8 @@ rotation is under way, even a rotation requested mid-turn. No later report
 would repair a `working` row whose turn has ended, so the row keeps its state
 and the following Stop, or `RotateCursorSession` (which picks
 `check_permission` or `waiting` in its own transaction), settles it. The
-turn's unanswered requests are proven gone before that Stop (see
+turn's requests without pending or stored tool proof are proven gone before
+that Stop (see
 [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority)),
 so only a request that proof did not cover can hold it; a row whose Stop such
 a request held stays `check_permission` until the next accepted prompt's
@@ -14858,7 +14877,7 @@ a request held stays `check_permission` until the next accepted prompt's
 and fatal-cleanup flushes can run while a turn is still open; their proof
 then moves the row to `working` just before termination, and SessionEnd
 (`ended`) or the failure's `missing` follows, as a Claude `PostToolUse`
-before its SessionEnd would. A delivered deny gets no proof of its own; a row
+before its SessionEnd would. A delivered deny supplies no tool proof; a row
 whose last answered request is a delivered deny waits, as on Claude, for the
 turn's Stop.
 
@@ -15164,8 +15183,10 @@ can match; Codex has main-agent `Stop` or `Interrupt` proofs and no tool-run
 proof. Both also have an agent-gone
 proof when their requests close with the Spawn; Codex's move to `ended` requires its
 verified process gone and its end report recorded. Cursor has its gateway's
-exact-invocation tool-run proof and its turn-end proof of the requests it never
-answered, and no agent-gone proof. It reads no screen:
+exact-invocation tool-run proof and turn-end proof, answered or not, with the
+tool-proof exceptions in
+[Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority).
+It has no agent-gone proof and reads no screen:
 it uses only hook events and fields `internal/hook/classify.go` already
 consumes, and, for the bypass, byte equality of the pane (see the "Core
 Principle: Never Hardcode Claude Code's Terminal Text" in
@@ -19660,7 +19681,9 @@ the section that describes it in detail.
   a NULL child id and after restart. Main/child lifecycle completion does not
   release it; correlated tool invocation proof, the owning launch ending
   (the spawn's close, or a `resume` replacing the launch) or, for a Cursor
-  request the gateway never answered, its prompt turn's completion does. Cursor
+  request, its prompt turn's completion does, answered or not, subject to the
+  tool-proof exceptions in
+  [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority). Cursor
   Stop/Interrupt/working retain any other genuine unanswered hold, whereas
   historical Claude/Codex Stop waiting is unchanged. See [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility).
 - **The row hold (b.omt).** A request that still awaits an answer and is
@@ -23611,8 +23634,12 @@ comment has the detail):
 - Cursor gateway refusal fixture (`cursor_gateway_refusal_linux_test.go`):
   `newGatewayHold(t, relay, kind, decision, after)` uses `newCursorPaneScenario`
   and waits for the first turn to end after answering its request through the
-  relay or pane. `followUp` sends with an inspected pane hash when relay is on;
-  `prompted` checks exact peer prompt text, and `assertRefused` checks
+  relay or pane; the request is then proven gone. Refusal cases must call
+  `gatewayHold.hold` to clear that request's `turn_end` proof in the store,
+  preserving its decision, delivery and pane answer. It requires exactly one
+  proof cleared and restores an unproven current-launch hold; the constructor
+  alone supplies no hold. `followUp` sends with an inspected pane hash when
+  relay is on; `prompted` checks exact peer prompt text, and `assertRefused` checks
   `gateway_refused` and no peer receipt. **Must use** for real-tmux tests of
   Cursor input held after an answered request.
 - Operator procedure (`unusable_name_procedure_test.go`): `n6Names(t)` and

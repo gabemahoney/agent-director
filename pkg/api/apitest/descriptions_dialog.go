@@ -55,7 +55,8 @@ func DescDialogMaybeOpenCodex() DescCase {
 // Notification, Codex Interrupt or verified Cursor main Stop/Interrupt only
 // for durable eligible origin, a Claude subagent's SubagentStop for that
 // subagent's requests (b.wbs), or the Cursor gateway at the end of the turn
-// that asked an unanswered request (b.gwj). Check it with AssertAgentTextCase.
+// that asked a request, answered or not, with no pending execution proof
+// (b.gwj, b.7qb). Check it with AssertAgentTextCase.
 func DescProvenGoneHow() DescCase {
 	return DescCase{
 		Name: "proven_gone_how field",
@@ -68,7 +69,7 @@ func DescProvenGoneHow() DescCase {
 			"Legacy non-Cursor main requests retain eligibility",
 			"Cursor unknown-origin and child requests are ineligible even without a child id",
 			"Decisions, delivery acknowledgements and pane-answer claims do not grant eligibility",
-			"A Cursor request its gateway never answered is instead proven turn_end by the gateway when the prompt turn that asked it completes",
+			"Every Cursor request of a prompt turn not otherwise proven or closed is instead proven turn_end by its gateway when that turn completes; one with a pending execution proof keeps it",
 			"agent_gone: its non-Cursor spawn was marked missing, ended or resumed",
 		},
 	}

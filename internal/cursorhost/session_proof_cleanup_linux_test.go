@@ -92,13 +92,14 @@ func killCursorRuntime(t *testing.T, c *cursorSession) {
 
 // b.o89 round 3: once the runtime has died after /exit, a deferred proof has
 // no authority left to wait for. The exit flush makes one attempt instead of
-// spinning out the busy window, and the failure names the lost proof.
+// spinning out the busy window, and the failure names the lost proof. The
+// /exit comes mid-turn, as in TestCursorExitStoresDeferredProofBeforeTermination.
 func TestCursorExitAfterRuntimeDeathMakesOneFlushAttempt(t *testing.T) {
 	// Serial: real Run, report subprocess and PTY with a synthetic ACP peer.
 	barrier, opener := newMatchingRecordBarrier(t, "input_control", func(raw []byte) bool { return bytes.Contains(raw, []byte(`"control":"exit"`)) })
-	idle, opener := idleProofBarrier(t, opener)
+	proofs, opener := openTurnProofBarrier(t, opener)
 	c := longBusyCursorSession(t, opener)
-	token, release := idleDeferredProof(t, c, idle)
+	token, release := openTurnDeferredProof(t, c, proofs)
 	c.keys(t, "\x15/exit\r")
 	select {
 	case <-barrier.entered:

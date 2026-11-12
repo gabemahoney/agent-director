@@ -271,9 +271,9 @@ const EventNameStop = "Stop"
 // Claude's table does not know the event. Verified main Cursor Stop and
 // Interrupt also supply turn-end proof; unknown/child origin supplies none.
 // It covers no Cursor gateway request, which is never eligible: before the
-// turn's Stop or a rotation's publication the gateway itself proves gone only
-// the turn's requests it never answered (store ProveCursorTurnEnded); one it
-// delivered stays unproven.
+// turn's Stop or a rotation's publication the gateway itself proves gone the
+// turn's requests, answered or not, except one awaiting its deferred tool
+// proof (store ProveCursorTurnEnded).
 func (r ClassifyResult) TurnEnded() bool {
 	if r.Agent == store.AgentCursor && r.UnknownEvent {
 		return false

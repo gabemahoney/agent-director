@@ -63,12 +63,13 @@ choices or request identities. Replayed requests provide no permission,
 execution proof or readiness.
 
 **A turn's end.** When a prompt turn completes, including cancellation,
-or `/clear` or `/new` ends it, requests of that conversation the gateway
-never answered are proven gone with `proven_gone_how` `turn_end`.
-They remain undelivered and may still read as awaiting an answer, but no
-longer hold the dialog or row. Their pane keys are removed and no new
-verdict can be recorded. Answered requests keep their
-[dialog hold](#the-dialog-hold). Relay and fallback holds are separate;
+or `/clear` or `/new` ends it, the gateway proves that turn's requests gone
+with `proven_gone_how` `turn_end`, answered or not. Pending tool proofs keep
+their persistence path; closed or already proven requests keep their fields.
+Turn-end proof preserves decision, delivery and pane-answer records and
+releases the dialog and row holds. Unanswered requests remain undelivered
+and may still read as awaiting an answer; their pane keys are removed and
+no new verdict can be recorded. Relay and fallback holds are separate;
 their handling is in the [caller contract](caller-contract.md#permission-relay).
 
 Matching execution evidence can prove one request gone with
@@ -382,6 +383,9 @@ exit it at the pane:
 4. Poll `get` or `status` until the row reads `ended`: `send-keys` does
    not wait for exit as `pause` does.
 
+For Cursor turn-end recovery and gateway refusals, follow
+[Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
+
 ### The dialog hold
 
 A delivery acknowledgement or pane-answer record does not prove the dialog
@@ -397,13 +401,17 @@ Proof comes from the agent, not from the caller's answer record:
   end, or a Claude subagent's requests recorded before its `SubagentStop`,
   subject to the [whole-second cutoff](caller-contract.md#permission-relay).
   A missing child ID alone never establishes main-turn eligibility.
-  Cursor also retires unanswered requests at their conversation's turn end.
+  For Cursor's turn-end proof and tool-proof exceptions, see
+  [Cursor spawns](#cursor-spawns).
 - `agent_gone`: a non-Cursor spawn ended, was marked `missing`, or resumed.
   Cursor launch closure leaves proof unchanged.
 
 An independent child's or unknown-origin request is not released by the
-parent's work or life change. Relay and fallback holds can remain after
-dialog proof. For hold handling, pane hashes and `pause`, use the
+parent's work or life change, except that Cursor proves every request of the
+completing prompt turn gone regardless of origin, answered or not, subject to
+the tool-proof exceptions in [Cursor spawns](#cursor-spawns).
+Relay and fallback holds can remain after dialog proof.
+For hold handling, pane hashes and `pause`, use the
 [caller contract](caller-contract.md#permission-relay).
 
 ### Answering at the pane

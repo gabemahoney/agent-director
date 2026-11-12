@@ -101,44 +101,45 @@ func answerFlushRequestAtPane(t *testing.T, c *cursorSession) string {
 	return token
 }
 
-// idleProofBarrier wraps open so the gateway stops once it has recorded the
-// flush-tool completion as an idle update, before it tries that tool's proof.
-func idleProofBarrier(t *testing.T, open func(string, store.CursorRuntime) (*transcript, error)) (*recordBarrier, func(string, store.CursorRuntime) (*transcript, error)) {
+// openTurnProofBarrier wraps open so the gateway stops once it has recorded
+// the flush-tool completion as an update of the open turn, before it tries
+// that tool's proof.
+func openTurnProofBarrier(t *testing.T, open func(string, store.CursorRuntime) (*transcript, error)) (*recordBarrier, func(string, store.CursorRuntime) (*transcript, error)) {
 	t.Helper()
-	f, _ := newMatchingRecordBarrier(t, "startup_or_idle_update", func(raw []byte) bool { return bytes.Contains(raw, []byte(`"flush-tool"`)) })
+	f, _ := newMatchingRecordBarrier(t, "update", func(raw []byte) bool { return bytes.Contains(raw, []byte(`"flush-tool"`)) })
 	return f, f.around(open)
 }
 
-// idleDeferredProof leaves an idle session holding one request answered at
-// the pane while its turn was open, whose completed shell tool arrived after
-// the turn's end while another writer holds the store's write lock, so its
-// proof is deferred. idle is the session's idleProofBarrier. It returns the
-// request and the lock's release.
-func idleDeferredProof(t *testing.T, c *cursorSession, idle *recordBarrier) (string, func()) {
+// openTurnDeferredProof leaves a session whose turn is still open holding
+// one request answered at the pane, whose completed shell tool arrived while
+// another writer holds the store's write lock, so its proof is deferred.
+// b.7qb: a turn's end proves turn_end every request of the turn with no
+// deferred proof, so the proof is deferred before the turn ends. The HOLD
+// prompt keeps the turn open until the runtime's release. proofs is the
+// session's openTurnProofBarrier. It returns the request and the lock's
+// release.
+func openTurnDeferredProof(t *testing.T, c *cursorSession, proofs *recordBarrier) (string, func()) {
 	t.Helper()
 	permission, completion := flushFrames(t)
-	// b.gwj: the turn's end retires a request still unanswered, so the pane
-	// answer comes first; the peer then ends the turn and sends the completion.
-	c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{permission}, CompleteBeforeAnswers: true, WaitForRelease: true, WaitForAfterAnswersRelease: true, AfterAnswers: []json.RawMessage{completion}, WaitForNew: true})
-	c.keys(t, "proof-turn\r")
+	c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{permission}, AfterAnswers: []json.RawMessage{completion}, WaitForNew: true})
+	c.keys(t, "HOLD\r")
 	c.wait(t, "request admitted", func() bool { return rotationRecordCount(c, t, "authorization_admitted") == 1 })
 	token := answerFlushRequestAtPane(t, c)
-	rotationRelease(t, c.e.runtime.Release)
-	c.wait(t, "idle completion recorded", func() bool {
+	c.wait(t, "completion recorded in the open turn", func() bool {
 		select {
-		case <-idle.entered:
+		case <-proofs.entered:
 			return true
 		default:
 			return false
 		}
 	})
-	// The peer sends the completion after the turn's end, which the gateway
-	// prints first; the test's pane reader can lag behind it.
-	c.wait(t, "turn complete before the idle completion", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor turn complete")) })
 	release := apitest.HoldWriteLock(t, c.e.path, time.Minute)
-	idle.unblock()
+	proofs.unblock()
 	if got := c.e.request(t, token); got.ProvenGone() {
 		t.Fatalf("request proven before its deferred completion: %+v", got)
+	}
+	if rotationRecordCount(c, t, "turn_outcome") != 0 {
+		t.Fatal("turn ended before its deferred completion")
 	}
 	return token, release
 }
@@ -325,6 +326,8 @@ func TestCursorTurnEndDuringRotationRetiresUndeliveredRequest(t *testing.T) {
 
 // b.gwj control: a relayed request decided and delivered before the turn ends
 // keeps its delivered decision, and the turn's end moves the row to waiting.
+// b.7qb: the turn's end also proves that request turn_end, so it no longer
+// holds the dialog.
 func TestCursorTurnEndAfterDeliveredDecisionReportsWaiting(t *testing.T) {
 	// Serial: real Run, report subprocess and PTY with a synthetic ACP peer.
 	c := postBootstrapCursorSession(t, "on", "")
@@ -339,8 +342,8 @@ func TestCursorTurnEndAfterDeliveredDecisionReportsWaiting(t *testing.T) {
 	if state := c.e.state(t); state != store.StateWaiting {
 		t.Fatalf("turn ended after its request was delivered, but the row reads %s: %+v", state, c.e.request(t, token))
 	}
-	if got := c.e.request(t, token); got.Decision != "allow" || got.DeliveredAt.IsZero() || got.ProvenGoneHow == store.ProvenGoneTurnEnd {
-		t.Fatalf("turn's end changed a delivered request: %+v", got)
+	if got := c.e.request(t, token); got.Decision != "allow" || got.DeliveredAt.IsZero() || got.ProvenGoneHow != store.ProvenGoneTurnEnd || got.HoldsDialog(store.AgentCursor, c.e.binding.Token) {
+		t.Fatalf("turn's end did not prove the delivered request turn_end with its decision kept: %+v", got)
 	}
 	c.stop(t)
 }
@@ -378,15 +381,25 @@ func TestCursorProofDuringMidTurnRotationLeavesRowHeld(t *testing.T) {
 
 // b.o89 finding 1: rotation must store a deferred proof under the outgoing
 // binding before publishing the fresh session, after which that binding can
-// no longer prove anything and a retry would end the controller.
+// no longer prove anything and a retry would end the controller. The
+// rotation is requested mid-turn, so the outgoing turn's end, which leaves
+// the deferred proof alone, reports no Stop that could flush it.
 func TestCursorRotationStoresDeferredProofBeforePublication(t *testing.T) {
 	// Serial: real Run, report subprocess and PTY with a synthetic ACP peer.
-	idle, opener := idleProofBarrier(t, openTranscript)
+	proofs, opener := openTurnProofBarrier(t, openTranscript)
 	c := postBootstrapCursorSessionWithInput(t, "off", "", opener, terminalLoop)
 	c.wait(t, "confirmed ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
-	token, release := idleDeferredProof(t, c, idle)
+	token, release := openTurnDeferredProof(t, c, proofs)
 	c.keys(t, "\x15/new\r")
+	c.wait(t, "rotation requested mid-turn", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor rotation requested")) })
+	rotationRelease(t, c.e.runtime.Release)
 	c.wait(t, "fresh session requested", func() bool { return rotationNewCount(c, t) == 2 })
+	if rotationRecordCount(c, t, "turn_outcome") != 1 {
+		t.Fatal("outgoing turn did not end before the fresh session was requested")
+	}
+	if got := c.e.request(t, token); got.ProvenGone() {
+		t.Fatalf("outgoing turn's end proved a request whose proof is deferred: %+v", got)
+	}
 	rotationRelease(t, c.e.runtime.NewRelease)
 	c.wait(t, "rotation confirmed while the writer holds the lock", func() bool { return rotationRecordCount(c, t, "rotation_confirmed") == 1 })
 	if got := c.e.request(t, token); got.ProvenGone() {
@@ -403,12 +416,13 @@ func TestCursorRotationStoresDeferredProofBeforePublication(t *testing.T) {
 
 // b.o89 finding 2: an intentional /exit must store a deferred proof before
 // terminating the runtime, whose termination retires the proof's authority.
+// The /exit comes mid-turn: once the turn ends, its Stop flushes the proof.
 func TestCursorExitStoresDeferredProofBeforeTermination(t *testing.T) {
 	// Serial: real Run, report subprocess and PTY with a synthetic ACP peer.
-	idle, opener := idleProofBarrier(t, openTranscript)
+	proofs, opener := openTurnProofBarrier(t, openTranscript)
 	c := postBootstrapCursorSessionWithInput(t, "off", "", opener, terminalLoop)
 	c.wait(t, "confirmed ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
-	token, release := idleDeferredProof(t, c, idle)
+	token, release := openTurnDeferredProof(t, c, proofs)
 	c.keys(t, "\x15/exit\r")
 	held := time.Now().Add(300 * time.Millisecond)
 	for time.Now().Before(held) {

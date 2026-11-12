@@ -125,12 +125,14 @@ func TestCursorResumePublicLaunchPendingParity(t *testing.T) {
 
 // b.m8h: once a relayed launch is verified gone, its delivered request no longer
 // holds the confirmed replacement's prompt, and keeps its proof as recorded.
+// The old launch is killed mid-turn: a turn's end would prove the request gone
+// (b.7qb), and only an unproven one shows the earlier launch's exclusion.
 func TestCursorResumeAfterOldLaunchRequestAcceptsPrompt(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real tmux synthetic ACP resume after old-launch request")
 	}
 	const session = "resume-hold-session"
-	scenario := cursorfix.Scenario{SessionID: session, Requests: []json.RawMessage{relayFrame("old-request", "session/request_permission", cursorfix.Permission(session, "old-tool", "execute"))}}
+	scenario := cursorfix.Scenario{SessionID: session, WaitForRelease: true, Requests: []json.RawMessage{relayFrame("old-request", "session/request_permission", cursorfix.Permission(session, "old-tool", "execute"))}}
 	f, peer, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{Script: &scenario, Relay: "on", Timeout: 30})
 	if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "old launch work"}); err != nil {
 		t.Fatal(err)
@@ -139,7 +141,8 @@ func TestCursorResumeAfterOldLaunchRequestAcceptsPrompt(t *testing.T) {
 	if _, err := f.API.Decide(api.DecideParams{InstanceID: launch.ID, RequestToken: request.RequestToken, Decision: "allow"}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "old turn finishes", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWaiting }, nil)
+	// The peer holds the turn open until its release, which never comes.
+	waitFor(t, "old allow reaches ACP", func() bool { return len(relayReplies(t, peer)) == 1 }, func() string { return fmt.Sprint(relayReplies(t, peer)) })
 	s, err := store.Open(f.DBPath)
 	if err != nil {
 		t.Fatal(err)

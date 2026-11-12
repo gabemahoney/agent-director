@@ -144,9 +144,9 @@ Wait for `waiting` before sending. Fresh startup reports when Cursor confirms
 its new conversation, without a first prompt. Login or a runtime that has not
 reported remains `pending`, and can be noted `unreported`. A submitted prompt
 reads `working`; a correlated turn completion returns it to `waiting`
-subject to [request holds](permissions.md#the-dialog-hold), after retiring the
-turn's unanswered requests (see
-[Cursor permissions](permissions.md#cursor-spawns)).
+subject to [request holds](permissions.md#the-dialog-hold), after proving the
+turn's requests gone as described in
+[Cursor permissions](permissions.md#cursor-spawns).
 
 The existing `inject_help_hook` setting also enables Cursor guidance; its default
 is off. When enabled, session setup supplies the current AD guidance before
@@ -715,13 +715,12 @@ still awaits an answer, so follow each request you track with
 `get-permission`, not only rows in `check_permission`.
 
 `proven_gone_at` and `proven_gone_how` say when and how the agent itself
-showed the request's dialog gone: `tool_ran` (validated matching Cursor
-invocation proof, including an exact failed MCP
-invocation without execution or answer inference; see [Cursor permissions](permissions.md#cursor-spawns)),
+showed the request's dialog gone: `tool_ran` (see
+[Cursor permissions](permissions.md#cursor-spawns)),
 `turn_end` (an eligible main request
 was written before the main turn ended, or a Claude subagent's request
 before that subagent's turn ended, see [The dialog hold](permissions.md#the-dialog-hold);
-or a Cursor request the gateway never answered when its turn ended, see
+or a Cursor request proven gone when its turn ended, see
 [Cursor permissions](permissions.md#cursor-spawns)) or
 `agent_gone` (a non-Cursor agent ended). A Claude or Codex agent's request
 carries no `tool_use_id` (it reads `null`) and is never proven by
@@ -738,8 +737,8 @@ menu names its `request_token` and supplies distinct keys; match that token
 and option to the request you inspected. At the attached pane a deliberate
 key competes with an active relay decision. A successful attached Cursor
 choice automatically records `pane_answer=sent` and `decision_reason=pane`;
-no `record-pane-answer` call is needed. That claim is not ACP delivery,
-Cursor receipt or execution proof. Through `send-keys`, use the
+no `record-pane-answer` call is needed. See [Delivery](permissions.md#delivery)
+for what those records establish. Through `send-keys`, use the
 existing guarded pane-answer command below once delivery has fallen back,
 substituting the displayed key for `Escape` and the chosen verdict for `deny`.
 Relay-off requests expose this path immediately, while `decide` remains
@@ -782,9 +781,8 @@ agent-director record-pane-answer --request-token "$token" \
 
 Pass `--as unknown` unless you saw how it was answered. A Claude or Codex
 request is closed only by one of the two calls above, or with its spawn.
-A Cursor request can close on validated matching shell execution or a successful
-MCP result under [Cursor permissions](permissions.md#cursor-spawns);
-other tool/plan completion supplies no execution proof. `record-pane-answer`
+For Cursor approval and proof limits, see
+[Cursor permissions](permissions.md#cursor-spawns). `record-pane-answer`
 types nothing and neither authorizes Cursor approval nor proves a dialog gone.
 A Codex pane's keys and an example are in
 [Answering a Codex approval at the pane](permissions.md#answering-a-codex-approval-at-the-pane). A

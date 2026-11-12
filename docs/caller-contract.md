@@ -858,10 +858,17 @@ Otherwise, read the pane and check `get`'s `state` and `unproven_requests`;
 answer or clear what holds input before explicitly sending again.
 
 A Cursor request of the current launch already answered (`delivered` or at
-the pane) with no validated tool proof holds input until that proof arrives
-or the launch ends ([Cursor spawns](permissions.md#cursor-spawns)). To recover
-a row held this way, follow the live-row sequence at the
-[top of this page](#caller-contract) to kill and resume it.
+the pane) holds input until tool proof arrives, its turn ends, or the launch
+ends ([Cursor spawns](permissions.md#cursor-spawns)). After turn end releases
+that hold, the next prompt needs no kill and resume. A later `gateway_refused`
+still means an admission hold remains; inspect it as above. The separate
+undelivered-request relay hold can still block input (see
+[Permission relay](#permission-relay)).
+
+If turn-end proof refuses an answer before it is written, the pane prints
+`Cursor turn ended before its answer was written; nothing sent`.
+No answer bytes were written and the gateway remains usable. An answer
+already issued may still be written; turn-end proof preserves its records.
 
 An accepted or provisionally held submission still returns `{}`. So does a
 call with no attributable verdict in the window or an unavailable transcript.
@@ -1218,9 +1225,9 @@ actual event determines what must finish before the next lifecycle step:
 
 | Event | Required proof persistence and limit |
 |---|---|
-| Ctrl-C interruption | The completed turn retires its unanswered requests, then stores deferred tool proofs before its Stop report; idle-control recovery also stores them before reporting waiting. The first control's three-second deadline bounds this work. |
-| `/clear` or `/new` | A completed outgoing turn first retires its unanswered requests. Deferred tool proofs must be stored before rotation publication, within the same first-control deadline; failure refuses rotation. |
-| Ordinary turn completion | Unanswered-request retirement has its own fixed store-busy window; deferred tool proofs keep theirs and must be stored before the Stop report. |
+| Ctrl-C interruption | The completed turn proves its requests gone, answered or not, except those with pending or stored tool proof. Deferred tool proofs are stored before its Stop report; idle-control recovery also stores them before reporting waiting. The first control's three-second deadline bounds this work. |
+| `/clear` or `/new` | A completed outgoing turn first proves its requests gone, with the same tool-proof exceptions. Deferred tool proofs must be stored before rotation publication, within the same first-control deadline; failure refuses rotation. |
+| Ordinary turn completion | Turn-end proof has its own fixed store-busy window; deferred tool proofs keep theirs and must be stored before the Stop report. |
 | Waiting report | Startup and turn/idle-control Stop reports store their captured deferred proofs first, within each proof's remaining window and any earlier cancellation deadline. |
 | `/exit`, eligible `pause` or terminating signal | Before terminating the runtime, try to store deferred proofs through their remaining original windows. This can outlast the cancellation deadline: a confirmed proof then survives, but intentional end cannot be confirmed and the row becomes `missing`, not `ended`. Storage failure remains failure. |
 
@@ -1786,7 +1793,7 @@ turn is still open, with no rotation under way, also moves a row no other
 request holds from `check_permission` to `working`; a late one does not (see
 "The row after the last answer" in [permissions.md](permissions.md#delivery)).
 
-A request retired at a Cursor turn's end (see "A turn's end" in
+An unanswered request retired at a Cursor turn's end (see "A turn's end" in
 [Cursor spawns](permissions.md#cursor-spawns)) still reads as awaiting an
 answer: `get-permission` shows it with `proven_gone_how` `turn_end`, and if a
 later request moves the row to `check_permission`, `permission_requests`

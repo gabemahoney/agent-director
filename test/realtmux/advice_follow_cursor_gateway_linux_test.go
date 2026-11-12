@@ -18,14 +18,16 @@ import (
 
 // TestAdviceFollow_E18_GatewayRefusedKillResume: E18 "read-pane and get, then
 // answer or clear what holds the input before sending again, or kill and
-// resume the row" after gateway_refused. The pane shows the refusal and get
-// the decided request holding the input, which nothing answers or clears, so
-// sending again is refused alike; after kill (find-missing until the row is
-// ended or missing, as docs/caller-contract.md says) and resume, the next send
-// reaches Cursor.
+// resume the row" after gateway_refused. The hold is the decided request with
+// its turn_end proof cleared (gatewayHold.hold), since a turn's end proves it
+// gone (b.7qb). The pane shows the refusal and get the decided request holding
+// the input, which nothing answers or clears, so sending again is refused
+// alike; after kill (find-missing until the row is ended or missing, as
+// docs/caller-contract.md says) and resume, the next send reaches Cursor.
 func TestAdviceFollow_E18_GatewayRefusedKillResume(t *testing.T) {
 	// Serial: the shared real-pane fixture changes HOME, PATH and tmux environment.
 	h := newGatewayHold(t, "on", "execute", "deny", nil)
+	h.hold(t)
 	c, id := h.f.API, h.launch.ID
 	const text = "after the refusal"
 	e := h.followUp(t, text)

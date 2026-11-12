@@ -201,13 +201,13 @@ func (p *protocol) writeLoop() {
 			}
 			if next.guard != nil {
 				if err := next.guard(); err != nil {
-					result <- writeResult{err: err, prewrite: errors.Is(err, errPromptRetired)}
+					result <- writeResult{err: err, prewrite: knownUnwritten(err)}
 					return
 				}
 			}
 			if next.issue != nil {
 				if err := next.issue(); err != nil {
-					result <- writeResult{err: err, prewrite: errors.Is(err, errPromptRetired)}
+					result <- writeResult{err: err, prewrite: knownUnwritten(err)}
 					return
 				}
 			}
@@ -242,8 +242,9 @@ func (p *protocol) writeLoop() {
 		}
 		timer.Stop()
 		if prewrite {
-			// A retired prompt is known unwritten at the final guard or issue.
-			// Other final authority failures retain their fail-closed behavior.
+			// A retired prompt, or an answer whose turn had ended, is known
+			// unwritten at the final guard or issue. Other final authority
+			// failures retain their fail-closed behavior.
 			if next.done != nil {
 				next.done(err)
 			}
@@ -270,6 +271,10 @@ func (p *protocol) writeLoop() {
 			return
 		}
 	}
+}
+
+func knownUnwritten(err error) bool {
+	return errors.Is(err, errPromptRetired) || errors.Is(err, errAnswerTurnEnded)
 }
 
 func (p *protocol) failQueued() {

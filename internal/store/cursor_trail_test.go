@@ -358,12 +358,13 @@ func TestCursorTrailProofFinalValuesAndDuplicate(t *testing.T) {
 	}
 }
 
-// b.gwj: a turn's end proves turn_end only the given requests that still hold
-// the row; one delivered, answered at the pane or already proven (the gateway
-// passes a proven one too) keeps what it had, and a stale binding writes nothing.
-func TestCursorTurnEndProvesOnlyHeldRequests(t *testing.T) {
+// b.gwj, b.7qb: a turn's end proves turn_end every given request still
+// unproven and not closed, answered or not, writing no decision, delivery or
+// pane answer; one already proven or closed (the gateway may pass either)
+// keeps what it had, and a stale binding writes nothing.
+func TestCursorTurnEndProvesTheTurnsUnprovenRequests(t *testing.T) {
 	e := newCursorTrailEnv(t)
-	for _, token := range []string{"unanswered", "delivered", "pane", "proven", "independent", "stale"} {
+	for _, token := range []string{"unanswered", "delivered", "pane", "proven", "closed", "independent", "stale"} {
 		e.insert(t, token)
 	}
 	if ok, err := e.f.s.DecidePermissionRequest(e.b.InstanceID, "delivered", "allow", "", store.WriterProcessDecide); err != nil || !ok {
@@ -378,20 +379,32 @@ func TestCursorTurnEndProvesOnlyHeldRequests(t *testing.T) {
 	if err := e.f.s.ProveCursorToolRan(e.b, "proven", "tool-proven", false, cursorTrailCheck); err != nil {
 		t.Fatal(err)
 	}
-	kept := map[string]store.PermissionRow{}
-	for _, token := range []string{"delivered", "pane", "proven", "independent"} {
-		kept[token] = e.read(t, token)
+	e.exec(t, `UPDATE permission_requests SET closed_at=1 WHERE request_token='closed'`)
+	before := map[string]store.PermissionRow{}
+	for _, token := range []string{"unanswered", "delivered", "pane", "proven", "closed", "independent"} {
+		before[token] = e.read(t, token)
 	}
 	mark := store.TrailMark(t)
-	if err := e.f.s.ProveCursorTurnEnded(e.b, []string{"unanswered", "delivered", "pane", "proven"}, e.until, cursorTrailCheck); err != nil {
+	if err := e.f.s.ProveCursorTurnEnded(e.b, []string{"unanswered", "delivered", "pane", "proven", "closed"}, e.until, cursorTrailCheck); err != nil {
 		t.Fatal(err)
 	}
-	if r := e.read(t, "unanswered"); r.ProvenGoneHow != store.ProvenGoneTurnEnd || r.Decision != "" || !r.DeliveredAt.IsZero() || r.PaneAnswered() {
-		t.Fatalf("unanswered request not proven turn_end alone: %+v", r)
+	for _, token := range []string{"unanswered", "delivered", "pane"} {
+		after := e.read(t, token)
+		want := before[token]
+		want.ProvenGoneAt, want.ProvenGoneHow = after.ProvenGoneAt, store.ProvenGoneTurnEnd
+		if after.ProvenGoneAt.IsZero() || !reflect.DeepEqual(want, after) {
+			t.Errorf("%s not proven turn_end alone: before %+v after %+v", token, before[token], after)
+		}
 	}
-	for token, before := range kept {
-		if after := e.read(t, token); !reflect.DeepEqual(before, after) {
-			t.Errorf("%s changed: before %+v after %+v", token, before, after)
+	if r := e.read(t, "delivered"); r.Decision != "allow" || r.DeliveredAt.IsZero() {
+		t.Errorf("delivered request lost its decision or delivery: %+v", r)
+	}
+	if r := e.read(t, "pane"); r.PaneAnswer != store.PaneAnswerSent || r.Decision != "allow" {
+		t.Errorf("pane-answered request lost its pane answer: %+v", r)
+	}
+	for _, token := range []string{"proven", "closed", "independent"} {
+		if after := e.read(t, token); !reflect.DeepEqual(before[token], after) {
+			t.Errorf("%s changed: before %+v after %+v", token, before[token], after)
 		}
 	}
 	if events := e.events(t, mark); len(events) != 0 {
