@@ -10,6 +10,8 @@
 # and the default PATH link in ~/.local/bin. Then, with that release's own
 # verbs, it adds one non-live Claude row and two templates, and it sets
 # disable_askuserquestion = true under [defaults] in config.toml.
+# Only the setup installer runs through /opt/driver/host-shim.sh; every later
+# command sees the real host. A way-back install must not use that shim.
 #
 # Usage:
 #   /opt/driver/old-layout.sh <home> [--store-outside <dir>]
@@ -142,7 +144,7 @@ if [[ -n "$outside" ]]; then
     chmod 0600 "$cfg"
 fi
 
-"$PREV/install.sh" --binary "$PREV/agent-director" --admin-binary "$PREV/agent-director-admin" \
+/opt/driver/host-shim.sh "$PREV/install.sh" --binary "$PREV/agent-director" --admin-binary "$PREV/agent-director-admin" \
     --register-mcp >&2 || die "the previous release's install.sh failed"
 [[ -x "$bin" && -x "$admin" ]] || die "the install left no binaries under $dir"
 [[ "$(readlink "$home/.local/bin/agent-director")" == "$bin" ]] || die "no PATH link to $bin"

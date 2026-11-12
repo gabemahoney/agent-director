@@ -115,9 +115,18 @@ type proc struct {
 // inherited SQL_BUSY_TIMEOUT_MS), stdin as its input, bounded at 30s.
 func start(t *testing.T, env []string, stdin, name string, args ...string) *proc {
 	t.Helper()
+	return startIn(t, "", env, stdin, name, args...)
+}
+
+// startIn is start in dir, or in a fresh temp dir when dir is "".
+func startIn(t *testing.T, dir string, env []string, stdin, name string, args ...string) *proc {
+	t.Helper()
+	if dir == "" {
+		dir = t.TempDir()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = t.TempDir()
+	cmd.Dir = dir
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "SQL_BUSY_TIMEOUT_MS=") {
 			cmd.Env = append(cmd.Env, kv)
@@ -163,6 +172,11 @@ func (p *proc) running() bool {
 func run(t *testing.T, env []string, stdin, name string, args ...string) result {
 	t.Helper()
 	return start(t, env, stdin, name, args...).wait()
+}
+
+func runIn(t *testing.T, dir string, env []string, stdin, name string, args ...string) result {
+	t.Helper()
+	return startIn(t, dir, env, stdin, name, args...).wait()
 }
 
 func driverScript(t *testing.T, name string) string {

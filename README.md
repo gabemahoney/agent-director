@@ -19,7 +19,7 @@ file, and tmux.
 
 ## Prerequisites
 
-- Linux x86_64 or Apple Silicon (arm64) macOS 13 or later.
+- Linux on x86_64 or arm64 (aarch64), or macOS 13 or later on arm64 (Apple Silicon).
 - At least one of Claude Code, Codex and Cursor, each on PATH or named by
   `[launch] claude_path` / `codex_path` / `cursor_path` in `config.toml`.
   Cursor needs its standalone `agent` program, not the editor's `cursor`

@@ -24,10 +24,9 @@
 # unless AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1, which runs it and shows it
 # fail.
 #
-# The tests run install.sh unmodified. On a host install.sh refuses (it accepts
-# only Linux/x86_64 and Darwin/arm64, so a Linux/aarch64 sandbox, Docker on
-# Apple silicon, is refused) no J test can run: the script runs none, prints
-# one "advice_follow.sh: SKIP: <reason>" line and exits SKIP_RC (77), which
+# The tests run install.sh unmodified. A refusal of Linux/x86_64,
+# Linux/aarch64 or Darwin/arm64 fails the suite. Other refused hosts print one
+# "advice_follow.sh: SKIP: <reason>" line and exit SKIP_RC (77), which
 # advice_follow_test.go reports as a skip, never a pass.
 
 set -uo pipefail
@@ -59,6 +58,9 @@ gate_err="$(cd "$ROOT" && env -i HOME="$ROOT/gate-home" PATH="$PATH" TMPDIR="$RO
     bash "$INSTALL_SRC" --binary "$ROOT/no-such-binary" --no-hooks --no-symlink 2>&1 >/dev/null)"
 gate_rc=$?
 if [[ "$gate_rc" -eq 2 && "$gate_err" == *"install.sh: unsupported host: $HOST_ARCH."* ]]; then
+    case "$HOST_ARCH" in
+        Linux/x86_64|Linux/aarch64|Darwin/arm64) die "install.sh refused supported host $HOST_ARCH: $gate_err" ;;
+    esac
     echo "advice_follow.sh: SKIP: install.sh refuses $HOST_ARCH hosts; J tests need a supported host"
     printf '%s\n' "$gate_err" | sed 's/^/    /'
     exit "$SKIP_RC"
@@ -319,8 +321,7 @@ echo "fake curl: unexpected call: $url" >&2
 exit 7
 EOF
 if ! command -v file >/dev/null 2>&1; then
-    # The sandbox image has no file(1): describe ELF the way it does, enough
-    # for install.sh's architecture probe.
+    # For an image without file(1), describe the headers as the real tool does.
     fake file <<'EOF'
 #!/bin/bash
 p="${!#}"
@@ -329,9 +330,13 @@ case "$(hex 0 4)" in
     7f454c46)
         bits=32; [[ "$(hex 4 1)" == 02 ]] && bits=64
         endian=LSB; [[ "$(hex 5 1)" == 02 ]] && endian=MSB
-        case "$(hex 18 2)" in 3e00) m=x86-64 ;; b700) m="ARM aarch64" ;; *) m="machine 0x$(hex 18 2)" ;; esac
+        machine="$(hex 18 2)"
+        [[ "$endian" != MSB ]] || machine="${machine:2:2}${machine:0:2}"
+        case "$machine" in 3e00) m=x86-64 ;; b700) m="ARM aarch64" ;; 2800) m=ARM ;; *) m="machine 0x$machine" ;; esac
         echo "ELF ${bits}-bit ${endian} executable, ${m}, version 1 (SYSV), statically linked" ;;
-    cffaedfe) echo "Mach-O 64-bit executable" ;;
+    cffaedfe)
+        m=""; [[ "$(hex 4 4)" != 0c000001 ]] || m=" arm64"
+        echo "Mach-O 64-bit${m} executable" ;;
     *) echo "data" ;;
 esac
 EOF
@@ -934,28 +939,62 @@ test_J3_TriedPathsResolved() {
     done
 }
 
-# ---- J4: wrong-architecture --binary ---------------------------------------------
+# ---- J4: wrong-architecture binary flags ----------------------------------------
 
-# J4: "Did you pass the wrong --binary?"
+# J4: "Did you pass the wrong --binary?" / "--admin-binary?" (b.vqr).
+# Both Linux hosts reject all four classes; each refusal is followed with the
+# native pair. Synthetic headers test the probe, not native ARM execution.
 test_J4_ArchMismatchRightBinary() {
-    local h; h="$(new_home)"
-    run "$h" bash "$LOOSE" --binary "$WRONG_ARCH" --admin-binary "$ADMIN" --no-hooks --no-symlink
-    expect_rc 2 "$WRONG_NAME binary on $HOST_ARCH" || return
-    expect_advice "Did you pass the wrong --binary?"
-    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
-    expect_rc 0 "re-run with the right --binary" && expect_installed "$h" "$BIN" "$ADMIN"
+    local h flag kind wrong desc want_format want_machine binary admin want
+    local native_machine=x86-64
+    [[ "$HOST_ARCH" != Linux/aarch64 ]] || native_machine="ARM aarch64"
+    # A complete ELF header in the declared byte order, with no program or
+    # section tables. Merely flipping EI_DATA would corrupt e_machine too.
+    python3 - "$BIN" "$ROOT/bin" <<'PY' || { bad "build J4 synthetic headers"; return; }
+from pathlib import Path
+import struct, sys
+native = Path(sys.argv[1]).read_bytes()
+machine = struct.unpack_from('<H', native, 18)[0]
+root = Path(sys.argv[2])
+headers = {
+    'big-endian': b'\x7fELF\x02\x02\x01' + bytes(9)
+        + struct.pack('>HHIQQQIHHHHHH', 2, machine, 1, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0),
+    'arm32': b'\x7fELF\x01\x01\x01' + bytes(9)
+        + struct.pack('<HHIIIIIHHHHHH', 2, 40, 1, 0, 0, 0, 0, 52, 0, 0, 0, 0, 0),
+    'macho': struct.pack('<IIIIII', 0xfeedfacf, 0x0100000c, 0, 2, 0, 0) + bytes(32),
 }
-
-# J4: "Did you pass the wrong --admin-binary?" (b.vqr)
-test_J4_ArchMismatchRightAdminBinary() {
-    local h; h="$(new_home)"
-    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$WRONG_ARCH_ADMIN" --no-hooks --no-symlink
-    expect_rc 2 "$WRONG_NAME agent-director-admin on $HOST_ARCH" || return
-    expect_advice "install.sh: --admin-binary $WRONG_ARCH_ADMIN: architecture mismatch"
-    expect_advice "Did you pass the wrong --admin-binary?"
-    expect_nothing_installed "$h"
-    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
-    expect_rc 0 "re-run with the right --admin-binary" && expect_installed "$h" "$BIN" "$ADMIN"
+for name, header in headers.items():
+    path = root / name
+    path.write_bytes(header)
+    path.chmod(0o755)
+PY
+    for flag in --binary --admin-binary; do
+        for kind in wrong-machine big-endian arm32 macho; do
+            wrong="$ROOT/bin/$kind"
+            case "$kind" in
+                wrong-machine)
+                    wrong="$WRONG_ARCH"
+                    [[ "$flag" != --admin-binary ]] || wrong="$WRONG_ARCH_ADMIN"
+                    want_format='ELF 64-bit LSB' want_machine="$WRONG_NAME" ;;
+                big-endian) want_format='ELF 64-bit MSB' want_machine="$native_machine" ;;
+                arm32) want_format='ELF 32-bit LSB' want_machine=ARM ;;
+                macho) want_format='Mach-O 64-bit' want_machine=arm64 ;;
+            esac
+            desc="$("$TOOLBOX/file" -L -b "$wrong")" || { bad "file $kind"; continue; }
+            [[ "$desc" == *"$want_format"* && "$desc" == *"$want_machine"* ]] \
+                || { bad "$kind fixture: [$desc]; want $want_format and $want_machine"; continue; }
+            h="$(new_home)" binary="$BIN" admin="$ADMIN"
+            if [[ "$flag" == --binary ]]; then binary="$wrong"; else admin="$wrong"; fi
+            run "$h" bash "$LOOSE" --binary "$binary" --admin-binary "$admin" --no-hooks --no-symlink
+            expect_rc 2 "$flag $kind on $HOST_ARCH" || continue
+            want="install.sh: $flag $wrong: architecture mismatch (binary appears to be ${desc:0:80}; host is $HOST_ARCH). Did you pass the wrong $flag?"
+            grep -qxF "$want" "$ERR" || bad "$flag $kind: missing exact probe message: $(flat "$ERR")"
+            expect_advice "Did you pass the wrong $flag?"
+            expect_nothing_installed "$h"
+            run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
+            expect_rc 0 "re-run with the right $flag after $kind" && expect_installed "$h" "$BIN" "$ADMIN"
+        done
+    done
 }
 
 # ---- J5: source-tree version check -------------------------------------------------
@@ -1996,7 +2035,8 @@ test_J9_NoCommitStampMakeBuild() {
 
 # J10: "install this release or later: bash $0 --from-release <tag of this
 # release or later>" and "or install an earlier release with that release's own
-# install.sh, fetched from its tag, rather than this one": the missing
+# install.sh (that release's install.sh must support this host), fetched from
+# its tag, rather than this one": the missing
 # agent-director-admin asset of a release before 0.11.0 is refused at once, with
 # no retry and no gh fallback (gh on PATH) and nothing installed; the advised
 # release installs both. (The advice names no 0.11.x tag: every 0.11.x is
@@ -2004,6 +2044,10 @@ test_J9_NoCommitStampMakeBuild() {
 test_J10_PreAdminReleaseInstallNewer() {
     local h cmd tag=v0.10.0
     h="$(new_home)"
+    run "$h" bash "$LOOSE" --help
+    expect_rc 0 "install.sh --help" || return
+    [[ "$(flat "$OUT")" == *"~/.config/agent-director (a binary from an earlier release: install that release with its own install.sh (that release's install.sh must support this host), fetched from its tag; this install reads no store for the check)"* ]] \
+        || bad "--help lacks exit 3's host-qualified earlier-installer advice: $(flat "$OUT")"
     PATH_EXTRA="$GH_DIR"
     FAKE_CURL_ADMIN_STATUS=404
     run "$h" bash "$LOOSE" --from-release "$tag" --no-hooks --no-symlink
@@ -2013,7 +2057,7 @@ test_J10_PreAdminReleaseInstallNewer() {
     grep -qF "asset not yet available" "$ERR" && bad "the agent-director-admin asset was retried"
     grep -qF "gh release download" "$ERR" && bad "the gh fallback was tried"
     expect_advice "- install this release or later: bash $LOOSE --from-release <tag of this release or later>"
-    expect_advice "- or install an earlier release with that release's own install.sh, fetched from its tag, rather than this one"
+    expect_advice "- or install an earlier release with that release's own install.sh (that release's install.sh must support this host), fetched from its tag, rather than this one"
     expect_nothing_installed "$h"
     cmd="$(advice_after "install this release or later: ")" || { bad "no advised command"; return; }
     FAKE_CURL_ADMIN_STATUS="" # the release this install.sh belongs to ships agent-director-admin

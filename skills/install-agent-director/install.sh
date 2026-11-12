@@ -191,7 +191,7 @@
 #      stamps differ or carry no commit stamp, or a binary's `version`
 #      output lacks config_dir or names a directory other than
 #      ~/.config/agent-director (a binary from an earlier release: install
-#      that release with its own install.sh, fetched from its tag; this
+#      that release with its own install.sh (that release's install.sh must support this host), fetched from its tag; this
 #      install reads no store for the check)
 #   4  hook merge failure (~/.claude/settings.json malformed, or holding
 #      more than one JSON document; an empty one is merged as {}), or
@@ -822,19 +822,18 @@ if [[ ${#missing_tools[@]} -gt 0 ]]; then
 fi
 
 # SRD §SR-2.1 / Idea Bee b.fg3: refuse with exit 2 any host outside the
-# supported set {Linux/x86_64, Darwin/arm64}, before anything is
-# downloaded or written. Linux/aarch64 is refused too; b.fg3 deferred
-# it. install.sh is the only installer (the npm package installs nothing
+# supported set {Linux/x86_64, Linux/aarch64, Darwin/arm64}, before anything is
+# downloaded or written. install.sh is the only installer (the npm package installs nothing
 # outside node_modules/), so this is the only host check that can refuse
 # an install. ad_arch_probe (below) checks both source binaries against
 # the pair read here.
 uname_s="$(uname -s)"
 uname_m="$(uname -m)"
 case "${uname_s}/${uname_m}" in
-    Linux/x86_64|Darwin/arm64)
+    Linux/x86_64|Linux/aarch64|Darwin/arm64)
         ;;
     *)
-        echo "install.sh: unsupported host: ${uname_s}/${uname_m}. Supported: Linux/x86_64, Darwin/arm64. See b.fg3 for cross-platform expansion status." >&2
+        echo "install.sh: unsupported host: ${uname_s}/${uname_m}. Supported: Linux/x86_64, Linux/aarch64, Darwin/arm64. See b.fg3 for cross-platform expansion status." >&2
         exit 2
         ;;
 esac
@@ -2781,7 +2780,7 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
         echo "  Releases before 0.11.0 ship no agent-director-admin binary, so" >&2
         echo "  re-running this command will never find one. Instead:" >&2
         echo "    - install this release or later: bash $0 --from-release <tag of this release or later>" >&2
-        echo "    - or install an earlier release with that release's own install.sh, fetched from its tag, rather than this one" >&2
+        echo "    - or install an earlier release with that release's own install.sh (that release's install.sh must support this host), fetched from its tag, rather than this one" >&2
         exit 3
     }
 
@@ -2999,6 +2998,7 @@ echo "  admin source: $ADMIN_SRC"
 # (e.g. operator passes a darwin-arm64 artifact on a Linux/x86_64 host).
 # Runs file(1) against $BINARY_SRC, and against $ADMIN_SRC (b.vqr), and
 # pattern-matches against the host pair captured by the OS/CPU gate (T1).
+# Supported pairs: Linux/x86_64, Linux/aarch64 and Darwin/arm64.
 # On mismatch: exit 2 with the SR-2.2 message. file(1) is a hard
 # preflight requirement (T2 + required_tools); never silent-skip.
 #
@@ -3017,6 +3017,12 @@ ad_arch_probe() {
         Linux/x86_64)
             if grep -q "ELF 64-bit LSB" <<<"$file_out" \
                 && { grep -q "x86-64" <<<"$file_out" || grep -q "x86_64" <<<"$file_out"; }; then
+                arch_ok=1
+            fi
+            ;;
+        Linux/aarch64)
+            if grep -q "ELF 64-bit LSB" <<<"$file_out" \
+                && grep -q "aarch64" <<<"$file_out"; then
                 arch_ok=1
             fi
             ;;
@@ -3188,7 +3194,7 @@ if [[ "$main_config_dir" != "~/.config/agent-director" || "$admin_config_dir" !=
     echo "  This release keeps AD's files in ~/.config/agent-director, and both of its" >&2
     echo "  binaries report that directory as config_dir in their version result." >&2
     echo "  A binary that does not is from an earlier release, which an earlier" >&2
-    echo "  release's own install.sh installs: fetch that release's install.sh from its" >&2
+    echo "  release's own install.sh installs (that release's install.sh must support this host): fetch that release's install.sh from its" >&2
     echo "  tag and run it, rather than this one. To install this release instead:" >&2
     echo "    - build both binaries from it: $build_advice" >&2
     echo "    - or download release:        rerun with --from-release (omit --binary and --admin-binary)" >&2
@@ -4793,7 +4799,7 @@ ad_restore_copy_path() {
 
 # Unlike ad_file_id, identify the link itself. A saved managed link may
 # point to a directory; its successful put-back must not look like mv put
-# the copy inside a late directory. Both hosts' stat default to lstat.
+# the copy inside a late directory. Linux's and macOS's stat both default to lstat.
 ad_restore_id() {
     local id
     id="$(stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null)" || return 1
@@ -4922,7 +4928,7 @@ ad_restore_run() {
         fi
         RESTORE_DONE+="set $DEFAULT_INSTALL_ROOT aside at $RESTORE_ASIDE"$'\n'
     fi
-    # A late directory can absorb mv's source on both hosts. Locate that
+    # A late directory can absorb mv's source on Linux and macOS. Locate that
     # retained directory and stop; never delete the occupant or retry mv.
     if [[ -e "$OLD_INSTALL_ROOT" || -L "$OLD_INSTALL_ROOT" ]]; then
         RESTORE_FAILED="$OLD_INSTALL_ROOT is occupied"
@@ -5250,7 +5256,7 @@ ad_cutover_message() {
             done
             if [[ "$PREV_RELEASE_PREDATES" -eq 1 && ( "$residual" -eq 1 || "$OUTCOME_STEPS" == unknown ) ]]; then
                 echo "  The installer cannot put the previous release back: the store has moved, or may have moved, past it." >&2 || true
-                echo "  To go back instead, restore the store from the journal backup directory $JOURNAL_BACKUP (filled before any schema step), and install the previous release with its own installer, as docs/operator-actions.md \"Going back to the previous release\" describes." >&2 || true
+                echo "  To go back instead, restore the store from the journal backup directory $JOURNAL_BACKUP (filled before any schema step), and install the previous release with its own installer (that release's install.sh must support this host), as docs/operator-actions.md \"Going back to the previous release\" describes." >&2 || true
             fi
             echo "  To complete forward, fix the reported cause, then re-run this release's installer with a new backup directory:" >&2 || true
             ad_rerun_advice journal "$row" ;;

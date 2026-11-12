@@ -679,6 +679,7 @@ func TestMoveEarlierReleaseRefused(t *testing.T) {
 				"install.sh: a binary to install is from an earlier release (its version output lacks config_dir ~/.config/agent-director); refusing to install.",
 				"  agent-director      : {main} (config_dir: " + main + ")",
 				"  agent-director-admin: {admin} (config_dir: " + admin + ")",
+				"  release's own install.sh installs (that release's install.sh must support this host): fetch that release's install.sh from its",
 				"rerun with --from-release (omit --binary and --admin-binary)",
 			}}
 		if fresh {

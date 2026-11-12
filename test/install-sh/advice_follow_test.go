@@ -32,8 +32,8 @@ var cli2Inputs = []string{"test/install-sh", "skills/install-agent-director", "g
 // cli2Result matches the script's closing line for one test.
 var cli2Result = regexp.MustCompile(`^--- (PASS|FAIL|SKIP): (test_\w+)$`)
 
-// cli2SkipRC is the script's exit status when install.sh refuses the host
-// (Linux/aarch64, for one): it ran no test and printed one cli2SkipLine.
+// cli2SkipRC is the script's exit status for a refused, unsupported host:
+// it ran no test and printed one cli2SkipLine. A supported host's refusal fails.
 const cli2SkipRC = 77
 
 // cli2SkipLine matches that line; the group is the reason.
@@ -67,7 +67,7 @@ func cli2TrackInputs(t *testing.T) {
 
 // TestAdviceFollow_J_InstallShScript: J1-J34, J48 and G8, each test_* in
 // advice_follow.sh a subtest with its own result; known-broken ones skip unless
-// the gate is set. On a host install.sh refuses, the whole test skips with the script's reason.
+// the gate is set. On an unsupported host, the whole test skips with the script's reason.
 func TestAdviceFollow_J_InstallShScript(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("advice_follow.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)

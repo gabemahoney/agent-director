@@ -8,12 +8,12 @@
 // target.  A binary stamped with the wrong version string (e.g. an accidental
 // AGENT_DIRECTOR_BUILD_VERSION override) must cause the gate to exit non-zero
 // and emit a structured SR-14 JSON diagnostic to stderr with
-// "gate":"coherence.binary-version.linux-amd64".
+// "gate":"coherence.binary-version.linux-<host arch>".
 //
 // DESIGN
 // ======
-//  1. Pre-req     : requires linux/amd64 host (gate skips non-host binaries).
-//  2. Mutation    : build agent-director-linux-amd64 into a per-test
+//  1. Pre-req     : requires linux/amd64 or linux/arm64 (gate skips non-host binaries).
+//  2. Mutation    : build agent-director-linux-<host arch> into a per-test
 //     t.TempDir() (RELEASE_DIST_DIR) with
 //     AGENT_DIRECTOR_BUILD_VERSION=9.9.9; the binary now reports
 //     version "9.9.9" while the target "0.0.0" is passed to the gate.
@@ -66,8 +66,8 @@ func TestCoherenceBinaryVersionFires(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow: runs make release-binaries")
 	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skipf("coherence.binary-version.linux-amd64 only runs on linux/amd64; host is %s/%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
+		t.Skipf("coherence.binary-version requires linux/amd64 or linux/arm64; host is %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
 	root := repoRoot(t)
@@ -108,7 +108,7 @@ func TestCoherenceBinaryVersionFires(t *testing.T) {
 		t.Fatal("expected coherence.binary-version gate to exit non-zero when version mismatches, but it exited 0")
 	}
 
-	const gateKey = `"gate":"coherence.binary-version.linux-amd64"`
+	gateKey := `"gate":"coherence.binary-version.linux-` + runtime.GOARCH + `"`
 	if !strings.Contains(stderr, gateKey) {
 		t.Fatalf("gate stderr does not contain %q;\nstderr:\n%s", gateKey, stderr)
 	}

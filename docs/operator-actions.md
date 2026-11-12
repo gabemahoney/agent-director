@@ -621,7 +621,7 @@ own pre-flight link refusal is listed separately in the shared reason's row:
 | `process_inventory_unreadable` | The process inventory as a whole could not be read, or a read-only inventory could not resolve a store, sidecar or root path (on macOS, see below). | No for read-only checks; otherwise Envelope | Make the store, sidecar and root paths resolvable; run as the agents' user with every mounted file system reachable or unmounted (on Linux, with `/proc` mounted and readable). After a read-only refusal, repeat the check; for a migration attempt, keep the window, then Retry; report it if it persists. |
 | `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | No for read-only checks; otherwise Envelope | Make every mounted file system reachable or unmount it, or answer any privacy consent prompt. After a read-only refusal, repeat the check; for a migration attempt, keep the maintenance window, then Retry. |
 | `old_or_unverified_mutators` | Listed processes may still write (roles below), including holders found by either read-only check before installation. | No for read-only checks; otherwise Envelope | Stop each listed `agent_director_mutator` (an agent-director program or a process holding the store, its sidecars or a file under a legacy root); each may run again once the cutover is verified. After a read-only refusal, repeat the check; for a migration attempt, keep the maintenance window, then Retry. |
-| `process_inventory_unsupported` | The host is neither Linux x86_64 nor macOS arm64. | No | Run the upgrade on a supported host. |
+| `process_inventory_unsupported` | The host is outside the supported set: Linux on x86_64 or arm64 (aarch64), and macOS 13 or later on arm64. | No | Run the upgrade on a supported host. |
 
 The store's causes:
 
@@ -672,7 +672,7 @@ rm -- ~/.config/agent-director
 mv -- "$target" ~/.config/agent-director
 ```
 
-**Roles.** On both hosts, `agent_director_mutator`
+**Roles.** On Linux and macOS, `agent_director_mutator`
 (`stop_and_restart_after_cutover`) is the only role: readable evidence shows
 that the program's file name contains `agent-director` or the process holds
 the store or a file under a legacy root. Any other process needs no action,
@@ -1272,7 +1272,8 @@ commit, `details.cutover` is `not_committed` and `details.steps_committed`
 `true`: the version was raised, so the previous release cannot open the store
 and this release stays. The message says the installer cannot put the previous
 release back and gives both ways on: the re-run command, which completes
-forward, or the way back.
+forward, or the way back, provided the previous release's own `install.sh`
+[supports this host](install.md#requirements).
 
 The way back restores the store from the journal backup directory the message
 names, which `migrate-journal` filled before any schema step. Keep writers
@@ -1574,6 +1575,10 @@ Delete the set-aside and `recreated` directories once the previous release is
 confirmed working.
 
 ## Going back to the previous release
+
+Before either procedure restores or moves anything, confirm that the previous
+release's own `install.sh` [supports this host](install.md#requirements).
+If that release's install.sh refuses this host, keep this release.
 
 For an upgrade within the current `~/.config/agent-director` layout,
 including schema v9→v10 through v19→v20, the old-layout steps below do not
