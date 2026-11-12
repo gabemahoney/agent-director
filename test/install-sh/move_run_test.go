@@ -667,12 +667,14 @@ func TestMovePathKeyOutwardRewritten(t *testing.T) {
 func TestMoveOtherReferencesPrinted(t *testing.T) {
 	h := newMoveHome(t)
 	h.Flags = append(h.Flags, "--keep-prior")
-	cfg := moveOldConfig + "\n[launch]\nclaude_path = \"{HOME}/.agent-director/bin/claude\"\n"
+	// b.mnb: sibling paths are not references into the old directory.
+	cfg := moveOldConfig + "\n[launch]\nclaude_path = \"{HOME}/.agent-director/bin/claude\"\ncodex_path = \"~/.agent-director-data/bin/codex\"\n"
 	h.BuildOld(withMoveConfig(func(h *moveHome) string { return h.expand(cfg) }))
 	oldLink := filepath.Join(h.Tools, "agent-director")
 	h.Link(filepath.Join(h.Old, "bin", "agent-director"), oldLink)
 	h.Env["PATH"] = h.Tools + ":" + filepath.Join(h.Old, "bin") + ":" + h.S.Toolbox
 	tmpl := "name = \"tooling\"\ncwd = \"{HOME}/.agent-director/work\"\n\n[extra_env]\nTOOLS = \"~/.agent-director/tools\"\nPLAIN = \"kept\"\n"
+	tmpl += "SIBLING_DATA = \"~/.agent-director-data/tools\"\nSIBLING_KEPT = \"{HOME}/.agent-director.pre-move-x/tools\"\nSIBLING_ASIDE = \"$HOME/.agent-director.aside-x/tools\"\nSIBLING_NUMBERED = \"{HOME}/.agent-director2/tools\"\nMIXED = \"~/.agent-director-data/tools ~/.agent-director/tools\"\n"
 	h.Write(filepath.Join(h.Old, "templates", "tooling.toml"), h.expand(tmpl), 0o644)
 	res := moveMustInstall(t, h)
 	// A crossing success flushes each deferred note exactly once, only
@@ -695,6 +697,7 @@ func TestMoveOtherReferencesPrinted(t *testing.T) {
 		"    {HOME}/.config/agent-director/config.toml:9:claude_path = \"{HOME}/.agent-director/bin/claude\"",
 		"    {HOME}/.config/agent-director/templates/tooling.toml:2:cwd = \"{HOME}/.agent-director/work\"",
 		"    {HOME}/.config/agent-director/templates/tooling.toml:6:TOOLS = \"~/.agent-director/tools\"",
+		"    {HOME}/.config/agent-director/templates/tooling.toml:12:MIXED = \"~/.agent-director-data/tools ~/.agent-director/tools\"",
 	} {
 		if !strings.Contains(res.Stdout, h.expand(s)) {
 			t.Errorf("stdout lacks %q:\n%s", s, res.Stdout)
@@ -713,8 +716,10 @@ func TestMoveOtherReferencesPrinted(t *testing.T) {
 	if strings.Contains(res.Stdout[refs:], ".pre-agent-rename.") {
 		t.Errorf("a migration backup is printed as a reference:\n%s", res.Stdout[refs:])
 	}
-	if strings.Contains(res.Stdout, "PLAIN") {
-		t.Errorf("stdout names a line that does not reach the old directory:\n%s", res.Stdout)
+	for _, s := range []string{"PLAIN", "SIBLING_", "config.toml:10:codex_path = \"~/.agent-director-data/bin/codex\""} {
+		if strings.Contains(res.Stdout, s) {
+			t.Errorf("stdout names a line that does not reach the old directory (%q):\n%s", s, res.Stdout)
+		}
 	}
 	// The move leaves every line as written (config.toml is the old one, byte
 	// for byte); the migration then adds the agent to each template, and the

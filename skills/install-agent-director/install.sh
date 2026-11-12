@@ -5887,8 +5887,16 @@ ad_move_rewrite_config() {
 # call defers these notes on a crossing upgrade, since it may restore; S1's
 # stop reports them directly on stderr as before.
 ad_move_print_references() {
-    local hits
-    hits="$( { grep -n -F -I -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -F -I --exclude='*.pre-agent-rename.*' -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
+    local hits old_re boundary="([/\"']|$)"
+    # Escape the absolute path so only the trailing boundary is a pattern.
+    old_re="$(printf '%s\n' "$OLD_INSTALL_ROOT" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+    local -a patterns=(
+        -e "${old_re}${boundary}"
+        -e '~/\.agent-director'"$boundary"
+        -e '\$HOME/\.agent-director'"$boundary"
+        -e '\$\{HOME\}/\.agent-director'"$boundary"
+    )
+    hits="$( { grep -n -E -I "${patterns[@]}" "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -E -I --exclude='*.pre-agent-rename.*' "${patterns[@]}" "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
     if [[ -n "$hits" ]]; then
         echo "  references: these lines still name the old directory. They were left as written; change each to the same place under $NEW_ROOT_CLEAN (or remove it) by hand, since the old directory is kept only until you delete it ($1):" || ad_cutover_write_failed
         printf '%s\n' "$hits" | sed 's/^/    /' || ad_cutover_write_failed
