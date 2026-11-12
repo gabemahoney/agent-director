@@ -30,9 +30,7 @@ file, and tmux.
   `/config`) defaults to "notify", which can put a feedback-draft menu in a
   driven agent's pane that may stop agent-director's input reaching the agent;
   we suggest setting it to "off". For Codex, `codex` (Codex) 0.159.2 or later:
-  its native program, or a wrapper that `exec`s it. An npm-installed `codex`
-  does not qualify: set `[launch] codex_path` in
-  `~/.config/agent-director/config.toml` to the native program.
+  its native program, or a wrapper that `exec`s it.
 - `tmux` 3.2 or later on PATH.
 - `jq`, `sqlite3` and `file` on PATH.
 

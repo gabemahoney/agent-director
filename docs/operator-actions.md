@@ -312,9 +312,7 @@ prints text to stdout before the relay hook runs, while the request reads
 `delivered` and the command waits for a person. The cause is a zsh `.zshenv`
 that prints, or a file named by a `BASH_ENV` the caller set in `extra_env`
 that prints (agent-director launches Codex with `BASH_ENV` empty). Text on
-stderr is harmless. The consequence is described in
-[Permissions](permissions.md#startup-files-that-print). A human checks and
-fixes it:
+stderr is harmless. A human checks and fixes it:
 
 1. Look at the pane (the dialog waits for a person; answer it there, or leave
    it), and confirm the request reads `delivered`:
@@ -1389,6 +1387,44 @@ runs are in [Maintenance](maintenance.md#scheduling-the-sweeps).
 reason other than "no crontab", it says so and leaves the crontab alone: remove
 the lines tagged `agent-director-schedule` with `crontab -e`. It does the same
 when it cannot write the crontab back.
+
+## The MCP registration or deregistration failed (exit 6)
+
+`install.sh --register-mcp` ended with `install.sh: installed, but the MCP
+registration failed (see above); exit 6`: `claude mcp add`, or the `claude mcp
+remove` before a re-add, exited non-zero. Every other install step is done and
+kept: the binaries, the store, the hooks and the links. The read of an existing
+registration (`claude mcp get`) never fails the install.
+
+`uninstall.sh --mcp-also` ended with `uninstall.sh: done, except the MCP
+deregistration failed (see above); exit 6`: `claude mcp remove agent-director`
+failed for a reason other than finding no registration. Every other step,
+`--purge` included, still ran.
+
+Either way, stderr shows the command that ran, its exit status, its stderr and
+the command to run by hand, with the Claude Code program it used. From the
+directory the install or uninstall ran in, check what is registered (see
+[which directories see a registration](install.md#mcp-registration)):
+
+```sh
+claude mcp get agent-director
+```
+
+Fix the cause the stderr names, then run the printed command. Two causes need
+a scope:
+
+- **The name is registered for another command** (install). If that
+  registration should be replaced, remove it, then run the install again or the
+  printed add:
+
+  ```sh
+  claude mcp remove agent-director -s <scope>
+  ```
+
+- **The name is registered in several scopes** (uninstall). `claude mcp remove`
+  without a scope refuses it. Run the command above once per scope; `claude mcp
+  get agent-director` shows one scope at a time, so run it again after each
+  removal until it finds none.
 
 ## Putting back a kept install
 

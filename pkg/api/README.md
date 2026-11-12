@@ -1,8 +1,7 @@
 # pkg/api — Go client library for agent-director
 
-Typed Go interface to all agent-director verbs, with the same semantics as the
-CLI and MCP server. Verb calls run in process; agent launches use their own
-processes.
+Typed Go client for agent-director. Shared behavior and recovery rules are in
+the [caller contract](../../docs/caller-contract.md).
 
 ## Contents
 
@@ -74,9 +73,8 @@ func main() {
 }
 ```
 
-`Version` reads build-time metadata only — no store I/O, no tmux — so it
-is the canonical safe first call for verifying connectivity. `List` is an
-acceptable alternative when you want to confirm store access as well.
+`Version` reads build metadata without store or tmux access. Use `List` to
+check store access.
 
 `Close` releases this client's store. Audit reporting belongs to the host
 process lifetime; closing a client does not drain accepted process audit
@@ -88,11 +86,8 @@ events or certify their durability.
 
 ### Spawn
 
-Launch a tracked agent inside a new tmux session.
-`Spawn` returns immediately with the `instance_id`; the row is
-`pending` from its insert until the agent reports in (its
-`SessionStart` hook), then `waiting`. Use `Status` or `Get` to observe
-progress. Shared CLI commands are in [Usage](../../docs/usage.md).
+Launch a tracked agent inside a new tmux session. `Spawn` returns immediately
+with the `instance_id`; use `Status` or `Get` to observe progress.
 
 ```go
 result, err := c.Spawn(api.SpawnParams{
@@ -110,91 +105,44 @@ if err != nil {
 fmt.Println(result.InstanceID)
 ```
 
-Cursor uses the existing `SpawnResult` and row fields; `Status` keeps its
-existing shape. Its fresh workflow is in [Usage](../../docs/usage.md#fresh-cursor-use).
-`Resume(api.ResumeParams{InstanceID: id})` launches load of only its latest saved session;
-the row can remain `pending` until a first real prompt. After inspecting the
-pane, set `SendKeysParams.AllowPending` for that prompt; current binding and
-dialog guards still apply. Saved configuration replay, which never includes
-the initial prompt, is defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
-`SpawnParams.ReuseFinished` supports Cursor and agent switches; see the
-[life rules](../../docs/usage.md#naming-the-agent). Argument and
-asynchronous failure handling are in the
-[caller contract](../../docs/caller-contract.md#cursor-operation-boundaries).
+Set `SpawnParams.Agent` to `"claude"`, `"codex"` or `"cursor"` (case-sensitive),
+or use a template that names its `Agent`. `MakeTemplateParams.Agent` sets the
+template's agent. Argument merging is defined in
+[Settings](../../docs/settings.md#templates-and-per-call-merge).
 
 Go applications launching or resuming Cursor require an installed
-`$HOME/.config/agent-director/bin/agent-director`. Its resolved symlink target
-must be a regular executable; an unavailable gateway fails before row mutation.
-The application itself does not need to implement the gateway. The Client's
-`Options.StorePath` selection is also used by fresh, reused and resumed Cursor
-processes; no separate gateway path or store parameter is needed.
+`$HOME/.config/agent-director/bin/agent-director` whose resolved target is a
+regular executable. See [Installation](../../docs/install.md). Cursor uses
+`Options.StorePath` too; no separate gateway or store parameter is needed.
 
-A spawn names its agent: `SpawnParams.Agent`, `"claude"`, `"codex"` or `"cursor"`
-(case-sensitive), or the `Agent` its template names. `MakeTemplateParams.Agent`
-bakes one into a template; a template with `AgentArgs` needs it. How a call's
-`AgentArgs` combine with a template's is in
-[docs/settings.md](../../docs/settings.md#templates-and-per-call-merge).
-
-Five sentinels refuse the agent input, each before anything is written;
-`pkg/api` re-exports them and callers match them with `errors.Is`:
-`ErrAgentMissing` (no `Agent`, and the template names none), `ErrAgentInvalid`
-(not `"claude"`, `"codex"` or `"cursor"`), `ErrAgentArgsMismatch` (the template's
-`AgentArgs` are for another agent: spawn that agent, or pass this call's own
-non-empty `AgentArgs`), `ErrTemplateAgentMissing` (the template has `AgentArgs`
-and no agent: give it one; `MakeTemplate` returns it too) and
-`ErrPermissionsUnsupported` (a `"codex"` or `"cursor"` spawn or template carrying an allow,
-deny or ask entry; `MakeTemplate` returns it too).
-
-`ErrSpawnDeniedFlag` refuses an unsupported `AgentArgs` entry before anything
-is written; `MakeTemplate` returns it for unsupported Cursor arguments too.
-Cursor's supported model/mode/prompt forms and asynchronous configuration
-failures are in [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries).
-Claude always refuses `--settings`,
-`--output-format` and print (`--print`, `-p`, parsed clusters included).
-Session selectors and their owned values are refused except on a verified
-finished-agent switch, where they are removed from launch and storage and the
-remainder is checked as for a plain spawn. Exact denied long names owned as
-option values always refuse. Codex also refuses other command-position
-subcommands, `--remote`, `--remote-auth-token-env`, and config keys or features
-that override its hooks, typing setting or, while `disable_ask_user` is on,
-question-tool setting. The complete selector lists, recognition rules and
-switch policy are in
-[docs/caller-contract.md](../../docs/caller-contract.md#spawn-and-template-input-refusals).
-`Resume` filters stored `AgentArgs` without applying spawn's argument refusals;
-see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules and
-[Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals)
-for argument recognition limits.
-
-For all agents, `SpawnParams.ReuseFinished` on a finished id starts a
-fresh conversation. Same-agent reuse retains current-life session history and subagent records;
-switching agents starts another life, including when switching back.
-`Resume` accepts only the id and continues its recorded agent's latest
-reported session. It never selects an archived session, even when its
-transcript exists. See [Transcript recovery](../../docs/caller-contract.md#transcript-recovery)
-for classification and recovery, and [Usage](../../docs/usage.md#naming-the-agent)
-for restoration and children.
+`SpawnParams.ReuseFinished` starts a fresh conversation on a finished id;
+`Resume(api.ResumeParams{InstanceID: id})` continues the latest recorded
+session. See [life rules](../../docs/usage.md#naming-the-agent) and
+[Pause and resume](../../docs/usage.md#pause-and-resume). Cursor startup and
+asynchronous failures are covered by
+[Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries).
 
 `SpawnParams.IdleScreenTimeoutSeconds` gives the row its own `idle_screen`
 timeout in whole seconds (0 for none); its range and lifecycle are in
 [Configuration](../../docs/configuration.md#idle-screen-timeout-state).
 
-Returns `SpawnResult` (`.InstanceID`, `.PreTrust`, `.DroppedArgs`).
-`.DroppedArgs` lists removed original argument tokens in argv order on a
-switching reuse, which starts fresh and resumes nothing. JSON omits
-`dropped_args` when empty. Reporting details are in the
-[caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals).
-`.PreTrust` is
-`"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did, for
-the selected agent (a failed pre-trust never fails the spawn; see the
-`SpawnResult.PreTrust` godoc,
-[Codex pre-trust](../../docs/settings.md#pre-trust-for-codex) and
-[Cursor launch settings](../../docs/settings.md#cursor-launch-settings)).
-Cursor reports `failed` for unsupported pre-trust or `skipped` for the saved
-opt-out, never a validated `ok`. Neither outcome proves readiness. Most-likely sentinel errors: `ErrCwdNotFound`, `ErrCwdNotADirectory`,
+Returns `SpawnResult`:
+
+- `InstanceID`: the tracked id.
+- `DroppedArgs`: removed original argument tokens in argv order on a switching
+  reuse; omitted from JSON when empty. See
+  [input refusals and reporting](../../docs/caller-contract.md#spawn-and-template-input-refusals).
+- `PreTrust`: `"ok"`, `"skipped"` or `"failed"`. This does not prove readiness.
+  See [Codex pre-trust](../../docs/settings.md#pre-trust-for-codex) and
+  [Cursor launch settings](../../docs/settings.md#cursor-launch-settings).
+
+Input errors include `ErrAgentMissing`, `ErrAgentInvalid`,
+`ErrAgentArgsMismatch`, `ErrTemplateAgentMissing`, `ErrPermissionsUnsupported`
+and `ErrSpawnDeniedFlag`; meanings and handling are in
+[Spawn and template input refusals](../../docs/caller-contract.md#spawn-and-template-input-refusals).
+Other common errors: `ErrCwdNotFound`, `ErrCwdNotADirectory`,
 `ErrRelayModeInvalid`, `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`,
-`ErrTmuxUnresponsive` and `ErrTmuxSessionConflict`. Timeout and held-name
-recovery are owned by the [caller contract](../../docs/caller-contract.md#caller-contract)
-and [Operator actions](../../docs/operator-actions.md).
+`ErrTmuxUnresponsive` and `ErrTmuxSessionConflict`.
 See `(*Client).Spawn` godoc for the full enumeration.
 
 ---
@@ -204,17 +152,13 @@ See `(*Client).Spawn` godoc for the full enumeration.
 Return the current lifecycle state of a tracked Spawn. State values:
 `pending`, `waiting`, `working`, `ask_user`, `check_permission`, `ended`,
 `missing`.
-`pending` means a launch (spawn, reuse or resume) is in progress and the
-agent has not reported in yet (its `SessionStart` hook); it may be
-loading or waiting at a startup prompt. A resumed `pending` row keeps its
-session id and history; a caller tells it from a fresh one by its non-empty
-`session_id`, shown by `Get`.
+For launch readiness and startup prompts, see the
+[caller contract](../../docs/caller-contract.md#pending-rows-and-startup-screens).
 
 Client `Status`, `Get`, `GetMany`, `List` and `Sweep` (also `FindMissing`) share
 [bounded recovery](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
-Single-row reads check only that row. Package-level helpers and custom stores
-run only checks their supplied capabilities support; they do not create
-missing process or tmux providers. Read success does not confirm every write.
+Package-level helpers and custom stores run only checks their supplied
+capabilities support.
 
 ```go
 res, err := c.Status("claude_2026-05-22T18-23-15")
@@ -229,75 +173,47 @@ the launch in progress, set only while the row is `pending`; JSON key
 `launch_started_at`, omitted otherwise). Most-likely sentinel error:
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
 
-`State` is never a Displayed State. While a row shows one, `StatusResult`
-and `Get`'s `SpawnRow` carry it in the embedded `StateDetail`:
-`.DisplayedState` (`api.StateIdleScreen`; `api.StateNeedsIntelligence` is
-defined, but nothing shows it yet), `.Since`, a string, and for
-`idle_screen` `.UnchangedMinutes`, an `*int64` (JSON `displayed_state`,
-`since`, `unchanged_minutes`); `StatusResult.TmuxSessionName` (JSON
-`tmux_session_name`) is set. `ListRow.DisplayedState` carries it with no
-detail. A field that does not apply is empty (nil), and absent from the
-JSON. Test `DisplayedState`, never `State`, for `api.StateIdleScreen` or
-`api.StateNeedsIntelligence`. `StatusResult`,
-`SpawnRow` and `ListRow` also carry `IdleScreenAvailability` (JSON
-`idle_screen_availability`): `api.IdleScreenAvailable` for Claude and Codex,
-`api.IdleScreenUnavailable` for Cursor. The
-[caller contract](../../docs/caller-contract.md#needs-intelligence-and-idle-screen-rows)
-defines the states, fields, omissions and detection.
+`StatusResult` and `Get`'s `SpawnRow` embed `StateDetail`:
+`DisplayedState` (`api.StateIdleScreen` or the defined-but-unused
+`api.StateNeedsIntelligence`), `Since string` and `UnchangedMinutes *int64`.
+`StatusResult.TmuxSessionName` identifies the session; `ListRow` carries
+`DisplayedState` without detail. Non-applicable display fields are empty/nil
+and omitted from JSON. Test `DisplayedState`, never `State`, for a display.
 
-For Go custom stores, successful status/get/list rows with no agent report
-`api.IdleScreenAvailable` for compatibility; this does not permit pane
-sampling. Only Claude and Codex are eligible for sampling.
+`StatusResult`, `SpawnRow` and `ListRow` also carry:
 
-`StatusResult`, `Get`'s `SpawnRow` and each `ListRow` expose
-`FamilyState string` (JSON `family_state`), either `"working"` or `"waiting"`.
-[Usage](../../docs/usage.md#family-state) defines membership and
-aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
-defines reporting limits.
+- `IdleScreenAvailability` (JSON `idle_screen_availability`):
+  `api.IdleScreenAvailable` for Claude/Codex, `api.IdleScreenUnavailable` for
+  Cursor. Agentless custom-store rows report available but cannot be sampled.
+- `FamilyState string` (JSON `family_state`): `"working"` or `"waiting"`;
+  [Usage](../../docs/usage.md#family-state) defines aggregation and
+  [Family reporting limits](../../docs/caller-contract.md#family-reporting-limits)
+  defines freshness.
+- `ProcessLiveness string` (JSON `process_liveness`): `"alive"`, `"exited"`
+  or `"unknown"`.
+- `Confirmations api.Confirmations` (JSON `confirmations`): exactly `State`,
+  `ProcessLiveness` and `DisplayedState`, each an `api.Confirmation` with
+  `Status` and nullable `*string` fields `ConfirmedAt`, `Source`, `CheckedAt`
+  and `Reason`. Nil fields encode as `null`, never omitted.
 
-They also expose `ProcessLiveness string` (JSON `process_liveness`:
-`"alive"`, `"exited"` or `"unknown"`) and `Confirmations` (JSON
-`confirmations`), an `api.Confirmations` holding exactly `State`,
-`ProcessLiveness` and `DisplayedState`. Each is an `api.Confirmation`: `Status`,
-never null, and the nullable `*string` fields `ConfirmedAt`, `Source`,
-`CheckedAt` and `Reason` (nil is JSON `null`, never omitted). The
-[caller contract](../../docs/caller-contract.md#confirmations) defines the
-values and when each is `null`. `Confirmations.DisplayedState` describes the
-returned display, including an omitted `DisplayedState`; Cursor's record is
-`unknown`/`unsupported`. A store that supplies no evidence, such as a custom
-store or a narrow status fallback, gets `"unknown"` and unknown records. With a non-nil error,
-the zero result's `ProcessLiveness` and each `Status` are empty strings, outside
-their value sets.
+Display fields use JSON names `displayed_state`, `since`, `unchanged_minutes`
+and `tmux_session_name`. Their meanings are in
+[Displayed states](../../docs/caller-contract.md#needs-intelligence-and-idle-screen-rows)
+and [Confirmations](../../docs/caller-contract.md#confirmations).
+Stores without evidence report unknown records. On error, the zero result's
+`ProcessLiveness` and confirmation `Status` fields are empty strings.
 
-`Get`'s `SpawnRow` and each `ListRow` expose `StateChangedAt time.Time` (JSON
-`state_changed_at`), when the raw state last changed; `StatusResult` does
-not. The [caller contract](../../docs/caller-contract.md#state-change-time)
-defines it and how it differs from `LastSeenAt`, the settled `State` and
-`Since`.
+`SpawnRow` and `ListRow`, but not `StatusResult`, expose
+`StateChangedAt time.Time` (JSON `state_changed_at`); see
+[State change time](../../docs/caller-contract.md#state-change-time).
 
 `Client.Status`, `Client.Get`, `Client.GetMany` and `Client.List` use the config
-loaded when the client was built for [independent state and family
-settling](../../docs/configuration.md#settle-time-state). While a
-Displayed State's exit settles, `Status`, `Get`, `GetMany` and `List` retain its
-`DisplayedState` and applicable confirmation, and `Status`, `Get` and `GetMany`
-its committed `Since` and detail.
-`StateChangedAt` and permission-request lists follow the live state;
-commands keep their raw-state guards. The package-level
-`api.Status`, `api.Get` and `api.List` functions use no settle time and
-sample no pane: they report stored display evidence without advancing either
-confirmation time. A committed non-sampling exit clears that evidence.
-Package-level `Sweep` (and its `FindMissing` alias) can sample panes when its
-supplied tmux provider supports capture.
-
-For Cursor, `Client.Status`, `Client.Get`, `Client.GetMany` and `Client.List`
-can report a launch-guarded `missing` read result even when the separate terminal write is
-busy or reaches its deadline. This does not confirm durable closure;
-`ended_at` and `state_changed_at` remain the stored values read, and
-`ended_at` may be absent. The
-[caller contract](../../docs/caller-contract.md#cursor-operation-boundaries)
-defines caller-budget errors, request proof and recovery. Package-level
-`api.Status`, `api.Get` and `api.List` can check gateway liveness when their
-store and `RelayView.Procs` supply the required capabilities.
+loaded at construction for [state and family settling](../../docs/configuration.md#settle-time-state).
+The package-level `api.Status`, `api.Get` and `api.List` functions use no
+settle time and sample no pane. Package-level `Sweep` (and `FindMissing`) can
+sample when its tmux provider supports capture. Gateway liveness checks need
+the store capabilities and `RelayView.Procs`; read-versus-write guarantees are
+in [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries).
 
 ---
 
@@ -328,8 +244,7 @@ the [caller contract](../../docs/caller-contract.md#reading-many-agents).
 ### List
 
 Enumerate Spawn rows matching a filter set. All filters AND together;
-state values OR together. Returned order is unspecified — sort with
-`jq` or in Go as needed.
+state values OR together. Returned order is unspecified.
 
 ```go
 res, err := c.List(api.ListParams{
@@ -349,9 +264,7 @@ Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`,
 encodes as `[]` when empty. The `State` filter keeps a row whose `State` or
 `DisplayedState` (see Status) is one of its values, so `"working"` keeps a
 working row that shows `"idle_screen"`; it is applied before `Limit`.
-Filters and limit select stored IDs before recovery checks. The result keeps
-those IDs even when their refreshed values no longer match, without refilling
-slots or adding newly matching rows. Recovery and family freshness follow the
+Selection and recovery follow the
 [caller contract](../../docs/caller-contract.md#bounded-recovery-on-state-reads).
 `Limit` caps the rows returned; 0 means no cap. Sentinel errors, each returned before the store is
 read: `ErrListInvalidLabel` (label not in `key=value` form) and
@@ -377,19 +290,13 @@ for _, sub := range res.Subagents {
 }
 ```
 
-Returns `ListSubagentsResult` (`.Tracked`, and `.Subagents []SubagentRecord`,
-never nil: `[]` when the agent has none). A `SubagentRecord` field with no
-known value is a nil pointer and encodes as JSON `null`; its times are UTC
-`*time.Time`, encoded like `launch_started_at`. `Tracked` is false, with no
-records, for a `"cursor"` agent, and for a `"codex"` agent (from its spawn, and after every `Resume` or
-reuse of its id) and for a `"claude"` agent that predates subagent tracking
-(it turns true when that agent is next resumed or its id is reused). Sentinel error:
-`ErrSpawnNotFound`; every error returns `Tracked` false and an empty slice.
-The package-level `api.ListSubagents(ListSubagentsStore, id)` reads a store
-you pass in and takes no `RelayView`. The records, their fields and their
-values are described in
+Returns `ListSubagentsResult` with `Tracked` and `Subagents []SubagentRecord`
+(never nil). Unknown fields are nil pointers encoded as JSON `null`; times
+are UTC `*time.Time`. `ErrSpawnNotFound` and other errors return `Tracked`
+false and an empty slice. Agent support, fields and retention are defined in
 [Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagent-records).
-See `(*Client).ListSubagents` godoc.
+The package-level `api.ListSubagents(ListSubagentsStore, id)` takes a store,
+not a `RelayView`. See `(*Client).ListSubagents` godoc.
 
 ---
 
@@ -420,24 +327,13 @@ if err != nil {
 ```
 
 On a supported native launch, ordinary nonempty text with Enter and no pane
-hash returns `SendKeysResult`
-with `Outcome: "submitted"`, `RequestID`, `SessionID`, `RecordSHA256` and
-`RecordID` when the native record supplies it. The result confirms the exact
-normalized text in the launch's native transcript. `DeliveryRequestID` owns
-one attempt: the same ID and text retrieve confirmation or reconcile without
-replay; a new ID allows an intentional identical turn. Launches without native
-capability use fallback input, return an empty result on success and make no
-exact transcript-confirmation claim. Manual operations
-(`NoEnter`, `Key`, empty text, pane hashes and permission answers) return an
-empty result on success; input-ownership refusals, including those from
-`Pause`, are in [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
-Supported launches, fallback readiness and input restrictions, omitted-ID
-behavior, structured outcomes and recovery are in
-[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
-Cursor sends with Enter can return `ErrSubmissionUnconfirmed` with
-`Outcome: "gateway_refused"`; see
-[Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes).
-
+hash returns `SendKeysResult` with `Outcome: "submitted"`, `RequestID`,
+`SessionID`, `RecordSHA256` and optional `RecordID`. `DeliveryRequestID`
+identifies one attempt. Fallback and manual operations (`NoEnter`, `Key`,
+empty text, pane hashes and permission answers) return an empty result on
+success. Supported launches, proof, request-ID rules and recovery are in
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission);
+manual guards are in [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
 Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
 `ErrSubmissionUnconfirmed`, `ErrInvalidFlags`, `ErrSendKeysWhileRelayed`,
 `ErrRelayFallenBack`, `ErrDialogMaybeOpen`, `ErrPaneChanged`, `ErrTmuxSendKeys`,
@@ -446,42 +342,18 @@ Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
 Permission holds, retry rules and timeout recovery are in the
 [caller contract](../../docs/caller-contract.md#permission-relay).
 
-After the state and relay refusals, a row whose recorded tmux session name
-cannot be used (empty, with a control character, or with a character tmux
-stores differently) returns an error classified `ErrInternal`, with no tmux
-call; nothing was sent.
-
 `SendKeysContext(ctx, params)` uses the caller's context; `SendKeys` uses a
-background context. Cancellation cannot undo attempted input. A cleanup error
-can accompany a confirmed result: `api.ErrDetails(err)` retains that exact
-result. Follow the [caller contract](../../docs/caller-contract.md#ordinary-text-submission)
-before deciding whether another call is safe. See `(*Client).SendKeys` godoc.
+background context. A cleanup error can accompany a confirmed result;
+`api.ErrDetails(err)` retains that result. See `(*Client).SendKeys` godoc and
+the [caller contract](../../docs/caller-contract.md#ordinary-text-submission)
+for cancellation and retry rules.
 
 #### `AllowPending` — reaching a `pending` launch
 
-By default `SendKeys` rejects new input to a `pending` row with
-`ErrSpawnNotInteractive`. `AllowPending: true` also allows a `pending`
-row: a launch (spawn, reuse or resume) whose agent has not reported in
-yet, for example to answer a startup choice with `Key` (including `Key: "Enter"`).
-See [pending startup screens](../../docs/caller-contract.md#pending-rows-and-startup-screens)
-for text answers and Enter-only sends. Keys are delivered only to a session
-started by the row's current launch. `ended` and `missing` rows are rejected,
-with no tmux call, including retries of an existing delivery request. State,
-relay and dialog guards precede native capability selection and request
-reconciliation.
-
-A `pending` row is refused with `ErrSpawnNotInteractive` and nothing sent
-when its launch start or launch token is not recorded (before any tmux
-call), or when the only session found is one an earlier launch left
-behind (not this launch's session). The keys reach the agent's pane, but
-the caller cannot be sure the prompt it saw is still showing when they
-arrive.
-
-`AllowPending` preserves native readiness and transcript requirements on
-supported launches; it does not make a startup dialog an ordinary composer.
-Ordinary pending Claude fallback has a readiness wait, and pending Claude and
-Codex fallback have a hook check; see
-[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
+Set `AllowPending: true` to allow input to a pending launch, for example a
+startup choice with `Key: "Enter"`. It defaults to false and does not bypass
+ownership, readiness, relay or dialog guards. See
+[Pending rows and startup screens](../../docs/caller-contract.md#pending-rows-and-startup-screens).
 `ErrSubmissionUnconfirmed` carries `SubmissionUnconfirmedDetails` through
 `api.ErrDetails(err)`: `RequestID`, `Outcome`, `Phase`, `BytesAttempted`,
 `EnterMayHaveBeenSent`, optional `LastQueue`, `Reason`, `KeysSent`,
@@ -490,10 +362,6 @@ an empty `Outcome` and serializes only `keys_sent: true`,
 `submission_confirmed: false` and `row_state`. See
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
 for their meaning and recovery.
-
-`LivenessNote` `unreported` means an alive agent has not reported since
-launch. For action on pending rows see the
-[caller contract](../../docs/caller-contract.md#pending-rows-and-startup-screens).
 
 #### Pure `SendKeys` function
 
@@ -504,15 +372,10 @@ interfaces for callers that supply their own dependencies:
 func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysParams) (SendKeysResult, error)
 ```
 
-`SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity,
-`IntentHold`, optional `Context` (the call's cancellation and deadline, as
-`SendKeysContext` sets), optional `Input` (`InputDeliveryBackend`, nil uses
-native delivery), and optional `Sleep` for native readiness, drain and
-submission checks, pending Claude readiness and settle, pending Codex and
-Claude hook checks, Cursor gateway verdict reads, and the pauses of macOS
-paced Claude typing (nil waits on a timer that `Context`'s end cuts short, or
-uses `time.Sleep` without `Context`). Most callers
-use the Client method, which supplies these.
+`SendKeysEnv` supplies `RelayView`, the sender's `Self` identity, `IntentHold`,
+optional `Context`, optional `Input` (`InputDeliveryBackend`, nil uses native
+delivery), and optional `Sleep`. Nil `Sleep` uses context-cancellable timers,
+or `time.Sleep` without `Context`. The Client method supplies these.
 Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
 bounding connection and lock waits by the supplied duration.
 Custom tmux adapters supplied to this function, to `ReadPane` or
@@ -569,55 +432,27 @@ Call `c.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 50})`.
 Returns `ReadPaneResult` (`.Pane` string, and `.PaneSHA256`, the SHA-256 in
 lowercase hex of exactly the bytes of `.Pane`, which `SendKeys` and
 `RecordPaneAnswer` take back as `ExpectPaneSHA256` with the same `NLines`;
-the hash of an `ANSI: true` read never matches). `ReadPane` reads only this
-agent's pane (or, with no session of the current launch, the pane of the
-one session an earlier launch of this row left behind) and changes
-nothing. Most-likely sentinel errors:
-
-- `ErrInvalidFlags`: `NLines` is negative; refused before the row is read,
-  with no tmux call.
-- `ErrSpawnNotFound`: no row has this id.
-- `ErrTmuxCaptureFailed`: no session of this agent is there.
-- `ErrTmuxSessionConflict`: the agent's pane was not found, more than one
-  session an earlier launch left behind is there, or tmux holds
-  conflicting labels.
-- `ErrTmuxUnresponsive`, `ErrTmuxNotAvailable`: no information about the
-  pane; nothing was read.
-
-A row in any state whose recorded tmux session name cannot be used (empty,
-with a control character, or with a character tmux stores differently)
-returns an error classified `ErrInternal`, with no tmux call. Its
-description quotes the recorded name exactly, every control character and
-invalid byte written as an escape.
-
-See `(*Client).ReadPane` godoc.
+the hash of an `ANSI: true` read never matches).
+Common errors: `ErrInvalidFlags` (negative `NLines`), `ErrSpawnNotFound`,
+`ErrTmuxCaptureFailed`, `ErrTmuxSessionConflict`, `ErrTmuxUnresponsive`,
+`ErrTmuxNotAvailable` and `ErrInternal`. See `(*Client).ReadPane` godoc and
+the [caller contract](../../docs/caller-contract.md).
 
 #### `AllowPending` — surface symmetry with `send-keys`
 
-`ReadPane` has **no state guard** — it can read the pane of a `pending`,
-`ended`, or `missing` row just as easily as a live one (provided tmux still
-holds the agent's session). Passing `AllowPending: true` is accepted but has no
-behavioral effect. The flag exists only so callers that pair `readPane` +
-`sendKeys` with `allow_pending: true` can set the same option on both calls
-without special-casing.
+`ReadPane` has no state guard: it can read `pending`, `ended` or `missing`
+rows if their pane is still present. `AllowPending` is accepted but has no
+effect.
 
 ---
 
 ### Kill
 
-End the agent of a live row's current launch (`pending` included). Kill
-finds the tmux session that carries the launch's label on the row's
-recorded socket, ends the agent's pane and that session by their tmux ids,
-and succeeds only once the agent process and every other process found in
-the session's panes are gone, waiting up to `kill_exit_wait_ms`. When no
-session of the launch is found, the agent process decides: gone, or none
-recorded, is success with nothing sent.
-Kill never signals a process itself and never ends a session an earlier
-launch left behind.
-
-A finished row (`ended`, `missing`) is a no-op success with no tmux call;
-that is not verification that the agent exited. Kill never changes the
-row's state: a state read or `sweep` marks it once its agent process is gone.
+End the agent of a live row's current launch (`pending` included).
+Finished rows (`ended`, `missing`) are a no-op success, not exit verification.
+`Kill` does not change row state. The
+[caller contract](../../docs/caller-contract.md#caller-contract) defines exit
+checks and the live-row sequence.
 
 ```go
 res, err := c.Kill(api.KillParams{
@@ -635,23 +470,17 @@ when nothing was sent, for example for a finished row.
 
 Errors (check them with `errors.Is` against the exported sentinels):
 
-| Sentinel | Class | Meaning |
-|---|---|---|
-| `ErrSpawnNotFound` | — | No row has this id |
-| `ErrTmuxKillFailed` | UNAVAILABLE | The agent process, or another process of the session's panes, still ran after the kill exit wait; or it cannot be checked and its labelled session is still there; or no session or pane of this launch was found while it runs. See [Caller contract](../../docs/caller-contract.md) for retry and refusal handling |
-| `ErrTmuxUnresponsive` | UNAVAILABLE | tmux did not answer usably, before or after a kill was sent. See [Caller contract](../../docs/caller-contract.md) for retry handling |
-| `ErrTmuxSessionConflict` | CONFLICT | The session found is not this launch's session, or tmux holds conflicting labels; no kill was sent. A human must look: see "Operator actions" in [docs/operator-actions.md](../../docs/operator-actions.md) |
-| `ErrTmuxNotAvailable` | ENVIRONMENT | tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on |
+| Sentinel | Meaning |
+|---|---|
+| `ErrSpawnNotFound` | No row has this id |
+| `ErrTmuxKillFailed` | Exit could not be confirmed |
+| `ErrTmuxUnresponsive` | tmux did not answer usably |
+| `ErrTmuxSessionConflict` | Session ownership conflicts |
+| `ErrTmuxNotAvailable` | The tmux environment is unavailable |
+| `ErrInternal` | The recorded session name cannot be used |
 
-A live row whose recorded tmux session name cannot be used (empty, with a
-control character, or with a character tmux stores differently) returns an
-error classified `ErrInternal`, with no tmux call. None of these errors
-means that the agent is dead.
-
-A repeated kill right after the last session on its tmux server ends can
-get `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable` while the server exits.
-See [Caller contract](../../docs/caller-contract.md)
-for handling.
+Each tmux error's class is in the
+[caller contract](../../docs/caller-contract.md#caller-contract).
 
 ```go
 _, err := c.Kill(api.KillParams{InstanceID: id})
@@ -665,11 +494,6 @@ case errors.Is(err, api.ErrTmuxSessionConflict):
     // stop and surface it to a human
 }
 ```
-
-The live-row sequence and finished-row no-op limits are owned
-in
-[Caller contract](../../docs/caller-contract.md#caller-contract). See `(*Client).Kill`
-godoc.
 
 ---
 
@@ -692,62 +516,30 @@ snapshot and reports unsupported coverage explicitly.
 
 ## Permission relay
 
-`(*Client).Decide` records a verdict on a relayed permission request, waits
-at most 1 s for relay acknowledgement, and returns a
-`DecideResult`, which embeds `RequestDelivery`: read `Delivery`
-(`delivered` or `not_confirmed`), not the recorded decision.
-`GetPermission` exposes subsequent delivery and `ConfirmBy`; see the
-[caller contract](../../docs/caller-contract.md#permission-relay) for
-confirmation handling.
-
-Cursor uses these same methods and fields for permissions and blocking plans.
-Its `HookAlive` is nil; `ConfirmBy` is finite and unchanged by recreating a
-client. `Delivery` `delivered` means durable relay acknowledgement, not Cursor
-receipt, execution or dialog closure.
-Cursor's once-only decisions, native choices, question denial and conservative
-unknown-origin holds are defined in
-[Cursor permissions](../../docs/permissions.md#cursor-spawns); uncertain
-answers and fallback follow the
+`(*Client).Decide` returns a `DecideResult` embedding `RequestDelivery`.
+Read `Delivery` (`delivered` or `not_confirmed`), not the recorded decision.
+`GetPermission` reads subsequent
+delivery and `ConfirmBy`; confirmation handling is in the
 [caller contract](../../docs/caller-contract.md#permission-relay).
 
-`DecideParams.MaxWaitMs` bounds the whole call, including SQL, cleanup and
-reporting, and has no default; pass at most your deadline minus 1 s. Already
-entered database work can retain its connection while the caller returns.
-Precommit exhaustion returns `ErrStoreBusy`; an unconfirmed commit returns
-an internal error. Once the verdict is confirmed committed, `Decide` never
-returns `ErrStoreBusy`. Zero-wait semantics and recovery are defined in the
-[caller contract](../../docs/caller-contract.md#permission-relay).
+`DecideParams.MaxWaitMs` bounds the whole call and has no default. Pass at
+most your deadline minus 1 s. Timing, commit uncertainty and recovery follow
+the linked contract.
 
-`ErrNoOpenPermissionRequest` means no eligible request has that token,
-including a closed, proven-gone or obsolete request; see the
-[caller contract](../../docs/caller-contract.md#permission-relay) for handling.
-A request still awaiting
-an answer when its Spawn ended (its agent's terminal SessionEnd, or the move
-of a Codex Spawn to `ended` by shared recovery or `Pause` once its agent is
-gone with an end report) or when shared recovery marked it `missing` is closed in the same write, an
-undecided one denied with `DecisionReason` `ended` or `find_missing`, and
-stays closed after `Resume`; `Get` and `List` no longer show it. The same
-close includes decided requests without a confirmation or completed pane
-answer, including requests recorded by an older binary.
-`GetPermission` still reads its delivery. For a request with a settle
-instant, `delivered` retains an acknowledgement from before closure; closure
-cannot authorize a later response. Requests
-recorded by an older binary retain the
-[legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary),
-including derived delivery after expiry even when closed.
-
-`ErrRelayFallenBack` carries `RelayFallenBackDetails` from `api.ErrDetails`: the
-request, spawn state and other open requests. `SendKeys` can answer a pane
-request using `RequestToken`, `As`, `Key` and `ExpectPaneSHA256`.
-`RecordPaneAnswer` records an answer made outside agent-director, using
+Cursor uses the same methods and fields for permissions and blocking plans.
+Its `HookAlive` is nil. Agent-specific rules are in
+[Cursor permissions](../../docs/permissions.md#cursor-spawns).
+`ErrNoOpenPermissionRequest` means no eligible request has that token.
+Closed requests stay closed after `Resume`; `GetPermission` can still read
+their delivery. Requests with no recorded settle instant follow
+[time-derived delivery](../../docs/permissions.md#requests-with-no-recorded-settle-instant).
+`ErrRelayFallenBack` carries `RelayFallenBackDetails` from `api.ErrDetails`.
+`SendKeys` answers a pane request using `RequestToken`, `As`, `Key` and
+`ExpectPaneSHA256`. `RecordPaneAnswer` records an outside answer using
 `RequestToken`, `As`, `ExpectPaneSHA256` and `NLines`, without typing.
 `PaneAnswer` is `sent`, `outside` or `tool_ran`; `PaneAs` is the caller's claim.
-`Pause` accepts no pane hash and is held by the same permission checks as
-a plain `SendKeys`. These calls and `Decide` can return structured refusals;
-handling, dialog proof, agent differences and stopping a held agent are in
-[Permissions](../../docs/permissions.md) and the
-[caller contract](../../docs/caller-contract.md#permission-relay).
-
+`Pause` accepts no pane hash. Handling and dialog proof are defined in
+[Permission relay](../../docs/caller-contract.md#permission-relay).
 `api.DetailedError` is the error type that carries such facts: its `Err`
 holds the catalogued sentinel (`errors.Is` sees through it) and `Details`
 the object; `api.ErrDetails(err)` returns the `Details` of the first one in
@@ -758,11 +550,6 @@ the object; `api.ErrDetails(err)` returns the `Details` of the first one in
 carry it too, and so does a
 pane answer's `ErrInternal` after its key was sent (`PaneKeySentDetails`).
 
-`Decide` on a request already answered at the pane (`PaneAnswer`
-`"sent"`, `"outside"` or `"tool_ran"`) returns `ErrAlreadyDecided`
-naming its `PaneAnswer`, as `SendKeys` and `RecordPaneAnswer` do, and
-records nothing.
-
 The exported functions `api.Decide`, `api.Status`, `api.Get`, `api.List` and
 `api.GetPermission` take a `RelayView`, and `api.SendKeys`,
 `api.RecordPaneAnswer` and `api.Pause` (`PauseEnv`) an env holding one (the
@@ -772,11 +559,8 @@ The exported functions `api.Decide`, `api.Status`, `api.Get`, `api.List` and
 
 ## Version mapping
 
-`pkg/api` and the CLI binary use a **1:1 lock**: `pkg/api@v0.X.Y`
-requires CLI binary `v0.X.Y`. The two components share an envelope shape
-— the JSON structures the library reads and writes are identical to those
-the binary produces. Mixing versions risks silent field mismatches that
-are not detectable at compile time.
+Use the same release tag for `pkg/api` and the installed agent-director
+binary: `pkg/api@v0.X.Y` requires binary `v0.X.Y`.
 
 ---
 
@@ -801,16 +585,10 @@ if errors.Is(err, api.ErrSpawnNotInteractive) {
 }
 ```
 
-A verb method's godoc has an "Errors:" block listing its verb's
-manifest error names: the sentinels catalogued for that verb on every
-surface (CLI, MCP, TypeScript client and Go). "Errors: none" means the
-verb has none. Sentinels common to all methods, such as
-`ErrClientClosed`, are not repeated there, and a refusal only a Go
-caller can reach is stated in the method's prose instead. The canonical
-list of all sentinels, with their descriptions, lives at the godoc index:
-
-<https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api>
-
+Each method's doc comment lists its sentinels under "Errors:".
+`go doc github.com/gabemahoney/agent-director/pkg/api` lists every exported
+sentinel. Shared handling is in the [caller contract](../../docs/caller-contract.md);
+human repairs are in [Operator actions](../../docs/operator-actions.md).
 Common sentinels across verbs:
 
 | Sentinel | Meaning |
@@ -818,19 +596,18 @@ Common sentinels across verbs:
 | `ErrSpawnNotFound` | No row for the given `instance_id` |
 | `ErrClientClosed` | Called after `Close()` |
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
-| `ErrSchemaMismatch` | DB schema is newer than the binary, the store has no valid store id, or its current-schema input authority is incompatible or uncommitted; see [Operator actions](../../docs/operator-actions.md#upgrading-the-native-input-journal) |
-| `ErrOldLayout` | From `New`, when it is about to open the default store (no `StorePath`, no `[store] db_path` in `config.toml`), no store exists in `~/.config/agent-director` and the old directory exists. Nothing was created; take no action, a human runs this release's `install.sh` (see [Operator actions](../../docs/operator-actions.md#a-verb-refuses-with-erroldlayout)) |
-| `ErrSpawnNotInteractive` | New input requires a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found. `ended` and `missing` rows are refused even when observing an existing delivery request; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) |
-| `ErrSendKeysWhileRelayed` | The Spawn's request relay may still answer (from `SendKeys` and `Pause`) — the message distinguishes an undecided request from a recorded verdict still being delivered; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling |
-| `ErrRelayFallenBack` | A permission request fell back (relay settled without acknowledgement, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — `ErrDetails` gives its facts; the relevant API methods are `SendKeys` with `RequestToken` and `RecordPaneAnswer`; shared pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
-| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by valid agent evidence and is not a Cursor request of an earlier launch; nothing was sent — `ErrDetails` gives its facts; shared retry, escalation and pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
-| `ErrPauseTimeout` | Exit keys were sent but `ended` was not observed; `ErrDetails` gives `PauseTimeoutDetails`. See [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit). |
+| `ErrSchemaMismatch` | Incompatible schema, store id or input authority; see [Operator actions](../../docs/operator-actions.md#upgrading-the-native-input-journal) |
+| `ErrOldLayout` | Default store still uses the old layout; see [Operator actions](../../docs/operator-actions.md#a-verb-refuses-with-erroldlayout) |
+| `ErrSpawnNotInteractive` | The row cannot accept input under the current launch guards |
+| `ErrSendKeysWhileRelayed` | A permission relay may still answer |
+| `ErrRelayFallenBack` | The relay settled without acknowledgement or a recorded pane answer |
+| `ErrDialogMaybeOpen` | A permission dialog is not proven gone |
+| `ErrStoreBusy` | A bounded store operation did not finish in time |
+| `ErrAlreadyDecided` | The request already has a verdict or completed pane answer |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---
 
 ## See also
 
-- [`../../docs/architecture.md`](../../docs/architecture.md) — internal architecture and topology
-- [`../../docs/cli-reference.md`](../../docs/cli-reference.md) — manifest-derived CLI reference
-- <https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api> — godoc index
+- [Caller contract](../../docs/caller-contract.md)

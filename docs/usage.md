@@ -703,12 +703,12 @@ outcome; a reason is not an immutable writer identity.
 never a closed one. `hook_alive` is `null` when agent-director cannot check
 the relay hook's process (for example from another pid namespace, for a
 Cursor gateway request, or for a
-request recorded by an older agent-director); such a request falls back by
+request with no recorded hook identity); such a request falls back by
 time, at `confirm_by`. A closed request's `delivery` follows the same
 [delivery rules](permissions.md#delivery) as an open one's: a request with
-a settle instant requires an acknowledgement from before closure for `delivered`,
-while requests recorded by an older binary retain their
-[time-derived delivery](permissions.md#requests-recorded-by-an-older-binary).
+a recorded settle instant requires an acknowledgement from before closure for
+`delivered`, while a request with no recorded settle instant keeps its
+[time-derived delivery](permissions.md#requests-with-no-recorded-settle-instant).
 A row
 can read `waiting`, `working` or `ask_user` while a request it recorded
 still awaits an answer, so follow each request you track with

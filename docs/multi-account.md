@@ -1,205 +1,115 @@
 # Multi-Account
 
-Launching a Spawn against a different Claude or Codex account than the
-operator's default, and selecting Cursor configuration/data directories.
-Everything up to "Codex group folders" covers spawns whose agent is `claude`;
-the later sections cover `codex` and `cursor` separately.
-Selection uses agent-director's existing `extra_env` parameter; AD adds no
-separate profile mechanism.
+Use `extra_env` directly or through a
+[template](settings.md#templates-and-per-call-merge) to select another agent
+account or configuration directory. agent-director adds no profile manager.
+`HOME` remains unchanged; use the agent-specific settings below.
 
-A Claude spawn's `CLAUDE_CONFIG_DIR` is the `extra_env` value when the key
-is present (an empty value means unset), otherwise agent-director's own
-environment's. An inherited value is put on the launch and saved with the
-spawn, so a caller with its own `CLAUDE_CONFIG_DIR` gives it to the Claude
-agents it spawns without `extra_env`; set `CLAUDE_CONFIG_DIR` in `extra_env`
-to choose another folder. When neither sets it, pretrust targets
-`~/.claude.json` and the pane takes tmux's environment, except that a fresh
-launch given
-[Ordinary delivery launch settings](settings.md#ordinary-delivery-launch-settings)
-gets `CLAUDE_CONFIG_DIR=$HOME/.claude`. `resume` launches and pretrusts with
-only the saved value, never the resuming process's environment, so an agent
-saved without one
-resumes as it did before 0.17.5: the pane takes tmux's environment and
-pretrust targets `~/.claude.json`.
+## Claude accounts
 
-Known gap: an agent saved before 0.17.5 in a setup where
-`CLAUDE_CONFIG_DIR` is set only in agent-director's environment has no
-saved value. Its `resume` pretrusts `~/.claude.json`, not the file the
-agent reads, so it reports `pre_trust: failed` when that file is missing,
-or `ok` after writing a file the agent doesn't read; either way the agent
-may stop at Claude Code's folder-trust prompt. Answering that prompt once
-in the pane lets the resume carry on with its conversation. Spawning it
-again saves the value but starts a fresh conversation: a new id, or a
-reuse with `reuse_finished`, has no history.
+A spawn uses `extra_env.CLAUDE_CONFIG_DIR` when present (empty means unset),
+otherwise agent-director's own `CLAUDE_CONFIG_DIR`. A selected value is saved;
+`resume` uses that saved selection, not the resuming process's environment.
 
-The value must be an absolute path. The pretrust write then targets
-`<CLAUDE_CONFIG_DIR>/.claude.json` instead of the operator's
-`~/.claude.json`, and
-`resume`, when it has to recompute a transcript's path, looks under
-`<CLAUDE_CONFIG_DIR>/projects/`. A relative, `~`-prefixed or
-whitespace-only value is not used by agent-director (Claude Code still
-receives it in the pane's environment and resolves it against the
-pane's cwd): pretrust writes nothing and reports `pre_trust: failed`
-(the spawn still goes ahead, and the agent may stop at Claude Code's
-folder-trust prompt), and `resume` recomputes under `~/.claude`
-instead, so it does not find a transcript Claude Code wrote under the
-relative dir unless the row's current `jsonl_path` still points at it.
-Only the current session is tried: its recorded path first, then its path
-recomputed from the current row's cwd and config directory after any stat
-failure. No earlier session's path or config folder is a resume candidate.
+Use an absolute directory. Pre-trust uses
+`<CLAUDE_CONFIG_DIR>/.claude.json`, and transcript lookup uses
+`<CLAUDE_CONFIG_DIR>/projects/`. Without a selection, pre-trust uses
+`~/.claude.json` and the pane uses tmux's environment, except a fresh launch
+with [ordinary delivery settings](settings.md#ordinary-delivery-launch-settings)
+receives `CLAUDE_CONFIG_DIR=$HOME/.claude`.
 
-Use an absolute `CLAUDE_CONFIG_DIR` for a separate Claude config. `HOME`
-and malformed environment keys are refused; shared validation and recovery
-are in [Spawn and template input refusals](caller-contract.md#spawn-and-template-input-refusals).
-A same-agent reuse retains the life and earlier sessions, but starts a fresh
-conversation; another config directory does not resume those sessions.
-A switch starts a new life with no memory of the earlier life; switching
-back does not recover the old one.
+```sh
+agent-director spawn --cwd /work/project-foo --agent claude \
+  --extra-env CLAUDE_CONFIG_DIR=/work/claude-team-a
+```
 
-For Claude Code's own auth reference, see:
-
-- API-key auth:
-  <https://docs.claude.com/en/docs/claude-code/iam#anthropic-api-key>
-- `claude setup-token` (long-lived OAuth tokens):
-  <https://docs.claude.com/en/docs/claude-code/headless#setup-token>
+Environment-variable authentication does not isolate configuration or move
+transcripts. Spawns sharing a config directory share its files; choose
+separate absolute directories when needed. Accounts also share their own
+usage and rate-limit pool.
 
 ## Two account types, two env vars
 
-| Account type | Env var | Token shape |
-| --- | --- | --- |
-| API-key (`sk-ant-api...`) | `ANTHROPIC_API_KEY` | 108-char `sk-ant-...` |
-| Max / OAuth (`sk-ant-oat01-...`) | `CLAUDE_CODE_OAUTH_TOKEN` | 108-char `sk-ant-oat01-...` |
+| Claude account type | `extra_env` key |
+| --- | --- |
+| API key | `ANTHROPIC_API_KEY` |
+| Max / OAuth | `CLAUDE_CODE_OAUTH_TOKEN` |
 
-Both environment variables select auth without the local `~/.claude.json`
-auth cache.
+These select authentication without the local auth cache. For provider
+details, see [Claude authentication](https://docs.claude.com/en/docs/claude-code/iam#anthropic-api-key).
 
 ## Passing the env var at spawn time
 
-```
-agent-director spawn \
-  --cwd /work/project-foo \
-  --agent claude \
-  --extra-env ANTHROPIC_API_KEY=sk-ant-api-test-...
+```sh
+agent-director spawn --cwd /work/project-foo --agent claude \
+  --extra-env ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
 ```
 
-Or for a Max account:
+For OAuth, use `--extra-env CLAUDE_CODE_OAUTH_TOKEN="$LONG_LIVED_TOKEN"` instead.
 
-```
-agent-director spawn \
-  --cwd /work/project-foo \
-  --agent claude \
-  --extra-env CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
-```
-
-Auth variables pass through to the pane; agent-director never logs their
-values. It persists `extra_env` for resume, including auth values, in its
-owner-only database. Templates persist their environment as plaintext TOML.
-See [Configuration](configuration.md) for secrets at rest and
-[Settings](settings.md#templates-and-per-call-merge) for template merging.
+Auth values are not logged. Saved `extra_env`, including auth values, remains
+in the owner-only database for resume and is omitted from public spawn views.
+Template environments are plaintext TOML; see [Configuration](configuration.md)
+for storage protections.
 
 ## Use `claude setup-token` for long-lived OAuth tokens
 
-The token in `~/.claude-maxauth/.credentials.json` is *short-lived*
-(`expiresAt` is ~9 hours after minting). Scraping it for use with
-`CLAUDE_CODE_OAUTH_TOKEN` works but expires fast.
+Create a long-lived token on a trusted host with `claude setup-token`, store
+it securely, then pass it as `CLAUDE_CODE_OAUTH_TOKEN`. Do not substitute the
+short-lived token from a credentials file. See
+[Claude's setup-token reference](https://docs.claude.com/en/docs/claude-code/headless#setup-token).
 
-For production / CI use:
-
-```bash
-# On a trusted host, interactively:
-claude setup-token
-# → emits a long-lived sk-ant-oat01-... token
-
-# Store the token securely (e.g. a CI secret), then pass at spawn time:
-agent-director spawn \
-  --cwd /work/project-bar \
-  --agent claude \
-  --extra-env CLAUDE_CODE_OAUTH_TOKEN="$LONG_LIVED_TOKEN"
-```
-
-This is the same pattern Claude's official GitHub Action uses.
-
-## Parallel agents
-
-Environment-variable auth does not give each spawn a separate Claude
-configuration directory. Spawns sharing a home or `CLAUDE_CONFIG_DIR` share
-that directory; it is not created inside each spawn's working tree. Use
-separate absolute config directories when isolation is required.
-
-## What the env var does NOT cover
-
-- **Resuming a previously-authenticated session.** If a Spawn needs to
-  read JSONL transcript history that was created by a specific account,
-  the JSONL lives in `~/.claude/projects/<slug(cwd)>/` on the host
-  filesystem — which is account-scoped. Env-var auth does not redirect
-  this path. An absolute `CLAUDE_CONFIG_DIR` does: the
-  transcript is then under `<CLAUDE_CONFIG_DIR>/projects/<slug(cwd)>/`,
-  and `resume` looks there (see above). Either way, the JSONL must still
-  be on that disk path for `resume` to find it.
-- **Concurrent operator + Spawn sessions on the same account.** Two
-  Claude sessions sharing one OAuth token are fine for env-var auth
-  (no contention) but share the same usage / rate-limit pool. Use
-  separate accounts (one operator, one Spawn) for clean accounting.
+`resume` needs the current session's transcript on disk; changing an auth
+variable does not relocate it. Same-agent reuse starts a fresh conversation
+while keeping inspectable history. Switching agents starts a new life, and
+switching back does not restore the prior conversation. See
+[Transcript recovery](caller-contract.md#transcript-recovery).
 
 ## Codex group folders
 
-A Codex agent keeps its login, its rules and its sessions in a Codex folder,
-and `CODEX_HOME` moves it. Agents that share an account share a group folder.
+Use an absolute `CODEX_HOME` to select a folder holding Codex's login, rules
+and sessions:
 
-- **`CODEX_HOME` is an ordinary `extra_env` key**, from the call or a template:
+```sh
+agent-director spawn --cwd /work/project-foo --agent codex \
+  --extra-env CODEX_HOME=/work/codex-team-a
+```
 
-  ```sh
-  agent-director spawn --cwd /work/project-foo --agent codex \
-    --extra-env CODEX_HOME=/work/codex-team-a
-  ```
-
-  agent-director never sets or copies it. A spawn that names none leaves Codex
-  to its default folder, and a parent agent's folder is not passed to a spawn
-  it makes.
-- **The value must be an absolute path.** A relative, `~`-prefixed or
-  whitespace-only value is passed to Codex as it is, which resolves it against
-  the pane's cwd. Pre-trust then reports `pre_trust: failed` with one warning,
-  and the launch goes ahead (the agent may stop at Codex's folder-trust prompt).
-- **Any number of agents may run on one folder at once.** agent-director takes
-  no lock on it.
-- **No agent-director command writes, moves, links or deletes anything in a
-  Codex folder,** and agent-director never logs in or out. `spawn`, `pause`,
-  `resume`, `kill` and `expire` leave the folder as they found it.
-- **`resume` finds a Codex transcript only by the current session's recorded
-  `jsonl_path`.** Earlier sessions are never tried. It
-  never builds a path from the cwd and the session id, and never looks under a
-  Claude config directory.
+agent-director neither sets nor copies `CODEX_HOME`. Without an explicit
+selection, Codex uses the tmux server's environment and its normal default;
+a parent agent's folder is not automatically passed to its children.
+Multiple agents can share a folder; agent-director takes no lock and does
+not manage its files or login.
 
 ### Setting up a group folder
 
-- **One login per folder.** Sign each folder in once, by hand, before an agent
-  uses it (add `--device-auth` on a host with no browser). An API-key login is
-  set up once in the folder the same way, with Codex's own key login:
+Create the folder outside the system temp directory and sign it in once,
+by hand. Add `--device-auth` on a host without a browser:
 
-  ```sh
-  CODEX_HOME=/work/codex-team-a codex login
-  printenv OPENAI_API_KEY | CODEX_HOME=/work/codex-team-a codex login --with-api-key
-  ```
-- **An API key in `extra_env` does not sign Codex in.** Codex reads its login
-  only from its folder, so a key passed as `--extra-env` is ignored for signing
-  in. Sign the folder in once with the key.
-- **Never copy a login between folders.** A copy can sign the original out,
-  because a refresh of one copy's token invalidates the other.
-- **Some settings still apply from outside a folder:** the `~/.agents` skills
-  and plugins, `/etc/codex`, the project's own `.codex/` and MCP tokens kept in
-  the system keyring.
-- **A first start on a new folder can be slower** than later ones, while Codex
-  sets the folder up.
-- **agent-director's MCP server and help entry are set up by hand in each
-  group folder,** as in the default one (see [Set up agent-director in a Codex
-  folder](settings.md#set-up-agent-director-in-a-codex-folder)).
+```sh
+CODEX_HOME=/work/codex-team-a codex login
+printenv OPENAI_API_KEY | CODEX_HOME=/work/codex-team-a codex login --with-api-key
+```
+
+An API key passed only through `extra_env` does not sign Codex in.
+Never copy login credentials between folders: refreshing one copy can
+invalidate the other.
+
+A separate folder does not isolate `~/.agents` skills and plugins,
+`/etc/codex`, project `.codex/` settings or MCP tokens in the system keyring.
+The first start can take longer while Codex prepares the folder.
+
+Add agent-director's MCP and help entries
+[in each folder](settings.md#set-up-agent-director-in-a-codex-folder).
+Launch trust is described in [Pre-trust for Codex](settings.md#pre-trust-for-codex).
+Resume uses only the current session's recorded transcript path; see
+[Transcript recovery](caller-contract.md#transcript-recovery).
 
 ## Cursor configuration and data directories
 
-Use `CURSOR_CONFIG_DIR` and `CURSOR_DATA_DIR` through `extra_env` or a
-[template](settings.md#templates-and-per-call-merge) to select Cursor's
-configuration and data directories with the existing personal login. Each is
-optional independently. For example, when that login is the intended account:
+Directory selection uses the existing personal login; it does not select a
+second account. Pass `CURSOR_CONFIG_DIR` and `CURSOR_DATA_DIR` independently
+through `extra_env` or a template:
 
 ```sh
 agent-director spawn --cwd /work/project-foo --agent cursor \
@@ -207,73 +117,35 @@ agent-director spawn --cwd /work/project-foo --agent cursor \
   --extra-env CURSOR_DATA_DIR=/work/cursor-data
 ```
 
-A supplied directory must be nonempty, absolute and lexically clean, without
-ASCII control bytes (0x00–0x1f or 0x7f). Relative paths, leading `~` or `$VAR`,
-dot/dot-dot components, redundant separators and trailing separators other
-than `/` are refused. Accepted values pass unchanged: `$` or `~` inside an
-otherwise valid absolute path stays literal. AD does no expansion, filesystem
-validation or directory creation.
+Each supplied path must be nonempty, absolute and lexically clean, without
+ASCII control bytes (0x00–0x1f or 0x7f). Do not use a leading `~` or `$VAR`,
+dot/dot-dot components, redundant separators or trailing separators other
+than `/`. Accepted values pass unchanged; an internal `$` or `~` stays
+literal. agent-director does not expand, validate on disk or create them.
 
-A launch without explicit selection does not inherit these directories or
-Cursor credential selectors from its caller, parent agent or tmux server.
-[Resume](usage.md#pause-and-resume) retains the saved selection; finished-id
-reuse takes the new resolved call/template selection and starts fresh.
-`HOME` stays unchanged. Selecting these directories neither relocates the
-personal login nor establishes credential, account or operating-system
-isolation.
+A launch does not inherit these directories or Cursor credential selectors
+from its caller, parent or tmux server. Resume retains the saved selection;
+finished-id reuse takes the new call/template selection and starts fresh.
 
-Multiple launches can select the same config/data directories at the same cwd,
-or select distinct directory pairs there. Each retains its own launch and
-conversation authority; shared directories remain shared Cursor storage.
-Stopping one owned launch does not grant it authority over another launch or
-an independent worker. A worker's survival or useful work does not establish
-separate credentials, account isolation or permission-policy isolation.
+Shared directories remain shared Cursor storage. Separate directories do not
+relocate the personal login or establish credential, account, permission-policy
+or operating-system isolation. Local project policy can override global lists;
+a global/group deny is not an immutable boundary against writable project policy.
+Persistent pane approvals can affect later requests under shared policy;
+their storage and full scope are unverified. See
+[Cursor permissions](permissions.md#cursor-spawns).
 
-The Cursor credential profile is unreleased. Explicit `CURSOR_API_KEY` or
-`AGENT_CLI_CREDENTIAL_STORE`, including empty or incomplete selections, is
-refused; there is no approved memory-store account recipe. Second-account
-isolation, API-key exchange/renewal, expiry/invalid keys, personal-auth
-preservation and cross-account workers remain unverified pending authorized
-account acceptance. Cursor's protected gateway is Linux-only; macOS needs a
-protected-runtime implementation before platform acceptance. Directory selection
-does not establish those capabilities or policy isolation. Handling a structured
-rejection does not establish that AD can reliably detect native malformed-policy
-repair or silent fallback. Refusals are in the
-[caller contract](caller-contract.md#spawn-and-template-input-refusals);
-[fresh recovery](caller-contract.md#cursor-operation-boundaries) must preserve
-caller-known supported account/configuration intent or stop for a human.
+The Cursor credential profile is unreleased. Explicit `CURSOR_API_KEY` and
+`AGENT_CLI_CREDENTIAL_STORE` are refused, including empty selections. There is
+no supported second-account or memory-store recipe. Do not remove intended
+account selection just to obtain a personal-login launch; follow
+[input refusals](caller-contract.md#spawn-and-template-input-refusals).
+The protected gateway is Linux-only; see
+[Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries).
 
-Saved `extra_env` remains in the owner-only database and is omitted from public
-spawn views; template environment remains plaintext TOML. See
-[Configuration](configuration.md) for storage protections and
-[Settings](settings.md#templates-and-per-call-merge) for merging.
-
-Cursor's local project rules can override its global lists. The retained Linux
-`2026.10.12-d47ca18` observation for `Shell(printf)` found project deny blocked
-global allow, and project allow overrode global deny. This is a limited
-local-list observation: organization rules, hooks, other permission kinds,
-configuration repair and full policy layering are unverified. A global/group
-deny is not an immutable boundary against writable project policy, and a group
-is not an operating-system security boundary.
-
-An explicitly offered persistent pane approval may affect later requests using
-the applicable shared Cursor policy; its storage and full scope are unverified.
-AD's `decide` grants only a one-shot decision. The request and pane decision
-mechanics are in [Cursor permissions](permissions.md#cursor-spawns).
-
-Models available to the authenticated account are selected through normal
-[agent arguments](usage.md#fresh-cursor-use), including template arguments.
-Availability depends on that account and environment; AD supplies no model
-catalog or availability guarantee. Cursor account/team usage follows
-[Cursor's billing terms](https://cursor.com/docs/models-and-pricing).
-An independently configured provider can bill the model cost directly;
-[Cursor's provider-key terms](https://prod.cursor.com/help/models-and-usage/api-keys)
-describe any additional applicable Cursor charges. This does not enable the
-refused AD credential profile. AD adds no billing controls or account administration.
-
-## References
-
-- API-key auth:
-  <https://docs.claude.com/en/docs/claude-code/iam#anthropic-api-key>
-- `claude setup-token`:
-  <https://docs.claude.com/en/docs/claude-code/headless#setup-token>
+Choose models through normal [agent arguments](usage.md#fresh-cursor-use).
+Availability and billing depend on the account and provider; agent-director
+offers no model catalog, billing controls or account administration. See
+[Cursor billing](https://cursor.com/docs/models-and-pricing) and
+[provider-key terms](https://prod.cursor.com/help/models-and-usage/api-keys).
+These do not enable the refused credential profile.
