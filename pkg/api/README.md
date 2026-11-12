@@ -470,14 +470,17 @@ when nothing was sent, for example for a finished row.
 
 Errors (check them with `errors.Is` against the exported sentinels):
 
-| Sentinel | Class | Meaning |
-|---|---|---|
-| `ErrSpawnNotFound` | — | No row has this id |
-| `ErrTmuxKillFailed` | UNAVAILABLE | Exit could not be confirmed |
-| `ErrTmuxUnresponsive` | UNAVAILABLE | tmux did not answer usably |
-| `ErrTmuxSessionConflict` | CONFLICT | Session ownership conflicts |
-| `ErrTmuxNotAvailable` | ENVIRONMENT | The tmux environment is unavailable |
-| `ErrInternal` | — | The recorded session name cannot be used |
+| Sentinel | Meaning |
+|---|---|
+| `ErrSpawnNotFound` | No row has this id |
+| `ErrTmuxKillFailed` | Exit could not be confirmed |
+| `ErrTmuxUnresponsive` | tmux did not answer usably |
+| `ErrTmuxSessionConflict` | Session ownership conflicts |
+| `ErrTmuxNotAvailable` | The tmux environment is unavailable |
+| `ErrInternal` | The recorded session name cannot be used |
+
+Each tmux error's class is in the
+[caller contract](../../docs/caller-contract.md#caller-contract).
 
 ```go
 _, err := c.Kill(api.KillParams{InstanceID: id})
@@ -491,11 +494,6 @@ case errors.Is(err, api.ErrTmuxSessionConflict):
     // stop and surface it to a human
 }
 ```
-
-The live-row sequence and finished-row no-op limits are owned
-in
-[Caller contract](../../docs/caller-contract.md#caller-contract). See `(*Client).Kill`
-godoc.
 
 ---
 
@@ -533,12 +531,8 @@ Its `HookAlive` is nil. Agent-specific rules are in
 [Cursor permissions](../../docs/permissions.md#cursor-spawns).
 `ErrNoOpenPermissionRequest` means no eligible request has that token.
 Closed requests stay closed after `Resume`; `GetPermission` can still read
-their delivery. See
-[Permission relay](../../docs/caller-contract.md#permission-relay).
-Requests
-recorded by an older binary retain the
-[legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary),
-including derived delivery after expiry even when closed.
+their delivery. Requests recorded by an older binary follow the
+[legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary).
 `ErrRelayFallenBack` carries `RelayFallenBackDetails` from `api.ErrDetails`.
 `SendKeys` answers a pane request using `RequestToken`, `As`, `Key` and
 `ExpectPaneSHA256`. `RecordPaneAnswer` records an outside answer using
@@ -591,12 +585,10 @@ if errors.Is(err, api.ErrSpawnNotInteractive) {
 }
 ```
 
-Each method's godoc lists its shared sentinel names under "Errors:".
-`ErrClientClosed` and other Go-only refusals are documented separately.
-The [godoc index](https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api)
-lists all exported sentinels. Shared handling is in the
-[caller contract](../../docs/caller-contract.md); human repairs are in
-[Operator actions](../../docs/operator-actions.md).
+Each method's doc comment lists its sentinels under "Errors:".
+`go doc github.com/gabemahoney/agent-director/pkg/api` lists every exported
+sentinel. Shared handling is in the [caller contract](../../docs/caller-contract.md);
+human repairs are in [Operator actions](../../docs/operator-actions.md).
 Common sentinels across verbs:
 
 | Sentinel | Meaning |
@@ -610,7 +602,6 @@ Common sentinels across verbs:
 | `ErrSendKeysWhileRelayed` | A permission relay may still answer |
 | `ErrRelayFallenBack` | The relay settled without acknowledgement or a recorded pane answer |
 | `ErrDialogMaybeOpen` | A permission dialog is not proven gone |
-| `ErrPauseTimeout` | Exit input was sent but `ended` was not observed |
 | `ErrStoreBusy` | A bounded store operation did not finish in time |
 | `ErrAlreadyDecided` | The request already has a verdict or completed pane answer |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
@@ -620,4 +611,3 @@ Common sentinels across verbs:
 ## See also
 
 - [Caller contract](../../docs/caller-contract.md)
-- <https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api> — godoc index

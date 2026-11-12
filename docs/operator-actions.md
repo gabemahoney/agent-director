@@ -312,9 +312,7 @@ prints text to stdout before the relay hook runs, while the request reads
 `delivered` and the command waits for a person. The cause is a zsh `.zshenv`
 that prints, or a file named by a `BASH_ENV` the caller set in `extra_env`
 that prints (agent-director launches Codex with `BASH_ENV` empty). Text on
-stderr is harmless. The consequence is described in
-[Permissions](permissions.md#startup-files-that-print). A human checks and
-fixes it:
+stderr is harmless. A human checks and fixes it:
 
 1. Look at the pane (the dialog waits for a person; answer it there, or leave
    it), and confirm the request reads `delivered`:

@@ -1504,11 +1504,8 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
     [Permissions](permissions.md#disable_ask_user-config)). Every spelling of
     a value is read (the next word, after `=`, or attached to a short flag),
     and an option is refused even after the `--`. A repeat of a flag the
-    supervisor adds is not refused or removed: when the arguments already
-    carry `--no-daemon`, `--dangerously-bypass-hook-trust` (pre-trust `ok`) or
-    `--enable write_stdin_approval` before any `--`, the supervisor adds no
-    second one, and Codex itself rejects a flag the arguments repeat (see
-    [Codex's layers](settings.md#codexs-layers)).
+    supervisor adds is not refused or removed; see
+    [Codex's layers](settings.md#codexs-layers).
   - `resume` does not apply spawn's argument refusals. It filters recognized
     session selectors and Claude print mode from stored arguments as described
     in [Pause and resume](usage.md#pause-and-resume).
@@ -1765,13 +1762,20 @@ capture and key, a key already in flight can land on a dialog that appears
 after the check, identical Claude or Codex dialogs cannot be told apart, and
 a native dialog drawn more than 2 s after its hook ends can appear after
 `record-pane-answer`. The affected request stays unproven and holds plain
-input until someone looks again. A main-turn end proves only requests
-recorded before the second its hook started.
+input until someone looks again.
+
+A hook that ends a turn proves gone only the requests recorded before the
+whole second it started. This holds for a main-turn end (Claude's `Stop` or
+idle-prompt Notification, Codex's `Stop` or `Interrupt`) and for a Claude
+subagent's `SubagentStop`, which covers only that subagent's requests. A
+request recorded in that second, even just before the turn ended, stays
+unproven and holds until a later proof.
 
 A shared recovery check repairs a relay-on Claude or Codex row left in
-`check_permission` once no request holds it: Claude to `waiting` when the
-idle-prompt Notification is its latest hook, otherwise `working`; Codex
-always to `working`.
+`check_permission` once no request holds it. A Claude row goes to `waiting`
+while its main-agent idle-prompt Notification still applies, otherwise to
+`working`. `SubagentStart` and `SubagentStop` leave that notification in
+effect; any other applied hook ends it. A Codex row always goes to `working`.
 
 A Cursor row can stay `check_permission` across working reports while a
 genuine unanswered, unproven request holds it; readiness requires the hold to

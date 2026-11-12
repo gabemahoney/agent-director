@@ -585,11 +585,13 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 
 ### 4. Catalog-derived (CLI-side validation)
 
-These classes map the binary's `err_name` contract. Input rules are in
+These classes map the binary's `err_name` contract; each row gives a short
+meaning. Input rules are in
 [Spawn and template input refusals](../../docs/caller-contract.md#spawn-and-template-input-refusals),
 [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries)
 and [Settings](../../docs/settings.md). Request handling is in
 [Permission relay](../../docs/caller-contract.md#permission-relay).
+
 **cwd validation**:
 
 | Error | When it fires |
@@ -610,7 +612,7 @@ and [Settings](../../docs/settings.md). Request handling is in
 | `ErrAgentArgsMismatch` | The template's `agent_args` belong to another agent. |
 | `ErrTemplateAgentMissing` | A template has `agent_args` without an `agent`. |
 | `ErrPermissionsUnsupported` | A Codex or Cursor spawn/template carries `allow`, `deny` or `ask` entries. |
-| `ErrReservedEnvKey` | An `extra_env` key is reserved or invalid; call-level invalid names are refused before starting a process. |
+| `ErrReservedEnvKey` | An `extra_env` key is reserved or invalid. |
 | `ErrInstanceIdCollision` | Without `reuse_finished`, a row already exists for the supplied `instance_id`, in any state. With `reuse_finished: true`, the row is live (`pending` included), or it changed or was removed after this spawn examined it (a lost race); nothing was changed. |
 
 **tmux session naming**:
@@ -638,18 +640,19 @@ and [Settings](../../docs/settings.md). Request handling is in
 
 **tmux transport**:
 
-| Error | Class | Meaning |
-|---|---|---|
-| `ErrTmuxNotAvailable` | ENVIRONMENT | tmux or its socket is unavailable |
-| `ErrTmuxSessionCreate` | LAUNCH FAILURE | The session could not be created or labelled |
-| `ErrTmuxUnresponsive` | UNAVAILABLE | tmux did not answer usably or a launch is still starting/stopping |
-| `ErrTmuxSessionConflict` | CONFLICT | Session or pane ownership conflicts |
-| `ErrTmuxKillFailed` | UNAVAILABLE | Exit could not be confirmed |
-| `ErrTmuxSendKeys` | GONE | The target session or pane is absent |
-| `ErrTmuxCaptureFailed` | GONE | The target session or pane is absent |
+| Error | Meaning |
+|---|---|
+| `ErrTmuxNotAvailable` | tmux or its socket is unavailable |
+| `ErrTmuxSessionCreate` | The session could not be created or labelled |
+| `ErrTmuxUnresponsive` | tmux did not answer usably or a launch is still starting/stopping |
+| `ErrTmuxSessionConflict` | Session or pane ownership conflicts |
+| `ErrTmuxKillFailed` | Exit could not be confirmed |
+| `ErrTmuxSendKeys` | The target session or pane is absent |
+| `ErrTmuxCaptureFailed` | The target session or pane is absent |
 
-Handling and the limits of each class are in the
+Each error's class is in the
 [caller contract](../../docs/caller-contract.md#caller-contract).
+
 **relay / permissions**:
 
 | Error | When it fires |
@@ -663,7 +666,7 @@ Handling and the limits of each class are in the
 | `ErrRelayModeOff` | `decide` requires `relay_mode: "on"`. |
 | `ErrInvalidDecision` | `decision` is neither `allow` nor `deny`. |
 | `ErrMissingRequestToken` | `decide` received an empty `request_token`. |
-| `ErrNoOpenPermissionRequest` | No eligible request matches the instance and token, including closed, proven-gone or obsolete requests. |
+| `ErrNoOpenPermissionRequest` | No eligible request matches the instance and token. |
 | `ErrAlreadyDecided` | The request has a verdict, relay acknowledgement or completed pane answer. |
 | `ErrStoreBusy` | A bounded store operation did not finish in time. |
 | `ErrPermissionRequestNotFound` | No permission-request row matches `request_token`. |
@@ -704,10 +707,8 @@ Handling and the limits of each class are in the
 | `ErrUnknownVerb` | The installed binary does not know the requested verb. |
 | `ErrTrailWrite` | Internal trail-writing failure; no client method returns it. |
 
-Requests recorded by an older binary retain the
-[legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary),
-including derived delivery after expiry even when closed. Compatibility
-refusals for a request recorded by an older binary are defined there too.
+Requests recorded by an older binary follow the
+[legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary).
 
 ## See also
 

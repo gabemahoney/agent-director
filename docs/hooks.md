@@ -110,7 +110,7 @@ hooks to run; see [Codex hook configuration](operator-actions.md#a-codex-row-sta
 | --- | --- |
 | `SessionStart` | `waiting`; records `session_id` |
 | `UserPromptSubmit` | `working` |
-| `PreToolUse`, `PostToolUse` | `working` for the current running main turn; late main-turn hooks leave state unchanged |
+| `PreToolUse`, `PostToolUse` | `working`, subject to permission holds; a late hook from an ended main turn leaves state unchanged |
 | `Stop`, main-agent `Interrupt` | `waiting` |
 | `PermissionRequest` | `check_permission` |
 | `SessionEnd` | End report only; see [How a Codex row ends](#how-a-codex-row-ends) |
@@ -118,13 +118,15 @@ hooks to run; see [Codex hook configuration](operator-actions.md#a-codex-row-sta
 Codex question tools report `working`, never `ask_user`. Codex sends no
 idle-prompt Notification and registers no `PostToolUseFailure`, `Notification`,
 `SubagentStart` or `SubagentStop` entry. Such events, if manually registered,
-leave state unchanged. Subagent session events are ignored.
+leave state unchanged. Subagent session events are ignored, but subagent and
+internal-thread tool and permission events, such as `/review`'s, still move
+the row even though Codex subagent records are not tracked.
 
 ### The Codex turn
 
 `Interrupt` is Codex's Esc and ends the current main turn. `Stop` and
 `Interrupt` report `waiting`; late tool hooks from an ended main turn do not
-return it to `working`. Permission requests can still hold working state.
+return it to `working`.
 
 For a turn that sends no end hook, follow
 [A Codex turn that ends in an error](caller-contract.md#a-codex-turn-that-ends-in-an-error).
@@ -151,8 +153,9 @@ for caller handling.
 ### The shell between Codex and the hook
 
 Keep shell startup files silent on stdout: `.zshenv` for zsh, and the file
-named by `BASH_ENV` for bash. agent-director sets `BASH_ENV` empty unless
-`extra_env` overrides it. Send startup messages to stderr instead.
+named by `BASH_ENV` for bash (see
+[what a Codex launch carries](settings.md#what-a-codex-launch-carries)).
+Send startup messages to stderr instead.
 
 For diagnosis and repair, see
 [A Codex agent shows its own approval dialog after a relayed verdict](operator-actions.md#a-codex-agent-shows-its-own-approval-dialog-after-a-relayed-verdict).

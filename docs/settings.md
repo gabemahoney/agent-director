@@ -55,9 +55,8 @@ It writes nothing in the Codex folder, project `.codex/` or spawn's cwd.
   [Ordinary text submission](caller-contract.md#ordinary-text-submission).
 - Disables the question tool while `disable_ask_user` is on; see
   [Permissions](permissions.md#disable_ask_user-config).
-- Enables `write_stdin_approval`: input to a running command asks for approval,
-  except inside Codex's sandbox, where it is not relayed. Your
-  `--disable write_stdin_approval` turns this off.
+- Enables `write_stdin_approval`; see [Codex spawns](permissions.md#codex-spawns)
+  for what it relays and how to turn it off.
 - Sets `BASH_ENV` empty unless the call or template's `extra_env` overrides it.
   Keep [shell startup output](hooks.md#the-shell-between-codex-and-the-hook) silent.
 - Adds folder trust and a hook-review bypass only when
@@ -104,9 +103,9 @@ any `--` separating the prompt.
 
 agent-director does not duplicate a caller's `--no-daemon`,
 `--dangerously-bypass-hook-trust` (with pre-trust `ok`) or
-`--enable write_stdin_approval`. Codex rejects repetitions within the caller's
-own arguments. Conflicting arguments and their refusals are in the
-[caller contract](caller-contract.md#spawn-and-template-input-refusals).
+`--enable write_stdin_approval` given before any `--`. Codex rejects
+repetitions within the caller's own arguments. Conflicting arguments and their
+refusals are in the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
 
 ### Pre-trust for Codex
 
@@ -131,9 +130,8 @@ Folder trust does not persist to later manual runs; Claude Code's pre-trust does
 inject_help_hook = true
 ```
 
-The default is `false`. `install.sh` sets it to `true` unless `--no-hooks`;
-the interactive persistent-help choice controls it too. `uninstall.sh`
-reverses that setting. See [Installation](install.md#claude-code-and-codex).
+Its default and how the installer sets it are in
+[Configuration](configuration.md#keys).
 
 When enabled, managed Claude and Codex launches add a `SessionStart` help
 entry using the absolute installed binary path

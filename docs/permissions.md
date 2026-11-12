@@ -263,7 +263,9 @@ Use the [pane-answer rules](#answering-at-the-pane) below.
 
 #### Startup files that print
 
-Keep shell startup files silent on stdout. Diagnosis and repair belong in
+Keep shell startup files silent, as
+[The shell between Codex and the hook](hooks.md#the-shell-between-codex-and-the-hook)
+says. Diagnosis and repair belong in
 [A Codex agent shows its own approval dialog after a relayed verdict](operator-actions.md#a-codex-agent-shows-its-own-approval-dialog-after-a-relayed-verdict).
 
 #### How the hold differs on Codex rows
@@ -391,7 +393,8 @@ Proof comes from the agent, not from the caller's answer record:
 - `tool_ran`: validated matching Cursor invocation evidence, as
   [defined above](#cursor-spawns). Claude and Codex requests cannot use it.
 - `turn_end`: eligible main-agent requests recorded before the main turn's
-  end, or a Claude subagent's requests before that subagent's turn ends.
+  end, or a Claude subagent's requests recorded before its `SubagentStop`,
+  subject to the [whole-second cutoff](caller-contract.md#permission-relay).
   A missing child ID alone never establishes main-turn eligibility.
   Cursor also retires unanswered requests at their conversation's turn end.
 - `agent_gone`: a non-Cursor spawn ended, was marked `missing`, or resumed.
