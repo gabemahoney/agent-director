@@ -132,8 +132,10 @@ func forwardOutcome(t *testing.T, tc forwardOutcomeCase, wayBack func(f *cutover
 		if tc.rerun {
 			f.Check(f.Install(false, false), "ErrJournalMigrationIncomplete", "unknown", false)
 			holder.Kill()
-			mutator := h.HoldSQLite(db, "PRAGMA user_version;")
-			release = mutator.Kill
+			// b.5pb: the retry must pass pre-flight and refuse in the
+			// post-swap attempt, with this release already installed.
+			f.Choose("child:verify-fails-2")
+			release = f.Clear
 			h.Flags = setFlag(h.Flags, "--journal-backup", filepath.Join(h.Root, "second-backup"))
 		}
 	}

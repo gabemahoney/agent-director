@@ -3,6 +3,7 @@ package spawn
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -21,6 +22,26 @@ func laneFiles(t *testing.T, token string) ComposedLaunch {
 		t.Fatal(err)
 	}
 	return ComposedLaunch{Files: []LaunchFile{{Path: filepath.Join(dir, "droid-settings.json"), Content: []byte(`{"model":"model"}`)}}}
+}
+
+// b.ma7: ownership advice identifies the observed and required owners.
+func TestLaunchDirectoryOwnerDiagnostic(t *testing.T) {
+	owner := uint32(os.Geteuid()) + 1
+	cause := &unsafeLaunchDirectoryError{path: "/scratch/.config", owner: owner, mode: 0755}
+	err := launchPreparationError("create private directory", cause)
+	want := fmt.Sprintf("launch directory %q has owner UID %d; directory must be owned by the user running agent-director (UID %d)", cause.path, owner, os.Geteuid())
+	if !errors.Is(err, cause) || !errors.Is(err, tmux.ErrTmuxSessionCreate) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("ownership refusal: %v; want %s", err, want)
+	}
+}
+
+// b.ma7: unrelated syscall failures retain their cause without exposing it.
+func TestLaunchPreparationRedactsPathError(t *testing.T) {
+	cause := &os.PathError{Op: "open", Path: "/private/settings", Err: errors.New("private value")}
+	err := launchPreparationError("create private directory", cause)
+	if !errors.Is(err, cause) || strings.Contains(err.Error(), "private/settings") || strings.Contains(err.Error(), "private value") {
+		t.Fatalf("lost cause or printed sensitive cause: %v", err)
+	}
 }
 
 func TestPaneOnlyLaunchFiles(t *testing.T) {

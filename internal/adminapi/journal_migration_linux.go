@@ -23,9 +23,18 @@ var journalProcRoot = "/proc"
 // Only readable program names and store/root links identify mutators;
 // incomplete evidence about one process adds no finding.
 func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string) error {
-	for _, path := range append([]string{dbPath}, roots...) {
-		if err := verifyJournalPath(path); err != nil {
+	stores := []string{dbPath, dbPath + "-wal", dbPath + "-shm"}
+	if journalIsInventoryOnly(ctx) {
+		paths, err := journalInventoryTargets(ctx, osJournalFS{}, append(stores, roots...))
+		if err != nil {
 			return err
+		}
+		stores, roots = paths[:3], paths[3:]
+	} else {
+		for _, path := range append([]string{dbPath}, roots...) {
+			if err := verifyJournalPath(path); err != nil {
+				return err
+			}
 		}
 	}
 	entries, err := os.ReadDir(journalProcRoot)
@@ -51,8 +60,9 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 		if !ok {
 			continue
 		}
-		// Private store/root permissions below establish the same-user scope.
-		// Privileged administrators are controlled by the maintained boundary.
+		// The real attempt establishes private store/root permissions. The
+		// pre-preparation inventory retains its same-user process scope;
+		// privileged administrators remain under the maintained boundary.
 		if stat.Uid != uint32(os.Geteuid()) {
 			continue
 		}
@@ -75,8 +85,10 @@ func verifyJournalQuiescence(ctx context.Context, dbPath string, roots []string)
 				continue
 			}
 			target = strings.TrimSuffix(target, " (deleted)")
-			if target == dbPath || target == dbPath+"-wal" || target == dbPath+"-shm" {
-				mutator = true
+			for _, path := range stores {
+				if target == path {
+					mutator = true
+				}
 			}
 			for _, root := range roots {
 				if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {

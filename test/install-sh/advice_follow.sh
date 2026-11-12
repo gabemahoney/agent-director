@@ -1477,7 +1477,7 @@ j7_warned() {
     j7_unreadable "The store open (agent-director list) succeeded and no migration was authorized, so the install carries on. Check the version later with: sqlite3 -batch -init /dev/null -cmd \".timeout $(j7_timeout)\" $db \"PRAGMA user_version;\"" "$1"
     # The schedule warning (b.wur) that ends stderr when nothing is scheduled is
     # not about this step: look at what comes before it.
-    if sed '/^install\.sh: WARNING: nothing schedules /,$d' "$ERR" | grep -qiE 'FAILED|could not|re-run'; then
+    if sed '/^install\.sh: WARNING: could not find active --schedule entries for both /,$d' "$ERR" | grep -qiE 'FAILED|could not|re-run'; then
         bad "the warning speaks as if the install failed: $(flat "$ERR")"
     fi
     j7_schema_unreadable
@@ -4491,7 +4491,7 @@ EOF
     local -a argv=(--binary ./ad-main --admin-binary ./ad-admin --no-hooks --no-symlink)
     run_in "$h" "$d" bash "$sh" "${argv[@]}"
     expect_rc 0 "a plain install with nothing scheduled" || return
-    grep -qxF "install.sh: WARNING: nothing schedules agent-director's sweep and expire jobs on this machine." "$ERR" \
+    grep -qxF "install.sh: WARNING: could not find active --schedule entries for both agent-director's sweep and expire jobs." "$ERR" \
         || bad "no schedule warning: $(flat "$ERR")"
     # The lines, as printed: the tmux directory in PATH, the installed binary,
     # the marker; no HOME (it is the passwd home here).
@@ -4580,8 +4580,9 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
     for answer in first repeat; do
         run "$h" "${J7ARGV[@]}" --journal-maintenance-window --journal-roots-complete --journal-backup "$backup" --journal-legacy-root "$extra"
         expect_exit5 ErrJournalMigrationRefused "$answer with incompatible process" || true
-        expect_advice "install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run."
-        expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+        expect_advice "install.sh: pre-flight holder check refused (agent-director-admin migrate-journal --check-only --store-path) Nothing was installed or changed."
+        expect_advice "Then re-run this release's installer, with a new --journal-backup directory."
+        ! grep -qF 'install.sh: pre-flight OK' "$OUT" || bad "incompatible process passed pre-flight"
         [[ ! -e "$h/.config/agent-director/bin/agent-director" && ! -e "$h/.config/agent-director/admin/agent-director-admin" ]] || bad "refusal retained binaries absent before the run"
         [[ "$(cat "$(sentinel "$h")")" == "{\"from\":$prior,\"to\":$SCHEMA}" ]] || bad "refusal did not restore the original sentinel"
         grep -F 'old_or_unverified_mutators' "$ERR" >/dev/null || bad "refused before process inventory: $(flat "$ERR")"

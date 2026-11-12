@@ -64,11 +64,11 @@ schedules as another user.
 
 An install that does not find entries for both sweeps, with or without
 `--schedule` (both tagged cron lines with a cron daemon running, or all four
-units), ends with a warning on stderr (the exit status is unchanged). It says what is
-unscheduled, names the exact crontab lines for this install's binary and says
-to run them as the agents' user. Its own cron lines in a crontab with no cron
-daemon running do not count as scheduled. It cannot see a schedule you made
-another way (launchd, your own cron line or unit): ignore the warning then. The
+units), ends with a warning on stderr (the exit status is unchanged). It says
+it could not find active `--schedule` entries for both jobs, names the exact
+crontab lines for this install's binary and says to run them as the agents'
+user. Its own cron lines in a crontab with no cron daemon running do not count
+as scheduled. It cannot see a schedule you made another way (launchd, your own cron line or unit): ignore the warning then. The
 reasons it gives and their fixes are in
 [Operator actions](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
 To remove what `--schedule` added, run `uninstall.sh` (see

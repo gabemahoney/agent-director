@@ -217,12 +217,11 @@ func TestAdviceFollow_J39_Restored(t *testing.T) {
 				return
 			}
 			var clear func()
-			if tc.old {
+			if !tc.backupFailed {
+				// b.5pb: refuse the attempt after the swap; a pre-existing
+				// holder now correctly refuses before any restore is needed.
 				f.Choose("child:verify-fails-2")
 				clear = f.Clear
-			} else if !tc.backupFailed {
-				holder := h.HoldSQLite(c.db, "PRAGMA user_version;")
-				clear = holder.Kill
 			}
 			if tc.linked {
 				if err := os.MkdirAll(target, 0o700); err != nil {

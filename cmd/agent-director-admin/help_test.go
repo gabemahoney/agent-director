@@ -46,7 +46,12 @@ func poisonedHome(t *testing.T) string {
 // ~/.config/agent-director.
 func dirEntries(t *testing.T, home string) map[string]string {
 	t.Helper()
-	dir := filepath.Join(home, ".config", "agent-director")
+	return directoryEntries(t, filepath.Join(home, ".config", "agent-director"))
+}
+
+// directoryEntries snapshots a flat fixture directory's names and file bytes.
+func directoryEntries(t *testing.T, dir string) map[string]string {
+	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read %s: %v", dir, err)

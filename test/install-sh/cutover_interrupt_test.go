@@ -111,7 +111,9 @@ func cutoverInterruptCases(t *testing.T, group string) {
 					}
 				case "running":
 					if tc.reread {
-						h.HoldSQLite(db, "PRAGMA user_version;")
+						// b.5pb: reach the post-attempt reread without a
+						// holder that pre-flight would correctly reject.
+						f.Choose("child:verify-fails-1")
 						h.Env["AD_TEST_REREAD_AFTER"] = f.Finished
 					} else {
 						cancelled, err := json.Marshal(map[string]any{

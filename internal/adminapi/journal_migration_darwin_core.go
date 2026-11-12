@@ -72,16 +72,24 @@ func (p *darwinProcess) setStart(start string) {
 // inventory_deadline rather than hold the attempt.
 func (v darwinVerifier) verify(ctx context.Context, dbPath string, roots []string) error {
 	helpers := &darwinHelpers{}
-	for _, path := range append([]string{dbPath}, roots...) {
-		if err := bounded(ctx, func() error { return verifyJournalPathIn(v.fs, path) }); err != nil {
+	if journalIsInventoryOnly(ctx) {
+		var err error
+		roots, err = journalInventoryTargets(ctx, v.fs, roots)
+		if err != nil {
 			return err
 		}
-		if err := v.checkAccessControl(ctx, path, helpers); err != nil {
-			return err
+	} else {
+		for _, path := range append([]string{dbPath}, roots...) {
+			if err := bounded(ctx, func() error { return verifyJournalPathIn(v.fs, path) }); err != nil {
+				return err
+			}
+			if err := v.checkAccessControl(ctx, path, helpers); err != nil {
+				return err
+			}
 		}
 	}
 	store := map[journalFileID]bool{}
-	if err := bounded(ctx, func() error { return journalStoreIDs(v.fs, dbPath, store) }); err != nil {
+	if err := bounded(ctx, func() error { return journalStoreIDs(ctx, v.fs, dbPath, store) }); err != nil {
 		return err
 	}
 
@@ -363,15 +371,29 @@ type darwinEvidence struct {
 // evidence reads the store's and roots' identities after the listing. The
 // store's join those read before the selection.
 func (v darwinVerifier) evidence(ctx context.Context, dbPath string, roots []string, store map[journalFileID]bool) (*darwinEvidence, error) {
-	if err := bounded(ctx, func() error { return journalStoreIDs(v.fs, dbPath, store) }); err != nil {
+	if err := bounded(ctx, func() error { return journalStoreIDs(ctx, v.fs, dbPath, store) }); err != nil {
 		return nil, err
 	}
 	evidence := &darwinEvidence{store: store, walked: map[journalFileID]bool{}}
 	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
 		if err := bounded(ctx, func() error {
-			ancestor, _, rest, err := journalDeepestExisting(v.fs, path)
+			lookup := path
+			if journalIsInventoryOnly(ctx) {
+				resolved, err := journalInventoryTargets(ctx, v.fs, []string{path})
+				if err != nil {
+					return err
+				}
+				path = resolved[0]
+				// The installer chmods the DB later. Derive vnode names from
+				// its parent so inventory never needs to open that file.
+				lookup = filepath.Dir(path)
+			}
+			ancestor, _, rest, err := journalDeepestExisting(v.fs, lookup)
 			if err != nil {
 				return journalRefusal("legacy_root_unreadable")
+			}
+			if journalIsInventoryOnly(ctx) {
+				rest = append(rest, filepath.Base(path))
 			}
 			forms, err := journalPathForms(v.fs, path, ancestor, rest)
 			evidence.storeForms = append(evidence.storeForms, forms...)
@@ -393,8 +415,16 @@ func (v darwinVerifier) evidence(ctx context.Context, dbPath string, roots []str
 // journalStoreIDs adds the identities of the database, -wal and -shm that
 // exist. The verifier reads them before the selection and again after the
 // listing, so a file recreated in between still matches.
-func journalStoreIDs(fsys journalFS, dbPath string, ids map[journalFileID]bool) error {
-	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+func journalStoreIDs(ctx context.Context, fsys journalFS, dbPath string, ids map[journalFileID]bool) error {
+	paths := []string{dbPath, dbPath + "-wal", dbPath + "-shm"}
+	if journalIsInventoryOnly(ctx) {
+		var err error
+		paths, err = journalInventoryTargets(ctx, fsys, paths)
+		if err != nil {
+			return err
+		}
+	}
+	for _, path := range paths {
 		st, err := fsys.Lstat(path)
 		if journalLookupAbsent(err) {
 			continue

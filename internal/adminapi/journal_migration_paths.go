@@ -1,11 +1,32 @@
 package adminapi
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
+
+// journalInventoryTargets resolves the current layout for descriptor matching,
+// including aliases and absent sidecars/roots. This collects names, not path
+// access verdicts: only verifyJournalPathIn judges a real attempt's paths.
+func journalInventoryTargets(ctx context.Context, fsys journalFS, paths []string) ([]string, error) {
+	resolved := make([]string, len(paths))
+	for i, path := range paths {
+		if err := bounded(ctx, func() error {
+			ancestor, rest, err := journalResolveExisting(fsys, path)
+			if err != nil {
+				return journalRefusal("process_inventory_unreadable")
+			}
+			resolved[i] = filepath.Join(append([]string{ancestor}, rest...)...)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return resolved, nil
+}
 
 // verifyJournalPath is the path check over the host's own file system, as
 // the Linux verifier makes it (verifyJournalPathIn).

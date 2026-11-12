@@ -114,8 +114,23 @@
 #                        each. An upgrade of an existing store below schema
 #                        v16 needs the first three journal flags, and this one
 #                        for each additional root; pre-flight refuses without
-#                        the three, changing nothing. See docs/operator-actions.md
+#                        the three, changing nothing. If journal flags are given
+#                        and no cutover is crossed, a completed install warns
+#                        that the flags were unused, names the store's version
+#                        before this install (or says there was no store), and
+#                        says no journal backup was made. A refused install adds
+#                        no such warning.
+#                        See docs/operator-actions.md
 #                        "Upgrading the native-input journal".
+#   --check-holders      Read-only pre-flight holder inventory for a native-input
+#                        cutover. Resolve the candidate binaries and store,
+#                        validate the journal flags and list blocking processes
+#                        with the real migration verifier, then exit 0 (clear)
+#                        or 5 (refused). Skip live-row checks, so agents need
+#                        not be stopped first. With no crossing, no holder check
+#                        is needed. No install, backup, sentinel, hook, MCP,
+#                        schedule or PATH change is made; release downloads and
+#                        store snapshots use temporary files removed at exit.
 #   -h, --help           Print this text and exit 0.
 #
 # The schedule (b.wur). sweep runs shared recovery checks every 2 minutes;
@@ -417,6 +432,8 @@ JOURNAL_MAINTENANCE=0
 JOURNAL_ROOTS_COMPLETE=0
 JOURNAL_ROOTS=()
 JOURNAL_BACKUP=""
+JOURNAL_FLAGS_GIVEN=0
+CHECK_HOLDERS=0
 
 # GitHub repo slug used by --from-release. Matches go.mod's module path
 # and the /release skill's asset naming.
@@ -462,13 +479,15 @@ while [[ $# -gt 0 ]]; do
         --keep-prior)
             KEEP_PRIOR=1; shift ;;
         --journal-maintenance-window)
-            JOURNAL_MAINTENANCE=1; shift ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_MAINTENANCE=1; shift ;;
         --journal-roots-complete)
-            JOURNAL_ROOTS_COMPLETE=1; shift ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_ROOTS_COMPLETE=1; shift ;;
         --journal-legacy-root)
-            JOURNAL_ROOTS+=("$2"); shift 2 ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_ROOTS+=("$2"); shift 2 ;;
         --journal-backup)
-            JOURNAL_BACKUP="$2"; shift 2 ;;
+            JOURNAL_FLAGS_GIVEN=1; JOURNAL_BACKUP="$2"; shift 2 ;;
+        --check-holders)
+            CHECK_HOLDERS=1; shift ;;
         --schedule)
             SCHEDULE=1; shift ;;
         -h|--help)
@@ -2132,11 +2151,15 @@ if [[ -f "$MOVE_MARKER" || -L "$MOVE_MARKER" ]]; then
     marker_kept=""
     IFS= read -r marker_kept <"$MOVE_MARKER" || true
     if [[ -n "$marker_kept" && ( -e "$marker_kept" || -L "$marker_kept" ) ]]; then
-        rm -f "$MOVE_MARKER"
+        if [[ "$CHECK_HOLDERS" -eq 0 ]]; then
+            rm -f "$MOVE_MARKER"
+        fi
     elif [[ "$OLD_PRESENT" -eq 1 ]]; then
         MOVE_PARTIAL=1
     else
-        rm -f "$MOVE_MARKER"
+        if [[ "$CHECK_HOLDERS" -eq 0 ]]; then
+            rm -f "$MOVE_MARKER"
+        fi
     fi
 fi
 
@@ -2687,12 +2710,12 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
     fi
     echo "  release : $RELEASE_REPO_SLUG @ $FROM_RELEASE_TAG ($asset, $admin_asset)"
 
+    # Arm cleanup before either allocation: if the second mktemp fails,
+    # the first file still needs removing. Cleanup accepts unset paths.
+    # The install steps later copy the files' contents into place.
+    trap ad_exit_cleanup EXIT
     tmp_bin="$(mktemp /tmp/agent-director.XXXXXX)"
     tmp_admin="$(mktemp /tmp/agent-director-admin.XXXXXX)"
-    # Defer-cleanup the tempfiles on any exit path. The install steps
-    # later in the script copy their contents into place, so the
-    # tempfiles being cleaned up at script exit is fine.
-    trap ad_exit_cleanup EXIT
 
     # ----------------------------------------------------------------
     # CDN-propagation retry (b.kym).
@@ -3378,6 +3401,50 @@ ad_journal_args() {
     done
 }
 
+# ad_journal_check_only — run the candidate administrator's migrate-journal
+# --check-only with the explicit store and the run's journal flags. It checks
+# arguments and holders in the current, pre-move layout without opening the
+# store or writing anything. Path access is verified by the real attempt,
+# after the move and this installer's permission preparation.
+# Refuse in pre-flight unless it prints exactly {} with status
+# 0. $ADMIN_SRC is the candidate; $ADMIN_CANONICAL is still the previous
+# install's binary here.
+ad_journal_check_only() {
+    local out rc=0 name action reason
+    ad_prepare_source_binaries
+    out="$("$ADMIN_SRC" --store-path "$state_db" migrate-journal --check-only "${JOURNAL_ARGS[@]}" 2>&1)" || rc=$?
+    if [[ "$rc" -eq 0 && "$out" == "{}" ]]; then
+        return 0
+    fi
+    name="$(ad_err_name "$out")"
+    if [[ "$rc" -ne 0 && "$name" == ErrJournalMigrationRefused ]]; then
+        action="$(printf '%s\n' "$out" | jq -Rr '(fromjson | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.action | strings)?' 2>/dev/null | tail -n1 || true)"
+        reason="$(printf '%s\n' "$out" | jq -Rr '(fromjson | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.reason | strings)?' 2>/dev/null | tail -n1 || true)"
+        case "$reason" in
+            old_or_unverified_mutators|process_inventory_*|inventory_deadline)
+                echo "install.sh: pre-flight holder check refused (agent-director-admin migrate-journal --check-only --store-path)" >&2 ;;
+            *)
+                echo "install.sh: pre-flight refused the journal flags (agent-director-admin migrate-journal --check-only)" >&2 ;;
+        esac
+        echo "  Nothing was installed or changed." >&2
+        if [[ -n "$action" ]]; then
+            echo "  To fix: $action" >&2
+        fi
+        echo "  Then re-run this release's installer, with a new --journal-backup directory." >&2
+        ad_relay_output "$out"
+        ad_exit_5 ErrJournalMigrationRefused
+    fi
+    action="run this release's agent-director-admin as the candidate (the same release as agent-director), then re-run this install; report it if it persists"
+    echo "install.sh: pre-flight could not check the journal flags: agent-director-admin migrate-journal --check-only gave an unexpected result (status ${rc})" >&2
+    echo "  This read-only check must establish both valid journal flags and a clear holder inventory." >&2
+    echo "  Nothing was installed or changed." >&2
+    ad_relay_output "$out"
+    if [[ -n "$name" ]]; then
+        ad_outcome_exit --relayed ErrJournalMigrationRefused "$name" "$action" not_committed
+    fi
+    ad_outcome_exit ErrJournalMigrationRefused check_only_unestablished "$action" not_committed
+}
+
 # ad_is_version <value> — true when <value> is a user_version as sqlite3
 # prints one: a whole number, 0 or more, with no leading zero. Nothing else
 # may reach a printf %d or a version compare (b.hk7). A leading zero would:
@@ -3496,10 +3563,27 @@ ad_agent_rename_gate() {
 # left to the move's live-agents check below, which reads the same store and
 # refuses first (ErrAgentsLive, "the live rows could not be read"): the
 # gate then defers, and runs again once that check has passed.
-if [[ "$MOVE_DUE" -eq 1 ]]; then
+if [[ "$MOVE_DUE" -eq 1 && "$CHECK_HOLDERS" -eq 0 ]]; then
     ad_agent_rename_gate defer
 else
     ad_agent_rename_gate
+fi
+
+# Holder-only mode ends before install-only config/link checks, live-row
+# checks, restore preparation or any installation step. The schema decision
+# uses the same private snapshot as normal pre-flight, never SQLite on the
+# source. Resolve the candidates even when there is no store to snapshot.
+if [[ "$CHECK_HOLDERS" -eq 1 ]]; then
+    ad_prepare_source_binaries
+    if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]] \
+        && ((PREFLIGHT_STORE_VERSION < INPUT_CUTOVER_VERSION)); then
+        ad_journal_args
+        ad_journal_check_only
+        echo "install.sh: holder check passed; nothing was installed or changed."
+    else
+        echo "install.sh: no native-input cutover is crossed; no holder check is needed. Nothing was installed or changed."
+    fi
+    exit 0
 fi
 
 # --------------------------------------------------------------------
@@ -4062,7 +4146,8 @@ fi
 #   - v1 up to INPUT_CUTOVER_VERSION - 1: crossing (CUTOVER_CROSSING=1);
 #     with no move due the store must hold no live row
 #     (ad_crossing_live_rows_check), and the candidate administrator's
-#     migrate-journal --check-only must accept the run's journal flags;
+#     migrate-journal --check-only must accept the run's journal flags and
+#     find no blocking process through the real quiescence verifier;
 #     then the restore preconditions (below) run;
 #   - INPUT_CUTOVER_VERSION up to STORE_SCHEMA_VERSION - 1: not crossing
 #     when the native-input authority is recorded; refused when it is
@@ -4087,8 +4172,8 @@ ad_cutover_refuse_state() {
 # ad_crossing_live_rows_check — on a crossing upgrade with no move due,
 # refuse in pre-flight while the store holds a row in a live state
 # (agents_live), or when its rows cannot be read (agent_rows_unreadable),
-# with nothing changed. Rows only: migrate-journal's inventory after the swap
-# stays the process check. With a move due, ad_agents_live_check has already
+# with nothing changed. The holder inventory follows in ad_journal_check_only.
+# With a move due, ad_agents_live_check has already
 # read the old store's rows. The advice runs the installed binary, which here
 # is still the previous release's.
 ad_crossing_live_rows_check() {
@@ -4127,40 +4212,6 @@ ad_crossing_live_rows_check() {
     echo "  A missing row does not prove the agent stopped: a run as another user or against another tmux server can mark a running agent missing (docs/maintenance.md \"Scheduling the sweeps\")." >&2
     echo "  Nothing was installed or changed. Then re-run the same install command from a shell AD did not start." >&2
     ad_outcome_exit ErrJournalMigrationRefused agents_live "$action" not_committed
-}
-
-# ad_journal_check_only — run the candidate administrator's migrate-journal
-# --check-only with the run's journal flags (no --store-path: it reads no
-# store), and refuse in pre-flight unless it prints exactly {} with status
-# 0. $ADMIN_SRC is the candidate; $ADMIN_CANONICAL is still the previous
-# install's binary here.
-ad_journal_check_only() {
-    local out rc=0 name action
-    ad_prepare_source_binaries
-    out="$("$ADMIN_SRC" migrate-journal --check-only "${JOURNAL_ARGS[@]}" 2>&1)" || rc=$?
-    if [[ "$rc" -eq 0 && "$out" == "{}" ]]; then
-        return 0
-    fi
-    name="$(ad_err_name "$out")"
-    if [[ "$rc" -ne 0 && "$name" == ErrJournalMigrationRefused ]]; then
-        action="$(printf '%s\n' "$out" | jq -Rr '(fromjson | select(.err_name == "ErrJournalMigrationRefused") | .details.refusal.action | strings)?' 2>/dev/null | tail -n1 || true)"
-        echo "install.sh: pre-flight refused the journal flags (agent-director-admin migrate-journal --check-only)" >&2
-        echo "  Nothing was installed or changed." >&2
-        if [[ -n "$action" ]]; then
-            echo "  To fix: $action" >&2
-        fi
-        echo "  Then re-run this release's installer, with a new --journal-backup directory." >&2
-        ad_relay_output "$out"
-        ad_exit_5 ErrJournalMigrationRefused
-    fi
-    action="run this release's agent-director-admin as the candidate (the same release as agent-director), then re-run this install; report it if it persists"
-    echo "install.sh: pre-flight could not check the journal flags: agent-director-admin migrate-journal --check-only gave an unexpected result (status ${rc})" >&2
-    echo "  Nothing was installed or changed." >&2
-    ad_relay_output "$out"
-    if [[ -n "$name" ]]; then
-        ad_outcome_exit --relayed ErrJournalMigrationRefused "$name" "$action" not_committed
-    fi
-    ad_outcome_exit ErrJournalMigrationRefused check_only_unestablished "$action" not_committed
 }
 
 # --------------------------------------------------------------------
@@ -5321,7 +5372,7 @@ if [[ -n "$PREFLIGHT_STORE_VERSION" && "$PREFLIGHT_STORE_VERSION" -ne 0 ]]; then
     if ((PREFLIGHT_STORE_VERSION < INPUT_CUTOVER_VERSION)); then
         CUTOVER_CROSSING=1
         # The real verifier always checks both HOME input roots, even
-        # while a move is due; --check-only does not reject link components.
+        # while a move is due; keep the link-specific remedy before inventory.
         if [[ -L "$DEFAULT_INSTALL_ROOT" ]]; then
             echo "install.sh: $DEFAULT_INSTALL_ROOT is a link; refusing the native-input cutover." >&2 || true
             echo "  Nothing was installed or changed." >&2 || true
@@ -6357,8 +6408,8 @@ fi
 #
 # Step 4 invokes migrate-journal exactly when pre-flight's cutover decision
 # found a crossing upgrade (CUTOVER_CROSSING); every other store takes the
-# ordinary list. Every quiescence verification migrate-journal makes stays
-# here, after the swap: pre-flight only refused. Step 5 checks the target
+# ordinary list. The real attempt repeats quiescence verification after the
+# swap; pre-flight's read-only inventory never replaces it. Step 5 checks the target
 # version. Keep incompatible hooks, helpers, servers and launchers excluded
 # through committed verification. A failed attempt restores only when the
 # previous release's store is shown unchanged; all other outcomes keep this
@@ -8172,7 +8223,8 @@ ad_sched_rerun_cmd() {
     ad_rerun_cmd schedule
 }
 
-# ad_sched_warn <reason> — the loud warning, on stderr: no schedule is set up.
+# ad_sched_warn <reason> — warn on stderr when --schedule entries are not found
+# for both jobs (cron lines without a running daemon do not count).
 # <reason> (may be empty) is why --schedule did not install one. The cron lines
 # are the shipped file's, rendered, and the directory named is where they were
 # read from: beside this script, or ~/.config/agent-director/schedule/ when
@@ -8184,7 +8236,13 @@ ad_sched_warn() {
     ad_sched_verb
     {
         echo
-        echo "install.sh: WARNING: nothing schedules agent-director's ${SCHED_VERB} and expire jobs on this machine."
+        echo "install.sh: WARNING: could not find active --schedule entries for both agent-director's ${SCHED_VERB} and expire jobs."
+        echo "  This check sees only the entries --schedule adds; it cannot see schedules made another way"
+        echo "  (launchd, your own cron line or unit). Already scheduled another way? Ignore this warning,"
+        echo "  or run --schedule and drop your own entries."
+        if [[ "$SCHED_VERB" == sweep ]]; then
+            echo "  Existing schedules running find-missing keep working: it is an alias of sweep."
+        fi
         echo "  Recovery runs only when called; state reads also perform the shared checks on supporting versions."
         echo "  Absent or failed checks leave observations old. expire separately removes eligible finished rows."
         echo "  Choose an external cadence for recovery and retention cleanup; neither runs an internal daemon."
@@ -8240,8 +8298,6 @@ ad_sched_warn() {
             echo "  an install.sh that has them beside it with"
             echo "  --schedule, as that user."
         fi
-        echo "  Already scheduled another way (launchd, your own cron line or unit)? This check sees only the entries"
-        echo "  --schedule adds, so it warns anyway: ignore this, or run --schedule and drop your own entries."
     } >&2
 }
 
@@ -8295,6 +8351,18 @@ ad_sched_step() {
     SCHED_WARN=1
 }
 
+# Report unused flags only after all install steps, preserving the leading
+# refusal/after-open diagnostic and the MCP failure's final exit-6 line.
+ad_unused_journal_warn() {
+    if [[ "$CUTOVER_CROSSING" -eq 0 && "$JOURNAL_FLAGS_GIVEN" -eq 1 ]]; then
+        if [[ -n "$PREFLIGHT_STORE_VERSION" ]]; then
+            echo "install.sh: warning: $state_db_name was at v${PREFLIGHT_STORE_VERSION} before this install; journal flags were not used and no journal backup was made." >&2
+        else
+            echo "install.sh: warning: there was no store before this install; journal flags were not used and no journal backup was made." >&2
+        fi
+    fi
+}
+
 SCHED_HOW=""
 ad_sched_step
 
@@ -8303,6 +8371,7 @@ if [[ "$MCP_FAILED" -eq 1 ]]; then
     if [[ "$SCHED_WARN" -eq 1 ]]; then
         ad_sched_warn "$SCHED_REASON"
     fi
+    ad_unused_journal_warn
     echo "install.sh: installed, but the MCP registration failed (see above); exit 6" >&2
     exit 6
 fi
@@ -8310,4 +8379,5 @@ echo "install.sh: done. Try: $CANONICAL help"
 if [[ "$SCHED_WARN" -eq 1 ]]; then
     ad_sched_warn "$SCHED_REASON"
 fi
+ad_unused_journal_warn
 } ; exit

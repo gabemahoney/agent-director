@@ -47,15 +47,43 @@ func defaultLaunchFileOps() launchFileOps {
 	return launchFileOps{(*os.File).Write, (*os.File).Sync, (*os.File).Close, unix.Unlinkat, unix.Close}
 }
 
-// Keep the original cause available to errors.Is/As without printing paths or
-// other values carried by an os.PathError (or an injected failure).
+// Keep causes available to errors.Is/As. Only our explicit directory-policy
+// refusal is printable; syscall and injected failures can carry private values.
 type launchFileStepError struct {
 	step  string
 	cause error
 }
 
-func (e *launchFileStepError) Error() string { return e.step + " failed" }
+func (e *launchFileStepError) Error() string {
+	if refusal, ok := e.cause.(*unsafeLaunchDirectoryError); ok {
+		return e.step + " failed: " + refusal.Error()
+	}
+	return e.step + " failed"
+}
 func (e *launchFileStepError) Unwrap() error { return e.cause }
+
+// unsafeLaunchDirectoryError deliberately identifies the component an operator
+// must repair, using only metadata obtained from its open directory descriptor.
+type unsafeLaunchDirectoryError struct {
+	path    string
+	owner   uint32
+	mode    uint32
+	private bool
+}
+
+func (e *unsafeLaunchDirectoryError) Error() string {
+	if e.owner != uint32(os.Geteuid()) {
+		return fmt.Sprintf("launch directory %q has owner UID %d; directory must be owned by the user running agent-director (UID %d)", e.path, e.owner, os.Geteuid())
+	}
+	fix := "g-w"
+	if e.private {
+		// GNU chmod preserves directory setuid/setgid with four digits.
+		fix = "00700"
+	} else if e.mode&0002 != 0 {
+		fix = "go-w"
+	}
+	return fmt.Sprintf("launch directory %q has mode %04o; run chmod %s %s", e.path, e.mode, fix, statusShellQuote(e.path))
+}
 
 func launchFileFailure(step string, cause error) error {
 	if cause == nil {
@@ -92,7 +120,9 @@ func openLaunchDirectories(storeID, token string, create bool) (*launchDirectori
 	}
 	d.fds, d.names, d.created = []int{fd}, []string{""}, []bool{false}
 	parts := []string{".config", "agent-director", "launch", storeID, token}
+	path := home
 	for i, part := range parts {
+		path = filepath.Join(path, part)
 		parent := d.fds[len(d.fds)-1]
 		created := false
 		if create {
@@ -127,7 +157,7 @@ func openLaunchDirectories(storeID, token string, create bool) (*launchDirectori
 			return d, err
 		}
 		if st.Uid != uint32(os.Geteuid()) || st.Mode&0022 != 0 || (i >= 2 && st.Mode&07777 != 0700) {
-			return d, fmt.Errorf("launch directory ownership or mode is unsafe")
+			return d, &unsafeLaunchDirectoryError{path: path, owner: st.Uid, mode: uint32(st.Mode & 07777), private: i >= 2}
 		}
 	}
 	return d, nil

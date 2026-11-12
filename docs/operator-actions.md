@@ -399,6 +399,8 @@ binary changes. Never delete a row or edit `state.db`.
 
 1. Stop whatever starts agents (the caller's service, schedulers, cron jobs).
 2. List the set: `agent-director list --label <key>=<value>`.
+   Keep each row's id and `parent_id` to resume it with its parent as
+   [step 6 of the upgrade skill](../skills/upgrade-agent-director/SKILL.md#6-resume-the-agents) says.
    `ErrSchemaMismatch` (store newer): use the binary that wrote it.
    `ErrSchemaMigrationRequired` (store older): use the previous binary.
    `ErrConfigMalformed`: fix the value it names.
@@ -422,17 +424,18 @@ sessions do not prove exit. Follow the maintenance window below.
 
 This upgrade moves operational input records into SQLite. Every upgrade of an
 existing store below schema v16 crosses it, once; a fresh install or a store at
-schema v16 or later does not. `install.sh` checks the journal flags (step 3) in
-pre-flight, where a refusal changes nothing, and runs the cutover at its store
-step, after the binary swap.
+schema v16 or later does not. `install.sh` checks the journal flags (step 3) and
+inventories holders in pre-flight, before restore copies, the binary swap or
+migration authorization. A refusal changes nothing. It runs the cutover at its
+store step, after the binary swap.
 
 Run it from an independent shell as the agents' user, never as root, with
 explicit operator authorization. The administrator checks actual processes and
 never kills them:
 
 - On Linux it reads `/proc`.
-- On macOS it lists the user's processes with the system `/usr/sbin/lsof` and
-  reads access-control entries with `/bin/ls`, at those paths. Run as root, it
+- On macOS it lists the user's processes with the system `/usr/sbin/lsof`; the
+  real migration also reads access-control entries with `/bin/ls`. Run as root, it
   refuses with `process_inventory_unreadable`. macOS may ask for consent to read
   a protected folder: answer it.
 - Any other host refuses with `process_inventory_unsupported`, changing
@@ -442,6 +445,39 @@ never kills them:
 against the same install until the first has ended. A second run can let old
 binaries run unseen by the first one's checks, and if it commits the cutover,
 a release the first run restored refuses the store with `ErrSchemaMismatch`.
+
+Step 1 of the upgrade skill chooses the release tag and reads the configured
+store's schema before stopping rows. For a crossing upgrade, after the operator
+confirms the stops, maintenance window and recovery set below, check that no
+`serve` remains. The skill checks the kernel program name before checking arguments for `serve`;
+another program merely mentioning `agent-director serve` in its arguments does
+not count.
+Run the strictly read-only `install.sh --check-holders` before stopping any row.
+Repeat it with the same tag and journal flags after step 2's sweep, just before
+step 3's install. On either check's non-zero exit, stop and show the operator
+the complete output, including listed processes. If the first check refuses,
+no row has been stopped. Skip both checks and the journal flags with no crossing.
+See [Upgrade](install.md#upgrade) for the command, source selection, exit statuses
+and read-only guarantees.
+
+For a direct check with this release's candidate administrator:
+
+```sh
+/absolute/candidate/agent-director-admin --store-path /absolute/actual-state.db migrate-journal --check-only --maintenance-window --roots-complete --backup-dir /absolute/new-backup-directory --legacy-root /absolute/additional/input
+```
+
+Omit or repeat `--legacy-root` as needed. With an explicit absolute
+`--store-path`, `--check-only` checks arguments, then inventories processes for
+the current DB, its `-wal`/`-shm` and the complete legacy roots, resolving aliases.
+It leaves ownership, modes, link-component and access-control checks to the real
+migration; an unresolvable inventory path refuses with `process_inventory_unreadable`.
+Without `--store-path`, it checks arguments only and resolves no configured
+store. Both forms are strictly read-only: no config load, store open,
+migration lock, backup or sentinel write. Success is `{}` and exit 0;
+refusal is exit 1 with `details.refusal` (reason, processes and action),
+`details.cutover: "not_committed"`, `details.steps_committed: false` and no
+`details.result`. Neither check stops a process. A clear inventory does not
+establish the maintenance boundary below or replace the later migration checks.
 
 1. Establish and maintain the stopped-writer boundary above. Include the
    actual configured database and every legacy input root. The invoking
@@ -521,12 +557,26 @@ refusals need their cause resolved before retry. The operator-only
 [`snapshot-store` reference](admin-reference.md#snapshot-store) describes the
 private destination; it is not a recovery backup or migration authorization.
 
+### Unused journal flags
+
+When journal flags are given and no cutover is crossed, a completed `install.sh`
+run warns on stderr that the flags were not used and no journal backup was made.
+It names the store's schema version before this install, or says there was no store then.
+The flags' values are not checked. The warning also appears when installation
+finishes with exit 6 because MCP registration failed; a refused install adds
+no such warning. Do not treat `--journal-backup` as a backup in this case.
+
 ### Upgrade refusal reasons
 
 Each reason is `details.refusal.reason` in the envelope, and its action is
 `details.refusal.action`; the installer's message repeats both as `reason:` and
 `action:` lines. Actions name `migrate-journal`'s flag with `install.sh`'s
 spelling beside it.
+
+Pre-flight uses two refusal headlines:
+
+- Argument refusals: `install.sh: pre-flight refused the journal flags (agent-director-admin migrate-journal --check-only)`.
+- Holder or inventory refusals: `install.sh: pre-flight holder check refused (agent-director-admin migrate-journal --check-only --store-path)`.
 
 **Retry**, below, is how most actions end: re-run this release's installer with
 a new `--journal-backup` directory, which finishes any pending schema step, then
@@ -550,24 +600,27 @@ first:
 | `maintenance_boundary_required` | `--journal-maintenance-window` was not given. | No | Establish the maintenance window (steps 1 and 2 above), then pass it. |
 | `legacy_roots_not_established` | `--journal-roots-complete` was not given. | No | Declare every additional root with `--journal-legacy-root`, then pass `--journal-roots-complete`. |
 | `invoking_home_unavailable` | `HOME` is not an absolute home directory. | No | Run with `HOME` set to the invoking user's absolute home directory. |
-| `legacy_root_not_absolute` | A `--journal-legacy-root` is relative. | No | Give every root as an absolute path. |
+| `legacy_root_not_absolute` | A `--journal-legacy-root`, or the explicit `--store-path` in `--check-only`, is relative. | No | Give every root and the explicit store as an absolute path. |
 | `legacy_root_not_clean` | A `--journal-legacy-root` is not in clean form. | No | Give every root with no trailing `/`, no repeated `/` and no `.` or `..` element. |
 | `absolute_backup_required` | `--journal-backup` is missing or relative. | No | Pass a new absolute directory outside every legacy input root. |
 | `backup_inside_legacy_root` | `--journal-backup` lies inside a legacy input root. | No | Choose one outside every legacy input root. |
 | `backup_exists` | `--journal-backup` already exists. | No | Keep it (it may be an earlier attempt's backup) and choose one that does not exist yet. |
 | `backup_unreadable` | A parent of `--journal-backup` is missing or cannot be searched. | No | Choose one whose parent directories exist and can be searched. |
 
-The process and root checks, which `migrate-journal` makes before its lock,
-inside the cutover step and after its commit:
+Explicit-store `--check-only` and installer pre-flight run the process inventory
+only, leaving the store unchanged. They do not make the real migration's
+store/root path-access checks. The real `migrate-journal` makes both checks
+before its lock, inside the cutover step and after its commit. The installer's
+own pre-flight link refusal is listed separately in the shared reason's row:
 
 | Reason | Means | Store changed | Next step |
 |---|---|---|---|
 | `legacy_root_unreadable` | A legacy root, or a directory above it, cannot be read or searched. | Envelope | Make each root and its parents readable and searchable by the user running the upgrade, keep the window, then Retry. |
 | `legacy_root_symlink` | `migrate-journal`: the store path, `HOME` or a legacy root has a link in it; the invoking `HOME`'s `~/.agent-director/input` is always checked. `install.sh`, in crossing pre-flight: `~/.config/agent-director` or `~/.agent-director` is a link, including a compatibility link. | Envelope; `install.sh`'s: no | Make the paths real. For a compatibility link at `~/.agent-director`, follow the [checks and link removal below](#installsh-refuses-with-errjournalmigrationrefused). For a linked `~/.config/agent-director`, replace the link with the directory it points to. Keep the window, then Retry. |
 | `legacy_root_access_unestablished` | The store or a legacy root is not owned by and private to the user, or carries an access-control entry, or its entries cannot be read. | Envelope | Make the store and every legacy root owned by the user running the upgrade (a repair by hand, path by path, not a recursive `chown`), then private to it: `chmod 0600` the store, `chmod 0700` each root, remove any access-control entry (`chmod -N <path>`). Keep the window, then Retry. |
-| `process_inventory_unreadable` | The process inventory as a whole could not be read (on macOS, see below). | Envelope | Run as the agents' user with every mounted file system reachable or unmounted (on Linux, with `/proc` mounted and readable), keep the window, then Retry; report it if it persists. |
-| `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | Envelope | Make every mounted file system reachable or unmount it, or answer any privacy consent prompt; keep the maintenance window, then Retry. |
-| `old_or_unverified_mutators` | Listed processes may still write (roles below). | Envelope | Stop each listed `agent_director_mutator` (an agent-director program or a process holding the store or a file under a legacy root); each may run again once the cutover is verified. Keep the maintenance window, then Retry. |
+| `process_inventory_unreadable` | The process inventory as a whole could not be read, or a read-only inventory could not resolve a store, sidecar or root path (on macOS, see below). | No for read-only checks; otherwise Envelope | Make the store, sidecar and root paths resolvable; run as the agents' user with every mounted file system reachable or unmounted (on Linux, with `/proc` mounted and readable). After a read-only refusal, repeat the check; for a migration attempt, keep the window, then Retry; report it if it persists. |
+| `inventory_deadline` | The process inventory did not finish within the attempt's time limit. | No for read-only checks; otherwise Envelope | Make every mounted file system reachable or unmount it, or answer any privacy consent prompt. After a read-only refusal, repeat the check; for a migration attempt, keep the maintenance window, then Retry. |
+| `old_or_unverified_mutators` | Listed processes may still write (roles below), including holders found by either read-only check before installation. | No for read-only checks; otherwise Envelope | Stop each listed `agent_director_mutator` (an agent-director program or a process holding the store, its sidecars or a file under a legacy root); each may run again once the cutover is verified. After a read-only refusal, repeat the check; for a migration attempt, keep the maintenance window, then Retry. |
 | `process_inventory_unsupported` | The host is outside the supported set: Linux on x86_64 or arm64 (aarch64), and macOS 13 or later on arm64. | No | Run the upgrade on a supported host. |
 
 The store's causes:
@@ -1248,8 +1301,8 @@ resumes.
 
 ## `install.sh` warns that nothing schedules the sweeps
 
-`install.sh` ended with `install.sh: WARNING: nothing schedules agent-director's
-sweep and expire jobs on this machine.` (`find-missing` replaces `sweep` when
+`install.sh` ended with `install.sh: WARNING: could not find active --schedule entries
+for both agent-director's sweep and expire jobs.` (`find-missing` replaces `sweep` when
 the target binary's help does not advertise it.) It comes after `install.sh:
 done`; when the MCP registration failed (exit 6), it comes just before the last
 line, `install.sh: installed, but the MCP registration failed`. The exit status

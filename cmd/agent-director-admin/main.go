@@ -93,8 +93,9 @@ func handlers(o clisetup.Overrides) map[string]func([]string) error {
 
 // The cutover must not construct a Client: even its initial schema probe needs
 // the explicit exclusion boundary when an old authorization sentinel exists.
-// --check-only makes only the argument checks, before any config load or
-// store-path resolution, so it loads no config and opens no store.
+// --check-only makes the argument checks and, with an explicit --store-path,
+// checks for holders through the real verifier. It loads no config and
+// opens no store.
 //
 // Every error goes through writeJournalError, carrying the commit state SRD
 // SR-2.16 "Commit state" gives it. The real run catches INT, TERM and HUP from
@@ -109,7 +110,7 @@ func migrateJournalHandler(o clisetup.Overrides, args []string) error {
 	fs.BoolVar(&options.RootsComplete, "roots-complete", false, "operator established all legacy input roots")
 	fs.Var((*stringSlice)(&options.LegacyRoots), "legacy-root", "additional absolute legacy input root (repeatable)")
 	fs.StringVar(&options.BackupDir, "backup-dir", "", "new absolute stopped-writer backup directory")
-	fs.BoolVar(&checkOnly, "check-only", false, "make only the argument checks")
+	fs.BoolVar(&checkOnly, "check-only", false, "check arguments and, with --store-path, holders; write nothing")
 	done, invalid, err := parseVerbFlags(fs, args)
 	switch {
 	case invalid != "" && (checkOnly || checkOnlyArgs(args)):
@@ -120,7 +121,13 @@ func migrateJournalHandler(o clisetup.Overrides, args []string) error {
 		return err
 	}
 	if checkOnly {
-		if err := adminapi.CheckJournalMigration(options); err != nil {
+		var err error
+		if o.StorePath == "" {
+			err = adminapi.CheckJournalMigration(options)
+		} else {
+			err = adminapi.CheckJournalMigrationHolders(context.Background(), o.StorePath, options)
+		}
+		if err != nil {
 			return writeJournalRefusal(err, nil)
 		}
 		return writeJSON(struct{}{})

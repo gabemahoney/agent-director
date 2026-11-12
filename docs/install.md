@@ -95,14 +95,20 @@ as described in that contract.
 
 ## Install from a release
 
-This installs agent-director and its operator tool `agent-director-admin`:
+Choose a release tag, or find the latest with this read-only command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
 ```
 
-It downloads the binaries from the
-[latest release](https://github.com/gabemahoney/agent-director/releases/latest),
+The URL must end in `/releases/tag/<tag>`. Replace both `<tag>`s below with
+that tag to install agent-director and its operator tool `agent-director-admin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag>
+```
+
+It downloads the binaries from that release,
 sets up `~/.config/agent-director/` (and `~/.config` itself, mode `0700`, if
 it is missing), symlinks `agent-director` (see `--symlink-dir`),
 installs `agent-director-admin` at `~/.config/agent-director/admin/` (never on PATH),
@@ -119,6 +125,9 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   `--sha256 <hex>` and `--admin-sha256 <hex>`, or neither.
 - `--binary <path>`, `--admin-binary <path>`: install from explicit binaries
   of the same build.
+- `--check-holders`: strictly read-only process inventory for native-input cutover
+  holders in the current layout, then exit without installing. Use the candidate
+  source and journal flags described under [Upgrade](#upgrade).
 - `--register-mcp`: register the stdio MCP server with Claude Code (Claude Code
   only; a Codex folder's entry is made by hand, see [Set up agent-director in a
   Codex folder](settings.md#set-up-agent-director-in-a-codex-folder)). It runs
@@ -145,7 +154,7 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   for; see
   [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
 - `--journal-backup <dir>`: choose a new absolute directory for the
-  stopped-writer backup; see
+  stopped-writer backup when crossing the native-input cutover; see
   [Upgrading the native-input journal](operator-actions.md#upgrading-the-native-input-journal).
 - `--journal-legacy-root <dir>`: include an additional absolute legacy input
   root (repeat for each); see
@@ -248,15 +257,17 @@ scopes, `claude mcp get` shows one of them: `local` before `user` before
 
 Both assets must come from the same
 [release](https://github.com/gabemahoney/agent-director/releases/latest); this
-needs no clone:
+needs no clone. Choose `<tag>` with the read-only lookup in
+[Install from a release](#install-from-a-release), and replace both `<tag>`s
+below with it:
 
 ```sh
 p=linux-amd64   # or linux-arm64 or darwin-arm64
-base=https://github.com/gabemahoney/agent-director/releases/latest/download
+base=https://github.com/gabemahoney/agent-director/releases/download/<tag>
 curl -fL -o agent-director "$base/agent-director-$p"
 curl -fL -o agent-director-admin "$base/agent-director-admin-$p"
 chmod +x agent-director agent-director-admin
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --binary ./agent-director --admin-binary ./agent-director-admin
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --binary ./agent-director --admin-binary ./agent-director-admin
 ```
 
 ## Install from inside Claude Code
@@ -296,12 +307,12 @@ using the template cadence. Choose the defaults or set your own cadence in
 [Maintenance](maintenance.md#schedule-them-by-hand).
 
 What it installs, how to do it by hand and the same-environment rule are in
-[Maintenance](maintenance.md#scheduling-the-sweeps). An install that finds no
-schedule ends with a warning on stderr: see
-[`install.sh` warns that nothing schedules the sweeps](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
+[Maintenance](maintenance.md#scheduling-the-sweeps). An install that cannot find active
+`--schedule` entries for both jobs ends with a warning on stderr: see
+[The install schedule warning](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
 
 **A piped install** (`curl ... | bash -s -- ...`) has no `schedule/` beside it.
-When `--schedule` is given or nothing is scheduled yet, it fetches the same five
+When `--schedule` is given or its entries are not found, it fetches the same five
 files from `raw.githubusercontent.com` at the release tag (with
 `--from-release`) or, with `--binary`, at the full commit stamp of the binaries,
 all or none, and keeps them in `~/.config/agent-director/schedule/`. When the
@@ -328,15 +339,43 @@ install beside those files.
 
 An upgrade of an existing store below schema v16 crosses the native-input
 journal cutover, once, and needs the journal flags listed above; a fresh
-install or a store at schema v16 or later needs none. Pre-flight checks those
-flags before anything changes, and a refusal there changes nothing. Run
-[one upgrade at a time](operator-actions.md#upgrading-the-native-input-journal).
+install or a store at schema v16 or later needs none. Follow the
+[maintenance-window procedure](operator-actions.md#upgrading-the-native-input-journal)
+for check timing, the complete recovery set and writer exclusion.
 
-Before crossing it, establish the
-[maintenance window and complete recovery set](operator-actions.md#upgrading-the-native-input-journal),
-including every invoking-home input root and any custom database. Keep old
-writers excluded through committed verification. Use the journal flags listed
-above; they assert the operator's boundary and do not stop processes.
+Check holders with the candidate release and the same journal flags planned
+for installation:
+
+```sh
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag> "$@"' upgrade-agent-director --check-holders --journal-maintenance-window --journal-roots-complete --journal-backup /absolute/new-backup-directory --journal-legacy-root /absolute/additional/input
+```
+
+The `pipefail` wrapper makes a failed download fail the check.
+
+Choose `<tag>` once as in [Install from a release](#install-from-a-release)
+and reuse it for both checks and installation, or use `--binary` and
+`--admin-binary` for matching local candidates. Include the original install's
+other flags and any additions in both checks and installation too. Omit the last
+root pair if none is needed; repeat it for every extra root. This strictly
+read-only mode allows live rows. It exits 0 when clear or 5 on refusal,
+listing any holders. With no store, schema v0 or schema v16 or later, it
+reports no check is needed and exits 0. Argument, dependency and source-selection
+errors retain their usual exit codes. Temporary downloads and private snapshots
+are removed at exit; HOME files, the store and sidecars,
+backups, sentinels, hooks, MCP registrations, schedules and links stay unchanged.
+
+The inventory checks the current configured store, its sidecars and the complete
+input roots, resolving aliases. With a directory move due, it checks the old
+store before the move. It does not refuse a store or root merely because it is
+not yet private. Ownership, modes, link components and access-control entries
+are checked by the real migration after the installer prepares the paths.
+An unresolvable inventory path still refuses with `process_inventory_unreadable`.
+
+The candidate administrator also offers strictly read-only
+`--store-path /absolute/actual-state.db migrate-journal --check-only` with
+the corresponding journal flags; without `--store-path`, it checks arguments
+only. See the [operator procedure](operator-actions.md#upgrading-the-native-input-journal).
+
 Recovery belongs in the
 [operator runbook](operator-actions.md#going-back-to-the-previous-release).
 
@@ -435,6 +474,9 @@ holds the old name of the arguments key is refused at spawn, naming
 **After the upgrade:**
 
 - Restart every `serve` and every caller, TypeScript clients included.
+- Resume each agent stopped for the upgrade, parents first, with
+  `AGENT_DIRECTOR_INSTANCE_ID=<its recorded parent>` set for each child's
+  command only; follow [step 6 of the upgrade skill](../skills/upgrade-agent-director/SKILL.md#6-resume-the-agents).
 - Cursor gateway refusal reporting requires both the caller and the running
   gateway to be agent-director 0.17.2 or later. With a pre-0.17.2 gateway,
   `send-keys` returns `{}` after the 2 s wait for refused text until the row is

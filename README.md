@@ -38,8 +38,12 @@ file, and tmux.
 
 ## Install
 
+Find the latest release tag with this read-only command, then replace both
+`<tag>`s in the install command with the tag at the end of its URL:
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag>
 ```
 
 This installs `agent-director` on your PATH and creates
