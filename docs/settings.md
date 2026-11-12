@@ -1,256 +1,159 @@
 # Settings
 
-How agent-director's per-Spawn settings layer over the agent's own. For
-Claude Code that is the `--settings` payload over Claude Code's settings
-files; for Codex it is a per-launch block on Codex's command line (see
-[What a Codex launch carries](#what-a-codex-launch-carries)). This document
-is the operator's reference for predicting what permissions, hooks, and
-scalars a Spawn will actually see: the agent does the merge itself, and
-agent-director's behavior is a direct consequence of that merge.
-
-For Claude Code's own description of settings, see the upstream docs:
-<https://docs.claude.com/en/docs/claude-code/settings>.
-
-The Claude Code merge sections below describe `claude` Spawns; the
-template sections and `inject_help_hook` cover all three agents, and
-[Set up agent-director in a Codex folder](#set-up-agent-director-in-a-codex-folder)
-covers the entries a Codex folder needs by hand.
+agent-director adds launch settings without rewriting your agent's configuration
+files. This page covers that layer and agent-director templates. For native
+settings, see the [Claude Code settings reference](https://docs.claude.com/en/docs/claude-code/settings)
+and [Codex configuration reference](https://developers.openai.com/codex/config-reference).
 
 ## What `--settings` carries
 
-Every `spawn` of a Claude agent synthesizes a single inline JSON document and hands
-it to `claude` via `--settings <inline-json>`. The payload arrives byte-for-byte
-regardless of which shell the operator has configured.
+Claude launches receive inline JSON through `--settings` containing:
 
-The synthesized payload contains:
+- State-tracking `hooks`, described in [Hooks](hooks.md#the-eleven-state-tracking-hooks).
+- Optional `permissions.allow`, `deny` and `ask` from spawn parameters, plus
+  `disable_ask_user`. See [Permissions](permissions.md).
+- `statusLine` and `subagentStatusLine` callbacks for
+  [experimental context fullness](caller-contract.md#experimental-context-fullness).
+  They forward the input, output and exit status of status-line commands in
+  user, project and local settings. A status line added only by a
+  `[launch] claude_path` wrapper's own `--settings` is not forwarded.
+  Set `[defaults] disable_context_fullness = true` to omit both callbacks
+  and leave Claude Code's status lines alone.
 
-- **`hooks`** — eleven state-tracking entries (`SessionStart`,
-  `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
-  `Stop`, `Notification`, `SessionEnd`, `PermissionRequest`, `SubagentStart`,
-  `SubagentStop`), each pointing at the running `agent-director` binary's
-  absolute path. See `hooks.md` for the per-event mapping.
-- **`permissions`** (optional) — `allow` / `deny` / `ask` arrays
-  populated from the spawn's `allow` / `deny` / `ask` params
-  (`--allow` / `--deny` / `--ask` on the CLI) plus the
-  `disable_ask_user` config flag. See `permissions.md`.
-- **`statusLine`** and **`subagentStatusLine`** — the experimental
-  [context fullness](caller-contract.md#experimental-context-fullness)
-  callbacks: each runs `agent-director hook --context-source <key>`, which
-  records the context window and runs the status-line command found in the
-  user, project and local settings files with its input, output and exit
-  status unchanged. Only those files are read: a status line that a
-  `[launch] claude_path` wrapper adds in its own `--settings` is not seen,
-  and the callback forwards to the command those files name instead. Set
-  [`[defaults] disable_context_fullness`](configuration.md#keys) to `true`
-  to omit both keys, so Claude Code's own status lines stand.
-
-agent-director never writes hooks or permissions to disk on behalf of a
-Spawn. The synthesized JSON exists only for the lifetime of the tmux
-session, and no cleanup is needed. Separate native diagnostics and delivery
-evidence are described in [Ordinary delivery launch settings](#ordinary-delivery-launch-settings).
+This JSON lasts for the launch and needs no cleanup. Claude Code merges it
+with its own settings; see [Fire order](hooks.md#fire-order) for hook layering
+and [Permissions](permissions.md#per-tier-concatenation) for permission lists.
 
 ## Cursor launch settings
 
-`disable_ask_user` accepts either value for Cursor; neither enables questions,
-with relay mode on or off.
-The enforced behavior and permission-list handling are owned by
-[Permissions](permissions.md#cursor-spawns). With `inject_help_hook` enabled,
-each fresh, latest-loaded or confirmed replacement conversation receives the
-current AD guidance through a session-scoped stdio MCP registration. With it
-off, no guidance server is registered. Delivery and compaction limits are in
-[Hooks](hooks.md#what-agent-director-help-actually-outputs).
+Cursor uses managed session setup rather than Claude's `--settings`.
+With `inject_help_hook` enabled, fresh, latest-loaded and confirmed replacement
+conversations receive guidance through a session-scoped stdio MCP registration.
+No dashboard registration or native-home edit is required. Delivery and
+compaction limits are in [Hooks](hooks.md#what-agent-director-help-actually-outputs).
 
-This is the supported managed Cursor MCP path: AD supplies the registration
-through ACP session setup with explicit routing. It requires no dashboard MCP
-registration or native-home configuration edit. Caller workflows are in
-[Usage](usage.md#drive-a-spawn-from-another-agent); shell reachability and process
-replacement limits are in the
-[caller contract](caller-contract.md#cursor-operation-boundaries).
+`disable_ask_user` accepts either value but neither enables questions.
+[Cursor permissions](permissions.md#cursor-spawns) owns enforced behavior and
+permission-list handling.
 
-Cursor pre-trust never reports `ok`: `no_pre_trust` yields `skipped`, otherwise
-the unsupported attempt yields `failed` with a warning and launch continues.
-No validated Cursor trust grant is made. Each spawn or reuse saves its own
-`no_pre_trust` choice; resume preserves it until the next spawn or reuse.
-Pre-trust reads or writes no Cursor authentication or configuration files,
-adds no policy bypass and approves no dialog. Reporting remains mandatory;
-neither outcome proves readiness or changes the applicable permission policy.
-Fresh launch and account limits are in
-[Usage](usage.md#fresh-cursor-use).
+Cursor pre-trust grants no trust: `no_pre_trust` reports `skipped`; otherwise
+the unsupported attempt reports `failed` with a warning and launch continues.
+Neither establishes readiness or changes permission policy. It edits no Cursor
+authentication or configuration files and approves no dialog. Spawn or reuse
+saves its own `no_pre_trust`; resume retains it. See
+[Fresh Cursor use](usage.md#fresh-cursor-use) for supported launch and account limits.
 
 ## What a Codex launch carries
 
-Every launch of a Codex agent (`spawn`, a reuse and `resume`) adds a block of
-settings to Codex's command line. The block exists only for that launch:
-agent-director writes it to no Codex folder, no file in the Spawn's cwd and no
-project `.codex/`, and it needs no cleanup. It holds:
+Every Codex spawn, reuse and resume adds a command-line settings block.
+It writes nothing in the Codex folder, project `.codex/` or spawn's cwd.
 
-- **No shared background service.** The agent runs alone; a shared Codex
-  service that is already running is left alone and unused.
-- **Hook entries and their trust.** Eight hook entries (see
-  [Hooks](hooks.md#the-codex-entry-set)), each trusted by its own hash, so
-  Codex shows no hook-review dialog for them in any launch, `no_pre_trust` and
-  a failed pre-trust included.
-- **The typing setting.** Codex's paste-burst delay is disabled. Ordinary
-  delivery support and submission confirmation are covered by the
-  [caller contract](caller-contract.md#ordinary-text-submission).
-- **The question tool, off.** While `disable_ask_user` is on, Codex's question
-  tool is turned off for the launch (see
-  [Permissions](permissions.md#disable_ask_user-config)).
-- **Approval of input to a running command, on.** Text sent to a command that
-  is already running asks for approval like any other command, except input to
-  a command running inside Codex's sandbox, which asks nothing and is never
-  relayed. A caller's own `--disable write_stdin_approval` turns it off again.
-- **`BASH_ENV` set to empty.** The agent's shell then reads no startup file
-  through `BASH_ENV`. A `BASH_ENV` in the spawn's `extra_env` (or its
-  template's) wins. The agent's own commands run without a `BASH_ENV` file
-  unless you set one; one that prints reaches the hooks too (see
-  [The shell between Codex and the hook](hooks.md#the-shell-between-codex-and-the-hook)).
-- **Folder trust and the hook-review bypass,** only when pre-trust is `ok`
-  (see [Pre-trust for Codex](#pre-trust-for-codex)). The folder-trust setting
-  replaces any `projects` table the caller passes for that launch.
+- Runs without a shared background service; existing services are unused.
+- Adds the [Codex hook entries](hooks.md#the-codex-entry-set), trusted even
+  with `no_pre_trust` or failed pre-trust. Your own hooks remain separate.
+- Disables the paste-burst delay. See
+  [Ordinary text submission](caller-contract.md#ordinary-text-submission).
+- Disables the question tool while `disable_ask_user` is on; see
+  [Permissions](permissions.md#disable_ask_user-config).
+- Enables `write_stdin_approval`: input to a running command asks for approval,
+  except inside Codex's sandbox, where it is not relayed. Your
+  `--disable write_stdin_approval` turns this off.
+- Sets `BASH_ENV` empty unless the call or template's `extra_env` overrides it.
+  Keep [shell startup output](hooks.md#the-shell-between-codex-and-the-hook) silent.
+- Adds folder trust and a hook-review bypass only when
+  [pre-trust](#pre-trust-for-codex) is `ok`. Folder trust replaces any
+  `projects` table in the caller's launch arguments.
 
 ### Ordinary delivery launch settings
 
-A fresh launch with the arguments supported by
-[Ordinary text submission](caller-contract.md#ordinary-text-submission) and
-exactly Codex 0.159.2 or Claude Code 2.1.280 gets additional launch settings.
-Resumed conversations, unsupported versions and other agent arguments do not
-get these additions. Native confirmed ordinary delivery requires Linux;
-when native capability is unavailable, literal input remains available as
-described in the caller contract.
+A fresh launch using the arguments supported by
+[Ordinary text submission](caller-contract.md#ordinary-text-submission), with
+exactly Codex 0.159.2 or Claude Code 2.1.280, receives these additions.
+Resumed conversations, unsupported versions and other agent arguments do not.
+Native confirmed delivery requires Linux; literal input remains available
+without that capability.
 
 - **Claude Code:** a generated `--session-id`,
-  `--debug-file <evidence-dir>/claude-debug.log` and `-d hooks`. The launch
-  receives agent-director's `HOME` and the inspected `CLAUDE_CONFIG_DIR`:
-  the spawn's `extra_env` value when present, otherwise agent-director's
-  environment, falling back to `$HOME/.claude` when empty. A relative config
-  directory or an existing or unreadable `keybindings.json` disables native
-  confirmed delivery; these additions still apply to that launch.
-- **Codex:** `-c log_dir="<evidence-dir>"`,
-  `RUST_LOG=off,codex_tui=info`, a complete `-c tui.keymap=…` set to Codex
-  0.159.2's built-in bindings, and `-c tui.vim_mode_default=false`. These
-  replace configured user, project and cloud keybindings and start with Vim
-  disabled for this launch. They apply even when `extra_env` supplies
-  `RUST_LOG`. `CODEX_HOME` comes from `extra_env` when supplied; otherwise
-  Codex uses the tmux server's environment and its normal home default.
-  agent-director does not copy its own `CODEX_HOME` into the launch. A
-  higher-priority `/etc/codex/managed_config.toml` containing keymap or Vim
+  `--debug-file <evidence-dir>/claude-debug.log` and `-d hooks`.
+  The launch receives agent-director's `HOME` and the selected
+  [`CLAUDE_CONFIG_DIR`](multi-account.md). A relative config directory or
+  an existing or unreadable `keybindings.json` disables native confirmed
+  delivery, but these additions still apply.
+- **Codex:** `-c log_dir="<evidence-dir>"`, `RUST_LOG=off,codex_tui=info`,
+  the complete built-in Codex 0.159.2 keymap through `-c tui.keymap=…`, and
+  `-c tui.vim_mode_default=false`. These override user, project and cloud
+  keybindings and start with Vim disabled. The logging setting overrides
+  `extra_env.RUST_LOG`. `CODEX_HOME` follows
+  [Codex group folders](multi-account.md#codex-group-folders).
+  A higher-priority `/etc/codex/managed_config.toml` containing keymap or Vim
   settings, or one that cannot be read or parsed, disables native confirmed delivery.
 
-The evidence directory is
+Diagnostics persist without automatic cleanup in
 `~/.config/agent-director/input/<store_id>/<launch_token>/`, under
-agent-director's `HOME`, even with a custom database path or agent config
-directory. It is private (0700; evidence files and the adjacent lock are 0600)
-and persists after the session exits. It retains provider diagnostics and logs;
-provider transcripts remain at their provider paths. Operational launch,
-current-attempt and request-history records, full normalized prompts and exact
-retained transcript proof are private records in the configured SQLite
-database. The adjacent lock synchronizes writers; it carries no delivery
-authority. There is no automatic cleanup. Follow
-[Operator actions](operator-actions.md#unresolved-ordinary-input) for unresolved
-input.
+agent-director's `HOME`, even with a custom database or agent config path.
+The directory is private (0700); evidence files and its adjacent lock are 0600.
+Provider transcripts stay at provider paths. Prompts and retained input proof
+are private database records. For inspection and recovery, see
+[Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
 
 ### Codex's layers
 
-Codex reads its own settings in layers, lowest first: the user's, the group's
-Codex folder and the project's. agent-director's per-launch block is one more
-layer after them and wins over every pass-through argument at `spawn` and every replayed
-argument at `resume`: it stands after the last of those arguments and before
-any `--`, so what follows a `--` is the prompt, as Codex reads it. At `resume`
-the block comes after `resume <id>` and the replayed arguments.
+agent-director's command-line block overrides Codex's native settings and the
+caller arguments supplied at spawn or replayed at resume. It appears before
+any `--` separating the prompt.
 
-agent-director never adds a second `--no-daemon`, a second
-`--dangerously-bypass-hook-trust` (with pre-trust `ok`) or a second
-`--enable write_stdin_approval` when the caller's own arguments already carry
-one. Codex itself rejects a flag repeated in the caller's arguments.
-
-The arguments that would fight the block are refused at `spawn` with
-`ErrSpawnDeniedFlag` (see the
-[caller contract](caller-contract.md#spawn-and-template-input-refusals)).
+agent-director does not duplicate a caller's `--no-daemon`,
+`--dangerously-bypass-hook-trust` (with pre-trust `ok`) or
+`--enable write_stdin_approval`. Codex rejects repetitions within the caller's
+own arguments. Conflicting arguments and their refusals are in the
+[caller contract](caller-contract.md#spawn-and-template-input-refusals).
 
 ### Pre-trust for Codex
 
-Pre-trust for a Codex agent marks only the Spawn's cwd, for that launch only.
-It writes no file, takes no lock and touches no Codex folder. The outcome is
-`pre_trust` on the result:
+Pre-trust applies only to the spawn's cwd for that launch. It writes no Codex
+file. The result's `pre_trust` is:
 
-- `ok`: the launch carries the folder trust and the bypass of Codex's hook
-  review, so Codex does not stop at its folder-trust or hook-review dialog.
-- `skipped`: `no_pre_trust` is set, on the spawn or, for `resume`, on the row.
-  The launch carries neither. Codex asks about the folder, and about the user's,
-  the group's and the project's own hooks, as it finds them, with the trust it
-  recorded for them. agent-director's own hooks stay trusted.
-- `failed`: `CODEX_HOME` in `extra_env` is not an absolute path (see
-  [Multi-Account](multi-account.md#codex-group-folders)). One warning line goes
-  to stderr, the launch goes ahead as for `skipped`, and the agent may stop at
-  Codex's folder-trust prompt.
+| Result | Launch behavior |
+| --- | --- |
+| `ok` | Adds folder trust and bypasses hook review |
+| `skipped` | `no_pre_trust` is set; Codex uses its recorded trust for your folders and hooks |
+| `failed` | Launch continues without folder trust or hook-review bypass; see [input handling](caller-contract.md#spawn-and-template-input-refusals) |
 
-`-C` / `--cd` or `--worktree` in the agent's arguments moves Codex's working
-root away from the Spawn's cwd, so the trusted folder may not be the one Codex
-works in and Codex may ask.
-
-**Folder trust lasts one launch only.** A later Codex run by hand in that
-folder asks for trust again. Claude Code's pre-trust, by contrast, persists in
-its file. Answer Codex's prompt when running it by hand.
+agent-director's own hooks stay trusted in every case. Use an absolute
+`CODEX_HOME` when selecting a [group folder](multi-account.md#codex-group-folders).
+`-C`, `--cd` or `--worktree` can move Codex away from the trusted cwd.
+Folder trust does not persist to later manual runs; Claude Code's pre-trust does.
 
 ## `defaults.inject_help_hook` config
-
-`config.toml`:
 
 ```toml
 [defaults]
 inject_help_hook = true
 ```
 
-Off by default. When true, every Claude Spawn's synthesized `--settings`
-appends one extra `SessionStart` hook entry whose command is the
-absolute install path `~/.config/agent-director/bin/agent-director help`
-(post `~` expansion). The state-tracking SessionStart entry is unchanged
-and fires alongside it. Every Codex launch carries a help entry of its own in
-its per-launch block while the setting is on (see
-[Hooks](hooks.md#what-agent-director-help-actually-outputs)), and none when it
-is off; the persistent pair described there is Claude-only. Cursor uses the
-session-scoped delivery described above. A Codex folder gets
-a help entry for the agents you start there by hand (see [Set up
-agent-director in a Codex folder](#set-up-agent-director-in-a-codex-folder)),
-which also covers a hand-made entry that names the old directory.
+The default is `false`. `install.sh` sets it to `true` unless `--no-hooks`;
+the interactive persistent-help choice controls it too. `uninstall.sh`
+reverses that setting. See [Installation](install.md#claude-code-and-codex).
 
-The flag exists to cover the dynamic case the operator's static
-`~/.claude/settings.json` injection cannot reach: a Spawn that inherits
-(or is given) a fresh `CLAUDE_CONFIG_DIR` whose `settings.json` does not
-yet carry the help hook. With this flag set, every Claude or Codex Spawn this binary
-creates is self-describing to its first turn regardless of the config
-dir, Codex Spawns included.
+When enabled, managed Claude and Codex launches add a `SessionStart` help
+entry using the absolute installed binary path
+`~/.config/agent-director/bin/agent-director`. This works with a separate
+`CLAUDE_CONFIG_DIR` that has no persistent help hook. Cursor receives
+session-scoped MCP guidance instead. Turning this off does not disable
+state reporting.
 
-`install.sh` sets the flag whether or not Claude Code is installed, so a
-host with only Codex gets it too. The static hook write in
-`~/.claude/settings.json` happens only with Claude Code installed (see
-[Claude Code and Codex](install.md#claude-code-and-codex)). The Q4 "inject
-persistent help hooks?" answer drives both, and `--no-hooks` skips both.
-`uninstall.sh` reverses both.
-
-The hook command is an absolute path rather than a bare
-`agent-director` because the spawned Claude's PATH may not include
-`~/.local/bin`, and the hook fires before any shell-rc manipulation
-could amend PATH.
+The installer also adds [persistent Claude help hooks](hooks.md#persistent-hooks-the-help-on-sessionstart-pair).
+Manual Codex sessions need the entry below.
+[Hooks](hooks.md#what-agent-director-help-actually-outputs) describes delivery.
 
 ## Set up agent-director in a Codex folder
 
-agent-director registers nothing with Codex and writes nothing in a Codex
-folder, so each Codex folder gets its entries by hand: the default folder
-(`~/.codex`) and every group folder (see
-[Codex group folders](multi-account.md#codex-group-folders)). Both entries go
-in that folder's `config.toml`. Both name the installed binary,
-`~/.config/agent-director/bin/agent-director`; an entry that names the old
-directory needs the new path (see [Upgrade](install.md#upgrade)).
+Add these two entries by hand to `config.toml` in the default Codex folder
+(`~/.codex`) or each [group folder](multi-account.md#codex-group-folders).
+Replace `/home/you` with your home directory.
 
-**The MCP entry** lets an agent that runs in the folder call agent-director.
-Codex starts the server with only a small environment of its own plus the
-variables `env_vars` names. agent-director reads its caller's id from
-`AGENT_DIRECTOR_INSTANCE_ID` and its tmux server from `TMUX` and `TMUX_TMPDIR`,
-so the entry forwards all three. Without them an agent it spawns gets no
-`parent_id` and may land on another tmux server. `command` is an absolute path:
-replace `/home/you` with your home directory.
+The MCP entry forwards the caller id and tmux environment so child spawns
+have the correct parent and tmux server:
 
 ```toml
 [mcp_servers.agent-director]
@@ -259,20 +162,9 @@ args = ["serve", "--stdio"]
 env_vars = ["AGENT_DIRECTOR_INSTANCE_ID", "TMUX", "TMUX_TMPDIR"]
 ```
 
-By default Codex asks before each agent-director call over MCP, so every call
-is an approval: a person answers it, or, for an agent agent-director launched with
-`relay_mode` on, the orchestrator does (see [What is
-relayed](permissions.md#what-is-relayed)). "Always allow" adds a rule to the
-whole folder (see [Codex spawns](permissions.md#codex-spawns)). What a caller
-gets, and how to reach agent-director from a Codex agent's shell, is in
-[Drive a Spawn from another agent](usage.md#drive-a-spawn-from-another-agent).
-
-**The help entry** gives an agent in the folder the verb list at its session
-start, as `inject_help_hook` does for agents agent-director launches. The
-command sets `AGENT_DIRECTOR_AGENT=codex`, which makes `help` print Codex's
-structured form (without it `help` prints the plain list, which Codex
-rejects), and runs the installed path's `help`. `additionalContextLimit` of
-4000 lets Codex deliver the whole list.
+The help entry supplies the verb list at session start.
+`AGENT_DIRECTOR_AGENT=codex` selects Codex's structured response;
+`additionalContextLimit = 4000` allows the whole list:
 
 ```toml
 [[hooks.SessionStart]]
@@ -283,182 +175,72 @@ command = 'AGENT_DIRECTOR_AGENT=codex "$HOME/.config/agent-director/bin/agent-di
 additionalContextLimit = 4000
 ```
 
-Codex asks once to review and trust the entry, at the next start of an agent in
-the folder (or in `/hooks`), and asks again whenever the entry changes. When the
-list arrives is in [What `agent-director help` actually
-outputs](hooks.md#what-agent-director-help-actually-outputs). An agent
-agent-director launches in a folder that has this entry while `inject_help_hook`
-is on gets the list twice, once from each entry.
+Codex asks to trust this help entry when it is added or changed.
+With this entry and `inject_help_hook` on, a managed launch receives the list
+twice. MCP approvals are covered by
+[Codex permissions](permissions.md#codex-spawns), and calling options by
+[Drive a spawn from another agent](usage.md#drive-a-spawn-from-another-agent).
 
-**Removing both.** Delete the `[mcp_servers.agent-director]` table and the
-`[[hooks.SessionStart]]` pair from the folder's `config.toml`. `uninstall.sh`
-leaves both in place. Codex may also keep its own record that you trusted the
-help entry; agent-director does not write or remove it.
-
-## The five-tier merge
-
-Claude Code merges settings from up to five sources in this order
-(lowest precedence first; higher tiers win on scalar conflicts):
-
-1. `userSettings` — `~/.claude/settings.json`
-2. `projectSettings` — `.claude/settings.json` in the Spawn's cwd
-3. `localSettings` — `.claude/settings.local.json` in the cwd
-4. `flagSettings` — what agent-director passes via `--settings`
-5. `policySettings` — managed-policy file (organization-wide)
-
-The merge rules depend on the value type at each key:
-
-- **Arrays** (e.g. `permissions.deny`, `hooks.SessionStart`)
-  — concatenated, lower tier first. *No tier replaces another.*
-- **Objects** (e.g. `permissions`, `hooks`, `mcpServers`) — recursed
-  into; each sub-key follows its own type's rule.
-- **Primitives** (e.g. `theme`, `model`, `defaultMode`) — higher tier
-  wins outright.
-
-### Worked example: `permissions.allow`
-
-| Tier | `allow` entries |
-| ---- | --- |
-| user | `["Bash(npm test)"]` |
-| project | `["Bash(go test)"]` |
-| per-Spawn (via `allow`) | `["WebFetch"]` |
-
-Effective `allow` for the Spawn: `["Bash(npm test)", "Bash(go test)", "WebFetch"]`.
-
-Claude Code merges these for us; agent-director does not read the user
-or project tiers itself. A change to `~/.claude/settings.json` between
-Spawns reaches the next Spawn without any agent-director restart.
+To remove the setup, delete the `[mcp_servers.agent-director]` table and the
+help entry's `[[hooks.SessionStart]]` pair. `uninstall.sh` leaves both in place,
+along with Codex's own trust record. Entries must name the current installed
+binary path; see [Upgrade](install.md#upgrade).
 
 ## Clean-slate Spawns
 
-To suppress the user (and optionally project) tiers, pass
-`--setting-sources` *through* `agent_args`:
+Pass Claude Code's `--setting-sources` through `agent_args` to exclude selected
+user, project or local settings:
 
-```
+```sh
 agent-director spawn --cwd /tmp --agent claude -- --setting-sources project,local
 ```
 
-- `--setting-sources` accepts a comma-separated subset of `user`,
-  `project`, `local`.
-- `flagSettings` (i.e., agent-director's `--settings`) and
-  `policySettings` are unconditional — they always apply, regardless of
-  `--setting-sources`.
-- agent-director's denied-flag list explicitly excludes
-  `--setting-sources` for this reason (`--settings` is denied because it
-  would conflict with our hook synthesis; `--setting-sources` is safe).
-
-The four-tier merge result of the above example would drop the user's
-`Bash(npm test)` entry but keep the project's `Bash(go test)` and the
-per-Spawn `WebFetch`.
-
-## Hook fire order
-
-Lower-precedence tiers are merged into the accumulator first, so the
-final `hooks.<event>` array is:
-
-```
-[ ...userSettings.hooks.<event>,
-  ...projectSettings.hooks.<event>,
-  ...localSettings.hooks.<event>,
-  ...flagSettings.hooks.<event>,
-  ...policySettings.hooks.<event> ]
-```
-
-Claude Code executes entries in array order. Hooks the operator has
-installed via `~/.claude/settings.json` fire *before*
-agent-director's. Agent-director records the spawn's state when its tracking
-hook runs.
-In relay mode, its permission hook fires last and returns the decision
-to Claude Code.
-
-A misbehaving user hook can still suppress agent-director's state
-recording — see `hooks.md` for the caveat and mitigations.
+This excludes user settings but keeps project and local settings.
+agent-director's `--settings` and managed policy still apply. Native flag
+details are in the [Claude Code CLI reference](https://docs.claude.com/en/docs/claude-code/cli-reference).
 
 ## Templates and per-call merge
 
-An agent-director **template** is a TOML file at
-`~/.config/agent-director/templates/<name>.toml` that bakes a default
-spawn-parameter set. A spawn's `template` param (`--template <name>` on
-the CLI) layers the per-call params on top per the merge rules below.
-
-Templates are not the same as Claude Code's `settings.json` tier
-stack. The tier stack belongs to Claude Code; templates belong to
-agent-director and feed *into* the `--settings` JSON the supervisor
-synthesizes for each spawn.
+A template at `~/.config/agent-director/templates/<name>.toml` supplies spawn
+defaults. `--template <name>` selects it. This merge is separate from the
+agent's native settings merge.
 
 ### Merge rules
 
-| Field shape | Rule |
-|---|---|
-| Scalar (`cwd`, `relay_mode`, `agent`) | Per-call non-empty REPLACES; per-call empty falls back to template. |
-| Map (`extra_env`, `labels`) | Top-level merge. Template keys survive; per-call keys win on collision. |
-| Permissions arrays (`permissions.allow` / `deny` / `ask`) | CONCAT. Template entries first, per-call appended. This mirrors how Claude Code itself merges its `permissions` block across settings tiers. |
-| `agent_args` | A per-call list REPLACES the template's wholesale; otherwise the template's are inherited, if they belong to the spawn's agent (below). |
+| Field | Rule |
+| --- | --- |
+| Scalars (`cwd`, `relay_mode`, `agent`) | Non-empty per-call value replaces the template; empty falls back |
+| Maps (`extra_env`, `labels`) | Merge keys; per-call keys win |
+| `permissions.allow`, `deny`, `ask` | Concatenate template entries then per-call entries |
+| `agent_args` | Supplied per-call list replaces the template's entire list; otherwise inherit for the same agent |
 
-Omitting per-call permissions inherits the template's entries
-unchanged.
-
-A template that sets the arguments key under its old name is refused with
-`ErrTemplateMalformed`, which names `agent_args`; the key is not ignored.
-
-`spawn` validates the merged `extra_env`: an `AGENT_DIRECTOR_*` key,
-`HOME` with any value, or a key that is not a valid env-var name (empty,
-or containing `=` or a NUL byte, such as `"CLAUDE_CONFIG_DIR=/x"`), from
-the template or the call, returns `ErrReservedEnvKey` and launches
-nothing; the description says which. `make-template` runs the same check
-on the template's `extra_env` and refuses such a key with the same error,
-writing no template and replacing none. A template saved before that
-check, or edited by hand, can still hold one; each `spawn` that uses it
-is refused. To give a templated agent its own config, set an
-absolute `CLAUDE_CONFIG_DIR` (Claude Code) or `CODEX_HOME` (Codex) under
-`[extra_env]` instead of `HOME`.
+Omitted permission lists inherit unchanged. `extra_env` keys must be valid
+environment names; `HOME` and `AGENT_DIRECTOR_*` are reserved.
+For account selection, use [Multi-Account](multi-account.md).
+Input refusals belong to the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
 
 ### The agent and its arguments
 
-A spawn needs an agent, `claude`, `codex` or `cursor`: the per-call `agent` (`--agent`
-on the CLI), else the template's. With neither, `spawn` is refused with
-`ErrAgentMissing`; any other value, with `ErrAgentInvalid` (the value is
-case-sensitive). A template names its agent with `agent`.
+Choose the case-sensitive `claude`, `codex` or `cursor` through the call's
+`agent`, otherwise the template's. A template with `agent_args` must name
+its `agent`; those arguments are inherited only for that agent.
 
-A template's `agent_args` belong to the template's `agent`. A spawn inherits
-them only when the agent it resolves to is that agent; when it is another,
-`spawn` is refused with `ErrAgentArgsMismatch`. A per-call `agent_args` list
-that the call supplies replaces the template's wholesale and inherits
-nothing, so it is never refused for a mismatch. On MCP and in Go an explicit
-empty list counts as supplied (the spawn gets no agent arguments, whatever
-the template says). On the CLI and in TypeScript an empty list counts as
-none: the template's are inherited when the agent is the same, and
-otherwise `spawn` is refused with `ErrAgentArgsMismatch`. A template with `agent_args` and
-no `agent` is refused with `ErrTemplateAgentMissing`, by `make-template` and
-when a `spawn` loads it.
-
-The refusals, and what to do for each, are in the
-[caller contract](caller-contract.md#spawn-and-template-input-refusals).
+An explicit empty `agent_args` list replaces the template on MCP and Go.
+On CLI and TypeScript an empty list counts as omitted. For another agent,
+supply replacement arguments or use its own template. See
+[input refusals](caller-contract.md#spawn-and-template-input-refusals).
 
 ### Reserved per-invocation params
 
-`agent` is not one of these: a template may bake it. A template MUST NOT
-bake any of:
-
-- `template` (recursion would be ill-defined)
-- `instance_id` (must be per-invocation for uniqueness)
-- `tmux_session_name` (derived from the id + cwd)
-- `reuse_finished` (applies to one `spawn` call only, and only with an
-  explicit `instance_id`)
-
-`make-template` refuses them with `ErrInvalidFlags`: on the CLI as
-undefined flags, over MCP as unknown parameters. A hand-edited template
-carrying any of them surfaces `ErrTemplateMalformed` on load.
+Templates cannot set `template`, `instance_id`, `tmux_session_name` or
+`reuse_finished`. `agent` is allowed.
 
 ### One spelling per key
 
-agent-director matches table and key names regardless of letter case, so
-a hand-edited template that sets one key under names differing only in
-letter case (`RELAY_MODE` and `relay_mode`, or `allow` under both
-`[permissions]` and `[Permissions]`) surfaces `ErrTemplateMalformed` on
-load, naming each spelling. Keep one and remove the others. A single
-spelling (`RELAY_MODE` alone) loads. Keys under `[extra_env]` and
-`[labels]` keep their letter case: `FOO` and `foo` there are two entries.
+Table and key names are case-insensitive. Keep one spelling per key, including
+across tables such as `[permissions]` and `[Permissions]`.
+Keys within `[extra_env]` and `[labels]` remain case-sensitive:
+`FOO` and `foo` are distinct.
 
 ### Example
 
@@ -471,38 +253,16 @@ agent_args = ["--model", "opus"]
 
 [labels]
 project = "widget"
-env     = "dev"
 
 [permissions]
-allow = ["Bash(npm test)", "Bash(npm run lint)"]
+allow = ["Bash(npm test)"]
 deny  = ["Bash(rm)"]
 ```
 
 ```sh
-agent-director spawn --template dev --label other=bar --allow 'Bash(jq)'
+agent-director spawn --template dev --label env=dev --allow 'Bash(jq)'
 ```
 
-Resulting per-spawn merge:
-
-- `cwd`            → `/home/me/repos/widget` (template)
-- `relay_mode`     → `off` (template)
-- `agent`          → `claude` (template; no per-call `--agent`)
-- `agent_args`     → `["--model", "opus"]` (template; no per-call replacement)
-- `labels` → `{project=widget, env=dev, other=bar}` (merged)
-- `permissions.allow` → `["Bash(npm test)", "Bash(npm run lint)", "Bash(jq)"]` (concat)
-- `permissions.deny`  → `["Bash(rm)"]` (template only)
-
-## Where to go next
-
-- `hooks.md` — per-event state tracking and reporting boundaries for each agent.
-- `permissions.md` — how the `permissions` block accumulates, and the
-  question-tool behavior for each agent.
-- `multi-account.md` — running Spawns against a different Claude or Codex
-  account.
-- `architecture.md` — package layout, state machine, parameter pipeline.
-
-## References
-
-- Claude Code settings: <https://docs.claude.com/en/docs/claude-code/settings>
-- Claude Code CLI flags (incl. `--setting-sources`):
-  <https://docs.claude.com/en/docs/claude-code/cli-reference>
+The spawn inherits the cwd, agent, arguments and deny list. Its labels are
+`project=widget` and `env=dev`; its allow list contains `Bash(npm test)` and
+`Bash(jq)`.

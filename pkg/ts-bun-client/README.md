@@ -1,11 +1,8 @@
 # agent-director
 
-TypeScript/Bun client for the agent-director CLI. Shares the Go API's verbs
-and CLI semantics; native request and proof fields have the declaration and
-runtime limitations described under [sendKeys](#sendkeys).
-The `Client` discovers the system-installed
-`agent-director` CLI binary at construction time and drives it as a
-subprocess per verb call — no FFI, no network hop, no bundled binary.
+TypeScript/Bun client for agent-director. `Client.create()` discovers the
+installed binary and each verb call runs it as a subprocess. Native request
+and proof fields have the declaration limits described under [sendKeys](#sendkeys).
 
 ## Install
 
@@ -13,23 +10,18 @@ subprocess per verb call — no FFI, no network hop, no bundled binary.
 bun add agent-director
 ```
 
-Requires Bun >=1.0.21. The package ships pure JavaScript — there are
-**no lifecycle scripts** (`postinstall`, `prepare`, etc.) and no
-optional platform dependencies. `bun add --ignore-scripts agent-director`
-is a no-op and installs the library with identical functionality.
+Requires Bun >=1.0.21. The package contains JavaScript with no lifecycle
+scripts, optional platform dependencies or bundled binary. Installing with
+`bun add --ignore-scripts agent-director` gives identical functionality.
 
-Install the CLI separately using the [install guide](../../docs/install.md).
+Install the binary separately using the [install guide](../../docs/install.md).
 `Client.create()` finds it at the standard install path or on `$PATH`;
-its version must meet the client floor.
+its version must meet the [client floor](#minimum-required-cli-binary-version).
 
 ## Supported platforms
 
-- `linux/x64` (Linux on x86_64)
-- `linux/arm64` (Linux on arm64/aarch64)
-- `darwin/arm64` (Apple Silicon Mac, macOS 13 or later)
-
-Package installation may also succeed on `darwin/x64`, where no CLI installs.
-See [Requirements](../../docs/install.md#requirements).
+See [Requirements](../../docs/install.md#requirements) for supported binary
+platforms. Package installation alone does not establish platform support.
 
 ## Quick start
 
@@ -56,44 +48,30 @@ try {
 }
 ```
 
-All constructor options are optional. Omitted fields fall back to the CLI binary's own three-tier default resolution (config.toml value, then hardcoded fallback such as `~/.config/agent-director/state.db`) — the CLI is the single source of truth for defaults. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
+All `ClientOptions` fields are optional. Omitted store, home and tmux options
+use the binary's configuration and defaults. The `using` form calls
+`client.close()` at block exit; TypeScript projects need
+`"lib": ["ESNext.Disposable"]`.
 
-`ClientOptions` overrides forward to the CLI subprocess as global flags:
+- `storePath`: store path.
+- `home`: home used for configuration and path expansion.
+- `tmuxCommand`: tmux executable.
+- `createIfMissing`: defaults to true; create the store on its first use.
+  False leaves an absent store uncreated and returns `ErrStoreOpen`.
+  Calls such as `version` that do not open the store are unaffected.
+- `callTimeoutMs`: defaults to 30,000 ms per subprocess call. Allow enough
+  time for configured pause waits, input delivery and reply overhead.
 
-- `storePath` → `--store-path`
-- `home` → `--home`
-- `tmuxCommand` → `--tmux-command`
-- `createIfMissing: false` → `--create-if-missing false` (`true` forwards nothing)
-
-The paths are forwarded verbatim. The CLI, not the client, expands a `~` in
-them, against `HOME` and nothing else (never the passwd entry's home). It applies `home` first, so with `home`
-set, a `~/` in `storePath` or `tmuxCommand` resolves under `home`. With
-`HOME` unset or empty, a `home` of `~` or `~/…` rejects every call with
-`ErrInvalidFlags`, and with no `home` either, every call that opens the store
-is refused with `ErrStoreOpen`, whatever `storePath` is, because the CLI cannot
-expand its config path `~/.config/agent-director/config.toml`.
-
-Set them when the consumer needs to override that field's CLI default.
-
-`callTimeoutMs` defaults to 30,000 ms per subprocess call. Cursor's separate
-45-second ACP operation bound does not extend that client budget. Spawn and
-resume do not wait for initialization, load, generation, a dialog answer or
-readiness. For a deliberately longer
-configured `pause.timeout_seconds`, give the client enough `callTimeoutMs`
-for that wait and reply overhead; 30 seconds is not a universal operation cap.
-
-By default, the first call that opens the store creates it when it does not
-exist (parent directories, file and schema). With `createIfMissing: false`,
-such a call rejects with `ErrStoreOpen` (`database not initialized`) and
-creates none of it; an existing store opens as usual, and calls that open no
-store, such as `version`, are unaffected.
+Paths are forwarded verbatim. The binary expands `~` against `home` when
+set, otherwise `HOME`, never the passwd home. It applies `home` before
+expanding `storePath` or `tmuxCommand`. Environment refusals and timeout handling are in the
+[caller contract](../../docs/caller-contract.md#caller-contract); a timeout
+does not prove the operation stopped.
 
 For spawning under another home or store, use
 [Permissions](../../docs/permissions.md#one-spawn-under-another-home-or-store).
 
 ## Verb examples
-
-Shared CLI use is in [Usage](../../docs/usage.md).
 
 A call that carries an old name of a renamed key (on any verb) throws
 `ErrInvalidFlags` before the client starts any process; its description names
@@ -102,6 +80,11 @@ the new key.
 ### spawn
 
 Launch a tracked agent in a new tmux session. A spawn names its agent, `"claude"`, `"codex"` or `"cursor"` (case-sensitive), in `agent` or through its template; with neither it throws `ErrAgentMissing`. An empty `agent` counts as not given.
+
+An explicit `instance_id` cannot contain ASCII control bytes (`0x00`–`0x1f`
+or `0x7f`). Each `extra_env` key must be nonempty with no `=` or NUL;
+reserved keys and account selection are covered by
+[Settings](../../docs/settings.md#templates-and-per-call-merge).
 
 ```ts
 const result = await client.spawn({ cwd: "~/my-project", agent: "claude" });
@@ -124,24 +107,12 @@ opt-out, never a validated `"ok"`; see
 whole seconds (`0`, `null` or omitted for none); its range and lifecycle are
 in [Configuration](../../docs/configuration.md#idle-screen-timeout-state).
 
-For all agents, same-agent reuse retains current-life session history and subagent records;
-switching agents starts another life, including when switching back.
-`resume` continues only the recorded agent's latest reported session and
-never selects an archived one. See [Usage](../../docs/usage.md#naming-the-agent)
-and [Transcript recovery](../../docs/caller-contract.md#transcript-recovery).
-
-Cursor uses the existing result and row fields; `status` keeps its existing
-shape. `resume({ instance_id: id })` launches load of only its latest saved session;
-the row can remain `pending` until a real first prompt. After inspecting the
-pane, pass `allow_pending: true` to `sendKeys` for that prompt; binding and
-dialog guards still apply. Saved configuration replay, which never includes
-the initial prompt, is defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
-`reuse_finished: true` supports Cursor and agent switches under the linked
-life rules. `makeTemplate`
-and `spawn` refuse nonempty Cursor permission lists with
-`ErrPermissionsUnsupported`. The fresh workflow is in
-[Usage](../../docs/usage.md#fresh-cursor-use); argument and asynchronous failure
-handling are in the [caller contract](../../docs/caller-contract.md#cursor-operation-boundaries).
+`reuse_finished: true` starts a fresh conversation on a finished id.
+`resume({ instance_id: id })` continues the latest recorded session.
+Life and replay rules are in [Usage](../../docs/usage.md#naming-the-agent)
+and [Pause and resume](../../docs/usage.md#pause-and-resume).
+Cursor startup, argument refusals and asynchronous failures are covered by
+[Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries).
 
 ### status
 
@@ -156,46 +127,32 @@ const result = await client.status({ instance_id: "<id>" });
 console.log(result.state);
 ```
 
-`StatusResult`, `GetResult` and each `ListRow` expose
-`family_state: "working" | "waiting"`, separately from `state`.
-[Usage](../../docs/usage.md#family-state) defines membership and
-aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
-defines reporting limits.
+`StatusResult`, `GetResult` and each `ListRow` carry:
 
-They also carry `process_liveness: ProcessLiveness` (`"alive" | "exited" |
-"unknown"`) and `confirmations: Confirmations`, with exactly `state`,
-`process_liveness` and `displayed_state`. Each is a `Confirmation`: a non-null
-`status` (`ConfirmationStatus`) and the nullable `confirmed_at`, `source`
-(`ConfirmationSource`), `checked_at` and `reason` (`ConfirmationReason`), all
-five always present. The [caller contract](../../docs/caller-contract.md#confirmations)
-defines the values and when each is `null`. `confirmations.displayed_state`
-describes the returned display, including an omitted `displayed_state` or a
-retained display whose exit is settling. Cursor's record is
-`unknown`/`unsupported`.
+- `family_state: "working" | "waiting"`; see
+  [Family state](../../docs/usage.md#family-state) and
+  [Family reporting limits](../../docs/caller-contract.md#family-reporting-limits).
+- `process_liveness: ProcessLiveness` (`"alive" | "exited" | "unknown"`).
+- `confirmations: Confirmations`: exactly `state`, `process_liveness` and
+  `displayed_state`. Each `Confirmation` has non-null `status`
+  (`ConfirmationStatus`) and nullable `confirmed_at`, `source`
+  (`ConfirmationSource`), `checked_at` and `reason` (`ConfirmationReason`).
+  All five keys are present; see [Confirmations](../../docs/caller-contract.md#confirmations).
+- Optional `displayed_state`: `"idle_screen"` or the defined-but-unused
+  `"needs_intelligence"`. Test this field, not `state`, for a display.
+- `idle_screen_availability: IdleScreenAvailability`: `"available"` for
+  Claude/Codex, `"unavailable"` for Cursor.
 
-`state` is always the lifecycle state. While a row shows a
-Displayed State, `StatusResult`, `GetResult` and each `ListRow` carry it in
-`displayed_state` (`"idle_screen"`; `"needs_intelligence"` is defined, but
-nothing shows it yet). `StatusResult` and `GetResult` then also carry
-`since` and, for `"idle_screen"`, `unchanged_minutes`; `StatusResult` also
-carries `tmux_session_name`. A `ListRow` carries no detail. A key that does
-not apply is absent from the result, never `null`, so test for presence
-(`result.displayed_state !== undefined`). Test `displayed_state`, never
-`state`, for `"idle_screen"` or `"needs_intelligence"`. Every `StatusResult`, `GetResult` and
-`ListRow` carries `idle_screen_availability` (`IdleScreenAvailability`:
-`"available"` for Claude and Codex, `"unavailable"` for Cursor).
-The [caller contract](../../docs/caller-contract.md#needs-intelligence-and-idle-screen-rows)
-defines the states, fields, omissions and detection.
+`StatusResult` and `GetResult` also carry display detail, `since` and
+`unchanged_minutes`; `StatusResult` adds `tmux_session_name`. Non-applicable
+display keys are absent, never null (`result.displayed_state !== undefined`).
+See [Displayed states](../../docs/caller-contract.md#needs-intelligence-and-idle-screen-rows).
+`GetResult` and `ListRow`, but not `StatusResult`, carry
+`state_changed_at: string`; see [State change time](../../docs/caller-contract.md#state-change-time).
 
-`GetResult` and each `ListRow` carry `state_changed_at: string`, when the raw
-state last changed; `StatusResult` does not. The
-[caller contract](../../docs/caller-contract.md#state-change-time) defines it
-and how it differs from `last_seen_at`, the settled `state` and `since`.
-
-`status`, `get`, `getMany` and `list` use `[state] settle_ms` in the CLI's
-`~/.config/agent-director/config.toml` for [independent state and family
-settling](../../docs/configuration.md#settle-time-state). Verbs that act on a
-Spawn judge its live state, which can be newer than its reported state.
+State and family settling use the binary's
+[`[state] settle_ms`](../../docs/configuration.md#settle-time-state).
+Commands judge live state, which may differ from the reported state.
 
 ### getMany
 
@@ -219,7 +176,8 @@ error names its 1-based position.
 
 ### list
 
-Query Spawns with optional filters.
+Query Spawns with optional filters. `limit` is nonnegative; 0 or omitted means
+no cap.
 
 ```ts
 const result = await client.list({ state: ["waiting"] });
@@ -251,7 +209,9 @@ for (const sub of result.subagents) {
 }
 ```
 
-`tracked` is `false`, with `subagents` `[]`, for a `"cursor"` agent, and for a `"codex"` agent (from its spawn, and after every `resume` or reuse of its id) and for a `"claude"` agent that predates subagent tracking (it becomes `true` when that agent is next resumed or its id is reused). `subagents` is never null; a field with no known value is `null`, and times are RFC 3339 UTC strings. The fields and values are described in [Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagent-records).
+`subagents` is never null; an unknown field is `null`, and times are RFC 3339
+UTC strings. Agent support, `tracked`, field values and retention are defined
+in [Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagent-records).
 
 ### sendKeys
 
@@ -266,6 +226,9 @@ passes the API's dialog hold (`ErrDialogMaybeOpen`, see "Answering a request at
 the pane" below). Pass it only for a pane a person or an LLM judged, never
 from an automatic flow.
 
+`key` cannot accompany nonempty `text`; `no_enter` needs text or a key.
+`as` requires `request_token`, and pane hashes must be valid SHA-256 values.
+
 ```ts
 await client.sendKeys({
   instance_id: "<id>",
@@ -273,67 +236,35 @@ await client.sendKeys({
 });
 ```
 
-On a supported native launch, ordinary nonempty text with Enter and no pane
-hash returns runtime proof fields
-`outcome: "submitted"`, `request_id`, `session_id`, `record_sha256` and
-`record_id` when the native record supplies it. They confirm the exact
-normalized text in the launch's native transcript. The published
-`SendKeysParams` and `SendKeysResult` declarations do not expose native request
-IDs or proof fields; use the Go API or CLI for explicit delivery request IDs.
-Launches without native capability use fallback input, return an empty object on
-success and make no exact transcript-confirmation claim. Manual
-operations (`no_enter`, `key`, empty text, pane hashes and permission answers)
-return an empty object on success; their input-ownership refusals are in
-[Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
-Supported launches, fallback readiness and input restrictions, omitted-ID
-behavior, structured outcomes and recovery are in
-[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
-Allow sufficient `callTimeoutMs` for that delivery window; a timeout does not
-cancel submission.
-After confirmed native delivery, a cleanup `ErrInternal` retains the submitted
-receipt through `AgentDirectorError.errDetails`; follow the caller contract's
-cleanup and no-replay rules. No additional typed proof fields are exposed.
-Cursor sends with Enter can return `ErrSubmissionUnconfirmed`
-with `outcome: "gateway_refused"`; see
+On a supported native launch, ordinary text submission returns runtime proof
+fields `outcome: "submitted"`, `request_id`, `session_id`, `record_sha256`
+and optional `record_id`. The published `SendKeysParams` and `SendKeysResult`
+do not expose request IDs or proof fields; use the Go API or CLI for explicit
+delivery request IDs. Fallback and manual operations return `{}` on success.
+Supported launches, proof, input restrictions and recovery are in
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
+and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
+
+`ErrSubmissionUnconfirmed.errDetails` is a
+`Readonly<Record<string, unknown>> | null`. The exported
+`SubmissionUnconfirmedDetails` covers only failed fallback hook observation
+(`keys_sent: true`, `submission_confirmed: false`, `row_state`). Additional
+runtime fields include `outcome`, `phase`, `bytes_attempted`,
+`enter_may_have_been_sent`, `reason`, and native `request_id` and `last_queue`.
+A cleanup `ErrInternal` after native confirmation retains the submitted
+receipt in `errDetails`. Read these fields with runtime value checks; their
+meanings and no-replay rules are in the linked contract, including
 [Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes).
 
-Pass `allow_pending: true` to also allow a `pending` row: a launch (spawn,
-reuse or resume) whose agent has not reported in yet, for example to answer a
-startup choice with `key` (including `key: "Enter"`). See
-[pending startup screens](../../docs/caller-contract.md#pending-rows-and-startup-screens)
-for text answers and Enter-only sends. Keys are delivered only to a
-session started by the row's current launch. `ended` and `missing` rows are
-rejected, including retries of an existing delivery request. State, relay and
-dialog guards precede native capability selection and request reconciliation.
-A `pending` row whose launch start or launch token is not recorded, or where
-only a session an earlier launch left behind is found, gets
-`ErrSpawnNotInteractive` and nothing is sent.
-
-`allow_pending` preserves native readiness and transcript requirements on
-supported launches; it does not make a startup dialog an ordinary composer.
-Ordinary pending Claude fallback has a readiness wait, and pending Claude and
-Codex fallback have a hook check; see
-[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
-`SubmissionUnconfirmedDetails` describes only a failed fallback hook observation:
-`keys_sent: true`, `submission_confirmed: false` and `row_state`. Native
-uncertainty, Claude fallback's `not_started` refusals, Claude paced typing
-failures, Codex fallback failures and Cursor gateway refusals carry additional
-runtime fields, including `outcome`, `phase`, `bytes_attempted`,
-`enter_may_have_been_sent` and `reason`;
-native attempts can also carry
-`request_id` and `last_queue`.
-Read these through `AgentDirectorError.errDetails`, whose type is
-`Readonly<Record<string, unknown>> | null`, and check their values; see
-[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
-for the fields and recovery.
-
-`liveness_note: "unreported"` means an alive agent has not reported since
-launch. Action on a pending row belongs to the
-[caller contract](../../docs/caller-contract.md#pending-rows-and-startup-screens).
+Pass `allow_pending: true` to allow input to a pending launch, for example a
+startup choice with `key: "Enter"`. It defaults to false and preserves
+ownership, readiness, relay and dialog guards; see
+[Pending rows and startup screens](../../docs/caller-contract.md#pending-rows-and-startup-screens).
 
 ### readPane
 
-Read the last N lines of the agent's own pane (default 25).
+Read the last N lines of the agent's own pane. `n_lines` is nonnegative;
+0 or omitted selects 25 lines.
 
 ```ts
 const result = await client.readPane({ instance_id: "<id>", n_lines: 50 });
@@ -366,11 +297,10 @@ const { kill_sent } = await client.kill({ instance_id: "<id>" });
 console.log(kill_sent);
 ```
 
-Errors to catch: `ErrTmuxKillFailed` and `ErrTmuxUnresponsive` (UNAVAILABLE:
-retry later), `ErrTmuxSessionConflict` (CONFLICT),
-`ErrTmuxNotAvailable` (ENVIRONMENT) and
-`ErrSpawnNotFound`. None of these proves exit. See the [caller contract](../../docs/caller-contract.md#caller-contract)
-for the live-row sequence and finished-row limits.
+Errors include `ErrTmuxKillFailed`, `ErrTmuxUnresponsive`,
+`ErrTmuxSessionConflict`, `ErrTmuxNotAvailable` and `ErrSpawnNotFound`.
+Handling and the live-row sequence are in the
+[caller contract](../../docs/caller-contract.md#caller-contract).
 
 ### sweep
 
@@ -389,34 +319,21 @@ neither rollback nor completion and need not return partial checks.
 
 ### pause
 
-Shut down a `waiting` Spawn: type `/exit` in its pane and wait up to
-`pause.timeout_seconds` for `ended`. A finished Spawn is a no-op. A live Codex
-Spawn whose agent already exited with an end report resolves, in any live
-state, having typed nothing, and its row is `ended`; otherwise any live state
-but `waiting` throws `ErrSpawnNotPausable`. On a Codex Spawn
-`pause` ends the row itself once the agent exits (see the
-[caller contract](../../docs/caller-contract.md#when-a-codex-agent-exits)).
+Shut down a `waiting` Spawn and wait up to `pause.timeout_seconds` for `ended`.
+A finished Spawn is a no-op. Codex exit handling is defined in the
+[caller contract](../../docs/caller-contract.md#when-a-codex-agent-exits).
 
 ```ts
 await client.pause({ instance_id: "<id>" });
 ```
 
-For input ownership or journal failures (`ErrInternal` before any input), see
-[Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
+`pause` takes no pane hash. It shares plain `sendKeys` permission and input
+guards; see [Permission relay](../../docs/caller-contract.md#permission-relay)
+and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
 
 For `ErrPauseTimeout`, `errDetails` has the exported `PauseTimeoutDetails`
-shape. Its fields and required inspection procedure are defined in
+shape. Its fields and handling are defined in
 [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit).
-
-`pause` is held like a `sendKeys` without `request_token` and without
-`expect_pane_sha256`: on a Spawn with `relay_mode: "on"` it throws
-`ErrSendKeysWhileRelayed`, `ErrRelayFallenBack` or `ErrDialogMaybeOpen`,
-with the same `errDetails`, typing nothing and starting no wait, whenever
-that `sendKeys` would. It takes no pane hash, so it stays held until
-valid agent evidence proves each request gone; see
-[The dialog hold](../../docs/permissions.md#the-dialog-hold).
-Stopping a held spawn and handling these refusals are in the
-[caller contract](../../docs/caller-contract.md#permission-relay).
 
 ### makeTemplate
 
@@ -453,59 +370,25 @@ if (result.delivery === "not_confirmed") {
 }
 ```
 
-`"delivered"` means durable relay acknowledgement, not agent receipt,
-execution or dialog closure. `"not_confirmed"` means no acknowledgement yet;
-`getPermission` exposes subsequent delivery and `confirm_by`. See the
-[caller contract](../../docs/caller-contract.md#permission-relay) for
-confirmation handling. `decision`
-is the verdict recorded, not the outcome: read `delivery`. `max_wait_ms`
-bounds the verb's reads, write, cleanup and reporting under one original
-deadline, and has no default; without it `decide` can wait up to the store's
-busy timeout. Allow the reply margin shown above for CLI audit teardown;
-its stderr diagnostic does not change the structured verdict/error. Exact
-timing and audit limits are owned by the
-[caller contract](../../docs/caller-contract.md#permission-relay). `decide` rejects,
-recording no verdict, with `ErrRelayFallenBack` when the request's relay
-settled without acknowledgement, with `ErrStoreBusy` when `max_wait_ms`
-ran out before the verdict was recorded, and with
-`ErrNoOpenPermissionRequest` when no eligible request has that token,
-including a closed, proven-gone or obsolete request. Pane answers, retries and closed-request handling are
-in the [caller contract](../../docs/caller-contract.md#permission-relay). The
-`permission_requests` of `get` and of each `list` row carry the same
-delivery fields, `pane_answer` and `pane_as` included, for requests that
-still await an answer only; a row can read `waiting`, `working` or
-`ask_user` while a request is still open, so follow the requests you track
-with `getPermission`.
+Read `delivery` (`"delivered"` or `"not_confirmed"`), not the recorded
+`decision`. `getPermission` exposes subsequent delivery (also `"fallen_back"`)
+and `confirm_by`. `max_wait_ms` bounds the whole call
+and has no default; it must be nonnegative and at most your deadline minus 1 s.
+The [caller contract](../../docs/caller-contract.md#permission-relay) owns
+confirmation, timing, refusal and closed-request handling.
 
-Cursor uses these same methods and fields for permissions and blocking plans.
-Its `hook_alive` is null; `confirm_by` is finite and unchanged by recreating
-a client. Without acknowledgement, no relay answer is sent, including a denial. Cursor's once-only decisions,
-native choices, question denial and conservative unknown-origin holds are
-defined in [Cursor permissions](../../docs/permissions.md#cursor-spawns);
-uncertain answers and fallback follow the
-[caller contract](../../docs/caller-contract.md#permission-relay).
+`get` and each `list` row expose still-unanswered `permission_requests`.
+Use `getPermission` to follow a request by token after it leaves those lists.
+Cursor uses the same fields for permissions and blocking plans, with
+`hook_alive: null`; see [Cursor permissions](../../docs/permissions.md#cursor-spawns).
 
-`decision_reason` is one of `"operator"`, `"timeout"`, `"find_missing"`,
-`"ended"`, `"pane"`, `"pane_outside"` and `"tool_ran"`. For a reason you
-do not know, read the recorded verdict from `decision` (`null` for a
-`"pane_outside"` `"unknown"` claim) and the outcome from `delivery` and
-`pane_answer`; never read a reason as a verdict.
-
-`proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, Cursor
-supplied validated exact matching invocation proof under
-[Cursor permissions](../../docs/permissions.md#cursor-spawns), including a failed
-MCP invocation that proves dialog closure without inferring execution or changing
-decision, delivery or pane-answer fields;
-`"turn_end"`, an eligible main request's turn ended under the age and identity
-guards, a Claude subagent's turn ended after its request (its
-`SubagentStop`), or a Cursor turn ended with the request still unanswered; or
-`"agent_gone"`, a non-Cursor agent ended) say when and how the request's
-dialog was proven gone; `"delivered"` and a pane answer are
-agent-director's own records, not proof. `get`'s `unproven_requests` lists
-every request still holding the dialog, each with `unproven_since`. A request
-that reads `"delivered"` or closed at the pane can remain unproven; its dialog
-may still be there. Handling is in the
-[caller contract](../../docs/caller-contract.md#permission-relay).
+`decision_reason` is `"operator"`, `"timeout"`, `"find_missing"`, `"ended"`,
+`"pane"`, `"pane_outside"` or `"tool_ran"`. Read the verdict from `decision`,
+not its reason. `proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`:
+`"tool_ran"`, `"turn_end"` or `"agent_gone"`) describe dialog proof;
+`get.unproven_requests` lists remaining holds with `unproven_since`.
+Delivery and pane-answer records are not dialog proof. The field meanings
+are in [Permissions](../../docs/permissions.md#delivery).
 
 ### Answering a request at the pane
 
@@ -528,6 +411,7 @@ await client.sendKeys({
 It sends exactly that key and no Enter, then records the request
 `pane_answer` `"sent"` with `decision` your `as` and `decision_reason`
 `"pane"`. `as`, `key` and `expect_pane_sha256` are required.
+Pane-answer calls cannot include `text`.
 An `ErrInternal` whose `errDetails` is a `PaneKeySentDetails`
 (`key_sent` `true`) means the key was sent but not recorded; hash use and
 recovery are in the [caller contract](../../docs/caller-contract.md#permission-relay).
@@ -551,7 +435,8 @@ try {
 }
 ```
 
-`as` is the caller's claim; use `"unknown"` when the answer was not seen.
+`as` is `"allow"`, `"deny"` or `"unknown"`; use `"unknown"` when the answer
+was not seen. `recordPaneAnswer` requires a valid `expect_pane_sha256`.
 `ErrPaneChanged`, `ErrPaneAnswerInProgress`, `ErrClaimTooSoon` and
 `ErrDialogMaybeOpen` carry structured facts in `errDetails`.
 `recordPaneAnswer` types nothing; `sendKeys` with a request token sends one
@@ -573,11 +458,9 @@ Use the package as Bun-runtime ESM.
 
 ## Versioning
 
-The library version equals the agent-director release tag — released in lockstep:
-
-| npm package | CLI binary |
-|---|---|
-| `agent-director@v0.5.0` | `agent-director CLI v0.5.0` |
+The package version equals its release tag. Use the matching binary release
+for the full API; the [minimum version check](#minimum-required-cli-binary-version)
+does not negotiate features.
 
 ## Minimum required CLI binary version
 
@@ -664,13 +547,10 @@ facts remain available through the generic `errDetails` record. So does the
 (`PaneKeySentDetails`: `key_sent` `true` and `request_token`). Read facts from
 `errDetails`, never from `errDescription`.
 
-The public typed-error surface falls into four groups. Every class named below is exported from the package entry point. The tables are self-sufficient for choosing what to catch; the CLI error contract also applies to group 4.
-
-For retry, escalation and shared CLI refusal handling see the
-[caller contract](../../docs/caller-contract.md). Binary installation and
-upgrade procedures are in [Installation](../../docs/install.md), and
-human repairs in [Operator actions](../../docs/operator-actions.md).
-The tables below describe the typed classes and their fields.
+All classes below are exported from the package entry point. The tables name
+what to catch and any client-specific fields. Shared retry, escalation and
+refusal handling belong to the [caller contract](../../docs/caller-contract.md);
+human repairs belong to [Operator actions](../../docs/operator-actions.md).
 
 ### 1. Library lifecycle
 
@@ -678,8 +558,8 @@ Raised by the client wrapper itself, independent of any agent-director binary.
 
 | Error | When it fires |
 |---|---|
-| `ErrClientClosed` | A verb was called on a `Client` after `close()`/disposal. Obtain a fresh handle with `Client.create()`. Programmer error. |
-| `ErrBunVersionTooOld` | The running Bun runtime is below the package's minimum. Fires at construction. |
+| `ErrClientClosed` | A verb was called after `close()` or disposal. |
+| `ErrBunVersionTooOld` | The Bun runtime is below the package minimum; thrown at construction. |
 
 ### 2. System install (agent-director binary)
 
@@ -697,129 +577,137 @@ Raised by the client wrapper itself, independent of any agent-director binary.
 
 Thrown per verb call by the subprocess transport, not by the CLI's own validation.
 
-| Error | When it fires | Category |
-|---|---|---|
-| `ErrCallTimeout` | The subprocess did not complete within the configured per-call timeout. Carries `verb`, `elapsedMs`, `timeoutMs`. | Operational; see the caller contract. |
-| `ErrConsumerSignal` | The subprocess was killed by an OS signal (e.g. `SIGTERM`, `SIGINT`) before producing a result. Carries `verb`, `signal`. | Operational — routine during shutdown. |
-| `ErrUnknownErrorName` | The CLI returned an error envelope whose `err_name` this client has no class for. This client has a class for every `err_name` the binary of its own version gives, so the binary is of a different version, most often a newer one. Carries `unknownName` (the real `err_name`) and `envelope`. | Version error; see [Installation](../../docs/install.md). |
+| Error | Meaning |
+|---|---|
+| `ErrCallTimeout` | The subprocess exceeded `callTimeoutMs`; carries `verb`, `elapsedMs`, `timeoutMs`. |
+| `ErrConsumerSignal` | The subprocess ended by signal; carries `verb`, `signal`. |
+| `ErrUnknownErrorName` | An unmapped `err_name`; carries `unknownName` and the original `envelope`. |
 
 ### 4. Catalog-derived (CLI-side validation)
 
-These classes correspond to the shared CLI `err_name` contract. They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
-
-**cwd validation** (spawn's `cwd` argument — programmer error — or resume's saved cwd, gone since the row finished):
-
-| Error | When it fires |
-|---|---|
-| `ErrCwdMissing` | No `cwd` was supplied; spawn requires it to derive the JSONL/resume path. |
-| `ErrCwdNotAPath` | `cwd` is neither absolute nor a `~/` form (URLs, bare relative paths, non-path values). |
-| `ErrCwdNotFound` | `cwd` resolved to a path that does not exist on disk, or that cannot be accessed or entered (no search permission on it or a parent). `resume` also returns it when the row's saved cwd is gone or cannot be entered; nothing is written or launched. |
-| `ErrCwdNotADirectory` | `cwd` resolved to a file (or other non-directory inode). `resume` also returns it when the row's saved cwd is no longer a directory. |
-
-**spawn and template config validation** (bad `spawn` or `makeTemplate` arguments — programmer error):
+These classes map the binary's `err_name` contract. Input rules are in
+[Spawn and template input refusals](../../docs/caller-contract.md#spawn-and-template-input-refusals),
+[Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries)
+and [Settings](../../docs/settings.md). Request handling is in
+[Permission relay](../../docs/caller-contract.md#permission-relay).
+**cwd validation**:
 
 | Error | When it fires |
 |---|---|
-| `ErrRelayModeInvalid` | `relay_mode` was something other than `on` / `off` / empty. |
-| `ErrSpawnDeniedFlag` | Cursor argument refusals and switch selector rules are in [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). The `agent_args` of a `spawn` contain an argument the supervisor must own; nothing is written, and the description names it. A `"claude"` spawn always refuses `--settings`, `--output-format` and print (`--print`, `-p`, parsed clusters included). Session selectors and owned values are refused except on a verified finished-agent switch, where they are removed and the remainder is checked as for a plain spawn. Exact denied long names owned as option values always refuse. A `"codex"` spawn also refuses other Codex subcommands as the first word that is neither an option nor an option's value, `--remote`, `--remote-auth-token-env`, a `-c` / `--config` key at, above or under `hooks`, `tui.disable_paste_burst`, `features.hooks` or its alias `features.codex_hooks`, `--disable hooks` or `--disable codex_hooks`, and, while `disable_ask_user` is on, `--enable default_mode_request_user_input` and the question-tool keys. `resume` filters stored arguments without applying spawn's argument refusals; see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules. The refused forms and argument recognition limits are in [Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals). |
-| `ErrAgentMissing` | `spawn` got no `agent` and its template names none; nothing is written. Pass `agent` (`"claude"`, `"codex"` or `"cursor"`), or put one in the template. |
-| `ErrAgentInvalid` | `agent` is none of `"claude"`, `"codex"` or `"cursor"` (the value is case-sensitive); nothing is written. |
-| `ErrAgentArgsMismatch` | The template's `agent_args` are for another agent than the one this spawn resolves to, so they are not inherited; nothing is written. Spawn that agent, or pass this call's own non-empty `agent_args`, which replace the template's. |
-| `ErrTemplateAgentMissing` | A template has `agent_args` and names no agent. From `makeTemplate` (`agent_args` without `agent`) and from a `spawn` that loads such a template; nothing is written. Give the template an `agent`, or remove its `agent_args`. |
-| `ErrPermissionsUnsupported` | A `"codex"` or `"cursor"` spawn/template carries an `allow`, `deny` or `ask` entry; nothing is written. Handling is in [Permissions](../../docs/permissions.md#codex-spawns) and [Cursor permissions](../../docs/permissions.md#cursor-spawns). |
-| `ErrReservedEnvKey` | From `spawn`: an `extra_env` key (a template's included) is reserved or is not a valid env-var name; nothing is written or launched, and the description says which. Reserved: an `AGENT_DIRECTOR_*` key, or a key that sets `HOME` (`HOME` itself, or one such as `HOME=/x`), with any value, an empty one included. An `extra_env` `HOME` would send the agent's hook events to another agent-director store; set an absolute `CLAUDE_CONFIG_DIR` (a Claude Code agent) or `CODEX_HOME` (a Codex agent) to give the agent its own config. Not a valid name: the key is empty, or contains `=` or a NUL character; give each variable its own name as the key and its value as the value (`{ CLAUDE_CONFIG_DIR: "/cfg" }`, not `{ "CLAUDE_CONFIG_DIR=/cfg": "" }`). This client refuses an invalid key in the call's `extra_env` itself, before it runs the CLI. From `makeTemplate`: the template's `extra_env` has such a key, reserved or not a valid name, refused by spawn's own check; no template is written or replaced, so none is saved that `spawn` would refuse (this client refuses an invalid key itself, as for `spawn`). From `resume`: the row's stored `extra_env` has a key that sets `HOME` or is not a valid name (a row spawned before spawn refused it); nothing is written or launched. Shared repair and reuse handling is in [Spawn and template input refusals](../../docs/caller-contract.md#spawn-and-template-input-refusals); a fresh conversation has no memory of the old conversation. |
+| `ErrCwdMissing` | No `cwd` was supplied to `spawn`. |
+| `ErrCwdNotAPath` | `cwd` is neither absolute nor a `~/` path. |
+| `ErrCwdNotFound` | The supplied or saved `cwd` does not exist or cannot be entered. |
+| `ErrCwdNotADirectory` | The supplied or saved `cwd` is not a directory. |
+
+**spawn and template config validation**:
+
+| Error | When it fires |
+|---|---|
+| `ErrRelayModeInvalid` | `relay_mode` is not `on`, `off` or empty. |
+| `ErrSpawnDeniedFlag` | `agent_args` contains a supervisor-owned or unsupported argument. |
+| `ErrAgentMissing` | Neither the call nor its template names an agent. |
+| `ErrAgentInvalid` | `agent` is not exactly `claude`, `codex` or `cursor`. |
+| `ErrAgentArgsMismatch` | The template's `agent_args` belong to another agent. |
+| `ErrTemplateAgentMissing` | A template has `agent_args` without an `agent`. |
+| `ErrPermissionsUnsupported` | A Codex or Cursor spawn/template carries `allow`, `deny` or `ask` entries. |
+| `ErrReservedEnvKey` | An `extra_env` key is reserved or invalid; call-level invalid names are refused before starting a process. |
 | `ErrInstanceIdCollision` | Without `reuse_finished`, a row already exists for the supplied `instance_id`, in any state. With `reuse_finished: true`, the row is live (`pending` included), or it changed or was removed after this spawn examined it (a lost race); nothing was changed. |
 
-**tmux session naming** (bad `tmux_session_name` — programmer error):
+**tmux session naming**:
 
 | Error | When it fires |
 |---|---|
-| `ErrTmuxSessionNameEmpty` | `tmux_session_name` was explicitly supplied but empty. |
-| `ErrTmuxSessionNameInvalid` | The name contains `#`, `:`, `.`, `$`, `\`, an ASCII control character, or is invalid UTF-8. |
-| `ErrTmuxSessionNameTooLong` | The name exceeds the app-layer byte cap. |
+| `ErrTmuxSessionNameEmpty` | An explicitly supplied `tmux_session_name` is empty. |
+| `ErrTmuxSessionNameInvalid` | The name contains `#`, `:`, `.`, `$`, `\`, an ASCII control character or invalid UTF-8. |
+| `ErrTmuxSessionNameTooLong` | The session name exceeds the byte cap. |
 
-**spawn state / lookup** (verb preconditions — mostly normal operational signals):
+**spawn state / lookup**:
 
 | Error | When it fires |
 |---|---|
-| `ErrSpawnNotFound` | No spawn row matches the supplied `instance_id`. |
-| `ErrSpawnNotInteractive` | New input requires a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. `ended` and `missing` rows are refused even when observing an existing delivery request; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission). |
-| `ErrSubmissionUnconfirmed` | `SubmissionUnconfirmedDetails` describes failed fallback hook observation; native, Claude readiness, Claude paced typing, Codex paste and Cursor gateway outcome fields are available through the generic `errDetails` record. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) for automatic delivery, [Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes) for `gateway_refused`, and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership) for manual `sendKeys`. |
-| `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
-| `ErrPauseTimeout` | Exit keys were sent but `ended` was not observed; `errDetails` has the `PauseTimeoutDetails` shape. See [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit). |
-| `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |
+| `ErrSpawnNotFound` | No row matches the supplied `instance_id`. |
+| `ErrSpawnNotInteractive` | The row cannot accept input under the current launch guards. |
+| `ErrSubmissionUnconfirmed` | Submission is unconfirmed; inspect `errDetails` as described under [sendKeys](#sendkeys). |
+| `ErrSpawnNotPausable` | The row is not in a pausable state. |
+| `ErrPauseTimeout` | Exit input was sent but `ended` was not observed; carries `PauseTimeoutDetails`. |
+| `ErrSpawnNotResumable` | The row is live, including `pending`, or changed during resume. |
 | `ErrNoSessionId` | The spawn has no `session_id`, so there is nothing to resume. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |
 | `ErrJsonlMissing` | The current session's transcript is unavailable. Cursor requires its protected gateway transcript; native session availability is decided later during load. Older sessions are never tried. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |
-| `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
-| `ErrProbeUnsupported` | No verb returns it. The name stays catalogued (and listed for `sweep` and `find-missing`) so the client still maps it. |
+| `ErrListInvalidLabel` | A label filter is not in `key=value` form. |
+| `ErrProbeUnsupported` | Retained error class; no current verb returns it. |
 
-**tmux transport** (infrastructure failures at the tmux layer — runtime). Each name has a class: GONE (the row's session is not there), UNAVAILABLE (transient; retry later), CONFLICT (permanent until a human looks), ENVIRONMENT (an environment problem for an operator to fix) or LAUNCH FAILURE (the launch failed).
+**tmux transport**:
 
-| Error | Class | When it fires |
+| Error | Class | Meaning |
 |---|---|---|
-| `ErrTmuxNotAvailable` | ENVIRONMENT | The `tmux` binary is not on PATH or refuses to execute, the tmux socket is not accessible to this user, or its per-user socket directory cannot be used (`spawn` then writes nothing). `kill`, `resume`, `readPane`, `sendKeys` and `pause` return it too: tmux could not be run, the socket is not accessible to this user, or this is not the tmux server the agent was launched on. |
-| `ErrTmuxSessionCreate` | LAUNCH FAILURE | The session could not be created or labelled. A plain launch normally stays `pending`; a duplicate-name re-lookup finding no holder ends its new row. Resume and reuse attempt a guarded restore after a non-timeout failure; the description reports whether it applied. |
-| `ErrTmuxUnresponsive` | UNAVAILABLE | tmux did not answer usably, or a launch still appears to be starting or stopping. A timed-out launch stays `pending`; after a timed-out send, keys may have been delivered. See the [caller contract](../../docs/caller-contract.md#caller-contract) before retrying. |
-| `ErrTmuxSessionConflict` | CONFLICT | A held name, a session left over from an earlier life (an earlier launch), conflicting labels, or the agent pane was not found. The description names the blocker and whether a new row was ended or a prior row restored. Nothing is sent to a conflicting session. Human repair is owned by [Operator actions](../../docs/operator-actions.md). |
-| `ErrTmuxKillFailed` | UNAVAILABLE | `kill` only: the agent process still runs after `kill`. A kill was sent and the agent process, or another process in a pane of the agent's session, still ran after the kill exit wait (`kill_exit_wait_ms`); or the process cannot be checked and its labelled session is still there; or no session or pane of this launch was found while the agent process runs, so no kill was sent. Retry and refusal handling is owned by [Caller contract](../../docs/caller-contract.md). |
-| `ErrTmuxSendKeys` | GONE | `sendKeys` and `pause`: the row's session or pane is not there. |
-| `ErrTmuxCaptureFailed` | GONE | `readPane`: the row's session or pane is not there. |
+| `ErrTmuxNotAvailable` | ENVIRONMENT | tmux or its socket is unavailable |
+| `ErrTmuxSessionCreate` | LAUNCH FAILURE | The session could not be created or labelled |
+| `ErrTmuxUnresponsive` | UNAVAILABLE | tmux did not answer usably or a launch is still starting/stopping |
+| `ErrTmuxSessionConflict` | CONFLICT | Session or pane ownership conflicts |
+| `ErrTmuxKillFailed` | UNAVAILABLE | Exit could not be confirmed |
+| `ErrTmuxSendKeys` | GONE | The target session or pane is absent |
+| `ErrTmuxCaptureFailed` | GONE | The target session or pane is absent |
 
-Only a GONE error means the row's session is not there (for `kill`, GONE is success); no other tmux error ever means the agent is dead.
-
-**relay / permissions** (relay-mode and permission-decision preconditions — normal operational signals):
-
-| Error | When it fires |
-|---|---|
-| `ErrSendKeysWhileRelayed` | A `sendKeys` or `pause` while the request relay may still answer. Nothing was sent. The message distinguishes an undecided request from a recorded verdict still being delivered; see the [caller contract](../../docs/caller-contract.md#permission-relay). |
-| `ErrRelayFallenBack` | The request's relay settled without acknowledgement and no pane answer is recorded through agent-director. Cursor uses finite `confirm_by` with null per-request hook process evidence; see [Cursor permissions](../../docs/permissions.md#cursor-spawns). Thrown by `decide` on that request, within seconds of the hook's end (after the request's `confirm_by` when agent-director cannot check the hook's process); no verdict was recorded, the caller's is kept as the request's `attempted_decision`. Thrown by a `sendKeys` without `request_token`, and by `pause`, while any request of the spawn is so; nothing was sent. `errDetails` is a `RelayFallenBackDetails`: the request's facts, the spawn's `state` and its other `open_requests`. Pane-answer handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay); the relevant API methods are `sendKeys` with `request_token` and `recordPaneAnswer`. For a request recorded by an older binary, `decide` throws it once the request's record is still open 2 s after its relay window ended (a call from 1 s before the window ends first waits for that instant, at most 3 s), and only while the spawn is still in `check_permission` with no other open request and none recorded after this one, otherwise `ErrNoOpenPermissionRequest`. |
-| `ErrDialogMaybeOpen` | A `sendKeys` without `request_token` and without `expect_pane_sha256`, or a `pause`, on a spawn with `relay_mode=on`, while a permission request of the spawn is not proven gone by valid agent evidence and is not a Cursor request of an earlier launch (see [The dialog hold](../../docs/permissions.md#the-dialog-hold)), whatever agent-director's records say of it (`"delivered"`, a pane answer, `recordPaneAnswer`); nothing was sent. `errDetails` is a `DialogMaybeOpenDetails`: the oldest such request with its facts and `unproven_since`, the spawn's `state` and its other `unproven_requests`. Retry, escalation and pane-hash handling are owned by [Permission relay](../../docs/caller-contract.md#permission-relay). `pause` takes no hash; stopping a held Spawn is covered by [Caller contract](../../docs/caller-contract.md). |
-| `ErrPaneChanged` | `sendKeys` or `recordPaneAnswer` with `expect_pane_sha256`: the agent's pane no longer has that hash; nothing was sent or recorded. `errDetails` (`PaneChangedDetails`) never carries the new hash; shared pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay). |
-| `ErrPaneAnswerInProgress` | A pane answer or `recordPaneAnswer` while another sender still owns the request. Nothing was sent or recorded; `errDetails` is `PaneAnswerInProgressDetails`. |
-| `ErrClaimTooSoon` | `recordPaneAnswer` before the request's relay hook has been gone 2 s, or while it may still answer the request; nothing was recorded. `errDetails` is `ClaimTooSoonDetails`, with `not_before` (`null` only while the hook is seen running); retry handling is in [Permission relay](../../docs/caller-contract.md#permission-relay). |
-| `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
-| `ErrInvalidDecision` | `decision` was neither `allow` nor `deny`. |
-| `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
-| `ErrNoOpenPermissionRequest` | No eligible permission request matches the `(instance_id, request_token)` pair, including a closed, proven-gone or obsolete request. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or shared recovery or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when shared recovery marked it `missing`) before the request relay acknowledged its recorded verdict, the missing mark's own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (for a request with a settle instant, `"delivered"` requires durable relay acknowledgement; requests recorded by an older binary retain the [legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary), including derived delivery after expiry even when closed). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
-| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the recorded decision and acknowledgement prevent a second API answer. Acknowledgement does not establish agent receipt or dialog closure; see [Permission relay](../../docs/caller-contract.md#permission-relay). It also includes a request shared recovery denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`), and one closed at the pane (`pane_answer` `"sent"`, `"outside"` or `"tool_ran"`, with a `decision` or, for an `"unknown"` claim, none): `decide` on it records nothing, not even `attempted_decision`. A pane answer or `recordPaneAnswer` on a request its relay acknowledged, or one already closed at the pane, throws it too. |
-| `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and its precommit budget ran out, including acquisition or SQL work. It does not establish another process held the store. Once the verdict is confirmed committed, `decide` never throws it: a bound reached while it waits for confirmation resolves with `delivery` `"not_confirmed"`. An unconfirmed commit is an internal error instead. Without `max_wait_ms`, `decide` never throws `ErrStoreBusy`. A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` throws it when the store's write lock was not taken within its busy timeout. Recovery and zero-wait semantics are in the [caller contract](../../docs/caller-contract.md#permission-relay). `status`, `get`, `getMany`, `list`, `sweep` and `findMissing` throw it when a bounded store read does not finish in time; see [Bounded recovery on state reads](../../docs/caller-contract.md#bounded-recovery-on-state-reads). |
-| `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |
-| `ErrAmbiguousRequest` | `request_token` was empty and more than one open request exists for the spawn. |
-
-**config templates** (template-management verbs — mixed programmer error / operational signal):
+Handling and the limits of each class are in the
+[caller contract](../../docs/caller-contract.md#caller-contract).
+**relay / permissions**:
 
 | Error | When it fires |
 |---|---|
-| `ErrTemplateNameUnsafe` | A template name fails the safety check (path traversal, absolute path, hidden name, or trivial garbage). |
-| `ErrTemplateNotFound` | The named template `.toml` does not exist on disk. |
-| `ErrTemplateMalformed` | A template file exists but fails schema validation (unknown keys, an `agent` other than `claude`, `codex` or `cursor`, the old name of the `agent_args` key, wrong types, bad enums, or one key set under names that differ only in letter case, such as `RELAY_MODE` and `relay_mode`). `makeTemplate` also throws it, before writing anything, for an `agent` that is not exactly `claude`, `codex` or `cursor`. |
-| `ErrTemplateExists` | `make-template` target already exists and `overwrite` is not `true`. |
+| `ErrSendKeysWhileRelayed` | A permission relay may still answer. |
+| `ErrRelayFallenBack` | The relay settled without acknowledgement or a recorded pane answer; carries `RelayFallenBackDetails`. |
+| `ErrDialogMaybeOpen` | A permission dialog is not proven gone; carries `DialogMaybeOpenDetails`. |
+| `ErrPaneChanged` | The pane no longer matches `expect_pane_sha256`; carries `PaneChangedDetails` without a new hash. |
+| `ErrPaneAnswerInProgress` | Another sender owns the request; carries `PaneAnswerInProgressDetails`. |
+| `ErrClaimTooSoon` | An outside-answer claim is not yet allowed; carries `ClaimTooSoonDetails` with `not_before`. |
+| `ErrRelayModeOff` | `decide` requires `relay_mode: "on"`. |
+| `ErrInvalidDecision` | `decision` is neither `allow` nor `deny`. |
+| `ErrMissingRequestToken` | `decide` received an empty `request_token`. |
+| `ErrNoOpenPermissionRequest` | No eligible request matches the instance and token, including closed, proven-gone or obsolete requests. |
+| `ErrAlreadyDecided` | The request has a verdict, relay acknowledgement or completed pane answer. |
+| `ErrStoreBusy` | A bounded store operation did not finish in time. |
+| `ErrPermissionRequestNotFound` | No permission-request row matches `request_token`. |
+| `ErrAmbiguousRequest` | No token was supplied and multiple open requests exist. |
+
+**config templates**:
+
+| Error | When it fires |
+|---|---|
+| `ErrTemplateNameUnsafe` | The template name fails path/name safety checks. |
+| `ErrTemplateNotFound` | The named template does not exist. |
+| `ErrTemplateMalformed` | The template has invalid, unknown, duplicate case-insensitive or wrong-typed keys/values. |
+| `ErrTemplateExists` | The template exists and `overwrite` is not true. |
 
 **misc**:
 
 | Error | When it fires |
 |---|---|
-| `ErrInvalidFlags` | CLI flag parsing rejected the invocation; `getMany` received no IDs, an empty or repeated ID, or an ID the client [cannot pass to the CLI](#getmany); a call carried an old name of a renamed key (thrown before any process starts, naming the new key); `spawn` was given an explicit `instance_id` containing an ASCII control character (0x00–0x1f or 0x7f); `readPane`'s `n_lines` or `list`'s `limit` is negative (0 or omitted gives the default: 25 lines, no cap); `decide` was given a negative `max_wait_ms`; `sendKeys` was given params that do not fit together (a pane answer without `as`, `key` or `expect_pane_sha256` or with `text`; `key` with a non-empty `text`; `no_enter` with neither; `as` without `request_token`; a `key` that is neither a named key nor one character; a malformed hash); or `recordPaneAnswer` was given an `as` other than `"allow"`, `"deny"` or `"unknown"`, or a missing or malformed hash. Nothing was changed, sent or recorded. |
-| `ErrTooManyIds` | `getMany` received more IDs than the configured Id Cap; `errDetails` is `TooManyIdsDetails` with `id_cap`. See [Reading many agents](../../docs/caller-contract.md#reading-many-agents) for handling. |
+| `ErrInvalidFlags` | A parameter, key or parameter combination is invalid; no change or input occurred. |
+| `ErrTooManyIds` | `getMany` exceeds the configured Id Cap; carries `TooManyIdsDetails.id_cap`. |
 
-**CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational):
-
-| Error | When it fires |
-|---|---|
-| `ErrConfigMalformed` | The CLI refused its config file, `~/.config/agent-director/config.toml`: it cannot be read, does not parse as TOML, or sets a value agent-director refuses (for example a negative `[pause] timeout_seconds`). The description names the file and why: the parse error, or every refused key with its value and the values it allows. Every call that opens the store fails this way until an operator fixes the file. See the caller contract for handling. |
-| `ErrStoreOpen` | The CLI could not open its store; the description says what failed. This includes `HOME` unset or empty with no `home` option (`api: expand config path: …`): every call that opens the store is then refused, whatever `storePath` is. With `createIfMissing: false` it includes a store that does not exist (`database not initialized`); nothing was created. It says nothing about any agent. |
-| `ErrSchemaMismatch` | The CLI refused to open its store: its schema is newer than the binary (`found user_version=<N>, want <M>`), its store id is invalid, or its current-schema input authority is incompatible or uncommitted. The description says which. Nothing was written; an operator must act before store-opening calls can run. A newer store needs the release that wrote it. See [Operator actions](../../docs/operator-actions.md#upgrading-the-native-input-journal) for input-authority recovery. This says nothing about any agent. |
-| `ErrSchemaMigrationRequired` | The CLI refused to open its store: the store is older than the binary and must be migrated first. The description gives both schema versions. Nothing was written, and every call that opens the store fails this way until an administrator migrates the store; no call through this client can. See the caller contract for handling. It says nothing about any agent. |
-| `ErrOldLayout` | The CLI refused to open its store: it was about to open the default store (no `storePath`, and no `[store] db_path` in its config file), no store exists in `~/.config/agent-director`, and the old directory exists. Nothing was created, and every call that opens the store fails this way until an operator runs this release's `install.sh`. See the caller contract for handling. It says nothing about any agent. |
-
-**CLI itself** (the CLI failed, or does not know the verb, rather than refusing the call's input or state):
+**Configuration and store setup**:
 
 | Error | When it fires |
 |---|---|
-| `ErrInternal` | A CLI failure with no more specific name. Its description reports what failed and whether anything changed. A pane answer whose key was sent but not recorded carries `PaneKeySentDetails` with `key_sent: true`; see the [caller contract](../../docs/caller-contract.md#permission-relay). |
-| `ErrJSONMarshal` | The verb ran and succeeded, but the CLI could not write its JSON result, so the result is lost and whatever the call changes was changed (a `spawn` launched its agent). A bug in agent-director. Check with `get`, `status` or `list` before you repeat a call that changes something. |
-| `ErrUnknownVerb` | The binary does not know the called verb. No verb ran; binary and client versions differ. See [Installation](../../docs/install.md). |
-| `ErrTrailWrite` | Only the CLI's internal `trail-emit` command gives it, when it cannot write its trail event. No method of this client runs `trail-emit`, so a call through this client does not get it. |
+| `ErrConfigMalformed` | The binary cannot read or validate its configuration. |
+| `ErrStoreOpen` | The store cannot be opened, including an absent store with `createIfMissing: false`. |
+| `ErrSchemaMismatch` | The store schema, store id or input authority is incompatible. |
+| `ErrSchemaMigrationRequired` | The store needs an administrator-run migration. |
+| `ErrOldLayout` | The default store still uses the old directory layout. |
+
+**Other binary errors**:
+
+| Error | When it fires |
+|---|---|
+| `ErrInternal` | An otherwise unclassified failure; pane input may carry `PaneKeySentDetails`. |
+| `ErrJSONMarshal` | The verb succeeded but its result could not be serialized. |
+| `ErrUnknownVerb` | The installed binary does not know the requested verb. |
+| `ErrTrailWrite` | Internal trail-writing failure; no client method returns it. |
+
+Requests recorded by an older binary retain the
+[legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary),
+including derived delivery after expiry even when closed. Compatibility
+refusals for a request recorded by an older binary are defined there too.
 
 ## See also
 

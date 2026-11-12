@@ -71,7 +71,7 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[relay] poll_base_ms` | ms | 100 | Wait between a relay hook's polls for a decision (never under 50 ms; 0 or negative gives that floor plus jitter). |
 | `[relay] poll_jitter_ms` | ms | 100 | Random time added to each poll wait; 0 or negative adds none. |
 | `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit; its decision window is 3 s shorter (see [The relay hook's time limit](#the-relay-hooks-time-limit)). For Cursor, the full value is the decision window from admission, followed by a separate four-second settlement reserve; see [Cursor spawns](permissions.md#cursor-spawns). |
-| `[relay] permission_request_cap` | 0 or more | 1000 | Permission requests kept before the oldest closed ones go; 0 is unbounded, negative gives the default. |
+| `[relay] permission_request_cap` | 0 or more | 1000 | Permission requests kept before the oldest closed ones go; 0 is unbounded, negative gives the default. Closed requests still holding a live spawn's dialog, and a spawn's newest request while it has one awaiting an answer, are kept above the cap. |
 | `[pause] timeout_seconds` | 1 to 9223372036 | 30 | How long `pause` waits for the agent to exit. |
 | `[get_many] id_cap` | 1 or more | 20 | Maximum IDs in one `get-many` call; a larger value allows longer calls and larger results. |
 | `[pre_trust] lock_wait_seconds` | 1 to 9223372036 | 12 | How long `spawn` and `resume` of a Claude agent wait for Claude Code's lock on `.claude.json`. On timeout the launch goes ahead with `pre_trust` `failed`. Codex pre-trust takes no lock, so a Codex launch never waits and ignores this key. |

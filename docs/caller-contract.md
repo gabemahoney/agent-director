@@ -59,6 +59,13 @@ error:
   alert once, never read it as "dead"; a human runs this release's `install.sh`
   (see [Operator actions](operator-actions.md#a-verb-refuses-with-erroldlayout);
   [Upgrade](install.md#upgrade)).
+- With `HOME` unset or empty, a `--home` (TypeScript `home`) of `~` or
+  `~/…` refuses every call with `ErrInvalidFlags`; with no `--home`, every
+  store-opening call returns `ErrStoreOpen`, even with an absolute
+  `--store-path`. Set `HOME` or pass an absolute `--home`.
+- `ErrJSONMarshal`: the verb succeeded and its changes stand, but its result
+  was lost. Check `get`, `status` or `list` before repeating a call that
+  changes something.
 - Detect features by the binary's version (`agent-director version`, MCP
   `version`, TypeScript `binaryVersion`); `X.Y.Z-rc.N` counts as `X.Y.Z`. The
   `version` result's `config_dir` names the directory the binary keeps its
@@ -351,6 +358,15 @@ prompt until its conversation is confirmed; `allow_pending` does not override
 that rule. Hook configuration diagnosis is in
 [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
 
+A first SessionStart can wait up to `pending_grace_seconds` (at most 540 s)
+for the launch to record its pane; Claude's first response waits for it.
+A caller whose store differs from the one its pane's hooks use (an alternate
+`HOME`, `--home` or `--store-path` on a shared tmux server) gets no error:
+the row stays `pending`, noted `unreported` while the agent runs, and goes
+`missing` once it exits. A shared tmux server started with an alternate
+`HOME` sends every later spawn's hooks to that store. Use a
+[separate tmux server](permissions.md#one-spawn-under-another-home-or-store).
+
 ## Experimental context fullness
 
 `status`, `get` and each visible `list-subagents` record include the same
@@ -445,7 +461,9 @@ not evidence that every member was checked. It has no
 [confirmation](#confirmations) record, and the row's own confirmed records
 say nothing about its descendants. A stopped agent still recorded
 as `working` keeps the raw family working until an existing detector or
-state change records otherwise. Cursor's existing per-agent read projection
+state change records otherwise. A hook payload over 1 MiB is dropped whole,
+so its state or subagent report is lost; a missing report is not proof that
+work ended. Cursor's existing per-agent read projection
 can show `missing` before its terminal write succeeds; family reporting
 continues to use stored states until that write commits.
 
@@ -466,6 +484,10 @@ a `list` selecting it, or `sweep` can move it to `waiting` (shown after any
 any turn. `waiting` does not mean the turn succeeded: read the pane for the
 error before sending more work. The row's `state_changed_at` is the time of
 that recovery write, not of the turn's end.
+
+A turn Codex starts without a `UserPromptSubmit` hook leaves the row in the
+previous turn's state (`waiting` if it ended) until its own `Stop` or
+Interrupt; no read ends it.
 
 That move proves none of the turn's permission requests gone. On a relay-on
 row that had a request in that turn, a plain `send-keys` and `pause` can
@@ -902,6 +924,14 @@ failure or when no path is recorded, recomputes the current session's path
 from the row's cwd and config directory. Codex tries only its current recorded
 path. The refusals write and launch nothing.
 
+Claude recomputes under the row's saved absolute `CLAUDE_CONFIG_DIR`, else
+`~/.claude`; a relative, `~`-prefixed or blank selection is not used, so
+only a still-valid recorded `jsonl_path` finds that transcript. A row saved
+with no selection resumes with pre-trust on `~/.claude.json`, even when the
+pane's environment selects another directory, so the agent may stop at
+Claude Code's folder-trust prompt. Answering it in the pane continues the
+conversation; a fresh spawn or reuse does not.
+
 Before that lookup, for every agent, `resume` checks that the row's saved cwd
 is still a directory agent-director can enter, as `spawn` checks its `cwd`: a
 path that is gone, or a directory that the user agent-director runs as cannot
@@ -1070,6 +1100,8 @@ arguments return `ErrSpawnDeniedFlag` before writing or launching;
 Remove the named argument and any owned value, then retry. Conflicting modes,
 unknown aliases, route-changing arguments and ordinary force/yolo/sandbox/trust
 flags are refused. No compatible additional permission flag is supported.
+agent-director cannot reliably detect Cursor repairing a malformed native
+policy or silently falling back from it.
 Cursor permission-list refusals are in [Permissions](permissions.md#cursor-spawns);
 argument replacement and empty-list semantics are in
 [Settings](settings.md#the-agent-and-its-arguments).
@@ -1392,6 +1424,16 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
 - `ErrTemplateAgentMissing`: a template holds `agent_args` but names no agent,
   at `make-template` or when a `spawn` loads it. Give the template an `agent`,
   or remove its `agent_args`.
+- `ErrTemplateMalformed`: a template sets the arguments key under its old
+  name, holds a reserved key (`template`, `instance_id`, `tmux_session_name`
+  or `reuse_finished`), or sets one key under names differing only in letter
+  case. Use `agent_args`, remove the reserved key and keep one spelling.
+  `make-template` refuses those reserved keys with `ErrInvalidFlags`.
+- `ErrReservedEnvKey`: the merged template and call `extra_env` sets `HOME`
+  (any value), an `AGENT_DIRECTOR_*` key, or a malformed name (empty, or
+  containing `=` or NUL); `make-template` checks its own `extra_env` the
+  same way. Remove the key; select another account as
+  [Multi-Account](multi-account.md) says.
 - `ErrPermissionsUnsupported`: a `codex` or `cursor` spawn or template carries an `allow`,
   `deny` or `ask` entry. Drop the lists; see
   [Permissions](permissions.md#codex-spawns) or
@@ -1488,6 +1530,11 @@ re-encoding, changes their order or spelling. When an original recognized
 required scalar or list option lacks its required value, only literal
 filtering applies and the agent's parser rejects incomplete input.
 
+Not refused: a relative, `~`-prefixed or blank `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME` reaches the agent unchanged, but `pre_trust` reads `failed`
+with a warning and the agent may stop at its folder-trust prompt. Read the
+pane and answer it, or relaunch with an absolute path.
+
 ## Permission relay
 
 For Cursor, use the same request token, decision and delivery fields.
@@ -1504,6 +1551,13 @@ do not replay it. A hook's late or uncertain acknowledgement commit can leave
 Neither a claim nor durable acknowledgement proves transport completion, agent
 receipt, execution or dialog closure.
 
+For Claude and Codex, a relay hook that fails before recording an identifiable
+request denies it. One that cannot read the event or dies before recording,
+or a binary that cannot run, gives no relay answer and leaves the agent's
+native prompt. A prompt with no recorded request holds no input, so a plain
+`send-keys` can answer it. Claude shows its native dialog while the relay
+hook runs; that dialog is not evidence that the hook died.
+
 Every Cursor relay reply, including timeout denial, requires its own durable
 acknowledgement. Failed or missing acknowledgement means no relay answer is
 sent to Cursor. Separately validated cancellation or policy rejection is a
@@ -1513,7 +1567,8 @@ approval as though known absent. See [Cursor permissions](permissions.md#cursor-
 for delivery, proof and request lifetime rules.
 
 For fallback, inspect a connected current menu and make a fresh deliberate
-choice for that request only while it remains eligible and unclaimed.
+choice for that request only while it is not closed or proven gone and no
+response is claimed; an unacknowledged recorded verdict does not prevent it.
 `fallen_back` alone does not guarantee an answerable
 native request. Do not reuse a choice from before the relay deadline, or retry
 an uncertain answer. Terminal cancellation or native timeout cannot revive a
@@ -1543,6 +1598,14 @@ supplies neither ACP approval authority nor proof.
   send anything again). Read facts from it, never from the description; a
   caller that does not use it ignores it.
 
+| Error | `err_details` |
+|---|---|
+| `ErrRelayFallenBack` | The request's `get-permission` fields; `state`; `open_requests`, the agent's other requests awaiting an answer, oldest first, each with `request_token`, `tool_name`, `requested_at`, `delivery`, `hook_alive` and `pane_answer` (`[]` for none, `null` when unreadable). |
+| `ErrDialogMaybeOpen` | The oldest request holding the dialog, with its `get-permission` fields; `state`; `unproven_requests`, the agent's other such requests, oldest first, with the same fields. |
+| `ErrPaneAnswerInProgress` | `request_token`, `pane_as`, `pane_intent_at`, `sender_alive` (`true`, or `null` when uncheckable) and `not_before`. |
+| `ErrPaneChanged` | `n_lines` and the `request_token` named, if any. |
+| `ErrClaimTooSoon` | `hook_alive`, `hook_gone_at` and `not_before`. |
+
 `decide` records no verdict when it refuses with:
 
 - `ErrRelayFallenBack`: the request's relay hook is gone and took no verdict,
@@ -1556,7 +1619,9 @@ supplies neither ACP approval authority nor proof.
 - `ErrStoreBusy`: the bound ran out before the verdict could commit.
   This can include store acquisition or SQL work; it does not establish
   that another process or call held the store. Retry only as a new,
-  deliberate call with a fresh budget.
+  deliberate call with a fresh budget. Without `--max-wait-ms`, a write
+  lock not taken within `[store] busy_timeout_ms` is `ErrInternal`
+  instead; a negative bound is `ErrInvalidFlags`.
 - `ErrAlreadyDecided`: a verdict is already recorded (first `decide` wins, and
   the relay hook records a deny of its own when its time runs out,
   `decision_reason` `timeout`), or the request was answered at the pane.
@@ -1568,6 +1633,10 @@ supplies neither ACP approval authority nor proof.
   closed, and stays closed after `resume`. A decided request without a
   relay acknowledgement or completed pane answer is also closed when its
   agent ends or is marked missing; its recorded verdict is preserved.
+  On a closed request, `decide` gets `ErrAlreadyDecided` only for a verdict
+  the relay acknowledged before closure, a completed pane answer or a
+  `find_missing` deny; an `ended` deny or an unacknowledged verdict gets
+  `ErrNoOpenPermissionRequest`.
 
 The positive `--max-wait-ms` bound covers store acquisition, SQL, cleanup
 and reporting under the same original deadline. Expiry prevents new SQL
@@ -1605,9 +1674,14 @@ A pane answer (`send-keys --request-token`) sends nothing when it refuses
 with:
 
 - `ErrPaneChanged`: the pane changed since you read it. Read it again; the
-  error does not carry the new hash.
+  error does not carry the new hash. Volatile lines, such as a spinner or a
+  clock, can cause it.
 - `ErrPaneAnswerInProgress`: another pane answer to this request is still
-  being sent. Do nothing.
+  being sent, or its sender cannot be checked and `not_before` has not
+  passed. Do nothing. A sender that died leaves `pane_answer` `intent`, its
+  key possibly typed: read the pane again, then answer with the fresh hash
+  or use `record-pane-answer`.
+- `ErrStoreBusy`: the store's write lock was not taken in time.
 - `ErrSendKeysWhileRelayed`: a relay hook of the agent may still answer
   its request: answer the request it names with `decide`, or retry later (a
   plain retry can then get `ErrDialogMaybeOpen`, below). Don't decide one
@@ -1619,6 +1693,11 @@ with:
 `record-pane-answer` returns `ErrClaimTooSoon` while the relay hook may still
 answer or has not been gone for 2 s yet, so the prompt may not be drawn:
 retry at `err_details.not_before` (null only while the hook is seen running).
+Its other refusals record nothing: `ErrPermissionRequestNotFound` (no request
+has the token), `ErrNoOpenPermissionRequest` (closed with its spawn),
+`ErrAlreadyDecided` (confirmed, or already closed at the pane),
+`ErrPaneAnswerInProgress`, `ErrPaneChanged`, `ErrStoreBusy` and
+`read-pane`'s tmux errors.
 
 On relay-on rows, while a request is fallen back with no pane answer recorded, a
 plain `send-keys` (no `--request-token`) is refused with
@@ -1626,6 +1705,11 @@ plain `send-keys` (no `--request-token`) is refused with
 other open requests: close it with a pane answer or with
 `record-pane-answer`. While a relay hook of the agent may still answer,
 every `send-keys` is refused with `ErrSendKeysWhileRelayed`.
+
+On Codex, `Escape` while an undecided main-agent request's relay hook polls
+ends the hook: the command does not run and no dialog follows, but the
+request falls back and stays open. Close it with `record-pane-answer --as deny`
+and an inspected read's hash once the hook has been gone 2 s.
 
 A decided request recorded before schema v7 with `proven_gone_how`
 `agent_gone` no longer holds plain `send-keys`, even when its reported
@@ -1645,6 +1729,16 @@ can last until `created_at` plus the configured relay window plus 2 s
 (24 h + 2 s at the default). A decided legacy request with `agent_gone`
 proof contributes no hold.
 
+A request recorded by an older binary takes no new verdict. Until
+`requested_at` plus the relay window less 1 s, `decide` on an undecided one
+is `ErrNoOpenPermissionRequest`. After that, `decide` first waits until its
+`confirm_by` (at most 3 s; `ErrStoreBusy` if `--max-wait-ms` cannot cover
+it). An existing verdict or completed pane answer then keeps its own refusal;
+a still-open request gets `ErrRelayFallenBack` only while the row is
+`check_permission` with no other open or later request, otherwise
+`ErrNoOpenPermissionRequest`. A pane answer by its token skips that check:
+after `ErrNoOpenPermissionRequest`, do not answer it at the pane.
+
 On relay-off rows, the API does not guard `send-keys` against an open
 permission prompt: keys can reach the prompt and answer it. Cursor's gateway
 still checks prompt admission; see [Cursor input outcomes](#cursor-input-outcomes).
@@ -1658,16 +1752,26 @@ hooks show the request's dialog gone. Follow the request's proof and delivery
 fields. Apart from a Cursor turn's end (below), completing or interrupting the
 main turn does not release a child or unknown-origin request, even when its
 child id is null. See [The dialog hold](permissions.md#the-dialog-hold).
-Nothing is sent. Its
-`err_details` name the oldest such request, how agent-director's records
-say it closed and since when, and the agent's other such requests. Keep
-the keys and retry later. If it is still held after some seconds, have a
-person or an LLM read the pane and, having looked, send with that read's
+Nothing is sent. Keep the keys and retry later. If it is still held after
+some seconds, have a person or an LLM read the pane and, having looked, send with that read's
 `pane_sha256`: a matching hash passes the API's dialog hold, and a changed pane
 is `ErrPaneChanged`. Every other refusal still applies. On Cursor the gateway
 can still refuse the prompt with `gateway_refused`; follow
 [Cursor input outcomes](#cursor-input-outcomes). Never pass
 `--expect-pane-sha256` from an automatic flow.
+
+A matching hash does not close every race: the pane can change between
+capture and key, a key already in flight can land on a dialog that appears
+after the check, identical Claude or Codex dialogs cannot be told apart, and
+a native dialog drawn more than 2 s after its hook ends can appear after
+`record-pane-answer`. The affected request stays unproven and holds plain
+input until someone looks again. A main-turn end proves only requests
+recorded before the second its hook started.
+
+A shared recovery check repairs a relay-on Claude or Codex row left in
+`check_permission` once no request holds it: Claude to `waiting` when the
+idle-prompt Notification is its latest hook, otherwise `working`; Codex
+always to `working`.
 
 A Cursor row can stay `check_permission` across working reports while a
 genuine unanswered, unproven request holds it; readiness requires the hold to
