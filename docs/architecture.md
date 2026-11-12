@@ -3340,9 +3340,13 @@ the socket is shown").
   through `lifeColumns`, and the owner through `launchOwnerColumns`, as
   full-row `Spawn` reads select them, so all three equal
   `GetSpawn`'s for the same row. `SpawnStatusRow` shares `lifeColumns` for
-  snapshot/identity but omits `LaunchOwner`. No
-  stored launch start, token or identity value fails the read, and the
-  structured columns (`labels`, `agent_args`, `extra_env`) are never read.
+  snapshot/identity but omits `LaunchOwner`. Nullable columns read NULL as
+  their zero value; stored launch starts, tokens and text identity or owner
+  values do not fail the read. A wrong storage class (such as non-numeric text)
+  in `row_version`, `pid`, `tmux_server_pid`, `tmux_server_started`, `pane_pid`
+  or `launch_owner_pid` fails the whole read: these columns are scanned into
+  Go integers. The structured columns (`labels`, `agent_args`, `extra_env`)
+  are never read.
   The struct grows additively.
 
 **Partial Spawn reader.** `SpawnStatusRow` reads status, context and display
