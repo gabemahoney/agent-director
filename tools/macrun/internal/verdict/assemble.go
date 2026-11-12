@@ -241,7 +241,11 @@ type partLinks struct {
 
 // findPart finds one planned part's job and record: from the artifact
 // mac-part-<part>-<the job's attempt>, else from the job's log. A job
-// GitHub carried over from an earlier attempt is read from that attempt.
+// GitHub carried over from an earlier attempt is read from that attempt:
+// one listed with that attempt's run_attempt, or one listed under the
+// judged attempt whose log holds this part's record for the run and commit
+// from an earlier attempt, which is read from that attempt's artifact, else
+// from the log.
 func findPart(ctx context.Context, r ghrun.Reader, opts Options, commit, name string, jobs []ghrun.Job) (model.PartInput, partLinks) {
 	pi := model.PartInput{Name: name, Source: model.SourceNone, Attempt: opts.Attempt}
 	job, ok := findJob(jobs, ghrun.PartJobName(name))
@@ -263,28 +267,14 @@ func findPart(ctx context.Context, r ghrun.Reader, opts Options, commit, name st
 	}
 	want := identity{part: name, runID: opts.RunID, attempt: pi.Attempt, commit: commit}
 
-	artifactName := fmt.Sprintf("mac-part-%s-%d", name, pi.Attempt)
 	var tried []string
-	file, found, err := r.ArtifactFile(ctx, opts.RunID, artifactName, model.RecordFile)
-	if file.ArtifactID != 0 {
-		links.artifact = fmt.Sprintf("%s/%s/actions/runs/%d/artifacts/%d", opts.ServerURL, opts.Repo, opts.RunID, file.ArtifactID)
+	rec, link, failed := readArtifact(ctx, r, opts, want)
+	links.artifact = link
+	if rec != nil {
+		pi.Record, pi.Source = rec, model.SourceArtifact
+		return pi, links
 	}
-	switch {
-	case err != nil:
-		tried = append(tried, fmt.Sprintf("artifact %s: %v", artifactName, err))
-	case !found:
-		tried = append(tried, fmt.Sprintf("artifact %s: no %s", artifactName, model.RecordFile))
-	default:
-		var rec model.Record
-		if err := json.Unmarshal(file.Data, &rec); err != nil {
-			tried = append(tried, fmt.Sprintf("artifact %s: %s doesn't parse: %v", artifactName, model.RecordFile, err))
-		} else if mismatch := want.mismatch(rec); mismatch != "" {
-			tried = append(tried, fmt.Sprintf("artifact %s: %s", artifactName, mismatch))
-		} else {
-			pi.Record, pi.Source = &rec, model.SourceArtifact
-			return pi, links
-		}
-	}
+	tried = append(tried, failed)
 
 	log, found, err := r.JobLog(ctx, job.ID)
 	switch {
@@ -300,11 +290,25 @@ func findPart(ctx context.Context, r ghrun.Reader, opts Options, commit, name st
 			tried = append(tried, fmt.Sprintf("log of job %d: %v", job.ID, err))
 		case !marked:
 			tried = append(tried, fmt.Sprintf("log of job %d: no marked line", job.ID))
-		case mismatch != "":
-			tried = append(tried, fmt.Sprintf("log of job %d: %s", job.ID, mismatch))
-		default:
+		case mismatch == "":
 			pi.Record, pi.Source = &rec, model.SourceLog
 			return pi, links
+		case pi.Attempt == opts.Attempt && want.earlier(rec):
+			pi.Attempt, pi.CarriedOver = rec.Attempt, true
+			from := want
+			from.attempt = rec.Attempt
+			// The judged attempt's artifact, if any, is not this part's, so
+			// only the earlier attempt's is linked.
+			fromRec, fromLink, _ := readArtifact(ctx, r, opts, from)
+			links.artifact = fromLink
+			if fromRec != nil {
+				pi.Record, pi.Source = fromRec, model.SourceArtifact
+			} else {
+				pi.Record, pi.Source = &rec, model.SourceLog
+			}
+			return pi, links
+		default:
+			tried = append(tried, fmt.Sprintf("log of job %d: %s", job.ID, mismatch))
 		}
 	}
 
@@ -313,6 +317,31 @@ func findPart(ctx context.Context, r ghrun.Reader, opts Options, commit, name st
 		pi.Detail = fmt.Sprintf("job concluded %s; %s", job.Conclusion, pi.Detail)
 	}
 	return pi, links
+}
+
+// readArtifact reads the record of the part, run and attempt want names
+// from the artifact mac-part-<part>-<attempt>. It returns the record, or nil
+// and what failed, and the artifact's link when GitHub has the artifact.
+func readArtifact(ctx context.Context, r ghrun.Reader, opts Options, want identity) (rec *model.Record, link, failed string) {
+	name := fmt.Sprintf("mac-part-%s-%d", want.part, want.attempt)
+	file, found, err := r.ArtifactFile(ctx, opts.RunID, name, model.RecordFile)
+	if file.ArtifactID != 0 {
+		link = fmt.Sprintf("%s/%s/actions/runs/%d/artifacts/%d", opts.ServerURL, opts.Repo, opts.RunID, file.ArtifactID)
+	}
+	switch {
+	case err != nil:
+		return nil, link, fmt.Sprintf("artifact %s: %v", name, err)
+	case !found:
+		return nil, link, fmt.Sprintf("artifact %s: no %s", name, model.RecordFile)
+	}
+	var read model.Record
+	if err := json.Unmarshal(file.Data, &read); err != nil {
+		return nil, link, fmt.Sprintf("artifact %s: %s doesn't parse: %v", name, model.RecordFile, err)
+	}
+	if mismatch := want.mismatch(read); mismatch != "" {
+		return nil, link, fmt.Sprintf("artifact %s: %s", name, mismatch)
+	}
+	return &read, link, ""
 }
 
 // findJob returns the job named name.
@@ -352,4 +381,15 @@ func (id identity) mismatch(rec model.Record) string {
 		return ""
 	}
 	return "record is for " + strings.Join(diffs, ", ")
+}
+
+// earlier reports that rec is this part's record for the same run and
+// commit from an earlier attempt.
+func (id identity) earlier(rec model.Record) bool {
+	if rec.Attempt < 1 || rec.Attempt >= id.attempt {
+		return false
+	}
+	from := id
+	from.attempt = rec.Attempt
+	return from.mismatch(rec) == ""
 }

@@ -21788,7 +21788,11 @@ format are shared across jobs and saved artifacts.
 A case reports `pass`, `skip` or `fail`; only `fail` has a reason
 (`failed`). Each part writes `record.json` to artifact
 `mac-part-<part>-<attempt>`. Its `@macrun-event` JSON log lines can reconstruct
-the record when the artifact is unavailable. A part is complete only when
+the record when the artifact is unavailable. After "Re-run failed jobs",
+macrun recognises a carried-over part by its earlier attempt's record in
+the job's log, matching the same run, commit and part. It judges that part
+from the earlier attempt's artifact or, if that has no usable record, the
+log. A part is complete only when
 its record exists, no setup step or check failed, it ended `finished`, and
 every expected or reported case has a `pass` or `fail` result.
 

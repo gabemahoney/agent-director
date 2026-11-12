@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "part": "installer",
+  "run_id": 43265158749,
+  "attempt": 1,
+  "commit": "54419d43d4dadd7c5623ade1bc399349c17cc9f9",
+  "versions": [
+    {
+      "name": "macos-product-version",
+      "value": "26.7.2"
+    },
+    {
+      "name": "macos-build-version",
+      "value": "25G332"
+    },
+    {
+      "name": "tmux",
+      "value": "tmux 3.8"
+    },
+    {
+      "name": "macos-sqlite3",
+      "value": "3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)"
+    },
+    {
+      "name": "go",
+      "value": "go1.27.3"
+    },
+    {
+      "name": "bun",
+      "value": "1.3.13"
+    },
+    {
+      "name": "bash",
+      "value": "GNU bash, version 5.3.20(1)-release (aarch64-apple-darwin25.6.0)"
+    },
+    {
+      "name": "standard-sqlite3",
+      "value": "3.54.1 2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76 (64-bit)"
+    }
+  ],
+  "configurations": [
+    "default"
+  ],
+  "expected_cases": [
+    "go:test/install-sh",
+    "go:test/install-sh:TestAgentCodexOnly",
+    "go:test/install-sh:TestMoveAfterCleanClose",
+    "go:test/install-sh:TestMoveSuccessful"
+  ],
+  "packages": [
+    {
+      "dir": "test/install-sh",
+      "built": true
+    }
+  ],
+  "cases": [
+    {
+      "case": "go:test/install-sh:TestAgentCodexOnly/no-hooks",
+      "result": "pass",
+      "elapsed": 10.05,
+      "output": "=== RUN   TestAgentCodexOnly/no-hooks\n=== PAUSE TestAgentCodexOnly/no-hooks\n=== CONT  TestAgentCodexOnly/no-hooks\n    agent_presence_test.go:192: installer case \"fresh install\": the tools install.sh meets\n          bash: /bin/bash -\u003e /bin/bash\n          bash BASH_VERSION: 3.2.57(1)-release\n          command -v sqlite3: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox-no-agents/sqlite3 -\u003e /usr/bin/sqlite3\n          sqlite3 --version: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)\n--- PASS: TestAgentCodexOnly/no-hooks (10.05s)\n"
+    },
+    {
+      "case": "go:test/install-sh:TestAgentCodexOnly/hooks",
+      "result": "pass",
+      "elapsed": 10.05,
+      "output": "=== RUN   TestAgentCodexOnly/hooks\n=== PAUSE TestAgentCodexOnly/hooks\n=== CONT  TestAgentCodexOnly/hooks\n    agent_presence_test.go:192: installer case \"fresh install\": the tools install.sh meets\n          bash: /bin/bash -\u003e /bin/bash\n          bash BASH_VERSION: 3.2.57(1)-release\n          command -v sqlite3: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox-no-agents/sqlite3 -\u003e /usr/bin/sqlite3\n          sqlite3 --version: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)\n--- PASS: TestAgentCodexOnly/hooks (10.05s)\n"
+    },
+    {
+      "case": "go:test/install-sh:TestAgentCodexOnly/no-hooks-register-mcp",
+      "result": "pass",
+      "elapsed": 10.05,
+      "output": "=== RUN   TestAgentCodexOnly/no-hooks-register-mcp\n=== PAUSE TestAgentCodexOnly/no-hooks-register-mcp\n=== CONT  TestAgentCodexOnly/no-hooks-register-mcp\n    agent_presence_test.go:192: installer case \"fresh install\": the tools install.sh meets\n          bash: /bin/bash -\u003e /bin/bash\n          bash BASH_VERSION: 3.2.57(1)-release\n          command -v sqlite3: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox-no-agents/sqlite3 -\u003e /usr/bin/sqlite3\n          sqlite3 --version: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)\n--- PASS: TestAgentCodexOnly/no-hooks-register-mcp (10.05s)\n"
+    },
+    {
+      "case": "go:test/install-sh:TestAgentCodexOnly/hooks-register-mcp",
+      "result": "pass",
+      "elapsed": 0.28,
+      "output": "=== RUN   TestAgentCodexOnly/hooks-register-mcp\n=== PAUSE TestAgentCodexOnly/hooks-register-mcp\n=== CONT  TestAgentCodexOnly/hooks-register-mcp\n    agent_presence_test.go:192: installer case \"fresh install\": the tools install.sh meets\n          bash: /bin/bash -\u003e /bin/bash\n          bash BASH_VERSION: 3.2.57(1)-release\n          command -v sqlite3: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox-no-agents/sqlite3 -\u003e /usr/bin/sqlite3\n          sqlite3 --version: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)\n--- PASS: TestAgentCodexOnly/hooks-register-mcp (0.28s)\n"
+    },
+    {
+      "case": "go:test/install-sh:TestAgentCodexOnly",
+      "result": "pass",
+      "elapsed": 0,
+      "output": "=== RUN   TestAgentCodexOnly\n--- PASS: TestAgentCodexOnly (0.00s)\n"
+    },
+    {
+      "case": "go:test/install-sh:TestMoveAfterCleanClose",
+      "result": "fail",
+      "reason": "failed",
+      "elapsed": 1.22,
+      "output": "=== RUN   TestMoveAfterCleanClose\n    move_clean_close_darwin_test.go:19: installer case \"upgrade after a clean close (b.zsj)\": the tools install.sh meets\n          bash: /bin/bash -\u003e /bin/bash\n          bash BASH_VERSION: 3.2.57(1)-release\n          command -v sqlite3: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox/sqlite3 -\u003e /usr/bin/sqlite3\n          sqlite3 --version: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)\n    move_clean_close_darwin_test.go:21: install.sh: exit 5\n        stdout:\n          source  : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director\n          admin source: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director-admin\n          version-check: agent-director-admin stamp matches (0.0.9-move 0123456789abcdef0123456789abcdef01234567)\n          previous: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director/admin/agent-director-admin does not predate the native-input cutover (it has migrate-journal)\n        install.sh: pre-flight OK\n          claude  : 0.0.0 (fake claude, move tests) (program: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox/claude)\n          codex   : not installed (codex is not on PATH, and [launch] codex_path is not set)\n          cursor  : not installed (agent is not on PATH, and [launch] cursor_path is not set)\n          tmux    : tmux 3.8\n          cutover : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director/state.db at v5 crosses the native-input cutover\n          move    : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director -\u003e /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.config/agent-director\n        \n        stderr:\n        install.sh: moving /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director to /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.config/agent-director failed: SQLite's backup of the store /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director/state.db failed: Error: unable to open database file\n          The partial /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.config/agent-director was removed (and so was ~/.config, when the move had created it); /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director was not changed.\n          A full disk is the usual cause: free some space (or fix the cause above), then re-run this install.\n          (operator-actions.md, \"`install.sh` stops with `ErrMoveFailed`\")\n        install.sh: err_name=ErrMoveFailed\n    installer_mac_darwin_test.go:140: installer case failed: upgrade after a clean close (b.zsj)\n        exit status: want 0, seen 5\n        err_name: want none, seen ErrMoveFailed\n        install.sh stdout:\n          source  : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director\n          admin source: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director-admin\n          version-check: agent-director-admin stamp matches (0.0.9-move 0123456789abcdef0123456789abcdef01234567)\n          previous: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director/admin/agent-director-admin does not predate the native-input cutover (it has migrate-journal)\n        install.sh: pre-flight OK\n          claude  : 0.0.0 (fake claude, move tests) (program: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox/claude)\n          codex   : not installed (codex is not on PATH, and [launch] codex_path is not set)\n          cursor  : not installed (agent is not on PATH, and [launch] cursor_path is not set)\n          tmux    : tmux 3.8\n          cutover : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director/state.db at v5 crosses the native-input cutover\n          move    : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director -\u003e /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.config/agent-director\n        \n        install.sh stderr:\n        install.sh: moving /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director to /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.config/agent-director failed: SQLite's backup of the store /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director/state.db failed: Error: unable to open database file\n          The partial /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.config/agent-director was removed (and so was ~/.config, when the move had created it); /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveAfterCleanClose3280763713/001/home/.agent-director was not changed.\n          A full disk is the usual cause: free some space (or fix the cause above), then re-run this install.\n          (operator-actions.md, \"`install.sh` stops with `ErrMoveFailed`\")\n        install.sh: err_name=ErrMoveFailed\n        \n        store files before install.sh:\n          .agent-director/state.db -rw-r--r-- size=65536 header write=2 read=2\n        store files after install.sh:\n          .agent-director/state.db -rw-r--r-- size=65536 header write=2 read=2\n        \n--- FAIL: TestMoveAfterCleanClose (1.22s)\n"
+    },
+    {
+      "case": "go:test/install-sh:TestMoveSuccessful/plain",
+      "result": "fail",
+      "reason": "failed",
+      "elapsed": 1.08,
+      "output": "=== RUN   TestMoveSuccessful/plain\n    move_run_test.go:299: installer case \"upgrade with -wal and -shm (b.up4)\": the tools install.sh meets\n          bash: /bin/bash -\u003e /bin/bash\n          bash BASH_VERSION: 3.2.57(1)-release\n          command -v sqlite3: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox/sqlite3 -\u003e /usr/bin/sqlite3\n          sqlite3 --version: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)\n    move_run_test.go:312: install.sh: exit 5\n        stdout:\n          source  : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director\n          admin source: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director-admin\n          version-check: agent-director-admin stamp matches (0.0.9-move 0123456789abcdef0123456789abcdef01234567)\n          previous: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director/admin/agent-director-admin does not predate the native-input cutover (it has migrate-journal)\n        install.sh: pre-flight OK\n          claude  : 0.0.0 (fake claude, move tests) (program: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox/claude)\n          codex   : not installed (codex is not on PATH, and [launch] codex_path is not set)\n          cursor  : not installed (agent is not on PATH, and [launch] cursor_path is not set)\n          tmux    : tmux 3.8\n          cutover : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director/state.db at v5 crosses the native-input cutover\n          move    : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director -\u003e /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.config/agent-director\n        \n        stderr:\n        install.sh: moving /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director to /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.config/agent-director failed: the copy /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.config/agent-director/state.db of the store has user_version 'Error: stepping, unable to open database file (14)', the original's is '5'\n          The partial /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.config/agent-director was removed (and so was ~/.config, when the move had created it); /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director was not changed.\n          A full disk is the usual cause: free some space (or fix the cause above), then re-run this install.\n          (operator-actions.md, \"`install.sh` stops with `ErrMoveFailed`\")\n        install.sh: err_name=ErrMoveFailed\n    installer_mac_darwin_test.go:140: installer case failed: upgrade with -wal and -shm (b.up4)\n        exit status: want 0, seen 5\n        err_name: want none, seen ErrMoveFailed\n        install.sh stdout:\n          source  : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director\n          admin source: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director-admin\n          version-check: agent-director-admin stamp matches (0.0.9-move 0123456789abcdef0123456789abcdef01234567)\n          previous: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director/admin/agent-director-admin does not predate the native-input cutover (it has migrate-journal)\n        install.sh: pre-flight OK\n          claude  : 0.0.0 (fake claude, move tests) (program: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox/claude)\n          codex   : not installed (codex is not on PATH, and [launch] codex_path is not set)\n          cursor  : not installed (agent is not on PATH, and [launch] cursor_path is not set)\n          tmux    : tmux 3.8\n          cutover : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director/state.db at v5 crosses the native-input cutover\n          move    : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director -\u003e /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.config/agent-director\n        \n        install.sh stderr:\n        install.sh: moving /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director to /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.config/agent-director failed: the copy /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.config/agent-director/state.db of the store has user_version 'Error: stepping, unable to open database file (14)', the original's is '5'\n          The partial /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.config/agent-director was removed (and so was ~/.config, when the move had created it); /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulplain2594053718/001/home/.agent-director was not changed.\n          A full disk is the usual cause: free some space (or fix the cause above), then re-run this install.\n          (operator-actions.md, \"`install.sh` stops with `ErrMoveFailed`\")\n        install.sh: err_name=ErrMoveFailed\n        \n        store files before install.sh:\n          .agent-director/state.db -rw-r--r-- size=65536 header write=2 read=2\n          .agent-director/state.db-shm -rw-r--r-- size=32768\n          .agent-director/state.db-wal -rw-r--r-- size=20632\n        store files after install.sh:\n          .agent-director/state.db -rw-r--r-- size=65536 header write=2 read=2\n          .agent-director/state.db-shm -rw-r--r-- size=32768\n          .agent-director/state.db-wal -rw-r--r-- size=20632\n        \n--- FAIL: TestMoveSuccessful/plain (1.08s)\n"
+    },
+    {
+      "case": "go:test/install-sh:TestMoveSuccessful/keep-prior",
+      "result": "fail",
+      "reason": "failed",
+      "elapsed": 1,
+      "output": "=== RUN   TestMoveSuccessful/keep-prior\n    move_run_test.go:314: install.sh: exit 5\n        stdout:\n          source  : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director\n          admin source: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director-admin\n          version-check: agent-director-admin stamp matches (0.0.9-move 0123456789abcdef0123456789abcdef01234567)\n          previous: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulkeep-prior2767646911/001/home/.agent-director/admin/agent-director-admin does not predate the native-input cutover (it has migrate-journal)\n        install.sh: pre-flight OK\n          claude  : 0.0.0 (fake claude, move tests) (program: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox/claude)\n          codex   : not installed (codex is not on PATH, and [launch] codex_path is not set)\n          cursor  : not installed (agent is not on PATH, and [launch] cursor_path is not set)\n          tmux    : tmux 3.8\n          cutover : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulkeep-prior2767646911/001/home/.agent-director/state.db at v5 crosses the native-input cutover\n          move    : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulkeep-prior2767646911/001/home/.agent-director -\u003e /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulkeep-prior2767646911/001/home/.config/agent-director\n        \n        stderr:\n        install.sh: moving /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulkeep-prior2767646911/001/home/.agent-director to /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulkeep-prior2767646911/001/home/.config/agent-director failed: the copy /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulkeep-prior2767646911/001/home/.config/agent-director/state.db of the store has user_version 'Error: stepping, unable to open database file (14)', the original's is '5'\n          The partial /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulkeep-prior2767646911/001/home/.config/agent-director was removed (and so was ~/.config, when the move had created it); /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulkeep-prior2767646911/001/home/.agent-director was not changed.\n          A full disk is the usual cause: free some space (or fix the cause above), then re-run this install.\n          (operator-actions.md, \"`install.sh` stops with `ErrMoveFailed`\")\n        install.sh: err_name=ErrMoveFailed\n--- FAIL: TestMoveSuccessful/keep-prior (1.00s)\n"
+    },
+    {
+      "case": "go:test/install-sh:TestMoveSuccessful/apple-sqlite3",
+      "result": "fail",
+      "reason": "failed",
+      "elapsed": 1.06,
+      "output": "=== RUN   TestMoveSuccessful/apple-sqlite3\n    move_run_test.go:314: install.sh: exit 5\n        stdout:\n          source  : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director\n          admin source: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/current/agent-director-admin\n          version-check: agent-director-admin stamp matches (0.0.9-move 0123456789abcdef0123456789abcdef01234567)\n          previous: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulapple-sqlite31601388469/001/home/.agent-director/admin/agent-director-admin does not predate the native-input cutover (it has migrate-journal)\n        install.sh: pre-flight OK\n          claude  : 0.0.0 (fake claude, move tests) (program: /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/move-fixture-3292555903/toolbox/claude)\n          codex   : not installed (codex is not on PATH, and [launch] codex_path is not set)\n          cursor  : not installed (agent is not on PATH, and [launch] cursor_path is not set)\n          tmux    : tmux 3.8\n          cutover : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulapple-sqlite31601388469/001/home/.agent-director/state.db at v5 crosses the native-input cutover\n          move    : /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulapple-sqlite31601388469/001/home/.agent-director -\u003e /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulapple-sqlite31601388469/001/home/.config/agent-director\n        \n        stderr:\n        install.sh: moving /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulapple-sqlite31601388469/001/home/.agent-director to /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulapple-sqlite31601388469/001/home/.config/agent-director failed: the copy /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulapple-sqlite31601388469/001/home/.config/agent-director/state.db of the store has user_version 'Error: in prepare, unable to open database file (14)', the original's is '5'\n          The partial /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulapple-sqlite31601388469/001/home/.config/agent-director was removed (and so was ~/.config, when the move had created it); /private/var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/TestMoveSuccessfulapple-sqlite31601388469/001/home/.agent-director was not changed.\n          A full disk is the usual cause: free some space (or fix the cause above), then re-run this install.\n          (operator-actions.md, \"`install.sh` stops with `ErrMoveFailed`\")\n        install.sh: err_name=ErrMoveFailed\n--- FAIL: TestMoveSuccessful/apple-sqlite3 (1.06s)\n"
+    },
+    {
+      "case": "go:test/install-sh:TestMoveSuccessful",
+      "result": "fail",
+      "reason": "failed",
+      "elapsed": 3.14,
+      "output": "=== RUN   TestMoveSuccessful\n--- FAIL: TestMoveSuccessful (3.14s)\n"
+    },
+    {
+      "case": "go:test/install-sh",
+      "result": "pass",
+      "elapsed": 14.814,
+      "output": "FAIL\n"
+    }
+  ],
+  "end": "finished"
+}

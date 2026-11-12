@@ -103,7 +103,10 @@
 // checkout, and reads whether the repository is public. For each planned
 // part it finds the job named "part <name>" and reads the part's record
 // from the artifact mac-part-<name>-<the job's run attempt>, or, failing
-// that, from the marked lines of the job's log. A job step that failed
+// that, from the marked lines of the job's log. A job whose log holds the
+// part's record from an earlier attempt of the run and commit was carried
+// over from that attempt by "Re-run failed jobs", so its record is read
+// from that attempt's artifact, or else from the log. A job step that failed
 // before the step named "Run cases" is the part's failed setup step. The
 // Mac workflow must name its part jobs and that step so.
 //

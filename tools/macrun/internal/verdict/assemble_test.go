@@ -164,6 +164,19 @@ func TestFindParts(t *testing.T) {
 		return []model.Incompleteness{{Kind: model.IncompletePartNotRun, Part: "one", Detail: detail}}
 	}
 	const neither = "no record: artifact mac-part-one-2: no record.json; log of job 101: none"
+	// listedCarriedOver gives part one GitHub's carry-over shape: listed in
+	// attempt 2 with run_attempt 2 and no artifact of attempt 2, its log
+	// printing rec. Attempts 1 and 3 have good artifacts, which a refused log
+	// record must not lead to.
+	listedCarriedOver := func(r *macfix.Reader, rec model.Record) {
+		delete(r.Records, "mac-part-one-2")
+		r.Records["mac-part-one-1"] = artifact(t, 500, record("one", 1, earlier...))
+		r.Records["mac-part-one-3"] = artifact(t, 503, record("one", 3, earlier...))
+		r.Logs[101] = logOf(t, rec)
+	}
+	refused := func(mismatch string) []model.Incompleteness {
+		return notRun("no record: artifact mac-part-one-2: no record.json; log of job 101: record is for " + mismatch)
+	}
 	for _, tc := range []struct {
 		name string
 		// change changes the fake GitHub, whose part job 101 succeeded with
@@ -292,6 +305,58 @@ func TestFindParts(t *testing.T) {
 				Name: "one", Attempt: 1, Source: model.SourceArtifact, CarriedOver: true, Complete: true,
 				LogURL: jobURL + "101", ArtifactURL: artifactURL + "500", Versions: macfix.Versions, Cases: earlier,
 			},
+		},
+		{
+			name: "listed in attempt 2, its log attempt 1's, no artifact of attempt 1: from its log, carried over",
+			change: func(r *macfix.Reader) {
+				listedCarriedOver(r, record("one", 1, earlier...))
+				delete(r.Records, "mac-part-one-1")
+			},
+			wantVerdict: model.VerdictPassed,
+			wantPart: model.PartVerdict{
+				Name: "one", Attempt: 1, Source: model.SourceLog, CarriedOver: true, Complete: true,
+				LogURL: jobURL + "101", Versions: macfix.Versions, Cases: earlier,
+			},
+		},
+		{
+			name: "listed in attempt 2, its log attempt 1's for another commit",
+			change: func(r *macfix.Reader) {
+				rec := record("one", 1, earlier...)
+				rec.Commit = "bad"
+				listedCarriedOver(r, rec)
+			},
+			wantCode:    1,
+			wantVerdict: model.VerdictIncomplete,
+			wantReasons: refused("attempt 1, not 2, commit bad, not c0ffee"),
+			wantPart:    partVerdict(model.SourceNone, "", nil),
+		},
+		{
+			name:        "listed in attempt 2, its log attempt 1's for another part",
+			change:      func(r *macfix.Reader) { listedCarriedOver(r, record("two", 1, earlier...)) },
+			wantCode:    1,
+			wantVerdict: model.VerdictIncomplete,
+			wantReasons: refused(`part "two", not "one", attempt 1, not 2`),
+			wantPart:    partVerdict(model.SourceNone, "", nil),
+		},
+		{
+			name: "listed in attempt 2, its log attempt 1's of another run",
+			change: func(r *macfix.Reader) {
+				rec := record("one", 1, earlier...)
+				rec.RunID = 8
+				listedCarriedOver(r, rec)
+			},
+			wantCode:    1,
+			wantVerdict: model.VerdictIncomplete,
+			wantReasons: refused("run 8, not 7, attempt 1, not 2"),
+			wantPart:    partVerdict(model.SourceNone, "", nil),
+		},
+		{
+			name:        "listed in attempt 2, its log a later attempt's",
+			change:      func(r *macfix.Reader) { listedCarriedOver(r, record("one", 3, earlier...)) },
+			wantCode:    1,
+			wantVerdict: model.VerdictIncomplete,
+			wantReasons: refused("attempt 3, not 2"),
+			wantPart:    partVerdict(model.SourceNone, "", nil),
 		},
 		{
 			name: "records of another part, run, attempt or commit",

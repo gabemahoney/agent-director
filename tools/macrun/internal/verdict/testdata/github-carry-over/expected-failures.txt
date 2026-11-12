@@ -1,0 +1,9 @@
+# Expected Failure marks for the Mac Tests; blank and # lines are ignored.
+# Line form: <case ID><TAB><Bug ID><TAB><note>, with real tabs between fields.
+# Case IDs: go:<package dir>:<test name> for a top-level test, subtest or Example;
+# go:<package dir> for the package's own result. Bug IDs are b.<id> (lowercase letters and digits).
+# Go fails a top-level test when a subtest fails: mark the top-level test separately too.
+# A mark whose case reports no result is listed as unmatched and does not change the verdict.
+# A marked case that passes is reported as an unexpected pass.
+# See docs/architecture.md "Mac Tests" for the rest of the rules.
+go:test/install-sh:TestMoveAfterCleanClose	b.zsj	Apple's sqlite3 cannot open a cleanly closed WAL store read-only, so the move's read of the old store fails

@@ -64,11 +64,14 @@ type Attempt struct {
 type Job struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
-	// RunAttempt is the attempt the job ran in, as GitHub returns it. A
-	// value earlier than the listed attempt is taken to mean GitHub carried
-	// the job over from that attempt when only failed jobs were re-run.
-	// GitHub's REST documentation for "List jobs for a workflow run attempt"
-	// doesn't say that it lists carried-over jobs this way.
+	// RunAttempt is the job's attempt, as GitHub returns it. When only
+	// failed jobs were re-run, GitHub was seen (run 43265158749,
+	// 2026-11-12) to list each job it carried over under the new attempt,
+	// with that attempt's run_attempt and a new ID, but with the earlier
+	// job's start and end times and log; GitHub's REST documentation for
+	// "List jobs for a workflow run attempt" doesn't say. A value earlier
+	// than the listed attempt is still read as the job carried over from
+	// that attempt.
 	RunAttempt int    `json:"run_attempt"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`

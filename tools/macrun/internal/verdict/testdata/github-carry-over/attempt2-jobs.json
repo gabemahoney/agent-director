@@ -1,0 +1,209 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 131348903878,
+      "name": "plan",
+      "run_attempt": 2,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/gabemahoney/agent-director/actions/runs/43265158749/job/131348903878",
+      "steps": [
+        {
+          "name": "Set up job",
+          "number": 1,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check out the tested commit",
+          "number": 2,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Go",
+          "number": 3,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build macrun",
+          "number": 4,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Plan the Mac Run",
+          "number": 5,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install Go",
+          "number": 9,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Check out the tested commit",
+          "number": 10,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "number": 11,
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 131348904063,
+      "name": "verdict",
+      "run_attempt": 2,
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/gabemahoney/agent-director/actions/runs/43265158749/job/131348904063",
+      "steps": [
+        {
+          "name": "Set up job",
+          "number": 1,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check out the tested commit",
+          "number": 2,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Go",
+          "number": 3,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build macrun",
+          "number": 4,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Judge the run",
+          "number": 5,
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Upload the run's verdict",
+          "number": 6,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install Go",
+          "number": 11,
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Check out the tested commit",
+          "number": 12,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "number": 13,
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 131348905644,
+      "name": "part installer",
+      "run_attempt": 2,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/gabemahoney/agent-director/actions/runs/43265158749/job/131348905644",
+      "steps": [
+        {
+          "name": "Set up job",
+          "number": 1,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check out the tested commit",
+          "number": 2,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Go",
+          "number": 3,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install bun",
+          "number": 4,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build the TypeScript client",
+          "number": 5,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install tmux, bash and sqlite from Homebrew",
+          "number": 6,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build macrun",
+          "number": 7,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cases",
+          "number": 8,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Upload the part record",
+          "number": 9,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install Go",
+          "number": 17,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Check out the tested commit",
+          "number": 18,
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "number": 19,
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ]
+}
