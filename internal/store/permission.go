@@ -151,8 +151,9 @@ const (
 // durably main-turn-eligible request; a Claude subagent's SubagentStop proves
 // only that subagent's requests (b.wbs). Legacy non-Cursor main requests retain
 // eligibility; Cursor unknown origin never acquires it from NULL agent_id.
-// A Cursor request the gateway never answered is proven gone by its gateway
-// when the prompt turn that asked it completes (ProveCursorTurnEnded; b.gwj).
+// Every Cursor request of a prompt turn, answered or not, is proven gone by
+// its gateway when that turn completes (ProveCursorTurnEnded; b.gwj, b.7qb),
+// unless it is already proven or closed or awaits its deferred tool proof.
 // ProvenGoneAgentGone: a close of its Spawn's
 // requests (closeOrphanedRequests: find-missing's mark, the terminal
 // SessionEnd, resume's backstop) ran while the request was not yet proven, or

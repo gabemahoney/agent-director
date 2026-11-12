@@ -200,6 +200,13 @@ func (s *Store) ClaimCursorPaneAnswer(b CursorRuntime, token, decision string, u
 	return claimed, nil
 }
 
+// ErrCursorAnswerTurnEnded is CheckCursorAnswer's and IssueCursorAnswer's
+// refusal of a claimed answer, not yet issued, whose request its prompt
+// turn's end proved gone (ProveCursorTurnEnded) and that would otherwise still
+// be eligible: the answer is moot and authorizes no bytes. Every other refusal
+// is a plain error.
+var ErrCursorAnswerTurnEnded = errors.New("store: Cursor answer refused: its prompt turn has ended")
+
 // CheckCursorAnswer is the writer's final authority check, including the exact
 // request's durable acknowledgement or native claim. The transport may repeat
 // this check; only IssueCursorAnswer consumes the claim immediately before I/O.
@@ -251,10 +258,22 @@ func (s *Store) cursorAnswer(b CursorRuntime, token string, relay bool, until ti
 		if e != nil {
 			return e
 		}
-		if n != 1 || !time.Now().Before(until) {
+		if !time.Now().Before(until) {
 			return fmt.Errorf("store: Cursor answer authority retired")
 		}
-		return nil
+		if n == 1 {
+			return nil
+		}
+		// Re-read without the proof condition: a claim refused only because
+		// its turn's end proved the request gone is known unwritten.
+		turnEnded := `instance_id=? AND request_token=? AND closed_at IS NULL AND proven_gone_how='` + ProvenGoneTurnEnd + `' AND ` + permissionOwnerSQL + ` AND ` + frag
+		if e = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM permission_requests WHERE `+turnEnded, b.InstanceID, token).Scan(&n); e != nil {
+			return e
+		}
+		if n == 1 {
+			return ErrCursorAnswerTurnEnded
+		}
+		return fmt.Errorf("store: Cursor answer authority retired")
 	})
 }
 
@@ -376,15 +395,17 @@ func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOp
 	return err
 }
 
-// ProveCursorTurnEnded proves gone, turn_end, every request among tokens that
-// still holds the row (holdsRowSQL), under b's launch and conversation
-// authority, as ProveCursorToolRan checks it. The gateway calls it when b's
-// prompt turn completes, with the turn's requests it never answered: once the
-// turn is over, a request still awaiting an answer no longer outranks the
-// agent's own report (b.gwj), so the turn's Stop, or a rotation's
-// RotateCursorSession, moves the row to waiting.
-// It writes no decision, delivery or pane answer; a request already
-// delivered, answered at the pane, closed or proven gone keeps what it has.
+// ProveCursorTurnEnded proves gone, turn_end, every request of b's instance
+// among tokens that is still unproven and not closed, under b's launch and
+// conversation authority, as ProveCursorToolRan checks it. The gateway calls
+// it when b's prompt turn completes, with every request of the turn that has
+// no deferred tool proof, answered or not (b.7qb): once the turn is over, a
+// request still awaiting an answer no longer outranks the agent's own report
+// (b.gwj), so the turn's Stop, or a rotation's RotateCursorSession, moves the
+// row to waiting, and no request of the turn holds the next prompt
+// (cursorHoldsDialogSQL), plain send-keys or pause.
+// It writes no decision, delivery or pane answer; a request delivered or
+// answered at the pane keeps those, and a closed or proven one keeps all it has.
 // until bounds the wait for the write lock and the authority check. It emits
 // no trail event: the Stop's ad.spawn.state_transition records the move.
 func (s *Store) ProveCursorTurnEnded(b CursorRuntime, tokens []string, until time.Time, check CursorCheck) error {
@@ -400,7 +421,8 @@ func (s *Store) ProveCursorTurnEnded(b CursorRuntime, tokens []string, until tim
 			args = append(args, token)
 		}
 		_, e := conn.ExecContext(ctx, `UPDATE permission_requests AS pr SET proven_gone_at=?,proven_gone_how=?
- WHERE pr.instance_id=? AND pr.request_token IN (`+strings.TrimSuffix(strings.Repeat("?,", len(tokens)), ",")+`) AND `+holdsRowSQL, args...)
+ WHERE pr.instance_id=? AND pr.request_token IN (`+strings.TrimSuffix(strings.Repeat("?,", len(tokens)), ",")+`)
+ AND pr.proven_gone_at IS NULL AND pr.closed_at IS NULL`, args...)
 		return e
 	})
 }

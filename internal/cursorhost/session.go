@@ -1990,10 +1990,13 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 						idleControl = true
 					}
 				}
-				// The turn's unanswered requests end with it, so they no
-				// longer hold the Stop's move to waiting, nor a rotation's
-				// state write: mid-rotation the binding is still the
-				// outgoing conversation's, and cancelAt bounds the write.
+				// The turn's requests end with it, answered or not (b.7qb),
+				// except one whose tool proof is still deferred, which the
+				// Stop's flush writes. None then holds the next prompt, and
+				// the unanswered ones no longer hold the Stop's move to
+				// waiting, nor a rotation's state write: mid-rotation the
+				// binding is still the outgoing conversation's, and cancelAt
+				// bounds the write.
 				ended := requests.endTurn()
 				until := time.Time{}
 				if !cancelAt.IsZero() {

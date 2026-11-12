@@ -72,8 +72,8 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // to check_permission in its own transaction) is never overwritten with
 // working (b.36h); a move to working that loses that race is held too.
 // Verified Cursor waiting transitions use the same write-time hold guard,
-// including Stop/Interrupt. The gateway proves its turn's unanswered requests
-// gone before the turn's Stop (ProveCursorTurnEnded), and the Stop's flush
+// including Stop/Interrupt. The gateway proves its turn's requests gone
+// before the turn's Stop (ProveCursorTurnEnded), and the Stop's flush
 // writes any deferred tool proof first, so the guard rarely holds a Cursor
 // Stop; it remains a write-time backstop. A held Cursor report applies a
 // gated soft refresh (session/path, liveness, activity and row version) with

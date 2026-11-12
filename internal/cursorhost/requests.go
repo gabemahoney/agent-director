@@ -40,7 +40,8 @@ type pendingAuthorization struct {
 	sent                         atomic.Bool
 	retired                      atomic.Bool
 	terminal                     atomic.Bool
-	// turnEnded: retired at its turn's completion (turnEnd).
+	// turnEnded: proven gone at its turn's completion (turnEnd), and retired
+	// too if it was unanswered.
 	turnEnded       bool
 	turnEndSequence uint64
 	choice          *nativeChoice
@@ -328,7 +329,7 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 			return e
 		}
 		if e := c.rep.store.CheckCursorAnswer(binding, r.token, relay, deadline, check); e != nil {
-			return e
+			return answerRefusal(e)
 		}
 		return current()
 	}
@@ -337,13 +338,16 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 			return e
 		}
 		if e := c.rep.store.IssueCursorAnswer(binding, r.token, relay, deadline, check); e != nil {
-			return e
+			return answerRefusal(e)
 		}
 		return current()
 	}
 	return c.protocol.sendGuarded(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(r.auth.frame.ID), "result": result}, deadline, guard, func(e error) {
 		if e == nil {
 			r.sent.Store(true)
+		} else if errors.Is(e, errAnswerTurnEnded) {
+			r.terminal.Store(true)
+			fmt.Fprint(c.out, "Cursor turn ended before its answer was written; nothing sent\r\n")
 		} else {
 			r.terminal.Store(true)
 			fmt.Fprint(c.out, "Cursor response failed or retired; delivery is unconfirmed and will not be retried\r\n")
@@ -351,6 +355,20 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 		c.deliver(requestWake{storeID: r.storeID, token: r.token, binding: binding, generation: r.generation, kind: responseCompleted, deadline: deadline, err: e})
 	}, issue)
 }
+
+// errAnswerTurnEnded marks a queued answer the store refused at its final
+// guard or issue only because its turn's end had proven the request gone
+// (store.ErrCursorAnswerTurnEnded). Nothing was written, so the transport
+// treats it as known unwritten (knownUnwritten) instead of failing.
+var errAnswerTurnEnded = errors.New("Cursor answer retired: its turn had ended")
+
+func answerRefusal(e error) error {
+	if errors.Is(e, store.ErrCursorAnswerTurnEnded) {
+		return fmt.Errorf("%w: %w", errAnswerTurnEnded, e)
+	}
+	return e
+}
+
 func (c *requestController) advanceRequest(r *pendingAuthorization) error {
 	if r.generation != c.generation.Load() {
 		r.terminal.Store(true)

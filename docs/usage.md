@@ -144,9 +144,9 @@ Wait for `waiting` before sending. Fresh startup reports when Cursor confirms
 its new conversation, without a first prompt. Login or a runtime that has not
 reported remains `pending`, and can be noted `unreported`. A submitted prompt
 reads `working`; a correlated turn completion returns it to `waiting`
-subject to [request holds](permissions.md#the-dialog-hold), after retiring the
-turn's unanswered requests (see
-[Cursor permissions](permissions.md#cursor-spawns)).
+subject to [request holds](permissions.md#the-dialog-hold), after proving the
+turn's requests gone as described in
+[Cursor permissions](permissions.md#cursor-spawns).
 
 The existing `inject_help_hook` setting also enables Cursor guidance; its default
 is off. When enabled, session setup supplies the current AD guidance before
@@ -688,15 +688,9 @@ The response is a single permission row:
 }
 ```
 
-`decision_reason` annotates the recorded verdict: `operator` (API deny),
-`timeout` (relay timeout deny), `find_missing`/`ended` (owning-spawn closure),
-`pane` (`send-keys` or a native Cursor choice), `pane_outside` (outside claim),
-or `tool_ran` (Cursor tool execution). API allow initially has no reason; later
-validated successful Cursor execution can fill that missing
-reason with `tool_ran`, preserving an existing verdict and non-null reason. Failed MCP invocation proof
-leaves these fields unchanged. Read `decision` for the
-verdict and the [delivery and proof fields](permissions.md#delivery) for its
-outcome; a reason is not an immutable writer identity.
+Read `decision` for the recorded verdict and `decision_reason` for its
+annotation. Their definitions and the delivery and proof fields are in
+[Delivery](permissions.md#delivery).
 
 `get`, `get-many` and `list` carry the same delivery fields on each request in a row's
 `permission_requests`; they list only requests that still await an answer,
@@ -714,22 +708,12 @@ can read `waiting`, `working` or `ask_user` while a request it recorded
 still awaits an answer, so follow each request you track with
 `get-permission`, not only rows in `check_permission`.
 
-`proven_gone_at` and `proven_gone_how` say when and how the agent itself
-showed the request's dialog gone: `tool_ran` (validated matching Cursor
-invocation proof, including an exact failed MCP
-invocation without execution or answer inference; see [Cursor permissions](permissions.md#cursor-spawns)),
-`turn_end` (an eligible main request
-was written before the main turn ended, or a Claude subagent's request
-before that subagent's turn ended, see [The dialog hold](permissions.md#the-dialog-hold);
-or a Cursor request the gateway never answered when its turn ended, see
-[Cursor permissions](permissions.md#cursor-spawns)) or
-`agent_gone` (a non-Cursor agent ended). A Claude or Codex agent's request
-carries no `tool_use_id` (it reads `null`) and is never proven by
-`tool_ran`. `delivered` and a pane answer are
-agent-director's own records, not proof. `get` lists every request still
-holding the dialog in `unproven_requests`, with `unproven_since`. A request that
-reads `delivered` or closed at the pane but stays unproven for a while is a
-reason to look at the pane: its dialog may still be there.
+`proven_gone_at` and `proven_gone_how` record dialog proof; see
+[The dialog hold](permissions.md#the-dialog-hold) for proof definitions and
+how proof differs from answer records. `get` lists every request still
+holding the dialog in `unproven_requests`, with `unproven_since`.
+For held-input recovery, follow the
+[caller contract](caller-contract.md#permission-relay).
 
 ## Answer a request at the pane
 
@@ -738,8 +722,8 @@ menu names its `request_token` and supplies distinct keys; match that token
 and option to the request you inspected. At the attached pane a deliberate
 key competes with an active relay decision. A successful attached Cursor
 choice automatically records `pane_answer=sent` and `decision_reason=pane`;
-no `record-pane-answer` call is needed. That claim is not ACP delivery,
-Cursor receipt or execution proof. Through `send-keys`, use the
+no `record-pane-answer` call is needed. See [Delivery](permissions.md#delivery)
+for what those records establish. Through `send-keys`, use the
 existing guarded pane-answer command below once delivery has fallen back,
 substituting the displayed key for `Escape` and the chosen verdict for `deny`.
 Relay-off requests expose this path immediately, while `decide` remains
@@ -748,9 +732,9 @@ explicit choice of that offered option. See [Cursor permissions](permissions.md#
 for the fixed relay/native lifetimes and retirement rules.
 
 A request with `delivery=fallen_back` has no confirmed relay answer.
-A pane answer can close it; validated execution proof or owning-spawn closure
-can also resolve it. To answer an open connected request, inspect its pane
-and send the one key for that request:
+For closure rules, see [Delivery](permissions.md#delivery).
+To answer an open connected request, inspect its pane and send the one key
+for that request:
 
 ```sh
 pane=$(agent-director read-pane --instance-id "$id")
@@ -780,12 +764,8 @@ agent-director record-pane-answer --request-token "$token" \
     --as unknown --expect-pane-sha256 "$hash"
 ```
 
-Pass `--as unknown` unless you saw how it was answered. A Claude or Codex
-request is closed only by one of the two calls above, or with its spawn.
-A Cursor request can close on validated matching shell execution or a successful
-MCP result under [Cursor permissions](permissions.md#cursor-spawns);
-other tool/plan completion supplies no execution proof. `record-pane-answer`
-types nothing and neither authorizes Cursor approval nor proves a dialog gone.
+Pass `--as unknown` unless you saw how it was answered. For Cursor approval
+and proof limits, see [Cursor permissions](permissions.md#cursor-spawns).
 A Codex pane's keys and an example are in
 [Answering a Codex approval at the pane](permissions.md#answering-a-codex-approval-at-the-pane). A
 closed request keeps `delivery` `fallen_back`; its `pane_answer` (`sent`,

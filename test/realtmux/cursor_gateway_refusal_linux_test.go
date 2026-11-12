@@ -3,6 +3,7 @@
 package realtmux_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +17,8 @@ import (
 )
 
 // gatewayHold is a live Cursor launch (b.bqd) whose first turn raised one
-// request, req, that the turn's end left in place.
+// request, req, that the turn's end proved gone (b.7qb); hold makes req hold
+// the launch again.
 type gatewayHold struct {
 	f      *spawnFix
 	peer   cursorfix.Runtime
@@ -54,6 +56,27 @@ func newGatewayHold(t *testing.T, relay, kind, decision string, after []json.Raw
 	}, h.observe(t))
 	peer.Configure(t, cursorfix.Scenario{SessionID: session})
 	return h
+}
+
+// hold clears req's turn_end proof in the store, leaving its decision,
+// delivery and pane answer, so req is again an unproven request of the
+// current launch, as a turn's end left an answered one before b.7qb. Nothing
+// proves it gone again while the launch lives, so the gateway refuses every
+// later prompt and plain send-keys reports the dialog may be open.
+func (h gatewayHold) hold(t *testing.T) {
+	t.Helper()
+	db, e := sql.Open("sqlite", h.f.DBPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close()
+	res, e := db.Exec("UPDATE permission_requests SET proven_gone_at=NULL,proven_gone_how=NULL WHERE instance_id=? AND request_token=? AND proven_gone_how='turn_end'", h.launch.ID, h.req.RequestToken)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if n, e := res.RowsAffected(); e != nil || n != 1 {
+		t.Fatalf("hold: cleared %d turn_end proofs (%v); want req's one; %s", n, e, h.observe(t)())
+	}
 }
 
 // observe reports the row, its requests and its pane for a failed wait.
@@ -108,9 +131,11 @@ func (h gatewayHold) assertRefused(t *testing.T, e error, text string) {
 	}
 }
 
-// b.bqd: a live Cursor launch whose decided request is never proven gone
+// b.bqd: a live Cursor launch with a current-launch request never proven gone
 // refuses typed input at its gateway; send-keys must report that refusal
-// (ErrSubmissionUnconfirmed, outcome gateway_refused), never success.
+// (ErrSubmissionUnconfirmed, outcome gateway_refused), never success. A turn's
+// end proves its requests gone (b.7qb), so each case's hold is its answered
+// request with that proof cleared (gatewayHold.hold).
 func TestCursorSendKeysReportsGatewayRefusal(t *testing.T) {
 	// Serial: the shared real-pane fixture changes HOME, PATH and tmux environment.
 	completed := func(output string) []json.RawMessage {
@@ -140,9 +165,10 @@ func TestCursorSendKeysReportsGatewayRefusal(t *testing.T) {
 				}, h.observe(t))
 				return
 			}
+			h.hold(t)
 			h.assertRefused(t, h.followUp(t, text), text)
 			if tc.relay == "on" {
-				// v0.17.1's hold; b.bqd part 2 (a turn's end releases its requests) would change it.
+				// The API sees the unproven request too and refuses before the gateway.
 				_, e := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: text})
 				if dd, ok := api.ErrDetails(e).(api.DialogMaybeOpenDetails); !errors.Is(e, api.ErrDialogMaybeOpen) || !ok || dd.RequestToken != h.req.RequestToken {
 					t.Fatalf("plain send: want ErrDialogMaybeOpen naming %s, got %v", h.req.RequestToken, e)

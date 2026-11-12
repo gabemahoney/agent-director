@@ -60,8 +60,14 @@ func TestCursorRelayNativeFallbackClaims(t *testing.T) {
 				t.Fatal(e)
 			}
 			waitFor(t, "connected native once choice", func() bool { return len(relayReplies(t, r)) == 1 }, func() string { return fmt.Sprint(relayReplies(t, r)) })
-			got := relayRequests(t, f, launch.ID, 1)[0]
-			if !got.DeliveredAt.IsZero() || !got.ProvenGoneAt.IsZero() || got.PaneAnswer != "sent" {
+			// The answered turn then ends, and its end proves the request gone
+			// (b.7qb); only that proves it, never the native claim.
+			var got store.PermissionRow
+			waitFor(t, "turn end proves the natively answered request", func() bool {
+				got = relayRequests(t, f, launch.ID, 1)[0]
+				return got.ProvenGone()
+			}, func() string { return fmt.Sprintf("%+v", got) })
+			if !got.DeliveredAt.IsZero() || got.ProvenGoneHow != store.ProvenGoneTurnEnd || got.PaneAnswer != "sent" || got.DecisionOrigin != "pane" {
 				t.Fatalf("native claim became relay ack/proof: %+v", got)
 			}
 			if !strings.Contains(string(relayReplies(t, r)[0]["result"]), `"optionId":"allow-once"`) {

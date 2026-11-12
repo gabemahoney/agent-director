@@ -98,6 +98,7 @@ func TestCursorRelayPublicCallers(t *testing.T) {
 				}
 			}
 			before := readRow(t, f.DBPath, id)
+			decided := map[string]string{}
 			call := func(verb string, params map[string]any) json.RawMessage {
 				t.Helper()
 				var raw []byte
@@ -204,6 +205,7 @@ func TestCursorRelayPublicCallers(t *testing.T) {
 					decision = "deny"
 				}
 				call("decide", map[string]any{"instance_id": id, "request_token": row.RequestToken, "decision": decision})
+				decided[row.RequestToken] = decision
 				// Every call above opens a replacement process/client; the deadline never rearms.
 				raw = call("get-permission", map[string]any{"request_token": row.RequestToken})
 				var after api.GetPermissionResult
@@ -235,9 +237,9 @@ func TestCursorRelayPublicCallers(t *testing.T) {
 			}
 			assertRelayCommittedAtRawResponse(t, r, observed, expected)
 
-			waitFor(t, "normal turn outcome retains child-safe holds", func() bool {
+			waitFor(t, "normal turn outcome reports waiting", func() bool {
 				raw, e := os.ReadFile(before.JSONLPath.(string))
-				return e == nil && strings.Contains(string(raw), `"kind":"turn_outcome"`)
+				return e == nil && strings.Contains(string(raw), `"kind":"turn_outcome"`) && readRow(t, f.DBPath, id).State == store.StateWaiting
 			}, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
 			var gateway int
 			fmt.Sscan(fmt.Sprint(before.PanePID), &gateway)
@@ -251,8 +253,27 @@ func TestCursorRelayPublicCallers(t *testing.T) {
 			if !reflect.DeepEqual(readRow(t, decoyPath, id), decoy) {
 				t.Fatal("public caller changed decoy default store")
 			}
-			// A complete turn/relay response cannot release unknown-origin child-safe holds.
-			assertRelayPromptGuard(t, f, r, id, "must remain held")
+			// A complete turn ends its requests, unknown-origin ones too (b.7qb):
+			// each is proven turn_end and keeps its delivered decision, so a plain
+			// prompt reaches ACP.
+			for _, row := range relayRequests(t, f, id, 2) {
+				if row.ProvenGoneHow != store.ProvenGoneTurnEnd || row.DeliveredAt.IsZero() || row.Decision != decided[row.RequestToken] || row.PaneAnswer != "none" {
+					t.Fatalf("request after turn end: want turn_end with its delivered %q kept, got %+v", decided[row.RequestToken], row)
+				}
+			}
+			r.Configure(t, cursorfix.Scenario{SessionID: script.SessionID})
+			const next = "after the relayed turn"
+			if _, e := f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: next}); e != nil {
+				t.Fatalf("plain prompt after turn end: %v; replies=%v", e, relayReplies(t, r))
+			}
+			waitFor(t, "next prompt reaches ACP and completes", func() bool {
+				for _, p := range panePrompts(t, r) {
+					if p.Text == next {
+						return readRow(t, f.DBPath, id).State == store.StateWaiting
+					}
+				}
+				return false
+			}, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
 		})
 	}
 }

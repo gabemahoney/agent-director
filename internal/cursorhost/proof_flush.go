@@ -165,10 +165,23 @@ func (f *proofFlush) settle() {
 	}
 }
 
+// A turn's end proves gone every request of its binding that no earlier
+// turn's end listed (turnEnded), that has no deferred tool proof (that one
+// stays with the Stop flush) and whose tool proof is not already stored
+// (lastProof). c.requests is never pruned, so without the lastProof check a
+// request proven tool_ran would be listed again at every later turn's end.
+// Only the
+// unanswered ones (retired) are also retired here. An answered one (sent) or
+// one whose answer is in flight (queued, the rest of proven) keeps its
+// response path: marking it terminal or retired could fail an answer the
+// store already issued after IssueCursorAnswer committed, or report a
+// delivered one as failed. The store's proof alone refuses an answer not yet
+// issued (permissionResponseEligibleSQL).
 type turnEnd struct {
 	c        *requestController
 	binding  store.CursorRuntime
 	retired  []*pendingAuthorization
+	proven   []*pendingAuthorization
 	tokens   []string
 	sequence uint64
 	deadline time.Time
@@ -181,9 +194,13 @@ func (c *requestController) endTurn() *turnEnd {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &turnEnd{c: c, binding: c.rep.binding, sequence: c.nextFlush, deadline: time.Now().Add(time.Duration(c.rep.cfg.Store.EffectiveBusyTimeoutMs()) * time.Millisecond), ctx: ctx, cancel: cancel}
 	for _, r := range c.requests {
-		if r.binding == t.binding && !r.turnEnded && !r.queued && !r.sent.Load() && r.proof == nil {
+		if r.binding == t.binding && !r.turnEnded && r.proof == nil && r.lastProof == nil {
 			r.turnEndSequence = t.sequence
-			t.retired = append(t.retired, r)
+			if r.queued || r.sent.Load() {
+				t.proven = append(t.proven, r)
+			} else {
+				t.retired = append(t.retired, r)
+			}
 			t.tokens = append(t.tokens, r.token)
 		}
 	}
@@ -212,6 +229,11 @@ func (t *turnEnd) write(until time.Time) error {
 func (t *turnEnd) settle() {
 	if t.ctx.Err() != nil || t.c.rep.binding != t.binding {
 		return
+	}
+	for _, r := range t.proven {
+		if r.turnEndSequence == t.sequence && r.binding == t.binding {
+			r.turnEnded = true
+		}
 	}
 	for _, r := range t.retired {
 		if r.turnEndSequence != t.sequence || r.binding != t.binding {
