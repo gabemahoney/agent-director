@@ -436,7 +436,9 @@ Callers own any policy for compaction, replacement or unknown readings.
 Use [`family_state`](usage.md#family-state) as a report of currently stored
 family activity. `waiting` means neither task success nor permission or
 readiness to take an action. With [settling](configuration.md#settle-time-state),
-it can still show `waiting` briefly after work begins.
+a family change in either direction, including to `waiting` after the last
+working member stops, shows only after it has held for `settle_ms` (up to
+60 s); until then the previous settled value shows.
 
 Family freshness is unconfirmed: the value is a consistent stored projection,
 not evidence that every member was checked. It has no
