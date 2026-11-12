@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/probe"
 )
 
 // moveRefusal is one row of a refusal table: a layout, what holds the install
@@ -555,6 +557,7 @@ func TestMoveStageRefusalLeavesTMPDIRUntouched(t *testing.T) {
 // TestMovePreflightPasses uses valid candidates to reach the live check, then
 // refuses staging before any installation change. Earlier candidates must now
 // be rejected before the first snapshot read; they cannot prove this boundary.
+// The other-path process passes the old-binary check, then refuses as a holder.
 func TestMovePreflightPasses(t *testing.T) {
 	earlier := func(s *moveShared) movePair { return s.NoConfigDir }
 	// passes: pre-flight ends OK and no move starts; noted says whether stdout
@@ -576,16 +579,6 @@ func TestMovePreflightPasses(t *testing.T) {
 			pair:  earlier,
 			setup: moveOldWith(nil),
 			want:  passes(false),
-		},
-		{
-			name: "a-stand-in-running-from-another-path-is-not-the-old-binary",
-			pair: earlier,
-			setup: moveOldWith(func(t *testing.T, h *moveHome) {
-				other := filepath.Join(h.Home, "elsewhere", "agent-director")
-				h.Copy(h.S.OldBinary, other, 0o755)
-				h.StartServe(other)
-			}),
-			want: passes(false),
 		},
 		{
 			name: "macos-ps-lists-other-processes-only",
@@ -639,6 +632,37 @@ fi`)
 		rows[i].want.Stderr = []string{"test: stage temp refused", "cannot make a temp file to hold a copy of {main}"}
 	}
 	runMoveRefusals(t, rows)
+	t.Run("a-stand-in-running-from-another-path-is-not-the-old-binary", func(t *testing.T) {
+		// b.5pb: another path is not the old binary (no ErrAgentsLive), but
+		// its executable is still a mutator for the crossing holder inventory.
+		h := newMoveHome(t)
+		h.BuildOld()
+		other := filepath.Join(h.Home, "elsewhere", "agent-director")
+		h.Copy(h.S.OldBinary, other, 0o755)
+		holder := h.StartServe(other)
+		h.Vars["pid"] = fmt.Sprint(holder.Pid)
+		start, alive, known := probe.NewProcChecker().StartTime(holder.Pid)
+		if !alive || !known {
+			t.Fatal("stand-in process identity unavailable after readiness")
+		}
+		h.WrapTool("mktemp", `if [[ "${!#}" == agent-director.stage.* ]]; then
+    echo 'test: stage temp refused' >&2
+    exit 1
+fi`)
+		before := h.PhysicalSnapshot()
+		res := h.Install()
+		if got, alive, known := probe.NewProcChecker().StartTime(holder.Pid); !alive || !known || got != start {
+			t.Error("holder refusal stopped or replaced the other-path stand-in")
+		}
+		moveWant{Code: 5, Err: "ErrJournalMigrationRefused",
+			Stderr: []string{
+				"install.sh: pre-flight holder check refused (agent-director-admin migrate-journal --check-only --store-path)",
+				`"reason":"old_or_unverified_mutators"`, `"pid":{pid},`, "Nothing was installed or changed."},
+			NoStdout: []string{"install.sh: pre-flight OK", "move    :", "restore :", "schema  : authorized"},
+			NoStderr: []string{"ErrAgentsLive", "test: stage temp refused"},
+		}.Check(t, h, res)
+		assertRefusedUnchanged(t, h, before)
+	})
 }
 
 func TestMoveEarlierReleaseRefused(t *testing.T) {

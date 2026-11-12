@@ -36,6 +36,47 @@ live, so the install refuses, and your own hooks would run the new binary
 mid-upgrade. Do the same if this session has agent-director's MCP tools: their
 `agent-director serve` must stop too.
 
+### Choose the release
+
+Choose the release tag once for this upgrade, such as `v0.18.1`, and reuse
+it for every re-run of the install. To find the latest, run this read-only
+command:
+
+```sh
+curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
+```
+
+If curl fails or its URL does not end in `/releases/tag/<tag>`, stop and
+hand the operator the output unless they provide a release tag.
+
+Replace both `<tag>`s below with that tag, so the installer and binaries
+come from the same release.
+
+### Read the store schema
+
+Before step 3, resolve `[store] db_path` from the installed `config.toml`
+as [Which database install.sh checks](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#which-database-installsh-checks)
+specifies: an unset or empty value uses `~/.config/agent-director/state.db`
+(`~/.agent-director/state.db` for 0.3.0–0.11.1); `~/` expands against `HOME`;
+an absolute path stays as written; every other value is relative to the
+install directory (`~/.config/agent-director`, or `~/.agent-director` for
+0.3.0–0.11.1), never the shell's working directory. Do not expand `$VAR`.
+Resolve to an absolute path before checking whether the store file exists.
+If there is no store file, record 0. Otherwise replace `<store>` with that
+resolved absolute path, quoted, and read it without opening it with
+agent-director:
+
+```sh
+sqlite3 -batch -init /dev/null -readonly <store> 'PRAGMA user_version;'
+```
+
+If the command fails or does not print one nonnegative integer, stop and
+hand the operator the output. Versions 1–15 cross the native-input journal
+cutover; 0 and versions 16 or above do not. Keep this result for steps 3 and
+4, even after the install changes the schema version.
+
+### Check the agents and holders
+
 List the live rows:
 
 ```sh
@@ -74,8 +115,52 @@ stop here and change nothing. Once they confirm, check that no `serve` runs:
 this prints nothing.
 
 ```sh
-ps -A -o pid= -o args= | grep '[a]gent-director serve'
+ps -Aww -o pid= -o ucomm= -o args= |
+  awk '$2 == "agent-director" {
+    pid = $1
+    sub(/^[[:space:]]*[0-9]+[[:space:]]+agent-director[[:space:]]+/, "")
+    if ($0 ~ /^[^[:space:]]+[[:space:]]+serve([[:space:]]|$)/ ||
+        $0 ~ /^.*\/agent-director[[:space:]]+serve([[:space:]]|$)/)
+      print pid, $0
+  }'
 ```
+
+The `ucomm` column reads the kernel command name on Linux and macOS;
+macOS's `comm` instead reads argv[0]. `agent-director` is 14 characters,
+within Linux's 15-character and macOS's 16-character name limits. Only
+after that kernel-name match do arguments select the `serve` verb, including
+a renamed argv[0] or an executable path containing spaces. `-ww` keeps long
+arguments from being truncated. A tmux server or other program whose
+arguments merely mention `agent-director serve` does not count. If a `serve`
+is listed, stop here and have the operator close it before starting step 1
+again.
+
+Only when the schema read above says this upgrade crosses the cutover,
+before stopping any row, first confirm with the operator that steps 1 and 2 of
+[Upgrading the native-input journal](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal)
+hold. The journal flags assert the operator's maintenance window. If they
+do not confirm, stop here. Then run this read-only holder check from the
+chosen release:
+
+```sh
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag> "$@"' upgrade-agent-director --check-holders
+```
+
+The outer Bash enables `pipefail`, so a failed download fails the command
+even if no script reaches the inner Bash. Append flags after
+`upgrade-agent-director`; `"$@"` forwards them to the installer.
+
+For a crossing upgrade, append
+`--journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>`
+and add `--journal-legacy-root <dir>` for each additional input root.
+Keep exactly these journal flags for the second holder check and step 3's
+install. Include the original install's other flags and any the operator
+adds now in both checks and the install too.
+Exit 5: show the operator the output, including the listed processes, and stop.
+No row has been stopped. On any other non-zero exit, stop and hand the
+operator the output. Exit 0: continue below.
+With no crossing, skip this confirmation and both holder checks, and pass
+no journal flags.
 
 With no live row, go to step 3. Otherwise stop each one:
 `pause` a `waiting` row; `kill` any other live row, or one `pause`
@@ -108,59 +193,25 @@ stops it, the operator confirming), or the sweep ran in the wrong place
 (step 1's checks find it; then sweep from the agents' environment). Never
 mark, delete or edit rows by hand.
 
-### Read the store schema
-
-Before step 3, resolve `[store] db_path` from the installed `config.toml`
-as [Which database install.sh checks](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#which-database-installsh-checks)
-specifies: an unset or empty value uses `~/.config/agent-director/state.db`
-(`~/.agent-director/state.db` for 0.3.0–0.11.1); `~/` expands against `HOME`;
-an absolute path stays as written; every other value is relative to the
-install directory (`~/.config/agent-director`, or `~/.agent-director` for
-0.3.0–0.11.1), never the shell's working directory. Do not expand `$VAR`.
-Resolve to an absolute path before checking whether the store file exists.
-If there is no store file, record 0. Otherwise replace `<store>` with that
-resolved absolute path, quoted, and read it without opening it with
-agent-director:
-
-```sh
-sqlite3 -batch -init /dev/null -readonly <store> 'PRAGMA user_version;'
-```
-
-If the command fails or does not print one nonnegative integer, stop and
-hand the operator the output. Versions 1–15 cross the native-input journal
-cutover; 0 and versions 16 or above do not. Keep this result for steps 3 and
-4, even after the install changes the schema version.
-
 ## 3. Install
 
-Choose the release tag once for this upgrade, such as `v0.18.1`, and reuse
-it for every re-run of the install. To find the latest, run this read-only
-command:
+For a crossing upgrade, after step 2's sweep and just before installing,
+repeat step 1's `--check-holders` command with the chosen tag and exactly
+the same journal flags. Exit 5: show the operator the output, including the
+listed processes, and stop. On any other non-zero exit, stop and hand the
+operator the output. With no crossing, skip this check.
+
+For every upgrade, from this shell:
 
 ```sh
-curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag> "$@"' upgrade-agent-director
 ```
 
-If curl fails or its URL does not end in `/releases/tag/<tag>`, stop and
-hand the operator the output unless they provide a release tag.
+Use step 1's argument-forwarding rule here too. If the download fails,
+stop and hand the operator the output.
 
-Replace both `<tag>`s below with that tag, so the installer and binaries
-come from the same release.
-
-Only when the schema read above says this upgrade crosses the cutover,
-the journal flags assert the operator's maintenance window: first confirm with
-the operator that steps 1 and 2 of
-[Upgrading the native-input journal](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal)
-hold. For every upgrade, from this shell:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag>
-```
-
-For a crossing upgrade, append
-`--journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>`
-and add `--journal-legacy-root <dir>` for each additional input root.
-Otherwise skip that confirmation and pass no journal flags.
+For a crossing upgrade, append exactly the journal flags kept in step 1.
+Otherwise pass no journal flags.
 Add the original install's other
 [flags](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#install-from-a-release),
 plus any the operator adds now, such as `--register-mcp`.

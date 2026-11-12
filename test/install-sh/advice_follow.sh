@@ -4536,8 +4536,9 @@ test_J34_JournalMaintenanceStopAndRestartVerification() {
     for answer in first repeat; do
         run "$h" "${J7ARGV[@]}" --journal-maintenance-window --journal-roots-complete --journal-backup "$backup" --journal-legacy-root "$extra"
         expect_exit5 ErrJournalMigrationRefused "$answer with incompatible process" || true
-        expect_advice "install.sh: the cutover was refused before changing the previous install's store; the previous install was put back as it was before the run."
-        expect_advice "Fix the reported cause, then re-run this release's installer with a new backup directory:"
+        expect_advice "install.sh: pre-flight holder check refused (agent-director-admin migrate-journal --check-only --store-path) Nothing was installed or changed."
+        expect_advice "Then re-run this release's installer, with a new --journal-backup directory."
+        ! grep -qF 'install.sh: pre-flight OK' "$OUT" || bad "incompatible process passed pre-flight"
         [[ ! -e "$h/.config/agent-director/bin/agent-director" && ! -e "$h/.config/agent-director/admin/agent-director-admin" ]] || bad "refusal retained binaries absent before the run"
         [[ "$(cat "$(sentinel "$h")")" == "{\"from\":$prior,\"to\":$SCHEMA}" ]] || bad "refusal did not restore the original sentinel"
         grep -F 'old_or_unverified_mutators' "$ERR" >/dev/null || bad "refused before process inventory: $(flat "$ERR")"

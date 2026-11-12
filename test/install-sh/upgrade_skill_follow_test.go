@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/google/uuid"
 )
 
@@ -44,6 +45,7 @@ const upgradeInstallWait = 5 * time.Minute
 // b.5i3: the installer and binaries must come from the same release.
 func upgradeNetworkInstall(t *testing.T, command string) string {
 	t.Helper()
+	command = strings.TrimPrefix(command, "bash -o pipefail -c '")
 	m := regexp.MustCompile(`^curl -fsSL https://raw\.githubusercontent\.com/gabemahoney/agent-director/([^/\s]+)/skills/install-agent-director/install\.sh \| bash -s -- --from-release (\S+)(?: |$)`).FindStringSubmatch(command)
 	if m == nil {
 		t.Fatalf("step 3 must fetch a release's installer and name its --from-release tag: %q", command)
@@ -66,9 +68,9 @@ const upgradeNoRows = `{"spawns":[]}`
 const (
 	askStillRuns = "No live row's tmux session is there: does any of those agents still run?"                                     // step 1
 	askStop      = "Will you stop whatever starts agents, every serve and every caller, and may each live row listed be stopped?" // step 1
-	askWindow    = `Do steps 1 and 2 of "Upgrading the native-input journal" hold?`                                               // step 3
+	askWindow    = `Do steps 1 and 2 of "Upgrading the native-input journal" hold?`                                               // crossing maintenance window
 	askVerify    = "May the filled-in migrate-journal verification run?"                                                          // step 4
-	askRestart   = "Will you restart whatever starts agents, every serve and every caller?"                                      // step 6
+	askRestart   = "Will you restart whatever starts agents, every serve and every caller?"                                       // step 6
 )
 
 // step1Next is where step 1 leads.
@@ -189,6 +191,12 @@ type upgradeFollow struct {
 	marked                [][]string        // each find-missing's ids, sorted, in order
 	installs              []moveResult      // each step 3 install
 	installCommands       []string          // commands submitted to the shell
+	holderChecks          []moveResult      // read-only checks, before stops and install
+	holderCommands        []string          // commands submitted for those checks
+	fetches               int               // candidate installer downloads attempted
+	failFetch             int               // download to fail with exit 22 and no script
+	journalArgs           string            // identical flags for both checks and install
+	earlySchema           bool              // the skill reads the schema in step 1
 	journalVerifications  int               // step 4 migrate-journal runs
 	crossing              bool              // schema read before the install
 	store                 string            // store located from the skill and config
@@ -347,6 +355,16 @@ func (f *upgradeFollow) step1() step1Next {
 		t.Fatalf("step 1's check printed %q", got.Stdout)
 	}
 	// This shell has no MCP tools.
+	f.earlySchema = strings.Contains(s.text, "### Read the store schema")
+	if f.earlySchema {
+		s.Pin("Choose the release tag once for this upgrade, such as `v0.18.1`, and reuse it for every re-run of the install.",
+			"If curl fails or its URL does not end in `/releases/tag/<tag>`, stop and hand the operator the output unless they provide a release tag.",
+			"Only when the schema read above says this upgrade crosses the cutover, before stopping any row, first confirm with the operator that steps 1 and 2 of",
+			"For a crossing upgrade, append `--journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>` and add `--journal-legacy-root <dir>` for each additional input root.",
+			"Keep exactly these journal flags for the second holder check and step 3's install.",
+			"With no crossing, skip this confirmation and both holder checks, and pass no journal flags.")
+		f.readSchema()
+	}
 	rows, none := f.list(s.Block("agent-director list --state"))
 	if !none {
 		user := strings.TrimSpace(f.must(s.Inline("id -un")).Stdout)
@@ -377,10 +395,21 @@ func (f *upgradeFollow) step1() step1Next {
 	if !f.ask(askStop) {
 		return stopHere
 	}
-	// The operator has stopped them: none runs here.
-	serve := s.Block("[a]gent-director serve")
-	if got := f.sh.Run(serve); got.Stdout != "" || got.Stderr != "" {
-		t.Fatalf("%s: a serve runs: %q, %q", serve, got.Stdout, got.Stderr)
+	serve := s.Block("ps -A")
+	if got := f.sh.Run(serve); got.Stderr != "" {
+		t.Fatalf("%s: %q", serve, got.Stderr)
+	} else if got.Stdout != "" {
+		f.notices = append(f.notices, got.Stdout)
+		return stopHere
+	}
+	if f.earlySchema && f.crossing {
+		if !f.ask(askWindow) {
+			return stopHere
+		}
+		f.prepareJournal(s)
+		if !f.checkHolders(s) {
+			return stopHere
+		}
 	}
 	if none {
 		return toStep3
@@ -477,39 +506,105 @@ func (f *upgradeFollow) readSchema() {
 
 // step3 follows "3. Install" and returns the install's result.
 func (f *upgradeFollow) step3() moveResult {
-	t, h := f.t, f.h
+	t := f.t
 	t.Helper()
 	s := docSection(t, upgradeSkill, "3. Install")
-	s.Pin("Only when the schema read above says this upgrade crosses the cutover, the journal flags assert the operator's maintenance window: first confirm with the operator that steps 1 and 2 of",
-		"hold. For every upgrade, from this shell:",
-		"For a crossing upgrade, append `--journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>` and add `--journal-legacy-root <dir>` for each additional input root. Otherwise skip that confirmation and pass no journal flags.",
+	if !f.earlySchema {
+		s.Pin("Only when the schema read above says this upgrade crosses the cutover, the journal flags assert the operator's maintenance window: first confirm with the operator that steps 1 and 2 of",
+			"hold. For every upgrade, from this shell:",
+			"For a crossing upgrade, append `--journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>` and add `--journal-legacy-root <dir>` for each additional input root. Otherwise skip that confirmation and pass no journal flags.")
+		if f.crossing {
+			if !f.ask(askWindow) {
+				t.Fatal("no case here has the operator deny the maintenance window")
+			}
+			f.prepareJournal(s)
+		}
+	}
+	s.Pin(
 		"Add the original install's other",
 		"Exit 0: step 4. Exit 5 or 6: step 5. Another exit:")
-	if f.crossing && !f.ask(askWindow) {
-		t.Fatal("no case here has the operator deny the maintenance window")
+	command := f.releaseCommand(s, false)
+	f.installCommands = append(f.installCommands, command)
+	res := f.sh.RunWithin(command, upgradeInstallWait)
+	f.installs = append(f.installs, res)
+	return res
+}
+
+func (f *upgradeFollow) prepareJournal(s *opsSection) {
+	f.t.Helper()
+	f.backup = f.c.newBackup()
+	f.journalArgs = s.Fill(s.Inline("--journal-maintenance-window"), "<new-absolute-directory>", moveQuote(f.backup))
+}
+
+// checkHolders follows only checks the skill actually prescribes. Keeping
+// the old skill runnable makes the red cases expose its late refusal.
+func (f *upgradeFollow) checkHolders(s *opsSection) bool {
+	f.t.Helper()
+	if !f.crossing || !strings.Contains(s.text, "--check-holders") {
+		return true
 	}
-	block := s.Block("install.sh | bash -s --")
+	s.Pin("Exit 5: show the operator the output, including the listed processes, and stop.",
+		"On any other non-zero exit, stop and hand the operator the output.")
+	if s.name == "3. Install" {
+		s.Pin("For a crossing upgrade, after step 2's sweep and just before installing, repeat step 1's `--check-holders` command with the chosen tag and exactly the same journal flags.",
+			"With no crossing, skip this check.")
+		s = f.stepOne()
+	}
+	command := f.releaseCommand(s, true)
+	f.holderCommands = append(f.holderCommands, command)
+	res := f.sh.RunWithin(command, upgradeInstallWait)
+	f.holderChecks = append(f.holderChecks, res)
+	if res.Code != 0 {
+		f.notices = append(f.notices, res.Stdout+res.Stderr)
+		return false
+	}
+	return true
+}
+
+// releaseCommand substitutes the offline fixture for the release fetch,
+// retaining the skill's flags for holder-only and installation runs alike.
+func (f *upgradeFollow) releaseCommand(s *opsSection, check bool) string {
+	t, h := f.t, f.h
+	t.Helper()
+	want := "install.sh | bash -s --"
+	if check {
+		want = "--check-holders"
+	}
+	block := s.Block(want)
 	networkInstall := upgradeNetworkInstall(t, block)
 	var pairs []string
 	if f.crossing {
-		block += " " + s.Inline("--journal-maintenance-window")
-		f.backup = f.c.newBackup()
-		pairs = append(pairs, "<new-absolute-directory>", moveQuote(f.backup))
+		block += " " + f.journalArgs
 	}
 	if strings.Contains(networkInstall, "<tag>") {
 		pairs = append(pairs, "<tag>", "v"+moveVersion)
 	}
 	block = s.Fill(block, pairs...)
+	// Preserve the documented outer shell rather than assuming its options
+	// apply to the follower's shell or to the downloaded installer.
+	wrapped := strings.HasPrefix(block, "bash -o pipefail -c '")
+	outerArgs := ""
+	if wrapped {
+		var ok bool
+		block, outerArgs, ok = strings.Cut(strings.TrimPrefix(block, "bash -o pipefail -c '"), ` "$@"' upgrade-agent-director`)
+		if !ok {
+			t.Fatalf("release command lost its outer argument forwarding: %q", block)
+		}
+	}
 	networkInstall = upgradeNetworkInstall(t, block)
 	// The one substitution beyond the placeholders: jobs have no network, so
-	// curl's fetch of install.sh becomes cat of the fixture's loose copy of
-	// this tree's install.sh, still piped to bash -s --, and --from-release
+	// curl's fetch becomes the fixture's loose install.sh (or a failed fetch
+	// emitting no script), still piped to bash -s --, and --from-release
 	// becomes this tree's pair (the candidate binaries), as J43 to J45
 	// install, under the test switches every h install runs with (no host
 	// crontab or systemctl). h.Flags are the original install's other flags,
 	// the ones the v0.17.3 install used; no extra input root needs
 	// --journal-legacy-root.
 	words := []string{"cat", moveQuote(h.S.Install), "|"}
+	f.fetches++
+	if f.fetches == f.failFetch {
+		words = []string{"bash", "-c", moveQuote("echo 'injected installer download failure' >&2; exit 22"), "|"}
+	}
 	for _, e := range h.command().Env {
 		if k, v, _ := strings.Cut(e, "="); strings.HasPrefix(k, "INSTALL_SH_TEST_") {
 			words = append(words, k+"="+moveQuote(v))
@@ -521,10 +616,10 @@ func (f *upgradeFollow) step3() moveResult {
 	}
 	rest := strings.TrimPrefix(block, networkInstall)
 	command := strings.Join(words, " ") + " " + rest
-	f.installCommands = append(f.installCommands, command)
-	res := f.sh.RunWithin(command, upgradeInstallWait)
-	f.installs = append(f.installs, res)
-	return res
+	if wrapped {
+		return "bash -o pipefail -c " + moveQuote(command+` "$@"`) + " upgrade-agent-director" + outerArgs
+	}
+	return command
 }
 
 // step4 follows "4. Verify".
@@ -739,7 +834,12 @@ func (f *upgradeFollow) run() bool {
 				f.afterSweep = nil
 			}
 		}
-		f.readSchema()
+		if !f.earlySchema {
+			f.readSchema()
+		}
+		if !f.checkHolders(docSection(t, upgradeSkill, "3. Install")) {
+			return false
+		}
 		// SQLite's read-only open can create WAL sidecars. The refusal's
 		// no-touch assertion covers the installer, after that schema read.
 		before := f.h.PhysicalSnapshot()
@@ -793,6 +893,221 @@ func TestAdviceFollow_J47_UpgradeSkill(t *testing.T) {
 	}
 	// yes is an operator who confirms, and knows of no agent still running.
 	yes := func(q string) bool { return q != askStillRuns }
+	// b.5pb r2: launch environment in a tmux server's argv is not a
+	// running serve. A real executable named agent-director still stops us.
+	for _, tc := range []struct {
+		name                string
+		realServe, darwinPS bool
+	}{
+		{name: "serve mention in tmux argv"},
+		{name: "serve executable", realServe: true},
+		{name: "serve darwin argv0 spoof", darwinPS: true},
+		{name: "serve darwin renamed argv0", realServe: true, darwinPS: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, x := setup(t, false)
+			var process *moveProc
+			program, argv0 := "cat", "agent-director"
+			if tc.realServe {
+				binary := filepath.Join(t.TempDir(), "program path", "agent-director")
+				c.h.Copy(c.h.S.OldBinary, binary, 0o700)
+				command := exec.Command(binary, "serve")
+				program, argv0 = "agent-director", binary
+				if tc.darwinPS {
+					argv0 = "server-alias"
+					command.Args[0] = argv0
+				}
+				process = c.h.startProc(command, "", "ready")
+			} else if tc.darwinPS {
+				// b.5pb r3: the real image is cat, with argv exactly
+				// [agent-director, serve]. The file serves as its stdin.
+				c.h.Link("/dev/stdin", filepath.Join(c.h.Root, "serve"))
+				command := exec.Command("/bin/cat", "serve")
+				command.Args[0], command.Dir = argv0, c.h.Root
+				process = c.h.startProc(command, "ready\n", "ready")
+			} else {
+				process = c.h.startProc(exec.Command(c.h.S.Bash, "-c",
+					`echo ready; IFS= read -r done`,
+					"tmux: server AGENT_DIRECTOR_INSTANCE_ID=worker AGENT_DIRECTOR_AGENT=codex agent-director serve"), "", "ready")
+			}
+			start, alive, known := probe.NewProcChecker().StartTime(process.Pid)
+			if !alive || !known {
+				t.Fatal("process identity unavailable after readiness")
+			}
+			f := newUpgradeFollow(t, c, x, true, yes)
+			if tc.darwinPS {
+				// Model Apple's comm=argv[0] and ucomm=p_comm. Other
+				// ps operations still run the real Linux ps. This tests
+				// field selection, not native Darwin's implementation.
+				c.h.WrapTool("ps", fmt.Sprintf(`case "$*" in
+  '-A -o pid= -o comm=') printf '%%s %%s\n' %d %s; exit 0 ;;
+  '-p %d -o args=') printf '%%s serve\n' %s; exit 0 ;;
+  '-A -o pid= -o ucomm= -o args='|'-Aww -o pid= -o ucomm= -o args=') printf '%%s %%s %%s serve\n' %d %s %s; exit 0 ;;
+esac`, process.Pid, moveQuote(argv0), process.Pid, moveQuote(argv0),
+					process.Pid, moveQuote(program), moveQuote(argv0)))
+				f.must("export PATH=" + moveQuote(c.h.Tools+":"+c.h.S.Toolbox))
+			}
+			next := f.step1()
+			want := toStep3 // setup has no live row
+			if tc.realServe {
+				want = stopHere
+			}
+			if next != want {
+				t.Errorf("step 1 reached %v; want %v (notices %q)", next, want, f.notices)
+			}
+			if len(f.stopped) != 0 || len(f.installs) != 0 {
+				t.Error("step 1 stopped rows or installed")
+			}
+			if tc.realServe && len(f.holderChecks) != 0 {
+				t.Errorf("serve guard missed the real server; reached %d holder checks", len(f.holderChecks))
+			}
+			if !tc.realServe && f.earlySchema && len(f.holderChecks) != 1 {
+				t.Errorf("argv-only process prevented holder check: %v", f.notices)
+			}
+			if got, alive, known := probe.NewProcChecker().StartTime(process.Pid); !alive || !known || got != start {
+				t.Error("step 1 stopped or replaced the process")
+			}
+		})
+	}
+	// b.5pb review r1: an empty failed download must not become an empty
+	// successful Bash script, at either holder-check boundary.
+	for _, failedAt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("failed fetch at check %d", failedAt), func(t *testing.T) {
+			c, x := setup(t, false)
+			if failedAt == 1 {
+				x.liveAgent(t, c, "row-live")
+			}
+			f := newUpgradeFollow(t, c, x, true, yes)
+			f.failFetch = failedAt
+			rows := rowStates(c)
+			f.list(f.stepOne().Block("agent-director list --state"))
+			before := c.h.PhysicalSnapshot()
+			if f.run() {
+				t.Error("upgrade continued after an empty failed installer download")
+			}
+			if len(f.stopped) != 0 || len(f.installs) != 0 || len(f.installCommands) != 0 {
+				t.Errorf("failed fetch stopped rows %v and ran %d installs; want neither", f.stopped, len(f.installs))
+			}
+			if failedAt == 1 {
+				if err := x.command("has-session", "-t", "=ad-row-live").Run(); err != nil {
+					t.Errorf("failed first fetch ended the live agent: %v", err)
+				}
+			}
+			assertRefusedUnchanged(t, c.h, before, ".config/agent-director")
+			if got := rowStates(c); got != rows {
+				t.Errorf("failed fetch changed rows from %q to %q", rows, got)
+			}
+			if len(f.holderChecks) != failedAt || f.fetches != failedAt {
+				t.Errorf("ran %d checks and %d fetches; want %d before stopping", len(f.holderChecks), f.fetches, failedAt)
+			}
+			if len(f.holderChecks) < failedAt {
+				t.Fatal("the failing holder-check download was not attempted")
+			}
+			res := f.holderChecks[failedAt-1]
+			if res.Code != 22 || res.Stdout != "" || res.Stderr != "injected installer download failure\n" {
+				t.Errorf("failed fetch result %+v; want exit 22, no stdout and the fetch error", res)
+			}
+			if !reflect.DeepEqual(f.notices, []string{res.Stdout + res.Stderr}) {
+				t.Errorf("fetch error was not relayed to the operator: %q", f.notices)
+			}
+		})
+	}
+	// b.5pb: holders must refuse before the first stop and again after the
+	// sweep, before installation. The holder is an ordinary process, not a
+	// serve, so step 1's existing ps check cannot find it.
+	for _, late := range []bool{false, true} {
+		name := "holder before stops"
+		if late {
+			name = "holder after sweep"
+		}
+		t.Run(name, func(t *testing.T) {
+			c, x := setup(t, false)
+			x.liveAgent(t, c, "row-live")
+			f := newUpgradeFollow(t, c, x, true, yes)
+			if late {
+				if next := f.step1(); next != toStep2 || !f.step2() {
+					t.Fatalf("clear step 1 and sweep did not reach step 3: %v", next)
+				}
+			}
+			// Prime SQLite's read-only sidecars before the physical snapshot;
+			// this is the skill's schema read, not an installer write.
+			f.readSchema()
+			holder := c.h.startProc(exec.Command(c.h.S.Bash, "-c",
+				`exec 3<"$1" || exit 1; echo ready; IFS= read -r done`, "holder", c.db), "", "ready")
+			start, alive, known := probe.NewProcChecker().StartTime(holder.Pid)
+			if !alive || !known {
+				t.Fatal("holder identity unavailable after readiness")
+			}
+			rows := rowStates(c)
+			// Close the installed list's writable SQLite connection before
+			// snapshotting, so the follower's own schema/list reads start and
+			// end without read-only SQLite sidecars in the snapshot.
+			f.list(f.stepOne().Block("agent-director list --state"))
+			before := c.h.PhysicalSnapshot()
+			if late {
+				if f.checkHolders(docSection(t, upgradeSkill, "3. Install")) {
+					t.Error("step 3 allowed installation with a store holder started after step 1")
+				}
+			} else {
+				if next := f.step1(); next != stopHere {
+					t.Errorf("step 1 went to %v with a store holder; want stop before any row is stopped", next)
+				}
+				if len(f.stopped) != 0 {
+					t.Errorf("step 1 stopped rows %v before finding the store holder", f.stopped)
+				}
+				if err := x.command("has-session", "-t", "=ad-row-live").Run(); err != nil {
+					t.Errorf("step 1 ended row-live's session: %v", err)
+				}
+			}
+			if len(f.installs) != 0 || len(f.installCommands) != 0 {
+				t.Error("holder refusal reached installation")
+			}
+			if late {
+				assertRefusedUnchanged(t, c.h, before)
+			} else {
+				// Step 1's mandated schema/list reads create and remove SQLite
+				// sidecars, changing only the install directory's metadata.
+				// All files (DB and sidecars included) still compare exactly.
+				assertRefusedUnchanged(t, c.h, before, ".config/agent-director")
+			}
+			if got := rowStates(c); got != rows {
+				t.Errorf("holder refusal changed rows from %q to %q", rows, got)
+			}
+			if got, alive, known := probe.NewProcChecker().StartTime(holder.Pid); !alive || !known || got != start {
+				t.Error("holder check stopped or replaced the holder")
+			}
+			wantChecks := 1
+			if late {
+				wantChecks = 2
+			}
+			if len(f.holderChecks) != wantChecks {
+				t.Fatalf("ran --check-holders %d times; want %d", len(f.holderChecks), wantChecks)
+			}
+			res := f.holderChecks[wantChecks-1]
+			if res.Code != 5 {
+				t.Fatalf("holder check exit %d; want 5:\n%s\n%s", res.Code, res.Stdout, res.Stderr)
+			}
+			env := opsLastEnvelope(t, res, "ErrJournalMigrationRefused")
+			if env.Details.Refusal["reason"] != "old_or_unverified_mutators" {
+				t.Errorf("holder refusal: %+v", env.Details.Refusal)
+			}
+			processes, _ := env.Details.Refusal["processes"].([]any)
+			found := false
+			for _, p := range processes {
+				process, _ := p.(map[string]any)
+				found = found || process["pid"] == float64(holder.Pid)
+			}
+			if !found {
+				t.Errorf("refusal did not name holder pid %d: %+v", holder.Pid, processes)
+			}
+			if !reflect.DeepEqual(f.notices, []string{res.Stdout + res.Stderr}) {
+				t.Errorf("operator was not shown the complete refusal: %q", f.notices)
+			}
+			if late && f.holderChecks[0].Code != 0 {
+				t.Errorf("step 1 refused before the holder started: %+v", f.holderChecks[0])
+			}
+		})
+	}
 	// b.3k7: execute the skill's resume commands rather than assuming that
 	// bringing back each row also brings back its recorded family.
 	for _, name := range []string{"two-level family survives", "missing parent", "ended parent", "parent resume fails"} {
@@ -912,6 +1227,16 @@ func TestAdviceFollow_J47_UpgradeSkill(t *testing.T) {
 		if f.journalVerifications != 1 {
 			t.Errorf("crossing follow ran migrate-journal %d times; want once", f.journalVerifications)
 		}
+		if f.earlySchema {
+			if len(f.holderChecks) < 2 {
+				t.Fatalf("crossing upgrade ran %d holder checks; want checks before stops and install", len(f.holderChecks))
+			}
+			for _, command := range append(f.holderCommands[len(f.holderCommands)-2:], f.installCommands[len(f.installCommands)-1]) {
+				if _, flags, ok := strings.Cut(command, "--journal-maintenance-window"); !ok || "--journal-maintenance-window"+flags != f.journalArgs {
+					t.Errorf("check/install did not reuse journal flags %q: %s", f.journalArgs, command)
+				}
+			}
+		}
 		c.assertCrossed(t, f.installs[len(f.installs)-1], f.backup)
 		if got := rowStates(c); got != rows {
 			t.Errorf("rows after the upgrade:\n%s\nwant:\n%s", got, rows)
@@ -946,6 +1271,9 @@ func TestAdviceFollow_J47_UpgradeSkill(t *testing.T) {
 		}
 		if f.journalVerifications != 0 {
 			t.Errorf("non-crossing follow ran migrate-journal %d times; want none", f.journalVerifications)
+		}
+		if len(f.holderChecks) != 0 || len(f.holderCommands) != 0 {
+			t.Errorf("non-crossing upgrade ran --check-holders: %q", f.holderCommands)
 		}
 		if backups, err := filepath.Glob(filepath.Join(h.Root, "backup-*")); err != nil || len(backups) != 0 {
 			t.Errorf("non-crossing follow made backup directories %q: %v", backups, err)
@@ -1018,7 +1346,12 @@ func TestAdviceFollow_J47_UpgradeSkill(t *testing.T) {
 		f.afterStop = func() { x.liveAgent(t, c, "row-live") }
 		// Three sweeps leave row-live live, so step 1 again sees its session
 		// and stops it, and the next sweep marks it.
-		passed(t, c, f, f.run(), 1, []string{askStillRuns, askStop, askStop, askWindow, askVerify},
+		ok := f.run()
+		asked := []string{askStillRuns, askStop, askStop, askWindow, askVerify}
+		if f.earlySchema {
+			asked = []string{askStillRuns, askStop, askWindow, askStop, askWindow, askVerify}
+		}
+		passed(t, c, f, ok, 1, asked,
 			[][]string{{"row-dead"}, {}, {}, {"row-live"}}, "row-dead|missing\nrow-ended|ended\nrow-live|missing\n")
 		if err := x.command("has-session", "-t", "=ad-row-live").Run(); err == nil {
 			t.Error("row-live's session is still there after its kill")

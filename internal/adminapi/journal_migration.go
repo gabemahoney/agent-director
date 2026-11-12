@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 )
@@ -30,10 +31,10 @@ type JournalProcess struct {
 	Action    string `json:"action"`
 }
 
-// JournalRefusal is every error MigrateJournal and CheckJournalMigration
-// return: a bounded reason, the processes to stop, the reason's own action,
-// and the attempt's commit state, which the administrator writes beside the
-// refusal rather than inside it.
+// JournalRefusal is every error MigrateJournal, CheckJournalMigration and
+// CheckJournalMigrationHolders return: a bounded reason, the processes to
+// stop, the reason's own action, and the attempt's commit state, which the
+// administrator writes beside the refusal rather than inside it.
 type JournalRefusal struct {
 	Reason    string           `json:"reason"`
 	Processes []JournalProcess `json:"processes"`
@@ -179,8 +180,9 @@ var (
 )
 
 // SetJournalVerifierForTest replaces the quiescence verifier MigrateJournal
-// hands the store, for every later call in this process until restore runs,
-// so a test can fail any of an attempt's three verifications. Normal
+// hands the store and CheckJournalMigrationHolders calls, for every later
+// call in this process until restore runs, so a test can fail any of an
+// attempt's three verifications or the read-only inventory. Normal
 // administrator runs never call it. It is the one verifier seam: a test that
 // fails a verification uses it, never a second seam (docs/architecture.md
 // "migrate-journal fault seams and child runner").
@@ -208,6 +210,43 @@ func journalVerifier() func(context.Context, string, []string) error {
 // binary swap. Its refusals are not_committed, with no step committed.
 func CheckJournalMigration(options JournalMigrationOptions) error {
 	_, err := journalArguments(options)
+	return withJournalCommit(err, JournalCommitCheckOnly())
+}
+
+// journalInventoryOnly marks the read-only, pre-preparation inventory. The
+// shared verifier seam still selects both modes; only a real attempt judges
+// path access, after the installer has moved and secured its files.
+type journalInventoryOnly struct{}
+
+func journalIsInventoryOnly(ctx context.Context) bool {
+	return ctx.Value(journalInventoryOnly{}) != nil
+}
+
+// CheckJournalMigrationHolders makes the same argument checks, then runs the
+// real migration's process inventory against the explicit absolute store
+// path and complete roots, without its path-access verdicts. It loads no
+// config, opens no store, takes no lock and writes nothing. Its inventory
+// has a 30-second budget, as the real
+// attempt does; every refusal is not_committed, with no step committed.
+func CheckJournalMigrationHolders(ctx context.Context, path string, options JournalMigrationOptions) error {
+	roots, err := journalArguments(options)
+	if err != nil {
+		return withJournalCommit(err, JournalCommitCheckOnly())
+	}
+	const inventoryTimeout = 30 * time.Second
+	ctx, cancel := context.WithTimeout(ctx, inventoryTimeout)
+	defer cancel()
+	if !filepath.IsAbs(path) {
+		return withJournalCommit(journalRefusal("legacy_root_not_absolute"), JournalCommitCheckOnly())
+	}
+	ctx = context.WithValue(ctx, journalInventoryOnly{}, true)
+	// Paths name the current layout: install.sh has not moved or chmodded
+	// anything yet. Each host resolves aliases for descriptor comparison.
+	err = journalVerifier()(ctx, filepath.Clean(path), roots)
+	var refusal *JournalRefusal
+	if err != nil && (!errors.As(err, &refusal) || strings.HasPrefix(refusal.Reason, "legacy_root_")) {
+		err = journalRefusal("process_inventory_unreadable")
+	}
 	return withJournalCommit(err, JournalCommitCheckOnly())
 }
 
