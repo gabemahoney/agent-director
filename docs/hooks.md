@@ -219,29 +219,13 @@ their delays can delay state reporting. See the
 [Claude Code hooks reference](https://docs.claude.com/en/docs/claude-code/hooks)
 for native hook behavior.
 
-## Misbehaving user hooks
+## Your own hooks
 
-A user hook can stall (long-running tool call), exit non-zero, or write
-malformed stdout. Each of these has a different blast radius:
-
-- **Slow user hook** — Claude Code waits for every hook entry to return
-  before consuming the event. A 30-second user-script hook stalls the
-  entire pipeline; agent-director's state update doesn't land until
-  the user hook returns. The `status` verb will keep showing the
-  pre-event state during the stall.
-- **Non-zero user hook** — for `PreToolUse`, a non-zero exit can block
-  the tool call (Claude Code's policy). agent-director's hook still
-  runs and writes its state update either way; the row state is independent
-  of whether the tool was actually executed.
-- **Malformed user hook stdout** — irrelevant for state-tracking hooks
-  (they don't emit stdout). A poorly-formed permission-decision
-  envelope from a user hook could confuse the relay path;
-  agent-director's relay hook is always last, so it wins the decision
-  channel.
-
-To exclude a user hook from supervised spawns, see
-[Operator actions](operator-actions.md#a-user-hook-interferes-with-supervised-agents). Hooks receive `AGENT_DIRECTOR_INSTANCE_ID` in
-both Claude and Codex agents.
+Your hooks run before agent-director's. A slow one holds back the state update
+until it returns. agent-director's relay hook runs after yours, so its
+permission decision wins. Hooks receive `AGENT_DIRECTOR_INSTANCE_ID` in Claude
+and Codex agents. To skip one of your hooks inside supervised agents, see
+[Operator actions](operator-actions.md#a-user-hook-interferes-with-supervised-agents).
 
 ## Persistent hooks (the `help`-on-SessionStart pair)
 
@@ -274,10 +258,8 @@ retention is unverified. See
 [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries)
 for deadlines and failure handling.
 
-### Caveat — install fail-closed gap
-
 A Claude or Codex help command that cannot run injects no verb list; the
-conversation proceeds. For installation checks and repairs see [Installation](install.md).
+conversation goes on.
 
 ## PermissionRequest relay path
 

@@ -73,9 +73,6 @@
   if macOS asks. [Upgrade refusal
   reasons](operator-actions.md#upgrade-refusal-reasons) gives the remedies.
 
-On Linux/aarch64, a release from before linux/arm64 support has an `install.sh`
-that refuses the host (exit 2, `unsupported host`).
-
 After validating arguments and the install path, the installer checks all
 required commands for the selected mode before running external commands,
 downloading files or changing the installation. If any are missing, it exits
@@ -126,8 +123,7 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   `claude` from PATH. By hand, with that
   program for `claude`:
   `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`
-  (the `--` before the path is required; without it Claude Code refuses
-  `--stdio` and registers nothing). See
+  (the `--` before the path is required). See
   [MCP registration](#mcp-registration).
 - `--no-hooks`: leave `~/.claude/settings.json` untouched (see
   [Upgrade](#upgrade) for the old entries it prints) and do not set
@@ -167,9 +163,7 @@ Before it changes anything, `install.sh` looks for each agent (see
   `claude` from PATH; every Claude Code command the installer runs (the version
   line, `claude mcp get`, `add` and `remove`) goes through it.
 - **Codex found:** the program's path, with a note that its version was not
-  checked and the command to check it. `install.sh` never runs Codex, because
-  `codex --version` writes Codex's own files (`tmp/arg0/...`) in the Codex
-  folder it runs against: the default one unless `CODEX_HOME` names another.
+  checked and the command to check it. `install.sh` never runs Codex.
 - **Cursor found:** the standalone `agent` program's path, with a note that
   this is presence only: version and compatibility were not checked and
   `agent` was not run.
@@ -216,24 +210,12 @@ chosen as [above](#claude-code-and-codex). What it does depends on what
 - **Already registered for this install's binary** (its command is this
   install's `agent-director` and its arguments are `serve --stdio`): it says so
   and adds nothing, so running the install again with `--register-mcp` is safe.
-- **Registered under the same name for another command:** the add fails, because
-  Claude Code refuses a name that already exists. The install ends with exit 6
-  (below). If that registration should be replaced, remove it, then run the
-  install again or the add by hand:
-
-  ```sh
-  claude mcp remove agent-director -s <scope>
-  ```
-
+- **Registered under the same name for another command:** the add fails and the
+  install ends with exit 6 (below).
 - **Naming the old directory's binary** (an upgrade): see [Upgrade](#upgrade).
 
-**Exit 6: the registration failed.** `claude mcp add` (or the `claude mcp remove`
-before a re-add) exited non-zero. Every other step is done and kept: the
-binaries, the store, the hooks and the links. The message on stderr shows the
-command that ran, its exit status, its stderr and the command to run by hand;
-the last line says the registration failed. Fix the cause the stderr names,
-then run that command. The read of an existing registration (`claude mcp get`)
-never fails the install.
+**Exit 6: the registration failed.** Every other install step is done and kept;
+see [The MCP registration or deregistration failed (exit 6)](operator-actions.md#the-mcp-registration-or-deregistration-failed-exit-6).
 
 **Which directories see a registration.** A `local` registration made inside a
 git repository is found from every directory of that repository (it is kept
@@ -305,12 +287,11 @@ When `--schedule` is given or nothing is scheduled yet, it fetches the same five
 files from `raw.githubusercontent.com` at the release tag (with
 `--from-release`) or, with `--binary`, at the full commit stamp of the binaries,
 all or none, and keeps them in `~/.config/agent-director/schedule/`. When the
-release tag or commit has no `schedule/` (an older release: HTTP 404), it tries
+release tag or commit has no `schedule/` (HTTP 404), it tries
 once more at `main`, and the `schedule:` line says so.
 
-Raw downloadable templates use `find-missing`, so released installers can use
-them with older binaries, including after a 404 fallback to `main`. The current
-installer checks only the target binary's `help`: if it advertises `sweep`,
+Raw downloadable templates use `find-missing`. The installer checks only the
+target binary's `help`: if it advertises `sweep`,
 rendered cron lines, services and advice use `sweep`; otherwise they use
 `find-missing`. Failed or unreadable help also keeps `find-missing`. It never
 runs recovery to discover support. Existing `find-missing` schedules remain
@@ -428,29 +409,21 @@ store is opened:
 - While the move is due the files are read in the old directory, and the
   migration changes the copies in the new one.
 
-Only this release's installer migrates. A template copied in afterwards that
-holds the old name of the arguments key is refused at spawn, naming
-`agent_args`; one with no `agent` supplies no agent.
+The installer migrates these files only during a schema upgrade. Templates
+added afterwards use `agent_args` for arguments; omitting `agent` leaves
+agent selection to the caller.
 
 **After the upgrade:**
 
 - Restart every `serve` and every caller, TypeScript clients included.
 - Cursor gateway refusal reporting requires both the caller and the running
-  gateway to be agent-director 0.17.2 or later. With a pre-0.17.2 gateway,
-  `send-keys` returns `{}` after the 2 s wait for refused text until the row is
-  relaunched (`kill` or `pause`, then `resume`). `pause` can itself be refused
-  while input is held; follow
-  [Cursor input outcomes](caller-contract.md#cursor-input-outcomes) for recovery.
+  gateway to be agent-director 0.17.2 or later. Relaunch Cursor rows (`kill` or
+  `pause`, then `resume`) to run the installed gateway; follow
+  [Cursor input outcomes](caller-contract.md#cursor-input-outcomes) if input is held.
 - Check, then delete, any `~/.claude/settings.json.bak.<YYYYmmdd-HHMMSS>`
-  files: an earlier release's install with hooks on, and its uninstall, saved
-  one on each run, and they may hold your tokens. Install and uninstall keep no
+  files: they may hold your tokens. Install and uninstall keep no
   copy of `settings.json` and delete none of these, but each names those it
   finds on one line, each path shell-quoted, ready to paste after `rm --`.
-  Install prints:
-
-  ```
-    settings: copies of settings.json that earlier releases kept may hold its secrets (tokens, say) and can be deleted: <path> <path>...
-  ```
 - A link `~/.agent-director` that points to `~/.config/agent-director` is allowed
   for scripts that still name the old path when the install does not cross the
   native-input cutover. For a crossing upgrade, follow the
@@ -464,51 +437,17 @@ holds the old name of the arguments key is refused at spawn, naming
   tag, provided it [supports this host](#requirements); this release's
   `install.sh` refuses an earlier release's binaries (exit 3).
 
-**Refusals** (exit 5, with the install as it was before the run; each has its
-check and fix in Operator actions):
-[`ErrMoveConflict`](operator-actions.md#installsh-refuses-with-errmoveconflict)
-(the layout cannot be moved as it is),
-[`ErrAgentsLive`](operator-actions.md#installsh-refuses-with-erragentslive)
-(an agent or an agent-director process still uses the old directory),
-[`ErrMoveFailed`](operator-actions.md#installsh-stops-with-errmovefailed)
-(the copy failed; the old directory is untouched), and
-[`ErrJournalMigrationRefused`](operator-actions.md#installsh-refuses-with-errjournalmigrationrefused)
-(pre-flight or the journal cutover refused before the previous install's store
-changed, and anything the run changed was put back). A crossing upgrade refuses
-a link at `~/.config/agent-director` or `~/.agent-director` in pre-flight
-(`legacy_root_symlink`), including the compatibility link. See
-[Upgrade refusal reasons](operator-actions.md#upgrade-refusal-reasons) for
-both link cases. With no move due, it also refuses while the store holds a live
-agent row (`agents_live`) or its rows cannot be read (`agent_rows_unreadable`);
-the same table gives each one's next step.
+For upgrade refusals, incomplete cutovers or partial restores, see
+[refusal reasons](operator-actions.md#upgrade-refusal-reasons),
+[cutover recovery](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete)
+and [kept-install recovery](operator-actions.md#putting-back-a-kept-install).
 
-Two other cutover outcomes end with exit 5:
+For refused files or failed migration writes, see
+[config and template refusals](operator-actions.md#installsh-refuses-configtoml-or-a-template)
+and [migration-write recovery](operator-actions.md#a-migration-write-failed-after-the-binary-swap).
 
-- [`ErrJournalMigrationIncomplete`](operator-actions.md#installsh-stops-with-errjournalmigrationincomplete):
-  the install did not finish successfully, and this release stays installed;
-  the cutover may still have committed.
-- `ErrSchemaVerifyFailed` after `the restore could not finish`, with kept
-  copies in `details.copies`, whatever its reason: the put-back of the
-  previous install could not finish, so it is partly restored; see
-  [Putting back a kept install](operator-actions.md#putting-back-a-kept-install).
-
-The migration refuses a `config.toml` or a template it cannot read safely, or a
-link it cannot write through (exit 5, `ErrConfigMalformed` or
-`ErrTemplateMalformed`, every file unchanged): see
-[`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template).
-A migration write that fails after the binaries are installed stops the install
-(exit 1, the file as it was, every copy kept), as does a migration that refuses
-a file the checks accepted (exit 5). After a move, each of these two stops also
-prints the lines that still name the old directory, as the move's summary does,
-because a re-run has no move to print them. See
-[A migration write failed after the binary swap](operator-actions.md#a-migration-write-failed-after-the-binary-swap).
-
-**Going back** to the previous release is
-[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release),
-when a crossing upgrade has not put it back itself.
-Binary-only rollback requires an unchanged directory and schema. Restoring a
-pre-upgrade store loses writes since its backup; restoring the kept pre-move
-directory loses writes since the move.
+For rollback, follow
+[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
 
 ## Install the TypeScript client
 
@@ -566,11 +505,6 @@ once the upgrade is confirmed.
 - No registration found from that directory (Claude Code answers `No MCP server
   named ...`): it says so; this is not a failure. See
   [which directories see a registration](#mcp-registration).
-- Any other failure: stderr gets the command run, its exit status and its
-  stderr, with the command to run by hand. Every later step, `--purge`
-  included, still runs, and `uninstall.sh` then exits 6.
-
-A name registered in several scopes is refused by `claude mcp remove` without a
-scope, so `--mcp-also` reports that failure. Remove each one by hand with
-`claude mcp remove agent-director -s <scope>`, once per scope
-(`claude mcp get agent-director` shows one scope at a time).
+- Any other failure, a name registered in several scopes included: every later
+  step still runs and `uninstall.sh` exits 6; see
+  [The MCP registration or deregistration failed (exit 6)](operator-actions.md#the-mcp-registration-or-deregistration-failed-exit-6).
