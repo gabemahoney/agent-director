@@ -61,6 +61,56 @@ func TestUpgradeSkillReleaseInstaller(t *testing.T) {
 	upgradeNetworkInstall(t, s.Block("install.sh | bash -s --"))
 }
 
+// b.7nr: reading the schema must leave idle and live WAL stores untouched.
+func TestUpgradeSkillReadSchemaWAL(t *testing.T) {
+	for _, row := range []struct {
+		name     string
+		readOnly bool
+		live     bool
+	}{
+		{name: "idle"},
+		{name: "read-only folder", readOnly: true},
+		{name: "live WAL", live: true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			h := newMoveHome(t)
+			store := filepath.Join(h.New, "state.db")
+			if err := os.MkdirAll(h.New, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			h.Sqlite(store, "PRAGMA journal_mode=WAL; CREATE TABLE t(x); PRAGMA user_version=21;")
+			entries, err := os.ReadDir(h.New)
+			if err != nil || len(entries) != 1 || entries[0].Name() != "state.db" {
+				t.Fatalf("idle store entries %v: %v; want only state.db", entries, err)
+			}
+			want := "21\n"
+			if row.live {
+				h.HoldSQLite(store, "PRAGMA wal_autocheckpoint=0; PRAGMA user_version=22;")
+				want = "22\n"
+				if got := h.Sqlite("file:"+store+"?immutable=1", "PRAGMA user_version;"); got != "21\n" {
+					t.Fatalf("main file version %q; want 21, with 22 only in the WAL", got)
+				}
+			}
+			if row.readOnly {
+				if err := os.Chmod(h.New, 0o555); err != nil {
+					t.Fatal(err)
+				}
+				h.OnRelease(func() { _ = os.Chmod(h.New, 0o755) })
+			}
+			s := docSection(t, upgradeSkill, "Read the store schema")
+			sh := newOpsShell(h)
+			before := h.PhysicalSnapshot()
+			res := sh.Run(s.Fill(s.Block("PRAGMA user_version;"), "<store>", moveQuote(store)))
+			if res.Code != 0 || res.Stdout != want || res.Stderr != "" {
+				t.Errorf("schema read: exit %d, stdout %q, stderr %q; want exit 0 and %q", res.Code, res.Stdout, res.Stderr, want)
+			}
+			if d := moveDiff(before, h.PhysicalSnapshot()); d != "" {
+				t.Errorf("schema read changed the store folder:\n%s", d)
+			}
+		})
+	}
+}
+
 // upgradeNoRows is list's output with no row, as step 1 and step 2 quote it.
 const upgradeNoRows = `{"spawns":[]}`
 
@@ -470,7 +520,7 @@ func (f *upgradeFollow) readSchema() {
 	s.Pin("Before step 3, resolve `[store] db_path` from the installed `config.toml` as",
 		"[Which database install.sh checks](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#which-database-installsh-checks)",
 		"specifies: an unset or empty value uses `~/.config/agent-director/state.db` (`~/.agent-director/state.db` for 0.3.0–0.11.1); `~/` expands against `HOME`; an absolute path stays as written; every other value is relative to the install directory (`~/.config/agent-director`, or `~/.agent-director` for 0.3.0–0.11.1), never the shell's working directory. Do not expand `$VAR`.",
-		"Resolve to an absolute path before checking whether the store file exists. If there is no store file, record 0. Otherwise replace `<store>` with that resolved absolute path, quoted, and read it without opening it with agent-director:",
+		"Resolve to an absolute path before checking whether the store file exists. If there is no store file, record 0. Otherwise replace `<store>` with that resolved absolute path, quoted, and read a private copy to leave the store folder unchanged:",
 		"If the command fails or does not print one nonnegative integer, stop and hand the operator the output. Versions 1–15 cross the native-input journal cutover; 0 and versions 16 or above do not. Keep this result for steps 3 and 4, even after the install changes the schema version.")
 	defaultStore := strings.ReplaceAll(s.Inline("~/.config/agent-director/state.db"), "~/", f.h.Home+"/")
 	var config struct {
@@ -496,7 +546,11 @@ func (f *upgradeFollow) readSchema() {
 	} else if err != nil {
 		t.Fatal(err)
 	}
+	before := f.h.PhysicalSnapshot()
 	res := f.must(s.Fill(s.Block("PRAGMA user_version;"), "<store>", moveQuote(f.store)))
+	if d := moveDiff(before, f.h.PhysicalSnapshot()); d != "" {
+		t.Errorf("schema read changed the store folder:\n%s", d)
+	}
 	version, err := strconv.Atoi(strings.TrimSpace(res.Stdout))
 	if err != nil || version < 0 {
 		t.Fatalf("unreadable schema version %q: %v", res.Stdout, err)
@@ -840,8 +894,7 @@ func (f *upgradeFollow) run() bool {
 		if !f.checkHolders(docSection(t, upgradeSkill, "3. Install")) {
 			return false
 		}
-		// SQLite's read-only open can create WAL sidecars. The refusal's
-		// no-touch assertion covers the installer, after that schema read.
+		// The refusal's no-touch assertion covers the installer.
 		before := f.h.PhysicalSnapshot()
 		switch res := f.step3(); res.Code {
 		case 0:
@@ -1029,8 +1082,7 @@ esac`, process.Pid, moveQuote(argv0), process.Pid, moveQuote(argv0),
 					t.Fatalf("clear step 1 and sweep did not reach step 3: %v", next)
 				}
 			}
-			// Prime SQLite's read-only sidecars before the physical snapshot;
-			// this is the skill's schema read, not an installer write.
+			// Keep the schema result for the install's cutover decision.
 			f.readSchema()
 			holder := c.h.startProc(exec.Command(c.h.S.Bash, "-c",
 				`exec 3<"$1" || exit 1; echo ready; IFS= read -r done`, "holder", c.db), "", "ready")
@@ -1040,8 +1092,7 @@ esac`, process.Pid, moveQuote(argv0), process.Pid, moveQuote(argv0),
 			}
 			rows := rowStates(c)
 			// Close the installed list's writable SQLite connection before
-			// snapshotting, so the follower's own schema/list reads start and
-			// end without read-only SQLite sidecars in the snapshot.
+			// snapshotting, so its later list leaves no sidecars in the snapshot.
 			f.list(f.stepOne().Block("agent-director list --state"))
 			before := c.h.PhysicalSnapshot()
 			if late {
@@ -1065,7 +1116,7 @@ esac`, process.Pid, moveQuote(argv0), process.Pid, moveQuote(argv0),
 			if late {
 				assertRefusedUnchanged(t, c.h, before)
 			} else {
-				// Step 1's mandated schema/list reads create and remove SQLite
+				// Step 1's mandated list creates and removes SQLite
 				// sidecars, changing only the install directory's metadata.
 				// All files (DB and sidecars included) still compare exactly.
 				assertRefusedUnchanged(t, c.h, before, ".config/agent-director")
