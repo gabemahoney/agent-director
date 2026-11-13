@@ -21,7 +21,9 @@ import (
 
 // spawnRequests is one judged read of every permission request of a Spawn
 // (b.146 rules 5, 7, 12 and 14): the Spawn as read, its requests, each relay
-// hook's verdict and the time they are judged at.
+// hook's verdict and the time they are judged at. Cursor turn-end proofs
+// exclude requests from the row-wide relay and fallback holds; their
+// token-specific answer eligibility is judged separately.
 type spawnRequests struct {
 	j        relayJudge
 	sp       Spawn
@@ -94,13 +96,15 @@ func (r spawnRequests) awaits(pr PermissionRow) bool {
 	return !finishedState(r.sp.State) && pr.AwaitsAnswer()
 }
 
-// hookMayAnswer reports whether pr's relay hook may still answer it (b.146
-// rule 7, rows 1 and 3): pr is not closed, and its hook process is seen
+// hookMayAnswer reports the relay's conservative may-answer classification
+// (b.146 rule 7, rows 1 and 3): pr is not closed, and its hook process is seen
 // running (an acked request's hook included: it is writing its verdict to
 // the agent), or pr is not_confirmed (no ack, and its hook cannot be
 // checked and confirm_by has not passed; a request recorded before schema v7,
 // by its relay window). A closed request's hook answers nothing that reaches
-// the agent's dialog, so it holds nothing.
+// the agent's dialog, so it holds nothing. liveHolder separately excludes
+// Cursor requests proven gone at their turn's end from the row-wide relay
+// hold.
 func (r spawnRequests) hookMayAnswer(pr PermissionRow) bool {
 	if r.closed(pr) {
 		return false
@@ -115,14 +119,25 @@ func (r spawnRequests) fallenBack(pr PermissionRow) bool {
 	return !r.closed(pr) && r.delivery(pr).Delivery == DeliveryFallenBack
 }
 
-// liveHolder returns the request ErrSendKeysWhileRelayed names: of those whose
-// relay hook may still answer (hookMayAnswer), one still awaiting an answer
-// in preference to an acked one, then the oldest.
+// cursorTurnEnded reports whether Cursor's gateway has retired pr's turn.
+// Its durable proof prevents a new ack, native claim or answer issue, even
+// for a verdict recorded before the proof. Earlier-launch requests are also
+// excluded from the row-wide holds; no current-launch match is needed.
+// Other agents' turn-end proofs do not stop a relay hook from answering.
+func (r spawnRequests) cursorTurnEnded(pr PermissionRow) bool {
+	return r.sp.Agent == store.AgentCursor && pr.ProvenGone() && pr.ProvenGoneHow == store.ProvenGoneTurnEnd
+}
+
+// liveHolder returns the request named by a row-wide ErrSendKeysWhileRelayed:
+// of those whose relay hook may still answer (hookMayAnswer), one still
+// awaiting an answer in preference to an acked one, then the oldest. A Cursor
+// request proven gone at its turn's end is excluded from this hold
+// (cursorTurnEnded).
 func (r spawnRequests) liveHolder() (PermissionRow, bool) {
 	var held *PermissionRow
 	for i := range r.rows {
 		pr := &r.rows[i]
-		if !r.hookMayAnswer(*pr) {
+		if r.cursorTurnEnded(*pr) || !r.hookMayAnswer(*pr) {
 			continue
 		}
 		if held == nil || (r.awaits(*pr) && !r.awaits(*held)) {
@@ -135,10 +150,12 @@ func (r spawnRequests) liveHolder() (PermissionRow, bool) {
 	return *held, true
 }
 
-// oldestFallenBack returns the oldest open request that has fallen back.
+// oldestFallenBack returns the oldest open request holding the row-wide
+// fallback guard, except a Cursor request proven gone at its turn's end
+// (cursorTurnEnded).
 func (r spawnRequests) oldestFallenBack() (PermissionRow, bool) {
 	for _, pr := range r.rows {
-		if r.fallenBack(pr) {
+		if !r.cursorTurnEnded(pr) && r.fallenBack(pr) {
 			return pr, true
 		}
 	}
@@ -180,6 +197,9 @@ func (r spawnRequests) find(token string) (PermissionRow, bool) {
 //     (hookMayAnswer): ErrSendKeysWhileRelayed, plain or with a token.
 //  2. Plain (no token), any open request has fallen back with pane_answer
 //     none or intent: ErrRelayFallenBack with err_details, naming the oldest.
+//     Rules 1 and 2 skip Cursor requests proven gone at their turn's end
+//     (cursorTurnEnded), including those of an earlier launch.
+//     Token-specific answer eligibility (rule 4) still applies.
 //  3. Plain with no expect_pane_sha256, any request of the Spawn is not
 //     proven gone (b.146 step 2c) and not of an earlier Cursor launch
 //     (unproven): ErrDialogMaybeOpen with err_details, naming the oldest.

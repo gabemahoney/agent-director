@@ -52,6 +52,10 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 //   - Pause, held as a plain SendKeys (b.zdz), for the same request: its
 //     `/exit` and Enter could land on that dialog. Nothing is sent.
 //
+// The row-wide fallback holds of SendKeys without a request token and Pause
+// skip Cursor requests proven gone at their turn's end. Decide retains its
+// fallen-back refusal for those requests.
+//
 // Its err_details (RelayFallenBackDetails) give the request's facts
 // (request_token, tool_name, tool_input, requested_at and its delivery
 // facts), the Spawn's state and its other open requests. The request is

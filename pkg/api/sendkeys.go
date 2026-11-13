@@ -333,6 +333,8 @@ type sendKeysGuard struct {
 //     ErrRelayFallenBack with err_details (RelayFallenBackDetails), naming
 //     the oldest. Only a call that names the request it answers can type on
 //     such a row.
+//     Rules 1 and 2 skip Cursor requests proven gone at their turn's end.
+//     Token-specific answer eligibility (rule 4) still applies.
 //  3. Plain without expect_pane_sha256, any request of the row is not proven
 //     gone (b.146 step 2c: no main-agent Stop, idle-prompt Notification or
 //     (Codex) Interrupt after it for a request with no agent_id, no
@@ -996,7 +998,9 @@ func evaluateRelayGuard(s relayGuardStore, j relayJudge, hold time.Duration, row
 // state the row is, and applies rule 7 (spawnRequests.sendKeysRefusal):
 // guardHeld with the refusal, or guardReleased; rule 7 includes b.146 step
 // 2c's hold of a plain call without a pane hash while a request is not proven
-// gone (ErrDialogMaybeOpen). A refusal that finds a request
+// gone (ErrDialogMaybeOpen). Cursor requests proven gone at their turn's end
+// are excluded from the row-wide holds under rules 1 and 2; token-specific
+// answer eligibility (rule 4) still applies. A refusal that finds a request
 // fallen back first records hook_gone_at on every such request with none
 // (recordFallenBackGone, waiting the store's busy timeout, fail-open), so its
 // err_details carry it. A failed read is guardError with the store's error.
@@ -1098,11 +1102,15 @@ func isInteractiveState(state string) bool {
 //   - [ErrSendKeysWhileRelayed]: relay_mode is on and a relay hook of the
 //     Spawn may still answer its request (its process runs, or cannot be
 //     checked and its request is open before its confirm_by); nothing was
-//     sent. The message names that request and advises Decide (undecided)
+//     sent. Cursor requests proven gone at their turn's end are excluded
+//     from the row-wide hold, but a pane answer naming such a request still
+//     receives this error while its delivery is not_confirmed.
+//     The message names that request and advises Decide (undecided)
 //     or a later retry (verdict recorded).
 //   - [ErrRelayFallenBack]: a plain call while a request of the Spawn has
 //     fallen back with no pane answer recorded through agent-director
-//     (pane_answer none or intent); nothing was sent. Its err_details
+//     (pane_answer none or intent), except a Cursor request proven gone at
+//     its turn's end; nothing was sent. Its err_details
 //     ([RelayFallenBackDetails]) name the request and the Spawn's other open
 //     requests. Answer it with a pane answer, or close it with
 //     RecordPaneAnswer.

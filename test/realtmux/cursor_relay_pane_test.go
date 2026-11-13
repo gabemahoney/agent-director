@@ -147,39 +147,6 @@ func assertRelayPromptGuard(t *testing.T, f *spawnFix, r cursorfix.Runtime, id, 
 	}
 }
 
-// assertRetiredRefusal requires the refusal docs/caller-contract.md gives a
-// plain send-keys or pause on a relay-on Cursor row whose requests, rows, a
-// turn's end retired undelivered: ErrSendKeysWhileRelayed until their latest
-// confirm_by, ErrRelayFallenBack from it on. call returns the refusal's error
-// name; a call that straddles confirm_by may get either.
-func assertRetiredRefusal(t *testing.T, rows []store.PermissionRow, what string, call func() string) {
-	t.Helper()
-	var confirmBy time.Time
-	for _, row := range rows {
-		if row.SettledAt.After(confirmBy) {
-			confirmBy = row.SettledAt
-		}
-	}
-	start := time.Now()
-	got := call()
-	end := time.Now()
-	relayed, fallen := got == api.ErrSendKeysWhileRelayed.Error(), got == api.ErrRelayFallenBack.Error()
-	if (end.Before(confirmBy) && !relayed) || (!start.Before(confirmBy) && !fallen) || (!relayed && !fallen) {
-		t.Fatalf("%s on retired requests: got %s, called %s..%s with confirm_by %s", what, got, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), confirmBy.Format(time.RFC3339Nano))
-	}
-}
-
-// refusalName is e's sentinel name when it is one assertRetiredRefusal
-// accepts, otherwise e as text.
-func refusalName(e error) string {
-	for _, sentinel := range []error{api.ErrSendKeysWhileRelayed, api.ErrRelayFallenBack} {
-		if errors.Is(e, sentinel) {
-			return sentinel.Error()
-		}
-	}
-	return fmt.Sprint(e)
-}
-
 func TestCursorRelayUnknownOriginRequiresCorrelatedExecution(t *testing.T) {
 	// Serial: the shared real-pane fixture changes HOME, PATH and tmux environment.
 	const session = "proof-session"
@@ -211,7 +178,8 @@ func TestCursorRelayUnknownOriginRequiresCorrelatedExecution(t *testing.T) {
 }
 
 // b.gwj: a turn that ends with its permission and plan undecided retires both,
-// so the row reports waiting and a later decide reaches nothing.
+// so the row reports waiting and a later decide reaches nothing. b.283: the
+// retired requests also release public input without a pane answer.
 func TestCursorRelayTurnEndRetiresUndecidedPermissionAndPlan(t *testing.T) {
 	// Serial: the shared real-pane fixture changes HOME, PATH and tmux environment.
 	script := relayCapturedScenario(t)
@@ -220,7 +188,7 @@ func TestCursorRelayTurnEndRetiresUndecidedPermissionAndPlan(t *testing.T) {
 	if _, e := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "end before answers"}); e != nil {
 		t.Fatal(e)
 	}
-	admitted := relayRequests(t, f, launch.ID, 2)
+	relayRequests(t, f, launch.ID, 2)
 	diag := func() string {
 		return fmt.Sprint(readRow(t, f.DBPath, launch.ID).State, relayRequests(t, f, launch.ID, 2))
 	}
@@ -254,11 +222,15 @@ func TestCursorRelayTurnEndRetiresUndecidedPermissionAndPlan(t *testing.T) {
 	if pidGone(gateway) {
 		t.Fatal("gateway died after its turn retired the requests")
 	}
-	const refused = "retired-requests-refuse-input"
-	assertRetiredRefusal(t, admitted, "send-keys after late decides", func() string {
-		_, e := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: refused})
-		return refusalName(e)
-	})
+	r.Configure(t, cursorfix.Scenario{SessionID: script.SessionID})
+	const followup = "retired requests release input"
+	if _, e := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: followup}); e != nil {
+		t.Fatalf("send-keys after late decides on retired requests: %v", e)
+	}
+	waitFor(t, "follow-up reaches ACP and completes", func() bool {
+		prompts := panePrompts(t, r)
+		return len(prompts) == 2 && prompts[1].Text == followup && readRow(t, f.DBPath, launch.ID).State == store.StateWaiting
+	}, diag)
 	// Once the gateway has exited, nothing more can reach the peer.
 	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "-l", "--", "/exit")
 	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "Enter")
@@ -266,9 +238,6 @@ func TestCursorRelayTurnEndRetiresUndecidedPermissionAndPlan(t *testing.T) {
 	for _, frame := range r.Frames(t) {
 		if len(frame["method"]) == 0 || string(frame["method"]) == `"session/cancel"` {
 			t.Fatalf("retired request answered or cancelled: %s", frame)
-		}
-		if strings.Contains(string(frame["params"]), refused) {
-			t.Fatalf("refused prompt reached the agent: %s", frame)
 		}
 	}
 }

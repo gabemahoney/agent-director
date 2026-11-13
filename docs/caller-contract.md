@@ -861,9 +861,8 @@ A Cursor request of the current launch already answered (`delivered` or at
 the pane) holds input until tool proof arrives, its turn ends, or the launch
 ends ([Cursor spawns](permissions.md#cursor-spawns)). After turn end releases
 that hold, the next prompt needs no kill and resume. A later `gateway_refused`
-still means an admission hold remains; inspect it as above. The separate
-undelivered-request relay hold can still block input (see
-[Permission relay](#permission-relay)).
+still means an admission hold remains; inspect it as above. For undelivered
+requests, see [Permission relay](#permission-relay).
 
 If turn-end proof refuses an answer before it is written, the pane prints
 `Cursor turn ended before its answer was written; nothing sent`.
@@ -1688,9 +1687,10 @@ with:
 - `ErrStoreBusy`: the store's write lock was not taken in time.
 - `ErrSendKeysWhileRelayed`: a relay hook of the agent may still answer
   its request: answer the request it names with `decide`, or retry later (a
-  plain retry can then get `ErrDialogMaybeOpen`, below). Don't decide one
-  `get-permission` shows proven gone `turn_end`; see the Cursor turn-end
-  paragraph below.
+  plain retry can then get `ErrDialogMaybeOpen`, below). Don't answer or
+  decide one `get-permission` shows proven gone `turn_end`. A call naming
+  that Cursor request's token still gets this refusal while its delivery is
+  `not_confirmed`; see the Cursor turn-end paragraph below.
 - `ErrAlreadyDecided` or `ErrNoOpenPermissionRequest`: the request is no
   longer open.
 
@@ -1709,6 +1709,9 @@ plain `send-keys` (no `--request-token`) is refused with
 other open requests: close it with a pane answer or with
 `record-pane-answer`. While a relay hook of the agent may still answer,
 every `send-keys` is refused with `ErrSendKeysWhileRelayed`.
+These row-wide holds exclude Cursor requests proven gone at turn end,
+including requests of an earlier launch. Token-specific answer eligibility
+still applies; see the Cursor turn-end paragraph below.
 
 On Codex, `Escape` while an undecided main-agent request's relay hook polls
 ends the hook: the command does not run and no dialog follows, but the
@@ -1727,8 +1730,8 @@ Other requests of the agent can still hold keys.
 With `--allow-pending`, `ErrSendKeysWhileRelayed` can still hold a row
 before SessionStart for minutes: an undecided request recorded before v7,
 a legacy request without `agent_gone` proof (including an earlier-launch
-request carrying only `turn_end` proof and no recorded close), or a current
-relay hook that is live or whose status cannot be checked. Legacy holds
+non-Cursor request carrying only `turn_end` proof and no recorded close), or
+a current relay hook that is live or whose status cannot be checked. Legacy holds
 can last until `created_at` plus the configured relay window plus 2 s
 (24 h + 2 s at the default). A decided legacy request with `agent_gone`
 proof contributes no hold.
@@ -1803,13 +1806,20 @@ or choose it to decide. Before `confirm_by`, a new verdict is refused with
 `confirm_by`, an undecided, still-open request takes the fallback refusal:
 `ErrRelayFallenBack`, which can record `attempted_decision`, `attempted_at`
 and fallback history, but no new verdict or response. An existing verdict
-or pane answer retains its own refusal. On a relay-on row, until its
-`confirm_by` (24 h + 4 s after
-admission at the default relay window) every `send-keys` and `pause` is
-refused with `ErrSendKeysWhileRelayed`, and `decide` does not lift that
-refusal. After `confirm_by`, a plain `send-keys` or `pause` gets
-`ErrRelayFallenBack` until `record-pane-answer` closes the request, which it
-accepts from 2 s past `confirm_by` (`ErrClaimTooSoon` before).
+or pane answer retains its own refusal.
+
+A Cursor request proven gone at turn end no longer holds `send-keys`
+without `--request-token` (plain or inspected), nor `pause`, before or after
+`confirm_by`. This includes a verdict recorded but not acknowledged before
+turn end and a request of an earlier launch. No `decide` or
+`record-pane-answer` is needed for that release. A call naming that request's
+token still faces its token-specific refusals, including
+`ErrSendKeysWhileRelayed` while delivery is `not_confirmed`.
+An undelivered request still reads `not_confirmed`
+until `confirm_by`, then `fallen_back`; `record-pane-answer` still accepts
+a claim only from 2 s past `confirm_by` (`ErrClaimTooSoon` before). Other requests can still
+hold input. Claude and Codex turn-end proof does not release their relay
+or fallback holds.
 
 `pause` is held like a plain `send-keys` without `--expect-pane-sha256`
 (`ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`)

@@ -54,28 +54,6 @@ func panePublicRow(t *testing.T, c *paneCaller, id string) api.SpawnRow {
 	return row
 }
 
-// paneErrName is the err_name of c's failed verb call, or its whole response
-// when it names none. The CLI and Bun envelopes carry err_name at the top;
-// MCP carries it in the JSON-RPC error's data (docs/architecture.md "Error
-// envelope").
-func paneErrName(c *paneCaller, verb string, p map[string]any) string {
-	raw, err := c.call(verb, p)
-	var failure struct {
-		Name  string `json:"err_name"`
-		Error struct {
-			Data struct {
-				Name string `json:"err_name"`
-			} `json:"data"`
-		} `json:"error"`
-	}
-	json.Unmarshal(raw, &failure)
-	for _, name := range []string{failure.Name, failure.Error.Data.Name} {
-		if name != "" {
-			return name
-		}
-	}
-	return fmt.Sprintf("no err_name: response=%s err=%v", raw, err)
-}
 func paneRuntimePID(t *testing.T, r cursorfix.Runtime) int {
 	t.Helper()
 	var pid int
@@ -185,7 +163,7 @@ func TestCursorPaneControlsPublicMixedQueueRetirement(t *testing.T) {
 
 // Questions, caller recreation and a cancellation alone cannot prove unknown-origin
 // requests gone; the cancelled turn's completion does (b.gwj), and a new
-// conversation keeps that proof.
+// conversation keeps that proof. b.283: retired requests release public input.
 func TestCursorPaneControlsPublicIndependentHoldsUntilTurnEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real pane independent public holds")
@@ -266,25 +244,25 @@ func TestCursorPaneControlsPublicIndependentHoldsUntilTurnEnd(t *testing.T) {
 		return paneRecordCount(t, path, "turn_outcome") == 1 && readRow(t, f.DBPath, id).State == store.StateWaiting
 	}, diag)
 	inspect(true)
-	// Local controls remain accessible even though public ordinary prompts/pause are refused.
+	// A new conversation keeps the proof and the public input release.
 	r.Configure(t, cursorfix.Scenario{SessionID: script.SessionID})
 	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "-l", "--", "/new")
 	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "Enter")
 	waitFor(t, "new conversation keeps the retired requests", func() bool { return readRow(t, f.DBPath, id).SessionID != script.SessionID }, diag)
 	inspect(true)
-	assertRetiredRefusal(t, rows, "public pause", func() string {
-		return paneErrName(c, "pause", map[string]any{"instance_id": id})
-	})
-	assertRetiredRefusal(t, rows, "public send-keys", func() string {
-		return paneErrName(c, "send-keys", map[string]any{"instance_id": id, "text": "retired-requests-refuse-input"})
-	})
-	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "-l", "--", "/exit")
-	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "Enter")
+	const followup = "retired requests release public input"
+	c.send(id, followup)
+	waitFor(t, "public follow-up reaches ACP and completes", func() bool {
+		prompts := panePrompts(t, r)
+		return len(prompts) == 2 && prompts[1].Text == followup && prompts[1].Session == readRow(t, f.DBPath, id).SessionID && readRow(t, f.DBPath, id).State == store.StateWaiting
+	}, diag)
+	inspect(true)
+	c.must("pause", map[string]any{"instance_id": id})
 	waitForObserved(t, 3*time.Second, "owned death before final guard raw observation", func() bool {
 		return pidGone(paneRuntimePID(t, r)) && pidGone(int(launch.Row.PanePID.(int64)))
 	}, diag)
-	assertPaneNoPromptBytes(t, r, "", "retired-requests-refuse-input")
-	if len(panePrompts(t, r)) != 1 {
+	assertPaneNoPromptBytes(t, r, "", "/new", "/exit")
+	if len(panePrompts(t, r)) != 2 {
 		t.Fatal("request inspection/recreation/new session replayed prompt")
 	}
 	t.Logf("instance=%s retired unknown-origin tokens=%s/%s at the cancelled turn's end, kept across /new", id, rows[0].RequestToken, rows[1].RequestToken)

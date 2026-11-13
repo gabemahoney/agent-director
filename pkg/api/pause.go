@@ -167,6 +167,7 @@ var pauseSleep = time.Sleep
 //     ErrRelayFallenBack (RelayFallenBackDetails), naming the oldest. It
 //     first records hook_gone_at on every such request with none (waiting
 //     the store's busy timeout, fail-open), so its err_details carry it.
+//     Rules 1 and 2 skip Cursor requests proven gone at their turn's end.
 //  3. A request of the row is not proven gone by the agent's hooks:
 //     ErrDialogMaybeOpen (DialogMaybeOpenDetails), naming the oldest. A
 //     Cursor request of an earlier launch of the row does not hold
@@ -632,12 +633,14 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //     and the session before more input; never blindly replay text or Enter.
 //   - [ErrSendKeysWhileRelayed]: relay_mode is on and a relay hook of the
 //     Spawn may still answer its request (its process runs, or cannot be
-//     checked and its request is open before its confirm_by); nothing was
+//     checked and its request is open before its confirm_by), except a
+//     Cursor request proven gone at its turn's end; nothing was
 //     sent. The message names that request, and advises answering it with
 //     decide, or, when its verdict is recorded, retrying later.
 //   - [ErrRelayFallenBack]: a request of the Spawn has fallen back with no
 //     pane answer recorded through agent-director (pane_answer none or
-//     intent); nothing was sent. Its err_details
+//     intent), except a Cursor request proven gone at its turn's end;
+//     nothing was sent. Its err_details
 //     ([RelayFallenBackDetails]) name the request and the Spawn's other open
 //     requests. Answer it with a pane answer (SendKeys with its
 //     RequestToken), or close it with RecordPaneAnswer; Pause then stays
