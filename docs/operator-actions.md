@@ -17,13 +17,24 @@ default `/tmp/tmux-<uid>/default`). Keep the quotes. Never remove a row after a
 
 A session's `@ad_owner` label has five fields: `ad1`, a launch token, the
 session's own id (`$N`), the row's id and the store id (the trail's `store_id`).
-Read this store's id (16 hexadecimal characters), with `<busy_timeout_ms>` set
-to your `[store] busy_timeout_ms` ([Configuration](configuration.md)); with
-another `db_path`, use that file:
+Read this store's id (16 hexadecimal characters) from a private copy to leave
+the store folder unchanged; with another `db_path`, use that file:
 
 ```sh
-sqlite3 -readonly -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" ~/.config/agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
+(
+  umask 077
+  store="$HOME/.config/agent-director/state.db"
+  copy=$(mktemp -d "${TMPDIR:-/tmp}/ad-store-id.XXXXXX") || exit 1
+  trap 'rm -rf "$copy"' EXIT
+  if [ -f "$store-wal" ]; then
+    cp "$store-wal" "$copy/state.db-wal" || exit 1
+  fi
+  cp "$store" "$copy/state.db" || exit 1
+  sqlite3 -batch -init /dev/null "$copy/state.db" "SELECT value FROM store_meta WHERE key = 'store_id'"
+)
 ```
+
+If it fails, run it again.
 
 ## Inspect and end a session by hand
 

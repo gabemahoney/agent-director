@@ -6,8 +6,9 @@ package api_test
 // it are pinned in readme_operator_actions_more_test.go, not here.
 
 import (
+	"bufio"
 	"context"
-	"database/sql"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -18,60 +19,48 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
 
-// runnableStoreIDLine returns the one sqlite3 line of docs/operator-actions.md's "This
-// store's id" item (storeIDItemCommands), refusing a line that is not
-// read-only, since the test runs it. Its one <busy_timeout_ms> placeholder
-// becomes config.DefaultStoreBusyTimeoutMs, the value of the temp HOME's
-// store, which has no config.toml (b.c7f); sqlite3 would read the
-// placeholder as 0 and never wait for a lock.
-func runnableStoreIDLine(t *testing.T) string {
+// holdStoreLock keeps a separate sqlite3 process's exclusive lock until cleanup.
+// b.dg1: snapshotTrees closes database handles, which would release a lock
+// held in this process even if its SQLite connection remained open.
+func holdStoreLock(t *testing.T, path string) {
 	t.Helper()
-	d := readMD(t, mdOperatorActions)
-	cmds := storeIDItemCommands(t, d)
-	if len(cmds) != 1 || !strings.HasPrefix(cmds[0], "sqlite3 -readonly ") {
-		t.Fatalf("%s %q: want exactly one sqlite3 line, with -readonly, in a code block; found %q", d.path, storeIDItemTitle, cmds)
-	}
-	if n := strings.Count(cmds[0], storeIDBusyTimeoutPlaceholder); n != 1 {
-		t.Fatalf("%s %q: sqlite3 line %q holds %d %s placeholders; want 1 for the run to substitute",
-			d.path, storeIDItemTitle, cmds[0], n, storeIDBusyTimeoutPlaceholder)
-	}
-	return strings.Replace(cmds[0], storeIDBusyTimeoutPlaceholder, strconv.Itoa(config.DefaultStoreBusyTimeoutMs), 1)
-}
-
-// holdStoreLock has a second connection take path's exclusive lock now and
-// release it after d, as a starting or exiting agent-director briefly does.
-func holdStoreLock(t *testing.T, path string, d time.Duration) {
-	t.Helper()
-	ctx := context.Background()
-	db, err := sql.Open("sqlite", path)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-bail", "-init", "/dev/null", path)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	in, err := cmd.StdinPipe()
 	if err != nil {
-		t.Fatalf("open lock holder: %v", err)
+		t.Fatalf("lock holder stdin: %v", err)
 	}
-	conn, err := db.Conn(ctx)
+	t.Cleanup(func() { _ = in.Close() })
+	out, err := cmd.StdoutPipe()
 	if err != nil {
-		t.Fatalf("lock holder conn: %v", err)
+		t.Fatalf("lock holder stdout: %v", err)
 	}
-	var n int
-	for _, q := range []string{"PRAGMA locking_mode=EXCLUSIVE", "BEGIN EXCLUSIVE"} {
-		if _, err := conn.ExecContext(ctx, q); err != nil {
-			t.Fatalf("lock holder %s: %v", q, err)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start lock holder: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = in.Close()
+		if err := cmd.Wait(); err != nil {
+			t.Errorf("lock holder: %v; stderr: %s", err, stderr.String())
+		}
+	})
+	if _, err := io.WriteString(in, "PRAGMA locking_mode=EXCLUSIVE;\nBEGIN EXCLUSIVE;\nSELECT count(*) FROM store_meta;\nSELECT 'ready';\n"); err != nil {
+		t.Fatalf("lock holder input: %v", err)
+	}
+	sc := bufio.NewScanner(out)
+	for sc.Scan() {
+		if sc.Text() == "ready" {
+			return
 		}
 	}
-	if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM store_meta").Scan(&n); err != nil {
-		t.Fatalf("lock holder read: %v", err)
-	}
-	released := make(chan struct{})
-	time.AfterFunc(d, func() {
-		_, _ = conn.ExecContext(ctx, "COMMIT")
-		_, _ = conn.Close(), db.Close()
-		close(released)
-	})
-	t.Cleanup(func() { <-released })
+	t.Fatalf("lock holder exited before ready: %v", sc.Err())
 }
 
 // operatorSQLiteRC has every sqlite3 started with the returned env entry run
@@ -115,12 +104,10 @@ func operatorSQLiteRC(t *testing.T, rc string) string {
 	return "AGENT_DIRECTOR_TEST_SQLITERC=" + rc
 }
 
-// TestReadmeStoreIDCommandPrintsStoreID runs docs/operator-actions.md's store-id line with
-// HOME at a temp dir holding a fresh store: closed, held open, while another
-// connection briefly holds its exclusive lock (b.ady), and under an operator
-// ~/.sqliterc that turns headers on (b.hk7). A missing sqlite3 fails inside
-// the sandbox (its image installs sqlite3, so a skip there would hide a
-// broken image) and skips only outside it.
+// b.dg1: the whole documented block must print Store.StoreID without changing
+// any store-folder entry or bytes, including idle WAL and read-only folders.
+// The locked-store case proves a plain read is busy after the snapshot;
+// b.hk7 retains the ~/.sqliterc coverage.
 func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("sqlite3"); err != nil {
@@ -129,17 +116,23 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 		}
 		t.Skip("sqlite3 not on PATH: the operator-actions store-id command cannot be run here (the sandbox image installs it)")
 	}
-	line := runnableStoreIDLine(t)
+	blocks := storeIDItemCommands(t, readMD(t, mdOperatorActions))
+	if len(blocks) != 1 {
+		t.Fatalf("store-id command: want one fenced block, got %d", len(blocks))
+	}
+	block := blocks[0]
 	for _, tc := range []struct {
 		name     string
 		keepOpen bool
-		lockFor  time.Duration // 0: no lock held
-		rc       string        // ~/.sqliterc; "": none
+		locked   bool
+		rc       string // ~/.sqliterc; "": none
+		readOnly bool
 	}{
-		{"store closed", false, 0, ""},
-		{"store held open", true, 0, ""},
-		{"store briefly locked", false, time.Second, ""},
-		{"sqliterc headers on", false, 0, ".headers on"},
+		{name: "store closed"},
+		{name: "store held open", keepOpen: true},
+		{name: "store locked", locked: true},
+		{name: "sqliterc headers on", rc: ".headers on"},
+		{name: "read-only store folder", readOnly: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := os.Environ()
@@ -159,33 +152,53 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 			} else if err := st.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
 			}
-			if tc.lockFor > 0 {
-				holdStoreLock(t, dbPath, tc.lockFor)
+			if tc.locked {
+				holdStoreLock(t, dbPath)
 			}
 			if tc.rc != "" { // a plain read shows the rc file takes effect
-				plain := exec.Command("sqlite3", "-readonly", dbPath, "SELECT value FROM store_meta WHERE key = 'store_id'")
+				plain := exec.Command("sqlite3", ":memory:", "SELECT 1")
 				plain.Env = env
-				if out, err := plain.Output(); err != nil || strings.TrimSpace(string(out)) == want {
+				if out, err := plain.Output(); err != nil || strings.TrimSpace(string(out)) == "1" {
 					t.Fatalf("plain sqlite3 read under ~/.sqliterc %q printed %q (err %v); want it changed by the rc file", tc.rc, out, err)
 				}
 			}
 
+			if tc.readOnly {
+				if err := os.Chmod(filepath.Dir(dbPath), 0o555); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(filepath.Dir(dbPath), 0o700) })
+			}
+			roots := []string{filepath.Dir(dbPath)}
+			before := snapshotTrees(t, roots)
+
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "sh", "-c", line)
+			if tc.locked {
+				// No busy timeout: prove the holder still owns the lock after
+				// snapshotTrees has opened and closed the original database.
+				plain := exec.CommandContext(ctx, "sqlite3", "-batch", "-init", "/dev/null", dbPath,
+					"SELECT value FROM store_meta WHERE key = 'store_id'")
+				plain.Env = env
+				out, err := plain.CombinedOutput()
+				if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 5 || !strings.Contains(string(out), "database is locked (5)") {
+					t.Fatalf("plain store read after snapshot: %v; output %q; want SQLITE_BUSY (5)", err, out)
+				}
+				t.Logf("plain store read after snapshot, before documented block: exit 5; %s", strings.TrimSpace(string(out)))
+			}
+			cmd := exec.CommandContext(ctx, "sh", "-c", block)
 			cmd.Env = env
 			var stderr strings.Builder
 			cmd.Stderr = &stderr
-			start := time.Now()
 			out, err := cmd.Output()
+			if diff := before.diff(snapshotTrees(t, roots)); len(diff) != 0 {
+				t.Errorf("store-id read changed the store folder: %s", strings.Join(diff, "; "))
+			}
 			if err != nil {
-				t.Fatalf("operator-actions line %s: %v; stderr: %s", line, err, stderr.String())
+				t.Fatalf("operator-actions block %s: %v; stderr: %s", block, err, stderr.String())
 			}
 			if got := strings.TrimSpace(string(out)); got != want {
-				t.Errorf("operator-actions line %s printed %q; Store.StoreID() is %q", line, got, want)
-			}
-			if waited := time.Since(start); waited < tc.lockFor/2 {
-				t.Errorf("operator-actions line returned after %v, well before the %v lock was released: the lock never blocked it", waited, tc.lockFor)
+				t.Errorf("operator-actions block %s printed %q; Store.StoreID() is %q", block, got, want)
 			}
 		})
 	}
