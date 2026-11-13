@@ -67,10 +67,10 @@ or `/clear` or `/new` ends it, the gateway proves that turn's requests gone
 with `proven_gone_how` `turn_end`, answered or not. Pending tool proofs keep
 their persistence path; closed or already proven requests keep their fields.
 Turn-end proof preserves decision, delivery and pane-answer records and
-releases the dialog and row holds. Unanswered requests remain undelivered
-and may still read as awaiting an answer; their pane keys are removed and
-no new verdict can be recorded. Relay and fallback holds are separate;
-their handling is in the [caller contract](caller-contract.md#permission-relay).
+releases row-wide input holds and the row hold. Unanswered requests remain
+undelivered and may still read as awaiting an answer; their pane keys are removed and
+no new verdict can be recorded. For delivery history and input rules, see
+the [caller contract](caller-contract.md#permission-relay).
 
 Matching execution evidence can prove one request gone with
 `proven_gone_how` `tool_ran`. Shell proof requires a completed or failed
@@ -410,7 +410,8 @@ An independent child's or unknown-origin request is not released by the
 parent's work or life change, except that Cursor proves every request of the
 completing prompt turn gone regardless of origin, answered or not, subject to
 the tool-proof exceptions in [Cursor spawns](#cursor-spawns).
-Relay and fallback holds can remain after dialog proof.
+Row-wide relay and fallback holds can remain after dialog proof, except Cursor
+turn-end proof.
 For hold handling, pane hashes and `pause`, use the
 [caller contract](caller-contract.md#permission-relay).
 

@@ -154,14 +154,18 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 // hook process is seen running (it is writing the verdict to Claude Code). A
 // request that is closed (acked and its hook gone, answered at the pane, or
 // closed with its Spawn) never holds.
+// A Cursor request proven gone at its turn's end is excluded from the
+// row-wide relay and fallback holds of send-keys without a request token and
+// pause. A pane answer naming that request still receives this error while
+// its delivery is not_confirmed; do not answer or decide a proven-gone request.
 //
-// Its message names the request holding the guard — one still awaiting an
-// answer in preference to an acked one, then the oldest — and states no
-// release time (b.ah6). For an undecided request it advises answering it with
-// decide. For one whose verdict is recorded it says the relay hook may still
-// be delivering it and advises retrying later ("retry send-keys later" from
-// send-keys, "retry later" from pause): decide on it would return
-// ErrAlreadyDecided.
+// For a row-wide refusal, its message names the request holding the guard —
+// one still awaiting an answer in preference to an acked one, then the oldest.
+// It states no release time (b.ah6). For an undecided request it advises
+// answering it with decide. For one whose verdict is recorded it says the
+// relay hook may still be delivering it and advises retrying later ("retry
+// send-keys later" from send-keys, "retry later" from pause): decide on it
+// would return ErrAlreadyDecided.
 //
 // The guard holds for no time window beyond the relay hook's own, and has no
 // zero-rows rule: the relay hook records its request and the Spawn's move to
