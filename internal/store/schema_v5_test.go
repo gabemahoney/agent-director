@@ -25,7 +25,8 @@ import (
 var wellFormedID = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 // assertOneStoreID checks the exact metadata for this schema: one store_id,
-// plus the committed native authority on schemas that include the cutover.
+// plus the committed native authority on schemas that include the cutover and
+// the busy-send core's identity from v21 on.
 func assertOneStoreID(t *testing.T, path string) string {
 	t.Helper()
 	rows, present := readStoreMeta(t, path)
@@ -34,10 +35,14 @@ func assertOneStoreID(t *testing.T, path string) string {
 	}
 	id := rows[len(rows)-1].value
 	want := []storeMetaRow{{"store_id", id, "text"}}
+	version := readUserVersion(t, path)
 	for _, step := range migrationSteps {
-		if step.inputCutover && readUserVersion(t, path) > step.from {
+		if step.inputCutover && version > step.from {
 			want = append([]storeMetaRow{{inputAuthorityKey, inputAuthorityVersion + id, "text"}}, want...)
 		}
+	}
+	if version >= 21 {
+		want = append([]storeMetaRow{{busySendCoreKey, busySendCoreVersion + id, "text"}}, want...)
 	}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("store_meta = %+v; want %+v", rows, want)

@@ -53,6 +53,9 @@ func ReadStoreID(dbPath string) (string, error) {
 // opened before the call keeps the id it read when it opened, so seed before
 // opening the client or store under test. A fresh SQLite input-authority marker
 // changes atomically with the id; any existing native records refuse reseeding.
+// So does a schema-v21 busy-send core identity (busy-send-core-v1:<id>), which
+// every open checks against the id; any row of a table with a store_id column
+// (the core's records name the store) refuses reseeding.
 func SeedStoreID(dbPath, id string) error {
 	if !wellFormedStoreID(id) {
 		return fmt.Errorf("SeedStoreID: id %q is not 16 lowercase hexadecimal characters", id)
@@ -101,6 +104,9 @@ func SeedStoreID(dbPath, id string) error {
 			return fmt.Errorf("SeedStoreID: update input authority: %w", err)
 		}
 	}
+	if err := reseedBusySendCore(tx, oldID, id); err != nil {
+		return err
+	}
 	res, err := tx.Exec(`UPDATE store_meta SET value = ? WHERE key = 'store_id'`, id)
 	if err != nil {
 		var name string
@@ -117,6 +123,57 @@ func SeedStoreID(dbPath, id string) error {
 		return fmt.Errorf("SeedStoreID: %w: no store_id row", ErrNoStoreID)
 	}
 	return tx.Commit()
+}
+
+// busySendCoreIdentity is the schema-v21 store_meta busy_send_core value of
+// the store whose id is storeID.
+func busySendCoreIdentity(storeID string) string { return "busy-send-core-v1:" + storeID }
+
+// reseedBusySendCore moves the busy-send core identity from oldID to id on tx,
+// SeedStoreID's transaction. A store from before schema v21 has none. An
+// identity of another store, or any row naming the store (a row of a table
+// with a store_id column), refuses the reseed with nothing written.
+func reseedBusySendCore(tx *sql.Tx, oldID, id string) error {
+	var core string
+	err := tx.QueryRow(`SELECT value FROM store_meta WHERE key = 'busy_send_core'`).Scan(&core)
+	switch {
+	case errors.Is(err, sql.ErrNoRows): // historical schemas have no busy-send core
+		return nil
+	case err != nil:
+		return fmt.Errorf("SeedStoreID: read busy-send core identity: %w", err)
+	case core != busySendCoreIdentity(oldID):
+		return fmt.Errorf("SeedStoreID: busy-send core identity does not match the original store")
+	}
+	rows, err := tx.Query(`SELECT m.name FROM sqlite_master m, pragma_table_info(m.name) p
+	                        WHERE m.type = 'table' AND p.name = 'store_id'`)
+	if err != nil {
+		return fmt.Errorf("SeedStoreID: list tables naming the store: %w", err)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close() //nolint:errcheck
+			return fmt.Errorf("SeedStoreID: list tables naming the store: %w", err)
+		}
+		tables = append(tables, name)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("SeedStoreID: list tables naming the store: %w", err)
+	}
+	for _, table := range tables {
+		var named bool
+		if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM "` + table + `")`).Scan(&named); err != nil {
+			return fmt.Errorf("SeedStoreID: inspect %s: %w", table, err)
+		}
+		if named {
+			return fmt.Errorf("SeedStoreID: cannot change the identity of %s records", table)
+		}
+	}
+	if _, err := tx.Exec(`UPDATE store_meta SET value = ? WHERE key = 'busy_send_core'`, busySendCoreIdentity(id)); err != nil {
+		return fmt.Errorf("SeedStoreID: update busy-send core identity: %w", err)
+	}
+	return nil
 }
 
 // OtherStoreID returns a well-formed store id (16 lowercase hexadecimal

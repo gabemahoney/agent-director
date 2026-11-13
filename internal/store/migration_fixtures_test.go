@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -270,14 +271,24 @@ func schemaShape(t *testing.T, db *sql.DB) map[string]any {
 }
 
 // dbDump is the schema shape of the DB at path plus every table's rows (each
-// value as %#v, in rowid order), keyed "rows <table>".
-func dbDump(t *testing.T, path string) map[string]any {
+// value as %#v, in rowid order), keyed "rows <table>". omit names columns
+// ("table.column") left out of both the shape and the rows.
+func dbDump(t *testing.T, path string, omit ...string) map[string]any {
 	t.Helper()
 	var out map[string]any
 	withRaw(t, path, func(db *sql.DB) {
 		out = schemaShape(t, db)
 		for _, table := range queryStrings(t, db, `SELECT name FROM sqlite_master WHERE type = 'table'`) {
-			rows, err := db.Query("SELECT * FROM " + table + " ORDER BY rowid")
+			var kept []tableColumn
+			var sel []string
+			for _, c := range readTableShape(t, db, table) {
+				if !slices.Contains(omit, table+"."+c.name) {
+					kept = append(kept, c)
+					sel = append(sel, `"`+c.name+`"`)
+				}
+			}
+			out["table "+table] = kept
+			rows, err := db.Query("SELECT " + strings.Join(sel, ", ") + " FROM " + table + " ORDER BY rowid")
 			if err != nil {
 				t.Fatalf("dump %s: %v", table, err)
 			}
@@ -306,6 +317,51 @@ func dbDump(t *testing.T, path string) map[string]any {
 func expectInputAuthority(dump map[string]any, id string) {
 	dump["rows store_meta"] = append(slices.Clone(dump["rows store_meta"].([]string)),
 		fmt.Sprintf("%#v", []any{inputAuthorityKey, inputAuthorityVersion + id}))
+}
+
+// dumpBeforeV21 is dbDump of the store at path without what the v20→v21 hop
+// adds to an existing store: the busy-send core's tables and indexes, its
+// spawns columns and its store_meta identity row. An older hop's test compares
+// it with a dump taken before the authorized chain ran, so the v21 backfill
+// neither masks nor fails what the older hop kept; the core's own facts are
+// busy_send_schema_test.go's.
+func dumpBeforeV21(t *testing.T, path string) map[string]any {
+	t.Helper()
+	var omit []string
+	for _, c := range busySendSpawnColumns {
+		omit = append(omit, "spawns."+c.name)
+	}
+	dump := dbDump(t, path, omit...)
+	for key := range dump {
+		if _, name, _ := strings.Cut(key, " "); strings.HasPrefix(name, "busy_") || strings.HasPrefix(name, "idx_busy_") ||
+			strings.HasPrefix(name, "sqlite_autoindex_busy_") {
+			delete(dump, key)
+		}
+	}
+	if rows, ok := dump["rows store_meta"].([]string); ok {
+		identity := strings.TrimSuffix(fmt.Sprintf("%#v", []any{busySendCoreKey}), "}")
+		dump["rows store_meta"] = slices.DeleteFunc(slices.Clone(rows), func(r string) bool { return strings.HasPrefix(r, identity+",") })
+	}
+	return dump
+}
+
+// reapplyHops re-runs the registered ordinary hops from version from up to
+// schemaVersion on the closed store at path: an older hop's reentry restamps
+// its own version, and the later hops' reentry returns the store to the
+// current one, as the chain would.
+func reapplyHops(t *testing.T, path string, from int) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for v := from; v < schemaVersion; v++ {
+			step, ok := migrationStepFrom(v)
+			if !ok || step.apply == nil {
+				t.Fatalf("not an ordinary registered hop: %d", v)
+			}
+			if err := step.apply(db); err != nil {
+				t.Fatalf("reentry of hop %d: %v", v, err)
+			}
+		}
+	})
 }
 
 // assertReleasedReentry checks the old hop's exact idempotence on a copy of
@@ -1819,26 +1875,37 @@ func assertV8ValuesKept(t *testing.T, path string, f v8Fixture, held map[string]
 	}
 }
 
+// rewriteTableDDL replaces old with new once in table's stored declaration
+// (writable_schema), the way only a hand-edited or historical store differs
+// from what any hop wrote; the stored text must contain old.
+func rewriteTableDDL(t *testing.T, path, table, old, new string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		db.SetMaxOpenConns(1)
+		var ddl string
+		var version int
+		if err := db.QueryRow("SELECT sql FROM sqlite_schema WHERE name=?", table).Scan(&ddl); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(ddl, old) {
+			t.Fatalf("%s's declaration lacks %q", table, old)
+		}
+		if err := db.QueryRow("PRAGMA schema_version").Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, "PRAGMA writable_schema=ON")
+		mustExec(t, db, "UPDATE sqlite_schema SET sql=? WHERE name=?", strings.Replace(ddl, old, new, 1), table)
+		mustExec(t, db, fmt.Sprintf("PRAGMA schema_version=%d", version+1))
+		mustExec(t, db, "PRAGMA writable_schema=RESET")
+	})
+}
+
 // Source-derived v10 fixture; it retains historical NULL/malformed agent values.
 func seedV10EligibilityFixture(t *testing.T, path string, agent any, child any) {
 	t.Helper()
 	seedPreMigrationRow(t, path, 10)
 	if agent == nil {
-		withRaw(t, path, func(db *sql.DB) {
-			db.SetMaxOpenConns(1)
-			var ddl string
-			var version int
-			if err := db.QueryRow("SELECT sql FROM sqlite_schema WHERE name='spawns'").Scan(&ddl); err != nil {
-				t.Fatal(err)
-			}
-			if err := db.QueryRow("PRAGMA schema_version").Scan(&version); err != nil {
-				t.Fatal(err)
-			}
-			mustExec(t, db, "PRAGMA writable_schema=ON")
-			mustExec(t, db, "UPDATE sqlite_schema SET sql=? WHERE name='spawns'", strings.Replace(ddl, "agent TEXT NOT NULL", "agent TEXT", 1))
-			mustExec(t, db, fmt.Sprintf("PRAGMA schema_version=%d", version+1))
-			mustExec(t, db, "PRAGMA writable_schema=RESET")
-		})
+		rewriteTableDDL(t, path, "spawns", "agent TEXT NOT NULL", "agent TEXT")
 	}
 	withRaw(t, path, func(db *sql.DB) {
 		mustExec(t, db, `UPDATE spawns SET agent=?, life_number=3, session_id='kept-session', end_reported_at=123456 WHERE instance_id='pre'`, agent)
@@ -2006,5 +2073,431 @@ func seedV13PermissionFixture(t *testing.T, path string) {
 				"settled_at": int64(1792411205000), "hook_gone_at": int64(1792411206000), "pane_answer": r.answer,
 				"proven_gone_how": nullableStringArg(r.proof), "proven_gone_at": proofAt})
 		}
+	})
+}
+
+// v21ColumnSpecs are the busy-send core's three spawns columns as table_info
+// shows them, appended after observation_writer in schema order. Their CHECK
+// clauses are TestBusySendCoreContract's.
+var v21ColumnSpecs = []columnSpec{
+	{"spawns", "busy_send", "TEXT", true, "'not_covered'"},
+	{"spawns", "busy_conversation_id", "TEXT", false, ""},
+	{"spawns", "turn_starts", "INTEGER", true, "0"},
+}
+
+// The ids of makeV20Fixture's rows besides v16's 'pre'.
+const (
+	v20ClaudeID   = "v20-claude"
+	v20CodexID    = "v20-codex"
+	v20CursorID   = "v20-cursor"
+	v20DroidID    = "v20-droid"
+	v20OpenCodeID = "v20-opencode"
+)
+
+// v20Fixture describes what makeV20Fixture seeded, the baseline of the
+// v20→v21 hop: rows holds quote() literals of every v20 spawns column (cols)
+// per id, and before the whole store's dbDump, both read before the hop.
+type v20Fixture struct {
+	dir, path, storeID string
+	ids, cols          []string
+	rows               map[string]map[string]string
+	before             map[string]any
+}
+
+// makeV20Fixture builds a genuine v20 store under dir, closed, holding a row
+// of every agent kind in each lifecycle the v20→v21 backfill records:
+//   - 'pre' (claude, working) with v16's decided requests and archived
+//     session, and v18's Cursor input and proof records;
+//   - v20ClaudeID: waiting at life 2 with its launch identity, session,
+//     process, permission epoch, display evidence and an archived session;
+//   - v20CodexID: working with an open Codex turn;
+//   - v20CursorID: ended at life 1, its Cursor runtime binding kept;
+//   - v20DroidID: missing at life 3 with no launch token or session, as a
+//     row that never recorded them;
+//   - v20OpenCodeID: pending mid-launch, with no session yet;
+//
+// and a legacy journal import.
+func makeV20Fixture(t *testing.T, dir string) v20Fixture {
+	t.Helper()
+	f := v20Fixture{dir: dir, path: makeVersionedDB(t, dir, 20), rows: map[string]map[string]string{}}
+	seedV16PermissionHistory(t, f.path)
+	seedV18Obligation(t, f.path, "cursor_inputs")
+	seedV18Obligation(t, f.path, "cursor_proofs")
+	f.storeID = assertOneStoreID(t, f.path)
+	f.ids = []string{"pre", v20ClaudeID, v20CodexID, v20CursorID, v20DroidID, v20OpenCodeID}
+	spawn := func(id, agent, state string, life int, token any, over map[string]any) map[string]any {
+		row := map[string]any{"instance_id": id, "agent": agent, "state": state, "settled_state": state, "cwd": "/work/" + id,
+			"tmux_session_name": "ad-" + id, "relay_mode": "on", "started_at": "2026-10-01 10:00:00",
+			"last_seen_at": "2026-10-01 10:05:00", "row_version": 4, "life_number": life, "launch_token": token}
+		for c, v := range over {
+			row[c] = v
+		}
+		return row
+	}
+	withRaw(t, f.path, func(db *sql.DB) {
+		for _, r := range []map[string]any{
+			spawn(v20ClaudeID, AgentClaude, StateWaiting, 2, "0123456789abcdef", map[string]any{"session_id": "sess-claude",
+				"jsonl_path": "/t/claude.jsonl", "pid": 4242, "proc_starttime": "98765", "permission_epoch": 3, "row_version": 9,
+				"display_evidence": `{"v":"waiting","life":2,"token":"0123456789abcdef","since":1792411208000,"at":1792411208000,"src":"pane","checked":1792411210000,"reason":null}`}),
+			spawn(v20CodexID, AgentCodex, StateWorking, 0, "1111111111111111", map[string]any{"session_id": "sess-codex",
+				"codex_turn": "01a16668-4862-7930-b160-2863caf991d1"}),
+			spawn(v20CursorID, AgentCursor, StateEnded, 1, "2222222222222222", map[string]any{"session_id": "sess-cursor",
+				"ended_at": "2026-10-01 11:00:00"}),
+			spawn(v20DroidID, AgentDroid, StateMissing, 3, nil, map[string]any{"ended_at": "2026-10-01 12:00:00"}),
+			spawn(v20OpenCodeID, AgentOpenCode, StatePending, 0, "3333333333333333", map[string]any{"launch_started_at": int64(1792411200123)}),
+		} {
+			insertRow(t, db, "spawns", r)
+		}
+		insertRow(t, db, "session_history", map[string]any{"instance_id": v20ClaudeID, "session_id": "sess-claude-prior", "life_number": 1})
+		insertRow(t, db, "cursor_runtimes", map[string]any{"bound_instance_id": v20CursorID, "bound_launch_token": "2222222222222222",
+			"bound_life_number": 1, "bound_gateway_pid": 4101, "bound_gateway_start": "start", "bound_runtime_pid": 12345,
+			"bound_runtime_start": "synthetic", "bound_connection_id": "kept", "bound_input_pipe": "pipe:[1]", "bound_output_pipe": "pipe:[2]",
+			"bound_input_fd": 11, "bound_output_fd": 12, "bound_session_id": "sess-cursor", "bound_terminated": 1})
+		insertRow(t, db, "input_imports", map[string]any{"source": "/legacy/input/claude.jsonl", "store_id": f.storeID,
+			"source_sha256": strings.Repeat("ab", 32), "evidence": []byte("legacy journal\x00evidence")})
+		f.cols = tableColumnNames(t, db, "spawns")
+	})
+	for _, id := range f.ids {
+		f.rows[id] = readRawSpawn(t, f.path, id, f.cols)
+	}
+	f.before = dbDump(t, f.path)
+	return f
+}
+
+// assertV21Backfill fails unless the v20→v21 hop recorded each id's row of
+// the store at path once and invented nothing: one published conversation
+// (the instance's first) and one current migrated Launch bound to it, both
+// with the row's provider (claude for a historical row with no agent, as
+// readers take it) and BusySendCoverageForAgent's coverage of it; the Launch
+// with the row's life and launch token (NULL kept) and no route, wake path,
+// process or Launch End; and the row bound to the conversation with the same
+// coverage and an integer Turn Start counter of 0. It returns each id's
+// recorded conversation and Launch ids.
+func assertV21Backfill(t *testing.T, path string, ids ...string) map[string]v21Binding {
+	t.Helper()
+	storeID := assertOneStoreID(t, path)
+	var convCols, launchCols []string
+	withRaw(t, path, func(db *sql.DB) {
+		convCols, launchCols = tableColumnNames(t, db, "busy_conversations"), tableColumnNames(t, db, "busy_send_launches")
+	})
+	quoted := func(s string) string { return "'" + s + "'" }
+	bound := map[string]v21Binding{}
+	for _, id := range ids {
+		row := readRawSpawn(t, path, id, []string{"agent", "life_number", "launch_token", "busy_send", "busy_conversation_id", "typeof(turn_starts)", "turn_starts"})
+		provider := unquote(row["agent"])
+		if provider == "" {
+			provider = AgentClaude
+		}
+		coverage := quoted(string(BusySendCoverageForAgent(provider)))
+		convs := readQuotedRows(t, path, "busy_conversations", id, "generation", convCols)
+		launches := readQuotedRows(t, path, "busy_send_launches", id, "launch_id", launchCols)
+		if len(convs) != 1 || len(launches) != 1 {
+			t.Errorf("%s: %d conversations and %d Launches; want one of each", id, len(convs), len(launches))
+			continue
+		}
+		c, l := convs[0], launches[0]
+		for col, want := range map[string]string{"store_id": quoted(storeID), "generation": "1", "publication": "'published'",
+			"provider": quoted(provider), "busy_send": coverage, "default_send_mode": "'wait_turn'", "default_confirmed": "0",
+			"confirm_from_transcripts": "0", "accepted_seq": "0", "reserved_count": "0", "reserved_bytes": "0",
+			"owner_handover_id": "NULL", "handover_force_id": "NULL", "revision": "1", "published_at_ms": c["recorded_at_ms"],
+			"retired_at_ms": "NULL", "retired_reason": "NULL", "replaced_by": "NULL"} {
+			if c[col] != want || c["recorded_at_ms"] == "NULL" {
+				t.Errorf("%s: conversation %s = %s (recorded %s); want %s", id, col, c[col], c["recorded_at_ms"], want)
+			}
+		}
+		for col, want := range map[string]string{"store_id": quoted(storeID), "conversation_id": c["conversation_id"],
+			"life_number": row["life_number"], "launch_token": row["launch_token"], "provider": quoted(provider), "busy_send": coverage,
+			"kind": "'migrated'", "phase": "'current'", "route_kind": "NULL", "route_id": "NULL", "connection_generation": "0",
+			"wake_path": "NULL", "revision": "1", "recorded_at_ms": c["recorded_at_ms"], "ended_at_ms": "NULL", "end_cause": "NULL"} {
+			if l[col] != want {
+				t.Errorf("%s: Launch %s = %s; want %s", id, col, l[col], want)
+			}
+		}
+		withRaw(t, path, func(db *sql.DB) {
+			var processes int
+			if err := db.QueryRow(`SELECT count(*) FROM busy_send_launch_processes WHERE launch_id = ?`, unquote(l["launch_id"])).Scan(&processes); err != nil || processes != 0 {
+				t.Errorf("%s: migrated Launch binds %d processes, %v; want none", id, processes, err)
+			}
+		})
+		if row["busy_send"] != coverage || row["busy_conversation_id"] != c["conversation_id"] ||
+			row["typeof(turn_starts)"] != "'integer'" || row["turn_starts"] != "0" {
+			t.Errorf("%s: spawns busy_send %s, busy_conversation_id %s, turn_starts %s (%s); want %s, %s and integer 0",
+				id, row["busy_send"], row["busy_conversation_id"], row["turn_starts"], row["typeof(turn_starts)"], coverage, c["conversation_id"])
+		}
+		bound[id] = v21Binding{conversation: unquote(c["conversation_id"]), launch: unquote(l["launch_id"])}
+	}
+	return bound
+}
+
+// v21Binding is one row's conversation and Launch ids, as the hop recorded them.
+type v21Binding struct{ conversation, launch string }
+
+// allV21Core names every busy-send core object and spawns column for
+// preAddV21Core, in creation order.
+func allV21Core() []string {
+	var names []string
+	for _, o := range busySendCoreObjects {
+		names = append(names, o.name)
+	}
+	for _, c := range busySendSpawnColumns {
+		names = append(names, "spawns."+c.name)
+	}
+	return names
+}
+
+// preAddV21Core creates the named busy-send core objects (a table or index by
+// name, or "spawns.<column>") with their permanent declarations in the closed
+// v20 store at path, as an earlier partial run of the v20→v21 hop left them.
+func preAddV21Core(t *testing.T, path string, names ...string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, name := range names {
+			ddl := ""
+			for _, o := range busySendCoreObjects {
+				if o.name == name {
+					ddl = o.ddl
+				}
+			}
+			for _, c := range busySendSpawnColumns {
+				if "spawns."+c.name == name {
+					ddl = c.ddl
+				}
+			}
+			if ddl == "" {
+				t.Fatalf("not a busy-send core object: %s", name)
+			}
+			mustExec(t, db, ddl)
+		}
+	})
+}
+
+// bindV21Row records id's row of the closed store at path, which holds the
+// whole core, as an earlier partial run of the hop would have: a published
+// conversation of generation and a current migrated Launch with the row's
+// agent, life and launch token, coverage on all three, and the row bound.
+// change, when set, edits the conversation and Launch first, to make an
+// inconsistent binding. It returns the conversation id.
+func bindV21Row(t *testing.T, path, id string, generation int, coverage BusySendCoverage, change func(conv, launch map[string]any)) string {
+	t.Helper()
+	conversationID := fmt.Sprintf("conv-%s-%d", id, generation)
+	withRaw(t, path, func(db *sql.DB) {
+		var storeID string
+		var agent, token sql.NullString
+		var life int64
+		if err := db.QueryRow(`SELECT value FROM store_meta WHERE key = 'store_id'`).Scan(&storeID); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow(`SELECT agent, life_number, launch_token FROM spawns WHERE instance_id = ?`, id).Scan(&agent, &life, &token); err != nil {
+			t.Fatal(err)
+		}
+		provider := agent.String
+		if provider == "" {
+			provider = AgentClaude
+		}
+		conv := map[string]any{"conversation_id": conversationID, "store_id": storeID, "instance_id": id, "generation": generation,
+			"publication": "published", "provider": provider, "busy_send": string(coverage), "recorded_at_ms": int64(1792411200000),
+			"published_at_ms": int64(1792411200000)}
+		launch := map[string]any{"launch_id": "launch-" + conversationID, "store_id": storeID, "instance_id": id,
+			"conversation_id": conversationID, "life_number": life, "launch_token": token, "provider": provider,
+			"busy_send": string(coverage), "kind": "migrated", "phase": "current", "recorded_at_ms": int64(1792411200000)}
+		if change != nil {
+			change(conv, launch)
+		}
+		insertRow(t, db, "busy_conversations", conv)
+		insertRow(t, db, "busy_send_launches", launch)
+		mustExec(t, db, `UPDATE spawns SET busy_send = ?, busy_conversation_id = ? WHERE instance_id = ?`, string(coverage), conversationID, id)
+	})
+	return conversationID
+}
+
+// The life and launch token of the Launch seedBusySendRecords makes current,
+// for a spawns row bound to its conversation.
+const (
+	recLife  = 2
+	recToken = "4444444444444444"
+)
+
+// busySendRecords are the ids seedBusySendRecords wrote.
+type busySendRecords struct {
+	retired, conversation         string // generations 1 and 2
+	oldLaunch, launch             string // superseded, current
+	held, issued, expired, second string // Messages 1 to 4
+	oldHandover, handover, force  string
+	endedClaim, standingClaim     string
+	callerUUID                    string // owns the pairs req-1 to req-4
+}
+
+// seedBusySendRecords writes one instance's representative durable core
+// records into the v21 store db, in one transaction (raw SQL: no writer of
+// them exists yet), with every key and fact the permanent contract holds:
+//   - generation 1 retired (replaced by 2) and generation 2 published,
+//     covered, accepted_seq 4, owned by the open forced hand-over;
+//   - the superseded Launch (life 1, ended at publication) and the current
+//     one (life recLife, recToken, connection generation 2), each with its
+//     agent process;
+//   - Message 1 held again after the closed hand-over on the superseded
+//     Launch released its prompt (its membership row kept); Messages 2 and 4
+//     issued in the open hand-over the force began, uncertain transport,
+//     non-Final; Message 3 an expired confirmed tombstone with no text, Result
+//     or receipt; a confirmed pair for each;
+//   - the open hand-over captured connection generation 1, Turn Start counter
+//     5 and a running turn with its emission intent;
+//   - the force ended handed_over (its own finality) carrying Messages 2 then 4;
+//   - an ended pause claim on the superseded Launch and a standing one on the
+//     current Launch.
+func seedBusySendRecords(t *testing.T, db *sql.DB, storeID, instance string) busySendRecords {
+	t.Helper()
+	p := instance + "-"
+	r := busySendRecords{retired: p + "conv-1", conversation: p + "conv-2", oldLaunch: p + "launch-1", launch: p + "launch-2",
+		held: p + "msg-1", issued: p + "msg-2", expired: p + "msg-3", second: p + "msg-4", oldHandover: p + "handover-1",
+		handover: p + "handover-2", force: p + "force-1", endedClaim: p + "pause-1", standingClaim: p + "pause-2",
+		callerUUID: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}
+	digest := func(s string) string {
+		sum := sha256.Sum256([]byte(s))
+		return hex.EncodeToString(sum[:])
+	}
+	base := map[string]any{"store_id": storeID}
+	row := func(fields map[string]any) map[string]any {
+		out := map[string]any{}
+		for _, m := range []map[string]any{base, fields} {
+			for c, v := range m {
+				out[c] = v
+			}
+		}
+		return out
+	}
+	message := func(id string, seq int, text string, fields map[string]any) map[string]any {
+		m := row(map[string]any{"message_id": id, "conversation_id": r.conversation, "instance_id": instance, "accepted_seq": seq,
+			"accepted_at_ms": int64(1000 + seq), "send_mode": "wait_turn", "confirmed": 1, "text": []byte(text),
+			"text_bytes": len(text), "text_sha256": digest(text), "reserved": 0})
+		for c, v := range fields {
+			m[c] = v
+		}
+		return m
+	}
+	type insert struct {
+		table string
+		row   map[string]any
+	}
+	inserts := []insert{
+		{"busy_conversations", row(map[string]any{"conversation_id": r.retired, "instance_id": instance, "generation": 1,
+			"publication": "retired", "provider": AgentClaude, "recorded_at_ms": 400, "published_at_ms": 500, "retired_at_ms": 1000,
+			"retired_reason": "conversation_replaced", "replaced_by": r.conversation})},
+		{"busy_conversations", row(map[string]any{"conversation_id": r.conversation, "instance_id": instance, "generation": 2,
+			"publication": "published", "provider": AgentClaude, "busy_send": "covered", "accepted_seq": 4, "reserved_count": 1,
+			"reserved_bytes": 5, "owner_handover_id": r.handover, "handover_force_id": r.force, "revision": 7,
+			"recorded_at_ms": 900, "published_at_ms": 1000})},
+		{"busy_send_launches", row(map[string]any{"launch_id": r.oldLaunch, "instance_id": instance, "conversation_id": r.conversation,
+			"life_number": 1, "launch_token": "3333333333333333", "provider": AgentClaude, "busy_send": "covered", "kind": "spawn",
+			"phase": "superseded", "route_kind": "claude_hooks", "route_id": "route-1", "connection_generation": 1,
+			"wake_path": "/wake/1", "recorded_at_ms": 900, "ended_at_ms": 2000, "end_cause": "launch_published"})},
+		{"busy_send_launches", row(map[string]any{"launch_id": r.launch, "instance_id": instance, "conversation_id": r.conversation,
+			"life_number": recLife, "launch_token": recToken, "provider": AgentClaude, "busy_send": "covered", "kind": "resume",
+			"phase": "current", "route_kind": "claude_hooks", "route_id": "route-2", "connection_generation": 2,
+			"wake_path": "/wake/2", "revision": 3, "recorded_at_ms": 2000})},
+		{"busy_send_launch_processes", row(map[string]any{"launch_id": r.oldLaunch, "role": "agent", "pid": 100, "start_time": "s1", "recorded_at_ms": 900})},
+		{"busy_send_launch_processes", row(map[string]any{"launch_id": r.launch, "role": "agent", "pid": 200, "start_time": "s2",
+			"pid_namespace": "pid:[4026531836]", "recorded_at_ms": 2000})},
+		{"busy_send_messages", message(r.held, 1, "hello", map[string]any{"place": "held", "reserved": 1, "result_class": "held",
+			"wait_reason": "turn_running", "wait_since_ms": 3000})},
+		{"busy_send_messages", message(r.issued, 2, "world!", map[string]any{"send_mode": "steer_turn", "place": "issued",
+			"handover_id": r.handover, "forced": 1, "result_class": "queued", "wait_reason": "awaiting_proof", "wait_since_ms": 3100,
+			"bound_launch_id": r.launch, "bound_launch_token": recToken, "bound_session_id": "sess-2", "queued_at_ms": 3050, "handed_over_at_ms": 3100})},
+		{"busy_send_messages", message(r.expired, 3, "gone", map[string]any{"text": nil, "text_sha256": nil, "place": "closed",
+			"result_final": 1, "final_at_ms": 2500, "retention": "expired", "expired_at_ms": 9000})},
+		{"busy_send_messages", message(r.second, 4, "again", map[string]any{"place": "issued", "handover_id": r.handover, "forced": 1,
+			"result_class": "queued", "wait_reason": "awaiting_proof", "wait_since_ms": 3100, "bound_launch_id": r.launch})},
+		{"busy_send_handovers", row(map[string]any{"handover_id": r.oldHandover, "conversation_id": r.conversation, "handover_seq": 1,
+			"instance_id": instance, "launch_id": r.oldLaunch, "launch_token": "3333333333333333", "provider": AgentClaude,
+			"session_id": "sess-1", "route_kind": "claude_hooks", "route_id": "route-1", "connection_generation": 1,
+			"owner_revision": 2, "cutoff_seq": 1, "boundary": "turn_end", "race_exposed": 0, "forced": 0, "expected_turn_starts": 4,
+			"permission_epoch": 1, "prompt_count": 1, "prompt_cursor": 1, "state": "closed", "claimed_at_ms": 2100,
+			"issue_deadline_ms": 2200, "job_deadline_ms": 2300, "closed_at_ms": 2300})},
+		{"busy_send_handovers", row(map[string]any{"handover_id": r.handover, "conversation_id": r.conversation, "handover_seq": 2,
+			"instance_id": instance, "launch_id": r.launch, "launch_token": recToken, "provider": AgentClaude, "session_id": "sess-2",
+			"route_kind": "claude_hooks", "route_id": "route-2", "connection_generation": 1, "owner_revision": 6, "cutoff_seq": 4,
+			"boundary": "force", "race_exposed": 0, "forced": 1, "force_id": r.force, "expected_turn_starts": 5, "permission_epoch": 3,
+			"prompt_count": 1, "prompt_cursor": 1, "intent_at_ms": 3090, "intent_turn_starts": 5, "intent_running_turn": 1,
+			"state": "open", "claimed_at_ms": 3080, "issue_deadline_ms": 3200, "job_deadline_ms": 3500})},
+		{"busy_send_prompts", row(map[string]any{"handover_id": r.oldHandover, "prompt_index": 0, "message_count": 1,
+			"rendered_bytes": 5, "emission": "released", "released_at_ms": 2150})},
+		{"busy_send_prompts", row(map[string]any{"handover_id": r.handover, "prompt_index": 0, "message_count": 2, "rendered_bytes": 20,
+			"route_request_id": "rq-2", "client_id": "cl-2", "emission": "issued", "intent_at_ms": 3090, "issued_at_ms": 3095,
+			"transport": "uncertain", "transport_at_ms": 3096})},
+		{"busy_send_handover_members", row(map[string]any{"handover_id": r.oldHandover, "member_index": 0, "message_id": r.held, "prompt_index": 0})},
+		{"busy_send_handover_members", row(map[string]any{"handover_id": r.handover, "member_index": 0, "message_id": r.issued, "prompt_index": 0})},
+		{"busy_send_handover_members", row(map[string]any{"handover_id": r.handover, "member_index": 1, "message_id": r.second, "prompt_index": 0})},
+		{"busy_send_forces", row(map[string]any{"force_id": r.force, "instance_id": instance, "conversation_id": r.conversation,
+			"launch_id": r.launch, "launch_token": recToken, "provider": AgentClaude, "owner_call_id": "force-call-1", "revision": 2,
+			"handover_id": r.handover, "call_deadline_ms": 3600, "call_ended_at_ms": 3300, "outcome": "handed_over",
+			"reason": "admitted", "started_at_ms": 3070, "ended_at_ms": 3300})},
+		{"busy_send_force_members", row(map[string]any{"force_id": r.force, "member_index": 0, "message_id": r.issued})},
+		{"busy_send_force_members", row(map[string]any{"force_id": r.force, "member_index": 1, "message_id": r.second})},
+		{"busy_send_pause_claims", row(map[string]any{"claim_id": r.endedClaim, "instance_id": instance, "launch_id": r.oldLaunch,
+			"owner_call_id": "pause-call-1", "revision": 2, "claimed_at_ms": 1900, "deadline_ms": 1990, "signal_kind": "sigterm",
+			"signal_intent_at_ms": 1950, "call_outcome": "paused", "call_outcome_at_ms": 1980, "state": "ended",
+			"closed_by": "launch_published", "closed_at_ms": 2000})},
+		{"busy_send_pause_claims", row(map[string]any{"claim_id": r.standingClaim, "instance_id": instance, "launch_id": r.launch,
+			"owner_call_id": "pause-call-2", "claimed_at_ms": 3400, "deadline_ms": 3500, "signal_kind": "sigterm", "state": "standing"})},
+	}
+	for i, id := range []string{r.held, r.issued, r.expired, r.second} {
+		inserts = append(inserts, insert{"busy_send_results", row(map[string]any{"caller_uuid": r.callerUUID, "delivery_request_id": fmt.Sprintf("req-%d", i+1),
+			"message_id": id, "instance_id": instance})})
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for _, in := range inserts {
+		cols := slices.Sorted(maps.Keys(in.row))
+		vals := make([]any, len(cols))
+		for i, c := range cols {
+			vals[i] = in.row[c]
+		}
+		if _, err := tx.Exec("INSERT INTO "+in.table+" ("+strings.Join(cols, ", ")+") VALUES (?"+strings.Repeat(", ?", len(cols)-1)+")", vals...); err != nil {
+			t.Fatalf("seed %s: %v", in.table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("seed busy-send records: %v", err)
+	}
+	return r
+}
+
+// breakV21Backfill fails the v20→v21 hop inside its backfill, after the core
+// DDL: the first row it binds.
+func breakV21Backfill(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `CREATE TRIGGER fail_v21_backfill BEFORE UPDATE ON spawns BEGIN SELECT RAISE(ABORT, 'injected backfill failure'); END`)
+	})
+}
+
+// breakV21CoreIdentity fails the hop at its store_meta identity insert, after
+// the core DDL and the whole backfill.
+func breakV21CoreIdentity(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `CREATE TRIGGER fail_v21_identity BEFORE INSERT ON store_meta WHEN NEW.key = 'busy_send_core'
+			BEGIN SELECT RAISE(ABORT, 'injected identity failure'); END`)
+	})
+}
+
+// breakV21Commit fails the hop's COMMIT itself: over the compatible core
+// tables and indexes of an earlier partial run, a trigger gives each Launch the
+// backfill records a process row naming no Launch, a deferred foreign-key
+// violation that only the COMMIT of a store open (foreign_keys on) detects.
+func breakV21Commit(t *testing.T, path string) {
+	t.Helper()
+	var objects []string
+	for _, o := range busySendCoreObjects {
+		objects = append(objects, o.name)
+	}
+	preAddV21Core(t, path, objects...)
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `CREATE TRIGGER fail_v21_commit AFTER INSERT ON busy_send_launches BEGIN
+			INSERT INTO busy_send_launch_processes(launch_id, role, store_id, pid, start_time, recorded_at_ms)
+			VALUES (NEW.launch_id || '-missing', 'agent', NEW.store_id, 1, 'x', 0); END`)
 	})
 }

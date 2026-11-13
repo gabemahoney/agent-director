@@ -370,6 +370,14 @@ func WithNoSubagentTracking() SpawnOption {
 	return func(o *spawnOpts) { o.set("subagent_tracking", int64(0)) }
 }
 
+// WithTurnStarts stores n as the row's schema-v21 turn_starts, the current
+// Launch's Turn Start counter (b.7si SR-1.4), which no store write advances
+// yet. Without it a seeded row keeps the insert's 0. The column takes only a
+// non-negative integer.
+func WithTurnStarts(n int64) SpawnOption {
+	return func(o *spawnOpts) { o.set("turn_starts", n) }
+}
+
 // SeededSubagentMs is the instant, in Unix milliseconds, SeedSubagent and
 // SeedSubagentLaunch store as opened_at (and SeedSubagent as activity_at) when
 // no option names one, so a default seed is deterministic and ties fall to

@@ -324,6 +324,11 @@ install or a store at schema v16 or later needs none. Follow the
 [maintenance-window procedure](operator-actions.md#upgrading-the-native-input-journal)
 for check timing, the complete recovery set and writer exclusion.
 
+An upgrade of a store below schema v21 also brings it to v21; the installer
+authorizes this itself. Every agent agent-director manages must then be
+resumed or restarted (see **After the upgrade** below). A store already at
+v21 opens with no migration.
+
 Check holders with the candidate release and the same journal flags planned
 for installation:
 
@@ -458,6 +463,8 @@ agent selection to the caller.
 - Resume each agent stopped for the upgrade, parents first, with
   `AGENT_DIRECTOR_INSTANCE_ID=<its recorded parent>` set for each child's
   command only; follow [step 6 of the upgrade skill](../skills/upgrade-agent-director/SKILL.md#6-resume-the-agents).
+  After an upgrade from a store below schema v21, also relaunch every agent
+  still running from before the install (`kill` or `pause`, then `resume`).
 - Cursor gateway refusal reporting requires both the caller and the running
   gateway to be agent-director 0.17.2 or later. Relaunch Cursor rows (`kill` or
   `pause`, then `resume`) to run the installed gateway; follow

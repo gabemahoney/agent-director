@@ -12,10 +12,13 @@ learned the hard way against the production database.
 ## 1. Architecture as it exists today
 
 Schema dispatch and fresh-store DDL live in `internal/store/schema.go`;
-`schemaVersion` in `store.go` is **20**. The twelve tables are `spawns`,
+`schemaVersion` in `store.go` is **21**. The twenty-three tables are `spawns`,
 `permission_requests`, `session_history`, `store_meta`, `subagents`,
 `subagent_launches`, `cursor_runtimes`, `input_launches`, `input_attempts`,
-`input_imports`, `cursor_inputs` and `cursor_proofs`.
+`input_imports`, `cursor_inputs`, `cursor_proofs` and the eleven tables of
+the busy-send core (`busy_conversations` and the `busy_send_*` tables).
+`busy_send_schema.go` owns the v20→v21 hop, the core's fresh-store
+`busySendCoreDDL` and open's recognition of the core.
 `inputDeliveryDDL` in `input_delivery_schema.go` is shared by
 fresh creation and the administrator import in `input_delivery_migration.go`.
 `permission_authority.go` owns the v16→v17 permission provenance step.
@@ -30,12 +33,12 @@ Earlier hops retain their owning files: `cursor_runtime.go`,
 
 | Version on disk | Result |
 |---|---|
-| 0, empty schema | Fresh v20 DDL, store id, native-input authority and stamp commit together with FULL on the actual connection. |
+| 0, empty schema | Fresh v21 DDL, store id, native-input authority, busy-send core identity and stamp commit together with FULL on the actual connection. |
 | 0, nonempty schema | `ErrSchemaMismatch`; resetting a version is not fresh creation. |
 | 1–15 | `ErrSchemaMigrationRequired` before any hop unless both exact schema authorization and the administrator input-migration window are present. |
-| 16–19 | Exact schema authorization is required for the remaining hops to v20; no input import or input-migration window is needed. |
-| 20 | Validate the store id and native-input authority; never reimport files or replay Cursor evidence. |
-| Above 20 | `ErrSchemaMismatch`; no DDL. |
+| 16–20 | Exact schema authorization is required for the remaining hops to v21; no input import or input-migration window is needed. |
+| 21 | Validate the store id and native-input authority and recognize the busy-send core; never migrate, repair the core, reimport files or replay Cursor evidence. |
+| Above 21 | `ErrSchemaMismatch`; no DDL. |
 
 Ordinary opens never construct the maintenance window. An exact preexisting
 sentinel therefore cannot trigger even an earlier hop on the way to v16. The
@@ -51,12 +54,13 @@ by later hops. Invalid identity refuses. The second metadata fact,
 complete v15→v16 import. Every open and input operation checks it; missing or
 wrong-store authority is corruption, not permission to use legacy files.
 
-**The registry.** Nineteen entries cover v1→v2 through v19→v20. The
+**The registry.** Twenty entries cover v1→v2 through v20→v21. The
 `{from:15, inputCutover:true, apply:migrateV15toV16}` entry uses the administrator
 importer; `{from:16, apply:migrateV16toV17}` adds permission provenance without
 reimporting input; `{from:17, apply:migrateV17toV18}` adds Cursor evidence tables;
 `{from:18, apply:migrateV18toV19}` adds the state/process evidence columns;
-`{from:19, apply:migrateV19toV20}` adds `display_evidence` and `observation_writer`.
+`{from:19, apply:migrateV19toV20}` adds `display_evidence` and `observation_writer`;
+`{from:20, apply:migrateV20toV21}` creates the permanent busy-send core.
 Earlier `apply` steps remain unchanged and individually
 transactional. Inspect the actual registry for later work;
 no next schema number is reserved here.
@@ -75,8 +79,8 @@ a nonempty hand-reset schema as a fresh store.
 `runMigrationChainWithInputWindow(db, from, window)` (`schema.go`) loops while `version <
 schemaVersion`, looking up the registered step for the current version
 (`migrationStepFrom`), applying it, and incrementing. It upgrades a DB across
-*multiple* versions in a single open — a v1 DB opened by the current v20 administrator
-runs v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12→v13→v14→v15→v16→v17→v18→v19→v20 in one pass, each step its own transaction. There is no
+*multiple* versions in a single open — a v1 DB opened by the current v21 administrator
+runs v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12→v13→v14→v15→v16→v17→v18→v19→v20→v21 in one pass, each step its own transaction. There is no
 return-after-one-hop: the loop keeps going until the DB reaches `schemaVersion`.
 If the loop finds itself below `schemaVersion` with no registered step for the
 current version, that is a gap in the registry — it fails loudly with
@@ -164,6 +168,63 @@ never touching `state.db`) — there is no logger plumbed into the store:
 
 The engine walks the actual registry; do not fold later changes into settled hops.
 
+### Current schema facts: v20 → v21
+
+`migrateV20toV21` creates the permanent busy-send core described under
+[`internal/store`](architecture.md#internalstore): its tables and indexes
+(`busySendCoreObjects`), three `spawns` columns appended after
+`observation_writer` (`busy_send`, `busy_conversation_id`, `turn_starts`; a
+compatible partial state keeps an existing one where it is) and the
+`store_meta` identity row `busy_send_core`. Each column's meaning and code
+set is documented beside the DDL.
+
+This is the core's only conversion. At v21 every open recognizes the core
+and migrates nothing, whatever sentinel is present: it requires the identity
+row and every declaration exactly as recorded (whitespace aside, CHECKs
+included). Anything else is `ErrSchemaMismatch` ("busy-send core not
+recognized"), with nothing rebuilt or repaired; a failed schema read keeps
+its own error. No later hop may edit or drop a core declaration:
+`TestBusySendCoreContract` pins them by digest.
+
+The sentinel gate (§1a) applies unchanged, as for the other post-v16 hops:
+the installer's ordinary open with an exact `{from:20,to:21}` sentinel runs
+the hop. No journal flag, cutover or administrator entry point is involved.
+
+Validation, DDL, backfill, the identity row and stamp 21 share one transaction
+on a `synchronous=FULL` connection. Before any DDL the hop validates the
+store id, any existing core identity, object or `spawns` column against its
+permanent declaration, every row's agent and life, and existing core rows:
+each names this store and refers only to existing records; a bound row's
+conversation and Launch are its instance's one published conversation and
+one current Launch, with the row's provider, life, launch token (NULL-safe)
+and coverage; no unbound row already has a published or candidate
+conversation or a current or pending Launch. A proven difference refuses with
+`ErrSchemaMismatch` ("v20→v21 incompatible …", "invalid …", "ambiguous …",
+"… names another store", "… refers to a missing record"); the v20 schema,
+data, stamp and sentinel remain.
+
+The backfill records only rows with no conversation binding. Each gets one
+published conversation (the instance's next generation) and one current
+Launch of kind `migrated`, with the row's provider, life and launch token,
+and coverage from `BusySendCoverageForAgent`, or `covered` when the row's
+existing `busy_send` already says so: coverage never decreases. A NULL or
+empty agent records provider `claude`, the readers' rule; `spawns.agent` is
+not rewritten. A missing token or session stays missing; no route, wake
+path, process, receipt, emission or Message is invented, and nothing is
+delivered. The backfill writes only the row's `busy_send` and
+`busy_conversation_id`. Bound rows and recorded core facts stay untouched, so
+compatible partial state keeps its established coverage, bindings and
+counters. A genuine v20 store, which has none of these, therefore comes out
+with every row `not_covered` while the covered set is empty and every
+`turn_starts` at the new column's default, 0.
+
+`busy_send_schema_test.go` covers the contract, record representation,
+every agent kind and lifecycle, legacy agents, reentry, refusal before
+mutation, uncertain commit, unrecognized cores and read failures, reusing the
+[registered v21 fixtures](architecture.md#storefix-seeders-reusable-test-fixtures);
+`TestMigrationExemptCoreHop` runs the real installer from a genuine v0.18.4
+store. Recovery is [restore-only](#emergency-downgrade-recipe).
+
 ### Current schema facts: v19 → v20
 
 `migrateV19toV20` appends nullable, default-free `spawns.display_evidence TEXT`
@@ -217,7 +278,7 @@ exact current value and owner. The additions and the v19 stamp share one
 transaction; refusal or rollback leaves the v18 schema, data, stamp and authorization intact. An
 unknown commit does not prove rollback: inspect the resulting version before
 reauthorization. Authorization must match the actual starting version and
-the current binary's target (20); this step stamps 19 before the next hop.
+the current binary's target (21); this step stamps 19 before the next hop.
 Store identity, input authority and the permission and Cursor
 tables are unchanged.
 
@@ -248,7 +309,7 @@ table additions and the final v18 stamp share one transaction; refusal or
 rollback leaves the v17 schema/data and authorization intact. An unknown commit
 does not prove rollback: inspect the resulting version before reauthorization.
 Authorization must match the actual starting version and the current target,
-20. Earlier hops, native-input authority/import and v17 permission provenance
+21. Earlier hops, native-input authority/import and v17 permission provenance
 are unchanged.
 
 Committed records retain input ordering, payload, original owner and phase
@@ -275,7 +336,7 @@ text. Compatible reentry retains values. Missing columns stay NULL, with no
 backfill from historical verdicts or pane records and no new response authority.
 The additions and stamp commit atomically; a refusal or failed hop retains v16.
 This hop stamps 17; authorization names the actual starting version and the
-current chain's target 20. The v16 input
+current chain's target 21. The v16 input
 tables, authority and import remain unchanged. Recovery is restore-only (§5).
 
 ### Worked example: v15 → v16
@@ -857,9 +918,9 @@ bytes. What they cover, step by step:
   and, for a phase 3, `breakV7Backfill` do), and the text the open's error
   must name. The test asserts a migration
   failure, not a refusal, and the version, schema, rows (`dbDump`) and
-  sentinel kept. Only `from == 4`, `from == 5` and `from == 6` start with
-  rows (`makeV4HistoryFixture`, `makeV5Fixture`, `makeV6Fixture`); every
-  other version's `makeVersionedDB` store is empty. Seed rows for your hop's
+  sentinel kept. Only `from` 4 to 8 and 20 start with rows
+  (`makeV4HistoryFixture`, `makeV5Fixture` to `makeV8Fixture`,
+  `makeV20Fixture`); every other version's `makeVersionedDB` store is empty. Seed rows for your hop's
   from-version (extend the fixture choice at the top of the subtest, as
   `tc.from == 4`, `5` and `6` do) so the `dbDump` comparison covers data, not
   only the schema.
@@ -933,7 +994,7 @@ see §5.
 ## 4. `createSchema` must always be the latest schema
 
 Restating the two-places rule because it is the most common way a migration
-goes wrong: **fresh databases never replay hops.** The current v20 fresh DDL
+goes wrong: **fresh databases never replay hops.** The current v21 fresh DDL
 includes `cursorRuntimeDDL`, the eligibility column, the three v12
 family-history columns, nullable `spawns.codex_startup TEXT` and
 `spawns.claude_capacity TEXT`, the eight `spawns` and five
@@ -945,7 +1006,9 @@ v13→v14 and v14→v15 hops use the same respective definitions; v16 shares
 permission columns match `v17PermissionColumns`; v18 shares
 `cursorObligationsDDL` with its hop; the three v19 evidence columns match
 `v19EvidenceColumns`, followed by v20's nullable `display_evidence TEXT` and
-`observation_writer TEXT` (`v20Columns`). Future changes must update
+`observation_writer TEXT` (`v20Columns`) and v21's three `spawns` columns
+(`busySendSpawnColumns`); the busy-send core shares `busySendCoreDDL` with
+its hop. Future changes must update
 both fresh DDL and the next hop. The §3 step 4
 `schemaShape` comparison guards that both paths land in the same place. If you
 only touch the hop, fresh installs are stuck on the old schema; if you only
@@ -1015,7 +1078,7 @@ ALTER TABLE <table> DROP COLUMN <added_col>;   -- reverse the v(N-1)→vN DDL
 PRAGMA user_version = <N-1>;      -- stamp back to the version the old binary reads
 ```
 
-This illustrates the historical pattern, not a recipe for v9 through v20. Never
+This illustrates the historical pattern, not a recipe for v9 through v21. Never
 merely reset the version pragma. Confirm the starting version and use only the
 matching tested recipe before letting an older binary open the file. The store
 does not downgrade automatically.
@@ -1027,7 +1090,13 @@ the v8 → v7 recipe, then the v7 → v6 recipe, and to v5 by those two, then th
 v6 → v5 recipe. Each recipe assumes the store is at its own starting version
 and changes nothing a newer version added, so never skip one.
 
-**Current recovery policy.** Schemas v20, v19, v18, v17 and v16 are restore-only.
+**Current recovery policy.** Schemas v21, v20, v19, v18, v17 and v16 are restore-only.
+The v21 busy-send core has no reverse recipe: dropping its tables or `spawns`
+columns, or resetting the version, would discard accepted custody, pair
+ownership and force records. A v20 binary refuses a v21 store with
+`ErrSchemaMismatch` and leaves it unchanged. A restored v20 store keeps its
+store id and needs exact authorization again; its remigration records new
+conversation and Launch ids and no Message, pair or force.
 The v20 display columns and v19 evidence columns have no reverse recipe:
 restore the stopped-writer pre-upgrade set, losing all later writes, and
 never drop the columns or reset the version. Display evidence and the
@@ -1036,20 +1105,23 @@ they carry no authority, delivery or proof fact. A v19 binary
 refuses a v20 store with `ErrSchemaMismatch`. The v18
 Cursor input/proof records preserve accepted work and uncertain issue evidence;
 dropping them cannot establish non-delivery or authorize replay. The v17
-permission origin, owner and one-use response claims have no reverse recipe;
-use the stopped-writer pre-upgrade recovery set and matching binary. For v16,
-neither a reverse DDL recipe nor a replayable file-journal export can preserve native input
-authority and uncertainty. Keep all writers excluded, restore the matching
-pre-upgrade DB/WAL/SHM and legacy evidence, preserve original lock inodes and
-use the matching prior binary. Later writes are lost; reconcile uncertain
-attempts against retained post-upgrade evidence before any older runtime starts.
-Never reset `user_version`, synthesize a replayable journal or infer non-delivery
-from missing restored proof. The cutover's completed backup supplements the
+permission origin, owner and one-use response claims have no reverse recipe.
+For v16, neither a reverse DDL recipe nor a replayable file-journal export can
+preserve native input authority and uncertainty.
+
+For each of these versions, keep all writers excluded, restore the matching
+pre-upgrade DB/WAL/SHM and legacy input evidence, preserve original lock
+inodes and use the matching prior binaries. Later writes are lost. Keep the
+upgraded copy and provider evidence, and reconcile uncertain input against
+them before any older runtime starts. Never reset `user_version`, synthesize
+a replayable journal, or infer non-delivery or permission to replay from
+missing restored proof. The v16 cutover's completed backup supplements the
 operator's copies; it does not cover earlier directory/config rewrites or
-external provider evidence. Without the matching recovery set, stop for help.
+external provider evidence. Without the matching recovery set, or while
+uncertain input is unreconciled, stop for help.
 
 Schemas v15, v14 and v13 also have no supported reverse recipe. The v12→v11
-recipe below is only for genuine family-only v12, never v13–v20 or a hand-reset
+recipe below is only for genuine family-only v12, never v13–v21 or a hand-reset
 store. No supported reverse path crosses v11→v10 or v10→v9. The v8-and-older
 recipes remain limited to their stated starting versions. The complete
 current-layout and directory-move procedure is owned by
@@ -1065,11 +1137,12 @@ installing. The installer does not make that copy.
 #### v12 → v11 (reverses `migrateV11toV12`)
 
 Use this only on a genuine family-only v12 store whose `PRAGMA user_version;`
-prints `12`, to allow a schema-v11 binary to open it. A v13–v20 store cannot use
+prints `12`, to allow a schema-v11 binary to open it. A v13–v21 store cannot use
 this recipe, even if someone resets its version: the context provenance
 columns (and, from v14, the permission columns; from v15, the Codex turn
 columns, v16 input authority/tables, v17 permission provenance, v18 Cursor
-evidence tables, v19 state/process evidence and v20 display evidence) would
+evidence tables, v19 state/process evidence, v20 display evidence and the v21
+busy-send core) would
 remain and the result would not match schema v11. Stop every agent, server and other caller
 that can hold or write the store. Back up the actual configured `state.db`
 and its `-wal` and `-shm` companions before changing anything. Use SQLite

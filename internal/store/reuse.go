@@ -48,7 +48,8 @@ type ReuseRow struct {
 // state_changed_ms (the restore writes those as an immediate write of the
 // prior state, b.3ie), and the report-only display and pane observation columns
 // (that write starts a new permission epoch, which no earlier observation
-// belongs to), each with its stored value and SQLite
+// belongs to), and the busy-send coverage columns busy_send and
+// busy_conversation_id, which no restore writes yet, each with its stored value and SQLite
 // storage class, NULL distinct from an empty value. Its fields are unexported:
 // only ReadForReuse fills it, and only RestoreAfterFailedReuse reads it. The
 // zero RawLife was not produced by ReadForReuse, and the restore refuses it.
@@ -92,6 +93,7 @@ type RawLife struct {
 	processEvidence         rawValue
 	stateEvidence           rawValue
 	permissionEpoch         rawValue
+	turnStarts              rawValue
 }
 
 // rawValue is one column's value exactly as stored: class is the column's
@@ -169,6 +171,7 @@ var rawLifeColumns = []rawLifeColumn{
 	{"process_evidence", func(l *RawLife) *rawValue { return &l.processEvidence }},
 	{"state_evidence", func(l *RawLife) *rawValue { return &l.stateEvidence }},
 	{"permission_epoch", func(l *RawLife) *rawValue { return &l.permissionEpoch }},
+	{"turn_starts", func(l *RawLife) *rawValue { return &l.turnStarts }},
 }
 
 // rawLifeSelect is the column fragment that reads rawLifeColumns, each as
@@ -297,6 +300,7 @@ var resetForReuseSQL = `UPDATE spawns
         agent                     = ?,
         end_reported_at           = NULL,
         subagent_tracking         = ` + subagentTrackedParamSQL + `,
+        turn_starts               = 0,
         idle_screen_timeout_seconds = ?,
         life_number               = life_number + CASE WHEN ` + reuseAgentTextSQL + ` = ? THEN 0 ELSE 1 END,
         ` + rowVersionAdvance + `
@@ -348,7 +352,8 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     codex or cursor (checked before anything is written: ErrRowAgentInvalid) and
 //     end_reported_at NULL; subagent_tracking from fresh.Agent, the flag of
 //     the launch it begins (SR-9; subagentTrackedParamSQL): 1 for claude, 0
-//     for codex or cursor, over whatever the row held; the timeout override
+//     for codex or cursor, over whatever the row held; turn_starts, the Turn
+//     Start counter, 0 for the Launch it begins; the timeout override
 //     fresh.IdleScreenTimeoutSeconds (0 as NULL, so an omitted override
 //     clears the old one); row_version advanced by one, and
 //     life_number advanced by one only if the exact stored agent differs
@@ -564,8 +569,9 @@ var restoredStateEvidence, _ = restoredStateEvidenceSet("", "")
 // last_seen_at, liveness_unverified_since, liveness_note, cwd,
 // tmux_session_name, agent_args, relay_mode, labels, extra_env,
 // launch_token, tmux_socket, the six server and pane identity columns, the
-// three launch-owner columns, agent, end_reported_at, subagent_tracking and
-// the timeout override, and the old life's process record), so the row
+// three launch-owner columns, agent, end_reported_at, subagent_tracking,
+// the timeout override and the Turn Start counter, and the old life's process
+// record), so the row
 // returns to its pre-reuse life and
 // that life's history is visible again (SR-5.9). ended_at is prior's as stored, or failedAt in the store's
 // CURRENT_TIMESTAMP layout when it was NULL. parent_id is prior's only while a

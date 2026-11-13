@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -180,6 +181,46 @@ func TestV5ReadParity(t *testing.T) {
 		if fromGet, err := f.s.GetSpawn(fromList.InstanceID); err != nil || !reflect.DeepEqual(fromGet, fromList) {
 			t.Errorf("row %s: GetSpawn (%v) and ListSpawns differ\nget:  %+v\nlist: %+v", fromList.InstanceID, err, fromGet, fromList)
 		}
+	}
+}
+
+// TestV5TurnStartsReadsBack checks every full-row read returns the stored Turn
+// Start counter (b.7si SR-1.4): GetSpawn, GetSpawnWithin, GetSpawnSettled and
+// ListSpawns, the settled ones under a settle time the raw state has not held
+// (so they report the settled state), and no read writes the row.
+func TestV5TurnStartsReadsBack(t *testing.T) {
+	const nowMs, turns = int64(1_790_000_000_000), int64(3)
+	f := newV5Store(t)
+	id := f.seed(store.StateWorking, "", apitest.WithTurnStarts(turns), apitest.WithSettle(store.StateWaiting, nowMs))
+	before := f.rawColumns(id)
+	settle := store.SettleRead{SettleMs: settleT, NowMs: nowMs}
+	listed := func(r store.SettleRead) (store.Spawn, error) {
+		rows, err := f.s.ListSpawns(store.ListFilters{Settle: r})
+		for _, sp := range rows {
+			if sp.InstanceID == id {
+				return sp, err
+			}
+		}
+		return store.Spawn{}, errors.Join(err, errors.New("row not listed: "+id))
+	}
+	reads := []struct {
+		name     string
+		reported string
+		read     func() (store.Spawn, error)
+	}{
+		{"GetSpawn", store.StateWorking, func() (store.Spawn, error) { return f.s.GetSpawn(id) }},
+		{"GetSpawnWithin", store.StateWorking, func() (store.Spawn, error) { return f.s.GetSpawnWithin(id, time.Second) }},
+		{"GetSpawnSettled", store.StateWaiting, func() (store.Spawn, error) { return f.s.GetSpawnSettled(id, settle) }},
+		{"ListSpawns", store.StateWorking, func() (store.Spawn, error) { return listed(store.SettleRead{}) }},
+		{"ListSpawns settled", store.StateWaiting, func() (store.Spawn, error) { return listed(settle) }},
+	}
+	for _, r := range reads {
+		if sp, err := r.read(); err != nil || sp.TurnStarts != turns || sp.ReportedState != r.reported {
+			t.Errorf("%s = TurnStarts %d, ReportedState %q, %v; want %d, %q", r.name, sp.TurnStarts, sp.ReportedState, err, turns, r.reported)
+		}
+	}
+	if after := f.rawColumns(id); !reflect.DeepEqual(after, before) {
+		t.Errorf("the reads changed the row:\nbefore %+v\nafter  %+v", before, after)
 	}
 }
 

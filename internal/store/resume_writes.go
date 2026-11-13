@@ -41,6 +41,10 @@ type ResumePrior struct {
 	// and never leaks into the launch the move began.
 	StateEvidence   string
 	ProcessEvidence string
+	// TurnStarts is the earlier Launch's Turn Start counter as the Spawn read
+	// it (Spawn.TurnStarts): the move resets turn_starts to 0 for the Launch it
+	// begins, and a failed resume's restore writes this value back.
+	TurnStarts int64
 }
 
 // moveToPendingEvidence is the move's state record: the resume command's
@@ -76,6 +80,7 @@ var moveToPendingSQL = `UPDATE spawns
         codex_startup             = NULL,
         claude_capacity           = NULL,
         subagent_tracking         = ` + subagentTrackedColumnSQL + `,
+        turn_starts               = 0,
         launch_started_at         = ?,
         launch_token              = ?,
         tmux_socket               = ?,
@@ -112,7 +117,8 @@ var moveToPendingSQL = `UPDATE spawns
 // is not touched. It also sets subagent_tracking, the flag of the launch it
 // begins (SR-9; subagentTrackedColumnSQL, no parameter): from the row's own
 // agent, which the move keeps, 1 for claude and 0 for codex or cursor, over whatever the
-// row held. The statement itself touches no subagent entry; the close below does.
+// row held, and resets turn_starts, the Turn Start counter, to 0 for the
+// Launch it begins. The statement itself touches no subagent entry; the close below does.
 //
 // The close (closeOrphanedRequests, as the ended transition's): every request
 // of the row that still awaits an answer gets closed_at, an undecided one
@@ -228,6 +234,7 @@ var restoreAfterFailedResumeSQL = `UPDATE spawns
         pane_starttime            = ?,
         end_reported_at           = ?,
         subagent_tracking         = ?,
+        turn_starts               = ?,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
   WHERE instance_id = ? AND state = ? AND row_version = ?`
@@ -240,7 +247,8 @@ var restoreAfterFailedResumeSQL = `UPDATE spawns
 // state_changed_ms the statement's clock; b.3ie); writes ended_at, pid, proc_starttime,
 // liveness_unverified_since, liveness_note, end_reported_at and
 // subagent_tracking (1 for prior.SubagentTracking true, else 0; the earlier
-// launch's flag, SR-9) from prior, and
+// launch's flag, SR-9) and turn_starts (the earlier Launch's Turn Start
+// counter) from prior, and
 // launch_token, tmux_socket and the six server and pane identity columns from
 // prior.Identity, each zero value as NULL; writes back prior.ProcessEvidence
 // and prior.StateEvidence, the latter rebound to the restore's raw-state
@@ -288,6 +296,7 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
 		positiveInt64Arg(prior.EndReportedAtMillis),
 		boolInt(prior.SubagentTracking),
+		prior.TurnStarts,
 		instanceID, StatePending, movedVersion,
 	)
 	r, err := s.execFamily(instanceID, restoreAfterFailedResumeSQL, args...)

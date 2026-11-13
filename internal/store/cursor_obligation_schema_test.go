@@ -44,9 +44,9 @@ func TestCursorObligationMigrationPreservesPartialRecords(t *testing.T) {
 				t.Fatal("migration changed identity or diverged from fresh shape")
 			}
 			assertSentinel(t, dir, false)
-			after := dbDump(t, path)
+			after, kept := dbDump(t, path), dumpBeforeV21(t, path)
 			for key, value := range before {
-				if !reflect.DeepEqual(after[key], value) {
+				if !reflect.DeepEqual(kept[key], value) {
 					t.Fatalf("changed existing %s", key)
 				}
 			}
@@ -64,15 +64,7 @@ func TestCursorObligationMigrationPreservesPartialRecords(t *testing.T) {
 				}
 			}
 			s.Close()
-			withRaw(t, path, func(db *sql.DB) {
-				// Re-running the hop stamps v18; the later hop's reentry
-				// returns the store to the current version.
-				for _, hop := range []func(*sql.DB) error{migrateV17toV18, migrateV18toV19, migrateV19toV20} {
-					if err := hop(db); err != nil {
-						t.Fatal(err)
-					}
-				}
-			})
+			reapplyHops(t, path, 17)
 			s, err = Open(path)
 			if err != nil {
 				t.Fatal(err)

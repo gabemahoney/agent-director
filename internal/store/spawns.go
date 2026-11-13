@@ -308,6 +308,24 @@ type Spawn struct {
 	ReportedState string
 	// FamilyState is the independently settled aggregate of this stored family.
 	FamilyState string
+
+	// BusySend and BusyConversationID are reserved for the schema-v21
+	// spawns.busy_send and busy_conversation_id columns (busy_send_schema.go):
+	// the current Launch's recorded coverage and its published conversation.
+	// No read fills them yet; until one does, their zero values say nothing
+	// about the row, so a coverage decision reads the stored column.
+	BusySend           BusySendCoverage
+	BusyConversationID string
+
+	// TurnStarts is the schema-v21 turn_starts column, the current Launch's
+	// Turn Start counter (b.7si t1.7si.nc SR-1.4). Every full-row read fills
+	// it; SpawnStatusRow does not select it, so a partial row's zero says
+	// nothing. No write takes it from a Spawn: InsertPending, MoveToPending and
+	// ResetForReuse store 0 in the statement that begins the Launch, and a
+	// failed launch's applied restore writes the earlier Launch's value back
+	// (ResumePrior.TurnStarts, RawLife). It is store-internal and never on any
+	// verb's output.
+	TurnStarts int64
 }
 
 // RawFields returns the full stored-row projection, clearing only the derived
@@ -382,7 +400,8 @@ func boolInt(b bool) int {
 // admission is the new row's state record (confirmations.go): pending,
 // source caller_command, for life 0, the launch token it writes and the
 // initial permission epoch, stamped with the statement's clock. It records
-// no process evidence: nothing has probed the agent yet.
+// no process evidence: nothing has probed the agent yet. The new Launch's Turn
+// Start counter, turn_starts, is the integer 0, whatever sp.TurnStarts holds.
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -409,9 +428,9 @@ func (s *Store) InsertPending(sp Spawn) error {
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
             launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
             settled_state, state_changed_ms, agent, subagent_tracking,
-            idle_screen_timeout_seconds, state_evidence
+            idle_screen_timeout_seconds, state_evidence, turn_starts
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `, ?,
-            json_object('v', ?, 'life', 0, 'token', ?, 'epoch', 0, 'at', ` + nowMsSQL + `, 'src', ?, 'checked', ` + nowMsSQL + `))
+            json_object('v', ?, 'life', 0, 'token', ?, 'epoch', 0, 'at', ` + nowMsSQL + `, 'src', ?, 'checked', ` + nowMsSQL + `), 0)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -545,7 +564,8 @@ func (s *Store) getSpawnSettled(instanceID string, r SettleRead, proofs []Cursor
 // (launchOwnerColumns) come after lifeColumns, by the same rule, and the v7
 // idle_since, then the v9 agent, end_reported_at and subagent_tracking, and
 // the later columns after them, state_changed_ms, the pane observation
-// columns (paneColumns) and the main-field evidence (evidenceColumns) last.
+// columns (paneColumns) and the main-field evidence (evidenceColumns), then
+// the v21 Turn Start counter, last.
 const spawnColumns = `
         instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, agent_args, relay_mode,
@@ -558,7 +578,7 @@ const spawnColumns = `
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
         COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, observation_version, COALESCE(display_observation, ''), state_changed_ms, ` + paneColumns + `,
-        ` + evidenceColumns
+        ` + evidenceColumns + `, turn_starts`
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -623,6 +643,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.ObservationVersion, &sp.DisplayObservation, &sp.StateChangedMillis)
 	dest = append(dest, pane.dest()...)
 	dest = append(dest, evidence.dest()...)
+	dest = append(dest, &sp.TurnStarts)
 	if reported {
 		dest = append(dest, &sp.ReportedState, &sp.FamilyState)
 	}

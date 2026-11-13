@@ -88,7 +88,8 @@ import (
 // never absolute values, except for a row the test inserted itself.
 //
 // Every seeded row is a Claude row (agent claude, no end report) unless
-// WithAgent or WithEndReportedAt says otherwise.
+// WithAgent or WithEndReportedAt says otherwise, and its Turn Start counter is
+// the insert's 0 unless WithTurnStarts says otherwise.
 //
 // Returns the instance_id that was written.
 func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error) {

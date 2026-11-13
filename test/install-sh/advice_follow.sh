@@ -1167,7 +1167,7 @@ j6_break_hop() {
             "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_turn;
                 ALTER TABLE spawns DROP COLUMN codex_turn_ended;" || return 1
             ;;
-        16|17|18|19|20)
+        16|17|18|19|20|21)
             local installed
             installed="$("$TS_HELPER" install-write-failure --store "$1" \
                 --kind input-authority --id native_input_authority)" || return 1
@@ -1293,6 +1293,10 @@ test_J6_MigrationFailedRerunRetries() {
             || bad "corrected retry did not add the three nullable evidence columns"
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT state_evidence IS NULL AND settled_evidence IS NULL AND process_evidence IS NULL AND display_evidence IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated main-field evidence for the historical spawn"
+    fi
+    if [[ "$SCHEMA" -ge 21 ]]; then
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM spawns s JOIN busy_conversations c ON c.conversation_id = s.busy_conversation_id JOIN busy_send_launches l ON l.conversation_id = c.conversation_id WHERE s.instance_id='j6' AND c.publication='published' AND l.phase='current' AND l.kind='migrated' AND s.turn_starts=0;")" == 1 ]] \
+            || bad "corrected retry did not record the historical spawn's one conversation and current Launch"
     fi
     local ran="  schema  : authorized migration v$PRE_CUTOVER_SCHEMA→v$SCHEMA (sentinel $(sentinel "$J6H"))"
     grep -qxF "$ran" "$OUT" || bad "no \"$ran\" line: $(grep -F "  schema  : " "$OUT")"

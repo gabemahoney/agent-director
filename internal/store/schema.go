@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v20 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v21 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -105,7 +105,10 @@ import (
 // nullable main-field evidence state_evidence, settled_evidence and
 // process_evidence (confirmations.go), with no backfill; v20 adds the
 // nullable display_evidence (confirmations.go) and observation_writer, the
-// last observer commit's token (display.go), with no backfill.
+// last observer commit's token (display.go), with no backfill. v21 adds the
+// busy-send permanent core (busy_send_schema.go): busy_send, busy_conversation_id
+// and turn_starts on spawns (busySendSpawnColumns) and the core tables and
+// indexes (busySendCoreDDL), with the same text migrateV20toV21 uses.
 // The column order matches the corresponding migration steps.
 //
 // subagents holds one row per entry, a record (confirmed) or an observation
@@ -126,8 +129,9 @@ import (
 // (the current launch and type, oldest first).
 //
 // Both cascade from spawns, so expire's guarded delete and the admin delete
-// remove a row's entries and claimable launches with the row.
-const schemaDDL = cursorRuntimeDDL + inputDeliveryDDL + cursorObligationsDDL + `
+// remove a row's entries and claimable launches with the row. No core table
+// refers to spawns, so neither removes any busy-send record.
+var schemaDDL = cursorRuntimeDDL + inputDeliveryDDL + cursorObligationsDDL + `
 CREATE TABLE IF NOT EXISTS spawns (
     instance_id                TEXT PRIMARY KEY,
     parent_id                  TEXT REFERENCES spawns(instance_id) ON DELETE SET NULL,
@@ -187,7 +191,10 @@ CREATE TABLE IF NOT EXISTS spawns (
     settled_evidence           TEXT,
     process_evidence           TEXT,
     display_evidence           TEXT,
-    observation_writer         TEXT
+    observation_writer         TEXT,
+    busy_send                  TEXT NOT NULL DEFAULT 'not_covered' CHECK(busy_send IN ('not_covered', 'covered')),
+    busy_conversation_id       TEXT,
+    turn_starts                INTEGER NOT NULL DEFAULT 0 CHECK(typeof(turn_starts) = 'integer' AND turn_starts >= 0)
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -294,7 +301,7 @@ CREATE TABLE IF NOT EXISTS subagent_launches (
     UNIQUE(instance_id, tool_use_id)
 );
 CREATE INDEX IF NOT EXISTS idx_subagent_launches_claim ON subagent_launches(instance_id, launch_token, subagent_type, opened_at);
-`
+` + busySendCoreDDL
 
 // migrationStep upgrades a database from `from` to `from+1` inside a single
 // transaction. Each step is individually transactional (per the migrateV1toV2
@@ -336,6 +343,7 @@ var migrationSteps = []migrationStep{
 	{from: 17, apply: migrateV17toV18},
 	{from: 18, apply: migrateV18toV19},
 	{from: 19, apply: migrateV19toV20},
+	{from: 20, apply: migrateV20toV21},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
@@ -535,6 +543,9 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 	if _, err := conn.ExecContext(ctx, `INSERT INTO store_meta(key,value) VALUES(?,?)`, inputAuthorityKey, inputAuthorityVersion+id); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO store_meta(key,value) VALUES(?,?)`, busySendCoreKey, busySendCoreVersion+id); err != nil {
 		return err
 	}
 	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {

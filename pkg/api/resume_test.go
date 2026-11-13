@@ -416,11 +416,12 @@ func TestResumeMoveNotApplied(t *testing.T) {
 // TestResumeRestore (SR-8.5, SR-5.8, SR-13.2 path (i), SR-14; AC-RES-06,
 // AC-RES-07, AC-RES-12): an unresponsive create leaves the row pending; any
 // other failure gets one restore, which applied puts the row back but for the
-// move's parent (a second resume then launches), after another write or the
-// row's removal writes nothing, and on a store error leaves it pending with
-// one WARN. The error carries its sentence, the trail records it, and the call
-// charges Q + C plus A per label or kill; a Codex row (SR-7.7) is charged the
-// same.
+// move's parent, the earlier Launch's Turn Start counter included, which only
+// resume's prior carries (b.7si SR-1.4; a second resume then launches), after
+// another write or the row's removal writes nothing, and on a store error
+// leaves it pending, counter 0, with one WARN. The error carries its sentence,
+// the trail records it, and the call charges Q + C plus A per label or kill; a
+// Codex row (SR-7.7) is charged the same.
 func TestResumeRestore(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	create, label, kill := tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
@@ -501,11 +502,11 @@ func TestResumeRestore(t *testing.T) {
 			e := newResumeEnv(t)
 			parent := pendParent(t, e)
 			t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", parent)
-			var opts []apitest.SpawnOption
+			opts := []apitest.SpawnOption{apitest.WithTurnStarts(4)} // the earlier Launch's counter, which the move resets
 			if tc.codex {
 				home := t.TempDir()
 				t.Setenv("HOME", home)
-				opts = codexRowOpts(seedCodexFolder(t, filepath.Join(home, "codex")).env())
+				opts = append(opts, codexRowOpts(seedCodexFolder(t, filepath.Join(home, "codex")).env())...)
 			}
 			r := e.seedResumable(t, tc.prior, opts...)
 			for call, s := range tc.scripts {

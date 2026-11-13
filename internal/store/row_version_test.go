@@ -8,6 +8,7 @@ package store_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,15 +43,20 @@ type rowVersionCase struct {
 	check func(t *testing.T, before, after apitest.SpawnColumns)
 }
 
-// rowVersionSeed sets every column no write may touch, and the launch start,
-// to a non-default value so "unchanged" and "cleared" are never vacuous. Its
-// identity records the agent's pane, so the agent's hooks apply (SR-22.9).
+// rvTurnStarts is the Turn Start counter rowVersionSeed stores.
+const rvTurnStarts int64 = 5
+
+// rowVersionSeed sets every column no write may touch, the launch start and
+// the Turn Start counter to a non-default value so "unchanged" and "cleared"
+// are never vacuous. Its identity records the agent's pane, so the agent's
+// hooks apply (SR-22.9).
 func rowVersionSeed() []apitest.SpawnOption {
 	return []apitest.SpawnOption{
 		apitest.WithLifeNumber(7),
 		apitest.WithNoPreTrust(),
 		apitest.WithLaunchIdentity(fullIdentity()),
 		apitest.WithLaunchStartedAt(1767225600123),
+		apitest.WithTurnStarts(rvTurnStarts),
 	}
 }
 
@@ -131,6 +137,7 @@ func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, c ro
 	if !bok || !aok || av != bv+1 {
 		t.Errorf("row_version %#v -> %#v, want exactly +1", before.RowVersion, after.RowVersion)
 	}
+	assertTurnStarts(t, c.name, before.TurnStarts, after.TurnStarts)
 	if c.noLaunchStart {
 		if before.LaunchStartedAt != nil || after.LaunchStartedAt != nil {
 			t.Errorf("launch_started_at %#v -> %#v, want NULL kept", before.LaunchStartedAt, after.LaunchStartedAt)
@@ -152,6 +159,28 @@ func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, c ro
 		t.Errorf("launch_started_at = %#v, want NULL after a non-pending state write", after.LaunchStartedAt)
 	case !c.clears && !reflect.DeepEqual(after.LaunchStartedAt, before.LaunchStartedAt):
 		t.Errorf("launch_started_at %#v -> %#v, want unchanged", before.LaunchStartedAt, after.LaunchStartedAt)
+	}
+}
+
+// assertTurnStarts checks the Turn Start counter (b.7si SR-1.4) the write the
+// case name names stores, in the same statement: 0 for a write that begins a
+// Launch (MoveToPending, ResetForReuse); the earlier Launch's rvTurnStarts for
+// a failed launch's restore, over the 0 its setup's move or reset left; the
+// seeded rvTurnStarts kept by any other write.
+func assertTurnStarts(t *testing.T, name string, before, after any) {
+	t.Helper()
+	from, want := rvTurnStarts, rvTurnStarts
+	switch writer, _, _ := strings.Cut(name, "/"); writer {
+	case "MoveToPending", "ResetForReuse":
+		want = 0
+	case "RestoreAfterFailedResume", "RestoreAfterFailedReuse":
+		from = 0
+	}
+	if before != from {
+		t.Fatalf("turn_starts before the write = %#v, want %d; the counter check would be vacuous", before, from)
+	}
+	if after != want {
+		t.Errorf("turn_starts %#v -> %#v, want %d", before, after, want)
 	}
 }
 
@@ -388,7 +417,7 @@ func (r *rvResume) move(t *testing.T, f *v5Store, id string) {
 	r.prior = store.ResumePrior{State: sp.State, EndedAtText: sp.EndedAtText, PID: sp.PID,
 		ProcStarttime: sp.ProcStarttime, LivenessUnverifiedSince: sp.LivenessUnverifiedSince,
 		LivenessNote: sp.LivenessNote, EndReportedAtMillis: sp.EndReportedAtMillis, Identity: sp.Identity,
-		StateEvidence: sp.PriorStateEvidence(), ProcessEvidence: sp.PriorProcessEvidence()}
+		StateEvidence: sp.PriorStateEvidence(), ProcessEvidence: sp.PriorProcessEvidence(), TurnStarts: sp.TurnStarts}
 	r.moved = rvMove(t, f, id, sp, store.CondApplied)
 }
 
@@ -589,9 +618,10 @@ func TestRowVersionEveryWriteAdvancesByOne(t *testing.T) {
 
 // TestRowVersionInsertStartsAtZero checks a new row starts at version 0 with
 // the launch start, token and socket given (zero as NULL), never a server or
-// pane identity, life 0, and the caller's pre-trust choice: 1 for the opt-out,
-// 0 otherwise (SR-5.1). Of the versioned writes, only reuse's reset and
-// restore change it.
+// pane identity, life 0, the integer Turn Start counter 0 whatever the
+// caller's Spawn holds (b.7si SR-1.4), and the caller's pre-trust choice: 1
+// for the opt-out, 0 otherwise (SR-5.1). Of the versioned writes, only reuse's
+// reset and restore change it.
 func TestRowVersionInsertStartsAtZero(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -609,17 +639,17 @@ func TestRowVersionInsertStartsAtZero(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
 			sp := store.Spawn{InstanceID: "rv-insert", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-rv-insert",
-				RelayMode: "off", LaunchStartedAtMillis: tc.ms, NoPreTrust: tc.noPreTrust, Identity: tc.lid}
+				RelayMode: "off", LaunchStartedAtMillis: tc.ms, NoPreTrust: tc.noPreTrust, Identity: tc.lid, TurnStarts: rvTurnStarts}
 			if err := f.s.InsertPending(sp); err != nil {
 				t.Fatalf("InsertPending: %v", err)
 			}
 			c := f.rawColumns("rv-insert")
 			assertInsertedLaunch(t, c, sp)
-			if got, want := []any{c.LifeNumber, c.NoPreTrust}, []any{int64(0), tc.want}; !reflect.DeepEqual(got, want) {
-				t.Errorf("life_number, no_pre_trust = %#v, want %#v", got, want)
+			if got, want := []any{c.LifeNumber, c.NoPreTrust, c.TurnStarts}, []any{int64(0), tc.want, int64(0)}; !reflect.DeepEqual(got, want) {
+				t.Errorf("life_number, no_pre_trust, turn_starts = %#v, want %#v", got, want)
 			}
-			if got := rvExamine(t, f, "rv-insert").NoPreTrust; got != tc.noPreTrust {
-				t.Errorf("GetSpawn NoPreTrust = %v, want %v", got, tc.noPreTrust)
+			if got := rvExamine(t, f, "rv-insert"); got.NoPreTrust != tc.noPreTrust || got.TurnStarts != 0 {
+				t.Errorf("GetSpawn NoPreTrust, TurnStarts = %v, %d, want %v, 0", got.NoPreTrust, got.TurnStarts, tc.noPreTrust)
 			}
 			assertStoreIDKept(t, f)
 		})
@@ -627,7 +657,9 @@ func TestRowVersionInsertStartsAtZero(t *testing.T) {
 }
 
 // TestRowVersionNoOpWritesChangeNothing checks the hold path, zero-row writes
-// and other-table writes leave the whole spawns row, version included, as it was.
+// and other-table writes leave the whole spawns row, version and Turn Start
+// counter included, as it was: a refused or rolled-back move or reset keeps the
+// seeded counter, a stale restore the newer Launch's.
 func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 	cases := []rowVersionCase{
 		{name: "RecordLaunchIdentity/stale version, hook wrote first", state: "pending",

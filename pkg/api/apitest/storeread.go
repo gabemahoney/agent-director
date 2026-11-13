@@ -69,6 +69,10 @@ type SpawnColumns struct {
 	// The schema-v14 spawns column idle_screen_timeout_seconds (b.ob8):
 	// the row's per-spawn timeout override; nil = none.
 	IdleScreenTimeoutSeconds any
+
+	// The schema-v21 spawns column turn_starts (b.7si SR-1.4): the current
+	// Launch's Turn Start counter. A default seed reads 0 (int64).
+	TurnStarts any
 }
 
 // ReadSpawnColumns reads every column of instanceID's spawns row from the
@@ -94,7 +98,7 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 	                  pane_pid, pane_starttime, launch_owner_pid,
 	                  launch_owner_starttime, launch_owner_pidns, idle_since,
 		                  agent, end_reported_at, subagent_tracking,
-	                  idle_screen_timeout_seconds
+	                  idle_screen_timeout_seconds, turn_starts
 	             FROM spawns
 	            WHERE instance_id = ?`
 	var c SpawnColumns
@@ -109,7 +113,7 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 		&c.PanePID, &c.PaneStarttime, &c.LaunchOwnerPID,
 		&c.LaunchOwnerStarttime, &c.LaunchOwnerPIDNS, &c.IdleSince,
 		&c.Agent, &c.EndReportedAt, &c.SubagentTracking,
-		&c.IdleScreenTimeoutSeconds,
+		&c.IdleScreenTimeoutSeconds, &c.TurnStarts,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SpawnColumns{}, fmt.Errorf("ReadSpawnColumns: %w: %s", store.ErrSpawnNotFound, instanceID)

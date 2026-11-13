@@ -351,7 +351,8 @@ func rstColumns(t *testing.T, e *resumeEnv, id string) (cols apitest.SpawnColumn
 	return cols, true
 }
 
-// rstRestored is r's row after a move and an applied restore with parent.
+// rstRestored is r's row after a move and an applied restore with parent: the
+// earlier Launch's Turn Start counter is back.
 func rstRestored(r resumableRow, parent any) apitest.SpawnColumns {
 	w := r.Before
 	w.ParentID = parent
@@ -359,13 +360,14 @@ func rstRestored(r resumableRow, parent any) apitest.SpawnColumns {
 	return w
 }
 
-// rstMoved is r's row after the move alone, with no parent.
+// rstMoved is r's row after the move alone, with no parent: the new Launch's
+// Turn Start counter is 0.
 func rstMoved(r resumableRow, launchStart int64, token, socket string) apitest.SpawnColumns {
 	w := r.Before
 	w.State, w.LaunchStartedAt, w.LaunchToken, w.TmuxSocket, w.ParentID = store.StatePending, launchStart, token, socket, nil
 	w.PID, w.ProcStarttime, w.EndedAt, w.LivenessUnverifiedSince, w.LivenessNote = nil, nil, nil, nil, nil
 	w.TmuxServerPID, w.TmuxServerStarted, w.TmuxServerStarttime, w.PaneID, w.PanePID, w.PaneStarttime = nil, nil, nil, nil, nil, nil
-	w.RowVersion = r.Before.RowVersion.(int64) + 1
+	w.RowVersion, w.TurnStarts = r.Before.RowVersion.(int64)+1, int64(0)
 	return w
 }
 

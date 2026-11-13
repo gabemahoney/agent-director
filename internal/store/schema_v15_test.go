@@ -85,17 +85,17 @@ func TestV15MigrationPreservationAndReentry(t *testing.T) {
 					}
 				}
 			}
-			after := dbDump(t, path)
+			after, kept := dbDump(t, path), dumpBeforeV21(t, path)
 			if len(added) == 0 {
 				// New input tables are checked by fresh-schema convergence above.
 				for key, want := range before {
-					if !reflect.DeepEqual(want, after[key]) {
+					if !reflect.DeepEqual(want, kept[key]) {
 						t.Fatalf("migration of a store holding both columns changed %s", key)
 					}
 				}
 			}
 			for _, table := range []string{"permission_requests", "session_history", "store_meta", "cursor_runtimes", "subagents", "subagent_launches"} {
-				if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
+				if !reflect.DeepEqual(before["rows "+table], kept["rows "+table]) {
 					t.Errorf("changed %s", table)
 				}
 			}

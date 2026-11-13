@@ -26,6 +26,9 @@ const (
 	// one, which the move keeps.
 	moveEndReported int64 = 1767225611000
 	moveAgent             = store.AgentCodex
+	// moveTurnStarts is the seeded row's Turn Start counter, which the move
+	// resets to 0 and a failed resume's restore writes back.
+	moveTurnStarts int64 = 6
 )
 
 // moveAgents are the agents the move is checked for: it stores subagent_tracking
@@ -65,9 +68,9 @@ type moveRow struct {
 
 // seedMoveRow seeds a row (a codex one unless spec names its agent) with a value
 // in every column the move clears or keeps (non-default layouts, raw text, an
-// end report), subagent_tracking the opposite of what the move stores for its
-// agent (0 for claude, 1 for codex), two subagent entries and a claimable
-// launch, a parent and a history entry.
+// end report, Turn Start counter moveTurnStarts), subagent_tracking the
+// opposite of what the move stores for its agent (0 for claude, 1 for codex),
+// two subagent entries and a claimable launch, a parent and a history entry.
 func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 	t.Helper()
 	state, agent := spec.state, spec.agent
@@ -86,7 +89,7 @@ func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 		apitest.WithRawAgentArgs(`["--model",   "opus"]`), apitest.WithRawExtraEnv(`{"K":  "v"}`),
 		apitest.WithJsonlPath("/tmp/ad-move-test/cur.jsonl"), apitest.WithPID(4242),
 		apitest.WithAgent(agent), apitest.WithEndReportedAt(moveEndReported), apitest.WithIdleScreenTimeout(int64(90)),
-		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-move-old", JSONLPath: "/tmp/ad-move-test/old.jsonl",
+		apitest.WithTurnStarts(moveTurnStarts), apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-move-old", JSONLPath: "/tmp/ad-move-test/old.jsonl",
 			Life: 2, RecordedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}),
 	}
 	if launchTracking(agent) == 1 {
@@ -130,7 +133,8 @@ func requireSet(t *testing.T, cols map[string]any) {
 // row of each agent: the returned version is stored; pid, process start,
 // ended_at, the end report, liveness and the server and pane identity are NULL;
 // subagent_tracking is the agent's (claude 1 over the seeded 0, codex 0 over
-// the seeded 1); the launch start, token, socket
+// the seeded 1); the Turn Start counter is 0 over the seeded one (b.7si
+// SR-1.4); the launch start, token, socket
 // and parent (NULL for "") are the move's, also over a row with no token; every
 // kept column (the agent and the idle_screen timeout override included) and the
 // history are byte for byte unchanged.
@@ -167,8 +171,9 @@ func testMoveToPendingApplied(t *testing.T, spec moveSpec, withParent bool) {
 	requireSet(t, moveKept(r.before))
 	requireSet(t, map[string]any{"end_reported_at": r.before.EndReportedAt})
 	wantTracking := launchTracking(r.before.Agent.(string))
-	if r.before.SubagentTracking != 1-wantTracking {
-		t.Fatalf("seeded subagent_tracking = %v; want %d, or the move's write is vacuous", r.before.SubagentTracking, 1-wantTracking)
+	if r.before.SubagentTracking != 1-wantTracking || r.before.TurnStarts != moveTurnStarts {
+		t.Fatalf("seeded subagent_tracking, turn_starts = %v, %v; want %d, %d, or the move's write is vacuous",
+			r.before.SubagentTracking, r.before.TurnStarts, 1-wantTracking, moveTurnStarts)
 	}
 	mix := f.seedCloseMix(r.id)
 	var parent any
@@ -185,7 +190,7 @@ func testMoveToPendingApplied(t *testing.T, spec moveSpec, withParent bool) {
 	want := map[string]any{"state": store.StatePending, "row_version": r.examined.Snapshot.RowVersion + 1,
 		"launch_started_at": moveLaunchMillis, "launch_token": moveToken, "tmux_socket": moveSocket, "parent_id": parent,
 		"pid": nil, "proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil,
-		"end_reported_at": nil, "subagent_tracking": wantTracking}
+		"end_reported_at": nil, "subagent_tracking": wantTracking, "turn_starts": int64(0)}
 	for col, w := range wantIdentityColumns(store.LaunchIdentity{}) {
 		want[col] = w
 	}
@@ -193,7 +198,8 @@ func testMoveToPendingApplied(t *testing.T, spec moveSpec, withParent bool) {
 	for col, g := range map[string]any{"state": after.State, "row_version": after.RowVersion, "launch_started_at": after.LaunchStartedAt,
 		"launch_token": after.LaunchToken, "tmux_socket": after.TmuxSocket, "parent_id": after.ParentID, "pid": after.PID,
 		"proc_starttime": after.ProcStarttime, "ended_at": after.EndedAt, "liveness_unverified_since": after.LivenessUnverifiedSince,
-		"liveness_note": after.LivenessNote, "end_reported_at": after.EndReportedAt, "subagent_tracking": after.SubagentTracking} {
+		"liveness_note": after.LivenessNote, "end_reported_at": after.EndReportedAt, "subagent_tracking": after.SubagentTracking,
+		"turn_starts": after.TurnStarts} {
 		got[col] = g
 	}
 	if !reflect.DeepEqual(got, want) || v != r.examined.Snapshot.RowVersion+1 {
@@ -258,7 +264,8 @@ func TestMoveToPendingNotAppliedClosesNothing(t *testing.T) {
 
 // TestMoveToPendingWithoutLaunchInstantFails checks a move given no launch
 // instant (0), which the close of the row's running entries and claimable
-// launches refuses, fails whole: an error with a zero result, and the row, its
+// launches refuses, fails whole: an error with a zero result, and the row (its
+// Turn Start counter included: the statement's reset rolls back), its
 // history, entries and claimable launches (and another row's) as they were
 // (SR-8.1).
 func TestMoveToPendingWithoutLaunchInstantFails(t *testing.T) {

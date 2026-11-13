@@ -1543,7 +1543,7 @@ AGENT_RENAME_HOP_VERSION=9
 # prints before the swap. A Go test fails when either differs from
 # internal/store, so keep each assignment on a line of its own, in this form.
 INPUT_CUTOVER_VERSION=16
-STORE_SCHEMA_VERSION=20
+STORE_SCHEMA_VERSION=21
 
 # AD_OUTCOME_REASONS lists the reasons install.sh chooses itself for an
 # outcome envelope (ad_outcome_exit), never a relayed one. Tasks

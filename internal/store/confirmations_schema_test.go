@@ -76,9 +76,9 @@ func TestV19MigrationPreservationAndReentry(t *testing.T) {
 					t.Errorf("added %s = %s; want NULL (no backfill)", c, v)
 				}
 			}
-			after := dbDump(t, path)
+			after, kept := dbDump(t, path), dumpBeforeV21(t, path)
 			for key, value := range before {
-				if strings.HasPrefix(key, "rows ") && key != "rows spawns" && !reflect.DeepEqual(after[key], value) {
+				if strings.HasPrefix(key, "rows ") && key != "rows spawns" && !reflect.DeepEqual(kept[key], value) {
 					t.Errorf("migration changed %s", key)
 				}
 			}
@@ -103,13 +103,7 @@ func TestV19MigrationPreservationAndReentry(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Reentry of the hop and a plain reopen change nothing.
-			withRaw(t, path, func(db *sql.DB) {
-				for _, hop := range []func(*sql.DB) error{migrateV18toV19, migrateV19toV20} {
-					if err := hop(db); err != nil {
-						t.Fatal(err)
-					}
-				}
-			})
+			reapplyHops(t, path, 18)
 			if s, err = Open(path); err != nil {
 				t.Fatal(err)
 			}
@@ -296,7 +290,7 @@ func TestV20DisplayMigration(t *testing.T) {
 				// display_evidence is appended after the partial run's column.
 				got, wantShape = columnsByName(got), columnsByName(wantShape)
 			}
-			if !reflect.DeepEqual(got, wantShape) || s.StoreID() != id || userVersion(t, s.db) != 20 {
+			if !reflect.DeepEqual(got, wantShape) || s.StoreID() != id || userVersion(t, s.db) != schemaVersion {
 				t.Fatal("v20 migration changed identity, column shape/order or version")
 			}
 			if !reflect.DeepEqual(before, readRawSpawn(t, path, "pre", cols)) {
@@ -323,11 +317,7 @@ func TestV20DisplayMigration(t *testing.T) {
 			}
 			s.Close()
 			after := dbDump(t, path)
-			withRaw(t, path, func(db *sql.DB) {
-				if err := migrateV19toV20(db); err != nil {
-					t.Fatal(err)
-				}
-			})
+			reapplyHops(t, path, 19)
 			reopened, err := Open(path)
 			if err != nil {
 				t.Fatal(err)

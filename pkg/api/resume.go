@@ -729,6 +729,7 @@ func resumePriorOf(row Spawn) ResumePrior {
 		Identity:                row.Identity,
 		StateEvidence:           row.PriorStateEvidence(),
 		ProcessEvidence:         row.PriorProcessEvidence(),
+		TurnStarts:              row.TurnStarts,
 	}
 }
 
