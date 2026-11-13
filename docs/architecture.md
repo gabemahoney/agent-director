@@ -25827,14 +25827,17 @@ each file's doc comments carry the detail.
     `TestReadmeOperatorActionsStoreIDPointers` pin "This store's id" (title
     `storeIDItemTitle`, command `storeIDCommand`) and the items that link
     to it beside the trail's `store_id`. Its shared helper
-    `storeIDItemCommands(t, d)` returns the trimmed `sqlite3` lines in that
-    item's fenced blocks.
+    `storeIDItemCommands(t, d)` returns that item's whole fenced blocks.
+    The pinned block reads a private copy without `-readonly`.
   - `readme_store_id_test.go` (SR-5.4): `TestReadmeStoreIDCommandPrintsStoreID`
-    runs `docs/operator-actions.md`'s store-id line (`runnableStoreIDLine`, through
-    `storeIDItemCommands`, refusing a line without `-readonly`) with HOME at
-    a temp dir holding a fresh store, closed and held open, and checks it
-    prints `Store.StoreID`. A missing `sqlite3` fails inside the sandbox
-    and skips only outside it.
+    runs `docs/operator-actions.md`'s whole store-id block through
+    `storeIDItemCommands` with HOME at a temp dir holding a fresh store:
+    closed, held open, locked by a separate `sqlite3` process, under a
+    headers-on `~/.sqliterc`, and in a read-only folder. The locked case
+    confirms a plain read fails busy after the snapshot and before the block.
+    Each case prints `Store.StoreID` and leaves
+    store-folder entries and bytes unchanged (`snapshotTrees`). A missing
+    `sqlite3` fails inside the sandbox and skips only outside it.
   - `readme_timing_values_test.go` (Epic 21): pins documented `[tmux]`
     timing values to the `internal/config` constants, recomputing each
     from them, so a changed constant or a changed pinned value fails.
@@ -25981,8 +25984,8 @@ title, and a step that may name the live states in more than one way takes
 them from `liveStateForms()`, never a list of state literals. A check or a
 run of the "This store's id" command reads it through
 `storeIDItemCommands`, never its own scan of that item's code blocks; only
-`readme_store_id_test.go` runs it, and only after `runnableStoreIDLine`'s
-`-readonly` check.
+`readme_store_id_test.go` runs the whole block. The command pin checks it
+contains no `-readonly`.
 
 **Must use:** a new doc statement of a `[tmux]` default, safe minimum or
 worst case (in the README or this document) gets an entry in

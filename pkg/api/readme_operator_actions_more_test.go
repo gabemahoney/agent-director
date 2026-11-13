@@ -23,30 +23,40 @@ const (
 	pendingItemTitle    = "A `pending` row with no launch start or token"
 )
 
-// storeIDBusyTimeoutPlaceholder stands in storeIDCommand for the operator's
-// [store] busy_timeout_ms, which the doc names instead of a literal
-// (b.c7f); the run of the line substitutes it.
-const storeIDBusyTimeoutPlaceholder = "<busy_timeout_ms>"
+// storeIDCommand is the whole documented lookup of this store's id.
+const storeIDCommand = `(
+  umask 077
+  store="$HOME/.config/agent-director/state.db"
+  copy=$(mktemp -d "${TMPDIR:-/tmp}/ad-store-id.XXXXXX") || exit 1
+  trap 'rm -rf "$copy"' EXIT
+  if [ -f "$store-wal" ]; then
+    cp "$store-wal" "$copy/state.db-wal" || exit 1
+  fi
+  cp "$store" "$copy/state.db" || exit 1
+  sqlite3 -batch -init /dev/null "$copy/state.db" "SELECT value FROM store_meta WHERE key = 'store_id'"
+)`
 
-// storeIDCommand is the documented read-only lookup of this store's id.
-const storeIDCommand = `sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ` + storeIDBusyTimeoutPlaceholder +
-	`" ~/.config/agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"`
-
-// storeIDItemCommands returns the trimmed lines starting "sqlite3" in the
-// fenced blocks of the "This store's id" item. Both the command's pinned
-// text and the run of it read the item through this one helper.
+// storeIDItemCommands returns the whole fenced blocks of "This store's id".
+// All checks and runs of that item's blocks must use this helper.
 func storeIDItemCommands(t *testing.T, d mdDoc) []string {
 	t.Helper()
 	from, to := sectionLines(d, operatorActionsItem(t, d, storeIDItemTitle))
-	var cmds []string
+	var cmds, lines []string
 	inFence := false
 	for _, line := range d.lines[from:to] {
-		switch line = strings.TrimSpace(line); {
-		case codeFenceRe.MatchString(line):
+		switch {
+		case codeFenceRe.MatchString(strings.TrimSpace(line)):
+			if inFence {
+				cmds = append(cmds, strings.Join(lines, "\n"))
+				lines = nil
+			}
 			inFence = !inFence
-		case inFence && strings.HasPrefix(line, "sqlite3"):
-			cmds = append(cmds, line)
+		case inFence:
+			lines = append(lines, line)
 		}
+	}
+	if inFence {
+		t.Fatalf("%s %q has an unclosed code block", d.path, storeIDItemTitle)
 	}
 	return cmds
 }
@@ -175,16 +185,21 @@ func TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible(t *testing.T) {
 }
 
 // TestReadmeOperatorActionsStoreIDCommand checks "This store's id" gives the
-// read-only sqlite3 lookup, once, with its facts.
+// private-copy sqlite3 lookup, once, with its facts.
 func TestReadmeOperatorActionsStoreIDCommand(t *testing.T) {
 	t.Parallel()
 	d := readMD(t, mdOperatorActions)
-	if cmds := storeIDItemCommands(t, d); len(cmds) != 1 || normalised(cmds[0]) != storeIDCommand {
-		t.Errorf("%s %q gives sqlite3 commands %q; want exactly %q", d.path, storeIDItemTitle, cmds, storeIDCommand)
+	if cmds := storeIDItemCommands(t, d); len(cmds) != 1 || cmds[0] != storeIDCommand {
+		t.Errorf("%s %q gives command blocks %q; want exactly %q", d.path, storeIDItemTitle, cmds, storeIDCommand)
+	}
+	for _, block := range storeIDItemCommands(t, d) {
+		if strings.Contains(block, "-readonly") {
+			t.Errorf("store-id block opens -readonly, which Apple’s sqlite3 cannot:\n%s", block)
+		}
 	}
 	text := normalised(d.body(operatorActionsItem(t, d, storeIDItemTitle)))
 	for _, want := range []string{"`store_id`", "16 hexadecimal characters", "`db_path`",
-		"with `" + storeIDBusyTimeoutPlaceholder + "` set to your `[store] busy_timeout_ms`"} {
+		"private copy", "store folder unchanged", "If it fails, run it again"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("%s %q lacks %q", d.path, storeIDItemTitle, want)
 		}
