@@ -63,11 +63,20 @@ install directory (`~/.config/agent-director`, or `~/.agent-director` for
 0.3.0–0.11.1), never the shell's working directory. Do not expand `$VAR`.
 Resolve to an absolute path before checking whether the store file exists.
 If there is no store file, record 0. Otherwise replace `<store>` with that
-resolved absolute path, quoted, and read it without opening it with
-agent-director:
+resolved absolute path, quoted, and read a private copy to leave the store
+folder unchanged:
 
 ```sh
-sqlite3 -batch -init /dev/null -readonly <store> 'PRAGMA user_version;'
+(
+  umask 077
+  copy=$(mktemp -d "${TMPDIR:-/tmp}/ad-schema.XXXXXX") || exit 1
+  trap 'rm -rf "$copy"' EXIT
+  if [ -f <store>-wal ]; then
+    cp <store>-wal "$copy/state.db-wal" || exit 1
+  fi
+  cp <store> "$copy/state.db" || exit 1
+  sqlite3 -batch -init /dev/null "$copy/state.db" 'PRAGMA user_version;'
+)
 ```
 
 If the command fails or does not print one nonnegative integer, stop and
