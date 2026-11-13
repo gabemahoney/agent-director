@@ -67,6 +67,9 @@ func TestGetManyEqualsSequentialGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if err := apitest.SeedBusySendCoverage(e.dbPath, "codex-ended", store.BusySendCovered, store.BusySendCovered); err != nil {
+		t.Fatal(err)
+	}
 	ids = append(ids, "no-such-row")
 	// Closing the sole open connection checkpoints WAL before the byte copy.
 	if err := e.s.Close(); err != nil {
@@ -186,6 +189,15 @@ func TestGetManyEqualsSequentialGet(t *testing.T) {
 			var err error
 			got, err = c.GetMany(ids)
 			batchWindow = manyReadWindow{from, time.Now()}
+			if err == nil {
+				for _, row := range got.Spawns {
+					coverage := store.BusySendNotCovered
+					if row.InstanceID == "codex-ended" {
+						coverage = store.BusySendCovered
+					}
+					assertBusyPublic(t, row, coverage)
+				}
+			}
 			return got.Spawns, err
 		},
 	}

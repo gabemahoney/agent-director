@@ -618,16 +618,22 @@ var adoptIdentityIfSameLifeSQL = `UPDATE spawns
 //
 // Only find-missing calls it (SR-3.6; LFR H2); kill, send-keys and pause use
 // AdoptIdentityIfUnchanged.
+// The applied transaction also resolves any busy-send candidate for the
+// adopted Launch's token, keeping the single version advance below.
 func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot, id LaunchIdentity) (res CondResult, now RowSnapshot, err error) {
 	const errPrefix = "store: adopt identity if same life"
 	args := append(adoptIdentityArgs(id), instanceID)
 	args = append(args, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(instanceID, adoptIdentityIfSameLifeSQL, args, errPrefix)
+	r, err := s.execBusySendEstablished(instanceID, adoptIdentityIfSameLifeSQL, args...)
 	if err != nil {
-		return 0, RowSnapshot{}, err
+		return 0, RowSnapshot{}, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	if applied {
+	n, err := r.RowsAffected()
+	if err != nil {
+		return 0, RowSnapshot{}, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	}
+	if n > 0 {
 		now = examined
 		now.RowVersion++
 		return CondApplied, now, nil

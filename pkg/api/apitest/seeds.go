@@ -88,7 +88,8 @@ import (
 // never absolute values, except for a row the test inserted itself.
 //
 // Every seeded row is a Claude row (agent claude, no end report) unless
-// WithAgent or WithEndReportedAt says otherwise, and its Turn Start counter is
+// WithAgent or WithEndReportedAt says otherwise. Options also seed matching
+// core provider/life/token facts in their transaction. Its Turn Start counter is
 // the insert's 0 unless WithTurnStarts says otherwise.
 //
 // Returns the instance_id that was written.
@@ -238,6 +239,21 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 		  WHERE instance_id = ?`, id); err != nil {
 			return fmt.Errorf("SeedSpawn: default launch start UPDATE: %w", err)
 		}
+	}
+	// Options can replace the insertion's provider, life and token. Keep the
+	// permanent core consistent in this same fixture transaction; production
+	// resume deliberately refuses a provider change within a conversation.
+	if _, err := tx.Exec(`UPDATE busy_conversations SET provider = (
+	    SELECT CASE WHEN COALESCE(agent, '') = '' THEN 'claude' ELSE agent END FROM spawns WHERE instance_id = ?)
+	    WHERE conversation_id = (SELECT busy_conversation_id FROM spawns WHERE instance_id = ?)`, id, id); err != nil {
+		return fmt.Errorf("SeedSpawn: core provider: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE busy_send_launches SET
+	    provider = (SELECT CASE WHEN COALESCE(agent, '') = '' THEN 'claude' ELSE agent END FROM spawns WHERE instance_id = ?),
+	    life_number = (SELECT life_number FROM spawns WHERE instance_id = ?),
+	    launch_token = (SELECT CASE WHEN typeof(launch_token) = 'text' THEN launch_token END FROM spawns WHERE instance_id = ?)
+	    WHERE instance_id = ? AND phase = 'current'`, id, id, id, id); err != nil {
+		return fmt.Errorf("SeedSpawn: core Launch identity: %w", err)
 	}
 	if err := insertSessionHistory(tx, id, o.history); err != nil {
 		return err

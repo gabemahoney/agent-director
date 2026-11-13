@@ -227,7 +227,7 @@ func (s *Store) HealProvisionalTranscript(pt ProvisionalTranscript, path string)
 	args := append([]any{path, pt.InstanceID, pt.SessionID}, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(pt.Snapshot)...)
 	args = append(args, pt.ObservationVersion, pt.PermissionEpoch, pt.LifeNumber)
-	result, err := s.recoveryExec(pt.InstanceID, q, args)
+	result, err := s.recoveryExec(pt.InstanceID, q, args, false)
 	if err != nil || result != CondApplied {
 		return false, err
 	}

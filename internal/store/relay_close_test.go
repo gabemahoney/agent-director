@@ -75,6 +75,10 @@ func makeRelayRowCodex(t *testing.T, s *Store, endReported bool) {
 	if _, err := s.db.Exec(`UPDATE spawns SET agent = ?, end_reported_at = ? WHERE instance_id = ?`, AgentCodex, report, relayID); err != nil {
 		t.Fatalf("make %s a Codex row: %v", relayID, err)
 	}
+	// This fixture changes the historical provider, not a real resume.
+	mustExec(t, s.db, `UPDATE busy_conversations SET provider='codex' WHERE instance_id=?`, relayID)
+	mustExec(t, s.db, `UPDATE busy_send_launches SET provider='codex' WHERE instance_id=?`, relayID)
+
 }
 
 // endRelayRowCodex is find-missing's move to ended of relayID as a Codex row

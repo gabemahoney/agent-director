@@ -412,3 +412,10 @@ test("public-surface: only status, get and list agent results carry confirmation
       /^\s*(confirmations|process_liveness)\??\s*:/m);
   }
 });
+
+
+test("public-surface: only get rows require the persisted busy_send union", () => {
+  const types = typesGolden();
+  expect(interfaceBody(types, "GetResult")).toMatch(/\bbusy_send\s*:\s*"covered"\s*\|\s*"not_covered"\s*;/);
+  for (const iface of ["ListRow", "StatusResult"]) expect(interfaceBody(types, iface)).not.toMatch(/\bbusy_send\b/);
+});

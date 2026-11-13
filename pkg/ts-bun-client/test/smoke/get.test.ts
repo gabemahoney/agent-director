@@ -36,6 +36,8 @@ test("get: happy path — returns full spawn row fields", async () => {
     }
     expect(result.launch_started_at).toBeUndefined();
     expect(result.agent).toBe("claude");
+    expect(result.busy_send).toBe("not_covered");
+    for (const key of ["delivery", "delivery_capabilities", "agent_defaults", "busy_conversation_id", "turn_starts"]) expect(Object.keys(result)).not.toContain(key);
     expect(result.context).toEqual(expectedContext("unknown"));
   });
 }, 10_000);

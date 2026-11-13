@@ -88,13 +88,16 @@ func TestSeedRowSession_MatchesSeedSpawnPane(t *testing.T) {
 			rec := tmuxfix.NewRecorder()
 			tokens := make([]string, len(tc.rows))
 			seeded := make([]tmuxfix.SeedSession, len(tc.rows))
-			for i, r := range tc.rows {
-				tokens[i], _ = seedV5Row(t, dbPath, r.id, r.state, r.opts...).LaunchToken.(string)
-			}
 			if tc.reseedStoreID {
+				if _, err := InitStore(dbPath); err != nil {
+					t.Fatal(err)
+				}
 				if err := SeedStoreID(dbPath, OtherStoreID(mustReadStoreID(t, dbPath))); err != nil {
 					t.Fatalf("SeedStoreID: %v", err)
 				}
+			}
+			for i, r := range tc.rows {
+				tokens[i], _ = seedV5Row(t, dbPath, r.id, r.state, r.opts...).LaunchToken.(string)
 			}
 			storeID := mustReadStoreID(t, dbPath)
 			for i, r := range tc.rows {

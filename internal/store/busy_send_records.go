@@ -51,9 +51,10 @@ const (
 // whose creation is in progress; uncertain is one whose external creation
 // outcome is unknown; failed is one whose creation failed and that was never
 // published. current is the instance's published current Launch, and
-// superseded one that a later publication replaced. Launch End is recorded
-// separately (ended_at_ms, end_cause), because a current Launch's process
-// can end before another Launch replaces it.
+// superseded one that a later publication replaced, an unpublished candidate
+// replaced before a later guarded Launch start, or one whose instance row was
+// deleted. Launch End is recorded separately (ended_at_ms, end_cause), because
+// a current Launch's process can end before another Launch replaces it.
 type BusySendLaunchPhase string
 
 const (
@@ -79,14 +80,20 @@ const (
 
 // BusySendLaunchEnd is the evidence on which a Launch End was recorded
 // (busy_send_launches.end_cause; SR-6.2): the recorded agent process exited,
-// a resume or reuse published a new Launch (which already required that
-// exclusion), or the Launch's creation failed.
+// a resume or reuse published a new Launch, supervised creation failed, its
+// instance row was deleted, or a later guarded Launch start replaced a
+// never-published candidate/uncertain Launch. candidate_replaced and
+// record_deleted prove neither physical exit nor old-issuer exclusion; no
+// caller may use them as either (SR-6.2, SR-6.3). creation_failed does not assert
+// process exit either: an unlabelled session can survive supervised failure.
 type BusySendLaunchEnd string
 
 const (
-	BusySendProcessExited   BusySendLaunchEnd = "process_exited"
-	BusySendLaunchPublished BusySendLaunchEnd = "launch_published"
-	BusySendCreationFailed  BusySendLaunchEnd = "creation_failed"
+	BusySendProcessExited           BusySendLaunchEnd = "process_exited"
+	BusySendLaunchPublished         BusySendLaunchEnd = "launch_published"
+	BusySendCreationFailed          BusySendLaunchEnd = "creation_failed"
+	BusySendLaunchRecordDeleted     BusySendLaunchEnd = "record_deleted"
+	BusySendLaunchCandidateReplaced BusySendLaunchEnd = "candidate_replaced"
 )
 
 // BusySendRouteKind is a Launch's provider route (busy_send_launches.route_kind,

@@ -63,10 +63,13 @@ func rhdRun(t *testing.T, tc rhdCase, prior string) {
 		tc.spec.Created = rlkSettled(e)
 	}
 	sc := e.arrangeHeld(t, r, tc.spec)
+	priorBusy := seedBusyCoveredConversation(t, e.dbPath, r.ID)
 	start := e.clock.Now()
 
 	_, err := e.resume(r.ID)
 
+	assertBusyProjection(t, e.dbPath, r.ID, priorBusy)
+	assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "failed", store.BusySendCovered)
 	assertOneSentinel(t, err, tc.want)
 	if err == nil {
 		t.Fatal("resume err = nil; want the held-name refusal")

@@ -335,12 +335,18 @@ func TestSpawnReuseIdentityWrite(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
-			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour})
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour, Opts: []apitest.SpawnOption{apitest.WithTurnStarts(5)}})
+			priorBusy := seedBusyCoveredConversation(t, e.dbPath, r.ID)
 			rlNewPanesAlive(e)
+			rs := &hookedReuseStore{st: e.st}
+			rs.afterReset(func() {
+				assertBusyProjection(t, e.dbPath, r.ID, priorBusy)
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "candidate", store.BusySendNotCovered)
+			})
 			wantParent := tc.setup(t, e, r)
 			before, start := e.columns(t, r.ID), e.clock.Now().Add(boundQ)
 
-			if _, logs, err := e.reuse(t, reuseParams(t, r, reuseRequest{})); err != nil || strings.Contains(logs, "WARN") ||
+			if _, logs, err := e.reuseWith(t, rs, reuseParams(t, r, reuseRequest{})); err != nil || strings.Contains(logs, "WARN") ||
 				(tc.recorded && logs != "") {
 				t.Fatalf("reuse = %v (log %q); want success, no WARN, no log at all once recorded", err, logs)
 			}
@@ -350,7 +356,18 @@ func TestSpawnReuseIdentityWrite(t *testing.T) {
 				t.Errorf("session label %+v, pane label %q; want ad1 %s <$N> %s <store id>, pane %s", s.Label, s.Panes[0].AdPane,
 					c.Token, r.ID, c.Token)
 			}
+			// Successful creation still publishes when an unrelated write makes
+			// the original identity assignment miss (CR1).
+			assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "current", store.BusySendNotCovered)
+			facts := busyFacts(t, e.dbPath, r.ID)
+			if facts.Binding == priorBusy.Binding || facts.Coverage != store.BusySendNotCovered {
+				t.Fatal("reuse inherited old conversation")
+			}
+
 			cols := e.columns(t, r.ID)
+			if cols.TurnStarts != int64(0) {
+				t.Errorf("reuse counter=%v", cols.TurnStarts)
+			}
 			rlAssertNewLife(t, r, cols, c.Token, start)
 			want := noIdentity
 			if tc.recorded {

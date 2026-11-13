@@ -68,6 +68,13 @@ func (w *hookedResumeStore) failRestore(err error) {
 	w.restoreErr = orInjected(err)
 }
 
+// failPublication fails explicit post-create publication without touching the real store.
+func (w *hookLock) failPublication(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.publishErr = orInjected(err)
+}
+
 // afterGet runs fn once, when the next GetSpawn returns (after the examination, before the move).
 func (w *hookedResumeStore) afterGet(fn func()) {
 	w.mu.Lock()
@@ -92,7 +99,19 @@ func orInjected(err error) error {
 
 // hookLock guards a hooked store wrapper's injected errors and one-shot hooks
 // (hookedResumeStore, hookedReuseStore in spawn_reuse_fixture_test.go).
-type hookLock struct{ mu sync.Mutex }
+type hookLock struct {
+	mu                     sync.Mutex
+	publishErr             error
+	restores, publications int
+}
+
+// publicationError counts the shared outcome mapper's attempt and supplies its fault.
+func (w *hookLock) publicationError() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.publications++
+	return w.publishErr
+}
 
 // take returns *fn and clears it, under the lock.
 func (h *hookLock) take(fn *func()) func() {
@@ -145,6 +164,9 @@ func (w *hookedResumeStore) MoveToPending(instanceID string, examined api.RowSna
 
 // RestoreAfterFailedResume delegates unless failRestore is set.
 func (w *hookedResumeStore) RestoreAfterFailedResume(instanceID string, movedVersion int64, prior api.ResumePrior) (api.CondResult, error) {
+	w.mu.Lock()
+	w.restores++
+	w.mu.Unlock()
 	if err := w.injected(&w.restoreErr); err != nil {
 		return 0, err
 	}
@@ -485,4 +507,17 @@ func pendRowNullOr(s string) any {
 // vanishedUserSocket is a socket under a missing per-user directory whose parent exists.
 func vanishedUserSocket(t *testing.T) string {
 	return filepath.Join(userSocketDir(t.TempDir()), "default")
+}
+
+// PublishBusySendLaunch forwards successful creation without an identity reply.
+func (w *hookedResumeStore) PublishBusySendLaunch(id string, version int64, token string) (api.CondResult, error) {
+	if err := w.publicationError(); err != nil {
+		return 0, err
+	}
+	return w.st.PublishBusySendLaunch(id, version, token)
+}
+
+// MarkBusySendLaunchUncertain forwards the creation outcome to the real core.
+func (w *hookedResumeStore) MarkBusySendLaunchUncertain(id, token string) error {
+	return w.st.MarkBusySendLaunchUncertain(id, token)
 }

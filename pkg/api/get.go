@@ -54,6 +54,9 @@ type PermissionRequestInfo struct {
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
 	StateDetail
+	// BusySend is the published current Launch's recorded coverage, retained
+	// during pending resume/reuse until successful creation publishes its candidate.
+	BusySend BusySendCoverage `json:"busy_send,omitempty"`
 	// IntegrationMode identifies the fixed pane-only capability contract;
 	// omitted for agents with native integration.
 	IntegrationMode string `json:"integration_mode,omitempty"`
@@ -462,6 +465,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		return emptySpawnRow(), err
 	}
 	out := SpawnRow{
+		BusySend:                row.BusySend,
 		Context:                 contextOf(row.ContextEvidence()),
 		InstanceID:              row.InstanceID,
 		ParentID:                row.ParentID,

@@ -623,6 +623,8 @@ export interface GetParams {
 }
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
+    /** Published current Launch coverage; pending resume/reuse retains it until successful creation publishes its candidate. */
+    busy_send: "covered" | "not_covered";
     /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
     integration_mode?: "pane_only";
     /**

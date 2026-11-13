@@ -1,5 +1,11 @@
 package store
 
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+)
+
 // BusySendCoverage is a Launch's or conversation's busy-send coverage
 // (SR-9.1): whether busy send's keyless store-and-forward route serves it.
 // Its values are permanent stored codes in spawns.busy_send and
@@ -31,10 +37,69 @@ func BusySendCoveredAgents() []string {
 // reads the coverage the target's current Launch recorded instead, because a
 // Launch keeps the coverage it started with whatever binary handles the call.
 func BusySendCoverageForAgent(agent string) BusySendCoverage {
+	if agent == "" {
+		agent = AgentClaude
+	}
 	for _, covered := range busySendCoveredAgents {
 		if agent == covered {
 			return BusySendCovered
 		}
 	}
 	return BusySendNotCovered
+}
+
+// ResumeLaunchCoverage is the new-Launch preflight rule: a resume can add
+// coverage but cannot remove its conversation's coverage. Current-Launch
+// decisions instead use GetBusySendCoverage or the already-read Spawn.BusySend.
+func ResumeLaunchCoverage(conversation BusySendCoverage, agent string) BusySendCoverage {
+	if conversation == BusySendCovered {
+		return BusySendCovered
+	}
+	return BusySendCoverageForAgent(agent)
+}
+
+func decodeBusySendCoverage(raw any) (BusySendCoverage, error) {
+	s, ok := raw.(string)
+	if !ok || (s != string(BusySendCovered) && s != string(BusySendNotCovered)) {
+		return "", fmt.Errorf("store: invalid busy-send coverage")
+	}
+	return BusySendCoverage(s), nil
+}
+
+// GetBusySendCoverage reads the published current Launch's persisted fact.
+// It never observes the provider or consults this binary's covered set. A
+// pending resume/reuse continues to expose the published Launch until commit.
+func (s *Store) GetBusySendCoverage(instanceID string) (BusySendCoverage, error) {
+	var raw any
+	err := s.db.QueryRow(`SELECT busy_send FROM spawns WHERE instance_id = ?`, instanceID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: read busy-send coverage: %w", err)
+	}
+	return decodeBusySendCoverage(raw)
+}
+
+// GetBusySendConversationCoverage reads the published binding for new-Launch
+// resume preflight, before any write, with ResumeLaunchCoverage. Missing or
+// corrupt bindings are errors, never an uncovered answer. Fresh spawn/reuse
+// preflight uses BusySendCoverageForAgent with the new agent instead.
+func (s *Store) GetBusySendConversationCoverage(instanceID string) (BusySendCoverage, error) {
+	var binding, conversation, publication, owner, identity, raw any
+	err := s.db.QueryRow(`SELECT s.busy_conversation_id, c.conversation_id,
+	        c.publication, c.instance_id, c.store_id, c.busy_send
+	    FROM spawns s LEFT JOIN busy_conversations c ON c.conversation_id = s.busy_conversation_id
+	    WHERE s.instance_id = ?`, instanceID).Scan(&binding, &conversation, &publication, &owner, &identity, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: read busy-send conversation coverage: %w", err)
+	}
+	id, ok := binding.(string)
+	if !ok || id == "" || conversation != id || publication != string(BusySendPublished) || owner != instanceID || identity != s.StoreID() {
+		return "", fmt.Errorf("store: invalid busy-send conversation binding")
+	}
+	return decodeBusySendCoverage(raw)
 }

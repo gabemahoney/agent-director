@@ -67,7 +67,9 @@ error:
   was lost. Check `get`, `status` or `list` before repeating a call that
   changes something.
 - Detect features by the binary's version (`agent-director version`, MCP
-  `version`, TypeScript `binaryVersion`); `X.Y.Z-rc.N` counts as `X.Y.Z`. The
+  `version`, TypeScript `binaryVersion`); `X.Y.Z-rc.N` counts as `X.Y.Z`.
+  For a target's busy-send coverage, use its
+  [returned coverage](#busy-send-coverage). The
   `version` result's `config_dir` names the directory the binary keeps its
   files in.
 - A TypeScript call that outlasts `callTimeoutMs` (30 s by default) returns
@@ -137,6 +139,23 @@ does not finish in time: other work held the store or a lock the read needed,
 or the read's time ran out. A failure while selecting rows means that selection
 checked nothing. A later failure of `status`, `get`, `get-many` or `list` leaves
 committed observations recorded.
+
+## Busy-send coverage
+
+Every successful `get` and found `get-many` `spawns` entry includes
+`busy_send: covered | not_covered` for the target's published current launch,
+including pending and finished rows. Use that returned fact for coverage
+decisions; agent kind and the calling binary's version do not determine it.
+`list` and `status` do not expose `busy_send`. A failed read remains an
+error; it never fabricates a successful `not_covered` row.
+
+Resume retains the conversation and preserves its coverage; fresh reuse
+starts a new conversation even with the same agent. Pending or uncertain
+resume/reuse keeps the earlier published coverage visible until the new launch
+is published following creation, adoption or report-in.
+
+Uncovered rows omit top-level `delivery`, `delivery_capabilities` and Agent
+Defaults. Permission-request delivery fields keep their separate meaning.
 
 ## Reading many agents
 
@@ -986,8 +1005,9 @@ reuse's archive remains. Deleted permission requests stay deleted, and
 records closed by the attempt stay closed. A changed or removed row is never
 overwritten; a failed restore can leave it `pending`. A launch timeout or
 indeterminate nonzero create reply returns `ErrTmuxUnresponsive` without
-restoring. A lost create reply can return success without identity and does
-not restore. Check the row and surviving work before any retry. For Cursor,
+restoring. A lost create reply returns success without identity even if the
+new launch could not be recorded. It does not restore or retry creation.
+Check the row and surviving work before any retry. For Cursor,
 cleanup and process death do not create per-request proof; delivery alone
 does not establish execution or dialog closure.
 

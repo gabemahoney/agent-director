@@ -33,6 +33,9 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // b.146 problem 3) and advances row_version by one; the ended transition and
 // every transition to a state other than pending set launch_started_at to
 // NULL, and a soft refresh leaves it unchanged (SR-5.2).
+// Applied nonterminal/gated refresh writes also resolve any busy-send
+// candidate for this Launch in their transaction. A read or rejected gate
+// never publishes a candidate.
 //
 // The gate (SR-22.9): every branch's UPDATE carries hookGateSQL in its own
 // WHERE, so it applies only when gate.ParentPID and gate.ParentStart are the
@@ -273,7 +276,9 @@ func gatedHookUpdate(instanceID string, gate HookGate, set string, setArgs []any
 // failure.
 func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, trailNew string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
 	q, args := gatedHookUpdate(instanceID, gate, set, setArgs, jsonlPath, jsonlPresent)
-	res, err := s.execFamily(instanceID, q, args...)
+	// A gated report from this Launch establishes creation even if the
+	// creator lost its reply or could not publish before this report-in.
+	res, err := s.execBusySendEstablished(instanceID, q, args...)
 	if err != nil {
 		return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -323,11 +328,15 @@ func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, 
 	if turnGuarded {
 		q, args = q+` AND `+codexToolTurnCurrentSQL, append(args, gate.CodexTurn, gate.CodexTurn)
 	}
-	moved, err := s.execGuarded(instanceID, q, args, errPrefix)
+	r, err := s.execBusySendEstablished(instanceID, q, args...)
 	if err != nil {
-		return UpsertError, HookApplied{}, err
+		return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	if !moved {
+	n, err := r.RowsAffected()
+	if err != nil {
+		return UpsertError, HookApplied{}, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	}
+	if n == 0 {
 		soft := gate.Cursor != nil
 		if !soft && turnGuarded {
 			if soft, err = s.codexToolTurnLate(instanceID, gate.CodexTurn); err != nil {
@@ -553,11 +562,15 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 		{StateCheckPermission, `state = '` + StateCheckPermission + `' AND relay_mode = 'on' AND ` + noRequestHoldsRowSQL},
 	} {
 		q, args := gatedHookUpdate(instanceID, gate, set, stateArgs, jsonlPath, jsonlPresent)
-		moved, err := s.execGuarded(instanceID, q+` AND `+from.cond, args, errPrefix)
+		r, err := s.execBusySendEstablished(instanceID, q+` AND `+from.cond, args...)
 		if err != nil {
-			return UpsertError, HookApplied{}, err
+			return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
 		}
-		if moved {
+		n, err := r.RowsAffected()
+		if err != nil {
+			return UpsertError, HookApplied{}, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+		}
+		if n > 0 {
 			_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
 				"instance_id":           instanceID,
 				"prior_state":           from.state,
@@ -638,8 +651,8 @@ func (s *Store) reportWorkingHeld(instanceID string, gate HookGate, triggeringEv
 		turn := nullableStringArg(gate.CodexTurn)
 		q, args = codexHeldTurnSQL, append([]any{turn, instanceID, turn}, hookGateArgs(gate)...)
 	}
-	if _, err := s.execGuarded(instanceID, q, args, "store: working transition hold idle clear"); err != nil {
-		return UpsertError, HookApplied{}, err
+	if _, err := s.execBusySendEstablished(instanceID, q, args...); err != nil {
+		return UpsertError, HookApplied{}, fmt.Errorf("store: working transition hold idle clear: %w", err)
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
 		"instance_id":           instanceID,
@@ -787,6 +800,10 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	if n == 0 {
 		_ = tx.Rollback()
 		return s.sessionStartNotApplied(instanceID, gate, errPrefix)
+	}
+	if err := publishBusySendReportedLaunch(context.Background(), tx, instanceID); err != nil {
+		_ = tx.Rollback()
+		return HookApplied{}, false, fmt.Errorf("%s: publish Launch: %w", errPrefix, err)
 	}
 
 	outgoing := gate.Examined.SessionID

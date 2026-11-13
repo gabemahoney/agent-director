@@ -193,7 +193,7 @@ func TestResumeLaunch(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newResumeEnv(t)
-			opts, socket := []apitest.SpawnOption{apitest.WithStartedAt(pendStartedAt)}, e.socket
+			opts, socket := []apitest.SpawnOption{apitest.WithStartedAt(pendStartedAt), apitest.WithTurnStarts(6)}, e.socket
 			switch tc.socket {
 			case "vanished":
 				socket = vanishedUserSocket(t)
@@ -202,6 +202,7 @@ func TestResumeLaunch(t *testing.T) {
 				opts = append(opts, apitest.WithNoLaunchToken())
 			}
 			r := e.seedRow(t, resumableSpec{State: tc.state, Opts: opts})
+			priorBusy := seedBusyCoveredConversation(t, e.dbPath, r.ID)
 			parent := ""
 			if tc.parent {
 				parent = pendParent(t, e)
@@ -221,12 +222,23 @@ func TestResumeLaunch(t *testing.T) {
 			wantStart, mark := e.moveStart().UnixMilli(), trailMark(t)
 			var moved apitest.SpawnColumns
 			var atMove []tmux.Call
-			e.store.afterMove(func() { moved, atMove = e.columns(t, r.ID), pendCallKinds(e.rec) })
+			e.store.afterMove(func() {
+				moved, atMove = e.columns(t, r.ID), pendCallKinds(e.rec)
+				assertBusyProjection(t, e.dbPath, r.ID, priorBusy)
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "candidate", store.BusySendCovered)
+			})
 
 			res, err := e.resume(r.ID)
 
 			if err != nil || res.InstanceID != r.ID {
 				t.Fatalf("Resume = %+v, %v; want %s launched", res, err, r.ID)
+			}
+			assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", store.BusySendCovered)
+			if facts := busyFacts(t, e.dbPath, r.ID); facts.Binding != priorBusy.Binding || facts.Coverage != store.BusySendCovered {
+				t.Fatal("resume lost conversation or coverage")
+			}
+			if cols := e.columns(t, r.ID); cols.TurnStarts != int64(0) {
+				t.Fatalf("resume counter=%v", cols.TurnStarts)
 			}
 			calls := []tmux.Call{tmux.CallLookup, tmux.CallCreate}
 			if tc.labelByID {
@@ -309,6 +321,140 @@ func TestResumeLaunch(t *testing.T) {
 				t.Errorf("socket directory %s: %v; want a 0700 directory", filepath.Dir(socket), err)
 			}
 		})
+	}
+}
+
+// F1: publication uncertainty must preserve the baseline lost-reply success,
+// independently of covered authority; never restore or recreate the launch.
+func TestResumeLostReplyPublicationPreservesSuccess(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		agent    string
+		coverage store.BusySendCoverage
+	}{
+		{"claude", store.BusySendCovered},
+		{"codex", store.BusySendNotCovered},
+	} {
+		for _, replaced := range []bool{false, true} {
+			t.Run(tc.agent+"/"+map[bool]string{false: "publication error", true: "candidate replaced"}[replaced], func(t *testing.T) {
+				e := newResumeEnv(t)
+				opts := []apitest.SpawnOption{apitest.WithNoPreTrust()}
+				if tc.agent == "codex" {
+					opts = append(opts, codexRowOpts(seedCodexFolder(t, t.TempDir()).env())...)
+				}
+				r := e.seedResumable(t, store.StateEnded, opts...)
+				prior := busyFacts(t, e.dbPath, r.ID)
+				if tc.coverage == store.BusySendCovered {
+					prior = seedBusyCoveredConversation(t, e.dbPath, r.ID)
+				}
+				e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 0, Applied: true}, tmux.CallCreate)
+				var replacement apitest.BusySendFacts
+				var replacementRow apitest.SpawnColumns
+				if !replaced {
+					e.store.failPublication(nil)
+				}
+				e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
+					if !replaced {
+						return
+					}
+					row, err := e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, res, err := e.st.MarkMissingIfSameLife(r.ID, row.Snapshot); err != nil || res != store.CondApplied {
+						t.Fatalf("finish replaced launch=%v,%v", res, err)
+					}
+					row, err = e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if res, _, err := e.st.MoveToPending(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), "1122334455667788", e.socket, "", store.LaunchOwner{}); err != nil || res != store.CondApplied {
+						t.Fatalf("stage replacement=%v,%v", res, err)
+					}
+					replacement, replacementRow = busyFacts(t, e.dbPath, r.ID), e.columns(t, r.ID)
+				})
+
+				result, err := e.resume(r.ID)
+				if err != nil || result.InstanceID != r.ID || result.PreTrust != "skipped" {
+					t.Fatalf("lost-reply resume=%+v,%v; want baseline instance_id/pre_trust success", result, err)
+				}
+
+				if replaced {
+					if facts := busyFacts(t, e.dbPath, r.ID); !reflect.DeepEqual(facts, replacement) || !reflect.DeepEqual(e.columns(t, r.ID), replacementRow) {
+						t.Fatal("obsolete creator changed replacement facts or row")
+					}
+				} else {
+					if logs := e.logs.String(); !strings.Contains(logs, "WARN") || !strings.Contains(logs, r.ID) || !strings.Contains(logs, errInjectedStore.Error()) {
+						t.Fatalf("publication store error was not warned: %q", logs)
+					}
+					assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "uncertain", tc.coverage)
+				}
+				assertBusyProjection(t, e.dbPath, r.ID, prior)
+				facts := busyFacts(t, e.dbPath, r.ID)
+				wantLaunches := 2
+				if replaced {
+					wantLaunches++
+				}
+				if len(facts.Launches) != wantLaunches || len(facts.Conversations) != 1 {
+					t.Fatalf("post-create core facts=%+v", facts)
+				}
+				for _, launch := range facts.Launches {
+					if launch.ID == prior.Launches[0].ID && !reflect.DeepEqual(launch, prior.Launches[0]) {
+						t.Fatalf("creator changed the earlier published Launch: %+v", launch)
+					}
+					if !replaced && launch.Kind == "resume" && (launch.Token.String != e.store.moveToken || launch.Conversation != prior.Binding || launch.EndCause.Valid || launch.EndedAt.Valid) {
+						t.Fatalf("failed publication lost exact candidate facts: %+v", launch)
+					}
+				}
+				cols := e.columns(t, r.ID)
+				if cols.State != store.StatePending || cols.LaunchOwnerPID != nil || cols.LaunchOwnerStarttime != nil || cols.LaunchOwnerPIDNS != nil {
+					t.Fatalf("post-create row restored or owner retained: %+v", cols)
+				}
+				if e.store.restores != 0 || e.store.publications != 1 {
+					t.Fatalf("restores=%d, publications=%d; want 0,1", e.store.restores, e.store.publications)
+				}
+				if got := callKinds(e.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) {
+					t.Fatalf("post-create calls=%v; want one lookup and one create", got)
+				}
+				created := rplSessionNamed(t, e.rec, e.socket, r.Name)
+				create := rstOneCreate(t, e)
+				if created.Label != tmuxfix.Valid(create.Token, r.ID, e.storeID) || created.Panes[0].AdPane != create.Token {
+					t.Fatal("failed publication lost the possibly running session")
+				}
+				if !replaced {
+					adviceAssertManifest(t, "resume", "", "success despite failed/unapplied publication", "no restore/retry")
+					adviceAssertManifest(t, "resume", "instance_id", "returns instance_id and pre_trust even if publication errors or does not apply", "for every agent regardless of coverage", "later guarded adoption/report-in resolution")
+					srv, _ := e.rec.Server(e.socket)
+					e.pc.Set(srv.PID, procfix.Alive(apitest.LinuxProcStarttime))
+					e.pc.Set(created.Panes[0].PID, procfix.Alive(apitest.DarwinProcStarttime))
+					e.rec.SetCapture(e.socket, created.Panes[0].ID, "launch awaiting report-in")
+					if got, err := api.Get(e.st, api.RelayView{}, r.ID); err != nil || got.State != store.StatePending {
+						t.Fatalf("inspection get=%+v,%v", got, err)
+					}
+					if got, err := e.c.ReadPane(api.ReadPaneParams{InstanceID: r.ID}); err != nil || got.Pane != "launch awaiting report-in" {
+						t.Fatalf("inspection read-pane=%+v,%v", got, err)
+					}
+					assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "uncertain", tc.coverage)
+					row, err := e.st.GetSpawn(r.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					identity := store.LaunchIdentity{Token: create.Token, Socket: e.socket,
+						ServerPID: srv.PID, ServerStart: srv.Start, ServerStarttime: apitest.LinuxProcStarttime,
+						PaneID: created.Panes[0].ID, PanePID: created.Panes[0].PID, PaneStarttime: apitest.DarwinProcStarttime}
+					if res, err := e.st.AdoptIdentityIfUnchanged(r.ID, row.Snapshot, identity); err != nil || res != store.CondApplied {
+						t.Fatalf("later guarded adoption=%v,%v", res, err)
+					}
+					assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", tc.coverage)
+					if _, err := e.resume(r.ID); !errors.Is(err, api.ErrSpawnNotResumable) {
+						t.Fatalf("pending launch retry=%v; want refusal", err)
+					}
+					if len(e.rec.SocketCallsOf(tmux.CallCreate)) != 1 || e.store.restores != 0 {
+						t.Fatal("inspection/retry restored or duplicated the running launch")
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -509,6 +655,7 @@ func TestResumeRestore(t *testing.T) {
 				opts = append(opts, codexRowOpts(seedCodexFolder(t, filepath.Join(home, "codex")).env())...)
 			}
 			r := e.seedResumable(t, tc.prior, opts...)
+			priorBusy := seedBusyCoveredConversation(t, e.dbPath, r.ID)
 			for call, s := range tc.scripts {
 				e.rec.Script(tmuxfix.AnySocket, s, call)
 			}
@@ -535,6 +682,14 @@ func TestResumeRestore(t *testing.T) {
 
 			_, err := e.resume(r.ID)
 
+			if tc.outcome != apitest.RestoreRowRemoved {
+				assertBusyProjection(t, e.dbPath, r.ID, priorBusy)
+				phase := "failed"
+				if tc.noRestore || tc.outcome == apitest.RestoreRowChanged || tc.failRestore {
+					phase = "uncertain"
+				}
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", phase, store.BusySendCovered)
+			}
 			assertOneName(t, err, tc.want)
 			if got, want := callKinds(e.rec), append([]tmux.Call{tmux.CallLookup, create}, tc.calls...); !reflect.DeepEqual(got, want) {
 				t.Errorf("tmux calls = %v; want %v", got, want)
@@ -603,6 +758,10 @@ func TestResumeRestore(t *testing.T) {
 				}
 				if st, n := e.columns(t, r.ID).State, len(e.rec.SocketCallsOf(create)); st != store.StatePending || n != 2 {
 					t.Errorf("after the second resume: state %v, creates %d; want pending, 2", st, n)
+				}
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", store.BusySendCovered)
+				if facts := busyFacts(t, e.dbPath, r.ID); facts.Binding != priorBusy.Binding || facts.Coverage != store.BusySendCovered {
+					t.Fatalf("retry lost retained conversation coverage: %+v", facts)
 				}
 			}
 		})

@@ -194,6 +194,7 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 		lg:       d.lg,
 		who:      d.who,
 		identity: identity,
+		busySend: busySendWriter(d.s),
 		release:  ownerReleaser(d.s, owner),
 		restoreWrite: func() (CondResult, error) {
 			return d.s.RestoreAfterFailedResume(row.InstanceID, movedVersion, resumePriorOf(row))
@@ -612,26 +613,11 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     store, file or network I/O between them: the recorded name on the
 //     launch's socket, labelled "ad1 <token> <session id> <instance id>
 //     <store id>". Once it returns, ad.resume.moved_to_pending is emitted.
-//  8. Its outcome (SR-8.5), mapped by finishedLaunch.outcome, which reuse
-//     shares (resumeDeps.launchOnto, verb values resumeLaunchVerb): a labelled
-//     session → the identity write with the move's version and token (when
-//     the store provides it), success; a lost reply → success with no
-//     identity; a timeout or a non-zero-exit unparseable reply →
-//     ErrTmuxUnresponsive, the row stays pending. Every path that ends with
-//     no identity write applied and no restore applied ends the launch's
-//     hold (finishedLaunch's release, b.kdf), the only other write.
-//     "duplicate session" → finishedLaunch.heldName: exactly one re-lookup of the
-//     recorded name on the launch socket for the row as examined (its id,
-//     earlier token and recorded server identity), the restore, the holder's
-//     classified error carrying the restore's sentence (the holder class; the
-//     row's own session by the starting-session rule with the examined
-//     ended_at; an old-label holder while the examined row's latest launch
-//     records no session, this id's own abandoned launch by the rule's age
-//     step; ErrTmuxSessionCreate only when no session holds the name any
-//     more), the re-lookup's disagree reasons not already written, and one
-//     ad.launch.name_held. Every other failure (tmux unavailable, a session
-//     that could not be labelled, any other launch failure) → the restore,
-//     then the launch error.
+//  8. Its outcome (SR-8.5), through resumeDeps.launchOnto with resumeLaunchVerb.
+//     finishedLaunch.outcome owns the shared resume/reuse mapping, including
+//     identity and publication writes, preserved success despite publication
+//     uncertainty, guarded restoration on creation failure and owner release.
+//     finishedLaunch.heldName owns the duplicate-session re-lookup and outcome.
 //
 // On success the row stays pending until the resumed agent's first
 // SessionStart hook moves it and rotates its session_id.

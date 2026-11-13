@@ -28,7 +28,7 @@ import (
 // only conversion: every later release reads and writes these tables as
 // declared, and open refuses any other declaration (SR-7.2). So this value
 // never changes; a change to it strands every store already at v21.
-const busySendCoreV1Digest = "ea17b80c3d72992cf634f42887f12d4f4a96172273d89e6b8c23664b788af1cc"
+const busySendCoreV1Digest = "3c29e04c32f24175649b0811b2bea31acd82d81e743bcb7d3a27e9f6c0d0ad7b"
 
 // busySendCoreDigest hashes db's recorded core declarations, each object's
 // type, name and SQL text (whitespace collapsed) in name order, and returns
@@ -138,7 +138,7 @@ func TestBusySendCoreContract(t *testing.T) {
 		{"busy_send_launches", "kind", codes(BusySendLaunchSpawn, BusySendLaunchReuse, BusySendLaunchResume, BusySendLaunchMigrated)},
 		{"busy_send_launches", "phase", codes(BusySendLaunchCandidate, BusySendLaunchUncertain, BusySendLaunchFailed, BusySendLaunchCurrent, BusySendLaunchSuperseded)},
 		{"busy_send_launches", "route_kind", codes(BusySendRouteClaudeHooks, BusySendRouteCodexAppServer, BusySendRouteCursorACP)},
-		{"busy_send_launches", "end_cause", codes(BusySendProcessExited, BusySendLaunchPublished, BusySendCreationFailed)},
+		{"busy_send_launches", "end_cause", codes(BusySendProcessExited, BusySendLaunchPublished, BusySendCreationFailed, BusySendLaunchRecordDeleted, BusySendLaunchCandidateReplaced)},
 		{"busy_send_launch_processes", "role", codes(BusySendProcessAgent, BusySendProcessAppServer, BusySendProcessTUI, BusySendProcessHelper, BusySendProcessGateway)},
 		{"busy_send_messages", "send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
 		{"busy_send_messages", "place", codes(BusySendHeld, BusySendClaimed, BusySendIssued, BusySendClosed)},
@@ -237,14 +237,20 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 		if err := s.InsertPending(Spawn{InstanceID: "rec", Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "ad-rec", RelayMode: "off"}); err != nil {
 			t.Fatal(err)
 		}
-		return s, seedBusySendRecords(t, s.db, s.StoreID(), "rec")
+		// Replace the fresh insertion's empty core with the richer fixture before
+		// exposing it to a test. No retained custody exists at this point.
+		mustExec(t, s.db, `DELETE FROM busy_send_launches WHERE instance_id='rec'`)
+		mustExec(t, s.db, `DELETE FROM busy_conversations WHERE instance_id='rec'`)
+		r := seedBusySendRecords(t, s.db, s.StoreID(), "rec")
+		mustExec(t, s.db, `UPDATE spawns SET busy_conversation_id=?,busy_send='covered',life_number=?,launch_token=? WHERE instance_id='rec'`, r.conversation, recLife, recToken)
+		return s, r
 	}
 	t.Run("deleting the agent keeps every record", func(t *testing.T) {
 		s, r := seed(t)
 		core := func() map[string]any {
 			out := map[string]any{}
 			for key, rows := range dbDump(t, s.filePath) {
-				if strings.HasPrefix(key, "rows busy_") {
+				if strings.HasPrefix(key, "rows busy_") && key != "rows busy_conversations" && key != "rows busy_send_launches" {
 					out[key] = rows
 				}
 			}
@@ -257,6 +263,9 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 		if after := core(); !reflect.DeepEqual(after, before) {
 			t.Errorf("deleting the agent changed core records:\n before %v\n after  %v", before, after)
 		}
+		// Deletion retires publications while preserving custody and claims.
+		busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_conversations WHERE conversation_id=? AND publication='retired' AND retired_reason='record_deleted'`, r.conversation)
+		busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_send_launches WHERE launch_id=? AND phase='superseded' AND end_cause='record_deleted'`, r.launch)
 		var retention string
 		var text []byte
 		err := s.db.QueryRow(`SELECT m.retention, m.text FROM busy_send_results p JOIN busy_send_messages m USING (message_id)
@@ -284,6 +293,10 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 		{"a running force beside the ended one", []string{forceSQL("running-1")}, ""},
 		{"a signalled claim records exit_uncertain standing, then ends at Launch End", pauseExitUncertainSQL("launch_end"), ""},
 		{"a signalled claim records exit_uncertain standing, then ends at a new Launch", pauseExitUncertainSQL("launch_published"), ""},
+
+		{"logical deletion requires supersession", []string{`UPDATE busy_send_launches SET ended_at_ms=5000,end_cause='record_deleted' WHERE launch_id='{launch}'`}, "CHECK"},
+		{"logical candidate replacement requires supersession", []string{`UPDATE busy_send_launches SET ended_at_ms=5000,end_cause='candidate_replaced' WHERE launch_id='{launch}'`}, "CHECK"},
+		{"logical candidate replacement is representable", []string{`UPDATE busy_send_launches SET phase='superseded',ended_at_ms=5000,end_cause='candidate_replaced' WHERE launch_id='{launch}'`}, ""},
 		{"a second published conversation", []string{
 			`INSERT INTO busy_conversations (conversation_id, store_id, instance_id, generation, publication, provider, recorded_at_ms, published_at_ms)
 				VALUES ('conv-3', '{store}', 'rec', 3, 'published', 'claude', 1, 1)`}, "UNIQUE"},

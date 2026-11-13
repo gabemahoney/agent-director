@@ -13,6 +13,7 @@ test("get-many: typed rows, missing ids, empty arrays and next-call config", asy
     using client = await openClient(store);
     const mixed: GetManyResult = await client.getMany({ instance_ids: ids.slice(0, 2) });
     expect(mixed.spawns.map((row) => [row.instance_id, row.state])).toEqual([[ids[0], "ended"]]);
+    expect(mixed.spawns[0]!.busy_send).toBe("not_covered");
     expect(mixed.not_found).toEqual([ids[1]!]);
     expect((await client.getMany({ instance_ids: [ids[0]!] })).not_found).toEqual([]);
     expect(await client.getMany({ instance_ids: [ids[1]!] })).toEqual({ spawns: [], not_found: [ids[1]!] });

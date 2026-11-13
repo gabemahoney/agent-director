@@ -318,6 +318,10 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 // reads the row and never fails because another process committed after its
 // read began; under contention it waits up to the store's busy timeout. No
 // other store transaction's locking changes.
+// The transaction also stages a fresh busy-send candidate conversation and
+// Launch. The published binding, coverage and provider stay intact until
+// successful creation publishes the candidate (RecordLaunchIdentity or
+// PublishBusySendLaunch), even on a same-agent reuse that keeps life_number.
 //
 // Inside it, it reads the row's session id, transcript path and life_number
 // (never labels, agent_args or extra_env, so a malformed row can be reset).
@@ -483,6 +487,9 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 	if n != 1 {
 		return 0, "", 0, fmt.Errorf("%s: reset changed %d rows, want 1", errPrefix, n)
 	}
+	if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchReuse, fresh.LaunchStartedAtMillis); err != nil {
+		return 0, "", 0, fmt.Errorf("%s: stage busy-send Launch: %w", errPrefix, err)
+	}
 
 	if _, err := q.Exec(resetForReuseDeleteRequestsSQL, instanceID); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: delete permission requests: %w", errPrefix, err)
@@ -597,6 +604,8 @@ var restoredStateEvidence, _ = restoredStateEvidenceSet("", "")
 // no pane, and the reset cleared it, SR-22.9); CondAbsent when no row has the
 // id. A store failure returns a wrapped error with a zero CondResult, and the
 // row stays as the reset left it (SR-5.8).
+// The same applied transaction marks its busy-send candidate failed and
+// abandons its candidate conversation; published coverage/binding stayed put.
 func (s *Store) RestoreAfterFailedReuse(instanceID string, resetVersion int64, prior RawLife, failedAt time.Time) (CondResult, error) {
 	const errPrefix = "store: restore after failed reuse"
 	if prior.state.class == "" {
@@ -619,11 +628,15 @@ func (s *Store) RestoreAfterFailedReuse(instanceID string, resetVersion int64, p
 	_, evidenceArgs := restoredStateEvidenceSet(prior.priorStateRecord(), prior.state.v.(string))
 	args = append(args, evidenceArgs...)
 	args = append(args, instanceID, StatePending, resetVersion)
-	applied, err := s.execGuarded(instanceID, restoreAfterFailedReuseSQL, args, errPrefix)
+	r, err := s.execBusySendRestore(instanceID, restoreAfterFailedReuseSQL, args...)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	if applied {
+	n, err := r.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	}
+	if n > 0 {
 		return CondApplied, nil
 	}
 	return s.condNotApplied(instanceID, errPrefix)

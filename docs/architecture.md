@@ -110,9 +110,9 @@ branches on the agent anywhere else. Each seam's own section states its rule
   relay on Codex rows](#the-relay-on-codex-rows-bssz), checked by the models in
   [`spec/tla/codex/`](../spec/tla/codex/README.md) (see [Model check (`make
   tla`)](#model-check-make-tla)).
-- **Busy-send coverage and records.** An agent kind is covered only through
-  the one covered set, and its route uses the permanent core's records:
-  "v21: the permanent busy-send core" under [`internal/store`](#internalstore).
+- **Busy-send coverage and records.** Use the target's
+  [persisted Launch coverage](#launch-coverage) and the permanent core's
+  records under [`internal/store`](#internalstore).
 - **Cursor gateway.** Fresh/load protocol, input, transcript and runtime proof use
   [the shared gateway components](#cursor-gateway-and-current-launch-binding);
   tests use [cursorfix](#cursorfix-synthetic-acp-runtime-reusable-test-fixture).
@@ -2891,9 +2891,9 @@ Claude-specific capacity provenance (see
 **v5 columns (b.fmk).** Schema v5 adds twelve `spawns` columns, after the
 v4 columns, and one `session_history` column. They are the storage later work
 builds on. The store gives each column its default on insert and on
-migration. Beyond that, the v5 writes are the ones under "Versioned writes"
-below (every `spawns` update advances `row_version`, and some clear
-`launch_started_at`) and the rotation and reuse archives, which write
+migration. Beyond that, the v5 writes follow
+[Versioned writes](#versioned-writes-bfmk-sr-52) below and the rotation
+and reuse archives, which write
 `session_history.life_number` through `upsertSessionHistoryEntry`. Verbs
 report two of the columns, and only for display: `status`, `get` and `list`
 report the launch start as `launch_started_at`, and `get` alone reports the
@@ -3410,12 +3410,15 @@ this reader for this evidence set; use `GetSpawn`, `GetSpawnSettled` or
 `ListSpawns` when omitted fields are needed. Status capability fallbacks are
 defined in [Status reader selection](#experimental-context-readers).
 
-**Versioned writes (b.fmk, SR-5.2).** The row version exists so that a later
-compare-and-set write can guard on it: the write checks that the version is
+#### Versioned writes (b.fmk, SR-5.2)
+
+The row version exists so that a later compare-and-set write can guard on
+it: the write checks that the version is
 still the one it read, so it knows the row has not changed since. As built:
 
-- Every lifecycle or metadata statement that updates a `spawns` row advances
-  `row_version` by exactly one in that same statement. The shared
+- Except for busy-send publication below, every lifecycle or metadata
+  statement that updates a `spawns` row advances `row_version` by exactly one
+  in that same statement. The shared
   SET fragment is `rowVersionAdvance` in `internal/store/spawns.go`. This
   covers every branch of `ApplyHookTransition` / `ApplyHookTransitionResult`
   (state transitions, the `ended` transition, soft refreshes),
@@ -3447,6 +3450,12 @@ still the one it read, so it knows the row has not changed since. As built:
   `spawns` row and advance nothing; nor does the close of a Spawn's
   requests, whose `spawns` change (the mark, the ended transition, resume's
   move) advances the version once.
+- Busy-send publication updates coverage/binding through
+  `publishBusySendCandidate` in the establishing writer's transaction.
+  Identity, adoption and report-in writes keep their single version advance;
+  publication adds none. Explicit `PublishBusySendLaunch` advances
+  `row_version` once in a separate statement in that same transaction, only
+  when it promotes a candidate. An already-published retry advances nothing.
 - Derived family-history updates through `refreshFamilies` are an exception:
   they change only `family_state`, `family_settled_state` and
   `family_changed_ms`, without advancing the row's or any ancestor's
@@ -4081,8 +4090,10 @@ still the one it read, so it knows the row has not changed since. As built:
   read any other way never matches.
 - **Must use:** any new or changed store statement that updates a `spawns`
   row must advance `row_version` in that same statement (concatenate
-  `rowVersionAdvance`), except for the derived family-history updates above
-  and the observation/evidence writes described below (`RecordProcessEvidence`
+  `rowVersionAdvance`), except for the derived family-history updates above,
+  busy-send publication's transaction-level rule in
+  [Versioned writes](#versioned-writes-bfmk-sr-52), and the
+  observation/evidence writes described below (`RecordProcessEvidence`
   and [Displayed State reporting](#displayed-state-reporting)).
   Lifecycle and metadata writes must follow the launch-start rule (concatenate
   `launchStartClear` when it sets a non-`pending` state) and, when it
@@ -4200,8 +4211,9 @@ Go comments give every column's meaning, owner and revision rule beside the
 DDL, and `busy_send_records.go` holds every stored code set and the shared
 record and lookup types (`BusySendForce`, `BusySendForceLookup`,
 `BusySendResult`, `BusySendResultLookup`, `BusySendPair`, `BusySendWait`).
-Only fresh creation and the v20→v21 hop write the core's tables today: no
-admission, delivery, force, pause or lookup operation exists yet. They hold:
+Launch lifecycle and deletion transactions maintain the core's identity and
+coverage records; the v20→v21 hop backfills them. No admission, delivery,
+force, pause or lookup operation exists yet. The tables hold:
 
 - **Identity.** A conversation (`busy_conversations`: an opaque id and a
   per-instance generation, independent of `life_number` and the provider
@@ -4247,20 +4259,12 @@ tables, deferred and never cascading, and every core row names the store id.
   column has no CHECK, so its codes can grow; every closed set has one. Each
   mutation compares the entity's captured revision (and owner) and advances
   it with its dependent records in one transaction.
-- **Must use: coverage.** `busySendCoveredAgents` in `busy_send_coverage.go`
-  is the one covered set, empty in this release; `BusySendCoveredAgents()`
-  returns a copy. `BusySendCoverageForAgent` serves only the migration and the
-  creation of a Launch or conversation. Every runtime delivery, refusal or
-  typing decision reads the target's persisted current-Launch coverage
-  (`spawns.busy_send`, the same fact as its Launch row), never recomputes it
-  from a binary's list; a conversation's coverage never decreases. The
-  v20→v21 backfill takes the coverage of each row it binds from the same
-  helper, never lowering recorded coverage (a genuine v20 store migrates all
-  `not_covered` while the set is empty), so adding an agent kind to the list
-  makes the same hop cover that kind's unbound rows; the
+- **Coverage backfill.** The v20→v21 hop uses the
+  [Launch coverage helper](#launch-coverage), never lowering recorded
+  coverage. A genuine v20 store migrates all `not_covered` while the set is
+  empty. The
   [migration guide](migration-guide.md#current-schema-facts-v20--v21) owns
-  reentry. `Spawn.BusySend` and
-  `Spawn.BusyConversationID` are declared, but no reader fills them yet.
+  reentry.
 - **Open recognizes, never migrates.** At schema 21 every open runs
   `recognizeBusySendCore`, which only reads and refuses an unrecognized core
   with `ErrSchemaMismatch` rather than rebuilding it. The
@@ -9041,6 +9045,71 @@ or saved calls `spawn.ValidateExtraEnv`; do not call
 sequence by hand. In the TypeScript client, a builder that passes
 `extra_env` as `--extra-env` flags calls `extraEnvFlags`.
 
+### Launch coverage
+
+`internal/store/busy_send_coverage.go` owns the sole fixed covered set,
+`BusySendCoveredAgents()` (a copy), `BusySendCoverageForAgent(agent)` and
+the permanent `covered` / `not_covered` codes. The set is empty in this
+release. Membership serves migration and new-Launch recording only.
+`spawns.busy_send` records the published current Launch's coverage;
+`busy_conversation_id` binds its separate conversation. Full-row readers
+fill `Spawn.BusySend` and `Spawn.BusyConversationID`; `get` and `get-many`
+project `Spawn.BusySend` without another query.
+
+`InsertPending` atomically publishes a fresh conversation, current Launch
+and binding. `ResetForReuse` stages a fresh candidate conversation and
+Launch from the resolved agent's membership, including same-agent reuse
+that retains life/history. `MoveToPending` stages a resume Launch for the
+retained conversation: `ResumeLaunchCoverage` preserves covered conversation
+status and can raise coverage from launch-time membership. Both staging writes
+are atomic with their guarded Launch-start transaction. Conversation coverage
+never decreases; each Launch's recorded coverage stays fixed
+through reads, hooks, lifecycle changes and Launch End.
+
+Pending or uncertain resume/reuse keeps the earlier published coverage and
+binding visible. An applied write establishing successful creation, guarded
+identity adoption or authenticated report-in atomically publishes the candidate.
+**Must use:** eligible writers reuse `publishBusySendCandidate` in
+`busy_send_launch_writes.go` for that step:
+it matches the candidate token to the row and compares captured core
+revisions under the write lock, preserving intervening conversation facts.
+Publication supersedes the earlier current Launch and, on reuse, retires
+the earlier conversation. Repeated publication is a no-op; stale callbacks
+after replacement, restoration or deletion cannot promote a candidate.
+Reads, timers and transcript healing do not publish candidates. Publication
+follows the single-advance rule in
+[Versioned writes](#versioned-writes-bfmk-sr-52).
+
+A guarded failure restore closes the candidate as `failed` / `creation_failed`
+and abandons a fresh candidate conversation. Published coverage/binding
+remain untouched; restoration cannot lower conversation coverage or overwrite
+a replacement Launch. A creation timeout retains uncertain candidate evidence
+and the published facts. Existing [resume](#resume) and
+[reuse](#reuse-of-a-finished-id) rules govern recovery; no new caller command
+or automatic retry is introduced.
+
+**Must use:** every `spawns` deletion uses `execBusySendDelete` in
+`busy_send_delete.go`, preserving the caller's guards and sharing the
+transaction with core retirement. Applied expiry/admin deletion retires the
+published conversation with `record_deleted`, abandons candidate conversations
+and supersedes current or
+unresolved Launches, retaining core records and earlier Launch End evidence.
+A later same-ID insertion starts a fresh conversation. Launch End causes
+`record_deleted` (row deletion), `candidate_replaced` (unpublished candidate
+replacement) and `creation_failed` (supervised creation failure) prove neither
+physical exit nor old-issuer exclusion. An unlabelled session can survive a
+creation failure; these causes never release an exit-dependent standing claim.
+
+**Must use:** current-target delivery, refusal and typing decisions read
+`Store.GetBusySendCoverage(instanceID)` or the already-read `Spawn.BusySend`
+under existing Launch/revision guards. Never infer coverage from `Agent`,
+conversation coverage or the running binary's list. The persisted reader
+performs no Active Checks, provider observation or writes; a missing row
+returns `ErrSpawnNotFound`, and store/corruption failures remain errors, never
+`not_covered`. New-resume preflight reads
+`GetBusySendConversationCoverage` before any write and applies
+`ResumeLaunchCoverage`; fresh spawn/reuse uses the new agent's membership.
+
 ### Launch identity
 
 A plain spawn labels its tmux session when it creates it, records which
@@ -9813,14 +9882,14 @@ before any restore. The outcome goes through `finishedLaunch.outcome`
 | Create outcome | Result |
 | --- | --- |
 | Labelled | The identity write (`spawn.RecordLaunchIdentity` with the reset's version and the new token; a failure logs one WARN line and does not fail the call); success: the id and `pre_trust` |
-| Reply lost with exit 0 | Success, no identity written |
-| Timed out, or a non-zero-exit reply that does not parse | `ErrTmuxUnresponsive` with the launch-timeout description and "the row was reset; the row stays pending"; no restore, the row stays `pending` in its reset life |
+| Reply lost with exit 0 | Success for every agent regardless of coverage or publication's result; no identity written. A publication error or non-applied result attempts guarded candidate uncertainty recording; write errors only warn. Releases the owner without restoration or creation retry. See [Launch coverage](#launch-coverage). |
+| Timed out, or a non-zero-exit reply that does not parse | `ErrTmuxUnresponsive` with the launch-timeout description and "the row was reset; the row stays pending"; records candidate uncertainty and releases the owner; no restore, the row stays `pending` in its reset life |
 | "duplicate session" | `finishedLaunch.heldName`: one re-lookup of the requested name against the examined launch identity, the restore, the holder's classified error (as in [After "duplicate session"](#after-duplicate-session), with the examined `ended_at`), the re-lookup's disagree reasons not already written, and one `ad.launch.name_held` (`launch` `reuse`) |
 | tmux unavailable (the binary cannot be run, or the socket-permission reply) | The restore, then `ErrTmuxNotAvailable` |
 | A session that could not be labelled, or any other failure | The restore, then `ErrTmuxSessionCreate` |
 
 **The restore** (SR-10.4; `RestoreAfterFailedReuse`). Attempted exactly
-once on every failed launch but a timeout, with the reset's version, the
+once on a determinate create/label failure or held-name outcome, with the reset's version, the
 examined raw life and a failure time read from the Client clock. Applied
 only while the row is `pending` at the reset's version, it writes the
 pre-reuse life back exactly, the life number, the agent, the stored
@@ -16845,9 +16914,9 @@ agent-aware hook classifier](#the-agent-aware-hook-classifier)) calls.
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
 | `ad.resume.moved_to_pending` | `ad_resume` | Once per applied move to `pending` by the `resume` verb, emitted when the create that directly follows the move returns (no I/O may run between the move and the create, SR-8.3); fail-open. Carries `instance_id`, `prior_state` (`ended` or `missing`) and `session_id` (the session id the row keeps). A `resume` refused before or at its move emits none. Emitted in `pkg/api/resume.go`, so every surface gets it. Unrelated to `ad.resume.observed`, a permission relay's hook resume (SR-8.3, SR-14) |
-| `ad.resume.restored` | `ad_resume` | Once per restore attempt after a failed `resume` launch (a failure other than a timeout), applied or not; fail-open. Carries `instance_id`, `applied` (boolean), `launch_error` (the err_name of the launch error `resume` returns: after "duplicate session", the name of the classified error the re-lookup gave, such as `ErrTmuxSessionConflict`, and `ErrTmuxSessionCreate` only when the holder vanished) and `restore_error` (null, or the store error's text when the restore's write failed). After "duplicate session" it precedes the call's `ad.provenance.disagree` and `ad.launch.name_held` records. Emitted by `finishedLaunch.restore` in `pkg/api/finished_launch.go` (also on the path after "duplicate session", `finishedLaunch.heldName`) with resume's values (`resumeLaunchVerb`), so a failed restore behind the MCP server, whose client has no logger, is still recorded. Unrelated to `ad.resume.observed` (SR-8.5, SR-14) |
+| `ad.resume.restored` | `ad_resume` | Once per restore attempt after a failed `resume` launch (a determinate create/label failure or held-name outcome), applied or not; fail-open. Carries `instance_id`, `applied` (boolean), `launch_error` (the err_name of the launch error `resume` returns: after "duplicate session", the name of the classified error the re-lookup gave, such as `ErrTmuxSessionConflict`, and `ErrTmuxSessionCreate` only when the holder vanished) and `restore_error` (null, or the store error's text when the restore's write failed). After "duplicate session" it precedes the call's `ad.provenance.disagree` and `ad.launch.name_held` records. Emitted by `finishedLaunch.restore` in `pkg/api/finished_launch.go` (also on the path after "duplicate session", `finishedLaunch.heldName`) with resume's values (`resumeLaunchVerb`), so a failed restore behind the MCP server, whose client has no logger, is still recorded. Unrelated to `ad.resume.observed` (SR-8.5, SR-14) |
 | `ad.spawn.reused` | `ad_spawn` | Exactly once per applied reuse change (`spawn` with the reuse opt-in whose `ResetForReuse` applied), fail-open: a trail-write failure never changes the spawn's result. Written after the change commits and after the create call that follows it returns, before any restore: on success, on a launch timeout and on every launch failure after the reset. Carries `instance_id`, `prior_state` (the state examined before the reset, `ended` or `missing`), `archived_session_id` (the session id the reset archived, null when the row had none), `lookup_outcome` (the old-row lookup's outcome token as the decision kept it; only a Gone lookup proceeds, so `gone`), `dropped_args` (original removed argument tokens in argv order, always present and null when empty, unlike the public result's omission) and `source`. A reuse refused before or at its change (a lost race, a store error) emits none. Emitted by `emitReused` in `pkg/api/spawn_reuse.go`, on the `pkg/api` spawn path, so every surface gets it. Not an `ad.spawn.state_transition`: the reset emits none (SR-10.6, SR-14) |
-| `ad.spawn.reuse_restored` | `ad_spawn` | Exactly once per restore attempt after a failed reuse launch (a failure other than a timeout, "duplicate session" included), applied or not; fail-open. Carries `instance_id`, `applied` (boolean: true only when the restore applied), `launch_error` (the err_name of the error the spawn returns, through `errorName`; after "duplicate session", the classified error the re-lookup gave) and `restore_error` (null, or the store error's text when the restore's write failed), and `source`. Written after `ad.spawn.reused`; after "duplicate session" it precedes the call's `ad.provenance.disagree` records and its `ad.launch.name_held`. Emitted by `finishedLaunch.restore` (`pkg/api/finished_launch.go`) with reuse's values (`reuseLaunchVerb`), on the `pkg/api` spawn path, so every surface gets it. Not an `ad.spawn.state_transition`: the restore emits none (SR-10.4, SR-10.6, SR-14) |
+| `ad.spawn.reuse_restored` | `ad_spawn` | Exactly once per restore attempt after a failed reuse launch (a determinate create/label failure or held-name outcome), applied or not; fail-open. Carries `instance_id`, `applied` (boolean: true only when the restore applied), `launch_error` (the err_name of the error the spawn returns, through `errorName`; after "duplicate session", the classified error the re-lookup gave) and `restore_error` (null, or the store error's text when the restore's write failed), and `source`. Written after `ad.spawn.reused`; after "duplicate session" it precedes the call's `ad.provenance.disagree` records and its `ad.launch.name_held`. Emitted by `finishedLaunch.restore` (`pkg/api/finished_launch.go`) with reuse's values (`reuseLaunchVerb`), on the `pkg/api` spawn path, so every surface gets it. Not an `ad.spawn.state_transition`: the restore emits none (SR-10.4, SR-10.6, SR-14) |
 | `ad.send_keys.called` | `ad_send_keys` | One per `Client.SendKeys` call past the closed check (every `agent-director send-keys` invocation), on every return path, fail-open (mirroring `ad.decide.called`); emitted by `emitSendKeysCalled` (`pkg/api/sendkeys_trail.go`). The exported `SendKeys` writes none. Carries `instance_id`; `allow_pending`; `row_state` (the stored state of the row the verb read, `""` when no row was read: it tells keys typed into a launching agent's startup prompt, a `pending` row, from keys sent to a live conversation, and records the state a refusal met); `outcome` (`ok` or the err_name from `errorName`: `ErrTmuxUnresponsive`, `ErrTmuxSessionConflict`, `ErrTmuxNotAvailable`, `ErrTmuxSendKeys`, `ErrSpawnNotInteractive` (its `pending`-row triggers included), `ErrSendKeysWhileRelayed`, `ErrSpawnNotFound`, and b.146 step 2b's `ErrRelayFallenBack`, `ErrPaneChanged`, `ErrPaneAnswerInProgress`, `ErrInvalidFlags`, `ErrNoOpenPermissionRequest`, `ErrAlreadyDecided` and `ErrStoreBusy`, and b.146 step 2c's `ErrDialogMaybeOpen`, by name; `ErrInternal` only for an error none of those matches, such as a relay-guard store error); the AD-collected `caller_*` identity (collected once per call); and a `guard_evaluation` field — `not-applicable` (relay guard did not apply: `relay_mode` is not on, or the call was refused before it), `held` (b.146 rule 7 refused the call: `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`, `ErrPaneAnswerInProgress`, or a pane answer's request not open), `released` (rule 7 let it through: excluding Cursor `turn_end` requests from row-wide relay and fallback holds, no relay hook of the Spawn may still answer and, for a plain call, no open request has fallen back and every request is proven gone or the call carries `expect_pane_sha256`, or, for a pane answer, its request has fallen back; a pane answer is the audited recovery of a fallen-back relay) or `error` (the guard's store read failed) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2, SR-7.4). Never the typed text or key. `pause` and `read-pane` write no call event |
 | `ad.launch.name_held` | `ad_spawn`; `ad_resume`; `ad_find_missing` | Written by the one emitter `emitNameHeld` (`pkg/api/name_held_trail.go`), fail-open: a trail-write failure never changes the verb's result, error or description. Exactly one per plain-spawn label-scan refusal ("left over from an earlier life"), exactly one per plain spawn whose create answered "duplicate session" (the held-name path; see [Launch identity](#launch-identity)), exactly one per `resume` whose create answered "duplicate session" (see [After "duplicate session"](#after-duplicate-session)), and exactly one per reuse whose create answered "duplicate session" (see [Reuse of a finished id](#reuse-of-a-finished-id)). Carries `source`, `instance_id`, `launch` (`spawn`, `resume` or `reuse`), `tmux_session_name` (the requested name; for the scan, the first leftover's; for `resume`, the recorded name), `tmux_socket`, `tmux_session_id` and `session_created` (the blocking session; for the scan, the leftover with the lowest `$N`), `store_id` (this store's `store_meta.store_id`, never a label's, for comparison with a label's last field), `carries_this_id` and `current_launch` (from the holder's label class only, never the environment: true and false for an old label; true and true for a current label, which only the re-lookup of `resume` or reuse can meet (the row's own session); false and null for another id's, another store's or no valid label, another store's counting as not carrying the id even when it names it; both null when no single holder was identified or its class cannot be trusted), `lookup_outcome` (the lookup's outcome token), `outcome` (the returned error's name), `row_result` (`not_inserted` for the scan; `ended`, `left_changed` or `still_pending` after a plain spawn's "duplicate session"; `restored`, `left_changed` or `still_pending` after a `resume`'s or a reuse's, as its restore went), `store_error` (the end write's or the restore's store error text, else null), the by-hand `attach_command` (`tmux -u -S '<socket>' attach-session -r -t '<$N>'`) and `end_command` (`tmux -u -S '<socket>' kill-session -t '<$N>'`), and the `caller_*` identity; `leftover_count` only on the scan's record. `tmux_session_id`, `session_created` and both commands are present whenever one blocking session was identified, a holder with no valid label included, and null otherwise (vanished, ambiguous, unreadable, tmux unavailable). The trail carries the two commands because humans read it; no error description carries them. Later sources and launch kinds (another launch's `launch` value, the sweep's null `launch` and `outcome`) add their constants beside the existing ones without changing the field set. **resume** (source `ad_resume`, `launch` `resume`, written by `finishedLaunch.heldName` in `pkg/api/finished_launch.go`) writes exactly one per call whose create answered "duplicate session", after its re-lookup, its restore attempt and `ad.resume.restored`, whatever the outcome: the holder fields from the re-lookup, `tmux_socket` the launch socket, `lookup_outcome` the re-lookup's token, `outcome` the returned error's name, `row_result` the restore's (`restored`: the restore applied; `left_changed`: the row changed or was removed after the move; `still_pending`: the restore failed in the store, with `store_error`); no `leftover_count`. A refusal at `resume`'s pre-launch lookup writes none. **reuse** (source `ad_spawn`, `launch` `reuse`, written by the same `finishedLaunch.heldName`) writes exactly one per call whose create answered "duplicate session", after `ad.spawn.reused`, its re-lookup, its restore attempt and `ad.spawn.reuse_restored`, in that order, whatever the outcome, with the same fields as `resume`'s: `tmux_session_name` the requested name, `row_result` the restore's (`left_changed`: the row changed or was removed after the reset). A refusal before the reset (the old-row lookup or the new-name pre-check) writes none. **find-missing** (source `ad_find_missing`, `emitRowNameHeld` in `pkg/api/find_missing_lookup.go`) writes exactly one per row per sweep whose mark attempt had tick reason `tmux_name_held`, whatever the mark's outcome, with the same field set: `launch` and `outcome` null; `tmux_session_name` the row's recorded name; `tmux_socket` the socket the lookup used; `store_id` this store's, as for every source; the holder fields from the row's lookup (`heldHolderFacts`), so `carries_this_id` false and `current_launch` null when the holder is another store's session, and the holder fields null when more than one listing entry matches the name; `lookup_outcome` the lookup's token (`gone` or `leftover`); `row_result` `marked_missing` (the mark applied), `left_changed` (the row was changed or absent) or `still_pending` (the mark failed in the store, with `store_error`); no `leftover_count`. The sweep never touches the holding session (see [`find-missing`](#find-missing)). Never a label value, the id a label names, another row's id or session-environment content (SR-9.3, SR-9.4, SR-14, SR-15) |
 | `ad.kill.called` | `ad_kill` | Exactly one per kill call (`runKill` in `pkg/api/kill.go`, behind the exported `Kill` and `agent-director-admin kill-finished`), on every return path, so `Client.Kill`, direct callers and the admin verb all get it; fail-open (a trail-write failure never changes the result). A call on a closed `Client` returns `ErrClientClosed` before `Kill` runs and emits nothing. Emitted by `killRun.emit` (`pkg/api/kill_trail.go`). Carries `instance_id`; `tmux_session_name` (the recorded name, empty when there is no row); `outcome` (`ok` or the err_name the CLI would print, from `errorName`; `ErrSpawnNotResumable` only for the operator-only opt-in on a live row); `lookup_outcome` (the lookup's outcome token, or `not_run` when no lookup ran: unknown id, a finished row without the operator-only opt-in, the operator-only opt-in on a live row, an unusable recorded name, an unusable socket directory); `followup_outcome` (the follow-up lookup's token, `not_run` when none ran); `kill_sent` (as in the result); `pane_killed` (whether a pane kill was sent); `process_check` (`gone`, `alive`, `unreadable` or `not_recorded` whenever a process check ran, on the Gone path or after a kill; after an expired wait `alive` when the agent still counted as running, else `gone` with survivors listed, except that the wait after the follow-up on this id's own abandoned launch, which never reads the agent, keeps its `unreadable` or `not_recorded`, survivors listed or not, beside that follow-up's `followup_outcome` (b.myx); `not_run` when none ran); `agent_pid` (the pid of the agent process that was checked, null when no check read one); `survivor_pids` (the pane processes of the labelled session, or of the sessions of this id's own abandoned launch the operator-only opt-in ended together with those sessions' agent pane processes wherever their panes now are, still running when the wait ended, `[]` otherwise); `include_finished` (whether the operator-only finished-row opt-in was set: true only for `agent-director-admin kill-finished`, whose `caller_process` is `agent-director-admin`); and the AD-collected `caller_process`, `caller_pid`, `caller_hostname`, `caller_user`. A human uses `agent_pid` and `survivor_pids` in docs/operator-actions.md procedure. Never session-environment content or another row's id (SR-6.4, SR-14, SR-15) |
@@ -17312,14 +17381,18 @@ written, harmlessly:
       with the move's version and token. The store must also implement the
       optional `RecordLaunchIdentity` method; `*store.Store` does, and an
       injected `ResumeStore` without it makes no identity write. Success.
-    - A reply lost with exit 0: success, no identity written; the row
-      takes no hook until its pane is adopted.
+    - A reply lost with exit 0: success for every agent regardless of coverage
+      or publication's result, no identity written; the row takes no hook
+      until its pane is adopted. A publication error or non-applied result
+      attempts guarded candidate uncertainty recording; write errors only
+      warn. Releases the owner without restoration or creation retry;
+      see [Launch coverage](#launch-coverage).
     - A timeout, or a non-zero-exit reply that does not parse:
       `ErrTmuxUnresponsive` with the launch-timeout description
       (`spawn.LaunchTimeoutError`, verb `resume`). The row stays
-      `pending`, because the session may exist; the only write is the
-      release of the launch's hold (`finishedLaunch.releaseOwner`, b.kdf),
-      as after a lost reply or an identity write that did not apply, so
+      `pending`, because the session may exist. It records candidate
+      uncertainty and releases the launch's hold
+      (`finishedLaunch.releaseOwner`, b.kdf), so
       `find-missing` judges the row once its grace period has passed. The
       launch-timeout rule applies: do not retry until `get` shows the row
       `ended` or `missing`.
@@ -17328,7 +17401,7 @@ written, harmlessly:
       [After "duplicate session"](#after-duplicate-session) below. It
       ends with the restore too, and never returns `ErrTmuxSessionCreate`
       for a name it finds held.
-    - Every other failure (tmux unavailable → `ErrTmuxNotAvailable`; a
+    - A determinate create/label failure (tmux unavailable → `ErrTmuxNotAvailable`; a
       session that could not be labelled, or any other failed create →
       `ErrTmuxSessionCreate`) is followed by the restore,
       `RestoreAfterFailedResume(id, movedVersion, prior)`
@@ -17508,7 +17581,8 @@ SR-8.5, SR-13.2 path (ii)), in this order:
    as the holder name, then reads the clock once. The move cleared the
    row's identity columns, so nothing is re-read from the store; no agent
    process is read and nothing is adopted.
-2. Restores the row (`finishedLaunch.restore`, as for any failed launch above):
+2. Attempts the conditional restore (`finishedLaunch.restore`, as for the
+   determinate create/label failures above):
    the restore write.
 3. Builds the classified error with the shared `heldNameOutcome`, from the
    examined row (`heldExaminedRow`), the restore's sentence in place of
@@ -23868,6 +23942,16 @@ same. For writing `[tmux]` settings, see the config writer subsection above.
 
 `SeedSpawn` in `pkg/api/apitest/seeds.go` takes trailing variadic
 `SpawnOption` values, so positional call sites compile unchanged. When two options set the same column, the later one wins.
+
+**Must use: busy-send coverage fixtures.** `SeedSpawn`'s option transaction
+seeds matching core provider, life and token facts without advancing
+`row_version`. Use [`pkg/api/apitest/busy_send.go`](../pkg/api/apitest/busy_send.go):
+`SeedBusySendCoverage` seeds independent Launch/conversation coverage without
+changing membership; `ReadBusySendFacts` observes the published binding and
+coverage plus all retained conversation/Launch facts in one read transaction,
+without provider work. `SeedBusySendCandidateProcess` seeds historical saved
+pane identity on an uncertain candidate without publishing it. Consumers use
+these helpers rather than inline SQL.
 
 **Options, by group:**
 

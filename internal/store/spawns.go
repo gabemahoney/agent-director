@@ -309,11 +309,14 @@ type Spawn struct {
 	// FamilyState is the independently settled aggregate of this stored family.
 	FamilyState string
 
-	// BusySend and BusyConversationID are reserved for the schema-v21
+	// BusySend and BusyConversationID are the schema-v21
 	// spawns.busy_send and busy_conversation_id columns (busy_send_schema.go):
 	// the current Launch's recorded coverage and its published conversation.
-	// No read fills them yet; until one does, their zero values say nothing
-	// about the row, so a coverage decision reads the stored column.
+	// Full-row readers populate them; pending resume/reuse retains the
+	// published facts until creation succeeds. Current-Launch decisions use
+	// BusySend; new-Launch preflight uses the helpers in busy_send_coverage.go.
+	// An empty BusyConversationID preserves an absent SQL binding; it does not
+	// establish conversation coverage. GetBusySendConversationCoverage rejects it.
 	BusySend           BusySendCoverage
 	BusyConversationID string
 
@@ -402,6 +405,8 @@ func boolInt(b bool) int {
 // initial permission epoch, stamped with the statement's clock. It records
 // no process evidence: nothing has probed the agent yet. The new Launch's Turn
 // Start counter, turn_starts, is the integer 0, whatever sp.TurnStarts holds.
+// The same transaction publishes a fresh busy-send conversation and current
+// Launch, recording BusySendCoverageForAgent(sp.Agent) and their binding.
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -453,7 +458,12 @@ func (s *Store) InsertPending(sp Spawn) error {
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
 	args = append(args, StatePending, sp.Agent, sp.Agent, positiveIntArg(sp.IdleScreenTimeoutSeconds),
 		StatePending, nullableStringArg(sp.Identity.Token), EvidenceCallerCommand)
-	_, err = s.execFamily(sp.InstanceID, stmt, args...)
+	err = s.inImmediateTx(sp.InstanceID, func(ctx context.Context, conn *sql.Conn) error {
+		if _, err := conn.ExecContext(ctx, stmt, args...); err != nil {
+			return err
+		}
+		return s.insertBusySendPublished(ctx, conn, sp)
+	})
 	if err != nil {
 		var serr *sqlite.Error
 		if errors.As(err, &serr) {
@@ -565,7 +575,7 @@ func (s *Store) getSpawnSettled(instanceID string, r SettleRead, proofs []Cursor
 // idle_since, then the v9 agent, end_reported_at and subagent_tracking, and
 // the later columns after them, state_changed_ms, the pane observation
 // columns (paneColumns) and the main-field evidence (evidenceColumns), then
-// the v21 Turn Start counter, last.
+// the v21 Turn Start counter and published busy-send facts, last.
 const spawnColumns = `
         instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, agent_args, relay_mode,
@@ -578,7 +588,7 @@ const spawnColumns = `
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
         COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, observation_version, COALESCE(display_observation, ''), state_changed_ms, ` + paneColumns + `,
-        ` + evidenceColumns + `, turn_starts`
+        ` + evidenceColumns + `, turn_starts, busy_send, busy_conversation_id`
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -625,6 +635,8 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		subagentTrack   any
 		codexStartup    any
 		claudeCapacity  any
+		busySend        any
+		busyBinding     sql.NullString
 		life            lifeScan
 		pane            paneScan
 		evidence        evidenceScan
@@ -643,7 +655,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.ObservationVersion, &sp.DisplayObservation, &sp.StateChangedMillis)
 	dest = append(dest, pane.dest()...)
 	dest = append(dest, evidence.dest()...)
-	dest = append(dest, &sp.TurnStarts)
+	dest = append(dest, &sp.TurnStarts, &busySend, &busyBinding)
 	if reported {
 		dest = append(dest, &sp.ReportedState, &sp.FamilyState)
 	}
@@ -654,6 +666,10 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	if !reported {
 		sp.ReportedState = sp.State
 	}
+	if sp.BusySend, err = decodeBusySendCoverage(busySend); err != nil {
+		return Spawn{}, fmt.Errorf("%s busy_send: %w", errs.decode, err)
+	}
+	sp.BusyConversationID = busyBinding.String
 	if endedAt.Valid {
 		t := endedAt.Time
 		sp.EndedAt = &t
@@ -920,27 +936,48 @@ const recordLaunchIdentitySQL = `UPDATE spawns
 // passed as "" is stored as NULL), NULLs the launch owner (launch_owner_pid,
 // launch_owner_starttime, launch_owner_pidns: it is the launch's last write,
 // so it ends the launch's hold on the row, b.kdf), and advances row_version
-// by one. It never writes id.Token, id.Socket, launch_started_at, state or any
-// other column.
+// by one. It never writes id.Token, id.Socket, launch_started_at or state.
+// The same applied transaction resolves any staged busy-send candidate using
+// the successful create's token and captured core revisions, with no second
+// spawns version advance. A publication failure rolls back identity too;
+// plain spawn already published at insertion. A creator whose identity guard
+// misses can separately call PublishBusySendLaunch on its observed success.
 //
-// It returns CondApplied when the write applied; CondChanged, having written
-// nothing, when the row exists but is no longer pending with that version and
-// token (another write came first, such as find-missing's mark, or another
-// launch began; no hook can, because a row that records no pane matches no
-// hook, SR-22.9); CondAbsent when no row
-// has the id. The two are told apart by an existence read after the guarded
-// statement matched no row; nothing is written a second time. A driver error
-// is returned wrapped, with a zero CondResult.
+// It returns CondApplied when the identity write applied; CondChanged when
+// the row exists but its identity guard missed, and CondAbsent when no row
+// has the id. CondChanged and CondAbsent write nothing. It never overwrites a
+// newer identity; the separate successful-create publication follows the
+// Launch token, independently of this identity guard.
+// A driver error is returned wrapped, with a zero CondResult.
 //
 // Used by plain spawn after its create, and later by resume and reuse. It is
 // on the concrete *Store only, like InsertPending (Appendix F.4).
 func (s *Store) RecordLaunchIdentity(instanceID string, launchVersion int64, token string, id LaunchIdentity) (CondResult, error) {
-	res, err := s.db.Exec(recordLaunchIdentitySQL,
-		positiveIntArg(id.ServerPID), positiveInt64Arg(id.ServerStart),
-		nullableStringArg(id.ServerStarttime), nullableStringArg(id.PaneID),
-		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
-		instanceID, StatePending, launchVersion, token,
-	)
+	var res sql.Result
+	err := s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
+		var err error
+		res, err = conn.ExecContext(ctx, recordLaunchIdentitySQL,
+			positiveIntArg(id.ServerPID), positiveInt64Arg(id.ServerStart),
+			nullableStringArg(id.ServerStarttime), nullableStringArg(id.PaneID),
+			positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
+			instanceID, StatePending, launchVersion, token,
+		)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errFamilyWriteNotApplied
+		}
+		_, err = publishBusySendCandidate(ctx, conn, instanceID, token, storeNowMillis())
+		return err
+	})
+	if errors.Is(err, errFamilyWriteNotApplied) {
+		err = nil
+	}
 	if err != nil {
 		return 0, fmt.Errorf("store: record launch identity: %w", err)
 	}
@@ -1134,6 +1171,8 @@ var adoptIdentitySQL = `UPDATE spawns
 // drains any display exit, emitted only after commit. It never writes
 // id.Token, id.Socket or the state; the verb records adopted on
 // ad.provenance.disagree (SR-14).
+// The same transaction publishes any matching busy-send candidate now that
+// the owned session was established, without another version advance.
 //
 // It returns CondApplied when the write applied; CondChanged, having written
 // nothing, when the row exists but its snapshot differs; CondAbsent when no
@@ -1147,7 +1186,7 @@ var adoptIdentitySQL = `UPDATE spawns
 // and expire never write an adoption.
 func (s *Store) AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot, id LaunchIdentity) (CondResult, error) {
 	args := append(adoptIdentityArgs(id), instanceID)
-	res, err := s.execFamily(instanceID, adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
+	res, err := s.execBusySendEstablished(instanceID, adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
 	if err != nil {
 		return 0, fmt.Errorf("store: adopt identity: %w", err)
 	}

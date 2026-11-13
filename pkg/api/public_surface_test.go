@@ -142,7 +142,8 @@ var aliasTargets = map[string]reflect.Type{
 	"TmuxCreateReply": reflect.TypeFor[api.TmuxCreateReply](), "TmuxCall": reflect.TypeFor[api.TmuxCall](),
 	"TmuxFailure": reflect.TypeFor[api.TmuxFailure](), "TmuxCallError": reflect.TypeFor[api.TmuxCallError](),
 	"ProcChecker": reflect.TypeFor[api.ProcChecker](), "SpawnParams": reflect.TypeFor[api.SpawnParams](),
-	"Permissions": reflect.TypeFor[api.Permissions](),
+	"Permissions":      reflect.TypeFor[api.Permissions](),
+	"BusySendCoverage": reflect.TypeFor[api.BusySendCoverage](),
 }
 
 // TestNoRemovedDisplayNames is SR-1.3's guard (b.ob8): nothing pkg/api

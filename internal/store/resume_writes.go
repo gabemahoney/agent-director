@@ -97,6 +97,9 @@ var moveToPendingSQL = `UPDATE spawns
 // entries and claimable launches (SR-8.1) in the same transaction, all or
 // nothing. The transaction is begun with BEGIN IMMEDIATE (inImmediateTx,
 // waiting the store's busy timeout for the write lock).
+// It also stages a busy-send candidate Launch in that transaction, retaining
+// the published coverage/conversation until successful creation. See
+// RecordLaunchIdentity and PublishBusySendLaunch for publication.
 //
 // The move is one conditional statement (SR-5.6) that applies only while the
 // row is ended or missing and its row snapshot equals examined, compared on
@@ -185,6 +188,9 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 			return errFamilyWriteNotApplied
 		}
 		moved = true
+		if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchResume, launchStartedAtMillis); err != nil {
+			return err
+		}
 		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, storeNowMillis())
 		if err != nil {
 			return fmt.Errorf("close permission requests: %w", err)
@@ -276,6 +282,8 @@ var restoreAfterFailedResumeSQL = `UPDATE spawns
 // no pane, and the move cleared it, SR-22.9); CondAbsent when no row
 // has the id. A store failure returns a wrapped error with a zero CondResult,
 // and the row stays as the move left it (SR-5.8).
+// In the same transaction an applied restore marks only its busy-send
+// candidate failed (creation_failed). Published coverage never changed.
 func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, prior ResumePrior) (CondResult, error) {
 	const errPrefix = "store: restore after failed resume"
 	if prior.State != StateEnded && prior.State != StateMissing {
@@ -299,7 +307,7 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		prior.TurnStarts,
 		instanceID, StatePending, movedVersion,
 	)
-	r, err := s.execFamily(instanceID, restoreAfterFailedResumeSQL, args...)
+	r, err := s.execBusySendRestore(instanceID, restoreAfterFailedResumeSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}

@@ -12,7 +12,8 @@ import (
 
 // RotateCursorSession is only called by an independently verified direct
 // gateway hook. Startup binding and generic SessionStart history retain their
-// separate contracts. All three publication writes share one transaction.
+// separate contracts. Session/runtime/history publication and any busy-send
+// candidate promotion share one transaction.
 func (s *Store) RotateCursorSession(examined Spawn, gate HookGate, next, path string, until time.Time, check CursorCheck) (bool, error) {
 	return s.rotateCursorSession(examined, gate, next, path, until, check, nil)
 }
@@ -69,6 +70,9 @@ func (s *Store) rotateCursorSession(examined Spawn, gate HookGate, next, path st
 		}
 		if n != 1 {
 			return fmt.Errorf("store: Cursor rotation gate changed")
+		}
+		if err := publishBusySendReportedLaunch(ctx, conn, b.InstanceID); err != nil {
+			return err
 		}
 		if err = upsertSessionHistoryEntry(connQuerier{ctx: ctx, conn: conn}, b.InstanceID, b.SessionID, row.JSONLPath, b.Life); err != nil {
 			return fmt.Errorf("store: required Cursor archive: %w", err)

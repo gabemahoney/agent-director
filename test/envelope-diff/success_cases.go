@@ -148,11 +148,15 @@ var successCases = append([]successCase{
 	// ── get ───────────────────────────────────────────────────────────────
 	{
 		verb: "get",
+		want: map[string]any{"busy_send": "covered"},
 		seed: func(t *testing.T) (string, map[string]any) {
 			t.Helper()
 			_, dbPath := apitest.OpenStoreWithRow(t,
 				"id-get-1", "cd-get-1", store.StateWaiting, "off")
 			if _, err := apitest.BindReadSurfaceProcess(dbPath, "id-get-1", os.Getpid()); err != nil {
+				t.Fatal(err)
+			}
+			if err := apitest.SeedBusySendCoverage(dbPath, "id-get-1", store.BusySendCovered, store.BusySendCovered); err != nil {
 				t.Fatal(err)
 			}
 			return filepath.Dir(dbPath), map[string]any{"id": "id-get-1"}

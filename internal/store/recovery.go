@@ -155,10 +155,13 @@ func emitOrphanCloseoutTickContext(ctx context.Context, instanceID, requestToken
 // those down or accept the orphan. The row's permission requests, session
 // history, subagent entries and claimable launches go with it through the
 // schema's ON DELETE CASCADE foreign keys (foreign_keys=1), with no delete
-// statement of their own.
+// statement of their own. The same transaction retires its published
+// busy-send conversation, abandons any candidate conversation and supersedes
+// current/pending Launches, retaining core history and recording only deletion,
+// never proof of physical exit (SR-6.3).
 func (s *Store) DeleteSpawn(instanceID string) error {
 	const q = `DELETE FROM spawns WHERE instance_id = ?`
-	res, err := s.execFamily(instanceID, q, instanceID)
+	res, err := s.execBusySendDelete(instanceID, q, instanceID)
 	if err != nil {
 		return fmt.Errorf("store: delete spawn: %w", err)
 	}
@@ -238,7 +241,7 @@ func (s *RecoveryWrites) MarkEndedIfSameLifeFrom(id string, snapshot RowSnapshot
 // recoveryExec checks the no-match outcome under the same write boundary and
 // refreshes changed family contributions atomically. No follow-up read can
 // queue behind an abandoned commit.
-func (s *Store) recoveryExec(id, q string, args []any) (CondResult, error) {
+func (s *Store) recoveryExec(id, q string, args []any, establishesLaunch bool) (CondResult, error) {
 	result := CondChanged
 	var exits []displayTransition
 	ctx, cancel := s.operationContext(0)
@@ -263,6 +266,11 @@ func (s *Store) recoveryExec(id, q string, args []any) (CondResult, error) {
 			return nil
 		}
 		result = CondApplied
+		if establishesLaunch {
+			if err := publishBusySendReportedLaunch(ctx, conn, id); err != nil {
+				return err
+			}
+		}
 		if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 			return err
 		}
@@ -279,26 +287,26 @@ func (s *Store) recoveryExec(id, q string, args []any) (CondResult, error) {
 func (s *RecoveryWrites) SetLivenessNoteIfSameLife(id string, snapshot RowSnapshot, note string) (CondResult, error) {
 	args := append([]any{note, id}, liveStateGuardArgs()...)
 	statement, args := s.guard(id, setLivenessNoteIfSameLifeSQL, append(args, snapshotMatchArgs(snapshot)...))
-	return s.recoveryExec(id, statement, args)
+	return s.recoveryExec(id, statement, args, false)
 }
 
 func (s *RecoveryWrites) ClearLivenessIfSameLife(id string, snapshot RowSnapshot) (CondResult, error) {
 	args := append([]any{id}, liveStateGuardArgs()...)
 	statement, args := s.guard(id, clearLivenessIfSameLifeSQL, append(args, snapshotMatchArgs(snapshot)...))
-	return s.recoveryExec(id, statement, args)
+	return s.recoveryExec(id, statement, args, false)
 }
 
 func (s *RecoveryWrites) NoteUnreportedIfSameLife(id string, snapshot RowSnapshot) (CondResult, error) {
 	args := append([]any{LivenessNoteUnreported, id, StatePending, LivenessNoteProvenanceConflict}, snapshotMatchArgs(snapshot)...)
 	statement, args := s.guard(id, noteUnreportedIfSameLifeSQL, args)
-	return s.recoveryExec(id, statement, args)
+	return s.recoveryExec(id, statement, args, false)
 }
 
 func (s *RecoveryWrites) AdoptIdentityIfSameLife(id string, snapshot RowSnapshot, identity LaunchIdentity) (CondResult, RowSnapshot, error) {
 	args := append(adoptIdentityArgs(identity), id)
 	args = append(args, liveStateGuardArgs()...)
 	statement, args := s.guard(id, adoptIdentityIfSameLifeSQL, append(args, snapshotMatchArgs(snapshot)...))
-	result, err := s.recoveryExec(id, statement, args)
+	result, err := s.recoveryExec(id, statement, args, true)
 	if result != CondApplied || err != nil {
 		return result, RowSnapshot{}, err
 	}

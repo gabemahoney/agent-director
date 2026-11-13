@@ -130,7 +130,11 @@ const busyConversationsDDL = `CREATE TABLE IF NOT EXISTS busy_conversations (
 //   - revision: owned by the lifecycle writers (spawn, reuse, resume,
 //     Launch End) and the route's connection writer.
 //   - ended_at_ms, end_cause: the Launch End and its evidence
-//     (BusySendLaunchEnd; SR-6.2), recorded once.
+//     (BusySendLaunchEnd; SR-6.2), recorded once. record_deleted means only
+//     that the instance row was deleted: it proves neither physical exit nor
+//     old-issuer exclusion and always leaves the Launch superseded (SR-6.3).
+//     candidate_replaced is likewise logical: a later guarded Launch start
+//     replaced a never-published candidate, without proving exit/exclusion.
 const busySendLaunchesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launches (
     launch_id             TEXT PRIMARY KEY NOT NULL,
     store_id              TEXT NOT NULL,
@@ -149,10 +153,12 @@ const busySendLaunchesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launches (
     revision              INTEGER NOT NULL DEFAULT 1 CHECK(typeof(revision) = 'integer' AND revision > 0),
     recorded_at_ms        INTEGER NOT NULL,
     ended_at_ms           INTEGER,
-    end_cause             TEXT CHECK(end_cause IN ('process_exited', 'launch_published', 'creation_failed')),
+    end_cause             TEXT CHECK(end_cause IN ('process_exited', 'launch_published', 'creation_failed', 'record_deleted', 'candidate_replaced')),
     CHECK((ended_at_ms IS NULL) = (end_cause IS NULL)),
     CHECK((phase = 'failed') = (end_cause IS 'creation_failed')),
     CHECK(phase <> 'superseded' OR ended_at_ms IS NOT NULL),
+    CHECK(end_cause IS NOT 'record_deleted' OR phase IS 'superseded'),
+    CHECK(end_cause IS NOT 'candidate_replaced' OR phase IS 'superseded'),
     FOREIGN KEY(conversation_id) REFERENCES busy_conversations(conversation_id) DEFERRABLE INITIALLY DEFERRED
 );`
 
