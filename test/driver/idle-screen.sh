@@ -45,8 +45,8 @@ last=""
 # Exact key sets (docs/caller-contract.md): a status row showing no Displayed
 # State and showing idle_screen; a list row's keys present on a row showing
 # idle_screen and those present only on some.
-status_plain='["confirmations","context","family_state","idle_screen_availability","process_liveness","state"]'
-status_idle='["confirmations","context","displayed_state","family_state","idle_screen_availability","process_liveness","since","state","tmux_session_name","unchanged_minutes"]'
+status_plain='["confirmations","context","failure_reason","family_state","idle_screen_availability","process_liveness","state"]'
+status_idle='["confirmations","context","displayed_state","failure_reason","family_state","idle_screen_availability","process_liveness","since","state","tmux_session_name","unchanged_minutes"]'
 list_keys='["agent","confirmations","cwd","displayed_state","family_state","idle_screen_availability","instance_id","labels","last_seen_at","permission_requests","process_liveness","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
 list_optional='["ended_at","launch_started_at","liveness_note","liveness_unverified_since","parent_id"]'
 
@@ -228,6 +228,7 @@ check_idle() {
     local since_ms
     jq -e --slurpfile w "$fixtures/idle_screen.json" --arg s "$3" --argjson m "$4" \
         '.state == $w[0].state and .displayed_state == $w[0].displayed_state and .unchanged_minutes == $m and .tmux_session_name == $s
+         and has("failure_reason") and .failure_reason == null
          and .idle_screen_availability == "available" and (has("request_token") | not) and (has("tool_name") | not)
          and (.since | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"))' <<<"$2" >/dev/null ||
         fail "$1: not the displayed idle_screen of $3 with $4 minutes: $2"
@@ -335,6 +336,7 @@ public)
         observe "$id"
         failed="$last"
         jq -e --argjson prior "$get" --argjson state "$state_record" '.state == "working" and .displayed_state == "idle_screen"
+            and has("failure_reason") and .failure_reason == null
             and .process_liveness == "alive" and .confirmations.process_liveness.status == "confirmed" and .confirmations.state == $state
             and .confirmations.displayed_state == {status:"not_confirmed", confirmed_at:$prior.confirmations.displayed_state.confirmed_at,
                 source:"pane", checked_at:.confirmations.displayed_state.checked_at, reason:"unreadable"}
@@ -378,7 +380,7 @@ override)
     # An hour unchanged: the config's 60 s would qualify; the row's 2 h does not.
     backdate "$id" 3600000
     early="$(read_row status "$id")"
-    jq -e --argjson k "$status_plain" '.state == "working" and keys == $k' <<<"$early" >/dev/null ||
+    jq -e --argjson k "$status_plain" '.state == "working" and .failure_reason == null and keys == $k' <<<"$early" >/dev/null ||
         fail "an hour unchanged under a 2 h override reads [$early]"
     backdate "$id" 7200000
     observe "$id"
@@ -401,10 +403,10 @@ cursor)
          VALUES('cursor-quiet','working','working',0,'/tmp','cursor','on','ts-cursor-quiet','2222222222222222',7,1,'$(printf 'ab%.0s' {1..32})',$old,7,$$,'$writer_start')"
     before="$(col cursor-quiet "observation_version || '|' || IFNULL(display_observation,'') || '|' || pane_since_ms")"
     quiet="$(read_row status cursor-quiet)"
-    jq -e --argjson k "$status_plain" '.state == "working" and .idle_screen_availability == "unavailable" and keys == $k' <<<"$quiet" >/dev/null ||
+    jq -e --argjson k "$status_plain" '.state == "working" and .failure_reason == null and .idle_screen_availability == "unavailable" and keys == $k' <<<"$quiet" >/dev/null ||
         fail "Cursor quiet status: $quiet"
     row="$(read_row get cursor-quiet)"
-    jq -e '.state == "working" and .idle_screen_availability == "unavailable" and (has("since") | not)
+    jq -e '.state == "working" and has("failure_reason") and .failure_reason == null and .idle_screen_availability == "unavailable" and (has("since") | not)
         and (has("unchanged_minutes") | not)' <<<"$row" >/dev/null || fail "Cursor quiet get: $row"
     no_old_member "$row" "Cursor quiet get"
     [[ "$(col cursor-quiet "observation_version || '|' || IFNULL(display_observation,'') || '|' || pane_since_ms")" == "$before" ]] ||
@@ -415,7 +417,7 @@ cursor)
          VALUES('cursor-asks','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}','2019-12-31 23:59:00',$old,'1111111111111111',7,$((old - 1000)),$old,'deadline')"
     # b.zpv: fallen back since 2020, the request keeps its row check_permission.
     last="$(read_row status cursor-asks)"
-    jq -e --argjson k "$status_plain" '.state == "check_permission" and .idle_screen_availability == "unavailable" and keys == $k' <<<"$last" >/dev/null ||
+    jq -e --argjson k "$status_plain" '.state == "check_permission" and .failure_reason == null and .idle_screen_availability == "unavailable" and keys == $k' <<<"$last" >/dev/null ||
         fail "Cursor permission: $last"
     sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token)
          VALUES('codex-ended','ended','ended',0,'/tmp','codex','off','ts-codex-ended','3333333333333333')"
