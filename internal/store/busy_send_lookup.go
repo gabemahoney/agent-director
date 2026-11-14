@@ -138,14 +138,19 @@ func readBusySendMessageResult(ctx context.Context, q busySendLaunchSQL, storeID
 		}
 	}
 	var transport sql.NullString
-	err = q.QueryRowContext(ctx, `SELECT p.transport FROM busy_send_handover_members hm
+	var transportAt sql.NullInt64
+	err = q.QueryRowContext(ctx, `SELECT p.transport, p.transport_at_ms FROM busy_send_handover_members hm
 	    JOIN busy_send_handovers h ON h.handover_id = hm.handover_id
 	    JOIN busy_send_prompts p ON p.handover_id = hm.handover_id AND p.prompt_index = hm.prompt_index
-	    WHERE hm.message_id = ? ORDER BY h.handover_seq DESC LIMIT 1`, messageID).Scan(&transport)
+	    WHERE hm.message_id = ? ORDER BY h.handover_seq DESC LIMIT 1`, messageID).Scan(&transport, &transportAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, fmt.Errorf("store: read busy-send Message transport: %w", err)
 	}
-	r.PartialTransport = BusySendTransport(transport.String) == BusySendTransportPartial
+	// A Final Result projects only a fact recorded by its Final time; a later
+	// fact is stamped after it (RecordBusySendCompletion), so the Final Result,
+	// its compatibility outcome included, never changes (SR-5.1).
+	r.PartialTransport = BusySendTransport(transport.String) == BusySendTransportPartial &&
+		(!r.Final || transportAt.Int64 <= r.FinalAtMillis)
 	return r, nil
 }
 

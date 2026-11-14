@@ -226,9 +226,11 @@ const (
 // BusySendEmission is a prompt's emission disposition
 // (busy_send_prompts.emission; SR-2.4). none: claimed, no intent persisted.
 // intent: emission intent and the captured destination persisted, so a route
-// call may follow and the prompt is never re-emitted. issued: the route call
-// was made. released: proven never issued (its claim released, or fenced by
-// a call end before revalidation), so its Messages may return to Held.
+// call may follow and the prompt is never re-emitted. issued: its intent and
+// issue revalidation committed (together, CommitBusySendIssue), so the one
+// route call may have been made. released: proven never issued (its claim
+// released, or fenced by a call end before revalidation), so its Messages may
+// return to Held.
 type BusySendEmission string
 
 const (
@@ -492,7 +494,8 @@ type BusySendResult struct {
 	RecordSHA256 string
 	// PartialTransport is whether the prompt of the Message's latest hand-over
 	// attempt was known to be only partly written (busy_send_prompts.transport
-	// partial), which the compatibility outcome reports (SR-5.3).
+	// partial), which the compatibility outcome reports (SR-5.3). For a Final
+	// Result it is what was known by its Final time, so it never changes.
 	PartialTransport bool
 
 	AcceptedAtMillis   int64
