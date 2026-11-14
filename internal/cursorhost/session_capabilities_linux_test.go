@@ -106,19 +106,58 @@ func TestCursorCorrelatedOperationFailureSanitized(t *testing.T) {
 			} else {
 				c = beginConfiguredCursorSession(t, options, scenario, openTranscript, terminalLoop, before)
 			}
+			failureWait := 3 * time.Second
 			if operation == "session/prompt" {
 				// b.ivj D1/D2: one correlated error ends the turn; a second
 				// consecutive error ends the session, with no prompt replay.
-				waitCursorFailedTurn(t, c, 1)
+				// b.dcj: race-instrumented report subprocesses need a larger
+				// local progress budget until the shared fixture is repaired.
+				// These waits measure liveness, not a product timing bound.
+				failureWait = 15 * time.Second
+				waitForProgress := func(label string, ready func() bool) {
+					t.Helper()
+					until := time.Now().Add(failureWait)
+					for !ready() {
+						select {
+						case err := <-c.done:
+							c.ended, c.endErr = true, err
+							t.Fatalf("%s: session ended %v; pane=%s", label, err, c.pane.bytes())
+						default:
+						}
+						if time.Now().After(until) {
+							t.Fatalf("%s: frame count=%d pane=%s", label, len(c.e.runtime.Frames(t)), c.pane.bytes())
+						}
+						time.Sleep(time.Millisecond)
+					}
+				}
+				waitForProgress("failed turn returned to waiting", func() bool {
+					return bytes.Count(c.pane.bytes(), []byte("Cursor turn failed: "+cursorPromptFailureReason+"\r\n")) == 1 && c.e.state(t) == store.StateWaiting
+				})
 				cursorFailureView(t, c, store.StateWaiting, cursorPromptFailureReason)
 				assertCursorFailedOutcomes(t, c, 1)
-				c.idleObservationBarrier(t, "after first prompt failure")
+				// Keep idleObservationBarrier's two ordered observations, using
+				// this case's local wait instead of cursorSession.wait's 3 s.
+				var wire, last []byte
+				for _, suffix := range []string{"-first", "-processed"} {
+					last = mustE3JSON(t, map[string]any{"sessionId": "synthetic-session-1", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "after first prompt failure" + suffix}}})
+					wire = append(wire, mustE3JSON(t, frame{JSONRPC: "2.0", Method: "session/update", Params: last})...)
+					wire = append(wire, '\n')
+				}
+				c.e.runtime.Emit(t, "after first prompt failure", string(wire))
+				waitForProgress("after first prompt failure", func() bool {
+					for _, r := range c.records(t) {
+						if r.Kind == "startup_or_idle_update" && bytes.Equal(r.Data.Update, last) {
+							return true
+						}
+					}
+					return false
+				})
 				if got := c.prompts(t); !reflect.DeepEqual(got, []string{"initial"}) {
 					t.Fatalf("failed prompt replayed: %v", got)
 				}
 				c.keys(t, "second failure\r")
 			}
-			err := c.awaitFailure(t, 3*time.Second)
+			err := c.awaitFailure(t, failureWait)
 			if !strings.Contains(err.Error(), operation+" failed:") || !strings.Contains(err.Error(), "internal error; cause unknown") || strings.Contains(err.Error(), "SYNTHETIC-SECRET") {
 				t.Fatalf("wrong failure: %v", err)
 			}
