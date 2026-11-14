@@ -194,6 +194,12 @@ cg_worker_op() {
  check worker.useful cg_observe_work worker "$op" "$text" > "$case_dir/observed-$op.json"
 }
 cg_worker_ready() { [[ -s $case_dir/worker-pid.result.json ]] && jq -e --arg op "$1" '.operation==$op' "$case_dir/worker-pid.result.json" >/dev/null; }
+cg_failure_is() {
+ ad status --instance-id "$id" > "$case_dir/failure-$1.json" || return 1
+ jq -e --arg state "$1" --arg reason "$2" '.state==$state and .failure_reason==$reason' "$case_dir/failure-$1.json" >/dev/null || return 1
+ # Stop publishes waiting before the gateway emits its turn-failure event.
+ jq -se --arg id "$id" --arg state "$1" --arg reason "$2" '[.[]|select(.instance_id==$id and (.event=="ad.cursor.turn_failed" or .event=="ad.cursor.failed"))|[.event,.reason]] == ([["ad.cursor.turn_failed",$reason]] + (if $state=="waiting" then [] else [["ad.cursor.failed",$reason]] end))' "$HOME/.config/agent-director/ad-trail.jsonl" >/dev/null
+}
 cg_composed_cleanup() {
  local rc=$?
  set +e
@@ -214,6 +220,7 @@ cg_archive() {
 }
 cg_composed() {
  local outcome=$1 label settings program oldpath claim saved_b cg_worker_start
+ local failure_reason="Cursor ACP session/prompt failed: authentication required; check the selected runtime's existing login"
  cg_base=$case_dir; cg_id=$id
  trap cg_composed_cleanup EXIT
  for label in a b c; do
@@ -257,14 +264,24 @@ cg_composed() {
  printf '{"recordArtifacts":true}\n' > "$case_dir/scenario"
  cg_enter a; load_identity
  if [[ $outcome == stop ]]; then ad pause --instance-id "$id" >/dev/null; else
+  # b.ivj D1/D2: one correlated prompt rejection fails its turn, not its launch.
   jq -cn '{promptReply:{error:{code:-32000,message:"Authentication required"}}}' > "$case_dir/scenario"
   rl_send CLI affected-rejection >/dev/null
+  check affected.turn-failed wait_until cg_failure_is waiting "$failure_reason"
+  check affected.binding-unchanged cmp "$case_dir/binding-before.json" <(sql -json "SELECT * FROM cursor_runtimes WHERE bound_instance_id='$id';")
+  check affected.gateway-kernel-start test "$(cg_proc_start "$gateway")" = "$(jq -r '.[0].bound_gateway_start' "$case_dir/binding-before.json")"
+  check affected.kernel-start test "$(cg_proc_start "$runtime")" = "$(cat "$case_dir/runtime-start-before")"
+  check affected.first-no-fallback frames | jq -se '[.[]|select(has("method"))|.method] == ["initialize","session/new","session/prompt","session/prompt"] and [.[]|select(.method=="session/prompt")|.params.prompt[0].text] == ["before-a","affected-rejection"]' >/dev/null
+  rl_send CLI affected-second-rejection >/dev/null
  fi
  check affected.runtime-gone wait_gone "$runtime"
  check affected.gateway-gone wait_gone "$gateway"
  local affected_state=ended; [[ $outcome != rejection ]] || affected_state=missing
  check affected.truthful-state test "$(row_state)" = "$affected_state"
- check affected.no-fallback frames | jq -se --arg outcome "$outcome" '[.[]|select(has("method"))|.method] == (["initialize","session/new","session/prompt"] + (if $outcome=="stop" then [] else ["session/prompt"] end))' >/dev/null
+ if [[ $outcome == rejection ]]; then
+  check affected.failure-retained wait_until cg_failure_is missing "$failure_reason"
+ fi
+ check affected.no-fallback frames | jq -se --arg outcome "$outcome" '[.[]|select(has("method"))|.method] == (["initialize","session/new","session/prompt"] + (if $outcome=="stop" then [] else ["session/prompt","session/prompt"] end)) and (if $outcome=="stop" then true else [.[]|select(.method=="session/prompt")|.params.prompt[0].text] == ["before-a","affected-rejection","affected-second-rejection"] end)' >/dev/null
  for label in b c; do
   cg_enter "$label"; load_identity
   check peer.binding cmp "$case_dir/binding-before.json" <(sql -json "SELECT * FROM cursor_runtimes WHERE bound_instance_id='$id';")

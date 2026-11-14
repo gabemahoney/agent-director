@@ -62,6 +62,12 @@ func (s *CursorMissingReads) ListSpawns(filters ListFilters) ([]Spawn, error) {
 }
 
 func cursorMissingGuard(row Spawn, b CursorRuntime) (string, []any) {
+	return cursorMissingStateGuard(row, b, liveStateGuardSQL, liveStateGuardArgs())
+}
+
+// Fatal cleanup may enrich an already-missing row with its reason; the exact
+// snapshot, launch, pane and runtime predicates are shared with the live mark.
+func cursorMissingStateGuard(row Spawn, b CursorRuntime, stateGuard string, stateArgs []any) (string, []any) {
 	if row.Agent != AgentCursor || row.InstanceID != b.InstanceID || row.Identity.Token == "" || row.Identity.PanePID <= 0 || row.Identity.PaneStarttime == "" {
 		return "", nil
 	}
@@ -71,8 +77,8 @@ func cursorMissingGuard(row Spawn, b CursorRuntime) (string, []any) {
 	if cursorRuntimeAbsent(b) && (row.Identity.Token != b.Token || row.LifeNumber != b.Life || row.Identity.PanePID != b.GatewayPID || row.Identity.PaneStarttime != b.GatewayStart || row.SessionID != b.SessionID) {
 		return "", nil
 	}
-	guard := `instance_id=? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL + ` AND agent='cursor' AND launch_token=? AND life_number=? AND pane_pid=? AND pane_starttime=?`
-	args := append([]any{row.InstanceID}, liveStateGuardArgs()...)
+	guard := `instance_id=? AND ` + stateGuard + ` AND ` + snapshotMatchSQL + ` AND agent='cursor' AND launch_token=? AND life_number=? AND pane_pid=? AND pane_starttime=?`
+	args := append([]any{row.InstanceID}, stateArgs...)
 	args = append(args, snapshotMatchArgs(row.Snapshot)...)
 	args = append(args, row.Identity.Token, row.LifeNumber, row.Identity.PanePID, row.Identity.PaneStarttime)
 	guard += ` AND COALESCE(tmux_socket,'')=? AND COALESCE(tmux_server_pid,0)=? AND COALESCE(tmux_server_started,0)=? AND COALESCE(tmux_server_starttime,'')=? AND COALESCE(pane_id,'')=? AND COALESCE(jsonl_path,'')=?`

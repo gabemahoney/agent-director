@@ -134,6 +134,11 @@ const result = await client.status({ instance_id: "<id>" });
 console.log(result.state);
 ```
 
+`get`, each `getMany` row and `status` expose `failure_reason: string | null`;
+`list` omits it. Claude Code and Codex always return `null`. See
+[Failure reasons](../../docs/caller-contract.md#failure-reasons) for recording
+support and behaviour.
+
 `StatusResult`, `GetResult` and each `ListRow` carry:
 
 - `family_state: "working" | "waiting"`; see

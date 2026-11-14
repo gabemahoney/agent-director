@@ -26,7 +26,7 @@ const realState: Record<string, string> = {
 const LIST_KEYS = ["agent", "confirmations", "cwd", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at",
   "permission_requests", "process_liveness", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"];
 /** Every status result's main-field keys beside context and family_state. */
-const MAIN_KEYS = ["confirmations", "context", "family_state", "process_liveness"];
+const MAIN_KEYS = ["confirmations", "context", "failure_reason", "family_state", "process_liveness"];
 
 /**
  * b.x9o: the fixtures have no owned pane. Working rows attempt a capture;

@@ -236,7 +236,7 @@ must still pass the existing advertised-state/selection acknowledgement gate
 for fresh, loaded and rotated conversations before publication or prompt.
 
 `protocol.response` retains the correlated `pendingMethod` before retirement.
-`acpResponseFailure` and `acpOperation` are the shared failure boundary:
+`acpResponseFailure`, `acpReplyError` and `acpOperation` are the shared failure boundary:
 future response handling MUST reuse them. Only host-owned operation names
 (`initialize`, `session/new`, `session/load`, `session/set_mode`,
 `session/prompt`, otherwise `request`) and static cause text are rendered.
@@ -248,6 +248,14 @@ cancellation, authentication-required and missing-resource causes respectively.
 Malformed errors remain malformed, with no authentication/configuration
 inference from message, data, stderr or exit. Runtime-supplied secrets,
 paths, environment and control text never enter these diagnostics.
+Only a structurally valid correlated error constructs `acpReplyError`;
+`errMalformedACPErrorResponse` remains fatal. The controller may recover only
+an active `session/prompt` failure with a current binding, verified live runtime
+and no observed child exit. The second consecutive failure is fatal. A valid
+prompt completion resets the connection-local count, including cancellation,
+refusal and limits; updates, admission and conversation rotation do not.
+Future consumers MUST use the typed operation and verified ownership, never
+diagnostic strings, to choose turn recovery.
 Exact structured -32601 also carries the private `errACPOperationUnsupported`
 marker. Future consumers MUST reuse `errors.Is` on this wrapped cause rather
 than classify diagnostic text. Only while `modeResponse` is pending may this
@@ -638,6 +646,20 @@ them after required proof flushes and before reporting/recovering admission,
 and never retries an unknown result. A callback draft or local `final` flag is
 not a committed record. Protected transcripts remain history, not operational
 authority; neither transcript nor store reopen enumerates work for replay.
+
+A correlated prompt failure records terminal `CursorInputFailed` (`failed`)
+with the issued request identity and reason, plus `turn_outcome` with
+`outcome: "failed"`, reason, submission/request IDs and cancellation status;
+it invents no ACP stop reason. Both first and second failures take this path
+after liveness verification, so cleanup cannot relabel them unconfirmed.
+Recovery reuses `requests.endTurn`, turn-end persistence, deferred-proof flush
+and the verified Stop report before admission. The reporter carries
+`cursor_failure_reason` through `HookGate` for an atomic waiting/evidence write
+and verifies its raw value. `turnFailureReason` retains that outcome through
+cancellation and idle-control Stop reports; a new prompt, valid completion or
+published rotation clears it. Recovery emits `ad.cursor.turn_failed` with the
+correlation IDs and renders its own failure line; product code never parses it.
+
 Already accepted live input may continue only on its own prerequisite events
 and existing guards. No idle scan discovers held work, and permanent storage,
 evidence or wake loss can prevent completion.
@@ -733,7 +755,12 @@ then terminate and join the exact owned runtime, then independently call
 `VerifyRuntime` for terminated evidence while the gateway's registered
 ownership descriptors remain open. Only that terminated evidence
 permits failure cleanup to publish `missing`; preserve both the original failure
-and any cleanup error. Do not manufacture intentional SessionEnd,
+and any cleanup error. Capture one bounded, single-line sanitized initiating
+reason with `recordedFailureReason` for both the row and `ad.cursor.failed`;
+cleanup errors must not replace it. Before runtime registration, failures that
+do not reach `closeFailedLaunch` can still emit that event but leave no row
+reason. No separate pre-registration annotation path exists.
+Do not manufacture intentional SessionEnd,
 `prompt_input_exit` or turn success for this path. Keep SIGINT/SIGHUP/SIGTERM
 capture installed through terminal restoration (including ISIG), runtime/binding/
 store cleanup and final failure-event emission. `signal.Stop` must run after
@@ -794,7 +821,7 @@ request facts or trail events.
 
 The read's separate persistence attempt MUST reuse
 `Store.MarkCursorMissingIfSameLaunch`; fatal cleanup MUST use
-`Store.MarkFailedCursorRuntimeMissing`. Both use `terminalMarkWithoutWait`, through
+`Store.MarkFailedCursorRuntimeMissing`. Terminal moves use `terminalMarkWithoutWait`, through
 `inWriteTxContext(ctx, 0)` and the common `terminalMarkOnConn` payload. The write
 repeats the shared guard and atomically closes requests and running subagents,
 advances row version and applies terminal state. An inserted binding, including
@@ -809,6 +836,10 @@ Fatal cleanup requires exact owned termination and independent
 termination-bit advancement, retaining every other complete identity/snapshot
 predicate and requiring the row's token/life/gateway to match the proven-dead
 runtime. Public missing reconciliation keeps its strict termination-bit check.
+If reconciliation already marked that same launch `missing`, fatal cleanup may
+enrich only its applicable `state_evidence.failure_reason` under the same full
+snapshot and binding guards. This does not rewrite state, timestamps, requests
+or row version. It cannot annotate a replacement launch or an `ended` row.
 No runtime identity, retirement or intentional SessionEnd is fabricated, and
 Cursor per-request proof rules remain unchanged. Context-aware request-deny and
 orphan-tick emitters preserve event values, order and pending/failed/rejected
@@ -4141,6 +4172,13 @@ The public contract is in the
   `currentStateEvidenceSet` keep an applicable record when the value does not
   change, so a soft refresh, held transition or same-value hook never redates
   it.
+- Optional `state_evidence.failure_reason` holds the sanitized Cursor outcome,
+  separately from the confirmation `reason` enum; no schema migration is needed.
+  Cursor lifecycle writes MUST use `cursorStateEvidenceSet` or
+  `hookWriteCursorStateEvidenceSet` to set or clear it atomically, including on
+  same-state reports and rotation, without redating an existing confirmation.
+  Optional failure metadata is decoded separately so malformed metadata cannot
+  invalidate state confirmation. Other agents project no reason.
 - `settled_evidence` follows `settled_state`: `hookStateSet`'s
   `settledEvidenceMove` moves the raw record exactly where `settled_state`
   takes the old raw value, and `immediateSettleSet` clears it.
@@ -4170,12 +4208,17 @@ The public contract is in the
   prior raw `process_evidence` back verbatim with the rest of `RawLife`, and
   `ProcessConfirmation` judges it on read.
 - Reads: `spawnColumns` and `statusRowColumns` select `evidenceColumns`.
-  `Spawn.StateConfirmation(SettleRead)` (`settle.go`) applies the raw record to
+  `Spawn.StateConfirmation(SettleRead)` and `Spawn.FailureReason(SettleRead)`
+  share `stateRecord` (`settle.go`), applying the raw record to
   the raw state of its interval or, while a younger change settles, the
   settled record to the settled value shown. `Spawn.ProcessConfirmation`
   applies a process record only to the recorded process at its start
   identity. A malformed or inapplicable record reads `unknown`
   (`no_evidence`); no stored value fails a read.
+  Get/GetMany/Status always expose nullable `failure_reason` for that reported
+  state; reads neither create nor clear it. Guard/report verification MUST use
+  `RawFailureReason`, independent of settling. See the
+  [caller contract](caller-contract.md#failure-reasons) for agent support and lifetime.
 - Evidence is metadata, never authority: no command-authority guard relies on
   it, input preparation (`sameInputPreparation`) ignores it, and it advances
   neither `row_version` nor `observation_version`.
@@ -24321,6 +24364,11 @@ these helpers rather than inline SQL.
   `agent_args` column) and
   `WithRawExtraEnv(text)`, each stored byte for byte. `WithRawExtraEnv` and
   `WithExtraEnv` write the same column.
+- State evidence: `WithStateEvidence(raw string)` (`pkg/api/apitest/options.go`)
+  seeds raw `state_evidence` through `SeedSpawn`; an empty string stores SQL
+  NULL. **Must use** it for read-surface tests needing explicit evidence,
+  optional metadata such as `failure_reason`, or legacy/no-evidence rows,
+  rather than writing that column with raw SQL.
 - Session history: `WithSessionHistory(entry SessionHistorySeed)` seeds one
   archived `session_history` entry per use: `SessionID` (it may equal the
   row's current session id), `JSONLPath` (empty stores NULL), the `Life` it

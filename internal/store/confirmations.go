@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // confirmations.go — the bounded main-field evidence of SR-4.1 to SR-4.8
@@ -434,6 +435,52 @@ func stateEvidenceSet(value, src, lifeExpr, tokenExpr string, lifeArgs, tokenArg
 // row's life and launch.
 func currentStateEvidenceSet(value, src string) (string, []any) {
 	return stateEvidenceSet(value, src, "life_number", "launch_token", nil, nil)
+}
+
+// cursorStateEvidenceSet updates failure metadata in the same expression as
+// the state record. Its optional reason never changes confirmation timestamps;
+// an ordinary lifecycle event clears it even on a same-state write.
+func cursorStateEvidenceSet(value, src, reason string) (string, []any) {
+	set, args := currentStateEvidenceSet(value, src)
+	expr := strings.TrimPrefix(set, "state_evidence = ")
+	if reason == "" {
+		return `state_evidence = json_remove(` + expr + `, '$.failure_reason')`, args
+	}
+	return `state_evidence = json_set(` + expr + `, '$.failure_reason', ?)`, append(args, reason)
+}
+
+// rawStateRecord applies only to the raw state's current interval, life and
+// launch. Guards use this record independently of the public read projection.
+func (sp Spawn) rawStateRecord() (fieldEvidence, bool) {
+	if ev, ok := decodeFieldEvidence(sp.StateEvidence); ok && ev.Value == sp.State &&
+		ev.Epoch != nil && *ev.Epoch == sp.PermissionEpoch && ev.owns(sp) && ev.Reason == "" && ev.At > 0 {
+		return ev, true
+	}
+	return fieldEvidence{}, false
+}
+
+// RawFailureReason is the Cursor failure recorded for the raw state's current
+// interval. Report verification uses it without consulting display settling.
+func (sp Spawn) RawFailureReason() string {
+	if _, ok := sp.rawStateRecord(); !ok {
+		return ""
+	}
+	return sp.failureReason(sp.StateEvidence)
+}
+
+// Optional failure metadata is decoded separately so an invalid reason cannot
+// invalidate the state's confirmation. Other agents do not record reasons.
+func (sp Spawn) failureReason(raw string) string {
+	if sp.Agent != AgentCursor {
+		return ""
+	}
+	var extra struct {
+		Reason string `json:"failure_reason"`
+	}
+	if json.Unmarshal([]byte(raw), &extra) != nil || len(extra.Reason) > 4096 || strings.ContainsAny(extra.Reason, "\x00\r\n\x1b") {
+		return ""
+	}
+	return extra.Reason
 }
 
 // restoredStateEvidenceSet returns the SET assignment of a failed launch's

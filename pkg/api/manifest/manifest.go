@@ -78,6 +78,8 @@ const confirmationsText = "Exactly three records, state, process_liveness and di
 var processLivenessField = FieldDef{Name: "process_liveness", Type: "string", Description: processLivenessText, Nullable: false, AllowEmpty: false, AllowedValues: []string{"alive", "exited", "unknown"}}
 var confirmationsField = FieldDef{Name: "confirmations", Type: "object", Description: confirmationsText, Nullable: false, AllowEmpty: false, AllowedValues: nil}
 
+var failureReasonField = FieldDef{Name: "failure_reason", Type: "string?", Description: "Sanitized failure recorded by the Cursor gateway for the reported state's current interval: waiting means a failed turn, missing a failed session. Always present; null when no applicable reason is recorded. Only agent cursor records reasons; Claude Code, Codex and other agents return null regardless of their outcome. Follows state settling, survives reads, and clears when the next prompt or lifecycle transition replaces that state's evidence, including rotation or a new launch. Raw runtime message and data are never included. Not a confirmations.state.reason value or permission to replay input.", Nullable: true, AllowEmpty: false, AllowedValues: nil}
+
 // stateEnum is the exhaustive set of valid spawn state strings (SRD §6): the
 // lifecycle states a state field reports. Inlined into AllowedValues where
 // state fields appear.
@@ -677,6 +679,7 @@ var Verbs = []VerbDef{
 			},
 			{Name: "context", Type: "object", Description: contextDescription, Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			familyStateField,
+			failureReasonField,
 			processLivenessField,
 			confirmationsField,
 			availabilityField,
@@ -722,6 +725,7 @@ var Verbs = []VerbDef{
 			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "state", Type: "string", Description: "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is a check's judgement on available evidence, not proof that the agent has exited. " + needsIntelligenceText + " " + idleScreenText + " " + settledStateText, Nullable: false, AllowEmpty: false, AllowedValues: stateEnum},
 			familyStateField,
+			failureReasonField,
 			processLivenessField,
 			confirmationsField,
 			availabilityField,

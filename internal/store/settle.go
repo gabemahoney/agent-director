@@ -147,6 +147,14 @@ func (s *Store) hookWriteStateEvidenceSet(v, src string) (string, []any) {
 	return set + ",\n       " + evidence, append(args, evidenceArgs...)
 }
 
+// A verified Cursor lifecycle report owns the failure metadata along with its
+// state write; proof and dialog guards remain the ordinary hook's guards.
+func (s *Store) hookWriteCursorStateEvidenceSet(v, reason string) (string, []any) {
+	set, args := s.hookWriteStateSet(v)
+	evidence, evidenceArgs := cursorStateEvidenceSet(v, EvidenceAgentEvent, reason)
+	return set + ",\n       " + evidence, append(args, evidenceArgs...)
+}
+
 // SetSettleMs sets the settle time, in whole milliseconds, with which this
 // store's hook writes judge whether the raw value they replace had settled
 // ([state] settle_ms, config.State.EffectiveSettleMs; b.3ie). 0, the value a
@@ -202,14 +210,33 @@ func (r SettleRead) stateExpr() (string, []any) {
 // unknown with no_evidence. A pure read or the passing of time never makes
 // a record. Partial readers that select no evidence columns read unknown.
 func (sp Spawn) StateConfirmation(r SettleRead) Confirmation {
-	if ev, ok := decodeFieldEvidence(sp.StateEvidence); ok && sp.ReportedState == sp.State && ev.Value == sp.State &&
-		ev.Epoch != nil && *ev.Epoch == sp.PermissionEpoch && ev.owns(sp) && ev.Reason == "" && ev.At > 0 {
+	if _, ev, ok := sp.stateRecord(r); ok {
 		return stateRecordFor(ev)
+	}
+	return UnknownConfirmation(ReasonNoEvidence)
+}
+
+// FailureReason is the recorded Cursor failure for the lifecycle state this
+// snapshot reports, including its previous value while a change settles. A
+// read creates and clears no evidence. Guards use RawFailureReason instead.
+func (sp Spawn) FailureReason(r SettleRead) string {
+	raw, _, ok := sp.stateRecord(r)
+	if !ok {
+		return ""
+	}
+	return sp.failureReason(raw)
+}
+
+// stateRecord selects the same owned, applicable record for confirmation and
+// failure metadata, including the previous value while a change settles.
+func (sp Spawn) stateRecord(r SettleRead) (string, fieldEvidence, bool) {
+	if ev, ok := sp.rawStateRecord(); ok && sp.ReportedState == sp.State {
+		return sp.StateEvidence, ev, true
 	}
 	settling := r.on() && r.NowMs-sp.StateChangedMillis < r.SettleMs
 	if ev, ok := decodeFieldEvidence(sp.SettledStateEvidence); ok && settling && ev.Value == sp.ReportedState &&
 		ev.owns(sp) && ev.Reason == "" && ev.At > 0 {
-		return stateRecordFor(ev)
+		return sp.SettledStateEvidence, ev, true
 	}
-	return UnknownConfirmation(ReasonNoEvidence)
+	return "", fieldEvidence{}, false
 }

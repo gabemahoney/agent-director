@@ -87,6 +87,7 @@ const (
 	CursorInputStarted    = "started"
 	CursorInputIssued     = "issued"
 	CursorInputCompleted  = "completed"
+	CursorInputFailed     = "failed"
 	CursorInputRefused    = "refused"
 	CursorInputCancelled  = "cancelled"
 	CursorInputUnresolved = "unresolved"
@@ -109,7 +110,7 @@ func (v CursorInput) validate() error {
 		if v.TargetSession == "" || v.RequestID != "" || !v.Deadline.IsZero() {
 			return fmt.Errorf("store: Cursor input target missing")
 		}
-	case CursorInputStarted, CursorInputIssued, CursorInputCompleted:
+	case CursorInputStarted, CursorInputIssued, CursorInputCompleted, CursorInputFailed:
 		if v.TargetSession == "" || v.RequestID == "" || v.Deadline.IsZero() {
 			return fmt.Errorf("store: Cursor input start identity missing")
 		}
@@ -235,7 +236,7 @@ func cursorInputTransition(old, next CursorInput) bool {
 	case CursorInputAdmitted:
 		return next.State == CursorInputStarted && next.TargetSession == old.TargetSession && old.RequestID == "" && next.RequestID != "" && !next.Deadline.IsZero()
 	case CursorInputStarted, CursorInputIssued:
-		return (old.State == CursorInputStarted && next.State == CursorInputIssued || old.State == CursorInputIssued && next.State == CursorInputCompleted) && next.TargetSession == old.TargetSession && next.RequestID == old.RequestID && next.Deadline.Equal(old.Deadline)
+		return (old.State == CursorInputStarted && next.State == CursorInputIssued || old.State == CursorInputIssued && (next.State == CursorInputCompleted || next.State == CursorInputFailed)) && next.TargetSession == old.TargetSession && next.RequestID == old.RequestID && next.Deadline.Equal(old.Deadline)
 	}
 	return false
 }
@@ -244,7 +245,7 @@ func cursorInputTransition(old, next CursorInput) bool {
 // publication/runtime exit, only for the original physical connection and life.
 // A replacement helper cannot adopt them and no read path resumes them.
 func cursorInputFinal(state string) bool {
-	return state == CursorInputControl || state == CursorInputCompleted || state == CursorInputRefused || state == CursorInputCancelled || state == CursorInputUnresolved
+	return state == CursorInputControl || state == CursorInputCompleted || state == CursorInputFailed || state == CursorInputRefused || state == CursorInputCancelled || state == CursorInputUnresolved
 }
 func (s *Store) cursorInputObservation(ctx context.Context, conn *sql.Conn, owner CursorOwner) error {
 	if owner.StoreID != s.StoreID() {

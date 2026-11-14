@@ -39,7 +39,7 @@ const MAX_READS = 5;
 const BUSY_RETRY_MS = 10000;
 // The lowest valid timeout: the key still loads, and has no effect.
 const TIMEOUT_S = 1;
-const STATUS_KEYS = ['confirmations', 'context', 'family_state', 'idle_screen_availability', 'process_liveness', 'state'];
+const STATUS_KEYS = ['confirmations', 'context', 'failure_reason', 'family_state', 'idle_screen_availability', 'process_liveness', 'state'];
 const DETAIL_KEYS = ['displayed_state', 'since', 'request_token', 'tool_name', 'unchanged_minutes', 'stuck_reason'];
 // A list row's keys present on every row, and those present only on some.
 const LIST_KEYS = ['agent', 'confirmations', 'cwd', 'family_state', 'idle_screen_availability', 'instance_id', 'labels', 'last_seen_at', 'permission_requests', 'process_liveness', 'relay_mode', 'started_at', 'state', 'state_changed_at', 'tmux_session_name'];
@@ -135,6 +135,7 @@ function request(id, at, stored) {
 function check(verb, row, id, agent) {
  const label = `${id} ${verb}`;
  assert.equal(row.state, 'check_permission', `${label}: state`);
+ assert.equal(row.failure_reason, null, `${label}: failure_reason`);
  assert.equal(row.idle_screen_availability, availability(agent), `${label}: idle_screen_availability`);
  for (const key of DETAIL_KEYS) assert.ok(!(key in row), `${label}: row carries ${key}`);
  // SR-4.5: exactly three confirmation records, each of the same five keys.

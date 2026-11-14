@@ -19,6 +19,7 @@ const cancelWait = 3 * time.Second
 const transportWriteWait = 3 * time.Second
 
 var errMalformedACPFrame = errors.New("malformed ACP frame")
+var errMalformedACPErrorResponse = errors.New("malformed error response")
 var errACPOperationUnsupported = errors.New("operation unsupported by the selected runtime")
 
 type frame struct {
@@ -335,10 +336,25 @@ func (p *protocol) response(f frame) (json.RawMessage, error) {
 	p.pendingID = ""
 	p.pendingMethod = ""
 	if len(f.Error) > 0 {
-		return nil, acpResponseFailure(method, f.Error)
+		cause := acpResponseFailure(method, f.Error)
+		if errors.Is(cause, errMalformedACPErrorResponse) {
+			return nil, cause
+		}
+		return nil, &acpReplyError{operation: method, cause: cause}
 	}
 	return f.Result, nil
 }
+
+// Only a structurally valid correlated error response can construct this error.
+// Malformed payloads, transport, framing and correlation failures never grant
+// the controller turn-completion authority.
+type acpReplyError struct {
+	operation string
+	cause     error
+}
+
+func (e *acpReplyError) Error() string { return e.cause.Error() }
+func (e *acpReplyError) Unwrap() error { return e.cause }
 
 // Only documented ACP error codes supply causes. Message and data are untrusted
 // runtime diagnostics and must never reach the pane or ad.cursor.failed trail.
@@ -352,7 +368,7 @@ func acpResponseFailure(method string, raw json.RawMessage) error {
 	var message *string
 	if json.Unmarshal(raw, &failure) != nil || json.Unmarshal(failure["code"], &code) != nil || code == nil ||
 		json.Unmarshal(failure["message"], &message) != nil || message == nil {
-		return fmt.Errorf("Cursor ACP %s failed: malformed error response", method)
+		return fmt.Errorf("Cursor ACP %s failed: %w", method, errMalformedACPErrorResponse)
 	}
 	cause := "runtime rejected the request; cause unknown"
 	switch *code {

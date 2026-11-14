@@ -91,6 +91,25 @@ func verbOf(t *testing.T, name string) manifest.VerbDef {
 	return v
 }
 
+// b.ivj D2: get/status declare the nullable diagnostic without changing list's result shape.
+func TestManifestFailureReason(t *testing.T) {
+	for _, name := range []string{"get", "status", "list"} {
+		found := false
+		for _, field := range verbOf(t, name).ResultFields {
+			if field.Name != "failure_reason" {
+				continue
+			}
+			found = true
+			if field.Type != "string?" || !field.Nullable || field.AllowEmpty || len(field.AllowedValues) != 0 {
+				t.Errorf("%s failure_reason contract: %+v", name, field)
+			}
+		}
+		if found != (name != "list") {
+			t.Errorf("%s failure_reason present=%v", name, found)
+		}
+	}
+}
+
 // siteText returns verb's description or, when param or field is set, that
 // param's or result field's description, failing the test when it is absent.
 func siteText(t *testing.T, verb, param, field string) string {

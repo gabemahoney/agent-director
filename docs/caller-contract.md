@@ -495,6 +495,31 @@ authority. Follow the existing command guards and live-row sequence above;
 [Maintenance](maintenance.md#scheduling-the-sweeps) owns cadence and the separate,
 operator-owned `expire` schedule.
 
+## Failure reasons
+
+`get`, each `get-many.spawns` row and `status` always include
+`failure_reason: string | null`. A non-null value is a sanitized failure for
+the reported state's current interval: `waiting` means a failed Cursor turn;
+`missing` means a failed session. It is separate from
+`confirmations.state.reason`, which explains confirmation status.
+
+Use `get` or `get-many`'s `agent` field to identify recording support;
+`status` does not include `agent`:
+
+| `agent` | `failure_reason` |
+| --- | --- |
+| `cursor` | Recorded reason, or explicit `null` when no applicable reason is recorded. |
+| `claude`, `codex`, `droid`, `opencode` | Always `null`, regardless of outcome. |
+
+Legacy rows and failures without a recorded reason also return `null`; it
+does not prove success. The reason follows state settling, including the
+previous state's reason while that state is still reported. Reads do not clear
+it. A later lifecycle event clears it when it replaces the state's evidence,
+including a new prompt, valid completion, published rotation or new launch. Repeated
+cancellation/idle recovery of the same failed turn retains it. Historical
+outcomes remain in the protected transcript. Neither the field nor `waiting`
+authorizes replay of input. See [Cursor operation boundaries](#cursor-operation-boundaries).
+
 ## Confirmations
 
 `status`, `get`, every `list` row and every `sweep` check carry
@@ -1301,8 +1326,8 @@ that starts before its deadline keeps that original deadline throughout.
 Replacement verification cannot acknowledge a later setup attempt. Retired launch
 registrations do not authorize a new launch. This is distinct from `pause` and `resume`, which
 end and relaunch the managed runtime. Independently launched AD children retain
-their own rows and lifetimes. Native Cursor process replacement and continuation
-remain unverified.
+their own rows and lifetimes, including when a lead's session ends. Native
+Cursor process replacement and continuation remain unverified.
 
 `resume` accepts only `instance_id` (`--instance-id` on the CLI) for an
 `ended` or `missing` Cursor row. It loads only the latest durably reported
@@ -1317,8 +1342,9 @@ never candidates, even when their native storage or transcripts exist.
 Native conversation availability is checked by Cursor during asynchronous
 load; `resume` does not wait for it. Unsupported load, a missing native session,
 invalid response, timeout or transport failure never selects an older session
-or starts a new conversation. Inspect the pane, row and `ad.cursor.failed`
-reason; a successful resume result confirms launch, not successful load.
+or starts a new conversation. Inspect `get` or `status`'s
+[`failure_reason`](#failure-reasons) and the pane if it still exists;
+a successful resume result confirms launch, not successful load.
 Invalid protected-file continuity also fails in the gateway; no missing or
 damaged transcript is reconstructed from replay or replaced with an empty file.
 Load can leave the row `pending` until a real first prompt. Explicit
@@ -1385,7 +1411,8 @@ loaded or rotated conversation must advertise the requested mode and confirm
 its selection before publication, readiness or prompt submission. Missing mode
 state, an unavailable requested mode, a rejected or invalid acknowledgement,
 timeout or lost authority fails asynchronously, with no automatic fallback.
-Inspect the pane, row and `ad.cursor.failed` reason as for other gateway failures.
+Inspect [`failure_reason`](#failure-reasons) and any surviving pane as for
+other gateway failures.
 Only an advertised unavailable mode or a structured unsupported-operation error
 (`-32601`) while mode selection is pending can offer mode-removal advice.
 Authentication-required, unknown, internal, malformed, format, cancellation and
@@ -1476,10 +1503,28 @@ outcomes. Display loss supplies no readiness, permission or termination evidence
 unsupported platforms, failed lifetime protection or unavailable ownership
 evidence cannot produce a ready report; a launch may remain `pending` until
 a recovery check (a state read or `sweep`) confirms gateway loss.
-Runtime/protocol/reporting failures emit `ad.cursor.failed` with a reason when
-the gateway has identified its row.
-Examples include an ACP operation timeout, unsupported ACP protocol,
-changed runtime/session binding, a refused report or transport failure.
+
+A structurally valid error reply correlated to the active `session/prompt`
+ends only that turn when the runtime is verified alive. Without a pending
+rotation or exit, required proof and outcome persistence return the row to `waiting` with
+[`failure_reason`](#failure-reasons); the gateway renders the failure and admits
+later explicit input. No prompt is automatically retried. A second consecutive
+prompt error ends the session. Any valid prompt completion, including
+`cancelled`, refusal or a token limit, resets the count; updates, input admission
+and conversation rotation do not. A new runtime starts at zero.
+
+The failed submission has a protected `turn_outcome` with `outcome: "failed"`,
+its sanitized `reason`, submission/request IDs and cancellation status; no
+`stop_reason` is invented. This applies to the second failure too when runtime
+liveness is verified. A successful `send-keys` reports admission, not turn
+success. Pending permission requests follow the ordinary turn-end proof rules
+without inventing a verdict, delivery or execution result. Recoverable failures
+emit `ad.cursor.turn_failed`; session-ending failures emit `ad.cursor.failed`
+when the gateway has identified its row. The trail remains audit-only.
+
+Other ACP operations, malformed error payloads or frames, uncorrelated replies,
+timeouts, transport or reporting failures, changed bindings, and a dead or
+unverifiable runtime remain fatal gateway failures.
 Each tool proof keeps the original `[store] busy_timeout_ms` window from its
 first persistence attempt; retries never renew it. Failure to confirm storage
 fails the gateway without establishing either persistence or rollback. The
@@ -1489,7 +1534,7 @@ actual event determines what must finish before the next lifecycle step:
 |---|---|
 | Ctrl-C interruption | The completed turn proves its requests gone, answered or not, except those with pending or stored tool proof. Deferred tool proofs are stored before its Stop report; idle-control recovery also stores them before reporting waiting. The first control's three-second deadline bounds this work. |
 | `/clear` or `/new` | A completed outgoing turn first proves its requests gone, with the same tool-proof exceptions. Deferred tool proofs must be stored before rotation publication, within the same first-control deadline; failure refuses rotation. |
-| Ordinary turn completion | Turn-end proof has its own fixed store-busy window; deferred tool proofs keep theirs and must be stored before the Stop report. |
+| Ordinary completion or recovered prompt failure | Turn-end proof has its own fixed store-busy window; deferred tool proofs keep theirs and must be stored before the Stop report. |
 | Waiting report | Startup and turn/idle-control Stop reports store their captured deferred proofs first, within each proof's remaining window and any earlier cancellation deadline. |
 | `/exit`, eligible `pause` or terminating signal | Before terminating the runtime, try to store deferred proofs through their remaining original windows. This can outlast the cancellation deadline: a confirmed proof then survives, but intentional end cannot be confirmed and the row becomes `missing`, not `ended`. Storage failure remains failure. |
 
@@ -1501,9 +1546,9 @@ without busy retries; death supplies no missing authority or proof.
 The prompt's 30-minute response phase pauses while admitted requests remain
 open and restarts when an actual completion releases the last one. This is not
 a fixed total-turn limit; it never renews the first control's deadline.
-These are asynchronous launch failures, not new typed spawn errors.
+Gateway failures are asynchronous, not new typed spawn errors.
 
-Failure reasons identify the initiating operation (`initialize`, `session/new`,
+ACP failure reasons identify the initiating operation (`initialize`, `session/new`,
 `session/load`, `session/set_mode` or `session/prompt`) with bounded, sanitized
 text. Structured ACP errors require exact `code` (an integer in the signed
 32-bit range) and `message` (a string) keys. Only the numeric code supplies the
@@ -1532,9 +1577,15 @@ session or authorization checks.
 Pipe EOF is a transport failure, not proof of child death. On fatal gateway
 failure, cleanup stops and joins the owned runtime and independently confirms
 its death before marking the current launch `missing` and closing its requests.
-This is not an intentional session end or a successful turn. Cleanup errors
-remain failures. Local `/exit` and eligible `pause` can report termination only
-after the owned runtime is confirmed gone; a stop failure cannot report success.
+Its initiating sanitized reason is recorded as `failure_reason`, matching
+`ad.cursor.failed`, even if a state read marked that same launch `missing`
+first. The pane can disappear with the gateway; use the public field rather
+than requiring pane or audit-trail access. Failures before runtime registration
+can leave a later `missing` row without a recorded reason, even when the trail
+contains one. This is not an intentional session end or a successful turn.
+Cleanup errors remain failures. Local `/exit` and eligible `pause` can report
+termination only after the owned runtime is confirmed gone; a stop failure
+cannot report success.
 
 For a selected live Cursor row, the
 [shared checks](#bounded-recovery-on-state-reads) judge its recorded gateway

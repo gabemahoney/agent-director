@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,7 +102,9 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 						}
 					}
 					payload := map[string]any{"hook_event_name": event, "origin": "main",
-						"session_id": b.SessionID, "cursor_connection": b.Connection, "transcript_path": path}
+						"session_id": b.SessionID, "cursor_connection": b.Connection, "transcript_path": path,
+						// b.ivj D2: only a verified main Stop may persist this claim.
+						"cursor_failure_reason": "runtime internal error"}
 					if tc.origin != "" {
 						payload["origin"] = tc.origin
 					}
@@ -141,6 +144,13 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 						if held && after.RowVersion <= before.RowVersion {
 							t.Fatal("main held refresh did not advance row version")
 						}
+						wantReason := ""
+						if event == "Stop" && !held {
+							wantReason = "runtime internal error"
+						}
+						if after.RawFailureReason() != wantReason {
+							t.Fatalf("failure reason=%q; want %q", after.RawFailureReason(), wantReason)
+						}
 						if after.State != expected || after.SessionID != b.SessionID {
 							t.Fatalf("verified prompt did not apply: %+v", after)
 						}
@@ -165,6 +175,33 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 					}
 					if got, err := st.ReadCursorRuntime(id); err != nil || !reflect.DeepEqual(got, b) {
 						t.Fatalf("runtime binding changed: %+v, %v", got, err)
+					}
+					// b.ivj D2: reject unsafe optional text at ingestion, rather than
+					// merely hiding it in the reader; a same-state Stop replaces metadata.
+					if event == "Stop" && !held && tc.name == "verified" {
+						for _, reason := range []string{strings.Repeat("é", 2048), strings.Repeat("é", 2048) + "x", "a\nb", "a\rb", "a\x00b", "a\x1bb"} {
+							payload["cursor_failure_reason"] = reason
+							raw, err := json.Marshal(payload)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if out := ssgHandleWith(t, st, hc, string(raw), nil); out != "" {
+								t.Fatalf("optional reason stdout=%q", out)
+							}
+							current := mustGetSpawn(t, st, id)
+							var evidence map[string]any
+							if err := json.Unmarshal([]byte(current.StateEvidence), &evidence); err != nil {
+								t.Fatal(err)
+							}
+							want := ""
+							if len(reason) == 4096 {
+								want = reason
+							}
+							_, stored := evidence["failure_reason"]
+							if current.State != store.StateWaiting || current.RawFailureReason() != want || stored != (want != "") {
+								t.Fatalf("optional reason length=%d: stored=%v, state=%s, reason length=%d", len(reason), stored, current.State, len(current.RawFailureReason()))
+							}
+						}
 					}
 				})
 			}
