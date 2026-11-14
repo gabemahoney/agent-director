@@ -434,3 +434,18 @@ test("public-surface: only get rows require the persisted busy_send union", () =
   expect(interfaceBody(types, "GetResult")).toMatch(/\bbusy_send\s*:\s*"covered"\s*\|\s*"not_covered"\s*;/);
   for (const iface of ["ListRow", "StatusResult"]) expect(interfaceBody(types, iface)).not.toMatch(/\bbusy_send\b/);
 });
+
+// SR-5.6: the covered-only read blocks are optional (omitted for an uncovered row), each only where it is shown.
+test.each([
+  ["GetResult", ["agent_defaults", "delivery", "delivery_capabilities"]],
+  ["StatusResult", ["agent_defaults", "delivery"]],
+  ["ListRow", ["agent_defaults"]],
+] as const)("public-surface: %s carries exactly its optional covered-only blocks", (iface, want) => {
+  const declared = [...interfaceBody(typesGolden(), iface).matchAll(/^\s*(agent_defaults|delivery|delivery_capabilities)(\??)\s*:/gm)];
+  expect(declared.map(([, name, optional]) => `${name}${optional}`)).toEqual(want.map((name) => `${name}?`));
+});
+
+test("public-surface: the covered-only blocks' types are exported from the package root", () => {
+  const index = fs.readFileSync(path.join(fixtureDir, "index.d.ts.golden"), "utf8");
+  for (const name of ["AgentDefaults", "DeliveryFacts", "DeliveryCapabilities", "DeliveryModeLimits"]) expect(index, name).toMatch(new RegExp(`\\b${name}\\b`));
+});

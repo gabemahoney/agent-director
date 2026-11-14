@@ -71,9 +71,10 @@ type MakeTemplateParams struct {
 	// setting; nil stores no key, so a spawn uses its own or none. Any
 	// supplied value, false and wait_turn included, is stored. They apply only
 	// to a Covered Agent: a template whose Agent busy send does not cover is
-	// refused with ErrCantSend, reason agent_not_covered, before anything is
-	// written. A template with no Agent stores them; the spawn that uses it
-	// decides them for its resolved agent (SR-9.2).
+	// refused with ErrCantSend, reason agent_not_covered, and one whose Agent
+	// is not offered its SendMode with reason steer_unsupported, before
+	// anything is written. A template with no Agent stores them; the spawn
+	// that uses it decides them for its resolved agent (SR-1.4, SR-9.2).
 	SendMode               *string
 	ConfirmedDelivery      *bool
 	ConfirmFromTranscripts *bool
@@ -129,7 +130,9 @@ type MakeTemplateResult struct {
 //     ErrTemplateMalformed, after RelayMode. Last, a template that names its
 //     Agent and sets an Agent Default or ConfirmFromTranscripts is decided
 //     for that agent: busy send not covering it is ErrCantSend, reason
-//     agent_not_covered (SR-9.2). An agent-less template stores them.
+//     agent_not_covered (SR-9.2), and a SendMode the agent is not offered
+//     ErrCantSend, reason steer_unsupported (SR-1.4). An agent-less template
+//     stores them.
 //   - These checks run before the templates dir is created and before any
 //     write, so a refused call creates, writes and replaces nothing,
 //     whatever Overwrite is.
@@ -176,10 +179,12 @@ func makeTemplate(params MakeTemplateParams, cfg config.Config) (MakeTemplateRes
 		return MakeTemplateResult{}, err
 	}
 	// A template that names its agent is decided for that agent now, from the
-	// coverage a Launch of it would record; an agent-less one is decided by
-	// the spawn that resolves its agent (SR-9.2).
-	if named := agentDefaultsNamed(params.SendMode, params.ConfirmedDelivery, params.ConfirmFromTranscripts); named != "" && params.Agent != "" {
-		if err := busySendGate("make-template of agent "+params.Agent, named, store.BusySendCoverageForAgent(params.Agent)); err != nil {
+	// coverage a Launch of it would record and the Send Modes it offers; an
+	// agent-less one is decided by the spawn that resolves its agent (SR-1.4,
+	// SR-9.2).
+	if params.Agent != "" {
+		if err := busySendDefaultsGate("make-template of agent "+params.Agent, params.Agent, store.BusySendCoverageForAgent(params.Agent),
+			agentDefaultsNamed(params.SendMode, params.ConfirmedDelivery, params.ConfirmFromTranscripts), params.SendMode); err != nil {
 			return MakeTemplateResult{}, err
 		}
 	}
@@ -335,8 +340,9 @@ func validateTemplateRelayMode(m string) error {
 //     set to neither wait_turn nor steer_turn, or Agent is non-empty and
 //     unrecognized (the message quotes the value).
 //   - ErrCantSend: SendMode, ConfirmedDelivery or ConfirmFromTranscripts is
-//     set and busy send does not cover Agent: reason agent_not_covered
-//     ([CantSendDetails]); nothing is written or replaced.
+//     set and busy send does not cover Agent: reason agent_not_covered; or
+//     SendMode is one the covered Agent is not offered: reason
+//     steer_unsupported ([CantSendDetails]); nothing is written or replaced.
 //   - ErrTemplateAgentMissing: AgentArgs is non-empty and Agent is empty;
 //     nothing is written. Give the template's agent or drop AgentArgs.
 //   - ErrExperimentalAgentDisabled: the template's experimental agent is

@@ -153,9 +153,32 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	if p.InstanceID == "" {
 		return p, fmt.Errorf("--instance-id is required")
 	}
+	// A raw-key flag given even at its zero value (--no-enter=false, --n-lines
+	// 0) counts as supplied, which a Covered Agent's send refuses. An omitted
+	// --n-lines is 0, which the verb reads as its default, so the flag's
+	// displayed default never counts as supplied.
+	// A --delivery-request-id given empty is supplied too, which a Covered
+	// Agent's send refuses rather than making an id.
+	nLinesGiven := false
+	fs.Visit(func(f *flag.Flag) {
+		if name, raw := sendKeysRawKeyFlags[f.Name]; raw {
+			p.RawKeysSupplied = append(p.RawKeysSupplied, name)
+			nLinesGiven = nLinesGiven || name == "n_lines"
+		}
+		p.DeliveryRequestIDSupplied = p.DeliveryRequestIDSupplied || f.Name == "delivery-request-id"
+	})
+	if !nLinesGiven {
+		p.NLines = 0
+	}
 	// Empty --text is allowed (a press-Enter-only call has no body); the
 	// verb-layer state guard still applies.
 	return p, nil
+}
+
+// sendKeysRawKeyFlags maps send-keys' raw-key flags to their parameter names.
+var sendKeysRawKeyFlags = map[string]string{
+	"no-enter": "no_enter", "key": "key", "expect-pane-sha256": "expect_pane_sha256",
+	"n-lines": "n_lines", "request-token": "request_token", "as": "as",
 }
 
 // recordPaneAnswerHandlerWith implements `agent-director record-pane-answer`

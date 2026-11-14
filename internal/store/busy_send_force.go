@@ -142,41 +142,46 @@ func (s *Store) ReadBusySendForce(forceID string) (BusySendForceLookup, error) {
 			return err
 		}
 		defer rollbackConn(ctx, conn)
-		var f BusySendForce
-		var conversation, launch, token, provider, handover, reason sql.NullString
-		var callEnded, ended, expired sql.NullInt64
-		var outcome, retention string
-		err := conn.QueryRowContext(ctx, `SELECT force_id, instance_id, conversation_id, launch_id, launch_token, provider,
-		        owner_call_id, revision, handover_id, call_deadline_ms, call_ended_at_ms, outcome, reason,
-		        started_at_ms, ended_at_ms, retention, expired_at_ms
-		    FROM busy_send_forces WHERE force_id = ? AND store_id = ?`, forceID, s.StoreID()).Scan(
-			&f.ForceID, &f.InstanceID, &conversation, &launch, &token, &provider, &f.OwnerCallID, &f.Revision,
-			&handover, &f.CallDeadlineMillis, &callEnded, &outcome, &reason, &f.StartedAtMillis, &ended,
-			&retention, &expired)
-		if errors.Is(err, sql.ErrNoRows) {
-			out = BusySendForceLookup{Lookup: BusySendLookupUnknown}
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if BusySendRetention(retention) == BusySendExpired {
-			out = BusySendForceLookup{Lookup: BusySendLookupRetentionExpired}
-			return nil
-		}
-		f.ConversationID, f.LaunchID, f.LaunchToken, f.Provider = conversation.String, launch.String, token.String, provider.String
-		f.HandoverID, f.Outcome, f.Reason = handover.String, BusySendForceOutcome(outcome), BusySendForceReason(reason.String)
-		f.CallEndedAtMillis, f.EndedAtMillis, f.Retention = callEnded.Int64, ended.Int64, BusySendRetention(retention)
-		if f.CarriedPairs, err = readBusySendForcePairs(ctx, conn, forceID); err != nil {
-			return err
-		}
-		out = BusySendForceLookup{Lookup: BusySendLookupFound, ForceResult: &f}
-		return nil
+		var err error
+		out, err = readBusySendForceByID(ctx, conn, s.StoreID(), forceID)
+		return err
 	})
 	if err != nil {
 		return BusySendForceLookup{}, err
 	}
 	return out, nil
+}
+
+// readBusySendForceByID is ReadBusySendForce's read inside its caller's
+// transaction, shared with the delivery observation's force summary.
+func readBusySendForceByID(ctx context.Context, conn *sql.Conn, storeID, forceID string) (BusySendForceLookup, error) {
+	var f BusySendForce
+	var conversation, launch, token, provider, handover, reason sql.NullString
+	var callEnded, ended, expired sql.NullInt64
+	var outcome, retention string
+	err := conn.QueryRowContext(ctx, `SELECT force_id, instance_id, conversation_id, launch_id, launch_token, provider,
+	        owner_call_id, revision, handover_id, call_deadline_ms, call_ended_at_ms, outcome, reason,
+	        started_at_ms, ended_at_ms, retention, expired_at_ms
+	    FROM busy_send_forces WHERE force_id = ? AND store_id = ?`, forceID, storeID).Scan(
+		&f.ForceID, &f.InstanceID, &conversation, &launch, &token, &provider, &f.OwnerCallID, &f.Revision,
+		&handover, &f.CallDeadlineMillis, &callEnded, &outcome, &reason, &f.StartedAtMillis, &ended,
+		&retention, &expired)
+	if errors.Is(err, sql.ErrNoRows) {
+		return BusySendForceLookup{Lookup: BusySendLookupUnknown}, nil
+	}
+	if err != nil {
+		return BusySendForceLookup{}, err
+	}
+	if BusySendRetention(retention) == BusySendExpired {
+		return BusySendForceLookup{Lookup: BusySendLookupRetentionExpired}, nil
+	}
+	f.ConversationID, f.LaunchID, f.LaunchToken, f.Provider = conversation.String, launch.String, token.String, provider.String
+	f.HandoverID, f.Outcome, f.Reason = handover.String, BusySendForceOutcome(outcome), BusySendForceReason(reason.String)
+	f.CallEndedAtMillis, f.EndedAtMillis, f.Retention = callEnded.Int64, ended.Int64, BusySendRetention(retention)
+	if f.CarriedPairs, err = readBusySendForcePairs(ctx, conn, forceID); err != nil {
+		return BusySendForceLookup{}, err
+	}
+	return BusySendForceLookup{Lookup: BusySendLookupFound, ForceResult: &f}, nil
 }
 
 // readBusySendForcePairs reads a force's carried confirmed pairs in carried

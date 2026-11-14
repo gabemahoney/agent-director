@@ -1,9 +1,10 @@
 package store
 
 // The busy-send permanent core (SR-2.1, SR-7.1, SR-7.2, SR-9.1): its
-// declarations and stored codes, the records it holds, the exempt v20→v21
-// hop that is its only conversion, open's recognition of it, and its
-// restore-only recovery. Fixtures: migration_fixtures_test.go (makeV20Fixture,
+// declarations and stored codes, the records it holds (and delivery's
+// hand-over count over them, SR-5.6), the exempt v20→v21 hop that is its only
+// conversion, open's recognition of it, and its restore-only recovery.
+// Fixtures: migration_fixtures_test.go (makeV20Fixture,
 // preAddV21Core, bindV21Row, seedBusySendRecords, assertV21Backfill); the
 // hop's rollback and step reentry rows are schema_test.go's.
 
@@ -28,7 +29,7 @@ import (
 // only conversion: every later release reads and writes these tables as
 // declared, and open refuses any other declaration (SR-7.2). So this value
 // never changes; a change to it strands every store already at v21.
-const busySendCoreV1Digest = "3c29e04c32f24175649b0811b2bea31acd82d81e743bcb7d3a27e9f6c0d0ad7b"
+const busySendCoreV1Digest = "1f23599717702e35a732a463f6052436ee82756cb26d65e50271c689c31d7db0"
 
 // busySendCoreDigest hashes db's recorded core declarations, each object's
 // type, name and SQL text (whitespace collapsed) in name order, and returns
@@ -138,6 +139,7 @@ func TestBusySendCoreContract(t *testing.T) {
 		{"busy_send_launches", "kind", codes(BusySendLaunchSpawn, BusySendLaunchReuse, BusySendLaunchResume, BusySendLaunchMigrated)},
 		{"busy_send_launches", "phase", codes(BusySendLaunchCandidate, BusySendLaunchUncertain, BusySendLaunchFailed, BusySendLaunchCurrent, BusySendLaunchSuperseded)},
 		{"busy_send_launches", "route_kind", codes(BusySendRouteClaudeHooks, BusySendRouteCodexAppServer, BusySendRouteCursorACP)},
+		{"busy_send_launches", "override_send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
 		{"busy_send_launches", "end_cause", codes(BusySendProcessExited, BusySendLaunchPublished, BusySendCreationFailed, BusySendLaunchRecordDeleted, BusySendLaunchCandidateReplaced)},
 		{"busy_send_launch_processes", "role", codes(BusySendProcessAgent, BusySendProcessAppServer, BusySendProcessTUI, BusySendProcessHelper, BusySendProcessGateway)},
 		{"busy_send_messages", "send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
@@ -230,21 +232,10 @@ func TestBusySendCoveredSet(t *testing.T) {
 // keeping its pair, a refused force with no captured target, a signalled
 // claim's exit_uncertain outcome before its fence ends, one standing claim
 // and one open force per scope) and refuses every state its keys and
-// constraints rule out, a dangling reference at COMMIT (SR-2.1, SR-6.5).
+// constraints rule out, a dangling reference at COMMIT and an Agent Default
+// override on a Launch other than a resume (SR-2.1, SR-1.4, SR-6.5).
 func TestBusySendRecordsRepresentation(t *testing.T) {
-	seed := func(t *testing.T) (*Store, busySendRecords) {
-		s, _ := openTempStore(t)
-		if err := s.InsertPending(Spawn{InstanceID: "rec", Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "ad-rec", RelayMode: "off"}); err != nil {
-			t.Fatal(err)
-		}
-		// Replace the fresh insertion's empty core with the richer fixture before
-		// exposing it to a test. No retained custody exists at this point.
-		mustExec(t, s.db, `DELETE FROM busy_send_launches WHERE instance_id='rec'`)
-		mustExec(t, s.db, `DELETE FROM busy_conversations WHERE instance_id='rec'`)
-		r := seedBusySendRecords(t, s.db, s.StoreID(), "rec")
-		mustExec(t, s.db, `UPDATE spawns SET busy_conversation_id=?,busy_send='covered',life_number=?,launch_token=? WHERE instance_id='rec'`, r.conversation, recLife, recToken)
-		return s, r
-	}
+	seed := seedBusySendRecordsRow
 	t.Run("deleting the agent keeps every record", func(t *testing.T) {
 		s, r := seed(t)
 		core := func() map[string]any {
@@ -294,6 +285,8 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 		{"a signalled claim records exit_uncertain standing, then ends at Launch End", pauseExitUncertainSQL("launch_end"), ""},
 		{"a signalled claim records exit_uncertain standing, then ends at a new Launch", pauseExitUncertainSQL("launch_published"), ""},
 
+		{"an Agent Default override on a Launch that is not a resume", []string{
+			`UPDATE busy_send_launches SET override_confirmed = 0 WHERE launch_id = '{oldLaunch}'`}, "CHECK"},
 		{"logical deletion requires supersession", []string{`UPDATE busy_send_launches SET ended_at_ms=5000,end_cause='record_deleted' WHERE launch_id='{launch}'`}, "CHECK"},
 		{"logical candidate replacement requires supersession", []string{`UPDATE busy_send_launches SET ended_at_ms=5000,end_cause='candidate_replaced' WHERE launch_id='{launch}'`}, "CHECK"},
 		{"logical candidate replacement is representable", []string{`UPDATE busy_send_launches SET phase='superseded',ended_at_ms=5000,end_cause='candidate_replaced' WHERE launch_id='{launch}'`}, ""},
@@ -367,6 +360,59 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 			}
 			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want+" constraint failed")) {
 				t.Fatalf("got %v; want a %s constraint refusal", err, tc.want)
+			}
+		})
+	}
+}
+
+// seedBusySendRecordsRow opens a store whose pending Claude row "rec" is bound,
+// covered, to seedBusySendRecords' published conversation and current Launch.
+func seedBusySendRecordsRow(t *testing.T) (*Store, busySendRecords) {
+	t.Helper()
+	s, _ := openTempStore(t)
+	if err := s.InsertPending(Spawn{InstanceID: "rec", Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "ad-rec", RelayMode: "off"}); err != nil {
+		t.Fatal(err)
+	}
+	// Replace the fresh insertion's empty core with the richer fixture before
+	// exposing it to a test. No retained custody exists at this point.
+	mustExec(t, s.db, `DELETE FROM busy_send_launches WHERE instance_id='rec'`)
+	mustExec(t, s.db, `DELETE FROM busy_conversations WHERE instance_id='rec'`)
+	r := seedBusySendRecords(t, s.db, s.StoreID(), "rec")
+	mustExec(t, s.db, `UPDATE spawns SET busy_conversation_id=?,busy_send='covered',life_number=?,launch_token=? WHERE instance_id='rec'`, r.conversation, recLife, recToken)
+	return s, r
+}
+
+// TestBusySendHandoverCount (SR-5.6): delivery's handover_count counts
+// distinct non-Final hand-overs, each at its Messages' latest attempt only.
+// seedBusySendRecords' open hand-over of Messages 2 and 4 counts once, and
+// Message 1, Held again after the closed hand-over, adds nothing. With
+// Message 1's custody closed unfinished after that hand-over, the two
+// separate hand-overs count 2; with Message 1 handed over again in the open
+// one, its earlier hand-over no longer counts.
+func TestBusySendHandoverCount(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stmts []string
+		want  int64
+	}{
+		{"a multi-Message hand-over", nil, 1},
+		{"two separate hand-overs", []string{`UPDATE busy_send_messages SET place = 'closed', result_class = 'queued',
+			wait_reason = 'awaiting_proof' WHERE message_id = '{held}'`}, 2},
+		{"a Message handed over again", []string{
+			`INSERT INTO busy_send_handover_members (handover_id, member_index, message_id, prompt_index, store_id)
+				VALUES ('{handover}', 2, '{held}', 0, '{store}')`,
+			`UPDATE busy_send_messages SET place = 'issued', handover_id = '{handover}', wait_reason = 'awaiting_proof'
+				WHERE message_id = '{held}'`}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, r := seedBusySendRecordsRow(t)
+			fill := strings.NewReplacer("{store}", s.StoreID(), "{held}", r.held, "{handover}", r.handover)
+			for _, q := range tc.stmts {
+				mustExec(t, s.db, fill.Replace(q))
+			}
+			o, err := s.ReadBusySendObservation("rec", DefaultLockWait)
+			if err != nil || o == nil || o.HandoverCount != tc.want {
+				t.Errorf("observation %+v, %v; want handover_count %d", o, err, tc.want)
 			}
 		})
 	}

@@ -371,9 +371,10 @@ func busyPair(id string) store.BusySendPair {
 	return store.BusySendPair{CallerUUID: busyCaller, DeliveryRequestID: id}
 }
 
-// TestBusySendLookups (SR-4.1, SR-5.1, SR-5.3, SR-5.4, SR-5.5): get-delivery
-// projects each stored Result class exactly, holding no text, raw evidence or
-// path, for either hex case of the Caller UUID; unknown pairs and force ids
+// TestBusySendLookups (SR-4.1, SR-5.1, SR-5.3, SR-5.4, SR-5.5; M1
+// during-coding Result field and reason mapping): get-delivery projects each
+// stored Result class and compatibility outcome exactly, holding no text, raw
+// evidence or path, for either hex case of the Caller UUID; unknown pairs and force ids
 // and expired ones answer with a null payload. The reads start no work and
 // write nothing: neither elapsed idle time, the row's deletion nor reopening
 // the store changes an answer.
@@ -414,9 +415,17 @@ func TestBusySendLookups(t *testing.T) {
 				return d
 			}},
 		{storefix.BusySendResultSeed{Pair: busyPair("unconfirmed"), Class: store.BusySendClassSentUnconfirmed, Final: true,
-			Reason: "confirmation_off", LaunchToken: token},
+			Reason: "confirmation_off", LaunchToken: token, Transport: store.BusySendTransportWritten},
 			func(d api.DeliveryResult) api.DeliveryResult {
 				d.Class, d.Final, d.Reason, d.LaunchToken, d.Outcome = "sent_unconfirmed", true, "confirmation_off", &token, "submission_unconfirmed"
+				return d
+			}},
+		// SR-5.3: only the stored fact that the latest prompt was partly
+		// written maps to partial_input_unconfirmed, whatever the class.
+		{storefix.BusySendResultSeed{Pair: busyPair("partial"), Class: store.BusySendClassSentUnconfirmed, Final: true,
+			Reason: "transport_partial", LaunchToken: token, Transport: store.BusySendTransportPartial},
+			func(d api.DeliveryResult) api.DeliveryResult {
+				d.Class, d.Final, d.Reason, d.LaunchToken, d.Outcome = "sent_unconfirmed", true, "transport_partial", &token, "partial_input_unconfirmed"
 				return d
 			}},
 		{storefix.BusySendResultSeed{Pair: busyPair("not-started"), Class: store.BusySendClassNotStarted, Final: true,
@@ -467,7 +476,7 @@ func TestBusySendLookups(t *testing.T) {
 		}
 	}
 
-	ids := []string{"delivered", "held", "queued", "unconfirmed", "not-started", "expired", "never-sent"}
+	ids := []string{"delivered", "held", "queued", "unconfirmed", "partial", "not-started", "expired", "never-sent"}
 	answers := func(c *api.Client) map[string]api.GetDeliveryResult {
 		t.Helper()
 		out := map[string]api.GetDeliveryResult{}

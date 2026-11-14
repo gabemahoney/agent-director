@@ -153,10 +153,13 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	// its template, apply to the new Launch, so they are decided from the
 	// coverage that Launch would record: the resolved agent's, for a fresh
 	// spawn and for a reuse alike, since a reuse starts a fresh conversation
-	// (SR-9.1). This comes before the label scan, the reuse reset, pre-trust
-	// and the insert, so a refusal writes and launches nothing (SR-9.2).
-	if named := agentDefaultsNamed(r.SendMode, r.ConfirmedDelivery, r.ConfirmFromTranscripts); named != "" {
-		return SpawnResult{}, busySendGate("spawn of agent "+r.Agent, named, store.BusySendCoverageForAgent(r.Agent))
+	// (SR-9.1), and from that agent's offered Send Modes (SR-1.4). This comes
+	// before the label scan, the reuse reset, pre-trust and the insert, so a
+	// refusal writes and launches nothing (SR-9.2). Accepted, they are
+	// published with the new conversation (store.Spawn.BusySendDefaults).
+	if err := busySendDefaultsGate("spawn of agent "+r.Agent, r.Agent, store.BusySendCoverageForAgent(r.Agent),
+		agentDefaultsNamed(r.SendMode, r.ConfirmedDelivery, r.ConfirmFromTranscripts), r.SendMode); err != nil {
+		return SpawnResult{}, err
 	}
 	if reuse && idCheck == spawn.IDFinishedRow {
 		return spawnReuse(reuseDeps{rs: rs, t: t, pc: pc, cfg: cfg, storeID: s.StoreID(), storePath: s.Path(), now: now, lg: lg, who: callerIdentity()}, r, reused.row)
@@ -355,8 +358,11 @@ func hasControlChar(id string) bool {
 //     is neither wait_turn nor steer_turn; nothing is written or launched.
 //   - ErrCantSend: SendMode, ConfirmedDelivery or ConfirmFromTranscripts is
 //     set, by the call or its template, and busy send does not cover the
-//     resolved agent: reason agent_not_covered ([CantSendDetails]), after
-//     validation and before anything is written or launched.
+//     resolved agent: reason agent_not_covered; or SendMode is one the
+//     covered agent is not offered: reason steer_unsupported
+//     ([CantSendDetails]); after validation and before anything is written or
+//     launched. Accepted, they are published with the new conversation over
+//     the out-of-box wait_turn and false.
 //   - ErrInstanceIdCollision: without ReuseFinished, a row already exists
 //     for the explicit InstanceID, in any state (the pre-check refuses
 //     it before anything is written; the insert's primary key refuses a row

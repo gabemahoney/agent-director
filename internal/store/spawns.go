@@ -329,6 +329,14 @@ type Spawn struct {
 	// (ResumePrior.TurnStarts, RawLife). It is store-internal and never on any
 	// verb's output.
 	TurnStarts int64
+
+	// BusySendDefaults is a spawn's or reuse's explicit Agent Default and
+	// confirm_from_transcripts choice, its template's folded in. InsertPending
+	// publishes it, resolved over BusySendOutOfBoxDefaults, with the new
+	// conversation; ResetForReuse stages it the same way on its candidate
+	// conversation (SR-1.4, SR-6.3). No read fills it: the published values
+	// are the conversation's.
+	BusySendDefaults BusySendDefaultsChoice
 }
 
 // RawFields returns the full stored-row projection, clearing only the derived

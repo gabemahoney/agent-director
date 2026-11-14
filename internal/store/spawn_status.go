@@ -16,7 +16,7 @@ const statusRowColumns = `instance_id, state, launch_started_at, family_state,
  relay_mode, COALESCE(life_number, 0), agent, jsonl_path, end_reported_at,
  codex_startup, claude_capacity, permission_epoch, observation_version,
  COALESCE(display_observation, ''), ` + lifeColumns + `, ` + paneColumns + `,
- state_changed_ms, ` + evidenceColumns
+ state_changed_ms, ` + evidenceColumns + `, busy_send`
 
 // SpawnStatusRow is the partial Spawn reader: it reads only status, context
 // and display-observation evidence in one snapshot. It fills InstanceID,
@@ -26,9 +26,10 @@ const statusRowColumns = `instance_id, state, launch_started_at, family_state,
 // (Snapshot.StartedAt as stored text), with RowVersion, SessionID, PID,
 // ProcStarttime and TmuxSessionName taken from Snapshot; PermissionEpoch,
 // ObservationVersion and DisplayObservation; and the idle_screen timeout
-// override and committed pane baseline (paneColumns); and StateChangedMillis
+// override and committed pane baseline (paneColumns); StateChangedMillis
 // with the main-field evidence (evidenceColumns), which StateConfirmation
-// applies to the reported state.
+// applies to the reported state; and BusySend, the current Launch's recorded
+// coverage, which decides whether status reads delivery facts.
 //
 // All other fields stay unpopulated; their zero values do not establish stored
 // absence. These include LaunchOwner, IdleSince,
@@ -86,7 +87,7 @@ func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, err
 	var life lifeScan
 	var pane paneScan
 	var evidence evidenceScan
-	var launch, agent, path, endReport, startup, capacity any
+	var launch, agent, path, endReport, startup, capacity, busySend any
 	dest := []any{&row.InstanceID, &row.State, &launch, &row.FamilyState,
 		&row.RelayMode, &row.LifeNumber, &agent, &path, &endReport,
 		&startup, &capacity, &row.PermissionEpoch, &row.ObservationVersion, &row.DisplayObservation}
@@ -94,6 +95,7 @@ func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, err
 	dest = append(dest, pane.dest()...)
 	dest = append(dest, &row.StateChangedMillis)
 	dest = append(dest, evidence.dest()...)
+	dest = append(dest, &busySend)
 	dest = append(dest, extra...)
 	if reported {
 		dest = append(dest, &row.ReportedState, &row.FamilyState)
@@ -116,6 +118,10 @@ func scanSpawnStatusExtra(sc rowScanner, reported bool, extra []any) (Spawn, err
 	row.ClaudeCapacity = decodeClaudeCapacity(capacity)
 	pane.apply(&row)
 	evidence.apply(&row)
+	var err error
+	if row.BusySend, err = decodeBusySendCoverage(busySend); err != nil {
+		return Spawn{}, err
+	}
 	return row, nil
 }
 

@@ -487,7 +487,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 	if n != 1 {
 		return 0, "", 0, fmt.Errorf("%s: reset changed %d rows, want 1", errPrefix, n)
 	}
-	if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchReuse, fresh.LaunchStartedAtMillis); err != nil {
+	if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchReuse, fresh.BusySendDefaults, fresh.LaunchStartedAtMillis); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: stage busy-send Launch: %w", errPrefix, err)
 	}
 

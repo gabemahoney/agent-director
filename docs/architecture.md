@@ -33,6 +33,8 @@ A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 - Templates as plain files in `~/.config/agent-director/templates/`.
 - Private generated launch files under `~/.config/agent-director/launch/<store_id>/<launch_token>/`, prepared and reclaimed by the [launch-file seam](#per-agent-launch-composition).
 - Operational native launch/current/history records and exact proof in SQLite.
+- Busy-send conversations, Messages, pairs and Results in SQLite (the
+  [permanent core](#internalstore)).
 - Private provider diagnostics and synchronization locks under
   `~/.config/agent-director/input/<store_id>/<launch_token>/`; see
   [Ordinary input delivery](#ordinary-input-delivery).
@@ -111,8 +113,11 @@ branches on the agent anywhere else. Each seam's own section states its rule
   [`spec/tla/codex/`](../spec/tla/codex/README.md) (see [Model check (`make
   tla`)](#model-check-make-tla)).
 - **Busy-send coverage and records.** Use the target's
-  [persisted Launch coverage](#launch-coverage) and the permanent core's
-  records under [`internal/store`](#internalstore).
+  [persisted Launch coverage](#launch-coverage), the permanent core's
+  records under [`internal/store`](#internalstore), and admission, Results and
+  the capability table: [Busy-send admission and
+  Results](#busy-send-admission-and-results). A new agent's limits are a row
+  of that table.
 - **Cursor gateway.** Fresh/load protocol, input, transcript and runtime proof use
   [the shared gateway components](#cursor-gateway-and-current-launch-binding);
   tests use [cursorfix](#cursorfix-synthetic-acp-runtime-reusable-test-fixture).
@@ -4211,11 +4216,13 @@ Go comments give every column's meaning, owner and revision rule beside the
 DDL, and `busy_send_records.go` holds every stored code set and the shared
 record and lookup types (`BusySendForce`, `BusySendForceLookup`,
 `BusySendResult`, `BusySendResultLookup`, `BusySendPair`, `BusySendWait`).
-Launch lifecycle and deletion transactions maintain the core's identity and
-coverage records; the v20→v21 hop backfills them. Beyond that, only refused
-force attempts and the durable lookups use the core (see
-[Launch coverage](#launch-coverage)); no admission, delivery or pause operation
-exists. The tables hold:
+Launch lifecycle and deletion transactions maintain the core's identity,
+coverage and Agent Defaults records; the v20→v21 hop backfills them. Beyond
+that, admission stores Held Messages and their pairs, refused force attempts
+are stored, and the durable lookups and delivery reads read the core (see
+[Launch coverage](#launch-coverage) and
+[Busy-send admission and Results](#busy-send-admission-and-results)); no
+hand-over, delivery or pause operation exists. The tables hold:
 
 - **Identity.** A conversation (`busy_conversations`: an opaque id and a
   per-instance generation, independent of `life_number` and the provider
@@ -4224,6 +4231,8 @@ exists. The tables hold:
   reuse creates a new one even at the same life. A candidate conversation or
   Launch stays apart from the published one and the current Launch.
   `spawns.busy_conversation_id` binds the row to its published conversation.
+  The conversation also holds its Agent Defaults, last accepted sequence and
+  held reservations; a resume Launch holds its staged default overrides.
 - **Messages.** `busy_send_messages` keeps each Message's immutable target,
   text, order and options. Its current custody (`place`, nullable
   `handover_id`) is separate from its earlier attempts, the immutable
@@ -4244,7 +4253,8 @@ exists. The tables hold:
   Message stays as a tombstone with its pair and no text, Result or receipt.
 - **Reserved fields.** Pause claims (`busy_send_pause_claims`: one Launch,
   owning call, deadline, signal intent, and the call's outcome kept apart
-  from the fence's lifetime), per-Launch wake paths,
+  from the fence's lifetime), per-Launch wake paths (admission reads one, but
+  nothing records one yet),
   Codex and Cursor route kinds and process roles
   (`busy_send_launch_processes`) are schema capacity only: nothing uses them
   yet.
@@ -6012,6 +6022,8 @@ Every verb call from `Client` follows this four-step recipe inside
    included, is passed, so the CLI refuses a negative count with
    `ErrInvalidFlags` as MCP and Go do, rather than the builder dropping it
    and the call running with the default (b.c4n).
+   `send-keys`' raw-key fields go whenever present, `false` and 0 included,
+   because a Covered Agent's send refuses their presence.
    For `spawn` and `make-template`, an `extra_env` key that is empty or
    holds `=` or a NUL is refused here: the CLI splits each
    `--extra-env K=V` at its first `=`, so it could not carry such a key
@@ -9128,6 +9140,98 @@ facts only, with no Active Check, provider, tmux or process probe and no write;
 they answer `found`, `unknown` or `retention_expired` and return a read failure
 as an error, never `unknown`. They are not the bounded recovery of state reads.
 
+### Busy-send admission and Results
+
+A Covered Agent's `send-keys` is decided from the row's recorded coverage
+before any state guard, relay check, input journal or pane work, and goes only
+to `sendCovered` (`pkg/api/busy_send_admission.go`): nothing on that path
+types, probes or launches. `coveredAdmissionRequest` judges the call's
+original parameters, never `planSendKeys`' normalized text; the surfaces carry
+what decoding loses in `SendKeysParams.RawKeysSupplied`,
+`DeliveryRequestIDSupplied` and `MalformedUTF8`. A confirmed send without a
+Message ID gets a canonical UUID there, so an uncertain commit can still name
+its pair. A pair sent to a deleted row also reaches admission, which answers
+an owned pair's repeat. If admission finds the current Launch no longer
+covered, an option-free call is decided once more on today's path.
+
+**Must use: `Store.AdmitBusySend`** (`internal/store/busy_send_admission.go`),
+the one provider-neutral admission transaction. It runs on
+`inDurableWriteTxContext` (`lockwait.go`), which sets WAL `synchronous=FULL`
+on the leased connection before `BEGIN IMMEDIATE`. In that transaction it
+arbitrates the confirmed pair store-wide (`busy_send_results`; exact text
+bytes, never a digest or normalized text), reads the published conversation
+and current Launch, resolves the Message's options over the published Agent
+Defaults, checks eligibility (`busySendEligible`: Agent Command, offered Send
+Mode, text kind, then the text, prompt and held limits), and stores the
+Message Held: the next `accepted_seq`, its count and bytes added to the
+conversation's reservations, original text, digest, immutable options, pair
+and initial wait (`initialBusySendWait`, from durable facts only), comparing
+and advancing the conversation's revision. A refusal (`*BusySendRefusal`)
+writes nothing. A replay returns the owner's current Result and writes
+nothing. Later partition, hand-over and lifecycle code must consume these rows
+in `accepted_seq` order and keep the reservation until custody can no longer
+return to Held.
+
+The store returns a `BusySendAdmission` only after a verified COMMIT; a COMMIT
+of unknown outcome is `errCommitUnconfirmed` (`CommitUnconfirmed`), never a
+rollback, a free pair, wake or delivery authority, and `pkg/api` reports it as
+an unnamed error naming the pair. Only a verified new admission
+(`BusySendAdmitted`) lets `pkg/api` touch the published current Launch's
+recorded wake path (`touchBusySendWake`: `os.Chtimes` on a recorded absolute
+path, never creating one). The file is a content-free hint with no authority;
+a failed touch is a lost wake and changes no Result. The transaction does no
+provider, process or file work.
+
+**Must use: the capability table.** `internal/store/busy_send_capabilities.go`
+is the one per-provider, per-Send-Mode limit definition
+(`BusySendCapabilitiesFor`): each mode's `MessageBytes`, `PromptBytes`,
+`WrapperBytes` and `TextKind` (`Accepts`), the per-agent `HeldCount` and
+`HeldBytes`, `BusySendSeparator` and `SinglePromptBytes`. Admission and
+`delivery_capabilities` read it, and a partitioner or prompt renderer must
+too; none keeps a limit of its own. A route's wrapper stays within
+`WrapperBytes`, so a Message at `MessageBytes` fits a prompt alone. A covered
+provider without a row gets the fallback row. A new agent or a changed limit
+is a table change only.
+
+**Agent Defaults.** The published conversation holds them
+(`default_send_mode`, `default_confirmed`, `confirm_from_transcripts`), so
+defaults, provider and binding are published together. A launch's choice
+travels as `store.BusySendDefaultsChoice` (nil apart from an explicit false):
+`InsertPending` publishes it over `BusySendOutOfBoxDefaults` with the new
+conversation, `ResetForReuse` stages it on the candidate conversation, and
+`MoveToPendingWithDefaults` stages a resume's overrides in the candidate
+Launch's nullable `override_*` columns (only a `resume` Launch may carry them).
+`publishBusySendCandidate` applies those in the same guarded conversation
+update that publishes the Launch, whichever writer publishes it; a failed,
+uncertain or replaced candidate never applies them. `busySendDefaultsGate`
+(`pkg/api/busy_send_options.go`) checks the offered Send Mode for spawn,
+reuse, `make-template` and resume before any write.
+
+**Must use: the published read and the Result projection.**
+`readBusySendPublished` (`busy_send_launch_writes.go`; `readExaminedBusySendLaunch`
+adds `ErrSpawnNotFound`) is the one typed read of the published conversation
+and current Launch (defaults, provider, coverage, sequence, reservations, open
+hand-over, route kind, wake path, Launch End, raw state), never a candidate's
+token or provider.
+`readBusySendMessageResult` (`busy_send_lookup.go`) is the one Result read,
+for the send response, an `id_conflict` owner and `get-delivery`, with partial
+transport from the latest attempt's prompt; `deliveryResultOf` and
+`compatibilityOutcome` (`pkg/api/busy_send_types.go`) are the one public
+projection. A Result is Message columns, kept apart from custody (`place`,
+`handover_id`); a Final Result is never rewritten.
+
+**Must use: the delivery reads.** `Store.ReadBusySendObservation`
+(`busy_send_observation.go`) reads what `get`, `get-many` and `status` show
+(`agent_defaults`, `delivery`, and the provider whose table row is
+`delivery_capabilities`) in one transaction with the published binding;
+`ReadBusySendDefaults` serves `list`. Both use the reading verbs' zero lock
+wait and are observational: no input, wake, Result change or repair. Held
+count and bytes are counted from Held Messages, apart from the reservations.
+`busySendAwaitingTurnStart` is the one derivation of `awaiting_turn_start`;
+it returns 0 until a route records hand-overs, and that route must update its
+facts in the same transaction as each emission intent and completion, never
+from a read.
+
 ### Launch identity
 
 A plain spawn labels its tmux session when it creates it, records which
@@ -10529,7 +10633,10 @@ earlier compaction probe remains historical evidence.
 
 A tracked row is externally drivable: a caller can deliver text into the
 agent's own pane and read the rendered TUI back out without attaching to
-the session. The two verbs (and `pause`, see
+the session. A Covered Agent's `send-keys` is the exception: it types
+nothing and goes to [admission](#busy-send-admission-and-results), so the
+pane flow below covers `send-keys` only on launches busy send does not
+cover. The two verbs (and `pause`, see
 [Stop semantics](#stop-semantics), and `record-pane-answer`, which captures
 the pane to check a caller's hash and types nothing, see
 [Permission relay](#permission-relay)) are the pane verbs: typed Go functions in
@@ -10551,8 +10658,12 @@ name-based send or capture. Cross-reference SRD SR-7 (pane verbs), SRD
 ### `send-keys`
 
 `pkg/api/sendkeys.go` holds the flow (`SendKeys`, unexported `sendKeysRun`
-and `sendKeysStateGuard`); its tmux phase is the keys verbs' shared
-`keysRun` (`pkg/api/pane_keys.go`: `targetPane`, then the selected transport),
+and `sendKeysStateGuard`). Right after the row read, a send whose current
+Launch is recorded `covered` leaves it for
+[admission](#busy-send-admission-and-results); the rest of this section
+describes sends to launches busy send does not cover. Its tmux phase is the
+keys verbs' shared `keysRun` (`pkg/api/pane_keys.go`: `targetPane`, then the
+selected transport),
 which `pause` also uses; the shape of a call, the pane hash and the named keys
 are in `pkg/api/pane_answer.go`, and the relay guard in
 `pkg/api/sendkeys_relay.go`; `pkg/api/sendkeys_submission.go` coordinates
@@ -10572,8 +10683,9 @@ and, on Ours, one pane listing; journal-backed delivery then revalidates that
 ownership before each write. All text and keys target the agent's pane id.
 Keys are never sent
 before the lookup returned Ours and the listing showed the agent's pane.
-`planSendKeys` checks the params' shape first, before anything is read,
-sent or written (`ErrInvalidFlags`): a pane answer (`request_token` set)
+`planSendKeys` checks the params' shape first; its refusal comes once the row
+is known not covered, before anything is sent or written
+(`ErrInvalidFlags`): a pane answer (`request_token` set)
 needs `as` (`allow` or `deny`), `key` and `expect_pane_sha256` and takes
 no `text`; on a plain call `as` is refused, `key` excludes a non-empty
 `text`, and `no_enter` with neither is refused; `expect_pane_sha256` is 64
@@ -10646,8 +10758,9 @@ is in [Ordinary text submission](caller-contract.md#ordinary-text-submission).
 Cursor sends with Enter also check the [gateway verdict](#cursor-gateway-verdict),
 including Enter-only and pane-hash sends.
 
-State precondition (`sendKeysStateGuard`, before native reconciliation or any tmux call): the
-row's `state` must be one of `waiting`, `working`, `ask_user`,
+State precondition (`sendKeysStateGuard`, before native reconciliation or any
+tmux call), on a launch busy send does not cover: the row's `state` must be
+one of `waiting`, `working`, `ask_user`,
 `check_permission`. `ended` and `missing` are refused with
 `ErrSpawnNotInteractive` and no tmux call, with or without
 `allow_pending`. Passive reconciliation of an existing native request runs
@@ -10789,10 +10902,17 @@ skipped for relay-off rows; Cursor's native controller still checks request
 identity, lifetime and arbitration. See [Cursor authorization](#cursor-authorization-dataflow-and-authority)
 and the relay chapter's pane-answer and dialog-hold contracts.
 
-Order of the refusals before any tmux call (`sendKeysRun.run`): the shape
-of the params (`planSendKeys`), then the row read and state guard for every
-operation, including observation of existing native requests. Finished rows
-always return `ErrSpawnNotInteractive`. That state guard also refuses a
+Order of the refusals before any tmux call (`sendKeysRun.run`): the
+busy-send option shapes (`send_mode`, `caller_uuid`), then the row read. A
+row whose current Launch is covered, or an unknown id named with a confirmed
+pair, goes to [admission](#busy-send-admission-and-results) here, before
+every check below; a covered send can be admitted on an `ended` or
+`missing` row. For an uncovered launch: the shape of the params
+(`planSendKeys`, judged before the read but refused only now; for an unknown
+id it comes before `ErrSpawnNotFound`), a busy-send option's
+`agent_not_covered`, then the state guard for every operation, including
+observation of existing native requests. There, finished rows always return
+`ErrSpawnNotInteractive`. That state guard also refuses a
 `pending` row with no launch start or no launch token, so that row keeps
 `ErrSpawnNotInteractive` whatever its name. Then the relay guard and the
 unusable-recorded-name check:
@@ -22034,10 +22154,13 @@ MUST reuse these fixtures for their respective responsibilities.
 confirmed Message with its pair and Result, or an expired tombstone, in the
 instance's published conversation. `ExpireBusySendForce` expires an ended
 force attempt. `UnbindBusySend` clears a row's published binding.
+With `Transport` set, `SeedBusySendResult` also records the Message's one-prompt
+hand-over on the current Launch with that observed transport.
 `ReadBusySendCounts` counts Messages, pairs, force attempts and input
 attempts, so a refusal can show it stored nothing. Tests MUST use these rather
 than inline SQL. These helpers are fixture setup only; schema and migration
-tests own the tables.
+tests own the tables. A test of a Held Message admits it through production
+(`AdmitBusySend` or `send-keys`), never a seed.
 
 Deterministic request timing MUST reuse `requestController.clock` in
 `request_jobs.go`: `requestClock.Now` / `AfterFunc` and `requestTimer.Stop`.
@@ -23977,7 +24100,13 @@ seeds matching core provider, life and token facts without advancing
 `SeedBusySendCoverage` seeds independent Launch/conversation coverage without
 changing membership; `ReadBusySendFacts` observes the published binding and
 coverage plus all retained conversation/Launch facts in one read transaction,
-without provider work. `SeedBusySendCandidateProcess` seeds historical saved
+without provider work, including each conversation's Agent Defaults and
+reservations and each Message's stored text, options, custody and pair.
+`SeedBusySendRoute` records the current Launch's route kind and wake path, as
+a route would; `SeedBusySendReservation` sets the published conversation's
+reservations, so a held limit is reached without that many sends;
+`SeedBusySendDefaults` sets its published Agent Defaults.
+`SeedBusySendCandidateProcess` seeds historical saved
 pane identity on an uncertain candidate without publishing it. Consumers use
 these helpers rather than inline SQL.
 

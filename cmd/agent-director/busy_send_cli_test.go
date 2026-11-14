@@ -5,12 +5,15 @@ package main_test
 // wait_turn included, a malformed value is refused rather than dropped, and
 // force-delivery, get-force and get-delivery print their results and errors
 // unchanged. A call with none of the flags is today's call, which the existing
-// CLI tests cover; pkg/api's tests own the refusals themselves.
+// CLI tests cover; pkg/api's tests own the refusals themselves. Task
+// t2.xis.oo.tc adds a covered send's raw-key presence, Message ID, Result and
+// id_conflict details.
 
 import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // TestBusySendCLIFlagsReachTheVerb: on an uncovered Claude row, each busy-send
@@ -103,6 +107,65 @@ func TestBusySendCLIFlagsReachTheVerb(t *testing.T) {
 				t.Errorf("%q err_details = %#v (%v); want %#v", argv, got.Details, err, tc.wantDetails)
 			}
 		})
+	}
+}
+
+// TestBusySendCLICoveredSend (SR-1.3, SR-1.5, SR-5.1): on a covered row, a
+// raw-key flag given at its zero value, or an empty --delivery-request-id,
+// still reaches the verb as supplied, so the send is ErrInvalidFlags naming it;
+// a confirmed send's --delivery-request-id reaches the store byte for byte, and
+// its printed Result is the one get-delivery prints; the pair's repeat with
+// other text is ErrCantSend, id_conflict, with that Result in err_details.
+func TestBusySendCLICoveredSend(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home, id, _ := seedRowOnSocket(t, store.StateWaiting)
+	if err := apitest.SeedBusySendCoverage(stateDB(home), id, store.BusySendCovered, store.BusySendCovered); err != nil {
+		t.Fatalf("SeedBusySendCoverage: %v", err)
+	}
+	run := func(args ...string) (string, string, int) { return runSpawnCLI(t, home, fakeDir, args...) }
+	send := func(text string, flags ...string) []string {
+		return slices.Concat([]string{"send-keys", "--instance-id", id, "--text", text}, flags)
+	}
+	confirmed := []string{"--confirmed-delivery", "--caller-uuid", "AAAAAAAA-AAAA-4AAA-AAAA-AAAAAAAAAAAA"}
+	for _, tc := range []struct {
+		flags []string
+		want  string
+	}{
+		{[]string{"--no-enter=false"}, "a Covered Agent's send takes no no_enter;"},
+		{[]string{"--n-lines=0"}, "a Covered Agent's send takes no n_lines;"},
+		{[]string{"--as="}, "a Covered Agent's send takes no as;"},
+		{slices.Concat(confirmed, []string{"--delivery-request-id="}), "delivery_request_id, when given, must be nonempty"},
+	} {
+		stdout, stderr, code := run(send("hi", tc.flags...)...)
+		env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
+		if !strings.Contains(env.ErrDescription, tc.want) {
+			t.Errorf("%q: err_description = %q; want it to carry %q", tc.flags, env.ErrDescription, tc.want)
+		}
+	}
+
+	const requestID = "msg 多 🦋"
+	pair := slices.Concat(confirmed, []string{"--delivery-request-id", requestID})
+	sent, stderr, code := run(send("hi", pair...)...)
+	var result map[string]any
+	if code != 0 || json.Unmarshal([]byte(sent), &result) != nil {
+		t.Fatalf("confirmed send exit = %d, stdout = %q, stderr = %q; want its Result", code, sent, stderr)
+	}
+	if result["caller_uuid"] != "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa" || result["request_id"] != requestID || result["class"] != "held" {
+		t.Errorf("Result = %v; want held, with the lowercase caller_uuid and request_id %q", result, requestID)
+	}
+	lookup := []string{"get-delivery", "--caller-uuid", "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", "--delivery-request-id", requestID}
+	if got, stderr, code := run(lookup...); code != 0 || got != `{"lookup":"found","result":`+strings.TrimSuffix(sent, "\n")+"}\n" {
+		t.Errorf("get-delivery exit = %d, stdout = %q, stderr = %q; want found with the send's Result %s", code, got, stderr, sent)
+	}
+
+	stdout, stderr, code := run(send("other", pair...)...)
+	assertOnlyEnvelope(t, stdout, stderr, code, "ErrCantSend")
+	var got struct {
+		Details map[string]any `json:"err_details"`
+	}
+	want := map[string]any{"class": "cant_send", "reason": "id_conflict", "resend_safe": true, "retry_with": "new_send", "result": result}
+	if err := json.Unmarshal([]byte(stderr), &got); err != nil || !reflect.DeepEqual(got.Details, want) {
+		t.Errorf("id_conflict err_details = %#v (%v); want %#v", got.Details, err, want)
 	}
 }
 

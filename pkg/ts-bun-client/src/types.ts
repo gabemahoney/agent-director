@@ -428,6 +428,57 @@ export interface ListRow {
    * `displayed_state`).
    */
   permission_requests: PermissionRequestInfo[];
+  /** A covered row's published Agent Defaults; omitted for an uncovered row. */
+  agent_defaults?: AgentDefaults;
+}
+
+/**
+ * A Covered Agent's published Agent Defaults: the Send Mode and Confirmed Delivery its
+ * Messages take when the send names none, and the experimental `confirm_from_transcripts`.
+ */
+export interface AgentDefaults {
+  send_mode: SendMode;
+  confirmed_delivery: boolean;
+  confirm_from_transcripts: boolean;
+}
+
+/**
+ * A Covered Agent's delivery block on get, getMany and status, read from durable records only:
+ * reading it delivers, wakes and changes nothing.
+ */
+export interface DeliveryFacts {
+  /** Messages Held now and their text bytes. The held limits also count custody that can return to Held. */
+  held_count: number;
+  held_bytes: number;
+  /** What the first Held Message waits on; null with none Held. */
+  first_wait: DeliveryWait | null;
+  /** Non-Final hand-overs: each hand-over of one or more Messages with a member whose Result is not yet Final counts once. */
+  handover_count: number;
+  /** Waiting startup work; null for Claude Code, whose startup prompt is part of its Launch. */
+  startup_wait: DeliveryWait | null;
+  /** The pending force, else the latest force that began a hand-over; null with neither. */
+  force: ForceResult | null;
+  /** This Launch's completed hand-overs with no evidence yet that the agent took their input. */
+  awaiting_turn_start: number;
+}
+
+/** One offered Send Mode's limits, in UTF-8 bytes. */
+export interface DeliveryModeLimits {
+  send_mode: SendMode;
+  /** The most bytes of one Message's own text. */
+  message_bytes: number;
+  /** The most bytes of a complete prompt with AD's separators and the route's wrapper; a Message at message_bytes always fits alone. */
+  prompt_bytes: number;
+  /** `utf8_tab_lf`: valid UTF-8 with no C0 control characters other than TAB and LF. */
+  text_kind: string;
+}
+
+/** What busy send offers a Covered Agent, on get and getMany. */
+export interface DeliveryCapabilities {
+  modes: DeliveryModeLimits[];
+  /** The most Held Messages and bytes, counting custody that can return to Held. */
+  held_count: number;
+  held_bytes: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -663,6 +714,10 @@ export interface StatusResult {
    * set, a row whose agent has reported in can read pending without it for up to settle_ms.
    */
   launch_started_at?: string | null;
+  /** A covered row's published Agent Defaults; omitted for an uncovered row. */
+  agent_defaults?: AgentDefaults;
+  /** A covered row's delivery block; omitted for an uncovered row. */
+  delivery?: DeliveryFacts;
 }
 
 /**
@@ -695,6 +750,12 @@ export interface GetParams {
 export interface GetResult {
   /** Published current Launch coverage; pending resume/reuse retains it until successful creation publishes its candidate. */
   busy_send: "covered" | "not_covered";
+  /** A covered row's published Agent Defaults; omitted for an uncovered row. */
+  agent_defaults?: AgentDefaults;
+  /** A covered row's delivery block; omitted for an uncovered row. */
+  delivery?: DeliveryFacts;
+  /** What busy send offers a covered row; omitted for an uncovered row. */
+  delivery_capabilities?: DeliveryCapabilities;
   /** Fixed supervised-pane contract; omitted for native integrations. Live rows stay pending, context is null, idle screen unavailable and subagents untracked. */
   integration_mode?: "pane_only";
   /**
@@ -919,17 +980,31 @@ export interface SendKeysParams {
    * hexadecimal) and whether to also force Held Messages. Covered Agents only: naming any of them,
    * `false` and `"wait_turn"` included, when the row's current Launch is recorded `not_covered`
    * rejects with `ErrCantSend`, reason `agent_not_covered` (`errDetails` CantSendDetails), and
-   * nothing is sent. Omit them for today's behaviour.
+   * nothing is sent. Omit them for today's behaviour. Omitted on a Covered Agent, the Message takes
+   * its Agent Defaults; a confirmed send needs `caller_uuid`, an unconfirmed one takes neither
+   * `caller_uuid` nor `delivery_request_id` (`ErrInvalidFlags`).
    */
   send_mode?: SendMode;
   confirmed_delivery?: boolean;
   caller_uuid?: string;
   force?: boolean;
+  /**
+   * For an agent busy send does not cover: owns one native ordinary text attempt (1-128 letters,
+   * digits, `_` or `-`); retry the same id and text to observe it without replay. For a Covered
+   * Agent: a confirmed send's Message ID, any nonempty UTF-8, only with `caller_uuid`; omitted, AD
+   * makes one, and given empty it is `ErrInvalidFlags`. Repeating the pair with the same text and
+   * target returns the stored Result.
+   */
+  delivery_request_id?: string;
 }
 
-/** Successful sendKeys calls return an empty object. */
+/**
+ * A Covered Agent's accepted send returns its Message's current Result, stored Held before the
+ * call returns (an unconfirmed send has no `caller_uuid` or `request_id`). Other successful
+ * sendKeys calls return an empty object, or native proof fields.
+ */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface SendKeysResult {}
+export interface SendKeysResult extends Partial<DeliveryResult> {}
 
 /** Parameters for capturing the agent's pane. */
 export interface ReadPaneParams {
@@ -1095,7 +1170,11 @@ export interface TooManyIdsDetails {
 /**
  * `ErrCantSend`'s `errDetails`: class `cant_send`, the reason (such as `agent_not_covered`),
  * whether a new send may carry the Message and with what (`new_send` for `agent_not_covered`:
- * the same call without busy-send options). `limit` and `result` belong to later reasons.
+ * the same call without busy-send options; also for `steer_unsupported`, `held_count`,
+ * `held_bytes` and `id_conflict`, whose Message may go as a new send under a new
+ * `delivery_request_id`). `limit` holds a refused limit's actual and allowed values
+ * (`text_bytes`, `prompt_size`, `held_count`, `held_bytes`); `result` is an `id_conflict`'s
+ * owner Result.
  */
 export interface CantSendDetails {
   class: "cant_send";
@@ -1635,7 +1714,7 @@ export interface DeliveryResult {
   evidence_kind: string | null;
   record_id?: string;
   record_sha256?: string;
-  outcome: "submitted" | "not_started" | "submission_unconfirmed";
+  outcome: "submitted" | "not_started" | "submission_unconfirmed" | "partial_input_unconfirmed";
 }
 
 /** getDelivery's answer: `result` is null unless `lookup` is `found`. Reads durable facts only. */

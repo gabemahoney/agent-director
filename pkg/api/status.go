@@ -56,6 +56,11 @@ type StatusResult struct {
 	// with millisecond precision. Present only on a pending row; nil (and
 	// omitted from JSON) otherwise (SR-22.2).
 	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
+	// AgentDefaults and Delivery are, as SpawnRow's, a covered row's
+	// published Agent Defaults and inbox facts (SR-5.6); omitted for an
+	// uncovered row and from the narrow readers' results.
+	AgentDefaults *AgentDefaults `json:"agent_defaults,omitempty"`
+	Delivery      *DeliveryFacts `json:"delivery,omitempty"`
 }
 
 // statusReader reads the state and the launch start in one read (SR-16.1).
@@ -145,6 +150,13 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		out.ProcessLiveness, out.Confirmations = mainFields(s, row, settle)
 		if out.DisplayedState != "" {
 			out.TmuxSessionName = row.TmuxSessionName
+		}
+		observation, err := busySendObservationOf(s, row)
+		if err != nil {
+			return StatusResult{}, err
+		}
+		if observation != nil {
+			out.AgentDefaults, out.Delivery = agentDefaultsOf(observation.Defaults), busySendDeliveryOf(observation)
 		}
 		return out, nil
 	}

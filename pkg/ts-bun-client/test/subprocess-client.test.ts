@@ -4,7 +4,8 @@
  * (SR-6.2/6.5), a signal → ErrConsumerSignal (SR-5.2), version() reports the
  * package version (b.6o1), storePath, home and tmuxCommand reach the CLI
  * verbatim (b.38a), and the busy-send verbs' methods run their verbs and return
- * the lookup payloads as printed (SR-4.1, SR-5.4). callTimeoutMs validation
+ * the lookup payloads, and sendKeys a Covered Agent's Result, as printed
+ * (SR-4.1, SR-5.1, SR-5.4). callTimeoutMs validation
  * (SR-6.1) is adviceFollow.test.ts K1.
  *
  * The Client passes process.env to each call (SR-1.4), which the fixtures read.
@@ -164,13 +165,14 @@ test.each([
   expect(argv.slice(argv.indexOf(want[0]))).toEqual([...want]);
 });
 
-// SR-4.1, SR-5.4: a lookup's payload, null outside found, reaches the caller as the CLI printed it.
+// SR-4.1, SR-5.1, SR-5.4: a lookup's payload, null outside found, and a covered send's Result reach the
+// caller as the CLI printed them.
 const PAIR: DeliveryPair = { caller_uuid: "0f8e2a34-5b6c-4d7e-8f90-a1b2c3d4e5f6", request_id: "msg 2 多" };
 const EARLIER: DeliveryPair = { caller_uuid: "0f8e2a34-5b6c-4d7e-8f90-a1b2c3d4e5f6", request_id: "msg 1" };
 const HELD: DeliveryResult = {
   ...PAIR, class: "held", final: false, reason: "earlier_message", resend_safe: false, retry_with: "none",
   wait: { reason: "earlier_message", since: "2026-11-13T10:00:00.123Z", earlier: EARLIER }, forced: false,
-  instance_id: "id-1", launch_token: null, evidence_kind: null, outcome: "submission_unconfirmed",
+  instance_id: "id-1", launch_token: null, evidence_kind: null, outcome: "not_started",
 };
 const DELIVERED: DeliveryResult = {
   ...PAIR, class: "delivered_confirmed", final: true, reason: "exact_receipt", resend_safe: false, retry_with: "none", wait: null,
@@ -190,12 +192,14 @@ test.each([
     { lookup: "found", result: DELIVERED }],
   ["getDelivery retention_expired", (c: Client) => c.getDelivery({ caller_uuid: PAIR.caller_uuid, delivery_request_id: PAIR.request_id }),
     { lookup: "retention_expired", result: null }],
+  ["sendKeys accepted by a Covered Agent", (c: Client) => c.sendKeys({ instance_id: "id-1", text: "hi", confirmed_delivery: true,
+    caller_uuid: PAIR.caller_uuid, delivery_request_id: PAIR.request_id }), HELD],
 ] as const)("%s: the payload reaches the caller intact", async (_label, call, payload) => {
   const cli = path.join(tmp, `${crypto.randomUUID()}-lookup.sh`);
   fs.writeFileSync(cli, `#!/bin/sh
 case " $* " in
   *" version "*) printf '{"version":"0.0.0-dev","commit":"lookup-fixture"}\\n';;
-  *" get-force "*|*" get-delivery "*) printf '%s\\n' '${JSON.stringify(payload)}';;
+  *" get-force "*|*" get-delivery "*|*" send-keys "*) printf '%s\\n' '${JSON.stringify(payload)}';;
   *) exit 71;;
 esac
 `, { mode: 0o700 });

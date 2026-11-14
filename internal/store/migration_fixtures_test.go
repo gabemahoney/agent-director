@@ -2170,9 +2170,9 @@ func makeV20Fixture(t *testing.T, dir string) v20Fixture {
 // with the row's provider (claude for a historical row with no agent, as
 // readers take it) and BusySendCoverageForAgent's coverage of it; the Launch
 // with the row's life and launch token (NULL kept) and no route, wake path,
-// process or Launch End; and the row bound to the conversation with the same
-// coverage and an integer Turn Start counter of 0. It returns each id's
-// recorded conversation and Launch ids.
+// Agent Default override, process or Launch End; and the row bound to the
+// conversation with the same coverage and an integer Turn Start counter of 0.
+// It returns each id's recorded conversation and Launch ids.
 func assertV21Backfill(t *testing.T, path string, ids ...string) map[string]v21Binding {
 	t.Helper()
 	storeID := assertOneStoreID(t, path)
@@ -2208,7 +2208,8 @@ func assertV21Backfill(t *testing.T, path string, ids ...string) map[string]v21B
 		for col, want := range map[string]string{"store_id": quoted(storeID), "conversation_id": c["conversation_id"],
 			"life_number": row["life_number"], "launch_token": row["launch_token"], "provider": quoted(provider), "busy_send": coverage,
 			"kind": "'migrated'", "phase": "'current'", "route_kind": "NULL", "route_id": "NULL", "connection_generation": "0",
-			"wake_path": "NULL", "revision": "1", "recorded_at_ms": c["recorded_at_ms"], "ended_at_ms": "NULL", "end_cause": "NULL"} {
+			"wake_path": "NULL", "override_send_mode": "NULL", "override_confirmed": "NULL", "override_confirm_from_transcripts": "NULL",
+			"revision": "1", "recorded_at_ms": c["recorded_at_ms"], "ended_at_ms": "NULL", "end_cause": "NULL"} {
 			if l[col] != want {
 				t.Errorf("%s: Launch %s = %s; want %s", id, col, l[col], want)
 			}

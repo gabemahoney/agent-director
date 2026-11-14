@@ -6,8 +6,8 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// DeliveryResult is a confirmed Message's Result (SR-5.1) as a Lookup or a
-// conflict refusal reports it: its class, whether it is Final, its reason,
+// DeliveryResult is a Message's Result (SR-5.1) as a Covered Agent's send, a
+// Lookup or a conflict refusal reports it: its class, whether it is Final, its reason,
 // whether a new send may carry it and with what, what it waits on, its
 // original target and actual hand-over binding, its receipt identity and the
 // compatibility outcome (SR-5.3). It never holds the Message's text, raw
@@ -44,8 +44,8 @@ type DeliveryResult struct {
 	// without one.
 	RecordID     string `json:"record_id,omitempty"`
 	RecordSHA256 string `json:"record_sha256,omitempty"`
-	// Outcome is the compatibility outcome: submitted, not_started or
-	// submission_unconfirmed.
+	// Outcome is the compatibility outcome: submitted, not_started,
+	// submission_unconfirmed or partial_input_unconfirmed.
 	Outcome string `json:"outcome"`
 }
 
@@ -76,6 +76,132 @@ type ForceResult struct {
 	CarriedPairs []DeliveryPair `json:"carried_pairs"`
 }
 
+// AgentDefaults are a Covered Agent's Agent Defaults, the Send Mode and
+// Confirmed Delivery its Messages take when the send names none, and its
+// experimental confirm_from_transcripts setting (SR-1.4, SR-4.5), as get,
+// get-many, status and list show them (SR-5.6). An uncovered row has none.
+type AgentDefaults struct {
+	SendMode               string `json:"send_mode"`
+	ConfirmedDelivery      bool   `json:"confirmed_delivery"`
+	ConfirmFromTranscripts bool   `json:"confirm_from_transcripts"`
+}
+
+// DeliveryFacts is a Covered Agent's delivery block on get, get-many and
+// status (SR-5.6), read from durable records only: reading it delivers, wakes
+// and changes nothing. An uncovered row has none.
+type DeliveryFacts struct {
+	// HeldCount and HeldBytes are the Messages Held now and their text
+	// bytes. The held limits count more: custody that can return to Held.
+	HeldCount int64 `json:"held_count"`
+	HeldBytes int64 `json:"held_bytes"`
+	// FirstWait is what the first Held Message waits on; null with none Held.
+	FirstWait *DeliveryWait `json:"first_wait"`
+	// HandoverCount is the non-Final hand-overs: hand-overs, each of one or
+	// more Messages, with a member whose Result is not yet Final. It counts
+	// hand-overs, not Messages.
+	HandoverCount int64 `json:"handover_count"`
+	// StartupWait is waiting startup work; null for Claude Code, whose
+	// startup prompt is part of its Launch.
+	StartupWait *DeliveryWait `json:"startup_wait"`
+	// Force is the pending force, else the latest force that began a
+	// hand-over; null when there is neither.
+	Force *ForceResult `json:"force"`
+	// AwaitingTurnStart is the current Launch's completed hand-overs whose
+	// input has no evidence yet that the agent took it (SR-3.3).
+	AwaitingTurnStart int64 `json:"awaiting_turn_start"`
+}
+
+// DeliveryCapabilities is what busy send offers a Covered Agent, on get and
+// get-many (SR-5.6): its Send Modes with their limits and its held limits,
+// all in UTF-8 bytes, from the one published capability table. An uncovered
+// row has none.
+type DeliveryCapabilities struct {
+	Modes []DeliveryModeLimits `json:"modes"`
+	// HeldCount and HeldBytes cap the agent's Held Messages and their bytes,
+	// counting custody that can return to Held.
+	HeldCount int64 `json:"held_count"`
+	HeldBytes int64 `json:"held_bytes"`
+}
+
+// DeliveryModeLimits is one offered Send Mode's limits: a Message's own text
+// bytes, a complete prompt's bytes with AD's separators and the route's
+// wrapper (a Message at message_bytes always fits alone), and the text it
+// accepts (utf8_tab_lf: valid UTF-8 with no C0 control characters other than
+// TAB and LF).
+type DeliveryModeLimits struct {
+	SendMode     string `json:"send_mode"`
+	MessageBytes int64  `json:"message_bytes"`
+	PromptBytes  int64  `json:"prompt_bytes"`
+	TextKind     string `json:"text_kind"`
+}
+
+// agentDefaultsOf projects published Agent Defaults.
+func agentDefaultsOf(d store.BusySendAgentDefaults) *AgentDefaults {
+	return &AgentDefaults{SendMode: string(d.SendMode), ConfirmedDelivery: d.Confirmed, ConfirmFromTranscripts: d.ConfirmFromTranscripts}
+}
+
+// busySendDeliveryOf projects a delivery observation.
+func busySendDeliveryOf(o *store.BusySendObservation) *DeliveryFacts {
+	out := &DeliveryFacts{HeldCount: o.HeldCount, HeldBytes: o.HeldBytes, FirstWait: deliveryWaitOf(o.FirstWait),
+		HandoverCount: o.HandoverCount, StartupWait: deliveryWaitOf(o.StartupWait), AwaitingTurnStart: o.AwaitingTurnStart}
+	if o.Force != nil {
+		force := forceResultOf(*o.Force)
+		out.Force = &force
+	}
+	return out
+}
+
+// deliveryCapabilitiesOf projects provider's row of the capability table.
+func deliveryCapabilitiesOf(provider string) *DeliveryCapabilities {
+	caps := store.BusySendCapabilitiesFor(provider)
+	out := &DeliveryCapabilities{Modes: []DeliveryModeLimits{}, HeldCount: caps.HeldCount, HeldBytes: caps.HeldBytes}
+	for _, m := range caps.Modes {
+		out.Modes = append(out.Modes, DeliveryModeLimits{SendMode: string(m.Mode), MessageBytes: m.MessageBytes,
+			PromptBytes: m.PromptBytes, TextKind: string(m.TextKind)})
+	}
+	return out
+}
+
+// busySendObserver is the delivery read get and status make for a covered row
+// (store.ReadBusySendObservation). It is not part of GetStore or StatusStore;
+// they find it by a type assertion, through an Active Check run's source. A
+// store without it shows no delivery facts.
+type busySendObserver interface {
+	ReadBusySendObservation(instanceID string, maxWait time.Duration) (*store.BusySendObservation, error)
+}
+
+var _ busySendObserver = (*store.Store)(nil)
+
+// busySendObservationOf reads row's delivery facts when its current Launch is
+// covered, without waiting, as the reading verbs' other reads (readerLockWait):
+// nil for an uncovered row, a store without the read, or a Launch no longer
+// covered when read. A read failure is the caller's error.
+func busySendObservationOf(s any, row Spawn) (*store.BusySendObservation, error) {
+	if row.BusySend != store.BusySendCovered {
+		return nil, nil
+	}
+	if run, ok := s.(*activeReadStore); ok {
+		s = run.source
+	}
+	observer, ok := s.(busySendObserver)
+	if !ok {
+		return nil, nil
+	}
+	return observer.ReadBusySendObservation(row.InstanceID, readerLockWait)
+}
+
+// deliveryWaitOf projects a stored wait; nil stays nil.
+func deliveryWaitOf(w *store.BusySendWait) *DeliveryWait {
+	if w == nil {
+		return nil
+	}
+	out := &DeliveryWait{Reason: string(w.Reason), Since: time.UnixMilli(w.SinceMillis).UTC()}
+	if e := w.Earlier; e != nil {
+		out.Earlier = &DeliveryPair{CallerUUID: e.CallerUUID, RequestID: e.DeliveryRequestID}
+	}
+	return out
+}
+
 // The busy-send codes the public projections and refusals use.
 const (
 	cantSendClass         = "cant_send"
@@ -85,14 +211,16 @@ const (
 	retryWithNone         = "none"
 )
 
-// deliveryResultOf projects a stored Result (SR-5.1, SR-5.3).
+// deliveryResultOf projects a stored Result (SR-5.1, SR-5.3), a send's
+// response, a conflict's owner Result and a Lookup alike. An unconfirmed
+// Message's has no pair, so caller_uuid and request_id are omitted.
 func deliveryResultOf(r store.BusySendResult) DeliveryResult {
 	out := DeliveryResult{
 		CallerUUID: r.Pair.CallerUUID, RequestID: r.Pair.DeliveryRequestID,
 		Class: string(r.Class), Final: r.Final, Reason: r.Reason, RetryWith: retryWithNone,
 		Forced: r.Forced, InstanceID: r.InstanceID, LaunchToken: r.LaunchToken,
 		SessionID: r.SessionID, RecordID: r.RecordID, RecordSHA256: r.RecordSHA256,
-		Outcome: compatibilityOutcome(r.Class),
+		Outcome: compatibilityOutcome(r.Class, r.PartialTransport),
 	}
 	if r.Class == store.BusySendClassNotStarted {
 		out.ResendSafe, out.RetryWith = true, retryWithNewID
@@ -101,23 +229,25 @@ func deliveryResultOf(r store.BusySendResult) DeliveryResult {
 		kind := string(*r.EvidenceKind)
 		out.EvidenceKind = &kind
 	}
-	if !r.Final && r.Wait != nil {
-		out.Wait = &DeliveryWait{Reason: string(r.Wait.Reason), Since: time.UnixMilli(r.Wait.SinceMillis).UTC()}
-		if e := r.Wait.Earlier; e != nil {
-			out.Wait.Earlier = &DeliveryPair{CallerUUID: e.CallerUUID, RequestID: e.DeliveryRequestID}
-		}
+	if !r.Final {
+		out.Wait = deliveryWaitOf(r.Wait)
 	}
 	return out
 }
 
-// compatibilityOutcome is SR-5.3's outcome for a Result class. The stored
-// Result does not record partial transport, so a sent_unconfirmed Result
-// maps to submission_unconfirmed.
-func compatibilityOutcome(class store.BusySendResultClass) string {
+// compatibilityOutcome is SR-5.3's outcome for a Result class: submitted for
+// delivered_confirmed; for queued and sent_unconfirmed,
+// partial_input_unconfirmed when the store knows its latest prompt was only
+// partly written (store.BusySendResult.PartialTransport) and
+// submission_unconfirmed for a whole prompt; not_started otherwise.
+func compatibilityOutcome(class store.BusySendResultClass, partial bool) string {
 	switch class {
 	case store.BusySendClassDeliveredConfirmed:
 		return "submitted"
 	case store.BusySendClassQueued, store.BusySendClassSentUnconfirmed:
+		if partial {
+			return "partial_input_unconfirmed"
+		}
 		return "submission_unconfirmed"
 	}
 	return "not_started"

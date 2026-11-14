@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -88,11 +89,14 @@ var (
 // rule 8, decision 7 A). A pane answer needs As, Key and ExpectPaneSHA256,
 // takes no Text, and sends exactly one key with no Enter after it.
 type SendKeysParams struct {
-	// DeliveryRequestID owns one native ordinary text attempt for this launch.
-	// Retry the same ID and normalized text to observe it without replay. Use a
-	// new ID for an intentional identical turn. Omitted IDs conservatively
-	// reuse the most recent confirmed attempt with identical normalized text.
-	// Fallback pane input has no native request deduplication guarantee.
+	// DeliveryRequestID, for an agent busy send does not cover, owns one
+	// native ordinary text attempt for this launch. Retry the same ID and
+	// normalized text to observe it without replay. Use a new ID for an
+	// intentional identical turn. Omitted IDs conservatively reuse the most
+	// recent confirmed attempt with identical normalized text. Fallback pane
+	// input has no native request deduplication guarantee. For a Covered
+	// Agent it is a confirmed send's Message ID, any nonempty UTF-8 string,
+	// needing CallerUUID; omitted, AD makes one (SR-1.3).
 	DeliveryRequestID string `json:"delivery_request_id"`
 	// InstanceID identifies the Spawn whose pane will receive the keys.
 	InstanceID string `json:"instance_id"`
@@ -146,6 +150,25 @@ type SendKeysParams struct {
 	ConfirmedDelivery *bool   `json:"confirmed_delivery,omitempty"`
 	CallerUUID        *string `json:"caller_uuid,omitempty"`
 	Force             *bool   `json:"force,omitempty"`
+	// RawKeysSupplied names the raw-key parameters (no_enter, key,
+	// expect_pane_sha256, n_lines, request_token, as) a surface saw supplied,
+	// zero values included, since a Covered Agent's send refuses each one's
+	// presence (SR-1.5). The CLI and MCP fill it; a Go caller may leave it nil,
+	// and a field set to its zero value then counts as not supplied.
+	RawKeysSupplied []string `json:"-"`
+	// DeliveryRequestIDSupplied is whether a surface saw delivery_request_id
+	// supplied, empty or (over MCP) null included: a Covered Agent's send
+	// refuses a supplied empty Message ID and makes one only when it is
+	// omitted (SR-1.3). The CLI and MCP fill it; for a Go caller an empty
+	// DeliveryRequestID is omitted.
+	DeliveryRequestIDSupplied bool `json:"-"`
+	// MalformedUTF8 names the string parameters (text, delivery_request_id)
+	// whose supplied value was not valid UTF-8, or held an unpaired UTF-16
+	// surrogate escape, before a surface's decoding replaced it with U+FFFD.
+	// A Covered Agent's send refuses them, never storing the replaced text
+	// (SR-1.2, SR-1.5); other agents keep the decoded value, as today. MCP
+	// fills it; CLI arguments reach Text unchanged.
+	MalformedUTF8 []string `json:"-"`
 }
 
 // busySendOptions lists the busy-send options p names, for busySendGate's
@@ -167,12 +190,21 @@ func (p SendKeysParams) busySendOptions() string {
 	return strings.Join(named, ", ")
 }
 
-// SendKeysResult carries native proof for a supported ordinary request. Other
-// pane operations return an empty object and make no exact-proof claim.
+// SendKeysResult carries, for an agent busy send does not cover, native proof
+// for a supported ordinary request; other pane operations return an empty
+// object and make no exact-proof claim. A Covered Agent's accepted send
+// returns its Message's current Result (Delivery, SR-5.1) instead.
 type SendKeysResult struct {
-	// RequestID identifies the confirmed native request.
+	// CallerUUID and Class repeat a Covered Agent's Result (Delivery) for Go
+	// callers: its Caller UUID ("" when unconfirmed) and class. Both are ""
+	// for every other send, so its JSON is unchanged.
+	CallerUUID string `json:"caller_uuid,omitempty"`
+	Class      string `json:"class,omitempty"`
+	// RequestID identifies the confirmed native request, or a covered
+	// Message's confirmed Message ID.
 	RequestID string `json:"request_id,omitempty"`
-	// Outcome is submitted when exact native proof confirms the request.
+	// Outcome is submitted when exact native proof confirms the request; a
+	// covered Message's compatibility outcome (SR-5.3).
 	Outcome string `json:"outcome,omitempty"`
 	// SessionID is the native session named by the confirming record.
 	SessionID string `json:"session_id,omitempty"`
@@ -180,6 +212,47 @@ type SendKeysResult struct {
 	RecordID string `json:"record_id,omitempty"`
 	// RecordSHA256 hashes the exact retained bytes of the confirming record.
 	RecordSHA256 string `json:"record_sha256,omitempty"`
+	// Delivery is a Covered Agent's accepted send's current Result, the same
+	// Result get-delivery reads for its pair; nil for every other send. When
+	// set, the JSON result is Delivery alone, and the fields above repeat its
+	// caller_uuid, class, request_id, outcome, session_id, record_id and
+	// record_sha256 for Go callers.
+	Delivery *DeliveryResult `json:"-"`
+}
+
+// MarshalJSON writes Delivery when it is set, and the fields above otherwise,
+// so an uncovered send's result is unchanged.
+func (r SendKeysResult) MarshalJSON() ([]byte, error) {
+	if r.Delivery != nil {
+		return json.Marshal(r.Delivery)
+	}
+	type plain SendKeysResult
+	return json.Marshal(plain(r))
+}
+
+// UnmarshalJSON reads either form MarshalJSON writes: an object with a class
+// is a Covered Agent's Result.
+func (r *SendKeysResult) UnmarshalJSON(data []byte) error {
+	type plain SendKeysResult
+	var out plain
+	if err := json.Unmarshal(data, &out); err != nil {
+		return err
+	}
+	var probe struct {
+		Class *string `json:"class"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	if probe.Class != nil {
+		var d DeliveryResult
+		if err := json.Unmarshal(data, &d); err != nil {
+			return err
+		}
+		out.Delivery = &d
+	}
+	*r = SendKeysResult(out)
+	return nil
 }
 
 // SendKeysEnv is what SendKeys judges and records the relay with besides its
@@ -258,14 +331,16 @@ type sendKeysGuard struct {
 // b.146 rules 7 and 8). It types into the agent's own pane of the row's
 // current launch, by pane id.
 //
-// The params' shape is checked first (planSendKeys, then send_mode and
-// caller_uuid): a refusal is ErrInvalidFlags with nothing read, sent or
-// written. Once the row is read, a call naming SendMode, ConfirmedDelivery,
-// CallerUUID or Force is decided from its current Launch's recorded coverage
-// (Spawn.BusySend) before any other guard: for a Launch recorded not_covered
-// it is ErrCantSend, reason agent_not_covered (CantSendDetails), with
-// nothing stored, sent or typed (SR-9.2). A call naming none of them goes on
-// as below. What a call sends:
+// The busy-send options' shapes (send_mode, caller_uuid) are checked first: a
+// refusal is ErrInvalidFlags with nothing read, sent or written. The row is
+// then read, and its current Launch's recorded coverage (Spawn.BusySend)
+// decides the call before any other guard. A Covered Agent's call goes only
+// through busy-send admission (sendCovered): no state, relay, native or pane
+// path below runs for it. For a Launch recorded not_covered, today's shape
+// (planSendKeys) is checked next, then a call naming SendMode,
+// ConfirmedDelivery, CallerUUID or Force is ErrCantSend, reason
+// agent_not_covered (CantSendDetails), with nothing stored, sent or typed
+// (SR-9.2); a call naming none of them goes on as below. What a call sends:
 //
 //   - Plain, text: `\r` (CR, 0x0D) bytes are STRIPPED (CR would submit the
 //     buffer mid-message); `\n` (LF, 0x0A) bytes are PRESERVED (Claude's
@@ -528,6 +603,9 @@ type sendKeysRun struct {
 	// readiness into later refusals and hook observation. It never changes
 	// the row or launch identity used to authorize input.
 	terminalState string
+	// coverageChanged is set when admission found the current Launch no
+	// longer covered after the row read; the call is then decided once more.
+	coverageChanged bool
 }
 
 // sendKeys is the inner implementation shared by the pure SendKeys entry point
@@ -546,30 +624,48 @@ func sendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 
 // run is the send-keys flow; the returned error is SendKeys'.
 func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
-	plan, err := planSendKeys(params)
-	if err != nil {
-		return err
-	}
 	if err := checkSendMode("send-keys", params.SendMode); err != nil {
 		return err
 	}
-	if _, err := checkCallerUUID("send-keys", params.CallerUUID); err != nil {
+	callerUUID, err := checkCallerUUID("send-keys", params.CallerUUID)
+	if err != nil {
 		return err
+	}
+	// planSendKeys judges today's shape and normalizes the text for today's
+	// input. A Covered Agent's send never uses it: its shape is its own and
+	// its text stays byte for byte (sendCovered), so the plan's refusal is
+	// returned only once the row is known not to be covered.
+	plan, planErr := planSendKeys(params)
+	row, err := r.s.GetSpawn(params.InstanceID)
+	if errors.Is(err, store.ErrSpawnNotFound) && callerUUID != nil && (params.DeliveryRequestID != "" || params.DeliveryRequestIDSupplied) {
+		// An owned pair's repeat returns its Result after the record's
+		// deletion too (SR-1.2); a pair no Message owns is ErrSpawnNotFound.
+		return r.sendCovered(nil, params, callerUUID)
+	}
+	if err != nil {
+		if planErr != nil {
+			return planErr
+		}
+		return err
+	}
+	r.facts.RowState = row.State
+	// Coverage is the current Launch's recorded fact, decided before every
+	// guard, capability check, journal, relay write and input below: a
+	// Covered Agent's send goes only through admission (SR-3.9), and a
+	// busy-send option to an agent busy send does not cover is refused
+	// (SR-9.2).
+	if row.BusySend == store.BusySendCovered {
+		return r.sendCovered(&row, params, callerUUID)
+	}
+	if planErr != nil {
+		return planErr
+	}
+	if options := params.busySendOptions(); options != "" {
+		return busySendGate("send-keys "+row.InstanceID, options, row.BusySend)
 	}
 	// ordinary is plain nonempty text with Enter and no pane hash, the only
 	// input native delivery and the agent-specific fallback paths below take.
 	ordinary := !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != ""
-	row, err := r.s.GetSpawn(params.InstanceID)
-	if err != nil {
-		return err
-	}
-	r.facts.RowState = row.State
-	// A busy-send option is decided from the current Launch's recorded
-	// coverage before every guard, capability check, journal, relay write
-	// and input below (SR-9.2).
-	if options := params.busySendOptions(); options != "" {
-		return busySendGate("send-keys "+row.InstanceID, options, row.BusySend)
-	}
 	paneOnly := spawn.IsPaneOnly(row.Agent)
 	if paneOnly && params.DeliveryRequestID != "" {
 		return spawn.PaneOnlyCapabilityError(row.Agent, "send-keys delivery_request_id")
@@ -1236,6 +1332,28 @@ func isInteractiveState(state string) bool {
 //     unknown. On gateway_refused nothing reached Cursor and the gateway
 //     discarded the text: read the pane and get, answer or clear what holds the
 //     input before sending again, or kill and resume.
+//
+// A Covered Agent's send (its current Launch recorded covered) types nothing:
+// it is admitted through busy send's one transactional path whatever the
+// agent's state, and its Result (SendKeysResult.Delivery) returns once the
+// Message is durably Held. Its errors are its own, in this order:
+//   - [ErrInvalidFlags]: a raw-key parameter, even at its zero value; empty
+//     or invalid UTF-8 text, or a supplied delivery_request_id that is empty
+//     or invalid UTF-8 (SendKeysParams.MalformedUTF8 and
+//     DeliveryRequestIDSupplied carry what a surface's decoding lost);
+//     delivery_request_id without CallerUUID; CallerUUID or delivery_request_id with Confirmed
+//     Delivery false, or Confirmed Delivery true without CallerUUID, whether
+//     from the call or the Agent Defaults. Nothing was stored.
+//   - [ErrCantSend] with [CantSendDetails]: id_conflict (the pair names
+//     another target or text; details carry the owner's Result), then
+//     agent_command, steer_unsupported, text_kind, text_bytes, prompt_size,
+//     held_count and held_bytes (with limit). A repeat of an owned pair with
+//     the same target and text returns the owner's current Result instead,
+//     even after the target's deletion; an unknown target with no owned pair
+//     is [ErrSpawnNotFound].
+//   - [ErrStoreBusy]: the store's lock or connection was not taken in time;
+//     nothing was stored. A COMMIT whose outcome is unknown is an unnamed
+//     error: repeat the same pair, or get-delivery, to learn the Result.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs; pending Claude fallback on

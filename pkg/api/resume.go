@@ -118,10 +118,12 @@ type ResumeParams struct {
 	// SendMode (wait_turn or steer_turn), ConfirmedDelivery and
 	// ConfirmFromTranscripts override the conversation's Agent Defaults and
 	// SR-4.5's experimental setting for the resumed Launch; nil keeps them.
-	// Any supplied value, false and wait_turn included, sets one. They apply
-	// only to a Covered Agent: when busy send would not cover the resumed
-	// Launch, a resume that sets one is refused with ErrCantSend, reason
-	// agent_not_covered, before anything is written (SR-9.2).
+	// Any supplied value, false and wait_turn included, sets one. They become
+	// the conversation's values when the resumed Launch is published, never
+	// before, and a failed or uncertain launch leaves the published values.
+	// They apply only to a Covered Agent: when busy send would not cover the
+	// resumed Launch, a resume that sets one is refused with ErrCantSend,
+	// reason agent_not_covered, before anything is written (SR-9.2).
 	SendMode               *string `json:"send_mode,omitempty"`
 	ConfirmedDelivery      *bool   `json:"confirmed_delivery,omitempty"`
 	ConfirmFromTranscripts *bool   `json:"confirm_from_transcripts,omitempty"`
@@ -139,11 +141,24 @@ type busySendConversationCoverageReader interface {
 
 var _ busySendConversationCoverageReader = (*store.Store)(nil)
 
+// busySendResumeMover is resume's move to pending that also stages its Agent
+// Default overrides on the candidate Launch (store.MoveToPendingWithDefaults),
+// so the Launch's publication, whoever makes it, applies them. It is not part
+// of ResumeStore; resume finds it by a type assertion, as it finds
+// resumeIdentityWriter, and a store without it can take no override.
+type busySendResumeMover interface {
+	MoveToPendingWithDefaults(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner, defaults store.BusySendDefaultsChoice) (CondResult, int64, error)
+}
+
+var _ busySendResumeMover = (*store.Store)(nil)
+
 // resumeDefaultsGate decides a resume that sets an Agent Default or
 // confirm_from_transcripts from the coverage its new Launch would record: the
-// published conversation's, raised by the row's agent kind (SR-9.1). It reads
-// durable facts only, before any write; a binding or read failure is an error,
-// never a refusal.
+// published conversation's, raised by the row's agent kind (SR-9.1), and from
+// the Send Modes that agent is offered (SR-1.4). It reads durable facts only,
+// before any write; a binding or read failure is an error, never a refusal.
+// Accepted, the overrides are staged with the candidate Launch and published
+// with it (busySendResumeMover); a store that cannot stage them refuses.
 func resumeDefaultsGate(s ResumeStore, row Spawn, params ResumeParams) error {
 	named := agentDefaultsNamed(params.SendMode, params.ConfirmedDelivery, params.ConfirmFromTranscripts)
 	if named == "" {
@@ -157,7 +172,25 @@ func resumeDefaultsGate(s ResumeStore, row Spawn, params ResumeParams) error {
 	if err != nil {
 		return err
 	}
-	return busySendGate("resume "+row.InstanceID, named, store.ResumeLaunchCoverage(conversation, row.Agent))
+	target := "resume " + row.InstanceID
+	if err := busySendDefaultsGate(target, row.Agent, store.ResumeLaunchCoverage(conversation, row.Agent), named, params.SendMode); err != nil {
+		return err
+	}
+	if _, ok := s.(busySendResumeMover); !ok {
+		return fmt.Errorf("%s: the store cannot stage %s with the resumed Launch; nothing was written or launched", target, named)
+	}
+	return nil
+}
+
+// resumeDefaultsChoice is the resume's Agent Default overrides; nil keeps the
+// published conversation's value.
+func resumeDefaultsChoice(p ResumeParams) store.BusySendDefaultsChoice {
+	c := store.BusySendDefaultsChoice{Confirmed: p.ConfirmedDelivery, ConfirmFromTranscripts: p.ConfirmFromTranscripts}
+	if p.SendMode != nil {
+		mode := store.BusySendMode(*p.SendMode)
+		c.SendMode = &mode
+	}
+	return c
 }
 
 // ResumeResult is the typed return shape: the id and what the launch's
@@ -208,6 +241,9 @@ type resumeDeps struct {
 	now     func() time.Time
 	lg      *log.Logger
 	who     caller
+	// defaults are the call's Agent Default overrides, staged by the move
+	// with the candidate Launch (busySendResumeMover).
+	defaults store.BusySendDefaultsChoice
 }
 
 // launchOnto returns resume's launch after its move applied (finishedLaunch,
@@ -358,7 +394,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	if lg == nil {
 		lg = log.New(io.Discard, "", 0)
 	}
-	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg, who: callerIdentity()}
+	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg, who: callerIdentity(), defaults: resumeDefaultsChoice(params)}
 
 	if err := checkSendMode("resume", params.SendMode); err != nil {
 		return ResumeResult{}, err
@@ -734,7 +770,13 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 
 	parent := spawn.ParentIDFromEnv()
 	owner := spawn.CurrentLaunchOwner(d.pc)
-	res, movedVersion, err := d.s.MoveToPending(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent, owner)
+	move := d.s.MoveToPending
+	if mover, ok := d.s.(busySendResumeMover); ok {
+		move = func(id string, examined RowSnapshot, at int64, token, socket, parent string, owner LaunchOwner) (CondResult, int64, error) {
+			return mover.MoveToPendingWithDefaults(id, examined, at, token, socket, parent, owner, d.defaults)
+		}
+	}
+	res, movedVersion, err := move(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent, owner)
 	if err := resumeMoveError(id, res, err); err != nil {
 		return ResumeResult{}, err
 	}
@@ -951,8 +993,9 @@ func launchInProgressError(row Spawn) error {
 //   - [ErrCantSend]: SendMode, ConfirmedDelivery or ConfirmFromTranscripts is
 //     set and busy send would not cover the resumed Launch (the published
 //     conversation's recorded coverage, raised by the row's agent kind):
-//     reason agent_not_covered ([CantSendDetails]), before every other
-//     refusal below and before anything is written or launched.
+//     reason agent_not_covered; or SendMode is one the covered agent is not
+//     offered: reason steer_unsupported ([CantSendDetails]); before every
+//     other refusal below and before anything is written or launched.
 //   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
 //     cannot be resumed; nothing is changed or launched.
 //   - [ErrSpawnNotFound]: no row exists for the instance id, or the row was

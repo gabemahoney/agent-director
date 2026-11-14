@@ -52,9 +52,9 @@ type TooManyIdsDetails struct {
 
 // CantSendDetails is ErrCantSend's err_details (SR-9.4): the refusal's class
 // (always cant_send), its reason, whether the same Message may be sent again
-// as a new send, and with what. Limit and Result belong to reasons later
-// releases add: the exceeded limit (SR-1.6), and a pair conflict's owner's
-// Result (SR-1.2); both are omitted when the reason has none.
+// as a new send, and with what. Limit is the exceeded limit (SR-1.6) and
+// Result an id_conflict's owner Result (SR-1.2); both are omitted when the
+// reason has none.
 type CantSendDetails struct {
 	// Class is cant_send.
 	Class string `json:"class"`
@@ -64,8 +64,10 @@ type CantSendDetails struct {
 	// ResendSafe is true when the Message was not sent and a new send may
 	// carry it.
 	ResendSafe bool `json:"resend_safe"`
-	// RetryWith is the call that can succeed instead: new_send for
-	// agent_not_covered (the same call without busy-send options).
+	// RetryWith is the call that can succeed instead: new_send for a
+	// retryable refusal (agent_not_covered: the same call without busy-send
+	// options; steer_unsupported, held_count, held_bytes and id_conflict: a
+	// new send, changed or later), none otherwise.
 	RetryWith string `json:"retry_with"`
 	// Limit is the exceeded limit's actual and allowed values.
 	Limit *CantSendLimit `json:"limit,omitempty"`

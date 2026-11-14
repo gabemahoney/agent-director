@@ -85,7 +85,43 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 		return SpawnColumns{}, fmt.Errorf("ReadSpawnColumns: %w", err)
 	}
 	defer raw.Close() //nolint:errcheck
+	return readSpawnColumns(raw, instanceID)
+}
 
+// SpawnColumnsReader reads spawns rows as ReadSpawnColumns does, through one
+// raw connection opened once and kept, so a tight poll from a second
+// connection pays the connection's schema parse only once, before the poll
+// starts. Under -race that parse of the v21 schema is slow enough to hide a
+// commit the poll must observe on each fresh connection.
+type SpawnColumnsReader struct {
+	raw *sql.DB
+}
+
+// OpenSpawnColumnsReader opens a reader on the store file at dbPath and parses
+// its schema now. The caller closes it.
+func OpenSpawnColumnsReader(dbPath string) (*SpawnColumnsReader, error) {
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("OpenSpawnColumnsReader: %w", err)
+	}
+	raw.SetMaxOpenConns(1)
+	var rows int
+	if err := raw.QueryRow(`SELECT count(*) FROM spawns`).Scan(&rows); err != nil {
+		raw.Close() //nolint:errcheck
+		return nil, fmt.Errorf("OpenSpawnColumnsReader: %w", err)
+	}
+	return &SpawnColumnsReader{raw: raw}, nil
+}
+
+// Read is ReadSpawnColumns on the reader's connection.
+func (r *SpawnColumnsReader) Read(instanceID string) (SpawnColumns, error) {
+	return readSpawnColumns(r.raw, instanceID)
+}
+
+// Close closes the reader's connection.
+func (r *SpawnColumnsReader) Close() error { return r.raw.Close() }
+
+func readSpawnColumns(raw *sql.DB, instanceID string) (SpawnColumns, error) {
 	// The unary + makes each TIMESTAMP column an expression with no declared
 	// type, so the driver returns its stored value instead of a parsed time.
 	const q = `SELECT parent_id, state, cwd, tmux_session_name, agent_args,
@@ -102,7 +138,7 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 	             FROM spawns
 	            WHERE instance_id = ?`
 	var c SpawnColumns
-	err = raw.QueryRow(q, instanceID).Scan(
+	err := raw.QueryRow(q, instanceID).Scan(
 		&c.ParentID, &c.State, &c.CWD, &c.TmuxSessionName, &c.AgentArgs,
 		&c.RelayMode, &c.JSONLPath, &c.SessionID, &c.Labels,
 		&c.StartedAt, &c.LastSeenAt, &c.EndedAt, &c.PID, &c.ProcStarttime,

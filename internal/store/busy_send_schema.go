@@ -127,6 +127,15 @@ const busyConversationsDDL = `CREATE TABLE IF NOT EXISTS busy_conversations (
 //     advances the generation, fencing work captured on an older one.
 //   - wake_path: the Launch's one content-free wake endpoint, a file whose
 //     change notifies its route (SR-7.2). It carries no Message authority.
+//   - override_send_mode, override_confirmed,
+//     override_confirm_from_transcripts: a resume Launch's explicit Agent
+//     Default and confirm_from_transcripts overrides (SR-1.4, SR-4.5),
+//     staged with its candidate: NULL keeps the published conversation's
+//     value. The publication that makes this Launch current applies them to
+//     the conversation in the same transaction; a failed, uncertain or
+//     replaced candidate never does, so the published values stay (SR-6.3).
+//     Only a resume Launch carries them: a reuse stages its defaults on its
+//     candidate conversation, and a spawn publishes them at once.
 //   - revision: owned by the lifecycle writers (spawn, reuse, resume,
 //     Launch End) and the route's connection writer.
 //   - ended_at_ms, end_cause: the Launch End and its evidence
@@ -150,10 +159,14 @@ const busySendLaunchesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launches (
     route_id              TEXT,
     connection_generation INTEGER NOT NULL DEFAULT 0 CHECK(typeof(connection_generation) = 'integer' AND connection_generation >= 0),
     wake_path             TEXT,
+    override_send_mode    TEXT CHECK(override_send_mode IN ('wait_turn', 'steer_turn')),
+    override_confirmed    INTEGER CHECK(override_confirmed IN (0, 1)),
+    override_confirm_from_transcripts INTEGER CHECK(override_confirm_from_transcripts IN (0, 1)),
     revision              INTEGER NOT NULL DEFAULT 1 CHECK(typeof(revision) = 'integer' AND revision > 0),
     recorded_at_ms        INTEGER NOT NULL,
     ended_at_ms           INTEGER,
     end_cause             TEXT CHECK(end_cause IN ('process_exited', 'launch_published', 'creation_failed', 'record_deleted', 'candidate_replaced')),
+    CHECK(kind IS 'resume' OR (override_send_mode IS NULL AND override_confirmed IS NULL AND override_confirm_from_transcripts IS NULL)),
     CHECK((ended_at_ms IS NULL) = (end_cause IS NULL)),
     CHECK((phase = 'failed') = (end_cause IS 'creation_failed')),
     CHECK(phase <> 'superseded' OR ended_at_ms IS NOT NULL),

@@ -24,49 +24,17 @@ func (s *Store) ReadBusySendResult(callerUUID, deliveryRequestID string) (BusySe
 			return err
 		}
 		defer rollbackConn(ctx, conn)
-		r := BusySendResult{Pair: BusySendPair{CallerUUID: callerUUID, DeliveryRequestID: deliveryRequestID}}
-		var retention, mode string
-		var class, reason, waitReason, earlier, token, session, evidence, recordID, recordSHA sql.NullString
-		var waitSince, queued, handedOver, delivered, final sql.NullInt64
-		err := conn.QueryRowContext(ctx, `SELECT p.instance_id, m.retention, m.send_mode, m.result_class, m.result_final,
-		        m.result_reason, m.forced, m.wait_reason, m.wait_since_ms, m.wait_earlier_message_id,
-		        m.bound_launch_token, m.bound_session_id, m.evidence_kind, m.record_id, m.record_sha256,
-		        m.accepted_at_ms, m.queued_at_ms, m.handed_over_at_ms, m.delivered_at_ms, m.final_at_ms
-		    FROM busy_send_results p JOIN busy_send_messages m ON m.message_id = p.message_id
-		    WHERE p.caller_uuid = ? AND p.delivery_request_id = ? AND p.store_id = ?`,
-			callerUUID, deliveryRequestID, s.StoreID()).Scan(&r.InstanceID, &retention, &mode, &class, &r.Final,
-			&reason, &r.Forced, &waitReason, &waitSince, &earlier, &token, &session, &evidence, &recordID, &recordSHA,
-			&r.AcceptedAtMillis, &queued, &handedOver, &delivered, &final)
-		if errors.Is(err, sql.ErrNoRows) {
-			return readBusySendPairAbsent(ctx, conn, s.StoreID(), r.Pair, &out)
-		}
-		if err != nil {
+		owner, found, err := readBusySendPairOwner(ctx, conn, s.StoreID(), BusySendPair{CallerUUID: callerUUID, DeliveryRequestID: deliveryRequestID})
+		switch {
+		case err != nil:
 			return err
-		}
-		if BusySendRetention(retention) == BusySendExpired {
+		case !found:
+			out = BusySendResultLookup{Lookup: BusySendLookupUnknown}
+		case owner.expired:
 			out = BusySendResultLookup{Lookup: BusySendLookupRetentionExpired}
-			return nil
+		default:
+			out = BusySendResultLookup{Lookup: BusySendLookupFound, Result: &owner.result}
 		}
-		r.SendMode, r.Class, r.Reason = BusySendMode(mode), BusySendResultClass(class.String), reason.String
-		r.SessionID, r.RecordID, r.RecordSHA256 = session.String, recordID.String, recordSHA.String
-		r.QueuedAtMillis, r.HandedOverAtMillis = queued.Int64, handedOver.Int64
-		r.DeliveredAtMillis, r.FinalAtMillis = delivered.Int64, final.Int64
-		if token.Valid {
-			r.LaunchToken = &token.String
-		}
-		if evidence.Valid {
-			kind := BusySendEvidenceKind(evidence.String)
-			r.EvidenceKind = &kind
-		}
-		if waitReason.Valid {
-			r.Wait = &BusySendWait{Reason: BusySendWaitReason(waitReason.String), SinceMillis: waitSince.Int64}
-			if earlier.Valid {
-				if r.Wait.Earlier, err = readBusySendEarlierPair(ctx, conn, earlier.String); err != nil {
-					return err
-				}
-			}
-		}
-		out = BusySendResultLookup{Lookup: BusySendLookupFound, Result: &r}
 		return nil
 	})
 	if err != nil {
@@ -75,12 +43,47 @@ func (s *Store) ReadBusySendResult(callerUUID, deliveryRequestID string) (BusySe
 	return out, nil
 }
 
-// readBusySendPairAbsent tells a pair never stored (unknown) from an
-// ownership row whose Message is missing, which is a corrupt store, never an
-// answer that the pair is free.
-func readBusySendPairAbsent(ctx context.Context, conn *sql.Conn, storeID string, pair BusySendPair, out *BusySendResultLookup) error {
+// busySendPairOwner is the Message that owns a confirmed pair: its original
+// target and validated text, which pair arbitration compares, and its current
+// Result. An expired owner keeps only the pair (SR-5.5): no text or Result.
+type busySendPairOwner struct {
+	messageID  string
+	instanceID string
+	text       []byte
+	expired    bool
+	result     BusySendResult
+}
+
+// readBusySendPairOwner reads pair's owner. found is false only when no
+// ownership row exists; an ownership row whose Message is missing is a corrupt
+// store, never a free pair (readBusySendPairAbsent).
+func readBusySendPairOwner(ctx context.Context, q busySendLaunchSQL, storeID string, pair BusySendPair) (busySendPairOwner, bool, error) {
+	var o busySendPairOwner
+	var retention string
+	err := q.QueryRowContext(ctx, `SELECT p.message_id, m.instance_id, m.text, m.retention
+	    FROM busy_send_results p JOIN busy_send_messages m ON m.message_id = p.message_id
+	    WHERE p.caller_uuid = ? AND p.delivery_request_id = ? AND p.store_id = ?`,
+		pair.CallerUUID, pair.DeliveryRequestID, storeID).Scan(&o.messageID, &o.instanceID, &o.text, &retention)
+	if errors.Is(err, sql.ErrNoRows) {
+		return o, false, readBusySendPairAbsent(ctx, q, storeID, pair)
+	}
+	if err != nil {
+		return o, false, err
+	}
+	if BusySendRetention(retention) == BusySendExpired {
+		o.expired, o.text = true, nil
+		return o, true, nil
+	}
+	o.result, err = readBusySendMessageResult(ctx, q, storeID, o.messageID)
+	return o, true, err
+}
+
+// readBusySendPairAbsent tells a pair never stored (nil) from an ownership row
+// whose Message is missing, which is a corrupt store, never an answer that
+// the pair is free.
+func readBusySendPairAbsent(ctx context.Context, q busySendLaunchSQL, storeID string, pair BusySendPair) error {
 	var owned bool
-	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM busy_send_results
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM busy_send_results
 	    WHERE caller_uuid = ? AND delivery_request_id = ? AND store_id = ?)`,
 		pair.CallerUUID, pair.DeliveryRequestID, storeID).Scan(&owned); err != nil {
 		return err
@@ -88,15 +91,69 @@ func readBusySendPairAbsent(ctx context.Context, conn *sql.Conn, storeID string,
 	if owned {
 		return fmt.Errorf("store: busy-send pair has no Message")
 	}
-	*out = BusySendResultLookup{Lookup: BusySendLookupUnknown}
 	return nil
+}
+
+// readBusySendMessageResult reads the current Result of the retained Message
+// messageID, with its confirmed pair when it has one (an unconfirmed Message
+// has none). It is the one projection of a stored Result: a send's response,
+// a conflict's owner Result and get-delivery read it alike, so all agree at
+// the same durable state. PartialTransport comes from the Message's latest
+// hand-over attempt, so the compatibility outcome need not guess it.
+func readBusySendMessageResult(ctx context.Context, q busySendLaunchSQL, storeID, messageID string) (BusySendResult, error) {
+	var r BusySendResult
+	var mode string
+	var caller, request, class, reason, waitReason, earlier, token, session, evidence, recordID, recordSHA sql.NullString
+	var waitSince, queued, handedOver, delivered, final sql.NullInt64
+	err := q.QueryRowContext(ctx, `SELECT p.caller_uuid, p.delivery_request_id, m.instance_id, m.send_mode,
+	        m.result_class, m.result_final, m.result_reason, m.forced, m.wait_reason, m.wait_since_ms,
+	        m.wait_earlier_message_id, m.bound_launch_token, m.bound_session_id, m.evidence_kind, m.record_id,
+	        m.record_sha256, m.accepted_at_ms, m.queued_at_ms, m.handed_over_at_ms, m.delivered_at_ms, m.final_at_ms
+	    FROM busy_send_messages m LEFT JOIN busy_send_results p ON p.message_id = m.message_id
+	    WHERE m.message_id = ? AND m.store_id = ? AND m.retention = 'retained'`, messageID, storeID).Scan(
+		&caller, &request, &r.InstanceID, &mode, &class, &r.Final, &reason, &r.Forced, &waitReason, &waitSince,
+		&earlier, &token, &session, &evidence, &recordID, &recordSHA,
+		&r.AcceptedAtMillis, &queued, &handedOver, &delivered, &final)
+	if err != nil {
+		return r, fmt.Errorf("store: read busy-send Message Result: %w", err)
+	}
+	r.Pair = BusySendPair{CallerUUID: caller.String, DeliveryRequestID: request.String}
+	r.SendMode, r.Class, r.Reason = BusySendMode(mode), BusySendResultClass(class.String), reason.String
+	r.SessionID, r.RecordID, r.RecordSHA256 = session.String, recordID.String, recordSHA.String
+	r.QueuedAtMillis, r.HandedOverAtMillis = queued.Int64, handedOver.Int64
+	r.DeliveredAtMillis, r.FinalAtMillis = delivered.Int64, final.Int64
+	if token.Valid {
+		r.LaunchToken = &token.String
+	}
+	if evidence.Valid {
+		kind := BusySendEvidenceKind(evidence.String)
+		r.EvidenceKind = &kind
+	}
+	if waitReason.Valid {
+		r.Wait = &BusySendWait{Reason: BusySendWaitReason(waitReason.String), SinceMillis: waitSince.Int64}
+		if earlier.Valid {
+			if r.Wait.Earlier, err = readBusySendEarlierPair(ctx, q, earlier.String); err != nil {
+				return r, err
+			}
+		}
+	}
+	var transport sql.NullString
+	err = q.QueryRowContext(ctx, `SELECT p.transport FROM busy_send_handover_members hm
+	    JOIN busy_send_handovers h ON h.handover_id = hm.handover_id
+	    JOIN busy_send_prompts p ON p.handover_id = hm.handover_id AND p.prompt_index = hm.prompt_index
+	    WHERE hm.message_id = ? ORDER BY h.handover_seq DESC LIMIT 1`, messageID).Scan(&transport)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return r, fmt.Errorf("store: read busy-send Message transport: %w", err)
+	}
+	r.PartialTransport = BusySendTransport(transport.String) == BusySendTransportPartial
+	return r, nil
 }
 
 // readBusySendEarlierPair names the earlier Message a Result waits behind by
 // its confirmed pair; an unconfirmed earlier Message has none to show.
-func readBusySendEarlierPair(ctx context.Context, conn *sql.Conn, messageID string) (*BusySendPair, error) {
+func readBusySendEarlierPair(ctx context.Context, q busySendLaunchSQL, messageID string) (*BusySendPair, error) {
 	var p BusySendPair
-	err := conn.QueryRowContext(ctx, `SELECT caller_uuid, delivery_request_id FROM busy_send_results WHERE message_id = ?`,
+	err := q.QueryRowContext(ctx, `SELECT caller_uuid, delivery_request_id FROM busy_send_results WHERE message_id = ?`,
 		messageID).Scan(&p.CallerUUID, &p.DeliveryRequestID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

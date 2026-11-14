@@ -103,10 +103,16 @@ func (e *killEnv) snapshotBusy(t *testing.T, verb string, r resumeRow) busyRefus
 // "" when the entry writes none.
 func (e *killEnv) assertBusyRefused(t *testing.T, before busyRefusal, called string) {
 	t.Helper()
+	e.assertBusyRefusedAs(t, before, called, "ErrCantSend")
+}
+
+// assertBusyRefusedAs is assertBusyRefused with the call record's outcome.
+func (e *killEnv) assertBusyRefusedAs(t *testing.T, before busyRefusal, called, outcome string) {
+	t.Helper()
 	if called != "" {
 		recs := readAPITrailLines(t)[before.mark:]
-		if len(recs) != 1 || recs[0]["event"] != called || recs[0]["instance_id"] != before.id || recs[0]["outcome"] != "ErrCantSend" {
-			t.Errorf("trail since the call = %v; want one %s for %s with outcome ErrCantSend", recs, called, before.id)
+		if len(recs) != 1 || recs[0]["event"] != called || recs[0]["instance_id"] != before.id || recs[0]["outcome"] != outcome {
+			t.Errorf("trail since the call = %v; want one %s for %s with outcome %s", recs, called, before.id, outcome)
 		}
 		before.mark = trailMark(t)
 	}
@@ -257,9 +263,12 @@ func TestBusySendUncoveredRefusalMatrix(t *testing.T) {
 // options' shapes alike, come before the coverage decision, and an unknown id
 // stays ErrSpawnNotFound; a valid option is refused agent_not_covered before
 // today's state, relay, permission, capability and lifecycle branches. On a
-// Launch seeded covered, or through a resume store that cannot read
-// coverage, it is an unnamed error that never falls back to today's
-// behaviour. Every refusal writes, sends and stores nothing.
+// Launch seeded covered, force, pause only_if_waiting and force-delivery,
+// like a resume through a store that cannot read coverage, are an unnamed
+// error that never falls back to today's behaviour, and a resume's
+// steer_turn is steer_unsupported before the launch (SR-1.4; its accepted
+// defaults: TestBusySendResumeDefaults). Every refusal writes, sends and
+// stores nothing.
 func TestBusySendOptionOrder(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
@@ -339,12 +348,14 @@ func TestBusySendOptionOrder(t *testing.T) {
 			_, err := c.ForceDelivery(api.ForceDeliveryParams{InstanceID: coveredLive.ID})
 			return err
 		}, "", ""},
-		{"covered resume", coveredDone, resume(e.st, api.ResumeParams{InstanceID: coveredDone.ID, SendMode: ptr("wait_turn")}), "", ""},
+		{"covered resume steer_turn before the launch", coveredDone, resume(e.st, api.ResumeParams{InstanceID: coveredDone.ID, SendMode: ptr("steer_turn")}), "steer_unsupported", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := e.snapshotBusy(t, tc.name, tc.row)
 			err := tc.run()
 			switch {
+			case tc.want == "steer_unsupported":
+				assertCantSendDetails(t, err, busySteerUnsupported)
 			case tc.want == "ErrCantSend":
 				assertCantSend(t, err, tc.options)
 			case tc.want == "ErrSpawnNotPausable":

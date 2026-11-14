@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/gabemahoney/agent-director/internal/oldnames"
 	api "github.com/gabemahoney/agent-director/pkg/api"
@@ -178,6 +180,27 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		var p api.SendKeysParams
 		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
+		}
+		// A raw-key parameter present even at its zero value, or null,
+		// counts as supplied, which a Covered Agent's send refuses; so does
+		// a present delivery_request_id, empty or null. encoding/json has
+		// replaced invalid UTF-8 and unpaired surrogate escapes with U+FFFD,
+		// so the raw values say which strings a Covered Agent's send must
+		// refuse instead of storing the replacement (MalformedUTF8).
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(args, &keys); err != nil {
+			return nil, paramDecodeError(v, err)
+		}
+		for _, name := range []string{"no_enter", "key", "expect_pane_sha256", "n_lines", "request_token", "as"} {
+			if _, present := keys[name]; present {
+				p.RawKeysSupplied = append(p.RawKeysSupplied, name)
+			}
+		}
+		_, p.DeliveryRequestIDSupplied = keys["delivery_request_id"]
+		for _, name := range []string{"text", "delivery_request_id"} {
+			if raw, present := keys[name]; present && !jsonStringValid(raw) {
+				p.MalformedUTF8 = append(p.MalformedUTF8, name)
+			}
 		}
 		return d.client.SendKeysContext(ctx, p)
 
@@ -441,6 +464,57 @@ func refuseNullBusySendOptions(v manifest.VerbDef, args json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+// jsonStringValid reports whether raw, a JSON value, decodes to exactly the
+// string it spells: it is not a string (decodeParams judges its type), or it
+// holds only valid UTF-8 and only paired UTF-16 surrogate escapes, which are
+// what encoding/json would otherwise replace with U+FFFD. A literal U+FFFD, or
+// its � escape, is valid.
+func jsonStringValid(raw json.RawMessage) bool {
+	if len(raw) == 0 || raw[0] != '"' {
+		return true
+	}
+	if !utf8.Valid(raw) {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '\\' {
+			continue
+		}
+		i++ // the escaped character
+		if i >= len(raw) || raw[i] != 'u' {
+			continue
+		}
+		r, ok := jsonHex4(raw, i+1)
+		if !ok {
+			return false
+		}
+		i += 4 // the escape's last hex digit
+		if !utf16.IsSurrogate(r) {
+			continue
+		}
+		if r >= 0xDC00 { // a low surrogate with no high one before it
+			return false
+		}
+		if i+2 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+			return false
+		}
+		if lo, ok := jsonHex4(raw, i+3); !ok || lo < 0xDC00 || lo > 0xDFFF {
+			return false
+		}
+		i += 6 // the low surrogate escape's last hex digit
+	}
+	return true
+}
+
+// jsonHex4 reads the four hexadecimal digits of a \u escape at raw[at:].
+func jsonHex4(raw []byte, at int) (rune, bool) {
+	if at+4 > len(raw) {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(string(raw[at:at+4]), 16, 32)
+	return rune(v), err == nil
 }
 
 // decodeParams decodes args into into, verb v's typed params struct, whose

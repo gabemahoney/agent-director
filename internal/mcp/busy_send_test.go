@@ -6,6 +6,8 @@ package mcp_test
 // as omitted), so an agent busy send does not cover gets pkg/api's refusal with
 // its machine fields; force_delivery, get_force and get_delivery forward their
 // results and errors unchanged. pkg/api's tests own the refusals themselves.
+// Task t2.xis.oo.tc adds a covered send's raw-key presence, Message ID, Result
+// and id_conflict details.
 
 import (
 	"encoding/json"
@@ -20,6 +22,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/store"
 	api "github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // busySendOptions are the params whose JSON null MCP refuses (SR-8.1).
@@ -100,6 +103,76 @@ func TestBusySendMCPOptionsReachTheVerb(t *testing.T) {
 				t.Errorf("err_details = %#v; want %#v", data.ErrDetails, tc.wantDetails)
 			}
 		})
+	}
+}
+
+// TestBusySendMCPCoveredSend (SR-1.3, SR-1.5, SR-5.1): on a covered row, a
+// raw-key param present as false, 0, "" or null, or a null
+// delivery_request_id, still reaches the verb as supplied, and text or a
+// delivery_request_id that is invalid UTF-8 or holds a lone surrogate escape
+// reaches it as malformed, not replaced, so send_keys is ErrInvalidFlags
+// naming each and stores no Message or pair; a confirmed send's
+// delivery_request_id reaches the store unchanged, and its Result is the one
+// get_delivery returns; its text's U+FFFD is kept, so the same pair with the
+// character escaped is a repeat returning that Result, while other text is
+// ErrCantSend, id_conflict, with that Result in err_details.
+func TestBusySendMCPCoveredSend(t *testing.T) {
+	const id = "mcp-covered-row"
+	e := newEnv(t)
+	e.seed(t, id, store.StateWaiting)
+	if err := apitest.SeedBusySendCoverage(e.storePath, id, store.BusySendCovered, store.BusySendCovered); err != nil {
+		t.Fatalf("SeedBusySendCoverage: %v", err)
+	}
+	facts := func() apitest.BusySendFacts {
+		f, err := apitest.ReadBusySendFacts(e.storePath, id)
+		if err != nil {
+			t.Fatalf("ReadBusySendFacts: %v", err)
+		}
+		return f
+	}
+	before := facts()
+	const requestID = "msg 多 🦋"
+	confirmed := `"confirmed_delivery":true,"caller_uuid":"` + strings.ToUpper(paramToken) + `"`
+	for _, tc := range []struct{ members, want string }{
+		{`"text":"hi","no_enter":false`, "a Covered Agent's send takes no no_enter;"},
+		{`"text":"hi","n_lines":0`, "a Covered Agent's send takes no n_lines;"},
+		{`"text":"hi","key":""`, "a Covered Agent's send takes no key;"},
+		{`"text":"hi","expect_pane_sha256":null`, "a Covered Agent's send takes no expect_pane_sha256;"},
+		{`"text":"hi",` + confirmed + `,"delivery_request_id":null`, "delivery_request_id, when given, must be nonempty"},
+		{"\"text\":\"h\xffi\"", "text must be valid UTF-8"},
+		{`"text":"h\ud800i"`, "text must be valid UTF-8"},
+		{`"text":"hi",` + confirmed + ",\"delivery_request_id\":\"r\xff1\"", "delivery_request_id must be valid UTF-8"},
+		{`"text":"hi",` + confirmed + `,"delivery_request_id":"r\ud800"`, "delivery_request_id must be valid UTF-8"},
+	} {
+		data := toolErrorData(t, callTool(t, e.d, "send_keys", `{"instance_id":"`+id+`",`+tc.members+`}`))
+		if data.ErrName != "ErrInvalidFlags" || !strings.Contains(data.ErrDescription, tc.want) {
+			t.Errorf("%q = %s: %q; want ErrInvalidFlags carrying %q", tc.members, data.ErrName, data.ErrDescription, tc.want)
+		}
+		if after := facts(); !reflect.DeepEqual(after, before) {
+			t.Errorf("%q stored:\n got %+v\nwant %+v", tc.members, after, before)
+		}
+	}
+
+	send := func(textJSON string) *mcp.Response {
+		return callTool(t, e.d, "send_keys", `{"instance_id":"`+id+`","text":`+textJSON+`,`+confirmed+`,"delivery_request_id":"`+requestID+`"}`)
+	}
+	sent := toolText(t, send(`"hi �"`))
+	var result map[string]any
+	if err := json.Unmarshal([]byte(sent), &result); err != nil || result["caller_uuid"] != paramToken || result["request_id"] != requestID || result["class"] != "held" {
+		t.Errorf("Result = %s (%v); want held, with the lowercase caller_uuid and request_id %q", sent, err, requestID)
+	}
+	lookup := paramJSON(t, map[string]any{"caller_uuid": paramToken, "delivery_request_id": requestID})
+	if got := toolText(t, callTool(t, e.d, "get_delivery", lookup)); got != `{"lookup":"found","result":`+sent+`}` {
+		t.Errorf("get_delivery = %s; want found with the send's Result %s", got, sent)
+	}
+	if got := toolText(t, send(`"hi \`+`ufffd"`)); got != sent { // U+FFFD as a JSON escape
+		t.Errorf("repeat with U+FFFD escaped = %s; want the send's Result %s", got, sent)
+	}
+
+	data := toolErrorData(t, send(`"other"`))
+	want := map[string]any{"class": "cant_send", "reason": "id_conflict", "resend_safe": true, "retry_with": "new_send", "result": result}
+	if data.ErrName != "ErrCantSend" || !reflect.DeepEqual(data.ErrDetails, want) {
+		t.Errorf("repeat with other text = %s, err_details %#v; want ErrCantSend with %#v", data.ErrName, data.ErrDetails, want)
 	}
 }
 

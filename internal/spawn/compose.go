@@ -166,8 +166,21 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 			// (insertPending) and reuse's reset (ResetForReuse) alike.
 			Agent:                    r.Agent,
 			IdleScreenTimeoutSeconds: r.IdleScreenTimeoutSeconds,
+			BusySendDefaults:         busySendDefaultsChoice(r.SpawnParams),
 		},
 	}, nil
+}
+
+// busySendDefaultsChoice is the launch's Agent Default and
+// confirm_from_transcripts choice, its template's folded in by Resolve, which
+// the insert publishes and reuse's reset stages (store.Spawn.BusySendDefaults).
+func busySendDefaultsChoice(p SpawnParams) store.BusySendDefaultsChoice {
+	c := store.BusySendDefaultsChoice{Confirmed: p.ConfirmedDelivery, ConfirmFromTranscripts: p.ConfirmFromTranscripts}
+	if p.SendMode != nil {
+		mode := store.BusySendMode(*p.SendMode)
+		c.SendMode = &mode
+	}
+	return c
 }
 
 // envClaudeConfigDir is the variable that moves Claude Code's config.

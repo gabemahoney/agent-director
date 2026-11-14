@@ -56,14 +56,15 @@ func checkCallerUUID(verb string, id *string) (*string, error) {
 
 // busySendGate decides a call that names a busy-send option from coverage,
 // the coverage of the Launch the option would apply to (SR-9.1, SR-9.2): the
-// current Launch's recorded coverage for send-keys, pause and force-delivery,
-// and the coverage the new Launch would record for spawn, reuse, resume and
-// make-template. It never returns nil: for an agent busy send does not cover
-// it is ErrCantSend with reason agent_not_covered, and for a Covered Agent an
-// unnamed error, since this version builds no busy-send delivery; either way
-// nothing has been stored, sent, typed or launched, and the call never falls
-// back to today's behaviour. target names what was checked; options names
-// what the call set.
+// current Launch's recorded coverage for send-keys' force, pause's
+// only_if_waiting and force-delivery, and the coverage the new Launch would
+// record for an Agent Default (busySendDefaultsGate, which calls it only for
+// an uncovered Launch). It never returns nil: for an agent busy send does not cover it is
+// ErrCantSend with reason agent_not_covered, and for a Covered Agent an
+// unnamed interim error until forced delivery and pause only if waiting are
+// built; either way nothing has been stored, sent, typed or launched, and the
+// call never falls back to today's behaviour. target names what was checked;
+// options names what the call set.
 func busySendGate(target, options string, coverage store.BusySendCoverage) error {
 	switch coverage {
 	case store.BusySendNotCovered:
@@ -72,6 +73,38 @@ func busySendGate(target, options string, coverage store.BusySendCoverage) error
 		return fmt.Errorf("%s: %s: busy send is not available in this version for a Covered Agent; nothing was stored, sent, typed or launched", target, options)
 	}
 	return fmt.Errorf("%s: invalid busy-send coverage %q; nothing was stored, sent, typed or launched", target, coverage)
+}
+
+// busySendDefaultsGate decides a spawn, reuse or make-template that sets an
+// Agent Default or confirm_from_transcripts (named, "" for none) for agent,
+// whose Launch would record coverage (SR-1.4, SR-9.2): nil when it sets none;
+// ErrCantSend agent_not_covered when busy send would not cover the Launch;
+// ErrCantSend steer_unsupported when sendMode is a Send Mode agent's row of
+// the capability table does not offer; nil otherwise, so the values are
+// stored. Nothing has been written or launched when it refuses.
+func busySendDefaultsGate(target, agent string, coverage store.BusySendCoverage, named string, sendMode *string) error {
+	switch {
+	case named == "":
+		return nil
+	case coverage != store.BusySendCovered:
+		return busySendGate(target, named, coverage)
+	case sendMode != nil:
+		if _, offered := store.BusySendCapabilitiesFor(agent).Mode(store.BusySendMode(*sendMode)); !offered {
+			return steerUnsupportedError(target, *sendMode)
+		}
+	}
+	return nil
+}
+
+// steerUnsupportedError is ErrCantSend with reason steer_unsupported: the
+// agent's capability table does not offer mode. The same call with send_mode
+// wait_turn can succeed.
+func steerUnsupportedError(target, mode string) error {
+	return &DetailedError{
+		Err: fmt.Errorf("%w: %s: send_mode %s is not offered for this agent (steer_unsupported); nothing was stored, sent, typed or launched; use wait_turn",
+			ErrCantSend, target, mode),
+		Details: CantSendDetails{Class: cantSendClass, Reason: string(store.BusySendRefuseSteerUnsupported), ResendSafe: true, RetryWith: retryWithNewSend},
+	}
 }
 
 // agentNotCoveredError is SR-9.2's refusal: ErrCantSend with reason

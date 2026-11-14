@@ -57,6 +57,12 @@ type SpawnRow struct {
 	// BusySend is the published current Launch's recorded coverage, retained
 	// during pending resume/reuse until successful creation publishes its candidate.
 	BusySend BusySendCoverage `json:"busy_send,omitempty"`
+	// AgentDefaults, Delivery and DeliveryCapabilities are a covered row's
+	// published Agent Defaults, inbox facts and offered limits (SR-5.6), read
+	// with the published conversation; omitted for an uncovered row.
+	AgentDefaults        *AgentDefaults        `json:"agent_defaults,omitempty"`
+	Delivery             *DeliveryFacts        `json:"delivery,omitempty"`
+	DeliveryCapabilities *DeliveryCapabilities `json:"delivery_capabilities,omitempty"`
 	// IntegrationMode identifies the fixed pane-only capability contract;
 	// omitted for agents with native integration.
 	IntegrationMode string `json:"integration_mode,omitempty"`
@@ -494,6 +500,14 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		PriorSessions:           []PriorSession{},
 	}
 	out.ProcessLiveness, out.Confirmations = mainFields(s, row, settle)
+	observation, err := busySendObservationOf(s, row)
+	if err != nil {
+		return emptySpawnRow(), err
+	}
+	if observation != nil {
+		out.AgentDefaults, out.Delivery = agentDefaultsOf(observation.Defaults), busySendDeliveryOf(observation)
+		out.DeliveryCapabilities = deliveryCapabilitiesOf(observation.Provider)
+	}
 
 	// b.v2c AC6/AC8: surface the visible history (the current life's archived
 	// sessions minus the entry for the row's current session id) and derive

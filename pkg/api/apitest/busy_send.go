@@ -15,12 +15,26 @@ type BusySendFacts struct {
 	Coverage      store.BusySendCoverage
 	Conversations []BusyConversationFact
 	Launches      []BusyLaunchFact
+	Messages      []BusyMessageFact
 }
 
 type BusyConversationFact struct {
 	ID, Publication, Provider, Coverage string
 	Generation, Revision, AcceptedSeq   int64
 	RetiredReason, ReplacedBy           sql.NullString
+	Defaults                            store.BusySendAgentDefaults
+	ReservedCount, ReservedBytes        int64
+}
+
+// BusyMessageFact is one Message targeting the instance: its custody, its
+// immutable options and exact stored text, and its confirmed pair (NULL for
+// an unconfirmed Message).
+type BusyMessageFact struct {
+	ID, Conversation, SendMode, Place string
+	Seq                               int64
+	Text                              []byte
+	Confirmed, Reserved               bool
+	CallerUUID, RequestID             sql.NullString
 }
 
 type BusyLaunchFact struct {
@@ -46,13 +60,15 @@ func ReadBusySendFacts(path, id string) (BusySendFacts, error) {
 	if err = tx.QueryRow(`SELECT COALESCE(busy_conversation_id, ''), busy_send FROM spawns WHERE instance_id = ?`, id).Scan(&out.Binding, &out.Coverage); err != nil {
 		return out, err
 	}
-	rows, err := tx.Query(`SELECT conversation_id, publication, provider, busy_send, generation, revision, accepted_seq, retired_reason, replaced_by FROM busy_conversations WHERE instance_id = ? ORDER BY generation`, id)
+	rows, err := tx.Query(`SELECT conversation_id, publication, provider, busy_send, generation, revision, accepted_seq, retired_reason, replaced_by,
+	    default_send_mode, default_confirmed, confirm_from_transcripts, reserved_count, reserved_bytes FROM busy_conversations WHERE instance_id = ? ORDER BY generation`, id)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
 		var c BusyConversationFact
-		if err = rows.Scan(&c.ID, &c.Publication, &c.Provider, &c.Coverage, &c.Generation, &c.Revision, &c.AcceptedSeq, &c.RetiredReason, &c.ReplacedBy); err != nil {
+		if err = rows.Scan(&c.ID, &c.Publication, &c.Provider, &c.Coverage, &c.Generation, &c.Revision, &c.AcceptedSeq, &c.RetiredReason, &c.ReplacedBy,
+			&c.Defaults.SendMode, &c.Defaults.Confirmed, &c.Defaults.ConfirmFromTranscripts, &c.ReservedCount, &c.ReservedBytes); err != nil {
 			_ = rows.Close()
 			return out, err
 		}
@@ -74,6 +90,25 @@ func ReadBusySendFacts(path, id string) (BusySendFacts, error) {
 			return out, err
 		}
 		out.Launches = append(out.Launches, l)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return out, err
+	}
+	rows, err = tx.Query(`SELECT m.message_id, m.conversation_id, m.send_mode, m.place, m.accepted_seq, m.text, m.confirmed, m.reserved,
+	    p.caller_uuid, p.delivery_request_id FROM busy_send_messages m LEFT JOIN busy_send_results p ON p.message_id = m.message_id
+	    WHERE m.instance_id = ? ORDER BY m.accepted_at_ms, m.accepted_seq`, id)
+	if err != nil {
+		return out, err
+	}
+	for rows.Next() {
+		var m BusyMessageFact
+		if err = rows.Scan(&m.ID, &m.Conversation, &m.SendMode, &m.Place, &m.Seq, &m.Text, &m.Confirmed, &m.Reserved, &m.CallerUUID, &m.RequestID); err != nil {
+			_ = rows.Close()
+			return out, err
+		}
+		out.Messages = append(out.Messages, m)
 	}
 	err = rows.Err()
 	_ = rows.Close()
@@ -118,6 +153,47 @@ func SeedBusySendCoverage(path, id string, launch, conversation store.BusySendCo
 		}
 	}
 	return tx.Commit()
+}
+
+// SeedBusySendRoute records the current Launch's route kind and wake file as
+// the route that registers them (a later release) would, so admission sees a
+// reachable route and touches wakePath. No route or file is created.
+func SeedBusySendRoute(path, id, routeKind, wakePath string) error {
+	return execBusySendSeed(path, "SeedBusySendRoute", `UPDATE busy_send_launches SET route_kind = ?, wake_path = ?
+	    WHERE instance_id = ? AND phase = 'current'`, routeKind, wakePath, id)
+}
+
+// SeedBusySendReservation sets the published conversation's held reservation
+// (reserved_count, reserved_bytes), as custody that can return to Held would
+// leave it, so a capacity limit is reached without that many sends.
+func SeedBusySendReservation(path, id string, count, bytes int64) error {
+	return execBusySendSeed(path, "SeedBusySendReservation", `UPDATE busy_conversations SET reserved_count = ?, reserved_bytes = ?
+	    WHERE instance_id = ? AND publication = 'published'`, count, bytes, id)
+}
+
+// SeedBusySendDefaults sets the published conversation's Agent Defaults and
+// confirm_from_transcripts, as an earlier launch that chose them would have
+// published them.
+func SeedBusySendDefaults(path, id string, d store.BusySendAgentDefaults) error {
+	return execBusySendSeed(path, "SeedBusySendDefaults", `UPDATE busy_conversations SET default_send_mode = ?, default_confirmed = ?,
+	    confirm_from_transcripts = ? WHERE instance_id = ? AND publication = 'published'`, string(d.SendMode), d.Confirmed, d.ConfirmFromTranscripts, id)
+}
+
+// execBusySendSeed runs one seed's update, which must change exactly one row.
+func execBusySendSeed(path, name, query string, args ...any) error {
+	db, err := openRawStore(path)
+	if err != nil {
+		return err
+	}
+	defer db.Close() //nolint:errcheck
+	r, err := db.Exec(query, args...)
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	if n, err := r.RowsAffected(); err != nil || n != 1 {
+		return fmt.Errorf("%s: %d rows, %v; want one", name, n, err)
+	}
+	return nil
 }
 
 // SeedBusySendCandidateProcess models a historical timed-out creation whose

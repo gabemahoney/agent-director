@@ -34,8 +34,8 @@ error:
   `send-keys`, follow
   [Ordinary text submission](#ordinary-text-submission); for manual
   `send-keys`, follow [Manual input ownership](#manual-input-ownership).
-- `ErrCantSend`: nothing was stored, sent or typed; follow
-  [Busy-send options](#busy-send-options).
+- `ErrCantSend`: nothing was stored, sent or typed; act on its `reason`
+  ([Busy-send refusals](#busy-send-refusals)).
 - `ErrPauseTimeout`: inspect before further input; never retry `pause`
   automatically. Follow [When pause cannot confirm exit](#when-pause-cannot-confirm-exit).
 - `resume`, or a supported `spawn --reuse-finished` refused as "still stopping" or "still
@@ -153,11 +153,23 @@ error; it never fabricates a successful `not_covered` row.
 
 Resume retains the conversation and preserves its coverage; fresh reuse
 starts a new conversation even with the same agent. Pending or uncertain
-resume/reuse keeps the earlier published coverage visible until the new launch
-is published following creation, adoption or report-in.
+resume/reuse keeps the earlier published coverage and
+[Agent Defaults](#agent-defaults) visible, and sends use those defaults, until
+the new launch is published following creation, adoption or report-in.
 
-Uncovered rows omit top-level `delivery`, `delivery_capabilities` and Agent
-Defaults. Permission-request delivery fields keep their separate meaning.
+A covered row also shows `agent_defaults` on `get`, `get-many`, `status` and
+`list`; `delivery`, its inbox, on `get`, `get-many` and `status`; and
+`delivery_capabilities`, its limits, on `get` and `get-many`. Uncovered rows
+omit all three. Permission-request delivery fields keep their separate
+meaning.
+
+`delivery.held_count` and `held_bytes` count the Messages Held now. The held
+limits also count Messages handed over that could still return to Held, so
+staying under them does not promise the next send fits.
+`delivery.awaiting_turn_start` is 0 in this version. Reading these
+fields hands nothing over, wakes nothing and changes no Result; `state`,
+`process_liveness`, `displayed_state`, `confirmations` and the permission
+fields keep their own meanings.
 
 ## Busy-send options
 
@@ -167,15 +179,16 @@ These options apply only to Covered Agents:
   `caller_uuid` and `force`.
 - `spawn` (reuse included), `resume` and `make-template`: the Agent Defaults
   `send_mode` and `confirmed_delivery`, and the experimental
-  `confirm_from_transcripts`. A spawn's own value overrides its template's.
+  `confirm_from_transcripts`.
 - `pause`: `only_if_waiting`.
 
 Any supplied value counts, `false`, `wait_turn` and a value inherited from a
 template included. On the CLI a bare boolean flag is true; write false
 as `--force=false`. Over MCP, `null` is refused with `ErrInvalidFlags`, never
-read as omitted. A call that names none of them, or a `pause` with
-`only_if_waiting` false or omitted, works as the rest of this contract says,
-raw keys included.
+read as omitted. Every `send-keys` to a Covered Agent is a Message
+([Covered sends](#covered-sends)). Otherwise a call that names none of them,
+or a `pause` with `only_if_waiting` false or omitted, works as the rest of
+this contract says, raw keys included.
 
 A call decides from the coverage of the launch its options apply to:
 
@@ -185,9 +198,11 @@ A call decides from the coverage of the launch its options apply to:
 - `spawn`, reuse and `make-template`: the agent they resolve. A new
   conversation is never covered in this version.
 
-This version delivers nothing through busy send: where that coverage is
-`covered`, the call fails with `ErrInternal`, and nothing is stored, sent,
-typed, ended or launched.
+Where it is `covered`, `send-keys` sends a Message, and `spawn`, reuse,
+`resume` and `make-template` store the [Agent Defaults](#agent-defaults). In
+this version `force` on `send-keys`, `force-delivery` and `pause` with
+`only_if_waiting: true` fail there with `ErrInternal`; nothing is stored,
+sent, typed or ended.
 
 Where it is `not_covered`:
 
@@ -208,13 +223,146 @@ A call naming an option never falls back to input or a launch without it.
 A `send_mode` other than `wait_turn` or `steer_turn`, or a `caller_uuid` that
 is not a hyphenated hexadecimal UUID, is refused before coverage is decided:
 `ErrInvalidFlags`, or `ErrTemplateMalformed` from `make-template` and for a
-template's own `send_mode`. `send-keys` checks its other input shapes first.
-An unknown id is `ErrSpawnNotFound`. Then `send-keys`, `pause` and `resume`
-decide coverage before any other check of the row, such as its state, relay
-or agent capability. `spawn`, reuse and `make-template` decide it only once
-their other checks of the template, agent, arguments, environment, id and
-credentials pass; those keep their own errors. `agent_not_covered` comes
-before any other `ErrCantSend` reason. Store failures keep their own errors.
+template's own `send_mode`. A `send-keys` to an uncovered or unknown target
+checks its other input shapes first. An unknown id is `ErrSpawnNotFound`,
+except for a [repeat](#covered-sends) of a stored pair. Then `send-keys`,
+`pause` and `resume` decide coverage before any other check of the row, such
+as its state, relay or agent capability. `spawn`, reuse and `make-template`
+decide it only once their other checks of the template, agent, arguments,
+environment, id and credentials pass; those keep their own errors.
+`agent_not_covered` comes before any other `ErrCantSend` reason. Store
+failures keep their own errors.
+
+### Agent Defaults
+
+A Covered Agent's Message takes its Agent Defaults for any of `send_mode` and
+`confirmed_delivery` the send leaves out. Out of the box they are `wait_turn`
+and `false`, and `confirm_from_transcripts` is `false`. Each value resolves on
+its own:
+
+- `spawn` and reuse: the call's value, else the template's, else the
+  out-of-box value. An explicit `false` or `wait_turn` overrides the template.
+- `resume`: the conversation keeps its values; a value the call names replaces
+  that one when the resumed launch is published (see
+  [Busy-send coverage](#busy-send-coverage)). A failed or uncertain resume
+  changes nothing. To change an agent's defaults, resume it with new ones.
+- `make-template`: stored for the spawns that use the template.
+
+A `send_mode` the agent does not offer is `ErrCantSend`, reason
+`steer_unsupported`, before anything is written or launched; a template with
+no agent is checked at each spawn that uses it. `confirm_from_transcripts` is
+experimental: this version stores and shows it, and it changes nothing.
+
+### Covered sends
+
+A Covered Agent's `send-keys` stores its `text` as a Message in the agent's
+inbox, Held, and returns its [Result](#message-results). This version hands no
+Message to the agent yet. Acceptance types nothing and does not wait for the
+agent: a Message is accepted in any state, `pending`, `ended` and `missing`
+included, so `allow_pending` changes nothing.
+
+The text is kept byte for byte: TAB, LF, Unicode and whitespace included,
+nothing normalized. These are malformed, `ErrInvalidFlags` with nothing
+stored:
+
+- `key`, `no_enter`, `request_token`, `as`, `expect_pane_sha256` or `n_lines`,
+  even at a zero, `false` or empty value. To press keys on a Covered Agent's
+  pane, use tmux, and record a permission answer with `record-pane-answer`.
+- Empty `text`, or `text` or `delivery_request_id` that is not valid UTF-8
+  (over MCP, a lone surrogate escape counts as invalid).
+- A confirmed send without `caller_uuid`; an unconfirmed send with
+  `caller_uuid` or `delivery_request_id`; a `delivery_request_id` that is
+  empty, null or without `caller_uuid`.
+
+**Confirmed and unconfirmed.** The resolved `confirmed_delivery` decides;
+supplying an ID never turns it on. A confirmed send carries `caller_uuid`
+and may carry `delivery_request_id`, its Message ID: any nonempty UTF-8,
+unique only within that Caller UUID. If it carries none, agent-director makes
+a UUID. The Result returns the lowercase `caller_uuid` and the Message ID as
+`request_id`. Supply your own ID: after a lost reply, only a known pair can be
+repeated safely. An unconfirmed send returns no ID and has no lookup.
+
+**Repeats.** A pair of Caller UUID and Message ID belongs, store-wide, to the
+first Message accepted with it. A send repeating the pair with the same target
+and the exact text bytes stores nothing and returns the owner's current
+Result, even after the launch ended, the row was deleted or the inbox filled.
+Only malformed parameters, a store failure or a target now `not_covered`
+refuse it, and the owner's options stand. The same pair with another target
+or text is `ErrCantSend`, reason `id_conflict`. A refused send claims no pair.
+
+**When the reply is uncertain.** `ErrStoreBusy` stored nothing. An
+`ErrInternal` saying whether the Message was accepted is unknown (it has no
+`err_details`) is not a refusal: the Message may be Held. For a confirmed
+send, repeat it with the pair the error names, or call `get-delivery` with
+that pair; a repeat never accepts it twice. An unconfirmed send has no
+identity, so nothing resolves it: `get`'s `delivery` counts are aggregates.
+Never resend it automatically. Where a send must be recoverable, use confirmed
+delivery with your own `caller_uuid` and `delivery_request_id`.
+
+### Busy-send refusals
+
+Other refusals are `ErrCantSend`. Nothing was stored, sent, typed or launched,
+and no pair was claimed. `err_details` has `class: "cant_send"`, `reason`,
+`resend_safe` and `retry_with`, plus `limit` (`actual`, `allowed`) for a limit
+and `result`, the owner's Result, for `id_conflict`. A covered send is checked
+in the table's order.
+
+| `reason` | Refused because | Next step (`resend_safe`, `retry_with`) |
+|---|---|---|
+| `id_conflict` | The pair names a Message with another target or text. | `true`, `new_send`: send it under a new `delivery_request_id`. |
+| `retention_expired` | The pair's Message is past retention; the pair stays owned. | `false`, `none`: never reuse the pair. |
+| `agent_not_covered` | Busy send does not cover the launch. | `true`, `new_send`: the same call without busy-send options. |
+| `agent_command` | The text's first non-whitespace character is `/` or `!`. | `false`, `none` |
+| `steer_unsupported` | The agent does not offer the resolved `send_mode`. | `true`, `new_send`: use `wait_turn`. |
+| `text_kind` | The text holds a control character below U+0020 (NUL and CR included) other than TAB and LF. | `false`, `none` |
+| `text_bytes` | The text is over `message_bytes`. | `false`, `none` |
+| `prompt_size` | The Message would not fit one prompt on its own. | `false`, `none` |
+| `held_count`, `held_bytes` | The agent's held limit is full. | `true`, `new_send`: send again once Held Messages drain. |
+
+`false`, `none`: the same send can never succeed. Read limits from
+`delivery_capabilities`, which can change: they are agent-director's policy,
+counted in UTF-8 bytes, not measured provider maxima. `message_bytes` counts a
+Message's own text; `prompt_bytes` counts a whole prompt with agent-director's
+separators and wrapper, and a Message within `message_bytes` always fits a
+prompt on its own. Claude Code's `wait_turn` allows 8,000 Message bytes and
+9,000 prompt bytes, and its held limits are 1,000 Messages and 8,000,000
+bytes.
+
+### Message Results
+
+Every accepted send succeeds and returns its Message's Result, never
+`ErrSubmissionUnconfirmed`. A found `get-delivery` and an `id_conflict`
+refusal carry the same shape. Decide from `class` and `final`:
+
+| `class` | `final` | Meaning | Next step |
+|---|---|---|---|
+| `held` | `false` | Accepted; nothing has reached the agent. | Observe; never resend. |
+| `queued` | `false` | The agent's harness holds it but hasn't taken it in, so it isn't Delivered. | Observe; never resend. |
+| `delivered_confirmed` | `true` | Allowed exact evidence shows the harness took this Message in, on the right launch and session. | Never resend. |
+| `sent_unconfirmed` | `false` or `true` | Some or all of it may have reached the agent; it can't be proven Delivered. Until final, proof may still arrive. | Never resend; once final, act on `reason`. |
+| `not_started` | `true` | Accepted, then ended with nothing reaching the agent, because its conversation can no longer be resumed. | Resend with a new Message ID. |
+
+A final Result never changes. Its fields:
+
+- `caller_uuid`, `request_id`: the confirmed pair; omitted for an unconfirmed
+  send, whose Result is `held` or, once handed over, final `sent_unconfirmed`.
+- `reason`: the stable machine-readable reason. Advice text is a hint.
+- `resend_safe`, `retry_with`: `true`, `new_id` only for `not_started`;
+  `false`, `none` otherwise. Repeating a pair reads its Result; it never
+  resends.
+- `wait`: null when final; otherwise `reason`, `since` (UTC) and, behind an
+  earlier confirmed Message, `earlier` with its `caller_uuid` and `request_id`.
+- `forced`: whether its hand-over was forced.
+- `instance_id`: the original target. `launch_token` (null) and `session_id`
+  (omitted) name the launch and session it was actually handed to, once it is.
+- `evidence_kind` (null), `record_id` and `record_sha256` (omitted): the
+  qualified receipt's identity, once one exists.
+- No Message text, raw evidence or private paths.
+
+`outcome` maps `class` for older callers: `delivered_confirmed` is `submitted`;
+`held` and `not_started` are `not_started`; `queued` and `sent_unconfirmed` are
+`submission_unconfirmed`, or `partial_input_unconfirmed` when only part of the
+prompt is known written. No `outcome` is permission to resend.
 
 ### Stored force attempts
 
@@ -236,15 +384,17 @@ UTF-8. Any other form is `ErrInvalidFlags`.
 
 Each returns `lookup`: `found`, `unknown` (nothing stored) or
 `retention_expired`, with `force_result` or `result` null unless `found`. A
-refused force attempt is `found`; a pair no Message holds, including a native
-`delivery_request_id` sent without `caller_uuid`, is `unknown`.
+refused force attempt is `found`; a pair no Message holds, including one only
+refused sends used and a native `delivery_request_id` sent without
+`caller_uuid`, is `unknown`. A found `result` is the [Result](#message-results)
+a repeat of the owner's send would return at that moment.
 
 They read stored facts only: they start no work, run no
 [recovery checks](#bounded-recovery-on-state-reads) and probe no agent, tmux
 or process. Stored facts stay readable after a restart, the launch's end and
-the row's deletion. `unknown` and `retention_expired` are never permission to
-resend. A store failure is an error (`ErrStoreBusy` when a bounded read runs
-out of time), never `unknown`.
+the row's deletion. Only a found `not_started` Result is permission to
+resend; `unknown` and `retention_expired` never are. A store failure is an
+error (`ErrStoreBusy` when a bounded read runs out of time), never `unknown`.
 
 ## Reading many agents
 
@@ -766,9 +916,11 @@ kept; nothing reads what the pane says.
 
 ## Ordinary text submission
 
-A nonempty `text` with Enter, without `key`, `request_token`,
-`expect_pane_sha256` or a [busy-send option](#busy-send-options), uses native
-ordinary delivery where the launch supports it. CR bytes are removed; LF newlines are preserved. Native success returns
+For an agent busy send does not cover, a nonempty `text` with Enter, without
+`key`, `request_token`, `expect_pane_sha256` or a
+[busy-send option](#busy-send-options), uses native ordinary delivery where
+the launch supports it. A Covered Agent's send is a
+[Message](#covered-sends) instead. CR bytes are removed; LF newlines are preserved. Native success returns
 `outcome: "submitted"`,
 `request_id`, `session_id`, `record_sha256` and, when supplied by the native
 record, `record_id`: an exact new user record in this launch's native
@@ -987,8 +1139,10 @@ blindly resending. Minimum gateway version: see [Upgrade](install.md#upgrade).
 
 ## Manual input ownership
 
-Empty text (Enter only), `no_enter`, `key`, pane-hash sends and permission
-pane answers remain separate manual operations. On success they return an empty
+For an agent busy send does not cover, empty text (Enter only), `no_enter`,
+`key`, pane-hash sends and permission pane answers remain separate manual
+operations; a Covered Agent's send refuses them as
+[malformed](#covered-sends). On success they return an empty
 object and make no transcript-confirmation claim. Cursor sends with Enter also
 check for [gateway refusal](#cursor-input-outcomes). They serialize with ordinary
 delivery. Manual `send-keys` can return `ErrSubmissionUnconfirmed`
@@ -1545,8 +1699,9 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
   case. Use `agent_args`, remove the reserved key and keep one spelling.
   `make-template` refuses those reserved keys with `ErrInvalidFlags`.
 - `ErrCantSend`: the call or its template sets an Agent Default or
-  `confirm_from_transcripts` for an agent busy send does not cover; see
-  [Busy-send options](#busy-send-options).
+  `confirm_from_transcripts` for an agent busy send does not cover
+  (`agent_not_covered`), or a `send_mode` the agent does not offer
+  (`steer_unsupported`); see [Agent Defaults](#agent-defaults).
 - `ErrReservedEnvKey`: the merged template and call `extra_env` sets `HOME`
   (any value), an `AGENT_DIRECTOR_*` key, or a malformed name (empty, or
   containing `=` or NUL); `make-template` checks its own `extra_env` the

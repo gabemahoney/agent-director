@@ -344,6 +344,14 @@ var paneLinesParam = ParamDef{
 	AllowedValues: nil,
 }
 
+// sendKeysLinesParam is send-keys' paneLinesParam, which a Covered Agent's
+// send refuses.
+var sendKeysLinesParam = func() ParamDef {
+	p := paneLinesParam
+	p.Description += coveredRawKey
+	return p
+}()
+
 // sweepResultFields is shared by the canonical verb and its retained alias.
 var sweepResultFields = []FieldDef{
 	{Name: "checks", Type: "[]SweepCheck", Description: "Sorted fixed all-agent snapshot, once per selected instance_id, including finished, changed, removed and unattempted rows. Never null; [] when empty. Each entry carries instance_id (string), state (string, the lifecycle value as on status), displayed_state (optional string, omitted when absent), family_state (working or waiting, stored and freshness unconfirmed), idle_screen_availability (available or unavailable), process_liveness (alive, exited or unknown), confirmations (exactly the state, process_liveness and displayed_state records), completion (complete or incomplete) and reason (null for complete; otherwise deadline, busy, unreadable, stale_observation, no_evidence, commit_unconfirmed, unsupported or unattempted). Complete means every eligible adapter was attempted or inapplicable, not that fields were confirmed; an attempted failure can be complete. Interrupted and unattempted rows retain stored applicable evidence with no new evidence timestamps. No input, answer, signal, restart or retry is authorized. An initial selection error fails the call; per-agent failures do not suppress others. Transport termination does not promise a returned partial result or prove rollback. " + processLivenessText + " " + confirmationsText, Nullable: false, AllowEmpty: true, AllowedValues: nil},
@@ -374,14 +382,14 @@ func coveredOnlySend(value string) string {
 // coveredOnlyLaunch is the same for the Agent Defaults and
 // confirm_from_transcripts of spawn (reuse included) and resume.
 func coveredOnlyLaunch(value string) string {
-	return "Covered Agents only: setting it" + included(value) + " for a Launch of any other agent is refused with ErrCantSend, reason agent_not_covered, before anything is written."
+	return "Covered Agents only: setting it" + included(value) + " for a Launch of any other agent is refused with ErrCantSend, reason agent_not_covered, before anything is written. A send_mode the agent is not offered: reason steer_unsupported."
 }
 
 // coveredOnlyTemplate is the same for make-template, whose agent-less
 // template defers the decision to the spawn that uses it.
 func coveredOnlyTemplate(value string) string {
 	return "Covered Agents only: for a template whose agent busy send does not cover, setting it" + included(value) +
-		" is refused with ErrCantSend, reason agent_not_covered, and nothing is written; a template with no agent stores it, and the spawn that uses it decides."
+		" is refused with ErrCantSend, reason agent_not_covered (a send_mode that agent is not offered: steer_unsupported), and nothing is written; a template with no agent stores it, and the spawn that uses it decides."
 }
 
 // agentDefaultParams are the Agent Defaults and confirm_from_transcripts
@@ -398,6 +406,29 @@ func agentDefaultParams(before string, covered func(value string) string) []Para
 
 // forceResultText describes a force_result object (SR-4.1).
 const forceResultText = "force_id (AD-made UUID), outcome (handed_over, pending, refused or failed), reason, started_at, ended_at (null while pending) and carried_pairs (each caller_uuid and request_id; [] when none)."
+
+// deliveryResultText describes a Message's Result (SR-5.1, SR-5.3): a
+// Lookup's result and a Covered Agent's send-keys result.
+const deliveryResultText = "class (held, queued, delivered_confirmed, sent_unconfirmed or not_started), final, reason, resend_safe and retry_with (true/new_id only for not_started), wait (null when final; else reason, since and optional earlier pair), forced, instance_id, launch_token (null until bound), session_id (omitted until bound), evidence_kind (null without receipt), record_id and record_sha256 (omitted without receipt) and outcome (submitted, not_started, submission_unconfirmed or partial_input_unconfirmed). Never Message text or raw evidence."
+
+// coveredRow begins each busy-send read field get, status and list show only
+// for a covered row (SR-5.6).
+const coveredRow = "Covered Agents only (omitted otherwise): "
+
+// agentDefaultsField is a covered row's published Agent Defaults on get,
+// get-many, status and list.
+var agentDefaultsField = FieldDef{Name: "agent_defaults", Type: "object?", Description: coveredRow + "the published Agent Defaults a Message takes when its send names none, send_mode and confirmed_delivery, and the experimental confirm_from_transcripts.", Nullable: true, AllowEmpty: false}
+
+// deliveryField is a covered row's inbox facts on get, get-many and status.
+var deliveryField = FieldDef{Name: "delivery", Type: "object?", Description: coveredRow + "inbox facts read from durable records, delivering nothing: held_count and held_bytes (Messages Held now and their bytes), first_wait (the first Held Message's reason, since and optional earlier pair; null with none Held), handover_count (non-Final hand-overs: each hand-over of one or more Messages with a member whose Result is not Final counts once), startup_wait (null for Claude Code), force (the pending force, else the latest that began a hand-over, as a force_result; null with neither) and awaiting_turn_start (this Launch's hand-overs with no evidence yet that the agent took them).", Nullable: true, AllowEmpty: false}
+
+// deliveryCapabilitiesField is a covered row's offered limits on get and
+// get-many.
+var deliveryCapabilitiesField = FieldDef{Name: "delivery_capabilities", Type: "object?", Description: coveredRow + "modes, each send_mode offered with message_bytes (the most UTF-8 bytes of one Message's own text), prompt_bytes (of a complete prompt with AD's separators and the route's wrapper; a Message at message_bytes always fits alone) and text_kind (utf8_tab_lf: UTF-8 with no C0 control characters other than TAB and LF); and held_count and held_bytes, the most Held Messages and bytes, counting custody that can return to Held.", Nullable: true, AllowEmpty: false}
+
+// coveredRawKey is how send-keys' raw-key parameters say a Covered Agent's
+// send takes none of them (SR-1.5).
+const coveredRawKey = " A Covered Agent's send refuses it, even at its zero value, with ErrInvalidFlags."
 
 // lookupField is get-force's and get-delivery's lookup answer (SR-4.1,
 // SR-5.4): never an error, and never permission to resend.
@@ -660,6 +691,7 @@ var Verbs = []VerbDef{
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
+			agentDefaultsField, deliveryField,
 		},
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
@@ -684,6 +716,7 @@ var Verbs = []VerbDef{
 		},
 		ResultFields: []FieldDef{
 			{Name: "busy_send", Type: "string", Description: "The published current Launch's recorded busy-send coverage. Pending or uncertain resume/reuse retains the published coverage until successful creation publishes its candidate.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"covered", "not_covered"}},
+			agentDefaultsField, deliveryField, deliveryCapabilitiesField,
 			{Name: "instance_id", Type: "string", Description: "Stable id of the Spawn.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "context", Type: "object", Description: contextDescription, Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
@@ -748,7 +781,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "send-keys",
-		Description: "Strip CR, keep LF, add Enter (empty text: Enter only). Native: readiness, 512B chunks, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. Cleanup: caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Covered agent: Held, not typed. Else strip CR, keep LF, add Enter (empty text: Enter only); native (exact proof) or pane input. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. See caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -764,7 +797,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "text",
 				Type:          "string",
-				Description:   "Text to type into the Spawn's input. `\\r` stripped pre-send; `\\n` preserved as newline-in-input. Empty/omitted: nothing typed (Enter only, unless no_enter or key). Exclusive with key; must be empty on a pane answer.",
+				Description:   "Text to type into the Spawn's input. `\\r` stripped pre-send; `\\n` preserved as newline-in-input. Empty/omitted: nothing typed (Enter only, unless no_enter or key). Exclusive with key; must be empty on a pane answer. A Covered Agent's Message is this text byte for byte, never typed: empty or invalid UTF-8 is ErrInvalidFlags; C0 control characters other than TAB and LF (NUL and CR included) are ErrCantSend, reason text_kind; a first non-whitespace / or ! is reason agent_command; over its limits, text_bytes or prompt_size (get's delivery_capabilities).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -772,13 +805,13 @@ var Verbs = []VerbDef{
 			},
 			{
 				Name: "delivery_request_id", Type: "string",
-				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Unresolved or unreadable/corrupt native evidence blocks fallback resends too; discovering old proof never dispatches a different request. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.",
+				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Unresolved or unreadable/corrupt native evidence blocks fallback resends too; discovering old proof never dispatches a different request. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers. For a Covered Agent instead: a confirmed send's Message ID, any nonempty UTF-8, only with caller_uuid; omitted, AD makes a UUID; given empty, null or not valid UTF-8, ErrInvalidFlags.",
 				Required:    false, Nullable: false, AllowEmpty: true,
 			},
 			{
 				Name:          "allow_pending",
 				Type:          "bool",
-				Description:   "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected (ErrSpawnNotInteractive), including requests to reconcile stored or late proof.",
+				Description:   "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected (ErrSpawnNotInteractive), including requests to reconcile stored or late proof. Ignored for a Covered Agent, whose Messages are held in any state.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -787,7 +820,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "no_enter",
 				Type:          "bool",
-				Description:   "Type text with no Enter after it. With neither text nor key: ErrInvalidFlags (nothing to send). A pane answer never presses Enter.",
+				Description:   "Type text with no Enter after it. With neither text nor key: ErrInvalidFlags (nothing to send). A pane answer never presses Enter." + coveredRawKey,
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -796,7 +829,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "key",
 				Type:          "string",
-				Description:   "Send this one key instead of text, never followed by Enter: a named key (Escape, Enter, Up, Down, Tab), sent by name, or one character, typed literally. The caller picks the key; agent-director never interprets the screen. Required on a pane answer. Anything else: ErrInvalidFlags.",
+				Description:   "Send this one key instead of text, never followed by Enter: a named key (Escape, Enter, Up, Down, Tab), sent by name, or one character, typed literally. The caller picks the key; agent-director never interprets the screen. Required on a pane answer. Anything else: ErrInvalidFlags." + coveredRawKey,
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -805,17 +838,17 @@ var Verbs = []VerbDef{
 			{
 				Name:          "expect_pane_sha256",
 				Type:          "string",
-				Description:   "Required on a pane answer, optional otherwise. " + paneHashDescription + " On a plain call a matching hash also passes the hold of a request not proven gone (ErrDialogMaybeOpen); every other refusal still applies.",
+				Description:   "Required on a pane answer, optional otherwise. " + paneHashDescription + " On a plain call a matching hash also passes the hold of a request not proven gone (ErrDialogMaybeOpen); every other refusal still applies." + coveredRawKey,
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
 				AllowedValues: nil,
 			},
-			paneLinesParam,
+			sendKeysLinesParam,
 			{
 				Name:          "request_token",
 				Type:          "string",
-				Description:   "Makes the call a pane answer to this permission request of the Spawn (as get, get-permission or ErrRelayFallenBack's err_details name it): with as, key and expect_pane_sha256, and no text, it sends exactly one key and never Enter. Accepted only once the request has fallen back (its relay hook gone, no verdict acked, no pane answer completed), while no relay hook of the Spawn may still answer (else ErrSendKeysWhileRelayed) and no other pane answer on it is still being sent (else ErrPaneAnswerInProgress). Cursor requests proven gone at their turn's end (proven_gone_at set and proven_gone_how turn_end) are excluded from the row-wide relay and fallback holds of send-keys without request_token and pause. A pane answer naming such an open request still gets ErrSendKeysWhileRelayed while delivery is not_confirmed. Do not answer or decide a proven-gone request. pane_answer intent means sending started but whether the key was sent is unknown; sent records the key was sent, with decision as and decision_reason pane, not ACP delivery, agent receipt or proof. Not open: ErrNoOpenPermissionRequest or ErrAlreadyDecided. A retry after a sender that died is accepted with a fresh hash. Without it the call is plain: refused with ErrRelayFallenBack (with err_details) while any remaining request of the Spawn has fallen back with no pane answer recorded, then, without expect_pane_sha256, with ErrDialogMaybeOpen (with err_details) while any request of the Spawn is not proven gone by the agent (get's unproven_requests, which leaves out Cursor requests of an earlier launch), whatever agent-director's records say of it.",
+				Description:   "Makes the call a pane answer to this permission request of the Spawn (as get, get-permission or ErrRelayFallenBack's err_details name it): with as, key and expect_pane_sha256, and no text, it sends exactly one key and never Enter. A Covered Agent's send refuses it (ErrInvalidFlags). Accepted only once the request has fallen back (its relay hook gone, no verdict acked, no pane answer completed), while no relay hook of the Spawn may still answer (else ErrSendKeysWhileRelayed) and no other pane answer on it is still being sent (else ErrPaneAnswerInProgress). Cursor requests proven gone at their turn's end (proven_gone_at set and proven_gone_how turn_end) are excluded from the row-wide relay and fallback holds of send-keys without request_token and pause. A pane answer naming such an open request still gets ErrSendKeysWhileRelayed while delivery is not_confirmed. Do not answer or decide a proven-gone request. pane_answer intent means sending started but whether the key was sent is unknown; sent records the key was sent, with decision as and decision_reason pane, not ACP delivery, agent receipt or proof. Not open: ErrNoOpenPermissionRequest or ErrAlreadyDecided. A retry after a sender that died is accepted with a fresh hash. Without it the call is plain: refused with ErrRelayFallenBack (with err_details) while any remaining request of the Spawn has fallen back with no pane answer recorded, then, without expect_pane_sha256, with ErrDialogMaybeOpen (with err_details) while any request of the Spawn is not proven gone by the agent (get's unproven_requests, which leaves out Cursor requests of an earlier launch), whatever agent-director's records say of it.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -824,20 +857,22 @@ var Verbs = []VerbDef{
 			{
 				Name:          "as",
 				Type:          "string",
-				Description:   "A pane answer's claimed verdict, allow or deny: recorded as the request's pane_as and, once its key is sent, its decision. The public send-keys operation stores the claim without screen verification or proof. Before answering ACP, Cursor additionally requires the sent claim to match the actual selected offered option's verdict. Only with request_token.",
+				Description:   "A pane answer's claimed verdict, allow or deny: recorded as the request's pane_as and, once its key is sent, its decision. The public send-keys operation stores the claim without screen verification or proof. Before answering ACP, Cursor additionally requires the sent claim to match the actual selected offered option's verdict. Only with request_token." + coveredRawKey,
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
 				AllowedValues: []string{"allow", "deny", ""},
 			},
-			{Name: "send_mode", Type: "string", Description: "This Message's Send Mode: wait_turn or steer_turn. " + coveredOnlySend("wait_turn"), Nullable: false, AllowEmpty: false, AllowedValues: []string{"wait_turn", "steer_turn"}},
-			{Name: "confirmed_delivery", Type: "bool", Description: "This Message's Confirmed Delivery. " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
-			{Name: "caller_uuid", Type: "string", Description: "Caller UUID: hyphenated hexadecimal, either case. " + coveredOnlySend(""), Nullable: false, AllowEmpty: false},
+			{Name: "send_mode", Type: "string", Description: "This Message's Send Mode: wait_turn or steer_turn; omitted, the Agent Default. One the agent is not offered: ErrCantSend, reason steer_unsupported. " + coveredOnlySend("wait_turn"), Nullable: false, AllowEmpty: false, AllowedValues: []string{"wait_turn", "steer_turn"}},
+			{Name: "confirmed_delivery", Type: "bool", Description: "This Message's Confirmed Delivery; omitted, the Agent Default. Confirmed needs caller_uuid; unconfirmed takes neither caller_uuid nor delivery_request_id (else ErrInvalidFlags). " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
+			{Name: "caller_uuid", Type: "string", Description: "Caller UUID: hyphenated hexadecimal, either case. With delivery_request_id it names the Message store-wide: the same text to the same target returns its current Result; anything else, ErrCantSend, reason id_conflict, with the owner's Result. " + coveredOnlySend(""), Nullable: false, AllowEmpty: false},
 			{Name: "force", Type: "bool", Description: "Also force Held Messages, as force-delivery does. " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
 		},
 		ResultFields: []FieldDef{
-			{Name: "request_id", Type: "string", Description: "Native ordinary delivery attempt identity; absent on fallback pane input and manual operations.", AllowEmpty: true},
-			{Name: "outcome", Type: "string", Description: "submitted only with exact native transcript proof; absent on fallback pane input and manual operations.", AllowEmpty: true},
+			{Name: "caller_uuid", Type: "string", Description: "A Covered Agent's confirmed send: its Caller UUID, lowercase; omitted otherwise.", AllowEmpty: true},
+			{Name: "request_id", Type: "string", Description: "Native ordinary delivery attempt identity; absent on fallback pane input and manual operations. A Covered Agent's confirmed send: its Message ID; omitted for an unconfirmed one.", AllowEmpty: true},
+			{Name: "class", Type: "string", Description: "A Covered Agent's accepted send only (absent otherwise): its Message's current Result, stored Held before the call returns: " + deliveryResultText + " An unconfirmed send shows only held, or sent_unconfirmed with confirmation_off.", AllowEmpty: true},
+			{Name: "outcome", Type: "string", Description: "submitted only with exact native transcript proof; absent on fallback pane input and manual operations. A Covered Agent's send: the Result's compatibility outcome.", AllowEmpty: true},
 			{Name: "session_id", Type: "string", Description: "Native session that recorded the ordinary prompt.", AllowEmpty: true},
 			{Name: "record_id", Type: "string", Description: "Native user record id when provided by the pinned schema.", AllowEmpty: true},
 			{Name: "record_sha256", Type: "string", Description: "SHA-256 of the exact structured user record.", AllowEmpty: true},
@@ -901,7 +936,7 @@ var Verbs = []VerbDef{
 		},
 		ResultFields: []FieldDef{
 			lookupField,
-			{Name: "result", Type: "object?", Description: "Null unless lookup is found: the Result's caller_uuid, request_id, class (held, queued, delivered_confirmed, sent_unconfirmed or not_started), final, reason, resend_safe and retry_with (true/new_id only for not_started), wait (null when final; else reason, since and optional earlier pair), forced, instance_id, launch_token (null until bound), session_id (omitted until bound), evidence_kind (null without receipt), record_id and record_sha256 (omitted without receipt) and outcome (submitted, not_started or submission_unconfirmed). Never Message text or raw evidence.", Nullable: true, AllowEmpty: false},
+			{Name: "result", Type: "object?", Description: "Null unless lookup is found: the Result's caller_uuid, request_id, " + deliveryResultText + " The same Result the owner's send returned at the same durable state.", Nullable: true, AllowEmpty: false},
 		},
 		ErrorNames: []string{"ErrInvalidFlags", "ErrStoreBusy"},
 	},
@@ -1441,7 +1476,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. State filtering occurs before limit. A row showing a Displayed State carries displayed_state (string?) beside its state, with since/request_token/tool_name/unchanged_minutes omitted. " + needsIntelligenceText + " " + idleScreenText + " Every row carries idle_screen_availability (string: available for Claude and Codex, unavailable for Cursor and pane-only agents), a capability outcome, never a state. Empty array when none match (never null). Each row carries family_state (string: working or waiting). " + familyStateText + " Each row carries process_liveness (string: alive, exited or unknown). " + processLivenessText + " Each row carries confirmations (object). " + confirmationsText + " Each row carries optional integration_mode (string: pane_only; omitted for other agents). " + paneOnlyContract + " Each row carries agent (string: the agent it runs) and liveness_unverified_since (timestamp?, the time a check first noted the row, kept while the note changes) and liveness_note (string?, the latest check's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a check that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a check finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row carries state_changed_at (timestamp), as get's: " + stateChangedAtText + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is a check's judgement on available evidence, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. State filtering occurs before limit. A row showing a Displayed State carries displayed_state (string?) beside its state, with since/request_token/tool_name/unchanged_minutes omitted. " + needsIntelligenceText + " " + idleScreenText + " Every row carries idle_screen_availability (string: available for Claude and Codex, unavailable for Cursor and pane-only agents), a capability outcome, never a state. Empty array when none match (never null). Each row carries family_state (string: working or waiting). " + familyStateText + " Each row carries process_liveness (string: alive, exited or unknown). " + processLivenessText + " Each row carries confirmations (object). " + confirmationsText + " Each row carries optional integration_mode (string: pane_only; omitted for other agents). " + paneOnlyContract + " Each row carries agent (string: the agent it runs) and liveness_unverified_since (timestamp?, the time a check first noted the row, kept while the note changes) and liveness_note (string?, the latest check's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a check that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a check finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row carries state_changed_at (timestamp), as get's: " + stateChangedAtText + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is a check's judgement on available evidence, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription + " A covered row carries agent_defaults, as get's; an uncovered row omits it.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrInvalidFlags",

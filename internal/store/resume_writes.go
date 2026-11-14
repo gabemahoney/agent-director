@@ -159,6 +159,16 @@ var moveToPendingSQL = `UPDATE spawns
 // the row, its requests, its entries and its claimable launches as they were
 // (SR-5.8).
 func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner) (res CondResult, movedVersion int64, err error) {
+	return s.MoveToPendingWithDefaults(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner, BusySendDefaultsChoice{})
+}
+
+// MoveToPendingWithDefaults is MoveToPending for a resume that overrides
+// Agent Defaults or confirm_from_transcripts: the move stages defaults on its
+// candidate Launch (busy_send_launches.override_*), and only that Launch's
+// publication applies them to the published conversation; a failed, uncertain
+// or replaced candidate leaves the published values as they are (SR-1.4,
+// SR-6.3). An empty choice is MoveToPending exactly.
+func (s *Store) MoveToPendingWithDefaults(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner, defaults BusySendDefaultsChoice) (res CondResult, movedVersion int64, err error) {
 	const errPrefix = "store: move to pending"
 	_, evidenceArgs := moveToPendingEvidenceArgs(token)
 	args := append(immediateStateArgs(StatePending), evidenceArgs...)
@@ -188,7 +198,7 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 			return errFamilyWriteNotApplied
 		}
 		moved = true
-		if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchResume, launchStartedAtMillis); err != nil {
+		if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchResume, defaults, launchStartedAtMillis); err != nil {
 			return err
 		}
 		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, storeNowMillis())

@@ -9,6 +9,7 @@ import * as ad from "../src/index.js";
 import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import type { SweepParams, SweepResult, SweepCheck, FindMissingParams, FindMissingResult, DialogMaybeOpenDetails, ProvenGoneHow, IdleScreenAvailability } from "../src/index.js";
 import type { SendKeysResult, ResumeParams, PauseParams, GetForceResult, GetDeliveryResult, ForceResult, DeliveryResult, CantSendDetails } from "../src/index.js";
+import type { AgentDefaults, DeliveryFacts, DeliveryCapabilities, DeliveryModeLimits } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
@@ -164,6 +165,25 @@ function _assertBusySendTypes(client: ad.Client, force: GetForceResult, delivery
   void [sent, launches, pause, badMode, forced, result, details];
 }
 void _assertBusySendTypes;
+
+// Typecheck (SR-1.3, SR-5.1, SR-5.6): a send names its Message ID; an uncovered send's result stays {}, a
+// covered one's is the Result with a string request_id; the covered-only read blocks are optional, and their
+// types are exported from the package root.
+function _assertCoveredSendTypes(client: ad.Client, sent: SendKeysResult, got: GetResult, status: StatusResult, row: ListRow): void {
+  const confirmed: Promise<SendKeysResult> = client.sendKeys({ instance_id: "i", text: "t", confirmed_delivery: true, caller_uuid: "u", delivery_request_id: "r" });
+  const uncovered: SendKeysResult = {};
+  const requestID: string | undefined = sent.request_id;
+  const outcome: DeliveryResult["outcome"] = "partial_input_unconfirmed";
+  const caps: DeliveryCapabilities | undefined = got.delivery_capabilities;
+  const covered: [DeliveryModeLimits | undefined, AgentDefaults | undefined, DeliveryFacts | undefined, AgentDefaults | undefined] = [caps?.modes[0],
+    got.agent_defaults, status.delivery, row.agent_defaults];
+  // @ts-expect-error — request_id is a string Message ID, never a number
+  const numericID: SendKeysResult = { request_id: 1 };
+  // @ts-expect-error — list rows carry no delivery block
+  const listDelivery = row.delivery;
+  void [confirmed, uncovered, requestID, outcome, covered, numericID, listDelivery];
+}
+void _assertCoveredSendTypes;
 
 // Both names remain source-compatible and share the exact check records.
 function _assertSweepAliases(client: ad.Client, result: SweepResult): void {

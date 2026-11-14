@@ -12,7 +12,17 @@ import (
 // All helpers in this file run under the lifecycle writer's existing write
 // lock. Candidates describe external creation, independently of the published
 // conversation/current Launch that reads and future admissions still use.
+//
+// busySendPublishedRow is the one typed read of an instance's published
+// binding that lifecycle writers, admission and the delivery reads share
+// (readBusySendPublished). Every field is the published conversation's or the
+// current Launch's own, never a staged candidate's, so a read during a pending
+// resume or reuse cannot pair the published conversation with the candidate's
+// token or provider.
 type busySendPublishedRow struct {
+	// conversation and provider: the published conversation and its provider,
+	// published with it by InsertPending (spawn) or a reuse's publication
+	// (publishBusySendCandidate); a resume keeps both.
 	conversation, launch, provider string
 	// token is the current Launch's own recorded launch token ("" for NULL),
 	// never spawns.launch_token, which can already name a staged candidate.
@@ -27,6 +37,21 @@ type busySendPublishedRow struct {
 	launchCoverage       BusySendCoverage
 	conversationRevision int64
 	launchRevision       int64
+	// defaults are the conversation's Agent Defaults, published with it by
+	// InsertPending or a reuse's publication; staging never changes them.
+	defaults BusySendAgentDefaults
+	// acceptedSeq, reservedCount and reservedBytes are the inbox's admission
+	// facts, written by admission and the custody writers; ownerHandover is
+	// its open hand-over ("" for none), written by the hand-over writers.
+	acceptedSeq, reservedCount, reservedBytes int64
+	ownerHandover                             string
+	// routeKind and wakePath are the current Launch's route and content-free
+	// wake endpoint, "" until its route records them (SR-7.2); launchEnded is
+	// whether its Launch End is recorded.
+	routeKind, wakePath string
+	launchEnded         bool
+	// state is the spawns row's raw lifecycle state.
+	state string
 }
 
 // busySendLaunchSQL is the locked transaction surface shared by lifecycle
@@ -39,9 +64,13 @@ type busySendLaunchSQL interface {
 func readBusySendPublished(ctx context.Context, conn busySendLaunchSQL, instanceID string) (busySendPublishedRow, error) {
 	var p busySendPublishedRow
 	var raw, launchRaw any
-	var token sql.NullString
+	var mode string
+	var token, owner, route, wake sql.NullString
+	var ended sql.NullInt64
 	err := conn.QueryRowContext(ctx, `SELECT c.conversation_id, c.revision, c.provider, c.busy_send,
-	        l.launch_id, l.revision, l.launch_token, l.busy_send
+	        c.default_send_mode, c.default_confirmed, c.confirm_from_transcripts,
+	        c.accepted_seq, c.reserved_count, c.reserved_bytes, c.owner_handover_id,
+	        l.launch_id, l.revision, l.launch_token, l.busy_send, l.route_kind, l.wake_path, l.ended_at_ms, s.state
 	    FROM spawns s JOIN busy_conversations c ON c.conversation_id = s.busy_conversation_id
 	        AND c.instance_id = s.instance_id AND c.publication = 'published'
 	    JOIN busy_send_launches l ON l.instance_id = s.instance_id
@@ -49,11 +78,14 @@ func readBusySendPublished(ctx context.Context, conn busySendLaunchSQL, instance
 	        AND l.busy_send = s.busy_send AND l.provider = c.provider
 	        AND (c.busy_send = 'covered' OR l.busy_send = 'not_covered')
 	    WHERE s.instance_id = ?`, instanceID).Scan(&p.conversation, &p.conversationRevision,
-		&p.provider, &raw, &p.launch, &p.launchRevision, &token, &launchRaw)
+		&p.provider, &raw, &mode, &p.defaults.Confirmed, &p.defaults.ConfirmFromTranscripts,
+		&p.acceptedSeq, &p.reservedCount, &p.reservedBytes, &owner,
+		&p.launch, &p.launchRevision, &token, &launchRaw, &route, &wake, &ended, &p.state)
 	if err != nil {
 		return p, fmt.Errorf("store: read published busy-send Launch: %w", err)
 	}
-	p.token = token.String
+	p.token, p.ownerHandover, p.routeKind, p.wakePath = token.String, owner.String, route.String, wake.String
+	p.defaults.SendMode, p.launchEnded = BusySendMode(mode), ended.Valid
 	if p.coverage, err = decodeBusySendCoverage(raw); err != nil {
 		return p, err
 	}
@@ -78,7 +110,10 @@ func busySendChange(ctx context.Context, conn busySendLaunchSQL, query string, a
 	return nil
 }
 
-func (s *Store) insertBusySendConversation(ctx context.Context, conn *sql.Conn, instanceID, provider string, coverage BusySendCoverage, publication BusySendPublication, at int64) (string, error) {
+// insertBusySendConversation records a new conversation with the Agent
+// Defaults its launch resolved: published at once for a spawn, or a reuse's
+// candidate, whose defaults become visible only when it is published.
+func (s *Store) insertBusySendConversation(ctx context.Context, conn *sql.Conn, instanceID, provider string, coverage BusySendCoverage, defaults BusySendAgentDefaults, publication BusySendPublication, at int64) (string, error) {
 	id, err := uuid.NewRandom()
 	if err != nil {
 		return "", err
@@ -88,35 +123,53 @@ func (s *Store) insertBusySendConversation(ctx context.Context, conn *sql.Conn, 
 		published = at
 	}
 	_, err = conn.ExecContext(ctx, `INSERT INTO busy_conversations
-	    (conversation_id, store_id, instance_id, generation, publication, provider, busy_send, recorded_at_ms, published_at_ms)
-	    SELECT ?, ?, ?, COALESCE(MAX(generation), 0) + 1, ?, ?, ?, ?, ?
+	    (conversation_id, store_id, instance_id, generation, publication, provider, busy_send,
+	     default_send_mode, default_confirmed, confirm_from_transcripts, recorded_at_ms, published_at_ms)
+	    SELECT ?, ?, ?, COALESCE(MAX(generation), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?
 	    FROM busy_conversations WHERE instance_id = ?`, id.String(), s.StoreID(), instanceID,
-		string(publication), provider, string(coverage), at, published, instanceID)
+		string(publication), provider, string(coverage), string(defaults.SendMode), boolInt(defaults.Confirmed),
+		boolInt(defaults.ConfirmFromTranscripts), at, published, instanceID)
 	return id.String(), err
 }
 
-func (s *Store) insertBusySendLaunch(ctx context.Context, conn *sql.Conn, instanceID, conversation, provider string, coverage BusySendCoverage, kind BusySendLaunchKind, phase BusySendLaunchPhase, at int64) error {
+// insertBusySendLaunch records a Launch; overrides are a resume candidate's
+// staged Agent Default overrides (busy_send_launches.override_*), empty for
+// every other Launch.
+func (s *Store) insertBusySendLaunch(ctx context.Context, conn *sql.Conn, instanceID, conversation, provider string, coverage BusySendCoverage, kind BusySendLaunchKind, phase BusySendLaunchPhase, overrides BusySendDefaultsChoice, at int64) error {
 	id, err := uuid.NewRandom()
 	if err != nil {
 		return err
 	}
+	var mode, confirmed, fromTranscripts any
+	if overrides.SendMode != nil {
+		mode = string(*overrides.SendMode)
+	}
+	if overrides.Confirmed != nil {
+		confirmed = boolInt(*overrides.Confirmed)
+	}
+	if overrides.ConfirmFromTranscripts != nil {
+		fromTranscripts = boolInt(*overrides.ConfirmFromTranscripts)
+	}
 	return busySendChange(ctx, conn, `INSERT INTO busy_send_launches
-	    (launch_id, store_id, instance_id, conversation_id, life_number, launch_token, provider, busy_send, kind, phase, recorded_at_ms)
-	    SELECT ?, ?, instance_id, ?, life_number, `+busySendLaunchTokenSQL("launch_token")+`, ?, ?, ?, ?, ?
+	    (launch_id, store_id, instance_id, conversation_id, life_number, launch_token, provider, busy_send, kind, phase,
+	     override_send_mode, override_confirmed, override_confirm_from_transcripts, recorded_at_ms)
+	    SELECT ?, ?, instance_id, ?, life_number, `+busySendLaunchTokenSQL("launch_token")+`, ?, ?, ?, ?, ?, ?, ?, ?
 	    FROM spawns WHERE instance_id = ?`, id.String(), s.StoreID(), conversation, provider,
-		string(coverage), string(kind), string(phase), at, instanceID)
+		string(coverage), string(kind), string(phase), mode, confirmed, fromTranscripts, at, instanceID)
 }
 
 // insertBusySendPublished is part of InsertPending: a new instance has no
-// previous conversation to retain while its first process is being created.
+// previous conversation to retain while its first process is being created,
+// so its conversation and Agent Defaults are published at once.
 func (s *Store) insertBusySendPublished(ctx context.Context, conn *sql.Conn, sp Spawn) error {
 	coverage := BusySendCoverageForAgent(sp.Agent)
-	conversation, err := s.insertBusySendConversation(ctx, conn, sp.InstanceID, sp.Agent, coverage, BusySendPublished, sp.LaunchStartedAtMillis)
+	conversation, err := s.insertBusySendConversation(ctx, conn, sp.InstanceID, sp.Agent, coverage,
+		sp.BusySendDefaults.Over(BusySendOutOfBoxDefaults), BusySendPublished, sp.LaunchStartedAtMillis)
 	if err != nil {
 		return err
 	}
 	if err := s.insertBusySendLaunch(ctx, conn, sp.InstanceID, conversation, sp.Agent, coverage,
-		BusySendLaunchSpawn, BusySendLaunchCurrent, sp.LaunchStartedAtMillis); err != nil {
+		BusySendLaunchSpawn, BusySendLaunchCurrent, BusySendDefaultsChoice{}, sp.LaunchStartedAtMillis); err != nil {
 		return err
 	}
 	return busySendChange(ctx, conn, `UPDATE spawns SET busy_send = ?, busy_conversation_id = ? WHERE instance_id = ?`,
@@ -128,7 +181,12 @@ func (s *Store) insertBusySendPublished(ctx context.Context, conn *sql.Conn, sp 
 // allow replacing an earlier uncertain creation; this helper grants no new
 // permission to proceed. Replacement proves neither exit nor old-issuer
 // exclusion, so its logical cause is candidate_replaced, never process_exited.
-func (s *Store) stageBusySendLaunch(ctx context.Context, conn *sql.Conn, instanceID string, kind BusySendLaunchKind, at int64) error {
+// A reuse's candidate conversation carries defaults resolved over the
+// out-of-box values; a resume's candidate Launch carries defaults as its
+// overrides of the published conversation's. Either way the published
+// conversation keeps its own values until the candidate's publication
+// (SR-6.3).
+func (s *Store) stageBusySendLaunch(ctx context.Context, conn *sql.Conn, instanceID string, kind BusySendLaunchKind, defaults BusySendDefaultsChoice, at int64) error {
 	p, err := readBusySendPublished(ctx, conn, instanceID)
 	if err != nil {
 		return err
@@ -142,16 +200,18 @@ func (s *Store) stageBusySendLaunch(ctx context.Context, conn *sql.Conn, instanc
 	}
 	conversation := p.conversation
 	coverage := ResumeLaunchCoverage(p.coverage, provider)
+	overrides := defaults
 	if kind == BusySendLaunchReuse {
-		coverage = BusySendCoverageForAgent(provider)
-		conversation, err = s.insertBusySendConversation(ctx, conn, instanceID, provider, coverage, BusySendCandidate, at)
+		coverage, overrides = BusySendCoverageForAgent(provider), BusySendDefaultsChoice{}
+		conversation, err = s.insertBusySendConversation(ctx, conn, instanceID, provider, coverage,
+			defaults.Over(BusySendOutOfBoxDefaults), BusySendCandidate, at)
 		if err != nil {
 			return err
 		}
 	} else if provider != p.provider {
 		return fmt.Errorf("store: resume changes busy-send provider")
 	}
-	return s.insertBusySendLaunch(ctx, conn, instanceID, conversation, provider, coverage, kind, BusySendLaunchCandidate, at)
+	return s.insertBusySendLaunch(ctx, conn, instanceID, conversation, provider, coverage, kind, BusySendLaunchCandidate, overrides, at)
 }
 
 // closeBusySendCandidate preserves evidence instead of deleting a failed or
@@ -190,15 +250,20 @@ func closeBusySendCandidate(ctx context.Context, conn *sql.Conn, instanceID stri
 // candidate token, not the creator's obsolete spawns version, pins the Launch;
 // replacement/restoration/deletion cannot promote it. Repeated publication is
 // a no-op. The return value says whether this call promoted a candidate; its
-// caller owns the spawns version advance. E1 has no custody to finalize.
+// caller owns the spawns version advance. E1 has no custody to finalize. A
+// reuse's Agent Defaults publish with its candidate conversation; a resume
+// candidate's staged overrides are applied to the published conversation
+// here, in the same guarded update as its coverage, whichever write publishes
+// it (the creator, adoption or the first hook report-in).
 func publishBusySendCandidate(ctx context.Context, conn busySendLaunchSQL, instanceID, token string, at int64) (bool, error) {
 	var launch, conversation, kind string
 	var revision int64
-	var raw any
-	err := conn.QueryRowContext(ctx, `SELECT launch_id, conversation_id, kind, revision, busy_send
+	var raw, mode, confirmed, fromTranscripts any
+	err := conn.QueryRowContext(ctx, `SELECT launch_id, conversation_id, kind, revision, busy_send,
+	        override_send_mode, override_confirmed, override_confirm_from_transcripts
 	    FROM busy_send_launches l WHERE instance_id = ? AND launch_token IS ? AND phase IN ('candidate', 'uncertain')
 	        AND EXISTS (SELECT 1 FROM spawns s WHERE s.instance_id = l.instance_id AND s.launch_token IS l.launch_token)`,
-		instanceID, nullableStringArg(token)).Scan(&launch, &conversation, &kind, &revision, &raw)
+		instanceID, nullableStringArg(token)).Scan(&launch, &conversation, &kind, &revision, &raw, &mode, &confirmed, &fromTranscripts)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Already published, replaced, restored, deleted, or a plain spawn
 		// that published in InsertPending. None authorizes a second commit.
@@ -234,8 +299,11 @@ func publishBusySendCandidate(ctx context.Context, conn busySendLaunchSQL, insta
 		if kind != string(BusySendLaunchResume) || conversation != p.conversation || (p.coverage == BusySendCovered && coverage != BusySendCovered) {
 			return false, fmt.Errorf("store: invalid busy-send resume publication")
 		}
-		if err := busySendChange(ctx, conn, `UPDATE busy_conversations SET busy_send = ?, revision = revision + 1
-	        WHERE conversation_id = ? AND revision = ? AND publication = 'published'`, string(coverage), conversation, p.conversationRevision); err != nil {
+		if err := busySendChange(ctx, conn, `UPDATE busy_conversations SET busy_send = ?,
+	            default_send_mode = COALESCE(?, default_send_mode), default_confirmed = COALESCE(?, default_confirmed),
+	            confirm_from_transcripts = COALESCE(?, confirm_from_transcripts), revision = revision + 1
+	        WHERE conversation_id = ? AND revision = ? AND publication = 'published'`,
+			string(coverage), mode, confirmed, fromTranscripts, conversation, p.conversationRevision); err != nil {
 			return false, err
 		}
 	}

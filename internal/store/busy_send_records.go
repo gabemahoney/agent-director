@@ -469,13 +469,13 @@ type BusySendWait struct {
 	Earlier     *BusySendPair
 }
 
-// BusySendResult is a confirmed Message's stored Result (SR-5.1, SR-5.2) as a
-// durable lookup reads it: its structured fields, its actual Launch binding
-// and receipt identity (nil or "" until established) and its observed
-// transition times (milliseconds since the epoch, 0 = not observed). It holds
-// no text, raw evidence or private path. The caller-facing projection
-// (resend_safe, retry_with, outcome and the JSON shape) is derived from it
-// outside the store.
+// BusySendResult is a Message's stored Result (SR-5.1, SR-5.2) as a send's
+// response or a durable lookup reads it: its structured fields, its actual
+// Launch binding and receipt identity (nil or "" until established) and its
+// observed transition times (milliseconds since the epoch, 0 = not observed).
+// Pair is zero for an unconfirmed Message. It holds no text, raw evidence or
+// private path. The caller-facing projection (resend_safe, retry_with,
+// outcome and the JSON shape) is derived from it outside the store.
 type BusySendResult struct {
 	Pair         BusySendPair
 	InstanceID   string
@@ -490,6 +490,10 @@ type BusySendResult struct {
 	EvidenceKind *BusySendEvidenceKind
 	RecordID     string
 	RecordSHA256 string
+	// PartialTransport is whether the prompt of the Message's latest hand-over
+	// attempt was known to be only partly written (busy_send_prompts.transport
+	// partial), which the compatibility outcome reports (SR-5.3).
+	PartialTransport bool
 
 	AcceptedAtMillis   int64
 	QueuedAtMillis     int64

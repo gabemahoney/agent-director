@@ -169,5 +169,6 @@ export type {
   GetForceParams, GetForceResult,
   GetDeliveryParams, GetDeliveryResult, DeliveryResult, DeliveryWait, DeliveryPair, Lookup,
   AgentDefaultParams, SendMode,
+  AgentDefaults, DeliveryFacts, DeliveryCapabilities, DeliveryModeLimits,
   VersionParams, VersionResult,
 } from "./types.js";

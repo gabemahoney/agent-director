@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -89,6 +90,10 @@ func TestBusySendPublicSpawnAllAgents(t *testing.T) {
 			if facts.Coverage != store.BusySendNotCovered || facts.Binding == "" || len(facts.Conversations) != 1 || len(facts.Launches) != 1 || facts.Conversations[0].Provider != agent || facts.Launches[0].Provider != agent {
 				t.Fatalf("fresh core=%+v", facts)
 			}
+			// A spawn choosing none publishes the out-of-the-box Agent Defaults (SR-1.4).
+			if d := facts.Conversations[0].Defaults; d != store.BusySendOutOfBoxDefaults {
+				t.Errorf("published Agent Defaults = %+v; want wait_turn, false, false", d)
+			}
 			cols, err := apitest.ReadSpawnColumns(e.dbPath, result.InstanceID)
 			if err != nil || cols.TurnStarts != int64(0) {
 				t.Fatalf("counter=%v,%v", cols.TurnStarts, err)
@@ -121,6 +126,18 @@ func TestBusySendPublicSpawnAllAgents(t *testing.T) {
 	}
 }
 
+// The covered blocks of a row whose inbox is empty and whose Agent Defaults
+// are out of the box (SR-5.6), with the one capability table's Wait Turn
+// limits.
+const (
+	busyDefaultsJSON     = `{"send_mode":"wait_turn","confirmed_delivery":false,"confirm_from_transcripts":false}`
+	busyEmptyInboxJSON   = `{"held_count":0,"held_bytes":0,"first_wait":null,"handover_count":0,"startup_wait":null,"force":null,"awaiting_turn_start":0}`
+	busyCapabilitiesJSON = `{"modes":[{"send_mode":"wait_turn","message_bytes":8000,"prompt_bytes":9000,"text_kind":"utf8_tab_lf"}],"held_count":1000,"held_bytes":8000000}`
+)
+
+// assertBusyPublic checks get's busy-send projection of a row whose inbox is
+// empty: busy_send, and for a covered row only, agent_defaults, delivery and
+// delivery_capabilities; never the core's own columns.
 func assertBusyPublic(t *testing.T, out api.SpawnRow, want store.BusySendCoverage) {
 	t.Helper()
 	if out.BusySend != want {
@@ -130,13 +147,31 @@ func assertBusyPublic(t *testing.T, out api.SpawnRow, want store.BusySendCoverag
 	if !ok || string(raw) != `"`+string(want)+`"` {
 		t.Errorf("busy_send JSON=%s, present=%t", raw, ok)
 	}
-	for _, key := range []string{"delivery", "delivery_capabilities", "agent_defaults", "default_send_mode", "default_confirmed", "confirm_from_transcripts", "turn_starts", "busy_conversation_id"} {
+	assertBusyBlocks(t, out, out.InstanceID, want == store.BusySendCovered, "agent_defaults", "delivery", "delivery_capabilities")
+	for _, key := range []string{"default_send_mode", "default_confirmed", "confirm_from_transcripts", "turn_starts", "busy_conversation_id"} {
 		if raw, ok := jsonField(t, out, key); ok {
 			t.Errorf("unexpected top-level %s=%s", key, raw)
 		}
 	}
 }
 
+// assertBusyBlocks fails unless out, id's get, status or list row, carries
+// exactly the shown blocks of an empty inbox with out-of-the-box defaults when
+// covered, and none of the three blocks otherwise.
+func assertBusyBlocks(t *testing.T, out any, id string, covered bool, shown ...string) {
+	t.Helper()
+	for key, block := range map[string]string{"agent_defaults": busyDefaultsJSON, "delivery": busyEmptyInboxJSON, "delivery_capabilities": busyCapabilitiesJSON} {
+		raw, ok := jsonField(t, out, key)
+		if want := covered && slices.Contains(shown, key); ok != want || want && string(raw) != block {
+			t.Errorf("%s %s=%s, present=%t; want present=%t (%s)", id, key, raw, ok, want, block)
+		}
+	}
+}
+
+// TestGetBusySendPersistedProjection (SR-5.6, SR-9.3): get shows a row's
+// recorded coverage, and for a covered row its Agent Defaults, delivery facts
+// and capabilities; status shows the defaults and delivery facts, list the
+// defaults, neither busy_send. An uncovered row shows none of them.
 func TestGetBusySendPersistedProjection(t *testing.T) {
 	t.Parallel()
 	for _, state := range []string{store.StatePending, store.StateEnded} {
@@ -161,6 +196,24 @@ func TestGetBusySendPersistedProjection(t *testing.T) {
 					t.Fatal(err)
 				}
 				assertBusyPublic(t, out, coverage)
+				c, _ := e.client(t)
+				status, err := c.Status(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertBusyBlocks(t, status, id, coverage == store.BusySendCovered, "agent_defaults", "delivery")
+				listed, err := c.List(api.ListParams{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, row := range listed.Spawns {
+					assertBusyBlocks(t, row, row.InstanceID, row.InstanceID == id && coverage == store.BusySendCovered, "agent_defaults")
+				}
+				for _, v := range []any{status, listed.Spawns[0]} {
+					if raw, ok := jsonField(t, v, "busy_send"); ok {
+						t.Errorf("status or list gained busy_send=%s", raw)
+					}
+				}
 			})
 		}
 	}

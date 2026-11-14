@@ -344,7 +344,27 @@ func (s *Store) inWriteTx(maxWait time.Duration, fn func(ctx context.Context, co
 // A lifecycle callback collects its own display exit; authority and request
 // transactions must not inspect unrelated rows' report-only history.
 func (s *Store) inWriteTxContext(ctx context.Context, maxWait time.Duration, fn func(context.Context, *sql.Conn) error) error {
+	return s.writeTxContext(ctx, maxWait, false, fn)
+}
+
+// inDurableWriteTxContext is inWriteTxContext on a leased connection whose WAL
+// synchronous=FULL is established before BEGIN IMMEDIATE (inputDurability),
+// for a commit that must survive power loss before its caller acts on it.
+// Ending before BEGIN wraps ErrStoreBusy, nothing written.
+func (s *Store) inDurableWriteTxContext(ctx context.Context, maxWait time.Duration, fn func(context.Context, *sql.Conn) error) error {
+	return s.writeTxContext(ctx, maxWait, true, fn)
+}
+
+func (s *Store) writeTxContext(ctx context.Context, maxWait time.Duration, durable bool, fn func(context.Context, *sql.Conn) error) error {
 	return s.withConnContext(ctx, maxWait, func(ctx context.Context, conn *sql.Conn, busyMs int, cleanup *connectionCleanup) error {
+		if durable {
+			if err := inputDurability(ctx, conn); err != nil {
+				if ctx.Err() != nil {
+					return fmt.Errorf("%w: before begin: %w", ErrStoreBusy, err)
+				}
+				return fmt.Errorf("store: durable connection: %w", err)
+			}
+		}
 		if err := beginWithin(ctx, conn, busyMs); err != nil {
 			if isBusy(err) || ctx.Err() != nil {
 				return fmt.Errorf("%w: the write lock was not free within %d ms: %w", ErrStoreBusy, busyMs, err)

@@ -2,8 +2,9 @@
  * argv-builder.test.ts — SR-1.2: buildArgv maps each verb's params to a
  * shell-free argv: [cli, ...global flags (b.32k), verb, ...long flags];
  * snake_case fields become kebab-case flags, booleans appear only when true
- * (busy send's as --flag=true or --flag=false whenever present), and unset
- * optionals are omitted. A spawn or make-template extra_env key the
+ * (busy send's as --flag=true or --flag=false whenever present, and send-keys'
+ * no_enter as --no-enter=false too), and unset optionals are omitted. A spawn
+ * or make-template extra_env key the
  * CLI could not carry unchanged is refused instead (b.vpb, b.66q).
  */
 
@@ -99,8 +100,16 @@ test.each([
   ["send-keys: no_enter, hash and n_lines", "send-keys", {
     instance_id: "id-1", text: "hi", no_enter: true, expect_pane_sha256: "ab", n_lines: 7,
   }, ["send-keys", ...ID, "--text", "hi", "--no-enter", "--expect-pane-sha256", "ab", "--n-lines", "7"]],
+  // SR-1.5: a present raw-key field goes through at its zero value too, since a Covered Agent's send refuses its presence.
   ["send-keys: a key, no text", "send-keys", { instance_id: "id-1", key: "Escape", no_enter: false },
-    ["send-keys", ...ID, "--key", "Escape"]],
+    ["send-keys", ...ID, "--no-enter=false", "--key", "Escape"]],
+  ["send-keys: n_lines 0 passed through", "send-keys", { instance_id: "id-1", text: "hi", n_lines: 0 },
+    ["send-keys", ...ID, "--text", "hi", "--n-lines", "0"]],
+  // SR-1.3: a confirmed send's caller-chosen Message ID goes through byte for byte.
+  ["send-keys: confirmed send with its delivery_request_id", "send-keys", {
+    instance_id: "id-1", text: "hi", confirmed_delivery: true, caller_uuid: "ABCDEF01-2345-6789-ABCD-EF0123456789", delivery_request_id: "-h 多行\n🦋",
+  }, ["send-keys", ...ID, "--text", "hi", "--delivery-request-id", "-h 多行\n🦋", "--confirmed-delivery=true",
+    "--caller-uuid", "ABCDEF01-2345-6789-ABCD-EF0123456789"]],
   // SR-1.3, SR-1.4: a present busy-send option goes through, false and wait_turn included; undefined is omitted.
   ["send-keys: busy-send options false and wait_turn", "send-keys", {
     instance_id: "id-1", text: "hi", send_mode: "wait_turn", confirmed_delivery: false, caller_uuid: "ABCDEF01-2345-6789-ABCD-EF0123456789", force: false,

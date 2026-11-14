@@ -376,12 +376,17 @@ function buildSendKeys(p: SendKeysParams): string[] {
   const f: string[] = ["send-keys", "--instance-id", p.instance_id];
   if (p.text !== undefined) f.push("--text", p.text);
   if (p.allow_pending === true) f.push("--allow-pending");
+  // The raw-key fields are forwarded whenever present, false and 0 included,
+  // because a Covered Agent's send refuses their presence; other agents read
+  // the same values as omitted.
   if (p.no_enter === true) f.push("--no-enter");
+  else if (p.no_enter === false) f.push("--no-enter=false");
   if (p.key !== undefined) f.push("--key", p.key);
   if (p.expect_pane_sha256 !== undefined) f.push("--expect-pane-sha256", p.expect_pane_sha256);
-  if (p.n_lines !== undefined && p.n_lines !== 0) f.push("--n-lines", String(p.n_lines));
+  if (p.n_lines !== undefined) f.push("--n-lines", String(p.n_lines));
   if (p.request_token !== undefined) f.push("--request-token", p.request_token);
   if (p.as !== undefined) f.push("--as", p.as);
+  if (p.delivery_request_id !== undefined) f.push("--delivery-request-id", p.delivery_request_id);
   if (p.send_mode !== undefined) f.push("--send-mode", p.send_mode);
   if (p.confirmed_delivery !== undefined) f.push(`--confirmed-delivery=${p.confirmed_delivery}`);
   if (p.caller_uuid !== undefined) f.push("--caller-uuid", p.caller_uuid);
