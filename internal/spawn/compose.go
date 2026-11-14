@@ -129,6 +129,7 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 			return ComposedLaunch{}, err
 		}
 	} else {
+		r.BusySendCovered = store.BusySendCoverageForAgent(r.Agent) == store.BusySendCovered
 		settings, err := synthesizeSettings(r, cfg)
 		if err != nil {
 			return ComposedLaunch{}, err

@@ -171,6 +171,11 @@ type Resolved struct {
 	// composition; they identify generated files without writing them.
 	LaunchStoreID string
 	LaunchToken   string
+	// BusySendCovered is whether the Launch is a covered Claude Launch, whose
+	// settings carry busy send's owned wake (SR-3.4). Composition sets it from
+	// the coverage the Launch records (ComposeLaunch, ComposeRelaunch); a
+	// caller's value is replaced.
+	BusySendCovered bool
 
 	// DropResumeArgs is set only from a successful finished reuse snapshot
 	// whose raw stored agent differs exactly from the resolved agent.

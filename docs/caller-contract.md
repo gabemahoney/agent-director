@@ -325,7 +325,7 @@ counted in UTF-8 bytes, not measured provider maxima. `message_bytes` counts a
 Message's own text; `prompt_bytes` counts a whole prompt with agent-director's
 separators and wrapper, and a Message within `message_bytes` always fits a
 prompt on its own. Claude Code's `wait_turn` allows 8,000 Message bytes and
-9,000 prompt bytes, and its held limits are 1,000 Messages and 8,000,000
+9,600 prompt bytes, and its held limits are 1,000 Messages and 8,000,000
 bytes.
 
 ### Message Results

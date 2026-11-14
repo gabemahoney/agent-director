@@ -28,10 +28,11 @@ import (
 )
 
 // busySendTwoPrompts are two Messages that never share a Claude prompt: each
-// is one byte over half of what the table's prompt leaves two Messages.
+// is one byte over half of what the table's prompt leaves two Messages under
+// Claude's exact wrapping (the table's measure of an empty body).
 var busySendTwoPrompts = func() []string {
 	l, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
-	n := int((l.PromptBytes-l.WrapperBytes-2*int64(len("[agent-director: message 1 of 2]\n"))-2)/2) + 1
+	n := int((l.PromptBytes-l.Measure(nil)-2*int64(len("[agent-director: message 1 of 2]\n"))-2)/2) + 1
 	return []string{strings.Repeat("a", n), strings.Repeat("b", n)}
 }()
 
@@ -270,7 +271,11 @@ func TestBusySendStaleOwnerCannotIssue(t *testing.T) {
 // elapsed time, a later callback or a missing row: it keeps the order barrier,
 // and Launch End makes it Final sent_unconfirmed (launch_ended), fenced, with
 // its reservation freed, until exit evidence lifts the fence. Exit before
-// Launch End is refused. Later Tasks add rows here.
+// Launch End is refused. Later Tasks add rows here. Task 3 checks every row
+// for M2 P-C4.2 and the helper slot: the awaiting obligation and the
+// registered issuer exist exactly when intent landed, an unacknowledged
+// commit's included, whatever the job did after it, and evidence the agent
+// took the prompt clears only the obligation.
 func TestBusySendCustodyMatrix(t *testing.T) {
 	t.Parallel()
 	injected := errors.New("injected issue failure")
@@ -363,6 +368,9 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 			h := in.claim(t, time.Time{}, false)
 			tc.drive(t, in, h)
 			in.reopen(t)
+			if n, listed := in.awaiting(t), in.listsIssuer(t, busySendHelper); n != int64(boolCount(tc.intent)) || listed != tc.intent {
+				t.Fatalf("awaiting_turn_start %d, issuer registered %t; want %d, %t", n, listed, boolCount(tc.intent), tc.intent)
+			}
 			if tc.intent {
 				// No replay of the intent and no later prompt past its barrier,
 				// whatever revision a job holds; a later callback clears nothing.
@@ -380,6 +388,9 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 					Admission: store.BusySendAdmissionPromptSighting})
 				if err != nil || res.OrderSecured || res.Closed {
 					t.Fatalf("a later admission callback %+v, %v; want the barrier kept", res, err)
+				}
+				if n := in.awaiting(t); n != 0 {
+					t.Fatalf("awaiting_turn_start %d after the admission; want 0", n)
 				}
 			}
 			a, b := "held held readiness_unknown reserved", "held held earlier_message reserved"
@@ -622,6 +633,13 @@ func TestBusySendCompletionAfterExpiry(t *testing.T) {
 				t.Errorf("completion after expiry %+v; want it applied and the hand-over closed", res)
 			}
 			wantBusySendCustody(t, in.path, in.id, tc.want...)
+			if complete {
+				// SR-3.3: the agent's own sighting of prompt 0 shows it took it.
+				if _, err := in.s.RecordBusySendEvidence(ctx, store.BusySendPromptEvidence{HandoverID: h.HandoverID, LaunchID: in.dest.LaunchID,
+					Admission: store.BusySendAdmissionPromptSighting}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if next, err := in.s.ClaimBusySendHandover(ctx, in.claimRequest(time.Time{}, false)); err != nil || next.Outcome != tc.next {
 				t.Errorf("the next event's claim %+v, %v; want %s", next, err, tc.next)
 			}

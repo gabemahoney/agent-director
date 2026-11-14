@@ -150,12 +150,42 @@ func (s *Store) insertBusySendLaunch(ctx context.Context, conn *sql.Conn, instan
 	if overrides.ConfirmFromTranscripts != nil {
 		fromTranscripts = boolInt(*overrides.ConfirmFromTranscripts)
 	}
-	return busySendChange(ctx, conn, `INSERT INTO busy_send_launches
+	if err := busySendChange(ctx, conn, `INSERT INTO busy_send_launches
 	    (launch_id, store_id, instance_id, conversation_id, life_number, launch_token, provider, busy_send, kind, phase,
 	     override_send_mode, override_confirmed, override_confirm_from_transcripts, recorded_at_ms)
 	    SELECT ?, ?, instance_id, ?, life_number, `+busySendLaunchTokenSQL("launch_token")+`, ?, ?, ?, ?, ?, ?, ?, ?
 	    FROM spawns WHERE instance_id = ?`, id.String(), s.StoreID(), conversation, provider,
-		string(coverage), string(kind), string(phase), mode, confirmed, fromTranscripts, at, instanceID)
+		string(coverage), string(kind), string(phase), mode, confirmed, fromTranscripts, at, instanceID); err != nil {
+		return err
+	}
+	return recordBusySendClaudeRoute(ctx, conn, s.StoreID(), id.String(), provider, coverage)
+}
+
+// recordBusySendClaudeRoute records a covered Claude Launch's route A in the
+// transaction that records the Launch (SR-3.4, SR-7.2): route kind
+// claude_hooks, its Launch id as route identity, connection generation 0 and
+// its own content-free wake endpoint (BusySendWakePath of its store and launch
+// token), which its own SessionStart hook creates before it returns the path
+// to watch (internal/spawn PrepareBusySendWake). A candidate Launch's route is
+// its own and serves no send until the Launch is published; a Launch with no
+// token, another provider or no coverage, or whose token or home cannot name a
+// wake endpoint, records none: its Held Messages wait route_unavailable, the
+// outcome callers read, and the Launch itself still starts.
+func recordBusySendClaudeRoute(ctx context.Context, conn busySendLaunchSQL, storeID, launchID, provider string, coverage BusySendCoverage) error {
+	if provider != AgentClaude || coverage != BusySendCovered {
+		return nil
+	}
+	var token sql.NullString
+	if err := conn.QueryRowContext(ctx, `SELECT launch_token FROM busy_send_launches WHERE launch_id = ?`, launchID).Scan(&token); err != nil {
+		return err
+	}
+	wake, err := BusySendWakePath(storeID, token.String)
+	if err != nil {
+		return nil
+	}
+	_, err = conn.ExecContext(ctx, `UPDATE busy_send_launches SET route_kind = ?, route_id = ?, wake_path = ?
+	    WHERE launch_id = ? AND route_kind IS NULL`, string(BusySendRouteClaudeHooks), launchID, wake, launchID)
+	return err
 }
 
 // insertBusySendPublished is part of InsertPending: a new instance has no

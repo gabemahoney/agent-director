@@ -49,7 +49,11 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // its current turn unless a newer one is current), and so does a held
 // UserPromptSubmit (reportWorkingHeld). Either turn-start write invalidates
 // the pane baseline and any idle_screen candidate/display in its statement,
-// even when state stays working, without advancing permission_epoch.
+// even when state stays working, without advancing permission_epoch. An
+// owned main-agent Claude UserPromptSubmit (gate.ClaudeTurnStart) advances
+// spawns.turn_starts by one in the same statement as its applied or held
+// write (claudeTurnStartSet, claudeHeldTurnSQL); a write that does not apply
+// advances nothing.
 //
 // A late Codex tool hook (b.x72; codexToolTurn): a PreToolUse or PostToolUse
 // whose turn is not the row's current, not-ended turn
@@ -258,14 +262,16 @@ const idleSet = `idle_since = CURRENT_TIMESTAMP`
 func gatedHookUpdate(instanceID string, gate HookGate, set string, setArgs []any, jsonlPath string, jsonlPresent bool) (string, []any) {
 	recordSet, recordArgs := hookSessionRecordSet(gate, jsonlPath, jsonlPresent)
 	turnSet, turnArgs := codexTurnSet(gate)
+	startSet, startArgs := claudeTurnStartSet(gate)
 	q := `UPDATE spawns
 	         SET ` + set + `,
 	             liveness_unverified_since = NULL, liveness_note = NULL,
-	             ` + recordSet + turnSet + hookPaneStartSet + `,
+	             ` + recordSet + turnSet + startSet + hookPaneStartSet + `,
 	             ` + rowVersionAdvance + `
 	       WHERE instance_id = ? AND ` + hookGateSQL
 	args := append(append([]any{}, setArgs...), recordArgs...)
 	args = append(args, turnArgs...)
+	args = append(args, startArgs...)
 	args = append(args, gate.ParentStart, instanceID)
 	args = append(args, hookGateArgs(gate)...)
 	return q, args
@@ -636,7 +642,11 @@ func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeri
 // it, b.146 problem 3), with a main-thread Codex UserPromptSubmit's turn
 // recorded in the same statement (codexHeldTurnSQL; b.x72), so a read never
 // ends the turn before it. That turn write also invalidates the pane baseline
-// and idle_screen candidate/display without changing permission_epoch. The
+// and idle_screen candidate/display without changing permission_epoch. An
+// owned main-agent Claude UserPromptSubmit's write (claudeHeldTurnSQL)
+// advances the Turn Start counter in that same statement, even when
+// idle_since is already NULL, so a turn started under a permission hold is
+// still counted; its state stays check_permission. The
 // no-op ad.spawn.state_transition (prior == new ==
 // the state the gate read saw, soft_refresh false, SR-A-2.2) and
 // UpsertNoChange with an applied result; a missing row or a gate that does
@@ -650,9 +660,12 @@ func (s *Store) reportWorkingHeld(instanceID string, gate HookGate, triggeringEv
 		return UpsertNoChange, notAppliedReason(r), nil
 	}
 	q, args := clearIdleSinceSQL, append([]any{instanceID}, hookGateArgs(gate)...)
-	if gate.CodexTurnStart {
+	switch {
+	case gate.CodexTurnStart:
 		turn := nullableStringArg(gate.CodexTurn)
 		q, args = codexHeldTurnSQL, append([]any{turn, instanceID, turn}, hookGateArgs(gate)...)
+	case gate.ClaudeTurnStart:
+		q, args = claudeHeldTurnSQL, append([]any{gate.SessionID, instanceID, gate.SessionID}, hookGateArgs(gate)...)
 	}
 	if _, err := s.execBusySendEstablished(instanceID, q, args...); err != nil {
 		return UpsertError, HookApplied{}, fmt.Errorf("store: working transition hold idle clear: %w", err)

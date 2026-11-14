@@ -45,8 +45,9 @@ type BusySendClaimRequest struct {
 	Boundary BusySendBoundary
 	// RaceExposed is SR-3.3a's boundary-race exposure the route reports.
 	RaceExposed bool
-	// Measure is the route's complete-payload measure (nil: the mode's whole
-	// wrapper budget). The limits are the capability table's.
+	// Measure is the route's complete-payload measure (nil: the mode's own
+	// measure from the capability table, BusySendModeLimits.Measure). The
+	// limits are the capability table's.
 	Measure BusySendPromptMeasure
 	// IssueBudget and JobBudget are the finite job's original budgets from
 	// At: no intent or revalidation passes after the issue deadline, and the
@@ -194,7 +195,10 @@ func (f busySendIssueFacts) destinationMatches(d BusySendDestination) bool {
 // one, one with no recorded route and an authoritative permission hold
 // (ineligible with the Wait); releases a dead job's expired never-issued
 // claims (ReleaseBusySendClaims' expiry rule); finds an earlier hand-over
-// still owning order and transport (owned); then freezes the eligible
+// still owning order and transport (owned); at turn end, refuses while the
+// current Launch has an awaiting obligation, earlier issued input with no
+// evidence it was taken (ineligible, readiness_unknown; SR-3.3,
+// readBusySendAwaiting); then freezes the eligible
 // contiguous prefix of Held Messages at its last accepted sequence, partitions
 // it (PartitionBusySendPrompts) under the conversation provider's mode limits
 // and req.Measure, and records the hand-over, its prompts and ordered
@@ -263,6 +267,18 @@ func claimBusySendHandover(ctx context.Context, conn *sql.Conn, storeID string, 
 	}
 	if len(members) == 0 {
 		return BusySendClaim{Outcome: BusySendClaimEmpty, ReleasedExpired: released}, nil
+	}
+	if req.Boundary == BusySendBoundaryTurnEnd {
+		// SR-3.3's AD-owned-work rule: turn-end evidence is not idleness while
+		// AD's own earlier input may still be pending at the provider.
+		awaiting, err := readBusySendAwaiting(ctx, conn, f.conversation, f.launch)
+		if err != nil {
+			return BusySendClaim{}, err
+		}
+		if awaiting > 0 {
+			return BusySendClaim{Outcome: BusySendClaimIneligible, Wait: BusySendWaitReadinessUnknown, ReleasedExpired: released,
+				Detail: "earlier input AD issued has no evidence the agent took it"}, nil
+		}
 	}
 	mode := BusySendWaitTurn
 	if req.Boundary == BusySendBoundaryToolBoundary {

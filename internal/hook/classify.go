@@ -75,12 +75,19 @@ type payload struct {
 	// PostToolUseFailure, PermissionRequest).
 	ToolUseID string `json:"tool_use_id"`
 	// SessionID is the payload's session_id: Codex's session id (SR-6.3), the
-	// one a Codex hook's session is recorded by. Claude's table does not read
-	// it; Claude's session id is the transcript path's basename.
+	// one a Codex hook's session is recorded by. Claude's session id is the
+	// transcript path's basename; Claude's table passes this one on only as
+	// ClassifyResult.PayloadSessionID, for busy send's delivery authority.
 	SessionID string `json:"session_id"`
 	// TurnID is the payload's turn_id: the Codex turn the hook belongs to
 	// (b.x72). Only Codex's table reads it.
 	TurnID string `json:"turn_id"`
+	// Prompt is a UserPromptSubmit's prompt text. Only Claude's table reads
+	// it, for the main agent's take evidence (recordClaudeSighting).
+	Prompt string `json:"prompt"`
+	// FilePath is a FileChanged hook's changed path. Only Claude's table
+	// reads it, for busy send's owned wake (handleClaudeWake).
+	FilePath string `json:"file_path"`
 }
 
 // sessionEndCause picks the best-available exit-cause field from a
@@ -191,7 +198,9 @@ type ClassifyResult struct {
 	// session id yet and the hook carries no AgentID, and ad.hook.ignored
 	// reports it as hook_session_id (SR-14). A Codex result takes it from the
 	// payload's session_id instead (SR-6.3), and has none for a hook with an
-	// agent_id, which records no session id or path.
+	// agent_id, which records no session id or path. A Claude result also
+	// carries the payload's session_id as PayloadSessionID, for busy send's
+	// delivery authority only.
 	SessionID string
 
 	// TranscriptPath is the full hook-reported transcript_path, for every
@@ -233,6 +242,21 @@ type ClassifyResult struct {
 	// when it carried none or one longer than store.MaxCodexTurnBytes. Handle
 	// records it (codexTurnGate).
 	TurnID string
+
+	// Prompt is a Claude main-agent UserPromptSubmit's prompt text verbatim
+	// (no agent_id), for AD's own sighting of a wake it issued (SR-3.5); empty
+	// for every other hook. It is never logged or written to the row.
+	Prompt string
+
+	// FilePath is a Claude FileChanged hook's changed path verbatim, which
+	// busy send's owned wake compares with its Launch's wake endpoint
+	// (handleClaudeWake); empty for every other hook.
+	FilePath string
+
+	// PayloadSessionID is a Claude payload's own session_id verbatim, which
+	// busy send's delivery authority requires to agree with SessionID when
+	// present (claudeCallbackSession); lifecycle tracking never reads it.
+	PayloadSessionID string
 }
 
 // ToolRan reports whether the result is a PostToolUse or PostToolUseFailure
@@ -357,14 +381,15 @@ func ClassifyEvent(agent string, raw json.RawMessage) (ClassifyResult, error) {
 // transcript path's basename.
 func classifyClaude(p payload) ClassifyResult {
 	res := ClassifyResult{
-		Agent:           store.AgentClaude,
-		SubagentCapture: true,
-		EventName:       p.eventName(),
-		ToolName:        p.ToolName,
-		SessionID:       extractSessionID(p.TranscriptPath),
-		TranscriptPath:  p.TranscriptPath,
-		AgentID:         p.AgentID,
-		ToolUseID:       p.ToolUseID,
+		Agent:            store.AgentClaude,
+		SubagentCapture:  true,
+		EventName:        p.eventName(),
+		ToolName:         p.ToolName,
+		SessionID:        extractSessionID(p.TranscriptPath),
+		TranscriptPath:   p.TranscriptPath,
+		AgentID:          p.AgentID,
+		ToolUseID:        p.ToolUseID,
+		PayloadSessionID: p.SessionID,
 	}
 
 	switch res.EventName {
@@ -372,6 +397,9 @@ func classifyClaude(p payload) ClassifyResult {
 		res.NewState = store.StateWaiting
 	case "UserPromptSubmit":
 		res.NewState = store.StateWorking
+		if p.AgentID == "" {
+			res.Prompt = p.Prompt
+		}
 	case "PreToolUse":
 		if p.ToolName == ToolAskUserQuestion {
 			res.NewState = store.StateAskUser
@@ -400,6 +428,11 @@ func classifyClaude(p payload) ClassifyResult {
 		// last_seen_at, as a soft refresh does. It is a known event (no
 		// unknown-event log line); Handle routes it to the subagent write.
 		res.SoftRefresh = true
+	case EventNameFileChanged:
+		// Busy send's owned wake (SR-3.4): not a state report. Handle routes
+		// it to handleClaudeWake, which writes no state.
+		res.SoftRefresh = true
+		res.FilePath = p.FilePath
 	case "SessionEnd":
 		// b.pmn: soft-refresh by default. Only mark `ended` on known-
 		// terminal causes. Empty/unknown causes (which Claude Code emits

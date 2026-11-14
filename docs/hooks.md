@@ -60,6 +60,30 @@ Limits:
 To disable Claude Code's prompt-suggestion background work, set
 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` through the spawn's `extra_env`.
 
+### Busy-send delivery to a covered Claude launch
+
+A Claude launch that busy send covers also registers one `FileChanged` entry
+with `asyncRewake`. It reports no state. The launch's main `SessionStart`
+creates the launch's private wake file and returns it in `watchPaths`.
+
+The wake file carries no content. agent-director touches it when it accepts a
+Message, and again at a main-agent `Stop` or idle-prompt `Notification` while
+Messages are Held. On each touch the `FileChanged` hook checks the agent
+again. It writes one prompt of Held Messages to stderr and exits 2 only when
+the main agent is idle at its prompt, no dialog is open, and the agent's
+`UserPromptSubmit` has shown every earlier delivered prompt. Claude Code then
+hands that prompt to the agent as its next input. Otherwise the hook writes
+nothing and exits 0.
+
+- A spawn's own startup prompt always goes first.
+- Repeated touches never deliver a Message twice.
+- A lost touch leaves Messages Held until the next eligible event.
+- Subagent and teammate hooks never deliver.
+- A delivered prompt's `UserPromptSubmit` shows that the agent took it, not
+  that it acted on it.
+
+Results, waits and recovery are in [Covered sends](caller-contract.md#covered-sends).
+
 ## Cursor reporting
 
 Cursor reports startup, conversation changes, submitted prompts, completed
@@ -200,14 +224,20 @@ Subagent prompts, messages, result text, errors and output files are not stored.
 ## Fail-open invariant
 
 State-tracking failures leave the agent running; they do not confirm its
-state. State hooks add no stdout context or permission decision, and
-`SubagentStop` does not block a stop. Relay permission decisions have a
-separate [fail-closed boundary](#fail-closed-boundary).
+state. State hooks add no context or permission decision, and `SubagentStop`
+does not block a stop. Relay permission decisions have a separate
+[fail-closed boundary](#fail-closed-boundary).
+
+[Busy-send delivery](#busy-send-delivery-to-a-covered-claude-launch) is the
+only other hook output: the `SessionStart` watch path and the `FileChanged`
+prompt. It carries no permission decision and changes no dialog, settings or
+hooks of yours. A failed delivery exits 0 and gives the agent nothing.
 
 For a spawn that never reports, see
 [Pending rows and startup screens](caller-contract.md#pending-rows-and-startup-screens).
 Diagnostics go to the configured
-[error log](configuration.md#keys), or stderr if it cannot be opened.
+[error log](configuration.md#keys), or stderr if it cannot be opened. The
+`FileChanged` hook never writes diagnostics to stderr.
 
 ## Fire order
 

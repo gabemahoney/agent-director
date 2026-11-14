@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"golang.org/x/sys/unix"
 )
@@ -255,12 +256,54 @@ func launchPreparationError(step string, cause error) error {
 }
 
 func generatedLaunchFileNames() []string {
-	var names []string
+	names := []string{store.BusySendWakeFile} // a covered Claude Launch's wake endpoint
 	for _, p := range paneOnlyAgents {
 		names = append(names, p.files...)
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
+}
+
+// PrepareBusySendWake creates, when it does not exist yet, the content-free
+// wake endpoint of the covered Claude Launch with launch token token in store
+// storeID (SR-3.4, SR-7.2): an empty file at store.BusySendWakePath, in that
+// Launch's private launch directory, reached through the same owner and mode
+// checks as every generated launch file and never through a symbolic link.
+// The Launch's own SessionStart hook calls it before it returns the path in
+// watchPaths, so no API call writes it. An existing endpoint that is a regular
+// file of the current user is kept as it is. ReclaimLaunchFiles removes it.
+func PrepareBusySendWake(storeID, token string) (string, error) {
+	path, err := store.BusySendWakePath(storeID, token)
+	if err != nil {
+		return "", err
+	}
+	d, err := openLaunchDirectories(storeID, token, false)
+	if errors.Is(err, unix.ENOENT) {
+		_ = d.close(false, defaultLaunchFileOps())
+		d, err = openLaunchDirectories(storeID, token, true)
+		if errors.Is(err, unix.EEXIST) {
+			// Another hook of the same Launch created it meanwhile.
+			_ = d.close(false, defaultLaunchFileOps())
+			d, err = openLaunchDirectories(storeID, token, false)
+		}
+	}
+	defer func() { _ = d.close(false, defaultLaunchFileOps()) }()
+	if err != nil {
+		return "", launchFileFailure("open wake directory", err)
+	}
+	fd, err := unix.Openat(d.fds[len(d.fds)-1], store.BusySendWakeFile, unix.O_WRONLY|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
+	if err != nil {
+		return "", launchFileFailure("open wake file", err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return "", launchFileFailure("stat wake file", err)
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != uint32(os.Geteuid()) {
+		return "", launchFileFailure("validate wake file", errors.New("not a regular file owned by the current user"))
+	}
+	return path, nil
 }
 
 // ReclaimLaunchFiles removes only named, regular, current-user generated files

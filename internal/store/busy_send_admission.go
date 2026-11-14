@@ -259,8 +259,10 @@ func busySendEligible(p busySendPublishedRow, mode BusySendMode, text []byte) er
 	switch {
 	case size > limits.MessageBytes:
 		return refuse(BusySendRefuseTextBytes, size, limits.MessageBytes, "text bytes")
-	case limits.SinglePromptBytes(size) > limits.PromptBytes:
-		return refuse(BusySendRefusePromptSize, limits.SinglePromptBytes(size), limits.PromptBytes, "prompt bytes")
+	case limits.SinglePromptBytes(text) > limits.PromptBytes:
+		// A guard against a later table change: under the published table a
+		// valid Message at the text limit always fits a prompt alone.
+		return refuse(BusySendRefusePromptSize, limits.SinglePromptBytes(text), limits.PromptBytes, "prompt bytes")
 	case p.reservedCount+1 > caps.HeldCount:
 		return refuse(BusySendRefuseHeldCount, p.reservedCount+1, caps.HeldCount, "held Messages")
 	case p.reservedBytes+size > caps.HeldBytes:

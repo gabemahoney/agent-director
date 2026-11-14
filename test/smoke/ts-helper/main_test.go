@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -424,6 +426,57 @@ func TestDispatch(t *testing.T) {
 		})
 	}
 
+	// seed-busy-send-claude-route records the row's Launch and conversation
+	// covered and prints the Launch's own wake endpoint; a row with no launch
+	// token is refused with nothing written.
+	t.Run("a_success_seed_busy_send_claude_route", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "busy.db")
+		var dummy bytes.Buffer
+		for _, args := range [][]string{
+			{"seed-spawn", "--store", dbPath, "--state", "waiting", "--id", "busy-1", "--create-store"},
+			{"seed-spawn", "--store", dbPath, "--state", "waiting", "--id", "busy-2", "--no-launch-identity"},
+		} {
+			if code := dispatch(args, &dummy, &dummy); code != 0 {
+				t.Fatalf("setup %v failed: %s", args, dummy.String())
+			}
+		}
+		var stdout, stderr bytes.Buffer
+		if code := dispatch([]string{"seed-busy-send-claude-route", "--store", dbPath, "--id", "busy-1"}, &stdout, &stderr); code != 0 {
+			t.Fatalf("expected exit 0, got %d; stderr: %s", code, stderr.String())
+		}
+		cols, err := apitest.ReadSpawnColumns(dbPath, "busy-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		storeID, err := apitest.ReadStoreID(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, _ := cols.LaunchToken.(string)
+		wake, err := store.BusySendWakePath(storeID, token)
+		if err != nil || stderr.Len() != 0 || stdout.String() != `{"wake_path":"`+wake+`"}`+"\n" {
+			t.Fatalf("stdout %q, stderr %q, %v; want the wake path %s", stdout.String(), stderr.String(), err, wake)
+		}
+		facts, err := apitest.ReadBusySendFacts(dbPath, "busy-1")
+		if err != nil || facts.Coverage != store.BusySendCovered || len(facts.Conversations) != 1 ||
+			facts.Conversations[0].Coverage != string(store.BusySendCovered) {
+			t.Fatalf("busy-send facts = %+v, %v; want the Launch and conversation covered", facts, err)
+		}
+		before, err := apitest.ReadBusySendFacts(dbPath, "busy-2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdout.Reset()
+		stderr.Reset()
+		if code := dispatch([]string{"seed-busy-send-claude-route", "--store", dbPath, "--id", "busy-2"}, &stdout, &stderr); code == 0 ||
+			stdout.Len() != 0 || stderr.Len() == 0 {
+			t.Fatalf("a row with no launch token: exit %d, stdout %q, stderr %q; want refused", code, stdout.String(), stderr.String())
+		}
+		if after, err := apitest.ReadBusySendFacts(dbPath, "busy-2"); err != nil || !reflect.DeepEqual(after, before) {
+			t.Fatalf("refused row's facts = %+v, %v; want unchanged %+v", after, err, before)
+		}
+	})
+
 	t.Run("a_success_seed_template", func(t *testing.T) {
 		dir := t.TempDir()
 		var stdout, stderr bytes.Buffer
@@ -582,6 +635,7 @@ func TestDispatch(t *testing.T) {
 			"seed-row-session",
 			"seed-read-surface-store",
 			"set-settle",
+			"seed-busy-send-claude-route",
 		}
 		for _, k := range wantKeys {
 			if _, ok := schema[k]; !ok {

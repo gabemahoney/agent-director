@@ -35,7 +35,12 @@ type BusySendObservation struct {
 	// began a hand-over (busy_conversations.handover_force_id); nil when
 	// neither exists, so a force refused before any hand-over never shows.
 	Force *BusySendForce
-	// AwaitingTurnStart is busySendAwaitingTurnStart's count.
+	// AwaitingTurnStart is SR-5.6's awaiting_turn_start: the current
+	// Launch's hand-overs whose issued input is still AD-owned work with no
+	// evidence it was taken (SR-3.3; readBusySendAwaiting), whatever its
+	// output's state, and zero once the Launch has ended. The issue commit
+	// records each obligation before any output can exist, and only recorded
+	// evidence clears it; no read repairs it.
 	AwaitingTurnStart int64
 }
 
@@ -65,7 +70,11 @@ func (s *Store) ReadBusySendObservation(instanceID string, maxWait time.Duration
 		if o.Force, err = readBusySendForceSummary(ctx, conn, s.StoreID(), p.conversation); err != nil {
 			return err
 		}
-		o.AwaitingTurnStart = busySendAwaitingTurnStart(p)
+		if !p.launchEnded {
+			if o.AwaitingTurnStart, err = readBusySendAwaiting(ctx, conn, p.conversation, p.launch); err != nil {
+				return err
+			}
+		}
 		out = &o
 		return nil
 	})
@@ -140,14 +149,6 @@ func readBusySendForceSummary(ctx context.Context, conn *sql.Conn, storeID, conv
 	lookup, err := readBusySendForceByID(ctx, conn, storeID, forceID.String)
 	return lookup.ForceResult, err
 }
-
-// busySendAwaitingTurnStart is SR-5.6's awaiting_turn_start for the published
-// current Launch: its completed hand-overs whose input is still AD-owned work
-// with no evidence it was taken (SR-3.3). This is the one place the count is
-// derived. Until the Claude route records those hand-overs it is zero; the
-// route extends this from facts it writes in the same transaction as each
-// emission intent and completion, and no read repairs them.
-func busySendAwaitingTurnStart(busySendPublishedRow) int64 { return 0 }
 
 // ReadBusySendDefaults returns the published Agent Defaults of every listed
 // instance whose current Launch is covered, keyed by instance id; an

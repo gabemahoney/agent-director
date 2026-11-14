@@ -47,6 +47,14 @@ var hookEvents = []hookEventName{
 	hookSessionEnd, hookPermissionRequest, hookSubagentStart, hookSubagentStop,
 }
 
+// hookFileChanged is busy send's owned wake (SR-3.4): registered, with
+// asyncRewake, only for a covered Claude Launch (Resolved.BusySendCovered),
+// beside the eleven state-tracking events, never as a twelfth state report.
+// Claude Code runs it in the background when a path the SessionStart hook
+// returned in watchPaths changes; its exit 2 hands its stderr to the agent as
+// a wake prompt.
+const hookFileChanged hookEventName = "FileChanged"
+
 var matcherFields = map[hookEventName]bool{
 	hookPreToolUse:        true,
 	hookPermissionRequest: true,
@@ -139,6 +147,11 @@ const sessionStartHookTimeoutSeconds = 600
 // form ("command":"<install path> help", through quoteIfWhitespace): it
 // writes nothing, so its parent process does not matter.
 //
+// A covered Claude Launch (r.BusySendCovered; SR-3.4) also gets the owned
+// FileChanged entry, in exec form with "asyncRewake": true and no timeout
+// (hookFileChanged); an uncovered Launch's settings are exactly as before.
+// Other people's hooks and settings are never read, reordered or replaced.
+//
 // `statusLine` and `subagentStatusLine` carry the context-fullness callbacks
 // composeContextStatuslines writes, unless cfg.Defaults.DisableContextFullness
 // is true: then neither key is written and no Claude settings file is read for
@@ -186,6 +199,14 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 			entry["matcher"] = "*"
 		}
 		hooks[string(evt)] = []any{entry}
+	}
+	if r.BusySendCovered {
+		// SR-3.4: the owned wake, in exec form like every agent-director
+		// hook, so its parent is the agent process the gate compares. It
+		// carries no matcher and no timeout of its own.
+		hooks[string(hookFileChanged)] = []any{map[string]any{"hooks": []any{
+			map[string]any{"type": "command", "command": exe, "args": []string{"hook"}, "asyncRewake": true},
+		}}}
 	}
 
 	if cfg.Defaults.InjectHelpHook {

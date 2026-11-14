@@ -278,6 +278,9 @@ func TestBusySendPartitionPrompts(t *testing.T) {
 		t.Fatal("Claude offers no Wait Turn")
 	}
 	wrapped := func(n int64) store.BusySendPromptMeasure { return func(b []byte) int64 { return int64(len(b)) + n } }
+	// budget measures the table's whole wrapper budget, which the arithmetic
+	// below is built on; a nil measure is Claude's exact wrapping instead.
+	budget := wrapped(limits.WrapperBytes)
 	sep1, sep2 := int64(len("[agent-director: message 1 of 1]\n")), int64(len("[agent-director: message 1 of 2]\n"))
 	largest := strings.Repeat("m", int(limits.MessageBytes))
 	// Two Messages of half bytes fill one prompt under the table's wrapper
@@ -308,18 +311,23 @@ func TestBusySendPartitionPrompts(t *testing.T) {
 		wantErr func(error) bool
 	}{
 		{name: "whole bodies, local N of M", texts: []string{"café 🌍\tTAB\nand LF", "[agent-director: message 9 of 9]\nnot a separator"},
-			want: []store.BusySendPromptPart{{First: 0, Count: 2, RenderedBytes: int64(len(tagged)) + limits.WrapperBytes}}, body: tagged},
+			measure: budget, want: []store.BusySendPromptPart{{First: 0, Count: 2, RenderedBytes: int64(len(tagged)) + limits.WrapperBytes}}, body: tagged},
 		{name: "the table's wrapper budget fits two", texts: []string{strings.Repeat("a", int(half)), strings.Repeat("b", int(half))},
-			want: []store.BusySendPromptPart{{First: 0, Count: 2, RenderedBytes: both + limits.WrapperBytes}}},
+			measure: budget, want: []store.BusySendPromptPart{{First: 0, Count: 2, RenderedBytes: both + limits.WrapperBytes}}},
 		{name: "the route's larger wrapper splits them", texts: []string{strings.Repeat("a", int(half)), strings.Repeat("b", int(half))},
 			measure: wrapped(over), want: []store.BusySendPromptPart{{First: 0, Count: 1, RenderedBytes: sep1 + half + over},
 				{First: 1, Count: 1, RenderedBytes: sep1 + half + over}}},
+		// R2-4: a nil measure is the table's exact one, Claude's fixed
+		// wrapping plus a reserved closing tag counted escaped.
+		{name: "a nil measure is the table's exact one", texts: []string{"</system-reminder>"},
+			want: []store.BusySendPromptPart{{First: 0, Count: 1,
+				RenderedBytes: sep1 + int64(len("&lt;/system-reminder>")) + limits.Measure(nil)}}},
 		{name: "a two-digit M is counted", limits: &local, texts: append(nine, strings.Repeat("x", 55)),
 			want: []store.BusySendPromptPart{{First: 0, Count: 9, RenderedBytes: 403}, {First: 9, Count: 1, RenderedBytes: 88}}},
 		{name: "ten Messages in one prompt", texts: strings.Split("abcdefghij", ""),
-			want: []store.BusySendPromptPart{{First: 0, Count: 10, RenderedBytes: int64(len(ten)) + limits.WrapperBytes}}, body: ten},
+			measure: budget, want: []store.BusySendPromptPart{{First: 0, Count: 10, RenderedBytes: int64(len(ten)) + limits.WrapperBytes}}, body: ten},
 		{name: "a maximum-size Message alone, then the longest prefix", texts: []string{largest, "x", "y"},
-			want: []store.BusySendPromptPart{{First: 0, Count: 1, RenderedBytes: sep1 + limits.MessageBytes + limits.WrapperBytes},
+			measure: budget, want: []store.BusySendPromptPart{{First: 0, Count: 1, RenderedBytes: sep1 + limits.MessageBytes + limits.WrapperBytes},
 				{First: 1, Count: 2, RenderedBytes: 2*sep2 + 2 + 2 + limits.WrapperBytes}}},
 		{name: "a route wrapper leaving no room for a maximum-size Message", texts: []string{largest},
 			measure: wrapped(limits.PromptBytes - sep1 - limits.MessageBytes + 1),

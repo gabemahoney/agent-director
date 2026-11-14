@@ -3,11 +3,8 @@ package api
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -144,26 +141,13 @@ func (r *sendKeysRun) sendCovered(row *Spawn, params SendKeysParams, callerUUID 
 		return fmt.Errorf("send-keys %s: %w", params.InstanceID, err)
 	}
 	if adm.Outcome == store.BusySendAdmitted {
-		touchBusySendWake(adm.WakePath)
+		store.TouchBusySendWake(adm.WakePath)
 	}
 	result := deliveryResultOf(adm.Result)
 	r.deliveryResult = SendKeysResult{Delivery: &result, CallerUUID: result.CallerUUID, Class: result.Class,
 		RequestID: result.RequestID, Outcome: result.Outcome, SessionID: result.SessionID, RecordID: result.RecordID,
 		RecordSHA256: result.RecordSHA256}
 	return nil
-}
-
-// touchBusySendWake changes the Launch's recorded wake file's times, the
-// content-free notification of its route (SR-7.2). Only a recorded absolute
-// path is touched: none is made up or created. A failed or missing touch is a
-// lost wake, which leaves the committed Message Held for the agent's next
-// eligible event (SR-3.1), so it never changes the send's Result.
-func touchBusySendWake(path string) {
-	if path == "" || !filepath.IsAbs(path) {
-		return
-	}
-	now := time.Now()
-	_ = os.Chtimes(path, now, now) // a failure is a lost wake, as above
 }
 
 // admissionUncertain is a covered send whose admission COMMIT outcome is

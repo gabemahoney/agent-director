@@ -182,6 +182,24 @@ func resumeDefaultsGate(s ResumeStore, row Spawn, params ResumeParams) error {
 	return nil
 }
 
+// resumeBusySendCoverage is the coverage a resume of row's Launch records
+// (store.ResumeLaunchCoverage of the published conversation's coverage and the
+// row's agent), which decides whether a Claude resume composes busy send's
+// owned wake (SR-3.4); the store records the same coverage with the new
+// Launch. A store that cannot read the conversation's coverage gives the
+// agent's own coverage.
+func resumeBusySendCoverage(s ResumeStore, row Spawn) (store.BusySendCoverage, error) {
+	reader, ok := s.(busySendConversationCoverageReader)
+	if !ok {
+		return store.BusySendCoverageForAgent(row.Agent), nil
+	}
+	conversation, err := reader.GetBusySendConversationCoverage(row.InstanceID)
+	if err != nil {
+		return "", fmt.Errorf("resume of instance %s: its busy-send coverage could not be read (%w), so nothing was written and nothing was launched", row.InstanceID, err)
+	}
+	return store.ResumeLaunchCoverage(conversation, row.Agent), nil
+}
+
 // resumeDefaultsChoice is the resume's Agent Default overrides; nil keeps the
 // published conversation's value.
 func resumeDefaultsChoice(p ResumeParams) store.BusySendDefaultsChoice {
@@ -741,12 +759,17 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	if err != nil {
 		return ResumeResult{}, fmt.Errorf("resume of instance %s: the launch could not be recorded (%v), so nothing was written and nothing was launched", id, err)
 	}
+	coverage, err := resumeBusySendCoverage(d.s, row)
+	if err != nil {
+		return ResumeResult{}, err
+	}
 	composed, err := spawn.ComposeRelaunch(spawn.RelaunchInput{
-		Row:       row,
-		SessionID: sessionID,
-		Socket:    socket,
-		Token:     token,
-		StoreID:   d.storeID,
+		Row:              row,
+		SessionID:        sessionID,
+		Socket:           socket,
+		Token:            token,
+		StoreID:          d.storeID,
+		BusySendCoverage: coverage,
 	}, d.cfg)
 	if err != nil {
 		return ResumeResult{}, err

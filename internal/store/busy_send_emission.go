@@ -262,9 +262,10 @@ type BusySendIssue struct {
 // become issued, take the hand-over's sticky race exposure, keep their
 // reservations and become non-Final sent_unconfirmed bound to the captured
 // Launch and session, since output may now reach the provider (SR-5.2). The
-// prompt row with emission issued and no admission is the durable owned-input
-// obligation a route's awaiting count reads (SR-3.3, SR-5.6); it exists
-// before any output can. Only a verified commit authorizes the one route call.
+// prompt row with emission issued and no admission or negative evidence is
+// the durable owned-input obligation the awaiting count and the turn-end
+// claim's AD-owned-work gate read (SR-3.3, SR-5.6; readBusySendAwaiting); it
+// exists before any output can. Only a verified commit authorizes the one route call.
 // A refusal (*BusySendGuardError) writes nothing, so the prompt stays claimed
 // and its job may release it; a COMMIT whose outcome is unknown is an error
 // CommitUnconfirmed reports and authorizes nothing, and Launch End resolves
@@ -334,7 +335,12 @@ func (s *Store) CommitBusySendIssue(ctx context.Context, req BusySendIssueReques
 // Another identity replaces an earlier one only when every other issued
 // prompt of the Launch has its order or a negative outcome recorded: the
 // earlier issuer can then emit nothing still unresolved. An issuer that may
-// still emit is never overwritten.
+// still emit is never overwritten. This is the helper slot's serialization
+// (Main Agent decision 5): an earlier helper's hand-over closed with its
+// outcome recorded permits replacement, which is not exit evidence. A
+// replacement on the earlier helper's verified exit alone is never needed on
+// a live Launch, whose unresolved prompt still owns the conversation and so
+// refuses every claim, and is not offered.
 func registerBusySendIssuer(ctx context.Context, conn *sql.Conn, storeID string, h busySendHandoverRow, issuer BusySendIssuer, now int64) error {
 	var unresolved bool
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM busy_send_prompts p
@@ -715,71 +721,81 @@ type BusySendPromptEvidence struct {
 func (s *Store) RecordBusySendEvidence(ctx context.Context, ev BusySendPromptEvidence) (BusySendCompletionResult, error) {
 	var out BusySendCompletionResult
 	err := s.inDurableWriteTxContext(ctx, DefaultLockWait, func(ctx context.Context, conn *sql.Conn) error {
-		now := busySendAt(ev.At)
-		h, err := readBusySendHandover(ctx, conn, s.StoreID(), ev.HandoverID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		p, err := readBusySendPrompt(ctx, conn, h.HandoverID, ev.PromptIndex)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if ev.LaunchID != h.Destination.LaunchID || ev.ConnectionGeneration != h.Destination.ConnectionGeneration ||
-			p.emission != BusySendEmissionIssued {
-			return readBusySendCompletionState(ctx, conn, h.HandoverID, p.index, &out)
-		}
-		admission := ev.Admission
-		if ev.Receipt != nil && admission == "" {
-			admission = BusySendAdmissionExactReceipt
-		}
-		if admission != "" && p.admission == "" {
-			if err := busySendChange(ctx, conn, `UPDATE busy_send_prompts SET admission_kind = ?, admitted_at_ms = ?, revision = revision + 1
-			    WHERE handover_id = ? AND prompt_index = ? AND revision = ? AND admission_kind IS NULL`,
-				string(admission), now, h.HandoverID, p.index, p.revision); err != nil {
-				return err
-			}
-			out.Recorded, p.admission = true, admission
-			p.revision++
-		}
-		if ev.Receipt != nil && p.evidence == "" {
-			r := ev.Receipt
-			if err := busySendChange(ctx, conn, `UPDATE busy_send_prompts SET evidence_kind = ?, record_id = ?, record_sha256 = ?,
-			        receipt_at_ms = ?, revision = revision + 1
-			    WHERE handover_id = ? AND prompt_index = ? AND revision = ? AND evidence_kind IS NULL`,
-				string(r.Kind), nullableStringArg(r.RecordID), nullableStringArg(r.RecordSHA256), now,
-				h.HandoverID, p.index, p.revision); err != nil {
-				return err
-			}
-			out.Recorded = true
-			p.revision++
-			if err := applyBusySendReceipt(ctx, conn, &h, p, *r, now); err != nil {
-				return err
-			}
-		} else if ev.Order != "" && p.orderKind == "" {
-			live, err := busySendLive(ctx, conn, h, p.index, BusySendIssued)
-			if err != nil {
-				return err
-			}
-			if live {
-				if err := applyBusySendOrder(ctx, conn, &h, p, ev.Order, ev.UnprovenBoundary, now); err != nil {
-					return err
-				}
-				out.Recorded = true
-			}
-		}
-		return readBusySendCompletionState(ctx, conn, h.HandoverID, p.index, &out)
+		var err error
+		out, err = recordBusySendEvidence(ctx, conn, s.StoreID(), ev, busySendAt(ev.At))
+		return err
 	})
 	if err != nil {
 		return BusySendCompletionResult{}, err
 	}
 	out.Revision = 0
 	return out, nil
+}
+
+// recordBusySendEvidence is RecordBusySendEvidence's work inside its caller's
+// transaction (RecordBusySendSighting's too), at now.
+func recordBusySendEvidence(ctx context.Context, conn *sql.Conn, storeID string, ev BusySendPromptEvidence, now int64) (BusySendCompletionResult, error) {
+	var out BusySendCompletionResult
+	h, err := readBusySendHandover(ctx, conn, storeID, ev.HandoverID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return out, err
+	}
+	p, err := readBusySendPrompt(ctx, conn, h.HandoverID, ev.PromptIndex)
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return out, err
+	}
+	if ev.LaunchID != h.Destination.LaunchID || ev.ConnectionGeneration != h.Destination.ConnectionGeneration ||
+		p.emission != BusySendEmissionIssued {
+		err := readBusySendCompletionState(ctx, conn, h.HandoverID, p.index, &out)
+		return out, err
+	}
+	admission := ev.Admission
+	if ev.Receipt != nil && admission == "" {
+		admission = BusySendAdmissionExactReceipt
+	}
+	if admission != "" && p.admission == "" {
+		if err := busySendChange(ctx, conn, `UPDATE busy_send_prompts SET admission_kind = ?, admitted_at_ms = ?, revision = revision + 1
+		    WHERE handover_id = ? AND prompt_index = ? AND revision = ? AND admission_kind IS NULL`,
+			string(admission), now, h.HandoverID, p.index, p.revision); err != nil {
+			return out, err
+		}
+		out.Recorded, p.admission = true, admission
+		p.revision++
+	}
+	if ev.Receipt != nil && p.evidence == "" {
+		r := ev.Receipt
+		if err := busySendChange(ctx, conn, `UPDATE busy_send_prompts SET evidence_kind = ?, record_id = ?, record_sha256 = ?,
+		        receipt_at_ms = ?, revision = revision + 1
+		    WHERE handover_id = ? AND prompt_index = ? AND revision = ? AND evidence_kind IS NULL`,
+			string(r.Kind), nullableStringArg(r.RecordID), nullableStringArg(r.RecordSHA256), now,
+			h.HandoverID, p.index, p.revision); err != nil {
+			return out, err
+		}
+		out.Recorded = true
+		p.revision++
+		if err := applyBusySendReceipt(ctx, conn, &h, p, *r, now); err != nil {
+			return out, err
+		}
+	} else if ev.Order != "" && p.orderKind == "" {
+		live, err := busySendLive(ctx, conn, h, p.index, BusySendIssued)
+		if err != nil {
+			return out, err
+		}
+		if live {
+			if err := applyBusySendOrder(ctx, conn, &h, p, ev.Order, ev.UnprovenBoundary, now); err != nil {
+				return out, err
+			}
+			out.Recorded = true
+		}
+	}
+	err = readBusySendCompletionState(ctx, conn, h.HandoverID, p.index, &out)
+	return out, err
 }
 
 // applyBusySendReceipt applies an exact receipt for p on the live Launch (M1's

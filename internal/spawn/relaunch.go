@@ -23,6 +23,10 @@ type RelaunchInput struct {
 	Socket    string
 	Token     string
 	StoreID   string
+	// BusySendCoverage is the coverage the resumed Launch records
+	// (store.ResumeLaunchCoverage of the published conversation's coverage and
+	// the row's agent); "" reads as not covered.
+	BusySendCoverage store.BusySendCoverage
 }
 
 // ComposedRelaunch is a composed resume launch: the create request Relaunch
@@ -75,7 +79,9 @@ type ComposedRelaunch struct {
 // in.StoreID.
 //
 // The environment and the settings (the same hooks as a fresh spawn) are
-// composed from the row. ExtraEnv is restored from the persisted
+// composed from the row; a Claude resume that in.BusySendCoverage covers also
+// gets busy send's owned wake registration, whose endpoint its new Launch's
+// record names and its own SessionStart hook creates. ExtraEnv is restored from the persisted
 // row (in.Row.ExtraEnv, decoded by GetSpawn) so a resumed spawn keeps its
 // original env, including CLAUDE_CONFIG_DIR (a claude spawn's inherited one
 // too, which ComposeLaunch records), CODEX_HOME and any auth vars. This is the
@@ -146,6 +152,7 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 	} else {
 		read := ReadClaudeArgs(in.Row.AgentArgs)
 		r.AgentArgs = extractClaudeArgs(withoutOperands(in.Row.AgentArgs, read.Positionals, read.DoubleDash), true).Args
+		r.BusySendCovered = in.BusySendCoverage == store.BusySendCovered
 		settings, err := synthesizeSettings(r, cfg)
 		if err != nil {
 			return ComposedRelaunch{}, err

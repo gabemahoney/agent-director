@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // Exec-form hooks (SR-22.9, SR-20.6) and the launch argv of at least two
@@ -31,8 +32,10 @@ var execFormEvents = map[string]bool{
 // assertExecFormSettings checks settingsJSON: each event has exactly one
 // exec-form agent-director hook for exe; SessionStart also carries the
 // shell-form help entry wantHelp (exactly {type, command}, no timeout) when
-// it is non-empty.
-func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cfg config.Config) {
+// it is non-empty. A covered Claude Launch (covered; SR-3.4) also has exactly
+// busy send's owned wake: one FileChanged entry, exec form with asyncRewake,
+// no matcher and no timeout; an uncovered one has no FileChanged at all.
+func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cfg config.Config, covered bool) {
 	t.Helper()
 	if strings.Contains(settingsJSON, ` hook"`) {
 		t.Errorf("settings contain a shell-form %q suffix: %s", " hook", settingsJSON)
@@ -51,6 +54,13 @@ func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cf
 	var wantEvents []string
 	for evt := range execFormEvents {
 		wantEvents = append(wantEvents, evt)
+	}
+	if covered {
+		wantEvents = append(wantEvents, "FileChanged")
+		want := []map[string]any{{"hooks": []any{map[string]any{"type": "command", "command": exe, "args": []any{"hook"}, "asyncRewake": true}}}}
+		if got := top.Hooks["FileChanged"]; !reflect.DeepEqual(got, want) {
+			t.Errorf("FileChanged = %v; want only the owned wake %v", got, want)
+		}
 	}
 	sort.Strings(wantEvents)
 	if !slices.Equal(gotEvents, wantEvents) {
@@ -116,11 +126,12 @@ func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cf
 
 // TestHookExecFormSettings: every agent-director hook is exec form with the
 // path verbatim (never quoted); the help entry, only with inject_help_hook,
-// stays shell form and quotes a path with a space.
+// stays shell form and quotes a path with a space. A covered Claude Launch
+// adds only the owned wake beside them.
 func TestHookExecFormSettings(t *testing.T) {
 	cases := []struct {
 		name, exe, helpBin, wantHelp string
-		injectHelp                   bool
+		injectHelp, covered          bool
 	}{
 		{name: "plain path, no help entry unless injected", exe: "/opt/ad/bin/agent-director", helpBin: "/opt/help/agent-director"},
 		{name: "path with a space is verbatim", exe: "/opt/with space/agent-director"},
@@ -128,6 +139,8 @@ func TestHookExecFormSettings(t *testing.T) {
 			helpBin: "/home/op/.config/agent-director/bin/agent-director", wantHelp: "/home/op/.config/agent-director/bin/agent-director help"},
 		{name: "help entry quoted, hooks verbatim", exe: "/opt/with space/agent-director", injectHelp: true,
 			helpBin: "/opt/help dir/agent-director", wantHelp: `"/opt/help dir/agent-director" help`},
+		{name: "covered Launch adds the owned wake", exe: "/opt/with space/agent-director", injectHelp: true, covered: true,
+			helpBin: "/opt/help/agent-director", wantHelp: "/opt/help/agent-director help"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -135,37 +148,45 @@ func TestHookExecFormSettings(t *testing.T) {
 			withStubHelpBin(t, tc.helpBin)
 			cfg := config.Default()
 			cfg.Defaults.InjectHelpHook = tc.injectHelp
-			got, err := synthesizeSettings(Resolved{SpawnParams: SpawnParams{InstanceID: "id-exec"}}, cfg)
+			got, err := synthesizeSettings(Resolved{SpawnParams: SpawnParams{InstanceID: "id-exec"}, BusySendCovered: tc.covered}, cfg)
 			if err != nil {
 				t.Fatalf("synthesizeSettings: %v", err)
 			}
-			assertExecFormSettings(t, got, tc.exe, tc.wantHelp, cfg)
+			assertExecFormSettings(t, got, tc.exe, tc.wantHelp, cfg, tc.covered)
 		})
 	}
 }
 
 // TestHookExecFormLaunchArgv: a spawn's and a resume relaunch's create argv
 // has at least two elements, starts with the Claude binary and carries
-// exec-form settings.
+// exec-form settings. The owned wake follows the coverage the Launch records
+// (SR-3.4): a spawn's is this binary's covered set, whatever its caller set,
+// and a resume's is RelaunchInput.BusySendCoverage.
 func TestHookExecFormLaunchArgv(t *testing.T) {
-	cases := []struct {
-		name   string
-		create func(t *testing.T) ([]string, config.Config)
-	}{
-		{name: "spawn", create: func(t *testing.T) ([]string, config.Config) {
-			e := newLaunchEnv(t)
-			e.r.AgentArgs = nil
-			e.mustLaunch()
-			return e.onlyCreate().Command, e.cfg
-		}},
-		{name: "resume relaunch", create: func(t *testing.T) ([]string, config.Config) {
+	binaryCovers := store.BusySendCoverageForAgent(store.AgentClaude) == store.BusySendCovered
+	relaunch := func(coverage store.BusySendCoverage) func(t *testing.T) ([]string, config.Config) {
+		return func(t *testing.T) ([]string, config.Config) {
 			e := newRelaunchEnv(t)
-			e.row.AgentArgs = nil
+			e.row.AgentArgs, e.coverage = nil, coverage
 			if out := e.relaunch("session-exec-1"); out.Kind != CreateLabelled {
 				t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
 			}
 			return e.onlyCreate().Command, e.cfg
-		}},
+		}
+	}
+	cases := []struct {
+		name    string
+		create  func(t *testing.T) ([]string, config.Config)
+		covered bool
+	}{
+		{name: "spawn", create: func(t *testing.T) ([]string, config.Config) {
+			e := newLaunchEnv(t)
+			e.r.AgentArgs, e.r.BusySendCovered = nil, !binaryCovers
+			e.mustLaunch()
+			return e.onlyCreate().Command, e.cfg
+		}, covered: binaryCovers},
+		{name: "resume relaunch", create: relaunch("")},
+		{name: "resume relaunch of a covered conversation", create: relaunch(store.BusySendCovered), covered: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -177,7 +198,7 @@ func TestHookExecFormLaunchArgv(t *testing.T) {
 			if i < 0 || i+1 >= len(argv) {
 				t.Fatalf("create argv = %v; want --settings <json>", argv)
 			}
-			assertExecFormSettings(t, argv[i+1], "/bin/agent-director", "", cfg)
+			assertExecFormSettings(t, argv[i+1], "/bin/agent-director", "", cfg, tc.covered)
 		})
 	}
 }

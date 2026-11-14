@@ -132,7 +132,7 @@ func TestBusySendPublicSpawnAllAgents(t *testing.T) {
 const (
 	busyDefaultsJSON     = `{"send_mode":"wait_turn","confirmed_delivery":false,"confirm_from_transcripts":false}`
 	busyEmptyInboxJSON   = `{"held_count":0,"held_bytes":0,"first_wait":null,"handover_count":0,"startup_wait":null,"force":null,"awaiting_turn_start":0}`
-	busyCapabilitiesJSON = `{"modes":[{"send_mode":"wait_turn","message_bytes":8000,"prompt_bytes":9000,"text_kind":"utf8_tab_lf"}],"held_count":1000,"held_bytes":8000000}`
+	busyCapabilitiesJSON = `{"modes":[{"send_mode":"wait_turn","message_bytes":8000,"prompt_bytes":9600,"text_kind":"utf8_tab_lf"}],"held_count":1000,"held_bytes":8000000}`
 )
 
 // assertBusyPublic checks get's busy-send projection of a row whose inbox is

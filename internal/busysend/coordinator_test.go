@@ -207,6 +207,19 @@ func (e *coordEnv) admit(t *testing.T, request, text string) {
 	}
 }
 
+// sight records the agent's own sighting of a hand-over's first prompts, the
+// evidence it took them (SR-3.3), so a later turn end may claim again.
+func (e *coordEnv) sight(t *testing.T, handover string, prompts int) {
+	t.Helper()
+	for k := range prompts {
+		if _, err := e.st.RecordBusySendEvidence(context.Background(), store.BusySendPromptEvidence{HandoverID: handover, PromptIndex: k,
+			LaunchID: e.dest.LaunchID, ConnectionGeneration: e.dest.ConnectionGeneration,
+			Admission: store.BusySendAdmissionPromptSighting}); err != nil {
+			t.Fatalf("sighting of prompt %d: %v", k, err)
+		}
+	}
+}
+
 // result is the stored Result of Message ID request.
 func (e *coordEnv) result(t *testing.T, request string) store.BusySendResult {
 	t.Helper()
@@ -323,6 +336,7 @@ func TestCoordinatorDeliversFrozenPrompts(t *testing.T) {
 		t.Errorf("the send past the cutoff = %+v; want Held, waiting readiness_unknown", r)
 	}
 
+	e.sight(t, issued[0].HandoverID, 2)
 	if out, err := e.deliver(ctx); err != nil || out.Kind != busysend.OutcomeIssued {
 		t.Fatalf("next event = %+v, %v; want the late send issued", out, err)
 	}
@@ -569,6 +583,9 @@ func TestCoordinatorKeepsOriginalBudgets(t *testing.T) {
 				}
 				e.clock.Advance(late)
 			}
+			if tc.issued > 0 {
+				e.sight(t, issued[0].HandoverID, tc.issued)
+			}
 			if out, err := e.deliver(context.Background()); err != nil || len(e.route.prepared()) != 2 ||
 				!slices.Equal(e.places(t), []string{"closed", "closed"}) {
 				t.Errorf("next event = %+v, %v: %d prompts issued in all, custody %v; want each Message issued once and closed",
@@ -734,6 +751,9 @@ func TestCoordinatorIssueCommitBoundary(t *testing.T) {
 			}
 			e.reopen(t)
 			e.clock.Advance(time.Hour)
+			if tc.issued > 0 {
+				e.sight(t, e.route.prepared()[0].HandoverID, tc.issued)
+			}
 			later, err := e.deliver(context.Background())
 			if got := e.places(t); err != nil || later.Kind != tc.later || !slices.Equal(got, tc.laterPlaces) ||
 				len(e.route.prepared()) != tc.issued+len(later.Issued) {

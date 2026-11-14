@@ -75,7 +75,7 @@ func TestHelpHookBinPathUnderConfigDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("synthesizeSettings: %v", err)
 	}
-	assertExecFormSettings(t, settings, "/opt/ad/bin/agent-director", want+" help", cfg)
+	assertExecFormSettings(t, settings, "/opt/ad/bin/agent-director", want+" help", cfg, false)
 }
 
 // settingsShape is the part of the synthesized settings the permission tests read.
@@ -208,7 +208,7 @@ func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
 		if got := cfg.Relay.EffectiveTimeoutSeconds(); got != tc.want || float64(got)*1000 > math.MaxInt32 {
 			t.Errorf("timeout_seconds %d: effective %d; want %d, within a 32-bit millisecond timer", tc.configured, got, tc.want)
 		}
-		assertExecFormSettings(t, synthSettings(t, Resolved{}, cfg), exe, "", cfg)
+		assertExecFormSettings(t, synthSettings(t, Resolved{}, cfg), exe, "", cfg, false)
 	}
 }
 

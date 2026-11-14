@@ -25,8 +25,10 @@ import (
 // prompt whose body is body: the body plus everything the route's own wrapper
 // adds, as the provider receives it. A route supplies it; it must be pure (no
 // I/O), never return less than len(body), and never shrink when a Message is
-// added to the body. nil measures the body plus the mode's whole wrapper
-// budget (BusySendModeLimits.WrapperBytes).
+// added to the body. nil is the mode's own measure from the capability table
+// (BusySendModeLimits.Measure): the provider's exact wrapping and escaping
+// where the table records them, else the body plus the mode's whole wrapper
+// budget.
 type BusySendPromptMeasure func(body []byte) int64
 
 // BusySendPromptPart is one prompt of a partition: Count Messages starting at
@@ -79,7 +81,7 @@ func busySendBodyBytes(texts [][]byte, n int) int {
 // ErrBusySendPromptUnfit; a measure that breaks its contract is an error.
 func PartitionBusySendPrompts(texts [][]byte, limits BusySendModeLimits, measure BusySendPromptMeasure) ([]BusySendPromptPart, error) {
 	if measure == nil {
-		measure = func(body []byte) int64 { return int64(len(body)) + limits.WrapperBytes }
+		measure = limits.Measure
 	}
 	fit := func(part [][]byte) (int64, bool, error) {
 		if int64(busySendBodyBytes(part, len(part))) > limits.PromptBytes {

@@ -163,6 +163,25 @@ type HandleConfig struct {
 	// wires api.RelayHookGone with the per-OS readers; tests inject a double.
 	// A nil RelayHookGone closes no request.
 	RelayHookGone func(store.PermissionRow) bool
+	// PrepareBusySendWake creates, when missing, a covered Claude Launch's
+	// wake endpoint in its private launch directory and returns its path
+	// (SR-3.4): the seam to the launch-file code internal/hook does not
+	// import. cmd/agent-director wires spawn.PrepareBusySendWake. A nil one
+	// returns no watch path, so the Launch is never woken.
+	PrepareBusySendWake func(storeID, token string) (string, error)
+	// ClaudeStartupPrompt reports whether Claude agent arguments carry a
+	// startup prompt, which goes first in a fresh or reused Launch's order
+	// (SR-6.1): the seam to Claude's argument reader, which internal/hook
+	// does not import. cmd/agent-director wires spawn.HasClaudeStartupPrompt.
+	// With a nil one no wake issues at all, for any Launch: the wake claims
+	// nothing, logs and waits readiness_unknown.
+	ClaudeStartupPrompt func(args []string) bool
+	// Stderr is the hook's error stream, where busy send's owned FileChanged
+	// wake writes its one prompt (handleClaudeWake); Handle then returns
+	// ErrRewake and the verb exits RewakeExitCode. cmd/agent-director wires
+	// os.Stderr and keeps the hook logger off it for that event. A nil Stderr
+	// delivers nothing.
+	Stderr io.Writer
 	// PendingGrace is the effective pending grace period
 	// (config.Tmux.EffectivePendingGrace, SR-13.4): SessionStart waits for its
 	// launch's identity write until the row's launch start plus PendingGrace,
@@ -277,7 +296,12 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // the row's current, not-ended one is a soft refresh (codexTurnGate; b.x72);
 // and after any applied write of a Codex hook without an agent_id, a NULL
 // jsonl_path is healed from the payload's path when that exists and its file
-// name carries the hook's session id (healCodexTranscript, SR-6.3). A relayed
+// name carries the hook's session id (healCodexTranscript, SR-6.3). A Claude
+// main-agent UserPromptSubmit with a session id advances the row's Turn Start
+// counter in its own gated write, applied or held (claudeTurnGate), and once
+// that write applied, a prompt in AD's measured wake wrapping is offered as
+// the take evidence of the one awaiting prompt with its exact body
+// (recordClaudeSighting; SR-3.3, SR-3.5). A relayed
 // PermissionRequest is the exception: runRelay owns its write and reports no
 // applied flag, and a heal there would add a store write, with its lock wait,
 // to the relay hook's window before its poll for nothing the next applied
@@ -314,7 +338,19 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // emitted as null.
 //
 // Stdout is reserved for the decision envelope; state-tracking events
-// (everything except an on-relay PermissionRequest) leave it empty.
+// (everything except an on-relay PermissionRequest) leave it empty, except
+// that a covered Claude Launch's main SessionStart returns its busy-send wake
+// endpoint in watchPaths (writeClaudeWatchPath).
+//
+// Busy send's Claude route A (SR-3.4; decision 10): a covered Claude Launch's
+// owned FileChanged hook writes no state and drives one coordinator
+// invocation (handleClaudeWake). When it wrote one whole prompt to
+// HandleConfig.Stderr, Handle returns ErrRewake and the verb exits
+// RewakeExitCode, so Claude Code takes that prompt; otherwise it returns nil
+// and the hook exits 0. A main Stop or idle-prompt Notification whose write
+// applied touches the Launch's wake endpoint when Messages are Held and no
+// earlier issued input awaits take evidence (resignalClaudeWake). Delivery
+// never answers a permission request or writes a decision envelope.
 func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore, hc HandleConfig, logger *log.Logger) error {
 	// The hook's start, from which the relay hook's kill instant is counted
 	// (b.146 rule 4), and before which a turn_end proof's requests were
@@ -497,6 +533,7 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		CodexStartup: res.CodexStartup,
 	}
 	codexTurnGate(&gate, res)
+	claudeTurnGate(&gate, res)
 	if res.Agent == store.AgentCursor {
 		reader, ok := st.(interface {
 			ReadCursorRuntime(string) (store.CursorRuntime, error)
@@ -557,6 +594,15 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			return nil
 		}
 	}
+	if res.Agent == store.AgentClaude && res.EventName == EventNameFileChanged {
+		// SR-3.4: busy send's owned wake writes no state; it delivers one
+		// whole prompt on stderr for an exit 2, or nothing.
+		fields["upsert_outcome"] = string(store.UpsertNoChange)
+		if handleClaudeWake(ctx, hc.Stderr, st, hc, instanceID, gate, res, logger) {
+			return ErrRewake
+		}
+		return nil
+	}
 	jsonlPresent := transcriptPresent(transcriptPath)
 	onIgnored := func(reason string) {
 		emitIgnored(ctx, st, hc.ParentProc, ignoredHook{
@@ -577,6 +623,10 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		if err != nil {
 			failClosed(fmt.Sprintf("record session start identity (instance=%s): %v", instanceID, err))
 			return nil
+		}
+		if applied.Applied {
+			// SR-3.4: a covered Claude Launch's wake endpoint to watch.
+			writeClaudeWatchPath(ctx, stdout, st, hc.PrepareBusySendWake, instanceID, gate, res, logger)
 		}
 	case relayActive && res.EventName == EventNamePermissionRequest:
 		// The relay branch (b.146 rule 1): its first write records the
@@ -626,6 +676,13 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			// their applied row write with the entry transaction. A held
 			// working transition counts as applied.
 			runSubagentAfterWrite(st, instanceID, gate, res, raw, start, logger)
+		}
+		if applied.Applied {
+			// SR-3.3, SR-3.5: an owned main-agent Claude UserPromptSubmit
+			// carrying AD's own wake is the take evidence for it. A main
+			// Stop or idle prompt re-signals a covered Launch's wake.
+			recordClaudeSighting(ctx, st, instanceID, gate, res, logger)
+			resignalClaudeWake(ctx, st, instanceID, gate, res, logger)
 		}
 	}
 

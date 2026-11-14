@@ -193,7 +193,8 @@ func TestBusySendCoveredAdmission(t *testing.T) {
 	}
 
 	// A Message handed over and a reservation larger than the inbox leave
-	// get's held_count the Messages actually Held.
+	// get's held_count the Messages actually Held; the handed-over prompt,
+	// with no evidence the agent took it, awaits its turn start (SR-5.6).
 	storefix.SeedBusySendResult(t, e.dbPath, storefix.BusySendResultSeed{InstanceID: r.ID, Pair: busyPair("issued"),
 		Class: store.BusySendClassQueued, Reason: "awaiting_receipt", Transport: store.BusySendTransportWritten})
 	if err := apitest.SeedBusySendReservation(e.dbPath, r.ID, 1000, held); err != nil {
@@ -203,7 +204,7 @@ func TestBusySendCoveredAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (api.DeliveryFacts{HeldCount: 4, HeldBytes: held, FirstWait: first.Wait, HandoverCount: 1}); out.Delivery == nil || !reflect.DeepEqual(*out.Delivery, want) {
+	if want := (api.DeliveryFacts{HeldCount: 4, HeldBytes: held, FirstWait: first.Wait, HandoverCount: 1, AwaitingTurnStart: 1}); out.Delivery == nil || !reflect.DeepEqual(*out.Delivery, want) {
 		t.Errorf("get delivery = %+v; want %+v", out.Delivery, want)
 	}
 	_, err = c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "one more"})
@@ -318,12 +319,13 @@ func TestBusySendCoveredRefusals(t *testing.T) {
 // TestBusySendHeldWhileBusy (SR-1.1, SR-2.6, SR-3.9): a Covered Agent's send
 // is admitted Held whatever the row's state, where today's send-keys refuses:
 // on a running turn it waits turn_running, behind an open Dialog dialog and
-// on an ended row launch_ended. The row, its permission request and the pane
-// are untouched.
+// on an ended row launch_ended. The row and its permission request are
+// untouched, and neither input path is reached: the native-input backend is
+// never opened and tmux is never called (assertNoInputPath).
 func TestBusySendHeldWhileBusy(t *testing.T) {
 	t.Parallel()
-	e := newKillEnv(t)
-	c, _ := e.client(t)
+	ne := newNativeSubmissionEnv(t)
+	e := ne.killEnv
 	working := e.seedRow(t, killRowSpec{State: store.StateWorking})
 	dialog := e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true})
 	e.seedRequest(t, dialog.ID)
@@ -341,7 +343,7 @@ func TestBusySendHeldWhileBusy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if res := busyAdmit(t, c, api.SendKeysParams{InstanceID: tc.id, Text: "while busy"}); res.Class != "held" || res.Wait == nil || res.Wait.Reason != tc.wait {
+		if res := coveredSend(t, ne, api.SendKeysParams{InstanceID: tc.id, Text: "while busy"}); res.Class != "held" || res.Wait == nil || res.Wait.Reason != tc.wait {
 			t.Errorf("Result on the %s row = %+v; want Held, waiting %s", tc.wait, res, tc.wait)
 		}
 		e.assertRowUnchanged(t, tc.id, cols)
@@ -352,6 +354,7 @@ func TestBusySendHeldWhileBusy(t *testing.T) {
 	if n := len(e.rec.SocketCalls()) - calls; n != 0 {
 		t.Errorf("%d tmux calls; want no pane input", n)
 	}
+	assertNoInputPath(t, ne)
 	if got := storefix.ReadBusySendCounts(t, e.dbPath); got.Messages != 3 || got.InputAttempts != 0 {
 		t.Errorf("records = %+v; want three Messages and no input journal attempt", got)
 	}

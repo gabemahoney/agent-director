@@ -41,6 +41,15 @@
 #                      limited to [A-Za-z0-9_./:@%+,=-] because it is typed
 #                      into a shell.
 #   --timeout <secs>   bound on the wait (default 20).
+#   --stderr-pipe      give the hook a pipe for stderr, as Claude Code does,
+#                      instead of the err file: the typed line is
+#                      `agent-director hook < <dir>/payload.json 2>&1 > <dir>/out | cat > <dir>/err;
+#                      echo ${PIPESTATUS[0]} > <dir>/rc`. The hook is still the
+#                      pane shell's direct child (a pipeline's simple command is
+#                      exec'd from the shell's fork), rc is written once cat has
+#                      written all of err, and the pane's shell must be bash.
+#                      Busy send's owned wake needs it: a regular file takes no
+#                      write deadline, so the hook writes nothing there.
 #
 # The pane and socket come from one read-only SELECT of the row's pane_id
 # and tmux_socket in $PANE_HOOK_DB (default $HOME/.config/agent-director/state.db),
@@ -68,6 +77,7 @@ pane=""
 job=""
 envs=()
 agent=claude
+stderr_pipe=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -84,6 +94,7 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || die 2 "--timeout needs whole seconds"
             timeout_s="$2"; shift 2 ;;
         --no-wait) mode=nowait; shift ;;
+        --stderr-pipe) stderr_pipe=1; shift ;;
         --wait) [[ $# -ge 2 ]] || die 2 "--wait needs a job directory"; mode=join; job="$2"; shift 2 ;;
         --) shift; break ;;
         -*) die 2 "unknown option $1" ;;
@@ -125,7 +136,7 @@ if [[ "$mode" == join ]]; then
     finish "$job"
 fi
 
-[[ $# -eq 2 ]] || die 2 "usage: pane-hook.sh [--agent claude|codex] [--pane <target>] [--env K=V]... [--timeout <secs>] [--no-wait] <instance-id> <payload-json | ->"
+[[ $# -eq 2 ]] || die 2 "usage: pane-hook.sh [--agent claude|codex] [--pane <target>] [--env K=V]... [--timeout <secs>] [--stderr-pipe] [--no-wait] <instance-id> <payload-json | ->"
 id="$1"
 payload="$2"
 
@@ -159,7 +170,11 @@ for kv in "${envs[@]}"; do
 done
 hook_cmd="agent-director hook"
 [[ "$agent" == claude ]] || hook_cmd+=" --agent $agent"
-line+="$hook_cmd < $job/payload.json > $job/out 2> $job/err; echo \$? > $job/rc"
+if [[ -n "$stderr_pipe" ]]; then
+    line+="$hook_cmd < $job/payload.json 2>&1 > $job/out | cat > $job/err; echo \${PIPESTATUS[0]} > $job/rc"
+else
+    line+="$hook_cmd < $job/payload.json > $job/out 2> $job/err; echo \$? > $job/rc"
+fi
 
 tmux ${socket:+-S "$socket"} send-keys -t "$pane" -l -- "$line"
 tmux ${socket:+-S "$socket"} send-keys -t "$pane" Enter
