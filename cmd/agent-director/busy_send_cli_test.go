@@ -1,0 +1,189 @@
+package main_test
+
+// busy_send_cli_test.go pins Task t2.xis.pu.ar's CLI side (SR-8.1): each
+// busy-send flag reaches pkg/api under its own param, an explicit =false or
+// wait_turn included, a malformed value is refused rather than dropped, and
+// force-delivery, get-force and get-delivery print their results and errors
+// unchanged. A call with none of the flags is today's call, which the existing
+// CLI tests cover; pkg/api's tests own the refusals themselves.
+
+import (
+	"encoding/json"
+	"os"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/gabemahoney/agent-director/internal/store"
+)
+
+// TestBusySendCLIFlagsReachTheVerb: on an uncovered Claude row, each busy-send
+// flag given alone is ErrCantSend naming exactly its param, with its
+// err_details, on every verb that takes it, a reuse included; pause's
+// --only-if-waiting is ErrSpawnNotPausable with its cause, and
+// --only-if-waiting=false is today's pause; a malformed value is refused as
+// malformed.
+func TestBusySendCLIFlagsReachTheVerb(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	cantSend := map[string]any{"class": "cant_send", "reason": "agent_not_covered", "resend_safe": true, "retry_with": "new_send"}
+	base := map[string]func(id, cwd string) []string{
+		"send-keys": func(id, _ string) []string { return []string{"send-keys", "--instance-id", id, "--text", "hi"} },
+		"spawn":     func(_, cwd string) []string { return withAgent("claude", "spawn", "--cwd", cwd) },
+		"reuse": func(id, cwd string) []string {
+			return withAgent("claude", "spawn", "--cwd", cwd, "--instance-id", id, "--reuse-finished")
+		},
+		"resume":        func(id, _ string) []string { return []string{"resume", "--instance-id", id} },
+		"make-template": func(_, _ string) []string { return withAgent("claude", "make-template", "--name", "cli-busy") },
+		"pause":         func(id, _ string) []string { return []string{"pause", "--instance-id", id} },
+	}
+	type flagCase struct {
+		verb, state        string
+		flags              []string
+		wantName, wantDesc string
+		wantDetails        map[string]any
+	}
+	// Each option's param and flags; send-keys' take both spellings.
+	type option struct {
+		param string
+		flags []string
+	}
+	var cases []flagCase
+	for _, o := range []option{
+		{"send_mode", []string{"--send-mode", "wait_turn"}}, {"confirmed_delivery", []string{"--confirmed-delivery=false"}},
+		{"caller_uuid", []string{"--caller-uuid", "AAAAAAAA-AAAA-4AAA-AAAA-AAAAAAAAAAAA"}}, {"force", []string{"--force=false"}},
+	} {
+		cases = append(cases, flagCase{"send-keys", store.StateWaiting, o.flags, "ErrCantSend", "so " + o.param + " cannot apply", cantSend})
+	}
+	for _, verb := range []string{"spawn", "resume", "make-template"} {
+		for _, o := range []option{
+			{"send_mode", []string{"--send-mode=wait_turn"}}, {"confirmed_delivery", []string{"--confirmed-delivery=false"}},
+			{"confirm_from_transcripts", []string{"--confirm-from-transcripts=false"}},
+		} {
+			cases = append(cases, flagCase{verb, store.StateEnded, o.flags, "ErrCantSend", "so " + o.param + " cannot apply", cantSend})
+		}
+	}
+	cases = append(cases,
+		flagCase{"reuse", store.StateEnded, []string{"--confirmed-delivery"}, "ErrCantSend", "so confirmed_delivery cannot apply", cantSend},
+		flagCase{"pause", store.StateEnded, []string{"--only-if-waiting"}, "ErrSpawnNotPausable", "only_if_waiting needs a Covered Agent",
+			map[string]any{"cause": "agent_not_covered"}},
+		flagCase{"pause", store.StateEnded, []string{"--only-if-waiting=false"}, "", "", nil},
+		flagCase{"send-keys", store.StateWaiting, []string{"--send-mode="}, "ErrInvalidFlags",
+			`send-keys: send_mode "" must be wait_turn or steer_turn; nothing was sent or written`, nil},
+		flagCase{"send-keys", store.StateWaiting, []string{"--caller-uuid", "{aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa}"}, "ErrInvalidFlags",
+			`send-keys: caller_uuid "{aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa}" must be a hyphenated hexadecimal UUID (8-4-4-4-12); nothing was sent or written`, nil},
+		flagCase{"send-keys", store.StateWaiting, []string{"--force=maybe"}, "ErrInvalidFlags", `invalid boolean value "maybe" for -force: not a boolean`, nil},
+		flagCase{"resume", store.StateEnded, []string{"--send-mode=Wait_Turn"}, "ErrInvalidFlags",
+			`resume: send_mode "Wait_Turn" must be wait_turn or steer_turn; nothing was sent or written`, nil},
+		flagCase{"make-template", store.StateEnded, []string{"--send-mode="}, "ErrTemplateMalformed", `send_mode "" (want wait_turn/steer_turn)`, nil},
+	)
+	for _, tc := range cases {
+		t.Run(tc.verb+" "+strings.Join(tc.flags, " "), func(t *testing.T) {
+			home, id, _ := seedRowOnSocket(t, tc.state)
+			argv := append(base[tc.verb](id, t.TempDir()), tc.flags...)
+
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, argv...)
+
+			if tc.wantName == "" {
+				if code != 0 || stdout != "{}\n" {
+					t.Fatalf("%q exit = %d, stdout = %q, stderr = %q; want today's pause, {}", argv, code, stdout, stderr)
+				}
+				return
+			}
+			env := assertOnlyEnvelope(t, stdout, stderr, code, tc.wantName)
+			if !strings.Contains(env.ErrDescription, tc.wantDesc) {
+				t.Errorf("%q err_description = %q; want it to carry %q", argv, env.ErrDescription, tc.wantDesc)
+			}
+			var got struct {
+				Details map[string]any `json:"err_details"`
+			}
+			if err := json.Unmarshal([]byte(stderr), &got); err != nil || !reflect.DeepEqual(got.Details, tc.wantDetails) {
+				t.Errorf("%q err_details = %#v (%v); want %#v", argv, got.Details, err, tc.wantDetails)
+			}
+		})
+	}
+}
+
+// TestBusySendCLIAgentlessTemplateKeepsExplicitFalse: make-template with no
+// agent saves --send-mode wait_turn and --confirmed-delivery=false as keys,
+// the explicit false included, and leaves the unnamed option unset.
+func TestBusySendCLIAgentlessTemplateKeepsExplicitFalse(t *testing.T) {
+	stdout, stderr, code := runCLI(t, "make-template", "--name", "cli-busy-tpl", "--send-mode", "wait_turn", "--confirmed-delivery=false")
+	var res struct {
+		Path string `json:"path"`
+	}
+	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil {
+		t.Fatalf("make-template exit = %d, stdout = %q, stderr = %q; want its path", code, stdout, stderr)
+	}
+	body, err := os.ReadFile(res.Path)
+	if want := "send_mode = \"wait_turn\"\nconfirmed_delivery = false\n"; err != nil || string(body) != want {
+		t.Errorf("template = %q (%v); want exactly %q", body, err, want)
+	}
+}
+
+// TestBusySendCLIForceAndLookups: force-delivery on an uncovered row prints a
+// refused, agent_not_covered force_result whose force_id is an AD-made
+// lowercase UUID, ending as it starts and carrying no pair; get-force prints
+// that same force_result as found, its id given in upper case; an unused id
+// or pair prints unknown with a null payload; a missing row, a malformed id
+// or pair and a non-UTF-8 delivery_request_id each print their one error.
+func TestBusySendCLIForceAndLookups(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home, id, _ := seedRowOnSocket(t, store.StateEnded)
+	run := func(args ...string) (string, string, int) { return runSpawnCLI(t, home, fakeDir, args...) }
+
+	stdout, stderr, code := run("force-delivery", "--instance-id", id)
+	var forced struct {
+		ForceResult json.RawMessage `json:"force_result"`
+	}
+	var force map[string]any
+	if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &forced) != nil || json.Unmarshal(forced.ForceResult, &force) != nil {
+		t.Fatalf("force-delivery exit = %d, stdout = %q, stderr = %q; want a force_result", code, stdout, stderr)
+	}
+	forceID, _ := force["force_id"].(string)
+	started, _ := force["started_at"].(string)
+	if parsed, err := uuid.Parse(forceID); err != nil || parsed.String() != forceID {
+		t.Errorf("force_id = %q (%v); want a hyphenated lowercase UUID", forceID, err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, started); err != nil {
+		t.Errorf("started_at = %q: %v", started, err)
+	}
+	want := map[string]any{"force_id": forceID, "outcome": "refused", "reason": "agent_not_covered",
+		"started_at": started, "ended_at": started, "carried_pairs": []any{}}
+	if !reflect.DeepEqual(force, want) {
+		t.Errorf("force_result = %v; want %v", force, want)
+	}
+
+	unused := uuid.NewString()
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"get-force", "--force-id", strings.ToUpper(forceID)}, `{"lookup":"found","force_result":` + string(forced.ForceResult) + `}`},
+		{[]string{"get-force", "--force-id", unused}, `{"lookup":"unknown","force_result":null}`},
+		{[]string{"get-delivery", "--caller-uuid", unused, "--delivery-request-id", "r1"}, `{"lookup":"unknown","result":null}`},
+	} {
+		if stdout, stderr, code := run(tc.args...); code != 0 || stdout != tc.want+"\n" {
+			t.Errorf("%q exit = %d, stdout = %q, stderr = %q; want %s", tc.args, code, stdout, stderr, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		args               []string
+		wantName, wantDesc string // wantDesc "" is not checked
+	}{
+		{[]string{"force-delivery", "--instance-id", "cli-no-such-row"}, "ErrSpawnNotFound", ""},
+		{[]string{"get-force", "--force-id", "not-a-uuid"}, "ErrInvalidFlags",
+			`get-force: force_id "not-a-uuid" must be a hyphenated hexadecimal UUID (8-4-4-4-12); nothing was read`},
+		{[]string{"get-delivery", "--caller-uuid", "{" + unused + "}", "--delivery-request-id", "r1"}, "ErrInvalidFlags",
+			`get-delivery: caller_uuid "{` + unused + `}" must be a hyphenated hexadecimal UUID (8-4-4-4-12); nothing was read`},
+		{[]string{"get-delivery", "--caller-uuid", unused, "--delivery-request-id", "\xff"}, "ErrInvalidFlags",
+			"get-delivery: delivery_request_id must be nonempty UTF-8; nothing was read"},
+	} {
+		stdout, stderr, code := run(tc.args...)
+		if env := assertOnlyEnvelope(t, stdout, stderr, code, tc.wantName); tc.wantDesc != "" && env.ErrDescription != tc.wantDesc {
+			t.Errorf("%q err_description = %q; want %q", tc.args, env.ErrDescription, tc.wantDesc)
+		}
+	}
+}

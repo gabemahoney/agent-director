@@ -187,7 +187,7 @@ func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "get-many", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
+	want := []string{"help", "spawn", "status", "get", "get-many", "send-keys", "force-delivery", "get-force", "get-delivery", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -233,7 +233,7 @@ func TestCallableVerbsExcludesNonCallable(t *testing.T) {
 // order (the callable verbs in the order they appear in Verbs).
 func TestCallableVerbsOrder(t *testing.T) {
 	want := []string{
-		"spawn", "status", "get", "get-many", "send-keys", "read-pane", "kill",
+		"spawn", "status", "get", "get-many", "send-keys", "force-delivery", "get-force", "get-delivery", "read-pane", "kill",
 		"decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire",
 		"make-template", "list", "list-subagents", "pause", "version",
 	}
@@ -599,13 +599,14 @@ func assertErrorNames(t *testing.T, verb, method string, exact bool, want ...str
 // SR-9.4), as Client.Spawn's "Errors:" list does; that bullet names the
 // held-name case, and each tmux name reuse returns states its reuse opt-in
 // cases (SR-1.4, SR-10); and the five agent names, ErrTemplateAgentMissing
-// among them as spawn raises it from template load (SR-1.6).
+// among them as spawn raises it from template load (SR-1.6); and ErrCantSend,
+// an Agent Default for an agent busy send does not cover (SR-9.2).
 func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	assertErrorNames(t, "spawn", "Spawn", false, "ErrCwdMissing", "ErrCwdNotAPath", "ErrCwdNotFound", "ErrCwdNotADirectory",
 		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey", "ErrInvalidFlags", "ErrInstanceIdCollision",
 		"ErrTmuxSessionNameInvalid", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate", "ErrTmuxUnresponsive", "ErrTmuxSessionConflict",
 		"ErrAgentMissing", "ErrAgentInvalid", "ErrAgentArgsMismatch", "ErrPermissionsUnsupported", "ErrTemplateAgentMissing",
-		"ErrExperimentalAgentDisabled", "ErrModelMissing", "ErrAgentCapabilityUnsupported", "ErrHostCredentialMissing")
+		"ErrExperimentalAgentDisabled", "ErrModelMissing", "ErrAgentCapabilityUnsupported", "ErrHostCredentialMissing", "ErrCantSend")
 	conflict := goDocErrorBulletText(t, "Spawn", "ErrTmuxSessionConflict")
 	for _, phrase := range []string{`after "duplicate session"`, "the new row is ended"} {
 		if !strings.Contains(conflict, phrase) {
@@ -675,32 +676,47 @@ func TestReadPaneHasInteractErrorNames(t *testing.T) {
 // TestResumeHasSRDErrorNames pins resume's to exactly SR-1.7's nine names and
 // ErrReservedEnvKey (a row whose stored extra env has HOME, b.nas, or a
 // malformed key, b.vpb), ErrCwdNotFound and ErrCwdNotADirectory (a row whose
-// saved cwd is gone or not a directory, b.vit).
+// saved cwd is gone or not a directory, b.vit), and busy send's: a malformed
+// send_mode (ErrInvalidFlags) and an Agent Default for a Launch busy send
+// would not cover (ErrCantSend, SR-9.2).
 func TestResumeHasSRDErrorNames(t *testing.T) {
 	assertErrorNames(t, "resume", "Resume", true, "ErrAgentCapabilityUnsupported", "ErrCwdNotADirectory", "ErrCwdNotFound", "ErrJsonlMissing", "ErrJsonlNeverWritten", "ErrNoSessionId",
 		"ErrReservedEnvKey", "ErrSpawnNotFound", "ErrSpawnNotResumable", "ErrTmuxNotAvailable", "ErrTmuxSessionConflict",
-		"ErrTmuxSessionCreate", "ErrTmuxUnresponsive")
+		"ErrTmuxSessionCreate", "ErrTmuxUnresponsive", "ErrInvalidFlags", "ErrCantSend")
 }
 
 // TestMakeTemplateHasErrorNames pins make-template's to exactly its three
 // template names, ErrReservedEnvKey, spawn's one name for every refused
-// extra_env key, reserved or malformed (b.66q), and the two agent refusals
-// ErrTemplateAgentMissing and ErrPermissionsUnsupported (SR-1.6).
+// extra_env key, reserved or malformed (b.66q), the two agent refusals
+// ErrTemplateAgentMissing and ErrPermissionsUnsupported (SR-1.6), and
+// ErrCantSend for an Agent Default of an agent busy send does not cover (SR-9.2).
 func TestMakeTemplateHasErrorNames(t *testing.T) {
 	assertErrorNames(t, "make-template", "MakeTemplate", true, "ErrExperimentalAgentDisabled", "ErrAgentCapabilityUnsupported", "ErrTemplateNameUnsafe", "ErrTemplateExists",
-		"ErrTemplateMalformed", "ErrReservedEnvKey", "ErrTemplateAgentMissing", "ErrPermissionsUnsupported", "ErrSpawnDeniedFlag")
+		"ErrTemplateMalformed", "ErrReservedEnvKey", "ErrTemplateAgentMissing", "ErrPermissionsUnsupported", "ErrSpawnDeniedFlag", "ErrCantSend")
 }
 
 // TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven
 // names and b.146 rules 7 and 8's: the params' shape, the relay refusals, a
 // pane answer's request not open or still being answered, the pane's hash and
-// a pane answer's write lock; and step 2c's hold of a plain call while a
-// request is not proven gone.
+// a pane answer's write lock; step 2c's hold of a plain call while a request
+// is not proven gone; and ErrCantSend, a busy-send option for an agent busy
+// send does not cover (SR-9.2).
 func TestSendKeysHasInteractErrorNames(t *testing.T) {
 	assertErrorNames(t, "send-keys", "SendKeys", true, "ErrAgentCapabilityUnsupported", "ErrSendKeysWhileRelayed", "ErrSpawnNotFound",
 		"ErrSpawnNotInteractive", "ErrSubmissionUnconfirmed", "ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
 		"ErrInvalidFlags", "ErrRelayFallenBack", "ErrDialogMaybeOpen", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided",
-		"ErrPaneAnswerInProgress", "ErrPaneChanged", "ErrStoreBusy")
+		"ErrPaneAnswerInProgress", "ErrPaneChanged", "ErrStoreBusy", "ErrCantSend")
+}
+
+// TestForceAndLookupVerbsHaveErrorNames pins force-delivery's, get-force's and
+// get-delivery's to exactly their Go doc "Errors:" lists (SR-4.1, SR-5.4): a
+// refused standalone force is a success, not an error, and a lookup's unknown
+// or retention_expired is an answer; a store that stays busy past its wait is
+// ErrStoreBusy, and any other store failure stays unnamed.
+func TestForceAndLookupVerbsHaveErrorNames(t *testing.T) {
+	assertErrorNames(t, "force-delivery", "ForceDelivery", true, "ErrInvalidFlags", "ErrSpawnNotFound", "ErrStoreBusy")
+	assertErrorNames(t, "get-force", "GetForce", true, "ErrInvalidFlags", "ErrStoreBusy")
+	assertErrorNames(t, "get-delivery", "GetDelivery", true, "ErrInvalidFlags", "ErrStoreBusy")
 }
 
 // TestRecordPaneAnswerHasErrorNames pins record-pane-answer's (b.146 rule 13)

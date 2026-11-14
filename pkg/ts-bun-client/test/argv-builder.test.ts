@@ -1,8 +1,9 @@
 /**
  * argv-builder.test.ts — SR-1.2: buildArgv maps each verb's params to a
  * shell-free argv: [cli, ...global flags (b.32k), verb, ...long flags];
- * snake_case fields become kebab-case flags, booleans appear only when true,
- * and unset optionals are omitted. A spawn or make-template extra_env key the
+ * snake_case fields become kebab-case flags, booleans appear only when true
+ * (busy send's as --flag=true or --flag=false whenever present), and unset
+ * optionals are omitted. A spawn or make-template extra_env key the
  * CLI could not carry unchanged is refused instead (b.vpb, b.66q).
  */
 
@@ -49,6 +50,16 @@ test.each([
     ["spawn", "--cwd", "/ws", "--agent", "claude"]],
   ["spawn: false booleans omitted (SR-10.1)", "spawn", { cwd: "/ws", no_pre_trust: false, reuse_finished: false },
     ["spawn", "--cwd", "/ws"]],
+  // SR-1.4, SR-4.5: a present Agent Default goes through, false and wait_turn included, before agent_args' --.
+  ["spawn: reuse with Agent Defaults false and wait_turn", "spawn", {
+    cwd: "/ws", instance_id: "id-1", reuse_finished: true, send_mode: "wait_turn", confirmed_delivery: false,
+    confirm_from_transcripts: false, agent_args: ["--x"],
+  }, ["spawn", "--cwd", "/ws", ...ID, "--reuse-finished", "--send-mode", "wait_turn", "--confirmed-delivery=false",
+    "--confirm-from-transcripts=false", "--", "--x"]],
+  ["spawn: Agent Defaults true and steer_turn", "spawn", { cwd: "/ws", send_mode: "steer_turn", confirmed_delivery: true, confirm_from_transcripts: true },
+    ["spawn", "--cwd", "/ws", "--send-mode", "steer_turn", "--confirmed-delivery=true", "--confirm-from-transcripts=true"]],
+  ["spawn: undefined Agent Defaults omitted", "spawn", { cwd: "/ws", send_mode: undefined, confirmed_delivery: undefined, confirm_from_transcripts: undefined },
+    ["spawn", "--cwd", "/ws"]],
   // b.ob8: a 0 or null idle_screen override is none and omitted; any other
   // value goes through whole, the range's top included, for the CLI to refuse or keep.
   ["spawn: idle_screen override 0 omitted", "spawn", { cwd: "/ws", idle_screen_timeout_seconds: 0 }, ["spawn", "--cwd", "/ws"]],
@@ -68,7 +79,17 @@ test.each([
   ["list-subagents", "list-subagents", { instance_id: "id-1" }, ["list-subagents", ...ID]],
   ["kill", "kill", { instance_id: "id-1" }, ["kill", ...ID]],
   ["resume", "resume", { instance_id: "id-1" }, ["resume", ...ID]],
+  ["resume: Agent Defaults", "resume", { instance_id: "id-1", send_mode: "wait_turn", confirmed_delivery: false, confirm_from_transcripts: true },
+    ["resume", ...ID, "--send-mode", "wait_turn", "--confirmed-delivery=false", "--confirm-from-transcripts=true"]],
   ["pause", "pause", { instance_id: "id-1" }, ["pause", ...ID]],
+  ["pause: only_if_waiting", "pause", { instance_id: "id-1", only_if_waiting: true }, ["pause", ...ID, "--only-if-waiting"]],
+  ["pause: only_if_waiting false omitted", "pause", { instance_id: "id-1", only_if_waiting: false }, ["pause", ...ID]],
+  // Identifiers go through byte for byte; their shape is Go's to judge.
+  ["force-delivery", "force-delivery", { instance_id: "--x 多行\n🦋" }, ["force-delivery", "--instance-id", "--x 多行\n🦋"]],
+  ["get-force", "get-force", { force_id: "ABCDEF01-2345-6789-ABCD-EF0123456789" },
+    ["get-force", "--force-id", "ABCDEF01-2345-6789-ABCD-EF0123456789"]],
+  ["get-delivery", "get-delivery", { caller_uuid: "{not-a-uuid}", delivery_request_id: "-h 多行\n🦋" },
+    ["get-delivery", "--caller-uuid", "{not-a-uuid}", "--delivery-request-id", "-h 多行\n🦋"]],
   ["send-keys", "send-keys", { instance_id: "id-1", text: "hello world", allow_pending: false },
     ["send-keys", ...ID, "--text", "hello world"]],
   // b.9o4: empty text is the Enter-only send, also on a pending row.
@@ -80,6 +101,16 @@ test.each([
   }, ["send-keys", ...ID, "--text", "hi", "--no-enter", "--expect-pane-sha256", "ab", "--n-lines", "7"]],
   ["send-keys: a key, no text", "send-keys", { instance_id: "id-1", key: "Escape", no_enter: false },
     ["send-keys", ...ID, "--key", "Escape"]],
+  // SR-1.3, SR-1.4: a present busy-send option goes through, false and wait_turn included; undefined is omitted.
+  ["send-keys: busy-send options false and wait_turn", "send-keys", {
+    instance_id: "id-1", text: "hi", send_mode: "wait_turn", confirmed_delivery: false, caller_uuid: "ABCDEF01-2345-6789-ABCD-EF0123456789", force: false,
+  }, ["send-keys", ...ID, "--text", "hi", "--send-mode", "wait_turn", "--confirmed-delivery=false",
+    "--caller-uuid", "ABCDEF01-2345-6789-ABCD-EF0123456789", "--force=false"]],
+  ["send-keys: busy-send options true and steer_turn", "send-keys", { instance_id: "id-1", text: "", send_mode: "steer_turn", confirmed_delivery: true, force: true },
+    ["send-keys", ...ID, "--text", "", "--send-mode", "steer_turn", "--confirmed-delivery=true", "--force=true"]],
+  ["send-keys: undefined busy-send options omitted", "send-keys", {
+    instance_id: "id-1", text: "hi", send_mode: undefined, confirmed_delivery: undefined, caller_uuid: undefined, force: undefined,
+  }, ["send-keys", ...ID, "--text", "hi"]],
   ["send-keys: a pane answer", "send-keys", {
     instance_id: "id-1", request_token: "tok", as: "deny", key: "2", expect_pane_sha256: "ab",
   }, ["send-keys", ...ID, "--key", "2", "--expect-pane-sha256", "ab", "--request-token", "tok", "--as", "deny"]],
@@ -119,6 +150,10 @@ test.each([
     allow: ["Read"], deny: ["Bash"], ask: ["Edit"], agent_args: ["--x", "y"],
   }, ["make-template", "--name", "tpl", "--cwd", "/p", "--agent", "claude", "--relay-mode", "on", "--overwrite", "--label", "a=b",
     "--extra-env", "K=V", "--allow", "Read", "--deny", "Bash", "--ask", "Edit", "--agent-args", "--x", "--agent-args", "y"]],
+  ["make-template: Agent Defaults, no agent", "make-template", {
+    name: "tpl", send_mode: "wait_turn", confirmed_delivery: false, confirm_from_transcripts: false, label: ["a=b"],
+  }, ["make-template", "--name", "tpl", "--send-mode", "wait_turn", "--confirmed-delivery=false", "--confirm-from-transcripts=false",
+    "--label", "a=b"]],
   ["make-template: agent with agent_args", "make-template", { name: "tpl", agent: "codex", agent_args: ["--x"] },
     ["make-template", "--name", "tpl", "--agent", "codex", "--agent-args", "--x"]],
   ["make-template: Cursor with model", "make-template", { name: "cursor", agent: "cursor", agent_args: ["--model", "auto"] },

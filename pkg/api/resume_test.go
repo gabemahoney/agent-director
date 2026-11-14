@@ -422,8 +422,8 @@ func TestResumeLostReplyPublicationPreservesSuccess(t *testing.T) {
 					t.Fatal("failed publication lost the possibly running session")
 				}
 				if !replaced {
-					adviceAssertManifest(t, "resume", "", "success despite failed/unapplied publication", "no restore/retry")
-					adviceAssertManifest(t, "resume", "instance_id", "returns instance_id and pre_trust even if publication errors or does not apply", "for every agent regardless of coverage", "later guarded adoption/report-in resolution")
+					adviceAssertManifest(t, "resume", "", "Lost reply: success; no restore/retry.")
+					adviceAssertManifest(t, "resume", "instance_id", "Successful creation with a lost reply returns instance_id and pre_trust for every agent, with no restoration or retry.")
 					srv, _ := e.rec.Server(e.socket)
 					e.pc.Set(srv.PID, procfix.Alive(apitest.LinuxProcStarttime))
 					e.pc.Set(created.Panes[0].PID, procfix.Alive(apitest.DarwinProcStarttime))

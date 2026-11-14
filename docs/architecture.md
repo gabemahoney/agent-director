@@ -4212,8 +4212,10 @@ DDL, and `busy_send_records.go` holds every stored code set and the shared
 record and lookup types (`BusySendForce`, `BusySendForceLookup`,
 `BusySendResult`, `BusySendResultLookup`, `BusySendPair`, `BusySendWait`).
 Launch lifecycle and deletion transactions maintain the core's identity and
-coverage records; the v20→v21 hop backfills them. No admission, delivery,
-force, pause or lookup operation exists yet. The tables hold:
+coverage records; the v20→v21 hop backfills them. Beyond that, only refused
+force attempts and the durable lookups use the core (see
+[Launch coverage](#launch-coverage)); no admission, delivery or pause operation
+exists. The tables hold:
 
 - **Identity.** A conversation (`busy_conversations`: an opaque id and a
   per-instance generation, independent of `life_number` and the provider
@@ -9109,6 +9111,22 @@ returns `ErrSpawnNotFound`, and store/corruption failures remain errors, never
 `not_covered`. New-resume preflight reads
 `GetBusySendConversationCoverage` before any write and applies
 `ResumeLaunchCoverage`; fresh spawn/reuse uses the new agent's membership.
+
+**Must use: force attempts and durable lookups.** A force decides and binds
+from one read: `Store.GetBusySendPublishedLaunch(instanceID)` returns the
+published current Launch's conversation, Launch id, that Launch's own token,
+provider and coverage in one read transaction (`ErrSpawnNotFound` for no row;
+a missing or inconsistent binding is an error, never `not_covered`). Never take
+the token from `spawns.launch_token`, which can name a staged candidate. Every
+force attempt is stored through `Store.InsertBusySendForce` with that Launch:
+under the write lock it reads the published Launch again and inserts only if
+it is unchanged, else `ErrBusySendLaunchChanged` with nothing written, and the
+caller reads and decides again, a bounded number of times. Reads by
+`force_id` use `Store.ReadBusySendForce`, and reads of a confirmed Message's
+Result by its canonical pair use `Store.ReadBusySendResult`. Both read durable
+facts only, with no Active Check, provider, tmux or process probe and no write;
+they answer `found`, `unknown` or `retention_expired` and return a read failure
+as an error, never `unknown`. They are not the bounded recovery of state reads.
 
 ### Launch identity
 
@@ -22011,6 +22029,16 @@ actual AD controller/store/pipe paths against synthetic runtime authority;
 seeded store rows alone do not establish controller behavior. Future authors
 MUST reuse these fixtures for their respective responsibilities.
 
+**Busy-send records without a public writer (reusable test fixtures).**
+`internal/testsupport/storefix/busy_send.go`: `SeedBusySendResult` seeds a
+confirmed Message with its pair and Result, or an expired tombstone, in the
+instance's published conversation. `ExpireBusySendForce` expires an ended
+force attempt. `UnbindBusySend` clears a row's published binding.
+`ReadBusySendCounts` counts Messages, pairs, force attempts and input
+attempts, so a refusal can show it stored nothing. Tests MUST use these rather
+than inline SQL. These helpers are fixture setup only; schema and migration
+tests own the tables.
+
 Deterministic request timing MUST reuse `requestController.clock` in
 `request_jobs.go`: `requestClock.Now` / `AfterFunc` and `requestTimer.Stop`.
 `realRequestClock` preserves the production time functions. Tests install a
@@ -24437,7 +24465,8 @@ time, and check them with one:
 ### apitest template factory (reusable test fixture)
 
 `apitest.TemplateBody(apitest.TemplateFields{Agent, AgentArgs, CWD, RelayMode,
-ExtraEnv, Labels, Permissions, RawKeys})` (`pkg/api/apitest/template_body.go`)
+ExtraEnv, Labels, Permissions, SendMode, ConfirmedDelivery,
+ConfirmFromTranscripts, RawKeys})` (`pkg/api/apitest/template_body.go`)
 builds the `body` argument of `apitest.SeedTemplate` (see [apitest Seed*
 factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)). It
 encodes the fields over `config.TemplateFile` with the encoder `make-template`

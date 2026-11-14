@@ -57,6 +57,9 @@ import type {
   ListParams, ListResult,
   ListSubagentsParams, ListSubagentsResult,
   PauseParams, PauseResult,
+  ForceDeliveryParams, ForceDeliveryResult,
+  GetForceParams, GetForceResult,
+  GetDeliveryParams, GetDeliveryResult,
   VersionParams, VersionResult,
 } from "../types.js";
 
@@ -432,6 +435,33 @@ export class SubprocessClient {
     return this.#enqueue<SendKeysResult>("send-keys", params);
   }
 
+  /**
+   * forceDelivery — force an agent's Held Messages now. When the row's published current Launch is
+   * recorded not_covered it resolves with force_result refused, reason agent_not_covered, stored
+   * under its force_id; a Launch recorded covered rejects with this version's unavailable error
+   * (ErrInternal) and stores nothing.
+   */
+  async forceDelivery(params: ForceDeliveryParams): Promise<ForceDeliveryResult> {
+    this.#assertOpen();
+    return this.#enqueue<ForceDeliveryResult>("force-delivery", params);
+  }
+
+  /** getForce — read a stored force attempt by force_id (durable facts only; starts no work). */
+  async getForce(params: GetForceParams): Promise<GetForceResult> {
+    this.#assertOpen();
+    return this.#enqueue<GetForceResult>("get-force", params);
+  }
+
+  /**
+   * getDelivery — read a confirmed Message's Result by caller_uuid and delivery_request_id
+   * (durable facts only; starts no work). unknown and retention_expired are not permission to
+   * resend; a store failure rejects, never resolves unknown.
+   */
+  async getDelivery(params: GetDeliveryParams): Promise<GetDeliveryResult> {
+    this.#assertOpen();
+    return this.#enqueue<GetDeliveryResult>("get-delivery", params);
+  }
+
   /** readPane — read the current contents of a Spawn's tmux pane. */
   async readPane(params: ReadPaneParams): Promise<ReadPaneResult> {
     this.#assertOpen();
@@ -522,7 +552,10 @@ export class SubprocessClient {
   }
 
   /**
-   * pause — politely shut down a waiting Spawn. Held like a plain sendKeys without
+   * pause — politely shut down a waiting Spawn. With only_if_waiting: true, the row's current
+   * Launch's recorded coverage decides first, in any state, ending nothing: not_covered rejects with
+   * ErrSpawnNotPausable (cause agent_not_covered), covered with this version's unavailable
+   * ErrInternal; the rest of this applies only without it. Held like a plain sendKeys without
    * expect_pane_sha256: rejects, typing nothing, with ErrSendKeysWhileRelayed, ErrRelayFallenBack
    * or ErrDialogMaybeOpen whenever that sendKeys would. It takes no pane hash, and the hold
    * (ErrDialogMaybeOpen) lasts until the agent's hooks prove each request gone, whatever is

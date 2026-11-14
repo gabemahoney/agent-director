@@ -160,6 +160,11 @@
     "description": ""
   },
   {
+    "name": "ErrCantSend",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrListInvalidLabel",
     "package": "api",
     "description": ""

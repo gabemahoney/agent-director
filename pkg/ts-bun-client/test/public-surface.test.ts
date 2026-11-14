@@ -414,6 +414,21 @@ test("public-surface: only status, get and list agent results carry confirmation
 });
 
 
+// SR-4.1, SR-5.4: a lookup answers found, unknown or retention_expired, its payload null unless
+// found; force-delivery's own force_result is never null, and only a pending force lacks ended_at.
+test("public-surface: lookups answer a Lookup with a payload null unless found", () => {
+  const types = typesGolden();
+  expect(types).toMatch(/export type Lookup = "found" \| "unknown" \| "retention_expired";/);
+  for (const [iface, shape] of [
+    ["GetForceResult", /\blookup\s*:\s*Lookup\s*;/],
+    ["GetForceResult", /\bforce_result\s*:\s*ForceResult\s*\|\s*null\s*;/],
+    ["GetDeliveryResult", /\blookup\s*:\s*Lookup\s*;/],
+    ["GetDeliveryResult", /\bresult\s*:\s*DeliveryResult\s*\|\s*null\s*;/],
+    ["ForceDeliveryResult", /\bforce_result\s*:\s*ForceResult\s*;/],
+    ["ForceResult", /\bended_at\s*:\s*string\s*\|\s*null\s*;/],
+  ] as const) expect(interfaceBody(types, iface), iface).toMatch(shape);
+});
+
 test("public-surface: only get rows require the persisted busy_send union", () => {
   const types = typesGolden();
   expect(interfaceBody(types, "GetResult")).toMatch(/\bbusy_send\s*:\s*"covered"\s*\|\s*"not_covered"\s*;/);

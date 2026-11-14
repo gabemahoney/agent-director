@@ -8,6 +8,7 @@ import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
 import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import type { SweepParams, SweepResult, SweepCheck, FindMissingParams, FindMissingResult, DialogMaybeOpenDetails, ProvenGoneHow, IdleScreenAvailability } from "../src/index.js";
+import type { SendKeysResult, ResumeParams, PauseParams, GetForceResult, GetDeliveryResult, ForceResult, DeliveryResult, CantSendDetails } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
@@ -144,6 +145,25 @@ function _assertDisplayTypes(status: StatusResult, get: GetResult, row: ListRow)
   void [availability, displayed, minutes, override, badAvailability, badDisplayed, listMinutes];
 }
 void _assertDisplayTypes;
+
+// Typecheck (SR-1.3, SR-1.4, SR-4.1, SR-5.4, SR-9.4): busy send's options are optional on the methods that
+// take them, Send Mode is closed, a lookup's payload may be null and CantSendDetails requires its four fields.
+function _assertBusySendTypes(client: ad.Client, force: GetForceResult, delivery: GetDeliveryResult): void {
+  const sent: Promise<SendKeysResult> = client.sendKeys({ instance_id: "i", send_mode: "wait_turn", confirmed_delivery: false, caller_uuid: "u", force: false });
+  const launches: [SpawnParams, ResumeParams, MakeTemplateParams] = [{ cwd: "/ws", confirm_from_transcripts: false },
+    { instance_id: "i", send_mode: "steer_turn" }, { name: "t", confirmed_delivery: true }];
+  const pause: PauseParams = { instance_id: "i", only_if_waiting: true };
+  // @ts-expect-error — send_mode is wait_turn or steer_turn
+  const badMode: SpawnParams = { cwd: "/ws", send_mode: "now" };
+  // @ts-expect-error — get-force's payload is null unless found
+  const forced: ForceResult = force.force_result;
+  // @ts-expect-error — get-delivery's payload is null unless found
+  const result: DeliveryResult = delivery.result;
+  // @ts-expect-error — resend_safe and retry_with are required
+  const details: CantSendDetails = { class: "cant_send", reason: "agent_not_covered" };
+  void [sent, launches, pause, badMode, forced, result, details];
+}
+void _assertBusySendTypes;
 
 // Both names remain source-compatible and share the exact check records.
 function _assertSweepAliases(client: ad.Client, result: SweepResult): void {

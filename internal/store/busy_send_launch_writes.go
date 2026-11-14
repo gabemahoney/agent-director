@@ -14,9 +14,19 @@ import (
 // conversation/current Launch that reads and future admissions still use.
 type busySendPublishedRow struct {
 	conversation, launch, provider string
-	coverage                       BusySendCoverage
-	conversationRevision           int64
-	launchRevision                 int64
+	// token is the current Launch's own recorded launch token ("" for NULL),
+	// never spawns.launch_token, which can already name a staged candidate.
+	token string
+	// coverage is the published conversation's coverage, which the lifecycle
+	// writers read (resume's monotonic rule, publication's guard).
+	// launchCoverage is the current Launch's own recorded coverage, the same
+	// fact as spawns.busy_send, which every call about the current Launch
+	// decides from (SR-9.1); a covered conversation can have an uncovered
+	// current Launch.
+	coverage             BusySendCoverage
+	launchCoverage       BusySendCoverage
+	conversationRevision int64
+	launchRevision       int64
 }
 
 // busySendLaunchSQL is the locked transaction surface shared by lifecycle
@@ -28,9 +38,10 @@ type busySendLaunchSQL interface {
 
 func readBusySendPublished(ctx context.Context, conn busySendLaunchSQL, instanceID string) (busySendPublishedRow, error) {
 	var p busySendPublishedRow
-	var raw any
+	var raw, launchRaw any
+	var token sql.NullString
 	err := conn.QueryRowContext(ctx, `SELECT c.conversation_id, c.revision, c.provider, c.busy_send,
-	        l.launch_id, l.revision
+	        l.launch_id, l.revision, l.launch_token, l.busy_send
 	    FROM spawns s JOIN busy_conversations c ON c.conversation_id = s.busy_conversation_id
 	        AND c.instance_id = s.instance_id AND c.publication = 'published'
 	    JOIN busy_send_launches l ON l.instance_id = s.instance_id
@@ -38,11 +49,15 @@ func readBusySendPublished(ctx context.Context, conn busySendLaunchSQL, instance
 	        AND l.busy_send = s.busy_send AND l.provider = c.provider
 	        AND (c.busy_send = 'covered' OR l.busy_send = 'not_covered')
 	    WHERE s.instance_id = ?`, instanceID).Scan(&p.conversation, &p.conversationRevision,
-		&p.provider, &raw, &p.launch, &p.launchRevision)
+		&p.provider, &raw, &p.launch, &p.launchRevision, &token, &launchRaw)
 	if err != nil {
 		return p, fmt.Errorf("store: read published busy-send Launch: %w", err)
 	}
-	p.coverage, err = decodeBusySendCoverage(raw)
+	p.token = token.String
+	if p.coverage, err = decodeBusySendCoverage(raw); err != nil {
+		return p, err
+	}
+	p.launchCoverage, err = decodeBusySendCoverage(launchRaw)
 	return p, err
 }
 

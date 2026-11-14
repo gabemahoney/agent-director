@@ -67,6 +67,11 @@ type errorCase struct {
 	// values they must never carry (a token, a store id, a label value), for
 	// rows whose errName alone does not show which path gave it.
 	desc func(ctx map[string]any) (c apitest.DescCase, forbid []string)
+
+	// details, if set, is the err_details both envelopes must carry exactly
+	// (as JSON decodes it): a refusal's machine fields, such as ErrCantSend's,
+	// whose loss on both sides the structural diff alone would pass.
+	details map[string]any
 }
 
 // zeroPaneHash is a well-formed expect_pane_sha256 (64 hex digits) no pane has.
@@ -76,10 +81,11 @@ var zeroPaneHash = strings.Repeat("0", 64)
 // below, then the spawn, kill, read-pane, send-keys, pause and resume rows
 // that need a private fake-tmux socket (spawnTmuxErrorCases,
 // killTmuxErrorCases, paneTmuxErrorCases, keysTmuxErrorCases,
-// resumeTmuxErrorCases; error_cases_*_tmux.go). The
+// resumeTmuxErrorCases; error_cases_*_tmux.go), then busy send's
+// (busySendErrorCases, error_cases_busy_send.go). The
 // init() guard below validates every errName and verb name at startup.
 // TestErrorTableCoverage (error_cases_test.go) enforces completeness.
-var errorCases = append(append(append(append(append([]errorCase{
+var errorCases = append(append(append(append(append(append([]errorCase{
 
 	{
 		verb: "get-many", errName: "ErrTooManyIds",
@@ -613,7 +619,7 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 	},
 }, spawnTmuxErrorCases...), killTmuxErrorCases...), paneTmuxErrorCases...),
-	keysTmuxErrorCases...), resumeTmuxErrorCases...)
+	keysTmuxErrorCases...), resumeTmuxErrorCases...), busySendErrorCases...)
 
 // ── lookup helper ─────────────────────────────────────────────────────────────
 

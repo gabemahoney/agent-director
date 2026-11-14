@@ -46,6 +46,8 @@ func errorName(err error) string {
 		return "ErrSpawnNotInteractive"
 	case errors.Is(err, ErrSubmissionUnconfirmed):
 		return "ErrSubmissionUnconfirmed"
+	case errors.Is(err, ErrCantSend):
+		return "ErrCantSend"
 	case errors.Is(err, ErrSendKeysWhileRelayed):
 		return "ErrSendKeysWhileRelayed"
 	case errors.Is(err, ErrSpawnNotResumable):

@@ -15,9 +15,14 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
+// fieldCheck is a want value checked rather than compared: for a field whose
+// parts nondeterministic.json excludes from the diff, which must still be
+// present, well formed and coherent on each side.
+type fieldCheck func(got any) error
+
 // fieldsMismatch returns nil when the success envelope carries every field
-// of want with its value (as JSON decodes it), and an error naming the first
-// that is missing or differs.
+// of want with its value (as JSON decodes it), or passing its fieldCheck, and
+// an error naming the first that is missing or differs.
 func fieldsMismatch(envelope []byte, want map[string]any) error {
 	var m map[string]any
 	if err := json.Unmarshal(envelope, &m); err != nil {
@@ -32,6 +37,12 @@ func fieldsMismatch(envelope []byte, want map[string]any) error {
 		got, ok := m[k]
 		if !ok {
 			return fmt.Errorf("%s missing; want %v", k, want[k])
+		}
+		if check, ok := want[k].(fieldCheck); ok {
+			if err := check(got); err != nil {
+				return fmt.Errorf("%s = %v: %w", k, got, err)
+			}
+			continue
 		}
 		if !reflect.DeepEqual(got, want[k]) {
 			return fmt.Errorf("%s = %v (%T); want %v (%T)", k, got, got, want[k], want[k])

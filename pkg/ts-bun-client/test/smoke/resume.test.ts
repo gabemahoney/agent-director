@@ -8,7 +8,8 @@
  * pre_trust (SR-22.6): the temp HOME's .claude.json lacks the cwd's entry; an
  * allowed row reports ok and gains it, a row seeded --no-pre-trust reports
  * skipped and leaves the file byte-identical.
- * Error path: unknown id → ErrSpawnNotFound.
+ * Error paths: Agent Defaults for claude → ErrCantSend agent_not_covered
+ * (SR-9.2); unknown id → ErrSpawnNotFound.
  */
 
 import { test, expect } from "bun:test";
@@ -16,7 +17,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
 import {
-  runHelper, privateTmuxSocket, CLAUDE_JSON, trustEntry, seedOuterParent, homeStore, openClient,
+  runHelper, privateTmuxSocket, CLAUDE_JSON, trustEntry, seedOuterParent, homeStore, openClient, rejection, expectAgentNotCovered,
 } from "../internal/helper.js";
 import { ErrSpawnNotFound } from "../../src/index.js";
 
@@ -45,6 +46,18 @@ test.each([
     expect(result.pre_trust).toBe(want);
     if (noPreTrust) expect(fs.readFileSync(claudeJson, "utf8")).toBe(CLAUDE_JSON);
     else expect(trustEntry(claudeJson, cwd)).toBe(true);
+  });
+}, 10_000);
+
+// SR-1.4, SR-4.5, SR-9.2: each Agent Default reaches resume's coverage check, which refuses it for claude.
+test("resume: error — Agent Defaults for claude → ErrCantSend agent_not_covered", async () => {
+  await withTempHome(async (homeDir) => {
+    const store = homeStore(homeDir);
+    const id = `smoke-resume-defaults-${crypto.randomUUID().slice(0, 8)}`;
+    runHelper("seed-spawn", { store, state: "ended", id, "session-id": `sess-${id}`, "create-store": true, socket: privateTmuxSocket(homeDir) });
+    using client = await openClient(store);
+    const err = await rejection(client.resume({ instance_id: id, send_mode: "steer_turn", confirmed_delivery: true, confirm_from_transcripts: false }));
+    expectAgentNotCovered(err, "send_mode, confirmed_delivery, confirm_from_transcripts");
   });
 }, 10_000);
 

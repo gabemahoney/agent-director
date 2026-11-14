@@ -20,6 +20,7 @@ package envelope_diff
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -36,6 +37,7 @@ import (
 //   - Both err_name values equal the row's expected errName.
 //   - Both err_description values match under the prefix policy (errDescriptionsMatch)
 //     and, for a row with desc, pass apitest.AssertDescription for its case.
+//   - For a row with details, both envelopes carry exactly those err_details.
 func TestEnvelopeDiff_Error(t *testing.T) {
 	binPath := buildCLI(t)
 
@@ -111,6 +113,20 @@ func TestEnvelopeDiff_Error(t *testing.T) {
 				c, forbid := ec.desc(ctx)
 				apitest.AssertDescription(t, cliParsed.ErrDescription, c, forbid...)
 				apitest.AssertDescription(t, clientParsed.ErrDescription, c, forbid...)
+			}
+			// ── 8b. Assert the row's err_details exactly ─────────────────
+			if ec.details != nil {
+				for _, side := range []struct {
+					name string
+					env  []byte
+				}{{"CLI", cliEnv}, {"Client", clientEnv}} {
+					var got struct {
+						ErrDetails map[string]any `json:"err_details"`
+					}
+					if err := json.Unmarshal(side.env, &got); err != nil || !reflect.DeepEqual(got.ErrDetails, ec.details) {
+						t.Errorf("%s err_details = %#v (%v); want %#v\nenvelope: %s", side.name, got.ErrDetails, err, ec.details, side.env)
+					}
+				}
 			}
 
 			// ── 9. Structural diff on the error envelope ───────────────

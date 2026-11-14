@@ -164,6 +164,58 @@ func init() {
 		},
 	}
 
+	// ── force-delivery, get-force, get-delivery ───────────────────────────
+	// Busy send covers no agent in this release, so a force of the seeded
+	// ended row succeeds, refused (SR-9.2). get-force reads the attempt
+	// force-delivery stores, its only public writer; a lookup other than found
+	// fails the happy path. get-delivery has no public writer, so it reads a
+	// pair no Message holds: unknown with a null result.
+	seeders["force-delivery"] = seederSpec{
+		Manifest: mustVerb("force-delivery"),
+		SeedKind: seedResumable, // an ended row
+		SeedID:   "smoke-force-delivery-id",
+		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
+			return c.ForceDelivery(api.ForceDeliveryParams{InstanceID: id})
+		},
+		Error: func(c *api.Client, _ context.Context) error {
+			_, err := c.ForceDelivery(api.ForceDeliveryParams{InstanceID: bogusID})
+			return err
+		},
+	}
+	seeders["get-force"] = seederSpec{
+		Manifest: mustVerb("get-force"),
+		SeedKind: seedResumable,
+		SeedID:   "smoke-get-force-id",
+		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
+			forced, err := c.ForceDelivery(api.ForceDeliveryParams{InstanceID: id})
+			if err != nil {
+				return nil, err
+			}
+			res, err := c.GetForce(api.GetForceParams{ForceID: forced.ForceResult.ForceID})
+			if err == nil && res.Lookup != "found" {
+				err = fmt.Errorf("get-force of the stored attempt: lookup %q; want found", res.Lookup)
+			}
+			return res, err
+		},
+		Error: func(c *api.Client, _ context.Context) error {
+			// A force_id that is not a UUID: ErrInvalidFlags.
+			_, err := c.GetForce(api.GetForceParams{ForceID: "not-a-uuid"})
+			return err
+		},
+	}
+	seeders["get-delivery"] = seederSpec{
+		Manifest: mustVerb("get-delivery"),
+		SeedKind: seedNone,
+		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
+			return c.GetDelivery(api.GetDeliveryParams{CallerUUID: "deadbeef-dead-4dea-adea-deadbeefdead", DeliveryRequestID: "smoke-request"})
+		},
+		Error: func(c *api.Client, _ context.Context) error {
+			// A caller_uuid that is not a UUID: ErrInvalidFlags.
+			_, err := c.GetDelivery(api.GetDeliveryParams{CallerUUID: "not-a-uuid", DeliveryRequestID: "smoke-request"})
+			return err
+		},
+	}
+
 	// ── find-missing ──────────────────────────────────────────────────────
 	seeders["find-missing"] = seederSpec{
 		Manifest: mustVerb("find-missing"),

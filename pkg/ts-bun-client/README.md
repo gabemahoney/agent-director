@@ -107,6 +107,13 @@ opt-out, never a validated `"ok"`; see
 whole seconds (`0`, `null` or omitted for none); its range and lifecycle are
 in [Configuration](../../docs/configuration.md#idle-screen-timeout-state).
 
+`send_mode` and `confirmed_delivery` (Agent Defaults) and the experimental
+`confirm_from_transcripts` come from `AgentDefaultParams`, which `SpawnParams`,
+`ResumeParams` and `MakeTemplateParams` extend. An omitted or `undefined`
+field is not sent; any value, `false` included, is. They apply only to Covered
+Agents; a new launch busy send does not cover rejects with `ErrCantSend`. See
+[Busy-send options](../../docs/caller-contract.md#busy-send-options).
+
 `reuse_finished: true` starts a fresh conversation on a finished id.
 `resume({ instance_id: id })` continues the latest recorded session.
 Life and replay rules are in [Usage](../../docs/usage.md#naming-the-agent)
@@ -238,9 +245,10 @@ await client.sendKeys({
 
 On a supported native launch, ordinary text submission returns runtime proof
 fields `outcome: "submitted"`, `request_id`, `session_id`, `record_sha256`
-and optional `record_id`. The published `SendKeysParams` and `SendKeysResult`
-do not expose request IDs or proof fields; use the Go API or CLI for explicit
-delivery request IDs. Fallback and manual operations return `{}` on success.
+and optional `record_id`. `SendKeysResult` declares none of these fields and
+`SendKeysParams` has no `delivery_request_id`; use the Go API or CLI for
+explicit delivery request IDs. Fallback and manual operations return `{}` on
+success.
 Supported launches, proof, input restrictions and recovery are in
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
 and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
@@ -260,6 +268,12 @@ Pass `allow_pending: true` to allow input to a pending launch, for example a
 startup choice with `key: "Enter"`. It defaults to false and preserves
 ownership, readiness, relay and dialog guards; see
 [Pending rows and startup screens](../../docs/caller-contract.md#pending-rows-and-startup-screens).
+
+`send_mode` (`SendMode`), `confirmed_delivery`, `caller_uuid` and `force`
+follow the same rule as spawn's Agent Defaults: omitted or `undefined` is not
+sent, and any value, `false` included, is. They apply only to Covered Agents;
+when the target's current launch is not covered, a call naming one rejects
+with `ErrCantSend` and sends nothing. See [Busy-send options](../../docs/caller-contract.md#busy-send-options).
 
 ### readPane
 
@@ -320,7 +334,7 @@ neither rollback nor completion and need not return partial checks.
 ### pause
 
 Shut down a `waiting` Spawn and wait up to `pause.timeout_seconds` for `ended`.
-A finished Spawn is a no-op. Codex exit handling is defined in the
+Without `only_if_waiting`, a finished Spawn is a no-op. Codex exit handling is defined in the
 [caller contract](../../docs/caller-contract.md#when-a-codex-agent-exits).
 
 ```ts
@@ -335,6 +349,12 @@ For `ErrPauseTimeout`, `errDetails` has the exported `PauseTimeoutDetails`
 shape. Its fields and handling are defined in
 [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit).
 
+`only_if_waiting` applies only to Covered Agents. When the row's current launch
+is not covered, `true` rejects with `ErrSpawnNotPausable` in any row state,
+finished included, with
+`errDetails` a `NotPausableDetails` whose `cause` is `"agent_not_covered"`;
+nothing is ended. `false` or omitted is the pause above.
+
 ### makeTemplate
 
 Save a reusable spawn preset. Pass `agent` to bake in the template's agent; a template with `agent_args` needs one. Pass `overwrite: true` to atomically replace an existing template; omit the field to keep the default rejection on collision.
@@ -345,10 +365,32 @@ configuration failures are in
 [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries).
 Argument replacement, including TypeScript's empty-list omission, is defined in
 [Settings](../../docs/settings.md#the-agent-and-its-arguments).
+[Agent Defaults](#spawn) are decided for the template's `agent`; a template
+with no agent stores them for the spawn that uses it to decide.
 
 ```ts
 await client.makeTemplate({ name: "dev", cwd: "/repos/widget", agent: "claude", overwrite: true });
 ```
+
+### forceDelivery, getForce and getDelivery
+
+```ts
+const { force_result } = await client.forceDelivery({ instance_id: "<id>" });
+const read = await client.getForce({ force_id: force_result.force_id });
+console.log(read.lookup, read.force_result?.outcome);
+```
+
+`forceDelivery` resolves with `force_result` (`ForceResult`). When the target's
+current launch is not covered, `outcome` is `"refused"` and `reason`
+`"agent_not_covered"`; the attempt is stored for `getForce`. See
+[Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
+
+`getForce({ force_id })` and
+`getDelivery({ caller_uuid, delivery_request_id })` resolve with `lookup`
+(`Lookup`: `"found"`, `"unknown"` or `"retention_expired"`) and
+`force_result: ForceResult | null` or `result: DeliveryResult | null`, null
+unless `"found"`. A store failure rejects; it never resolves `"unknown"`. See
+[Durable lookups](../../docs/caller-contract.md#durable-lookups).
 
 ### decide
 
@@ -532,13 +574,16 @@ try {
 ```
 
 Every `AgentDirectorError` has `errName`, `errDescription` and `errDetails`:
-the error envelope's optional `err_details` object, or `null`. Eight errors
-carry one, typed as exported interfaces: `ErrRelayFallenBack`
+the error envelope's optional `err_details` object, unchanged, or `null`. Ten
+errors carry one, typed as exported interfaces: `ErrRelayFallenBack`
 (`RelayFallenBackDetails`, with `OpenRequestFacts`), `ErrPaneAnswerInProgress`
 (`PaneAnswerInProgressDetails`), `ErrClaimTooSoon` (`ClaimTooSoonDetails`),
 `ErrPaneChanged` (`PaneChangedDetails`), `ErrDialogMaybeOpen`
 (`DialogMaybeOpenDetails`), `ErrPauseTimeout` (`PauseTimeoutDetails`),
-`ErrTooManyIds` (`TooManyIdsDetails`) and
+`ErrTooManyIds` (`TooManyIdsDetails`), `ErrCantSend` (`CantSendDetails`:
+`class`, `reason`, `resend_safe`, `retry_with`, and optional `limit` and
+`result`, absent for `agent_not_covered`), `ErrSpawnNotPausable`
+(`NotPausableDetails`, for `only_if_waiting`) and
 `ErrSubmissionUnconfirmed`
 (`SubmissionUnconfirmedDetails`, for failed fallback hook observation).
 Native, Claude readiness, Claude paced typing, Codex paste and Cursor gateway
@@ -630,7 +675,8 @@ and [Settings](../../docs/settings.md). Request handling is in
 | `ErrSpawnNotFound` | No row matches the supplied `instance_id`. |
 | `ErrSpawnNotInteractive` | The row cannot accept input under the current launch guards. |
 | `ErrSubmissionUnconfirmed` | Submission is unconfirmed; inspect `errDetails` as described under [sendKeys](#sendkeys). |
-| `ErrSpawnNotPausable` | The row is not in a pausable state. |
+| `ErrCantSend` | A busy-send option was given where busy send does not cover the launch it applies to; nothing was stored, sent or typed. Carries `CantSendDetails`. |
+| `ErrSpawnNotPausable` | The row is not in a pausable state, or `only_if_waiting: true` was given for a row whose current launch is not covered (`NotPausableDetails`). |
 | `ErrPauseTimeout` | Exit input was sent but `ended` was not observed; carries `PauseTimeoutDetails`. |
 | `ErrSpawnNotResumable` | The row is live, including `pending`, or changed during resume. |
 | `ErrNoSessionId` | The spawn has no `session_id`, so there is nothing to resume. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |

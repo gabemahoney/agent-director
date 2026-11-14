@@ -106,6 +106,7 @@ var packageOf = map[string]string{
 	"ErrSpawnNotPausable":      "api",
 	"ErrPauseTimeout":          "api",
 	"ErrSubmissionUnconfirmed": "api",
+	"ErrCantSend":              "api",
 	"ErrListInvalidLabel":      "api",
 	"ErrSpawnNotResumable":     "api",
 	"ErrNoSessionId":           "api",

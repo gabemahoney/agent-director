@@ -86,6 +86,7 @@ var Catalog = []Entry{
 	{Name: "ErrSpawnNotPausable", Err: api.ErrSpawnNotPausable},
 	{Name: "ErrPauseTimeout", Err: api.ErrPauseTimeout},
 	{Name: "ErrSubmissionUnconfirmed", Err: api.ErrSubmissionUnconfirmed},
+	{Name: "ErrCantSend", Err: api.ErrCantSend},
 	{Name: "ErrListInvalidLabel", Err: api.ErrListInvalidLabel},
 	{Name: "ErrTemplateNameUnsafe", Err: config.ErrTemplateNameUnsafe},
 	{Name: "ErrTemplateNotFound", Err: config.ErrTemplateNotFound},

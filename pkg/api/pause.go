@@ -98,6 +98,13 @@ var (
 type PauseParams struct {
 	// InstanceID identifies the Spawn to pause gracefully.
 	InstanceID string `json:"instance_id"`
+	// OnlyIfWaiting pauses only an agent proven waiting with no turn pending
+	// (SR-6.5). It applies only to a Covered Agent. With true, the coverage
+	// the row's current Launch recorded decides first, in any state, and
+	// nothing is ended: not_covered is ErrSpawnNotPausable, cause
+	// agent_not_covered (SR-9.2); covered is this version's unnamed
+	// busy-send-unavailable error (ErrInternal). false is today's pause.
+	OnlyIfWaiting bool `json:"only_if_waiting"`
 }
 
 // PauseResult is the typed return shape — empty today. Reserved so
@@ -126,6 +133,12 @@ var pauseSleep = time.Sleep
 // Behavior:
 //
 //   - Unknown id: ErrSpawnNotFound from the store.
+//   - OnlyIfWaiting true, in any state: the coverage the row's current
+//     Launch recorded (Spawn.BusySend) decides, and nothing is ended or sent.
+//     not_covered is ErrSpawnNotPausable with err_details NotPausableDetails,
+//     cause agent_not_covered (SR-9.2); covered is this version's unnamed
+//     busy-send-unavailable error (ErrInternal). The rules below apply only
+//     with OnlyIfWaiting false, the default.
 //   - Pane-only row in any state: ErrAgentCapabilityUnsupported, before any
 //     state change or tmux call. The remaining rules apply to other agents.
 //   - A Codex row in a live state (pending included) whose agent process is
@@ -401,10 +414,11 @@ func (r *pauseRun) endIfGoneInWait(instanceID string) func() (bool, error) {
 
 // exit is pause's row read, state rules, relay guard and tmux phase, which
 // clears the agent's input line before typing (keysRun.clear). It reports
-// whether C-u, `/exit` and Enter went through, so the wait is due. Pane-only
-// rows are refused in every state. For other agents, a finished row, and a
-// Codex row the end check moved to ended, are (false, nil). Every refusal
-// before the lookup makes no tmux call.
+// whether C-u, `/exit` and Enter went through, so the wait is due. With
+// OnlyIfWaiting it returns onlyIfWaitingGate's refusal, whatever the row's
+// agent or state. Without it, pane-only rows are refused in every state, and
+// for other agents a finished row, and a Codex row the end check moved to
+// ended, are (false, nil). Every refusal before the lookup makes no tmux call.
 func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent bool, resultErr error) {
 	if r.ctx != nil {
 		if err := r.ctx.Err(); err != nil {
@@ -414,6 +428,12 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 	row, err := r.s.GetSpawn(params.InstanceID)
 	if err != nil {
 		return false, err
+	}
+	// only_if_waiting is decided from the current Launch's recorded coverage
+	// before every rule below: the Codex end check, the pane-only refusal, a
+	// finished row's no-op and the exit keys (SR-9.2).
+	if params.OnlyIfWaiting {
+		return false, onlyIfWaitingGate(row)
 	}
 	if spawn.IsPaneOnly(row.Agent) {
 		return false, spawn.PaneOnlyCapabilityError(row.Agent, "pause")
@@ -523,6 +543,21 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 	return true, nil
 }
 
+// onlyIfWaitingGate is pause's only_if_waiting decision from the coverage the
+// row's current Launch recorded: not_covered is ErrSpawnNotPausable with
+// cause agent_not_covered; covered is busySendGate's unnamed error, since this
+// version builds no pause claim. It never returns nil and ends nothing.
+func onlyIfWaitingGate(row Spawn) error {
+	if row.BusySend == store.BusySendNotCovered {
+		return &DetailedError{
+			Err: fmt.Errorf("%w: pause %s: only_if_waiting needs a Covered Agent and busy send does not cover this agent; nothing was ended",
+				ErrSpawnNotPausable, row.InstanceID),
+			Details: NotPausableDetails{Cause: reasonAgentNotCovered},
+		}
+	}
+	return busySendGate("pause "+row.InstanceID, "only_if_waiting", row.BusySend)
+}
+
 // waitEnded is pause's wait after a delivered `/exit` (SR-7.2, SR-17): it
 // polls the row's state at pausePollInterval, sleeping through pauseSleep,
 // until the row is `ended` (nil), the real-clock deadline timeoutSeconds
@@ -589,9 +624,13 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // and Enter to the agent's own pane of the row's current launch, by pane id,
 // and polling until the row reaches ended, or until the configured timeout
 // (pause.timeout_seconds in config.toml; a missing key or 0 gives the default,
-// 30 s) elapses. Pane-only rows return ErrAgentCapabilityUnsupported in every
-// state. For other agents, terminal states (ended/missing) are no-op success.
-// Pause is one-shot — no incremental progress callback; ctx cancellation
+// 30 s) elapses. With OnlyIfWaiting true, the coverage the row's current
+// Launch recorded (Spawn.BusySend) decides first, in any state, and nothing is
+// ended: not_covered is ErrSpawnNotPausable, cause agent_not_covered; covered
+// is this version's unnamed busy-send-unavailable error (ErrInternal). Only
+// with OnlyIfWaiting false, the default, do pane-only rows return
+// ErrAgentCapabilityUnsupported in every state and do other agents' terminal
+// states (ended/missing) give no-op success. Pause is one-shot — no incremental progress callback; ctx cancellation
 // short-circuits the poll.
 //
 // Pause types what a plain send-keys without ExpectPaneSHA256 types, so on a
@@ -627,7 +666,11 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
 //     cannot be paused; nothing is changed or sent.
-//   - [ErrSpawnNotPausable]: the row's state is not waiting.
+//   - [ErrSpawnNotPausable]: with OnlyIfWaiting false, the row's state is
+//     not waiting; with OnlyIfWaiting true, the row's current Launch is
+//     recorded not_covered, in any state, with err_details
+//     ([NotPausableDetails]) cause agent_not_covered, and nothing ended. A
+//     Launch recorded covered gets ErrInternal instead (above).
 //   - [ErrSubmissionUnconfirmed]: an admission or cleanup failure reports
 //     attempted-input facts without proving submission. Inspect those details
 //     and the session before more input; never blindly replay text or Enter.

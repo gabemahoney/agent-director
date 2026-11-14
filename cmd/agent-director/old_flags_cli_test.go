@@ -173,6 +173,7 @@ func oldIDVerbs() []oldIDVerb {
 		{verb: "kill", state: store.StateWaiting, pane: true, flags: only("kill"), value: rowID},
 		{verb: "pause", state: store.StateEnded, flags: only("pause"), value: rowID},
 		{verb: "resume", state: store.StateEnded, flags: only("resume"), value: rowID},
+		{verb: "force-delivery", state: store.StateEnded, flags: only("force-delivery"), value: rowID},
 		// decide writes its own ad.decide.called line, ErrInvalidFlags, for any refused flag.
 		{verb: "decide", state: store.StateCheckPermission, request: true, wantTrail: 1, value: rowID,
 			flags: func(w oldFlagWorld) []string {

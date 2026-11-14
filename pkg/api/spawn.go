@@ -127,6 +127,9 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	if err := validateIdleScreenTimeout(params.IdleScreenTimeoutSeconds); err != nil {
 		return SpawnResult{}, err
 	}
+	if err := checkSendMode("spawn", params.SendMode); err != nil {
+		return SpawnResult{}, err
+	}
 	r, err := spawn.Resolve(params, cfg)
 	if err != nil {
 		return SpawnResult{}, err
@@ -145,6 +148,15 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	idCheck, err := spawn.ApplyDefaults(&r, cfg, collisions)
 	if err != nil {
 		return SpawnResult{}, err
+	}
+	// Agent Defaults and confirm_from_transcripts, the call's or inherited from
+	// its template, apply to the new Launch, so they are decided from the
+	// coverage that Launch would record: the resolved agent's, for a fresh
+	// spawn and for a reuse alike, since a reuse starts a fresh conversation
+	// (SR-9.1). This comes before the label scan, the reuse reset, pre-trust
+	// and the insert, so a refusal writes and launches nothing (SR-9.2).
+	if named := agentDefaultsNamed(r.SendMode, r.ConfirmedDelivery, r.ConfirmFromTranscripts); named != "" {
+		return SpawnResult{}, busySendGate("spawn of agent "+r.Agent, named, store.BusySendCoverageForAgent(r.Agent))
 	}
 	if reuse && idCheck == spawn.IDFinishedRow {
 		return spawnReuse(reuseDeps{rs: rs, t: t, pc: pc, cfg: cfg, storeID: s.StoreID(), storePath: s.Path(), now: now, lg: lg, who: callerIdentity()}, r, reused.row)
@@ -338,9 +350,13 @@ func hasControlChar(id string) bool {
 //     from a template. The name before the first '=' is checked, so malformed
 //     variants cannot bypass the refusal. Pane-only agents keep the invoking HOME. Pane-only diagnostics omit values and
 //     raw malformed key text. Nothing is written or launched.
-//   - ErrInvalidFlags: InstanceID contains an ASCII control character, or
-//     IdleScreenTimeoutSeconds is negative or above 9223372036; nothing is
-//     written or launched.
+//   - ErrInvalidFlags: InstanceID contains an ASCII control character,
+//     IdleScreenTimeoutSeconds is negative or above 9223372036, or SendMode
+//     is neither wait_turn nor steer_turn; nothing is written or launched.
+//   - ErrCantSend: SendMode, ConfirmedDelivery or ConfirmFromTranscripts is
+//     set, by the call or its template, and busy send does not cover the
+//     resolved agent: reason agent_not_covered ([CantSendDetails]), after
+//     validation and before anything is written or launched.
 //   - ErrInstanceIdCollision: without ReuseFinished, a row already exists
 //     for the explicit InstanceID, in any state (the pre-check refuses
 //     it before anything is written; the insert's primary key refuses a row
@@ -429,7 +445,8 @@ func hasControlChar(id string) bool {
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed, or it
 //     sets an unknown key, one key under names differing only in letter
-//     case, a relay_mode other than on/off, or an unrecognized nonempty agent.
+//     case, a relay_mode other than on/off, a send_mode other than
+//     wait_turn/steer_turn, or an unrecognized nonempty agent.
 //   - ErrTemplateAgentMissing: the template sets agent_args but names no
 //     agent.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.

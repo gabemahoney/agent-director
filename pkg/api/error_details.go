@@ -14,7 +14,8 @@ import (
 // and its text is the description. Details is the err_details object, one of
 // RelayFallenBackDetails, PaneAnswerInProgressDetails, ClaimTooSoonDetails,
 // PaneChangedDetails, PaneKeySentDetails, DialogMaybeOpenDetails,
-// PauseTimeoutDetails and TooManyIdsDetails.
+// PauseTimeoutDetails, TooManyIdsDetails, CantSendDetails and
+// NotPausableDetails.
 //
 // The CLI writes Details as the error envelope's err_details key, the MCP
 // server as its error data's err_details, and the TypeScript client exposes
@@ -47,6 +48,46 @@ func ErrDetails(err error) any {
 type TooManyIdsDetails struct {
 	// IdCap is the maximum number of ids the Client accepts in one call.
 	IdCap int `json:"id_cap"`
+}
+
+// CantSendDetails is ErrCantSend's err_details (SR-9.4): the refusal's class
+// (always cant_send), its reason, whether the same Message may be sent again
+// as a new send, and with what. Limit and Result belong to reasons later
+// releases add: the exceeded limit (SR-1.6), and a pair conflict's owner's
+// Result (SR-1.2); both are omitted when the reason has none.
+type CantSendDetails struct {
+	// Class is cant_send.
+	Class string `json:"class"`
+	// Reason is the machine-readable refusal reason, such as
+	// agent_not_covered.
+	Reason string `json:"reason"`
+	// ResendSafe is true when the Message was not sent and a new send may
+	// carry it.
+	ResendSafe bool `json:"resend_safe"`
+	// RetryWith is the call that can succeed instead: new_send for
+	// agent_not_covered (the same call without busy-send options).
+	RetryWith string `json:"retry_with"`
+	// Limit is the exceeded limit's actual and allowed values.
+	Limit *CantSendLimit `json:"limit,omitempty"`
+	// Result is the owner's Result of a conflicting pair.
+	Result *DeliveryResult `json:"result,omitempty"`
+}
+
+// CantSendLimit is a refused send's exceeded limit (SR-1.6).
+type CantSendLimit struct {
+	// Actual is the refused value.
+	Actual int64 `json:"actual"`
+	// Allowed is the published limit.
+	Allowed int64 `json:"allowed"`
+}
+
+// NotPausableDetails is ErrSpawnNotPausable's err_details when pause refuses
+// only_if_waiting (SR-6.5, SR-9.2): its structured cause, agent_not_covered
+// for a row whose published current Launch is recorded not_covered. Nothing
+// was ended.
+type NotPausableDetails struct {
+	// Cause is the machine-readable cause.
+	Cause string `json:"cause"`
 }
 
 // PauseTimeoutDetails is ErrPauseTimeout's err_details after pause sent the

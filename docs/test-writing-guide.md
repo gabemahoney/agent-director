@@ -102,7 +102,7 @@ Exported factories (in pkg/api/apitest/seeds.go):
   fallen back) and records its `hook_gone_at` in the past (old enough for
   `record-pane-answer`); each only when positive.
 - `SeedTemplate(templatesDir, name, body string) (string, error)`
-- `TemplateBody(TemplateFields{Agent, AgentArgs, CWD, RelayMode, ExtraEnv, Labels, Permissions, RawKeys}) string`
+- `TemplateBody(TemplateFields{Agent, AgentArgs, CWD, RelayMode, ExtraEnv, Labels, Permissions, SendMode, ConfirmedDelivery, ConfirmFromTranscripts, RawKeys}) string`
   (pkg/api/apitest/template_body.go) — builds the `body` for `SeedTemplate`,
   encoded as `make-template` encodes it. A new template body MUST be built
   with it, not held as template TOML text of the test's own; `RawKeys` carries

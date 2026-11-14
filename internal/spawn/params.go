@@ -133,6 +133,17 @@ type SpawnParams struct {
 	// keep it too, though idle_screen is unavailable for them. Templates never
 	// carry it.
 	IdleScreenTimeoutSeconds int
+
+	// SendMode (wait_turn or steer_turn) and ConfirmedDelivery are the
+	// Launch's Agent Defaults, and ConfirmFromTranscripts SR-4.5's
+	// experimental setting. nil is not supplied, and Resolve then takes the
+	// template's value; any supplied value, false and wait_turn included, is
+	// set. They apply only to a Covered Agent: a launch that sets one for an
+	// agent busy send does not cover is refused before anything is written
+	// (SR-9.2).
+	SendMode               *string
+	ConfirmedDelivery      *bool
+	ConfirmFromTranscripts *bool
 }
 
 // Permissions captures the three SRD §6.1 arrays. Nil entries are omitted
@@ -204,6 +215,9 @@ type Resolved struct {
 //     Explicit empty (len=0, non-nil) replaces (with an empty slice).
 //     Inherited non-empty template arguments are recorded in
 //     Resolved.InheritedArgsAgent for the ownership check (SR-2.1).
+//   - SendMode, ConfirmedDelivery, ConfirmFromTranscripts: per-call non-nil
+//     REPLACES the template's value, false included; nil takes the
+//     template's, which may be nil too.
 //
 // When p.Template is empty (the common path for ad-hoc spawns) Resolve
 // is a near no-op: it returns the params verbatim wrapped in Resolved.
@@ -230,6 +244,15 @@ func Resolve(p SpawnParams, cfg config.Config) (Resolved, error) {
 	}
 	if merged.Agent == "" {
 		merged.Agent = tmpl.Agent
+	}
+	if merged.SendMode == nil {
+		merged.SendMode = tmpl.SendMode
+	}
+	if merged.ConfirmedDelivery == nil {
+		merged.ConfirmedDelivery = tmpl.ConfirmedDelivery
+	}
+	if merged.ConfirmFromTranscripts == nil {
+		merged.ConfirmFromTranscripts = tmpl.ConfirmFromTranscripts
 	}
 
 	// Maps: merge with per-call winning on collision.

@@ -203,6 +203,47 @@ func manifestTextCases() []textCase {
 		cases = append(cases, textCase{verb: string(v), c: apitest.DescPaneManifest(v, def.ErrorNames)})
 	}
 	cases = append(cases, listSubagentsTextCases()...)
+	return append(cases, busySendTextCases()...)
+}
+
+// busySendTextCases are busy send's texts (SR-8.1): each option says it
+// applies to Covered Agents only and names the refusal other agents get, and
+// that its own out-of-box value (wait_turn or false; caller_uuid has none)
+// still counts; confirm_from_transcripts says it is experimental; standalone
+// force-delivery names its refused success; the lookups read durable facts
+// only and say unknown and retention_expired are no permission to resend and
+// a store failure is an error.
+func busySendTextCases() []textCase {
+	cantSend := func(value string) apitest.DescCase {
+		c := tokens("Covered Agents only, else ErrCantSend", "Covered Agents only", "ErrCantSend, reason agent_not_covered")
+		if value == "" {
+			c.MustNot = []string{"included"}
+		} else {
+			c.Require = append(c.Require, "("+value+" included)")
+		}
+		return c
+	}
+	var cases []textCase
+	for _, p := range []struct{ name, value string }{{"send_mode", "wait_turn"}, {"confirmed_delivery", "false"}, {"caller_uuid", ""}, {"force", "false"}} {
+		cases = append(cases, textCase{verb: "send-keys", param: p.name, c: cantSend(p.value)})
+	}
+	for _, verb := range []string{"spawn", "resume", "make-template"} {
+		for _, p := range []struct{ name, value string }{{"send_mode", "wait_turn"}, {"confirmed_delivery", "false"}, {"confirm_from_transcripts", "false"}} {
+			cases = append(cases, textCase{verb: verb, param: p.name, c: cantSend(p.value)})
+		}
+		cases = append(cases, textCase{verb: verb, param: "confirm_from_transcripts", c: tokens("experimental", "Experimental")})
+	}
+	cases = append(cases,
+		textCase{verb: "pause", param: "only_if_waiting", c: tokens("Covered Agents only, else not pausable",
+			"Covered Agents only", "ErrSpawnNotPausable, err_details cause agent_not_covered", "nothing is ended", "false or omitted: today's pause")},
+		textCase{verb: "force-delivery", c: tokens("refused success", "success, force_result refused, agent_not_covered")},
+		textCase{verb: "force-delivery", field: "force_result", c: tokens("stored per call", "stored before the call returns", "each call stores its own")})
+	for _, verb := range []string{"get-force", "get-delivery"} {
+		cases = append(cases,
+			textCase{verb: verb, c: tokens("durable facts only", "Durable facts only; starts no work.")},
+			textCase{verb: verb, field: "lookup", c: tokens("not permission to resend, store failure an error",
+				"unknown and retention_expired are not permission to resend", "a store failure is an error, never unknown")})
+	}
 	return cases
 }
 

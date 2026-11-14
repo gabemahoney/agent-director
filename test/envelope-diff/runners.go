@@ -73,6 +73,9 @@ var dispatch = map[string]clientDispatchFn{
 	"get":                dispatchGet,
 	"get-many":           dispatchGetMany,
 	"send-keys":          dispatchSendKeys,
+	"force-delivery":     dispatchForceDelivery,
+	"get-force":          dispatchGetForce,
+	"get-delivery":       dispatchGetDelivery,
 	"read-pane":          dispatchReadPane,
 	"kill":               dispatchKill,
 	"decide":             dispatchDecide,
@@ -302,6 +305,24 @@ func boolParam(params map[string]any, key string) bool {
 	return false
 }
 
+// optStrParam extracts an optional string from params by key: nil when
+// absent, so a supplied "" stays supplied, as the CLI's optional flags keep it.
+func optStrParam(params map[string]any, key string) *string {
+	if s, ok := params[key].(string); ok {
+		return &s
+	}
+	return nil
+}
+
+// optBoolParam extracts an optional bool from params by key: nil when absent,
+// so a supplied false stays supplied.
+func optBoolParam(params map[string]any, key string) *bool {
+	if b, ok := params[key].(bool); ok {
+		return &b
+	}
+	return nil
+}
+
 // strMapParam extracts a map[string]string from params by key.
 func strMapParam(params map[string]any, key string) map[string]string {
 	v, ok := params[key]
@@ -336,6 +357,10 @@ func dispatchSpawn(c *api.Client, params map[string]any) ([]byte, bool) {
 		ExtraEnv:            strMapParam(params, "extra_env"),
 		AgentDirectorLabels: strMapParam(params, "labels"),
 		NoPreTrust:          boolParam(params, "no_pre_trust"),
+
+		SendMode:               optStrParam(params, "send_mode"),
+		ConfirmedDelivery:      optBoolParam(params, "confirmed_delivery"),
+		ConfirmFromTranscripts: optBoolParam(params, "confirm_from_transcripts"),
 	}
 	if tmuxName, ok := params["tmux_session_name"].(string); ok {
 		p.TmuxSessionName = tmuxName
@@ -393,6 +418,42 @@ func dispatchSendKeys(c *api.Client, params map[string]any) ([]byte, bool) {
 		return marshalErrEnvelope(err), true
 	}
 	res, err := c.SendKeys(p)
+	if err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	return successEnvelope(res)
+}
+
+func dispatchForceDelivery(c *api.Client, params map[string]any) ([]byte, bool) {
+	var p api.ForceDeliveryParams
+	if err := remarshal(params, &p); err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	res, err := c.ForceDelivery(p)
+	if err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	return successEnvelope(res)
+}
+
+func dispatchGetForce(c *api.Client, params map[string]any) ([]byte, bool) {
+	var p api.GetForceParams
+	if err := remarshal(params, &p); err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	res, err := c.GetForce(p)
+	if err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	return successEnvelope(res)
+}
+
+func dispatchGetDelivery(c *api.Client, params map[string]any) ([]byte, bool) {
+	var p api.GetDeliveryParams
+	if err := remarshal(params, &p); err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	res, err := c.GetDelivery(p)
 	if err != nil {
 		return marshalErrEnvelope(err), true
 	}
@@ -518,6 +579,10 @@ func dispatchMakeTemplate(c *api.Client, params map[string]any) ([]byte, bool) {
 		ExtraEnv:            strMapParam(params, "extra_env"),
 		AgentDirectorLabels: strMapParam(params, "labels"),
 		Overwrite:           boolParam(params, "overwrite"),
+
+		SendMode:               optStrParam(params, "send_mode"),
+		ConfirmedDelivery:      optBoolParam(params, "confirmed_delivery"),
+		ConfirmFromTranscripts: optBoolParam(params, "confirm_from_transcripts"),
 	}
 	res, err := c.MakeTemplate(p)
 	if err != nil {

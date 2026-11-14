@@ -25,7 +25,7 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 
-import { Client, AgentDirectorError, ErrTooManyIds } from "../src/index.js";
+import { Client, AgentDirectorError, ErrCantSend, ErrSpawnNotPausable, ErrTooManyIds } from "../src/index.js";
 import {
   runHelper,
   privateTmuxSocket,
@@ -37,6 +37,7 @@ import {
   spawnClaude,
   makeTemplateClaude,
   rejection,
+  expectAgentNotCovered,
 } from "./internal/helper.js";
 import { runCli } from "./internal/cliRunner.js";
 import { assertEnvelopesEqual } from "./internal/structuralDiff.js";
@@ -655,6 +656,183 @@ describe("send-keys", () => {
         }
 
         assertErrorEnvelopes(cli.stderr, tsErr);
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  // SR-9.2, SR-9.4: each busy-send option, false and wait_turn included, reaches the
+  // coverage check (the refusal names all four), and err_details arrive exactly.
+  test(
+    "error path: ErrCantSend with err_details, every busy-send option named",
+    async () => {
+      const id = "id-sk-cant-send";
+      const caller = "ABCDEF01-2345-6789-ABCD-EF0123456789";
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id, state: "waiting", "create-store": true });
+      });
+      try {
+        const cli = runCli(["send-keys", "--instance-id", id, "--text", "hello", "--send-mode", "wait_turn",
+          "--confirmed-delivery=false", "--caller-uuid", caller, "--force=false"], cliEnv(homeA));
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        const err = (await rejection(client.sendKeys({
+          instance_id: id, text: "hello", send_mode: "wait_turn", confirmed_delivery: false, caller_uuid: caller, force: false,
+        }))) as ErrCantSend;
+        expectAgentNotCovered(err, "send_mode, confirmed_delivery, caller_uuid, force");
+        assertEnvelopesEqual(JSON.parse(cli.stderr), {
+          err_name: err.errName, err_description: trimNamePrefix(err.errName, err.errDescription), err_details: err.errDetails,
+        }, { ignorePaths: loadIgnorePathsForVerb("send-keys") });
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+});
+
+// ── force-delivery ────────────────────────────────────────────────────────────
+
+describe("force-delivery", () => {
+  test(
+    "success path: a refused attempt for an agent busy send does not cover",
+    async () => {
+      const id = "id-force-1";
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id, state: "waiting", "create-store": true });
+      });
+      try {
+        const cli = runCli(["force-delivery", "--instance-id", id], cliEnv(homeA));
+        expect(cli.exitCode).toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        const ts = await client.forceDelivery({ instance_id: id });
+
+        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+          ignorePaths: loadIgnorePathsForVerb("force-delivery"),
+        });
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  test(
+    "error path: ErrSpawnNotFound",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const cli = runCli(["force-delivery", "--instance-id", "nonexistent-id"], cliEnv(homeA));
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        assertErrorEnvelopes(cli.stderr, await rejection(client.forceDelivery({ instance_id: "nonexistent-id" })));
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+});
+
+// ── get-force ─────────────────────────────────────────────────────────────────
+
+describe("get-force", () => {
+  test(
+    "success path: found, the attempt force-delivery stored in the seed",
+    async () => {
+      let forceId = "";
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id: "id-get-force-1", state: "waiting", "create-store": true });
+        const forced = runCli(["--store-path", store, "force-delivery", "--instance-id", "id-get-force-1"], cliEnv(testHome));
+        expect(forced.exitCode).toBe(0);
+        forceId = (JSON.parse(forced.stdout) as { force_result: { force_id: string } }).force_result.force_id;
+      });
+      try {
+        const cli = runCli(["get-force", "--force-id", forceId], cliEnv(homeA));
+        expect(cli.exitCode).toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        const ts = await client.getForce({ force_id: forceId });
+
+        expect(ts.lookup).toBe("found");
+        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+          ignorePaths: loadIgnorePathsForVerb("get-force"),
+        });
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  test(
+    "error path: ErrInvalidFlags for a force_id that is not a UUID",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const cli = runCli(["get-force", "--force-id", "not-a-uuid"], cliEnv(homeA));
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        assertErrorEnvelopes(cli.stderr, await rejection(client.getForce({ force_id: "not-a-uuid" })));
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+});
+
+// ── get-delivery ──────────────────────────────────────────────────────────────
+
+describe("get-delivery", () => {
+  test(
+    "success path: unknown, with a null result, for a pair no Message holds",
+    async () => {
+      const caller = "0f8e2a34-5b6c-4d7e-8f90-a1b2c3d4e5f6";
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const cli = runCli(["get-delivery", "--caller-uuid", caller, "--delivery-request-id", "msg-1"], cliEnv(homeA));
+        expect(cli.exitCode).toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        const ts = await client.getDelivery({ caller_uuid: caller, delivery_request_id: "msg-1" });
+
+        expect(ts).toEqual({ lookup: "unknown", result: null });
+        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+          ignorePaths: loadIgnorePathsForVerb("get-delivery"),
+        });
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  test(
+    "error path: ErrInvalidFlags for a caller_uuid that is not a UUID",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const cli = runCli(["get-delivery", "--caller-uuid", "{not-a-uuid}", "--delivery-request-id", "msg-1"], cliEnv(homeA));
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        assertErrorEnvelopes(cli.stderr,
+          await rejection(client.getDelivery({ caller_uuid: "{not-a-uuid}", delivery_request_id: "msg-1" })));
       } finally {
         cleanup();
       }
@@ -1704,6 +1882,31 @@ describe("pause", () => {
         }
 
         assertErrorEnvelopes(cli.stderr, tsErr);
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  // SR-6.5, SR-9.2: only_if_waiting on an agent busy send does not cover; err_details carry the cause.
+  test(
+    "error path: only_if_waiting → ErrSpawnNotPausable, cause agent_not_covered",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id: "id-pause-oiw", state: "waiting", "create-store": true });
+      });
+      try {
+        const cli = runCli(["pause", "--instance-id", "id-pause-oiw", "--only-if-waiting"], cliEnv(homeA));
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        const err = (await rejection(client.pause({ instance_id: "id-pause-oiw", only_if_waiting: true }))) as ErrSpawnNotPausable;
+        expect(err).toBeInstanceOf(ErrSpawnNotPausable);
+        expect(err.errDetails).toEqual({ cause: "agent_not_covered" });
+        assertEnvelopesEqual(JSON.parse(cli.stderr), {
+          err_name: err.errName, err_description: trimNamePrefix(err.errName, err.errDescription), err_details: err.errDetails,
+        }, { ignorePaths: loadIgnorePathsForVerb("pause") });
       } finally {
         cleanup();
       }

@@ -51,6 +51,9 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := checkParamNames(v, args); err != nil {
 			return nil, err
 		}
+		if err := refuseNullBusySendOptions(v, args); err != nil {
+			return nil, err
+		}
 	}
 
 	switch verbName {
@@ -93,6 +96,9 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			TmuxSessionName          *string           `json:"tmux_session_name"`
 			ReuseFinished            bool              `json:"reuse_finished"`
 			IdleScreenTimeoutSeconds int               `json:"idle_screen_timeout_seconds"`
+			SendMode                 *string           `json:"send_mode"`
+			ConfirmedDelivery        *bool             `json:"confirmed_delivery"`
+			ConfirmFromTranscripts   *bool             `json:"confirm_from_transcripts"`
 		}
 		if err := decodeParams(v, args, &raw); err != nil {
 			return nil, err
@@ -114,6 +120,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			ReuseFinished:       raw.ReuseFinished,
 
 			IdleScreenTimeoutSeconds: raw.IdleScreenTimeoutSeconds,
+
+			SendMode:               raw.SendMode,
+			ConfirmedDelivery:      raw.ConfirmedDelivery,
+			ConfirmFromTranscripts: raw.ConfirmFromTranscripts,
 		}
 		if raw.TmuxSessionName != nil {
 			p.TmuxSessionName = *raw.TmuxSessionName
@@ -170,6 +180,27 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			return nil, err
 		}
 		return d.client.SendKeysContext(ctx, p)
+
+	case "force-delivery":
+		var p api.ForceDeliveryParams
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
+		}
+		return d.client.ForceDelivery(p)
+
+	case "get-force":
+		var p api.GetForceParams
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
+		}
+		return d.client.GetForce(p)
+
+	case "get-delivery":
+		var p api.GetDeliveryParams
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
+		}
+		return d.client.GetDelivery(p)
 
 	case "read-pane":
 		var p api.ReadPaneParams
@@ -234,6 +265,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			Deny      []string          `json:"deny"`
 			Ask       []string          `json:"ask"`
 			Overwrite bool              `json:"overwrite"`
+
+			SendMode               *string `json:"send_mode"`
+			ConfirmedDelivery      *bool   `json:"confirmed_delivery"`
+			ConfirmFromTranscripts *bool   `json:"confirm_from_transcripts"`
 		}
 		if err := decodeParams(v, args, &raw); err != nil {
 			return nil, err
@@ -251,6 +286,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			ExtraEnv:            raw.ExtraEnv,
 			AgentDirectorLabels: labels,
 			Overwrite:           raw.Overwrite,
+
+			SendMode:               raw.SendMode,
+			ConfirmedDelivery:      raw.ConfirmedDelivery,
+			ConfirmFromTranscripts: raw.ConfirmFromTranscripts,
 		}
 		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
 			p.Permissions = &api.MakeTemplatePermissions{
@@ -361,6 +400,47 @@ func checkParamNames(v manifest.VerbDef, args json.RawMessage) error {
 	}
 	return fmt.Errorf("%w: %s: unknown %s %s; valid parameters: %s",
 		api.ErrInvalidFlags, v.Name, noun, strings.Join(unknown, ", "), list)
+}
+
+// busySendOptionParams are the busy-send settings whose null must not read as
+// omitted: an explicit null would otherwise decode as absent (or, for
+// only_if_waiting, as today's pause), silently dropping a setting the caller
+// named (SR-8.1). Only an optional param of these names is such a setting: a
+// required one (get-delivery's caller_uuid) is a lookup key, whose null
+// decodes as empty and is refused by the verb's own check, asking for a valid
+// value. Each setting maps to what its refusal adds: omitting a send or
+// launch setting leaves it unset, but omitting only_if_waiting is today's
+// pause, and no error description advises running pause, so its refusal says
+// only that nothing was ended.
+var busySendOptionParams = map[string]string{
+	"send_mode": omitToUnset, "confirmed_delivery": omitToUnset, "caller_uuid": omitToUnset, "force": omitToUnset,
+	"confirm_from_transcripts": omitToUnset, "only_if_waiting": "nothing was ended",
+}
+
+// omitToUnset is the null refusal's advice for a setting omission leaves unset.
+const omitToUnset = "omit it to leave it unset"
+
+// refuseNullBusySendOptions refuses an optional busy-send setting of v given
+// as JSON null with api.ErrInvalidFlags, naming the param and its expected
+// type and adding busySendOptionParams' text, before anything is decoded or
+// run. checkParamNames has already refused arguments that are not a JSON
+// object.
+func refuseNullBusySendOptions(v manifest.VerbDef, args json.RawMessage) error {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(args, &keys); err != nil {
+		return paramDecodeError(v, err)
+	}
+	for _, p := range v.Params {
+		added, setting := busySendOptionParams[p.Name]
+		if p.Required || !setting {
+			continue
+		}
+		if raw, ok := keys[p.Name]; ok && strings.TrimSpace(string(raw)) == "null" {
+			return fmt.Errorf("%w: %s: parameter %q must be %s, not null; %s",
+				api.ErrInvalidFlags, v.Name, p.Name, expectedValue(p.Type), added)
+		}
+	}
+	return nil
 }
 
 // decodeParams decodes args into into, verb v's typed params struct, whose

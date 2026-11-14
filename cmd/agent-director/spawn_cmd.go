@@ -62,6 +62,9 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
+	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
 	if err := fs.Parse(args); err != nil {
 		return p, flagErr(fs, err)
 	}
@@ -140,6 +143,10 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
 	fs.StringVar(&p.RequestToken, "request-token", "", "make the call a pane answer to this fallen-back permission request: needs --as, --key and --expect-pane-sha256; sends exactly one key, no Enter")
 	fs.StringVar(&p.As, "as", "", "a pane answer's claimed verdict, allow or deny, recorded as its decision")
+	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", "this Message's Send Mode, wait_turn or steer_turn; Covered Agents only, else ErrCantSend agent_not_covered")
+	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", "this Message's Confirmed Delivery (--confirmed-delivery=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered")
+	fs.Var(optionalStringValue{&p.CallerUUID}, "caller-uuid", "Caller UUID, hyphenated hexadecimal; Covered Agents only, else ErrCantSend agent_not_covered")
+	fs.Var(optionalBoolValue{&p.Force}, "force", "also force Held Messages (--force=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered")
 	if err := fs.Parse(args); err != nil {
 		return p, flagErr(fs, err)
 	}
@@ -239,6 +246,9 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
 	fs.Var(newStringSlice(&agentArgs), "agent-args", "single agent arg (repeatable; replaces template's array wholesale at spawn time)")
 	fs.BoolVar(&p.Overwrite, "overwrite", false, "replace any existing template atomically (default false preserves O_EXCL create-only)")
+	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -306,6 +316,7 @@ func pauseHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := flag.NewFlagSet("pause", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to pause")
+	fs.BoolVar(&p.OnlyIfWaiting, "only-if-waiting", false, "pause only an agent proven waiting with no turn pending; Covered Agents only, else ErrSpawnNotPausable cause agent_not_covered")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
@@ -405,6 +416,9 @@ func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the finished (ended or missing) row to resume")
+	fs.Var(optionalStringValue{&p.SendMode}, "send-mode", sendModeUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmedDelivery}, "confirmed-delivery", confirmedDeliveryUsage)
+	fs.Var(optionalBoolValue{&p.ConfirmFromTranscripts}, "confirm-from-transcripts", confirmFromTranscriptsUsage)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}

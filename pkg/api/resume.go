@@ -115,6 +115,49 @@ var _ ResumeTmux = TmuxClient(nil)
 type ResumeParams struct {
 	// InstanceID identifies the finished (ended or missing) row to resume.
 	InstanceID string `json:"instance_id"`
+	// SendMode (wait_turn or steer_turn), ConfirmedDelivery and
+	// ConfirmFromTranscripts override the conversation's Agent Defaults and
+	// SR-4.5's experimental setting for the resumed Launch; nil keeps them.
+	// Any supplied value, false and wait_turn included, sets one. They apply
+	// only to a Covered Agent: when busy send would not cover the resumed
+	// Launch, a resume that sets one is refused with ErrCantSend, reason
+	// agent_not_covered, before anything is written (SR-9.2).
+	SendMode               *string `json:"send_mode,omitempty"`
+	ConfirmedDelivery      *bool   `json:"confirmed_delivery,omitempty"`
+	ConfirmFromTranscripts *bool   `json:"confirm_from_transcripts,omitempty"`
+}
+
+// busySendConversationCoverageReader is resume's optional read of the
+// published conversation's coverage, which a resume that sets an Agent Default
+// or confirm_from_transcripts is decided from (store.ResumeLaunchCoverage). It
+// is not part of ResumeStore; resume finds it by a type assertion, as it finds
+// resumeIdentityWriter. A store without it refuses such a resume, since its
+// new Launch's coverage cannot be read; a resume that sets none never reads it.
+type busySendConversationCoverageReader interface {
+	GetBusySendConversationCoverage(instanceID string) (BusySendCoverage, error)
+}
+
+var _ busySendConversationCoverageReader = (*store.Store)(nil)
+
+// resumeDefaultsGate decides a resume that sets an Agent Default or
+// confirm_from_transcripts from the coverage its new Launch would record: the
+// published conversation's, raised by the row's agent kind (SR-9.1). It reads
+// durable facts only, before any write; a binding or read failure is an error,
+// never a refusal.
+func resumeDefaultsGate(s ResumeStore, row Spawn, params ResumeParams) error {
+	named := agentDefaultsNamed(params.SendMode, params.ConfirmedDelivery, params.ConfirmFromTranscripts)
+	if named == "" {
+		return nil
+	}
+	reader, ok := s.(busySendConversationCoverageReader)
+	if !ok {
+		return fmt.Errorf("resume %s: the store cannot read busy-send coverage, so %s cannot be decided; nothing was written or launched", row.InstanceID, named)
+	}
+	conversation, err := reader.GetBusySendConversationCoverage(row.InstanceID)
+	if err != nil {
+		return err
+	}
+	return busySendGate("resume "+row.InstanceID, named, store.ResumeLaunchCoverage(conversation, row.Agent))
 }
 
 // ResumeResult is the typed return shape: the id and what the launch's
@@ -217,7 +260,11 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 // Guards (SR-8.1 step 1, in order; each refusal writes nothing and makes no
 // tmux call):
 //
-//  1. GetSpawn → ErrSpawnNotFound when the id is unknown.
+//  1. GetSpawn → ErrSpawnNotFound when the id is unknown, after a send_mode
+//     that is neither wait_turn nor steer_turn → ErrInvalidFlags. Then a
+//     resume setting an Agent Default or confirm_from_transcripts is
+//     decided (resumeDefaultsGate): busy send not covering the new Launch
+//     → ErrCantSend, reason agent_not_covered (SR-9.2).
 //     Cursor follows the same state and latest-session checks.
 //  2. State must be `ended` or `missing` → otherwise
 //     ErrSpawnNotResumable. The verb does NOT touch a live Spawn. A
@@ -313,8 +360,14 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	}
 	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg, who: callerIdentity()}
 
+	if err := checkSendMode("resume", params.SendMode); err != nil {
+		return ResumeResult{}, err
+	}
 	row, err := s.GetSpawn(params.InstanceID)
 	if err != nil {
+		return ResumeResult{}, err
+	}
+	if err := resumeDefaultsGate(s, row, params); err != nil {
 		return ResumeResult{}, err
 	}
 	if spawn.IsPaneOnly(row.Agent) {
@@ -893,6 +946,13 @@ func launchInProgressError(row Spawn) error {
 // CLI: agent-director resume
 //
 // Errors:
+//   - [ErrInvalidFlags]: SendMode is neither wait_turn nor steer_turn;
+//     nothing was read, written or launched.
+//   - [ErrCantSend]: SendMode, ConfirmedDelivery or ConfirmFromTranscripts is
+//     set and busy send would not cover the resumed Launch (the published
+//     conversation's recorded coverage, raised by the row's agent kind):
+//     reason agent_not_covered ([CantSendDetails]), before every other
+//     refusal below and before anything is written or launched.
 //   - [ErrAgentCapabilityUnsupported]: the row's agent is pane-only and
 //     cannot be resumed; nothing is changed or launched.
 //   - [ErrSpawnNotFound]: no row exists for the instance id, or the row was

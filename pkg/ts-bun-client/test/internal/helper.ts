@@ -3,14 +3,17 @@
  * with a fallen-back request, seedFallenBackRelayRow), Clients over the in-repo
  * CLI, process env and cwd scoping, the fake-tmux log (its send-keys calls,
  * paneSends), spawnClaude and makeTemplateClaude (the agent every spawn names),
- * and .claude.json pre-trust fixtures. setup.ts (the preload) sets
+ * .claude.json pre-trust fixtures and the agent_not_covered refusal check
+ * (expectAgentNotCovered). setup.ts (the preload) sets
  * TS_HELPER_PATH, FAKE_TMUX_DIR and CLI_PATH.
  */
 
+import { expect } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { Client, type ClientOptions } from "../../src/client.js";
+import { ErrCantSend } from "../../src/errors.js";
 
 /** The fake-tmux binary setup.ts builds, for a Client's tmuxCommand. */
 export const FAKE_TMUX_BIN = path.join(
@@ -80,6 +83,17 @@ export function thrownBy(fn: () => unknown): unknown {
     return e;
   }
   throw new Error("expected a throw, but the call returned");
+}
+
+/**
+ * Checks err is SR-9.2's refusal for an agent busy send does not cover: ErrCantSend with exactly
+ * agent_not_covered's errDetails, naming `options` (the options the call set, in parameter order).
+ */
+export function expectAgentNotCovered(err: unknown, options: string): void {
+  expect(err).toBeInstanceOf(ErrCantSend);
+  const e = err as ErrCantSend;
+  expect(e.errDetails).toEqual({ class: "cant_send", reason: "agent_not_covered", resend_safe: true, retry_with: "new_send" });
+  expect(e.errDescription).toContain(`so ${options} cannot apply`);
 }
 
 /** What promise rejects with; fails the test when it resolves. */

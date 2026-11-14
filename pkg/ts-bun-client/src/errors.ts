@@ -402,7 +402,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (61 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (69 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -475,7 +475,21 @@ export class ErrSubmissionUnconfirmed extends AgentDirectorError {}
  * of the Spawn may still answer its request; nothing was sent.
  */
 export class ErrSendKeysWhileRelayed extends AgentDirectorError {}
-/** Mirrors ErrSpawnNotPausable (package: api) */
+/**
+ * Mirrors ErrCantSend (package: api): a busy-send refusal; nothing was stored, sent or typed.
+ * `errDetails` is a `CantSendDetails`: reason `agent_not_covered` means busy send does not cover
+ * the Launch the option applies to (sendKeys: the row's current Launch, as recorded; resume: the
+ * resumed Launch; spawn, reuse and an agent-named template: the resolved agent's new Launch), and
+ * the same call without busy-send options can succeed (`retry_with` `new_send`).
+ */
+export class ErrCantSend extends AgentDirectorError {}
+/**
+ * Mirrors ErrSpawnNotPausable (package: api). With `only_if_waiting` false (the default), the row
+ * is not waiting. With `only_if_waiting: true` on a row whose current Launch is recorded
+ * `not_covered`, in any state, `errDetails` is a `NotPausableDetails` with cause
+ * `agent_not_covered` and nothing is ended; a Launch recorded `covered` rejects with this
+ * version's unavailable `ErrInternal` instead.
+ */
 export class ErrSpawnNotPausable extends AgentDirectorError {}
 /**
  * Exit keys were sent but ended was not observed before the pause deadline.
@@ -654,6 +668,7 @@ const ERROR_TABLE = {
   // api package
   ErrSpawnNotInteractive,
   ErrSubmissionUnconfirmed,
+  ErrCantSend,
   ErrSendKeysWhileRelayed,
   ErrSpawnNotPausable,
   ErrPauseTimeout,

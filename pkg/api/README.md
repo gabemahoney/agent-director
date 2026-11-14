@@ -17,6 +17,9 @@ the [caller contract](../../docs/caller-contract.md).
   - [ReadPane](#readpane)
   - [Kill](#kill)
   - [Sweep](#sweep)
+  - [Pause](#pause)
+  - [ForceDelivery](#forcedelivery)
+  - [GetForce and GetDelivery](#getforce-and-getdelivery)
 - [Permission relay](#permission-relay)
 - [Version mapping](#version-mapping)
 - [Errors](#errors)
@@ -126,6 +129,13 @@ asynchronous failures are covered by
 timeout in whole seconds (0 for none); its range and lifecycle are in
 [Configuration](../../docs/configuration.md#idle-screen-timeout-state).
 
+`SpawnParams`, `ResumeParams` and `MakeTemplateParams` take the Agent Defaults
+`SendMode` and `ConfirmedDelivery` and the experimental
+`ConfirmFromTranscripts`. Each is a pointer: nil leaves it unset, and a pointer
+to any value, `false` or `"wait_turn"` included, sets it. They apply only to
+Covered Agents; see
+[Busy-send options](../../docs/caller-contract.md#busy-send-options).
+
 Returns `SpawnResult`:
 
 - `InstanceID`: the tracked id.
@@ -137,8 +147,8 @@ Returns `SpawnResult`:
   [Cursor launch settings](../../docs/settings.md#cursor-launch-settings).
 
 Input errors include `ErrAgentMissing`, `ErrAgentInvalid`,
-`ErrAgentArgsMismatch`, `ErrTemplateAgentMissing`, `ErrPermissionsUnsupported`
-and `ErrSpawnDeniedFlag`; meanings and handling are in
+`ErrAgentArgsMismatch`, `ErrTemplateAgentMissing`, `ErrPermissionsUnsupported`,
+`ErrSpawnDeniedFlag` and `ErrCantSend`; meanings and handling are in
 [Spawn and template input refusals](../../docs/caller-contract.md#spawn-and-template-input-refusals).
 Other common errors: `ErrCwdNotFound`, `ErrCwdNotADirectory`,
 `ErrRelayModeInvalid`, `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`,
@@ -342,6 +352,13 @@ Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
 Permission holds, retry rules and timeout recovery are in the
 [caller contract](../../docs/caller-contract.md#permission-relay).
 
+`SendMode`, `ConfirmedDelivery`, `CallerUUID` and `Force` are pointers with
+the same rule as Spawn's Agent Defaults: nil omits one, and any value names
+it. They apply only to Covered Agents; when the target's current launch is not
+covered, a call naming one
+returns `ErrCantSend` (see [Errors](#errors)) and sends nothing. See
+[Busy-send options](../../docs/caller-contract.md#busy-send-options).
+
 `SendKeysContext(ctx, params)` uses the caller's context; `SendKeys` uses a
 background context. A cleanup error can accompany a confirmed result;
 `api.ErrDetails(err)` retains that result. See `(*Client).SendKeys` godoc and
@@ -514,6 +531,45 @@ grace, budget, clock and logger arguments as `FindMissing`. `FindMissing` and
 live identities and its available checks, so it cannot promise an all-agent
 snapshot and reports unsupported coverage explicitly.
 
+---
+
+### Pause
+
+By default, `c.Pause(ctx, api.PauseParams{InstanceID: id})` ends a `waiting`
+row's agent and waits for `ended`; a finished row is a no-op.
+`ErrPauseTimeout` is under [Errors](#errors).
+
+`PauseParams.OnlyIfWaiting` applies only to Covered Agents. When the row's
+current launch is not covered, `true` returns `ErrSpawnNotPausable` in any row
+state, with
+`api.ErrDetails(err)` a `NotPausableDetails` whose `Cause` is
+`"agent_not_covered"`; nothing is ended. `false` is the default pause.
+
+---
+
+### ForceDelivery
+
+`c.ForceDelivery(api.ForceDeliveryParams{InstanceID: id})` returns
+`ForceDeliveryResult`, whose `ForceResult` has `ForceID`, `Outcome`, `Reason`,
+`StartedAt`, `EndedAt` (`*time.Time`) and `CarriedPairs` (never nil). When the
+target's current launch is not covered, it succeeds with `Outcome` `"refused"` and
+`Reason` `"agent_not_covered"`, and stores the attempt for `GetForce`. See
+[Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
+
+---
+
+### GetForce and GetDelivery
+
+`c.GetForce(api.GetForceParams{ForceID: id})` returns `GetForceResult`
+(`Lookup`, `ForceResult *ForceResult`).
+`c.GetDelivery(api.GetDeliveryParams{CallerUUID: caller, DeliveryRequestID: request})`
+returns `GetDeliveryResult` (`Lookup`, `Result *DeliveryResult`). `Lookup` is
+`"found"`, `"unknown"` or `"retention_expired"`; the pointer is nil unless
+`"found"`. `DeliveryResult` carries the Result's `Class`, `Final`, `Reason`,
+`ResendSafe`, `RetryWith`, `Wait` (nil when final), target, hand-over binding,
+receipt identity and `Outcome`, never the Message text. See
+[Durable lookups](../../docs/caller-contract.md#durable-lookups).
+
 ## Permission relay
 
 `(*Client).Decide` returns a `DecideResult` embedding `RequestDelivery`.
@@ -574,6 +630,11 @@ returns an `api.PauseTimeoutDetails` value after exit keys were sent but
 `ended` was not observed. Its fields are `InspectionRequired`, `ExitKeysSent`,
 `ExitConfirmed` and `RowState`, with the shared meanings and recovery in
 [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit).
+
+`ErrCantSend` matches with `errors.Is`; `api.ErrDetails(err)` returns an
+`api.CantSendDetails` with `Class`, `Reason`, `ResendSafe` and `RetryWith`.
+Its `Limit` and `Result` are nil for `"agent_not_covered"`. Meanings are in
+[Busy-send options](../../docs/caller-contract.md#busy-send-options).
 
 ```go
 res, err := c.SendKeys(api.SendKeysParams{

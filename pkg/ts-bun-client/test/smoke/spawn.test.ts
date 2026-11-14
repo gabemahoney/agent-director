@@ -6,7 +6,8 @@
  * file byte-identical (SR-22.6).
  * Errors: empty cwd → ErrCwdMissing; no agent (absent or empty) → ErrAgentMissing and a
  * wrong-case agent → ErrAgentInvalid, each with no row (SR-1.1); an id with a control character →
- * ErrInvalidFlags with no row and no session, with or without reuse_finished.
+ * ErrInvalidFlags with no row and no session, with or without reuse_finished;
+ * Agent Defaults for claude, fresh or reused → ErrCantSend agent_not_covered (SR-9.2).
  * reuse_finished (SR-10.1, SR-10.2): without an id it mints one; with an id an
  * ended row is reused (pending, one session); without the opt-in an ended row
  * collides (ErrInstanceIdCollision), row unchanged, no session.
@@ -18,7 +19,7 @@ import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
 import {
   runHelper, privateTmuxSocket, fakeTmuxCalls, withProcessEnv, CLAUDE_JSON, trustEntry, seedOuterParent,
-  homeStore, openClient, rejection, spawnClaude,
+  homeStore, openClient, rejection, spawnClaude, expectAgentNotCovered,
 } from "../internal/helper.js";
 import {
   ErrSpawnDeniedFlag, ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, ErrAgentMissing, ErrAgentInvalid, AgentDirectorError,
@@ -102,6 +103,24 @@ test.each([
     });
   });
 }, 20_000);
+
+// SR-1.4, SR-4.5, SR-9.2: each Agent Default, false and wait_turn included, reaches the coverage
+// check, which refuses it for claude (busy send covers no agent here), fresh or reused.
+test.each([
+  ["fresh", false],
+  ["reusing an ended row", true],
+] as const)("spawn: error — Agent Defaults for claude, %s → ErrCantSend agent_not_covered", async (_label, reuse) => {
+  await withTempHome(async (homeDir) => {
+    const storePath = homeStore(homeDir);
+    const id = `defaults-${crypto.randomUUID().slice(0, 8)}`;
+    seedOuterParent(storePath);
+    if (reuse) runHelper("seed-spawn", { store: storePath, id, state: "ended", "create-store": true, socket: privateTmuxSocket(homeDir) });
+    using client = await openClient(storePath);
+    const err = await rejection(spawnClaude(client, { cwd: homeDir, instance_id: id, reuse_finished: reuse,
+      send_mode: "wait_turn", confirmed_delivery: false, confirm_from_transcripts: false }));
+    expectAgentNotCovered(err, "send_mode, confirmed_delivery, confirm_from_transcripts");
+  });
+}, 10_000);
 
 // SR-10.1: reuse_finished has no effect without an explicit id; the spawn mints one.
 test("spawn: reuse_finished without instance_id → fresh spawn with a minted id", async () => {

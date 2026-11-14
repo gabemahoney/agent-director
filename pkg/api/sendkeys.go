@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
@@ -134,6 +135,36 @@ type SendKeysParams struct {
 	// claim without screen verification or proof. Before answering ACP, Cursor
 	// additionally requires it to match the selected offered option verdict.
 	As string `json:"as"`
+	// SendMode (wait_turn or steer_turn), ConfirmedDelivery, CallerUUID (a
+	// hyphenated hexadecimal UUID) and Force are busy send's options
+	// (SR-1.3, SR-1.4, SR-4.1). nil is omitted; any supplied value, false and
+	// wait_turn included, names the option. They apply only to a Covered
+	// Agent: when the row's current Launch is recorded not_covered, a call
+	// naming any of them is refused with ErrCantSend, reason
+	// agent_not_covered (SR-9.2).
+	SendMode          *string `json:"send_mode,omitempty"`
+	ConfirmedDelivery *bool   `json:"confirmed_delivery,omitempty"`
+	CallerUUID        *string `json:"caller_uuid,omitempty"`
+	Force             *bool   `json:"force,omitempty"`
+}
+
+// busySendOptions lists the busy-send options p names, for busySendGate's
+// refusal; "" when it names none.
+func (p SendKeysParams) busySendOptions() string {
+	var named []string
+	if p.SendMode != nil {
+		named = append(named, "send_mode")
+	}
+	if p.ConfirmedDelivery != nil {
+		named = append(named, "confirmed_delivery")
+	}
+	if p.CallerUUID != nil {
+		named = append(named, "caller_uuid")
+	}
+	if p.Force != nil {
+		named = append(named, "force")
+	}
+	return strings.Join(named, ", ")
 }
 
 // SendKeysResult carries native proof for a supported ordinary request. Other
@@ -227,8 +258,14 @@ type sendKeysGuard struct {
 // b.146 rules 7 and 8). It types into the agent's own pane of the row's
 // current launch, by pane id.
 //
-// The params' shape is checked first (planSendKeys): a refusal is
-// ErrInvalidFlags with nothing read, sent or written. What a call sends:
+// The params' shape is checked first (planSendKeys, then send_mode and
+// caller_uuid): a refusal is ErrInvalidFlags with nothing read, sent or
+// written. Once the row is read, a call naming SendMode, ConfirmedDelivery,
+// CallerUUID or Force is decided from its current Launch's recorded coverage
+// (Spawn.BusySend) before any other guard: for a Launch recorded not_covered
+// it is ErrCantSend, reason agent_not_covered (CantSendDetails), with
+// nothing stored, sent or typed (SR-9.2). A call naming none of them goes on
+// as below. What a call sends:
 //
 //   - Plain, text: `\r` (CR, 0x0D) bytes are STRIPPED (CR would submit the
 //     buffer mid-message); `\n` (LF, 0x0A) bytes are PRESERVED (Claude's
@@ -513,6 +550,12 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	if err != nil {
 		return err
 	}
+	if err := checkSendMode("send-keys", params.SendMode); err != nil {
+		return err
+	}
+	if _, err := checkCallerUUID("send-keys", params.CallerUUID); err != nil {
+		return err
+	}
 	// ordinary is plain nonempty text with Enter and no pane hash, the only
 	// input native delivery and the agent-specific fallback paths below take.
 	ordinary := !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != ""
@@ -521,6 +564,12 @@ func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 		return err
 	}
 	r.facts.RowState = row.State
+	// A busy-send option is decided from the current Launch's recorded
+	// coverage before every guard, capability check, journal, relay write
+	// and input below (SR-9.2).
+	if options := params.busySendOptions(); options != "" {
+		return busySendGate("send-keys "+row.InstanceID, options, row.BusySend)
+	}
 	paneOnly := spawn.IsPaneOnly(row.Agent)
 	if paneOnly && params.DeliveryRequestID != "" {
 		return spawn.PaneOnlyCapabilityError(row.Agent, "send-keys delivery_request_id")
@@ -1091,9 +1140,14 @@ func isInteractiveState(state string) bool {
 //   - [ErrInvalidFlags]: the params' shape is refused (a pane answer without
 //     As allow or deny, Key or ExpectPaneSHA256, or with Text; As without
 //     RequestToken; Key with Text; NoEnter with neither; a Key that is not a
-//     named key or one character; a malformed hash; a negative NLines);
-//     nothing was read or sent.
+//     named key or one character; a malformed hash; a negative NLines; a
+//     SendMode other than wait_turn or steer_turn; a CallerUUID that is not
+//     a hyphenated hexadecimal UUID); nothing was read or sent.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
+//   - [ErrCantSend]: the call names SendMode, ConfirmedDelivery, CallerUUID
+//     or Force and busy send does not cover the row's current Launch: reason
+//     agent_not_covered, resend_safe true, retry_with new_send
+//     ([CantSendDetails]); nothing was stored, sent or typed.
 //   - [ErrSpawnNotInteractive]: new input's row is finished or otherwise not in a
 //     live interactive state, or pending without AllowPending, or pending
 //     with no launch start or launch token recorded, or pending and the

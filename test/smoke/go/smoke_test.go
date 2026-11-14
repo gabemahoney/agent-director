@@ -129,7 +129,7 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	// guard. Each branch calls one storefix.Seed* helper or apitest.SeedSpawn.
 	switch spec.SeedKind {
 	case seedNone:
-		// no row needed (spawn, find-missing, make-template, version)
+		// no row needed (spawn, find-missing, make-template, version, get-delivery)
 	case seedCheckPermission:
 		storefix.SeedCheckPermission(t, st, spec.SeedID)
 	case seedResumable:

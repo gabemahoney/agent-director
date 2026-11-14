@@ -75,7 +75,10 @@ import "testing"
 // approved 128 bytes is 14680.
 // On 2026-11-13 b.kii lost-reply compatibility wording lowered it to 14677
 // (free downward step; source Repair round 6).
-const helpStdoutBytes = 14677
+// On 2026-11-13 b.kii E1 added force-delivery, get-force and get-delivery and
+// trimmed existing descriptions to make room rather than raise the baseline,
+// lowering it to 14660 (free downward step).
+const helpStdoutBytes = 14660
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

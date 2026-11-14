@@ -11,6 +11,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // MakeTemplateParams is the typed parameter shape for the
@@ -65,6 +66,17 @@ type MakeTemplateParams struct {
 	// run identically on both branches; Overwrite is consulted only at the
 	// write step, so a refused template never replaces an existing one.
 	Overwrite bool
+	// SendMode (wait_turn or steer_turn) and ConfirmedDelivery are the Agent
+	// Defaults to bake in, and ConfirmFromTranscripts SR-4.5's experimental
+	// setting; nil stores no key, so a spawn uses its own or none. Any
+	// supplied value, false and wait_turn included, is stored. They apply only
+	// to a Covered Agent: a template whose Agent busy send does not cover is
+	// refused with ErrCantSend, reason agent_not_covered, before anything is
+	// written. A template with no Agent stores them; the spawn that uses it
+	// decides them for its resolved agent (SR-9.2).
+	SendMode               *string
+	ConfirmedDelivery      *bool
+	ConfirmFromTranscripts *bool
 }
 
 // MakeTemplatePermissions is the params-side mirror of the on-disk
@@ -113,6 +125,11 @@ type MakeTemplateResult struct {
 //     ErrReservedEnvKey, without values in pane-only diagnostics. The key is refused,
 //     never rewritten, so no template is saved that every spawn using it
 //     would refuse.
+//   - SendMode (when set) must be wait_turn or steer_turn, else
+//     ErrTemplateMalformed, after RelayMode. Last, a template that names its
+//     Agent and sets an Agent Default or ConfirmFromTranscripts is decided
+//     for that agent: busy send not covering it is ErrCantSend, reason
+//     agent_not_covered (SR-9.2). An agent-less template stores them.
 //   - These checks run before the templates dir is created and before any
 //     write, so a refused call creates, writes and replaces nothing,
 //     whatever Overwrite is.
@@ -149,11 +166,22 @@ func makeTemplate(params MakeTemplateParams, cfg config.Config) (MakeTemplateRes
 	if err := validateTemplateRelayMode(params.RelayMode); err != nil {
 		return MakeTemplateResult{}, err
 	}
+	if params.SendMode != nil && !config.ValidSendMode(*params.SendMode) {
+		return MakeTemplateResult{}, fmt.Errorf("%w: send_mode %q (want wait_turn/steer_turn)", config.ErrTemplateMalformed, *params.SendMode)
+	}
 	if err := validateTemplateAgent(params, cfg.Experimental); err != nil {
 		return MakeTemplateResult{}, err
 	}
 	if err := spawn.ValidateExtraEnv(params.ExtraEnv, params.Agent); err != nil {
 		return MakeTemplateResult{}, err
+	}
+	// A template that names its agent is decided for that agent now, from the
+	// coverage a Launch of it would record; an agent-less one is decided by
+	// the spawn that resolves its agent (SR-9.2).
+	if named := agentDefaultsNamed(params.SendMode, params.ConfirmedDelivery, params.ConfirmFromTranscripts); named != "" && params.Agent != "" {
+		if err := busySendGate("make-template of agent "+params.Agent, named, store.BusySendCoverageForAgent(params.Agent)); err != nil {
+			return MakeTemplateResult{}, err
+		}
 	}
 
 	if _, err := config.EnsureTemplatesDir(); err != nil {
@@ -172,6 +200,10 @@ func makeTemplate(params MakeTemplateParams, cfg config.Config) (MakeTemplateRes
 		AgentArgs:           params.AgentArgs,
 		ExtraEnv:            params.ExtraEnv,
 		AgentDirectorLabels: params.AgentDirectorLabels,
+
+		SendMode:               params.SendMode,
+		ConfirmedDelivery:      params.ConfirmedDelivery,
+		ConfirmFromTranscripts: params.ConfirmFromTranscripts,
 	}
 	if params.Permissions != nil {
 		file.Permissions = &config.TemplatePermissions{
@@ -299,8 +331,12 @@ func validateTemplateRelayMode(m string) error {
 //   - ErrTemplateNameUnsafe: Name contains path-unsafe characters (path
 //     separators, leading dot, or "..").
 //   - ErrTemplateExists: a template with that name already exists.
-//   - ErrTemplateMalformed: RelayMode is not "on", "off", or "", or Agent
-//     is non-empty and unrecognized (the message quotes the value).
+//   - ErrTemplateMalformed: RelayMode is not "on", "off", or "", SendMode is
+//     set to neither wait_turn nor steer_turn, or Agent is non-empty and
+//     unrecognized (the message quotes the value).
+//   - ErrCantSend: SendMode, ConfirmedDelivery or ConfirmFromTranscripts is
+//     set and busy send does not cover Agent: reason agent_not_covered
+//     ([CantSendDetails]); nothing is written or replaced.
 //   - ErrTemplateAgentMissing: AgentArgs is non-empty and Agent is empty;
 //     nothing is written. Give the template's agent or drop AgentArgs.
 //   - ErrExperimentalAgentDisabled: the template's experimental agent is

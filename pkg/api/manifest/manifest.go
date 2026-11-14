@@ -255,14 +255,14 @@ const reuseFinishedDescription = "Opt in to reusing an explicit instance_id whos
 
 // killDescription is kill's Description (SR-6.1, SR-1.7, SR-18.1, SR-18.2,
 // SR-18.7, SR-18.9; decision-0930b Q4), ending with the live-row sequence.
-const killDescription = "End the agent of a live row's current launch (pending included). " +
-	"kill finds the session with that launch's label on the row's recorded socket, ends the agent's pane and that session by tmux id, and succeeds only once the agent process and every other process found in the session's panes are gone; otherwise it returns ErrTmuxKillFailed. kill_sent says whether a kill was sent. " +
+const killDescription = "End the agent of a live row's current launch (pending included): " +
+	"kill ends the agent's pane and that launch's labelled session on the row's recorded socket, by tmux id, and succeeds only once the agent process and every other process found in the session's panes are gone; otherwise it returns ErrTmuxKillFailed. kill_sent says whether a kill was sent. " +
 	"With no session of the launch found, an agent process gone or not recorded is success, nothing sent; one running in another session's pane has that pane ended and is checked again. " +
 	"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call. " + missingNotProofShort + " " +
 	"kill never changes the row's state: a state read or sweep marks it once its agent process is gone. kill never signals a process itself; one the agent started can outlive a successful kill. " +
 	"On a pending row, before the launch created its session, kill returns kill_sent false and does not stop the launch. kill never ends an earlier launch's session. " +
 	"Success is judged per call: after ErrTmuxKillFailed names a non-agent process outliving the kill, a retried kill checks only the agent process and its success means only that the agent is gone; the named process needs a human (see docs/operator-actions.md). If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed; a retried kill is a finished-row no-op. " +
-	"Errors (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): after a kill the agent process or another process of the session's panes ran past the kill exit wait, or the process cannot be checked and its labelled session remains, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's, or tmux holds conflicting labels; no kill was sent (see docs/operator-actions.md). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the agent's tmux server; an operator must fix it. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; wait and check again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. " +
+	"Errors (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): after a kill the agent process or another process of the session's panes ran past the kill exit wait, or the process cannot be checked and its labelled session remains, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's, or tmux holds conflicting labels; no kill was sent (see docs/operator-actions.md). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the agent's tmux server; an operator must fix it. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; wait and check again. None of these errors means that the agent is dead. " +
 	"Run kill as the agents' user in their tmux environment. " + sameEnvConsequences + " " + expireCleanupPointer + " " +
 	"A live row whose recorded tmux session name cannot be used (empty, or containing a control character or a character tmux stores differently) gets ErrInternal with no tmux call; removing the row is a human's decision (see docs/operator-actions.md). " +
 	liveRowSequence
@@ -353,6 +353,56 @@ var sweepResultFields = []FieldDef{
 	{Name: "unverified_ids", Type: "[]string", Description: "Sorted IDs of live rows this sweep left unverified with a liveness note, whether it wrote the note or found it already current: rows whose agent process could not be checked and which tmux did not mark, for example because their own session is present, tmux could not tell or was unavailable, or tmux was not called, or their recorded tmux session name cannot be used (empty, a control character, or a character tmux stores differently: no tmux call, and a liveness note of its own; removing such a row is a human's decision, see docs/operator-actions.md). Never a pending row inside the pending grace period or while its launch runs. A row whose guarded write found it changed or gone, or failed, a row whose note was cleared, and a pending row noted unreported (its agent alive, no hook reported since its launch; find it by liveness_note in get or list) are in neither list. Never null; [] when none.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 }
 
+// included is the parenthesis a busy-send option's text gives the value that
+// still names or sets it, though it equals the out-of-box behaviour (false
+// for a Boolean, wait_turn for send_mode); "" for an option with no such
+// value.
+func included(value string) string {
+	if value == "" {
+		return ""
+	}
+	return " (" + value + " included)"
+}
+
+// coveredOnlySend is how every busy-send option of send-keys says it applies
+// only to Covered Agents and names the refusal for other agents (SR-8.1);
+// value is the option's out-of-box value, if any (included).
+func coveredOnlySend(value string) string {
+	return "Covered Agents only: naming it" + included(value) + " for any other agent is refused with ErrCantSend, reason agent_not_covered; nothing is sent."
+}
+
+// coveredOnlyLaunch is the same for the Agent Defaults and
+// confirm_from_transcripts of spawn (reuse included) and resume.
+func coveredOnlyLaunch(value string) string {
+	return "Covered Agents only: setting it" + included(value) + " for a Launch of any other agent is refused with ErrCantSend, reason agent_not_covered, before anything is written."
+}
+
+// coveredOnlyTemplate is the same for make-template, whose agent-less
+// template defers the decision to the spawn that uses it.
+func coveredOnlyTemplate(value string) string {
+	return "Covered Agents only: for a template whose agent busy send does not cover, setting it" + included(value) +
+		" is refused with ErrCantSend, reason agent_not_covered, and nothing is written; a template with no agent stores it, and the spawn that uses it decides."
+}
+
+// agentDefaultParams are the Agent Defaults and confirm_from_transcripts
+// that spawn, resume and make-template take, each described with how it
+// relates to other values (before) and when it applies (covered, given the
+// param's out-of-box value) (SR-1.4, SR-4.5).
+func agentDefaultParams(before string, covered func(value string) string) []ParamDef {
+	return []ParamDef{
+		{Name: "send_mode", Type: "string", Description: "Agent Default Send Mode: wait_turn or steer_turn. " + before + covered("wait_turn"), Nullable: false, AllowEmpty: false, AllowedValues: []string{"wait_turn", "steer_turn"}},
+		{Name: "confirmed_delivery", Type: "bool", Description: "Agent Default Confirmed Delivery. " + before + covered("false"), Nullable: false, AllowEmpty: false},
+		{Name: "confirm_from_transcripts", Type: "bool", Description: "Experimental: whether a force may be confirmed from transcripts. " + before + covered("false"), Nullable: false, AllowEmpty: false},
+	}
+}
+
+// forceResultText describes a force_result object (SR-4.1).
+const forceResultText = "force_id (AD-made UUID), outcome (handed_over, pending, refused or failed), reason, started_at, ended_at (null while pending) and carried_pairs (each caller_uuid and request_id; [] when none)."
+
+// lookupField is get-force's and get-delivery's lookup answer (SR-4.1,
+// SR-5.4): never an error, and never permission to resend.
+var lookupField = FieldDef{Name: "lookup", Type: "string", Description: "found, unknown (nothing stored) or retention_expired. unknown and retention_expired are not permission to resend; a store failure is an error, never unknown.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"found", "unknown", "retention_expired"}}
+
 // Verbs is the canonical, ordered list of verbs implemented by this binary.
 // Epic 2+ workers append entries here as they implement new verbs.
 var Verbs = []VerbDef{
@@ -381,7 +431,7 @@ var Verbs = []VerbDef{
 		Description: "Launch a tracked agent in tmux. Returns the instance_id and pre_trust (ok, skipped or failed) right away; the row is pending from its insert until the agent reports in, then waiting. Creation bounded by the create timeout; timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created; the row stays pending; do not retry until get shows the row ended or missing, since a retry without an explicit id would start a second agent; then retry an explicit id with the reuse opt-in and " + RowAgentPointer + ". This store's session labelled by an explicit id but no row (left over from an earlier life): ErrTmuxSessionConflict; nothing is written. Name already held: spawn ends its new row at once (unless error says otherwise), returning ErrTmuxSessionConflict naming the holder's tmux id and whether its label names this id; ErrTmuxSessionCreate (LAUNCH FAILURE) if holder vanished first, ErrTmuxNotAvailable (ENVIRONMENT) or ErrTmuxUnresponsive if tmux cannot run/be read. ErrTmuxSessionConflict is CONFLICT (permanent until a human looks): another row's/another agent-director store's session is another agent; must not be ended; a leftover of an earlier life or a session with no valid instance id is a human's to end (see docs/operator-actions.md); then, if refused for a held name, spawn the id again with " + ReuseOptInSpelling + " and the row's agent. ErrInternal, nothing created or changed: the collision pre-check could not read the store (id use unknown), or a reuse's archive of the previous session or its change failed (a busy store included), or a reused row's recorded name is unusable (see kill). " + liveRowSequencePointer,
 		Callable:    true,
 		HandleFree:  false,
-		Params: []ParamDef{
+		Params: append([]ParamDef{
 			{
 				Name:          "cwd",
 				Type:          "string",
@@ -517,7 +567,7 @@ var Verbs = []VerbDef{
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
-		},
+		}, agentDefaultParams("Overrides the template's. ", coveredOnlyLaunch)...),
 		ResultFields: []FieldDef{
 			{
 				Name:          "instance_id",
@@ -566,6 +616,7 @@ var Verbs = []VerbDef{
 			"ErrTemplateMalformed",
 			"ErrTemplateAgentMissing",
 			"ErrTemplateNameUnsafe",
+			"ErrCantSend",
 		},
 	},
 	{
@@ -697,7 +748,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "send-keys",
-		Description: "Strip CR, keep LF, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512B chunks, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. Cleanup: caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Strip CR, keep LF, add Enter (empty text: Enter only). Native: readiness, 512B chunks, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: never auto-retry; gateway_refused: unsubmitted, else hook-derived get/status, escalate if unknown. Cleanup: caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -779,6 +830,10 @@ var Verbs = []VerbDef{
 				AllowEmpty:    true,
 				AllowedValues: []string{"allow", "deny", ""},
 			},
+			{Name: "send_mode", Type: "string", Description: "This Message's Send Mode: wait_turn or steer_turn. " + coveredOnlySend("wait_turn"), Nullable: false, AllowEmpty: false, AllowedValues: []string{"wait_turn", "steer_turn"}},
+			{Name: "confirmed_delivery", Type: "bool", Description: "This Message's Confirmed Delivery. " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
+			{Name: "caller_uuid", Type: "string", Description: "Caller UUID: hyphenated hexadecimal, either case. " + coveredOnlySend(""), Nullable: false, AllowEmpty: false},
+			{Name: "force", Type: "bool", Description: "Also force Held Messages, as force-delivery does. " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
 		},
 		ResultFields: []FieldDef{
 			{Name: "request_id", Type: "string", Description: "Native ordinary delivery attempt identity; absent on fallback pane input and manual operations.", AllowEmpty: true},
@@ -791,6 +846,7 @@ var Verbs = []VerbDef{
 			"ErrAgentCapabilityUnsupported",
 			"ErrInvalidFlags",
 			"ErrSpawnNotFound",
+			"ErrCantSend",
 			"ErrSpawnNotInteractive",
 			"ErrSubmissionUnconfirmed",
 			"ErrSendKeysWhileRelayed",
@@ -808,8 +864,50 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "force-delivery",
+		Description: "Force Held Messages. Agents not covered: success, force_result refused, agent_not_covered.",
+		Callable:    true,
+		HandleFree:  false,
+		Params: []ParamDef{
+			{Name: "instance_id", Type: "string", Description: "Id of the agent whose Held Messages to force.", Required: true, Nullable: false, AllowEmpty: false},
+		},
+		ResultFields: []FieldDef{
+			{Name: "force_result", Type: "object", Description: "This attempt, stored before the call returns; each call stores its own, and get-force reads it by force_id: " + forceResultText, Nullable: false, AllowEmpty: false},
+		},
+		ErrorNames: []string{"ErrInvalidFlags", "ErrSpawnNotFound", "ErrStoreBusy"},
+	},
+	{
+		Name:        "get-force",
+		Description: "Read a force_result by force_id. Durable facts only; starts no work.",
+		Callable:    true,
+		HandleFree:  false,
+		Params: []ParamDef{
+			{Name: "force_id", Type: "string", Description: "A force_result's force_id: hyphenated hexadecimal UUID, either case.", Required: true, Nullable: false, AllowEmpty: false},
+		},
+		ResultFields: []FieldDef{
+			lookupField,
+			{Name: "force_result", Type: "object?", Description: "Null unless lookup is found: " + forceResultText, Nullable: true, AllowEmpty: false},
+		},
+		ErrorNames: []string{"ErrInvalidFlags", "ErrStoreBusy"},
+	},
+	{
+		Name:        "get-delivery",
+		Description: "Read a confirmed Message's Result. Durable facts only; starts no work.",
+		Callable:    true,
+		HandleFree:  false,
+		Params: []ParamDef{
+			{Name: "caller_uuid", Type: "string", Description: "The send's Caller UUID: hyphenated hexadecimal, either case.", Required: true, Nullable: false, AllowEmpty: false},
+			{Name: "delivery_request_id", Type: "string", Description: "The send's Message ID: nonempty UTF-8.", Required: true, Nullable: false, AllowEmpty: false},
+		},
+		ResultFields: []FieldDef{
+			lookupField,
+			{Name: "result", Type: "object?", Description: "Null unless lookup is found: the Result's caller_uuid, request_id, class (held, queued, delivered_confirmed, sent_unconfirmed or not_started), final, reason, resend_safe and retry_with (true/new_id only for not_started), wait (null when final; else reason, since and optional earlier pair), forced, instance_id, launch_token (null until bound), session_id (omitted until bound), evidence_kind (null without receipt), record_id and record_sha256 (omitted without receipt) and outcome (submitted, not_started or submission_unconfirmed). Never Message text or raw evidence.", Nullable: true, AllowEmpty: false},
+		},
+		ErrorNames: []string{"ErrInvalidFlags", "ErrStoreBusy"},
+	},
+	{
 		Name:        "read-pane",
-		Description: "Capture the last N lines of the agent's own pane (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Capture the last N lines of the agent's own pane; ANSI stripped unless `ansi=true`. tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -913,7 +1011,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "decide",
-		Description: "Caller's allow/deny on open PermissionRequest (relay_mode=on only): first wins (else ErrAlreadyDecided). Cursor allow: offered allow_once or blocking-plan acceptance; deny: supported rejection; persistent native choices need deliberate pane selection. Up to 1 s for relay-hook ack: delivery delivered/not_confirmed (poll get-permission; ends by confirm_by). Hook gone: immediate ErrRelayFallenBack. ErrNoOpenPermissionRequest (absent, closed, proven-gone or obsolete request): no pane answer. max_wait_ms blocks required pre-record wait: ErrStoreBusy.",
+		Description: "Caller's allow/deny on open PermissionRequest (relay_mode=on only): first wins (else ErrAlreadyDecided). Cursor allow: offered allow_once or blocking-plan acceptance; deny: supported rejection; persistent native choices need deliberate pane selection. Up to 1 s for relay-hook ack: delivery delivered/not_confirmed (poll get-permission; ends by confirm_by). Hook gone: immediate ErrRelayFallenBack. ErrNoOpenPermissionRequest (absent, closed, proven-gone or obsolete request): no pane answer.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1072,22 +1170,22 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name: "resume",
-		Description: "Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: native-history loss fails async, no fallback. No saved prompt/input/readiness/decisions/proof replay. " + missingNotProofShort + " Cwd best-effort pre-trust unless the row's latest spawn set no_pre_trust; pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Moves the row to pending, keeping its session id and history; stays pending until the agent reports in, then waiting (Cursor: first verified prompt). On non-timeout creation failure, an applied restore restores the row's prior ended or missing state; failures reported. Lost reply: success despite failed/unapplied publication; retain uncertainty, release owner, no restore/retry. ErrTmuxNotAvailable ENVIRONMENT; ErrTmuxSessionCreate LAUNCH FAILURE. Create timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient); the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move: untouched/retryable. ErrTmuxSessionConflict (CONFLICT, human) or ErrTmuxUnresponsive (starting/stopping): untouched. Held create: restore/refuse. A pending row (a launch in progress): ErrSpawnNotResumable. Cursor: keep row/session/transcript/artifacts. " +
+		Description: "Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: native-history loss fails async, no fallback. No saved prompt/input/readiness/decisions/proof replay. " + missingNotProofShort + " Cwd best-effort pre-trust unless the row's latest spawn set no_pre_trust; pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Moves the row to pending, keeping its session id and history; stays pending until the agent reports in, then waiting (Cursor: first verified prompt). On non-timeout creation failure, an applied restore restores the row's prior ended or missing state; failures reported. Lost reply: success; no restore/retry. ErrTmuxNotAvailable ENVIRONMENT; ErrTmuxSessionCreate LAUNCH FAILURE. Create timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient); the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move: untouched/retryable. ErrTmuxSessionConflict (CONFLICT, human) or ErrTmuxUnresponsive (starting/stopping): untouched. Held create: restore/refuse. A pending row (a launch in progress): ErrSpawnNotResumable. Cursor: keep row/session/transcript/artifacts. " +
 			"Fresh: kill's live-row advice; unresolved survivors: STOP, human: docs/operator-actions.md#inspect-and-end-a-session-by-hand; spawn agent=cursor, project cwd, omit instance_id, same HOME, known supported extra_env/template intent. None: personal login/no custom dirs; dirs don't isolate accounts. Unavailable intent/needs protected data: STOP, human; no saved-env edit/drop credential intent. Saved credential/bad-dir: ErrReservedEnvKey pre-mutation. " +
 			"ErrInternal: control-character id/unusable recorded name (see kill); record failure, no tmux/launch.",
 		Callable:   true,
 		HandleFree: false,
-		Params: []ParamDef{
+		Params: append([]ParamDef{
 			{
 				Name:          "instance_id",
 				Type:          "string",
-				Description:   "Id of the finished (ended or missing) row to resume. Sets parent_id from the caller's AGENT_DIRECTOR_INSTANCE_ID. Cursor uses current cursor_path and the latest conversation/protected transcript. Successful creation with a lost reply returns instance_id and pre_trust even if publication errors or does not apply, for every agent regardless of coverage. Retain candidate uncertainty for later guarded adoption/report-in resolution; release the owner without restoration or retry. Replay removes parsed session selectors, Claude print mode, cloud controls orphaned by selector removal and the prompt (operands, an unowned -- and what follows; an unknown option's next word counts) without changing stored agent_args. Claude inputs missing a recognized required value get literal filtering only; otherwise options and owned values retain parsed meaning. Altered Claude short clusters are re-encoded only when needed to preserve that meaning; otherwise order and spelling survive.",
+				Description:   "Id of the finished (ended or missing) row to resume. Sets parent_id from the caller's AGENT_DIRECTOR_INSTANCE_ID. Cursor uses current cursor_path and the latest conversation/protected transcript. Successful creation with a lost reply returns instance_id and pre_trust for every agent, with no restoration or retry. Replay removes parsed session selectors, Claude print mode, cloud controls orphaned by selector removal and the prompt (operands, an unowned -- and what follows; an unknown option's next word counts) without changing stored agent_args. Claude inputs missing a recognized required value get literal filtering only; otherwise options and owned values retain parsed meaning. Altered Claude short clusters are re-encoded only when needed to preserve that meaning; otherwise order and spelling survive.",
 				Required:      true,
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
-		},
+		}, agentDefaultParams("Omitted keeps the conversation's. ", coveredOnlyLaunch)...),
 		ResultFields: []FieldDef{
 			{Name: "instance_id", Type: "string", Description: "The same id passed in (resume keeps the instance id).", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{
@@ -1100,6 +1198,8 @@ var Verbs = []VerbDef{
 			},
 		},
 		ErrorNames: []string{
+			"ErrInvalidFlags",
+			"ErrCantSend",
 			"ErrAgentCapabilityUnsupported",
 			"ErrSpawnNotFound",
 			"ErrSpawnNotResumable",
@@ -1117,7 +1217,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:         "sweep",
-		Description:  "One bounded pass of status/get/list recovery checks on a fixed all-agent snapshot: liveness, missed Codex turn ends, stale check_permission, display, provisional transcripts, late input proof. checks: three confirmations; complete/incomplete coverage, not observation success. No input, answer, restart or signal. Liveness uses the agent process at its recorded start identity, never children or copied IDs; no process environment is read. A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux. Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded), once per recorded socket (else caller's). No session, or (with no recorded pane) no pane with its launch token, marks missing; else an owned session leaves it unverified. Cursor uses its exact gateway: gone overrides pending protections; unknown stays unverified, no tmux fallback. Unusable tmux leaves it unverified; held names are untouched (docs/operator-actions.md). ErrProbeUnsupported: never returned. `missing` is a check's judgement on available evidence, not proof that the agent has exited. Run as the agents' user in their tmux environment: another user, root or another server can mark live rows missing; see kill. " + expireCleanupPointer + " Pending launches are protected while launching or within pending_grace_seconds (default 60 s) of launch start, not started_at; an unreadable start is judged at once. Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending. " + liveRowSequencePointer,
+		Description:  "One bounded pass of status/get/list recovery checks on a fixed all-agent snapshot: liveness, missed Codex turn ends, stale check_permission, display, provisional transcripts, late input proof. No input, answer, restart or signal. Liveness uses the agent process at its recorded start identity, never children or copied IDs; no process environment is read. A dead agent marks missing (Codex with an end report: ended, not in ids), without tmux. Only an uncheckable or unrecorded process uses tmux (Cursor only if unrecorded), once per recorded socket (else caller's). No session, or (with no recorded pane) no pane with its launch token, marks missing; else an owned session leaves it unverified. Cursor uses its exact gateway: gone overrides pending protections; unknown stays unverified, no tmux fallback. Unusable tmux leaves it unverified; held names are untouched (docs/operator-actions.md). ErrProbeUnsupported: never returned. `missing` is a check's judgement on available evidence, not proof that the agent has exited. Run as the agents' user in their tmux environment: another user, root or another server can mark live rows missing; see kill. " + expireCleanupPointer + " Pending launches are protected while launching or within pending_grace_seconds (default 60 s) of launch start, not started_at; an unreadable start is judged at once. Past grace, a running agent with no hook report gets liveness_note unreported: read-pane before send-keys with allow_pending. " + liveRowSequencePointer,
 		Callable:     true,
 		HandleFree:   false,
 		Params:       []ParamDef{},
@@ -1162,7 +1262,7 @@ var Verbs = []VerbDef{
 		Description: "Save a preset as ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
 		Callable:    true,
 		HandleFree:  false,
-		Params: []ParamDef{
+		Params: append([]ParamDef{
 			{
 				Name:          "name",
 				Type:          "string",
@@ -1262,7 +1362,7 @@ var Verbs = []VerbDef{
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
-		},
+		}, agentDefaultParams("Bakes a default; a per-call value overrides. ", coveredOnlyTemplate)...),
 		ResultFields: []FieldDef{
 			{Name: "path", Type: "string", Description: "Absolute path of the written template file.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 		},
@@ -1276,6 +1376,7 @@ var Verbs = []VerbDef{
 			"ErrAgentCapabilityUnsupported",
 			"ErrPermissionsUnsupported",
 			"ErrReservedEnvKey",
+			"ErrCantSend",
 		},
 	},
 	{
@@ -1374,7 +1475,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "pause",
-		Description: "Pane-only: always ErrAgentCapabilityUnsupported. Others: ended/missing no-op; waiting: send `/exit`, await `ended` for pause.timeout_seconds. " + missingNotProofShort + " ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. ErrSubmissionUnconfirmed: inspect attempted-input facts (caller-contract.md). Codex: end report + exited agent ends row before keys or in wait. Plain send-keys guards; ErrDialogMaybeOpen: answer dialog, send-keys `/exit` with expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Default: pane-only ErrAgentCapabilityUnsupported; others ended/missing no-op; waiting: send `/exit`, await `ended` for pause.timeout_seconds. " + missingNotProofShort + " ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. ErrSubmissionUnconfirmed: inspect attempted-input facts (caller-contract.md). Codex: end report + exited agent ends row before keys or in wait. Plain send-keys guards; ErrDialogMaybeOpen: answer dialog, send-keys `/exit` with expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1387,6 +1488,7 @@ var Verbs = []VerbDef{
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
+			{Name: "only_if_waiting", Type: "bool", Description: "Pause only an agent proven waiting with no turn pending. Covered Agents only: true for any other agent is refused with ErrSpawnNotPausable, err_details cause agent_not_covered, and nothing is ended. false or omitted: today's pause.", Nullable: false, AllowEmpty: false},
 		},
 		ResultFields: []FieldDef{},
 		ErrorNames: []string{

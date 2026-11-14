@@ -18,14 +18,21 @@ package config
 // TOML library represents an absent map as nil and an empty `[...]`
 // as a zero-length slice — Merge distinguishes them by nil-ness, so
 // the file's emptiness is faithfully preserved through the round-trip.
+//
+// SendMode, ConfirmedDelivery and ConfirmFromTranscripts are busy send's
+// Agent Defaults and SR-4.5's experimental setting: nil when the file has no
+// such key, so an absent key never reads as an explicit false or wait_turn.
 type TemplateFile struct {
-	CWD                 string               `toml:"cwd,omitempty"`
-	RelayMode           string               `toml:"relay_mode,omitempty"`
-	Agent               string               `toml:"agent,omitempty"`
-	AgentArgs           []string             `toml:"agent_args,omitempty"`
-	ExtraEnv            map[string]string    `toml:"extra_env,omitempty"`
-	AgentDirectorLabels map[string]string    `toml:"labels,omitempty"`
-	Permissions         *TemplatePermissions `toml:"permissions,omitempty"`
+	CWD                    string               `toml:"cwd,omitempty"`
+	RelayMode              string               `toml:"relay_mode,omitempty"`
+	Agent                  string               `toml:"agent,omitempty"`
+	AgentArgs              []string             `toml:"agent_args,omitempty"`
+	ExtraEnv               map[string]string    `toml:"extra_env,omitempty"`
+	AgentDirectorLabels    map[string]string    `toml:"labels,omitempty"`
+	Permissions            *TemplatePermissions `toml:"permissions,omitempty"`
+	SendMode               *string              `toml:"send_mode,omitempty"`
+	ConfirmedDelivery      *bool                `toml:"confirmed_delivery,omitempty"`
+	ConfirmFromTranscripts *bool                `toml:"confirm_from_transcripts,omitempty"`
 }
 
 // templateMapTables names TemplateFile's tables that decode into a Go map:
@@ -89,6 +96,10 @@ func AgentChoices(e Experimental) string {
 	}
 	return "claude, codex or cursor"
 }
+
+// ValidSendMode reports whether m is a Send Mode (SR-1.4): exactly wait_turn
+// or steer_turn. config cannot import the store, which holds the same codes.
+func ValidSendMode(m string) bool { return m == "wait_turn" || m == "steer_turn" }
 
 // IsPaneOnly identifies the fixed, supervised pane-only capability contract.
 func IsPaneOnly(agent string) bool { return agentPaneOnly[agent] }

@@ -98,8 +98,9 @@ type successCase struct {
 }
 
 // successCases is the authoritative per-verb fixture table, with expire's
-// cases (expireSuccessCases, success_expire.go) and list-subagents' cases
-// (listSubagentsSuccessCases, success_subagents.go) appended.
+// cases (expireSuccessCases, success_expire.go), list-subagents' cases
+// (listSubagentsSuccessCases, success_subagents.go) and busy send's
+// (busySendSuccessCases, success_busy_send.go) appended.
 // The init() guard below ensures every callable verb is represented at least
 // once, no verb and name pair twice, and that no non-callable verb sneaks in.
 var successCases = append([]successCase{
@@ -516,7 +517,7 @@ var successCases = append([]successCase{
 			return []string{"version"}
 		},
 	},
-}, append(expireSuccessCases, listSubagentsSuccessCases...)...)
+}, append(append(expireSuccessCases, listSubagentsSuccessCases...), busySendSuccessCases...)...)
 
 // ── completeness guard ────────────────────────────────────────────────────────
 

@@ -1,6 +1,7 @@
 /**
  * errors.test.ts — src/errors.ts and src/internal/errorMap.ts: the base class,
- * both err_name factories over the whole catalog (SR-4.1–4.4), and the TS-only
+ * both err_name factories over the whole catalog (SR-4.1–4.4) and busy-send
+ * refusal details (SR-9.4), and the TS-only
  * classes' fields and messages (SR-3, SR-5.4, SR-6.5, b.cot, b.xht).
  */
 
@@ -25,10 +26,14 @@ import {
   ErrAgentArgsMismatch,
   ErrAgentInvalid,
   ErrAgentMissing,
+  ErrCantSend,
   ErrOldLayout,
   ErrPermissionsUnsupported,
+  ErrSpawnNotPausable,
   ErrSubmissionUnconfirmed,
   ErrTemplateAgentMissing,
+  type CantSendDetails,
+  type NotPausableDetails,
   type SubmissionUnconfirmedDetails,
 } from "../src/index.js";
 import { errorMap, throwFromEnvelope } from "../src/internal/errorMap.js";
@@ -66,6 +71,7 @@ test.each([
   ["ErrTemplateAgentMissing", ErrTemplateAgentMissing, "make-template"],
   ["ErrOldLayout", ErrOldLayout, "list"],
   ["ErrSubmissionUnconfirmed", ErrSubmissionUnconfirmed, "send-keys"],
+  ["ErrCantSend", ErrCantSend, "send-keys"],
 ] as const)("%s: the exported class is what both factories build from its err_name", (name, Class, verb) => {
   const thrown = thrownBy(() => throwFromEnvelope(verb, { err_name: name, err_description: "d" }));
   for (const err of [errorFromEnvelope(verb, name, "d"), thrown]) {
@@ -90,6 +96,28 @@ test("ErrSubmissionUnconfirmed preserves accepted-keys and unknown-submission de
   const built = errorFromEnvelope("send-keys", envelope.err_name, envelope.err_description, details);
   for (const err of [thrown, built]) {
     expect(err).toBeInstanceOf(ErrSubmissionUnconfirmed);
+    expect((err as AgentDirectorError).errDetails).toEqual(details);
+  }
+});
+
+// SR-9.4, SR-6.5: busy-send refusal details reach errDetails unchanged through both factories:
+// agent_not_covered as the API sends it, and the limit and owner's Result later reasons carry.
+test.each([
+  ["ErrCantSend", "agent_not_covered", ErrCantSend, "send-keys",
+    { class: "cant_send", reason: "agent_not_covered", resend_safe: true, retry_with: "new_send" } satisfies CantSendDetails],
+  ["ErrCantSend", "with a limit", ErrCantSend, "send-keys",
+    { class: "cant_send", reason: "fixture_limit", resend_safe: false, retry_with: "none", limit: { actual: 70001, allowed: 70000 } } satisfies CantSendDetails],
+  ["ErrCantSend", "with the owner's Result", ErrCantSend, "send-keys", {
+    class: "cant_send", reason: "fixture_conflict", resend_safe: false, retry_with: "none",
+    result: { caller_uuid: "0f8e2a34-5b6c-4d7e-8f90-a1b2c3d4e5f6", request_id: "m1", class: "not_started", final: true, reason: "admission_unknown",
+      resend_safe: true, retry_with: "new_id", wait: null, forced: false, instance_id: "id-1", launch_token: null, evidence_kind: null, outcome: "not_started" },
+  } satisfies CantSendDetails],
+  ["ErrSpawnNotPausable", "cause agent_not_covered", ErrSpawnNotPausable, "pause", { cause: "agent_not_covered" } satisfies NotPausableDetails],
+] as const)("%s %s: errDetails through both factories", (name, _label, Class, verb, details) => {
+  const envelope = { err_name: name, err_description: "d", err_details: details };
+  const thrown = thrownBy(() => throwFromEnvelope(verb, envelope));
+  for (const err of [thrown, errorFromEnvelope(verb, name, "d", details)]) {
+    expect(err).toBeInstanceOf(Class);
     expect((err as AgentDirectorError).errDetails).toEqual(details);
   }
 });

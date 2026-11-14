@@ -59,7 +59,7 @@ type seedKind int
 const (
 	// seedNone means no DB row is seeded. Used for verbs whose happy path
 	// does not require any pre-existing row (spawn, find-missing, version,
-	// make-template).
+	// make-template, get-delivery).
 	seedNone seedKind = iota
 
 	// seedCheckPermission seeds a spawn in StateCheckPermission with
@@ -69,7 +69,8 @@ const (
 	// seedResumable seeds a spawn in StateEnded with session_id
 	// populated AND writes a JSONL placeholder on disk so the resume
 	// verb's os.Stat pre-flight passes. HOME must be redirected first
-	// (the smoke TestMain does this).
+	// (the smoke TestMain does this). Also force-delivery's and get-force's
+	// ended row, which busy send does not cover.
 	seedResumable
 
 	// seedExpired seeds an ended row through apitest.SeedSpawn (its SR-20.3

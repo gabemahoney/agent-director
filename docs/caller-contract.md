@@ -34,6 +34,8 @@ error:
   `send-keys`, follow
   [Ordinary text submission](#ordinary-text-submission); for manual
   `send-keys`, follow [Manual input ownership](#manual-input-ownership).
+- `ErrCantSend`: nothing was stored, sent or typed; follow
+  [Busy-send options](#busy-send-options).
 - `ErrPauseTimeout`: inspect before further input; never retry `pause`
   automatically. Follow [When pause cannot confirm exit](#when-pause-cannot-confirm-exit).
 - `resume`, or a supported `spawn --reuse-finished` refused as "still stopping" or "still
@@ -156,6 +158,93 @@ is published following creation, adoption or report-in.
 
 Uncovered rows omit top-level `delivery`, `delivery_capabilities` and Agent
 Defaults. Permission-request delivery fields keep their separate meaning.
+
+## Busy-send options
+
+These options apply only to Covered Agents:
+
+- `send-keys`: `send_mode` (`wait_turn` or `steer_turn`), `confirmed_delivery`,
+  `caller_uuid` and `force`.
+- `spawn` (reuse included), `resume` and `make-template`: the Agent Defaults
+  `send_mode` and `confirmed_delivery`, and the experimental
+  `confirm_from_transcripts`. A spawn's own value overrides its template's.
+- `pause`: `only_if_waiting`.
+
+Any supplied value counts, `false`, `wait_turn` and a value inherited from a
+template included. On the CLI a bare boolean flag is true; write false
+as `--force=false`. Over MCP, `null` is refused with `ErrInvalidFlags`, never
+read as omitted. A call that names none of them, or a `pause` with
+`only_if_waiting` false or omitted, works as the rest of this contract says,
+raw keys included.
+
+A call decides from the coverage of the launch its options apply to:
+
+- `send-keys`, `pause` and `force-delivery`: the target's current launch, the
+  [`busy_send`](#busy-send-coverage) that `get` returns.
+- `resume`: its new launch, which keeps the conversation's coverage.
+- `spawn`, reuse and `make-template`: the agent they resolve. A new
+  conversation is never covered in this version.
+
+This version delivers nothing through busy send: where that coverage is
+`covered`, the call fails with `ErrInternal`, and nothing is stored, sent,
+typed, ended or launched.
+
+Where it is `not_covered`:
+
+- `send-keys`, `spawn`, reuse, `resume` and `make-template` return
+  `ErrCantSend` with `err_details`
+  `{"class": "cant_send", "reason": "agent_not_covered", "resend_safe": true, "retry_with": "new_send"}`.
+  Nothing was stored, sent, typed, written or launched; the same call without
+  these options can succeed.
+- `pause` with `only_if_waiting: true` returns `ErrSpawnNotPausable` with
+  `err_details` `{"cause": "agent_not_covered"}`, whatever the row's state.
+  Nothing was sent or ended.
+- `make-template` decides for the template's `agent`. A template with no agent
+  stores the options, and each `spawn` that uses it decides for the agent it
+  resolves.
+
+A call naming an option never falls back to input or a launch without it.
+
+A `send_mode` other than `wait_turn` or `steer_turn`, or a `caller_uuid` that
+is not a hyphenated hexadecimal UUID, is refused before coverage is decided:
+`ErrInvalidFlags`, or `ErrTemplateMalformed` from `make-template` and for a
+template's own `send_mode`. `send-keys` checks its other input shapes first.
+An unknown id is `ErrSpawnNotFound`. Then `send-keys`, `pause` and `resume`
+decide coverage before any other check of the row, such as its state, relay
+or agent capability. `spawn`, reuse and `make-template` decide it only once
+their other checks of the template, agent, arguments, environment, id and
+credentials pass; those keep their own errors. `agent_not_covered` comes
+before any other `ErrCantSend` reason. Store failures keep their own errors.
+
+### Stored force attempts
+
+`force-delivery` on a target whose current launch is `not_covered` succeeds. Its
+`force_result` has `outcome: "refused"`, `reason: "agent_not_covered"`,
+`ended_at` equal to `started_at` and `carried_pairs: []`. Each call stores its
+own attempt under a new `force_id` that agent-director makes; nothing is
+delivered, typed or changed. An empty id is `ErrInvalidFlags`, an unknown or
+deleted one `ErrSpawnNotFound`, and a store failure an error, never a refused
+force. A refused `send-keys` with `force` stores no force attempt.
+
+### Durable lookups
+
+`get-force` reads a force attempt by its `force_id`. `get-delivery` reads a
+confirmed Message's Result by its pair, `caller_uuid` and
+`delivery_request_id`. `force_id` and `caller_uuid` are hyphenated hexadecimal
+UUIDs, in either case, read as lowercase; `delivery_request_id` is nonempty
+UTF-8. Any other form is `ErrInvalidFlags`.
+
+Each returns `lookup`: `found`, `unknown` (nothing stored) or
+`retention_expired`, with `force_result` or `result` null unless `found`. A
+refused force attempt is `found`; a pair no Message holds, including a native
+`delivery_request_id` sent without `caller_uuid`, is `unknown`.
+
+They read stored facts only: they start no work, run no
+[recovery checks](#bounded-recovery-on-state-reads) and probe no agent, tmux
+or process. Stored facts stay readable after a restart, the launch's end and
+the row's deletion. `unknown` and `retention_expired` are never permission to
+resend. A store failure is an error (`ErrStoreBusy` when a bounded read runs
+out of time), never `unknown`.
 
 ## Reading many agents
 
@@ -677,9 +766,9 @@ kept; nothing reads what the pane says.
 
 ## Ordinary text submission
 
-A nonempty `text` with Enter, without `key`, `request_token` or
-`expect_pane_sha256`, uses native ordinary delivery where the launch supports
-it. CR bytes are removed; LF newlines are preserved. Native success returns
+A nonempty `text` with Enter, without `key`, `request_token`,
+`expect_pane_sha256` or a [busy-send option](#busy-send-options), uses native
+ordinary delivery where the launch supports it. CR bytes are removed; LF newlines are preserved. Native success returns
 `outcome: "submitted"`,
 `request_id`, `session_id`, `record_sha256` and, when supplied by the native
 record, `record_id`: an exact new user record in this launch's native
@@ -1455,6 +1544,9 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
   or `reuse_finished`), or sets one key under names differing only in letter
   case. Use `agent_args`, remove the reserved key and keep one spelling.
   `make-template` refuses those reserved keys with `ErrInvalidFlags`.
+- `ErrCantSend`: the call or its template sets an Agent Default or
+  `confirm_from_transcripts` for an agent busy send does not cover; see
+  [Busy-send options](#busy-send-options).
 - `ErrReservedEnvKey`: the merged template and call `extra_env` sets `HOME`
   (any value), an `AGENT_DIRECTOR_*` key, or a malformed name (empty, or
   containing `=` or NUL); `make-template` checks its own `extra_env` the

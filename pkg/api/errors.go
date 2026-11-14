@@ -61,11 +61,31 @@ var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 // resume the row.
 var ErrSubmissionUnconfirmed = errors.New("ErrSubmissionUnconfirmed")
 
+// ErrCantSend is a busy-send refusal (SR-9.4): nothing was stored, sent or
+// typed. Its err_details (CantSendDetails) carry class cant_send, the
+// machine-readable reason, resend_safe and retry_with. Reason
+// agent_not_covered (SR-9.2) answers send-keys naming send_mode,
+// confirmed_delivery, caller_uuid or force, and spawn, reuse, resume or
+// make-template setting an Agent Default or confirm_from_transcripts, when
+// busy send does not cover the Launch the option applies to: send-keys' row's
+// published current Launch (its recorded coverage); a resumed Launch (the
+// conversation's recorded coverage, raised by the agent kind); and a spawn's,
+// reuse's or named-agent template's new Launch (the resolved agent's).
+// resend_safe is true and retry_with new_send (the same call without those
+// options can succeed). It follows malformed-parameter validation and
+// precedes every other cant_send reason.
+var ErrCantSend = errors.New("ErrCantSend")
+
 // ErrSpawnNotPausable is returned by the pause verb when the target
-// Spawn's state is not pausable (SRD §9). Pausable means `waiting`;
-// `pending` / `working` / `ask_user` / `check_permission` all reject.
-// `ended` / `missing` are not errors — they are no-op success, since
-// the desired post-condition is already true.
+// Spawn's state is not pausable (SRD §9). With only_if_waiting false (the
+// default), pausable means `waiting`; `pending` / `working` / `ask_user` /
+// `check_permission` all reject, and `ended` / `missing` are not errors —
+// they are no-op success, since the desired post-condition is already true.
+// With only_if_waiting true, the coverage the row's published current Launch
+// recorded decides first, in any state, and nothing is ended: not_covered
+// returns this error with err_details (NotPausableDetails) cause
+// agent_not_covered (SR-9.2); covered gets this version's unnamed
+// busy-send-unavailable error (ErrInternal), not this one.
 var ErrSpawnNotPausable = errors.New("ErrSpawnNotPausable")
 
 // ErrPauseTimeout is returned by the pause verb when the target Spawn
@@ -265,8 +285,14 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     -, or whose day count is above 106751 (expire), with a description
 //     naming the param and the expected form (b.anw, b.hxn, b.sgw, b.c4n).
 //   - The shared verb layer, for spawn, read-pane, list, decide, send-keys,
-//     get-many and record-pane-answer, so the CLI, MCP, the Go client and the
-//     TypeScript client all return it: runSpawn returns it (wrapped) when an
+//     get-many, record-pane-answer, resume, force-delivery, get-force and
+//     get-delivery, so the CLI, MCP, the Go client and the TypeScript client
+//     all return it: spawn, resume and send-keys for a send_mode other than
+//     wait_turn or steer_turn, and send-keys for a caller_uuid that is not a
+//     hyphenated hexadecimal UUID; force-delivery for an empty instance id;
+//     get-force for a force_id and get-delivery for a caller_uuid that is not
+//     one, or an empty or non-UTF-8 delivery_request_id (SR-1.3);
+//     runSpawn returns it (wrapped) when an
 //     explicit instance id contains an ASCII control character (0x00-0x1f or
 //     0x7f) (SR-9.1); ReadPane for a negative NLines and List for a negative
 //     Limit, before anything is read (b.c4n); decide for a negative
@@ -285,8 +311,9 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     older_than with ParseOlderThan, which refuses a negative value first
 //     (the CLI flag-parse and MCP argument sources above).
 //
-// So spawn's, read-pane's, list's, decide's, send-keys' and
-// record-pane-answer's manifest ErrorNames list it; no other callable verb
+// So spawn's, read-pane's, list's, decide's, send-keys', get-many's,
+// record-pane-answer's, resume's, force-delivery's, get-force's and
+// get-delivery's manifest ErrorNames list it; no other callable verb
 // lists it, because the CLI flag-parse and MCP argument emissions are not
 // verb-specific and the expire verb's surfaces never reach Expire's refusal:
 // only a Go caller passing Client.Expire a negative olderThan does. (The

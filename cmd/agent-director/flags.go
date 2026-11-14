@@ -145,6 +145,61 @@ func (o optionalInt64Value) Set(v string) error {
 	return nil
 }
 
+// optionalStringValue implements flag.Value for a string flag whose absence
+// differs from every value, an empty one included (busy send's --send-mode
+// and --caller-uuid): *dst stays nil until the flag is given, so the verb
+// refuses a supplied empty value instead of reading it as omitted.
+type optionalStringValue struct {
+	dst **string
+}
+
+func (o optionalStringValue) String() string {
+	if o.dst == nil || *o.dst == nil {
+		return ""
+	}
+	return **o.dst
+}
+
+func (o optionalStringValue) Set(v string) error {
+	*o.dst = &v
+	return nil
+}
+
+// optionalBoolValue implements flag.Value for a boolean flag whose absence
+// differs from false (busy send's --confirmed-delivery, --force and
+// --confirm-from-transcripts): *dst stays nil until the flag is given, the
+// bare flag is true, and --flag=false is an explicit false that reaches the
+// verb.
+type optionalBoolValue struct {
+	dst **bool
+}
+
+func (o optionalBoolValue) IsBoolFlag() bool { return true }
+
+func (o optionalBoolValue) String() string {
+	if o.dst == nil || *o.dst == nil {
+		return ""
+	}
+	return strconv.FormatBool(**o.dst)
+}
+
+func (o optionalBoolValue) Set(v string) error {
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return errors.New("not a boolean")
+	}
+	*o.dst = &b
+	return nil
+}
+
+// The usage text of the busy-send Agent Default flags spawn, resume and
+// make-template define on their own FlagSets.
+const (
+	sendModeUsage               = "Agent Default Send Mode, wait_turn or steer_turn; Covered Agents only, else ErrCantSend agent_not_covered"
+	confirmedDeliveryUsage      = "Agent Default Confirmed Delivery (--confirmed-delivery=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered"
+	confirmFromTranscriptsUsage = "experimental: confirm a force from transcripts (=false is explicit); Covered Agents only, else ErrCantSend agent_not_covered"
+)
+
 // buildPermissions assembles a *spawn.Permissions from the three repeated
 // flag slices. Returns nil when every slice is empty so the caller can
 // leave the field unset.

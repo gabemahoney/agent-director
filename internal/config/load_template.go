@@ -35,7 +35,9 @@ import (
 //     decoder accepts unknown keys by default; we walk the
 //     MetaData.Undecoded() result and reject if any survive).
 //   - relay_mode validation: must be "" / "on" / "off" — anything else
-//     is ErrTemplateMalformed at load time, before merge.
+//     is ErrTemplateMalformed at load time, before merge. A present
+//     send_mode must be wait_turn or steer_turn, an empty one included;
+//     ErrTemplateMalformed otherwise.
 //   - agent validation, after relay_mode: a value other than claude, codex or cursor
 //     (case-sensitive) → ErrTemplateMalformed, whatever agent the spawn
 //     names; then a non-empty agent_args with no agent →
@@ -90,6 +92,10 @@ func LoadTemplate(name string) (TemplateFile, error) {
 	if tf.RelayMode != "" && tf.RelayMode != "on" && tf.RelayMode != "off" {
 		return TemplateFile{}, fmt.Errorf("%w: %s: relay_mode=%q (want on/off)",
 			ErrTemplateMalformed, name, tf.RelayMode)
+	}
+	if tf.SendMode != nil && !ValidSendMode(*tf.SendMode) {
+		return TemplateFile{}, fmt.Errorf("%w: %s: send_mode=%q (want wait_turn/steer_turn)",
+			ErrTemplateMalformed, name, *tf.SendMode)
 	}
 
 	if tf.Agent != "" && !ValidAgent(tf.Agent) {
