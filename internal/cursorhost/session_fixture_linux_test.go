@@ -27,22 +27,25 @@ type submissionRecord struct {
 	Token      string `json:"launch_token"`
 	Life       int64  `json:"life_number"`
 	Data       struct {
-		ID          string          `json:"submission_id"`
-		Request     string          `json:"request_id"`
-		Text        string          `json:"text"`
-		Started     bool            `json:"started"`
-		Reason      string          `json:"reason"`
-		Completion  string          `json:"completion"`
-		RuntimeGone bool            `json:"runtime_gone"`
-		ConsumedAt  time.Time       `json:"consumed_at"`
-		Control     string          `json:"control"`
-		InputID     string          `json:"input_id"`
-		InputEpoch  *uint64         `json:"input_epoch"`
-		Count       uint64          `json:"count"`
-		Update      json.RawMessage `json:"update"`
-		TextSHA256  string          `json:"text_sha256"`
-		Durable     *bool           `json:"durable_admission"`
-		Written     *int            `json:"bytes_written"`
+		ID                    string          `json:"submission_id"`
+		Request               string          `json:"request_id"`
+		Text                  string          `json:"text"`
+		Started               bool            `json:"started"`
+		Reason                string          `json:"reason"`
+		Outcome               string          `json:"outcome"`
+		StopReason            string          `json:"stop_reason"`
+		CancellationRequested *bool           `json:"cancellation_requested"`
+		Completion            string          `json:"completion"`
+		RuntimeGone           bool            `json:"runtime_gone"`
+		ConsumedAt            time.Time       `json:"consumed_at"`
+		Control               string          `json:"control"`
+		InputID               string          `json:"input_id"`
+		InputEpoch            *uint64         `json:"input_epoch"`
+		Count                 uint64          `json:"count"`
+		Update                json.RawMessage `json:"update"`
+		TextSHA256            string          `json:"text_sha256"`
+		Durable               *bool           `json:"durable_admission"`
+		Written               *int            `json:"bytes_written"`
 	} `json:"data"`
 }
 

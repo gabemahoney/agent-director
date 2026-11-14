@@ -170,7 +170,9 @@ func TestCursorMissingRefusesReplacedAuthority(t *testing.T) {
 				}
 				closeMissing := f.s.MarkCursorMissingIfSameLaunch
 				if fatal {
-					closeMissing = f.s.MarkFailedCursorRuntimeMissing
+					closeMissing = func(row store.Spawn, b store.CursorRuntime) (string, store.CondResult, error) {
+						return f.s.MarkFailedCursorRuntimeMissing(row, b, "")
+					}
 				}
 				prior, result, err := closeMissing(row, b)
 				if err != nil || result != store.CondChanged || prior != "" {
@@ -222,7 +224,7 @@ func TestFailedCursorRuntimeMissingTerminationAndTerminalGuards(t *testing.T) {
 				}
 				before := f.rawColumns(row.InstanceID)
 				b.Terminated = bits.proof
-				prior, result, err := f.s.MarkFailedCursorRuntimeMissing(row, b)
+				prior, result, err := f.s.MarkFailedCursorRuntimeMissing(row, b, "")
 				if store.IsLiveState(state) && (!bits.proof || bits.durable) {
 					after, readErr := f.s.GetSpawn(row.InstanceID)
 					if err != nil || result != store.CondApplied || prior != state || readErr != nil || after.State != store.StateMissing || after.RowVersion != row.RowVersion+1 {
@@ -258,7 +260,7 @@ func TestFailedCursorRuntimeCannotCloseRetainedObsoleteDescriptor(t *testing.T) 
 				t.Fatal(err)
 			}
 			before := f.rawColumns(row.InstanceID)
-			if prior, result, err := f.s.MarkFailedCursorRuntimeMissing(row, b); err != nil || result != store.CondChanged || prior != "" {
+			if prior, result, err := f.s.MarkFailedCursorRuntimeMissing(row, b, ""); err != nil || result != store.CondChanged || prior != "" {
 				t.Fatalf("old runtime closed replacement: %s %v %v", prior, result, err)
 			}
 			if !reflect.DeepEqual(before, f.rawColumns(row.InstanceID)) {
@@ -292,7 +294,7 @@ func TestFailedCursorRuntimeMissingDoesNotWaitForWriter(t *testing.T) {
 	}
 	defer conn.ExecContext(context.Background(), "ROLLBACK")
 	start := time.Now()
-	prior, result, err := e.f.s.MarkFailedCursorRuntimeMissing(row, e.b)
+	prior, result, err := e.f.s.MarkFailedCursorRuntimeMissing(row, e.b, "")
 	if !errors.Is(err, store.ErrStoreBusy) || prior != "" || result == store.CondApplied || time.Since(start) > 250*time.Millisecond {
 		t.Fatalf("no-wait close: %s %v %v elapsed=%s", prior, result, err, time.Since(start))
 	}

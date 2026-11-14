@@ -545,8 +545,9 @@ export interface SpawnParams {
  * The launch result. The row is `pending` from its insert until
  * the agent reports in (Cursor: verified first prompt), then `waiting`.
  * Cursor initialization, session creation and requested mode validation happen
- * asynchronously. This result does not confirm them; later failure appears in
- * the pane and ad.cursor.failed. Missing still requires process evidence.
+ * asynchronously. This result does not confirm them. Recorded Cursor failures
+ * appear as failure_reason on get, get-many and status, and in the gateway pane.
+ * Trail events are audit-only. Missing still requires process evidence.
  */
 export interface SpawnResult {
   /** The id the new Spawn is tracked under. */
@@ -623,6 +624,8 @@ export interface StatusResult {
    * can be newer: a refusal can name a state status does not show yet.
    */
   state: string;
+  /** As GetResult's: the sanitized Cursor failure for the reported state, or null. Other agents do not record reasons. */
+  failure_reason: string | null;
   /**
    * Complete stored family: self and live descendants, including through retained terminal
    * intermediates. A live member counts as working while its raw state is not waiting or it
@@ -720,6 +723,14 @@ export interface GetResult {
    * this field does not show yet.
    */
   state: string;
+  /**
+   * Sanitized Cursor failure for this reported state's current interval; null when none
+   * is recorded. Waiting means a failed turn; missing means a failed session. Only
+   * agent "cursor" records reasons; other agents return null regardless of outcome.
+   * Follows state settling and clears with the next prompt or lifecycle transition,
+   * including rotation or a new launch. Never authorizes replay.
+   */
+  failure_reason: string | null;
   /**
    * Complete stored family: self and live descendants, including through retained terminal
    * intermediates. A live member counts as working while its raw state is not waiting or it

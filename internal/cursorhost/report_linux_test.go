@@ -33,12 +33,13 @@ func runCursorReportHelper() int {
 		return 2
 	}
 	var payload struct {
-		Event      string `json:"hook_event_name"`
-		Path       string `json:"transcript_path"`
-		Session    string `json:"session_id"`
-		Connection string `json:"cursor_connection"`
-		Previous   string `json:"cursor_previous_session"`
-		Deadline   string `json:"cursor_rotation_deadline"`
+		Event         string `json:"hook_event_name"`
+		Path          string `json:"transcript_path"`
+		Session       string `json:"session_id"`
+		Connection    string `json:"cursor_connection"`
+		Previous      string `json:"cursor_previous_session"`
+		Deadline      string `json:"cursor_rotation_deadline"`
+		FailureReason string `json:"cursor_failure_reason"`
 	}
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil || json.Unmarshal(raw, &payload) != nil {
@@ -74,6 +75,9 @@ func runCursorReportHelper() int {
 		return 2
 	}
 	g := store.HookGate{Event: payload.Event, ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
+	if payload.Event == "Stop" {
+		g.CursorFailureReason = payload.FailureReason
+	}
 	if payload.Previous != "" {
 		until, e := time.Parse(time.RFC3339Nano, payload.Deadline)
 		if e != nil || payload.Event != "SessionStart" || payload.Previous != b.SessionID || payload.Session == b.SessionID || !time.Now().Before(until) {

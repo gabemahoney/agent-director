@@ -66,8 +66,11 @@ test.each([
     expect(listed).toMatchObject({ instance_id: spawned.instance_id, agent: "cursor", state: "pending" });
     const status = await client.status({ instance_id: spawned.instance_id });
     expect(status.state).toBe("pending");
+    expect(status.failure_reason).toBeNull();
+    expect(row.failure_reason).toBeNull();
+    expect(listed).not.toHaveProperty("failure_reason");
     expect(status.family_state).toBe("working");
-    expect(Object.keys(status).sort()).toEqual(["confirmations", "context", "family_state", "idle_screen_availability", "launch_started_at", "process_liveness", "state"]);
+    expect(Object.keys(status).sort()).toEqual(["confirmations", "context", "failure_reason", "family_state", "idle_screen_availability", "launch_started_at", "process_liveness", "state"]);
     expect(status.idle_screen_availability).toBe("unavailable");
     // Only the Helper's gateway is probed for Cursor: its runtime process and
     // displayed state are explicitly unknown with null evidence, while the

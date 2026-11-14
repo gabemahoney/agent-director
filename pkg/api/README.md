@@ -173,6 +173,11 @@ the launch in progress, set only while the row is `pending`; JSON key
 `launch_started_at`, omitted otherwise). Most-likely sentinel error:
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
 
+`Get`, each `GetMany` row and `Status` expose `FailureReason *string`
+(JSON `failure_reason`, nil encodes as `null`); `List` omits it. Claude Code
+and Codex always return nil. See [Failure reasons](../../docs/caller-contract.md#failure-reasons)
+for recording support and behaviour.
+
 `StatusResult` and `Get`'s `SpawnRow` embed `StateDetail`:
 `DisplayedState` (`api.StateIdleScreen` or the defined-but-unused
 `api.StateNeedsIntelligence`), `Since string` and `UnchangedMinutes *int64`.

@@ -279,6 +279,135 @@ func TestCursorHumanAdminDeleteLeavesRunningPaneUntracked(t *testing.T) {
 	}
 }
 
+// b.ivj Reproduction, D1-D3: a failed lead turn survives once, exposes its
+// sanitized reason, and never ends its independently launched child.
+func TestCursorLeadPromptInternalErrorPreservesChild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real pane lead and child failures")
+	}
+	f, lead, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{Relay: "on"})
+	_, _, child := newCursorPaneScenario(t, false, "", cursorPaneOptions{Shared: f, Script: &cursorfix.Scenario{SessionID: "ivj-child"}})
+	for _, id := range []string{launch.ID, child.ID} {
+		waitFor(t, "waiting "+id, func() bool { return readRow(t, f.DBPath, id).State == store.StateWaiting }, nil)
+	}
+	if err := apitest.SeedParentChild(f.DBPath, launch.ID, child.ID); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(f.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	childBefore := readRow(t, f.DBPath, child.ID)
+	childBinding, err := st.ReadCursorRuntime(child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertChildUntouched := func() {
+		t.Helper()
+		got := readRow(t, f.DBPath, child.ID)
+		binding, err := st.ReadCursorRuntime(child.ID)
+		if got.ParentID != launch.ID || got.State != store.StateWaiting || got != childBefore || err != nil || binding != childBinding {
+			t.Fatalf("lead failure changed child: row=%+v binding=%+v err=%v", got, binding, err)
+		}
+		for _, identity := range []struct {
+			pid   int
+			start string
+		}{{binding.GatewayPID, binding.GatewayStart}, {binding.RuntimePID, binding.RuntimeStart}} {
+			observed, ok := readStat(identity.pid)
+			if !ok || observed.gone() || observed.start != identity.start {
+				t.Fatalf("lead failure ended or replaced child process %d", identity.pid)
+			}
+		}
+		if !child.rt.hasSession(t, child.SessionID) {
+			t.Fatal("lead failure removed child's tmux session")
+		}
+	}
+
+	const reason = "Cursor ACP session/prompt failed: runtime internal error; cause unknown"
+	lead.Configure(t, cursorfix.Scenario{PromptReply: json.RawMessage(`{"error":{"code":-32603,"message":"SYNTHETIC internal"}}`)})
+	if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "ivj first failure"}); err != nil {
+		t.Fatal(err)
+	}
+	assertCursorTurnFailure(t, f, launch, reason)
+	waitFor(t, "sanitized turn failure rendered", func() bool {
+		pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: launch.ID, NLines: 100})
+		if err == nil && strings.Contains(pane.Pane, "SYNTHETIC") {
+			t.Fatalf("peer diagnostic leaked into pane: %s", pane.Pane)
+		}
+		// capture-pane preserves wrapping at the real terminal's width.
+		return err == nil && strings.Contains(strings.ReplaceAll(pane.Pane, "\n", ""), "Cursor turn failed: "+reason)
+	}, nil)
+	assertChildUntouched()
+
+	if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "ivj second failure"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "second failure ends lead gateway and session", func() bool {
+		return pidGone(int(launch.Row.PanePID.(int64))) && readRow(t, f.DBPath, launch.ID).State == store.StateMissing && !launch.rt.hasSession(t, launch.SessionID)
+	}, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
+	assertCursorFailureViews(t, f, launch.ID, store.StateMissing, reason)
+	failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", launch.ID)
+	if len(failures) != 1 || failures[0]["reason"] != reason || strings.Contains(fmt.Sprint(failures), "SYNTHETIC") {
+		t.Fatalf("session-ending failure trail: %v", failures)
+	}
+	if turns := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.turn_failed", launch.ID); len(turns) != 1 {
+		t.Fatalf("recoverable failure trail count = %d, want 1", len(turns))
+	}
+	assertChildUntouched()
+	if prompts := panePrompts(t, lead); len(prompts) != 2 || prompts[0].Text != "ivj first failure" || prompts[1].Text != "ivj second failure" {
+		t.Fatalf("failed prompts replayed or lost: %+v", prompts)
+	}
+}
+
+func assertCursorTurnFailure(t *testing.T, f *spawnFix, launch spawned, reason string) {
+	t.Helper()
+	gatewayPID := int(launch.Row.PanePID.(int64))
+	waitFor(t, "first failure returns to waiting", func() bool {
+		return pidGone(gatewayPID) || (readRow(t, f.DBPath, launch.ID).State == store.StateWaiting && len(hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.turn_failed", launch.ID)) == 1)
+	}, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
+	if pidGone(gatewayPID) || !launch.rt.hasSession(t, launch.SessionID) || readRow(t, f.DBPath, launch.ID).State != store.StateWaiting {
+		t.Fatalf("first prompt failure ended session: %+v", readRow(t, f.DBPath, launch.ID))
+	}
+	turns := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.turn_failed", launch.ID)
+	if len(turns) != 1 || turns[0]["reason"] != reason {
+		t.Fatalf("turn failure trail: %v; want reason %q", turns, reason)
+	}
+	if failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", launch.ID); len(failures) != 0 {
+		t.Fatalf("first prompt failure emitted fatal event: %v", failures)
+	}
+	assertCursorFailureViews(t, f, launch.ID, store.StateWaiting, reason)
+}
+
+func assertCursorFailureViews(t *testing.T, f *spawnFix, id, state, reason string) {
+	t.Helper()
+	got, err := f.API.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	many, err := f.API.GetMany([]string{id})
+	if err != nil || len(many.Spawns) != 1 || len(many.NotFound) != 0 {
+		t.Fatalf("get-many: %+v %v", many, err)
+	}
+	status, err := f.API.Status(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, result := range map[string]any{"get": got, "get-many": many.Spawns[0], "status": status} {
+		raw, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var view map[string]any
+		if err := json.Unmarshal(raw, &view); err != nil {
+			t.Fatal(err)
+		}
+		if view["state"] != state || view["failure_reason"] != reason || strings.Contains(string(raw), "SYNTHETIC") {
+			t.Fatalf("%s = %s; want state %q and sanitized failure_reason %q", name, raw, state, reason)
+		}
+	}
+}
+
 func TestCursorStoppingOneLaunchPreservesOtherLaunchAndWorker(t *testing.T) {
 	if testing.Short() {
 		t.Skip("concurrent real launches")
@@ -377,8 +506,13 @@ func cursorConcurrentSurvivors(t *testing.T, outcome string) {
 			t.Fatal(err)
 		}
 	} else {
+		// b.ivj D1: one correlated rejection ends only its turn; the next is fatal.
 		a.Configure(t, cursorfix.Scenario{PromptReply: json.RawMessage(`{"error":{"code":-32000,"message":"Authentication required"}}`)})
 		if _, err = f.API.SendKeys(api.SendKeysParams{InstanceID: first.ID, Text: "affected-rejection"}); err != nil {
+			t.Fatal(err)
+		}
+		assertCursorTurnFailure(t, f, first, "Cursor ACP session/prompt failed: authentication required; check the selected runtime's existing login")
+		if _, err = f.API.SendKeys(api.SendKeysParams{InstanceID: first.ID, Text: "affected-second-rejection"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -429,6 +563,8 @@ func cursorConcurrentSurvivors(t *testing.T, outcome string) {
 		}
 		if i == 0 && outcome == "stop" {
 			prompts = 1
+		} else if i == 0 {
+			prompts = 3
 		}
 		if !reflect.DeepEqual(methods, map[string]int{"initialize": 1, "session/new": 1, "session/prompt": prompts}) {
 			t.Fatalf("unexpected retry/fallback frames: %v", methods)
@@ -439,7 +575,7 @@ func cursorConcurrentSurvivors(t *testing.T, outcome string) {
 			intended, other = distinct, selected
 		}
 		for _, p := range panePrompts(t, r) {
-			if p.Text == "affected-rejection" {
+			if p.Text == "affected-rejection" || p.Text == "affected-second-rejection" {
 				continue
 			}
 			var operation any

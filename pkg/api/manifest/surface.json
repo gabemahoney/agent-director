@@ -284,6 +284,14 @@
           ]
         },
         {
+          "name": "failure_reason",
+          "type": "string?",
+          "description": "Sanitized failure recorded by the Cursor gateway for the reported state's current interval: waiting means a failed turn, missing a failed session. Always present; null when no applicable reason is recorded. Only agent cursor records reasons; Claude Code, Codex and other agents return null regardless of their outcome. Follows state settling, survives reads, and clears when the next prompt or lifecycle transition replaces that state's evidence, including rotation or a new launch. Raw runtime message and data are never included. Not a confirmations.state.reason value or permission to replay input.",
+          "nullable": true,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
           "name": "process_liveness",
           "type": "string",
           "description": "The recorded agent process at its recorded start identity: alive, exited or unknown. A Helper, tmux session or descendant never makes it alive, and an unreadable start identity, no recorded identity or a protected pending launch leaves it unknown or unconfirmed. Cursor reports unknown (reason unsupported): only its Helper's gateway is probed. Its evidence is confirmations.process_liveness; a live process never confirms or refreshes state.",
@@ -456,6 +464,14 @@
             "working",
             "waiting"
           ]
+        },
+        {
+          "name": "failure_reason",
+          "type": "string?",
+          "description": "Sanitized failure recorded by the Cursor gateway for the reported state's current interval: waiting means a failed turn, missing a failed session. Always present; null when no applicable reason is recorded. Only agent cursor records reasons; Claude Code, Codex and other agents return null regardless of their outcome. Follows state settling, survives reads, and clears when the next prompt or lifecycle transition replaces that state's evidence, including rotation or a new launch. Raw runtime message and data are never included. Not a confirmations.state.reason value or permission to replay input.",
+          "nullable": true,
+          "allow_empty": false,
+          "allowed_values": null
         },
         {
           "name": "process_liveness",

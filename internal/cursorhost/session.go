@@ -121,9 +121,13 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	// the final failure event, including after the terminal restores ISIG.
 	defer signal.Stop(signals)
 	ownedID := ""
+	failureReason := ""
 	defer func() {
 		if err != nil && ownedID != "" {
-			_ = trail.Emit(context.Background(), "ad.cursor.failed", map[string]any{"instance_id": ownedID, "reason": err.Error(), "source": "ad_cursor_host"})
+			if failureReason == "" {
+				failureReason = recordedFailureReason(err)
+			}
+			_ = trail.Emit(context.Background(), "ad.cursor.failed", map[string]any{"instance_id": ownedID, "reason": failureReason, "source": "ad_cursor_host"})
 		}
 	}()
 	if runtime.GOOS != "linux" {
@@ -160,7 +164,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				if abandonedCleanupBinding != nil {
 					// The original failure has already been returned. This is
 					// best-effort retirement under fresh conditional row guards.
-					_ = closeFailedLaunch(s, *abandonedCleanupBinding)
+					_ = closeFailedLaunch(s, *abandonedCleanupBinding, failureReason)
 				}
 			}()
 			return
@@ -196,17 +200,25 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	intentional := false
 	var cleanupBinding *store.CursorRuntime
 	defer func() {
+		// Keep one initiating reason for the row and audit even when cleanup
+		// appends an independent termination, verification or store error.
+		if err != nil && failureReason == "" {
+			failureReason = recordedFailureReason(err)
+		}
 		stopErr := p.terminate()
 		if stopErr != nil {
 			err = errors.Join(err, stopErr)
 		}
 		if err != nil && cleanupBinding != nil {
+			if failureReason == "" {
+				failureReason = recordedFailureReason(err)
+			}
 			if proofErr := VerifyRuntime(*cleanupBinding, true); proofErr != nil {
 				err = errors.Join(err, proofErr)
 			} else if guidanceVerificationAbandoned {
 				binding := *cleanupBinding
 				abandonedCleanupBinding = &binding
-			} else if closeErr := closeFailedLaunch(s, *cleanupBinding); closeErr != nil {
+			} else if closeErr := closeFailedLaunch(s, *cleanupBinding, failureReason); closeErr != nil {
 				err = errors.Join(err, closeErr)
 			}
 		}
@@ -377,6 +389,10 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	persistenceFailed := false
 	var cancelAt time.Time
 	runtimeEnded := false
+	consecutivePromptFailures := 0
+	// Controls may report Stop again for the same completed turn. Preserve its
+	// failure until another prompt or conversation supplies a new outcome.
+	turnFailureReason := ""
 	activeCancellation := false
 	idleControl := false
 	var pendingControl map[string]any
@@ -723,11 +739,12 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		}
 		return e
 	}
-	reportWaiting := func(event string, check func(func() bool)) error {
+	reportWaiting := func(event string, check func(func() bool), reason string) error {
 		// Persist exact outgoing proofs before waiting can recover admission.
 		flush := requests.flushProofs(proofFlushEvent{kind: proofWaiting, epoch: inputs.epochValue()})
 		defer flush.abandon()
 		bound := *rep
+		bound.failureReason = reason
 		bound.rotationContext = flush.ctx
 		var waiting func(func() bool)
 		if check != nil {
@@ -869,7 +886,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				v.obligation.retired.Store(true)
 				old := v.obligation.snapshot()
 				switch old.State {
-				case store.CursorInputCompleted, store.CursorInputCancelled, store.CursorInputRefused, store.CursorInputUnresolved, store.CursorInputControl:
+				case store.CursorInputCompleted, store.CursorInputFailed, store.CursorInputCancelled, store.CursorInputRefused, store.CursorInputUnresolved, store.CursorInputControl:
 					return
 				}
 				next := old
@@ -1015,6 +1032,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		if e := report("UserPromptSubmit"); e != nil {
 			return e
 		}
+		turnFailureReason = ""
 		if intentional || !inputs.current(v.epoch) || v.sessionID != session {
 			return cancelSubmission(v, "control consumed before dispatch")
 		}
@@ -1290,7 +1308,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		if idleControl && !rotating && !busy && !intentional && session != "" {
 			idleControl = false
 			epoch := inputs.epochValue()
-			if err = reportWaiting("Stop", func(check func() bool) { inputs.ifCurrent(epoch, func() { admission.waiting(check) }) }); err != nil {
+			if err = reportWaiting("Stop", func(check func() bool) { inputs.ifCurrent(epoch, func() { admission.waiting(check) }) }, turnFailureReason); err != nil {
 				return err
 			}
 			if len(afterRecoveryReport) > 0 && afterRecoveryReport[0] != nil {
@@ -1627,11 +1645,23 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				continue
 			}
 			raw, e := protocol.response(f)
+			var promptFailure *acpReplyError
 			if e != nil {
 				if modeResponse != nil && errors.Is(e, errACPOperationUnsupported) {
 					return fmt.Errorf("Cursor requested mode configuration failed; remove --plan, or --mode and its value, then retry: %w", e)
 				}
-				return e
+				if !errors.As(e, &promptFailure) || promptFailure.operation != "session/prompt" || phase != "prompt" || active == nil {
+					return e
+				}
+				select {
+				case <-p.done:
+					runtimeEnded = true
+					return e
+				default:
+				}
+				if VerifyRuntime(rep.binding, false) != nil {
+					return e
+				}
 			}
 			modeConfirmed := false
 			if modeResponse != nil {
@@ -1759,6 +1789,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				}
 				if observed == expected {
 					b, rep.binding, tr.binding, session = expected, expected, expected, created.ID
+					turnFailureReason = ""
 					retiredSessions[rotationOld] = true
 					confirmedSessions[session] = true
 					responseOrigins = append(responseOrigins, responseOrigin{protocol.next, session})
@@ -1890,7 +1921,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					waiting = func(check func() bool) { inputs.ifCurrent(waitingEpoch, func() { admission.waiting(check) }) }
 				}
 				if !loaded {
-					if err = reportWaiting("SessionStart", waiting); err != nil {
+					if err = reportWaiting("SessionStart", waiting, ""); err != nil {
 						return err
 					}
 				}
@@ -1955,27 +1986,52 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					}
 				}
 			case "prompt":
-				var completed struct {
-					Reason string `json:"stopReason"`
+				reason := ""
+				submissionID, requestID := active.submission, activeRequest
+				if promptFailure != nil {
+					reason = promptFailure.Error()
+					consecutivePromptFailures++
+					if err = finishInput(active, store.CursorInputFailed, reason); err != nil {
+						return err
+					}
+					if err = record("turn_outcome", map[string]any{"outcome": "failed", "reason": reason, "cancellation_requested": cancelled, "origin": "main", "submission_id": submissionID, "request_id": requestID}); err != nil {
+						return err
+					}
+					if consecutivePromptFailures >= 2 {
+						failureReason = reason
+						// The correlated reply establishes this outcome even though
+						// the connection is being retired. Do not call it unconfirmed.
+						active, activeRequest = nil, ""
+						if err = flushInputDispositions(); err != nil {
+							return err
+						}
+						return promptFailure
+					}
+				} else {
+					var completed struct {
+						Reason string `json:"stopReason"`
+					}
+					if json.Unmarshal(raw, &completed) != nil {
+						return fmt.Errorf("invalid Cursor completion")
+					}
+					switch completed.Reason {
+					case "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled":
+					default:
+						return fmt.Errorf("Cursor completion reason unavailable")
+					}
+					consecutivePromptFailures = 0
+					if err = finishInput(active, store.CursorInputCompleted, completed.Reason); err != nil {
+						return err
+					}
+					if err = record("turn_outcome", map[string]any{"stop_reason": completed.Reason, "cancellation_requested": cancelled, "origin": "main", "submission_id": submissionID, "request_id": requestID}); err != nil {
+						return err
+					}
+					if completed.Reason == "cancelled" {
+						requests.cancel()
+					}
 				}
-				if json.Unmarshal(raw, &completed) != nil {
-					return fmt.Errorf("invalid Cursor completion")
-				}
-				switch completed.Reason {
-				case "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled":
-				default:
-					return fmt.Errorf("Cursor completion reason unavailable")
-				}
-				if err = finishInput(active, store.CursorInputCompleted, completed.Reason); err != nil {
-					return err
-				}
+				turnFailureReason = reason
 				inputPrerequisitesChanged = true
-				if err = record("turn_outcome", map[string]any{"stop_reason": completed.Reason, "cancellation_requested": cancelled, "origin": "main", "submission_id": active.submission, "request_id": activeRequest}); err != nil {
-					return err
-				}
-				if completed.Reason == "cancelled" {
-					requests.cancel()
-				}
 				active = nil
 				activeRequest = ""
 				activeCancellation = false
@@ -2011,13 +2067,22 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					return err
 				}
 				if rotating {
+					if reason != "" {
+						_ = trail.Emit(context.Background(), "ad.cursor.turn_failed", map[string]any{"instance_id": ownedID, "reason": reason, "submission_id": submissionID, "request_id": requestID, "source": "ad_cursor_host"})
+						fmt.Fprintf(writer, "\r\nCursor turn failed: %s\r\n", reason)
+					}
 					continue
 				}
 				waitingEpoch := inputs.epochValue()
-				if err = reportWaiting("Stop", func(check func() bool) { inputs.ifCurrent(waitingEpoch, func() { admission.waiting(check) }) }); err != nil {
+				if err = reportWaiting("Stop", func(check func() bool) { inputs.ifCurrent(waitingEpoch, func() { admission.waiting(check) }) }, reason); err != nil {
 					return err
 				}
-				fmt.Fprint(writer, "\r\nCursor turn complete\r\n> ")
+				if reason == "" {
+					fmt.Fprint(writer, "\r\nCursor turn complete\r\n> ")
+				} else {
+					_ = trail.Emit(context.Background(), "ad.cursor.turn_failed", map[string]any{"instance_id": ownedID, "reason": reason, "submission_id": submissionID, "request_id": requestID, "source": "ad_cursor_host"})
+					fmt.Fprintf(writer, "\r\nCursor turn failed: %s\r\n> ", reason)
+				}
 				if !intentional {
 					inputs.ifCurrent(waitingEpoch, admission.enableQueue)
 				}
@@ -2093,12 +2158,12 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 
 // A completed Run has relinquished admission even though its hosting process
 // may still be alive. Only independently proven runtime death permits this close.
-func closeFailedLaunch(s *store.Store, b store.CursorRuntime) error {
+func closeFailedLaunch(s *store.Store, b store.CursorRuntime, reason string) error {
 	row, err := s.GetSpawn(b.InstanceID)
 	if err != nil {
 		return err
 	}
-	_, result, err := s.MarkFailedCursorRuntimeMissing(row, b)
+	_, result, err := s.MarkFailedCursorRuntimeMissing(row, b, reason)
 	if err != nil {
 		return err
 	}
@@ -2110,6 +2175,26 @@ func closeFailedLaunch(s *store.Store, b store.CursorRuntime) error {
 		if current.State != store.StateEnded && current.State != store.StateMissing && current.Identity.Token == b.Token && current.LifeNumber == b.Life {
 			return fmt.Errorf("Cursor failed launch changed during close")
 		}
+		if current.State == store.StateMissing {
+			_, _, err = s.MarkFailedCursorRuntimeMissing(current, b, reason)
+			return err
+		}
 	}
 	return nil
+}
+
+// Errors at this boundary already exclude raw ACP diagnostics. Keep the saved
+// and audit reason bounded and on one line even if cleanup joined own errors.
+func recordedFailureReason(err error) string {
+	reason := strings.Map(func(r rune) rune {
+		if r < ' ' || r == '\x7f' || (r >= 0x80 && r <= 0x9f) {
+			return ' '
+		}
+		return r
+	}, err.Error())
+	reason = strings.Join(strings.Fields(reason), " ")
+	if len(reason) > 4096 {
+		return "Cursor gateway failed; diagnostic exceeds recording limit"
+	}
+	return reason
 }

@@ -37,6 +37,9 @@ type StatusResult struct {
 	// session id and history; a caller tells it from a fresh one by its
 	// non-empty session_id, shown by [Client.Get].
 	State string `json:"state"`
+	// FailureReason is, as SpawnRow's, the sanitized Cursor failure for the
+	// reported state, or null. Claude and Codex do not record reasons yet.
+	FailureReason *string `json:"failure_reason"`
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
@@ -139,6 +142,7 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		}
 		display, family := displayed(s, v, settle, row)
 		out := StatusResult{State: row.ReportedState, StateDetail: stateDetail(display), FamilyState: family,
+			FailureReason:          nullableField(row.FailureReason(settle)),
 			IntegrationMode:        integrationMode(row.Agent),
 			IdleScreenAvailability: idleScreenAvailability(row.Agent),
 			LaunchStartedAt:        launchStartedAt(row.State, row.LaunchStartedAtMillis), Context: contextOf(row.ContextEvidence())}
