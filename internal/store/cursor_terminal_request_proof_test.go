@@ -48,7 +48,7 @@ func TestCursorTerminalClosePreservesRequestProof(t *testing.T) {
 						t.Fatalf("retire %v %v", ok, err)
 					}
 				}
-				if _, result, err := f.s.MarkFailedCursorRuntimeMissing(row, b); err != nil || result != store.CondApplied {
+				if _, result, err := f.s.MarkFailedCursorRuntimeMissing(row, b, ""); err != nil || result != store.CondApplied {
 					t.Fatalf("fatal missing: %v %v", result, err)
 				}
 			case "cursor missing":

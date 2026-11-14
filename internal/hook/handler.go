@@ -506,9 +506,10 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		}
 		b, e := reader.ReadCursorRuntime(instanceID)
 		var claim struct {
-			Connection string `json:"cursor_connection"`
-			Previous   string `json:"cursor_previous_session"`
-			Deadline   string `json:"cursor_rotation_deadline"`
+			Connection    string `json:"cursor_connection"`
+			Previous      string `json:"cursor_previous_session"`
+			Deadline      string `json:"cursor_rotation_deadline"`
+			FailureReason string `json:"cursor_failure_reason"`
 		}
 		if e != nil || json.Unmarshal(raw, &claim) != nil || claim.Connection == "" || claim.Connection != b.Connection || b.SessionID == "" || b.GatewayPID != parent.pid || b.GatewayStart != parent.start {
 			return nil
@@ -528,6 +529,9 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			return nil
 		}
 		gate.Cursor = &b
+		if res.EventName == "Stop" && len(claim.FailureReason) <= 4096 && !strings.ContainsAny(claim.FailureReason, "\x00\r\n\x1b") {
+			gate.CursorFailureReason = claim.FailureReason
+		}
 		if claim.Previous != "" {
 			if ended || res.EventName != "SessionStart" || claim.Previous != b.SessionID || res.SessionID == b.SessionID || hc.VerifyCursorRotation == nil {
 				return nil

@@ -14,6 +14,7 @@ import (
 type HookGate struct {
 	CodexStartup           bool           // classified main Codex SessionStart with source=startup
 	Cursor                 *CursorRuntime // independently revalidated current connection; nil never authorizes Cursor
+	CursorFailureReason    string         // sanitized failed-turn reason, only on a verified Cursor Stop
 	ClaudeCapacitySnapshot *string        // capacity writes only: JSON examined before computation; "null" expects SQL NULL
 
 	Event        string      // the Claude Code hook event name

@@ -74,6 +74,11 @@ type SpawnRow struct {
 	// startup prompt. A resumed pending row keeps its session id and history;
 	// a non-empty SessionID tells it from a fresh one.
 	State string `json:"state"`
+	// FailureReason is the sanitized Cursor failure for the reported state's
+	// current interval, or null. Waiting records a failed turn; missing records
+	// a failed session. Other agents do not record this field's value yet.
+	// It follows state settling and clears with the next lifecycle transition.
+	FailureReason *string `json:"failure_reason"`
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
@@ -466,6 +471,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		InstanceID:              row.InstanceID,
 		ParentID:                row.ParentID,
 		State:                   reported,
+		FailureReason:           nullableField(row.FailureReason(settle)),
 		FamilyState:             row.FamilyState,
 		IdleScreenAvailability:  idleScreenAvailability(row.Agent),
 		CWD:                     row.CWD,

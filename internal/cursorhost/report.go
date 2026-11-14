@@ -24,6 +24,7 @@ type reporter struct {
 	rotationReconciled  func()
 	afterRuntimeRetired func()
 	terminationUntil    time.Time
+	failureReason       string // captured sanitized outcome of this Stop's turn
 }
 
 // A locally retired authorization is not evidence that the durable dialog is
@@ -111,6 +112,9 @@ func (r *reporter) reportIdentity(event string, waiting func(func() bool), next 
 		r.binding.Terminated = true
 	}
 	payload := map[string]any{"hook_event_name": event, "session_id": r.binding.SessionID, "transcript_path": r.path, "cursor_connection": r.binding.Connection, "origin": "main"}
+	if event == "Stop" && r.failureReason != "" {
+		payload["cursor_failure_reason"] = r.failureReason
+	}
 	if next != "" {
 		if len(rotationUntil) != 1 || !time.Now().Before(rotationUntil[0]) {
 			return fmt.Errorf("Cursor rotation publication deadline passed")
@@ -243,6 +247,9 @@ func (r *reporter) verifyReport(event string, beforeVersion int64, waitingOnly b
 		if row.State != store.StateWaiting || terminated || event == "UserPromptSubmit" {
 			return fmt.Errorf("Cursor waiting report was not applied")
 		}
+		if event == "Stop" && row.RawFailureReason() != r.failureReason {
+			return fmt.Errorf("Cursor waiting failure reason was not applied")
+		}
 		requests, e := r.store.PermissionRequestsForSpawn(row.InstanceID)
 		if e != nil {
 			return fmt.Errorf("Cursor waiting requests unavailable")
@@ -268,6 +275,9 @@ func (r *reporter) verifyReport(event string, beforeVersion int64, waitingOnly b
 		if !held {
 			return fmt.Errorf("Cursor report was not applied")
 		}
+	}
+	if event == "Stop" && row.State == store.StateWaiting && row.RawFailureReason() != r.failureReason {
+		return fmt.Errorf("Cursor failure reason was not applied")
 	}
 	// Report acceptance retains the same runtime/connection/pane authority;
 	// another launch or an unrelated version increment cannot confirm it.

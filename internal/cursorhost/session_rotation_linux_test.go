@@ -115,6 +115,65 @@ func rotationEntered(c *cursorSession, t *testing.T, dir string) {
 	c.wait(t, "publication barrier", func() bool { _, e := os.Stat(filepath.Join(dir, "entered")); return e == nil })
 }
 
+// b.ivj: rotation publishes after an outgoing prompt failure, but does not reset its streak.
+func TestCursorRotationPromptFailurePreservesFailureStreak(t *testing.T) {
+	c := postBootstrapCursorSession(t, "off", "HOLD")
+	c.wait(t, "outgoing prompt received", func() bool { return len(rotationPrompts(c, t)) == 1 })
+	before, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id json.RawMessage
+	for _, f := range c.e.runtime.Frames(t) {
+		if string(f["method"]) == `"session/prompt"` {
+			id = f["id"]
+		}
+	}
+	c.e.runtime.Configure(t, cursorfix.Scenario{WaitForNew: true, PromptReply: json.RawMessage(`{"error":{"code":-32603,"message":"SYNTHETIC-SECRET","data":"SYNTHETIC-SECRET"}}`)})
+	c.keys(t, "/new\r")
+	c.wait(t, "rotation awaiting outgoing turn", func() bool {
+		return rotationRecordCount(c, t, "rotation_requested") == 1 && sessionCancelCount(t, c) == 1
+	})
+	if rotationNewCount(c, t) != 1 {
+		t.Fatal("rotation started a new conversation before the outgoing outcome")
+	}
+	c.e.runtime.Emit(t, "outgoing-prompt-failed", fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"SYNTHETIC-SECRET"}}`, id)+"\n")
+	c.wait(t, "failed outgoing turn permits fresh request", func() bool {
+		return rotationNewCount(c, t) == 2 && bytes.Contains(c.pane.bytes(), []byte("Cursor turn failed: "+cursorPromptFailureReason+"\r\n"))
+	})
+	rotationRelease(t, c.e.runtime.NewRelease)
+	c.wait(t, "fresh conversation published after failure", func() bool {
+		return rotationRecordCount(c, t, "rotation_published") == 1 && bytes.Contains(c.pane.bytes(), []byte("Cursor fresh conversation published\r\n"))
+	})
+	cursorFailureView(t, c, store.StateWaiting, nil)
+	after, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
+	if err != nil || after.SessionID != "synthetic-session-2" || after.Connection != before.Connection {
+		t.Fatalf("rotation did not publish in the same runtime connection: before=%+v after=%+v err=%v", before, after, err)
+	}
+	c.keys(t, "failure after rotation\r")
+	if err := c.awaitFailure(t, 3*time.Second); err.Error() != cursorPromptFailureReason {
+		t.Fatalf("second consecutive failure returned %v", err)
+	}
+	cursorFailureView(t, c, store.StateMissing, cursorPromptFailureReason)
+	want := []rotationPrompt{{"synthetic-session-1", "HOLD"}, {"synthetic-session-2", "failure after rotation"}}
+	if got := rotationPrompts(c, t); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rotation lost or replayed a failed prompt: got=%+v want=%+v", got, want)
+	}
+	outcomes := 0
+	for _, r := range c.records(t) {
+		if r.Kind != "turn_outcome" {
+			continue
+		}
+		if outcomes >= len(want) || r.Session != want[outcomes].Session || r.Data.Outcome != "failed" || r.Data.Reason != cursorPromptFailureReason || r.Data.CancellationRequested == nil || *r.Data.CancellationRequested != (outcomes == 0) {
+			t.Fatalf("failed outcome lost rotation/cancellation attribution: %+v", r)
+		}
+		outcomes++
+	}
+	if outcomes != 2 {
+		t.Fatalf("failed outcomes=%d, want 2", outcomes)
+	}
+}
+
 // Real controller, PTY and guarded publication with a synthetic ACP peer.
 func TestCursorRotationAliasesIdleAndActive(t *testing.T) {
 	// Serial: Run and verified pane fixtures own process environment and signals.

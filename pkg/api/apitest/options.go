@@ -581,3 +581,11 @@ func WithPaneBaseline(sha, sinceMs, epoch any) SpawnOption {
 		o.set("pane_epoch", epoch)
 	}
 }
+
+// WithStateEvidence seeds raw state_evidence through SeedSpawn, including
+// optional metadata. An empty string seeds SQL NULL for legacy/no-evidence
+// surface tests. Tests needing seeded state evidence should reuse this option
+// rather than writing SQL.
+func WithStateEvidence(raw string) SpawnOption {
+	return func(o *spawnOpts) { o.set("state_evidence", nullIfZero(raw)) }
+}

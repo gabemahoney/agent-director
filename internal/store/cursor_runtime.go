@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -239,26 +240,57 @@ func (s *Store) MarkCursorMissingIfSameLaunch(row Spawn, b CursorRuntime) (strin
 // bit is compatible with that death proof. Every identity, session and examined
 // row guard remains exact. Public lost-gateway reconciliation keeps the stricter
 // MarkCursorMissingIfSameLaunch predicate above.
-func (s *Store) MarkFailedCursorRuntimeMissing(row Spawn, b CursorRuntime) (string, CondResult, error) {
+func (s *Store) MarkFailedCursorRuntimeMissing(row Spawn, b CursorRuntime, reason string) (string, CondResult, error) {
 	if cursorRuntimeAbsent(b) || row.Identity.Token != b.Token || row.LifeNumber != b.Life || row.Identity.PanePID != b.GatewayPID || row.Identity.PaneStarttime != b.GatewayStart {
 		return "", CondChanged, nil
 	}
-	guard, guardArgs := cursorMissingGuard(row, b)
+	stateGuard, stateArgs := liveStateGuardSQL, liveStateGuardArgs()
+	if row.State == StateMissing && reason != "" {
+		stateGuard, stateArgs = `state='missing'`, nil
+	}
+	guard, guardArgs := cursorMissingStateGuard(row, b, stateGuard, stateArgs)
 	if guard == "" {
 		return "", CondChanged, nil
 	}
 	if !b.Terminated {
 		retired := b
 		retired.Terminated = true
-		retiredGuard, retiredArgs := cursorMissingGuard(row, retired)
+		retiredGuard, retiredArgs := cursorMissingStateGuard(row, retired, stateGuard, stateArgs)
 		guard = "(" + guard + ") OR (" + retiredGuard + ")"
 		guardArgs = append(guardArgs, retiredArgs...)
 	}
 	// The exact gateway or owned runtime loss is the state record's evidence
 	// (process); it is no process_liveness evidence about the runtime (SR-3.3),
 	// so the process record is cleared.
-	args := append(markMissingArgs(EvidenceProcess, ProcessExit{}), guardArgs...)
-	stmt := markMissingSetSQL + ` WHERE ` + guard
+	if row.State == StateMissing && reason != "" {
+		// A read may have marked this launch missing before the failed Run
+		// closed. Add only metadata to its applicable state record: never
+		// reopen the row, redate its state, or overwrite a replacement launch.
+		ctx, cancel := s.operationContext(0)
+		defer cancel()
+		result := CondChanged
+		err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
+			args := append([]any{reason}, guardArgs...)
+			r, err := conn.ExecContext(ctx, `UPDATE spawns SET state_evidence=json_set(state_evidence, '$.failure_reason', ?) WHERE (`+guard+`) AND `+stateEvidenceCurrentSQL, args...)
+			if err != nil {
+				return err
+			}
+			n, err := r.RowsAffected()
+			if n == 1 {
+				result = CondApplied
+			}
+			return err
+		})
+		if err != nil || result != CondApplied {
+			return "", result, err
+		}
+		return StateMissing, result, nil
+	}
+	evidence, evidenceArgs := cursorStateEvidenceSet(StateMissing, EvidenceProcess, reason)
+	stmt := strings.Replace(markMissingSetSQL, markMissingEvidence, evidence, 1) + ` WHERE ` + guard
+	args := append(immediateStateArgs(StateMissing), evidenceArgs...)
+	args = append(args, terminalProcessEvidenceArgs(ProcessExit{})...)
+	args = append(args, guardArgs...)
 	return s.terminalMarkWithoutWait("store: close failed Cursor runtime", stmt, args, row.InstanceID, DecisionReasonFindMissing, nil)
 }
 

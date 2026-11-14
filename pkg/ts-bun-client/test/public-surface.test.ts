@@ -183,6 +183,15 @@ function interfaceBody(src: string, name: string): string {
 const typesGolden = () =>
   fs.readFileSync(path.join(fixtureDir, "types.d.ts.golden"), "utf-8");
 
+// b.ivj D2: callers can read string|null directly; list keeps its existing contract.
+test("public-surface: failure_reason is required and nullable on get/status only", () => {
+  const golden = typesGolden();
+  for (const iface of ["StatusResult", "GetResult"]) {
+    expect(interfaceBody(golden, iface)).toMatch(/\bfailure_reason\s*:\s*string\s*\|\s*null\s*;/);
+  }
+  expect(interfaceBody(golden, "ListRow")).not.toMatch(/\bfailure_reason\b/);
+});
+
 test("public-surface: pane-only reads retain optional integration_mode", () => {
   for (const iface of ["GetResult", "StatusResult", "ListRow"]) {
     expect(interfaceBody(typesGolden(), iface)).toMatch(/\bintegration_mode\?\s*:\s*"pane_only"\s*;/);

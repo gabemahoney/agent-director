@@ -215,9 +215,10 @@ func hasControlChar(id string) bool {
 // the spawn) without waiting for the agent; the row is pending from its
 // insert until the agent reports in (Cursor: verified first prompt), then
 // waiting. Cursor initialization, session creation and requested mode validation
-// happen asynchronously; this result confirms none of them. Later runtime
-// failure is reported in the pane and ad.cursor.failed; missing still requires
-// independent process evidence. Use [Client.Status] or [Client.Get] to observe progress. The
+// happen asynchronously; this result confirms none of them. [Client.Get],
+// [Client.GetMany] and [Client.Status] expose recorded Cursor failures as
+// failure_reason; the gateway also renders failures in its pane. Trail events
+// are audit-only. missing still requires independent process evidence. The
 // session is labelled for this launch when it is created, and the
 // session-creating call is bounded by the create timeout. If it times out,
 // Spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may

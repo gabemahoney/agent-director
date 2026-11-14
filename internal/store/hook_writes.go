@@ -171,6 +171,9 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		// columns (hookWriteStateSet, b.3ie): decided in this one statement,
 		// never from priorState, which feeds the trail only.
 		stateSet, stateArgs := s.hookWriteStateEvidenceSet(newState, EvidenceAgentEvent)
+		if gate.Cursor != nil {
+			stateSet, stateArgs = s.hookWriteCursorStateEvidenceSet(newState, gate.CursorFailureReason)
+		}
 		if gate.CodexTurnStart {
 			// codexTurnSet supplies the observation reset. Keep the ordinary
 			// raw-state/settle write, without assigning the observation twice.
