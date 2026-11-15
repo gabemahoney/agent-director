@@ -1727,9 +1727,10 @@ that checks nothing. In any live state, a running turn or an open dialog
 included, `pause` sends SIGTERM to the agent's recorded process, checked by
 pid and start time. It succeeds only once, within `pause.timeout_seconds`,
 the agent has exited and every other process its launch owned is checked
-gone; `resume` may follow once `get` shows the row `ended` or `missing`. It
-never returns `ErrPauseTimeout`. The budget bounds shutdown work, not the
-time before a refusal can return.
+gone. Successful verified shutdown records `ended` and keeps `session_id`;
+`resume` may then follow. A row already `missing` for another cause stays
+`missing`. It never returns `ErrPauseTimeout`. The budget bounds shutdown work,
+not the time before a refusal can return.
 
 If the initial read outlasts the budget while the store is occupied, `pause`
 waits until it can read the row. A live covered row then refuses with

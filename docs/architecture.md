@@ -21090,7 +21090,7 @@ does not wait for `ended`, so the caller polls `get` or `status`
 (docs/permissions.md, "Send-keys interaction"; the help text, at its size
 cap, carries only the way past `ErrDialogMaybeOpen`).
 
-A Claude `pause` never writes the row's state. Its store writes include
+An uncovered Claude `pause` never writes the row's state. Its store writes include
 adoption, the relay guard's `hook_gone_at` (on an `ErrRelayFallenBack` refusal)
 and input-journal records. A Codex `pause` may also write the move to `ended` (step 1
 and the wait's check), through the one guarded write and its records (see
@@ -21191,11 +21191,24 @@ The remaining covered shutdown is:
    `EstablishBusySendExitWithin` (success) or the deadline: a replaced Launch is
    `launch_changed`; an owned process still running at the deadline, or any
    unverifiable process or route at once, gives the judgement's cause.
+5. `Store.MarkKeylessPauseEndedWithin` records immediate `ended`, retaining
+   `session_id`, with process evidence and the shared terminal cleanup. Keyless
+   completion must use this bounded writer. Under its write lock it rechecks
+   the captured Launch, life and agent identity against the current row and
+   published Launch, then updates the fresh snapshot. Agent comparison uses
+   `tmux.SelectAgentProcess`'s pure PID/start identity selection: SessionStart
+   promotion or recovery adoption of the same process is allowed, and the fresh
+   `session_id` is retained. It also corrects a
+   same-Launch `missing` backed by applicable process-exit evidence; other
+   missing causes stay unchanged. A replacement Launch is `launch_changed`.
+   An applied move emits the Codex end path's `ad.find_missing.tick`, source
+   `ad_recovery`, reason `proc_absent`, after commit, with no new call event
+   or `ad.spawn.state_transition`.
 
 After the initial row read, budget expiry at a store read/write or before the
 signal is `budget_exhausted`, with `signal_sent`; expiry while polling the
 agent remains `exit_uncertain`.
-The budget is checked before the signal and final Exit write, then
+The budget is checked before the signal, Exit write and row completion, then
 `established` checks cancellation and time again before reporting success.
 Cancellation before that boundary is the bare context error; after the last
 store call it is wrapped, and an expired budget is `budget_exhausted` with

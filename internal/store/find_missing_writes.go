@@ -175,7 +175,7 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 // the same statement (terminalProcessEvidenceSet; markEndedArgs).
 var markEndedEvidence, markEndedEvidenceArgs = currentStateEvidenceSet(StateEnded, EvidenceProcess)
 
-var markEndedIfSameLifeSQL = `UPDATE spawns
+var markEndedSetSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
         ` + markEndedEvidence + `,
         ` + terminalProcessEvidenceSet + `,
@@ -184,7 +184,9 @@ var markEndedIfSameLifeSQL = `UPDATE spawns
         liveness_unverified_since = NULL,
         liveness_note             = NULL,
         ` + launchStartClear + `,
-        ` + rowVersionAdvance + `
+        ` + rowVersionAdvance
+
+var markEndedIfSameLifeSQL = markEndedSetSQL + `
   WHERE instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL + `
     AND agent = '` + AgentCodex + `' AND typeof(end_reported_at) = 'integer' AND end_reported_at > 0`
 

@@ -146,7 +146,8 @@ var pauseSleep = time.Sleep
 //     finished row is a no-op success; in any live state an identity-checked
 //     SIGTERM to its recorded agent process, its exit and its Launch's
 //     exclusion verified within timeoutSeconds, else ErrSpawnNotPausable with
-//     NotPausableDetails. Nothing is typed and Held Messages stay Held.
+//     NotPausableDetails. Verified shutdown records ended with session_id
+//     retained. Nothing is typed and Held Messages stay Held.
 //   - A Codex row in a live state (pending included) whose agent process is
 //     already gone and which holds an end report (the SessionEnd of its
 //     agent) is moved to ended before any of the rules below, with no tmux
@@ -271,8 +272,9 @@ var pauseSleep = time.Sleep
 // ErrPauseTimeout and find-missing settles the row. A store error from the
 // move is returned as pause's error. A nil start-time reader makes no move.
 // Client.Pause passes pause.timeout_seconds through
-// config.Pause.EffectiveTimeoutSeconds. Pause never writes a Claude row's
-// state. It can write adoption, the relay guard's hook_gone_at and the input
+// config.Pause.EffectiveTimeoutSeconds. Uncovered Claude pause never writes
+// the row's state; covered keyless pause records its verified end itself.
+// Pause can write adoption, the relay guard's hook_gone_at and the input
 // session's manual-interference record; a Codex row can also move to ended.
 //
 // Pause is one-shot: it returns when the row reaches `ended`, when the
@@ -291,7 +293,7 @@ var pauseSleep = time.Sleep
 // what the call typed, as for send-keys: keys_sent (`/exit` and Enter both
 // went through), text_sent (the `/exit` call timed out, or it went through
 // and the Enter call failed or timed out) or nothing_sent (a failed C-u
-// included: it types no text). Codex end handling also emits ad.find_missing.tick
+// included: it types no text). Codex and keyless end handling also emit ad.find_missing.tick
 // with source ad_recovery (proc_absent and permission_orphan_closeout),
 // ad.row_mutation.committed for denied requests, and any retained
 // ad.spawn.displayed_state_transition, all after the terminal commit.

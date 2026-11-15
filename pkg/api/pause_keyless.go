@@ -19,8 +19,8 @@ import (
 // succeeds only once it established resumable keyless shutdown within the
 // existing pause budget: the agent's verified exit and the shared exit
 // evidence for every owned process and captured destination of its Launch
-// (judgeBusySendExit). Anything less is ErrSpawnNotPausable with a structured
-// cause.
+// (judgeBusySendExit), then its guarded row transition to ended, retaining
+// session_id. Anything less is ErrSpawnNotPausable with a structured cause.
 
 // The NotPausableDetails causes of keyless pause (SR-6.4), beside
 // agent_not_covered and the shared exit judgement's causes
@@ -61,7 +61,8 @@ var pauseTerminate = probe.TerminateIdentity
 // keylessPauseStore is the store surface keyless pause needs besides
 // PauseStore, every read and write within the caller's context and wait:
 // the row read again before the signal, the published current Launch, the
-// Launch End a verified agent exit records, and the shared exit evidence.
+// Launch End a verified agent exit records, the shared exit evidence, and
+// the guarded row completion after that evidence is established.
 // *store.Store satisfies it.
 type keylessPauseStore interface {
 	GetSpawnContext(ctx context.Context, instanceID string, maxWait time.Duration) (Spawn, error)
@@ -69,6 +70,7 @@ type keylessPauseStore interface {
 	EndBusySendLaunchWithin(ctx context.Context, instanceID, token string, maxWait time.Duration) (bool, error)
 	ReadBusySendExitScopeOfWithin(ctx context.Context, instanceID, token string, maxWait time.Duration) (store.BusySendExitScope, bool, error)
 	EstablishBusySendExitWithin(ctx context.Context, ev store.BusySendExitEvidence, maxWait time.Duration) (bool, error)
+	MarkKeylessPauseEndedWithin(ctx context.Context, captured Spawn, launch store.BusySendPublishedLaunch, exit store.ProcessExit, maxWait time.Duration) (string, CondResult, error)
 }
 
 // keylessBudget is keyless pause's one call budget (SR-6.4): the call's own
@@ -202,10 +204,11 @@ func (r *pauseRun) readRow(b keylessBudget, instanceID string) (Spawn, error) {
 //  4. Its verified exit records the Launch End (store.EndBusySendLaunchWithin,
 //     for the captured token only), then the shared exit judgement of the
 //     captured Launch (busySendExitForLaunch) is retried until the deadline:
-//     established and applied (store.EstablishBusySendExitWithin, with the
-//     budget and cancellation checked before it and again after it, before
-//     success is reported) is success; a process still running when the
-//     budget ends, also when the budget ends during a later judgement's read,
+//     store.EstablishBusySendExitWithin applies the exit evidence, then
+//     MarkKeylessPauseEndedWithin records ended, retaining session_id. Both
+//     writes recheck the captured Launch and share the budget, checked before
+//     and after each write. A process still running when the budget ends,
+//     also when the budget ends during a later judgement's read,
 //     refuses owned_process_running, and any unverifiable process or route
 //     refuses with the judgement's cause; a Launch that replaced the captured
 //     one is launch_changed, with nothing judged or recorded for it.
@@ -254,7 +257,7 @@ func (r *pauseRun) keyless(b keylessBudget, row Spawn) error {
 	if _, err := st.EndBusySendLaunchWithin(b.ctx, row.InstanceID, published.LaunchToken, b.wait()); err != nil {
 		return r.storeFailed(b, row.InstanceID, sent, err)
 	}
-	return r.awaitLaunchExit(b, st, row.InstanceID, published.LaunchToken, sent)
+	return r.awaitLaunchExit(b, st, row, published, sent)
 }
 
 // signal revalidates the captured Launch and sends the identity-checked
@@ -318,7 +321,7 @@ func (r *pauseRun) awaitAgentExit(instanceID string, agent tmux.ProcIdentity, de
 }
 
 // awaitLaunchExit retries the shared exit judgement for the agent's Launch,
-// the captured one whose launch token is token, now that the agent is gone,
+// the captured one in row and launch, now that the agent is gone,
 // until it is established and applied or the deadline passes. A process
 // still running is waited for, and is the refusal when the budget ends with
 // it running; an unverifiable process or route refuses at once. A Launch
@@ -328,7 +331,8 @@ func (r *pauseRun) awaitAgentExit(instanceID string, agent tmux.ProcIdentity, de
 // (also when the budget ends during a later judgement's read) is
 // owned_process_running, so the refusal does not depend on where in a poll
 // the deadline falls.
-func (r *pauseRun) awaitLaunchExit(b keylessBudget, st keylessPauseStore, instanceID, token string, sent bool) error {
+func (r *pauseRun) awaitLaunchExit(b keylessBudget, st keylessPauseStore, row Spawn, launch store.BusySendPublishedLaunch, sent bool) error {
+	instanceID, token := row.InstanceID, launch.LaunchToken
 	var running *busySendExitRefusal
 	changed := false
 	stillRunning := func(ref *busySendExitRefusal) error {
@@ -370,7 +374,7 @@ func (r *pauseRun) awaitLaunchExit(b keylessBudget, st keylessPauseStore, instan
 			return notPausable(instanceID, "the agent exited but "+refusal.describe()+", so its keyless shutdown is not established; inspect with get, and retry pause "+refusal.clears(),
 				refusal.cause, &sent)
 		case ev == nil:
-			return r.established(b, instanceID, sent, false)
+			return r.endKeylessRow(b, st, row, launch, sent, false)
 		default:
 			// The write that establishes it is bounded by the same budget,
 			// checked before it and, at the success boundary, after it.
@@ -385,12 +389,34 @@ func (r *pauseRun) awaitLaunchExit(b keylessBudget, st keylessPauseStore, instan
 				return r.storeFailed(b, instanceID, sent, err)
 			}
 			if applied {
-				return r.established(b, instanceID, sent, true)
+				return r.endKeylessRow(b, st, row, launch, sent, true)
 			}
 			changed = true
 		}
 		pauseSleep(min(pausePollInterval, max(b.deadline.Sub(pauseNow()), 0)))
 	}
+}
+
+// endKeylessRow completes the verified pause in the same budget. The store
+// rechecks the captured Launch under its write lock, so a resume after Exit
+// committed is still launch_changed, never an end of the replacement.
+func (r *pauseRun) endKeylessRow(b keylessBudget, st keylessPauseStore, row Spawn, launch store.BusySendPublishedLaunch, sent, recorded bool) error {
+	if err := r.established(b, row.InstanceID, sent, recorded); err != nil {
+		return err
+	}
+	exit := provenExit(agentProcess(row, row.Identity).Identity, clockNow(r.now))
+	prior, res, err := st.MarkKeylessPauseEndedWithin(b.ctx, row, launch, exit, b.wait())
+	if errors.Is(err, store.ErrBusySendLaunchChanged) || (err == nil && res == store.CondAbsent) {
+		return notPausable(row.InstanceID, "the agent exited but its Launch was replaced before its keyless shutdown was established; nothing more was recorded; inspect with get",
+			pauseCauseLaunchChanged, &sent)
+	}
+	if err != nil {
+		return r.storeFailed(b, row.InstanceID, sent, err)
+	}
+	if res == store.CondApplied {
+		emitMarkTick(recoveryTickTrail(recoveryTrail(b.ctx), "ad_recovery"), row.InstanceID, prior, store.StateEnded, reasonProcAbsent, nil)
+	}
+	return r.established(b, row.InstanceID, sent, recorded)
 }
 
 // established is keyless pause's success boundary, after its last store

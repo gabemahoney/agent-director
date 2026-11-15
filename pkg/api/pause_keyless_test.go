@@ -153,6 +153,35 @@ func (e *kpEnv) assertSignals(t *testing.T, n int) {
 	}
 }
 
+// assertEnded checks b.nqq's postcondition before any read can reconcile it.
+func (e *kpEnv) assertEnded(t *testing.T, sessionID ...string) {
+	t.Helper()
+	wantSession := e.r.Spawn.SessionID
+	if len(sessionID) == 1 {
+		wantSession = sessionID[0]
+	}
+	row, err := e.st.GetSpawn(e.r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.State != store.StateEnded || row.SessionID != wantSession || row.EndedAt == nil {
+		t.Errorf("row after pause: state=%s session=%s ended_at=%v; want ended with session %s and end time", row.State, row.SessionID, row.EndedAt, wantSession)
+	}
+	if value, evidence := row.ProcessConfirmation(); value != store.ProcessExited || evidence.Source != store.EvidenceProcess {
+		t.Errorf("process after pause = %s, %+v; want confirmed exited from process", value, evidence)
+	}
+	got, err := e.c.Get(e.r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != store.StateEnded || got.SessionID != wantSession {
+		t.Errorf("get after pause: state=%s session=%s; want ended with session %s", got.State, got.SessionID, wantSession)
+	}
+	if c := got.Confirmations.State; c.Status != store.ConfirmationConfirmed || c.Source == nil || *c.Source != store.EvidenceProcess {
+		t.Errorf("state confirmation = %+v; want confirmed from process", c)
+	}
+}
+
 // launchEnd is the current Launch's recorded end cause ("" for none) and
 // whether it still has an open hand-over: its intent-bearing custody fenced.
 func (e *kpEnv) launchEnd(t *testing.T) (cause string, open bool) {
@@ -210,6 +239,10 @@ func TestPauseKeylessAnyLiveState(t *testing.T) {
 			if _, err := e.c.Pause(context.Background(), api.PauseParams{InstanceID: e.r.ID}); err != nil {
 				t.Fatalf("Pause: %v; want success", err)
 			}
+			if live {
+				// b.nqq: verified keyless shutdown must publish its deliberate end.
+				e.assertEnded(t)
+			}
 
 			e.assertKept(t, held)
 			got, err := e.c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: "kp-1"})
@@ -230,6 +263,35 @@ func TestPauseKeylessAnyLiveState(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPauseKeylessEndsRowAfterSweepMissing (b.nqq): recovery can observe the
+// agent's exit before pause records its deliberate end. That same-Launch
+// process-based missing mark must not prevent pause from leaving ended.
+func TestPauseKeylessEndsRowAfterSweepMissing(t *testing.T) {
+	e := newKeylessEnv(t, killRowSpec{})
+	held := e.held(t)
+	var mark int
+	e.answer = func(s kpSignal) error {
+		e.pc.Set(s.pid, procfix.Gone())
+		if _, err := e.c.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		row, err := e.st.GetSpawn(e.r.ID)
+		if err != nil || row.State != store.StateMissing {
+			t.Fatalf("sweep before pause completion: state=%s, err=%v; want missing", row.State, err)
+		}
+		mark = trailMark(t)
+		return nil
+	}
+	if err := e.pause(context.Background(), nil, 1); err != nil {
+		t.Fatalf("Pause: %v; want success after concurrent sweep", err)
+	}
+	e.assertEnded(t)
+	e.assertSignals(t, 1)
+	e.assertKept(t, held)
+	assertMoveRecords(t, mark, e.r.ID, moveWant{source: "ad_recovery", prior: store.StateMissing, now: store.StateEnded,
+		reason: "proc_absent", denyReason: store.DecisionReasonEnded})
 }
 
 // TestPauseKeylessOutcomes (SR-6.4): the signal goes only to the recorded
@@ -342,6 +404,32 @@ type kpHookedStore struct {
 	first, once func()
 }
 
+// kpExitHookStore schedules a race after physical exit evidence commits,
+// outside the store connection, before pause completes its row transition.
+type kpExitHookStore struct {
+	*store.Store
+	afterExit func()
+	afterEnd  func()
+}
+
+func (s *kpExitHookStore) EstablishBusySendExitWithin(ctx context.Context, ev store.BusySendExitEvidence, wait time.Duration) (bool, error) {
+	applied, err := s.Store.EstablishBusySendExitWithin(ctx, ev, wait)
+	if err == nil && applied && s.afterExit != nil {
+		f := s.afterExit
+		s.afterExit = nil
+		f()
+	}
+	return applied, err
+}
+
+func (s *kpExitHookStore) MarkKeylessPauseEndedWithin(ctx context.Context, row api.Spawn, launch store.BusySendPublishedLaunch, exit store.ProcessExit, wait time.Duration) (string, store.CondResult, error) {
+	prior, res, err := s.Store.MarkKeylessPauseEndedWithin(ctx, row, launch, exit, wait)
+	if err == nil && res == store.CondApplied && s.afterEnd != nil {
+		s.afterEnd()
+	}
+	return prior, res, err
+}
+
 // read counts a row read and runs its hook.
 func (s *kpHookedStore) read() {
 	s.reads++
@@ -370,6 +458,67 @@ func (s *kpHookedStore) GetSpawnContext(ctx context.Context, id string, wait tim
 func (s *kpHookedStore) GetSpawnConnBounded(ctx context.Context, id string) (api.Spawn, bool, error) {
 	s.read()
 	return s.Store.GetSpawnConnBounded(ctx, id)
+}
+
+// TestPauseKeylessSessionStartDuringPause (b.nqq, code-review round 1):
+// SessionStart may promote the captured pane process to the SessionStart
+// columns and record a fresh session without replacing the Launch or agent.
+func TestPauseKeylessSessionStartDuringPause(t *testing.T) {
+	for _, when := range []string{"before signal", "after exit evidence"} {
+		t.Run(when, func(t *testing.T) {
+			e := newKeylessEnv(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithNoPID()}})
+			held := e.held(t)
+			latestSession := uuid.NewString()
+			start := func() {
+				if a := storefix.ApplyAgentHook(t, e.st, e.r.ID, "SessionStart", latestSession); !a.Applied {
+					t.Fatalf("same-Launch SessionStart not applied: %+v", a)
+				}
+				row, err := e.st.GetSpawn(e.r.ID)
+				if err != nil || row.SessionID != latestSession || row.PID != e.r.AgentPID || row.ProcStarttime != e.r.AgentStart || row.Identity.Token != e.r.Token {
+					t.Fatalf("SessionStart row = %+v, %v; want the same Launch and agent with fresh session metadata", row, err)
+				}
+			}
+			var st api.PauseStore = &kpHookedStore{Store: e.st, once: start}
+			if when == "after exit evidence" {
+				st = &kpExitHookStore{Store: e.st, afterExit: start}
+			}
+			if err := e.pause(context.Background(), st, 1); err != nil {
+				t.Fatalf("Pause after same-Launch SessionStart: %v; want ended with fresh session %s", err, latestSession)
+			}
+			e.assertEnded(t, latestSession)
+			e.assertSignals(t, 1)
+			e.assertKept(t, held)
+		})
+	}
+}
+
+// TestPauseKeylessAgentAdoptedDuringPause (b.nqq, round 1 sweep): recovery
+// may fill the pane identity from the same recorded SessionStart process.
+func TestPauseKeylessAgentAdoptedDuringPause(t *testing.T) {
+	e := newKeylessEnv(t, killRowSpec{NoPane: true, NoSession: true, Opts: []apitest.SpawnOption{
+		apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime),
+	}})
+	if e.r.AgentPID != e.r.Spawn.PID || e.r.AgentStart != e.r.Spawn.ProcStarttime {
+		t.Fatal("adoption fixture must retain the recorded SessionStart process")
+	}
+	held := e.held(t)
+	st := &kpExitHookStore{Store: e.st, afterExit: func() {
+		row, err := e.st.GetSpawn(e.r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity := row.Identity
+		identity.PaneID, identity.PanePID, identity.PaneStarttime = apitest.TestPaneID, e.r.AgentPID, e.r.AgentStart
+		if res, _, err := e.st.AdoptIdentityIfSameLife(e.r.ID, row.Snapshot, identity); err != nil || res != store.CondApplied {
+			t.Fatalf("same-agent adoption = %v, %v; want applied", res, err)
+		}
+	}}
+	if err := e.pause(context.Background(), st, 1); err != nil {
+		t.Fatalf("Pause after same-agent adoption: %v; want ended", err)
+	}
+	e.assertEnded(t)
+	e.assertSignals(t, 1)
+	e.assertKept(t, held)
 }
 
 // replace replaces r's Launch as a covered resume would: the agent exits and
@@ -447,6 +596,25 @@ func TestPauseKeylessLaunchReplaced(t *testing.T) {
 		e.assertSignals(t, 1)
 		if now := currentLaunch(t, e.dbPath, e.r.ID); !reflect.DeepEqual(now, replacement) {
 			t.Errorf("replacement Launch after pause (err %v) = %+v; want unchanged %+v", err, now, replacement)
+		}
+	})
+	t.Run("after exit evidence commits", func(t *testing.T) {
+		// b.nqq: a late row write must not finish a concurrently resumed Launch.
+		e := newKeylessEnv(t, killRowSpec{})
+		var replacement apitest.BusyLaunchFact
+		var before apitest.SpawnColumns
+		st := &kpExitHookStore{Store: e.st, afterExit: func() {
+			replacement = e.replace(t)
+			before = e.columns(t, e.r.ID)
+		}}
+		err := e.pause(context.Background(), st, 1)
+		assertOneName(t, err, "ErrSpawnNotPausable")
+		if got := jsonOf(t, api.ErrDetails(err)); got != `{"cause":"launch_changed","signal_sent":true}` {
+			t.Errorf("err_details = %s; want launch_changed with signal sent", got)
+		}
+		e.assertRowUnchanged(t, e.r.ID, before)
+		if now := currentLaunch(t, e.dbPath, e.r.ID); !reflect.DeepEqual(now, replacement) {
+			t.Errorf("replacement Launch = %+v; want unchanged %+v", now, replacement)
 		}
 	})
 }
@@ -717,6 +885,85 @@ func TestPauseKeylessSuccessBoundary(t *testing.T) {
 				t.Errorf("err_details = %s; want %s", got, want)
 			}
 			e.followBudgetAdvice(t, err, "its exit evidence was recorded and stays recorded; inspect with get", true, false, held)
+		})
+	}
+}
+
+// TestPauseKeylessRowCompletionBudget (b.nqq): the new terminal write shares
+// the original budget and cancellation; it never bypasses a blocked store.
+func TestPauseKeylessRowCompletionBudget(t *testing.T) {
+	for _, tc := range []string{"connection held", "write lock held", "cancelled"} {
+		t.Run(tc, func(t *testing.T) {
+			e := newKeylessEnv(t, killRowSpec{})
+			held := e.held(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var release func()
+			free := func() {
+				if release != nil {
+					release()
+					release = nil
+				}
+			}
+			defer free()
+			st := &kpExitHookStore{Store: e.st, afterExit: func() {
+				switch tc {
+				case "cancelled":
+					cancel()
+				case "connection held":
+					take, _, unlock := holdReadConnection(t, e.st, e.r.ID)
+					release = unlock
+					if err := take(); err != nil {
+						t.Error(err)
+					}
+				case "write lock held":
+					release = apitest.HoldWriteLock(t, e.dbPath, time.Minute)
+				}
+				e.advance(900 * time.Millisecond)
+			}}
+			err := e.pauseWatched(t, ctx, st, 1, free)
+			free()
+			if tc == "cancelled" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("Pause = %v; want cancellation", err)
+				}
+			} else if got := jsonOf(t, api.ErrDetails(err)); got != `{"cause":"budget_exhausted","signal_sent":true}` {
+				t.Fatalf("Pause = %v, details %s; want budget_exhausted with signal sent", err, got)
+			}
+			row, readErr := e.st.GetSpawn(e.r.ID)
+			if readErr != nil || !store.IsLiveState(row.State) {
+				t.Errorf("row after uncommitted end = %s, %v; want still live", row.State, readErr)
+			}
+			e.assertSignals(t, 1)
+			e.assertKept(t, held)
+		})
+	}
+}
+
+// TestPauseKeylessRowCompletionSuccessBoundary (b.nqq): cancellation or budget
+// expiry after the row commit refuses success while retaining the committed end.
+func TestPauseKeylessRowCompletionSuccessBoundary(t *testing.T) {
+	for _, tc := range []string{"cancelled", "budget"} {
+		t.Run(tc, func(t *testing.T) {
+			e := newKeylessEnv(t, killRowSpec{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			st := &kpExitHookStore{Store: e.st, afterEnd: func() {
+				if tc == "cancelled" {
+					cancel()
+				} else {
+					e.advance(time.Hour)
+				}
+			}}
+			err := e.pause(ctx, st, 1)
+			if tc == "cancelled" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("Pause = %v; want cancellation", err)
+				}
+			} else if got := jsonOf(t, api.ErrDetails(err)); got != `{"cause":"budget_exhausted","signal_sent":true}` {
+				t.Fatalf("Pause = %v, details %s; want budget_exhausted", err, got)
+			}
+			e.assertEnded(t)
 		})
 	}
 }
