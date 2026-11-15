@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"maps"
@@ -89,11 +90,22 @@ func newWakeEnv(t *testing.T, state string, opts ...apitest.SpawnOption) *wakeEn
 // endpoint.
 func newResumedWakeEnv(t *testing.T) *wakeEnv {
 	t.Helper()
+	return newResumedWakeEnvWithHeld(t, nil, nil)
+}
+
+// newResumedWakeEnvWithHeld carries texts from the ended Launch and configures
+// its new Launch before the first SessionStart (including a captured wake job).
+func newResumedWakeEnvWithHeld(t *testing.T, texts []string, configure func(*wakeEnv, *hook.HandleConfig)) *wakeEnv {
+	t.Helper()
 	id := "wake-" + strings.ReplaceAll(t.Name(), "/", "-")
 	st, db := ssgSeed(t, id, store.StateEnded, wakeSession, apitest.WithJsonlPath("/x/"+wakeSession+".jsonl"),
 		apitest.WithLaunchIdentity(ssgOldPane))
 	if err := apitest.SeedBusySendCoverage(db, id, store.BusySendCovered, store.BusySendCovered); err != nil {
 		t.Fatal(err)
+	}
+	old := &wakeEnv{st: st, db: db, id: id}
+	for i, text := range texts {
+		old.admit(t, fmt.Sprint(i), text)
 	}
 	res, moved, err := st.MoveToPendingWithExit(id, mustGetSpawn(t, st, id).Snapshot, time.Now().UnixMilli(), ssgNewPane.Token, ssgNewPane.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, st, id))
 	if err != nil || res != store.CondApplied {
@@ -107,7 +119,13 @@ func newResumedWakeEnv(t *testing.T) *wakeEnv {
 		t.Fatal(err)
 	}
 	start := e.payload(t, "session-start-resume.json", map[string]any{"transcript_path": writeTranscript(t, wakeSession)})
-	if _, err := e.handle(context.Background(), e.parent, start, nil); err != nil {
+	hc := hookConfig(envHook(e.id, ""), e.parent)
+	hc.Self = wakeHelper
+	if configure != nil {
+		configure(e, &hc)
+	}
+	var stdout bytes.Buffer
+	if err := hook.Handle(context.Background(), bytes.NewReader(start), &stdout, e.st, hc, newSilentLogger()); err != nil {
 		t.Fatalf("SessionStart: %v", err)
 	}
 	f, err := st.ReadBusySendRouteFacts(context.Background(), id, store.HookGate{})
@@ -777,15 +795,21 @@ func TestClaudeSessionStartWatchPath(t *testing.T) {
 	for _, tc := range []struct {
 		name                       string
 		covered, session, preparer bool
+		prompt                     bool
 	}{
-		{"covered", true, true, true},
-		{"uncovered", false, true, true},
-		{"no session (F2)", true, false, true},
-		{"no endpoint preparer (R2-7)", true, true, false},
+		{"covered", true, true, true, false},
+		{"startup prompt goes first (Q5)", true, true, true, true},
+		{"uncovered", false, true, true, false},
+		{"no session (F2)", true, false, true, false},
+		{"no endpoint preparer (R2-7)", true, true, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := "wake-" + strings.ReplaceAll(t.Name(), "/", "-")
-			st, db := ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgFreshPane))
+			args := `["--model","opus"]`
+			if tc.prompt {
+				args = `["--model","opus","first turn"]`
+			}
+			st, db := ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgFreshPane), apitest.WithRawAgentArgs(args))
 			wake, err := store.BusySendWakePath(st.StoreID(), ssgFreshPane.Token)
 			if err != nil {
 				t.Fatal(err)
@@ -807,11 +831,23 @@ func TestClaudeSessionStartWatchPath(t *testing.T) {
 				want = `{"hookSpecificOutput":{"hookEventName":"SessionStart","watchPaths":["` + wake + `"]}}` + "\n"
 			}
 			hc := hookConfig(envHook(id, ""), agentParent(t, st, id))
+			scheduled := 0
+			hc.ScheduleClaudeStartupWake = func(hook.ClaudeStartupWake) error {
+				scheduled++
+				return nil
+			}
 			if !tc.preparer {
 				hc.PrepareBusySendWake = nil
 			}
 			if got := ssgHandleWith(t, st, hc, payload, newSilentLogger()); got != want {
 				t.Errorf("SessionStart stdout = %q; want %q", got, want)
+			}
+			wantScheduled := 0
+			if want != "" && !tc.prompt {
+				wantScheduled = 1
+			}
+			if scheduled != wantScheduled {
+				t.Errorf("startup jobs = %d; want %d", scheduled, wantScheduled)
 			}
 			info, err := os.Lstat(wake)
 			switch {
@@ -823,6 +859,185 @@ func TestClaudeSessionStartWatchPath(t *testing.T) {
 				if dir, err := os.Stat(filepath.Dir(wake)); err != nil || dir.Mode().Perm() != 0o700 {
 					t.Errorf("launch directory = %v, %v; want mode 0700", dir, err)
 				}
+			}
+		})
+	}
+}
+
+// Q5 / t2.xis.oo.67: discard every pre-watch hint, release only the finite
+// startup job, then drive FileChanged. No subsequent send or Stop rescues it.
+func TestClaudeStartupWakeDeliversHeldInOrder(t *testing.T) {
+	for _, resumed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("resume=%v", resumed), func(t *testing.T) {
+			now := time.Now()
+			clock := &advancingClock{now: &now}
+			var jobs []hook.ClaudeStartupWake
+			configure := func(e *wakeEnv, hc *hook.HandleConfig) {
+				hc.Now = clock.Now
+				hc.ScheduleClaudeStartupWake = func(job hook.ClaudeStartupWake) error {
+					jobs = append(jobs, job)
+					return nil
+				}
+			}
+			var e *wakeEnv
+			if resumed {
+				// These Messages were accepted on the old, ended Launch.
+				e = newResumedWakeEnvWithHeld(t, []string{"first", "second"}, configure)
+			} else {
+				e = newWakeEnv(t, store.StatePending, apitest.WithTurnStarts(0), apitest.WithRawAgentArgs(`["--model","opus"]`))
+				hc := hookConfig(envHook(e.id, ""), e.parent)
+				configure(e, &hc)
+				e.admit(t, "0", "first")
+				e.admit(t, "1", "second")
+				var out bytes.Buffer
+				if err := hook.Handle(context.Background(), bytes.NewReader(e.payload(t, "session-start-startup.json", map[string]any{
+					"transcript_path": writeTranscript(t, wakeSession)})), &out, e.st, hc, newSilentLogger()); err != nil {
+					t.Fatal(err)
+				}
+				want := `{"hookSpecificOutput":{"hookEventName":"SessionStart","watchPaths":["` + e.endpoint + `"]}}` + "\n"
+				if out.String() != want {
+					t.Fatalf("SessionStart = %q; want %q", out.String(), want)
+				}
+			}
+			if len(jobs) != 1 {
+				t.Fatalf("scheduled %d startup jobs; want one", len(jobs))
+			}
+			if o := e.observe(t); o.HeldCount != 2 || o.HandoverCount != 0 {
+				t.Fatalf("before watch registration = %+v; want two Held, no hand-over", o)
+			}
+			// Consume SessionStart output and install the watch only now. Aging
+			// the file discards admission's touch and SessionStart preparation.
+			touched := e.wakeMtime(t)
+			exited := false
+			clock.runAt, clock.run = 1, func() {
+				if touched() {
+					t.Error("startup job touched before SessionStart exit")
+				}
+				exited = true
+			}
+			if err := hook.RunClaudeStartupWake(context.Background(), e.st, jobs[0], func() bool { return exited }, clock, clock.Now, newSilentLogger()); err != nil {
+				t.Fatal(err)
+			}
+			if !touched() || now.Sub(jobs[0].Deadline.Add(-5*time.Second)) < 250*time.Millisecond || !now.Before(jobs[0].Deadline) {
+				t.Fatalf("post-watch hint touched=%v, finished=%v, deadline=%v", touched(), now, jobs[0].Deadline)
+			}
+			if o := e.observe(t); o.HeldCount != 2 || o.HandoverCount != 0 {
+				t.Fatalf("startup hint delivered without FileChanged: %+v", o)
+			}
+			want := "[agent-director: message 1 of 2]\nfirst\n\n[agent-director: message 2 of 2]\nsecond"
+			if got := e.wake(t); got != want {
+				t.Fatalf("FileChanged = %q; want %q", got, want)
+			}
+			e.assertRaced(t, "0", "1")
+			if o := e.observe(t); o.HeldCount != 0 || o.HandoverCount != 0 || o.AwaitingTurnStart != 1 {
+				t.Fatalf("after FileChanged = %+v; want Final Results and one hand-over awaiting exact take evidence", o)
+			}
+			if got := e.wake(t); got != "" {
+				t.Fatalf("repeated FileChanged duplicated prompt %q", got)
+			}
+			e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(want)}))
+			if o := e.observe(t); o.AwaitingTurnStart != 0 || o.HandoverCount != 0 {
+				t.Fatalf("after exact take evidence = %+v; want awaiting cleared and Results still Final", o)
+			}
+			if got := e.wake(t); got != "" {
+				t.Errorf("wake after take duplicated prompt %q", got)
+			}
+		})
+	}
+}
+
+// Startup recovery revalidates its Launch, gate, coverage and session after
+// waiting; failure leaves custody untouched and does not recreate endpoints.
+func TestClaudeStartupWakeRevalidatesAndExpires(t *testing.T) {
+	for _, name := range []string{"stale token", "wrong parent", "wrong session", "uncovered during settle", "ended during settle", "missing endpoint", "hook never exits", "watch budget exhausted", "cancelled", "unreadable facts"} {
+		t.Run(name, func(t *testing.T) {
+			e := newWakeEnv(t, store.StateWaiting)
+			e.admit(t, "held", "hello")
+			touched := e.wakeMtime(t)
+			now := time.Now()
+			clock := &advancingClock{now: &now}
+			job := hook.ClaudeStartupWake{InstanceID: e.id, LaunchToken: e.token, SessionID: wakeSession,
+				ParentPID: e.parent.PID, ParentStart: e.parent.Start, Deadline: now.Add(5 * time.Second)}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var st hook.HookStore = e.st
+			wantErr := false
+			row := mustGetSpawn(t, e.st, e.id)
+			duringWait := name == "uncovered during settle" || name == "ended during settle"
+			transitioned := false
+			switch name {
+			case "stale token":
+				job.LaunchToken = "superseded"
+			case "wrong parent":
+				job.ParentPID++
+			case "wrong session":
+				job.SessionID = "another-session"
+			case "uncovered during settle", "ended during settle":
+				// TR2: begin eligible and mutate the real store from inside the
+				// settle sleep. A route read moved before that wait would retain
+				// authority and incorrectly touch the endpoint after this change.
+				f, err := e.st.ReadBusySendRouteFacts(ctx, e.id, store.HookGate{ParentPID: job.ParentPID, ParentStart: job.ParentStart})
+				if err != nil || !f.GateHolds || !f.Covered || f.Ended || f.State != store.StateWaiting ||
+					f.Destination.LaunchToken != job.LaunchToken || f.Destination.SessionID != job.SessionID {
+					t.Fatalf("initial startup authority = %+v, %v; want eligible", f, err)
+				}
+				clock.runAt, clock.run = 1, func() {
+					if touched() {
+						t.Error("startup job touched before its settle completed")
+					}
+					if name == "uncovered during settle" {
+						if err := apitest.SeedBusySendCoverage(e.db, e.id, store.BusySendNotCovered, store.BusySendCovered); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						e.fire(t, e.payload(t, "session-end-prompt-input-exit.json", nil))
+					}
+					transitioned = true
+					row = mustGetSpawn(t, e.st, e.id)
+				}
+			case "missing endpoint":
+				if err := os.Remove(e.endpoint); err != nil {
+					t.Fatal(err)
+				}
+				wantErr = true
+			case "hook never exits":
+				wantErr = true
+			case "watch budget exhausted":
+				job.Deadline = now.Add(200 * time.Millisecond)
+				wantErr = true
+			case "cancelled":
+				cancel()
+				wantErr = true
+			case "unreadable facts":
+				st = &failRouteFacts{Store: e.st, n: 1}
+			}
+			var logs bytes.Buffer
+			err := hook.RunClaudeStartupWake(ctx, st, job, func() bool { return name != "hook never exits" }, clock, clock.Now, log.New(&logs, "", 0))
+			if (err != nil) != wantErr {
+				t.Errorf("startup wake = %v; want error=%v", err, wantErr)
+			}
+			if duringWait && !transitioned {
+				t.Fatal("authority transition did not run during the settle wait")
+			}
+			if name == "missing endpoint" {
+				if _, err := os.Stat(e.endpoint); !os.IsNotExist(err) {
+					t.Errorf("startup job recreated endpoint: %v", err)
+				}
+			} else if touched() {
+				t.Error("refused startup job touched the endpoint")
+			}
+			if name == "hook never exits" && !now.Equal(job.Deadline) {
+				t.Errorf("never-exiting hook stopped at %v; want its finite deadline %v", now, job.Deadline)
+			}
+			if now.After(job.Deadline) {
+				t.Error("startup job exceeded its budget")
+			}
+			assertRowUnchanged(t, e.st, e.id, row)
+			if r := e.result(t, "held"); r.Final || r.Class != store.BusySendClassHeld {
+				t.Errorf("startup job changed Held custody: %+v", r)
+			}
+			if name == "unreadable facts" && !strings.Contains(logs.String(), "injected route-facts read failure") {
+				t.Errorf("read failure not diagnosed: %q", logs.String())
 			}
 		})
 	}

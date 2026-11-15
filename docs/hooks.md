@@ -68,7 +68,8 @@ creates the launch's private wake file and returns it in `watchPaths`.
 
 The wake file carries no content. agent-director touches it when it accepts a
 Message, and again at a main-agent `Stop` or idle-prompt `Notification` while
-Messages are Held. On each touch the `FileChanged` hook checks the agent
+Messages are Held. [Startup also wakes eligible launches](caller-contract.md#launch-end-resume-and-reuse).
+On each touch the `FileChanged` hook checks the agent
 again. It writes one prompt of Held Messages to stderr and exits 2 only when
 the main agent is idle at its prompt, no dialog is open, and the agent's
 `UserPromptSubmit` has shown every earlier delivered prompt. Claude Code then

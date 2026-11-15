@@ -45,13 +45,14 @@ func BusySendWakePath(storeID, token string) (string, error) {
 // agent's owned FileChanged hook watches. Only a recorded absolute path is
 // touched; none is made up or created. A failed or missing touch is a lost
 // wake, which leaves Held Messages for the agent's next eligible event
-// (SR-3.1), so it reports nothing.
-func TouchBusySendWake(path string) {
+// (SR-3.1). Callers that own startup recovery log the returned error; ordinary
+// event hints may leave it for the next eligible event.
+func TouchBusySendWake(path string) error {
 	if path == "" || !filepath.IsAbs(path) {
-		return
+		return fmt.Errorf("store: wake endpoint must be an absolute path")
 	}
 	now := time.Now()
-	_ = os.Chtimes(path, now, now) // a failure is a lost wake, as above
+	return os.Chtimes(path, now, now)
 }
 
 // BusySendRouteFacts is what an owned callback of an agent reads, in one

@@ -125,19 +125,21 @@ func claudeCallbackSession(res ClassifyResult, session string) bool {
 // directory) and returns it in watchPaths, so Claude Code runs the owned
 // FileChanged hook when it changes. Any other SessionStart, a nil prepare, or
 // an endpoint that cannot be created where the Launch's record names it,
-// writes nothing; a send's touch before then is a lost wake. It carries no
-// permission decision.
-func writeClaudeWatchPath(ctx context.Context, stdout io.Writer, st HookStore, prepare func(storeID, token string) (string, error),
+// writes nothing. A send's touch before the watch is registered is recovered
+// by one finite detached startup touch after this hook exits (decision 19).
+// With a startup prompt its first Stop still supplies the touch instead. It
+// carries no permission decision.
+func writeClaudeWatchPath(ctx context.Context, stdout io.Writer, st HookStore, hc HandleConfig,
 	instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
 	f, ok := claudeRouteFacts(ctx, st, instanceID, gate, res, logger)
 	if !ok {
 		return
 	}
 	id, ok := st.(interface{ StoreID() string })
-	if !ok || prepare == nil {
+	if !ok || hc.PrepareBusySendWake == nil {
 		return
 	}
-	path, err := prepare(id.StoreID(), f.Destination.LaunchToken)
+	path, err := hc.PrepareBusySendWake(id.StoreID(), f.Destination.LaunchToken)
 	if err != nil || path != f.WakePath {
 		logf(logger, "hook: busy-send wake endpoint (instance=%s): %v", instanceID, err)
 		return
@@ -149,6 +151,16 @@ func writeClaudeWatchPath(ctx context.Context, stdout io.Writer, st HookStore, p
 	}
 	if err != nil {
 		logf(logger, "hook: busy-send watch path (instance=%s): %v", instanceID, err)
+		return
+	}
+	if hc.ScheduleClaudeStartupWake == nil || hc.ClaudeStartupPrompt == nil ||
+		(f.Kind != store.BusySendLaunchResume && f.Kind != store.BusySendLaunchMigrated && hc.ClaudeStartupPrompt(f.AgentArgs)) {
+		return
+	}
+	job := ClaudeStartupWake{InstanceID: instanceID, LaunchToken: f.Destination.LaunchToken, SessionID: res.SessionID,
+		ParentPID: gate.ParentPID, ParentStart: gate.ParentStart, Deadline: hc.clock()().Add(claudeStartupWakeBudget)}
+	if err := hc.ScheduleClaudeStartupWake(job); err != nil {
+		logf(logger, "hook: schedule busy-send startup wake (instance=%s): %v", instanceID, err)
 	}
 }
 

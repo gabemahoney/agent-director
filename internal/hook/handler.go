@@ -169,6 +169,12 @@ type HandleConfig struct {
 	// import. cmd/agent-director wires spawn.PrepareBusySendWake. A nil one
 	// returns no watch path, so the Launch is never woken.
 	PrepareBusySendWake func(storeID, token string) (string, error)
+	// ScheduleClaudeStartupWake leaves one finite detached touch after this
+	// SessionStart exits, so Claude has consumed watchPaths before the touch.
+	// It must return promptly without inheriting the hook's output streams.
+	// A nil seam schedules nothing; tests can capture and run the job with a
+	// virtual clock and an explicit hook-exit barrier.
+	ScheduleClaudeStartupWake func(ClaudeStartupWake) error
 	// ClaudeStartupPrompt reports whether Claude agent arguments carry a
 	// startup prompt, which goes first in a fresh or reused Launch's order
 	// (SR-6.1): the seam to Claude's argument reader, which internal/hook
@@ -626,7 +632,7 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		}
 		if applied.Applied {
 			// SR-3.4: a covered Claude Launch's wake endpoint to watch.
-			writeClaudeWatchPath(ctx, stdout, st, hc.PrepareBusySendWake, instanceID, gate, res, logger)
+			writeClaudeWatchPath(ctx, stdout, st, hc, instanceID, gate, res, logger)
 		}
 	case relayActive && res.EventName == EventNamePermissionRequest:
 		// The relay branch (b.146 rule 1): its first write records the

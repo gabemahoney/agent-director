@@ -9471,10 +9471,32 @@ applied, creates the file when missing through the `PrepareBusySendWake` seam
 (the launch directory's owner and mode checks, `O_NOFOLLOW`, a regular file
 of the current user) and returns it in `hookSpecificOutput.watchPaths`
 (`writeClaudeWatchPath`). No API call creates it, so a touch before that is a
-lost wake. `ReclaimLaunchFiles` removes it. The touches are admission's, and a
-main `Stop` or idle-prompt `Notification` whose write applied while Messages
-are Held and the awaiting count is 0 (`resignalClaudeWake`); a touch claims
-and emits nothing.
+lost wake until startup or another eligible event touches it again.
+`ReclaimLaunchFiles` removes it. Admission touches it, as does a main `Stop`
+or idle-prompt `Notification` whose write applied while Messages are Held and
+the awaiting count is 0 (`resignalClaudeWake`). A touch claims and emits nothing.
+
+**Startup wake.** After successfully writing `watchPaths`, SessionStart
+schedules one detached job through `HandleConfig.ScheduleClaudeStartupWake`
+(`cmd/agent-director/hook_startup_wake.go`). Resume and prompt-free spawn/reuse
+schedule even with no Held Messages, since admission can precede watch
+registration. A spawn/reuse with a startup prompt keeps its first-turn Stop
+path. The job inherits no provider input/output pipe: stdin/stdout are
+`/dev/null`, stderr must be a regular diagnostic file, and it has its own
+process session. Scheduling is refused and logged without that sink.
+
+`RunClaudeStartupWake` waits for its scheduling hook to exit, checking every
+25 ms, then allows 250 ms for Claude to install the watch. It revalidates the
+original parent gate, session, Launch token, route, coverage and end state
+before touching the current Launch's recorded path once. The absolute budget
+is five seconds from scheduling, including waiting and store work; store open
+uses a 100 ms busy timeout. An independent process-exit timer enforces that
+deadline without logging or waiting for diagnostic I/O. A separate timer
+attempts a notice in the final 250 ms without delaying exit. Failures are
+logged best-effort and leave custody Held; a stale or ended Launch is a no-op.
+There is no continuing poll or retry. FileChanged alone decides delivery
+again from SQLite; the startup job claims nothing, sends no input or keys,
+and supplies no take evidence.
 
 **Delivery.** The owned `FileChanged` hook writes no state and, whatever its
 gate, no `ad.hook.ignored`. When its `file_path` is the current Launch's wake

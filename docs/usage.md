@@ -889,8 +889,9 @@ editable draft text are not restored. Session-selector filtering is defined in
 the [Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
 
 For Claude, `send-keys` continues through Wait Turn, carrying Held Messages in
-accepted order. Neither `resume` nor a state read delivers them; the new
-launch's eligible events do. A migrated Claude launch without a route holds
+accepted order. The resumed launch's startup wakes an idle agent to receive
+them without another send; see [startup delivery](caller-contract.md#launch-end-resume-and-reuse).
+A migrated Claude launch without a route holds
 `route_unavailable` until reconnected. For Codex, `send-keys` uses its input fallback. Native confirmed
 [ordinary text submission](caller-contract.md#ordinary-text-submission)
 requires a fresh supported launch with an empty composer; `allow_pending`

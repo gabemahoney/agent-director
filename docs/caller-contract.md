@@ -397,7 +397,8 @@ An accepted Message has no age timeout. Read its Result's `wait`, or
 | `route_unavailable` | Reconnect with keyless pause and resume. An existing Claude launch covered by migration has no delivery route until a new launch supplies one. |
 | `readiness_unknown` | Inspect the agent and outstanding hand-over; waiting alone supplies no readiness evidence. |
 
-A send's wake, an idle-prompt Notification or a turn end can enable delivery.
+A send's wake, [launch startup](#launch-end-resume-and-reuse), an idle-prompt
+Notification or a turn end can enable delivery.
 A lost wake delays it until a later eligible event: reads, `sweep` and elapsed
 time never deliver. Claude's wake hand-over is race-exposed: its Result ends
 `sent_unconfirmed`, reason `wait_turn_raced`, even if exact intake later
@@ -485,9 +486,13 @@ budget); on these finished rows `kill` and `sweep` end nothing.
 
 `resume` keeps the conversation: its Held Messages carry to the new launch in
 accepted order with their options, and no startup prompt is replayed. They
-wait `agent_starting` while the row is `pending`, and only the new launch's own
-events hand them over; `resume`, `sweep` and reads deliver nothing. A failed
-launch leaves them Held, waiting `launch_ended`.
+wait `agent_starting` while the row is `pending`. After Claude's SessionStart
+registers the wake path, startup makes one bounded wake attempt so an idle
+resumed agent receives Held Messages without another send or turn. A spawn
+without a startup prompt gets the same wake; with a startup prompt, its first
+turn's end enables delivery. A failed startup wake is logged and leaves
+Messages Held for the next eligible event. `sweep` and reads deliver nothing.
+A failed launch leaves them Held, waiting `launch_ended`.
 
 A reuse starts a new conversation. Until it is published, sends still go to
 the earlier one ([Busy-send coverage](#busy-send-coverage)). Once it is

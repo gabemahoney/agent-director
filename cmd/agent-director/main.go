@@ -160,6 +160,11 @@ const hookExitCode = 0
 //
 // The function never returns an error; it logs and returns.
 func runHook() (exit int) {
+	// Private re-exec of SessionStart's finite startup job; it consumes no
+	// provider payload and must never open a permission-response path.
+	if len(os.Args) >= 3 && os.Args[2] == claudeStartupWakeArg {
+		return runClaudeStartupWake(os.Args[3:])
+	}
 	start := time.Now()
 	stdout := os.Stdout
 	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
@@ -325,7 +330,10 @@ func runHook() (exit int) {
 		RelayHookGone:        hookRelayHookGone(cfg.Relay),
 		Stderr:               hookStderr(eventName),
 		PrepareBusySendWake:  spawn.PrepareBusySendWake,
-		ClaudeStartupPrompt:  spawn.HasClaudeStartupPrompt,
+		ScheduleClaudeStartupWake: func(job hook.ClaudeStartupWake) error {
+			return scheduleClaudeStartupWake(dbPath, logger, job)
+		},
+		ClaudeStartupPrompt: spawn.HasClaudeStartupPrompt,
 	}
 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		if errors.Is(err, hook.ErrRewake) {
