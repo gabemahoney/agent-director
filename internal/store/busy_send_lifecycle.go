@@ -32,7 +32,8 @@ import (
 // evidence only when it is unchanged, so a registration or identity write
 // after the judgement voids it (ErrBusySendExitNotEstablished). No elapsed
 // time, worker death, missing proof, ended or missing row, logical end cause
-// (record_deleted, candidate_replaced, creation_failed, launch_published) or
+// (agent_missing, record_deleted, candidate_replaced, creation_failed,
+// launch_published) or
 // successful kill no-op ever stands in for Exit.
 
 // ErrBusySendExitNotEstablished is a lifecycle write refused because positive
@@ -315,11 +316,10 @@ func recordBusySendLaunchEnd(ctx context.Context, conn *sql.Conn, storeID, launc
 
 // endBusySendRowLaunch records the Launch End of instanceID's row's own
 // published current Launch, the one whose launch token is the row's, with
-// cause process_exited (BusySendProcessExited: AD observed its agent's end),
-// in the caller's transaction. A row with a staged candidate (whose token is
-// the candidate's), an already ended Launch or no consistent binding changes
-// nothing.
-func endBusySendRowLaunch(ctx context.Context, conn *sql.Conn, storeID, instanceID string, now int64) (bool, error) {
+// the supplied cause, in the caller's transaction. A row with a staged
+// candidate (whose token is the candidate's), an already ended Launch or no
+// consistent binding changes nothing.
+func endBusySendRowLaunch(ctx context.Context, conn *sql.Conn, storeID, instanceID string, cause BusySendLaunchEnd, now int64) (bool, error) {
 	var launch string
 	err := conn.QueryRowContext(ctx, `SELECT l.launch_id FROM spawns s
 	    JOIN busy_send_launches l ON l.instance_id = s.instance_id AND l.conversation_id = s.busy_conversation_id
@@ -331,27 +331,31 @@ func endBusySendRowLaunch(ctx context.Context, conn *sql.Conn, storeID, instance
 	if err != nil {
 		return false, fmt.Errorf("store: busy-send Launch End: %w", err)
 	}
-	return recordBusySendLaunchEnd(ctx, conn, storeID, launch, BusySendProcessExited, now)
+	return recordBusySendLaunchEnd(ctx, conn, storeID, launch, cause, now)
 }
 
 // endBusySendOnTerminalMark is the Launch End a terminal row write records in
 // its own transaction, once it applied: on a move to ended (the agent's own
 // end report, or a proven exit with one), and on any mark whose statement
-// recorded the agent process's proven exit (process_evidence). A missing
-// mark on tmux evidence alone records none: the row's own agent may still
-// report in and revive it, and a lifecycle command records the End when it
-// needs one.
+// recorded the agent process's proven exit (process_evidence). A covered
+// Launch also ends on a missing mark without proven exit (agent_missing).
+// That logical end neither establishes exit nor lifts physical fences, even
+// if the row's own agent reports in and revives its lifecycle state later.
 func endBusySendOnTerminalMark(ctx context.Context, conn *sql.Conn, storeID, instanceID string) error {
 	var state string
-	var proven bool
-	if err := conn.QueryRowContext(ctx, `SELECT state, process_evidence IS NOT NULL FROM spawns WHERE instance_id = ?`,
-		instanceID).Scan(&state, &proven); err != nil {
+	var proven, covered bool
+	if err := conn.QueryRowContext(ctx, `SELECT state, process_evidence IS NOT NULL, busy_send = 'covered' FROM spawns WHERE instance_id = ?`,
+		instanceID).Scan(&state, &proven, &covered); err != nil {
 		return fmt.Errorf("busy-send Launch End: %w", err)
 	}
+	cause := BusySendProcessExited
 	if state != StateEnded && !proven {
-		return nil
+		if state != StateMissing || !covered {
+			return nil
+		}
+		cause = busySendAgentMissing
 	}
-	_, err := endBusySendRowLaunch(ctx, conn, storeID, instanceID, storeNowMillis())
+	_, err := endBusySendRowLaunch(ctx, conn, storeID, instanceID, cause, storeNowMillis())
 	return err
 }
 
@@ -386,7 +390,7 @@ func (s *Store) EndBusySendLaunchWithin(ctx context.Context, instanceID, token s
 			return err
 		}
 		var err error
-		ended, err = endBusySendRowLaunch(ctx, conn, s.StoreID(), instanceID, storeNowMillis())
+		ended, err = endBusySendRowLaunch(ctx, conn, s.StoreID(), instanceID, BusySendProcessExited, storeNowMillis())
 		return err
 	})
 	if err != nil {

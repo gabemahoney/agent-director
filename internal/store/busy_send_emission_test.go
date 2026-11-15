@@ -275,8 +275,8 @@ func TestBusySendStaleOwnerCannotIssue(t *testing.T) {
 // took the prompt clears only the obligation. Task 4 (t3.xis.oo.sf.2b) ends
 // the Launch through each production writer of M1's EndLaunch (the agent's own
 // end report, kill's verified exit, sweep's proven-exit mark) and lifts the
-// fence with the shared exit-evidence operation; find-missing's mark on tmux
-// evidence alone records no Launch End, so its row keeps the fence.
+// fence with the shared exit-evidence operation. A tmux-only missing mark
+// records logical Launch End too, while keeping the physical exit fence.
 func TestBusySendCustodyMatrix(t *testing.T) {
 	t.Parallel()
 	injected := errors.New("injected issue failure")
@@ -341,18 +341,14 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 			}
 		}
 	}
-	missing := func(t *testing.T, in *busySendInbox, h *store.BusySendHandover) {
-		issued("")(t, in, h)
-		row, err := in.s.GetSpawn(in.id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, res, err := in.s.MarkMissingIfSameLife(in.id, row.Snapshot); err != nil || res != store.CondApplied {
-			t.Fatalf("find-missing's mark %v, %v; want applied", res, err)
-		}
-	}
-	// The Launch End writers (Task 4), each recording process_exited.
+	// Launch End writers: missing is logical only; the others observe agent end.
 	endBy := map[string]func(t *testing.T, in *busySendInbox){
+		"tmux-only missing mark": func(t *testing.T, in *busySendInbox) {
+			row := in.row(t)
+			if _, res, err := in.s.MarkMissingIfSameLife(in.id, row.Snapshot); err != nil || res != store.CondApplied {
+				t.Fatalf("find-missing mark %v, %v; want applied", res, err)
+			}
+		},
 		"the agent's end report": func(t *testing.T, in *busySendInbox) {
 			if a := storefix.ApplyAgentHook(t, in.s, in.id, "SessionEnd", in.dest.SessionID); !a.Applied {
 				t.Fatalf("SessionEnd %+v; want applied", a)
@@ -391,7 +387,8 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 		{"partial output", issued(store.BusySendOutputPartial), true, "expiry", store.BusySendClaimOwned},
 		{"uncertain output", issued(store.BusySendOutputUncertain), true, "sweep's proven exit", ""},
 		{"complete output with no order evidence", issued(store.BusySendOutputComplete), true, "expiry", store.BusySendClaimOwned},
-		{"issued, agent row marked missing", missing, true, "expiry", store.BusySendClaimIneligible},
+		{"issued, agent row marked missing", issued(""), true, "tmux-only missing mark", ""},
+		{"claimed only, agent row marked missing", claimOnly, false, "tmux-only missing mark", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -416,13 +413,15 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 						return errors.As(err, &guard)
 					})
 				}
-				res, err := in.s.RecordBusySendEvidence(ctx, store.BusySendPromptEvidence{HandoverID: h.HandoverID, LaunchID: in.dest.LaunchID,
-					Admission: store.BusySendAdmissionPromptSighting})
-				if err != nil || res.OrderSecured || res.Closed {
-					t.Fatalf("a later admission callback %+v, %v; want the barrier kept", res, err)
-				}
-				if n := in.awaiting(t); n != 0 {
-					t.Fatalf("awaiting_turn_start %d after the admission; want 0", n)
+				if tc.end != "tmux-only missing mark" {
+					res, err := in.s.RecordBusySendEvidence(ctx, store.BusySendPromptEvidence{HandoverID: h.HandoverID, LaunchID: in.dest.LaunchID,
+						Admission: store.BusySendAdmissionPromptSighting})
+					if err != nil || res.OrderSecured || res.Closed {
+						t.Fatalf("a later admission callback %+v, %v; want the barrier kept", res, err)
+					}
+					if n := in.awaiting(t); n != 0 {
+						t.Fatalf("awaiting_turn_start %d after the admission; want 0", n)
+					}
 				}
 			}
 			a, b := "held held readiness_unknown reserved", "held held earlier_message reserved"
@@ -446,7 +445,17 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 				!reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
 				t.Fatalf("exit before Launch End: %v; want it refused, changing nothing", err)
 			}
+			beforeEnd, err := in.s.ReadBusySendHandover(ctx, h.HandoverID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			endBy[tc.end](t, in)
+			if n := in.awaiting(t); n != 0 {
+				t.Fatalf("awaiting_turn_start after Launch End = %d; want 0", n)
+			}
+			if after, err := in.s.ReadBusySendHandover(ctx, h.HandoverID); err != nil || after.Revision <= beforeEnd.Revision {
+				t.Fatalf("hand-over after Launch End %+v, %v; want revision beyond %d", after, err, beforeEnd.Revision)
+			}
 			a, b = "held held launch_ended reserved", "held held launch_ended reserved"
 			if tc.intent {
 				a = "issued sent_unconfirmed final launch_ended member"

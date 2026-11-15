@@ -380,7 +380,8 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 }
 
 // terminalMarkOnConn shares the guarded terminal update, the busy-send Launch
-// End it establishes (endBusySendOnTerminalMark) and atomic request /
+// End it establishes (endBusySendOnTerminalMark, including a covered Launch's
+// logical missing mark without proven exit) and atomic request /
 // subagent closure. The caller owns the transaction and emits only after commit.
 // A non-nil recorded receives, once the update applied, whether it stored a
 // process record: the statement's own terminalProcessEvidenceSet decides

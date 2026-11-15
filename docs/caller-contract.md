@@ -457,9 +457,9 @@ error (`ErrStoreBusy` when a bounded read runs out of time), never `unknown`.
 
 ### Launch end, resume and reuse
 
-When agent-director records that a Covered Agent's launch ended (its agent
-exited or was killed or paused, or its row was deleted), it types and resends
-nothing:
+When a Covered Agent becomes `ended` or `missing` (after `pause`, `kill`,
+`sweep` or a crash), or its row is deleted, agent-director records launch end
+and types and resends nothing:
 
 - A Message the agent cannot have received stays Held, in accepted order with
   its options, and waits `launch_ended`.
@@ -467,6 +467,10 @@ nothing:
   reason `wait_turn_raced` or `confirmation_off` where they apply, else
   `launch_ended`. Never resend it.
 - A final Result never changes.
+
+An agent marked `missing` may still be running. If it reports in again, its
+old launch's delivery authority stays fenced; Held Messages still wait
+`launch_ended` until `resume` starts a new launch.
 
 `ended`, `missing`, a finished-row `kill` or `pause` no-op, or the agent's exit
 alone does not show that the earlier launch can no longer deliver. Before

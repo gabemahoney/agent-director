@@ -157,8 +157,8 @@ func (l *lcEnv) assertNoInput(t *testing.T) {
 
 // TestBusySendLifecycleResumeCarriesCustody (SR-6.1, SR-6.2; M1
 // NoOldIssuerAfterResume, OldCallbacksInert): a Launch End learned from
-// kill's verified exit or from sweep finalizes the issued Message
-// sent_unconfirmed and keeps the later ones Held; after AD restarts, resume on
+// kill's verified exit or sweep (including tmux-only absence) finalizes the
+// issued Message sent_unconfirmed and keeps the later ones Held. After AD restarts, resume on
 // a new Client carries them to the new Launch in accepted order with the same
 // bytes, pair and options, its route recorded, waiting agent_starting and
 // earlier_message, and replays nothing at startup. The old job's late
@@ -167,10 +167,10 @@ func (l *lcEnv) assertNoInput(t *testing.T) {
 func TestBusySendLifecycleResumeCarriesCustody(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		end  func(t *testing.T, l *lcEnv)
+		name, cause string
+		end         func(t *testing.T, l *lcEnv)
 	}{
-		{"kill's verified exit, then sweep", func(t *testing.T, l *lcEnv) {
+		{"kill's verified exit, then sweep", "process_exited", func(t *testing.T, l *lcEnv) {
 			l.setAfterCall(tmux.CallKillPane, procfix.Gone(), l.r.AgentPID)
 			if res, err := l.c.Kill(api.KillParams{InstanceID: l.r.ID}); err != nil || !res.KillSent {
 				t.Fatalf("kill = %+v, %v; want the agent's pane killed", res, err)
@@ -180,9 +180,80 @@ func TestBusySendLifecycleResumeCarriesCustody(t *testing.T) {
 			}
 			l.sweep(t, l.c)
 		}},
-		{"sweep finds the agent gone", func(t *testing.T, l *lcEnv) {
+		{"sweep finds the agent gone", "process_exited", func(t *testing.T, l *lcEnv) {
 			l.pc.Set(l.r.AgentPID, procfix.Gone())
 			adviceEndSession(t, l.rec, l.r.Socket, l.r.Session.ID)
+			l.sweep(t, l.c)
+		}},
+		{"tmux-only missing, then an owned hook revives the row", "agent_missing", func(t *testing.T, l *lcEnv) {
+			l.pc.Set(l.r.AgentPID, procfix.Unreadable())
+			adviceEndSession(t, l.rec, l.r.Socket, l.r.Session.ID)
+			l.sweep(t, l.c)
+			row, err := l.c.Get(l.r.ID)
+			if err != nil || row.State != store.StateMissing || row.Delivery == nil || row.Delivery.AwaitingTurnStart != 0 ||
+				row.Delivery.HeldCount != 2 || row.Delivery.FirstWait == nil || row.Delivery.FirstWait.Reason != "launch_ended" {
+				t.Fatalf("tmux-only missing = %+v, %v; want missing, 2 Held waiting launch_ended, none awaiting", row, err)
+			}
+			issued := lcLookup(t, l.c, "lc-0")
+			if issued.Class != "sent_unconfirmed" || !issued.Final || issued.Reason != "launch_ended" {
+				t.Fatalf("tmux-only missing Result = %+v; want Final sent_unconfirmed launch_ended", issued)
+			}
+			// Logical End supplies no physical exclusion, so no retirement or
+			// not_started is allowed while the agent cannot be checked.
+			for _, verb := range []lcVerb{lcResume, lcReuse, lcDelete} {
+				before := l.snapshot(t)
+				err := verb.run(t, l, l.c)
+				if verb.name == "delete" {
+					if err == nil || err.Error() != verb.refusal {
+						t.Fatalf("delete = %v; want %s", err, verb.refusal)
+					}
+				} else {
+					assertOneName(t, err, verb.refusal)
+				}
+				if after := l.snapshot(t); !reflect.DeepEqual(after, before) {
+					t.Fatalf("%s without exit evidence changed custody or launched: %+v; want %+v", verb.name, after, before)
+				}
+			}
+			if got := lcLookup(t, l.c, "lc-2"); got.Class != "held" || got.Final || got.Wait == nil || got.Wait.Reason != "launch_ended" {
+				t.Fatalf("Held Result = %+v; want non-Final Held launch_ended", got)
+			}
+			l.assertNoInput(t)
+
+			// The original agent reports in again. Row revival must not
+			// restore its old Launch or its delivery authority (F1).
+			old := currentLaunch(t, l.dbPath, l.r.ID)
+			l.pc.Set(l.r.AgentPID, procfix.Alive(l.r.Spawn.Identity.PaneStarttime))
+			if a := apitest.ApplyAgentHook(t, l.dbPath, l.r.ID, "UserPromptSubmit", l.r.Spawn.SessionID); !a.Applied {
+				t.Fatalf("reviving hook = %+v; want applied", a)
+			}
+			row, err = l.c.Get(l.r.ID)
+			if err != nil || row.State != store.StateWorking || row.Delivery == nil || row.Delivery.HeldCount != 2 ||
+				row.Delivery.AwaitingTurnStart != 0 || row.Delivery.FirstWait == nil || row.Delivery.FirstWait.Reason != "launch_ended" {
+				t.Fatalf("revived row = %+v, %v; want working with 2 Held waiting launch_ended, none awaiting", row, err)
+			}
+			if got := currentLaunch(t, l.dbPath, l.r.ID); !reflect.DeepEqual(got, old) || !got.EndedAt.Valid {
+				t.Fatalf("revival changed old Launch: %+v; want ended %+v", got, old)
+			}
+			before := l.snapshot(t)
+			dest := store.BusySendDestination{LaunchID: old.ID, LaunchToken: old.Token.String, Provider: store.AgentClaude,
+				SessionID: l.r.Spawn.SessionID, RouteKind: store.BusySendRouteClaudeHooks}
+			claim, err := l.st.ClaimBusySendHandover(context.Background(), store.BusySendClaimRequest{InstanceID: l.r.ID,
+				Destination: dest, Boundary: store.BusySendBoundaryTurnEnd, IssueBudget: time.Hour, JobBudget: 2 * time.Hour})
+			if err != nil || claim.Outcome != store.BusySendClaimIneligible {
+				t.Fatalf("revived Launch claim = %+v, %v; want ineligible", claim, err)
+			}
+			if _, err := l.st.CommitBusySendIssue(context.Background(), store.BusySendIssueRequest{Ref: l.ref, Issuer: &lcHelper}); err == nil {
+				t.Fatal("the revived Launch allowed an old job to issue")
+			}
+			if after := l.snapshot(t); !reflect.DeepEqual(after, before) {
+				t.Fatalf("revived Launch issue attempts changed custody: %+v; want %+v", after, before)
+			}
+			if got := lcLookup(t, l.c, "lc-0"); !reflect.DeepEqual(got, issued) {
+				t.Fatalf("revival changed the Final Result: %+v; want %+v", got, issued)
+			}
+			l.assertNoInput(t)
+			// Only positive exit evidence lets the shared trace resume.
+			l.pc.Set(l.r.AgentPID, procfix.Gone())
 			l.sweep(t, l.c)
 		}},
 	} {
@@ -193,8 +264,8 @@ func TestBusySendLifecycleResumeCarriesCustody(t *testing.T) {
 
 			tc.end(t, l)
 
-			if got := currentLaunch(t, l.dbPath, l.r.ID).EndCause.String; got != "process_exited" {
-				t.Fatalf("Launch End = %q; want process_exited", got)
+			if got := currentLaunch(t, l.dbPath, l.r.ID).EndCause.String; got != tc.cause {
+				t.Fatalf("Launch End = %q; want %s", got, tc.cause)
 			}
 			issued := lcLookup(t, l.c, "lc-0")
 			if issued.Class != "sent_unconfirmed" || !issued.Final || issued.Reason != "launch_ended" {

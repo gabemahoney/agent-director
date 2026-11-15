@@ -9187,6 +9187,7 @@ and supersedes current or
 unresolved Launches, recording an unended current Launch's End with its
 custody disposition and retaining core records and earlier Launch End evidence.
 A later same-ID insertion starts a fresh conversation. Launch End causes
+`agent_missing` (a missing mark without proven agent exit),
 `record_deleted` (row deletion), `candidate_replaced` (unpublished candidate
 replacement) and `creation_failed` (supervised creation failure) prove neither
 physical exit nor old-issuer exclusion. An unlabelled session can survive a
@@ -9536,7 +9537,7 @@ A covered conversation's custody outlives its Launches.
 `internal/store/busy_send_lifecycle.go` holds the store side and
 `pkg/api/busy_send_exit.go` the judgement. Two facts stay distinct:
 
-- **Launch End** is logical: agent-director learned the Launch ended.
+- **Launch End** is logical, including when the agent becomes `ended` or `missing`.
   `recordBusySendLaunchEnd` records it once, on the current Launch only, and
   always applies the inbox's disposition (`applyBusySendLaunchEnd`): claims
   with no persisted intent return to Held in accepted order with their
@@ -9544,7 +9545,8 @@ A covered conversation's custody outlives its Launches.
   Final `sent_unconfirmed` (`wait_turn_raced`, then `confirmation_off`, else
   `launch_ended`) with its prompt fenced; Final Results are untouched; every
   hand-over's revision advances, so no old job persists intent or moves
-  custody afterwards. Held Messages then wait `launch_ended`.
+  custody afterwards. Held Messages then wait `launch_ended`, and public
+  `awaiting_turn_start` becomes zero.
 - **Exit** is positive evidence that nothing the Launch owns can emit or take
   its input: identity-checked exit of every owned process, its captured
   destinations fenced. Only Exit lifts a fence (`applyBusySendLaunchExit`),
@@ -9552,14 +9554,21 @@ A covered conversation's custody outlives its Launches.
   or `not_started` be written.
 
 **Launch End's writers** (cause `process_exited` unless stated): the agent's
-own verified end report (`applyEndedTransition`); a terminal mark whose
-statement recorded the agent process's proven exit
-(`endBusySendOnTerminalMark` in `terminalMarkOnConn`), never a `missing` mark
-on tmux evidence alone, since the agent may still report in; `kill`'s and
-keyless `pause`'s verified agent exit (`Store.EndBusySendLaunch`, for the
+own verified end report (`applyEndedTransition`); an applied terminal mark
+(`endBusySendOnTerminalMark` in `terminalMarkOnConn`), including a covered
+Launch's `missing` mark on tmux evidence alone (`agent_missing` without
+proven agent exit); `kill`'s and keyless `pause`'s verified agent exit
+(`Store.EndBusySendLaunch`, for the
 launch token they acted on only); a resume's or reuse's staging under exit
 evidence; and deletion (`record_deleted`, in `retireBusySendDeleted`). A
 repeat, or a Launch no longer current, changes nothing.
+
+A missing agent may still be running and report in again. Reviving its row
+does not clear the recorded Launch End or restore delivery authority; Held
+Messages keep waiting `launch_ended` until resume establishes a new Launch.
+`agent_missing` is internal bookkeeping, not a public Result reason, and
+asserts neither observed agent end nor Exit. `process_exited` records observed
+agent end, not exit of every owned issuer.
 
 **Must use: the shared exit evidence.** Every writer that relaunches,
 publishes, retires or closes a Launch on its exit reads the scope with

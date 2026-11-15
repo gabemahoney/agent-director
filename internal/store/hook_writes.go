@@ -173,7 +173,9 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		// missing before its agent reported in (SR-22.9's gate admits no
 		// other process), so a row a hook moves to a live state never keeps
 		// its old ended_at. A target other than pending clears the launch
-		// start in the same statement; a pending target (no hook passes one
+		// start in the same statement. Reviving the lifecycle row never clears
+		// its busy-send Launch End or restores that Launch's delivery authority.
+		// A pending target (no hook passes one
 		// today) leaves it (SR-5.2). The state is written with its settle
 		// columns (hookWriteStateSet, b.3ie): decided in this one statement,
 		// never from priorState, which feeds the trail only.
@@ -483,7 +485,7 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 		// the subagent close's lost_at (SR-3.5) and the busy-send Launch End
 		// the verified agent's own end report establishes (SR-6.2).
 		at := storeNowMillis()
-		if _, err := endBusySendRowLaunch(ctx, conn, s.StoreID(), instanceID, at); err != nil {
+		if _, err := endBusySendRowLaunch(ctx, conn, s.StoreID(), instanceID, BusySendProcessExited, at); err != nil {
 			return err
 		}
 		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, at)

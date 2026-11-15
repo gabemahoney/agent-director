@@ -30,7 +30,7 @@ import (
 // only conversion: every later release reads and writes these tables as
 // declared, and open refuses any other declaration (SR-7.2). So this value
 // never changes; a change to it strands every store already at v21.
-const busySendCoreV1Digest = "1f23599717702e35a732a463f6052436ee82756cb26d65e50271c689c31d7db0"
+const busySendCoreV1Digest = "227578b57237688544da2d3de19db781c7b2b0252559d267549522508a6301ec"
 
 // busySendCoreDigest hashes db's recorded core declarations, each object's
 // type, name and SQL text (whitespace collapsed) in name order, and returns
@@ -141,7 +141,7 @@ func TestBusySendCoreContract(t *testing.T) {
 		{"busy_send_launches", "phase", codes(BusySendLaunchCandidate, BusySendLaunchUncertain, BusySendLaunchFailed, BusySendLaunchCurrent, BusySendLaunchSuperseded)},
 		{"busy_send_launches", "route_kind", codes(BusySendRouteClaudeHooks, BusySendRouteCodexAppServer, BusySendRouteCursorACP)},
 		{"busy_send_launches", "override_send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
-		{"busy_send_launches", "end_cause", codes(BusySendProcessExited, BusySendLaunchPublished, BusySendCreationFailed, BusySendLaunchRecordDeleted, BusySendLaunchCandidateReplaced)},
+		{"busy_send_launches", "end_cause", codes(BusySendProcessExited, BusySendLaunchPublished, BusySendCreationFailed, BusySendLaunchRecordDeleted, BusySendLaunchCandidateReplaced, busySendAgentMissing)},
 		{"busy_send_launch_processes", "role", codes(BusySendProcessAgent, BusySendProcessAppServer, BusySendProcessTUI, BusySendProcessHelper, BusySendProcessGateway)},
 		{"busy_send_messages", "send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
 		{"busy_send_messages", "place", codes(BusySendHeld, BusySendClaimed, BusySendIssued, BusySendClosed)},

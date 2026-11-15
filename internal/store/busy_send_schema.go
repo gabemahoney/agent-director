@@ -139,7 +139,9 @@ const busyConversationsDDL = `CREATE TABLE IF NOT EXISTS busy_conversations (
 //   - revision: owned by the lifecycle writers (spawn, reuse, resume,
 //     Launch End) and the route's connection writer.
 //   - ended_at_ms, end_cause: the Launch End and its evidence
-//     (BusySendLaunchEnd; SR-6.2), recorded once. record_deleted means only
+//     (BusySendLaunchEnd; SR-6.2), recorded once. agent_missing is a logical
+//     missing mark without proven agent exit, not exit evidence.
+//     record_deleted means only
 //     that the instance row was deleted: it proves neither physical exit nor
 //     old-issuer exclusion and always leaves the Launch superseded (SR-6.3).
 //     candidate_replaced is likewise logical: a later guarded Launch start
@@ -165,7 +167,7 @@ const busySendLaunchesDDL = `CREATE TABLE IF NOT EXISTS busy_send_launches (
     revision              INTEGER NOT NULL DEFAULT 1 CHECK(typeof(revision) = 'integer' AND revision > 0),
     recorded_at_ms        INTEGER NOT NULL,
     ended_at_ms           INTEGER,
-    end_cause             TEXT CHECK(end_cause IN ('process_exited', 'launch_published', 'creation_failed', 'record_deleted', 'candidate_replaced')),
+    end_cause             TEXT CHECK(end_cause IN ('process_exited', 'launch_published', 'creation_failed', 'record_deleted', 'candidate_replaced', 'agent_missing')),
     CHECK(kind IS 'resume' OR (override_send_mode IS NULL AND override_confirmed IS NULL AND override_confirm_from_transcripts IS NULL)),
     CHECK((ended_at_ms IS NULL) = (end_cause IS NULL)),
     CHECK((phase = 'failed') = (end_cause IS 'creation_failed')),
