@@ -120,6 +120,31 @@ func readStoredMessages(t *testing.T, path, id string) []storedMessage {
 	return out
 }
 
+// exitEvidenceForTest is id's exit scope as read, taken as positive exit
+// evidence: the test judges every owned process in it gone, since the store
+// never probes one.
+func exitEvidenceForTest(t *testing.T, s *store.Store, id string) *store.BusySendExitEvidence {
+	t.Helper()
+	scope, err := s.ReadBusySendExitScope(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &store.BusySendExitEvidence{Scope: scope}
+}
+
+// deleteCoveredForTest deletes id's covered row as administrator deletion
+// does once it established exit evidence (exitEvidenceForTest).
+func deleteCoveredForTest(t *testing.T, s *store.Store, id string) {
+	t.Helper()
+	row, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.DeleteBusySendCovered(id, row.Snapshot, *exitEvidenceForTest(t, s, id)); err != nil || res != store.CondApplied {
+		t.Fatalf("DeleteBusySendCovered(%s) = %v, %v; want applied", id, res, err)
+	}
+}
+
 // awaitSignal waits for ch, failing the test after 10 s.
 func awaitSignal(t *testing.T, ch <-chan struct{}, what string) {
 	t.Helper()
@@ -269,9 +294,7 @@ func TestBusySendAdmissionArbitratesPairFirst(t *testing.T) {
 			target: id, text: text, pair: fresh, want: store.BusySendRefuseHeldCount, limit: &store.BusySendLimit{Actual: held + 1, Allowed: held}},
 		{name: "same target and text once the target is full", target: id, text: text, pair: pair},
 		{name: "a new pair once the target is deleted", setup: func() {
-			if err := s.DeleteSpawn(id); err != nil {
-				t.Fatal(err)
-			}
+			deleteCoveredForTest(t, s, id)
 		}, target: id, text: text, pair: fresh, notFound: true},
 		{name: "same target and text once the target is deleted", target: id, text: text, pair: pair},
 	} {

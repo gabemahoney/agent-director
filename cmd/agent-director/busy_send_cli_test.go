@@ -24,7 +24,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// TestBusySendCLIFlagsReachTheVerb: on an uncovered Claude row, each busy-send
+// TestBusySendCLIFlagsReachTheVerb: on an uncovered Codex row, each busy-send
 // flag given alone is ErrCantSend naming exactly its param, with its
 // err_details, on every verb that takes it, a reuse included; pause's
 // --only-if-waiting is ErrSpawnNotPausable with its cause, and
@@ -35,12 +35,12 @@ func TestBusySendCLIFlagsReachTheVerb(t *testing.T) {
 	cantSend := map[string]any{"class": "cant_send", "reason": "agent_not_covered", "resend_safe": true, "retry_with": "new_send"}
 	base := map[string]func(id, cwd string) []string{
 		"send-keys": func(id, _ string) []string { return []string{"send-keys", "--instance-id", id, "--text", "hi"} },
-		"spawn":     func(_, cwd string) []string { return withAgent("claude", "spawn", "--cwd", cwd) },
+		"spawn":     func(_, cwd string) []string { return withAgent("codex", "spawn", "--cwd", cwd) },
 		"reuse": func(id, cwd string) []string {
-			return withAgent("claude", "spawn", "--cwd", cwd, "--instance-id", id, "--reuse-finished")
+			return withAgent("codex", "spawn", "--cwd", cwd, "--instance-id", id, "--reuse-finished")
 		},
 		"resume":        func(id, _ string) []string { return []string{"resume", "--instance-id", id} },
-		"make-template": func(_, _ string) []string { return withAgent("claude", "make-template", "--name", "cli-busy") },
+		"make-template": func(_, _ string) []string { return withAgent("codex", "make-template", "--name", "cli-busy") },
 		"pause":         func(id, _ string) []string { return []string{"pause", "--instance-id", id} },
 	}
 	type flagCase struct {
@@ -85,7 +85,7 @@ func TestBusySendCLIFlagsReachTheVerb(t *testing.T) {
 	)
 	for _, tc := range cases {
 		t.Run(tc.verb+" "+strings.Join(tc.flags, " "), func(t *testing.T) {
-			home, id, _ := seedRowOnSocket(t, tc.state)
+			home, id, _ := seedRowOnSocket(t, tc.state, apitest.WithAgent("codex"))
 			argv := append(base[tc.verb](id, t.TempDir()), tc.flags...)
 
 			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, argv...)
@@ -110,7 +110,7 @@ func TestBusySendCLIFlagsReachTheVerb(t *testing.T) {
 	}
 }
 
-// TestBusySendCLICoveredSend (SR-1.3, SR-1.5, SR-5.1): on a covered row, a
+// TestBusySendCLICoveredSend (SR-1.3, SR-1.5, SR-5.1): on a Claude row, a
 // raw-key flag given at its zero value, or an empty --delivery-request-id,
 // still reaches the verb as supplied, so the send is ErrInvalidFlags naming it;
 // a confirmed send's --delivery-request-id reaches the store byte for byte, and
@@ -118,10 +118,7 @@ func TestBusySendCLIFlagsReachTheVerb(t *testing.T) {
 // other text is ErrCantSend, id_conflict, with that Result in err_details.
 func TestBusySendCLICoveredSend(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
-	home, id, _ := seedRowOnSocket(t, store.StateWaiting)
-	if err := apitest.SeedBusySendCoverage(stateDB(home), id, store.BusySendCovered, store.BusySendCovered); err != nil {
-		t.Fatalf("SeedBusySendCoverage: %v", err)
-	}
+	home, id, _ := seedRowOnSocket(t, store.StateWaiting) // a Claude row, covered as shipped
 	run := func(args ...string) (string, string, int) { return runSpawnCLI(t, home, fakeDir, args...) }
 	send := func(text string, flags ...string) []string {
 		return slices.Concat([]string{"send-keys", "--instance-id", id, "--text", text}, flags)
@@ -186,7 +183,7 @@ func TestBusySendCLIAgentlessTemplateKeepsExplicitFalse(t *testing.T) {
 	}
 }
 
-// TestBusySendCLIForceAndLookups: force-delivery on an uncovered row prints a
+// TestBusySendCLIForceAndLookups: force-delivery on an uncovered Codex row prints a
 // refused, agent_not_covered force_result whose force_id is an AD-made
 // lowercase UUID, ending as it starts and carrying no pair; get-force prints
 // that same force_result as found, its id given in upper case; an unused id
@@ -194,7 +191,7 @@ func TestBusySendCLIAgentlessTemplateKeepsExplicitFalse(t *testing.T) {
 // or pair and a non-UTF-8 delivery_request_id each print their one error.
 func TestBusySendCLIForceAndLookups(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
-	home, id, _ := seedRowOnSocket(t, store.StateEnded)
+	home, id, _ := seedRowOnSocket(t, store.StateEnded, apitest.WithAgent("codex"))
 	run := func(args ...string) (string, string, int) { return runSpawnCLI(t, home, fakeDir, args...) }
 
 	stdout, stderr, code := run("force-delivery", "--instance-id", id)

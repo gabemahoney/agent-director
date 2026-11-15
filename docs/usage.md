@@ -62,7 +62,7 @@ reports in, the shared recovery checks can note it `unreported` (see
 A Codex agent reports in at its first prompt, not when its screen opens, so
 its row stays `pending` until someone prompts it. Until then `pause` and
 `send-keys` without `allow_pending` (`--allow-pending` on the CLI) are
-refused, as for any `pending` row (once the agent has exited with an end
+refused on uncovered agents (once the agent has exited with an end
 report, `pause` ends the row instead; see the
 [caller contract](caller-contract.md#when-a-codex-agent-exits)). Pass the first prompt in the `spawn`
 arguments, or read the pane with `read-pane` and then type with
@@ -98,6 +98,51 @@ observe it; nothing samples between calls. Its separate
 the display actually returned, including no display. The fields, filtering
 and what to do are in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
+
+## Send Modes
+
+Claude Code is covered by busy send. Every `send-keys` stores a nonempty
+ordinary Message, including while the agent works or starts; it types no keys.
+Codex, Cursor and the experimental agents keep their existing input paths.
+Read `get.busy_send` for the current launch's coverage.
+
+`wait_turn` is Claude's supported Send Mode. The model sees
+`[agent-director: message N of M]` before each Message body. See
+[Wait Turn delivery and waits](caller-contract.md#wait-turn-delivery-and-waits)
+for batching, order, delivery schedule, risks and limits.
+
+Delivered means the message was passed to the harness, but not necessarily confirmed received by the LLM.
+
+For a worker, send a confirmed Message with your own Caller UUID and Message ID,
+then read its actual Result:
+
+```sh
+id=$(agent-director spawn --agent claude --cwd "$PWD" | jq -r '.instance_id')
+caller=7af00f9e-f42d-4a24-9cc1-c9697d17c261
+message=review-1
+agent-director send-keys --instance-id "$id" --text 'Review the project entry points' \
+    --send-mode wait_turn --confirmed-delivery --caller-uuid "$caller" \
+    --delivery-request-id "$message"
+agent-director get-delivery --caller-uuid "$caller" --delivery-request-id "$message"
+```
+
+Keep the pair for that Message; use a fresh Message ID for each new one.
+Repeating the same pair and text reads its Result without sending twice.
+An unconfirmed send has no lookup: never automatically resend after a lost
+reply. Result handling belongs in the
+[caller contract](caller-contract.md#message-results).
+
+## Agent Defaults
+
+Covered Messages default to `send_mode: wait_turn` and
+`confirmed_delivery: false`. `spawn` and `make-template` accept
+`--send-mode` and `--confirmed-delivery`; each send can override them.
+`resume` keeps the conversation's defaults unless it supplies replacements.
+See [Agent Defaults](caller-contract.md#agent-defaults) for precedence.
+
+For reconnection, see [Pause and resume](#pause-and-resume).
+`steer_turn`, forced delivery and `only_if_waiting` are unavailable; the
+experimental `confirm_from_transcripts` setting provides no confirmation.
 
 ## Family state
 
@@ -732,6 +777,9 @@ reason to look at the pane: its dialog may still be there.
 
 ## Answer a request at the pane
 
+For covered Claude, use [direct tmux and `record-pane-answer`](permissions.md#answering-at-the-pane).
+The `send-keys` key and hash examples below apply to uncovered agents.
+
 For a connected Cursor request, use its displayed key, without Enter. Each
 menu names its `request_token` and supplies distinct keys; match that token
 and option to the request you inspected. At the attached pane a deliberate
@@ -789,7 +837,7 @@ A Codex pane's keys and an example are in
 closed request keeps `delivery` `fallen_back`; its `pane_answer` (`sent`,
 `outside` or `tool_ran`) says how it was closed.
 
-For plain typing, `send-keys` also accepts `--no-enter`, `--key` and
+For plain typing on uncovered agents, `send-keys` also accepts `--no-enter`, `--key` and
 `--expect-pane-sha256`. Permission holds and stopping a held agent are in
 the [caller contract](caller-contract.md#permission-relay). Never pass a
 pane hash from an automatic flow: it means a person or an LLM judged that
@@ -815,7 +863,10 @@ and latest-session resume. Fresh reuse and switches follow the
 [life rules](#naming-the-agent); recovery rules are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
 
-`pause` asks a `waiting` agent to exit and keeps its row. `resume` relaunches
+For covered Claude, `pause` is keyless in any live state; see
+[keyless pause](caller-contract.md#keyless-pause-of-a-covered-agent).
+On uncovered agents, `pause` asks a `waiting` agent to exit. Both keep the row.
+`resume` relaunches
 it under the same id with the last agent's latest reported session, so the
 conversation carries on if that agent can reopen it. `resume` accepts no
 agent or session choice. Older sessions of the current life remain inspectable
@@ -837,8 +888,10 @@ not manufacture `waiting`. Transient queued, provisionally held and
 editable draft text are not restored. Session-selector filtering is defined in
 the [Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
 
-For Claude and Codex, continue a resumed conversation with `send-keys` using its literal input
-fallback. Native confirmed
+For Claude, `send-keys` continues through Wait Turn, carrying Held Messages in
+accepted order. Neither `resume` nor a state read delivers them; the new
+launch's eligible events do. A migrated Claude launch without a route holds
+`route_unavailable` until reconnected. For Codex, `send-keys` uses its input fallback. Native confirmed
 [ordinary text submission](caller-contract.md#ordinary-text-submission)
 requires a fresh supported launch with an empty composer; `allow_pending`
 does not extend native confirmation to resumed conversations.
@@ -881,7 +934,9 @@ agent-director pause --instance-id "$id"
 agent-director resume --instance-id "$id"
 ```
 
-Run `resume` after `pause` succeeds. If exit is not confirmed, follow the
+Run `resume` once `get` shows `ended` or `missing`. For a covered pause refusal,
+follow its [structured cause](caller-contract.md#keyless-pause-of-a-covered-agent);
+for an uncovered agent, follow the
 [pause timeout procedure](caller-contract.md#when-pause-cannot-confirm-exit).
 
 On a Codex row `pause` clears a draft of up to 64 lines before it types

@@ -1118,9 +1118,18 @@ export interface CantSendDetails {
     };
     result?: DeliveryResult;
 }
-/** `ErrSpawnNotPausable`'s `errDetails` when pause refuses `only_if_waiting`: its cause. */
+/**
+ * `ErrSpawnNotPausable`'s `errDetails`: its cause. `agent_not_covered` when pause refuses
+ * `only_if_waiting`; a covered agent's keyless pause adds `signal_sent` (whether its SIGTERM
+ * was sent, absent when not known) and one of `agent_process_unverifiable`, `launch_changed`,
+ * `signal_unsupported`, `signal_uncertain`, `exit_uncertain` (signalled, exit not verified
+ * within the budget), `budget_exhausted` (the budget ran out at a store read or write, or
+ * before the signal), `owned_process_running`, `owned_process_unverifiable` or
+ * `destination_unfenced`.
+ */
 export interface NotPausableDetails {
     cause: string;
+    signal_sent?: boolean;
 }
 /**
  * ErrPauseTimeout's errDetails after exit keys were sent but ended was not

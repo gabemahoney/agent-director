@@ -120,7 +120,8 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 	}
 	if _, checked := s.(*activeReadStore); !checked {
 		if _, rich := s.(permissionStatusReader); rich {
-			refresh := activeRefresh(s, settle, true)
+			delivery := store.NewBusySendDeliveries()
+			refresh := activeRefresh(s, settle, true, delivery)
 			rows, err := refresh([]string{instanceID}, nil)
 			if err != nil {
 				return StatusResult{}, err
@@ -128,7 +129,7 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 			if len(rows) == 0 {
 				return StatusResult{}, fmt.Errorf("%w: %s", store.ErrSpawnNotFound, instanceID)
 			}
-			run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, false)
+			run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, false, delivery)
 			out, err := statusSettledWithRelay(run, run.view, settle, instanceID)
 			finishErr := run.finish()
 			if err != nil {

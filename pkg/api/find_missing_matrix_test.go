@@ -260,6 +260,7 @@ func runMxCell(t *testing.T, c mxCell) {
 	before := len(readAPITrailLines(t))
 
 	res := mustSweep(t, st, c.pc, fmSweep{tmux: c.rec})
+	drainTrail(t) // the sweep's tick and held-name records are bounded: let them reach disk first
 	var ids, unver []string
 	switch {
 	case slices.Contains(w.ops, "mark"):
@@ -342,8 +343,8 @@ func assertMxCalls(t *testing.T, rec *tmuxfix.Recorder, lookups, listings int) {
 
 // TestFindMissingPendingMatrix: each pending row kind x pane identity x lookup cell past the grace period gets
 // SR-11.3's outcome (a live agent's row noted unreported, in neither list, b.kdf), and the holding session is never
-// touched. Each cell sweeps its own fake store and reads only its own id's trail records, so the cells run in
-// parallel.
+// touched. Each cell sweeps its own fake store and reads only its own id's trail records, drained first; the cells
+// run one at a time, so their bounded records never crowd the shared trail queue (each cell drains before the next).
 func TestFindMissingPendingMatrix(t *testing.T) {
 	t.Parallel()
 	for ki, k := range mxKinds {
@@ -355,14 +356,12 @@ func TestFindMissingPendingMatrix(t *testing.T) {
 				name, id := k.name+"/"+p.name+"/"+lk.name, fmt.Sprintf("mx-%d-%d-%d", ki, pi, li)
 				if !lk.ours || !p.none {
 					t.Run(name, func(t *testing.T) {
-						t.Parallel()
 						runMxCell(t, mxPlainCell(id, k, p, lk))
 					})
 					continue
 				}
 				for vi, v := range mxListings {
 					t.Run(name+"/"+v.name, func(t *testing.T) {
-						t.Parallel()
 						runMxCell(t, mxOursNoPaneCell(fmt.Sprintf("%s-%d", id, vi), k, lk, v))
 					})
 				}

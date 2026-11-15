@@ -195,7 +195,7 @@ func (e *killEnv) resumeWritesOnPane(t *testing.T, r killRow) {
 		t.Fatalf("GetSpawn: %v", err)
 	}
 	token := newToken()
-	res, moved, err := e.st.MoveToPending(r.ID, sp.Snapshot, e.clock.Now().UnixMilli(), token, r.Spawn.Identity.Socket, "", store.LaunchOwner{})
+	res, moved, err := e.st.MoveToPendingWithExit(r.ID, sp.Snapshot, e.clock.Now().UnixMilli(), token, r.Spawn.Identity.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, e.st, r.ID))
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want applied", res, err)
 	}

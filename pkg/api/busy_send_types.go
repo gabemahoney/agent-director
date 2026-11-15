@@ -172,15 +172,25 @@ type busySendObserver interface {
 
 var _ busySendObserver = (*store.Store)(nil)
 
-// busySendObservationOf reads row's delivery facts when its current Launch is
-// covered, without waiting, as the reading verbs' other reads (readerLockWait):
-// nil for an uncovered row, a store without the read, or a Launch no longer
-// covered when read. A read failure is the caller's error.
+// busySendObservationOf is row's delivery facts when its current Launch is
+// covered: nil for an uncovered row, a store without the read, or a Launch no
+// longer covered when read. An Active Check run's projection shows the facts
+// its row read took in that read's own read transaction
+// (store.BusySendDeliveries), so a covered row answers wherever an uncovered
+// one does, with facts of the very row state read. Only a row read
+// that took none (a store without that read, or a row since read without it)
+// reads them again here, without waiting, as the reading verbs' other reads
+// (readerLockWait). A read failure is the caller's error: the reading verb
+// then fails (ErrStoreBusy while the connection is held), never showing a
+// covered row without its delivery facts.
 func busySendObservationOf(s any, row Spawn) (*store.BusySendObservation, error) {
 	if row.BusySend != store.BusySendCovered {
 		return nil, nil
 	}
 	if run, ok := s.(*activeReadStore); ok {
+		if observation, found, err := run.delivery.Lookup(row); found {
+			return observation, err
+		}
 		s = run.source
 	}
 	observer, ok := s.(busySendObserver)

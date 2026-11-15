@@ -21,9 +21,9 @@ const (
 // list every coverage decision reads: the v20→v21 backfill (busy_send_schema.go)
 // and every later launch-time recording. A release that covers an agent kind
 // appends it here; each release's set must include every earlier release's
-// (SR-7.3). Adding claude, as E2 does, makes the same migration record
-// existing Claude Launches covered with no change to its code.
-var busySendCoveredAgents = [...]string{}
+// (SR-7.3). Claude Code is covered, so the same migration records existing
+// Claude Launches covered without fabricating a route or wake endpoint.
+var busySendCoveredAgents = [...]string{AgentClaude}
 
 // BusySendCoveredAgents returns a copy of this version's covered set, so no
 // caller can change the list every coverage decision reads.

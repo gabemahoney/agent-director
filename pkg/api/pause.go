@@ -141,6 +141,12 @@ var pauseSleep = time.Sleep
 //     with OnlyIfWaiting false, the default.
 //   - Pane-only row in any state: ErrAgentCapabilityUnsupported, before any
 //     state change or tmux call. The remaining rules apply to other agents.
+//   - A row whose current Launch is recorded covered (Spawn.BusySend): keyless
+//     pause (pauseRun.keyless, SR-6.4) instead of every rule below. A
+//     finished row is a no-op success; in any live state an identity-checked
+//     SIGTERM to its recorded agent process, its exit and its Launch's
+//     exclusion verified within timeoutSeconds, else ErrSpawnNotPausable with
+//     NotPausableDetails. Nothing is typed and Held Messages stay Held.
 //   - A Codex row in a live state (pending included) whose agent process is
 //     already gone and which holds an end report (the SessionEnd of its
 //     agent) is moved to ended before any of the rules below, with no tmux
@@ -293,7 +299,8 @@ var pauseSleep = time.Sleep
 // env carries the relay judge (its start-time reader judges the lookup's
 // server, SR-3.3, and an adopted pane, SR-3.6, too) and the intent hold.
 func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeoutSeconds int, params PauseParams) (PauseResult, error) {
-	r := &pauseRun{s: s, ctx: ctx, caller: callerIdentity(), procs: env.Relay.Procs, now: newRelayJudge(env.Relay).now}
+	r := &pauseRun{s: s, ctx: ctx, caller: callerIdentity(), procs: env.Relay.Procs, now: newRelayJudge(env.Relay).now,
+		timeoutSeconds: timeoutSeconds}
 	delivered, err := r.exit(t, env, params)
 	if errors.Is(err, ErrAgentCapabilityUnsupported) {
 		return PauseResult{}, err
@@ -365,6 +372,9 @@ type pauseRun struct {
 	// wait makes the end check; launch is the launch it sent them to.
 	codex  bool
 	launch launchKey
+	// timeoutSeconds is the pause budget, as Pause was given it: keyless
+	// pause's whole budget for its signal, exit and exclusion checks.
+	timeoutSeconds int
 }
 
 // endIfGone is the Codex end check: when row is a Codex row in a live state
@@ -425,7 +435,14 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 			return false, err
 		}
 	}
-	row, err := r.s.GetSpawn(params.InstanceID)
+	// The call's one budget starts before its first read (readRow): a covered
+	// row's keyless pause carries the rest of it. An uncovered pause ignores
+	// it: the budget bounds only the first read's wait for the connection, and
+	// a wait it cuts short falls back to GetSpawn; its wait after its keys
+	// keeps its own full timeout.
+	b, cancel := r.newKeylessBudget()
+	defer cancel()
+	row, err := r.readRow(b, params.InstanceID)
 	if err != nil {
 		return false, err
 	}
@@ -437,6 +454,12 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent boo
 	}
 	if spawn.IsPaneOnly(row.Agent) {
 		return false, spawn.PaneOnlyCapabilityError(row.Agent, "pause")
+	}
+	// A row whose current Launch is recorded covered is paused keylessly
+	// (SR-6.4), before the end check, the state rules, the relay guard and
+	// any tmux call: nothing is typed and no input session is opened.
+	if row.BusySend == store.BusySendCovered {
+		return false, r.keyless(b, row)
 	}
 
 	// The Codex end check comes first (SR-7.3, MC-4): before the state rules,
@@ -630,7 +653,12 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // is this version's unnamed busy-send-unavailable error (ErrInternal). Only
 // with OnlyIfWaiting false, the default, do pane-only rows return
 // ErrAgentCapabilityUnsupported in every state and do other agents' terminal
-// states (ended/missing) give no-op success. Pause is one-shot — no incremental progress callback; ctx cancellation
+// states (ended/missing) give no-op success. A Covered Agent (its current
+// Launch recorded covered) is paused keylessly in any live state: an
+// identity-checked SIGTERM to its recorded agent process, never keys, with
+// its exit and its Launch's exclusion verified within the timeout, else
+// ErrSpawnNotPausable with NotPausableDetails' cause and signal_sent; its
+// Held Messages stay Held for a resume. Pause is one-shot — no incremental progress callback; ctx cancellation
 // short-circuits the poll.
 //
 // Pause types what a plain send-keys without ExpectPaneSHA256 types, so on a

@@ -341,7 +341,7 @@ func (d decideInterleaved) PermissionRequestsForSpawn(id string) ([]store.Permis
 // refusing it, with a write landing among decide's reads is refused with no pane advice (b.pzy, b.t6e).
 func TestDecideFallenBackWriteBetweenReads(t *testing.T) {
 	t.Parallel()
-	deleteSpawn := func(_ *testing.T, s *store.Store, _ string) error { return s.DeleteSpawn("id-d-1") }
+	deleteSpawn := func(_ *testing.T, s *store.Store, _ string) error { return storefix.DeleteWithExit(t, s, "id-d-1") }
 	cases := []struct {
 		name   string
 		move   string // the agent's move after A was recorded, before decide; "": none

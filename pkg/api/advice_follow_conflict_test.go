@@ -173,9 +173,11 @@ var adviceConflictKill = adviceConflictVerb{"kill", func(t *testing.T, e *killEn
 	}
 }}
 
-// adviceConflictPane is the pane verb v on adviceConflictLiveRow's row.
-func adviceConflictPane(name string, v advPaneVerb) adviceConflictVerb {
+// adviceConflictPane is the pane verb v on adviceConflictLiveRow's row, an
+// agent's row ("" for Claude's).
+func adviceConflictPane(name string, v advPaneVerb, agent string) adviceConflictVerb {
 	return adviceConflictVerb{name, func(t *testing.T, e *killEnv, noOwn bool) (killRow, func() error, func(*testing.T)) {
+		e.rowAgent = agent
 		r := adviceConflictLiveRow(t, e, noOwn)
 		call, worked := v(t, e, r)
 		return r, call, worked
@@ -206,10 +208,12 @@ func adviceConflictReadPane(t *testing.T, e *killEnv, r killRow) (func() error, 
 }
 
 // The pane verbs: send-keys and pause (advice_follow_pane_test.go's), read-pane.
+// send-keys types on a pane-only Droid row and pause exits a Codex row: a
+// covered Claude row's send-keys is admission and its pause keyless.
 var (
-	adviceConflictSendKeys = adviceConflictPane("send-keys", advPaneSendKeys)
-	adviceConflictPause    = adviceConflictPane("pause", advPanePause)
-	adviceConflictRead     = adviceConflictPane("read-pane", adviceConflictReadPane)
+	adviceConflictSendKeys = adviceConflictPane("send-keys", advPaneSendKeys, store.AgentDroid)
+	adviceConflictPause    = adviceConflictPane("pause", advPanePause, store.AgentCodex)
+	adviceConflictRead     = adviceConflictPane("read-pane", adviceConflictReadPane, "")
 )
 
 // adviceScopeValue sets an @ad_owner value at the global scope of r's server;

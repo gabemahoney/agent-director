@@ -7,6 +7,8 @@ package api_test
 
 import (
 	"errors"
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"slices"
 	"strings"
 	"testing"
@@ -82,6 +84,8 @@ func (in *paneInput) assertSubmittedOnce(t *testing.T, text string) {
 
 // paneAgentExiting is watchPaneInput on r's agent pane for an agent that
 // ends its row (SessionEnd) on its exitOn-th "/exit" submission (0: never).
+// A Codex agent's SessionEnd only reports the end, so its process also exits
+// then, for pause's wait to end the row.
 func paneAgentExiting(t *testing.T, e *killEnv, r killRow, timeoutsReach bool, exitOn int) *paneInput {
 	t.Helper()
 	in := watchPaneInput(e, r.Spawn.Identity.PaneID, timeoutsReach)
@@ -93,6 +97,9 @@ func paneAgentExiting(t *testing.T, e *killEnv, r killRow, timeoutsReach bool, e
 		if exits++; exits == exitOn {
 			if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", r.Spawn.SessionID); !a.Applied {
 				t.Errorf("SessionEnd after /exit not applied: %s", a.Reason)
+			}
+			if r.Spawn.Agent == store.AgentCodex {
+				e.pc.Set(r.AgentPID, procfix.Gone())
 			}
 		}
 	}

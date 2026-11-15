@@ -19,6 +19,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -368,7 +369,8 @@ func TestResumeLostReplyPublicationPreservesSuccess(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if res, _, err := e.st.MoveToPending(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), "1122334455667788", e.socket, "", store.LaunchOwner{}); err != nil || res != store.CondApplied {
+					if res, _, err := e.st.MoveToPendingWithExit(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), "1122334455667788", e.socket, "", store.LaunchOwner{},
+						store.BusySendDefaultsChoice{}, exitEvidenceFor(t, e.st, r.ID)); err != nil || res != store.CondApplied {
 						t.Fatalf("stage replacement=%v,%v", res, err)
 					}
 					replacement, replacementRow = busyFacts(t, e.dbPath, r.ID), e.columns(t, r.ID)
@@ -399,7 +401,16 @@ func TestResumeLostReplyPublicationPreservesSuccess(t *testing.T) {
 					t.Fatalf("post-create core facts=%+v", facts)
 				}
 				for _, launch := range facts.Launches {
-					if launch.ID == prior.Launches[0].ID && !reflect.DeepEqual(launch, prior.Launches[0]) {
+					want := prior.Launches[0]
+					if launch.ID == want.ID && tc.coverage == store.BusySendCovered {
+						// A covered resume's staging records the earlier Launch's
+						// End with its exit evidence (SR-6.2); the creator adds nothing.
+						if launch.EndCause.String != "process_exited" || !launch.EndedAt.Valid || launch.Revision != want.Revision+1 {
+							t.Fatalf("staging left the earlier Launch's End unrecorded: %+v", launch)
+						}
+						want.EndCause, want.EndedAt, want.Revision = launch.EndCause, launch.EndedAt, launch.Revision
+					}
+					if launch.ID == want.ID && !reflect.DeepEqual(launch, want) {
 						t.Fatalf("creator changed the earlier published Launch: %+v", launch)
 					}
 					if !replaced && launch.Kind == "resume" && (launch.Token.String != e.store.moveToken || launch.Conversation != prior.Binding || launch.EndCause.Valid || launch.EndedAt.Valid) {
@@ -490,7 +501,7 @@ func TestResumeMoveNotApplied(t *testing.T) {
 			lostRace, true},
 		{"a competing resume moved it after the lookup", competing, true, "ErrSpawnNotResumable", lostRace, false},
 		{"the row removed", func(t *testing.T, e *resumeEnv, id string) {
-			if err := e.st.DeleteSpawn(id); err != nil {
+			if err := storefix.DeleteWithExit(t, e.st, id); err != nil {
 				t.Errorf("DeleteSpawn: %v", err)
 			}
 		}, false, "ErrSpawnNotFound", apitest.DescCase{Name: "ErrSpawnNotFound, removed before the move"}, false},
@@ -629,8 +640,20 @@ func TestResumeRestore(t *testing.T) {
 			}, onCreate: true, want: "ErrTmuxSessionCreate", desc: createFailed, outcome: apitest.RestoreRowChanged},
 		{name: "row removed after the move", prior: store.StateEnded, scripts: map[tmux.Call]tmuxfix.Script{create: fails},
 			write: func(t *testing.T, e *resumeEnv, id string) {
-				if err := e.st.DeleteSpawn(id); err != nil {
-					t.Errorf("DeleteSpawn: %v", err)
+				// Its conversation is covered: deleted as administrator
+				// deletion does, with the test judging every owned process gone.
+				row, err := e.st.GetSpawn(id)
+				if err != nil {
+					t.Errorf("GetSpawn: %v", err)
+					return
+				}
+				scope, err := e.st.ReadBusySendExitScope(id)
+				if err != nil {
+					t.Errorf("ReadBusySendExitScope: %v", err)
+					return
+				}
+				if res, err := e.st.DeleteBusySendCovered(id, row.Snapshot, store.BusySendExitEvidence{Scope: scope}); err != nil || res != store.CondApplied {
+					t.Errorf("DeleteBusySendCovered = %v, %v; want applied", res, err)
 				}
 			}, want: "ErrTmuxSessionCreate", desc: createFailed, outcome: apitest.RestoreRowRemoved},
 		{name: "restore store error", prior: store.StateEnded, scripts: map[tmux.Call]tmuxfix.Script{create: fails},

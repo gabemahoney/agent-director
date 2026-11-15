@@ -152,7 +152,7 @@ func TestEndReportGateMisses(t *testing.T) {
 			}
 		}, store.HookApplied{Reason: store.HookReasonPIDMismatch}},
 		{"race: row deleted", func(t *testing.T, id string, _ store.RowSnapshot) {
-			if err := f.s.DeleteSpawn(id); err != nil {
+			if err := storefix.DeleteWithExit(t, f.s, id); err != nil {
 				t.Fatalf("DeleteSpawn: %v", err)
 			}
 		}, store.HookApplied{}},

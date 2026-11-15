@@ -36,8 +36,15 @@ test("get: happy path — returns full spawn row fields", async () => {
     }
     expect(result.launch_started_at).toBeUndefined();
     expect(result.agent).toBe("claude");
-    expect(result.busy_send).toBe("not_covered");
-    for (const key of ["delivery", "delivery_capabilities", "agent_defaults", "busy_conversation_id", "turn_starts"]) expect(Object.keys(result)).not.toContain(key);
+    // Busy send covers claude (SR-9.1): get shows its out-of-the-box Agent Defaults, an empty inbox and
+    // the capability table, never the core's own columns (SR-5.6).
+    expect(result.busy_send).toBe("covered");
+    expect(result.agent_defaults).toEqual({ send_mode: "wait_turn", confirmed_delivery: false, confirm_from_transcripts: false });
+    expect(result.delivery).toEqual({ held_count: 0, held_bytes: 0, first_wait: null, handover_count: 0, startup_wait: null, force: null,
+      awaiting_turn_start: 0 });
+    expect(result.delivery_capabilities).toEqual({ modes: [{ send_mode: "wait_turn", message_bytes: 8000, prompt_bytes: 9600,
+      text_kind: "utf8_tab_lf" }], held_count: 1000, held_bytes: 8000000 });
+    for (const key of ["busy_conversation_id", "turn_starts"]) expect(Object.keys(result)).not.toContain(key);
     expect(result.context).toEqual(expectedContext("unknown"));
   });
 }, 10_000);

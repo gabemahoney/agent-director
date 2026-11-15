@@ -14,10 +14,14 @@ import (
 
 func init() {
 	// ── send-keys ─────────────────────────────────────────────────────────
+	//
+	// A Codex row: its text is pasted into its pane, then its Enter sent.
+	// A Claude row's send-keys admits a Message and types nothing.
 	seeders["send-keys"] = seederSpec{
 		Manifest: mustVerb("send-keys"),
 		SeedKind: seedLiveSession, // the row's own session and pane (Ours)
 		SeedID:   "smoke-send-keys-id",
+		RowAgent: "codex",
 		SentText: smokeSentText,
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.SendKeys(api.SendKeysParams{
@@ -100,15 +104,18 @@ func init() {
 
 	// ── pause ─────────────────────────────────────────────────────────────
 	//
-	// The waiting row's own session and pane (Ours): pause sends /exit and
-	// Enter by pane id, the Enter's after-call hook ends the row, and the
-	// wait sees it ended on its first poll. The 2s deadline fails the
-	// subtest, rather than hanging the suite, if the row never ends. The
-	// error path's bogus id returns ErrSpawnNotFound before any tmux call.
+	// The waiting Codex row's own session and pane (Ours): pause clears the
+	// line, sends /exit and Enter by pane id, the Enter's after-call hook
+	// reports the agent's end, and the wait's end check ends the row. A
+	// Claude row's pause is keyless: it signals the agent's process, which
+	// a smoke run must not do. The 2s deadline fails the subtest, rather
+	// than hanging the suite, if the row never ends. The error path's bogus
+	// id returns ErrSpawnNotFound before any tmux call.
 	seeders["pause"] = seederSpec{
 		Manifest:         mustVerb("pause"),
 		SeedKind:         seedPause,
 		SeedID:           "smoke-pause-id",
+		RowAgent:         "codex",
 		SentText:         smokeExitText,
 		HappyCtxDeadline: 2 * time.Second,
 		Happy: func(c *api.Client, id string, ctx context.Context) (any, error) {

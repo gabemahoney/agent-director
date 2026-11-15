@@ -209,7 +209,8 @@ func TestListRowKeySet(t *testing.T) {
 		got = append(got, k)
 	}
 	sort.Strings(got)
-	want := []string{"agent", "confirmations", "cwd", "ended_at", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at", "liveness_note",
+	// The row is Claude's, which busy send covers: it carries agent_defaults.
+	want := []string{"agent", "agent_defaults", "confirmations", "cwd", "ended_at", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at", "liveness_note",
 		"liveness_unverified_since", "parent_id", "permission_requests", "process_liveness", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"}
 	if !equalStrings(got, want) {
 		t.Errorf("ListRow keys = %v; want exactly %v", got, want)

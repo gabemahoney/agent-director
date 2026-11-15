@@ -24,12 +24,13 @@ func securityPauseCall(_ *testing.T, c *api.Client, s *securityScene) (any, erro
 }
 
 // psSecEnds ends the target's row as its own agent after the first Enter, so
-// the Ours rows' wait returns at once.
+// the Ours rows' wait returns at once (the rows are Codex's: its agent exits).
 func psSecEnds(t *testing.T, s *securityScene) { s.e.endAfterEnter(t, s.target) }
 
-// psSecEndEvents are the records that SessionEnd writes for the row during
-// the call (its state transition), not pause's.
-var psSecEndEvents = []string{"ad.spawn.state_transition"}
+// psSecEndEvents are the records the row's end writes during the call (its
+// state transition and, a Codex row's end being find-missing's guarded move
+// by pause's end check, its recovery tick), not pause's own.
+var psSecEndEvents = []string{"ad.spawn.state_transition", "ad.find_missing.tick"}
 
 // psSecChecks checks pause's sends and its disagree records: /exit and Enter
 // delivered to the agent's pane (the recorded one, else the adopted first

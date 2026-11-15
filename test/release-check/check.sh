@@ -63,8 +63,10 @@
 #                       EXPECTED_VERSION and EXPECTED_COMMIT
 #        admin help     its help opens with the human-approval statement
 #        claude row     spawn; SessionStart to waiting; status, get and list;
-#        codex row      send-keys text seen in read-pane; kill; after
-#                       find-missing, get shows missing or ended
+#        codex row      send-keys text seen in read-pane (Claude Code, which
+#                       busy send covers: a Held Result, and read-pane does
+#                       not show the text); kill; after find-missing, get
+#                       shows missing or ended
 #        reuse          the finished claude row's id, spawned again with
 #                       --reuse-finished, reaches waiting; then kill
 #   3. Last, exactly one `VERDICT: PASS` (exit 0, every check passed) or
@@ -599,6 +601,26 @@ pane_shows() {
     done
 }
 
+# pane_lacks <id> <text>: the first read-pane that succeeds within
+# PANE_WAIT_SECONDS does not show <text>. A Held Message is never typed, and
+# send-keys returns only after anything it typed was sent, so one successful
+# read is enough.
+pane_lacks() {
+    local id="$1" text="$2" start=$SECONDS
+    while :; do
+        if call "$ad_bin" read-pane --instance-id "$id" --n-lines 50; then
+            [[ "$(jq -r .pane <<<"$out" 2>/dev/null)" != *"$text"* ]] && return 0
+            reason="read-pane $id shows $text, the text of a Held Message"
+            return 1
+        fi
+        if ((SECONDS - start >= PANE_WAIT_SECONDS)); then
+            call_failed "read-pane $id"
+            return 1
+        fi
+        sleep "$POLL_SECONDS"
+    done
+}
+
 # finished <id>: after find-missing, get shows missing or ended within
 # FINISH_WAIT_SECONDS.
 finished() {
@@ -659,7 +681,14 @@ check_row() {
 
     token="release-check-text-$(uuid)"
     call "$ad_bin" send-keys --instance-id "$id" --text "$token" || { call_failed "send-keys $id"; return; }
-    pane_shows "$id" "$token" || return 1
+    if [[ "$agent" == claude ]]; then
+        # Busy send covers Claude Code: the send is a Held Message, never typed.
+        jq -e '.class == "held" and .final == false' <<<"$out" >/dev/null 2>&1 ||
+            { reason="send-keys $id printed $(oneline "$out"); expected a Held Result (class held, final false)"; return 1; }
+        pane_lacks "$id" "$token" || return 1
+    else
+        pane_shows "$id" "$token" || return 1
+    fi
 
     call "$ad_bin" kill --instance-id "$id" || { call_failed "kill $id"; return; }
     finished "$id" || return 1

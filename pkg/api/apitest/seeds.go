@@ -89,7 +89,8 @@ import (
 //
 // Every seeded row is a Claude row (agent claude, no end report) unless
 // WithAgent or WithEndReportedAt says otherwise. Options also seed matching
-// core provider/life/token facts in their transaction. Its Turn Start counter is
+// core provider/life/token facts, and the final agent's busy-send coverage
+// (seedAgentCoverage), in their transaction. Its Turn Start counter is
 // the insert's 0 unless WithTurnStarts says otherwise.
 //
 // Returns the instance_id that was written.
@@ -255,11 +256,45 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 	    WHERE instance_id = ? AND phase = 'current'`, id, id, id, id); err != nil {
 		return fmt.Errorf("SeedSpawn: core Launch identity: %w", err)
 	}
+	if err := seedAgentCoverage(tx, id); err != nil {
+		return err
+	}
 	if err := insertSessionHistory(tx, id, o.history); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("SeedSpawn: commit options tx: %w", err)
+	}
+	return nil
+}
+
+// seedAgentCoverage records, on tx, the busy-send coverage of id's final
+// agent (store.BusySendCoverageForAgent) on its row, current Launch and
+// published conversation, as that agent's own insertion records it: the seed
+// inserts a Claude row, and WithAgent changes the agent afterwards. A Launch
+// that is not a covered Claude one keeps no route, as recordBusySendClaudeRoute
+// records none for it.
+func seedAgentCoverage(tx *sql.Tx, id string) error {
+	var agent string
+	if err := tx.QueryRow(`SELECT COALESCE(agent, '') FROM spawns WHERE instance_id = ?`, id).Scan(&agent); err != nil {
+		return fmt.Errorf("SeedSpawn: core coverage: %w", err)
+	}
+	coverage := store.BusySendCoverageForAgent(agent)
+	for _, q := range []string{
+		`UPDATE spawns SET busy_send = ? WHERE instance_id = ?`,
+		`UPDATE busy_send_launches SET busy_send = ? WHERE instance_id = ? AND phase = 'current'`,
+		`UPDATE busy_conversations SET busy_send = ? WHERE instance_id = ? AND publication = 'published'`,
+	} {
+		if _, err := tx.Exec(q, string(coverage), id); err != nil {
+			return fmt.Errorf("SeedSpawn: core coverage: %w", err)
+		}
+	}
+	if coverage == store.BusySendCovered && (agent == "" || agent == store.AgentClaude) {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE busy_send_launches SET route_kind = NULL, route_id = NULL, wake_path = NULL
+	    WHERE instance_id = ? AND phase = 'current'`, id); err != nil {
+		return fmt.Errorf("SeedSpawn: core route: %w", err)
 	}
 	return nil
 }

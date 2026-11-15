@@ -52,6 +52,7 @@ func runCallTablePause(t *testing.T, v callTableVerb, col callTableColumn, cell 
 		return
 	}
 	e := newKillEnv(t)
+	e.rowAgent = v.agent
 	r := e.seedRow(t, col.spec)
 	e.endAfterEnter(t, r)
 
@@ -105,6 +106,7 @@ func callTablePause() callTableVerb {
 	maps.Copy(cells, callTableUnusableRefused())
 	return callTableVerb{
 		name:        "pause",
+		agent:       store.AgentCodex,
 		invoke:      pauseCallTableInvoke,
 		firstAction: tmux.CallSendText,
 		actions:     []tmux.Call{callClearLine, tmux.CallSendText, callEnterKey},

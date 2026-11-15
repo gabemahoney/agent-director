@@ -5,7 +5,7 @@
  * HOME); the name is run-unique so ErrTemplateExists never fires.
  * The agent is written to the file (SR-1.1); agent_args without an agent → ErrTemplateAgentMissing.
  * Agent Defaults: an agent-less template stores them as given; with agent
- * claude → ErrCantSend agent_not_covered (SR-1.4, SR-9.2).
+ * codex → ErrCantSend agent_not_covered (SR-1.4, SR-9.2).
  * Error path: a name with "/" → ErrTemplateNameUnsafe.
  */
 
@@ -39,11 +39,11 @@ test("make-template: happy path — an agent-less template stores the Agent Defa
   });
 }, 10_000);
 
-// SR-9.2: a template naming claude refuses them.
-test("make-template: error — Agent Defaults with agent claude → ErrCantSend agent_not_covered", async () => {
+// SR-9.2: a template naming codex, which busy send doesn't cover, refuses them.
+test("make-template: error — Agent Defaults with agent codex → ErrCantSend agent_not_covered", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
-    const err = await rejection(makeTemplateClaude(client, { name: `smoke-template-claude-defaults-${Date.now()}`, send_mode: "wait_turn",
+    const err = await rejection(client.makeTemplate({ agent: "codex", name: `smoke-template-codex-defaults-${Date.now()}`, send_mode: "wait_turn",
       confirmed_delivery: false, confirm_from_transcripts: false }));
     expectAgentNotCovered(err, "send_mode, confirmed_delivery, confirm_from_transcripts");
   });

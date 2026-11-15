@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -56,27 +59,9 @@ func (s *Store) ReadBusySendObservation(instanceID string, maxWait time.Duration
 			return err
 		}
 		defer rollbackConn(ctx, conn)
-		p, err := readExaminedBusySendLaunch(ctx, conn, instanceID)
-		if err != nil || p.launchCoverage != BusySendCovered {
-			return err
-		}
-		o := BusySendObservation{Provider: p.provider, Defaults: p.defaults}
-		if o.HeldCount, o.HeldBytes, o.FirstWait, err = readBusySendHeld(ctx, conn, p.conversation); err != nil {
-			return err
-		}
-		if o.HandoverCount, err = readBusySendHandoverCount(ctx, conn, p.conversation); err != nil {
-			return err
-		}
-		if o.Force, err = readBusySendForceSummary(ctx, conn, s.StoreID(), p.conversation); err != nil {
-			return err
-		}
-		if !p.launchEnded {
-			if o.AwaitingTurnStart, err = readBusySendAwaiting(ctx, conn, p.conversation, p.launch); err != nil {
-				return err
-			}
-		}
-		out = &o
-		return nil
+		var err error
+		out, err = readBusySendObservationOn(ctx, conn, s.StoreID(), instanceID)
+		return err
 	})
 	if errors.Is(err, ErrSpawnNotFound) {
 		return nil, err
@@ -85,6 +70,202 @@ func (s *Store) ReadBusySendObservation(instanceID string, maxWait time.Duration
 		return nil, fmt.Errorf("store: read busy-send delivery: %w", err)
 	}
 	return out, nil
+}
+
+// readBusySendObservationOn is ReadBusySendObservation's read in the
+// caller's read transaction on conn.
+func readBusySendObservationOn(ctx context.Context, conn *sql.Conn, storeID, instanceID string) (*BusySendObservation, error) {
+	p, err := readExaminedBusySendLaunch(ctx, conn, instanceID)
+	if err != nil || p.launchCoverage != BusySendCovered {
+		return nil, err
+	}
+	o := BusySendObservation{Provider: p.provider, Defaults: p.defaults}
+	if o.HeldCount, o.HeldBytes, o.FirstWait, err = readBusySendHeld(ctx, conn, p.conversation); err != nil {
+		return nil, err
+	}
+	if o.HandoverCount, err = readBusySendHandoverCount(ctx, conn, p.conversation); err != nil {
+		return nil, err
+	}
+	if o.Force, err = readBusySendForceSummary(ctx, conn, storeID, p.conversation); err != nil {
+		return nil, err
+	}
+	if o.AwaitingTurnStart, err = readBusySendAwaiting(ctx, conn, p.conversation, p.launch); err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+// BusySendDeliveries holds the delivery facts a row read took for its covered
+// rows in the row read's own SQLite read transaction (ListFilters.Delivery,
+// RecoveryRowsWithDelivery): the reader begins it before its row SELECT and
+// holds it through these reads, on its one zero-wait acquisition of the store
+// connection. A reading verb that has the row thus needs no second
+// acquisition to show them, so covering an agent makes its reads no less
+// available, and the facts are of the very row state read (SR-5.6, SR-9.1).
+// A full collection (NewBusySendDeliveries, for get, get-many and status)
+// takes each covered row's whole delivery observation; a defaults collection
+// (NewBusySendDefaults, for list) takes only the Agent Defaults, in one
+// batched query. Each entry is the latest read of its instance, with the row
+// snapshot and launch token it was read with, and a row's own read error (no
+// consistent binding) rather than failing the row read. Safe for concurrent
+// use.
+type BusySendDeliveries struct {
+	mu           sync.Mutex
+	defaultsOnly bool
+	byID         map[string]busySendDelivery
+}
+
+type busySendDelivery struct {
+	snapshot    RowSnapshot
+	token       string
+	observation *BusySendObservation
+	defaults    *BusySendAgentDefaults
+	err         error
+}
+
+// NewBusySendDeliveries returns an empty full collection.
+func NewBusySendDeliveries() *BusySendDeliveries {
+	return &BusySendDeliveries{byID: map[string]busySendDelivery{}}
+}
+
+// NewBusySendDefaults returns an empty defaults collection: Agent Defaults
+// only, as list shows.
+func NewBusySendDefaults() *BusySendDeliveries {
+	return &BusySendDeliveries{defaultsOnly: true, byID: map[string]busySendDelivery{}}
+}
+
+// entry is the delivery facts taken with row's read, if any.
+func (d *BusySendDeliveries) entry(row Spawn) (busySendDelivery, bool) {
+	if d == nil {
+		return busySendDelivery{}, false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	e, ok := d.byID[row.InstanceID]
+	if !ok || e.snapshot != row.Snapshot || e.token != row.Identity.Token {
+		return busySendDelivery{}, false
+	}
+	return e, true
+}
+
+// Lookup returns a full collection's delivery facts taken with row's read:
+// found is false when none was taken for that instance at row's snapshot and
+// launch token (or the collection holds defaults only), so the caller reads
+// them itself. A nil observation found means its current Launch was not
+// covered at that read; err is that read's own error.
+func (d *BusySendDeliveries) Lookup(row Spawn) (observation *BusySendObservation, found bool, err error) {
+	e, ok := d.entry(row)
+	if !ok || d.defaultsOnly {
+		return nil, false, nil
+	}
+	return e.observation, true, e.err
+}
+
+// LookupDefaults returns the Agent Defaults taken with row's read: found is
+// false when none was taken for that instance at row's snapshot and launch
+// token; ok is false, found, when that read showed none (its current Launch
+// not covered, or no consistent published binding).
+func (d *BusySendDeliveries) LookupDefaults(row Spawn) (defaults BusySendAgentDefaults, ok, found bool) {
+	e, found := d.entry(row)
+	switch {
+	case !found:
+		return BusySendAgentDefaults{}, false, false
+	case e.observation != nil:
+		return e.observation.Defaults, true, true
+	case e.defaults != nil:
+		return *e.defaults, true, true
+	}
+	return BusySendAgentDefaults{}, false, true
+}
+
+// beginRead begins the row read's read transaction when d is set: the row
+// SELECT and read then see one snapshot. The returned end rolls it back.
+func (d *BusySendDeliveries) beginRead(ctx context.Context, conn *sql.Conn) (end func(), err error) {
+	if d == nil {
+		return func() {}, nil
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
+		return nil, err
+	}
+	return func() { rollbackConn(ctx, conn) }, nil
+}
+
+// read takes the delivery facts of rows' covered rows on conn, inside the
+// read transaction beginRead began before the rows were selected. A failure
+// that is the connection's or the transaction's (busy, cancelled) fails the
+// whole read, as a row read's own failure does; any other is recorded for
+// its row.
+func (d *BusySendDeliveries) read(ctx context.Context, conn *sql.Conn, storeID string, rows []Spawn) error {
+	if d == nil {
+		return nil
+	}
+	var covered []Spawn
+	for _, row := range rows {
+		if row.BusySend == BusySendCovered {
+			covered = append(covered, row)
+		}
+	}
+	if len(covered) == 0 {
+		return nil
+	}
+	got := make(map[string]busySendDelivery, len(covered))
+	if d.defaultsOnly {
+		defaults, err := readBusySendDefaultsOn(ctx, conn, covered)
+		if err != nil {
+			return err
+		}
+		for _, row := range covered {
+			e := busySendDelivery{snapshot: row.Snapshot, token: row.Identity.Token}
+			if v, ok := defaults[row.InstanceID]; ok {
+				e.defaults = &v
+			}
+			got[row.InstanceID] = e
+		}
+	} else {
+		for _, row := range covered {
+			o, err := readBusySendObservationOn(ctx, conn, storeID, row.InstanceID)
+			if err != nil && (isBusy(err) || ctx.Err() != nil) {
+				return err
+			}
+			if err != nil {
+				err = fmt.Errorf("store: read busy-send delivery: %w", err)
+			}
+			got[row.InstanceID] = busySendDelivery{snapshot: row.Snapshot, token: row.Identity.Token, observation: o, err: err}
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	maps.Copy(d.byID, got)
+	return nil
+}
+
+// readBusySendDefaultsOn reads rows' published Agent Defaults in one query on
+// conn, keyed by instance id; a row whose current Launch is not covered or
+// that has no consistent published binding has no entry.
+func readBusySendDefaultsOn(ctx context.Context, conn *sql.Conn, rows []Spawn) (map[string]BusySendAgentDefaults, error) {
+	args := make([]any, 0, len(rows))
+	for _, row := range rows {
+		args = append(args, row.InstanceID)
+	}
+	q, err := conn.QueryContext(ctx, `SELECT s.instance_id, c.default_send_mode, c.default_confirmed, c.confirm_from_transcripts
+	    FROM spawns s JOIN busy_conversations c ON c.conversation_id = s.busy_conversation_id
+	        AND c.instance_id = s.instance_id AND c.publication = 'published'
+	    WHERE s.busy_send = 'covered' AND s.instance_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer q.Close()
+	out := make(map[string]BusySendAgentDefaults, len(rows))
+	for q.Next() {
+		var id, mode string
+		var d BusySendAgentDefaults
+		if err := q.Scan(&id, &mode, &d.Confirmed, &d.ConfirmFromTranscripts); err != nil {
+			return nil, err
+		}
+		d.SendMode = BusySendMode(mode)
+		out[id] = d
+	}
+	return out, q.Err()
 }
 
 // readBusySendHeld counts conversation's Held Messages and their bytes and

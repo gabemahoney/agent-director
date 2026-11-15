@@ -24,6 +24,19 @@ import (
 // paneVerbs are the three pane verbs, in the order the tables run them.
 var paneVerbs = []apitest.PaneVerb{apitest.PaneReadPane, apitest.PaneSendKeys, apitest.PanePause}
 
+// paneVerbRow is the row facts a table gives the row verb acts on. Busy send
+// covers Claude, whose send-keys and pause type nothing, so send-keys acts on
+// a pane-only Droid row and pause on a Codex row; read-pane on a Claude row.
+func paneVerbRow(verb apitest.PaneVerb) []apitest.SpawnOption {
+	switch verb {
+	case apitest.PaneSendKeys:
+		return []apitest.SpawnOption{apitest.WithAgent("droid")}
+	case apitest.PanePause:
+		return []apitest.SpawnOption{apitest.WithAgent("codex")}
+	}
+	return nil
+}
+
 // paneCall is one pane-verb call's outcome: read-pane's pane text and the error.
 type paneCall struct {
 	Pane string
@@ -105,7 +118,7 @@ func TestPaneVerbSocketDeniedIsTmuxNotAvailable(t *testing.T) {
 	for _, verb := range paneVerbs {
 		t.Run(string(verb), func(t *testing.T) {
 			f := newKillFix(t)
-			r := f.liveRow(t, killRowSpec{})
+			r := f.liveRow(t, killRowSpec{Opts: paneVerbRow(verb)})
 			world := idtWorld(t, f.realTmux)
 			chmodSocket(t, f.Socket, 0o000)
 
@@ -121,12 +134,13 @@ func TestPaneVerbSocketDeniedIsTmuxNotAvailable(t *testing.T) {
 }
 
 // TestPaneVerbDollarAndBackslashNames: read-pane reads and send-keys types
-// into each $ or \ name's own pane only; the session whose id a$1 spells is untouched.
+// into each $ or \ name's own pane only, a pane-only Droid row's (paneVerbRow);
+// the session whose id a$1 spells is untouched.
 func TestPaneVerbDollarAndBackslashNames(t *testing.T) {
 	for _, n := range dollarBackslashNames(t) {
 		t.Run(n.Raw, func(t *testing.T) {
 			f := newKillFix(t)
-			r, others := f.namedRow(t, n)
+			r, others := f.namedRow(t, n, paneVerbRow(apitest.PaneSendKeys)...)
 			seen := idtSendAndSee(t, f.realTmux, f.Client, r.Reply.PaneID)
 
 			read := f.paneVerb(t, apitest.PaneReadPane, r.InstanceID, "")

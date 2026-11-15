@@ -124,7 +124,11 @@ const deleteFinishedIfSameLifeSQL = `DELETE FROM spawns
 // delete statement of their own and no other row's entries touched. The same
 // transaction retires/abandons its busy-send conversations and supersedes its
 // current/pending Launches with deletion-only evidence (SR-6.3), retaining core
-// history. It emits no trail event and never touches tmux or transcripts.
+// history. A row whose published conversation still holds custody (a Message
+// Held, claimed or issued) is kept: checked in the delete's own transaction,
+// it deletes nothing and returns an error holding ErrBusySendCustodyHeld
+// (SR-5.5), so an admission racing expire's read is never lost. It emits no
+// trail event and never touches tmux or transcripts.
 //
 // It returns CondApplied when the row was deleted; CondChanged, having
 // deleted nothing, when the row exists but is live or pending now or its
@@ -135,7 +139,7 @@ func (s *Store) DeleteFinishedIfSameLife(instanceID string, examined RowSnapshot
 	const errPrefix = "store: delete finished if same life"
 	args := append([]any{instanceID}, finishedStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	r, err := s.execBusySendDelete(instanceID, deleteFinishedIfSameLifeSQL, args...)
+	r, err := s.execBusySendDelete(instanceID, keepBusySendCustody, deleteFinishedIfSameLifeSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}

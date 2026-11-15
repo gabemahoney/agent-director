@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrBusySendLaunchChanged means the instance's published current Launch is
@@ -40,8 +41,17 @@ type BusySendPublishedLaunch struct {
 // Spawn.Identity.Token as the published Launch's token, since either may
 // already name a staged candidate.
 func (s *Store) GetBusySendPublishedLaunch(instanceID string) (BusySendPublishedLaunch, error) {
+	return s.GetBusySendPublishedLaunchWithin(context.Background(), instanceID, DefaultLockWait)
+}
+
+// GetBusySendPublishedLaunchWithin is GetBusySendPublishedLaunch within ctx,
+// its waits bounded by maxWait (readWithin; a wait cut short is
+// ErrStoreBusy): keyless pause passes its one call budget. Its result is read
+// only once the read completed: a read the budget cuts short returns its
+// error alone, while its abandoned operation may still be running.
+func (s *Store) GetBusySendPublishedLaunchWithin(ctx context.Context, instanceID string, maxWait time.Duration) (BusySendPublishedLaunch, error) {
 	var out BusySendPublishedLaunch
-	err := s.readWithin(DefaultLockWait, "", func(ctx context.Context, conn *sql.Conn) error {
+	err := s.WithContext(ctx).readWithin(maxWait, "", func(ctx context.Context, conn *sql.Conn) error {
 		if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
 			return err
 		}
@@ -54,12 +64,16 @@ func (s *Store) GetBusySendPublishedLaunch(instanceID string) (BusySendPublished
 			Provider: p.provider, Coverage: p.launchCoverage}
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return BusySendPublishedLaunch{}, err
+	}
+	return out, nil
 }
 
 // readExaminedBusySendLaunch is the published current Launch of an existing
 // row (readBusySendPublished): ErrSpawnNotFound for no row, and an error that
-// names the instance for a row with no consistent published binding.
+// names the instance and holds ErrBusySendNoBinding for a row with no
+// consistent published binding.
 func readExaminedBusySendLaunch(ctx context.Context, conn busySendLaunchSQL, instanceID string) (busySendPublishedRow, error) {
 	var exists bool
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM spawns WHERE instance_id = ?)`, instanceID).Scan(&exists); err != nil {
@@ -70,10 +84,24 @@ func readExaminedBusySendLaunch(ctx context.Context, conn busySendLaunchSQL, ins
 	}
 	p, err := readBusySendPublished(ctx, conn, instanceID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return p, fmt.Errorf("store: %s has no consistent published busy-send Launch binding", instanceID)
+		return p, busySendNoBindingError{instanceID}
 	}
 	return p, err
 }
+
+// ErrBusySendNoBinding is a row that exists with no consistent published
+// busy-send binding (history from before the core): a fact of the row, never
+// a store failure, which callers keep apart from errors reading it.
+var ErrBusySendNoBinding = errors.New("store: no consistent published busy-send Launch binding")
+
+// busySendNoBindingError names the instance and is ErrBusySendNoBinding.
+type busySendNoBindingError struct{ instanceID string }
+
+func (e busySendNoBindingError) Error() string {
+	return fmt.Sprintf("store: %s has no consistent published busy-send Launch binding", e.instanceID)
+}
+
+func (e busySendNoBindingError) Is(target error) bool { return target == ErrBusySendNoBinding }
 
 // InsertBusySendForce stores one force attempt (SR-4.1): every call, refused
 // ones and repeats included, is its own row under its own force_id. The

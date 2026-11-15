@@ -95,6 +95,7 @@ type securityVerb struct {
 	record func(t *testing.T, s *securityScene, rec map[string]any, texts map[string]string)
 	cases  []securityCase
 	serial string
+	agent  string // the rows' agent ("" for Claude): busy send covers Claude, whose send-keys and pause type nothing
 }
 
 // securityMovesHome is the serial reason of a verb whose call points HOME at
@@ -135,12 +136,12 @@ var securityVerbs = slices.Concat([]securityVerb{{
 	verb: "read-pane", call: securityReadPaneCall, cases: securityReadPaneCases,
 }, {
 	verb: "send-keys", event: "ad.send_keys.called", call: securitySendKeysCall(false),
-	cases: securitySendKeysCases(store.StateWaiting),
+	cases: securitySendKeysCases(store.StateWaiting), agent: store.AgentDroid,
 }, {
 	verb: "send-keys allow_pending", event: "ad.send_keys.called", call: securitySendKeysCall(true),
-	cases: securitySendKeysCases(store.StatePending),
+	cases: securitySendKeysCases(store.StatePending), agent: store.AgentDroid,
 }, {
-	verb: "pause", call: securityPauseCall, cases: securityPauseCases,
+	verb: "pause", call: securityPauseCall, cases: securityPauseCases, agent: store.AgentCodex,
 }, {
 	verb: "expire", event: expireKeptEvent, call: securityExpireCall, record: securityExpireKeptRecord,
 	cases: securityExpireKeptCases,
@@ -250,6 +251,7 @@ func securityEnv() map[string]string { return map[string]string{"SECRET": securi
 func newSecurityScene(t *testing.T, v securityVerb, c securityCase) *securityScene {
 	t.Helper()
 	e := newKillEnv(t)
+	e.rowAgent = v.agent
 	if c.wallClock {
 		e.clock.Advance(time.Now().Sub(e.clock.Now()))
 	}

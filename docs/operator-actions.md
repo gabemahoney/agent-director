@@ -108,6 +108,14 @@ in the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
 
 ## Unresolved ordinary input
 
+For covered Claude, follow the Message's
+[Result and pair](caller-contract.md#message-results), never native transcript
+observation or manual re-entry. If a permission request blocks it, use
+[direct tmux and outside-answer recording](permissions.md#answering-at-the-pane).
+For reconnecting, use [keyless pause](caller-contract.md#keyless-pause-of-a-covered-agent)
+and [resume carry](caller-contract.md#launch-end-resume-and-reuse).
+The native and manual procedures below apply only to uncovered agents.
+
 Cursor's `gateway_refused` is not unresolved input: the text was discarded.
 Follow [Cursor input outcomes](caller-contract.md#cursor-input-outcomes).
 
@@ -221,6 +229,31 @@ A human removes the row, in order:
    ```sh
    ~/.config/agent-director/admin/agent-director-admin delete --instance-id <id>
    ```
+
+   For an `ErrSpawnNotDeletable` answer, see
+   [`delete` answers `ErrSpawnNotDeletable`](#delete-answers-errspawnnotdeletable).
+
+## `delete` answers `ErrSpawnNotDeletable`
+
+The row is a Covered Agent's, and a process one of its launches owns (the
+agent, or an agent-director hook or delivery job that could still give it
+input) still runs or cannot be checked. Nothing changed for that id; the
+batch's other ids went on. Deletion requires every owned process identity to
+be checked gone and the delivery destination fenced, then retires atomically.
+`ended`, `missing`, agent-only exit and a finished-row `kill` no-op do not
+establish that evidence. The check needs no tmux, so
+a row whose recorded name cannot be used gets it too.
+
+On a live row, end the agent with `agent-director kill --instance-id <id>`
+(for a row whose recorded name cannot be used, steps 4 and 5 of
+[Inspect and end a session by hand](#inspect-and-end-a-session-by-hand)
+instead), run `agent-director sweep`, then run `delete` again, following the
+[live-row sequence and pending grace](caller-contract.md) and each error's class. On a finished
+row, where `kill` ends nothing, run `delete` again once its processes have
+exited. A hook or delivery job that outlives the agent keeps the refusal until
+it exits. Once deleted, the row's Held Messages end `not_started` with reason
+`record_deleted` ([caller contract](caller-contract.md#launch-end-resume-and-reuse)).
+A row of an agent busy send does not cover is deleted as before.
 
 ## A spawn refused as "left over from an earlier life"
 

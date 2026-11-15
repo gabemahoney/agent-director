@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -78,7 +79,7 @@ func TestDeleteSpawnCascadesSubagents(t *testing.T) {
 			len(keptBefore.Entries), len(keptBefore.Launches))
 	}
 
-	if err := f.s.DeleteSpawn(doomed); err != nil {
+	if err := storefix.DeleteWithExit(t, f.s, doomed); err != nil {
 		t.Fatalf("DeleteSpawn: %v", err)
 	}
 	if got := f.subagentRowsOf(doomed); len(got.Entries) != 0 || len(got.Launches) != 0 {

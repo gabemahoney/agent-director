@@ -544,7 +544,7 @@ describe("list-subagents", () => {
 
 describe("send-keys", () => {
   test(
-    "success path: the row's own session, lookup + pane listing + text then Enter by pane id on both sides",
+    "success path: a claude row's text is a Message held alike on both sides, with no tmux call",
     async () => {
       const id = "id-sk-1";
       // Both store copies record this private socket; each run reads its own
@@ -592,25 +592,11 @@ describe("send-keys", () => {
           ignorePaths: loadIgnorePathsForVerb("send-keys"),
         });
 
-        // Each run retains the initial target and revalidates it before writes.
-        // All reads and both input actions use the row's socket and pane.
-        for (const log of [logCli, logClient]) {
-          const calls = fakeTmuxCalls(log);
-          expect(calls.map((argv) => argv.slice(1, 5))).toEqual([
-            ["-u", "-S", socket, "display-message"], // the lookup: its server identity read first (b.47f)
-            ["-u", "-S", socket, "list-panes"],
-            ["-u", "-S", socket, "display-message"],
-            ["-u", "-S", socket, "list-panes"],
-            ["-u", "-S", socket, "display-message"],
-            ["-u", "-S", socket, "list-panes"],
-            ["-u", "-S", socket, "send-keys"],
-            ["-u", "-S", socket, "display-message"],
-            ["-u", "-S", socket, "list-panes"],
-            ["-u", "-S", socket, "send-keys"],
-          ]);
-          expect(calls[6].slice(4)).toEqual(["send-keys", "-t", paneId, "-l", "--", "hello"]);
-          expect(calls[9].slice(4)).toEqual(["send-keys", "-t", paneId, "Enter"]);
-        }
+        // Busy send covers claude (SR-3.9): each run admits the text as a Message, held
+        // (its wait's since is each run's own clock), and neither touches tmux.
+        expect(JSON.parse(cli.stdout)).toMatchObject({ class: "held", final: false, instance_id: id });
+        for (const log of [logCli, logClient]) expect(fakeTmuxCalls(log)).toEqual([]);
+        expect(paneId).toBeTruthy();
       } finally {
         cleanup();
         fs.rmSync(tmuxDir, { recursive: true, force: true });
@@ -623,11 +609,12 @@ describe("send-keys", () => {
     "error path: ErrSpawnNotInteractive",
     async () => {
       const { homeA, storeB, cleanup } = prepareStores((store) => {
-        // ended state → not interactive
+        // ended state → not interactive, on a codex row (a claude row holds a Message in any state)
         runHelper("seed-spawn", {
           store,
           id: "id-err-ni-1",
           state: "ended",
+          agent: "codex",
           "create-store": true,
         });
       });
@@ -671,7 +658,7 @@ describe("send-keys", () => {
       const id = "id-sk-cant-send";
       const caller = "ABCDEF01-2345-6789-ABCD-EF0123456789";
       const { homeA, storeB, cleanup } = prepareStores((store) => {
-        runHelper("seed-spawn", { store, id, state: "waiting", "create-store": true });
+        runHelper("seed-spawn", { store, id, state: "waiting", agent: "codex", "create-store": true });
       });
       try {
         const cli = runCli(["send-keys", "--instance-id", id, "--text", "hello", "--send-mode", "wait_turn",
@@ -702,7 +689,7 @@ describe("force-delivery", () => {
     async () => {
       const id = "id-force-1";
       const { homeA, storeB, cleanup } = prepareStores((store) => {
-        runHelper("seed-spawn", { store, id, state: "waiting", "create-store": true });
+        runHelper("seed-spawn", { store, id, state: "waiting", agent: "codex", "create-store": true });
       });
       try {
         const cli = runCli(["force-delivery", "--instance-id", id], cliEnv(homeA));
@@ -749,7 +736,7 @@ describe("get-force", () => {
     async () => {
       let forceId = "";
       const { homeA, storeB, cleanup } = prepareStores((store) => {
-        runHelper("seed-spawn", { store, id: "id-get-force-1", state: "waiting", "create-store": true });
+        runHelper("seed-spawn", { store, id: "id-get-force-1", state: "waiting", agent: "codex", "create-store": true });
         const forced = runCli(["--store-path", store, "force-delivery", "--instance-id", "id-get-force-1"], cliEnv(testHome));
         expect(forced.exitCode).toBe(0);
         forceId = (JSON.parse(forced.stdout) as { force_result: { force_id: string } }).force_result.force_id;
@@ -1858,11 +1845,12 @@ describe("pause", () => {
     "error path: ErrSpawnNotPausable",
     async () => {
       const { homeA, storeB, cleanup } = prepareStores((store) => {
-        // pending state (InsertPending, no transition) → ErrSpawnNotPausable
+        // pending state (InsertPending, no transition) → ErrSpawnNotPausable, on a codex row
         runHelper("seed-spawn", {
           store,
           id: "id-err-np-1",
           state: "pending",
+          agent: "codex",
           "create-store": true,
         });
       });
@@ -1894,7 +1882,7 @@ describe("pause", () => {
     "error path: only_if_waiting → ErrSpawnNotPausable, cause agent_not_covered",
     async () => {
       const { homeA, storeB, cleanup } = prepareStores((store) => {
-        runHelper("seed-spawn", { store, id: "id-pause-oiw", state: "waiting", "create-store": true });
+        runHelper("seed-spawn", { store, id: "id-pause-oiw", state: "waiting", agent: "codex", "create-store": true });
       });
       try {
         const cli = runCli(["pause", "--instance-id", "id-pause-oiw", "--only-if-waiting"], cliEnv(homeA));

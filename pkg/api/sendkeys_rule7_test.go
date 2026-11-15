@@ -140,7 +140,7 @@ func TestSendKeysRule7(t *testing.T) {
 		{"an unknown token", nil, "dddddddd-dddd-4ddd-addd-dddddddddddd", store.ErrNoOpenPermissionRequest, "has no permission request"},
 		{"A's token, A fallen back", nil, tokA, nil, ""},
 	}
-	for _, ag := range paAgents {
+	for _, ag := range paInputAgents {
 		for _, tc := range cases {
 			if tc.name == r7ClaudeOnly && ag.name == "codex" {
 				continue
@@ -215,7 +215,7 @@ func TestSendKeysRule7EveryLiveState(t *testing.T) {
 // its description never says the dialog is on screen.
 func TestPlainSendKeysRelayFallenBackDetails(t *testing.T) {
 	t.Parallel()
-	for _, ag := range paAgents {
+	for _, ag := range paInputAgents {
 		t.Run(ag.name, func(t *testing.T) {
 			t.Parallel()
 			fallenBackDetailsCase(t, ag)

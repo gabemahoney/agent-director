@@ -15,6 +15,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -37,6 +38,7 @@ func TestClientSendKeysRelayGuardUsesConfiguredWindow(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(fmt.Sprint(tc.relay), func(t *testing.T) {
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 			storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, storefix.TestRequestTokenA,
 				2*config.DefaultRelayTimeoutSeconds*time.Second)
@@ -60,14 +62,22 @@ func TestClientSendKeysRelayGuardUsesConfiguredWindow(t *testing.T) {
 
 // TestClientPauseTimeoutConfigWaitsForEnd: P1 (b.8q2) — with [pause]
 // timeout_seconds = 0 (the default) or the largest value Load accepts,
-// Client.Pause waits, so an agent that ends at the wait's first sleep pauses cleanly.
+// Client.Pause waits, so an agent that ends at the wait's first sleep pauses
+// cleanly. The row is Claude's, covered, so the pause is keyless (SR-6.4): its
+// signalled agent exits at the first poll sleep and the Launch End is recorded.
 func TestClientPauseTimeoutConfigWaitsForEnd(t *testing.T) {
-	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
+	// Serial: it replaces keyless pause's signal and the pause knobs (process-wide).
 	for _, n := range []int64{0, config.MaxPauseTimeoutSeconds} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
-			e.endAtFirstWait(t, r)
+			signals := 0
+			t.Cleanup(api.SetPauseTerminateForTest(func(int, string) error { signals++; return nil }))
+			slept := pauSleeps(t, time.Millisecond, false, func(n int) {
+				if n == 1 {
+					e.pc.Set(r.AgentPID, procfix.Gone())
+				}
+			})
 			cfgPath := filepath.Join(t.TempDir(), "config.toml")
 			writeConfig(t, cfgPath, fmt.Sprintf("[pause]\ntimeout_seconds = %d\n", n))
 			c, _, err := e.clientFor(t, cfgPath)
@@ -77,11 +87,13 @@ func TestClientPauseTimeoutConfigWaitsForEnd(t *testing.T) {
 
 			_, err = c.Pause(context.Background(), pauseParams(r))
 
-			if err != nil {
-				t.Fatalf("Pause: %v; want nil once the agent ends", err)
+			if err != nil || signals != 1 || len(*slept) == 0 {
+				t.Fatalf("Pause = %v after %d signals and %d sleeps; want nil once the signalled agent ends at the wait", err, signals, len(*slept))
 			}
-			if state, err := e.st.GetSpawnState(r.ID); err != nil || state != store.StateEnded {
-				t.Errorf("row state = %q (err %v); want %s", state, err, store.StateEnded)
+			for _, l := range busyFacts(t, e.dbPath, r.ID).Launches {
+				if l.Phase == "current" && l.EndCause.String != "process_exited" {
+					t.Errorf("current Launch end = %+v; want process_exited", l.EndCause)
+				}
 			}
 		})
 	}

@@ -6,6 +6,8 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -17,6 +19,30 @@ func busyFacts(t *testing.T, path, id string) apitest.BusySendFacts {
 		t.Fatal(err)
 	}
 	return facts
+}
+
+// exitEvidenceFor is id's exit scope as read, taken as positive exit
+// evidence: the test judges every owned process in it gone.
+func exitEvidenceFor(t *testing.T, st *store.Store, id string) *store.BusySendExitEvidence {
+	t.Helper()
+	scope, err := st.ReadBusySendExitScope(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &store.BusySendExitEvidence{Scope: scope}
+}
+
+// deleteCoveredRow deletes id's covered row as administrator deletion does
+// once it established exit evidence (exitEvidenceFor).
+func deleteCoveredRow(t *testing.T, st *store.Store, id string) {
+	t.Helper()
+	row, err := st.GetSpawn(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := st.DeleteBusySendCovered(id, row.Snapshot, *exitEvidenceFor(t, st, id)); err != nil || res != store.CondApplied {
+		t.Fatalf("DeleteBusySendCovered(%s) = %v, %v; want applied", id, res, err)
+	}
 }
 func seedBusyCoveredConversation(t *testing.T, path, id string) apitest.BusySendFacts {
 	t.Helper()
@@ -67,8 +93,10 @@ func assertBusyProjection(t *testing.T, path, id string, old apitest.BusySendFac
 	t.Fatal("saved projection has no bound published conversation")
 }
 
-// One public creation/projection case per kind; transport tests add only the
-// field forwarding contract. No fixed-list mutation is needed in E1.
+// TestBusySendPublicSpawnAllAgents (SR-9.1, SR-3.4, SR-5.6): one public
+// creation and projection case per kind. A fresh spawn records this release's
+// coverage, written out here: only Claude is covered, and only its Launch
+// records the claude_hooks route; the launch types nothing into the pane.
 func TestBusySendPublicSpawnAllAgents(t *testing.T) {
 	// Serial: newSpawnEnv sets HOME, TMUX and TMUX_TMPDIR.
 	for _, agent := range []string{"claude", "codex", "cursor", "droid", "opencode"} {
@@ -86,9 +114,17 @@ func TestBusySendPublicSpawnAllAgents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			want, route := store.BusySendNotCovered, ""
+			if agent == "claude" {
+				want, route = store.BusySendCovered, string(store.BusySendRouteClaudeHooks)
+			}
 			facts := busyFacts(t, e.dbPath, result.InstanceID)
-			if facts.Coverage != store.BusySendNotCovered || facts.Binding == "" || len(facts.Conversations) != 1 || len(facts.Launches) != 1 || facts.Conversations[0].Provider != agent || facts.Launches[0].Provider != agent {
-				t.Fatalf("fresh core=%+v", facts)
+			if facts.Coverage != want || facts.Binding == "" || len(facts.Conversations) != 1 || len(facts.Launches) != 1 ||
+				facts.Conversations[0].Provider != agent || facts.Launches[0].Provider != agent || facts.Launches[0].RouteKind.String != route {
+				t.Fatalf("fresh core=%+v; want coverage %s, route %q", facts, want, route)
+			}
+			if n := len(e.rec.SocketCallsOf(tmux.CallSendText)) + len(e.rec.SocketCallsOf(tmux.CallSendKey)); n != 0 {
+				t.Errorf("the launch typed %d times into the pane; want none", n)
 			}
 			// A spawn choosing none publishes the out-of-the-box Agent Defaults (SR-1.4).
 			if d := facts.Conversations[0].Defaults; d != store.BusySendOutOfBoxDefaults {
@@ -102,7 +138,7 @@ func TestBusySendPublicSpawnAllAgents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertBusyPublic(t, out, store.BusySendNotCovered)
+			assertBusyPublic(t, out, want)
 			status, err := e.c.Status(result.InstanceID)
 			if err != nil {
 				t.Fatal(err)
@@ -178,12 +214,15 @@ func TestGetBusySendPersistedProjection(t *testing.T) {
 		for _, coverage := range []store.BusySendCoverage{store.BusySendNotCovered, store.BusySendCovered} {
 			t.Run(state+string(coverage), func(t *testing.T) {
 				e := newKillEnv(t)
+				// Codex rows, so each row's coverage is only what the case records
+				// (a covered one as a later release would record it).
+				e.rowAgent = "codex"
 				r := e.seedReusable(t, agentGone, reuseRowSpec{State: store.StateEnded})
 				// Pending is seeded independently rather than manufacturing a new launch.
 				id := r.ID
 				if state == store.StatePending {
 					var err error
-					id, err = apitest.SeedSpawn(e.dbPath, "", state, t.TempDir(), "off", "", false)
+					id, err = apitest.SeedSpawn(e.dbPath, "", state, t.TempDir(), "off", "", false, apitest.WithAgent("codex"))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -232,7 +271,7 @@ func TestBusySendCandidateReplacementProcessEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			const token = "1122334455667788"
-			res, _, err := e.st.MoveToPending(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), token, r.Socket, "", store.LaunchOwner{})
+			res, _, err := e.st.MoveToPendingWithExit(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), token, r.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, e.st, r.ID))
 			if err != nil || res != store.CondApplied {
 				t.Fatalf("stage=%v,%v", res, err)
 			}

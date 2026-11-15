@@ -28,6 +28,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -94,8 +95,7 @@ func newResumedWakeEnv(t *testing.T) *wakeEnv {
 	if err := apitest.SeedBusySendCoverage(db, id, store.BusySendCovered, store.BusySendCovered); err != nil {
 		t.Fatal(err)
 	}
-	res, moved, err := st.MoveToPending(id, mustGetSpawn(t, st, id).Snapshot, time.Now().UnixMilli(),
-		ssgNewPane.Token, ssgNewPane.Socket, "", store.LaunchOwner{})
+	res, moved, err := st.MoveToPendingWithExit(id, mustGetSpawn(t, st, id).Snapshot, time.Now().UnixMilli(), ssgNewPane.Token, ssgNewPane.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, st, id))
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want applied", res, err)
 	}

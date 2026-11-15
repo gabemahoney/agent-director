@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -245,7 +246,7 @@ func rhdSpoilRestore(t *testing.T, e *killEnv, id, other string, outcome apitest
 	case apitest.RestoreRowChanged:
 		write = func() error { return e.st.SetParentID(id, other) }
 	case apitest.RestoreRowRemoved:
-		write = func() error { return e.st.DeleteSpawn(id) }
+		write = func() error { return storefix.DeleteWithExit(t, e.st, id) } // a covered conversation needs exit evidence
 	default:
 		failRestore()
 		return

@@ -95,14 +95,19 @@ func TestAdviceFollow_E1_PaneVerbLookupUnreadableRetryLater(t *testing.T) {
 		{"pane listing gave an unrecognised reply", tmux.CallListPanes, tmuxfix.Script{Failure: tmux.FailUnrecognized,
 			FirstLine: "list-panes: unexpected reply", ExitStatus: 1, HadStdout: true, Times: 2}},
 	}
+	// send-keys types on a pane-only Droid row and pause exits a Codex row:
+	// a covered Claude row's send-keys is admission and its pause keyless.
 	verbs := []struct {
 		name  string
 		start advPaneVerb
-	}{{"send-keys", advPaneSendKeys}, {"read-pane", advPaneReadPane}, {"pause", advPanePause}}
+		agent string
+	}{{"send-keys", advPaneSendKeys, store.AgentDroid}, {"read-pane", advPaneReadPane, store.AgentClaude},
+		{"pause", advPanePause, store.AgentCodex}}
 	for _, v := range verbs {
 		for _, f := range failures {
 			t.Run(v.name+"/"+f.name, func(t *testing.T) {
 				e := newKillEnv(t)
+				e.rowAgent = v.agent
 				r := e.seedRow(t, killRowSpec{})
 				call, done := v.start(t, e, r)
 				e.rec.Script(r.Socket, f.script, f.call)
@@ -141,8 +146,7 @@ func TestAdviceFollow_E4_ReadPaneCaptureFailedRetryLater(t *testing.T) {
 
 // advPaneKeysFailure is a failed keys call: the call scripted to fail once,
 // whether a timed-out call reached the pane, the advice its description
-// carries, what the agent's input box holds before the first call and
-// whether send-keys types advPacedText in paced pieces (b.vr5).
+// carries and what the agent's input box holds before the first call.
 type advPaneKeysFailure struct {
 	name    string
 	call    tmux.Call
@@ -150,30 +154,6 @@ type advPaneKeysFailure struct {
 	reached bool
 	advice  string
 	typed   string
-	paced   bool
-}
-
-// advPacedText is send-keys text that macOS paced Claude typing types in
-// pieces of 512, 512 and 1 bytes (b.vr5).
-var advPacedText = strings.Repeat("p", 1025)
-
-// text is what f's send-keys types: advPacedText when paced, else skaText.
-func (f advPaneKeysFailure) text() string {
-	if f.paced {
-		return advPacedText
-	}
-	return skaText
-}
-
-// advPaced is fs with send-keys typing advPacedText in paced pieces, whose
-// Enter is the named Enter key (b.vr5).
-func advPaced(fs []advPaneKeysFailure) []advPaneKeysFailure {
-	var out []advPaneKeysFailure
-	for _, f := range fs {
-		f.name, f.paced = "paced: "+f.name, true
-		out = append(out, f)
-	}
-	return out
 }
 
 // The keys-failure advice sentences (SR-1.4, SR-7.3; b.9o4): send-keys names
@@ -224,19 +204,21 @@ func advPaneEnterSubmitted(what, advice string) advPaneKeysFailure {
 		script: tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, reached: true, advice: advice}
 }
 
-// advPaneKeysRefused seeds a live row watching its agent's input box, fails
-// f's call once and sends f's text, which must be refused with f's advice.
-// A paced f turns the macOS selection on until the test ends.
+// advPaneKeysRefused seeds a live pane-only Droid row watching its agent's
+// input box (a covered Claude row's send-keys types nothing), fails f's call
+// once (an Enter failure on the lane's Enter send) and sends skaText, which
+// must be refused with f's advice.
 func advPaneKeysRefused(t *testing.T, f advPaneKeysFailure) (*killEnv, killRow, *paneInput) {
 	t.Helper()
-	if f.paced {
-		t.Cleanup(api.SetClaudePacedTypingForTest(true))
-	}
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentDroid
 	r := e.seedRow(t, killRowSpec{})
 	in := watchPaneInput(e, r.Spawn.Identity.PaneID, f.reached)
+	if f.call == callEnterKey {
+		f.call = e.rowEnterCall()
+	}
 	e.rec.Script(r.Socket, f.script, f.call)
-	_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: f.text()})
+	_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skaText})
 	adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, f.advice)
 	return e, r, in
 }
@@ -276,138 +258,24 @@ func TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyText(t *testing.T) 
 
 // TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmits: E3 "the text may
 // be typed but not submitted; send-keys with empty text submits it" (after a
-// timeout, "the keys may have been delivered; " first) after the Enter call,
-// or paced typing's named Enter (b.vr5), failed; send-keys with empty text
-// must leave the text submitted once, also when the timed-out Enter had
-// submitted it (Enter on an empty input submits nothing).
+// timeout, "the keys may have been delivered; " first) after the Enter call
+// failed; send-keys with empty text must leave the text submitted once, also
+// when the timed-out Enter had submitted it (Enter on an empty input submits
+// nothing).
 func TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmits(t *testing.T) {
-	// Serial: its paced cells set the process-wide paced-typing selection with api.SetClaudePacedTypingForTest; its other cells run in parallel.
+	t.Parallel()
 	adviceAssertManifest(t, "send-keys", "", advSendKeysEmptyTextManifest)
 	failures := append(advPaneEnterFailures(advSendKeysEnterTimeout, advSendKeysNotSubmitted),
 		advPaneEnterSubmitted("the text", advSendKeysEnterTimeout))
-	for _, f := range append(failures, advPaced(failures)...) {
+	for _, f := range failures {
 		t.Run(f.name, func(t *testing.T) {
-			if !f.paced {
-				t.Parallel()
-			}
+			t.Parallel()
 			e, r, in := advPaneKeysRefused(t, f)
 
 			if _, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID}); err != nil {
 				t.Fatalf("send-keys with empty text: %v; want Enter delivered", err)
 			}
-			in.assertSubmittedOnce(t, f.text())
-		})
-	}
-}
-
-// advSendKeysPacedReadPane is paced typing's advice once part of the text, or
-// all of it unsubmitted, may be in the input (b.vr5).
-const advSendKeysPacedReadPane = "read-pane before sending again, and do not resend the text blindly"
-
-// TestAdviceFollow_E20_SendKeysPacedPieceFailedReadPane: E20 (b.vr5)
-// "read-pane before sending again, and do not resend the text blindly" after
-// a later paced piece failed, the first timed out, or the relay guard held
-// input or could not read the row's permission requests before the next piece
-// or the Enter: partial_input_unconfirmed
-// counting the pieces attempted, with no further piece, Enter or follow-up
-// lookup and never "the same send-keys" or "send-keys with empty text";
-// read-pane then shows what was typed, unsubmitted.
-func TestAdviceFollow_E20_SendKeysPacedPieceFailedReadPane(t *testing.T) {
-	// Serial: it sets the process-wide paced-typing selection with api.SetClaudePacedTypingForTest.
-	t.Cleanup(api.SetClaudePacedTypingForTest(true))
-	for _, tc := range []struct {
-		name     string
-		failure  tmux.Failure
-		piece    int  // the piece that fails, of advPacedText's 512, 512 and 1 bytes; 0: none
-		held     int  // with none failing, the pieces typed before the relay guard holds input: 1, the second piece; 3, the Enter
-		readFail bool // with held, the guard's permission-request read fails instead of finding a held request
-	}{
-		{"first piece timed out", tmux.FailTimeout, 1, 0, false},
-		{"second piece timed out", tmux.FailTimeout, 2, 0, false},
-		{"second piece failed", tmux.FailNoServer, 2, 0, false},
-		{"relay guard held the second piece", 0, 0, 1, false},
-		{"relay guard held the Enter", 0, 0, 3, false},
-		{"permission read failed before the second piece", 0, 0, 1, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			r, other := e.seedKeysDisagreeCase(t, keysDisagreeCase{spec: killRowSpec{RelayOn: tc.held > 0},
-				setup: []func(*testing.T, *killEnv, *killRow){ktrRestart}})
-			in := watchPaneInput(e, r.Spawn.Identity.PaneID, true)
-			attempted, typed, pieces := len(advPacedText), len(advPacedText), 3
-			switch {
-			case tc.held > 0:
-				// A held permission request arrives, or the permission-request
-				// read starts failing, in the pause after the held-th piece,
-				// before the reread for the next piece (100 ms) or for the Enter
-				// (the 500 ms after the last piece's 100 ms).
-				attempted, pieces = min(512*tc.held, len(advPacedText)), tc.held
-				typed = attempted
-				pause := 100 * time.Millisecond
-				if tc.held == 3 {
-					pause = 500 * time.Millisecond
-				}
-				texts, sleep := 0, e.sleep
-				e.rec.AfterCall(tmux.CallSendText, func(tmuxfix.SocketCall, error) { texts++ })
-				e.sleep = func(d time.Duration) {
-					if texts == tc.held && d == pause && tc.readFail {
-						e.store.failPermissionRequests(nil)
-					} else if texts == tc.held && d == pause {
-						held := apitest.PermissionTimes(e.clock.Now(), time.Time{}, time.Time{}, time.Time{}, time.Time{}, "")
-						if _, err := apitest.SeedPermissionRequest(e.dbPath, r.ID, "Bash", held); err != nil {
-							t.Error(err)
-						}
-					}
-					sleep(d)
-				}
-			case tc.piece == 2:
-				e.rec.Script(r.Socket, tmuxfix.Script{Times: 1}, tmux.CallSendText) // the first piece goes through
-			}
-			if tc.piece > 0 {
-				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tc.failure, Times: 1}, tmux.CallSendText)
-				attempted, typed, pieces = 512*tc.piece, 512*tc.piece, tc.piece // a timed-out piece reached the pane
-				if tc.failure != tmux.FailTimeout {
-					typed -= 512
-				}
-			}
-			before := e.columns(t, r.ID)
-
-			run := runVerb(e, func() (api.SendKeysResult, error) {
-				return e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: advPacedText})
-			})
-
-			d := assertDeliveryError(t, run.err, "partial_input_unconfirmed", attempted, false)
-			if !d.KeysSent || d.Phase != "text_attempted" || d.RowState != store.StateWaiting {
-				t.Errorf("details = %+v; want keys_sent, phase text_attempted, row_state waiting", d)
-			}
-			adviceAssertAdvice(t, run.err, api.ErrSubmissionUnconfirmed, advSendKeysPacedReadPane)
-			for _, resend := range []string{"the same send-keys", "send-keys with empty text"} {
-				if strings.Contains(errText(run.err), resend) {
-					t.Errorf("description %q advises %q", errText(run.err), resend)
-				}
-			}
-			// The target's lookup and listing, input admission's before the
-			// first piece and the identity recheck's before each later one; a
-			// relay-guard stop comes before that recheck.
-			want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes}
-			for i := range pieces {
-				if i > 0 {
-					want = append(want, tmux.CallLookup, tmux.CallListPanes)
-				}
-				want = append(want, tmux.CallSendText)
-			}
-			if got := paKinds(run.calls); !slices.Equal(got, want) {
-				t.Errorf("tmux calls = %v; want %v: nothing after the failed piece, no Enter", got, want)
-			}
-			e.assertRowUnchanged(t, r.ID, before)
-			assertKeysDisagrees(t, e, sktDisagrees(t, r.ID), r, "send-keys", other, []disagreeWant{
-				{reason: "server_restarted", server: "restarted", verdict: "ours", action: "text_sent", ours: true}})
-
-			read, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
-			if err != nil || read.Pane != advPacedText[:typed] || len(in.submitted) != 0 {
-				t.Errorf("read-pane = %d bytes, %v, with %d submissions; want the %d bytes typed, unsubmitted",
-					len(read.Pane), err, len(in.submitted), typed)
-			}
+			in.assertSubmittedOnce(t, skaText)
 		})
 	}
 }
@@ -440,6 +308,7 @@ func TestAdviceFollow_E5_PauseKeysFailedRetryLater(t *testing.T) {
 		t.Run(f.name, func(t *testing.T) {
 			fastPausePolls(t)
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex // a covered Claude row's pause types no keys
 			r := e.seedRow(t, killRowSpec{})
 			in := paneAgentExiting(t, e, r, f.reached, 1)
 			in.box = f.typed
@@ -577,6 +446,7 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedAnswerWithDecide(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex // a covered Claude row's send-keys is admission, not keys
 			r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 			createdAt := advRequestCreatedAt(t, e, r)
 			now, advance := advRelayHookClock(t, e, r, createdAt, tc.deny)
@@ -631,6 +501,7 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater(t *testing
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex // a covered Claude row's send-keys is admission, not keys
 			r := seedRelayRow(t, e, tok)
 			createdAt := advRequestCreatedAt(t, e, r)
 			now := createdAt.Add(relayGuardWindow / 2)
@@ -673,7 +544,7 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater(t *testing
 			if err := send(); err != nil {
 				t.Fatalf("send-keys retried later: %v; want delivery", err)
 			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
+			assertFallbackPaste(t, e.rec.SocketCalls(), r.Socket, r.Spawn.Identity.PaneID, "1")
 		})
 	}
 }
@@ -696,7 +567,7 @@ func TestAdviceFollow_E7_RelayFallenBackAnswerAtPaneOrRecord(t *testing.T) {
 		for _, from := range []string{"decide", "send-keys"} {
 			t.Run(branch+" after "+from, func(t *testing.T) {
 				t.Parallel()
-				p := newPAEnv(t)
+				p := newCodexPAEnv(t) // a covered Claude row's plain send-keys is admission, not keys
 				var err error
 				if from == "decide" {
 					_, err = api.Decide(p.st, p.view(), api.DecideParams{InstanceID: p.r.ID, RequestToken: tok, Decision: "deny"})
@@ -741,7 +612,7 @@ func TestAdviceFollow_E7_RelayFallenBackAnswerAtPaneOrRecord(t *testing.T) {
 func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	t.Parallel()
 	tokA, tokB := storefix.TestRequestTokenA, storefix.TestRequestTokenB
-	p := newPAEnv(t)
+	p := newCodexPAEnv(t) // a covered Claude row takes no pane answer keys
 	hookB := api.ProcessIdentity{PID: 54322, Starttime: relayEnvHook.Starttime, PIDNamespace: relayNS}
 	p.pc.Set(hookB.PID, procfix.Alive(hookB.Starttime))
 	p.seedRequest(t, tokB, "toolu_01B", hookB) // a subagent's request, its hook polling
@@ -775,7 +646,7 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 // v7 (judged by time). A caller that branches on decide's error name and
 // answers at the pane at once (read-pane, then one key with the request's
 // token), at the instant decide returned, is not refused by the relay guard
-// (b.ah6) and never types into Claude's prompt after a live relay hook denied
+// (b.ah6) and never types into the agent's prompt after a live relay hook denied
 // the request at its poll deadline (b.pzy). Decide's earliest refusal, window
 // - 1 s (SR-4.2, SR-4.4), is TestDecideDeliverabilityBoundary's.
 func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
@@ -812,6 +683,7 @@ func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
 			}
 			t.Run(a.name+"/"+h.name, func(t *testing.T) {
 				e := newKillEnv(t)
+				e.rowAgent = store.AgentCodex // a covered Claude row takes no pane answer keys
 				r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 				createdAt := advRequestCreatedAt(t, e, r)
 				now, advance := advRelayHookClock(t, e, r, createdAt, h.deny)
@@ -836,7 +708,7 @@ func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
 				adviceAssertPhrase(t, err, advDecideHookTimedOut)
 				if answered {
 					t.Errorf("the answer was sent at the pane, but the live relay hook's timeout deny (%v after created_at) "+
-						"closes the dialog: the answer lands in Claude's prompt", h.deny)
+						"closes the dialog: the answer lands in the agent's prompt", h.deny)
 				}
 				e.assertNoTmuxCall(t)
 			})
@@ -1003,11 +875,13 @@ func TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded(t *testing.T) {
 	}
 }
 
-// E8 follows the inspection advice before a caller chooses guarded input.
+// E8 follows the inspection advice before a caller chooses guarded input, on
+// a Codex row (a covered Claude row's pause types no keys).
 func TestAdviceFollow_E8_PauseTimeoutInspectBeforeInput(t *testing.T) {
 	t.Parallel()
 	adviceAssertGoDoc(t, "errors.go", "ErrPauseTimeout", "require session inspection and a caller's decision before more input")
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentCodex
 	r := e.seedRow(t, killRowSpec{})
 	in := watchPaneInput(e, r.Spawn.Identity.PaneID, false)
 	const prompt = "Background work is running\n1. Exit and stop tasks / 2. Stay\n"
@@ -1029,9 +903,7 @@ func TestAdviceFollow_E8_PauseTimeoutInspectBeforeInput(t *testing.T) {
 	// The test caller chooses the answer; pause never interprets the capture.
 	in.onSubmit = func(line string) {
 		if line == "1" {
-			if ok, why := e.endAsAgent(t, r); !ok {
-				t.Errorf("SessionEnd: %s", why)
-			}
+			e.codexExits(t, r, nil)
 		}
 	}
 	if _, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "1", ExpectPaneSHA256: pane.PaneSHA256}); err != nil {
@@ -1040,18 +912,24 @@ func TestAdviceFollow_E8_PauseTimeoutInspectBeforeInput(t *testing.T) {
 	if !slices.Equal(in.submitted, []string{exitText, "1"}) {
 		t.Errorf("submitted = %q; want /exit, then caller's answer once", in.submitted)
 	}
-	pauAssertState(t, e, r.ID, store.StateEnded)
+	// A Codex SessionEnd records the end report and keeps the state.
+	if row, err := e.st.GetSpawn(r.ID); err != nil || row.EndReportedAtMillis == 0 {
+		t.Errorf("row after the caller's answer = %+v, %v; want the agent's end reported", row, err)
+	}
 }
 
 // TestAdviceFollow_E9_SendKeysPendingAllowPending: E9 a pending row's
 // "state=pending" refusal, followed by the allow_pending text ("When true,
-// also allows a pending row"); re-issued with it, the call passes the pending-row
-// eligibility guard, then refuses ordinary text because SessionStart is still
-// missing, without typing (b.qcf).
+// also allows a pending row"); re-issued with it on a pane-only Droid row
+// (which stays pending), the call passes the pending-row eligibility guard
+// and types the text with Enter. A covered Claude row's send-keys admits a
+// Message instead, and the uncovered pending Claude wait for SessionStart
+// (b.qcf) has no row left to run on.
 func TestAdviceFollow_E9_SendKeysPendingAllowPending(t *testing.T) {
 	t.Parallel()
 	adviceAssertManifest(t, "send-keys", "allow_pending", "When true, also allows a pending row")
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentDroid
 	r := e.seedPending(t, pendingFresh, pendingOurs)
 
 	_, err := e.sendKeys(skaParams(r))
@@ -1060,8 +938,10 @@ func TestAdviceFollow_E9_SendKeysPendingAllowPending(t *testing.T) {
 
 	p := skaParams(r)
 	p.AllowPending = true
-	_, err = e.sendKeys(p)
-	e.assertSessionStartMissing(t, err)
+	if _, err := e.sendKeys(p); err != nil {
+		t.Fatalf("send-keys with allow_pending: %v; want the text typed", err)
+	}
+	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skaText)
 }
 
 // E15 (b.qcr): "put the prompt in a file and send a short instruction to read it".
@@ -1120,62 +1000,6 @@ func TestAdviceFollow_E15_CodexFallbackLiteralSafety(t *testing.T) {
 				t.Fatalf("not one paste: %+v", calls)
 			}
 			e.assertRowUnchanged(t, r.ID, before)
-		})
-	}
-}
-
-// E15 (b.vr5): "put the prompt in a file and send a short instruction to read
-// it" after macOS paced Claude text over 32 KiB is refused before any input,
-// typing nothing and recording no input attempt; followed, the instruction is
-// delivered. Text of 32 KiB is typed. This unsupported launch records no
-// attempt for paced text either way; TestSendKeysMacClaudePacedRecordAndAttemptFacts
-// pins the refusal before the record on a supported one.
-func TestAdviceFollow_E15_PacedClaudeTextOver32KiB(t *testing.T) {
-	// Serial: it sets the process-wide paced-typing selection with api.SetClaudePacedTypingForTest.
-	t.Cleanup(api.SetClaudePacedTypingForTest(true))
-	for _, n := range []int{32 << 10, 32<<10 + 1} {
-		t.Run(fmt.Sprintf("%d bytes", n), func(t *testing.T) {
-			e := newNativeSubmissionEnv(t)
-			r := e.seedRow(t, killRowSpec{})
-			e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
-			pane := r.Spawn.Identity.PaneID
-			text := strings.Repeat("l", n)
-			before := e.columns(t, r.ID)
-
-			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text})
-
-			if n == 32<<10 {
-				typed := ""
-				for _, c := range e.rec.SocketCallsOf(tmux.CallSendText) {
-					typed += c.Text
-				}
-				if err != nil || typed != text || len(ordinaryEnters(e.killEnv)) != 1 {
-					t.Fatalf("send = %v, typed %d bytes, %d Enters; want the %d bytes and one Enter", err, len(typed), len(ordinaryEnters(e.killEnv)), n)
-				}
-				return
-			}
-			d := assertDeliveryError(t, err, "not_started", 0, false)
-			if d.KeysSent || d.Phase != "pre_input" {
-				t.Errorf("details = %+v; want nothing sent, phase pre_input", d)
-			}
-			adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "put the prompt in a file and send a short instruction to read it")
-			e.assertNothingSent(t)
-			e.assertNoCalls(t, tmux.CallSendKey)
-			if e.b.current != nil || len(e.b.history) != 0 {
-				t.Errorf("input attempts = %+v, %+v; want no durable input record", e.b.current, e.b.history)
-			}
-			e.assertRowUnchanged(t, r.ID, before)
-
-			file := filepath.Join(t.TempDir(), "prompt.txt")
-			if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			short := "Read " + file + " and follow its instructions."
-			if _, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: short}); err != nil {
-				t.Fatalf("send-keys of the short instruction: %v", err)
-			}
-			assertTextSent(t, e.rec, r.Socket, pane, short)
-			assertEnterSent(t, e.rec, r.Socket, pane)
 		})
 	}
 }
@@ -1252,94 +1076,5 @@ func TestAdviceFollow_E17_CodexFallbackTransportUncertain(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-// E19 (b.qcf): "nothing was typed, so the same send-keys can be retried later".
-// The capability refusal instead says "use an adapter with that capability".
-func TestAdviceFollow_E19_ClaudeFallbackTerminalRetry(t *testing.T) {
-	t.Parallel()
-	for _, mode := range []string{"cooked", "read failed", "no capability"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Parallel()
-			e := newNativeSubmissionEnv(t)
-			r := e.seedRow(t, killRowSpec{State: store.StatePending})
-			before := e.columns(t, r.ID)
-			e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
-			var adapter api.SendKeysTmux = e.rec
-			advice := "nothing was typed, so the same send-keys can be retried later"
-			reason := "the agent's terminal did not take raw input within 12 seconds; " + advice
-			var readError error
-			e.rec.AfterCall(tmux.CallPaneTerminal, func(_ tmuxfix.SocketCall, err error) { readError = err })
-			switch mode {
-			case "cooked":
-				e.rec.SetTerminalRaw(r.Socket, r.Spawn.Identity.PaneID, false)
-			case "read failed":
-				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallPaneTerminal)
-			case "no capability":
-				adapter = struct{ api.SendKeysTmux }{e.rec}
-				advice = "use an adapter with that capability, or send once the row is no longer pending"
-				reason = "the tmux adapter cannot read the agent's terminal mode, which pending Claude fallback input waits on; nothing was typed, so the same send-keys can be retried later; " + advice
-			}
-			waits := 0
-			sleep := e.env.Sleep
-			e.env.Sleep = func(d time.Duration) {
-				waits++
-				if d <= 0 || d > 100*time.Millisecond || waits > 120 {
-					t.Fatalf("readiness wait %d=%v; want bounded 100ms polls", waits, d)
-				}
-				sleep(d)
-			}
-			params := api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}
-			start := e.clock.Now()
-			_, err := api.SendKeys(e.s, adapter, e.env, params)
-			if mode == "read failed" {
-				if readError == nil {
-					t.Fatal("scripted terminal read did not fail")
-				}
-				reason = "the agent's terminal mode could not be read: " + readError.Error() + "; " + advice
-			}
-			assertOneName(t, err, "ErrSubmissionUnconfirmed")
-			want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StatePending, Reason: reason}
-			if got := api.ErrDetails(err); got != want {
-				t.Fatalf("refusal=%+v; want %+v", got, want)
-			}
-			adviceAssertPhrase(t, err, advice)
-			e.assertNothingSent(t)
-			e.assertNoCalls(t, tmux.CallSendKey)
-			e.assertRowUnchanged(t, r.ID, before)
-			if e.b.current != nil || len(e.b.history) != 0 || e.s.sent {
-				t.Fatal("not-started refusal journalled or sent input")
-			}
-			reads := len(e.rec.SocketCallsOf(tmux.CallPaneTerminal))
-			switch mode {
-			case "cooked":
-				elapsed := e.clock.Now().Sub(start)
-				if reads != 120 || waits != 120 || elapsed != 12*time.Second+2*time.Nanosecond {
-					t.Fatalf("terminal reads/waits/elapsed=%d/%d/%v; want 120/120/12s plus initial lookup/listing", reads, waits, elapsed)
-				}
-			case "read failed":
-				if reads != 1 || waits != 0 {
-					t.Fatalf("terminal reads/waits=%d/%d; want 1/0", reads, waits)
-				}
-			case "no capability":
-				e.assertNoTmuxCall(t)
-				if waits != 0 {
-					t.Fatalf("waits=%d; want none", waits)
-				}
-			}
-			// Follow the exact retry advice: clear the condition, keep the request unchanged.
-			e.clock.Advance(time.Second)
-			e.rec.Reset()
-			e.rec.SetTerminalRaw(r.Socket, r.Spawn.Identity.PaneID, true)
-			e.sessionStartsWhenPolled(t, r, nil)
-			e.env.Sleep = sleep // Each retry has a fresh readiness budget.
-			e.turnStartsAfterEnter(t, r)
-			result, err := e.send(params)
-			if err != nil || result != (api.SendKeysResult{}) {
-				t.Fatalf("same send after condition clears: %+v, %v", result, err)
-			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText, 2)
-		})
 	}
 }

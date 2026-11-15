@@ -607,7 +607,7 @@ func TestIdleScreenOlderSampleNeverOverwrites(t *testing.T) {
 				t.Fatal(got)
 			}
 			ended := e.row(t)
-			if res, _, err := e.s.MoveToPending(e.id, ended.Snapshot, e.now.UnixMilli(), "2222222222222222", apitest.TestSocket, "", store.LaunchOwner{}); err != nil || res != store.CondApplied {
+			if res, _, err := e.s.MoveToPendingWithExit(e.id, ended.Snapshot, e.now.UnixMilli(), "2222222222222222", apitest.TestSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, e.s, e.id)); err != nil || res != store.CondApplied {
 				t.Fatalf("new launch = %v, %v", res, err)
 			}
 		}},
@@ -1030,7 +1030,10 @@ func TestIdleScreenCommitAndRefreshFailures(t *testing.T) {
 								refused.Store(true)
 								return injected
 							}
-							if cut == "final refresh" && committed.Load() && strings.HasPrefix(q, "SELECT ") && strings.Contains(q, "FROM spawns") {
+							// The refresh's own spawns read, not a covered row's busy-send
+							// delivery read (its row check, then its busy_send_* reads).
+							if cut == "final refresh" && committed.Load() && strings.HasPrefix(q, "SELECT ") && strings.Contains(q, "FROM spawns") &&
+								!strings.Contains(q, "busy_") && !strings.HasPrefix(q, "SELECT EXISTS(SELECT 1 FROM spawns") {
 								refused.Store(true)
 								return injected
 							}

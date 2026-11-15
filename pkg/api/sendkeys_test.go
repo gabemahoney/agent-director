@@ -4,7 +4,9 @@ package api_test
 // state and relay guards (SR-7.1, SR-7.2, SR-4.2, SR-4.4) and the b.kk3
 // fallen-back relay. Which pane it types into, with read-pane and pause, is
 // readpane_pane_test.go's; its failed keys calls and adoption write
-// sendkeys_action_test.go's.
+// sendkeys_action_test.go's. The typing runs on rows busy send doesn't cover
+// (TestSendKeysText's on a pane-only Droid row, the others' on Codex rows): a
+// covered Claude row's send-keys admits a Message (busy_send_*_test.go).
 
 import (
 	"database/sql"
@@ -34,6 +36,7 @@ func TestSendKeysText(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentDroid
 			r := e.seedRow(t, killRowSpec{})
 			if _, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: tc.text}); err != nil {
 				t.Fatalf("SendKeys: %v", err)
@@ -93,6 +96,7 @@ func TestSendKeysGuards(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := e.seedRow(t, killRowSpec{State: tc.state, RelayOn: tc.relay != skRelayOff})
 			if tc.relay == skRelayHeld || tc.relay == skRelayFallenBack {
 				storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
@@ -124,6 +128,7 @@ func TestSendKeysGuards(t *testing.T) {
 func TestSendKeysGuardStoreReadError(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentCodex
 	r := e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true})
 	storeErr := errors.New("permission_requests read exploded")
 	e.store.failPermissionRequests(storeErr)
@@ -156,12 +161,18 @@ func TestSendKeysEmptyTextPressesEnterOnly(t *testing.T) {
 	}{
 		{name: "live row, text left typed", typed: skaText, want: []string{skaText},
 			seed: func(t *testing.T, e *killEnv) killRow { return e.seedRow(t, killRowSpec{}) }},
+		// A pane-only Droid row, which stays pending: a pending Codex row's
+		// Enter waits for turn activity (TestSendKeysPendingSubmissionUnconfirmed).
 		{name: "pending row with allow_pending", allowPending: true,
-			seed: func(t *testing.T, e *killEnv) killRow { return e.seedPending(t, pendingFresh, pendingOurs) }},
+			seed: func(t *testing.T, e *killEnv) killRow {
+				e.rowAgent = store.AgentDroid
+				return e.seedPending(t, pendingFresh, pendingOurs)
+			}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := tc.seed(t, e)
 			in := watchPaneInput(e, r.Spawn.Identity.PaneID, false)
 			in.box = tc.typed
@@ -224,6 +235,7 @@ func setRequestsCreatedAt(t *testing.T, e *killEnv, id string, at time.Time) {
 func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentCodex
 	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 	storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, storefix.TestRequestTokenA, 2*relayGuardWindow)
 	now := time.Now()
@@ -358,6 +370,7 @@ func TestSendKeysRelayGuard(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := seedRelayRow(t, e, tc.tokens...)
 			now := time.Now()
 			if tc.arrange != nil {

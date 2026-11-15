@@ -214,9 +214,7 @@ func TestBusySendCoveredAdmission(t *testing.T) {
 		t.Errorf("repeat with the reservation full = %+v; want the owner's %+v", got, first)
 	}
 
-	if err := e.st.DeleteSpawn(r.ID); err != nil {
-		t.Fatal(err)
-	}
+	deleteCoveredRow(t, e.st, r.ID)
 	found, err := c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: "m-1"})
 	if err != nil || found.Result == nil {
 		t.Fatalf("GetDelivery after deletion = %+v, %v", found, err)

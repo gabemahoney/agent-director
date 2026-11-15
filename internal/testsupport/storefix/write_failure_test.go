@@ -231,7 +231,9 @@ var proxyWrites = []proxyWrite{
 			if err != nil {
 				return err
 			}
-			res, _, err := s.MoveToPending(id, sp.Snapshot, 1700000000000, "0123456789abcdef", apitest.TestSocket, "", store.LaunchOwner{})
+			// The row is Claude's, whose covered conversation resume replaces only with exit evidence.
+			res, _, err := s.MoveToPendingWithExit(id, sp.Snapshot, 1700000000000, "0123456789abcdef", apitest.TestSocket, "",
+				store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.CoveredExit(s, id))
 			if err == nil && res != store.CondApplied {
 				err = fmt.Errorf("MoveToPending(%q) = %v, want CondApplied", id, res)
 			}
@@ -244,7 +246,7 @@ var proxyWrites = []proxyWrite{
 		kind: storefix.WriteFailReusePermissionDelete,
 		seed: func(t *testing.T, s *store.Store, _, id string) { storefix.SeedCheckPermission(t, s, id) },
 		write: func(s *store.Store, id string) error {
-			return s.DeleteSpawn(id) // cascades to the id's permission request
+			return storefix.DeleteCovered(s, id) // cascades to the id's permission request
 		},
 		observe: observeOpenRequests,
 	},
@@ -300,7 +302,7 @@ var proxyWrites = []proxyWrite{
 				t.Fatalf("SeedSubagent(%q): %v", id, err)
 			}
 		},
-		write:   func(s *store.Store, id string) error { return s.DeleteSpawn(id) },
+		write:   storefix.DeleteCovered, // a covered (Claude) conversation's delete needs exit evidence
 		observe: observeSubagentRows,
 	},
 	{
@@ -314,7 +316,7 @@ var proxyWrites = []proxyWrite{
 				t.Fatalf("SeedSubagentLaunch(%q): %v", id, err)
 			}
 		},
-		write:   func(s *store.Store, id string) error { return s.DeleteSpawn(id) },
+		write:   storefix.DeleteCovered, // a covered (Claude) conversation's delete needs exit evidence
 		observe: observeSubagentRows,
 	},
 	{
@@ -392,7 +394,7 @@ func runWrite(t *testing.T, s *store.Store, dbPath string, w proxyWrite, id stri
 func TestInjectWriteFailure(t *testing.T) {
 	const target, other = "wf-target", "wf-other"
 	// Proven by their production consumers instead: store input_delivery tests,
-	// pkg/api sendkeys_persisted_proof_test and cursorhost request_boundary_linux_test.
+	// adminapi advice_follow_journal_test and cursorhost request_boundary_linux_test.
 	production := map[storefix.WriteFailureKind]bool{
 		storefix.WriteFailInputAttemptInsert: true, storefix.WriteFailInputTextIntent: true, storefix.WriteFailInputCurrent: true,
 		storefix.WriteFailInputAuthority: true, storefix.WriteFailPermissionResponseIssue: true,

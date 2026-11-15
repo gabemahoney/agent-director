@@ -174,7 +174,7 @@ func advSpawnRestoreCases() []advSpawnRestoreCase {
 		{"removed", "the row was removed after this spawn reset it, so nothing was restored", "",
 			func(t *testing.T, e *killEnv, id string, _ *hookedReuseStore) {
 				adviceOnceAfter(e.rec, tmux.CallCreate, func() {
-					if err := e.st.DeleteSpawn(id); err != nil {
+					if err := storefix.DeleteWithExit(t, e.st, id); err != nil {
 						t.Errorf("DeleteSpawn(%s): %v", id, err)
 					}
 				})
@@ -289,7 +289,7 @@ func TestAdviceFollow_A13_ReuseLostRaceGetThenAct(t *testing.T) {
 		life        any
 	}{
 		{"removed", "", func(t *testing.T, e *killEnv, id string) {
-			if err := e.st.DeleteSpawn(id); err != nil {
+			if err := storefix.DeleteWithExit(t, e.st, id); err != nil {
 				t.Errorf("DeleteSpawn(%s): %v", id, err)
 			}
 		}, nil},

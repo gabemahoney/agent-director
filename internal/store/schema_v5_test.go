@@ -394,7 +394,9 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	}
 	fresh := Spawn{CWD: "/work/reused", TmuxSessionName: "ad-reused", RelayMode: "off", Agent: AgentCodex,
 		StartedAt: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), LaunchStartedAtMillis: 1772323200000,
-		Identity: LaunchIdentity{Token: "00112233aabbccdd", Socket: "/tmp/ad-sock"}}
+		Identity: LaunchIdentity{Token: "00112233aabbccdd", Socket: "/tmp/ad-sock"},
+		// The re-migrated claude row is covered, so its reuse carries exit evidence.
+		BusySendExit: busyLaunchExit(t, s, reused)}
 	if res, _, _, err := s.ResetForReuse(reused, rr.Snapshot, rr.Agent, fresh); err != nil || res != CondApplied {
 		t.Fatalf("ResetForReuse = %v, %v; want CondApplied", res, err)
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -79,13 +80,13 @@ func TestSettleGuardedWritesAreRaw(t *testing.T) {
 			}, store.CondApplied},
 		{"resume's move of a raw live row reported missing", store.StateWaiting, store.StateMissing,
 			func(t *testing.T, f *v5Store, id string, e store.ReuseRow) store.CondResult {
-				res, _, err := f.s.MoveToPending(id, e.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{})
+				res, _, err := f.s.MoveToPendingWithExit(id, e.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, id))
 				wantNoErr(t, err)
 				return res
 			}, store.CondChanged},
 		{"reuse's reset of a raw live row reported missing", store.StateWorking, store.StateMissing,
 			func(t *testing.T, f *v5Store, id string, e store.ReuseRow) store.CondResult {
-				res, _, _, err := f.s.ResetForReuse(id, e.Snapshot, e.Agent, rvReuseFresh(""))
+				res, _, _, err := f.s.ResetForReuse(id, e.Snapshot, e.Agent, storefix.WithExit(t, f.s, id, rvReuseFresh("")))
 				wantNoErr(t, err)
 				return res
 			}, store.CondChanged},

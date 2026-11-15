@@ -288,13 +288,13 @@ func TestCoordinatorDeliversFrozenPrompts(t *testing.T) {
 			t.Errorf("at prompt %d's output its record is %+v, hand-over destination %+v, Turn Starts %d; want issued with nothing observed, %+v, 3",
 				p.PromptIndex, got, h.Destination, h.ExpectedTurnStarts, e.dest)
 		}
-		fence, err := e.st.ReadBusySendLaunchFence(ctx, e.dest.LaunchID)
-		want := []store.BusySendFencedPrompt{{HandoverID: p.HandoverID, PromptIndex: p.PromptIndex, Destination: e.dest,
+		fence := storefix.ReadLaunchFence(t, e.st, e.dest.LaunchID)
+		want := []storefix.FencedPrompt{{HandoverID: p.HandoverID, PromptIndex: p.PromptIndex, Destination: e.dest,
 			Emission: store.BusySendEmissionIssued}}
 		issuer := store.BusySendLaunchProcess{Role: helper.Role, PID: helper.PID, StartTime: helper.StartTime}
-		if err != nil || !reflect.DeepEqual(fence.Prompts, want) || !slices.Contains(fence.Processes, issuer) {
-			t.Errorf("Launch fence at prompt %d's output = %+v, %v; want only its own obligation %+v and the issuer %+v",
-				p.PromptIndex, fence, err, want, issuer)
+		if !reflect.DeepEqual(fence.Prompts, want) || !slices.Contains(fence.Processes, issuer) {
+			t.Errorf("Launch fence at prompt %d's output = %+v; want only its own obligation %+v and the issuer %+v",
+				p.PromptIndex, fence, want, issuer)
 		}
 		if issues := e.seam.committed(); len(issues) != len(e.route.prepared()) || issues[len(issues)-1].TurnStarts != 3 ||
 			issues[len(issues)-1].RunningTurn {
@@ -442,9 +442,9 @@ func TestCoordinatorKeepsOrderBarrier(t *testing.T) {
 			if later.Kind != busysend.OutcomeNoIssue || later.Wait != store.BusySendWaitHandoverInProgress || len(issued) != 1 {
 				t.Errorf("later event = %+v with %d prompts issued in all; want no issue behind the barrier", later, len(issued))
 			}
-			fence, err := e.st.ReadBusySendLaunchFence(context.Background(), e.dest.LaunchID)
-			if err != nil || len(fence.Prompts) != 1 || fence.Prompts[0].HandoverID != issued[0].HandoverID || fence.Prompts[0].PromptIndex != 0 {
-				t.Errorf("Launch fence = %+v, %v; want prompt 0's unresolved issue alone", fence, err)
+			fence := storefix.ReadLaunchFence(t, e.st, e.dest.LaunchID)
+			if len(fence.Prompts) != 1 || fence.Prompts[0].HandoverID != issued[0].HandoverID || fence.Prompts[0].PromptIndex != 0 {
+				t.Errorf("Launch fence = %+v; want prompt 0's unresolved issue alone", fence)
 			}
 			if got := e.places(t); !slices.Equal(got, []string{"issued", "held"}) {
 				t.Errorf("custody %v; want a issued and b Held", got)

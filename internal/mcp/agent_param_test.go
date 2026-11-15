@@ -18,7 +18,6 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
-	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -51,25 +50,21 @@ func TestMCPSpawnAgentReachesRow(t *testing.T) {
 			if got := string(callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))["agent"]); got != `"`+agent+`"` {
 				t.Errorf("get agent = %s; want %q", got, agent)
 			}
+			// Only a Claude spawn is covered (SR-9.1).
+			wantCoverage := "not_covered"
+			if agent == "claude" {
+				wantCoverage = "covered"
+			}
 			get := callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))
-			if string(get["busy_send"]) != `"not_covered"` {
-				t.Errorf("get busy_send=%s", get["busy_send"])
+			if string(get["busy_send"]) != `"`+wantCoverage+`"` {
+				t.Errorf("get busy_send=%s; want %s", get["busy_send"], wantCoverage)
 			}
 			many := callToolText(t, e.d, "get_many", paramJSON(t, map[string]any{"instance_ids": []string{id}}))
 			var coverageRows []struct {
 				BusySend string `json:"busy_send"`
 			}
-			if err := json.Unmarshal(many["spawns"], &coverageRows); err != nil || len(coverageRows) != 1 || coverageRows[0].BusySend != "not_covered" {
-				t.Fatalf("get-many coverage=%+v,%v", coverageRows, err)
-			}
-			if agent == "claude" {
-				if err := apitest.SeedBusySendCoverage(e.storePath, id, store.BusySendCovered, store.BusySendCovered); err != nil {
-					t.Fatal(err)
-				}
-				covered := callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))
-				if string(covered["busy_send"]) != `"covered"` {
-					t.Errorf("covered get=%s", covered["busy_send"])
-				}
+			if err := json.Unmarshal(many["spawns"], &coverageRows); err != nil || len(coverageRows) != 1 || coverageRows[0].BusySend != wantCoverage {
+				t.Fatalf("get-many coverage=%+v,%v; want %s", coverageRows, err, wantCoverage)
 			}
 			var rows []struct {
 				Agent string `json:"agent"`

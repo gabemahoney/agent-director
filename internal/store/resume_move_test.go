@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -105,7 +106,7 @@ func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 
 // move runs MoveToPending on r's examined snapshot with the test launch and parentID.
 func (f *v5Store) move(r moveRow, parentID string) (store.CondResult, int64, error) {
-	return f.s.MoveToPending(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, parentID, store.LaunchOwner{})
+	return f.s.MoveToPendingWithExit(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, parentID, store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(f.t, f.s, r.id))
 }
 
 // moveKept are the columns the move leaves exactly as stored.
@@ -230,17 +231,17 @@ func TestMoveToPendingNotAppliedClosesNothing(t *testing.T) {
 			run: func(f *v5Store, r moveRow) (store.CondResult, error) {
 				stale := r.examined.Snapshot
 				stale.RowVersion--
-				res, _, err := f.s.MoveToPending(r.id, stale, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{})
+				res, _, err := f.s.MoveToPendingWithExit(r.id, stale, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, r.id))
 				return res, err
 			}},
 		{name: "row that is gone", want: store.CondAbsent,
 			run: func(f *v5Store, r moveRow) (store.CondResult, error) {
-				res, _, err := f.s.MoveToPending("move-no-such-row", r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{})
+				res, _, err := f.s.MoveToPendingWithExit("move-no-such-row", r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, "move-no-such-row"))
 				return res, err
 			}},
 		{name: "parent id that names no row", wantErr: true,
 			run: func(f *v5Store, r moveRow) (store.CondResult, error) {
-				res, _, err := f.s.MoveToPending(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "move-no-such-parent", store.LaunchOwner{})
+				res, _, err := f.s.MoveToPendingWithExit(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "move-no-such-parent", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, r.id))
 				return res, err
 			}},
 	}
@@ -274,7 +275,7 @@ func TestMoveToPendingWithoutLaunchInstantFails(t *testing.T) {
 	mix := f.seedCloseMix(r.id)
 	before := f.rawColumns(r.id)
 
-	res, v, err := f.s.MoveToPending(r.id, r.examined.Snapshot, 0, moveToken, moveSocket, "", store.LaunchOwner{})
+	res, v, err := f.s.MoveToPendingWithExit(r.id, r.examined.Snapshot, 0, moveToken, moveSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, r.id))
 
 	if err == nil || res != 0 || v != 0 {
 		t.Fatalf("MoveToPending(launch instant 0) = %v, %d, %v; want an error with a zero result", res, v, err)

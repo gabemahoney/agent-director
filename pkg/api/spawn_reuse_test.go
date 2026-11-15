@@ -423,8 +423,8 @@ func TestSpawnReuseRowRemovedAtReset(t *testing.T) {
 	e.rec.AfterCall(tmux.CallLookup, func(c tmuxfix.SocketCall, _ error) {
 		if !removed && c.Socket == r.Socket {
 			removed = true
-			if err := e.st.DeleteSpawn(r.ID); err != nil {
-				t.Errorf("DeleteSpawn(%s): %v", r.ID, err)
+			if err := storefix.DeleteWithExit(t, e.st, r.ID); err != nil {
+				t.Errorf("delete %s: %v", r.ID, err)
 			}
 		}
 	})

@@ -57,7 +57,7 @@ func TestReuseResetNotApplied(t *testing.T) {
 		{"agent-only NULL change after examination", reuseSpec{}, func(t *testing.T, f *v5Store, r reuseRow) { f.reuseAgentRaw(r.id, nil) }, store.CondChanged},
 		{"live row", reuseSpec{state: store.StateWaiting}, nil, store.CondChanged},
 		{"row deleted after examination", reuseSpec{}, func(t *testing.T, f *v5Store, r reuseRow) {
-			if err := f.s.DeleteSpawn(r.id); err != nil {
+			if err := storefix.DeleteWithExit(t, f.s, r.id); err != nil {
 				t.Fatalf("DeleteSpawn: %v", err)
 			}
 		}, store.CondAbsent},
@@ -171,7 +171,7 @@ func TestReuseResetConcurrent(t *testing.T) {
 				go func() {
 					defer wg.Done()
 					<-start
-					res[i], _, _, errs[i] = s.ResetForReuse(r.id, r.read.Snapshot, r.read.Agent, reuseFresh("", false))
+					res[i], _, _, errs[i] = s.ResetForReuse(r.id, r.read.Snapshot, r.read.Agent, storefix.WithExit(t, s, r.id, reuseFresh("", false)))
 				}()
 			}
 			close(start)

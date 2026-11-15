@@ -1066,91 +1066,70 @@ type BusySendLaunchProcess struct {
 	Endpoint     string
 }
 
-// BusySendFencedPrompt is an intent-bearing prompt of a Launch whose
-// hand-over is still open: its captured destination, which exit evidence must
-// fence, and its emission and transport so far.
-type BusySendFencedPrompt struct {
-	HandoverID  string
-	PromptIndex int
-	Destination BusySendDestination
-	Emission    BusySendEmission
-	Transport   BusySendTransport
-	Fenced      bool
+// busySendLaunchFacts is what exit evidence must cover for one Launch (SR-6.2;
+// M1 R6, R8): every process it owns (busy_send_launch_processes, in role
+// order), the distinct route kinds of its hand-overs still open, whose
+// captured destinations the evidence must fence, and whether any prompt of
+// any of its hand-overs ever persisted emission intent (whether AD ever
+// issued input for it). readBusySendLaunchFacts is the one production reading
+// of them: the instance-level exit scope (ReadBusySendExitScope) is built from
+// it.
+type busySendLaunchFacts struct {
+	processes []BusySendLaunchProcess
+	routes    []BusySendRouteKind
+	issued    bool
 }
 
-// BusySendLaunchFence is what the shared exit-evidence operation must cover
-// for one Launch (SR-6.2; M1 R6, R8): whether its Launch End is recorded,
-// every process it owns, and every intent-bearing prompt still holding its
-// conversation's order barrier.
-type BusySendLaunchFence struct {
-	LaunchID       string
-	InstanceID     string
-	ConversationID string
-	Ended          bool
-	Processes      []BusySendLaunchProcess
-	Prompts        []BusySendFencedPrompt
-}
-
-// ReadBusySendLaunchFence reads launchID's fence facts from durable records
-// only: no process probe, provider call or write. An unknown Launch is
-// sql.ErrNoRows.
-func (s *Store) ReadBusySendLaunchFence(ctx context.Context, launchID string) (BusySendLaunchFence, error) {
-	out := BusySendLaunchFence{LaunchID: launchID}
-	err := s.WithContext(ctx).readWithin(DefaultLockWait, "store: read busy-send Launch fence", func(ctx context.Context, conn *sql.Conn) error {
-		if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
-			return err
-		}
-		defer rollbackConn(ctx, conn)
-		var ended sql.NullInt64
-		if err := conn.QueryRowContext(ctx, `SELECT instance_id, conversation_id, ended_at_ms FROM busy_send_launches
-		    WHERE launch_id = ? AND store_id = ?`, launchID, s.StoreID()).Scan(&out.InstanceID, &out.ConversationID, &ended); err != nil {
-			return err
-		}
-		out.Ended = ended.Valid
-		rows, err := conn.QueryContext(ctx, `SELECT role, pid, start_time, pid_namespace, endpoint FROM busy_send_launch_processes
-		    WHERE launch_id = ? ORDER BY role`, launchID)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var p BusySendLaunchProcess
-			var role string
-			var namespace, endpoint sql.NullString
-			if err := rows.Scan(&role, &p.PID, &p.StartTime, &namespace, &endpoint); err != nil {
-				rows.Close()
-				return err
-			}
-			p.Role, p.PIDNamespace, p.Endpoint = BusySendProcessRole(role), namespace.String, endpoint.String
-			out.Processes = append(out.Processes, p)
-		}
-		if err := rows.Err(); err != nil {
+// readBusySendLaunchFacts reads launchID's exit facts in the caller's read
+// transaction on conn, from durable records only: no process probe, provider
+// call or write.
+func readBusySendLaunchFacts(ctx context.Context, conn *sql.Conn, launchID string) (busySendLaunchFacts, error) {
+	var out busySendLaunchFacts
+	rows, err := conn.QueryContext(ctx, `SELECT role, pid, start_time, pid_namespace, endpoint FROM busy_send_launch_processes
+	    WHERE launch_id = ? ORDER BY role`, launchID)
+	if err != nil {
+		return out, err
+	}
+	for rows.Next() {
+		var p BusySendLaunchProcess
+		var role string
+		var namespace, endpoint sql.NullString
+		if err := rows.Scan(&role, &p.PID, &p.StartTime, &namespace, &endpoint); err != nil {
 			rows.Close()
-			return err
+			return out, err
 		}
-		if err := rows.Close(); err != nil {
-			return err
+		p.Role, p.PIDNamespace, p.Endpoint = BusySendProcessRole(role), namespace.String, endpoint.String
+		out.processes = append(out.processes, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return out, err
+	}
+	if err := rows.Close(); err != nil {
+		return out, err
+	}
+	routes, err := conn.QueryContext(ctx, `SELECT DISTINCT route_kind FROM busy_send_handovers
+	    WHERE launch_id = ? AND state = 'open' ORDER BY route_kind`, launchID)
+	if err != nil {
+		return out, err
+	}
+	for routes.Next() {
+		var kind string
+		if err := routes.Scan(&kind); err != nil {
+			routes.Close()
+			return out, err
 		}
-		ids, err := readBusySendOpenHandovers(ctx, conn, launchID)
-		if err != nil {
-			return err
-		}
-		for _, id := range ids {
-			h, err := readBusySendHandover(ctx, conn, s.StoreID(), id)
-			if err != nil {
-				return err
-			}
-			for i := 0; i < h.promptCount; i++ {
-				p, err := readBusySendPrompt(ctx, conn, id, i)
-				if err != nil {
-					return err
-				}
-				if (p.emission == BusySendEmissionIntent || p.emission == BusySendEmissionIssued) && p.orderKind == "" && p.negative == "" {
-					out.Prompts = append(out.Prompts, BusySendFencedPrompt{HandoverID: id, PromptIndex: i,
-						Destination: h.Destination, Emission: p.emission, Transport: p.transport, Fenced: p.fenced})
-				}
-			}
-		}
-		return nil
-	})
+		out.routes = append(out.routes, BusySendRouteKind(kind))
+	}
+	if err := routes.Err(); err != nil {
+		routes.Close()
+		return out, err
+	}
+	if err := routes.Close(); err != nil {
+		return out, err
+	}
+	err = conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM busy_send_prompts p
+	    JOIN busy_send_handovers h ON h.handover_id = p.handover_id
+	    WHERE h.launch_id = ? AND p.intent_at_ms IS NOT NULL)`, launchID).Scan(&out.issued)
 	return out, err
 }

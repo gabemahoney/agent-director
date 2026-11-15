@@ -4,19 +4,25 @@ package api_test
 // only records an end report, so pause moves the row to ended itself: before its state rules when the agent
 // has already exited, and in each poll of its wait. The move is find-missing's (the same request close and
 // records; assertMoveRecords) and is judged on the agent process alone. Also its line clear (127 C-u in one
-// call) and a Claude row, which pause never writes. The GONE paths of send-keys and read-pane after a Codex
-// exit are TestKeysVerbsCodexExitedGone's, the E8 retry advice_follow_pane_test.go's.
+// call), its first read waiting for a held store connection or a SQLite lock, and a Claude row, which pause never
+// writes. The GONE paths of send-keys and read-pane after a Codex exit are TestKeysVerbsCodexExitedGone's, the E8
+// retry advice_follow_pane_test.go's.
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqlitelockfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -396,11 +402,219 @@ func TestPauseCodexWaitStoreError(t *testing.T) {
 	pauAssertState(t, e, r.ID, store.StateWaiting)
 }
 
-// TestPauseClaudeRowNeverMoved: pause writes no state of a Claude row, even with its process gone and an end
-// report column set: state refusal and dead-pane admission both leave it untouched.
+// pcxBoundedStore is a killStore with pause's first read
+// (GetSpawnConnBounded, *store.Store's); fellBack closes at the first
+// GetSpawn, which follows only that read's connection wait cut short.
+type pcxBoundedStore struct {
+	*killStore
+	fellBack chan struct{}
+	once     sync.Once
+}
+
+func newPcxBoundedStore(ks *killStore) *pcxBoundedStore {
+	return &pcxBoundedStore{killStore: ks, fellBack: make(chan struct{})}
+}
+
+func (w *pcxBoundedStore) GetSpawnConnBounded(ctx context.Context, id string) (api.Spawn, bool, error) {
+	return w.st.GetSpawnConnBounded(ctx, id)
+}
+
+func (w *pcxBoundedStore) GetSpawn(id string) (api.Spawn, error) {
+	w.once.Do(func() { close(w.fellBack) })
+	return w.killStore.GetSpawn(id)
+}
+
+// fellBackYet reports whether pause read the row through GetSpawn.
+func (w *pcxBoundedStore) fellBackYet() bool {
+	select {
+	case <-w.fellBack:
+		return true
+	default:
+		return false
+	}
+}
+
+// pcxPause runs api.Pause on r over st with timeoutSeconds on its own
+// goroutine, as e.pauseWithin does, its result on the returned channel.
+func (e *killEnv) pcxPause(st api.PauseStore, timeoutSeconds int, r killRow) <-chan error {
+	now := e.clock.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := api.Pause(context.Background(), st, e.rec, api.PauseEnv{
+			Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return now }, Window: sendKeysWindow()},
+		}, timeoutSeconds, pauseParams(r))
+		done <- err
+	}()
+	return done
+}
+
+// TestPauseCodexFirstReadWaitsForStore (SR-9.2; repair sf2o-4 R3-1): an
+// uncovered pause whose store connection another call holds past
+// pause.timeout_seconds waits for it as before keyless pause: once released,
+// it sends its exit keys and waits its own full timeout after them, to the
+// same ErrPauseTimeout as without the contention. Pause's covered budget does
+// not bound it.
+func TestPauseCodexFirstReadWaitsForStore(t *testing.T) {
+	t.Parallel()
+	e := newKillEnv(t)
+	r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
+	take, _, release := holdReadConnection(t, e.st, r.ID)
+	if err := take(); err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	w := newPcxBoundedStore(e.store)
+
+	done := e.pcxPause(w, 1, r)
+
+	select {
+	case <-w.fellBack:
+	case err := <-done:
+		t.Fatalf("Pause = %v with the store's connection held; want it to wait for the connection as before", err)
+	case <-time.After(30 * time.Second):
+		release()
+		joinWithin(t, done)
+		t.Fatal("pause's first read's connection wait was not cut short within 30 s")
+	}
+	e.assertNothingSent(t)
+	released := time.Now()
+	release()
+	err := joinWithin(t, done)
+
+	if waited := time.Since(released); waited < time.Second {
+		t.Errorf("pause returned %v after the release; want its own full 1 s wait after the keys", waited)
+	}
+	assertPauseInspectionDetails(t, err, store.StateWaiting)
+	e.assertExitDeliveredTimes(t, r.Socket, r.Spawn.Identity.PaneID, codexClearPresses)
+	pauAssertState(t, e, r.ID, store.StateWaiting)
+}
+
+// pcxLockedStore reopens e's store with busy timeout busy, alone on its file
+// so sqlitelockfix.HoldExclusive can take it: e.st is closed, and the new
+// store's own connection is dropped (store.ObserveSQLiteForTest), so its next
+// read opens one, whose setup reads the store and so waits for a lock first,
+// as a GetSpawn on a new connection does. started closes at the first
+// statement any read runs on it.
+func pcxLockedStore(t *testing.T, e *killEnv, busy time.Duration) (ps *store.Store, started <-chan struct{}) {
+	t.Helper()
+	ps, err := store.OpenWithBusyTimeout(e.dbPath, int(busy.Milliseconds()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ps.Close() })
+	first := make(chan struct{})
+	var once sync.Once
+	stop, err := store.ObserveSQLiteForTest(ps, func(d driver.Driver) driver.Driver {
+		return sqliteobserve.Wrap(d, sqliteobserve.Hooks{Before: func(context.Context, string) error {
+			once.Do(func() { close(first) })
+			return nil
+		}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := stop(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := e.st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return ps, first
+}
+
+// TestPauseCodexFirstReadLockWait (SR-9.2; repair sf2o-5 R4-1): an uncovered
+// pause's first read waits for a SQLite lock as GetSpawn does, once: pause's
+// budget bounds only its wait for the store's connection. With a lock held
+// past the store's 2 s busy timeout (past the 1 s pause budget too), pause
+// fails after that one timeout, under two, with GetSpawn's own error under
+// the same lock, never ErrStoreBusy, with no fallback read, and sends no
+// keys. With the lock released while the read runs, pause sends its exit keys
+// and waits its own full timeout after them, to the same ErrPauseTimeout as
+// without the lock.
+func TestPauseCodexFirstReadLockWait(t *testing.T) {
+	t.Parallel()
+	t.Run("held past the busy timeout", func(t *testing.T) {
+		t.Parallel()
+		const busy = 2 * time.Second
+		e := newKillEnv(t)
+		r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
+		ps, _ := pcxLockedStore(t, e, busy)
+		release := sqlitelockfix.HoldExclusive(t, e.dbPath)
+		w := newPcxBoundedStore(&killStore{st: ps})
+		start := time.Now()
+
+		done := e.pcxPause(w, 1, r)
+
+		var err error
+		select {
+		case err = <-done:
+		case <-time.After(30 * time.Second):
+			release()
+			joinWithin(t, done)
+			t.Fatal("pause did not return within 30 s under the lock")
+		}
+		elapsed := time.Since(start)
+		fellBack := w.fellBackYet()
+		_, legacy := ps.GetSpawn(r.ID)
+		if legacy == nil || !strings.Contains(legacy.Error(), "database is locked") {
+			t.Fatalf("GetSpawn under the lock = %v; want SQLite's busy error", legacy)
+		}
+		if err == nil || err.Error() != legacy.Error() || errors.Is(err, store.ErrStoreBusy) {
+			t.Errorf("Pause = %v; want GetSpawn's own error under the lock, %v", err, legacy)
+		}
+		if fellBack {
+			t.Error("pause read the row again through GetSpawn; want its one read, one busy timeout")
+		}
+		if elapsed < busy*3/4 || elapsed >= 2*busy {
+			t.Errorf("pause failed after %v; want about one %v busy timeout: not cut by its 1 s budget, not two", elapsed, busy)
+		}
+		e.assertNothingSent(t)
+	})
+	t.Run("released within the busy timeout", func(t *testing.T) {
+		t.Parallel()
+		e := newKillEnv(t)
+		r := e.seedRow(t, codexSpec(store.StateWaiting, agentAlive, false))
+		ps, started := pcxLockedStore(t, e, 10*time.Second)
+		release := sqlitelockfix.HoldExclusive(t, e.dbPath)
+		w := newPcxBoundedStore(&killStore{st: ps})
+
+		done := e.pcxPause(w, 1, r)
+
+		select {
+		case <-started:
+		case err := <-done:
+			t.Fatalf("Pause = %v before its first read ran; want it to read under the lock", err)
+		case <-time.After(30 * time.Second):
+			release()
+			joinWithin(t, done)
+			t.Fatal("pause's first read did not start within 30 s")
+		}
+		e.assertNothingSent(t)
+		released := time.Now()
+		release()
+		err := joinWithin(t, done)
+
+		if waited := time.Since(released); waited < time.Second {
+			t.Errorf("pause returned %v after the release; want its own full 1 s wait after the keys", waited)
+		}
+		assertPauseInspectionDetails(t, err, store.StateWaiting)
+		e.assertExitDeliveredTimes(t, r.Socket, r.Spawn.Identity.PaneID, codexClearPresses)
+		if state, err := ps.GetSpawnState(r.ID); err != nil || state != store.StateWaiting {
+			t.Errorf("row %s state = %q (%v); want %q", r.ID, state, err, store.StateWaiting)
+		}
+	})
+}
+
+// TestPauseClaudeRowNeverMoved: pause writes no state of a non-Codex row, even with its process gone and an end
+// report column set: state refusal and dead-pane admission both leave it untouched. On a Cursor row: a covered
+// Claude row's pause is keyless (pause_keyless_test.go), before the Codex end check.
 func TestPauseClaudeRowNeverMoved(t *testing.T) {
 	t.Parallel()
-	for _, rowAgent := range []string{"claude", "cursor"} {
+	for _, rowAgent := range []string{"cursor"} {
 		t.Run(rowAgent, func(t *testing.T) {
 			withReport := apitest.WithEndReportedAt(codexEndReport)
 			cases := []struct {
@@ -424,7 +638,7 @@ func TestPauseClaudeRowNeverMoved(t *testing.T) {
 					assertOneName(t, err, tc.want)
 					e.assertNothingSent(t)
 					if e.store.endedTries != 0 {
-						t.Errorf("moves to ended attempted = %d; want none for a Claude row", e.store.endedTries)
+						t.Errorf("moves to ended attempted = %d; want none for a non-Codex row", e.store.endedTries)
 					}
 					pauAssertState(t, e, r.ID, tc.state)
 					ptrAssertOnlyDisagrees(t, mark, r.ID, true)
@@ -435,9 +649,9 @@ func TestPauseClaudeRowNeverMoved(t *testing.T) {
 
 }
 
-// TestPauseLineClear (RN-19): pause clears the input line with C-u before typing /exit, one press on a
-// Claude row and 127 presses in one call on a Codex row (never C-c, which quits an empty Codex), then types
-// /exit and presses Enter; the agent gets /exit alone, after a draft was left typed.
+// TestPauseLineClear (RN-19): pause clears the input line with C-u before typing /exit, 127 presses in one
+// call on a Codex row (never C-c, which quits an empty Codex), then types /exit and presses Enter; the agent
+// gets /exit alone, after a draft was left typed. A covered Claude row's pause is keyless (pause_keyless_test.go).
 func TestPauseLineClear(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -446,11 +660,6 @@ func TestPauseLineClear(t *testing.T) {
 		exits   func(t *testing.T, e *killEnv, r killRow)
 		presses int
 	}{
-		{name: "claude", spec: killRowSpec{}, presses: 1, exits: func(t *testing.T, e *killEnv, r killRow) {
-			if ok, why := e.endAsAgent(t, r); !ok {
-				t.Errorf("SessionEnd not applied: %s", why)
-			}
-		}},
 		{name: "codex", spec: codexSpec(store.StateWaiting, agentAlive, false), presses: codexClearPresses,
 			exits: func(t *testing.T, e *killEnv, r killRow) { e.codexExits(t, r, nil) }},
 	}

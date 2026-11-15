@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -74,7 +75,7 @@ func TestCursorTerminalClosePreservesRequestProof(t *testing.T) {
 				}
 				wantState = store.StateEnded
 			case "resume backstop":
-				if result, _, err := f.s.MoveToPending(row.InstanceID, row.Snapshot, time.Now().UnixMilli(), "resumed-token", "/tmp/proof-sock", "", store.LaunchOwner{}); err != nil || result != store.CondApplied {
+				if result, _, err := f.s.MoveToPendingWithExit(row.InstanceID, row.Snapshot, time.Now().UnixMilli(), "resumed-token", "/tmp/proof-sock", "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, row.InstanceID)); err != nil || result != store.CondApplied {
 					t.Fatalf("resume: %v %v", result, err)
 				}
 				wantState = store.StatePending

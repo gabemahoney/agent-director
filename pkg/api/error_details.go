@@ -84,12 +84,24 @@ type CantSendLimit struct {
 }
 
 // NotPausableDetails is ErrSpawnNotPausable's err_details when pause refuses
-// only_if_waiting (SR-6.5, SR-9.2): its structured cause, agent_not_covered
-// for a row whose published current Launch is recorded not_covered. Nothing
-// was ended.
+// only_if_waiting (SR-6.5, SR-9.2), with cause agent_not_covered for a row
+// whose published current Launch is recorded not_covered (nothing was ended),
+// or when keyless pause of a covered row could not establish resumable
+// keyless shutdown (SR-6.4): agent_process_unverifiable, launch_changed,
+// signal_unsupported, signal_uncertain, exit_uncertain (the signal was sent
+// and exit was not verified within the pause budget: uncertain, never
+// success), budget_exhausted (the pause budget ran out at a store read or
+// write, or just before the signal; signal_sent says whether it was sent),
+// or, after the agent's verified exit, owned_process_running,
+// owned_process_unverifiable or destination_unfenced (an owned issuer of its
+// Launch may still emit, so exclusion is not established).
 type NotPausableDetails struct {
 	// Cause is the machine-readable cause.
 	Cause string `json:"cause"`
+	// SignalSent is keyless pause's own fact: whether its SIGTERM was sent.
+	// It is absent when that is not known (signal_uncertain) and for an
+	// only_if_waiting refusal, which sends nothing.
+	SignalSent *bool `json:"signal_sent,omitempty"`
 }
 
 // PauseTimeoutDetails is ErrPauseTimeout's err_details after pause sent the

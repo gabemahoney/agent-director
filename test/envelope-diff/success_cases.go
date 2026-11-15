@@ -191,14 +191,15 @@ var successCases = append([]successCase{
 	},
 
 	// ── send-keys ─────────────────────────────────────────────────────────
-	// A waiting row on a socket of its own; each run's fake table holds the
-	// row's own labelled session and @ad_pane-tagged pane (Ours, agent's pane
-	// found), so both runners send the text and Enter to that pane by its id
-	// (success_pane.go; SR-7.2, SR-3.7). The result is empty ({}).
+	// A waiting Claude row on a socket of its own, whose launch recorded no
+	// route: both runners admit the text as a Message Held route_unavailable
+	// and type nothing (SR-3.9), so both print the same Result but for its
+	// wait's since.
 	{
 		verb:      "send-keys",
 		seed:      seedSendKeys,
 		tmuxTable: writePaneRowTable,
+		want:      map[string]any{"class": "held", "reason": "route_unavailable"},
 		params: func(ctx map[string]any) map[string]any {
 			return map[string]any{
 				"instance_id": ctx["id"],

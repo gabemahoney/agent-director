@@ -31,7 +31,8 @@ type KillResult struct {
 // DeleteResult is delete's result, printed as JSON on stdout.
 type DeleteResult struct {
 	// Results maps each requested id to its outcome: "ok" when the row was
-	// removed, or an err_name ("ErrSpawnNotFound", "ErrInternal"). It is never
+	// removed, or an err_name ("ErrSpawnNotFound", "ErrSpawnNotDeletable",
+	// "ErrInternal"). It is never
 	// nil: when the batch ran (nil error) it has one entry per distinct
 	// requested id, and when Delete returns an error it is empty.
 	Results map[string]string `json:"results"`
@@ -164,12 +165,14 @@ var Verbs = []Verb{
 		Description: "Remove rows by id, bypassing every guard: the human's repair tool for a row nothing else removes, such as a row whose recorded tmux session name cannot be used, which resume and reuse refuse and expire keeps. " +
 			"It also removes each row's permission requests, session history and subagent records and clears it as the parent of any other row. " +
 			"It touches no tmux session and no transcript: on a live row the agent keeps running, untracked. " +
+			"A row whose busy-send delivery is covered is removed only once every process its launches own (the agent and any hook or delivery job of agent-director's) is checked gone, without tmux; its held messages then end not_started (record_deleted). " +
+			"Otherwise that id is refused with ErrSpawnNotDeletable and nothing changes: end the agent with kill, then sweep, and run delete again, or, on a finished row, run delete again once its processes have exited. " +
 			"Never remove a row after a kill that did not succeed. " +
 			"Each id is processed on its own; a failure on one never aborts the batch. " + sameUserText + " " + errorsText,
 		Flags: []Flag{
 			{Name: idFlagName, Description: "Id of a row to remove. Repeatable; at least one is required."},
 		},
-		Output: "{\"results\": {...}}, mapping each requested id to \"ok\" when the row was removed, \"ErrSpawnNotFound\" when no row has the id, or \"ErrInternal\" on any other store failure.",
+		Output: "{\"results\": {...}}, mapping each requested id to \"ok\" when the row was removed, \"ErrSpawnNotFound\" when no row has the id, \"ErrSpawnNotDeletable\" when a covered row's owned processes are not all checked gone (kill, then sweep, then retry; on a finished row, retry once they have exited), or \"ErrInternal\" on any other store failure.",
 	},
 	{
 		Name:  "help",

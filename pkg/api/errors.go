@@ -81,12 +81,28 @@ var ErrCantSend = errors.New("ErrCantSend")
 // default), pausable means `waiting`; `pending` / `working` / `ask_user` /
 // `check_permission` all reject, and `ended` / `missing` are not errors —
 // they are no-op success, since the desired post-condition is already true.
+// A row whose current Launch is recorded covered is paused keylessly in any
+// live state (SR-6.4), and gets this error, with NotPausableDetails' cause,
+// when its resumable keyless shutdown cannot be established.
 // With only_if_waiting true, the coverage the row's published current Launch
 // recorded decides first, in any state, and nothing is ended: not_covered
 // returns this error with err_details (NotPausableDetails) cause
 // agent_not_covered (SR-9.2); covered gets this version's unnamed
 // busy-send-unavailable error (ErrInternal), not this one.
 var ErrSpawnNotPausable = errors.New("ErrSpawnNotPausable")
+
+// ErrSpawnNotDeletable is agent-director-admin delete's per-id refusal of a
+// row whose published busy-send conversation is covered when positive exit
+// evidence cannot be established for it (SR-6.3; sf-answer-2): an owned
+// process of one of its Launches (the agent, or a hook or delivery job that
+// may still emit) still runs or cannot be checked, or a hand-over is open on a
+// route whose destination cannot be fenced. Nothing changed for that id: no
+// row, custody, Result or Launch was written, and nothing was signalled. Its
+// recovery on a live row is to end the agent (kill, then sweep) and retry the
+// deletion; on a finished row, where kill is a no-op, to retry once its
+// processes have exited (decision 16). An uncovered row is deleted
+// unconditionally, as before.
+var ErrSpawnNotDeletable = errors.New("ErrSpawnNotDeletable")
 
 // ErrPauseTimeout is returned by the pause verb when the target Spawn
 // did not transition to `ended` within `pause.timeout_seconds` after

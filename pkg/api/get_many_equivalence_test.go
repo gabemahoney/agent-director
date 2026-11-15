@@ -191,8 +191,9 @@ func TestGetManyEqualsSequentialGet(t *testing.T) {
 			batchWindow = manyReadWindow{from, time.Now()}
 			if err == nil {
 				for _, row := range got.Spawns {
+					// Claude rows are covered as shipped; codex-ended is seeded covered.
 					coverage := store.BusySendNotCovered
-					if row.InstanceID == "codex-ended" {
+					if row.Agent == store.AgentClaude || row.InstanceID == "codex-ended" {
 						coverage = store.BusySendCovered
 					}
 					assertBusyPublic(t, row, coverage)

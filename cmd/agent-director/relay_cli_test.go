@@ -158,18 +158,18 @@ func cliErrorEnvelope(t *testing.T, home string, args ...string) map[string]json
 }
 
 // TestCLIErrDetails (b.146 rule 15, decision 8 A): a refusal that carries
-// facts prints them as the stderr envelope's err_details object: decide's and
-// plain send-keys' ErrRelayFallenBack on a request whose relay hook exited,
-// and record-pane-answer's ErrClaimTooSoon while its hook runs (not_before
-// null). An error with none has no err_details key.
+// facts prints them as the stderr envelope's err_details object: decide's
+// ErrRelayFallenBack on a request whose relay hook exited, and
+// record-pane-answer's ErrClaimTooSoon while its hook runs (not_before null).
+// An error with none has no err_details key. (The row is Claude's, covered:
+// its plain send-keys is Held, never refused for the relay.)
 func TestCLIErrDetails(t *testing.T) {
 	cmd, gone := startChild(t, "sleep", "30")
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 	home, id := seedCLIRelayRequest(t, gone)
 	for name, argv := range map[string][]string{
-		"decide":    decideArgv(id, storefix.TestRequestTokenA),
-		"send-keys": {"send-keys", "--instance-id", id, "--text", "1"},
+		"decide": decideArgv(id, storefix.TestRequestTokenA),
 	} {
 		env := cliErrorEnvelope(t, home, argv...)
 		var details map[string]any

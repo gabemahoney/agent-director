@@ -344,7 +344,7 @@ func TestCloseWritesNothingUnlessItsWriteApplies(t *testing.T) {
 			if stale {
 				sp.Snapshot.RowVersion--
 			}
-			res, _, err := s.MoveToPending(id, sp.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "", LaunchOwner{})
+			res, _, err := s.MoveToPendingWithExit(id, sp.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "", LaunchOwner{}, BusySendDefaultsChoice{}, busyExitIfAny(t, s, id))
 			return result{applied: res == CondApplied, cond: res, err: err}
 		}
 	}

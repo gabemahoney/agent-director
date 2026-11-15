@@ -28,11 +28,12 @@ import (
 const busyCantSendAdvice = "make the same call without them"
 
 // TestAdviceFollow_E22_CantSendSameCallWithout: E22 "make the same call
-// without them". A send-keys naming force for an uncovered agent is refused;
-// the same send-keys without it sends its key.
+// without them". A send-keys naming force for an uncovered agent (Codex) is
+// refused; the same send-keys without it sends its key.
 func TestAdviceFollow_E22_CantSendSameCallWithout(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = "codex"
 	r := e.seedRow(t, killRowSpec{})
 	p := api.SendKeysParams{InstanceID: r.ID, Key: "Escape", Force: ptr(false)}
 	_, err := e.sendKeys(p)
@@ -53,11 +54,12 @@ func TestAdviceFollow_E22_CantSendSameCallWithout(t *testing.T) {
 }
 
 // TestAdviceFollow_B17_CantSendSameResumeWithout: B17 "make the same call
-// without them". A resume setting an Agent Default for an uncovered agent is
-// refused; the same resume without it moves the row to pending.
+// without them". A resume setting an Agent Default for an uncovered agent
+// (Codex) is refused; the same resume without it moves the row to pending.
 func TestAdviceFollow_B17_CantSendSameResumeWithout(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = "codex"
 	r := e.seedResumableRow(t, e.resumableSpec(rlkSettled(e), agentNotRecorded))
 	cfg := config.Default()
 	cfg.Tmux = e.cfg

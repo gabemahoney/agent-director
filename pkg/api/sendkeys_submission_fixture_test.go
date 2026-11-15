@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/google/uuid"
 )
 
 // deliveryBackend replaces native process/evidence I/O; store and tmux guards stay real.
@@ -155,37 +157,112 @@ func newNativeSubmissionEnv(t *testing.T) *nativeSubmissionEnv {
 	return e
 }
 
-// sqliteSubmission uses the production Native session and SQLite, replacing only
-// the terminal ioctl queue probe. Logs, proof files, guards and commits stay real.
-// SQLite-backed native tests must reuse it and sqliteDeliveryBackend's fault seams.
-func sqliteSubmission(t *testing.T, relay ...bool) (*nativeSubmissionEnv, killRow, inputdelivery.Launch) {
+// sqliteSubmission seeds spec's row, with its own session id and cwd, and an
+// input launch on the production Native session and SQLite
+// (enableSQLiteSubmission), replacing only the terminal ioctl queue probe.
+// Logs, proof files, guards and commits stay real. SQLite-backed input tests
+// must reuse it and sqliteDeliveryBackend's fault seams. The launch is
+// provisioned while the row is pending, as at spawn; a waiting spec's agent
+// then reports in (its SessionStart). Busy send covers Claude, so new input
+// runs on a Codex row (sqliteCodexSpec); a covered Claude row only carries
+// the attempts its launch persisted before (seedSQLiteOwner), which shared
+// reads still reconcile.
+func sqliteSubmission(t *testing.T, spec killRowSpec) (*nativeSubmissionEnv, killRow, inputdelivery.Launch) {
 	t.Helper()
 	e := newNativeSubmissionEnv(t)
 	e.clock.Advance(time.Now().Sub(e.clock.Now()))
-	r := e.seedRow(t, killRowSpec{State: store.StatePending, SessionID: uuid.NewString(), CWD: t.TempDir(), RelayOn: len(relay) > 0 && relay[0]})
-	return e, r, e.enableSQLiteSubmission(t, r, r.Spawn.SessionID)
+	want := spec.State
+	spec.State, spec.SessionID, spec.CWD = store.StatePending, uuid.NewString(), t.TempDir()
+	r := e.seedRow(t, spec)
+	l := e.enableSQLiteSubmission(t, r, r.Spawn.SessionID)
+	switch want {
+	case "", store.StatePending:
+	case store.StateWaiting:
+		if a := storefix.ApplyAgentHook(t, e.st, r.ID, "SessionStart", r.Spawn.SessionID, storefix.HookAgent(r.Spawn.Agent)); !a.Applied {
+			t.Fatalf("SessionStart: %+v", a)
+		}
+		row, err := e.st.GetSpawn(r.ID)
+		if err != nil || row.State != store.StateWaiting {
+			t.Fatalf("row after SessionStart = %+v, %v; want waiting", row, err)
+		}
+		r.Spawn = row
+	default:
+		t.Fatalf("sqliteSubmission: state %s; want pending or waiting", want)
+	}
+	return e, r, l
+}
+
+// sqliteCodexSpec is a live Codex row in state, relay on when relay: its
+// manual keys, hashed text, pane answers and pause's /exit go through the
+// real input journal with no native capability needed.
+func sqliteCodexSpec(state string, relay bool) killRowSpec {
+	spec := codexSpec(state, agentAlive, false)
+	spec.RelayOn = relay
+	return spec
 }
 
 // enableSQLiteSubmission must be reused when a native case needs an existing
-// row (including an initial report-in). It retains sqliteSubmission's capability.
+// row (including an initial report-in). It retains sqliteSubmission's
+// capability: the row's agent's, ready (its startup marker written), a Codex
+// one with its keymap pinned.
 func (e *nativeSubmissionEnv) enableSQLiteSubmission(t *testing.T, r killRow, sessionID string) inputdelivery.Launch {
 	t.Helper()
 	id := sqliteInputIdentity(r.Spawn, e.storeID)
 	id.PaneID, id.PID, id.Starttime = "", 0, ""
 	dir := t.TempDir()
+	version := map[string]string{store.AgentClaude: "2.1.280", store.AgentCodex: "0.159.2"}[id.Agent] // the pinned provider versions
 	l := inputdelivery.Launch{Identity: id, Revision: 1, EvidenceDir: dir, Capability: inputdelivery.Capability{
-		Agent: id.Agent, Version: "2.1.280", SessionID: sessionID, CWD: id.CWD, Socket: id.Socket,
+		Agent: id.Agent, Version: version, SessionID: sessionID, CWD: id.CWD, Socket: id.Socket,
 		Token: id.Token, InstanceID: id.InstanceID, Transcript: filepath.Join(dir, "native.jsonl"), Created: time.Now().UTC(), Safe: true,
+		KeymapPinned: id.Agent == store.AgentCodex,
 	}}
 	if err := e.st.CreateInputLaunch(context.Background(), l); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := os.WriteFile(filepath.Join(dir, "claude-debug.log"), []byte("Terminal capabilities:"), 0600); err != nil {
+	log, marker := "claude-debug.log", "Terminal capabilities:"
+	if id.Agent == store.AgentCodex {
+		log, marker = "codex-tui.log", "tui startup initial frame scheduled"
+	}
+	if err := os.WriteFile(filepath.Join(dir, log), []byte(marker), 0600); err != nil {
 		t.Fatal(err)
 	}
 	e.env.Input = &sqliteDeliveryBackend{e: e, ctx: context.Background()}
 	return l
+}
+
+// seedSQLiteOwner persists an unresolved ordinary attempt of text on r's
+// launch, as an ordinary send that typed it and pressed Enter left it
+// (enter_attempted, request id "original", the transcript's empty
+// watermark), through the store's own guarded writes. It returns the launch
+// and the attempt as stored: the owner later input must keep.
+func seedSQLiteOwner(t *testing.T, e *nativeSubmissionEnv, r killRow, launch inputdelivery.Launch, text string) (*inputdelivery.Launch, *api.InputDeliveryAttempt) {
+	t.Helper()
+	ctx := context.Background()
+	l, err := e.st.ReadInputLaunch(ctx, r.Token)
+	if err != nil || l == nil {
+		t.Fatalf("launch=%+v %v", l, err)
+	}
+	g := sqliteGuard(r.Spawn, e.storeID)
+	if l, err = e.st.BindInputLaunch(ctx, *l, g); err != nil {
+		t.Fatal(err)
+	}
+	a, err := inputdelivery.NewAttempt(g.Identity, text,
+		map[string]inputdelivery.Watermark{launch.Capability.Transcript: {PrefixSHA256: inputdelivery.Hash(nil)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.RequestID, a.NativeSessionID = "original", r.Spawn.SessionID
+	for _, step := range []func(){
+		func() {},
+		func() { a.Phase, a.BytesAttempted = "text_attempted", len(text) },
+		func() { a.Phase, a.EnterAttempted = "enter_attempted", true },
+	} {
+		step()
+		if l, a, err = e.st.SaveInputAttempt(ctx, *l, g, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return sqliteAttempt(t, e, r)
 }
 
 func sqliteInputIdentity(row api.Spawn, storeID string) inputdelivery.Identity {
@@ -198,7 +275,7 @@ func sqliteGuard(row api.Spawn, storeID string) inputdelivery.Guard {
 	return inputdelivery.Guard{Identity: sqliteInputIdentity(row, storeID), RowVersion: row.RowVersion, PermissionEpoch: row.PermissionEpoch, SessionID: row.SessionID, State: row.State}
 }
 
-// sqliteDeliveryBackend must be reused for SQLite-backed native tests; it keeps
+// sqliteDeliveryBackend must be reused for SQLite-backed input tests; it keeps
 // real admission and persistence while exposing optional I/O and fault seams.
 type sqliteDeliveryBackend struct {
 	e                   *nativeSubmissionEnv
@@ -328,6 +405,7 @@ func sqliteProofRecord(t *testing.T, l inputdelivery.Launch, payload string) []b
 	text, _ := json.Marshal(payload)
 	return []byte(fmt.Sprintf(" \t{ \"type\":\"user\", \"uuid\":\"cde93519-6972-4b1b-a650-830a0042e876\", \"sessionId\":%q, \"cwd\":%q, \"version\":\"2.1.280\", \"message\":{\"role\":\"user\",\"content\":%s} } \t", l.Capability.SessionID, l.Identity.CWD, text))
 }
+
 func (e *nativeSubmissionEnv) send(p api.SendKeysParams) (api.SendKeysResult, error) {
 	return api.SendKeys(e.s, e.rec, e.env, p)
 }

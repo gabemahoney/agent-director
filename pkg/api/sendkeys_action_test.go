@@ -11,6 +11,7 @@ import (
 	"log"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -30,6 +31,9 @@ func (v paneVerb) actions() []keysAction {
 		return []keysAction{{tmux.CallSendKey, pauseClearCalls}, {tmux.CallSendText, pauseTextCalls},
 			{callEnterKey, pauseSendCalls}}
 	}
+	if spawn.IsPaneOnly(v.agent) {
+		return []keysAction{{tmux.CallSendText, paneOnlyTextCalls}, {tmux.CallSendEnter, paneOnlySendCalls}}
+	}
 	return []keysAction{{tmux.CallSendText, paneTextCalls}, {callEnterKey, paneSendCalls}}
 }
 
@@ -47,9 +51,10 @@ func (v paneVerb) assertTyped(t *testing.T, e *killEnv, r killRow, action tmux.C
 		}
 		text = exitText
 	}
-	assertTextSent(t, e.rec, r.Socket, pane, text)
-	enters := e.rec.SocketCallsOf(callEnterKey)
-	if want := action == callEnterKey; want != (len(enters) == 1) || len(enters) > 1 || (want && enters[0].Target != pane) {
+	enter := e.rowEnterCall()
+	assertTextCall(t, e.rec, r.Socket, pane, text, v.verb != apitest.PanePause && e.paneOnlyRows())
+	enters := e.rec.SocketCallsOf(enter)
+	if want := action == enter; want != (len(enters) == 1) || len(enters) > 1 || (want && enters[0].Target != pane) {
 		t.Errorf("Enter calls = %+v; want one to %s: %v", enters, pane, want)
 	}
 }
@@ -76,14 +81,10 @@ type keysActionRow struct {
 	spec   killRowSpec
 }
 
-// keysActionRows are the rows the keys call a of v fails on: a Claude row, and for
-// pause's line clear (RN-19: a Codex row's is 127 presses in one call) a Codex row too.
-func keysActionRows(v paneVerb, a keysAction) []keysActionRow {
-	rows := []keysActionRow{{spec: killRowSpec{}}}
-	if v.verb == apitest.PanePause && a.call == tmux.CallSendKey {
-		rows = append(rows, keysActionRow{suffix: "/codex row", spec: codexSpec(store.StateWaiting, agentAlive, false)})
-	}
-	return rows
+// keysActionRows are the rows the keys call a of v fails on: one of v's agent
+// (pause's a Codex row, whose line clear is 127 presses in one call, RN-19).
+func keysActionRows(paneVerb, keysAction) []keysActionRow {
+	return []keysActionRow{{spec: killRowSpec{}}}
 }
 
 // TestKeysVerbsActionTimeout: a timed-out keys call (pause's line clear too)
@@ -97,6 +98,7 @@ func TestKeysVerbsActionTimeout(t *testing.T) {
 				t.Run(v.name+"/"+string(a.call)+row.suffix, func(t *testing.T) {
 					t.Parallel()
 					e := newKillEnv(t)
+					e.rowAgent = v.agent
 					r := e.seedRow(t, row.spec)
 					e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, a.call)
 					before := e.columns(t, r.ID)
@@ -192,6 +194,7 @@ func TestKeysVerbsActionFailureFollowUp(t *testing.T) {
 					t.Run(v.name+"/"+string(a.call)+row.suffix+"/"+tc.name, func(t *testing.T) {
 						t.Parallel()
 						e := newKillEnv(t)
+						e.rowAgent = v.agent
 						r := e.seedRow(t, row.spec)
 						e.seedBystander(t, r.Socket)
 						e.rec.Script(r.Socket, tc.script, a.call)
@@ -203,7 +206,7 @@ func TestKeysVerbsActionFailureFollowUp(t *testing.T) {
 						_, err := v.run(t, e, r)
 
 						desc := tc.desc(v.verb, r, a.call).AfterTextFailed()
-						if a.call == callEnterKey {
+						if a.call == callEnterKey || a.call == tmux.CallSendEnter { // a pane-only row's Enter send follows its text
 							desc = tc.desc(v.verb, r, a.call).AfterEnterFailed(v.verb)
 						}
 						assertKeysFailed(t, e, v, r, before, err, tc.errName, desc, a.call, withFollowUp(a.calls))
@@ -275,6 +278,7 @@ func TestKeysVerbsAdoptionWrite(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(v.name+"/"+tc.name, func(t *testing.T) {
 				e := newKillEnv(t)
+				e.rowAgent = v.agent
 				r := e.seedRow(t, tc.spec)
 				if tc.setup != nil {
 					tc.setup(t, e, &r)

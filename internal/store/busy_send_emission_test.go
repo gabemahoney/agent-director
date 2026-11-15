@@ -95,11 +95,8 @@ func TestBusySendIssueCommitsIntentFirst(t *testing.T) {
 		h.HandoverID, in.dest.LaunchID, in.dest.LaunchToken, in.dest.SessionID).Scan(&bound); err != nil || bound != 2 {
 		t.Errorf("%d Messages bound to the captured Launch and session, %v; want 2", bound, err)
 	}
-	fence, err := in.s.ReadBusySendLaunchFence(context.Background(), in.dest.LaunchID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantPrompt := []store.BusySendFencedPrompt{{HandoverID: h.HandoverID, Destination: in.dest, Emission: store.BusySendEmissionIssued}}
+	fence := storefix.ReadLaunchFence(t, in.s, in.dest.LaunchID)
+	wantPrompt := []storefix.FencedPrompt{{HandoverID: h.HandoverID, Destination: in.dest, Emission: store.BusySendEmissionIssued}}
 	helper := slices.ContainsFunc(fence.Processes, func(p store.BusySendLaunchProcess) bool {
 		return p.Role == busySendHelper.Role && p.PID == busySendHelper.PID && p.StartTime == busySendHelper.StartTime
 	})
@@ -275,7 +272,11 @@ func TestBusySendStaleOwnerCannotIssue(t *testing.T) {
 // for M2 P-C4.2 and the helper slot: the awaiting obligation and the
 // registered issuer exist exactly when intent landed, an unacknowledged
 // commit's included, whatever the job did after it, and evidence the agent
-// took the prompt clears only the obligation.
+// took the prompt clears only the obligation. Task 4 (t3.xis.oo.sf.2b) ends
+// the Launch through each production writer of M1's EndLaunch (the agent's own
+// end report, kill's verified exit, sweep's proven-exit mark) and lifts the
+// fence with the shared exit-evidence operation; find-missing's mark on tmux
+// evidence alone records no Launch End, so its row keeps the fence.
 func TestBusySendCustodyMatrix(t *testing.T) {
 	t.Parallel()
 	injected := errors.New("injected issue failure")
@@ -342,24 +343,55 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 	}
 	missing := func(t *testing.T, in *busySendInbox, h *store.BusySendHandover) {
 		issued("")(t, in, h)
-		setBusySendFact(t, in.path, `UPDATE spawns SET state = 'missing' WHERE instance_id = ?`, in.id)
+		row, err := in.s.GetSpawn(in.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, res, err := in.s.MarkMissingIfSameLife(in.id, row.Snapshot); err != nil || res != store.CondApplied {
+			t.Fatalf("find-missing's mark %v, %v; want applied", res, err)
+		}
+	}
+	// The Launch End writers (Task 4), each recording process_exited.
+	endBy := map[string]func(t *testing.T, in *busySendInbox){
+		"the agent's end report": func(t *testing.T, in *busySendInbox) {
+			if a := storefix.ApplyAgentHook(t, in.s, in.id, "SessionEnd", in.dest.SessionID); !a.Applied {
+				t.Fatalf("SessionEnd %+v; want applied", a)
+			}
+		},
+		"kill's verified exit": func(t *testing.T, in *busySendInbox) {
+			if ended, err := in.s.EndBusySendLaunch(in.id, in.dest.LaunchToken); err != nil || !ended {
+				t.Fatalf("EndBusySendLaunch %t, %v; want the Launch ended", ended, err)
+			}
+		},
+		"sweep's proven exit": func(t *testing.T, in *busySendInbox) {
+			setBusySendFact(t, in.path, `UPDATE spawns SET pane_starttime = '123' WHERE instance_id = ?`, in.id)
+			row, err := in.s.GetSpawn(in.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			exit := store.ProcessExit{PID: row.Identity.PanePID, Start: row.Identity.PaneStarttime, AtMillis: time.Now().UnixMilli()}
+			if _, res, recorded, err := in.s.RecoveryWrites(row).MarkMissingIfSameLifeFrom(in.id, row.Snapshot, store.EvidenceProcess, exit); err != nil ||
+				res != store.CondApplied || !recorded {
+				t.Fatalf("proven-exit mark %v, recorded %t, %v; want applied with the exit recorded", res, recorded, err)
+			}
+		},
 	}
 	for _, tc := range []struct {
 		name   string
 		drive  drive
 		intent bool
-		end    string                     // "expiry" or "launch end"
+		end    string                     // "expiry" or an endBy writer
 		claim  store.BusySendClaimOutcome // an event's claim after expiry
 	}{
 		{"claimed only, worker lost", claimOnly, false, "expiry", store.BusySendClaimMade},
 		{"issue rolled back before COMMIT", rolledBack, false, "expiry", store.BusySendClaimMade},
-		{"issue cancelled before BEGIN", cancelled, false, "launch end", ""},
+		{"issue cancelled before BEGIN", cancelled, false, "the agent's end report", ""},
 		{"issue COMMIT unacknowledged", lostAck, true, "expiry", store.BusySendClaimOwned},
-		{"issued, worker lost before completion", issued(""), true, "launch end", ""},
+		{"issued, worker lost before completion", issued(""), true, "kill's verified exit", ""},
 		{"partial output", issued(store.BusySendOutputPartial), true, "expiry", store.BusySendClaimOwned},
-		{"uncertain output", issued(store.BusySendOutputUncertain), true, "launch end", ""},
+		{"uncertain output", issued(store.BusySendOutputUncertain), true, "sweep's proven exit", ""},
 		{"complete output with no order evidence", issued(store.BusySendOutputComplete), true, "expiry", store.BusySendClaimOwned},
-		{"issued, agent row missing", missing, true, "expiry", store.BusySendClaimIneligible},
+		{"issued, agent row marked missing", missing, true, "expiry", store.BusySendClaimIneligible},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -414,18 +446,13 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 				!reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
 				t.Fatalf("exit before Launch End: %v; want it refused, changing nothing", err)
 			}
-			if err := store.EndBusySendLaunchForTest(in.s, in.dest.LaunchID, time.Now()); err != nil {
-				t.Fatal(err)
-			}
+			endBy[tc.end](t, in)
 			a, b = "held held launch_ended reserved", "held held launch_ended reserved"
 			if tc.intent {
 				a = "issued sent_unconfirmed final launch_ended member"
 			}
 			ended := wantBusySendCustody(t, in.path, in.id, a, b)
-			fence, err := in.s.ReadBusySendLaunchFence(ctx, in.dest.LaunchID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			fence := storefix.ReadLaunchFence(t, in.s, in.dest.LaunchID)
 			if !fence.Ended || len(fence.Prompts) != boolCount(tc.intent) {
 				t.Fatalf("fence %+v; want the Launch ended and %d fenced prompt", fence, boolCount(tc.intent))
 			}
@@ -436,8 +463,8 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 				!slices.ContainsFunc(fence.Processes, func(p store.BusySendLaunchProcess) bool { return p.PID == busySendHelper.PID }) {
 				t.Fatalf("fence %+v; want prompt 0 fenced at its captured destination and its issuer listed", fence)
 			}
-			if err := store.ExitBusySendLaunchForTest(in.s, in.dest.LaunchID, time.Now()); err != nil {
-				t.Fatal(err)
+			if applied, err := in.s.EstablishBusySendExit(*exitEvidenceForTest(t, in.s, in.id)); err != nil || !applied {
+				t.Fatalf("exit evidence %t, %v; want it applied", applied, err)
 			}
 			exited := wantBusySendCustody(t, in.path, in.id, "closed sent_unconfirmed final launch_ended", b)
 			if exited[0].result() != ended[0].result() {
@@ -705,11 +732,11 @@ func TestBusySendSafeReleaseThenProgress(t *testing.T) {
 		t.Fatalf("second prompt's completion %+v; want the hand-over closed", res)
 	}
 	wantBusySendCustody(t, in.path, in.id, "closed sent_unconfirmed final handed_over_not_proven", "closed sent_unconfirmed final confirmation_off")
-	fence, err := in.s.ReadBusySendLaunchFence(ctx, in.dest.LaunchID)
-	if err != nil || len(fence.Prompts) != 0 || !slices.ContainsFunc(fence.Processes, func(p store.BusySendLaunchProcess) bool {
+	fence := storefix.ReadLaunchFence(t, in.s, in.dest.LaunchID)
+	if len(fence.Prompts) != 0 || !slices.ContainsFunc(fence.Processes, func(p store.BusySendLaunchProcess) bool {
 		return p.Role == other.Role && p.PID == other.PID && p.StartTime == other.StartTime
 	}) {
-		t.Errorf("fence %+v, %v; want the new issuer recorded and no unresolved prompt", fence, err)
+		t.Errorf("fence %+v; want the new issuer recorded and no unresolved prompt", fence)
 	}
 }
 

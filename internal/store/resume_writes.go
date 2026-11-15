@@ -169,6 +169,20 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 // or replaced candidate leaves the published values as they are (SR-1.4,
 // SR-6.3). An empty choice is MoveToPending exactly.
 func (s *Store) MoveToPendingWithDefaults(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner, defaults BusySendDefaultsChoice) (res CondResult, movedVersion int64, err error) {
+	return s.MoveToPendingWithExit(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner, defaults, nil)
+}
+
+// MoveToPendingWithExit is MoveToPendingWithDefaults with exit, the positive
+// exit evidence a resume of a covered conversation needs (SR-6.1, SR-6.2;
+// M1's Resume): every owned process of the conversation's Launches judged
+// gone by identity. In the move's own transaction, before the move clears the
+// row's recorded identities, the evidence is validated against the scope read
+// under the write lock (prepareBusySendExit); then the staging records the
+// current Launch's End if it is not yet recorded and applies its Exit
+// (stageBusySendLaunch). An uncovered conversation needs none and ignores it.
+// A covered one with no or stale evidence writes nothing and returns an error
+// holding ErrBusySendExitNotEstablished.
+func (s *Store) MoveToPendingWithExit(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner, defaults BusySendDefaultsChoice, exit *BusySendExitEvidence) (res CondResult, movedVersion int64, err error) {
 	const errPrefix = "store: move to pending"
 	_, evidenceArgs := moveToPendingEvidenceArgs(token)
 	args := append(immediateStateArgs(StatePending), evidenceArgs...)
@@ -186,6 +200,10 @@ func (s *Store) MoveToPendingWithDefaults(instanceID string, examined RowSnapsho
 		closed []closedRequest
 	)
 	err = s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
+		scope, err := s.prepareBusySendExitIfFinished(ctx, conn, instanceID, examined, exit)
+		if err != nil {
+			return err
+		}
 		r, err := conn.ExecContext(ctx, moveToPendingSQL, args...)
 		if err != nil {
 			return err
@@ -198,7 +216,7 @@ func (s *Store) MoveToPendingWithDefaults(instanceID string, examined RowSnapsho
 			return errFamilyWriteNotApplied
 		}
 		moved = true
-		if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchResume, defaults, launchStartedAtMillis); err != nil {
+		if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchResume, defaults, scope, launchStartedAtMillis); err != nil {
 			return err
 		}
 		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, storeNowMillis())

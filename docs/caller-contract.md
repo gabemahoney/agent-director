@@ -25,7 +25,7 @@ error:
   a tmux server, a
   repeated `kill` can get `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable`: wait
   and check again.
-- A manual `send-keys` returning `ErrTmuxUnresponsive` with "may have been delivered" or
+- An uncovered agent's manual `send-keys` returning `ErrTmuxUnresponsive` with "may have been delivered" or
   "may be typed": do the step the error names, never resend the same text.
   `--text ""` sends Enter only. Retry a `pause` that returns
   `ErrTmuxUnresponsive` later.
@@ -38,6 +38,8 @@ error:
   ([Busy-send refusals](#busy-send-refusals)).
 - `ErrPauseTimeout`: inspect before further input; never retry `pause`
   automatically. Follow [When pause cannot confirm exit](#when-pause-cannot-confirm-exit).
+  A Covered Agent's `pause` refuses with `ErrSpawnNotPausable` instead: act on
+  its [`cause`](#keyless-pause-of-a-covered-agent).
 - `resume`, or a supported `spawn --reuse-finished` refused as "still stopping" or "still
   starting": wait and retry. Refused with "this row's own id", or
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
@@ -103,7 +105,9 @@ To end a live row (`pending` included) and relaunch its id:
      the row's agent, which `get` shows:
      `agent-director spawn --instance-id <id> --reuse-finished --agent <agent> --cwd <dir>`
 
-   A caller whose ids agent-director mints spawns fresh instead.
+   A caller whose ids agent-director mints spawns fresh instead. A Covered
+   Agent's `resume` or reuse also checks that its earlier launch can no
+   longer deliver ([Launch end, resume and reuse](#launch-end-resume-and-reuse)).
 
 ## Bounded recovery on state reads
 
@@ -166,8 +170,10 @@ meaning.
 `delivery.held_count` and `held_bytes` count the Messages Held now. The held
 limits also count Messages handed over that could still return to Held, so
 staying under them does not promise the next send fits.
-`delivery.awaiting_turn_start` is 0 in this version. Reading these
-fields hands nothing over, wakes nothing and changes no Result; `state`,
+`delivery.awaiting_turn_start` counts the current launch's hand-overs with an
+issued prompt but no admission or negative evidence, whatever their output
+state. It is zero after Launch End. Reading these fields hands nothing over,
+wakes nothing and changes no Result; `state`,
 `process_liveness`, `displayed_state`, `confirmations` and the permission
 fields keep their own meanings.
 
@@ -195,8 +201,9 @@ A call decides from the coverage of the launch its options apply to:
 - `send-keys`, `pause` and `force-delivery`: the target's current launch, the
   [`busy_send`](#busy-send-coverage) that `get` returns.
 - `resume`: its new launch, which keeps the conversation's coverage.
-- `spawn`, reuse and `make-template`: the agent they resolve. A new
-  conversation is never covered in this version.
+- `spawn`, reuse and `make-template`: the agent they resolve. New
+  Claude Code conversations are covered; Codex, Cursor, Droid and OpenCode
+  are not.
 
 Where it is `covered`, `send-keys` sends a Message, and `spawn`, reuse,
 `resume` and `make-template` store the [Agent Defaults](#agent-defaults). In
@@ -256,9 +263,9 @@ experimental: this version stores and shows it, and it changes nothing.
 ### Covered sends
 
 A Covered Agent's `send-keys` stores its `text` as a Message in the agent's
-inbox, Held, and returns its [Result](#message-results). This version hands no
-Message to the agent yet. Acceptance types nothing and does not wait for the
-agent: a Message is accepted in any state, `pending`, `ended` and `missing`
+inbox and returns its [Result](#message-results). Claude Code delivers ordinary
+Messages keylessly in `wait_turn` mode. Acceptance types nothing and does not
+wait for the agent: a Message is accepted in any state, `pending`, `ended` and `missing`
 included, so `allow_pending` changes nothing.
 
 The text is kept byte for byte: TAB, LF, Unicode and whitespace included,
@@ -266,8 +273,9 @@ nothing normalized. These are malformed, `ErrInvalidFlags` with nothing
 stored:
 
 - `key`, `no_enter`, `request_token`, `as`, `expect_pane_sha256` or `n_lines`,
-  even at a zero, `false` or empty value. To press keys on a Covered Agent's
-  pane, use tmux, and record a permission answer with `record-pane-answer`.
+  even at a zero, `false` or empty value. Follow the source advice:
+  "send the text alone, and use tmux with record-pane-answer for keys on the pane";
+  see [Answering at the pane](permissions.md#answering-at-the-pane).
 - Empty `text`, or `text` or `delivery_request_id` that is not valid UTF-8
   (over MCP, a lone surrogate escape counts as invalid).
 - A confirmed send without `caller_uuid`; an unconfirmed send with
@@ -342,6 +350,9 @@ refusal carry the same shape. Decide from `class` and `final`:
 | `sent_unconfirmed` | `false` or `true` | Some or all of it may have reached the agent; it can't be proven Delivered. Until final, proof may still arrive. | Never resend; once final, act on `reason`. |
 | `not_started` | `true` | Accepted, then ended with nothing reaching the agent, because its conversation can no longer be resumed. | Resend with a new Message ID. |
 
+Delivered means the message was passed to the harness, but not necessarily confirmed received by the LLM.
+`queued` is not Delivered.
+
 A final Result never changes. Its fields:
 
 - `caller_uuid`, `request_id`: the confirmed pair; omitted for an unconfirmed
@@ -363,6 +374,54 @@ A final Result never changes. Its fields:
 `held` and `not_started` are `not_started`; `queued` and `sent_unconfirmed` are
 `submission_unconfirmed`, or `partial_input_unconfirmed` when only part of the
 prompt is known written. No `outcome` is permission to resend.
+
+### Wait Turn delivery and waits
+
+Claude receives whole Message bodies in accepted order, grouped into the fewest
+prompts that fit its [limits](#busy-send-refusals), each body introduced by
+`[agent-director: message N of M]`. When several prompts are needed, one goes
+per wake and each remaining prompt goes at the next turn end. No other
+agent-director input goes between them; a person's typing can. This adds
+latency and exposure to `wait_turn_raced` between prompts.
+
+An accepted Message has no age timeout. Read its Result's `wait`, or
+`delivery.first_wait` for the first Held Message:
+
+| Wait reason | Next step |
+|---|---|
+| `turn_running`, `compaction` | Wait for the agent's next eligible boundary. |
+| `dialog` | Inspect the request; use [permission handling](permissions.md#answering-at-the-pane). Ordinary delivery never answers it. |
+| `earlier_message`, `handover_in_progress`, `input_unresolved`, `awaiting_proof` | Observe the earlier hand-over; never resend. |
+| `agent_starting` | Wait for startup; `allow_pending` does not bypass it. |
+| `launch_ended` | Follow [Launch end, resume and reuse](#launch-end-resume-and-reuse). |
+| `route_unavailable` | Reconnect with keyless pause and resume. An existing Claude launch covered by migration has no delivery route until a new launch supplies one. |
+| `readiness_unknown` | Inspect the agent and outstanding hand-over; waiting alone supplies no readiness evidence. |
+
+A send's wake, an idle-prompt Notification or a turn end can enable delivery.
+A lost wake delays it until a later eligible event: reads, `sweep` and elapsed
+time never deliver. Claude's wake hand-over is race-exposed: its Result ends
+`sent_unconfirmed`, reason `wait_turn_raced`, even if exact intake later
+secures order and clears `awaiting_turn_start`. The sticky reason records
+exposure to overlapping work, not proof that a race happened. A Final Result
+never upgrades on later evidence. Neither that reason nor missing proof
+permits a resend.
+
+User hooks can block or rewrite intake without agent-director detecting it or
+changing those hooks. Reserved closing tags can be escaped by the harness,
+preventing exact intake evidence; `awaiting_turn_start` can then stay nonzero
+and later Messages wait `readiness_unknown` until Launch End. Message-caused
+screen changes reset the ordinary `idle_screen` clock. No length of waiting
+alone becomes `needs_intelligence`.
+
+### Checking whether work is done
+
+For a Covered Agent, assess `waiting` together with
+[`confirmations.state`](#confirmations), its confirmation time and uncertainty.
+Also require `delivery.held_count == 0`, `handover_count == 0`, no
+`startup_wait`, and `awaiting_turn_start == 0`. A Final hand-over issued while
+idle can precede its next turn; Final alone does not mean that turn finished.
+This observation proves neither continuous inactivity nor completion of
+descendants; see [Family reporting limits](#family-reporting-limits).
 
 ### Stored force attempts
 
@@ -395,6 +454,47 @@ or process. Stored facts stay readable after a restart, the launch's end and
 the row's deletion. Only a found `not_started` Result is permission to
 resend; `unknown` and `retention_expired` never are. A store failure is an
 error (`ErrStoreBusy` when a bounded read runs out of time), never `unknown`.
+
+### Launch end, resume and reuse
+
+When agent-director records that a Covered Agent's launch ended (its agent
+exited or was killed or paused, or its row was deleted), it types and resends
+nothing:
+
+- A Message the agent cannot have received stays Held, in accepted order with
+  its options, and waits `launch_ended`.
+- A Message the agent may have received becomes final `sent_unconfirmed`, with
+  reason `wait_turn_raced` or `confirmation_off` where they apply, else
+  `launch_ended`. Never resend it.
+- A final Result never changes.
+
+`ended`, `missing`, a finished-row `kill` or `pause` no-op, or the agent's exit
+alone does not show that the earlier launch can no longer deliver. Before
+`resume` or a reuse writes anything, agent-director checks by process
+identity, without tmux, that every process the earlier launch owned is gone:
+the agent and any agent-director hook or delivery job that could still give it
+input. If one still runs or cannot be checked, nothing is written or launched:
+`resume` returns `ErrSpawnNotResumable` and reuse `ErrInstanceIdCollision`.
+Retry once the condition the error names clears, such as that process having
+exited (an agent-director hook or delivery job ends on its own within its job
+budget); on these finished rows `kill` and `sweep` end nothing.
+
+`resume` keeps the conversation: its Held Messages carry to the new launch in
+accepted order with their options, and no startup prompt is replayed. They
+wait `agent_starting` while the row is `pending`, and only the new launch's own
+events hand them over; `resume`, `sweep` and reads deliver nothing. A failed
+launch leaves them Held, waiting `launch_ended`.
+
+A reuse starts a new conversation. Until it is published, sends still go to
+the earlier one ([Busy-send coverage](#busy-send-coverage)). Once it is
+published, every Message still Held in the earlier conversation, those
+accepted while the reuse was pending included, ends `not_started` with reason
+`conversation_replaced`,
+`resend_safe: true` and `retry_with: new_id`. A human's `delete` of the row
+([Operator actions](operator-actions.md)) ends them the same way with reason
+`record_deleted`. Messages the agent may have received keep
+`sent_unconfirmed`. Confirmed Results stay readable through `get-delivery`
+afterwards; an unconfirmed Message has no lookup.
 
 ## Reading many agents
 
@@ -624,14 +724,13 @@ non-delivery nor exit.
 ## Pending rows and startup screens
 
 A pending row noted `unreported` has an alive agent with no applied hook
-since launch. Read its pane, then answer with `allow_pending` only after a
-person or an LLM judged that screen. Ordinary pending Claude fallback text
-waits for the agent to be ready; see [Ordinary text submission](#ordinary-text-submission).
-Such a Claude row that never reports in gets
-`ErrSubmissionUnconfirmed` with `outcome: "not_started"` after that wait,
-with nothing typed. Use `key` (including `key: "Enter"`) for startup choices,
-or a Claude Enter-only send; these take neither the readiness wait nor the
-hook check. For Codex Enter-only sends, see [Manual input ownership](#manual-input-ownership).
+since launch. Read its pane before acting. A Covered Agent accepts ordinary
+Messages while pending and holds them `agent_starting`; `allow_pending` changes
+nothing. For startup choices on Claude, use direct tmux after inspecting the
+owned pane ([Answering at the pane](permissions.md#answering-at-the-pane)).
+For uncovered agents, use `allow_pending` only after a person or an LLM judged
+the screen; `key: "Enter"` is a startup choice, separate from ordinary text.
+For Codex Enter-only sends, see [Manual input ownership](#manual-input-ownership).
 
 A pending Codex fallback text answer that starts no turn returns
 `ErrSubmissionUnconfirmed` with `keys_sent: true` even when the screen accepted
@@ -952,8 +1051,8 @@ record, `record_id`: an exact new user record in this launch's native
 transcript proves the normalized text was submitted. Hook activity, a quiet input queue and pane text do not prove it.
 This proves submission, not completion of the agent's turn.
 
-Native delivery supports Linux with exactly Codex 0.159.2 or Claude Code
-2.1.280, on fresh launches with an ordinary empty composer. For new input, the row must be
+Native delivery for uncovered Codex supports Linux with exactly Codex
+0.159.2, on fresh launches with an ordinary empty composer. For new input, the row must be
 `waiting`, or `pending` with `allow_pending`. A resumed conversation,
 positional startup prompt, alternate mode or unsupported agent argument is
 outside this contract. Accepted extra arguments are `--model`/`-m`,
@@ -966,72 +1065,13 @@ uses one paste followed by one Enter; other agents retain literal text plus
 Enter. Paste framing requires the application to have enabled bracketed paste;
 it does not establish composer readiness.
 
-For ordinary Claude fallback input read as `pending`, `send-keys` waits for the
-agent's terminal to take raw input, SessionStart to move the same launch to
-`waiting`, and 1.5 s from when the call first observes `waiting`. The row is
-polled throughout and must remain `waiting` once observed. After the settle,
-the call rechecks raw input, the row, ownership of the tmux server, session and
-pane, and permission-relay and dialog guards. Readiness and revalidation share
-one 12 s deadline, capped by the call's earlier deadline; an in-flight check
-can make the call return later. For a resumed row, the wait also accepts a
-SessionStart that keeps or rotates the saved session ID, under the same launch
-and process guards; `session_id` can change.
-An unavailable terminal-mode capability, a failed readiness read or check,
-cancellation or deadline expiry during readiness or admission, or changed
-launch or authority at admission returns `ErrSubmissionUnconfirmed` with `outcome: "not_started"`:
-nothing was typed, and `reason` names the unmet condition. Admission's state
-and relay/dialog guards keep their own refusal errors, also with nothing typed.
-Claude fallback sends read in any state other than `pending`, Enter-only,
-`no_enter`, `key` and pane-hash sends do not take this readiness path.
-
-After a successful transport, pending Codex fallback and the pending Claude
-path above are observed for up to 2 s for hook-derived `working`, `ask_user`
-or `check_permission` state on the same launch. Success returns `{}`: a turn
-was seen to start, without exact transcript confirmation. If that activity
-is not observed, the call returns
-`ErrSubmissionUnconfirmed` with `keys_sent: true`,
-`submission_confirmed: false` and `row_state`, without an `outcome`.
-For these refusals and failed hook observations, `row_state` is the last state
-the call read successfully, even when that state caused the refusal.
-Missing hooks can leave submission unknown even when input reached the agent.
-Other fallback success returns `{}` without this hook confirmation; Cursor's
-verdict is described below.
-
-On macOS, Claude fallback text longer than 512 bytes after CR removal is typed
-in pieces of at most 512 bytes, each followed by a 100 ms pause, with Enter
-500 ms after the last pause. This includes `no_enter`, `expect_pane_sha256`
-and `pending` sends; only a `pending` send with Enter and no hash is typed after
-the readiness wait above. Shorter text, keys, pane answers and Enter-only sends
-are typed in one call. The pauses add about 0.1 s per 512 bytes plus 0.5 s
-before the Enter; the checks before each later piece and the Enter add to that,
-and any readiness wait and hook observation come on top, so set the client
-timeout to match. Text over 32 KiB returns `ErrSubmissionUnconfirmed` with
-`outcome: "not_started"`, `phase: "pre_input"` and `keys_sent: false`, before
-any input: put the prompt in a file the agent can read and send a short
-instruction naming that file. Send text over 512 bytes to one row one call at
-a time: a second call returns `not_started` with nothing typed while the first
-owns the row's input (re-issue it once that call settles), and on a row with no
-launch token the pieces of concurrent calls can interleave in its input.
-
-Before each piece after the first, `no_enter` included, and before that Enter,
-the call rereads the row, reruns the state, permission-relay and dialog guards,
-and checks that the launch, session and the agent's pane and process are
-unchanged. It stops there, typing nothing more and sending no Enter, when the
-call was cancelled or reached its deadline, the launch, session, agent pane or
-process changed, the row cannot be read, a guard refuses, or the row moved into
-`check_permission` or `ask_user` during the call; a send that began in one of
-those states is not stopped for that alone. Other state changes of a working
-row, such as its hook updates or its turn ending, do not stop the send. A
-cancellation or deadline before the first piece returns `not_started` with
-nothing typed. A stop, a timed-out first piece or a failed later piece returns
-`ErrSubmissionUnconfirmed` with `outcome: "partial_input_unconfirmed"`,
-`phase: "text_attempted"`, `keys_sent: true` and
-`enter_may_have_been_sent: false`. `bytes_attempted` counts the pieces
-attempted: a failed piece counts, the piece a stop skipped does not.
-`row_state` is the reread row's state when its launch, state or a guard stopped
-the call, otherwise the state the call observed before typing. Part or all of
-the text may be in the input, unsubmitted: read the pane before any further
-input.
+After successful pending Codex fallback transport, the call observes the same
+launch for up to 2 s for hook-derived `working`, `ask_user` or
+`check_permission`. Success returns `{}` without exact transcript confirmation.
+Without that activity it returns `ErrSubmissionUnconfirmed` with
+`keys_sent: true`, `submission_confirmed: false` and `row_state`, without
+an `outcome`. Read the pane and state instead of resending. Other fallback
+success returns `{}`; Cursor's verdict is described below.
 
 Codex fallback accepts literal TAB and LF inside the paste. Codex may trim
 trailing whitespace, including TAB, before submission. It refuses invalid
@@ -1050,14 +1090,9 @@ State, permission-relay and dialog guards run before capability selection or
 stored-request observation. `ended` and `missing` rows are always refused
 with `ErrSpawnNotInteractive`, including retries of existing requests.
 
-Claude's local configuration checks are best effort: they do not verify the
-effective `editorMode` or managed or remote policy. Automatic Claude input
-remains enabled when those checks pass, but Vim settings or policy may still
-remap or consume input. For a supported native attempt, if Enter is attempted
-and no exact matching transcript record appears, agent-director reports
-`ErrSubmissionUnconfirmed` with
-`outcome: "submission_unconfirmed"`. It makes no submission claim without
-that proof and never retries text or Enter.
+For a supported native attempt, an Enter without an exact matching transcript
+record returns `ErrSubmissionUnconfirmed`, `outcome: "submission_unconfirmed"`.
+Agent-director never retries text or Enter.
 
 For native delivery, text must be valid UTF-8, at most 1 MiB after CR removal,
 with non-whitespace content. Apart from LF, control characters and Unicode
@@ -1085,9 +1120,8 @@ request discovers late proof for its predecessor,
 it reports `not_started`; re-issue the new request only after the predecessor
 has settled.
 
-Native delivery, Claude fallback refusals before input, macOS paced Claude
-typing, Codex fallback refusals or paste-transport failures, and Cursor gateway
-refusals use these `ErrSubmissionUnconfirmed` details:
+Native delivery, Codex fallback refusals or paste-transport failures, and
+Cursor gateway refusals use these `ErrSubmissionUnconfirmed` details:
 
 | Field | Meaning |
 |---|---|
@@ -1189,9 +1223,6 @@ bounded hook observation can instead return `ErrSubmissionUnconfirmed` with
 native `outcome`. Check hook-derived `get` or `status` without resending text
 or Enter. If submission remains unknown, use
 [Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
-
-On macOS, Claude `no_enter` and pane-hash text sends take the paced typing,
-size limit and outcomes in [Ordinary text submission](#ordinary-text-submission).
 
 Manual input, including `pause`, changes the native composer contract and prevents
 further new native delivery on that launch. A pane without native capability
@@ -1652,7 +1683,8 @@ end report.
 
 ## When pause cannot confirm exit
 
-For Claude, Codex and Cursor, `ErrPauseTimeout` means `/exit` and Enter
+For a Claude, Codex or Cursor agent that busy send does not cover,
+`ErrPauseTimeout` means `/exit` and Enter
 were sent, but the row was not observed to reach `ended` within
 `pause.timeout_seconds`. Its `err_details` object contains:
 
@@ -1677,6 +1709,51 @@ keys or force termination automatically from the timeout alone.
 Observe the resulting row state before relaunching; a timeout does not
 authorize `resume`. A Codex agent that exits after inspection follows
 [When a Codex agent exits](#when-a-codex-agent-exits).
+
+### Keyless pause of a Covered Agent
+
+`pause` on a Covered Agent types nothing, and neither waits for nor sends its
+Held Messages: they stay Held for `resume`. A finished row is a no-op success
+that checks nothing. In any live state, a running turn or an open dialog
+included, `pause` sends SIGTERM to the agent's recorded process, checked by
+pid and start time. It succeeds only once, within `pause.timeout_seconds`,
+the agent has exited and every other process its launch owned is checked
+gone; `resume` may follow once `get` shows the row `ended` or `missing`. It
+never returns `ErrPauseTimeout`. The budget bounds shutdown work, not the
+time before a refusal can return.
+
+If the initial read outlasts the budget while the store is occupied, `pause`
+waits until it can read the row. A live covered row then refuses with
+`ErrSpawnNotPausable`, `cause: budget_exhausted` and `signal_sent: false`,
+with nothing signalled or written. This refusal can arrive after
+`pause.timeout_seconds`. Caller cancellation at this point is the bare
+context error. Uncovered pause is unchanged.
+
+A shutdown refusal returns `ErrSpawnNotPausable` with `err_details` `cause` and
+`signal_sent`, whether this call sent the SIGTERM (absent when that is not
+known). A refusal is never shutdown: neither a sent signal nor an uncertain
+exit makes a resend safe or permits `resume`.
+
+On Darwin (macOS), the start-time check immediately precedes the signal, but
+a narrow PID-reuse gap remains: a replacement process can be signalled.
+Linux binds the signal to the checked process with pidfd. See the
+[signal architecture](architecture.md#probe-layer-internalprobe).
+
+| `cause` | Meaning | Next step |
+|---|---|---|
+| `launch_changed` | The launch was starting, or another launch replaced it. | `signal_sent: false`: retry `pause` once `get` shows the agent `waiting`. `true`: inspect with `get`. |
+| `agent_process_unverifiable` | The agent's recorded process cannot be checked; nothing was signalled. | To end the agent, follow the [live-row sequence](#caller-contract) instead. |
+| `signal_unsupported` | This system cannot send an identity-checked signal; nothing was signalled. | As for `agent_process_unverifiable`. |
+| `signal_uncertain` | The signal call failed; whether it arrived is not known. | Inspect with `get` before retrying. |
+| `budget_exhausted` | The one pause budget ran out at a store read/write, before the signal or at the final success check. | `signal_sent: false`: nothing was signalled; retry `pause`. `true`: inspect with `get` before more input, and retry `pause`. |
+| `exit_uncertain` | The signal was sent; the agent did not exit in time. | Inspect with `get` before more input. |
+| `owned_process_running` | The agent exited; another process its launch owned still runs. | Inspect with `get`, and retry `pause` once that process has exited. |
+| `owned_process_unverifiable` | The agent exited; a process its launch owned cannot be checked. | Inspect with `get`, and retry `pause` once it can be checked gone. |
+| `destination_unfenced` | The agent exited; an open hand-over's destination cannot be fenced. | Inspect with `get`, and retry `pause` once that hand-over has closed. |
+
+At the final success check, cancellation returns a wrapped context error and
+budget expiry returns `budget_exhausted`. If the error says exit evidence
+was recorded, it stays recorded: inspect with `get` before continuing.
 
 ## When a Codex agent exits
 
@@ -1858,6 +1935,14 @@ pane and answer it, or relaunch with an absolute path.
 
 ## Permission relay
 
+A Covered Agent accepts ordinary Messages while permission or dialog boundaries
+are unsafe and holds them; it never types an answer. `decide` keeps its own
+authority and lifetime rules. For Claude pane answers use
+[direct tmux and outside-answer recording](permissions.md#answering-at-the-pane);
+for stopping or reconnecting use [keyless pause](#keyless-pause-of-a-covered-agent)
+and [resume](#launch-end-resume-and-reuse). The `send-keys` key, hash,
+relay-refusal and typed-pause rules below apply only to uncovered agents.
+
 For Cursor, use the same request token, decision and delivery fields.
 `hook_alive` is null and no per-request hook process is claimed; the fixed
 `confirm_by` ends uncertainty independently of gateway liveness. Its precise
@@ -1875,9 +1960,9 @@ receipt, execution or dialog closure.
 For Claude and Codex, a relay hook that fails before recording an identifiable
 request denies it. One that cannot read the event or dies before recording,
 or a binary that cannot run, gives no relay answer and leaves the agent's
-native prompt. A prompt with no recorded request holds no input, so a plain
-`send-keys` can answer it. Claude shows its native dialog while the relay
-hook runs; that dialog is not evidence that the hook died.
+native prompt. For an uncovered agent, a prompt with no recorded request holds no input,
+so a plain `send-keys` can answer it. For Claude, inspect and use direct tmux.
+Claude shows its native dialog while the relay hook runs; that dialog is not evidence that the hook died.
 
 Every Cursor relay reply, including timeout denial, requires its own durable
 acknowledgement. Failed or missing acknowledgement means no relay answer is
@@ -1991,7 +2076,7 @@ the verdict and returns the available delivery facts; follow `not_confirmed`
 as above. A decision or delivery response is not a receipt that its audit
 events have reached durable storage.
 
-A pane answer (`send-keys --request-token`) sends nothing when it refuses
+An uncovered agent's pane answer (`send-keys --request-token`) sends nothing when it refuses
 with:
 
 - `ErrPaneChanged`: the pane changed since you read it. Read it again; the
@@ -2139,7 +2224,7 @@ a claim only from 2 s past `confirm_by` (`ErrClaimTooSoon` before). Other reques
 hold input. Claude and Codex turn-end proof does not release their relay
 or fallback holds.
 
-`pause` is held like a plain `send-keys` without `--expect-pane-sha256`
+An uncovered agent's `pause` is held like a plain `send-keys` without `--expect-pane-sha256`
 (`ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`)
 and types nothing; it takes no pane hash. To stop a held agent, see
 [Answer a request at the pane](usage.md#answer-a-request-at-the-pane), or

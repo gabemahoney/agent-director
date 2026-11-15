@@ -121,8 +121,10 @@ period or while its launch owner is alive, except a Cursor row whose recorded
 gateway is gone.
 
 Past its grace period, a `pending` row whose agent runs but has not reported
-in stays `pending` with `liveness_note` `unreported`. Read the pane, then answer
-a startup choice only after judging the screen:
+in stays `pending` with `liveness_note` `unreported`. For covered Claude,
+inspect startup choices through the existing
+[direct-tmux procedure](permissions.md#answering-at-the-pane). For an uncovered
+agent, read the pane, then answer a startup choice only after judging the screen:
 
 ```sh
 agent-director read-pane --instance-id <id>
@@ -141,7 +143,11 @@ A relayed request's delivery is worked out each time the request is read.
 when its agent process is not running and tmux shows no session of the agent.
 The others are in `kept_ids`; the trail's `ad.expire.kept` records give each
 reason. A row whose recorded tmux session name cannot be used is always kept
-([Operator actions](operator-actions.md)).
+([Operator actions](operator-actions.md)). So is a Covered Agent's row whose
+inbox still holds Messages (Held, or in an unfinished hand-over), with reason
+`held_messages`, however old: retention never discards a Message. A `resume`
+carries them, and a reuse or a human's `delete` ends them `not_started`
+([Launch end, resume and reuse](caller-contract.md#launch-end-resume-and-reuse)).
 
 A run of either verb as another user, as root or against another tmux server
 can wrongly mark or delete rows whose agent still runs: schedule both as the
@@ -162,7 +168,10 @@ agent-director resume --instance-id <id>   # relaunch the latest reported sessio
 
 `resume` acts on a finished row (`ended` or `missing`); `sweep` first
 makes a dead live row `missing` (or `ended`, for a Codex row that reported its
-end). Cursor loads only its saved latest session and protected transcript;
+end). Neither delivers a Message: a Covered Agent's Held Messages carry to the
+resumed launch, which hands them over itself
+([Launch end, resume and reuse](caller-contract.md#launch-end-resume-and-reuse)).
+Cursor loads only its saved latest session and protected transcript;
 load may leave it `pending` until a real first prompt. Missing native session
 or protected transcript never falls back to older history. For unavailable
 latest sessions, fresh reuse or artifact-preserving fresh-instance recovery,
@@ -171,7 +180,7 @@ follow the [Cursor recovery procedure](caller-contract.md#cursor-operation-bound
 For Claude and Codex, without a session id or transcript (see
 `transcript_status` in `get`), spawn the id again with reuse and the row's
 agent, which `get` shows; the new agent has no memory of the old
-conversation:
+conversation, and a Covered Agent's Held Messages end `not_started`:
 
 ```sh
 agent-director spawn --cwd <dir> --instance-id <id> --reuse-finished --agent <agent>

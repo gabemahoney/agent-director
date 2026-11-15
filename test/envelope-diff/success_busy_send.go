@@ -18,7 +18,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// busySendSuccessCases: standalone force-delivery on an uncovered row
+// busySendSuccessCases: standalone force-delivery on an uncovered Codex row
 // succeeds on both sides with a refused force_result, whose id and times
 // nondeterministic.json excludes and refusedForceResult checks; get-force
 // reads a force the seed stored through the public writer, found and alike on
@@ -29,8 +29,7 @@ var busySendSuccessCases = []successCase{
 		verb: "force-delivery",
 		seed: func(t *testing.T) (string, map[string]any) {
 			t.Helper()
-			_, dbPath := apitest.OpenStoreWithRow(t, "id-force-1", "cd-force-1", store.StateEnded, "off")
-			return filepath.Dir(dbPath), map[string]any{"id": "id-force-1"}
+			return seedCodexRow(t, "id-force-1"), map[string]any{"id": "id-force-1"}
 		},
 		params: func(ctx map[string]any) map[string]any { return map[string]any{"instance_id": ctx["id"]} },
 		cliArgv: func(ctx map[string]any) []string {
@@ -65,11 +64,22 @@ var busySendSuccessCases = []successCase{
 	},
 }
 
-// seedStoredForce seeds an ended row and stores one refused force of it
+// seedCodexRow seeds a store holding one ended Codex row id, which busy send
+// does not cover, and returns its directory.
+func seedCodexRow(t *testing.T, id string) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	if _, err := apitest.SeedSpawn(dbPath, id, store.StateEnded, "/tmp", "off", "", true, apitest.WithAgent("codex")); err != nil {
+		t.Fatalf("seedCodexRow: %v", err)
+	}
+	return filepath.Dir(dbPath)
+}
+
+// seedStoredForce seeds an ended Codex row and stores one refused force of it
 // through the public writer, Client.ForceDelivery; ctx carries its force_id.
 func seedStoredForce(t *testing.T) (string, map[string]any) {
 	t.Helper()
-	_, dbPath := apitest.OpenStoreWithRow(t, "id-force-2", "cd-force-2", store.StateEnded, "off")
+	dbPath := filepath.Join(seedCodexRow(t, "id-force-2"), "state.db")
 	c, err := api.New(api.Options{StorePath: dbPath, ConfigPath: filepath.Join(filepath.Dir(dbPath), "config.toml")})
 	if err != nil {
 		t.Fatalf("seedStoredForce: api.New: %v", err)

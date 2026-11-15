@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -283,8 +284,22 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 			if got := readFileTrim(t, exitPath); got != "0" {
 				t.Errorf("hook exit status %s, want 0", got)
 			}
-			if got := readFileTrim(t, filepath.Join(ctl, "stdout")); got != "" {
-				t.Errorf("hook stdout %q, want empty", got)
+			// An applied SessionStart of the covered Claude Launch names its
+			// own wake endpoint to watch (SR-3.4); an ignored hook writes nothing.
+			wantStdout := ""
+			if tc.applied {
+				storeID, err := apitest.ReadStoreID(f.DBPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wake, err := store.BusySendWakePath(storeID, fmt.Sprint(s.Row.LaunchToken))
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantStdout = `{"hookSpecificOutput":{"hookEventName":"SessionStart","watchPaths":["` + wake + `"]}}`
+			}
+			if got := readFileTrim(t, filepath.Join(ctl, "stdout")); got != wantStdout {
+				t.Errorf("hook stdout %q, want %q", got, wantStdout)
 			}
 			parent, err := strconv.Atoi(readFileTrim(t, filepath.Join(ctl, "parent")))
 			if err != nil {

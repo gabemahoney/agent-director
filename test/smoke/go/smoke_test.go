@@ -1,6 +1,7 @@
 package smoke_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"os"
@@ -30,8 +31,10 @@ import (
 //     and a recorder server on its socket without the row's session; for
 //     read-pane, a recorder from
 //     tmuxfix.NewRecorderForReadPane whose own pane captures smokePaneText; for
-//     pause, one from tmuxfix.NewRecorderForPause whose Enter ends the row,
-//     see endRowAfterEnter).
+//     pause, one from tmuxfix.NewRecorderForPause whose Enter reports the
+//     agent's end, see endRowAfterEnter). send-keys, pause, force-delivery
+//     and get-force seed Codex rows (seederSpec.RowAgent): busy send covers
+//     Claude.
 //  4. Constructs an api.Client wired with the temp store path and the
 //     recorder. CreateIfMissing is true so api.New reuses the store
 //     file created by storefix.OpenTempStore.
@@ -49,8 +52,8 @@ import (
 //     returned error into AssertExpectedError.
 //
 // Crucial: pause uses a 2s context deadline; its happy path enters the wait,
-// which sees the row ended on its first poll because the Enter's after-call
-// hook ended it. The error path uses a bogus id so ErrSpawnNotFound returns
+// whose end check ends the row on its first poll because the Enter's
+// after-call hook reported the agent's end. The error path uses a bogus id so ErrSpawnNotFound returns
 // before any tmux call or polling.
 //
 // No verb chaining: each subtest's seed is independent of every other.
@@ -133,8 +136,8 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	case seedCheckPermission:
 		storefix.SeedCheckPermission(t, st, spec.SeedID)
 	case seedResumable:
-		if spec.Agent != "" {
-			storefix.SeedResumable(t, st, spec.SeedID, storefix.WithResumableAgent(spec.Agent))
+		if agent := cmp.Or(spec.Agent, spec.RowAgent); agent != "" {
+			storefix.SeedResumable(t, st, spec.SeedID, storefix.WithResumableAgent(agent))
 		} else {
 			storefix.SeedResumable(t, st, spec.SeedID)
 		}
@@ -176,7 +179,7 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 			t.Fatalf("runVerbSubtest: seed subagent %q for %q: %v", smokeSubagentID, spec.SeedID, err)
 		}
 	case seedLiveSession:
-		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "working", "", "", "", false); err != nil {
+		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "working", "", "", "", false, rowAgentOpts(spec)...); err != nil {
 			t.Fatalf("runVerbSubtest: seed working %q: %v", spec.SeedID, err)
 		}
 		rec.SeedRowSession(t, storePath, spec.SeedID)
@@ -201,12 +204,12 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 			t.Fatalf("runVerbSubtest: seed a fallen-back request on %q: %v", spec.SeedID, err)
 		}
 	case seedPause:
-		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "waiting", "", "", "", false); err != nil {
+		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "waiting", "", "", "", false, rowAgentOpts(spec)...); err != nil {
 			t.Fatalf("runVerbSubtest: seed waiting %q: %v", spec.SeedID, err)
 		}
 		// As for read-pane, the process-checker fake is not used.
 		rec, _ = tmuxfix.NewRecorderForPause(t, storePath, spec.SeedID)
-		endRowAfterEnter(t, rec, storePath, spec.SeedID)
+		endRowAfterEnter(t, rec, storePath, spec.SeedID, spec.RowAgent)
 	default:
 		t.Fatalf("runVerbSubtest: unknown SeedKind %v for verb %q",
 			spec.SeedKind, vd.Name)
@@ -333,9 +336,10 @@ func assertLaunchStartedAt(t *testing.T, verb string, got *time.Time) {
 	}
 }
 
-// assertSentToPane checks rec saw exactly one call carrying text, sent with
-// Enter to the seeded row's pane by its pane id on its socket, and exactly
-// one Enter, to that pane (SR-7.1).
+// assertSentToPane checks rec saw exactly one call carrying text, sent
+// without Enter to the seeded row's pane by its pane id on its socket, and
+// exactly one Enter, to that pane: the Enter key, or the Enter send that
+// follows a Codex row's pasted text (SR-7.1).
 func assertSentToPane(t *testing.T, verb string, rec *tmuxfix.Recorder, text string) {
 	t.Helper()
 	var sent, enters []tmuxfix.SocketCall
@@ -343,7 +347,7 @@ func assertSentToPane(t *testing.T, verb string, rec *tmuxfix.Recorder, text str
 		if c.Text == text {
 			sent = append(sent, c)
 		}
-		if c.Call == api.TmuxCallSendKey && c.Key == "Enter" {
+		if c.Call == api.TmuxCallSendKey && c.Key == "Enter" || c.Call == api.TmuxCallSendEnter {
 			enters = append(enters, c)
 		}
 	}
@@ -376,21 +380,35 @@ func assertExpiredRow(t *testing.T, verb string, res api.ExpireResult, dbPath, i
 	}
 }
 
-// endRowAfterEnter ends id's row as its own agent (a SessionEnd through
-// apitest.ApplyAgentHook; SR-22.9) when the first Enter call on rec succeeds,
-// so pause's wait sees it ended. The test fails unless the end applied.
-func endRowAfterEnter(t *testing.T, rec *tmuxfix.Recorder, dbPath, id string) {
+// endRowAfterEnter applies id's agent's SessionEnd through
+// apitest.ApplyAgentHook (SR-22.9) when the first Enter call on rec
+// succeeds, so pause's wait sees the row end. A Codex SessionEnd (agent
+// "codex") only reports the end; the wait's end check then ends the row,
+// its pane process reading gone. The test fails unless the hook applied.
+func endRowAfterEnter(t *testing.T, rec *tmuxfix.Recorder, dbPath, id, agent string) {
 	t.Helper()
+	var opts []apitest.HookOption
+	if agent != "" {
+		opts = append(opts, apitest.HookAgent(agent))
+	}
 	ended := false
 	rec.AfterCall(tmuxfix.KeyCall("Enter"), func(_ tmuxfix.SocketCall, err error) {
 		if err != nil || ended {
 			return
 		}
 		ended = true
-		if a := apitest.ApplyAgentHook(t, dbPath, id, "SessionEnd", ""); !a.Applied {
+		if a := apitest.ApplyAgentHook(t, dbPath, id, "SessionEnd", "", opts...); !a.Applied {
 			t.Errorf("endRowAfterEnter: SessionEnd on %q not applied (reason %q)", id, a.Reason)
 		}
 	})
+}
+
+// rowAgentOpts seeds spec's row as its RowAgent's, when it names one.
+func rowAgentOpts(spec seederSpec) []apitest.SpawnOption {
+	if spec.RowAgent == "" {
+		return nil
+	}
+	return []apitest.SpawnOption{apitest.WithAgent(spec.RowAgent)}
 }
 
 // plantClaudeJSON writes a .claude.json with no folder-trust entries into

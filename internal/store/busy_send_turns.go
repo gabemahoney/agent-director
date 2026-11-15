@@ -81,12 +81,14 @@ const busySendAwaitingWhere = `h.conversation_id = ? AND h.launch_id = ? AND p.e
     AND p.admission_kind IS NULL AND p.negative_kind IS NULL`
 
 // readBusySendAwaiting counts launchID's hand-overs with at least one
-// awaiting obligation (SR-5.6's awaiting_turn_start before Launch End; the
-// caller reads zero for an ended Launch). It only reads.
+// awaiting obligation (SR-5.6's awaiting_turn_start), zero once the Launch's
+// End is recorded: Launch End finalizes their Messages and no evidence of
+// the ended Launch's intake is awaited any more (decision 11). It only reads.
 func readBusySendAwaiting(ctx context.Context, q busySendLaunchSQL, conversation, launchID string) (int64, error) {
 	var n int64
 	err := q.QueryRowContext(ctx, `SELECT COUNT(DISTINCT p.handover_id) FROM busy_send_prompts p
 	    JOIN busy_send_handovers h ON h.handover_id = p.handover_id
+	    JOIN busy_send_launches l ON l.launch_id = h.launch_id AND l.ended_at_ms IS NULL
 	    WHERE `+busySendAwaitingWhere, conversation, launchID).Scan(&n)
 	return n, err
 }

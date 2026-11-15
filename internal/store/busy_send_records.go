@@ -79,13 +79,18 @@ const (
 )
 
 // BusySendLaunchEnd is the evidence on which a Launch End was recorded
-// (busy_send_launches.end_cause; SR-6.2): the recorded agent process exited,
-// a resume or reuse published a new Launch, supervised creation failed, its
-// instance row was deleted, or a later guarded Launch start replaced a
-// never-published candidate/uncertain Launch. candidate_replaced and
-// record_deleted prove neither physical exit nor old-issuer exclusion; no
-// caller may use them as either (SR-6.2, SR-6.3). creation_failed does not assert
-// process exit either: an unlabelled session can survive supervised failure.
+// (busy_send_launches.end_cause; SR-6.2): AD observed the current Launch's
+// agent end (process_exited: the verified agent's own end report, a terminal
+// mark on its proven exit, kill's or pause's verified exit, or the exit
+// evidence a lifecycle command established), a resume or reuse published a
+// new Launch, supervised creation failed, its instance row was deleted, or a
+// later guarded Launch start replaced a never-published candidate/uncertain
+// Launch. No cause is exit evidence (busy_send_lifecycle.go): process_exited
+// says the agent ended, not that every owned issuer did, and
+// candidate_replaced and record_deleted prove neither physical exit nor
+// old-issuer exclusion; no caller may use them as either (SR-6.2, SR-6.3).
+// creation_failed does not assert process exit either: an unlabelled session
+// can survive supervised failure.
 type BusySendLaunchEnd string
 
 const (

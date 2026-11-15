@@ -169,14 +169,15 @@ func readBusySendIssueFacts(ctx context.Context, q busySendLaunchSQL, instanceID
 	return f, nil
 }
 
-// launchWait is the wait an ended, missing or starting current Launch gives,
-// or "" for a running one.
+// launchWait is the wait a starting, ended or missing current Launch gives,
+// or "" for a running one. A pending row is starting even when its staging
+// already recorded the published Launch's End (initialBusySendWait's order).
 func (f busySendIssueFacts) launchWait() BusySendWaitReason {
 	switch {
-	case f.launchEnded || f.state == StateEnded || f.state == StateMissing:
-		return BusySendWaitLaunchEnded
 	case f.state == StatePending:
 		return BusySendWaitAgentStarting
+	case f.launchEnded || f.state == StateEnded || f.state == StateMissing:
+		return BusySendWaitLaunchEnded
 	}
 	return ""
 }

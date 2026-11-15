@@ -50,8 +50,8 @@ type oldFlagWorld struct {
 
 // newOldFlagWorld seeds the row in state on the socket the CLI resolves, with
 // its own live session when pane is set and a permission request when
-// request is set (the row then relays).
-func newOldFlagWorld(t *testing.T, state string, pane, request bool) oldFlagWorld {
+// request is set (the row then relays), and extra's columns.
+func newOldFlagWorld(t *testing.T, state string, pane, request bool, extra ...apitest.SpawnOption) oldFlagWorld {
 	t.Helper()
 	home := t.TempDir()
 	socket := spawnSocket(t, home)
@@ -59,7 +59,7 @@ func newOldFlagWorld(t *testing.T, state string, pane, request bool) oldFlagWorl
 	if request {
 		relay = "on"
 	}
-	opts := []apitest.SpawnOption{apitest.WithTmuxSocket(socket)}
+	opts := append([]apitest.SpawnOption{apitest.WithTmuxSocket(socket)}, extra...)
 	if state == store.StateEnded { // a finished row resumes from its transcript
 		transcript := filepath.Join(home, "transcript.jsonl")
 		if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
@@ -155,6 +155,7 @@ func oldFlagFollow(t *testing.T, argv []string, desc string) []string {
 type oldIDVerb struct {
 	verb          string
 	state         string
+	opts          []apitest.SpawnOption
 	pane, request bool
 	flags         func(w oldFlagWorld) []string
 	wantTrail     int
@@ -173,7 +174,10 @@ func oldIDVerbs() []oldIDVerb {
 		{verb: "kill", state: store.StateWaiting, pane: true, flags: only("kill"), value: rowID},
 		{verb: "pause", state: store.StateEnded, flags: only("pause"), value: rowID},
 		{verb: "resume", state: store.StateEnded, flags: only("resume"), value: rowID},
-		{verb: "force-delivery", state: store.StateEnded, flags: only("force-delivery"), value: rowID},
+		// A Codex row: force-delivery succeeds on an uncovered agent (refused,
+		// agent_not_covered), while a covered one's force is E5's.
+		{verb: "force-delivery", state: store.StateEnded, opts: []apitest.SpawnOption{apitest.WithAgent("codex")},
+			flags: only("force-delivery"), value: rowID},
 		// decide writes its own ad.decide.called line, ErrInvalidFlags, for any refused flag.
 		{verb: "decide", state: store.StateCheckPermission, request: true, wantTrail: 1, value: rowID,
 			flags: func(w oldFlagWorld) []string {
@@ -195,7 +199,7 @@ func TestCLIRefusesOldInstanceIDFlag(t *testing.T) {
 	for _, v := range oldIDVerbs() {
 		for _, form := range oldFlagForms {
 			t.Run(v.verb+"/"+form.name, func(t *testing.T) {
-				w := newOldFlagWorld(t, v.state, v.pane, v.request)
+				w := newOldFlagWorld(t, v.state, v.pane, v.request, v.opts...)
 				argv := append(v.flags(w), form.render(oldIDFlag, v.value(w))...)
 
 				stdout, stderr, code := w.run(t, argv...)
@@ -216,7 +220,7 @@ func TestCLIRefusesOldInstanceIDFlag(t *testing.T) {
 func TestAdviceFollow_H8_OldInstanceIDFlag(t *testing.T) {
 	for _, v := range oldIDVerbs() {
 		t.Run(v.verb, func(t *testing.T) {
-			w := newOldFlagWorld(t, v.state, v.pane, v.request)
+			w := newOldFlagWorld(t, v.state, v.pane, v.request, v.opts...)
 			argv := append(v.flags(w), "--"+oldIDFlag, v.value(w))
 			stdout, stderr, code := w.run(t, argv...)
 			desc := assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrInvalidFlags").ErrDescription

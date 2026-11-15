@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -138,6 +139,12 @@ const (
 	// keptStoreError: the lookup was Gone but the conditional delete failed
 	// in the store; the error was logged and the run continued.
 	keptStoreError = "store_error"
+	// keptHeldMessages: the lookup was Gone but the row's busy-send
+	// conversation still holds Messages (Held, or in a hand-over), rechecked
+	// in the conditional delete's own transaction (SR-5.5): the row and its
+	// custody stay, however old, until a resume delivers or a deletion retires
+	// them.
+	keptHeldMessages = "held_messages"
 )
 
 // unusableKeptReason is the one mapping from the unusable-name guard's kind
@@ -425,11 +432,13 @@ func expireKeptReason(res tmux.Result) string {
 // deleteRow is a Gone row's conditional delete (SR-12.3, SR-5.8), guarded on
 // the snapshot the candidate read returned: applied marks the row deleted;
 // changed keeps it changed_since_examined; absent leaves it in neither list;
-// a store error is logged on lg with the instance id and the error only, and
-// keeps it store_error.
+// held busy-send custody keeps it held_messages; a store error is logged on
+// lg with the instance id and the error only, and keeps it store_error.
 func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 	res, err := r.s.DeleteFinishedIfSameLife(cand.InstanceID, cand.Snapshot)
 	switch {
+	case errors.Is(err, store.ErrBusySendCustodyHeld):
+		row.reason = keptHeldMessages
 	case err != nil:
 		if r.lg != nil {
 			r.lg.Printf("expire: DeleteFinishedIfSameLife(%s): %v (continuing)", cand.InstanceID, err)

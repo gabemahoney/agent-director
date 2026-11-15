@@ -18,6 +18,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -161,7 +162,7 @@ func TestResumeLoserRowDeletedBeforeReRead(t *testing.T) {
 	w := &hookedResumeStore{st: e.st}
 	w.failMove(nil) // a move would return the injected store error instead
 	w.afterGet(func() {
-		if err := e.st.DeleteSpawn(r.ID); err != nil {
+		if err := storefix.DeleteWithExit(t, e.st, r.ID); err != nil {
 			t.Fatalf("DeleteSpawn: %v", err)
 		}
 	})

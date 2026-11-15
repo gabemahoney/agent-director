@@ -17,6 +17,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -232,19 +233,25 @@ func TestAdviceFollow_B2_KillOrPauseThenResume(t *testing.T) {
 			}
 			advResumeAssertState(t, c, r.ID, store.StateMissing)
 		}},
+		// A covered Claude row's pause is keyless: it signals the agent, whose
+		// exit (its SessionEnd, its process and session gone) ends the row.
 		{"pause", func(t *testing.T, e *killEnv, r resumeRow) {
 			fastPausePolls(t)
-			e.endAfterEnter(t, r.killRow)
-			exited := false
-			e.rec.AfterCall(callEnterKey, func(tmuxfix.SocketCall, error) {
-				if !exited {
-					exited = true
+			signals := 0
+			t.Cleanup(api.SetPauseTerminateForTest(func(int, string) error {
+				if signals++; signals == 1 {
+					if ok, why := e.endAsAgent(t, r.killRow); !ok {
+						t.Errorf("SessionEnd at the signal: %s", why)
+					}
 					advResumeConditionEnds(t, e, r)
 				}
-			})
-			if _, err := e.pause(pauseParams(r.killRow)); err != nil {
-				t.Fatalf("pause: %v", err)
+				return nil
+			}))
+			c, _ := e.client(t)
+			if _, err := c.Pause(context.Background(), pauseParams(r.killRow)); err != nil || signals != 1 {
+				t.Fatalf("pause = %v after %d signals; want the row ended after one", err, signals)
 			}
+			e.assertNothingSent(t)
 		}},
 	}
 	for _, tc := range cases {
@@ -285,7 +292,7 @@ func TestAdviceFollow_B3_LostRaceGetThenAct(t *testing.T) {
 			}
 		}, api.ErrSpawnNotResumable, advResumeLostRaceChanged, store.StatePending},
 		{"the row was removed", func(t *testing.T, e *killEnv, id, _ string) {
-			if err := e.st.DeleteSpawn(id); err != nil {
+			if err := storefix.DeleteWithExit(t, e.st, id); err != nil {
 				t.Errorf("DeleteSpawn: %v", err)
 			}
 		}, api.ErrSpawnNotFound, advResumeLostRaceRemoved, ""},

@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"modernc.org/sqlite"
@@ -337,6 +339,12 @@ type Spawn struct {
 	// conversation (SR-1.4, SR-6.3). No read fills it: the published values
 	// are the conversation's.
 	BusySendDefaults BusySendDefaultsChoice
+
+	// BusySendExit is a reuse's positive exit evidence for the examined row's
+	// covered conversation (SR-6.3; M1's ReusePublish): ResetForReuse
+	// validates it before the reset and applies it with the staging, and
+	// refuses a covered conversation's reset without it. No read fills it.
+	BusySendExit *BusySendExitEvidence
 }
 
 // RawFields returns the full stored-row projection, clearing only the derived
@@ -521,6 +529,43 @@ func (s *Store) GetSpawnWithin(instanceID string, maxWait time.Duration) (Spawn,
 		return Spawn{}, err
 	}
 	return sp, nil
+}
+
+// GetSpawnContext is GetSpawnWithin within ctx: keyless pause's read again
+// before its signal, inside its one call budget.
+func (s *Store) GetSpawnContext(ctx context.Context, instanceID string, maxWait time.Duration) (Spawn, error) {
+	return s.WithContext(ctx).GetSpawnWithin(instanceID, maxWait)
+}
+
+// GetSpawnConnBounded is GetSpawn with only its wait for the store's one
+// connection, which another call of this process may hold, bounded by ctx:
+// pause's first read, before it knows the row's coverage (b.kii decision 18).
+// Once it holds the connection it reads exactly as GetSpawn does, unbounded by
+// ctx: the store's busy timeout for a lock another connection holds, and
+// GetSpawn's results and errors. The connection's setup, when it is new or
+// was returned unopened (which the pool's reacquisition sets up before
+// handing it over), runs unbounded by ctx too (legacyInitializationContextKey),
+// so it waits and fails as GetSpawn's does. queried is false only when no SQL
+// ran, so no lock was waited for: ctx ended the wait, the connection could not
+// be taken, or the read found it bad before running (driver.ErrBadConn, which
+// GetSpawn retries on another); err is then that error.
+func (s *Store) GetSpawnConnBounded(ctx context.Context, instanceID string) (sp Spawn, queried bool, err error) {
+	setup := new(atomic.Bool)
+	conn, err := s.db.Conn(context.WithValue(ctx, legacyInitializationContextKey{}, setup))
+	if err != nil {
+		return Spawn{}, setup.Load(), fmt.Errorf("store: connection: %w", err)
+	}
+	defer conn.Close()
+	sp, err = scanSpawn(conn.QueryRowContext(context.Background(), getSpawnSQL, instanceID), getSpawnErrs)
+	switch {
+	case errors.Is(err, driver.ErrBadConn):
+		return Spawn{}, setup.Load(), err
+	case errors.Is(err, sql.ErrNoRows):
+		return Spawn{}, true, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+	case err != nil:
+		return Spawn{}, true, err
+	}
+	return sp, true, nil
 }
 
 // GetSpawnSettled is GetSpawn with the state get reports (b.3ie): the row's

@@ -23,6 +23,9 @@ type observationReader interface {
 	PermissionRequestsForSpawnWithin(string, time.Duration) ([]store.PermissionRow, error)
 	ObserveNeedsIntelligence(store.Spawn, []store.PermissionSample, time.Time, store.SettleRead) (store.DisplayDetail, map[string]string, error)
 	RecordPermissionFallbacks(time.Time, time.Duration, []store.FallbackObservation) (map[int64]time.Time, error)
+	// ReadBusySendObservation is a covered (Claude) row's delivery read,
+	// which the reading verbs make too (SR-5.6).
+	ReadBusySendObservation(string, time.Duration) (*store.BusySendObservation, error)
 }
 
 // Lease only after the mandatory row read (status's row, list's rows) or

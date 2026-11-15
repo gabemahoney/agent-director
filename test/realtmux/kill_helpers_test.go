@@ -219,12 +219,12 @@ func assertVerbError(t testing.TB, verb string, err error, name string, c apites
 
 // baseIndexOneLostReply sets base-index and pane-base-index 1 on a new
 // server, then makes a row in state with a live session but no recorded pane.
-func (f *killFix) baseIndexOneLostReply(t *testing.T, state string, forward []string) killRow {
+func (f *killFix) baseIndexOneLostReply(t *testing.T, state string, forward []string, opts ...apitest.SpawnOption) killRow {
 	t.Helper()
 	f.startSession(t, "") // starts the server the options are set on
 	f.must(t, "set-option", "-g", "base-index", "1")
 	f.must(t, "set-option", "-gw", "pane-base-index", "1")
-	r := f.liveRow(t, killRowSpec{State: state, NoPane: true, ForwardEnv: forward})
+	r := f.liveRow(t, killRowSpec{State: state, NoPane: true, ForwardEnv: forward, Opts: opts})
 	if w, i := f.formatInt(t, r.Reply.PaneID, "#{window_index}"), f.formatInt(t, r.Reply.PaneID, "#{pane_index}"); w != 1 || i != 1 {
 		t.Fatalf("agent pane %s is window %d pane %d, want 1.1", r.Reply.PaneID, w, i)
 	}

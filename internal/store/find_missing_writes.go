@@ -308,7 +308,7 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 		}
 	}()
 
-	prior, res, closed, err := terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason, recorded)
+	prior, res, closed, err := terminalMarkOnConn(ctx, conn, s.StoreID(), errPrefix, stmt, args, instanceID, reason, recorded)
 	if err != nil || res != CondApplied {
 		return "", res, err
 	}
@@ -356,7 +356,7 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	}
 	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
-		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason, recordDest)
+		prior, res, closed, err = terminalMarkOnConn(ctx, conn, s.StoreID(), errPrefix, stmt, args, instanceID, reason, recordDest)
 		if err == nil && res == CondApplied {
 			exits, err = takeDisplayExits(ctx, conn, instanceID)
 			if err != nil {
@@ -379,12 +379,13 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	return prior, res, nil
 }
 
-// terminalMarkOnConn shares the guarded terminal update and atomic request /
+// terminalMarkOnConn shares the guarded terminal update, the busy-send Launch
+// End it establishes (endBusySendOnTerminalMark) and atomic request /
 // subagent closure. The caller owns the transaction and emits only after commit.
 // A non-nil recorded receives, once the update applied, whether it stored a
 // process record: the statement's own terminalProcessEvidenceSet decides
 // that, so it is read back under the same write lock.
-func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt string, args []any, instanceID, reason string, recorded *bool) (string, CondResult, []closedRequest, error) {
+func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, storeID, errPrefix, stmt string, args []any, instanceID, reason string, recorded *bool) (string, CondResult, []closedRequest, error) {
 	var prior string
 	err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
 	switch {
@@ -413,6 +414,9 @@ func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt str
 		}
 	}
 
+	if err := endBusySendOnTerminalMark(ctx, conn, storeID, instanceID); err != nil {
+		return "", 0, nil, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	at := storeNowMillis()
 	closed, err := closeOrphanedRequests(ctx, conn, instanceID, reason, at)
 	if err != nil {

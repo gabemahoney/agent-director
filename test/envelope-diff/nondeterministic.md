@@ -84,6 +84,6 @@ Every callable verb in `manifest.CallableVerbs()` is a key. Verbs whose output i
 | `read-pane` | — | all values fixture-derived (`pane_sha256` is the hash of the fixture's pane text) |
 | `record-pane-answer` | — | all values fixture-derived (the request token and the caller's claim) |
 | `resume` | — | all values fixture-derived |
-| `send-keys` | — | all values fixture-derived |
+| `send-keys` | `.wait.since` | the fixture row is a covered Claude agent's, so each run admits the text as a Message Held from its own call time; every other Result value is fixture-derived |
 | `status` | `.confirmations.process_liveness.checked_at`, `.confirmations.state.checked_at`, `.confirmations.state.confirmed_at` | the fixture row has no live pane, so each run's read marks it missing on its own store copy (tmux evidence, b.x9o) and attempts its process at call time; the records' status, source and reason, and every other value, are fixture-derived |
 | `sweep` | — | as for `find-missing` |

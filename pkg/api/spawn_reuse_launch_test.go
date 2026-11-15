@@ -25,6 +25,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -159,7 +160,7 @@ func TestPaneOnlyFilesBeforeStoreWrite(t *testing.T) {
 							t.Fatal(err)
 						}
 					case "reset absent":
-						if err := e.st.DeleteSpawn(p.InstanceID); err != nil {
+						if err := storefix.DeleteWithExit(t, e.st, p.InstanceID); err != nil {
 							t.Fatal(err)
 						}
 					case "reset error":
@@ -341,7 +342,8 @@ func TestSpawnReuseIdentityWrite(t *testing.T) {
 			rs := &hookedReuseStore{st: e.st}
 			rs.afterReset(func() {
 				assertBusyProjection(t, e.dbPath, r.ID, priorBusy)
-				assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "candidate", store.BusySendNotCovered)
+				// The reuse launches Claude, which busy send covers.
+				assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "candidate", store.BusySendCovered)
 			})
 			wantParent := tc.setup(t, e, r)
 			before, start := e.columns(t, r.ID), e.clock.Now().Add(boundQ)
@@ -358,9 +360,9 @@ func TestSpawnReuseIdentityWrite(t *testing.T) {
 			}
 			// Successful creation still publishes when an unrelated write makes
 			// the original identity assignment miss (CR1).
-			assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "current", store.BusySendNotCovered)
+			assertBusyLaunchPhase(t, e.dbPath, r.ID, "reuse", "current", store.BusySendCovered)
 			facts := busyFacts(t, e.dbPath, r.ID)
-			if facts.Binding == priorBusy.Binding || facts.Coverage != store.BusySendNotCovered {
+			if facts.Binding == priorBusy.Binding || facts.Coverage != store.BusySendCovered {
 				t.Fatal("reuse inherited old conversation")
 			}
 

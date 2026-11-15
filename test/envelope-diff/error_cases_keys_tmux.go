@@ -2,7 +2,9 @@
 // rows whose error comes from tmux (SR-7.2, SR-20.5): each verb gets the same
 // two rows, each seeding a live waiting row recording a private socket whose
 // fake-tmux table the row writes (or leaves empty), so both runners see the
-// same tmux, nothing is sent and pause never reaches its wait.
+// same tmux, nothing is sent and pause never reaches its wait. Each row is an
+// agent's busy send doesn't cover (send-keys a pane-only Droid's, pause a
+// Codex's): a covered Claude row takes neither verb through tmux.
 package envelope_diff
 
 import (
@@ -25,6 +27,7 @@ const keysLeftoverSessionID = "$9"
 // description may carry beyond the ids, tokens and label.
 type keysVerb struct {
 	pane               apitest.PaneVerb
+	agent              string
 	goneID, leftoverID string
 	args               map[string]string
 	secret             []string
@@ -32,9 +35,9 @@ type keysVerb struct {
 
 // keysVerbs are the keys verbs whose rows keysTmuxErrorCases holds.
 var keysVerbs = []keysVerb{
-	{pane: apitest.PaneSendKeys, goneID: "id-err-skf-1", leftoverID: "id-err-sksc-1",
+	{pane: apitest.PaneSendKeys, agent: "droid", goneID: "id-err-skf-1", leftoverID: "id-err-sksc-1",
 		args: map[string]string{"text": sendKeysText}, secret: []string{sendKeysText}},
-	{pane: apitest.PanePause, goneID: "id-err-psf-1", leftoverID: "id-err-pssc-1"},
+	{pane: apitest.PanePause, agent: "codex", goneID: "id-err-psf-1", leftoverID: "id-err-pssc-1"},
 }
 
 // params and argv are v's call on id for each runner.
@@ -55,10 +58,10 @@ func (v keysVerb) argv(id string) []string {
 
 // seedKeysLeftover seeds seedPaneRow's row id with its recorded name held by
 // keysLeftoverSessionID, labelled for id under tmuxfix.OtherToken.
-func seedKeysLeftover(t *testing.T, id string) (string, map[string]any) {
+func seedKeysLeftover(t *testing.T, id, agent string) (string, map[string]any) {
 	t.Helper()
 	socket, tables := usePrivateFakeTmux(t)
-	dir, storeID := seedKillRow(t, id, socket, apitest.TestPanePID, "")
+	dir, storeID := seedKillRow(t, id, socket, apitest.TestPanePID, "", apitest.WithAgent(agent))
 	tables.Write(t, socket, faketmuxfix.Table{
 		Server: &faketmuxfix.Server{PID: os.Getpid(), Start: paneLeftoversCreated},
 		Sessions: []faketmuxfix.Session{leftoverSession(keysLeftoverSessionID, killRowName,
@@ -78,7 +81,7 @@ func (v keysVerb) rows() []errorCase {
 			errName: "ErrTmuxSendKeys",
 			seed: func(t *testing.T) (string, map[string]any) {
 				t.Helper()
-				return seedPaneRow(t, v.goneID)
+				return seedPaneRow(t, v.goneID, apitest.WithAgent(v.agent))
 			},
 			params:  func(_ map[string]any) map[string]any { return v.params(v.goneID) },
 			cliArgv: func(_ map[string]any) []string { return v.argv(v.goneID) },
@@ -97,7 +100,7 @@ func (v keysVerb) rows() []errorCase {
 			errName: "ErrTmuxSessionConflict",
 			seed: func(t *testing.T) (string, map[string]any) {
 				t.Helper()
-				return seedKeysLeftover(t, v.leftoverID)
+				return seedKeysLeftover(t, v.leftoverID, v.agent)
 			},
 			params:  func(_ map[string]any) map[string]any { return v.params(v.leftoverID) },
 			cliArgv: func(_ map[string]any) []string { return v.argv(v.leftoverID) },

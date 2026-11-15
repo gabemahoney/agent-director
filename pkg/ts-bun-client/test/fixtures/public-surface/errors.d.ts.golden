@@ -308,10 +308,13 @@ export declare class ErrCantSend extends AgentDirectorError {
 }
 /**
  * Mirrors ErrSpawnNotPausable (package: api). With `only_if_waiting` false (the default), the row
- * is not waiting. With `only_if_waiting: true` on a row whose current Launch is recorded
- * `not_covered`, in any state, `errDetails` is a `NotPausableDetails` with cause
- * `agent_not_covered` and nothing is ended; a Launch recorded `covered` rejects with this
- * version's unavailable `ErrInternal` instead.
+ * is not waiting, or, for a Covered Agent paused keylessly, its resumable shutdown was not
+ * established: `errDetails` is a `NotPausableDetails` with its cause and `signal_sent`
+ * (`exit_uncertain` is a sent signal whose exit was not verified, never success). With
+ * `only_if_waiting: true` on a row whose current Launch is recorded `not_covered`, in any
+ * state, `errDetails` is a `NotPausableDetails` with cause `agent_not_covered` and nothing is
+ * ended; a Launch recorded `covered` rejects with this version's unavailable `ErrInternal`
+ * instead.
  */
 export declare class ErrSpawnNotPausable extends AgentDirectorError {
 }

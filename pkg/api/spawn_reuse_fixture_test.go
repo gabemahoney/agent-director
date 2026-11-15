@@ -409,6 +409,11 @@ func (w *hookedReuseStore) ResetForReuse(instanceID string, examined api.RowSnap
 	return res, archived, version, err
 }
 
+// ReadBusySendExitScope delegates, so reuse judges the exit scope the store holds.
+func (w *hookedReuseStore) ReadBusySendExitScope(instanceID string) (store.BusySendExitScope, error) {
+	return w.st.ReadBusySendExitScope(instanceID)
+}
+
 // RestoreAfterFailedReuse delegates.
 func (w *hookedReuseStore) RestoreAfterFailedReuse(instanceID string, resetVersion int64, prior store.RawLife, failedAt time.Time) (api.CondResult, error) {
 	w.mu.Lock()

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"io"
@@ -247,8 +248,14 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     socket, the one old-row lookup with the new-name pre-check on the same
 //     listing, proceed or the refusal.
 //  2. Its ad.provenance.disagree records, on a refusal as on proceed.
-//  3. A new launch token (spawn.NewLaunchToken); a failure is ErrInternal,
-//     with nothing written.
+//  3. For a covered published conversation, old-issuer exclusion
+//     (busySendExitFor): every owned process of its Launches checked gone by
+//     identity, else ErrInstanceIdCollision (reuseExitError) with nothing
+//     written; a row removed meanwhile is the lost race (reuseLostRaceError).
+//     The evidence goes to the reset (Spawn.BusySendExit), which
+//     validates and applies it in its own transaction. Then a new launch
+//     token (spawn.NewLaunchToken); a failure is ErrInternal, with nothing
+//     written.
 //  4. The composition (spawn.ComposeLaunch): the create request (name, cwd,
 //     environment, settings and argv) and the request fields the reset
 //     writes, with the parent id from the caller's AGENT_DIRECTOR_INSTANCE_ID.
@@ -303,6 +310,17 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	id := r.InstanceID
 	socket := ex.pre.Socket
 
+	exit, refusal, err := busySendExitFor(d.rs, d.pc, id)
+	if errors.Is(err, store.ErrSpawnNotFound) {
+		return SpawnResult{}, reuseLostRaceError(id)
+	}
+	if err != nil {
+		return SpawnResult{}, reuseChangeError(id, err)
+	}
+	if refusal != nil {
+		return SpawnResult{}, reuseExitError(id, refusal.describe(), refusal.clears())
+	}
+
 	token, err := spawn.NewLaunchToken()
 	if err != nil {
 		return SpawnResult{}, err
@@ -325,10 +343,14 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	fresh.LaunchStartedAtMillis = now.UnixMilli()
 	fresh.Identity = LaunchIdentity{Token: token, Socket: socket}
 	fresh.LaunchOwner = spawn.CurrentLaunchOwner(d.pc)
+	fresh.BusySendExit = exit
 	res, archived, resetVersion, err := d.rs.ResetForReuse(id, ex.row.Snapshot, ex.row.Agent, fresh)
 	if err != nil {
 		if len(c.Files) > 0 {
 			spawn.ReclaimLaunchFiles(d.storeID, token, d.lg)
+		}
+		if errors.Is(err, store.ErrBusySendExitNotEstablished) {
+			return SpawnResult{}, reuseExitError(id, "the processes it owns changed after this spawn checked them", "")
 		}
 		return SpawnResult{}, reuseChangeError(id, err)
 	}

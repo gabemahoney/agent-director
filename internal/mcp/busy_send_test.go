@@ -30,7 +30,7 @@ var busySendOptions = []string{"send_mode", "confirmed_delivery", "caller_uuid",
 
 // TestBusySendMCPOptionsReachTheVerb: each busy-send option, sent alone as
 // wait_turn or false, reaches the API under its own name on every tool that
-// takes it, so an uncovered Claude row's call is ErrCantSend naming exactly
+// takes it, so an uncovered Codex row's call is ErrCantSend naming exactly
 // that option, with its err_details; pause's only_if_waiting true is
 // ErrSpawnNotPausable with its cause, and false is today's pause; malformed
 // values are refused as malformed, not dropped.
@@ -44,9 +44,9 @@ func TestBusySendMCPOptionsReachTheVerb(t *testing.T) {
 	}
 	base := map[string]string{
 		"send_keys":     `"instance_id":"` + id + `","text":"hi"`,
-		"spawn":         `"cwd":{cwd},"agent":"claude"`,
+		"spawn":         `"cwd":{cwd},"agent":"codex"`,
 		"resume":        `"instance_id":"` + id + `"`,
-		"make_template": `"name":"mcp-busy","agent":"claude"`,
+		"make_template": `"name":"mcp-busy","agent":"codex"`,
 		"pause":         `"instance_id":"` + id + `"`,
 	}
 	var cases []busyCase
@@ -83,7 +83,7 @@ func TestBusySendMCPOptionsReachTheVerb(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.tool+"/"+tc.name, func(t *testing.T) {
 			e := newEnv(t)
-			e.seed(t, id, tc.state)
+			e.seed(t, id, tc.state, apitest.WithAgent("codex"))
 			cwd, _ := json.Marshal(t.TempDir())
 			args := "{" + strings.ReplaceAll(base[tc.tool], "{cwd}", string(cwd)) + "," + tc.extra + "}"
 
@@ -106,7 +106,7 @@ func TestBusySendMCPOptionsReachTheVerb(t *testing.T) {
 	}
 }
 
-// TestBusySendMCPCoveredSend (SR-1.3, SR-1.5, SR-5.1): on a covered row, a
+// TestBusySendMCPCoveredSend (SR-1.3, SR-1.5, SR-5.1): on a Claude row, a
 // raw-key param present as false, 0, "" or null, or a null
 // delivery_request_id, still reaches the verb as supplied, and text or a
 // delivery_request_id that is invalid UTF-8 or holds a lone surrogate escape
@@ -119,10 +119,7 @@ func TestBusySendMCPOptionsReachTheVerb(t *testing.T) {
 func TestBusySendMCPCoveredSend(t *testing.T) {
 	const id = "mcp-covered-row"
 	e := newEnv(t)
-	e.seed(t, id, store.StateWaiting)
-	if err := apitest.SeedBusySendCoverage(e.storePath, id, store.BusySendCovered, store.BusySendCovered); err != nil {
-		t.Fatalf("SeedBusySendCoverage: %v", err)
-	}
+	e.seed(t, id, store.StateWaiting) // a Claude row, covered as shipped
 	facts := func() apitest.BusySendFacts {
 		f, err := apitest.ReadBusySendFacts(e.storePath, id)
 		if err != nil {
@@ -220,14 +217,14 @@ func TestBusySendMCPNullRefused(t *testing.T) {
 }
 
 // TestBusySendMCPForceAndLookups: through the live dispatcher, force_delivery
-// on an uncovered row succeeds with its refused force_result, get_force reads
+// on an uncovered Codex row succeeds with its refused force_result, get_force reads
 // that same force_result back by its id in upper case, and an unused id or
 // pair is unknown with a null payload; an empty delivery_request_id and a null
 // caller_uuid, which only MCP can send, are refused, never looked up.
 func TestBusySendMCPForceAndLookups(t *testing.T) {
 	const id = "mcp-force-row"
 	e := newEnv(t)
-	e.seed(t, id, store.StateEnded)
+	e.seed(t, id, store.StateEnded, apitest.WithAgent("codex"))
 
 	forced := callToolText(t, e.d, "force_delivery", `{"instance_id":"`+id+`"}`)
 	var force api.ForceResult

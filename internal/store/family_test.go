@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -162,13 +163,13 @@ func TestFamilyLifecycleMembership(t *testing.T) {
 			familyAt(t, f, oldParent, 0, 0, store.StateWorking)
 			if mode == "resume" {
 				prior := rvExamine(t, f, id)
-				res, version, err := f.s.MoveToPending(id, prior.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, newParent, store.LaunchOwner{})
+				res, version, err := f.s.MoveToPendingWithExit(id, prior.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, newParent, store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, id))
 				if err != nil || res != store.CondApplied {
 					t.Fatalf("resume: %v %v", res, err)
 				}
 				familyAt(t, f, oldParent, 0, 0, store.StateWaiting)
 				familyAt(t, f, newParent, 0, 0, store.StateWorking)
-				if err := f.s.DeleteSpawn(leaf); err != nil {
+				if err := storefix.DeleteWithExit(t, f.s, leaf); err != nil {
 					t.Fatal(err)
 				}
 				res, err = f.s.RestoreAfterFailedResume(id, version, store.ResumePrior{State: prior.State, EndedAtText: prior.EndedAtText, Identity: prior.Identity})
@@ -178,7 +179,7 @@ func TestFamilyLifecycleMembership(t *testing.T) {
 				familyAt(t, f, newParent, 0, 0, store.StateWaiting)
 			} else {
 				prior := rvReuseRead(t, f, id)
-				res, _, version, err := f.s.ResetForReuse(id, prior.Snapshot, prior.Agent, rvReuseFresh(newParent))
+				res, _, version, err := f.s.ResetForReuse(id, prior.Snapshot, prior.Agent, storefix.WithExit(t, f.s, id, rvReuseFresh(newParent)))
 				if err != nil || res != store.CondApplied {
 					t.Fatalf("reuse: %v %v", res, err)
 				}
@@ -190,7 +191,7 @@ func TestFamilyLifecycleMembership(t *testing.T) {
 				}
 				familyAt(t, f, oldParent, 0, 0, store.StateWorking)
 				familyAt(t, f, newParent, 0, 0, store.StateWaiting)
-				if err := f.s.DeleteSpawn(id); err != nil {
+				if err := storefix.DeleteWithExit(t, f.s, id); err != nil {
 					t.Fatal(err)
 				}
 				familyAt(t, f, oldParent, 0, 0, store.StateWaiting)

@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -51,6 +52,68 @@ func busyLaunchCovered(t *testing.T, s *Store, id string) {
 	t.Helper()
 	mustExec(t, s.db, `UPDATE busy_conversations SET busy_send='covered' WHERE instance_id=?`, id)
 }
+
+// busyLaunchExit is id's exit scope as read, taken as positive exit evidence:
+// the test judges every owned process in it gone (the store never probes).
+func busyLaunchExit(t *testing.T, s *Store, id string) *BusySendExitEvidence {
+	t.Helper()
+	scope, e := s.ReadBusySendExitScope(id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return &BusySendExitEvidence{Scope: scope}
+}
+
+// busyExitIfAny is busyLaunchExit, or nil for a row with no exit scope to
+// read (absent, or no published binding); an uncovered conversation ignores it.
+func busyExitIfAny(t *testing.T, s *Store, id string) *BusySendExitEvidence {
+	t.Helper()
+	scope, e := s.ReadBusySendExitScope(id)
+	if e != nil {
+		return nil
+	}
+	return &BusySendExitEvidence{Scope: scope}
+}
+
+// busyWithExit is fresh carrying busyExitIfAny's evidence for id, as reuse
+// hands it to ResetForReuse.
+func busyWithExit(t *testing.T, s *Store, id string, fresh Spawn) Spawn {
+	t.Helper()
+	if fresh.BusySendExit == nil {
+		fresh.BusySendExit = busyExitIfAny(t, s, id)
+	}
+	return fresh
+}
+
+// busyDeleteWithExit deletes id's row as administrator deletion does: with
+// exit evidence when its conversation is covered, else plainly.
+func busyDeleteWithExit(t *testing.T, s *Store, id string) error {
+	t.Helper()
+	ev := busyExitIfAny(t, s, id)
+	if ev == nil || ev.Scope.Coverage != BusySendCovered {
+		return s.DeleteSpawn(id)
+	}
+	row, e := s.GetSpawn(id)
+	if e != nil {
+		return e
+	}
+	res, e := s.DeleteBusySendCovered(id, row.Snapshot, *ev)
+	if e == nil && res != CondApplied {
+		e = fmt.Errorf("delete covered %s: %v; want applied", id, res)
+	}
+	return e
+}
+
+// busyLaunchDeleteCovered is administrator deletion of id's covered row once
+// exit evidence is established (busyLaunchExit).
+func busyLaunchDeleteCovered(t *testing.T, s *Store, id string) {
+	t.Helper()
+	row := busyLaunchRow(t, s, id)
+	if res, e := s.DeleteBusySendCovered(id, row.Snapshot, *busyLaunchExit(t, s, id)); e != nil || res != CondApplied {
+		t.Fatalf("delete covered=%v,%v", res, e)
+	}
+}
+
 func busyLaunchStage(t *testing.T, s *Store, id, kind, agent, token string) int64 {
 	t.Helper()
 	row := busyLaunchRow(t, s, id)
@@ -58,13 +121,13 @@ func busyLaunchStage(t *testing.T, s *Store, id, kind, agent, token string) int6
 	var v int64
 	var e error
 	if kind == "resume" {
-		res, v, e = s.MoveToPending(id, row.Snapshot, 2000, token, "", "", LaunchOwner{})
+		res, v, e = s.MoveToPendingWithExit(id, row.Snapshot, 2000, token, "", "", LaunchOwner{}, BusySendDefaultsChoice{}, busyLaunchExit(t, s, id))
 	} else {
 		prior, _, err := s.ReadForReuse(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		res, _, v, e = s.ResetForReuse(id, prior.Snapshot, prior.Agent, Spawn{Agent: agent, CWD: t.TempDir(), TmuxSessionName: row.TmuxSessionName, RelayMode: "off", StartedAt: time.Unix(2, 0), LaunchStartedAtMillis: 2000, Identity: LaunchIdentity{Token: token}})
+		res, _, v, e = s.ResetForReuse(id, prior.Snapshot, prior.Agent, Spawn{Agent: agent, CWD: t.TempDir(), TmuxSessionName: row.TmuxSessionName, RelayMode: "off", StartedAt: time.Unix(2, 0), LaunchStartedAtMillis: 2000, Identity: LaunchIdentity{Token: token}, BusySendExit: busyLaunchExit(t, s, id)})
 	}
 	if e != nil || res != CondApplied {
 		t.Fatalf("stage %s: %v, %v", kind, res, e)
@@ -72,17 +135,23 @@ func busyLaunchStage(t *testing.T, s *Store, id, kind, agent, token string) int6
 	return v
 }
 
+// TestBusySendFreshLaunchAllAgents: a fresh Launch records this release's
+// coverage for its agent, written out here (only Claude is covered), on the
+// row, its conversation and its current Launch alike.
 func TestBusySendFreshLaunchAllAgents(t *testing.T) {
-	for _, agent := range []string{AgentClaude, AgentCodex, AgentCursor, AgentDroid, AgentOpenCode} {
+	for agent, want := range map[string]BusySendCoverage{
+		AgentClaude: BusySendCovered, AgentCodex: BusySendNotCovered, AgentCursor: BusySendNotCovered,
+		AgentDroid: BusySendNotCovered, AgentOpenCode: BusySendNotCovered,
+	} {
 		t.Run(agent, func(t *testing.T) {
 			s, path := openTempStore(t)
 			id := busyLaunchInsert(t, s, agent)
 			r := busyLaunchRow(t, s, id)
 			provider := agent
-			if r.BusySend != BusySendNotCovered || r.BusyConversationID == "" || r.TurnStarts != 0 {
-				t.Fatalf("fresh row: %+v", r)
+			if r.BusySend != want || r.BusyConversationID == "" || r.TurnStarts != 0 {
+				t.Fatalf("fresh row: %+v; want coverage %s", r, want)
 			}
-			busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_conversations c JOIN busy_send_launches l ON l.conversation_id=c.conversation_id WHERE c.instance_id=? AND c.publication='published' AND l.phase='current' AND c.provider=? AND l.provider=? AND c.busy_send='not_covered' AND l.busy_send='not_covered' AND l.launch_token=? AND l.life_number=?`, id, provider, provider, r.Identity.Token, r.LifeNumber)
+			busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_conversations c JOIN busy_send_launches l ON l.conversation_id=c.conversation_id WHERE c.instance_id=? AND c.publication='published' AND l.phase='current' AND c.provider=? AND l.provider=? AND c.busy_send=? AND l.busy_send=? AND l.launch_token=? AND l.life_number=?`, id, provider, provider, string(want), string(want), r.Identity.Token, r.LifeNumber)
 			reopened, e := Open(path)
 			if e != nil {
 				t.Fatal(e)
@@ -201,28 +270,34 @@ func TestBusySendReaderCorruptionIsError(t *testing.T) {
 	}
 }
 
+// TestBusySendStagedPublication: a staged resume or reuse leaves the published
+// Launch's projection in place until its own token publishes the candidate,
+// whose coverage is the new Launch's: a resume keeps its covered conversation's
+// coverage even for an agent the set doesn't cover, and a reuse takes its new
+// agent's.
 func TestBusySendStagedPublication(t *testing.T) {
 	for _, tc := range []struct {
-		kind, agent string
-		lostReply   bool
+		kind, base, agent string
+		lostReply         bool
+		published, want   BusySendCoverage
 	}{
-		{"resume", AgentClaude, false}, {"reuse", AgentClaude, false}, {"reuse", AgentCodex, true},
+		{"resume", AgentClaude, AgentClaude, false, BusySendCovered, BusySendCovered},
+		{"resume", AgentCodex, AgentCodex, false, BusySendNotCovered, BusySendCovered},
+		{"reuse", AgentClaude, AgentClaude, false, BusySendCovered, BusySendCovered},
+		{"reuse", AgentClaude, AgentCodex, true, BusySendCovered, BusySendNotCovered},
 	} {
-		t.Run(tc.kind+tc.agent, func(t *testing.T) {
+		t.Run(tc.kind+tc.base+tc.agent, func(t *testing.T) {
 			s, path := openTempStore(t)
-			id := busyLaunchInsert(t, s, AgentClaude)
+			id := busyLaunchInsert(t, s, tc.base)
 			old := busyLaunchFinish(t, s, id)
 			busyLaunchCovered(t, s, id)
 			const token = "1122334455667788"
 			v := busyLaunchStage(t, s, id, tc.kind, tc.agent, token)
 			staged := busyLaunchRow(t, s, id)
-			if staged.BusyConversationID != old.BusyConversationID || staged.BusySend != BusySendNotCovered || staged.TurnStarts != 0 {
-				t.Fatal("stage changed published projection or failed counter reset")
+			if staged.BusyConversationID != old.BusyConversationID || staged.BusySend != tc.published || staged.TurnStarts != 0 {
+				t.Fatalf("stage changed published projection (coverage %s, want %s) or failed counter reset", staged.BusySend, tc.published)
 			}
-			wantCoverage := "not_covered"
-			if tc.kind == "resume" {
-				wantCoverage = "covered"
-			}
+			wantCoverage := string(tc.want)
 			busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_send_launches WHERE instance_id=? AND phase='candidate' AND busy_send=?`, id, wantCoverage)
 			before := dbDump(t, path)
 			// A callback for another token must leave the entire staged write alone.
@@ -321,13 +396,13 @@ func TestBusySendLifecycleTransactionsRollback(t *testing.T) {
 				switch point {
 				case "stage":
 					if kind == "resume" {
-						_, _, e = s.MoveToPending(id, old.Snapshot, 2000, "1122334455667788", "", "", LaunchOwner{})
+						_, _, e = s.MoveToPendingWithExit(id, old.Snapshot, 2000, "1122334455667788", "", "", LaunchOwner{}, BusySendDefaultsChoice{}, busyLaunchExit(t, s, id))
 					} else {
 						prior, _, err := s.ReadForReuse(id)
 						if err != nil {
 							t.Fatal(err)
 						}
-						_, _, _, e = s.ResetForReuse(id, prior.Snapshot, prior.Agent, Spawn{Agent: AgentCodex, CWD: "/tmp", TmuxSessionName: old.TmuxSessionName, RelayMode: "off"})
+						_, _, _, e = s.ResetForReuse(id, prior.Snapshot, prior.Agent, Spawn{Agent: AgentCodex, CWD: "/tmp", TmuxSessionName: old.TmuxSessionName, RelayMode: "off", BusySendExit: busyLaunchExit(t, s, id)})
 					}
 				case "publish":
 					_, e = s.RecordLaunchIdentity(id, v, "1122334455667788", LaunchIdentity{})
@@ -356,7 +431,7 @@ func TestBusySendResumeCannotChangeProvider(t *testing.T) {
 	mustExec(t, s.db, `UPDATE spawns SET agent='codex' WHERE instance_id=?`, id)
 	row := busyLaunchRow(t, s, id)
 	before := dbDump(t, path)
-	_, _, e := s.MoveToPending(id, row.Snapshot, 2000, "1122334455667788", "", "", LaunchOwner{})
+	_, _, e := s.MoveToPendingWithExit(id, row.Snapshot, 2000, "1122334455667788", "", "", LaunchOwner{}, BusySendDefaultsChoice{}, busyExitIfAny(t, s, id))
 	if e == nil || !strings.Contains(e.Error(), "resume changes busy-send provider") {
 		t.Fatalf("changed provider=%v", e)
 	}
@@ -441,8 +516,9 @@ func TestBusySendDeletionRetirementAndRespawn(t *testing.T) {
 				id := busyLaunchInsert(t, s, AgentClaude)
 				mustExec(t, s.db, `DELETE FROM busy_send_launches WHERE instance_id=?`, id)
 				mustExec(t, s.db, `DELETE FROM busy_conversations WHERE instance_id=?`, id)
+				var rec busySendRecords
 				if !noCore {
-					rec := seedBusySendRecords(t, s.db, s.StoreID(), id)
+					rec = seedBusySendRecords(t, s.db, s.StoreID(), id)
 					mustExec(t, s.db, `UPDATE spawns SET busy_conversation_id=?,busy_send='covered',life_number=?,launch_token=? WHERE instance_id=?`, rec.conversation, recLife, recToken, id)
 					// Existing End evidence is retained; a second current/candidate gets deletion-only evidence.
 					mustExec(t, s.db, `UPDATE busy_send_launches SET ended_at_ms=42,end_cause='process_exited' WHERE launch_id=?`, rec.launch)
@@ -454,11 +530,22 @@ func TestBusySendDeletionRetirementAndRespawn(t *testing.T) {
 						t.Fatal(e)
 					}
 					old = busyLaunchFinish(t, s, id)
+					// Expire keeps a row whose conversation still holds a Held
+					// Message (SR-5.5), and covered deletion finalizes it; this
+					// case checks the other records' retention, so the fixture's
+					// Held Message is first an expired tombstone.
+					mustExec(t, s.db, `UPDATE busy_send_messages SET text = NULL, text_sha256 = NULL, place = 'closed', result_class = NULL,
+						result_reason = NULL, wait_reason = NULL, wait_since_ms = NULL, result_final = 1, final_at_ms = 5000,
+						retention = 'expired', expired_at_ms = 9000 WHERE message_id = ?`, rec.held)
 				}
 				before := dbDump(t, path)
 				remove := func(snapshot RowSnapshot) (CondResult, error) {
 					if mode == "expire" {
 						return s.DeleteFinishedIfSameLife(id, snapshot)
+					}
+					if !noCore {
+						// A covered conversation is deleted only with exit evidence.
+						return s.DeleteBusySendCovered(id, snapshot, *busyLaunchExit(t, s, id))
 					}
 					e := s.DeleteSpawn(id)
 					return CondApplied, e
@@ -496,7 +583,9 @@ func TestBusySendDeletionRetirementAndRespawn(t *testing.T) {
 				} else if e = s.DeleteSpawn(id); !errors.Is(e, ErrSpawnNotFound) {
 					t.Fatalf("repeat delete=%v", e)
 				}
-				if e = s.InsertPending(Spawn{InstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "ad-" + id, RelayMode: "off"}); e != nil {
+				// The respawn's agent is one the set doesn't cover, so inheriting
+				// the retired conversation's coverage would show.
+				if e = s.InsertPending(Spawn{InstanceID: id, Agent: AgentCodex, CWD: "/tmp", TmuxSessionName: "ad-" + id, RelayMode: "off"}); e != nil {
 					t.Fatal(e)
 				}
 				fresh := busyLaunchRow(t, s, id)
@@ -526,12 +615,15 @@ func TestBusySendDeletionRollback(t *testing.T) {
 			id := busyLaunchInsert(t, s, AgentClaude)
 			old := busyLaunchFinish(t, s, id)
 			mustExec(t, s.db, `CREATE TRIGGER fail_retirement BEFORE UPDATE ON busy_conversations BEGIN SELECT RAISE(ABORT,'injected retirement failure'); END`)
+			exit := busyLaunchExit(t, s, id)
 			before := dbDump(t, path)
 			var e error
 			if mode == "expire" {
 				_, e = s.DeleteFinishedIfSameLife(id, old.Snapshot)
 			} else {
-				e = s.DeleteSpawn(id)
+				// The fresh Claude row is covered: administrator deletion
+				// goes through its exit evidence.
+				_, e = s.DeleteBusySendCovered(id, old.Snapshot, *exit)
 			}
 			if e == nil || !strings.Contains(e.Error(), "injected retirement failure") {
 				t.Fatalf("delete=%v", e)
@@ -569,10 +661,8 @@ func TestBusySendAdoptionPublishesCandidate(t *testing.T) {
 				if e != nil || res != CondApplied {
 					t.Fatalf("adoption=%v,%v", res, e)
 				}
-				want := "not_covered"
-				if kind == "resume" {
-					want = "covered"
-				}
+				// A Claude Launch, resumed or reused, is covered.
+				want := "covered"
 				busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_send_launches WHERE instance_id=? AND launch_token='1122334455667788' AND phase='current' AND busy_send=?`, id, want)
 				published := busyLaunchRow(t, s, id)
 				if string(published.BusySend) != want {
@@ -661,9 +751,7 @@ func TestBusySendStaleSuccessCannotPublishReplacement(t *testing.T) {
 			v := busyLaunchStage(t, s, id, "reuse", AgentCodex, "1122334455667788")
 			stale := busyLaunchRow(t, s, id)
 			if deleted {
-				if e := s.DeleteSpawn(id); e != nil {
-					t.Fatal(e)
-				}
+				busyLaunchDeleteCovered(t, s, id)
 				// The absent row accepts neither publication nor adoption.
 				if res, e := s.PublishBusySendLaunch(id, v, "1122334455667788"); e != nil || res != CondAbsent {
 					t.Fatalf("absent publication=%v,%v", res, e)

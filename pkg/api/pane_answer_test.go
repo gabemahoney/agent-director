@@ -55,6 +55,7 @@ var linesPaneLast = map[int]string{2: "five\nsix\n", 5: "two\nthree\n\nfive\nsix
 func TestReadPaneSHA256AndSendKeysHashCheck(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentCodex
 	r := e.seedRow(t, killRowSpec{})
 	pane := r.Spawn.Identity.PaneID
 	e.rec.SetCapture(r.Socket, pane, "\x1b[1mfirst\x1b[0m line\n")
@@ -153,6 +154,7 @@ func TestSendKeysNoEnterAndKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			e.rowAgent = store.AgentCodex
 			r := e.seedRow(t, killRowSpec{})
 			p := tc.p
 			p.InstanceID = r.ID
@@ -230,7 +232,7 @@ func TestSendKeysShapeRefusedBeforeAnything(t *testing.T) {
 func TestPaneAnswerSendsOneKeyAfterItsIntent(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	for _, ag := range paAgents {
+	for _, ag := range paInputAgents {
 		for _, tc := range []struct{ as, key string }{{"allow", "1"}, {"deny", "Escape"}, {"allow", "Down"}} {
 			t.Run(ag.label(tc.as+" "+tc.key), func(t *testing.T) {
 				t.Parallel()
@@ -285,7 +287,7 @@ func TestPaneAnswerSendsOneKeyAfterItsIntent(t *testing.T) {
 func TestPaneAnswerSenderDiesBetweenIntentAndSent(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	p := newPAEnv(t)
+	p := newCodexPAEnv(t) // a covered Claude row takes no pane answer keys
 	firstPane := p.text
 	p.sks = &paDyingStore{killStore: p.store, die: true}
 	first := p.sendKeysRun(p.answer(tok, "allow", "1"))
@@ -356,7 +358,7 @@ func TestPaneAnswerUnjudgeableSenderHolds(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p := newPAEnv(t)
+			p := newCodexPAEnv(t) // a covered Claude row takes no pane answer keys
 			p.pc.Set(sender.PID, procfix.Alive(sender.Starttime))
 			t0 := p.now
 			if _, ok, err := p.st.RecordPaneIntent(p.r.ID, tok, "allow", sender, func() time.Time { return t0 }, store.DefaultLockWait, nil); err != nil || !ok {

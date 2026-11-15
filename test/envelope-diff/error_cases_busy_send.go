@@ -1,5 +1,5 @@
 // error_cases_busy_send.go holds busy send's error rows (Task t2.xis.pu.ar),
-// appended to errorCases: each option's refusal on an uncovered Claude row,
+// appended to errorCases: each option's refusal on an uncovered Codex row,
 // ErrCantSend's and pause's err_details pinned on both sides, and the new
 // verbs' error paths. Each row sends the same call through both runners, so
 // matching descriptions show the same options reached the API.
@@ -22,8 +22,8 @@ var busySendErrorCases = []errorCase{
 		[]string{"send-keys", "--instance-id", "id-busy-keys", "--text", "hi", "--send-mode", "wait_turn", "--confirmed-delivery=false"},
 		cantSendDetails, "so send_mode, confirmed_delivery cannot apply"),
 	busySendRow("spawn", "ErrCantSend", busySendSeedNone,
-		map[string]any{"cwd": "/tmp", "agent": "claude", "send_mode": "steer_turn", "confirm_from_transcripts": false},
-		[]string{"spawn", "--cwd", "/tmp", "--agent", "claude", "--send-mode", "steer_turn", "--confirm-from-transcripts=false"},
+		map[string]any{"cwd": "/tmp", "agent": "codex", "send_mode": "steer_turn", "confirm_from_transcripts": false},
+		[]string{"spawn", "--cwd", "/tmp", "--agent", "codex", "--send-mode", "steer_turn", "--confirm-from-transcripts=false"},
 		cantSendDetails, "so send_mode, confirm_from_transcripts cannot apply"),
 	busySendRow("resume", "ErrCantSend", busySendSeedRow("id-busy-resume", store.StateEnded),
 		map[string]any{"instance_id": "id-busy-resume", "confirmed_delivery": true},
@@ -34,8 +34,8 @@ var busySendErrorCases = []errorCase{
 		[]string{"resume", "--instance-id", "id-busy-resume", "--send-mode="},
 		nil, `send_mode "" must be wait_turn or steer_turn`),
 	busySendRow("make-template", "ErrCantSend", busySendSeedNone,
-		map[string]any{"name": "busy-tpl", "agent": "claude", "confirm_from_transcripts": true},
-		[]string{"make-template", "--name", "busy-tpl", "--agent", "claude", "--confirm-from-transcripts"},
+		map[string]any{"name": "busy-tpl", "agent": "codex", "confirm_from_transcripts": true},
+		[]string{"make-template", "--name", "busy-tpl", "--agent", "codex", "--confirm-from-transcripts"},
 		cantSendDetails, "so confirm_from_transcripts cannot apply"),
 	busySendRow("pause", "ErrSpawnNotPausable", busySendSeedRow("id-busy-pause", store.StateEnded),
 		map[string]any{"instance_id": "id-busy-pause", "only_if_waiting": true},
@@ -78,13 +78,13 @@ func busySendSeedNone(t *testing.T) string {
 	return filepath.Dir(apitest.SeedEmptyStore(t))
 }
 
-// busySendSeedRow seeds a store holding one Claude row id in state, which
+// busySendSeedRow seeds a store holding one Codex row id in state, which
 // busy send does not cover, and returns its directory.
 func busySendSeedRow(id, state string) func(t *testing.T) string {
 	return func(t *testing.T) string {
 		t.Helper()
 		dbPath := filepath.Join(t.TempDir(), "state.db")
-		if _, err := apitest.SeedSpawn(dbPath, id, state, "/tmp", "off", "", true); err != nil {
+		if _, err := apitest.SeedSpawn(dbPath, id, state, "/tmp", "off", "", true, apitest.WithAgent("codex")); err != nil {
 			t.Fatalf("busySendSeedRow: %v", err)
 		}
 		return filepath.Dir(dbPath)

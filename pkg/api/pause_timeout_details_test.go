@@ -14,10 +14,11 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// A timeout requires inspection regardless of the agent or the pane's text.
+// A timeout requires inspection regardless of the agent or the pane's text
+// (a covered Claude row's pause is keyless: pause_keyless_test.go).
 func TestPauseTimeoutInspectionRequired(t *testing.T) {
 	t.Parallel()
-	for _, agent := range []string{"claude", "codex", "cursor"} {
+	for _, agent := range []string{"codex", "cursor"} {
 		for _, pane := range []string{"Background work is running\n1. Exit and stop tasks / 2. Stay\n", "ordinary output\n", ""} {
 			t.Run(agent+"/"+pane, func(t *testing.T) {
 				t.Parallel()
@@ -30,23 +31,21 @@ func TestPauseTimeoutInspectionRequired(t *testing.T) {
 				_, err := e.pauseWithin(context.Background(), 0, pauseParams(r))
 
 				assertPauseInspectionDetails(t, err, store.StateWaiting)
-				presses := 1
-				if agent != "claude" {
-					presses = codexClearPresses
-				}
-				e.assertExitDeliveredTimes(t, r.Socket, r.Spawn.Identity.PaneID, presses)
+				e.assertExitDeliveredTimes(t, r.Socket, r.Spawn.Identity.PaneID, codexClearPresses)
 				e.assertRowUnchanged(t, r.ID, before)
 			})
 		}
 	}
 }
 
+// On a Codex row: a covered Claude row's pause is keyless.
 func TestPauseTimeoutDetailsLastObservedState(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = store.AgentCodex
 	r := e.seedRow(t, killRowSpec{})
 	e.rec.AfterCall(callEnterKey, func(_ tmuxfix.SocketCall, _ error) {
-		if applied := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "UserPromptSubmit", r.Spawn.SessionID); !applied.Applied {
+		if applied := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "UserPromptSubmit", r.Spawn.SessionID, apitest.HookAgent(store.AgentCodex)); !applied.Applied {
 			t.Fatalf("UserPromptSubmit: %s", applied.Reason)
 		}
 	})

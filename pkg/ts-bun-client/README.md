@@ -168,6 +168,11 @@ Commands judge live state, which may differ from the reported state.
 
 ### getMany
 
+`get` and each found `getMany` row expose `busy_send`; covered rows also
+include `agent_defaults`, `delivery` and `delivery_capabilities`. `status`
+has defaults and delivery facts; `list` has defaults. Reads deliver nothing.
+See [Busy-send coverage](../../docs/caller-contract.md#busy-send-coverage).
+
 ```ts
 const result = await client.getMany({ instance_ids: ["agent-a", "agent-b"] });
 for (const row of result.spawns) {
@@ -227,52 +232,51 @@ in [Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagen
 
 ### sendKeys
 
-Send text to the agent's own pane, then one Enter to submit it. An empty
-or omitted `text` sends the Enter only, submitting what is already typed.
-`no_enter: true` types the text without the Enter, and `key` sends one key
-alone (`"Escape"`, `"Enter"`, `"Up"`, `"Down"`, `"Tab"`, or one character),
-never followed by Enter. With `expect_pane_sha256` (the `pane_sha256` of
-the plain `readPane` you looked at, with its `n_lines`), nothing is sent if the
-pane changed since (`ErrPaneChanged`); on a relayed Spawn a match also
-passes the API's dialog hold (`ErrDialogMaybeOpen`, see "Answering a request at
-the pane" below). Pass it only for a pane a person or an LLM judged, never
-from an automatic flow.
+Claude defaults to Wait Turn and unconfirmed delivery. Resume carries Held
+Messages without replaying startup input; launch defaults are described under
+[Agent Defaults](../../docs/caller-contract.md#agent-defaults).
 
-`key` cannot accompany nonempty `text`; `no_enter` needs text or a key.
-`as` requires `request_token`, and pane hashes must be valid SHA-256 values.
+Behavior follows `get`/`getMany`'s `busy_send`. Covered Claude stores an
+ordinary Message byte for byte. CR is refused; empty text and raw-key
+parameters are malformed. `allow_pending` changes nothing. Permission and
+dialog boundaries hold accepted Messages; they never become pane answers.
+An accepted send resolves with its Result, never `ErrSubmissionUnconfirmed`.
+
+`SendKeysParams.delivery_request_id` supplies the Message ID, and
+`SendKeysResult` extends `Partial<DeliveryResult>`. For a confirmed Wait Turn
+Message, keep a caller-supplied pair:
 
 ```ts
-await client.sendKeys({
+const caller_uuid = "7af00f9e-f42d-4a24-9cc1-c9697d17c261";
+const delivery_request_id = "review-1";
+const sent = await client.sendKeys({
   instance_id: "<id>",
-  text: "what is 2+2?",
+  text: "review the project entry points",
+  send_mode: "wait_turn",
+  confirmed_delivery: true,
+  caller_uuid,
+  delivery_request_id,
 });
+console.log(sent.class, sent.final);
+const lookup = await client.getDelivery({ caller_uuid, delivery_request_id });
+if (lookup.result) console.log(lookup.lookup, lookup.result.class, lookup.result.final);
 ```
 
-On a supported native launch, ordinary text submission returns runtime proof
-fields `outcome: "submitted"`, `request_id`, `session_id`, `record_sha256`
-and optional `record_id`. `SendKeysResult` declares none of these fields and
-`SendKeysParams` has no `delivery_request_id`; use the Go API or CLI for
-explicit delivery request IDs. Fallback and manual operations return `{}` on
-success.
-Supported launches, proof, input restrictions and recovery are in
-[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
-and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
+Default unconfirmed sends have no identity or lookup. See
+[Covered sends](../../docs/caller-contract.md#covered-sends) and
+[Message Results](../../docs/caller-contract.md#message-results) for safe repeats
+and Result handling.
 
-`ErrSubmissionUnconfirmed.errDetails` is a
-`Readonly<Record<string, unknown>> | null`. The exported
-`SubmissionUnconfirmedDetails` covers only failed fallback hook observation
-(`keys_sent: true`, `submission_confirmed: false`, `row_state`). Additional
-runtime fields include `outcome`, `phase`, `bytes_attempted`,
-`enter_may_have_been_sent`, `reason`, and native `request_id` and `last_queue`.
-A cleanup `ErrInternal` after native confirmation retains the submitted
-receipt in `errDetails`. Read these fields with runtime value checks; their
-meanings and no-replay rules are in the linked contract, including
-[Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes).
-
-Pass `allow_pending: true` to allow input to a pending launch, for example a
-startup choice with `key: "Enter"`. It defaults to false and preserves
-ownership, readiness, relay and dialog guards; see
-[Pending rows and startup screens](../../docs/caller-contract.md#pending-rows-and-startup-screens).
+Uncovered Codex, Cursor and pane-only agents keep native and manual input.
+CR is stripped and one Enter appended unless `no_enter`; empty text sends
+Enter only and `key` sends one key alone. Use `expect_pane_sha256` only after
+judging that exact `readPane` screen, with matching `n_lines`. Supported native
+Codex input returns receipt fields; fallback/manual success returns `{}`.
+Their `ErrSubmissionUnconfirmed` details require runtime value checks. See
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission),
+[Manual input ownership](../../docs/caller-contract.md#manual-input-ownership)
+and [Cursor input outcomes](../../docs/caller-contract.md#cursor-input-outcomes).
+For uncovered startup input, `allow_pending: true` preserves all other guards.
 
 `send_mode` (`SendMode`), `confirmed_delivery`, `caller_uuid` and `force`
 follow the same rule as spawn's Agent Defaults: omitted or `undefined` is not
@@ -338,7 +342,10 @@ neither rollback nor completion and need not return partial checks.
 
 ### pause
 
-Shut down a `waiting` Spawn and wait up to `pause.timeout_seconds` for `ended`.
+For covered Claude, `pause` is keyless in any live state, preserves Held
+Messages for resume, and refuses with structured `NotPausableDetails`. See
+[keyless pause](../../docs/caller-contract.md#keyless-pause-of-a-covered-agent).
+For uncovered agents, shut down a waiting Spawn within `pause.timeout_seconds`.
 Without `only_if_waiting`, a finished Spawn is a no-op. Codex exit handling is defined in the
 [caller contract](../../docs/caller-contract.md#when-a-codex-agent-exits).
 
@@ -346,7 +353,7 @@ Without `only_if_waiting`, a finished Spawn is a no-op. Codex exit handling is d
 await client.pause({ instance_id: "<id>" });
 ```
 
-`pause` takes no pane hash. It shares plain `sendKeys` permission and input
+`pause` takes no pane hash. On uncovered agents it shares plain `sendKeys` permission and input
 guards; see [Permission relay](../../docs/caller-contract.md#permission-relay)
 and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
 
@@ -354,8 +361,9 @@ For `ErrPauseTimeout`, `errDetails` has the exported `PauseTimeoutDetails`
 shape. Its fields and handling are defined in
 [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit).
 
-`only_if_waiting` applies only to Covered Agents. When the row's current launch
-is not covered, `true` rejects with `ErrSpawnNotPausable` in any row state,
+`only_if_waiting: true` currently rejects with `ErrInternal` on a Covered
+Agent, ending nothing; see [Busy-send options](../../docs/caller-contract.md#busy-send-options).
+When the row's current launch is not covered, `true` rejects with `ErrSpawnNotPausable` in any row state,
 finished included, with
 `errDetails` a `NotPausableDetails` whose `cause` is `"agent_not_covered"`;
 nothing is ended. `false` or omitted is the pause above.
@@ -379,8 +387,12 @@ await client.makeTemplate({ name: "dev", cwd: "/repos/widget", agent: "claude", 
 
 ### forceDelivery, getForce and getDelivery
 
+Standalone `forceDelivery` currently rejects with `ErrInternal` for a Covered
+Agent, doing nothing; see [Busy-send options](../../docs/caller-contract.md#busy-send-options).
+For an uncovered target, a refused attempt remains readable:
+
 ```ts
-const { force_result } = await client.forceDelivery({ instance_id: "<id>" });
+const { force_result } = await client.forceDelivery({ instance_id: "<uncovered-id>" });
 const read = await client.getForce({ force_id: force_result.force_id });
 console.log(read.lookup, read.force_result?.outcome);
 ```
@@ -439,7 +451,8 @@ are in [Permissions](../../docs/permissions.md#delivery).
 
 ### Answering a request at the pane
 
-`sendKeys` with a `request_token` answers a request at the pane.
+For covered Claude use [direct tmux and outside-answer recording](../../docs/permissions.md#answering-at-the-pane).
+On uncovered agents, `sendKeys` with a `request_token` answers a request at the pane.
 The [caller contract](../../docs/caller-contract.md#permission-relay) owns
 when to use a pane answer and how to judge the screen. Example:
 
@@ -588,11 +601,10 @@ errors carry one, typed as exported interfaces: `ErrRelayFallenBack`
 `ErrTooManyIds` (`TooManyIdsDetails`), `ErrCantSend` (`CantSendDetails`:
 `class`, `reason`, `resend_safe`, `retry_with`, and optional `limit` and
 `result`, absent for `agent_not_covered`), `ErrSpawnNotPausable`
-(`NotPausableDetails`, for `only_if_waiting`) and
+(`NotPausableDetails`, for keyless pause and `only_if_waiting`) and
 `ErrSubmissionUnconfirmed`
 (`SubmissionUnconfirmedDetails`, for failed fallback hook observation).
-Native, Claude readiness, Claude paced typing, Codex paste and Cursor gateway
-facts remain available through the generic `errDetails` record. So does the
+Native Codex, Codex paste and Cursor gateway facts remain available through the generic `errDetails` record. So does the
 `ErrInternal` of a pane answer whose key was sent but not recorded
 (`PaneKeySentDetails`: `key_sent` `true` and `request_token`). Read facts from
 `errDetails`, never from `errDescription`.
@@ -680,8 +692,8 @@ and [Settings](../../docs/settings.md). Request handling is in
 | `ErrSpawnNotFound` | No row matches the supplied `instance_id`. |
 | `ErrSpawnNotInteractive` | The row cannot accept input under the current launch guards. |
 | `ErrSubmissionUnconfirmed` | Submission is unconfirmed; inspect `errDetails` as described under [sendKeys](#sendkeys). |
-| `ErrCantSend` | A busy-send option was given where busy send does not cover the launch it applies to; nothing was stored, sent or typed. Carries `CantSendDetails`. |
-| `ErrSpawnNotPausable` | The row is not in a pausable state, or `only_if_waiting: true` was given for a row whose current launch is not covered (`NotPausableDetails`). |
+| `ErrCantSend` | Busy-send admission or options refused (`agent_not_covered`, identity conflict, unsupported mode, text or capacity limits); nothing stored, sent or typed. Carries `CantSendDetails`; see [Busy-send refusals](../../docs/caller-contract.md#busy-send-refusals). |
+| `ErrSpawnNotPausable` | Pause refused; keyless causes and `only_if_waiting` refusals carry `NotPausableDetails`. See [keyless pause](../../docs/caller-contract.md#keyless-pause-of-a-covered-agent). |
 | `ErrPauseTimeout` | Exit input was sent but `ended` was not observed; carries `PauseTimeoutDetails`. |
 | `ErrSpawnNotResumable` | The row is live, including `pending`, or changed during resume. |
 | `ErrNoSessionId` | The spawn has no `session_id`, so there is nothing to resume. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |

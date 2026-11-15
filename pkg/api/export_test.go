@@ -5,6 +5,8 @@ import (
 	"database/sql/driver"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -107,12 +109,42 @@ func SetPauseTestKnobs(interval time.Duration, sleeper func(time.Duration)) {
 // so a SetPauseTestKnobs caller restores them without spelling the default.
 func PauseTestKnobs() (time.Duration, func(time.Duration)) { return pausePollInterval, pauseSleep }
 
+// SetPauseTerminateForTest replaces keyless pause's identity-checked SIGTERM
+// (probe.TerminateIdentity) with terminate until restore; process-wide.
+func SetPauseTerminateForTest(terminate func(pid int, start string) error) (restore func()) {
+	prev := pauseTerminate
+	pauseTerminate = terminate
+	return func() { pauseTerminate = prev }
+}
+
+// SetPauseNowForTest replaces keyless pause's budget and poll clock
+// (pauseNow) with now until restore; process-wide.
+func SetPauseNowForTest(now func() time.Time) (restore func()) {
+	prev := pauseNow
+	pauseNow = now
+	return func() { pauseNow = prev }
+}
+
+// SetBusySendExitNamespaceForTest replaces the exit judgement's reader of
+// this process's own pid namespace with read until restore; process-wide.
+func SetBusySendExitNamespaceForTest(read func() (string, bool)) (restore func()) {
+	prev := busySendExitNamespace
+	busySendExitNamespace = read
+	return func() { busySendExitNamespace = prev }
+}
+
 // KillFinished and DeleteRows expose the operator-only actions that only
 // agent-director-admin reaches, through internal/adminapi (b.vqr).
-var (
-	KillFinished = killFinished
-	DeleteRows   = deleteRows
-)
+var KillFinished = killFinished
+
+// DeleteRows is deleteRows judging covered rows' owned processes with the
+// production start-time reader.
+func DeleteRows(s deleteStore, ids []string) (adminapi.DeleteResult, error) {
+	return deleteRows(s, probe.NewProcChecker(), ids)
+}
+
+// DeleteRowsWith is DeleteRows judging covered rows' owned processes with pc.
+var DeleteRowsWith = deleteRows
 
 // TmuxClientOf returns the tmux client c was built with, so package api_test
 // can drive the production client api.New wired from the [tmux] config.
@@ -216,7 +248,7 @@ func WaitClientStoreForTest(c *Client, id string, wait time.Duration) error {
 // read does, with no final projection, and returns each row's outcome log in
 // order as "adapter=result" entries (b.x9o cw deferral S3).
 func ActiveCheckOutcomesForTest(ctx context.Context, source any, view RelayView, rows []Spawn) map[string][]string {
-	run := checkActiveRows(ctx, source, view, store.SettleRead{}, rows, nil, false)
+	run := checkActiveRows(ctx, source, view, store.SettleRead{}, rows, nil, false, nil)
 	out := map[string][]string{}
 	for _, checked := range run.rows {
 		for _, o := range checked.outcomes {

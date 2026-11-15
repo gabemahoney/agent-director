@@ -1,5 +1,12 @@
 package api_test
 
+// pause_input_ownership_test.go: pause's /exit through the input journal, on
+// Codex rows (busy send covers Claude, whose pause is keyless): it records
+// manual interference only before input, its established guards come before
+// the journal, and with the real SQLite journal (sqliteSubmission) it keeps
+// an unresolved ordinary owner, rechecks fully after its C-u and before
+// /exit, and keeps its dispatch through a failed cleanup.
+
 import (
 	"context"
 	"errors"
@@ -86,6 +93,7 @@ func TestPauseEstablishedGuardsPrecedeNativeJournal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newNativeSubmissionEnv(t)
+			e.rowAgent = store.AgentCodex // a covered Claude row's pause is keyless
 			r := e.seedRow(t, killRowSpec{State: tc.state, RelayOn: tc.relay})
 			if tc.relay {
 				storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
@@ -101,21 +109,12 @@ func TestPauseEstablishedGuardsPrecedeNativeJournal(t *testing.T) {
 	}
 }
 
+// TestPauseSQLiteRetainsUnresolvedOrdinaryOwner: pause's C-u and /exit record manual
+// interference on the unresolved ordinary owner and keep it.
 func TestPauseSQLiteRetainsUnresolvedOrdinaryOwner(t *testing.T) {
 	t.Parallel()
-	e, r, _ := sqliteSubmission(t)
-	if a := storefix.ApplyAgentHook(t, e.st, r.ID, "SessionStart", r.Spawn.SessionID); !a.Applied {
-		t.Fatalf("waiting hook: %+v", a)
-	}
-	row, err := e.st.GetSpawn(r.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.Spawn = row
-	p := api.SendKeysParams{InstanceID: r.ID, Text: "uncertain original", DeliveryRequestID: "original"}
-	_, err = e.send(p)
-	assertDeliveryError(t, err, "submission_unconfirmed", len(p.Text), true)
-	_, owner := sqliteAttempt(t, e, r)
+	e, r, launch := sqliteSubmission(t, sqliteCodexSpec(store.StateWaiting, false))
+	_, owner := seedSQLiteOwner(t, e, r, launch, "uncertain original")
 	cleared := false
 	e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
 		if c.Key != "C-u" {
@@ -127,7 +126,7 @@ func TestPauseSQLiteRetainsUnresolvedOrdinaryOwner(t *testing.T) {
 			t.Fatalf("pause erased owner: %+v", a)
 		}
 	})
-	_, err = api.Pause(context.Background(), e.st, e.rec, api.PauseEnv{Relay: e.env.Relay}, 0, pauseParams(r))
+	_, err := api.Pause(context.Background(), e.st, e.rec, api.PauseEnv{Relay: e.env.Relay}, 0, pauseParams(r))
 	assertOneName(t, err, "ErrPauseTimeout")
 	if !cleared {
 		t.Fatal("pause did not issue its authorized input")
@@ -143,6 +142,7 @@ func TestPauseSQLiteRetainsUnresolvedOrdinaryOwner(t *testing.T) {
 // row_version, or state and permission_epoch, moved once its C-u returned, with
 // identity and session unchanged, is refused: the C-u is the only key sent, no
 // text and no Enter follow, and pause's manual_input attempt stays as recorded.
+// On a Codex row, whose C-u is one call of codexClearPresses presses.
 func TestPauseSQLiteFullCheckBeforeExit(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -154,22 +154,14 @@ func TestPauseSQLiteFullCheckBeforeExit(t *testing.T) {
 		}},
 		{name: "state and epoch", change: func(t *testing.T, e *nativeSubmissionEnv, r killRow) {
 			e.onceAfter(t, tmux.CallSendKey, "UserPromptSubmit", func() (bool, string) {
-				a := storefix.ApplyAgentHook(t, e.st, r.ID, "UserPromptSubmit", r.Spawn.SessionID)
+				a := storefix.ApplyAgentHook(t, e.st, r.ID, "UserPromptSubmit", r.Spawn.SessionID, storefix.HookAgent(store.AgentCodex))
 				return a.Applied, a.Reason
 			})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e, r, _ := sqliteSubmission(t)
-			if a := storefix.ApplyAgentHook(t, e.st, r.ID, "SessionStart", r.Spawn.SessionID); !a.Applied {
-				t.Fatalf("waiting hook: %+v", a)
-			}
-			row, err := e.st.GetSpawn(r.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			r.Spawn = row
+			e, r, _ := sqliteSubmission(t, sqliteCodexSpec(store.StateWaiting, false))
 			var cleared *api.InputDeliveryAttempt
 			e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
 				if c.Key == "C-u" && cleared == nil {
@@ -178,14 +170,14 @@ func TestPauseSQLiteFullCheckBeforeExit(t *testing.T) {
 			})
 			tc.change(t, e, r)
 
-			_, err = api.Pause(context.Background(), e.st, e.rec, api.PauseEnv{Input: e.env.Input, Relay: e.env.Relay}, 0, pauseParams(r))
+			_, err := api.Pause(context.Background(), e.st, e.rec, api.PauseEnv{Input: e.env.Input, Relay: e.env.Relay}, 0, pauseParams(r))
 
 			if errors.Is(err, api.ErrPauseTimeout) {
 				t.Fatalf("pause = %v; want refused before /exit", err)
 			}
 			assertOneName(t, err, "ErrInternal")
 			keys := e.rec.SocketCallsOf(tmux.CallSendKey)
-			if len(keys) != 1 || keys[0].Key != "C-u" || keys[0].Socket != r.Socket || keys[0].Target != r.Spawn.Identity.PaneID || keys[0].Repeat != 0 {
+			if len(keys) != 1 || keys[0].Key != "C-u" || keys[0].Socket != r.Socket || keys[0].Target != r.Spawn.Identity.PaneID || keys[0].Repeat != codexClearPresses {
 				t.Fatalf("pause keys = %+v; want one C-u to %s on %s", keys, r.Spawn.Identity.PaneID, r.Socket)
 			}
 			e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendEnter)
@@ -209,18 +201,9 @@ func TestPauseSQLiteCloseFailureRetainsDispatch(t *testing.T) {
 	t.Parallel()
 	for _, refused := range []bool{false, true} {
 		t.Run(fmt.Sprintf("refused=%t", refused), func(t *testing.T) {
-			e, r, _ := sqliteSubmission(t)
-			if a := storefix.ApplyAgentHook(t, e.st, r.ID, "SessionStart", r.Spawn.SessionID); !a.Applied {
-				t.Fatalf("waiting hook: %+v", a)
-			}
-			row, err := e.st.GetSpawn(r.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			r.Spawn = row
-			_, err = e.send(api.SendKeysParams{InstanceID: r.ID, Text: "uncertain original", DeliveryRequestID: "original"})
-			assertDeliveryError(t, err, "submission_unconfirmed", len("uncertain original"), true)
-			_, owner := sqliteAttempt(t, e, r)
+			e, r, launch := sqliteSubmission(t, sqliteCodexSpec(store.StateWaiting, false))
+			row := r.Spawn
+			_, owner := seedSQLiteOwner(t, e, r, launch, "uncertain original")
 			if refused {
 				if err := e.rec.KillSessionID(r.Socket, r.Session.ID); err != nil {
 					t.Fatal(err)
@@ -233,7 +216,7 @@ func TestPauseSQLiteCloseFailureRetainsDispatch(t *testing.T) {
 				closed++
 				return cleanup
 			}
-			_, err = api.Pause(context.Background(), e.st, e.rec, api.PauseEnv{Input: e.env.Input, Relay: e.env.Relay}, 0, pauseParams(r))
+			_, err := api.Pause(context.Background(), e.st, e.rec, api.PauseEnv{Input: e.env.Input, Relay: e.env.Relay}, 0, pauseParams(r))
 			if closed != 1 {
 				t.Fatalf("close count=%d; want 1", closed)
 			}
@@ -258,7 +241,7 @@ func TestPauseSQLiteCloseFailureRetainsDispatch(t *testing.T) {
 			}
 			assertInputWrites(t, e.killEnv, r, "/exit")
 			keys := e.rec.SocketCallsOf(tmux.CallSendKey)
-			if len(keys) != 2 || keys[0].Key != "C-u" || keys[0].Socket != r.Socket || keys[0].Target != row.Identity.PaneID || keys[0].Repeat != 0 || keys[1].Key != "Enter" {
+			if len(keys) != 2 || keys[0].Key != "C-u" || keys[0].Socket != r.Socket || keys[0].Target != row.Identity.PaneID || keys[0].Repeat != codexClearPresses || keys[1].Key != "Enter" {
 				t.Fatalf("pause keys=%+v; want one C-u and one Enter", keys)
 			}
 			if after == nil || !after.ManualInterference {

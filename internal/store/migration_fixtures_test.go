@@ -2164,11 +2164,22 @@ func makeV20Fixture(t *testing.T, dir string) v20Fixture {
 	return f
 }
 
+// busySendWantCoverage is this release's coverage of a Launch of agent,
+// written out apart from BusySendCoverageForAgent so a covered set that loses
+// Claude or gains another agent fails the tests: only Claude, and a historical
+// row with no agent (read as Claude), is covered.
+func busySendWantCoverage(agent string) BusySendCoverage {
+	if agent == AgentClaude || agent == "" {
+		return BusySendCovered
+	}
+	return BusySendNotCovered
+}
+
 // assertV21Backfill fails unless the v20→v21 hop recorded each id's row of
 // the store at path once and invented nothing: one published conversation
 // (the instance's first) and one current migrated Launch bound to it, both
 // with the row's provider (claude for a historical row with no agent, as
-// readers take it) and BusySendCoverageForAgent's coverage of it; the Launch
+// readers take it) and busySendWantCoverage's coverage of it; the Launch
 // with the row's life and launch token (NULL kept) and no route, wake path,
 // Agent Default override, process or Launch End; and the row bound to the
 // conversation with the same coverage and an integer Turn Start counter of 0.
@@ -2188,7 +2199,7 @@ func assertV21Backfill(t *testing.T, path string, ids ...string) map[string]v21B
 		if provider == "" {
 			provider = AgentClaude
 		}
-		coverage := quoted(string(BusySendCoverageForAgent(provider)))
+		coverage := quoted(string(busySendWantCoverage(provider)))
 		convs := readQuotedRows(t, path, "busy_conversations", id, "generation", convCols)
 		launches := readQuotedRows(t, path, "busy_send_launches", id, "launch_id", launchCols)
 		if len(convs) != 1 || len(launches) != 1 {

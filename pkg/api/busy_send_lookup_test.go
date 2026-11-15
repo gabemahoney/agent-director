@@ -138,7 +138,7 @@ func TestForceDeliveryBindsExaminedPublishedLaunch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		res, version, err := e.st.MoveToPending(id, row.Snapshot, e.clock.Now().UnixMilli(), token, "", "", store.LaunchOwner{})
+		res, version, err := e.st.MoveToPendingWithExit(id, row.Snapshot, e.clock.Now().UnixMilli(), token, "", "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, e.st, id))
 		if err != nil || res != store.CondApplied {
 			t.Fatalf("stage resume = %v, %v", res, err)
 		}
@@ -182,7 +182,7 @@ func TestForceDeliveryBindsExaminedPublishedLaunch(t *testing.T) {
 		const token = "5566778899aabbcc"
 		fresh := store.Spawn{Agent: "cursor", CWD: r.CWD, TmuxSessionName: r.Name, RelayMode: "off", StartedAt: e.clock.Now(),
 			LaunchStartedAtMillis: e.clock.Now().UnixMilli(), Identity: store.LaunchIdentity{Token: token}}
-		res, _, version, err := e.st.ResetForReuse(r.ID, before.Snapshot, before.Agent, fresh)
+		res, _, version, err := e.st.ResetForReuse(r.ID, before.Snapshot, before.Agent, storefix.WithExit(t, e.st, r.ID, fresh))
 		if err != nil || res != store.CondApplied {
 			t.Fatalf("stage reuse = %v, %v", res, err)
 		}
@@ -204,6 +204,7 @@ func TestForceDeliveryBindsExaminedPublishedLaunch(t *testing.T) {
 		t.Run(fmt.Sprintf("publication between read and insert, covered=%t", covered), func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
+			e.rowAgent = "codex" // the replacement's coverage is the case's, not Claude's
 			r := e.seedResumable(t, time.Hour, agentGone)
 			c, _ := e.client(t)
 			old := currentLaunch(t, e.dbPath, r.ID)
@@ -272,6 +273,7 @@ func TestForceDeliveryBindsExaminedPublishedLaunch(t *testing.T) {
 func TestForceDeliveryFailuresStoreNothing(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = "codex" // force on an agent busy send doesn't cover; a covered force is E5's
 	r, unbound := e.seedRow(t, killRowSpec{}), e.seedRow(t, killRowSpec{})
 	storefix.UnbindBusySend(t, e.dbPath, unbound.ID)
 	c, _ := e.client(t)
@@ -327,6 +329,7 @@ func TestForceDeliveryFailuresStoreNothing(t *testing.T) {
 func TestForceAttemptOutlivesLaunchAndRow(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = "codex" // force on an agent busy send doesn't cover; a covered force is E5's
 	r := e.seedResumable(t, time.Hour, agentGone)
 	c, _ := e.client(t)
 	f := forceRefused(t, c, r.ID, e.clock.Now())
@@ -342,7 +345,7 @@ func TestForceAttemptOutlivesLaunchAndRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	const token = "99aabbccddeeff00"
-	_, version, err := e.st.MoveToPending(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), token, "", "", store.LaunchOwner{})
+	_, version, err := e.st.MoveToPendingWithExit(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), token, "", "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, e.st, r.ID))
 	if err == nil {
 		_, err = e.st.PublishBusySendLaunch(r.ID, version, token)
 	}
@@ -350,7 +353,7 @@ func TestForceAttemptOutlivesLaunchAndRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	read(c, "a new Launch published")
-	if err := e.st.DeleteSpawn(r.ID); err != nil {
+	if err := storefix.DeleteWithExit(t, e.st, r.ID); err != nil {
 		t.Fatal(err)
 	}
 	read(c, "the row's deletion")
@@ -381,6 +384,7 @@ func busyPair(id string) store.BusySendPair {
 func TestBusySendLookups(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = "codex" // force on an agent busy send doesn't cover; a covered force is E5's
 	r := e.seedRow(t, killRowSpec{})
 	c, _ := e.client(t)
 	calls, nameCalls := len(e.rec.SocketCalls()), len(e.rec.Calls())
@@ -504,7 +508,7 @@ func TestBusySendLookups(t *testing.T) {
 	if got := e.rec.SocketCalls()[calls:]; len(got) != 0 || len(e.rec.Calls()) != nameCalls {
 		t.Errorf("tmux calls %+v; want none", got)
 	}
-	if err := e.st.DeleteSpawn(r.ID); err != nil {
+	if err := storefix.DeleteWithExit(t, e.st, r.ID); err != nil {
 		t.Fatal(err)
 	}
 	reopened, _ := e.client(t)
@@ -523,6 +527,7 @@ func TestBusySendLookups(t *testing.T) {
 func TestBusySendLookupRefusals(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
+	e.rowAgent = "codex" // force on an agent busy send doesn't cover; a covered force is E5's
 	r := e.seedRow(t, killRowSpec{})
 	c, _ := e.client(t)
 	for _, id := range []string{"", "x", "{" + busyCaller + "}", "urn:uuid:" + busyCaller, strings.ReplaceAll(busyCaller, "-", "")} {

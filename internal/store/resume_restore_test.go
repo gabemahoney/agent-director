@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -104,7 +105,7 @@ func testRestoreAfterFailedResumeApplied(t *testing.T, spec moveSpec, deletePare
 		want.SubagentTracking = int64(1)
 	}
 	if deleteParent {
-		if err := f.s.DeleteSpawn(parent); err != nil {
+		if err := storefix.DeleteWithExit(t, f.s, parent); err != nil {
 			t.Fatalf("DeleteSpawn(parent): %v", err)
 		}
 		want.ParentID = nil

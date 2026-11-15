@@ -216,13 +216,39 @@ func (s *Store) insertBusySendPublished(ctx context.Context, conn *sql.Conn, sp 
 // overrides of the published conversation's. Either way the published
 // conversation keeps its own values until the candidate's publication
 // (SR-6.3).
-func (s *Store) stageBusySendLaunch(ctx context.Context, conn *sql.Conn, instanceID string, kind BusySendLaunchKind, defaults BusySendDefaultsChoice, at int64) error {
+//
+// exit is the covered published conversation's exit evidence, which the
+// caller validated under this write lock before its write changed the row's
+// recorded identities (prepareBusySendExit); nil for an uncovered one. With
+// it, the current Launch's End is recorded if it is not yet (process_exited,
+// with its custody disposition) and its Exit applied (exitBusySendLaunches),
+// before the candidate exists: M1's Resume and ReusePublish need the old
+// Launch ended and exited, and nothing issued to it can be taken afterwards.
+// Held Messages and claims returned to Held stay in the published
+// conversation, in accepted order with their resolved options, for the
+// candidate's publication to carry (resume) or retire (reuse).
+func (s *Store) stageBusySendLaunch(ctx context.Context, conn *sql.Conn, instanceID string, kind BusySendLaunchKind, defaults BusySendDefaultsChoice, exit *BusySendExitScope, at int64) error {
 	p, err := readBusySendPublished(ctx, conn, instanceID)
 	if err != nil {
 		return err
 	}
+	if p.coverage == BusySendCovered && exit == nil {
+		return fmt.Errorf("%w: a covered conversation's new Launch needs exit evidence", ErrBusySendExitNotEstablished)
+	}
 	if err := closeBusySendCandidate(ctx, conn, instanceID, nil, BusySendLaunchSuperseded, BusySendLaunchCandidateReplaced, at); err != nil {
 		return err
+	}
+	if exit != nil {
+		if _, err := recordBusySendLaunchEnd(ctx, conn, s.StoreID(), p.launch, BusySendProcessExited, at); err != nil {
+			return err
+		}
+		if err := exitBusySendLaunches(ctx, conn, s.StoreID(), *exit, at); err != nil {
+			return err
+		}
+		// The Launch End set Held waits launch_ended; the row is pending now.
+		if err := refreshBusySendLaunchWaits(ctx, conn, instanceID, at); err != nil {
+			return err
+		}
 	}
 	var provider string
 	if err := conn.QueryRowContext(ctx, `SELECT `+busySendProviderSQL("agent")+` FROM spawns WHERE instance_id = ?`, instanceID).Scan(&provider); err != nil {
@@ -280,11 +306,24 @@ func closeBusySendCandidate(ctx context.Context, conn *sql.Conn, instanceID stri
 // candidate token, not the creator's obsolete spawns version, pins the Launch;
 // replacement/restoration/deletion cannot promote it. Repeated publication is
 // a no-op. The return value says whether this call promoted a candidate; its
-// caller owns the spawns version advance. E1 has no custody to finalize. A
-// reuse's Agent Defaults publish with its candidate conversation; a resume
-// candidate's staged overrides are applied to the published conversation
-// here, in the same guarded update as its coverage, whichever write publishes
-// it (the creator, adoption or the first hook report-in).
+// caller owns the spawns version advance. A reuse's Agent Defaults publish
+// with its candidate conversation; a resume candidate's staged overrides are
+// applied to the published conversation here, in the same guarded update as
+// its coverage, whichever write publishes it (the creator, adoption or the
+// first hook report-in).
+//
+// Custody (SR-6.1 to SR-6.3; M1's Resume and ReusePublish): a covered
+// published conversation's current Launch must be ended and exited
+// (busySendLaunchExited), as its staging established, or nothing publishes
+// and the candidate stays for a later eligible write. A resume keeps the
+// conversation, so its Held Messages carry to the new Launch in their
+// accepted order with their resolved options, and their waits
+// are refreshed for it (refreshBusySendLaunchWaits: route_unavailable clears
+// once the new Launch's route is recorded, agent_starting stays while it is
+// pending). A reuse retires the old conversation and, in the same commit,
+// finalizes its never-emitted custody, Messages admitted while the reuse was
+// pending included, as not_started conversation_replaced
+// (retireBusySendCustody). Nothing is issued here.
 func publishBusySendCandidate(ctx context.Context, conn busySendLaunchSQL, instanceID, token string, at int64) (bool, error) {
 	var launch, conversation, kind string
 	var revision int64
@@ -310,6 +349,18 @@ func publishBusySendCandidate(ctx context.Context, conn busySendLaunchSQL, insta
 	if err != nil {
 		return false, err
 	}
+	if p.coverage == BusySendCovered {
+		exited, err := busySendLaunchExited(ctx, conn, p.launch)
+		if err != nil {
+			return false, err
+		}
+		if !exited {
+			// Staging established it, so this is never expected: publish
+			// nothing and keep the candidate's evidence, without failing the
+			// write that established creation.
+			return false, nil
+		}
+	}
 	if kind == string(BusySendLaunchReuse) {
 		var candidateRevision int64
 		if err := conn.QueryRowContext(ctx, `SELECT revision FROM busy_conversations
@@ -323,6 +374,9 @@ func publishBusySendCandidate(ctx context.Context, conn busySendLaunchSQL, insta
 		}
 		if err := busySendChange(ctx, conn, `UPDATE busy_conversations SET publication = 'published', published_at_ms = ?, revision = revision + 1
 	        WHERE conversation_id = ? AND revision = ? AND publication = 'candidate'`, at, conversation, candidateRevision); err != nil {
+			return false, err
+		}
+		if err := retireBusySendCustody(ctx, conn, p.conversation, BusySendReasonConversationReplaced, at); err != nil {
 			return false, err
 		}
 	} else {
@@ -346,10 +400,12 @@ func publishBusySendCandidate(ctx context.Context, conn busySendLaunchSQL, insta
 	    WHERE launch_id = ? AND revision = ? AND phase IN ('candidate', 'uncertain')`, launch, revision); err != nil {
 		return false, err
 	}
-	err = busySendChange(ctx, conn, `UPDATE spawns SET busy_send = ?, busy_conversation_id = ?
+	if err := busySendChange(ctx, conn, `UPDATE spawns SET busy_send = ?, busy_conversation_id = ?
 	    WHERE instance_id = ? AND launch_token IS ? AND busy_conversation_id = ?`, string(coverage), conversation,
-		instanceID, nullableStringArg(token), p.conversation)
-	return err == nil, err
+		instanceID, nullableStringArg(token), p.conversation); err != nil {
+		return false, err
+	}
+	return true, refreshBusySendLaunchWaits(ctx, conn, instanceID, at)
 }
 
 // PublishBusySendLaunch handles a successful creation whose reply supplied no
@@ -459,7 +515,12 @@ func (s *Store) execBusySendRestore(instanceID, query string, args ...any) (sql.
 		if n == 0 {
 			return errFamilyWriteNotApplied
 		}
-		return closeBusySendCandidate(ctx, conn, instanceID, &token.String, BusySendLaunchFailed, BusySendCreationFailed, storeNowMillis())
+		at := storeNowMillis()
+		if err := closeBusySendCandidate(ctx, conn, instanceID, &token.String, BusySendLaunchFailed, BusySendCreationFailed, at); err != nil {
+			return err
+		}
+		// Held Messages waited agent_starting while the row was pending.
+		return refreshBusySendLaunchWaits(ctx, conn, instanceID, at)
 	})
 	if errors.Is(err, errFamilyWriteNotApplied) {
 		err = nil

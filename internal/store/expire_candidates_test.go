@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -151,7 +152,7 @@ func TestExpireDeleteFinishedIfSameLife(t *testing.T) {
 			}
 		}, store.CondChanged},
 		{"deleted by another caller", store.StateEnded, func(t *testing.T, f *v5Store, id string) {
-			if err := f.s.DeleteSpawn(id); err != nil {
+			if err := storefix.DeleteWithExit(t, f.s, id); err != nil {
 				t.Fatalf("DeleteSpawn: %v", err)
 			}
 		}, store.CondAbsent},

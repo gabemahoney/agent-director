@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -284,7 +285,7 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 					}
 				}
 				if tc.delete {
-					if err := f.s.DeleteSpawn(r.id); err != nil {
+					if err := storefix.DeleteWithExit(t, f.s, r.id); err != nil {
 						t.Fatalf("DeleteSpawn: %v", err)
 					}
 				}

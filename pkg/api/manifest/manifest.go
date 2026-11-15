@@ -1514,7 +1514,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "pause",
-		Description: "Default: pane-only ErrAgentCapabilityUnsupported; others ended/missing no-op; waiting: send `/exit`, await `ended` for pause.timeout_seconds. " + missingNotProofShort + " ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. ErrSubmissionUnconfirmed: inspect attempted-input facts (caller-contract.md). Codex: end report + exited agent ends row before keys or in wait. Plain send-keys guards; ErrDialogMaybeOpen: answer dialog, send-keys `/exit` with expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Pane-only: ErrAgentCapabilityUnsupported. Ended/missing: no-op. " + missingNotProofShort + " Covered live: identity-checked SIGTERM, Held kept, else ErrSpawnNotPausable (cause, signal_sent). Uncovered waiting: `/exit`, await `ended` (pause.timeout_seconds); ErrPauseTimeout: inspect get/read-pane, no blind retry; ErrSubmissionUnconfirmed: inspect attempted input. Codex: end report + exited agent ends row before keys or in wait. Send-keys guards; ErrDialogMaybeOpen: answer it, send-keys `/exit`+expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1527,7 +1527,7 @@ var Verbs = []VerbDef{
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
-			{Name: "only_if_waiting", Type: "bool", Description: "Pause only an agent proven waiting with no turn pending. Covered Agents only: true for any other agent is refused with ErrSpawnNotPausable, err_details cause agent_not_covered, and nothing is ended. false or omitted: today's pause.", Nullable: false, AllowEmpty: false},
+			{Name: "only_if_waiting", Type: "bool", Description: "Pause only an agent proven waiting with no turn pending. Covered Agents only: true for any other agent is refused with ErrSpawnNotPausable, err_details cause agent_not_covered, and nothing is ended; on a Covered Agent this version refuses it with ErrInternal (not yet available), nothing ended. false or omitted: today's pause.", Nullable: false, AllowEmpty: false},
 		},
 		ResultFields: []FieldDef{},
 		ErrorNames: []string{

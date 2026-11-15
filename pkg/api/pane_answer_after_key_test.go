@@ -44,7 +44,7 @@ func TestPaneAnswerReleasesItsIntentOnFailure(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p := newPAEnv(t)
+			p := newCodexPAEnv(t) // a covered Claude row takes no pane answer keys
 			tc.arrange(p)
 
 			err := p.sendKeys(p.answer(tok, "allow", "1"))
@@ -72,24 +72,30 @@ func TestPaneAnswerReleasesItsIntentOnFailure(t *testing.T) {
 // with exactly its one key and no Enter, its sent write changes nothing
 // (no ad.row_mutation.committed by send_keys), and the request keeps the
 // close's verdict: its tool's PostToolUse (tool_ran, allow), or a close of the
-// row's requests by its SessionEnd or find-missing's mark (deny, closed).
+// row's requests by its SessionEnd or find-missing's mark (deny, closed). A
+// covered Claude row takes no pane answer keys: the PostToolUse close runs on
+// a Cursor row, through its authenticated binding (proveCursorTool), since a
+// Codex request has no tool_use_id; the other closes on Codex rows.
 func TestPaneAnswerClosedWhileItsKeyGoesOut(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
+	cursorEnv := func(t *testing.T) *paEnv { return newPAEnvAgent(t, store.AgentCursor, "") }
+	cursorToolRan := func(t *testing.T, p *paEnv) { p.proveCursorTool(t, tok, paToolUseID) }
 	cases := []struct {
 		name                         string
+		env                          func(*testing.T) *paEnv
 		close                        r7Step
 		paneAnswer, decision, reason string
 		closed                       bool
 	}{
-		{"its tool ran", r7ToolRan, store.PaneAnswerToolRan, "allow", store.DecisionReasonToolRan, false},
-		{"its row ended", r7End, store.PaneAnswerIntent, "deny", store.DecisionReasonEnded, true},
-		{"find-missing marked its row missing", r7Mark, store.PaneAnswerIntent, "deny", store.DecisionReasonFindMissing, true},
+		{"its tool ran", cursorEnv, cursorToolRan, store.PaneAnswerToolRan, "allow", store.DecisionReasonToolRan, false},
+		{"its row ended", newCodexPAEnv, r7End, store.PaneAnswerIntent, "deny", store.DecisionReasonEnded, true},
+		{"find-missing marked its row missing", newCodexPAEnv, r7Mark, store.PaneAnswerIntent, "deny", store.DecisionReasonFindMissing, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p := newPAEnv(t)
+			p := tc.env(t)
 			p.rec.AfterCall(paKeyCall("1"), func(tmuxfix.SocketCall, error) { tc.close(t, p) })
 
 			run := p.sendKeysRun(p.answer(tok, "allow", "1"))
@@ -164,7 +170,7 @@ func TestPaneAnswerReleaseIsBounded(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p := newPAEnv(t)
+			p := newCodexPAEnv(t) // a covered Claude row takes no pane answer keys
 			rs := &paReleaseStore{killStore: p.store, p: p, fails: tc.fails, tick: tc.tick}
 			p.sks = rs
 

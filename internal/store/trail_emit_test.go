@@ -217,7 +217,7 @@ func mustGetSpawn(t *testing.T, s *Store, id string) Spawn {
 // trailMove applies resume's move to pending on examined; it must apply.
 func trailMove(t *testing.T, s *Store, examined Spawn) int64 {
 	t.Helper()
-	res, v, err := s.MoveToPending(examined.InstanceID, examined.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "", LaunchOwner{})
+	res, v, err := s.MoveToPendingWithExit(examined.InstanceID, examined.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "", LaunchOwner{}, BusySendDefaultsChoice{}, busyExitIfAny(t, s, examined.InstanceID))
 	if err != nil || res != CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want CondApplied", res, err)
 	}
@@ -235,7 +235,7 @@ func trailReset(t *testing.T, s *Store, id string) (RawLife, int64) {
 	fresh := Spawn{Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-trail-reused-" + id, RelayMode: "off",
 		StartedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), LaunchStartedAtMillis: trailMoveStart,
 		Identity: LaunchIdentity{Token: trailReuseToken, Socket: "/tmp/trail-reuse-sock"}}
-	res, _, v, err := s.ResetForReuse(id, row.Snapshot, row.Agent, fresh)
+	res, _, v, err := s.ResetForReuse(id, row.Snapshot, row.Agent, busyWithExit(t, s, id, fresh))
 	if err != nil || res != CondApplied {
 		t.Fatalf("ResetForReuse = %v, %v; want CondApplied", res, err)
 	}

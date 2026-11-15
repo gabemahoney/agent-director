@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"sync/atomic"
 )
 
 // SQLite's DSN PRAGMAs use context.Background inside Driver.Open. The caller
@@ -17,6 +18,16 @@ type sqliteConnector struct {
 }
 
 type connectionInitializationContextKey struct{}
+
+// legacyInitializationContextKey marks an acquisition context whose lazy
+// connection, new or returned unopened, is initialized as GetSpawn's would
+// be: under context.Background, with no deadline or cancellation, so its
+// setup waits the store's busy timeout and fails as GetSpawn's does
+// (GetSpawnConnBounded). Its value, an *atomic.Bool, is set once that setup
+// has started (opening SQLite, then its PRAGMAs). Pool admission still
+// observes the acquisition context, and a new connection is still handed
+// over lazy.
+type legacyInitializationContextKey struct{}
 
 // The pool's replacement opener has no caller context. Give it a connection
 // without native resources, so handoff succeeds even with multiple waiters.
@@ -45,8 +56,11 @@ type lazySQLiteConn struct {
 }
 
 func (c *lazySQLiteConn) initialize(ctx context.Context) error {
+	legacy, _ := ctx.Value(legacyInitializationContextKey{}).(*atomic.Bool)
 	if operation, ok := ctx.Value(connectionInitializationContextKey{}).(context.Context); ok {
-		ctx = operation
+		ctx, legacy = operation, nil
+	} else if legacy != nil {
+		ctx = context.Background()
 	}
 	if c.closed {
 		return driver.ErrBadConn
@@ -58,6 +72,9 @@ func (c *lazySQLiteConn) initialize(ctx context.Context) error {
 		return err
 	}
 	if c.conn == nil {
+		if legacy != nil {
+			legacy.Store(true)
+		}
 		c.conn, c.err = c.connector.Connect(ctx)
 	}
 	return c.err
@@ -184,6 +201,9 @@ func (c sqliteConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	// connection's initialization is SQL work in the fixed operation budget.
 	if operation, ok := ctx.Value(connectionInitializationContextKey{}).(context.Context); ok {
 		ctx = operation
+	} else if legacy, ok := ctx.Value(legacyInitializationContextKey{}).(*atomic.Bool); ok {
+		// An acquisition with no Done opens at once, already unbounded.
+		legacy.Store(true)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

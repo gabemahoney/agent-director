@@ -40,9 +40,10 @@ var errInjectedStore = errors.New("injected store failure: database is locked")
 
 // hookedResumeStore implements api.ResumeStore (and RecordLaunchIdentity)
 // over a real store: a test can fail the move or the restore (failMove,
-// failRestore) and run a function once after GetSpawn (afterGet) or the move
-// (afterMove), cleared before it runs, so a nested resume does not rerun it.
-// moveToken is the last move's token. Safe for concurrent use.
+// failRestore) and run a function once after GetSpawn (afterGet), the exit
+// scope read (afterScope) or the move (afterMove), cleared before it runs, so
+// a nested resume does not rerun it. moveToken is the last move's token. Safe
+// for concurrent use.
 type hookedResumeStore struct {
 	st *store.Store
 
@@ -50,6 +51,7 @@ type hookedResumeStore struct {
 	moveErr    error
 	restoreErr error
 	afterGetFn func()
+	afterScFn  func()
 	afterMvFn  func()
 	moveToken  string
 }
@@ -80,6 +82,14 @@ func (w *hookedResumeStore) afterGet(fn func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.afterGetFn = fn
+}
+
+// afterScope runs fn once, when the next exit scope read returns (after the
+// exit judgement's read, before the move).
+func (w *hookedResumeStore) afterScope(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.afterScFn = fn
 }
 
 // afterMove runs fn once, when the next MoveToPending returns (before the create).
@@ -145,6 +155,22 @@ func (w *hookedResumeStore) ListSessionHistory(instanceID string, life int64) ([
 
 // MoveToPending delegates unless failMove is set, then runs the afterMove hook.
 func (w *hookedResumeStore) MoveToPending(instanceID string, examined api.RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner api.LaunchOwner) (api.CondResult, int64, error) {
+	return w.move(token, func() (api.CondResult, int64, error) {
+		return w.st.MoveToPending(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner)
+	})
+}
+
+// MoveToPendingWithExit is MoveToPending's hooks around the store's move with
+// a covered conversation's exit evidence, the move resume makes.
+func (w *hookedResumeStore) MoveToPendingWithExit(instanceID string, examined api.RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner api.LaunchOwner, defaults store.BusySendDefaultsChoice, exit *store.BusySendExitEvidence) (api.CondResult, int64, error) {
+	return w.move(token, func() (api.CondResult, int64, error) {
+		return w.st.MoveToPendingWithExit(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner, defaults, exit)
+	})
+}
+
+// move records token and runs the delegated move unless failMove is set,
+// then runs the afterMove hook.
+func (w *hookedResumeStore) move(token string, delegate func() (api.CondResult, int64, error)) (api.CondResult, int64, error) {
 	var (
 		res     api.CondResult
 		version int64
@@ -154,12 +180,22 @@ func (w *hookedResumeStore) MoveToPending(instanceID string, examined api.RowSna
 	w.moveToken = token
 	w.mu.Unlock()
 	if err == nil {
-		res, version, err = w.st.MoveToPending(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner)
+		res, version, err = delegate()
 	}
 	if fn := w.take(&w.afterMvFn); fn != nil {
 		fn()
 	}
 	return res, version, err
+}
+
+// ReadBusySendExitScope delegates, so resume judges the exit scope the store
+// holds, then runs the afterScope hook.
+func (w *hookedResumeStore) ReadBusySendExitScope(instanceID string) (store.BusySendExitScope, error) {
+	scope, err := w.st.ReadBusySendExitScope(instanceID)
+	if fn := w.take(&w.afterScFn); fn != nil {
+		fn()
+	}
+	return scope, err
 }
 
 // RestoreAfterFailedResume delegates unless failRestore is set.

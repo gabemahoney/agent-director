@@ -1,5 +1,12 @@
 package api_test
 
+// input_proof_test.go: late native proof of an input attempt a launch already
+// persisted, reconciled by ReconcileInputProof and by the shared first reads
+// (get, status, list, find-missing, sweep). The row is a covered Claude row
+// whose launch persisted its attempt before busy send covered it
+// (seedSQLiteOwner): covering Claude stops new ordinary typing, not the
+// reconciliation of its historical attempts.
+
 import (
 	"bytes"
 	"context"
@@ -18,11 +25,9 @@ import (
 
 func TestInputProofOnePassKeepsExactCapturedProvenance(t *testing.T) {
 	t.Parallel()
-	e, r, launch := sqliteSubmission(t)
-	p := api.SendKeysParams{InstanceID: r.ID, Text: "late <>& 🌍", AllowPending: true, DeliveryRequestID: "original"}
-	_, err := e.send(p)
-	assertDeliveryError(t, err, "submission_unconfirmed", len(p.Text), true)
-	l, owner := sqliteAttempt(t, e, r)
+	e, r, launch := sqliteSubmission(t, killRowSpec{State: store.StatePending})
+	const text = "late <>& 🌍"
+	l, owner := seedSQLiteOwner(t, e, r, launch, text)
 	if owner.Confirmation.Source != "store" {
 		t.Fatalf("intent became receipt: %+v", owner.Confirmation)
 	}
@@ -31,7 +36,7 @@ func TestInputProofOnePassKeepsExactCapturedProvenance(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(first.Attempt, owner) || first.LaunchRevision != l.Revision {
 		t.Fatalf("empty pass=%+v %v", first, err)
 	}
-	raw := sqliteProofRecord(t, launch, p.Text)
+	raw := sqliteProofRecord(t, launch, text)
 	if err := os.WriteFile(launch.Capability.Transcript, append(append([]byte(nil), raw...), '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +80,7 @@ func TestInputProofRejectsStaleCaptureAndNeverStartsWork(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"empty", "cancelled", "wrong launch", "wrong life", "wrong process", "wrong session", "stale commit"} {
 		t.Run(mode, func(t *testing.T) {
-			e, r, launch := sqliteSubmission(t)
+			e, r, launch := sqliteSubmission(t, killRowSpec{State: store.StatePending})
 			if mode == "empty" {
 				before, err := e.st.ReadInputLaunch(context.Background(), r.Token)
 				if err != nil {
@@ -92,11 +97,8 @@ func TestInputProofRejectsStaleCaptureAndNeverStartsWork(t *testing.T) {
 				e.assertNoTmuxCall(t)
 				return
 			}
-			p := api.SendKeysParams{InstanceID: r.ID, Text: "late", AllowPending: true, DeliveryRequestID: "original"}
-			_, err := e.send(p)
-			assertDeliveryError(t, err, "submission_unconfirmed", len(p.Text), true)
-			_, owner := sqliteAttempt(t, e, r)
-			raw := sqliteProofRecord(t, launch, p.Text)
+			_, owner := seedSQLiteOwner(t, e, r, launch, "late")
+			raw := sqliteProofRecord(t, launch, "late")
 			if err := os.WriteFile(launch.Capability.Transcript, append(raw, '\n'), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -150,10 +152,10 @@ func TestInputProofSharedFirstRead(t *testing.T) {
 	for _, surface := range []string{"status", "get", "list", "find-missing", "sweep"} {
 		for _, finished := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/finished=%v", surface, finished), func(t *testing.T) {
-				e, r, launch := sqliteSubmission(t)
-				p := api.SendKeysParams{InstanceID: r.ID, Text: "late <>& 🌍", AllowPending: true, DeliveryRequestID: "original"}
-				_, err := e.send(p)
-				assertDeliveryError(t, err, "submission_unconfirmed", len(p.Text), true)
+				e, r, launch := sqliteSubmission(t, killRowSpec{State: store.StatePending})
+				const text = "late <>& 🌍"
+				seedSQLiteOwner(t, e, r, launch, text)
+				var err error
 				if err := seedAgentState(e.st, e.dbPath, r.ID, store.StateWaiting); err != nil {
 					t.Fatal(err)
 				}
@@ -167,7 +169,7 @@ func TestInputProofSharedFirstRead(t *testing.T) {
 					}
 				}
 				before, owner := sqliteAttempt(t, e, r)
-				raw := sqliteProofRecord(t, launch, p.Text)
+				raw := sqliteProofRecord(t, launch, text)
 				if err := os.WriteFile(launch.Capability.Transcript, append(append([]byte(nil), raw...), '\n'), 0600); err != nil {
 					t.Fatal(err)
 				}

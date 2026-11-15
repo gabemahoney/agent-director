@@ -24,6 +24,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -124,7 +125,20 @@ var (
 	paneTextCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText}
 	paneListedCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes}
 	paneLookupCalls = []tmux.Call{tmux.CallLookup}
+	// A pane-only lane's (Droid, OpenCode) delivery: one target lookup, then
+	// its text call carrying its Enter (a text send, then an Enter send), with
+	// no native-input recheck between.
+	paneOnlySendCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText, tmux.CallSendEnter}
+	paneOnlyTextCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText}
+	// A Codex row's ordinary text: its guarded paste, the ownership checks
+	// immediately before each write (assertFallbackPaste).
+	codexPasteCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes,
+		tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText,
+		tmux.CallLookup, tmux.CallListPanes, tmux.CallSendEnter}
 )
+
+// paneOnlyRows reports whether e's rows are a pane-only lane's (e.rowAgent).
+func (e *killEnv) paneOnlyRows() bool { return spawn.IsPaneOnly(e.rowAgent) }
 
 // withFollowUp is calls then one follow-up lookup (a failed action's, SR-7.3), in a new slice.
 func withFollowUp(calls []tmux.Call) []tmux.Call { return append(slices.Clone(calls), tmux.CallLookup) }
@@ -237,19 +251,6 @@ func (e *killEnv) sessionStartsWhenPolled(t *testing.T, r killRow, after func(),
 	})
 }
 
-// assertSessionStartMissing pins b.qcf's never-reported refusal and no input.
-func (e *killEnv) assertSessionStartMissing(t *testing.T, err error) {
-	t.Helper()
-	assertOneName(t, err, "ErrSubmissionUnconfirmed")
-	want := api.SubmissionUnconfirmedDetails{Outcome: "not_started", Phase: "pre_input", RowState: store.StatePending,
-		Reason: "the agent did not report in with SessionStart within 12 seconds; nothing was typed, so the same send-keys can be retried later"}
-	if got := api.ErrDetails(err); got != want {
-		t.Fatalf("refusal=%+v; want %+v", got, want)
-	}
-	e.assertNothingSent(t)
-	e.assertNoCalls(t, tmux.CallSendKey)
-}
-
 // RecordHookGone delegates.
 func (w *killStore) RecordHookGone(at time.Time, maxWait time.Duration, ids ...int64) (map[int64]time.Time, error) {
 	return w.st.RecordHookGone(at, maxWait, ids...)
@@ -304,6 +305,10 @@ type paneVerb struct {
 	verb apitest.PaneVerb
 	keys bool
 	gone string // the gone error's name
+	// agent is the agent of the row the verb acts on ("" for Claude): busy
+	// send covers Claude, whose send-keys and pause type nothing, so send-keys
+	// acts on a pane-only Droid row and pause on a Codex row (killEnv.rowAgent).
+	agent string
 	// run runs the verb on r and returns the text read (read-pane) and its error.
 	run func(t *testing.T, e *killEnv, r killRow) (string, error)
 	// acted fails unless the run (out, err) acted on pane by id with exactly the verb's calls.
@@ -336,7 +341,7 @@ func readPaneVerb() paneVerb {
 
 // sendKeysVerb sends skaText through api.SendKeys.
 func sendKeysVerb() paneVerb {
-	return paneVerb{name: "send-keys", verb: apitest.PaneSendKeys, keys: true, gone: "ErrTmuxSendKeys",
+	return paneVerb{name: "send-keys", verb: apitest.PaneSendKeys, keys: true, gone: "ErrTmuxSendKeys", agent: store.AgentDroid,
 		run: func(_ *testing.T, e *killEnv, r killRow) (string, error) {
 			_, err := e.sendKeys(skaParams(r))
 			return "", err
@@ -352,7 +357,7 @@ func sendKeysVerb() paneVerb {
 
 // pauseVerb pauses through api.Pause up to its wait (pauseToWait).
 func pauseVerb() paneVerb {
-	return paneVerb{name: "pause", verb: apitest.PanePause, keys: true, gone: "ErrTmuxSendKeys",
+	return paneVerb{name: "pause", verb: apitest.PanePause, keys: true, gone: "ErrTmuxSendKeys", agent: store.AgentCodex,
 		run: func(_ *testing.T, e *killEnv, r killRow) (string, error) { return "", e.pauseToWait(r) },
 		acted: func(t *testing.T, e *killEnv, r killRow, pane, _ string, err error) {
 			t.Helper()
@@ -773,14 +778,30 @@ func (e *killEnv) assertCaptured(t *testing.T, paneID string, nLines int, ansi b
 // (as delivered: CR stripped) into paneID on socket, with Enter separate.
 func assertTextSent(t *testing.T, rec *tmuxfix.Recorder, socket, paneID, text string) {
 	t.Helper()
+	assertTextCall(t, rec, socket, paneID, text, false)
+}
+
+// assertTextCall is assertTextSent with the text call's own Enter (a
+// pane-only lane's carries it).
+func assertTextCall(t *testing.T, rec *tmuxfix.Recorder, socket, paneID, text string, enter bool) {
+	t.Helper()
 	got := rec.SocketCallsOf(tmux.CallSendText)
 	if len(got) != 1 {
 		t.Fatalf("text calls = %+v; want one to %s", got, paneID)
 	}
-	if c := got[0]; c.Socket != socket || c.Target != paneID || c.Text != text || c.PressEnter {
-		t.Errorf("text call %q to %q on %s (Enter %v); want %q to %q on %s (Enter false)",
-			c.Text, c.Target, c.Socket, c.PressEnter, text, paneID, socket)
+	if c := got[0]; c.Socket != socket || c.Target != paneID || c.Text != text || c.PressEnter != enter {
+		t.Errorf("text call %q to %q on %s (Enter %v); want %q to %q on %s (Enter %v)",
+			c.Text, c.Target, c.Socket, c.PressEnter, text, paneID, socket, enter)
 	}
+}
+
+// rowEnterCall is the Enter call on e's rows' lane: a pane-only lane's Enter
+// send, else the Enter key send.
+func (e *killEnv) rowEnterCall() tmux.Call {
+	if e.paneOnlyRows() {
+		return tmux.CallSendEnter
+	}
+	return callEnterKey
 }
 
 // assertEnterSent fails unless rec recorded exactly one Enter call, to paneID on socket.
@@ -794,9 +815,24 @@ func assertEnterSent(t *testing.T, rec *tmuxfix.Recorder, socket, paneID string)
 // assertDelivered checks paneSendCalls (lookup, listing, every target recheck,
 // literal text, one Enter key) with the specified number of terminal reads
 // (default zero) after the first lookup and listing. Terminal reads add pending
-// Claude's post-wait ownership lookup and listing (b.qcf).
+// Claude's post-wait ownership lookup and listing (b.qcf). On e's rows' lane
+// (e.rowAgent): a pane-only row's is paneOnlySendCalls, its text call
+// carrying Enter; a Codex row's is a guarded paste (assertFallbackPaste).
 func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string, terminalReads ...int) {
 	t.Helper()
+	if e.paneOnlyRows() {
+		e.assertPaneCalls(t, paneOnlySendCalls...)
+		assertTextCall(t, e.rec, socket, paneID, text, true)
+		if got := e.rec.SocketCallsOf(tmux.CallSendEnter); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
+			t.Errorf("Enter sends = %+v; want one to %s on %s", got, paneID, socket)
+		}
+		return
+	}
+	if e.rowAgent == store.AgentCodex {
+		// A Codex row's ordinary text goes by guarded paste (no native input here).
+		assertFallbackPaste(t, e.rec.SocketCalls(), socket, paneID, text)
+		return
+	}
 	calls := slices.Clone(paneSendCalls[:len(paneListedCalls)])
 	if len(terminalReads) > 0 {
 		for range terminalReads[0] {
@@ -816,11 +852,8 @@ func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string, ter
 // the ownership checks immediately before each write.
 func assertFallbackPaste(t *testing.T, calls []tmuxfix.SocketCall, socket, paneID, text string) {
 	t.Helper()
-	want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes,
-		tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText,
-		tmux.CallLookup, tmux.CallListPanes, tmux.CallSendEnter}
-	if !slices.Equal(paKinds(calls), want) {
-		t.Fatalf("fallback calls = %v; want %v", paKinds(calls), want)
+	if !slices.Equal(paKinds(calls), codexPasteCalls) {
+		t.Fatalf("fallback calls = %v; want %v", paKinds(calls), codexPasteCalls)
 	}
 	for _, c := range calls {
 		if c.Call == tmux.CallSendText || c.Call == tmux.CallSendEnter {
@@ -835,9 +868,15 @@ func assertFallbackPaste(t *testing.T, calls []tmuxfix.SocketCall, socket, paneI
 }
 
 // assertEnterOnly requires all admission checks and one actual Enter key,
-// with no literal transport operation, including an empty-text operation.
+// with no literal transport operation, including an empty-text operation (a
+// pane-only row's, e.rowAgent, after its one target lookup).
 func (e *killEnv) assertEnterOnly(t *testing.T, socket, paneID string) {
 	t.Helper()
+	if e.paneOnlyRows() { // one target lookup, no recheck (paneOnlySendCalls)
+		e.assertPaneCalls(t, tmux.CallLookup, tmux.CallListPanes, callEnterKey)
+		assertEnterSent(t, e.rec, socket, paneID)
+		return
+	}
 	e.assertPaneCalls(t, tmux.CallLookup, tmux.CallListPanes,
 		tmux.CallLookup, tmux.CallListPanes, tmux.CallLookup, tmux.CallListPanes,
 		tmux.CallLookup, tmux.CallListPanes, callEnterKey)
@@ -995,9 +1034,15 @@ func (e *killEnv) endAsAgent(t *testing.T, r killRow) (bool, string) {
 }
 
 // endAfterEnter ends r's row as its own agent (endAsAgent) when the first
-// Enter call returns. The test fails unless it ran and applied.
+// Enter call returns; a Codex agent exits instead (codexExitsAfterEnter), its
+// SessionEnd keeping the row for the wait's end check. The test fails unless
+// it ran and applied.
 func (e *killEnv) endAfterEnter(t *testing.T, r killRow) {
 	t.Helper()
+	if r.Spawn.Agent == store.AgentCodex {
+		e.codexExitsAfterEnter(t, r, nil)
+		return
+	}
 	e.onceAfter(t, callEnterKey, "SessionEnd", func() (bool, string) { return e.endAsAgent(t, r) })
 }
 
@@ -1047,15 +1092,19 @@ func (e *killEnv) assertExitTyped(t *testing.T, socket, paneID string) {
 }
 
 // assertLineCleared fails unless exactly one key send was made, paneClearKey
-// to paneID on socket, pressed once (a Claude row's clear), and it came before
-// every text call (b.9o4).
+// to paneID on socket, pressed as e's rows press it (once, or a Codex row's
+// codexClearPresses), and it came before every text call (b.9o4).
 func (e *killEnv) assertLineCleared(t *testing.T, socket, paneID string) {
 	t.Helper()
-	e.assertLineClearedTimes(t, socket, paneID, 1)
+	presses := 1
+	if e.rowAgent == store.AgentCodex || e.rowAgent == store.AgentCursor {
+		presses = codexClearPresses
+	}
+	e.assertLineClearedTimes(t, socket, paneID, presses)
 }
 
-// codexClearPresses is how many C-u presses a Codex row's line clear is (RN-19):
-// 127 in one call, enough for a draft of 64 lines.
+// codexClearPresses is how many C-u presses a Codex or Cursor row's line clear
+// is (RN-19): 127 in one call, enough for a draft of 64 lines.
 const codexClearPresses = 127
 
 // clearPresses is the presses of r's line clear: one on a Claude row,

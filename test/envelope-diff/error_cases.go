@@ -30,6 +30,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
@@ -277,13 +278,17 @@ var errorCases = append(append(append(append(append(append([]errorCase{
 
 	// ── send-keys / ErrSpawnNotInteractive ────────────────────────────────
 	// Most representative send-keys error: state check fires before any
-	// tmux interaction, so fake-tmux is not reached.
+	// tmux interaction, so fake-tmux is not reached. The ended row is a
+	// Codex agent's: a covered Claude row holds a Message in any state.
 	{
 		verb:    "send-keys",
 		errName: "ErrSpawnNotInteractive",
 		seed: func(t *testing.T) (string, map[string]any) {
 			t.Helper()
-			_, dbPath := apitest.SeedErrSpawnNotInteractive(t)
+			dbPath := filepath.Join(t.TempDir(), "state.db")
+			if _, err := apitest.SeedSpawn(dbPath, "id-err-ni-1", store.StateEnded, "/tmp", "off", "", true, apitest.WithAgent("codex")); err != nil {
+				t.Fatal(err)
+			}
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {

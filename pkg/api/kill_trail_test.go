@@ -47,9 +47,16 @@ func ktrDies(_ *testing.T, e *killEnv, r *killRow) {
 	e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
 }
 
-// ktrScript scripts the typed failure f on every call of kind call on r's socket.
+// ktrScript scripts the typed failure f on every call of kind call on r's socket
+// (callEnterKey: the Enter call of r's lane, rowEnterCall).
 func ktrScript(f tmux.Failure, call tmux.Call) func(*testing.T, *killEnv, *killRow) {
-	return func(_ *testing.T, e *killEnv, r *killRow) { e.rec.Script(r.Socket, tmuxfix.Script{Failure: f}, call) }
+	return func(_ *testing.T, e *killEnv, r *killRow) {
+		scripted := call
+		if scripted == callEnterKey {
+			scripted = e.rowEnterCall() // a pane-only row's Enter is its Enter send
+		}
+		e.rec.Script(r.Socket, tmuxfix.Script{Failure: f}, scripted)
+	}
 }
 
 // ktrBystander keeps a session on r's server after the row's is killed.

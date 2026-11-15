@@ -155,7 +155,7 @@ func TestSessionStartWait(t *testing.T) {
 		return err
 	}
 	bumpVersion := bumpRowVersion
-	deleteRow := func(st *store.Store, id string) error { return st.DeleteSpawn(id) }
+	deleteRow := func(st *store.Store, id string) error { return storefix.DeleteWithExit(t, st, id) }
 	frozenLeft := grace - 10*time.Second // time left at the start of the frozen-clock case
 	// The 540 s cap (TestSessionStartWaitCapIs540s pins it): a grace above it, and
 	// the sleeps from the wait's start to it.

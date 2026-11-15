@@ -216,10 +216,174 @@ func ReadBusySendCounts(t *testing.T, dbPath string) BusySendCounts {
 	return c
 }
 
+// ExitEvidence is instanceID's busy-send exit scope as s reads it, taken as
+// positive exit evidence: the test judges every owned process in it gone, as
+// resume, reuse and administrator deletion establish before they replace or
+// retire a covered conversation (SR-6.2, SR-6.3). It is nil when the row has
+// no scope to read (absent, or no published binding); an uncovered
+// conversation ignores it (reusable fixture).
+func ExitEvidence(t *testing.T, s *store.Store, instanceID string) *store.BusySendExitEvidence {
+	t.Helper()
+	return CoveredExit(s, instanceID)
+}
+
+// CoveredExit is ExitEvidence for a caller with no test handle, such as a
+// store write a table of proxies runs (reusable fixture).
+func CoveredExit(s *store.Store, instanceID string) *store.BusySendExitEvidence {
+	scope, err := s.ReadBusySendExitScope(instanceID)
+	if err != nil {
+		return nil
+	}
+	return &store.BusySendExitEvidence{Scope: scope}
+}
+
+// WithExit is fresh carrying instanceID's ExitEvidence as its BusySendExit,
+// unless it already carries one, as reuse hands it to ResetForReuse
+// (reusable fixture).
+func WithExit(t *testing.T, s *store.Store, instanceID string, fresh store.Spawn) store.Spawn {
+	t.Helper()
+	if fresh.BusySendExit == nil {
+		fresh.BusySendExit = ExitEvidence(t, s, instanceID)
+	}
+	return fresh
+}
+
+// DeleteWithExit deletes instanceID's row as administrator deletion does:
+// with ExitEvidence when its conversation is covered, else plainly
+// (Store.DeleteSpawn). It returns the deletion's error (reusable fixture).
+func DeleteWithExit(t *testing.T, s *store.Store, instanceID string) error {
+	t.Helper()
+	return DeleteCovered(s, instanceID)
+}
+
+// DeleteCovered is DeleteWithExit for a caller with no test handle
+// (reusable fixture).
+func DeleteCovered(s *store.Store, instanceID string) error {
+	ev := CoveredExit(s, instanceID)
+	if ev == nil || ev.Scope.Coverage != store.BusySendCovered {
+		return s.DeleteSpawn(instanceID)
+	}
+	row, err := s.GetSpawn(instanceID)
+	if err != nil {
+		return err
+	}
+	res, err := s.DeleteBusySendCovered(instanceID, row.Snapshot, *ev)
+	if err == nil && res != store.CondApplied {
+		err = fmt.Errorf("storefix.DeleteWithExit(%s): %v; want applied", instanceID, res)
+	}
+	return err
+}
+
 // nullIfEmpty is v, or NULL for an empty string.
 func nullIfEmpty(v any) any {
 	if s, ok := v.(string); ok && s == "" {
 		return nil
 	}
 	return v
+}
+
+// LaunchFence is one Launch's fence facts as its durable records hold them,
+// for tests to inspect (repair sf2o-3 R2-2; production reads only the exit
+// facts it judges): whether its Launch End is recorded, every process it owns
+// (busy_send_launch_processes, in role order), and every intent-bearing
+// prompt of its open hand-overs with no recorded order or negative outcome,
+// in hand-over and prompt order.
+type LaunchFence struct {
+	Ended     bool
+	Processes []store.BusySendLaunchProcess
+	Prompts   []FencedPrompt
+}
+
+// FencedPrompt is one prompt of LaunchFence: its hand-over, index, captured
+// destination, emission and transport, and whether its fence is recorded.
+type FencedPrompt struct {
+	HandoverID  string
+	PromptIndex int
+	Destination store.BusySendDestination
+	Emission    store.BusySendEmission
+	Transport   store.BusySendTransport
+	Fenced      bool
+}
+
+// ReadLaunchFence reads launchID's LaunchFence from s's database through a
+// separate raw connection (reusable fixture). An unknown Launch fails the
+// test.
+func ReadLaunchFence(t *testing.T, s *store.Store, launchID string) LaunchFence {
+	t.Helper()
+	raw := openRawStore(t, s.Path(), "ReadLaunchFence")
+	defer func() { _ = raw.Close() }()
+	fail := func(err error) {
+		t.Helper()
+		t.Fatalf("storefix.ReadLaunchFence(%s): %v", launchID, err)
+	}
+	var out LaunchFence
+	var ended sql.NullInt64
+	if err := raw.QueryRow(`SELECT ended_at_ms FROM busy_send_launches WHERE launch_id = ?`, launchID).Scan(&ended); err != nil {
+		fail(err)
+	}
+	out.Ended = ended.Valid
+	rows, err := raw.Query(`SELECT role, pid, start_time, pid_namespace, endpoint FROM busy_send_launch_processes
+	    WHERE launch_id = ? ORDER BY role`, launchID)
+	if err != nil {
+		fail(err)
+	}
+	for rows.Next() {
+		var p store.BusySendLaunchProcess
+		var role string
+		var namespace, endpoint sql.NullString
+		if err := rows.Scan(&role, &p.PID, &p.StartTime, &namespace, &endpoint); err != nil {
+			fail(err)
+		}
+		p.Role, p.PIDNamespace, p.Endpoint = store.BusySendProcessRole(role), namespace.String, endpoint.String
+		out.Processes = append(out.Processes, p)
+	}
+	if err := rows.Err(); err != nil {
+		fail(err)
+	}
+	_ = rows.Close()
+	type handover struct {
+		id      string
+		dest    store.BusySendDestination
+		prompts int
+	}
+	var open []handover
+	hrows, err := raw.Query(`SELECT handover_id, launch_id, launch_token, provider, session_id, route_kind, route_id,
+	        connection_generation, expected_turn_id, prompt_count
+	    FROM busy_send_handovers WHERE launch_id = ? AND state = 'open' ORDER BY handover_seq`, launchID)
+	if err != nil {
+		fail(err)
+	}
+	for hrows.Next() {
+		var h handover
+		var token, session, routeID, turnID sql.NullString
+		var routeKind string
+		if err := hrows.Scan(&h.id, &h.dest.LaunchID, &token, &h.dest.Provider, &session, &routeKind, &routeID,
+			&h.dest.ConnectionGeneration, &turnID, &h.prompts); err != nil {
+			fail(err)
+		}
+		h.dest.LaunchToken, h.dest.SessionID, h.dest.RouteID, h.dest.TurnID = token.String, session.String, routeID.String, turnID.String
+		h.dest.RouteKind = store.BusySendRouteKind(routeKind)
+		open = append(open, h)
+	}
+	if err := hrows.Err(); err != nil {
+		fail(err)
+	}
+	_ = hrows.Close()
+	for _, h := range open {
+		for i := 0; i < h.prompts; i++ {
+			var emission string
+			var transport, order, negative sql.NullString
+			var fenced sql.NullInt64
+			if err := raw.QueryRow(`SELECT emission, transport, order_kind, negative_kind, fenced_at_ms FROM busy_send_prompts
+			    WHERE handover_id = ? AND prompt_index = ?`, h.id, i).Scan(&emission, &transport, &order, &negative, &fenced); err != nil {
+				fail(err)
+			}
+			e := store.BusySendEmission(emission)
+			if (e == store.BusySendEmissionIntent || e == store.BusySendEmissionIssued) && !order.Valid && !negative.Valid {
+				out.Prompts = append(out.Prompts, FencedPrompt{HandoverID: h.id, PromptIndex: i, Destination: h.dest,
+					Emission: e, Transport: store.BusySendTransport(transport.String), Fenced: fenced.Valid})
+			}
+		}
+	}
+	return out
 }

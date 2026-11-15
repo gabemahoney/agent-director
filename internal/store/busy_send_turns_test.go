@@ -63,10 +63,7 @@ func (in *busySendInbox) awaiting(t *testing.T) int64 {
 // listsIssuer reports whether in's Launch fence lists issuer's process.
 func (in *busySendInbox) listsIssuer(t *testing.T, issuer store.BusySendIssuer) bool {
 	t.Helper()
-	fence, err := in.s.ReadBusySendLaunchFence(context.Background(), in.dest.LaunchID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fence := storefix.ReadLaunchFence(t, in.s, in.dest.LaunchID)
 	return slices.ContainsFunc(fence.Processes, func(p store.BusySendLaunchProcess) bool {
 		return p.Role == issuer.Role && p.PID == issuer.PID && p.StartTime == issuer.StartTime
 	})
@@ -224,10 +221,10 @@ func TestBusySendSightingRefusals(t *testing.T) {
 				}
 			}
 			if tc.awaiting == 0 {
-				fence, err := in.s.ReadBusySendLaunchFence(context.Background(), in.dest.LaunchID)
-				if err != nil || !fence.Ended || len(fence.Prompts) != 1 || fence.Prompts[0].PromptIndex != 1 ||
+				fence := storefix.ReadLaunchFence(t, in.s, in.dest.LaunchID)
+				if !fence.Ended || len(fence.Prompts) != 1 || fence.Prompts[0].PromptIndex != 1 ||
 					!in.listsIssuer(t, busySendHelper) {
-					t.Errorf("fence %+v, %v; want the ended Launch fencing prompt 1 and listing its issuer", fence, err)
+					t.Errorf("fence %+v; want the ended Launch fencing prompt 1 and listing its issuer", fence)
 				}
 			}
 		})
@@ -329,9 +326,10 @@ func TestBusySendHelperSlotKeepsAnUnresolvedIssuer(t *testing.T) {
 // route identity, connection generation 0 and its own token's wake endpoint.
 // Until publication the route facts an owned callback reads stay the
 // published Launch's, so the candidate cannot redirect them; publication
-// makes its route current. An uncovered Claude resume and a covered Codex
-// resume record no route, and their published Launch reads as uncovered by a
-// route.
+// makes its route current. A covered Codex resume (a conversation a later
+// release covered) records no route, and its published Launch reads as
+// uncovered by a route. (Every Claude Launch is covered: there is no
+// uncovered Claude resume.)
 func TestBusySendResumeRecordsItsOwnRoute(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -341,7 +339,6 @@ func TestBusySendResumeRecordsItsOwnRoute(t *testing.T) {
 		route   bool
 	}{
 		{"covered Claude resume", store.AgentClaude, true, true},
-		{"uncovered Claude resume", store.AgentClaude, false, false},
 		{"covered Codex resume", store.AgentCodex, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -371,7 +368,8 @@ func TestBusySendResumeRecordsItsOwnRoute(t *testing.T) {
 				t.Fatal(err)
 			}
 			const token = "1122334455667788"
-			res, version, err := s.MoveToPending(id, row.Snapshot, 2000, token, "", "", store.LaunchOwner{})
+			res, version, err := s.MoveToPendingWithExit(id, row.Snapshot, 2000, token, "", "", store.LaunchOwner{},
+				store.BusySendDefaultsChoice{}, exitEvidenceForTest(t, s, id))
 			if err != nil || res != store.CondApplied {
 				t.Fatalf("MoveToPending = %v, %v; want applied", res, err)
 			}

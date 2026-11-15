@@ -37,10 +37,12 @@ type BusyMessageFact struct {
 	CallerUUID, RequestID             sql.NullString
 }
 
+// BusyLaunchFact is one Launch of the instance; RouteKind is its recorded
+// route (NULL for none).
 type BusyLaunchFact struct {
 	ID, Conversation, Provider, Coverage, Kind, Phase string
 	Life, Revision                                    int64
-	Token, EndCause                                   sql.NullString
+	Token, EndCause, RouteKind                        sql.NullString
 	EndedAt                                           sql.NullInt64
 }
 
@@ -79,13 +81,13 @@ func ReadBusySendFacts(path, id string) (BusySendFacts, error) {
 	if err != nil {
 		return out, err
 	}
-	rows, err = tx.Query(`SELECT launch_id, conversation_id, provider, busy_send, kind, phase, life_number, revision, launch_token, end_cause, ended_at_ms FROM busy_send_launches WHERE instance_id = ? ORDER BY recorded_at_ms, launch_id`, id)
+	rows, err = tx.Query(`SELECT launch_id, conversation_id, provider, busy_send, kind, phase, life_number, revision, launch_token, end_cause, route_kind, ended_at_ms FROM busy_send_launches WHERE instance_id = ? ORDER BY recorded_at_ms, launch_id`, id)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
 		var l BusyLaunchFact
-		if err = rows.Scan(&l.ID, &l.Conversation, &l.Provider, &l.Coverage, &l.Kind, &l.Phase, &l.Life, &l.Revision, &l.Token, &l.EndCause, &l.EndedAt); err != nil {
+		if err = rows.Scan(&l.ID, &l.Conversation, &l.Provider, &l.Coverage, &l.Kind, &l.Phase, &l.Life, &l.Revision, &l.Token, &l.EndCause, &l.RouteKind, &l.EndedAt); err != nil {
 			_ = rows.Close()
 			return out, err
 		}

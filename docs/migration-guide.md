@@ -214,9 +214,9 @@ path, process, receipt, emission or Message is invented, and nothing is
 delivered. The backfill writes only the row's `busy_send` and
 `busy_conversation_id`. Bound rows and recorded core facts stay untouched, so
 compatible partial state keeps its established coverage, bindings and
-counters. A genuine v20 store, which has none of these, therefore comes out
-with every row `not_covered` while the covered set is empty and every
-`turn_starts` at the new column's default, 0.
+counters. In a genuine v20 store, Claude rows (including legacy NULL/empty
+agents) become `covered` without a route; other providers remain `not_covered`.
+Every `turn_starts` starts at the new column's default, 0.
 
 `busy_send_schema_test.go` covers the contract, record representation,
 every agent kind and lifecycle, legacy agents, reentry, refusal before

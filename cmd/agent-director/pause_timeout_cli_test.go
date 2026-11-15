@@ -9,12 +9,14 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// The CLI sends one exit command and preserves the inspection error envelope.
+// The CLI sends one exit command and preserves the inspection error envelope,
+// on a Codex row (a Claude row's pause is keyless: no exit keys to time out).
 func TestCLIPauseTimeoutInspectionRequired(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
-	home, id, socket := seedRowOnSocket(t, store.StateWaiting)
+	home, id, socket := seedRowOnSocket(t, store.StateWaiting, apitest.WithAgent("codex"))
 	faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, "Background work is running\n1. Exit and stop tasks / 2. Stay\n")))
 	configPath := filepath.Join(directorDir(home), "config.toml")
 	if err := os.WriteFile(configPath, []byte("[pause]\ntimeout_seconds = 1\n"), 0600); err != nil {

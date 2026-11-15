@@ -322,6 +322,11 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 // Launch. The published binding, coverage and provider stay intact until
 // successful creation publishes the candidate (RecordLaunchIdentity or
 // PublishBusySendLaunch), even on a same-agent reuse that keeps life_number.
+// A covered published conversation needs fresh.BusySendExit, validated
+// before the reset clears the examined identities and applied with the
+// staging (stageBusySendLaunch); without valid evidence nothing is written
+// and the error holds ErrBusySendExitNotEstablished. The publication then
+// retires the old conversation's never-emitted custody (SR-6.3).
 //
 // Inside it, it reads the row's session id, transcript path and life_number
 // (never labels, agent_args or extra_env, so a malformed row can be reset).
@@ -451,6 +456,12 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 		return CondChanged, "", 0, nil
 	}
 
+	// The exit gate comes before the reset clears the examined Launch's
+	// recorded identities (prepareBusySendExit).
+	exit, err := prepareBusySendExit(ctx, conn, s.StoreID(), instanceID, fresh.BusySendExit)
+	if err != nil {
+		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	q := connQuerier{ctx: ctx, conn: conn}
 	if sessionID != "" {
 		if err := upsertSessionHistoryEntry(q, instanceID, sessionID, jsonlPath, life); err != nil {
@@ -487,7 +498,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 	if n != 1 {
 		return 0, "", 0, fmt.Errorf("%s: reset changed %d rows, want 1", errPrefix, n)
 	}
-	if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchReuse, fresh.BusySendDefaults, fresh.LaunchStartedAtMillis); err != nil {
+	if err := s.stageBusySendLaunch(ctx, conn, instanceID, BusySendLaunchReuse, fresh.BusySendDefaults, exit, fresh.LaunchStartedAtMillis); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: stage busy-send Launch: %w", errPrefix, err)
 	}
 

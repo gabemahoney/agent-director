@@ -158,10 +158,13 @@ func emitOrphanCloseoutTickContext(ctx context.Context, instanceID, requestToken
 // statement of their own. The same transaction retires its published
 // busy-send conversation, abandons any candidate conversation and supersedes
 // current/pending Launches, retaining core history and recording only deletion,
-// never proof of physical exit (SR-6.3).
+// never proof of physical exit (SR-6.3). It deletes only a row whose
+// published conversation is not covered: a covered one holds custody that
+// only exit evidence may retire (DeleteBusySendCovered), so it is refused
+// with an error holding ErrBusySendExitNotEstablished and nothing written.
 func (s *Store) DeleteSpawn(instanceID string) error {
 	const q = `DELETE FROM spawns WHERE instance_id = ?`
-	res, err := s.execBusySendDelete(instanceID, q, instanceID)
+	res, err := s.execBusySendDelete(instanceID, refuseCoveredBusySend, q, instanceID)
 	if err != nil {
 		return fmt.Errorf("store: delete spawn: %w", err)
 	}

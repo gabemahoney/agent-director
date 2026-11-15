@@ -292,9 +292,10 @@ type busySendInitialWait struct {
 }
 
 // initialBusySendWait derives a new Message's wait from durable facts only,
-// never from the pane or process liveness (SR-2.6): the published current
-// Launch ended, or the row finished, is launch_ended, and a pending row
-// (spawn, reuse or resume in progress) agent_starting; a Launch with no
+// never from the pane or process liveness (SR-2.6): a pending row (spawn,
+// reuse or resume in progress, whose staging may already have recorded the
+// published Launch's End) is agent_starting, and otherwise the published
+// current Launch ended, or the row finished, is launch_ended; a Launch with no
 // recorded route or wake endpoint is route_unavailable; an open hand-over is
 // handover_in_progress; an earlier Message still in custody earlier_message;
 // then the row's raw state: a Dialog (check_permission, ask_user), a running
@@ -302,10 +303,10 @@ type busySendInitialWait struct {
 // establishes no readiness. Later custody writers record each change.
 func initialBusySendWait(ctx context.Context, conn *sql.Conn, p busySendPublishedRow) (busySendInitialWait, error) {
 	switch {
-	case p.launchEnded || p.state == StateEnded || p.state == StateMissing:
-		return busySendInitialWait{reason: BusySendWaitLaunchEnded}, nil
 	case p.state == StatePending:
 		return busySendInitialWait{reason: BusySendWaitAgentStarting}, nil
+	case p.launchEnded || p.state == StateEnded || p.state == StateMissing:
+		return busySendInitialWait{reason: BusySendWaitLaunchEnded}, nil
 	case p.routeKind == "" || p.wakePath == "":
 		return busySendInitialWait{reason: BusySendWaitRouteUnavailable}, nil
 	case p.ownerHandover != "":

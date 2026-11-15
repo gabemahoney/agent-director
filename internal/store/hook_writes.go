@@ -479,9 +479,13 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 			return errEndedNotApplied
 		}
 		// One store-clock read, inside the transaction after the write lock and
-		// only once the write applied, shared by the request close's closed_at
-		// and the subagent close's lost_at (SR-3.5).
+		// only once the write applied, shared by the request close's closed_at,
+		// the subagent close's lost_at (SR-3.5) and the busy-send Launch End
+		// the verified agent's own end report establishes (SR-6.2).
 		at := storeNowMillis()
+		if _, err := endBusySendRowLaunch(ctx, conn, s.StoreID(), instanceID, at); err != nil {
+			return err
+		}
 		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, at)
 		if err != nil {
 			return fmt.Errorf("close permission requests: %w", err)

@@ -458,7 +458,7 @@ func findMissingChecked(ctx context.Context, s FindMissingStore, view RelayView,
 		if err != nil {
 			return empty, err
 		}
-		refresh = activeRefresh(s, settle, true)
+		refresh = activeRefresh(s, settle, true, nil)
 	} else {
 		// A legacy narrow store exposes only its live identities. It cannot
 		// promise all-agent snapshot selection or the richer adapters.
@@ -495,7 +495,7 @@ func findMissingChecked(ctx context.Context, s FindMissingStore, view RelayView,
 		}
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].InstanceID < rows[j].InstanceID })
-	run := checkActiveRows(ctx, s, view, settle, rows, refresh, false)
+	run := checkActiveRows(ctx, s, view, settle, rows, refresh, false, nil)
 	// A sweep returns committed counts; its per-agent errors remain in the
 	// pass and never suppress independent selected rows.
 	_ = run.finish()

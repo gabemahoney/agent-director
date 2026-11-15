@@ -388,7 +388,7 @@ func rvMove(t *testing.T, f *v5Store, id string, examined store.Spawn, want stor
 	if want == store.CondApplied {
 		wantV = examined.Snapshot.RowVersion + 1
 	}
-	got, v, err := f.s.MoveToPending(id, examined.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{})
+	got, v, err := f.s.MoveToPendingWithExit(id, examined.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, id))
 	if err != nil || got != want || v != wantV {
 		t.Fatalf("MoveToPending = %v, %d, %v; want %v, %d, nil", got, v, err, want, wantV)
 	}
@@ -468,14 +468,14 @@ func rvResumeNoOps() []rowVersionCase {
 		{name: "MoveToPending/parent id names no row", state: "ended",
 			write: func(t *testing.T, f *v5Store, id string) {
 				sp := rvExamine(t, f, id)
-				got, v, err := f.s.MoveToPending(id, sp.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "rv-no-such-parent", store.LaunchOwner{})
+				got, v, err := f.s.MoveToPendingWithExit(id, sp.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "rv-no-such-parent", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, id))
 				if err == nil || got != 0 || v != 0 {
 					t.Fatalf("MoveToPending(bad parent) = %v, %d, %v; want 0, 0, an error", got, v, err)
 				}
 			}},
 		{name: "MoveToPending/absent row", state: "ended",
 			write: func(t *testing.T, f *v5Store, id string) {
-				got, v, err := f.s.MoveToPending("rv-absent", rvExamine(t, f, id).Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{})
+				got, v, err := f.s.MoveToPendingWithExit("rv-absent", rvExamine(t, f, id).Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, f.s, "rv-absent"))
 				if err != nil || got != store.CondAbsent || v != 0 {
 					t.Fatalf("MoveToPending(absent) = %v, %d, %v; want CondAbsent, 0, nil", got, v, err)
 				}

@@ -2,7 +2,8 @@
  * Smoke test — pause verb
  *
  * Happy path: an ended row is already terminal, so pause is a no-op success
- * with no tmux call. Error paths: a working row → ErrSpawnNotPausable; on a
+ * with no tmux call. Error paths, on codex rows, whose pause types `/exit`
+ * (a claude row's pause is keyless): a working row → ErrSpawnNotPausable; on a
  * relay-on waiting row pause is held as a plain sendKeys (b.zdz):
  * ErrRelayFallenBack, then ErrDialogMaybeOpen, typing nothing, which sendKeys
  * `/exit` with the pane's hash passes.
@@ -26,7 +27,7 @@ test("pause: happy path — no-op for already-terminal spawn", async () => {
 
 test("pause: error — working spawn is not pausable → ErrSpawnNotPausable", async () => {
   await withTempHome(async (homeDir) => {
-    runHelper("seed-spawn", { store: homeStore(homeDir), state: "working", id: "smoke-pause-err-id", "create-store": true });
+    runHelper("seed-spawn", { store: homeStore(homeDir), state: "working", id: "smoke-pause-err-id", agent: "codex", "create-store": true });
     using client = await openClient(homeStore(homeDir));
     await expect(client.pause({ instance_id: "smoke-pause-err-id" })).rejects.toBeInstanceOf(ErrSpawnNotPausable);
   });
@@ -37,7 +38,7 @@ test("pause: error — held as a plain sendKeys: ErrRelayFallenBack, then ErrDia
     const store = homeStore(homeDir);
     const id = "smoke-pause-hold-id";
     const logPath = path.join(homeDir, "fake-tmux.log");
-    const { token, paneId } = seedFallenBackRelayRow(homeDir, id, "waiting");
+    const { token, paneId } = seedFallenBackRelayRow(homeDir, id, "waiting", undefined, "codex");
 
     const got = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
@@ -70,7 +71,7 @@ test("pause: timeout preserves inspection details and sends no follow-up input",
     const id = "smoke-pause-timeout";
     const logPath = path.join(homeDir, "fake-tmux.log");
     const configPath = path.join(homeDir, ".config", "agent-director", "config.toml");
-    runHelper("seed-spawn", { store, state: "waiting", id, "create-store": true, socket: privateTmuxSocket(homeDir) });
+    runHelper("seed-spawn", { store, state: "waiting", id, agent: "codex", "create-store": true, socket: privateTmuxSocket(homeDir) });
     fs.writeFileSync(configPath, "[pause]\ntimeout_seconds = 1\n");
     const paneId = runHelper("seed-row-session", { store, id, capture: "Background work is running\n1. Exit and stop tasks / 2. Stay\n" })["pane_id"] as string;
 
@@ -84,8 +85,9 @@ test("pause: timeout preserves inspection details and sends no follow-up input",
     const details = { inspection_required: true, exit_keys_sent: true, exit_confirmed: false, row_state: "waiting" } satisfies PauseTimeoutDetails;
     expect(err.errDetails).toEqual(details);
     expect(err.errDescription).toContain("do not retry pause automatically");
+    // A Codex line clear is one call of 127 C-u presses (codexLineClearPresses).
     expect(paneSends(logPath)).toEqual([
-      ["send-keys", "-t", paneId, "C-u"],
+      ["send-keys", "-t", paneId, "-N", "127", "C-u"],
       ["send-keys", "-t", paneId, "-l", "--", "/exit"],
       ["send-keys", "-t", paneId, "Enter"],
     ]);

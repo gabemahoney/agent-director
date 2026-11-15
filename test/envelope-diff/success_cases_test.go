@@ -160,9 +160,9 @@ func TestEnvelopeDiff_Success(t *testing.T) {
 						if err := json.Unmarshal(encoded, &out); err != nil {
 							t.Fatal(err)
 						}
-						for _, row := range out.Spawns {
-							if row.BusySend != "not_covered" {
-								t.Errorf("get-many busy_send=%q; want not_covered", row.BusySend)
+						for _, row := range out.Spawns { // both rows are Claude's, covered as shipped
+							if row.BusySend != "covered" {
+								t.Errorf("get-many busy_send=%q; want covered", row.BusySend)
 							}
 						}
 					}

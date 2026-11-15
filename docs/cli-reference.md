@@ -627,12 +627,12 @@ Agent's subagent records with tracked status.
 
 ## pause
 
-Default: pane-only ErrAgentCapabilityUnsupported; others ended/missing no-op; waiting: send `/exit`, await `ended` for pause.timeout_seconds. `missing` is not proof of exit (see sweep). ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. ErrSubmissionUnconfirmed: inspect attempted-input facts (caller-contract.md). Codex: end report + exited agent ends row before keys or in wait. Plain send-keys guards; ErrDialogMaybeOpen: answer dialog, send-keys `/exit` with expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Pane-only: ErrAgentCapabilityUnsupported. Ended/missing: no-op. `missing` is not proof of exit (see sweep). Covered live: identity-checked SIGTERM, Held kept, else ErrSpawnNotPausable (cause, signal_sent). Uncovered waiting: `/exit`, await `ended` (pause.timeout_seconds); ErrPauseTimeout: inspect get/read-pane, no blind retry; ErrSubmissionUnconfirmed: inspect attempted input. Codex: end report + exited agent ends row before keys or in wait. Send-keys guards; ErrDialogMaybeOpen: answer it, send-keys `/exit`+expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Parameters
 
 - `instance_id` (string, required): Id of the Spawn to pause.
-- `only_if_waiting` (bool, optional): Pause only an agent proven waiting with no turn pending. Covered Agents only: true for any other agent is refused with ErrSpawnNotPausable, err_details cause agent_not_covered, and nothing is ended. false or omitted: today's pause.
+- `only_if_waiting` (bool, optional): Pause only an agent proven waiting with no turn pending. Covered Agents only: true for any other agent is refused with ErrSpawnNotPausable, err_details cause agent_not_covered, and nothing is ended; on a Covered Agent this version refuses it with ErrInternal (not yet available), nothing ended. false or omitted: today's pause.
 
 ### Result
 

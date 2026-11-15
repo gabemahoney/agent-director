@@ -37,10 +37,7 @@
 //	set-settle           Write an existing row's settle columns: its settled
 //	                     state and the time of its last raw state change
 //	                     (apitest.SetSettle; b.3ie).
-//	seed-busy-send-claude-route  Record a Claude row's current Launch and
-//	                     conversation covered with route A at its own wake
-//	                     endpoint, before Claude joins the covered set.
-//	json-schema         Print the result shapes of every subcommand.
+//	json-schema          Print the result shapes of every subcommand.
 //	install-write-failure Install canonical failure SQL on an existing temp DB;
 //	                     returns a handle, without opening/migrating a Store.
 //	remove-write-failure  Remove exactly that handle on the same DB.
@@ -81,7 +78,6 @@ var availableSubcmds = []string{
 	"seed-needs-intelligence-surface",
 	"seed-idle-screen-surface",
 	"set-settle",
-	"seed-busy-send-claude-route",
 	"install-write-failure",
 	"remove-write-failure",
 	"json-schema",
@@ -123,8 +119,6 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedReadSurfaceStore(args[1:], stdout, stderr)
 	case "set-settle":
 		return cmdSetSettle(args[1:], stdout, stderr)
-	case "seed-busy-send-claude-route":
-		return cmdSeedBusySendClaudeRoute(args[1:], stdout, stderr)
 	case "install-write-failure", "remove-write-failure":
 		return cmdWriteFailure(args[0], args[1:], stdout, stderr)
 	case "write-family-transition":
@@ -623,9 +617,6 @@ var resultSchemas = map[string]map[string]string{
 	},
 	"set-settle": {
 		"instance_id": "string",
-	},
-	"seed-busy-send-claude-route": {
-		"wake_path": "string",
 	},
 }
 

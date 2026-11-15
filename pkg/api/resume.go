@@ -152,6 +152,17 @@ type busySendResumeMover interface {
 
 var _ busySendResumeMover = (*store.Store)(nil)
 
+// busySendExitResumeMover is resume's move to pending with the positive exit
+// evidence a covered conversation's resume needs (SR-6.1, SR-6.2;
+// store.MoveToPendingWithExit). Like busySendResumeMover it is found by a type
+// assertion; a store without it gives the move no evidence, which a covered
+// conversation's move refuses.
+type busySendExitResumeMover interface {
+	MoveToPendingWithExit(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner, defaults store.BusySendDefaultsChoice, exit *store.BusySendExitEvidence) (CondResult, int64, error)
+}
+
+var _ busySendExitResumeMover = (*store.Store)(nil)
+
 // resumeDefaultsGate decides a resume that sets an Agent Default or
 // confirm_from_transcripts from the coverage its new Launch would record: the
 // published conversation's, raised by the row's agent kind (SR-9.1), and from
@@ -684,6 +695,9 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     (a competing resume moved it), the move's lost-race
 //     ErrSpawnNotResumable is returned instead, and if the row was removed,
 //     the move's ErrSpawnNotFound (SR-8.6).
+//     Then, for a covered published conversation, old-issuer exclusion
+//     (resumeBusySendExit): every owned process of its Launches checked gone
+//     by identity, else ErrSpawnNotResumable with nothing written.
 //  4. A new launch token (a failure → ErrInternal, nothing written), then
 //     the environment, settings and argv (spawn.ComposeRelaunch, for the row's
 //     agent), filtering stored session selectors and Claude print mode plus
@@ -712,7 +726,9 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     milliseconds, the token, the socket, the parent id re-derived from
 //     the caller's AGENT_DIRECTOR_INSTANCE_ID (spawn.ParentIDFromEnv, "" =
 //     NULL; the only parent-id write) and the launch owner, this process
-//     (spawn.CurrentLaunchOwner through the start-time reader; b.kdf). Row
+//     (spawn.CurrentLaunchOwner through the start-time reader; b.kdf), with
+//     the exit evidence, which the move validates and applies in its own
+//     transaction (store.MoveToPendingWithExit). Row or owned processes
 //     changed → ErrSpawnNotResumable; row removed →
 //     ErrSpawnNotFound; store error → ErrInternal. Each writes nothing and
 //     launches nothing.
@@ -753,6 +769,11 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 			}
 		}
 		return ResumeResult{}, pre.Err
+	}
+
+	exit, err := resumeBusySendExit(d, id)
+	if err != nil {
+		return ResumeResult{}, err
 	}
 
 	token, err := spawn.NewLaunchToken()
@@ -799,6 +820,11 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 			return mover.MoveToPendingWithDefaults(id, examined, at, token, socket, parent, owner, d.defaults)
 		}
 	}
+	if mover, ok := d.s.(busySendExitResumeMover); ok {
+		move = func(id string, examined RowSnapshot, at int64, token, socket, parent string, owner LaunchOwner) (CondResult, int64, error) {
+			return mover.MoveToPendingWithExit(id, examined, at, token, socket, parent, owner, d.defaults, exit)
+		}
+	}
 	res, movedVersion, err := move(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent, owner)
 	if err := resumeMoveError(id, res, err); err != nil {
 		return ResumeResult{}, err
@@ -816,6 +842,33 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		return ResumeResult{}, err
 	}
 	return ResumeResult{InstanceID: id, PreTrust: string(preTrust)}, nil
+}
+
+// resumeBusySendExit is resume's old-issuer exclusion (SR-6.1, SR-6.2; M1's
+// Resume), after the pre-launch decision and before anything is written: for
+// a covered published conversation, the shared exit judgement of every owned
+// process of its Launches (judgeBusySendExit), whose evidence the move then
+// applies; nil for an uncovered one. An owned process still running or that
+// cannot be checked refuses with ErrSpawnNotResumable, nothing written or
+// launched: the earlier Launch cannot be shown unable to emit, so its Held
+// Messages may not carry yet. The row is finished, where kill is a no-op, so
+// the advice names the condition that clears the refusal (decision 16:
+// retry resume once that process has exited). A row removed since the examination gives no
+// evidence, so the move reports it as it reports any removed row (SR-8.6);
+// any other failed scope read is the store's error.
+func resumeBusySendExit(d resumeDeps, id string) (*store.BusySendExitEvidence, error) {
+	exit, refusal, err := busySendExitFor(d.s, d.pc, id)
+	if errors.Is(err, store.ErrSpawnNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resume of instance %s: reading its busy-send exit scope failed, so nothing was written and nothing was launched: %v", id, err)
+	}
+	if refusal != nil {
+		return nil, fmt.Errorf("%w: spawn %s: %s, so the earlier Launch cannot be shown unable to deliver; nothing was written and nothing was launched; retry resume %s",
+			ErrSpawnNotResumable, id, refusal.describe(), refusal.clears())
+	}
+	return exit, nil
 }
 
 // resumePriorOf returns what the move to pending clears, from the row as
@@ -843,6 +896,9 @@ func resumePriorOf(row Spawn) ResumePrior {
 // wrapped, so the ErrInternal matches no catalogued sentinel (SR-1.5).
 func resumeMoveError(id string, res CondResult, err error) error {
 	switch {
+	case errors.Is(err, store.ErrBusySendExitNotEstablished):
+		return fmt.Errorf("%w: spawn %s: the processes its earlier Launch owns changed after resume checked them; nothing was written and nothing was launched; retry resume",
+			ErrSpawnNotResumable, id)
 	case err != nil:
 		return fmt.Errorf("resume of instance %s: recording the launch failed and nothing was launched: %v", id, err)
 	case res == CondApplied:

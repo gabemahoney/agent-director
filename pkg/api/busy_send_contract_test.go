@@ -19,9 +19,9 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// busyAgents are the five agent kinds; busy send covers none of them in E1
-// (SR-9.1).
-var busyAgents = []string{"claude", "codex", "cursor", "droid", "opencode"}
+// busyAgents are the agent kinds busy send doesn't cover: every kind but
+// Claude Code, which this release covers (SR-9.1).
+var busyAgents = []string{"codex", "cursor", "droid", "opencode"}
 
 // busyAgentArgs are the arguments a launch or template of agent needs to pass
 // validation: a model for the pane-only agents, none otherwise.
@@ -131,8 +131,8 @@ func (e *killEnv) assertBusyRefusedAs(t *testing.T, before busyRefusal, called, 
 	}
 }
 
-// TestBusySendUncoveredRefusalMatrix (SR-9.2, SR-9.4): for each agent kind,
-// all uncovered, each entry naming a busy-send option, false and wait_turn
+// TestBusySendUncoveredRefusalMatrix (SR-9.2, SR-9.4): for each uncovered
+// agent kind, each entry naming a busy-send option, false and wait_turn
 // included, is refused with ErrCantSend agent_not_covered (pause
 // only_if_waiting: ErrSpawnNotPausable, cause agent_not_covered) on a live and
 // a finished row, through the Client and the exported entries, and stores,
@@ -262,8 +262,8 @@ func TestBusySendUncoveredRefusalMatrix(t *testing.T) {
 // TestBusySendOptionOrder (SR-9.2): malformed parameters, today's and the new
 // options' shapes alike, come before the coverage decision, and an unknown id
 // stays ErrSpawnNotFound; a valid option is refused agent_not_covered before
-// today's state, relay, permission, capability and lifecycle branches. On a
-// Launch seeded covered, force, pause only_if_waiting and force-delivery,
+// today's state, relay, permission, capability and lifecycle branches (on
+// Codex rows). On a covered Claude Launch, force, pause only_if_waiting and force-delivery,
 // like a resume through a store that cannot read coverage, are an unnamed
 // error that never falls back to today's behaviour, and a resume's
 // steer_turn is steer_unsupported before the launch (SR-1.4; its accepted
@@ -275,19 +275,17 @@ func TestBusySendOptionOrder(t *testing.T) {
 	c := e.busyClient(t)
 	plain, _ := e.client(t)
 	unknown := "no-such-" + uuid.NewString()[:8]
+	// Today's order is an uncovered agent's: these rows are Codex's.
+	e.rowAgent = "codex"
 	waiting := resumeRow{killRow: e.seedRow(t, killRowSpec{})}
 	pending := resumeRow{killRow: e.seedRow(t, killRowSpec{State: store.StatePending})}
 	working := resumeRow{killRow: e.seedRow(t, killRowSpec{State: store.StateWorking})}
 	asking := resumeRow{killRow: e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true})}
 	request := e.seedRequest(t, asking.ID)
 	done := e.seedResumable(t, time.Hour, agentGone)
+	e.rowAgent = "" // Claude's, covered as shipped
 	coveredLive := resumeRow{killRow: e.seedRow(t, killRowSpec{})}
 	coveredDone := e.seedResumable(t, time.Hour, agentGone)
-	for _, id := range []string{coveredLive.ID, coveredDone.ID} {
-		if err := apitest.SeedBusySendCoverage(e.dbPath, id, store.BusySendCovered, store.BusySendCovered); err != nil {
-			t.Fatal(err)
-		}
-	}
 	e.rowAgent = "droid"
 	paneOnly := resumeRow{killRow: e.seedRow(t, killRowSpec{})}
 	send := func(p api.SendKeysParams) func() error {

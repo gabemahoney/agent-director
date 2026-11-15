@@ -171,7 +171,7 @@ func TestV9MigratedRowResumes(t *testing.T) {
 		t.Fatalf("end report = %d; want %d read back", before.EndReportedAtMillis, reported)
 	}
 
-	res, moved, err := s.MoveToPending(v8ReusedID, before.Snapshot, 1790000001000, "0123456789abcdef", "/tmp/ad-v9/sock", "", LaunchOwner{})
+	res, moved, err := s.MoveToPendingWithExit(v8ReusedID, before.Snapshot, 1790000001000, "0123456789abcdef", "/tmp/ad-v9/sock", "", LaunchOwner{}, BusySendDefaultsChoice{}, busyExitIfAny(t, s, v8ReusedID))
 	if err != nil || res != CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want applied", res, err)
 	}

@@ -38,7 +38,7 @@ type rrReset struct {
 func rrDoReset(t *testing.T, f *v5Store, id string, fresh store.Spawn) rrReset {
 	t.Helper()
 	before, row := f.rawColumns(id), f.readForReuse(t, id)
-	res, archived, v, err := f.s.ResetForReuse(id, row.Snapshot, row.Agent, fresh)
+	res, archived, v, err := f.s.ResetForReuse(id, row.Snapshot, row.Agent, storefix.WithExit(t, f.s, id, fresh))
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("ResetForReuse = %v, %q, %d, %v; want CondApplied", res, archived, v, err)
 	}
@@ -154,7 +154,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 				want.EndedAt = rrFailedAt.Format("2006-01-02 15:04:05")
 			}
 			if tc.deleteParent {
-				if err := f.s.DeleteSpawn(seeded.parent); err != nil {
+				if err := storefix.DeleteWithExit(t, f.s, seeded.parent); err != nil {
 					t.Fatalf("DeleteSpawn(parent): %v", err)
 				}
 				want.ParentID = nil

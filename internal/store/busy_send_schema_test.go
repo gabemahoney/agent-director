@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // busySendCoreV1Digest is the SHA-256 of the permanent core's declarations as
@@ -198,14 +199,15 @@ func TestBusySendCoreContract(t *testing.T) {
 	}
 }
 
-// TestBusySendCoveredSet: this release's covered set is empty, and its two
-// accessors agree on every agent kind; a caller's copy of the set changes
-// nothing (SR-9.1, SR-7.3). E2 adds claude here; the migration cases take each
-// expected coverage from BusySendCoverageForAgent and need no change.
+// TestBusySendCoveredSet: this release's covered set is exactly Claude Code,
+// and its two accessors agree on every agent kind, a legacy empty agent
+// counting as Claude; a caller's copy of the set changes nothing (SR-9.1,
+// SR-7.3). The expectations are written out here, not read from the set, so
+// dropping Claude or covering another agent fails.
 func TestBusySendCoveredSet(t *testing.T) {
 	first := BusySendCoveredAgents()
-	if len(first) != 0 {
-		t.Errorf("covered set %v; want none in this release", first)
+	if want := []string{AgentClaude}; !slices.Equal(first, want) {
+		t.Errorf("covered set %v; want exactly %v in this release", first, want)
 	}
 	copied := BusySendCoveredAgents()
 	for i := range copied {
@@ -214,11 +216,11 @@ func TestBusySendCoveredSet(t *testing.T) {
 	if got := BusySendCoveredAgents(); !slices.Equal(got, first) {
 		t.Errorf("covered set after a caller changed its copy = %v; want %v", got, first)
 	}
-	for _, agent := range []string{AgentClaude, AgentCodex, AgentCursor, AgentDroid, AgentOpenCode, "", "unknown"} {
-		want := BusySendNotCovered
-		if slices.Contains(first, agent) {
-			want = BusySendCovered
-		}
+	for agent, want := range map[string]BusySendCoverage{
+		AgentClaude: BusySendCovered, "": BusySendCovered,
+		AgentCodex: BusySendNotCovered, AgentCursor: BusySendNotCovered, AgentDroid: BusySendNotCovered,
+		AgentOpenCode: BusySendNotCovered, "unknown": BusySendNotCovered,
+	} {
 		if got := BusySendCoverageForAgent(agent); got != want {
 			t.Errorf("BusySendCoverageForAgent(%q) = %s; want %s", agent, got, want)
 		}
@@ -238,23 +240,24 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 	seed := seedBusySendRecordsRow
 	t.Run("deleting the agent keeps every record", func(t *testing.T) {
 		s, r := seed(t)
-		core := func() map[string]any {
-			out := map[string]any{}
+		// Every record is kept: each core table holds as many rows after the
+		// deletion. Covered deletion finalizes custody in place (SR-6.3), so
+		// rows are counted, not compared.
+		core := func() map[string]int {
+			out := map[string]int{}
 			for key, rows := range dbDump(t, s.filePath) {
-				if strings.HasPrefix(key, "rows busy_") && key != "rows busy_conversations" && key != "rows busy_send_launches" {
-					out[key] = rows
+				if strings.HasPrefix(key, "rows busy_") {
+					out[key] = len(rows.([]string))
 				}
 			}
 			return out
 		}
 		before := core()
-		if err := s.DeleteSpawn("rec"); err != nil {
-			t.Fatal(err)
-		}
+		busyLaunchDeleteCovered(t, s, "rec")
 		if after := core(); !reflect.DeepEqual(after, before) {
-			t.Errorf("deleting the agent changed core records:\n before %v\n after  %v", before, after)
+			t.Errorf("deleting the agent removed core records:\n before %v\n after  %v", before, after)
 		}
-		// Deletion retires publications while preserving custody and claims.
+		// Deletion retires publications while preserving every record and claim.
 		busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_conversations WHERE conversation_id=? AND publication='retired' AND retired_reason='record_deleted'`, r.conversation)
 		busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_send_launches WHERE launch_id=? AND phase='superseded' AND end_cause='record_deleted'`, r.launch)
 		var retention string
@@ -531,7 +534,7 @@ func TestV21MigrationRecordsEveryInstance(t *testing.T) {
 // F5 (Main Agent decision, 2026-11-13): a historical row with no agent, NULL
 // or empty, migrates; the hop leaves spawns.agent as it was and records its
 // conversation and Launch with provider claude, as readers take such a row,
-// and BusySendCoverageForAgent's coverage of claude.
+// and claude's coverage, covered.
 func TestV21MigrationLegacyAgentRows(t *testing.T) {
 	dir := t.TempDir()
 	path := makeVersionedDB(t, dir, 20)
@@ -554,6 +557,121 @@ func TestV21MigrationLegacyAgentRows(t *testing.T) {
 			t.Errorf("%s: agent %s; want %s kept", id, got, want)
 		}
 	}
+}
+
+// TestV21MigrationHeldUntilRoute (SR-7.2, SR-9.1, SR-6.3; Task t2.xis.oo.2o):
+// the authorized hop records the existing waiting Claude Launch covered with
+// no route or wake endpoint, and a Codex one uncovered. The Claude row then
+// admits Messages Held route_unavailable (the Codex row refuses them); they
+// survive close and reopen, and neither the open nor any read writes or
+// hands anything over. A guarded resume stages a new Launch whose own route
+// and wake endpoint the publication records: the Messages keep their order
+// and options, and their wait leaves route_unavailable (agent_starting while
+// the row is pending). No startup input is stored to replay.
+func TestV21MigrationHeldUntilRoute(t *testing.T) {
+	f := makeV20Fixture(t, t.TempDir())
+	writeSentinel(t, f.dir, 20, schemaVersion)
+	s, err := Open(f.path)
+	if err != nil {
+		t.Fatalf("authorized open: %v", err)
+	}
+	assertV21Backfill(t, f.path, v20ClaudeID, v20CodexID)
+	const caller = "3b9e1c4a-7d2f-4e8b-9a6c-1f0e2d3c4b5a"
+	confirmed := true
+	admit := func(id, text string, pair bool) error {
+		req := BusySendAdmissionRequest{InstanceID: id, Text: []byte(text)}
+		if pair {
+			req.CallerUUID, req.DeliveryRequestID, req.Confirmed = caller, "m-"+text, &confirmed
+		}
+		_, err := s.AdmitBusySend(req)
+		return err
+	}
+	var refusal *BusySendRefusal
+	if err := admit(v20CodexID, "codex", false); !errors.As(err, &refusal) || refusal.Reason != BusySendRefuseAgentNotCovered {
+		t.Errorf("Codex admission = %v; want refused agent_not_covered", err)
+	}
+	for i, text := range []string{"first", "second ✓\nline", "third"} {
+		if err := admit(v20ClaudeID, text, i != 1); err != nil {
+			t.Fatalf("admit %q: %v", text, err)
+		}
+	}
+	wait := func(st *Store, want BusySendWaitReason) {
+		t.Helper()
+		o, err := st.ReadBusySendObservation(v20ClaudeID, time.Second)
+		if err != nil || o == nil || o.HeldCount != 3 || o.FirstWait == nil || o.FirstWait.Reason != want {
+			t.Fatalf("observation = %+v, %v; want 3 Held, the first waiting %s", o, err, want)
+		}
+		r, err := st.ReadBusySendResult(caller, "m-first")
+		if err != nil || r.Result == nil || r.Result.Class != BusySendClassHeld || r.Result.Final {
+			t.Fatalf("m-first Result = %+v, %v; want Held", r, err)
+		}
+	}
+	held := func() [][3]string {
+		t.Helper()
+		var out [][3]string
+		withRaw(t, f.path, func(db *sql.DB) {
+			rows, err := db.Query(`SELECT text, send_mode, confirmed FROM busy_send_messages WHERE instance_id = ? AND place = 'held'
+			    ORDER BY accepted_seq`, v20ClaudeID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var m [3]string
+				if err := rows.Scan(&m[0], &m[1], &m[2]); err != nil {
+					t.Fatal(err)
+				}
+				out = append(out, m)
+			}
+		})
+		return out
+	}
+	wait(s, BusySendWaitRouteUnavailable)
+	accepted := held()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	before := dbDump(t, f.path)
+	s, err = Open(f.path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	wait(s, BusySendWaitRouteUnavailable)
+	if _, err := s.ReadBusySendRouteFacts(context.Background(), v20ClaudeID, HookGate{}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, dbDump(t, f.path)) {
+		t.Fatal("reopen and reads changed the store")
+	}
+	busyLaunchWantCount(t, s, 0, `SELECT count(*) FROM busy_send_handovers`)
+
+	busyLaunchFinish(t, s, v20ClaudeID)
+	const token = "a1b2c3d4e5f60718"
+	row := busyLaunchRow(t, s, v20ClaudeID)
+	res, version, err := s.MoveToPendingWithExit(v20ClaudeID, row.Snapshot, 2000, token, "", "", LaunchOwner{}, BusySendDefaultsChoice{},
+		busyLaunchExit(t, s, v20ClaudeID))
+	if err != nil || res != CondApplied {
+		t.Fatalf("resume = %v, %v; want applied", res, err)
+	}
+	if res, err := s.RecordLaunchIdentity(v20ClaudeID, version, token, LaunchIdentity{}); err != nil || res != CondApplied {
+		t.Fatalf("publication = %v, %v; want applied", res, err)
+	}
+	wake, err := BusySendWakePath(s.StoreID(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := s.ReadBusySendRouteFacts(context.Background(), v20ClaudeID, HookGate{})
+	if err != nil || facts.Kind != BusySendLaunchResume || !facts.Covered || facts.WakePath != wake ||
+		facts.Destination.RouteKind != BusySendRouteClaudeHooks {
+		t.Fatalf("resumed route facts = %+v, %v; want the covered resume Launch's own route and wake %s", facts, err, wake)
+	}
+	wait(s, BusySendWaitAgentStarting)
+	if got := held(); !reflect.DeepEqual(got, accepted) {
+		t.Errorf("Held after the resume = %q; want %q, order and options kept", got, accepted)
+	}
+	busyLaunchWantCount(t, s, 0, `SELECT count(*) FROM busy_send_handovers`)
 }
 
 // TestV21MigrationCompatibleReentry: over a compatible partial core holding

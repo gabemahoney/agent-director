@@ -1,6 +1,8 @@
 package api_test
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -65,15 +67,21 @@ func TestBusySendResumeDefaults(t *testing.T) {
 		return &pending
 	}
 	// assertKept fails unless that Message is still Held, owned and reserved
-	// in the published conversation, its Result as admitted.
-	assertKept := func(t *testing.T, e *killEnv, c *api.Client, id string, pending api.DeliveryResult) {
+	// in the published conversation, its Result as admitted but waiting wait:
+	// agent_starting while a Launch is starting, launch_ended once a failed
+	// creation's restoration finished the row again.
+	assertKept := func(t *testing.T, e *killEnv, c *api.Client, id string, pending api.DeliveryResult, wait string) {
 		t.Helper()
 		if pending.RequestID != "p-1" || pending.Wait == nil || pending.Wait.Reason != "agent_starting" {
 			t.Errorf("Result admitted while pending = %+v; want p-1 waiting agent_starting", pending)
 		}
 		got, err := c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: "p-1"})
-		if err != nil || got.Result == nil || !reflect.DeepEqual(*got.Result, pending) {
-			t.Errorf("GetDelivery(p-1) = %+v, %v; want %+v", got, err, pending)
+		want := pending
+		if want.Wait != nil && want.Wait.Reason != wait && got.Result != nil && got.Result.Wait != nil {
+			want.Reason, want.Wait = wait, &api.DeliveryWait{Reason: wait, Since: got.Result.Wait.Since}
+		}
+		if err != nil || got.Result == nil || !reflect.DeepEqual(*got.Result, want) {
+			t.Errorf("GetDelivery(p-1) = %+v, %v; want %+v", got, err, want)
 		}
 		facts := busyFacts(t, e.dbPath, id)
 		for _, conv := range facts.Conversations {
@@ -95,7 +103,7 @@ func TestBusySendResumeDefaults(t *testing.T) {
 		if got := defaults(t, e, r.ID); got != published {
 			t.Errorf("agent_defaults after a failed resume = %s; want the published %s", got, published)
 		}
-		assertKept(t, e, c, r.ID, *pending)
+		assertKept(t, e, c, r.ID, *pending, "launch_ended")
 	})
 	t.Run("published by its creator", func(t *testing.T) {
 		t.Parallel()
@@ -108,7 +116,7 @@ func TestBusySendResumeDefaults(t *testing.T) {
 			t.Errorf("agent_defaults after publication = %s; want %s", got, want)
 		}
 		assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", store.BusySendCovered)
-		assertKept(t, e, c, r.ID, *pending)
+		assertKept(t, e, c, r.ID, *pending, "agent_starting")
 		// Unconfirmed now by default: a Caller UUID alone is malformed.
 		_, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "after", CallerUUID: ptr(busyCaller)})
 		assertOneName(t, err, "ErrInvalidFlags")
@@ -143,6 +151,88 @@ func TestBusySendResumeDefaults(t *testing.T) {
 		assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", store.BusySendCovered)
 		if got, want := defaults(t, e, r.ID), `{"send_mode":"wait_turn","confirmed_delivery":true,"confirm_from_transcripts":false}`; got != want {
 			t.Errorf("agent_defaults after adoption = %s; want %s", got, want)
+		}
+	})
+}
+
+// TestBusySendCoveredLaunchDefaults (SR-1.4, SR-9.2; carried from Task
+// t2.xis.oo.tc's product review): a covered (Claude) fresh spawn and reuse
+// resolve each Agent Default from the call, then the template, then the
+// out-of-the-box value, an explicit false kept over the template's true.
+// send_mode steer_turn, which Claude's capability table does not offer, is
+// ErrCantSend steer_unsupported on spawn, reuse and make-template, before
+// anything is written or launched.
+func TestBusySendCoveredLaunchDefaults(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
+	t.Setenv("HOME", t.TempDir())
+	on, steer := true, "steer_turn"
+	if _, err := apitest.SeedTemplate(config.TemplatesDir(), "covered", apitest.TemplateBody(apitest.TemplateFields{
+		ConfirmedDelivery: &on, ConfirmFromTranscripts: &on})); err != nil {
+		t.Fatal(err)
+	}
+	want := store.BusySendAgentDefaults{SendMode: store.BusySendWaitTurn, Confirmed: false, ConfirmFromTranscripts: true}
+	published := func(t *testing.T, e *killEnv, id string) store.BusySendAgentDefaults {
+		t.Helper()
+		facts := busyFacts(t, e.dbPath, id)
+		for _, c := range facts.Conversations {
+			if c.ID == facts.Binding {
+				return c.Defaults
+			}
+		}
+		t.Fatalf("%s has no published conversation: %+v", id, facts)
+		return store.BusySendAgentDefaults{}
+	}
+	t.Run("fresh spawn", func(t *testing.T) {
+		e := newKillEnv(t)
+		res, err := e.busyClient(t).Spawn(api.SpawnParams{Agent: "claude", Template: "covered", CWD: t.TempDir(), NoPreTrust: true,
+			ConfirmedDelivery: ptr(false)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := published(t, e, res.InstanceID); got != want {
+			t.Errorf("published Agent Defaults = %+v; want %+v", got, want)
+		}
+	})
+	t.Run("reuse", func(t *testing.T) {
+		e := newKillEnv(t)
+		r := e.seedReusable(t, agentGone, reuseRowSpec{})
+		p := reuseParams(t, r, reuseRequest{})
+		p.Template, p.ConfirmedDelivery = "covered", ptr(false)
+		if _, _, err := e.reuse(t, p); err != nil {
+			t.Fatal(err)
+		}
+		if got := published(t, e, r.ID); got != want {
+			t.Errorf("published Agent Defaults = %+v; want %+v", got, want)
+		}
+	})
+	t.Run("steer_turn refused", func(t *testing.T) {
+		e := newKillEnv(t)
+		r := e.seedReusable(t, agentGone, reuseRowSpec{})
+		reuse := reuseParams(t, r, reuseRequest{})
+		reuse.SendMode = &steer
+		c := e.busyClient(t)
+		for verb, call := range map[string]func() error{
+			"spawn": func() error {
+				_, err := c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), NoPreTrust: true, SendMode: &steer})
+				return err
+			},
+			"reuse": func() error { _, err := c.Spawn(reuse); return err },
+			"make-template": func() error {
+				_, err := c.MakeTemplate(api.MakeTemplateParams{Name: "steer", Agent: "claude", SendMode: &steer})
+				return err
+			},
+		} {
+			before := e.snapshotBusy(t, verb, r.resumeRow)
+			err := call()
+			assertOneName(t, err, "ErrCantSend")
+			if got, want := api.ErrDetails(err), (api.CantSendDetails{Class: "cant_send", Reason: "steer_unsupported", ResendSafe: true,
+				RetryWith: "new_send"}); got != any(want) {
+				t.Errorf("%s err_details = %#v; want %#v", verb, got, want)
+			}
+			e.assertBusyRefused(t, before, "")
+		}
+		if _, err := os.Stat(filepath.Join(config.TemplatesDir(), "steer.toml")); !os.IsNotExist(err) {
+			t.Errorf("refused make-template left steer.toml (%v)", err)
 		}
 	})
 }

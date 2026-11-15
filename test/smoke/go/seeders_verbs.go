@@ -165,15 +165,18 @@ func init() {
 	}
 
 	// ── force-delivery, get-force, get-delivery ───────────────────────────
-	// Busy send covers no agent in this release, so a force of the seeded
-	// ended row succeeds, refused (SR-9.2). get-force reads the attempt
-	// force-delivery stores, its only public writer; a lookup other than found
-	// fails the happy path. get-delivery has no public writer, so it reads a
-	// pair no Message holds: unknown with a null result.
+	// Busy send covers Claude only, so a force of the seeded ended Codex row
+	// succeeds, refused, and is stored (SR-9.2); a Claude row's force is
+	// refused before anything is stored (a force is not built in this
+	// release). get-force reads the attempt force-delivery stores, its only
+	// public writer; a lookup other than found fails the happy path.
+	// get-delivery has no public writer, so it reads a pair no Message holds:
+	// unknown with a null result.
 	seeders["force-delivery"] = seederSpec{
 		Manifest: mustVerb("force-delivery"),
 		SeedKind: seedResumable, // an ended row
 		SeedID:   "smoke-force-delivery-id",
+		RowAgent: "codex",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.ForceDelivery(api.ForceDeliveryParams{InstanceID: id})
 		},
@@ -186,6 +189,7 @@ func init() {
 		Manifest: mustVerb("get-force"),
 		SeedKind: seedResumable,
 		SeedID:   "smoke-get-force-id",
+		RowAgent: "codex",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			forced, err := c.ForceDelivery(api.ForceDeliveryParams{InstanceID: id})
 			if err != nil {

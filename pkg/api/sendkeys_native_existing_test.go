@@ -1,5 +1,10 @@
 package api_test
 
+// sendkeys_native_existing_test.go: the production default backend never
+// falls back past an existing or unreadable journal, on a Codex launch with
+// its native capability (sqliteSubmission): busy send covers Claude, whose
+// send-keys never reaches its launch's journal.
+
 import (
 	"context"
 	"database/sql"
@@ -15,9 +20,9 @@ import (
 
 func TestSendKeysDefaultNativeBackendPreservesExistingOwnership(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"absent", "corrupt capability", "corrupt attempt", "partial input", "supported unready"} {
+	for _, mode := range []string{"corrupt capability", "corrupt attempt", "partial input", "supported unready"} {
 		t.Run(mode, func(t *testing.T) {
-			e, r, launch := sqliteSubmission(t)
+			e, r, launch := sqliteSubmission(t, sqliteCodexSpec(store.StatePending, false))
 			db, err := sql.Open("sqlite", e.dbPath)
 			if err != nil {
 				t.Fatal(err)
@@ -25,18 +30,8 @@ func TestSendKeysDefaultNativeBackendPreservesExistingOwnership(t *testing.T) {
 			defer db.Close()
 			e.env.Input = nil
 			params := api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true, DeliveryRequestID: "original"}
-			if mode == "absent" {
-				if _, err := db.Exec(`DELETE FROM input_launches`); err != nil {
-					t.Fatal(err)
-				}
-				// b.qcf: without a launch, ordinary text on this unreported
-				// pending Claude row is fallback input, which waits for SessionStart.
-				_, err = e.send(params)
-				e.assertSessionStartMissing(t, err)
-				return
-			}
 			if mode == "supported unready" {
-				if err := os.Remove(launch.EvidenceDir + "/claude-debug.log"); err != nil {
+				if err := os.Remove(launch.EvidenceDir + "/codex-tui.log"); err != nil {
 					t.Fatal(err)
 				}
 			}

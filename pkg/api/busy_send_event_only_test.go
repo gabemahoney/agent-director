@@ -11,6 +11,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/busysend"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -110,8 +111,8 @@ func TestBusySendEventOnly(t *testing.T) {
 		t.Errorf("busy-send core after reads, sweep, reopen and idle time = %+v; want unchanged %+v", got, facts)
 	}
 	dest := busyDestination(t, e, r.ID, session)
-	if fence, err := e.st.ReadBusySendLaunchFence(context.Background(), dest.LaunchID); err != nil || len(fence.Processes) != 0 || len(fence.Prompts) != 0 {
-		t.Errorf("Launch fence = %+v, %v; want no issuer and no issued prompt", fence, err)
+	if fence := storefix.ReadLaunchFence(t, e.st, dest.LaunchID); len(fence.Processes) != 0 || len(fence.Prompts) != 0 {
+		t.Errorf("Launch fence = %+v; want no issuer and no issued prompt", fence)
 	}
 	input := func() int {
 		return len(e.rec.SocketCallsOf(tmux.CallSendText)) + len(e.rec.SocketCallsOf(tmux.CallSendEnter)) + len(e.rec.SocketCallsOf(tmux.CallSendKey))

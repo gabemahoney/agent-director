@@ -35,6 +35,11 @@ if [[ $# -eq 1 && "$1" == --version ]]; then
     exit 0
 fi
 
-# --noprofile --norc: nothing from the image's dotfiles runs; -i: the shell
-# reads commands from the pane's terminal.
-exec bash --noprofile --norc -i
+# --noprofile, and --rcfile in place of ~/.bashrc: nothing from the image's
+# dotfiles runs; -i: the shell reads commands from the pane's terminal. An
+# interactive bash ignores SIGTERM, but Claude Code exits on it, and keyless
+# pause of a covered Claude Launch relies on that (SR-6.4), so stand-in.bashrc
+# beside this file sets only that trap. (Not PROMPT_COMMAND: any
+# PROMPT_COMMAND empties ${PIPESTATUS[@]} for a typed pipeline, which
+# pane-hook.sh --stderr-pipe reads.)
+exec bash --noprofile --rcfile "$(dirname -- "${BASH_SOURCE[0]}")/stand-in.bashrc" -i

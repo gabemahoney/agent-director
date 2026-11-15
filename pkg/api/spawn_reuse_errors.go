@@ -37,6 +37,24 @@ func reuseLostRaceError(instanceID string) error {
 		spawn.ErrInstanceIdCollision, instanceID, reuseNothingChanged)
 }
 
+// reuseExitError is reuse's refusal of a covered conversation whose earlier
+// Launch cannot be shown unable to deliver (SR-6.3; M1's ReusePublish): an
+// owned process of it (the agent, or a hook or delivery job) still runs or
+// cannot be checked, judged before the change or found changed by it.
+// Nothing was changed. Like a live row, the id is still in use, so it wraps
+// spawn.ErrInstanceIdCollision only (SR-1.5). The row is finished, where
+// kill is a no-op, so the recovery is the spawn again when the condition
+// clears (Main Agent decision 16): when, such as "once that process has
+// exited", or "" when only a retry is needed (the processes changed after
+// the judgement).
+func reuseExitError(instanceID, why, when string) error {
+	if when != "" {
+		when = " " + when
+	}
+	return fmt.Errorf("%w: spawn of instance %s: %s, so its earlier Launch cannot be shown unable to deliver and %s; spawn again%s",
+		spawn.ErrInstanceIdCollision, instanceID, why, reuseNothingChanged, when)
+}
+
 // reuseChangeError maps a failed reuse change (ResetForReuse's error) to one
 // of reuse's two ErrInternal descriptions (SR-1.4, SR-5.8), the one place
 // this mapping lives: an archive failure, told apart by errors.Is on

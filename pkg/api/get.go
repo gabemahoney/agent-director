@@ -452,7 +452,8 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		s = concrete.WithRecoveryTickSource("ad_recovery")
 	}
 	if _, checked := s.(*activeReadStore); !checked {
-		refresh := activeRefresh(s, settle, false)
+		delivery := store.NewBusySendDeliveries()
+		refresh := activeRefresh(s, settle, false, delivery)
 		rows, err := refresh([]string{instanceID}, nil)
 		if err != nil {
 			return emptySpawnRow(), err
@@ -460,7 +461,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		if len(rows) != 1 {
 			return emptySpawnRow(), fmt.Errorf("%w: %s", store.ErrSpawnNotFound, instanceID)
 		}
-		run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, true)
+		run := checkActiveRows(context.Background(), s, v, settle, rows, refresh, true, delivery)
 		out, err := getSettled(run, run.view, settle, instanceID)
 		finishErr := run.finish()
 		if err != nil {

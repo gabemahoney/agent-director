@@ -224,7 +224,8 @@ Relay failures and uncertain acknowledgements are covered in the
 
 ### The relay on Codex rows
 
-Codex uses the same decision, delivery and pane-answer commands as Claude.
+Codex uses the shared decision and delivery fields, with guarded `send-keys`
+pane answers; covered Claude uses direct tmux for keys.
 With relay off, a Codex permission prompt moves the row to
 `check_permission` and is answered at the pane.
 
@@ -360,12 +361,19 @@ timeout, to monitor it. See
 
 ### Send-keys interaction
 
-Permission guards apply in every live state, not only `check_permission`.
+Covered Claude ordinary Messages are accepted and Held behind unsafe permission
+or dialog boundaries in any state. They never answer a request or change its
+permission. Use `decide` for an eligible relay answer, or the
+[pane procedure](#answering-at-the-pane) after inspecting the request.
+To stop or reconnect covered Claude, use
+[keyless pause and resume](caller-contract.md#keyless-pause-of-a-covered-agent).
+
+For uncovered agents, permission guards apply in every live state, not only `check_permission`.
 For `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`,
 pane-answer refusals and retry rules, follow the
 [caller contract](caller-contract.md#permission-relay).
 
-To stop a held spawn, use `kill`, or have a person or an LLM inspect and
+To stop an uncovered held spawn, use `kill`, or have a person or an LLM inspect and
 exit it at the pane:
 
 1. Read the pane. Close any fallen-back request with a token-specific
@@ -389,7 +397,8 @@ For Cursor turn-end recovery and gateway refusals, follow
 ### The dialog hold
 
 A delivery acknowledgement or pane-answer record does not prove the dialog
-gone. On relay-on rows, an unproven request holds plain input without a
+gone. On covered Claude it holds ordinary Messages; keyless `pause` remains
+available. On uncovered relay-on rows, it holds plain input without a
 pane hash and holds `pause`. Cursor requests from an earlier launch are
 excluded; requests with no launch on record still hold.
 
@@ -417,7 +426,35 @@ For hold handling, pane hashes and `pause`, use the
 
 ### Answering at the pane
 
-Read the pane and match its dialog to the request before choosing a key:
+Read the pane and match its dialog to the request before choosing a key.
+A request must still be answerable: no closed or proven-gone request and no
+uncertain response already in flight. Follow the relay and timing checks in
+the [caller contract](caller-contract.md#permission-relay).
+
+**Covered Claude.** The source advice is: "send the text alone, and use tmux with record-pane-answer for keys on the pane".
+Read `get` for `tmux_socket` and `tmux_session_name`. On that socket, find the
+named session's `$N` id and verify its five-field `@ad_owner` label names that
+session, this row and this store ([ownership procedure](operator-actions.md#inspect-and-end-a-session-by-hand)).
+Select only the pane whose `@ad_pane` is the label's launch token followed by
+that pane's own `%N` id:
+
+```sh
+agent-director get --instance-id <id>
+tmux -u -S '<socket>' list-sessions -F '#{session_id} #{session_name}'
+tmux -u -S '<socket>' show-options -t '<session id>' -v @ad_owner
+tmux -u -S '<socket>' list-panes -s -t '<session id>' -F '#{pane_id} #{@ad_pane}'
+agent-director read-pane --instance-id <id> --n-lines 25
+tmux -u -S '<socket>' send-keys -t '<verified pane id>' Escape
+```
+
+`Escape` is only an example: send the key you just judged appropriate for
+that exact request. If ownership is uncertain, stop for a human to
+[inspect the session](operator-actions.md#inspect-and-end-a-session-by-hand).
+Direct tmux has no hash guard; recheck if the pane changes and never replay
+an uncertain key. After the outside answer, take a fresh normal `read-pane`
+and use its hash with `record-pane-answer` below. This records no new input.
+
+**Uncovered agents.** Use the guarded agent-director pane answer:
 
 ```sh
 agent-director read-pane --instance-id <id>

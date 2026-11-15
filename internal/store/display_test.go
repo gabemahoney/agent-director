@@ -353,7 +353,7 @@ func TestNeedsIntelligenceStaleSampleCannotCommit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res, _, err := s.MoveToPending(id, ended.Snapshot, now.UnixMilli(), "2222222222222222", apitest.TestSocket, "", store.LaunchOwner{}); err != nil || res != store.CondApplied {
+			if res, _, err := s.MoveToPendingWithExit(id, ended.Snapshot, now.UnixMilli(), "2222222222222222", apitest.TestSocket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, s, id)); err != nil || res != store.CondApplied {
 				t.Fatalf("new launch=%v %v", res, err)
 			}
 		}},

@@ -183,7 +183,7 @@ func reuseFresh(parentID string, noPreTrust bool) store.Spawn {
 
 // reuseReset resets r from the snapshot its read examined with fresh.
 func (f *v5Store) reuseReset(r reuseRow, fresh store.Spawn) (store.CondResult, string, int64, error) {
-	return f.s.ResetForReuse(r.id, r.read.Snapshot, r.read.Agent, fresh)
+	return f.s.ResetForReuse(r.id, r.read.Snapshot, r.read.Agent, storefix.WithExit(f.t, f.s, r.id, fresh))
 }
 
 // TestReuseReadForReuse checks the read's state, ended_at text (byte for byte,

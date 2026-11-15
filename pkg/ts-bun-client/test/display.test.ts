@@ -27,6 +27,9 @@ const LIST_KEYS = ["agent", "confirmations", "cwd", "family_state", "idle_screen
   "permission_requests", "process_liveness", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"];
 /** Every status result's main-field keys beside context and family_state. */
 const MAIN_KEYS = ["confirmations", "context", "failure_reason", "family_state", "process_liveness"];
+/** The busy-send blocks a covered (claude) row adds: status's Agent Defaults and delivery facts, list's Agent Defaults (SR-5.6). */
+const coveredStatusKeys = (agent: string) => (agent === "claude" ? ["agent_defaults", "delivery"] : []);
+const coveredListKeys = (agent: string) => (agent === "claude" ? ["agent_defaults"] : []);
 
 /**
  * b.x9o: the fixtures have no owned pane. Working rows attempt a capture;
@@ -55,7 +58,7 @@ test("idle_screen shows in displayed_state beside state working, and an open per
       const status = JSON.parse(JSON.stringify(await client.status({ instance_id: id })));
       expect(status).toMatchObject(detail);
       // The exact key set: no request detail and no state_changed_at.
-      expect(Object.keys(status).sort()).toEqual([...MAIN_KEYS, ...Object.keys(detail)].sort());
+      expect(Object.keys(status).sort()).toEqual([...MAIN_KEYS, ...Object.keys(detail), ...coveredStatusKeys(id.slice("idle-screen-".length))].sort());
       const get = JSON.parse(JSON.stringify(await client.get({ instance_id: id })));
       expect(get).toMatchObject(detail);
       for (const read of [status, get]) expectDisplayRecord(read, id.slice("idle-screen-".length));
@@ -70,7 +73,7 @@ test("idle_screen shows in displayed_state beside state working, and an open per
       const agent = id.slice("needs-intelligence-".length);
       const status = JSON.parse(JSON.stringify(await client.status({ instance_id: id })));
       expect(status).toMatchObject({ state: "check_permission", idle_screen_availability: availability(agent) });
-      expect(Object.keys(status).sort()).toEqual([...MAIN_KEYS, "idle_screen_availability", "state"].sort());
+      expect(Object.keys(status).sort()).toEqual([...MAIN_KEYS, "idle_screen_availability", "state", ...coveredStatusKeys(agent)].sort());
       expectDisplayRecord(status, agent);
       const get = JSON.parse(JSON.stringify(await client.get({ instance_id: id })));
       expect(get.state).toBe("check_permission");
@@ -92,18 +95,18 @@ test("idle_screen shows in displayed_state beside state working, and an open per
         if (idle.includes(row.instance_id)) {
           // The exact key set: displayed_state and no detail.
           expect(row.displayed_state).toBe("idle_screen");
-          expect(Object.keys(row).sort()).toEqual([...LIST_KEYS, "displayed_state"].sort());
+          expect(Object.keys(row).sort()).toEqual([...LIST_KEYS, "displayed_state", ...coveredListKeys(row.agent)].sort());
           expectDisplayRecord(row, row.agent);
         } else {
           expect(row).not.toHaveProperty("displayed_state");
         }
-        if (asking.includes(row.instance_id)) expect(Object.keys(row).sort()).toEqual(LIST_KEYS);
+        if (asking.includes(row.instance_id)) expect(Object.keys(row).sort()).toEqual([...LIST_KEYS, ...coveredListKeys(row.agent)].sort());
       }
     }
     for (const [id, agent] of [["ordinary", "claude"], ["ordinary-cursor", "cursor"]]) {
       const ordinary = await client.status({ instance_id: id });
       expect(ordinary.idle_screen_availability).toBe(availability(agent));
-      expect(Object.keys(ordinary).sort()).toEqual([...MAIN_KEYS, "idle_screen_availability", "state"].sort());
+      expect(Object.keys(ordinary).sort()).toEqual([...MAIN_KEYS, "idle_screen_availability", "state", ...coveredStatusKeys(agent)].sort());
       expectDisplayRecord(ordinary, agent);
     }
   });
