@@ -21196,8 +21196,9 @@ The remaining covered shutdown is:
    completion must use this bounded writer. Under its write lock it rechecks
    the captured Launch, life and agent identity against the current row and
    published Launch, then updates the fresh snapshot. Agent comparison uses
-   `tmux.SelectAgentProcess`'s pure PID/start identity selection: SessionStart
-   promotion or recovery adoption of the same process is allowed, and the fresh
+   the stored PID/start fields with the API's identity selection rules, without
+   importing tmux or probe into the hook path. SessionStart promotion or
+   recovery adoption of the same process is allowed, and the fresh
    `session_id` is retained. It also corrects a
    same-Launch `missing` backed by applicable process-exit evidence; other
    missing causes stay unchanged. A replacement Launch is `launch_changed`.

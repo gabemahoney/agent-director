@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // MarkKeylessPauseEndedWithin records keyless pause's deliberate end after
@@ -30,11 +28,7 @@ func (s *Store) MarkKeylessPauseEndedWithin(ctx context.Context, captured Spawn,
 	var res CondResult
 	var closed []closedRequest
 	var exits []displayTransition
-	// Selection is pure: no tmux call or process probe. SessionStart can move
-	// the same process from pane-only metadata to both identity columns.
-	capturedAgent := tmux.SelectAgentProcess(
-		tmux.ProcIdentity{PID: captured.PID, Starttime: captured.ProcStarttime},
-		tmux.ProcIdentity{PID: captured.Identity.PanePID, Starttime: captured.Identity.PaneStarttime}).Identity
+	capturedAgent := keylessPauseAgent(captured)
 	err := s.durableWriteWithin(ctx, maxWait, func(ctx context.Context, conn *sql.Conn) error {
 		row, err := scanSpawn(conn.QueryRowContext(ctx, getSpawnSQL, captured.InstanceID), getSpawnErrs)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -48,9 +42,7 @@ func (s *Store) MarkKeylessPauseEndedWithin(ctx context.Context, captured Spawn,
 		if err != nil {
 			return err
 		}
-		agent := tmux.SelectAgentProcess(
-			tmux.ProcIdentity{PID: row.PID, Starttime: row.ProcStarttime},
-			tmux.ProcIdentity{PID: row.Identity.PanePID, Starttime: row.Identity.PaneStarttime}).Identity
+		agent := keylessPauseAgent(row)
 		if launch.LaunchToken == "" || captured.Identity.Token != launch.LaunchToken ||
 			p.launch != launch.LaunchID || p.token != launch.LaunchToken || p.provider != launch.Provider ||
 			p.conversation != launch.ConversationID || p.launchCoverage != BusySendCovered ||
@@ -88,6 +80,22 @@ func (s *Store) MarkKeylessPauseEndedWithin(ctx context.Context, captured Spawn,
 		emitTerminalCloseout(reportCtx, closed, captured.InstanceID, DecisionReasonEnded, "ad_recovery")
 	}
 	return prior, res, nil
+}
+
+// keylessPauseAgent projects only stored fields: the pane wins when recorded
+// identities disagree; otherwise SessionStart wins, as recorded. The hook
+// path reaches store, so this projection must not import tmux or probe. Its
+// test checks parity with the API's shared process selector.
+func keylessPauseAgent(row Spawn) ProcessIdentity {
+	pid, start := row.PID, row.ProcStarttime
+	panePID, paneStart := row.Identity.PanePID, row.Identity.PaneStarttime
+	if pid <= 0 || (panePID > 0 && (pid != panePID || (start != "" && paneStart != "" && start != paneStart))) {
+		pid, start = panePID, paneStart
+	}
+	if pid <= 0 {
+		return ProcessIdentity{}
+	}
+	return ProcessIdentity{PID: pid, Starttime: start}
 }
 
 // keylessProcessMissing distinguishes a same-Launch proc_absent mark from a

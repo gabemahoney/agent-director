@@ -15,6 +15,7 @@ import (
 // TestMarkKeylessPauseEndedGuards (b.nqq) distinguishes a sweep's proven
 // process exit from other missing causes and keeps newer Launches untouched.
 func TestMarkKeylessPauseEndedGuards(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []string{"live", "process missing", "tmux missing", "unattributed missing", "malformed state", "stale process", "ended", "new Launch", "changed pane process", "changed pane start"} {
 		t.Run(tc, func(t *testing.T) {
 			in := newBusySendInbox(t, "held")
@@ -107,6 +108,7 @@ func TestMarkKeylessPauseEndedGuards(t *testing.T) {
 
 // TestMarkKeylessPauseEndedRollback (b.nqq) keeps row and request closure atomic.
 func TestMarkKeylessPauseEndedRollback(t *testing.T) {
+	t.Parallel()
 	in := newBusySendInbox(t, "held")
 	row := in.row(t)
 	pub, err := in.s.GetBusySendPublishedLaunch(in.id)
@@ -128,6 +130,7 @@ func TestMarkKeylessPauseEndedRollback(t *testing.T) {
 // TestMarkKeylessPauseEndedAbandonedResult (b.nqq) keeps callback-owned
 // outputs private when the budget returns before native SQL unwinds.
 func TestMarkKeylessPauseEndedAbandonedResult(t *testing.T) {
+	t.Parallel()
 	in := newBusySendInbox(t, "held")
 	row := in.row(t)
 	pub, err := in.s.GetBusySendPublishedLaunch(in.id)

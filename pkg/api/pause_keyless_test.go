@@ -269,6 +269,7 @@ func TestPauseKeylessAnyLiveState(t *testing.T) {
 // agent's exit before pause records its deliberate end. That same-Launch
 // process-based missing mark must not prevent pause from leaving ended.
 func TestPauseKeylessEndsRowAfterSweepMissing(t *testing.T) {
+	// Serial: replaces process-wide pause hooks and clock, and reads the shared trail.
 	e := newKeylessEnv(t, killRowSpec{})
 	held := e.held(t)
 	var mark int
@@ -464,6 +465,7 @@ func (s *kpHookedStore) GetSpawnConnBounded(ctx context.Context, id string) (api
 // SessionStart may promote the captured pane process to the SessionStart
 // columns and record a fresh session without replacing the Launch or agent.
 func TestPauseKeylessSessionStartDuringPause(t *testing.T) {
+	// Serial: replaces keyless pause's process-wide signal, clock and poll hooks.
 	for _, when := range []string{"before signal", "after exit evidence"} {
 		t.Run(when, func(t *testing.T) {
 			e := newKeylessEnv(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithNoPID()}})
@@ -495,6 +497,7 @@ func TestPauseKeylessSessionStartDuringPause(t *testing.T) {
 // TestPauseKeylessAgentAdoptedDuringPause (b.nqq, round 1 sweep): recovery
 // may fill the pane identity from the same recorded SessionStart process.
 func TestPauseKeylessAgentAdoptedDuringPause(t *testing.T) {
+	// Serial: replaces keyless pause's process-wide signal, clock and poll hooks.
 	e := newKeylessEnv(t, killRowSpec{NoPane: true, NoSession: true, Opts: []apitest.SpawnOption{
 		apitest.WithPID(apitest.TestPanePID), apitest.WithProcStarttime(apitest.LinuxProcStarttime),
 	}})
@@ -892,6 +895,7 @@ func TestPauseKeylessSuccessBoundary(t *testing.T) {
 // TestPauseKeylessRowCompletionBudget (b.nqq): the new terminal write shares
 // the original budget and cancellation; it never bypasses a blocked store.
 func TestPauseKeylessRowCompletionBudget(t *testing.T) {
+	// Serial: replaces keyless pause's process-wide signal, clock and poll hooks.
 	for _, tc := range []string{"connection held", "write lock held", "cancelled"} {
 		t.Run(tc, func(t *testing.T) {
 			e := newKeylessEnv(t, killRowSpec{})
@@ -943,6 +947,7 @@ func TestPauseKeylessRowCompletionBudget(t *testing.T) {
 // TestPauseKeylessRowCompletionSuccessBoundary (b.nqq): cancellation or budget
 // expiry after the row commit refuses success while retaining the committed end.
 func TestPauseKeylessRowCompletionSuccessBoundary(t *testing.T) {
+	// Serial: replaces keyless pause's process-wide signal, clock and poll hooks.
 	for _, tc := range []string{"cancelled", "budget"} {
 		t.Run(tc, func(t *testing.T) {
 			e := newKeylessEnv(t, killRowSpec{})
