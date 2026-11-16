@@ -106,8 +106,9 @@ func (r *fakeRoute) prepared() []busysend.Prepared {
 	return slices.Clone(r.issued)
 }
 
-// storeSeam is the real Store, recording each committed issue and, when
-// observe is set, the context of each call it overrides.
+// storeSeam is the real Store, recording each committed issue and each
+// refused one's error and, when observe is set, the context of each call it
+// overrides.
 type storeSeam struct {
 	*store.Store
 	observe func(string, context.Context)
@@ -115,8 +116,9 @@ type storeSeam struct {
 	// read can consume injected time.
 	forceRead func()
 
-	mu     sync.Mutex
-	issues []store.BusySendIssue
+	mu       sync.Mutex
+	issues   []store.BusySendIssue
+	refusals []error
 }
 
 func (s *storeSeam) ReadBusySendForcePrompt(ctx context.Context, instanceID string) (store.BusySendForcePrompt, error) {
@@ -155,11 +157,13 @@ func (s *storeSeam) RecordBusySendWait(ctx context.Context, w store.BusySendWait
 func (s *storeSeam) CommitBusySendIssue(ctx context.Context, req store.BusySendIssueRequest) (store.BusySendIssue, error) {
 	s.see("issue commit", ctx)
 	out, err := s.Store.CommitBusySendIssue(ctx, req)
+	s.mu.Lock()
 	if err == nil {
-		s.mu.Lock()
 		s.issues = append(s.issues, out)
-		s.mu.Unlock()
+	} else {
+		s.refusals = append(s.refusals, err)
 	}
+	s.mu.Unlock()
 	return out, err
 }
 
@@ -167,6 +171,13 @@ func (s *storeSeam) committed() []store.BusySendIssue {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.issues)
+}
+
+// refused is every issue commit's error, in call order.
+func (s *storeSeam) refused() []error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.refusals)
 }
 
 // coordEnv is a covered, waiting Claude agent with a recorded route and Turn
@@ -1009,6 +1020,23 @@ func (e *coordEnv) force(t *testing.T, forceID string) store.BusySendForce {
 	return *l.ForceResult
 }
 
+// pauseRequest is a new pause call's request for e's captured Launch, on the
+// clock, with a minute of budget left.
+func (e *coordEnv) pauseRequest() store.BusySendPauseRequest {
+	return store.BusySendPauseRequest{InstanceID: e.id, LaunchID: e.dest.LaunchID, LaunchToken: e.dest.LaunchToken,
+		OwnerCallID: uuid.NewString(), Deadline: e.clock.Now().Add(time.Minute), Now: e.clock.Now}
+}
+
+// pause is the real conditional pause's claim attempt (SR-6.5) for a new call.
+func (e *coordEnv) pause(t *testing.T) store.BusySendPauseDecision {
+	t.Helper()
+	d, err := e.st.ClaimBusySendPauseWithin(context.Background(), e.pauseRequest(), 10*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimBusySendPauseWithin: %v", err)
+	}
+	return d
+}
+
 // TestCoordinatorDrivesForcePrompts (SR-3.4, SR-4.3; M2 P-C4.3 and P-C4.6 at
 // the intent and output seam): each forced wake issues at most one frozen
 // prompt of the running force. At its only output the prompt's intent is
@@ -1283,5 +1311,123 @@ func TestCoordinatorReleasesAbandonedForce(t *testing.T) {
 	}
 	if b := e.result(t, "b"); !b.Final || b.Forced || e.force(t, c.Force.ForceID).Outcome != store.BusySendForceHandedOver {
 		t.Errorf("b %+v; want Final by ordinary delivery, unforced, and the force handed_over", b)
+	}
+}
+
+// TestCoordinatorPauseFencesForcePrompts (SR-6.5, SR-2.4, SR-4.3; M2 P-C4.6,
+// P-C4.7 issue side): a running force's call is no pending force, so the
+// waiting agent's real conditional pause claims it, and the claim fences the
+// force's issue commit (force.go's, BusySendGuardPause) for its first prompt,
+// and for a later prompt whose cursor the wake read before the claim, after
+// prompt 0 was written whole and admitted. The fenced wake writes nothing: no
+// output, intent, issuer or forced Message; the force's call then ends by
+// E5's rules, refused not_issued, or handed_over admitted with prompt 0's
+// Result unchanged, its never-issued Messages Held unforced in order. The
+// claim's matrix is internal/store's; the hook routes' fences internal/hook's.
+func TestCoordinatorPauseFencesForcePrompts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		later   bool
+		places  []string // custody at the call's end
+		outcome store.BusySendForceOutcome
+		reason  store.BusySendForceReason
+	}{
+		{"the first prompt", false, []string{"held", "held"}, store.BusySendForceRefused, store.BusySendForceNotIssued},
+		{"a later prompt's retained cursor", true, []string{"closed", "held"}, store.BusySendForceHandedOver, store.BusySendForceAdmitted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			e := newCoordEnv(t)
+			e.admit(t, "a", strings.Repeat("a", 5000))
+			e.admit(t, "b", strings.Repeat("b", 5000))
+			c := e.forceClaim(t)
+			claim := func() {
+				if d := e.pause(t); d.Kind != store.BusySendPauseDecisionClaimed {
+					t.Fatalf("pause claim %+v; want claimed beside the running force", d)
+				}
+			}
+			if tc.later {
+				if out, err := e.wake(ctx); err != nil || out.Kind != busysend.OutcomeIssued {
+					t.Fatalf("first wake = %+v, %v; want prompt 0 issued", out, err)
+				}
+				e.sight(t, c.Handover.HandoverID, 1)
+				e.route.authorize = func(_ context.Context, p busysend.Prepared) busysend.Authority {
+					if p.PromptIndex != 1 {
+						t.Errorf("the wake read prompt %d; want the next cursor, 1", p.PromptIndex)
+					}
+					claim()
+					return busysend.Authority{Issuer: helper}
+				}
+			} else {
+				claim()
+			}
+			a, fence, issued := e.result(t, "a"), storefix.ReadLaunchFence(t, e.st, e.dest.LaunchID), len(e.route.prepared())
+			out, err := e.wake(ctx)
+			var guard *store.BusySendGuardError
+			if refusals := e.seam.refused(); len(refusals) != 1 || !errors.As(refusals[0], &guard) || guard.Failure != store.BusySendGuardPause {
+				t.Errorf("issue commit refusals %v; want one, by the pause fence", refusals)
+			}
+			if want := (busysend.Outcome{Kind: busysend.OutcomeNoIssue, Wait: store.BusySendWaitReadinessUnknown,
+				HandoverID: c.Handover.HandoverID}); err != nil || !reflect.DeepEqual(out, want) || len(e.route.prepared()) != issued {
+				t.Fatalf("fenced wake = %+v, %v with %d prompts issued in all; want %+v and nothing more", out, err, len(e.route.prepared()), want)
+			}
+			if got := storefix.ReadLaunchFence(t, e.st, e.dest.LaunchID); !reflect.DeepEqual(got, fence) || !reflect.DeepEqual(e.result(t, "a"), a) {
+				t.Errorf("after the fenced wake: Launch fence %+v, a %+v; want unchanged %+v, %+v", got, e.result(t, "a"), fence, a)
+			}
+			end, err := e.st.EndBusySendForceCall(ctx, c.Ref, e.clock.Now())
+			if err != nil || !end.Ended || end.Force.Outcome != tc.outcome || end.Force.Reason != tc.reason {
+				t.Fatalf("call end %+v, %v; want %s %s", end, err, tc.outcome, tc.reason)
+			}
+			if got := e.places(t); !slices.Equal(got, tc.places) {
+				t.Errorf("custody after the call's end %v; want %v", got, tc.places)
+			}
+			if r := e.result(t, "b"); r.Class != store.BusySendClassHeld || r.Final || r.Forced {
+				t.Errorf("b %+v; want Held, unforced", r)
+			}
+			if r := e.result(t, "a"); tc.later && !reflect.DeepEqual(r, a) || !tc.later && (r.Class != store.BusySendClassHeld || r.Forced) {
+				t.Errorf("a %+v; want prompt 0's Result unchanged, or Held unforced when never issued", r)
+			}
+		})
+	}
+}
+
+// TestCoordinatorPauseLosesToIssuedInput (SR-6.5, SR-2.4; M2 P-C4.5, P-C4.6
+// issue side): the representative intent-first order at the shared
+// issue/claim boundary. Once a prompt's issue commit landed, before its output
+// completed, the waiting agent's real conditional pause refuses turn_pending,
+// claiming nothing, and the output keeps its meaning: its completion is
+// recorded and the Message is Final. The claim's other predicates are
+// internal/store's.
+func TestCoordinatorPauseLosesToIssuedInput(t *testing.T) {
+	t.Parallel()
+	e := newCoordEnv(t)
+	e.admit(t, "m1", "hello")
+	var decision store.BusySendPauseDecision
+	e.route.issue = func(context.Context, busysend.Prepared) busysend.Disposition {
+		fence := storefix.ReadLaunchFence(t, e.st, e.dest.LaunchID)
+		decision = e.pause(t)
+		if got := storefix.ReadLaunchFence(t, e.st, e.dest.LaunchID); len(fence.Prompts) != 1 || !reflect.DeepEqual(got, fence) {
+			t.Errorf("Launch fence across the pause %+v → %+v; want the issued prompt's unchanged", fence, got)
+		}
+		return delivered
+	}
+	ctx := context.Background()
+	if out, err := e.deliver(ctx); err != nil || out.Kind != busysend.OutcomeIssued || len(e.route.prepared()) != 1 {
+		t.Fatalf("Deliver = %+v, %v; want m1 issued", out, err)
+	}
+	if want := (store.BusySendPauseDecision{Kind: store.BusySendPauseDecisionRefused, Cause: store.BusySendPauseTurnPending}); !reflect.DeepEqual(decision, want) {
+		t.Errorf("pause at the issued prompt = %+v; want %+v", decision, want)
+	}
+	if row, err := e.st.GetSpawn(e.id); err != nil || row.State != store.StateWaiting {
+		t.Errorf("row %+v, %v; want raw state waiting", row, err)
+	}
+	if d, err := e.st.CheckBusySendPauseWithin(ctx, e.pauseRequest(), 10*time.Second); err != nil ||
+		!reflect.DeepEqual(d, store.BusySendPauseDecision{Kind: store.BusySendPauseDecisionClear}) {
+		t.Errorf("plain Check = %+v, %v; want clear, with no claim standing or released", d, err)
+	}
+	if r := e.result(t, "m1"); r.Class != store.BusySendClassSentUnconfirmed || !r.Final || !slices.Equal(e.places(t), []string{"closed"}) {
+		t.Errorf("m1 %+v, custody %v; want Final sent_unconfirmed, closed", r, e.places(t))
 	}
 }

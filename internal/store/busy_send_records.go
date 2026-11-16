@@ -374,10 +374,12 @@ const (
 // BusySendPauseCallOutcome is what a claim's owning pause call returned, once
 // known (busy_send_pause_claims.call_outcome; SR-6.4, SR-6.5): paused (the
 // recorded process's exit was verified within the budget), refused (keyless
-// shutdown refused before signalling; the same transaction releases the
-// claim), exit_uncertain (the signal was sent and exit was not verified
-// within the budget, which is uncertain exit, not success) or failed (the
-// call ended with another error after its signal intent). call_cause holds
+// shutdown refused before signalling, which its owning call proved, with or
+// without a signal intent persisted, since an intent is not a signal; the
+// same transaction releases the claim), exit_uncertain (the signal was sent
+// and exit was not verified within the budget, which is uncertain exit, not
+// success) or failed (the call ended with another error after its signal
+// intent). call_cause holds
 // the structured cause. Recording an outcome never ends the fence: after a
 // signal the claim stands until exit evidence or a new Launch, and a later
 // pause on it returns the recorded outcome. A signal intent with no recorded
@@ -393,11 +395,11 @@ const (
 
 // BusySendPauseClosure is the one transition that closed a pause claim's
 // fence (busy_send_pause_claims.closed_by; SR-6.5): released before any
-// signal, by the owning call's refusal or by a later pause after the owner's
-// deadline passed with neither a signal intent nor an outcome; or ended by
-// Launch End recorded on exit evidence or by a new Launch's publication. A
-// kill or resume that fails or refuses, a kill without exit evidence, a read,
-// a timer or elapsed time closes nothing.
+// signal, by the owning call's proven refusal (keeping any signal intent) or
+// by a later pause after the owner's deadline passed with neither a signal
+// intent nor an outcome; or ended by Launch End recorded on exit evidence or
+// by a new Launch's publication. A kill or resume that fails or refuses, a
+// kill without exit evidence, a read, a timer or elapsed time closes nothing.
 type BusySendPauseClosure string
 
 const (

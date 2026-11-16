@@ -200,6 +200,18 @@ func (sp Spawn) applicableProcessEvidence() (fieldEvidence, bool) {
 	return ev, true
 }
 
+// provenAgentExit is sp's process record when it is positive evidence that
+// its recorded agent process exited: an applicable exited record that an
+// identity-checked attempt itself established (source process, no failure
+// reason), never one a later failed attempt merely kept.
+func (sp Spawn) provenAgentExit() (fieldEvidence, bool) {
+	ev, ok := sp.applicableProcessEvidence()
+	if !ok || ev.Value != ProcessExited || ev.Source != EvidenceProcess || ev.Reason != "" {
+		return fieldEvidence{}, false
+	}
+	return ev, true
+}
+
 // ProcessConfirmation is the stored process_liveness value and record. A
 // record applies only to the row's current life, launch and recorded process
 // at its recorded start identity, never to a helper, tmux or a descendant. A
@@ -618,6 +630,12 @@ const recordProcessEvidenceSQL = `UPDATE spawns SET process_evidence = ?
 // version. CondChanged means the row moved on and nothing was written; a
 // busy store, a canceled caller or an unconfirmed COMMIT returns the error,
 // and the attempt is then not a durable confirmation.
+//
+// An accepted record that positively confirms the recorded agent exited
+// (Spawn.provenAgentExit) is exit evidence arriving after a bookkeeping End
+// (M2's EndClaimOnEvidence): in the same transaction it ends the standing
+// pause claim of the row's own current Launch when that Launch's End is
+// already recorded (endBusySendRowPauseClaim). Nothing else changes.
 func (s *Store) RecordProcessEvidence(sampled Spawn, record string) (CondResult, error) {
 	args := append([]any{record, sampled.InstanceID}, snapshotMatchArgs(sampled.Snapshot)...)
 	args = append(args, sampled.LifeNumber, nullableStringArg(sampled.Identity.Token), sampled.PermissionEpoch,
@@ -636,7 +654,12 @@ func (s *Store) RecordProcessEvidence(sampled Spawn, record string) (CondResult,
 		}
 		if n > 0 {
 			result = CondApplied
-			return nil
+			accepted := sampled
+			accepted.ProcessEvidence = record
+			if _, exited := accepted.provenAgentExit(); !exited {
+				return nil
+			}
+			return endBusySendRowPauseClaim(ctx, conn, s.StoreID(), sampled.InstanceID, storeNowMillis())
 		}
 		var exists bool
 		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM spawns WHERE instance_id=?)`, sampled.InstanceID).Scan(&exists); err != nil {

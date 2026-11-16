@@ -314,22 +314,35 @@ func recordBusySendLaunchEnd(ctx context.Context, conn *sql.Conn, storeID, launc
 	return true, applyBusySendLaunchEnd(ctx, conn, storeID, launchID, now)
 }
 
-// endBusySendRowLaunch records the Launch End of instanceID's row's own
-// published current Launch, the one whose launch token is the row's, with
-// the supplied cause, in the caller's transaction. A row with a staged
-// candidate (whose token is the candidate's), an already ended Launch or no
-// consistent binding changes nothing.
-func endBusySendRowLaunch(ctx context.Context, conn *sql.Conn, storeID, instanceID string, cause BusySendLaunchEnd, now int64) (bool, error) {
+// busySendRowLaunch is instanceID's row's own published current Launch, the
+// one whose launch token is the row's, and whether its End is recorded; ""
+// for a row with a staged candidate (whose token is the candidate's) or no
+// consistent binding.
+func busySendRowLaunch(ctx context.Context, q busySendLaunchSQL, storeID, instanceID string) (string, bool, error) {
 	var launch string
-	err := conn.QueryRowContext(ctx, `SELECT l.launch_id FROM spawns s
+	var ended bool
+	err := q.QueryRowContext(ctx, `SELECT l.launch_id, l.ended_at_ms IS NOT NULL FROM spawns s
 	    JOIN busy_send_launches l ON l.instance_id = s.instance_id AND l.conversation_id = s.busy_conversation_id
 	        AND l.phase = 'current' AND l.launch_token IS s.launch_token AND s.launch_token IS NOT NULL
-	    WHERE s.instance_id = ? AND l.store_id = ? AND l.ended_at_ms IS NULL`, instanceID, storeID).Scan(&launch)
+	    WHERE s.instance_id = ? AND l.store_id = ?`, instanceID, storeID).Scan(&launch, &ended)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return "", false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("store: busy-send Launch End: %w", err)
+		return "", false, fmt.Errorf("store: busy-send Launch End: %w", err)
+	}
+	return launch, ended, nil
+}
+
+// endBusySendRowLaunch records the Launch End of instanceID's row's own
+// published current Launch (busySendRowLaunch) with the supplied cause, in
+// the caller's transaction. A row with a staged candidate, an already ended
+// Launch or no consistent binding changes nothing. It is logical End only:
+// it never ends a pause claim, which needs exit evidence.
+func endBusySendRowLaunch(ctx context.Context, conn *sql.Conn, storeID, instanceID string, cause BusySendLaunchEnd, now int64) (bool, error) {
+	launch, ended, err := busySendRowLaunch(ctx, conn, storeID, instanceID)
+	if err != nil || launch == "" || ended {
+		return false, err
 	}
 	return recordBusySendLaunchEnd(ctx, conn, storeID, launch, cause, now)
 }
@@ -341,6 +354,13 @@ func endBusySendRowLaunch(ctx context.Context, conn *sql.Conn, storeID, instance
 // Launch also ends on a missing mark without proven exit (agent_missing).
 // That logical end neither establishes exit nor lifts physical fences, even
 // if the row's own agent reports in and revives its lifecycle state later.
+//
+// When the mark's statement stored positive exit evidence for the row's
+// recorded agent (Spawn.provenAgentExit: its exited record, for the row's
+// life, launch token and identity), the same transaction also ends the
+// standing pause claim of the row's own current Launch, its End recorded now
+// or earlier (endBusySendRowPauseClaim). An ended state, a missing mark or
+// any other process record ends none.
 func endBusySendOnTerminalMark(ctx context.Context, conn *sql.Conn, storeID, instanceID string) error {
 	var state string
 	var proven, covered bool
@@ -355,8 +375,18 @@ func endBusySendOnTerminalMark(ctx context.Context, conn *sql.Conn, storeID, ins
 		}
 		cause = busySendAgentMissing
 	}
-	_, err := endBusySendRowLaunch(ctx, conn, storeID, instanceID, cause, storeNowMillis())
-	return err
+	now := storeNowMillis()
+	if _, err := endBusySendRowLaunch(ctx, conn, storeID, instanceID, cause, now); err != nil || !proven {
+		return err
+	}
+	row, err := scanSpawn(conn.QueryRowContext(ctx, getSpawnSQL, instanceID), getSpawnErrs)
+	if err != nil {
+		return fmt.Errorf("busy-send pause claim end: %w", err)
+	}
+	if _, exited := row.provenAgentExit(); !exited {
+		return nil
+	}
+	return endBusySendRowPauseClaim(ctx, conn, storeID, instanceID, now)
 }
 
 // EndBusySendLaunch records the Launch End of instanceID's published current
@@ -364,7 +394,10 @@ func endBusySendOnTerminalMark(ctx context.Context, conn *sql.Conn, storeID, ins
 // pause): only while that Launch is the row's own and its launch token is
 // token, the Launch the caller judged. It reports whether it recorded one;
 // a repeat, another Launch or a deleted row changes nothing. It is Launch
-// End only, never exit evidence.
+// End only, never exit evidence for its delivery fences. The caller's
+// verified agent exit does end that Launch's standing pause claim
+// (launch_end), in the same transaction, also when its End was already
+// recorded (endBusySendRowPauseClaim).
 func (s *Store) EndBusySendLaunch(instanceID, token string) (bool, error) {
 	return s.EndBusySendLaunchWithin(context.Background(), instanceID, token, DefaultLockWait)
 }
@@ -389,9 +422,12 @@ func (s *Store) EndBusySendLaunchWithin(ctx context.Context, instanceID, token s
 			instanceID, nullableStringArg(token)).Scan(&current); err != nil || !current || token == "" {
 			return err
 		}
+		now := storeNowMillis()
 		var err error
-		ended, err = endBusySendRowLaunch(ctx, conn, s.StoreID(), instanceID, BusySendProcessExited, storeNowMillis())
-		return err
+		if ended, err = endBusySendRowLaunch(ctx, conn, s.StoreID(), instanceID, BusySendProcessExited, now); err != nil {
+			return err
+		}
+		return endBusySendRowPauseClaim(ctx, conn, s.StoreID(), instanceID, now)
 	})
 	if err != nil {
 		return false, fmt.Errorf("store: end busy-send Launch: %w", err)
@@ -440,12 +476,17 @@ func (s *Store) EstablishBusySendExitWithin(ctx context.Context, ev BusySendExit
 
 // exitBusySendLaunches applies validated exit evidence for scope in the
 // caller's transaction: every in-scope Launch's End must already be recorded;
-// its intent-bearing custody leaves its fences (applyBusySendLaunchExit) and
-// the current Launch's judged agent identity is kept as its agent process
-// row, so a later retirement judges it again after the spawns row moves on.
+// its intent-bearing custody leaves its fences (applyBusySendLaunchExit), its
+// standing pause claim ends (launch_end: the evidence covers its recorded
+// agent; endBusySendPauseClaim), and the current Launch's judged agent
+// identity is kept as its agent process row, so a later retirement judges it
+// again after the spawns row moves on.
 func exitBusySendLaunches(ctx context.Context, conn *sql.Conn, storeID string, scope BusySendExitScope, now int64) error {
 	for _, l := range scope.Launches {
 		if err := applyBusySendLaunchExit(ctx, conn, storeID, l.LaunchID, now); err != nil {
+			return err
+		}
+		if err := endBusySendPauseClaim(ctx, conn, l.LaunchID, BusySendPauseLaunchEnd, now); err != nil {
 			return err
 		}
 		if !l.Current {

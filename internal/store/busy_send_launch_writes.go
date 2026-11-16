@@ -323,7 +323,8 @@ func closeBusySendCandidate(ctx context.Context, conn *sql.Conn, instanceID stri
 // pending). A reuse retires the old conversation and, in the same commit,
 // finalizes its never-emitted custody, Messages admitted while the reuse was
 // pending included, as not_started conversation_replaced
-// (retireBusySendCustody). Nothing is issued here.
+// (retireBusySendCustody). Either way the old Launch's standing pause claim
+// ends (launch_published; SR-6.5). Nothing is issued here.
 func publishBusySendCandidate(ctx context.Context, conn busySendLaunchSQL, instanceID, token string, at int64) (bool, error) {
 	var launch, conversation, kind string
 	var revision int64
@@ -394,6 +395,12 @@ func publishBusySendCandidate(ctx context.Context, conn busySendLaunchSQL, insta
 	if err := busySendChange(ctx, conn, `UPDATE busy_send_launches SET phase = 'superseded',
 	    ended_at_ms = COALESCE(ended_at_ms, ?), end_cause = COALESCE(end_cause, 'launch_published'), revision = revision + 1
 	    WHERE launch_id = ? AND revision = ? AND phase = 'current'`, at, p.launch, p.launchRevision); err != nil {
+		return false, err
+	}
+	// SR-6.5: the old Launch's pause claim ends with this publication, unless
+	// its staging's exit evidence already ended it; the new Launch is judged
+	// only on its own facts.
+	if err := endBusySendPauseClaim(ctx, conn, p.launch, BusySendPauseLaunchPublished, at); err != nil {
 		return false, err
 	}
 	if err := busySendChange(ctx, conn, `UPDATE busy_send_launches SET phase = 'current', revision = revision + 1

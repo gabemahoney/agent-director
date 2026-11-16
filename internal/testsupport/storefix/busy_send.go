@@ -185,9 +185,11 @@ func ExpireBusySendForce(t *testing.T, dbPath, forceID string, atMillis int64) {
 
 // SeedBusySendPauseClaim records a standing pause claim on instanceID's
 // current Launch, as SR-6.5's pause call claims it before its signal, so the
-// Launch's issue commits refuse (BusySendGuardPause) until Launch End
-// (reusable fixture). This release has no claim writer: E6 t1.xis.8a owns the
-// pause claim and its matrix, and may replace this seed with its writer.
+// Launch's issue commits refuse (BusySendGuardPause) until the claim ends
+// (reusable fixture). It writes raw, skipping the claim's checks, for a test
+// that needs a fence on a Launch in any state; the real writer is
+// store.ClaimBusySendPauseWithin, which claims only a waiting row with no
+// turn pending.
 func SeedBusySendPauseClaim(t *testing.T, dbPath, instanceID string) {
 	t.Helper()
 	raw := openRawStore(t, dbPath, "SeedBusySendPauseClaim")

@@ -108,7 +108,6 @@ func keylessProcessMissing(row Spawn, exit ProcessExit) bool {
 	if !ok || state.Source != EvidenceProcess {
 		return false
 	}
-	process, ok := row.applicableProcessEvidence()
-	return ok && process.Value == ProcessExited && process.Source == EvidenceProcess && process.Reason == "" &&
-		process.PID == exit.PID && process.Start == exit.Start
+	process, ok := row.provenAgentExit()
+	return ok && process.PID == exit.PID && process.Start == exit.Start
 }

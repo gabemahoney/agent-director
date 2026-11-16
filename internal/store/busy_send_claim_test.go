@@ -270,14 +270,17 @@ func wantBusySendCustody(t *testing.T, path, id string, want ...string) []busySe
 	return got
 }
 
-// readBusySendTables reads every row of the inbox's tables and the agent rows,
-// so a refused or inert call can be shown to have written nothing.
-func readBusySendTables(t *testing.T, path string) map[string][][]any {
+// readBusySendTables reads every row of the inbox's tables, its Results and
+// pause claims, the agent rows and any also table, so a refused or inert call
+// can be shown to have written nothing. Force rows are an also table, since a
+// refused force stores its attempt.
+func readBusySendTables(t *testing.T, path string, also ...string) map[string][][]any {
 	t.Helper()
 	db := openBusySendRaw(t, path)
 	out := map[string][][]any{}
-	for _, table := range []string{"spawns", "busy_conversations", "busy_send_launches", "busy_send_launch_processes",
-		"busy_send_messages", "busy_send_handovers", "busy_send_prompts", "busy_send_handover_members"} {
+	for _, table := range append([]string{"spawns", "busy_conversations", "busy_send_launches", "busy_send_launch_processes",
+		"busy_send_messages", "busy_send_results", "busy_send_handovers", "busy_send_prompts", "busy_send_handover_members",
+		"busy_send_pause_claims"}, also...) {
 		rows, err := db.Query("SELECT * FROM " + table + " ORDER BY 1, 2")
 		if err != nil {
 			t.Fatal(err)

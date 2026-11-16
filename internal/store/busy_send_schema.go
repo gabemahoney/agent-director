@@ -535,6 +535,10 @@ const busySendForceMembersDDL = `CREATE TABLE IF NOT EXISTS busy_send_force_memb
 //     refusal or abandonment releases it, and only Launch End on exit evidence
 //     or a new Launch's publication ends it; state ended is SR-6.5's "outcome
 //     ended". At most one standing claim per Launch (the partial unique index).
+//     An intent is not proof of a signal: the owner's refusal proven before
+//     its signal keeps any intent already persisted (M2's
+//     PausePreSignalRefuseBy), while abandonment needs none, since only a
+//     claim without an intent may have been abandoned before its signal.
 const busySendPauseClaimsDDL = `CREATE TABLE IF NOT EXISTS busy_send_pause_claims (
     claim_id            TEXT PRIMARY KEY NOT NULL,
     store_id            TEXT NOT NULL,
@@ -555,11 +559,12 @@ const busySendPauseClaimsDDL = `CREATE TABLE IF NOT EXISTS busy_send_pause_claim
     CHECK(deadline_ms >= claimed_at_ms),
     CHECK((call_outcome IS NULL) = (call_outcome_at_ms IS NULL)),
     CHECK(call_cause IS NULL OR call_outcome IS NOT NULL),
-    CHECK(call_outcome <> 'refused' OR (signal_intent_at_ms IS NULL AND state = 'released')),
+    CHECK(call_outcome <> 'refused' OR (state = 'released' AND closed_by IS 'refused_before_signal')),
     CHECK(call_outcome NOT IN ('paused', 'exit_uncertain', 'failed') OR signal_intent_at_ms IS NOT NULL),
     CHECK((state = 'standing') = (closed_by IS NULL)),
     CHECK((closed_by IS NULL) = (closed_at_ms IS NULL)),
-    CHECK(state <> 'released' OR (closed_by IS NOT NULL AND closed_by IN ('refused_before_signal', 'abandoned_before_signal') AND signal_intent_at_ms IS NULL)),
+    CHECK(state <> 'released' OR (closed_by IS NOT NULL AND closed_by IN ('refused_before_signal', 'abandoned_before_signal')
+        AND (closed_by = 'refused_before_signal' OR signal_intent_at_ms IS NULL))),
     CHECK(state <> 'ended' OR (closed_by IS NOT NULL AND closed_by IN ('launch_end', 'launch_published'))),
     CHECK(closed_by <> 'refused_before_signal' OR call_outcome IS 'refused'),
     CHECK(closed_by <> 'abandoned_before_signal' OR call_outcome IS NULL),

@@ -2335,7 +2335,8 @@ type busySendRecords struct {
 	oldLaunch, launch             string // superseded, current
 	held, issued, expired, second string // Messages 1 to 4
 	oldHandover, handover, force  string
-	endedClaim, standingClaim     string
+	refusedClaim, endedClaim      string
+	standingClaim                 string
 	callerUUID                    string // owns the pairs req-1 to req-4
 }
 
@@ -2355,14 +2356,15 @@ type busySendRecords struct {
 //   - the open hand-over captured connection generation 1, Turn Start counter
 //     5 and a running turn with its emission intent;
 //   - the force ended handed_over (its own finality) carrying Messages 2 then 4;
-//   - an ended pause claim on the superseded Launch and a standing one on the
-//     current Launch.
+//   - on the superseded Launch, a pause claim its owner released on a refusal
+//     proven after its signal intent (the intent kept) and an ended one; a
+//     standing one on the current Launch.
 func seedBusySendRecords(t *testing.T, db *sql.DB, storeID, instance string) busySendRecords {
 	t.Helper()
 	p := instance + "-"
 	r := busySendRecords{retired: p + "conv-1", conversation: p + "conv-2", oldLaunch: p + "launch-1", launch: p + "launch-2",
 		held: p + "msg-1", issued: p + "msg-2", expired: p + "msg-3", second: p + "msg-4", oldHandover: p + "handover-1",
-		handover: p + "handover-2", force: p + "force-1", endedClaim: p + "pause-1", standingClaim: p + "pause-2",
+		handover: p + "handover-2", force: p + "force-1", refusedClaim: p + "pause-0", endedClaim: p + "pause-1", standingClaim: p + "pause-2",
 		callerUUID: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}
 	digest := func(s string) string {
 		sum := sha256.Sum256([]byte(s))
@@ -2445,6 +2447,10 @@ func seedBusySendRecords(t *testing.T, db *sql.DB, storeID, instance string) bus
 			"reason": "admitted", "started_at_ms": 3070, "ended_at_ms": 3300})},
 		{"busy_send_force_members", row(map[string]any{"force_id": r.force, "member_index": 0, "message_id": r.issued})},
 		{"busy_send_force_members", row(map[string]any{"force_id": r.force, "member_index": 1, "message_id": r.second})},
+		{"busy_send_pause_claims", row(map[string]any{"claim_id": r.refusedClaim, "instance_id": instance, "launch_id": r.oldLaunch,
+			"owner_call_id": "pause-call-0", "revision": 3, "claimed_at_ms": 1800, "deadline_ms": 1890, "signal_kind": "sigterm",
+			"signal_intent_at_ms": 1850, "call_outcome": "refused", "call_cause": "agent_process_unverifiable", "call_outcome_at_ms": 1860,
+			"state": "released", "closed_by": "refused_before_signal", "closed_at_ms": 1860})},
 		{"busy_send_pause_claims", row(map[string]any{"claim_id": r.endedClaim, "instance_id": instance, "launch_id": r.oldLaunch,
 			"owner_call_id": "pause-call-1", "revision": 2, "claimed_at_ms": 1900, "deadline_ms": 1990, "signal_kind": "sigterm",
 			"signal_intent_at_ms": 1950, "call_outcome": "paused", "call_outcome_at_ms": 1980, "state": "ended",

@@ -28,9 +28,12 @@ import (
 // busySendCoreV1Digest is the SHA-256 of the permanent core's declarations as
 // a store records them (busySendCoreDigest). The v20→v21 hop is the core's
 // only conversion: every later release reads and writes these tables as
-// declared, and open refuses any other declaration (SR-7.2). So this value
-// never changes; a change to it strands every store already at v21.
-const busySendCoreV1Digest = "227578b57237688544da2d3de19db781c7b2b0252559d267549522508a6301ec"
+// declared, and open refuses any other declaration (SR-7.2). So once v21 is
+// released this value never changes; a change to it strands every store
+// already at v21. Before release it changed in place for the pause claim's
+// refusal after its signal intent (b.kii E6 decision 3), and v21 test stores
+// are recreated.
+const busySendCoreV1Digest = "7300a8c1297fd415f14f9fb0ddbc05d7da60283c0d5586b162d8f79a7e766cfa"
 
 // busySendCoreDigest hashes db's recorded core declarations, each object's
 // type, name and SQL text (whitespace collapsed) in name order, and returns
@@ -232,7 +235,8 @@ func TestBusySendCoveredSet(t *testing.T) {
 // table refers to spawns); it admits the transitions its records need (a
 // return to Held beside earlier membership, expiry to a no-text tombstone
 // keeping its pair, a refused force with no captured target, a signalled
-// claim's exit_uncertain outcome before its fence ends, one standing claim
+// claim's exit_uncertain outcome before its fence ends, a refusal proven
+// before the signal keeping the claim's signal intent, one standing claim
 // and one open force per scope) and refuses every state its keys and
 // constraints rule out, a dangling reference at COMMIT and an Agent Default
 // override on a Launch other than a resume (SR-2.1, SR-1.4, SR-6.5).
@@ -287,6 +291,9 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 		{"a running force beside the ended one", []string{forceSQL("running-1")}, ""},
 		{"a signalled claim records exit_uncertain standing, then ends at Launch End", pauseExitUncertainSQL("launch_end"), ""},
 		{"a signalled claim records exit_uncertain standing, then ends at a new Launch", pauseExitUncertainSQL("launch_published"), ""},
+		{"a refusal proven before the signal keeps the claim's signal intent", []string{pauseExitUncertainSQL("")[0],
+			`UPDATE busy_send_pause_claims SET call_outcome = 'refused', call_cause = 'agent_process_unverifiable', call_outcome_at_ms = 3500,
+				state = 'released', closed_by = 'refused_before_signal', closed_at_ms = 3500 WHERE claim_id = '{standingClaim}'`}, ""},
 
 		{"an Agent Default override on a Launch that is not a resume", []string{
 			`UPDATE busy_send_launches SET override_confirmed = 0 WHERE launch_id = '{oldLaunch}'`}, "CHECK"},
@@ -328,6 +335,9 @@ func TestBusySendRecordsRepresentation(t *testing.T) {
 		{"a pause claim released after its signal", []string{pauseExitUncertainSQL("")[0],
 			`UPDATE busy_send_pause_claims SET state = 'released', closed_by = 'abandoned_before_signal', closed_at_ms = 3600
 				WHERE claim_id = '{standingClaim}'`}, "CHECK"},
+		{"a refused call outcome with a lifecycle closure", []string{
+			`UPDATE busy_send_pause_claims SET call_outcome = 'refused', call_outcome_at_ms = 3500, state = 'ended', closed_by = 'launch_end',
+				closed_at_ms = 3600 WHERE claim_id = '{standingClaim}'`}, "CHECK"},
 		{"a caller UUID not in canonical form", []string{
 			`INSERT INTO busy_send_results (caller_uuid, delivery_request_id, store_id, message_id, instance_id)
 				VALUES ('AAAAAAAA-AAAA-4AAA-AAAA-AAAAAAAAAAAA', 'req-9', '{store}', '{held}', 'rec')`}, "CHECK"},

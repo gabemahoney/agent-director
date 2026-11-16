@@ -383,6 +383,22 @@ func (e *wakeEnv) endCall(t *testing.T, c store.BusySendForceClaim) store.BusySe
 	return end.Force
 }
 
+// pause is the real conditional pause's claim attempt (SR-6.5) on e's current
+// Launch, for a new call with a minute of budget left.
+func (e *wakeEnv) pause(t *testing.T) store.BusySendPauseDecision {
+	t.Helper()
+	l, err := e.st.GetBusySendPublishedLaunch(e.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := e.st.ClaimBusySendPauseWithin(context.Background(), store.BusySendPauseRequest{InstanceID: e.id, LaunchID: l.LaunchID,
+		LaunchToken: l.LaunchToken, OwnerCallID: uuid.NewString(), Deadline: time.Now().Add(time.Minute)}, 10*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimBusySendPauseWithin: %v", err)
+	}
+	return d
+}
+
 // assertRaced fails unless each request's Result is Final sent_unconfirmed
 // with the sticky wait_turn_raced (every Claude wake is race-exposed, SR-3.3a,
 // ahead of handed_over_not_proven) on e's Launch and session.
@@ -544,7 +560,8 @@ func TestClaudeWakeDeliversHeldPrompts(t *testing.T) {
 // ReadBusySendTurnEndPrompts), "write" (its own gated lifecycle write) and
 // "record" (RecordBusySendTurnEnd), each with the step's request (the zero one
 // for "write"); turnEnd, when set, runs first, and an error it returns replaces
-// the store's call (errNotApplied: a write that did not apply).
+// the store's call (errNotApplied: a write that did not apply). commits keeps
+// each issue commit's error, nil for a committed one.
 type failRouteFacts struct {
 	*store.Store
 	n       int
@@ -554,6 +571,13 @@ type failRouteFacts struct {
 	readErr error
 	steps   []string
 	turnEnd func(step string, te store.BusySendTurnEnd) error
+	commits []error
+}
+
+func (s *failRouteFacts) CommitBusySendIssue(ctx context.Context, req store.BusySendIssueRequest) (store.BusySendIssue, error) {
+	out, err := s.Store.CommitBusySendIssue(ctx, req)
+	s.commits = append(s.commits, err)
+	return out, err
 }
 
 // errNotApplied makes failRouteFacts' lifecycle write one whose gate did not
@@ -1998,22 +2022,18 @@ func TestClaudeSteerConsecutiveBoundaries(t *testing.T) {
 // adopts nothing: it writes no context and its Message stays Held, never
 // issued, for the new Launch's own parent boundary to deliver. A Dialog
 // opening between eligibility and the last look refuses too: the request
-// stays open and unanswered, and nothing is written. So does a standing pause
-// claim made then (test review R1-2): the issue commit's pause fence refuses,
-// so nothing is issued or written and the Message stays Held. A route or
-// connection changes only with a new Launch (its route identity is its Launch
-// id, its connection generation 0). E6 owns the pause claim's matrix.
+// stays open and unanswered, and nothing is written. A pause claimed then is
+// TestClaudePauseFence's. A route or connection changes only with a new
+// Launch (its route identity is its Launch id, its connection generation 0).
 func TestClaudeSteerKeepsItsBinding(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		at     int // the route-facts read the change runs before
 		dialog bool
-		pause  bool
 	}{
 		{name: "the Launch replaced before eligibility", at: 2},
 		{name: "the Launch replaced before the last look", at: 3},
 		{name: "a Dialog opened before the last look", at: 3, dialog: true},
-		{name: "a pause claimed before the last look", at: 3, pause: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newWakeEnv(t, store.StateWorking)
@@ -2022,14 +2042,10 @@ func TestClaudeSteerKeepsItsBinding(t *testing.T) {
 			seam := &failRouteFacts{Store: e.st, n: tc.at}
 			seam.before = func() {
 				e.seam = nil
-				switch {
-				case tc.dialog:
+				if tc.dialog {
 					if _, err := apitest.SeedPermissionRequest(e.db, e.id, "Bash"); err != nil {
 						t.Fatal(err)
 					}
-					return
-				case tc.pause:
-					storefix.SeedBusySendPauseClaim(t, e.db, e.id)
 					return
 				}
 				e.fire(t, e.payload(t, "session-end-prompt-input-exit.json", nil))
@@ -2050,10 +2066,6 @@ func TestClaudeSteerKeepsItsBinding(t *testing.T) {
 				if open, err := e.st.OpenPermissionRequestsForSpawn(e.id); err != nil || len(open) != 1 {
 					t.Errorf("open permission requests %d, %v; want the Dialog's, unanswered", len(open), err)
 				}
-				return
-			}
-			if tc.pause {
-				e.assertHeld(t, "m1", store.BusySendWaitReadinessUnknown)
 				return
 			}
 			if r := e.result(t, "m1"); r.Final || r.Class != store.BusySendClassHeld || e.token == token {
@@ -2173,6 +2185,92 @@ func TestClaudeSteerForces(t *testing.T) {
 				t.Errorf("force %s, m1 %+v; want the force finished and m1 unforced", f.Outcome, r)
 			}
 			e.assertHeld(t, "m1", tc.wait)
+		})
+	}
+}
+
+// TestClaudePauseFence (SR-6.5, SR-2.4; M2 P-C4.6, P-C4.7 issue side): the
+// real conditional pause's standing claim on the waiting agent fences both
+// owned callbacks at their shared issue commit (BusySendGuardPause), which
+// each reaches:
+//   - the ordinary FileChanged wake, the one handler and commit that the
+//     parent Stop (TestClaudeTurnEndResignals), the idle prompt and admission
+//     (TestClaudeWakeDeliversHeldPrompts) and the startup job
+//     (TestClaudeStartupWakeDeliversHeldInOrder) only notify, its hand-over
+//     claimed before the claim lands at its last look;
+//   - a parent PostToolBatch steer in a turn the agent started after the
+//     claim. (A steer prepared before the claim cannot reach the fence: the
+//     turn's Stop that makes the agent claimable changes the permission
+//     epoch, which its commit refuses first.)
+//
+// Neither writes a wake body on stderr or context on stdout, an intent or an
+// issuer; the Messages stay Held in accepted order, waiting readiness_unknown,
+// and the claim still stands. Force prompts and the intent-first order are
+// internal/busysend's (TestCoordinatorPauseFencesForcePrompts,
+// TestCoordinatorPauseLosesToIssuedInput); the claim's matrix internal/store's.
+func TestClaudePauseFence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode store.BusySendMode
+		at   int // the route-facts read the claim runs before; 0: before the callback
+		fire func(*testing.T, *wakeEnv) string
+	}{
+		{name: "a wake prepared before the claim", at: 3, fire: func(t *testing.T, e *wakeEnv) string { return e.wake(t) }},
+		{name: "a steer in a turn started after the claim", mode: store.BusySendSteerTurn, fire: func(t *testing.T, e *wakeEnv) string {
+			e.fire(t, e.payload(t, "user-prompt-submit.json", nil))
+			return e.steer(t)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newWakeEnv(t, store.StateWaiting)
+			e.admitAs(t, "m1", "first", tc.mode, true)
+			e.admitAs(t, "m2", "second", tc.mode, true)
+			l, err := e.st.GetBusySendPublishedLaunch(e.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			held, err := apitest.ReadBusySendFacts(e.db, e.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fence := storefix.ReadLaunchFence(t, e.st, l.LaunchID)
+			var claim store.BusySendPauseDecision
+			seam := &failRouteFacts{Store: e.st, n: tc.at}
+			if tc.at == 0 {
+				claim = e.pause(t)
+			} else {
+				seam.before = func() { claim = e.pause(t) }
+			}
+			e.seam = seam
+			got := tc.fire(t, e)
+			e.seam = nil
+			if claim.Kind != store.BusySendPauseDecisionClaimed || got != "" || seam.fired != (tc.at > 0) {
+				t.Fatalf("pause claim %+v (at the last look %t), then the callback wrote %q; want claimed, then nothing", claim, seam.fired, got)
+			}
+			var guard *store.BusySendGuardError
+			if len(seam.commits) != 1 || !errors.As(seam.commits[0], &guard) || guard.Failure != store.BusySendGuardPause {
+				t.Errorf("issue commits %v; want one, refused by the pause fence", seam.commits)
+			}
+			if got := storefix.ReadLaunchFence(t, e.st, l.LaunchID); !reflect.DeepEqual(got, fence) {
+				t.Errorf("Launch fence %+v; want unchanged %+v: no intent, no issuer", got, fence)
+			}
+			facts, err := apitest.ReadBusySendFacts(e.db, e.id)
+			if err != nil || len(facts.Messages) != 2 {
+				t.Fatalf("facts %+v, %v", facts.Messages, err)
+			}
+			for i, m := range facts.Messages {
+				if m.ID != held.Messages[i].ID || m.Place != "held" {
+					t.Errorf("Message %d %+v; want %s Held in its accepted place", i, m, held.Messages[i].ID)
+				}
+			}
+			e.assertHeld(t, "m1", store.BusySendWaitReadinessUnknown)
+			e.assertHeld(t, "m2", store.BusySendWaitReadinessUnknown, store.BusySendWaitEarlierMessage)
+			if o := e.observe(t); o.AwaitingTurnStart != 0 || o.HeldCount != 2 {
+				t.Errorf("awaiting %d, Held %d; want nothing issued, both Held", o.AwaitingTurnStart, o.HeldCount)
+			}
+			if again := e.pause(t); again.Cause != store.BusySendPauseInProgress || again.Claim == nil || again.Claim.Ref != claim.Claim.Ref {
+				t.Errorf("a later pause %+v; want the standing claim's pause_in_progress", again)
+			}
 		})
 	}
 }

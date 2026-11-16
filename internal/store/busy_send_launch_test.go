@@ -506,8 +506,9 @@ func TestBusySendRestoreAndUncertainCandidates(t *testing.T) {
 }
 
 // Delete has two callers: guarded expiry and unconditional admin deletion.
-// Keep the retained custody/force/claim fixtures byte-for-byte, including a
-// standing claim: record_deleted is logical deletion, never process-exit proof.
+// Keep the retained custody/force/claim fixtures byte-for-byte: record_deleted
+// is logical deletion, never process-exit proof. The fixture's standing claim
+// has already ended launch_end at the reuse staging's exit evidence (SR-6.5).
 func TestBusySendDeletionRetirementAndRespawn(t *testing.T) {
 	for _, mode := range []string{"expire", "admin"} {
 		for _, noCore := range []bool{false, true} {
@@ -526,6 +527,7 @@ func TestBusySendDeletionRetirementAndRespawn(t *testing.T) {
 				old := busyLaunchFinish(t, s, id)
 				if !noCore {
 					busyLaunchStage(t, s, id, "reuse", AgentCodex, "1122334455667788")
+					busyLaunchWantCount(t, s, 1, `SELECT count(*) FROM busy_send_pause_claims WHERE claim_id=? AND state='ended' AND closed_by='launch_end'`, rec.standingClaim)
 					if e := s.MarkBusySendLaunchUncertain(id, "1122334455667788"); mode == "admin" && e != nil {
 						t.Fatal(e)
 					}

@@ -11,6 +11,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 const busySendIntentEnded = "issued sent_unconfirmed final launch_ended member"
@@ -516,4 +518,392 @@ func TestBusySendExpireKeepsRacingAdmission(t *testing.T) {
 		t.Fatal("expire deleted part of a row with Held custody")
 	}
 	wantBusySendCustody(t, in.path, in.id, "held held launch_ended reserved")
+}
+
+// failPauseClaimEnd makes every end of a pause claim in path fail.
+const failPauseClaimEnd = `CREATE TRIGGER fail_claim_end BEFORE UPDATE ON busy_send_pause_claims WHEN NEW.state = 'ended'
+    BEGIN SELECT RAISE(ABORT, 'injected claim end failure'); END`
+
+// applied is a CondResult step's error, an unexpected result included.
+func applied(res store.CondResult, err error) error {
+	if err == nil && res != store.CondApplied {
+		return fmt.Errorf("result %v; want applied", res)
+	}
+	return err
+}
+
+// TestBusySendPauseClaimLifetime (SR-6.5; M2 P-C4.7 EndStep and
+// EndClaimOnEvidence; Task t2.xis.8a.a4's caller inventory): a standing claim
+// ends launch_end only in the transaction of positive evidence that its
+// Launch's recorded agent exited, its End recorded then or earlier: kill's
+// and keyless pause's verified exit, a guarded mark or move storing the
+// agent's exited record (Store's terminal transaction and RecoveryWrites';
+// their compatibility aliases share these), an exited record accepted after
+// the Launch's End, and validated exit evidence (EstablishBusySendExit, resume
+// and reuse staging, whose restore keeps the end, and covered deletion). The
+// agent's end report and other logical Ends (an End process_exited with no
+// evidence), marks without the agent's exit, an exited record before any End,
+// an unknown record keeping an exited value, a stale sample or stale evidence
+// and a refused resume end nothing. Ending the claim fails the transition as a
+// whole. Accepted Messages' facts never change.
+func TestBusySendPauseClaimLifetime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const token = "1122334455667788"
+	type step func(t *testing.T, in *busySendInbox) error
+	sessionEnd := func(t *testing.T, in *busySendInbox) error {
+		if a := storefix.ApplyAgentHook(t, in.s, in.id, "SessionEnd", in.dest.SessionID); !a.Applied {
+			return fmt.Errorf("SessionEnd %+v; want applied", a)
+		}
+		return nil
+	}
+	// Synthetic: only a Codex row holding an end report moves to ended.
+	codex := func(t *testing.T, in *busySendInbox) error {
+		setBusySendFact(t, in.path, `UPDATE spawns SET agent = 'codex', end_reported_at = 1 WHERE instance_id = ?`, in.id)
+		return nil
+	}
+	exitOf := func(row store.Spawn) store.ProcessExit {
+		return store.ProcessExit{PID: row.Identity.PanePID, Start: row.Identity.PaneStarttime, AtMillis: time.Now().UnixMilli()}
+	}
+	record := func(value, reason string) step {
+		return func(t *testing.T, in *busySendInbox) error {
+			row := in.row(t)
+			rec, ok := row.ProcessEvidenceAfter(store.ProcessAttempt{PID: row.Identity.PanePID, Start: row.Identity.PaneStarttime,
+				Value: value, Reason: reason}, time.Now().UnixMilli())
+			if !ok {
+				return errors.New("no process record for the attempt")
+			}
+			return applied(in.s.RecordProcessEvidence(row, rec))
+		}
+	}
+	mark := func(src string, exit func(store.Spawn) store.ProcessExit) step {
+		return func(t *testing.T, in *busySendInbox) error {
+			row := in.row(t)
+			_, res, _, err := in.s.RecoveryWrites(row).MarkMissingIfSameLifeFrom(in.id, row.Snapshot, src, exit(row))
+			return applied(res, err)
+		}
+	}
+	keyless := func(exit func(store.Spawn) store.ProcessExit) step {
+		return func(t *testing.T, in *busySendInbox) error {
+			row := in.row(t)
+			pub, err := in.s.GetBusySendPublishedLaunch(in.id)
+			if err != nil {
+				return err
+			}
+			_, res, err := in.s.MarkKeylessPauseEndedWithin(ctx, row, pub, exit(row), time.Minute)
+			return applied(res, err)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		pre   step
+		step  step
+		ended bool
+	}{
+		{name: "kill's verified exit", step: func(t *testing.T, in *busySendInbox) error {
+			_, err := in.s.EndBusySendLaunch(in.id, in.dest.LaunchToken)
+			return err
+		}, ended: true},
+		{name: "kill's verified exit after the agent's end report", pre: sessionEnd, step: func(t *testing.T, in *busySendInbox) error {
+			_, err := in.s.EndBusySendLaunch(in.id, in.dest.LaunchToken)
+			return err
+		}, ended: true},
+		{name: "a kill judged for another token", step: func(t *testing.T, in *busySendInbox) error {
+			_, err := in.s.EndBusySendLaunch(in.id, "ffffffffffffffff")
+			return err
+		}},
+		{name: "keyless pause's verified end", step: keyless(exitOf), ended: true},
+		{name: "keyless pause's end without an exit", step: keyless(func(store.Spawn) store.ProcessExit { return store.ProcessExit{} })},
+		{name: "a sweep's proven-exit mark", step: mark(store.EvidenceProcess, exitOf), ended: true},
+		{name: "a tmux-only missing mark", step: mark(store.EvidenceTmux, func(store.Spawn) store.ProcessExit { return store.ProcessExit{} })},
+		{name: "a mark naming another process", step: mark(store.EvidenceProcess, func(row store.Spawn) store.ProcessExit {
+			exit := exitOf(row)
+			exit.PID++
+			return exit
+		})},
+		{name: "a missing mark without evidence", step: func(t *testing.T, in *busySendInbox) error {
+			_, res, err := in.s.MarkMissingIfSameLife(in.id, in.row(t).Snapshot)
+			return applied(res, err)
+		}},
+		{name: "a move to ended storing the agent's exit", pre: codex, step: func(t *testing.T, in *busySendInbox) error {
+			row := in.row(t)
+			_, res, recorded, err := in.s.MarkEndedIfSameLifeFrom(in.id, row.Snapshot, exitOf(row))
+			if err == nil && !recorded {
+				return errors.New("the move stored no exited record")
+			}
+			return applied(res, err)
+		}, ended: true},
+		{name: "a move to ended without an exit", pre: codex, step: func(t *testing.T, in *busySendInbox) error {
+			_, res, err := in.s.MarkEndedIfSameLife(in.id, in.row(t).Snapshot)
+			return applied(res, err)
+		}},
+		{name: "the agent's end report", step: sessionEnd},
+		{name: "an exited record after the agent's end report", pre: sessionEnd, step: record(store.ProcessExited, ""), ended: true},
+		{name: "an exited record before any End", step: record(store.ProcessExited, "")},
+		{name: "an unknown record keeping an exited value", pre: func(t *testing.T, in *busySendInbox) error {
+			if err := sessionEnd(t, in); err != nil {
+				return err
+			}
+			// Synthetic: an exited record no writer accepted, which the
+			// unknown attempt keeps with its failure reason.
+			row := in.row(t)
+			rec, _ := row.ProcessEvidenceAfter(store.ProcessAttempt{PID: row.Identity.PanePID, Start: row.Identity.PaneStarttime,
+				Value: store.ProcessExited}, time.Now().UnixMilli())
+			setBusySendFact(t, in.path, `UPDATE spawns SET process_evidence = ? WHERE instance_id = ?`, rec, in.id)
+			return nil
+		}, step: record(store.ProcessUnknown, store.ReasonBusy)},
+		{name: "a stale sample's exited record", pre: sessionEnd, step: func(t *testing.T, in *busySendInbox) error {
+			row := in.row(t)
+			rec, _ := row.ProcessEvidenceAfter(store.ProcessAttempt{PID: row.Identity.PanePID, Start: row.Identity.PaneStarttime,
+				Value: store.ProcessExited}, time.Now().UnixMilli())
+			setBusySendFact(t, in.path, `UPDATE spawns SET row_version = row_version + 1 WHERE instance_id = ?`, in.id)
+			if res, err := in.s.RecordProcessEvidence(row, rec); err != nil || res != store.CondChanged {
+				return fmt.Errorf("stale record %v, %v; want CondChanged", res, err)
+			}
+			return nil
+		}},
+		{name: "validated exit evidence", step: func(t *testing.T, in *busySendInbox) error {
+			if ok, err := in.s.EstablishBusySendExit(*exitEvidenceForTest(t, in.s, in.id)); err != nil || !ok {
+				return fmt.Errorf("exit %t, %v; want established", ok, err)
+			}
+			return nil
+		}, ended: true},
+		{name: "exit evidence made stale", step: func(t *testing.T, in *busySendInbox) error {
+			ev := *exitEvidenceForTest(t, in.s, in.id)
+			row := in.row(t)
+			identity := row.Identity
+			identity.PanePID++
+			res, _, err := in.s.AdoptIdentityIfSameLife(in.id, row.Snapshot, identity)
+			if err := applied(res, err); err != nil {
+				return fmt.Errorf("adopting another agent process: %w", err)
+			}
+			if ok, err := in.s.EstablishBusySendExit(ev); err != nil || ok {
+				return fmt.Errorf("stale exit %t, %v; want refused", ok, err)
+			}
+			return nil
+		}},
+		{name: "resume staging, then a restore", pre: sessionEnd, step: func(t *testing.T, in *busySendInbox) error {
+			row := in.row(t)
+			res, version, err := in.s.MoveToPendingWithExit(in.id, row.Snapshot, 2000, token, "", "", store.LaunchOwner{},
+				store.BusySendDefaultsChoice{}, exitEvidenceForTest(t, in.s, in.id))
+			if err := applied(res, err); err != nil {
+				return err
+			}
+			return applied(in.s.RestoreAfterFailedResume(in.id, version, store.ResumePrior{State: row.State, Identity: row.Identity,
+				TurnStarts: row.TurnStarts}))
+		}, ended: true},
+		{name: "reuse staging, then a restore", pre: sessionEnd, step: func(t *testing.T, in *busySendInbox) error {
+			prior, _, err := in.s.ReadForReuse(in.id)
+			if err != nil {
+				return err
+			}
+			res, version, err := in.reuse(t, token, exitEvidenceForTest(t, in.s, in.id))
+			if err := applied(res, err); err != nil {
+				return err
+			}
+			return applied(in.s.RestoreAfterFailedReuse(in.id, version, prior.Life, time.Unix(3, 0)))
+		}, ended: true},
+		{name: "a resume without exit evidence", pre: sessionEnd, step: func(t *testing.T, in *busySendInbox) error {
+			_, _, err := in.s.MoveToPendingWithExit(in.id, in.row(t).Snapshot, 2000, token, "", "", store.LaunchOwner{},
+				store.BusySendDefaultsChoice{}, nil)
+			if !errors.Is(err, store.ErrBusySendExitNotEstablished) {
+				return fmt.Errorf("resume %v; want exit not established", err)
+			}
+			return nil
+		}},
+		{name: "covered deletion", step: func(t *testing.T, in *busySendInbox) error {
+			return applied(in.s.DeleteBusySendCovered(in.id, in.row(t).Snapshot, *exitEvidenceForTest(t, in.s, in.id)))
+		}, ended: true},
+	} {
+		for _, fail := range []bool{false, true} {
+			if fail && !tc.ended {
+				continue
+			}
+			t.Run(tc.name+map[bool]string{false: "", true: ", its claim's end failing"}[fail], func(t *testing.T) {
+				t.Parallel()
+				in := newBusySendInbox(t, "held")
+				setBusySendFact(t, in.path, `UPDATE spawns SET pane_starttime = '123' WHERE instance_id = ?`, in.id)
+				in.pauseClaim(t, in.pauseRequest(pauseClock(), "call-1", time.Hour))
+				if tc.pre != nil {
+					if err := tc.pre(t, in); err != nil {
+						t.Fatal(err)
+					}
+				}
+				wantPauseClaims(t, in, "standing r1")
+				accepted := readBusySendAccepted(t, in.path, in.id)
+				if fail {
+					if _, err := openBusySendRaw(t, in.path).Exec(failPauseClaimEnd); err != nil {
+						t.Fatal(err)
+					}
+					before := readBusySendTables(t, in.path)
+					if err := tc.step(t, in); err == nil || !strings.Contains(err.Error(), "injected claim end failure") {
+						t.Fatalf("step %v; want the injected failure", err)
+					}
+					if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+						t.Fatal("a transition whose claim end failed wrote part of itself")
+					}
+					return
+				}
+				if err := tc.step(t, in); err != nil {
+					t.Fatal(err)
+				}
+				if tc.ended {
+					wantPauseClaims(t, in, "ended launch_end r2")
+				} else {
+					wantPauseClaims(t, in, "standing r1")
+				}
+				if got := readBusySendAccepted(t, in.path, in.id); !reflect.DeepEqual(got, accepted) {
+					t.Errorf("accepted facts %v; want them unchanged %v", got, accepted)
+				}
+			})
+		}
+	}
+	// The agent's verified exit ends the claim, but the Launch's issuer, its
+	// input resolved, still needs exit evidence that names it before the
+	// fences lift; that evidence leaves the ended claim's history as it is.
+	t.Run("kill's verified exit keeps the issuer's fence", func(t *testing.T) {
+		t.Parallel()
+		in := newBusySendInbox(t, "held")
+		h := in.claim(t, time.Time{}, false)
+		for _, step := range []forceStep{forceIssue(0), forceOutput(0, store.BusySendOutputComplete), forceAdmit(0)} {
+			step(t, in, h)
+		}
+		in.pauseClaim(t, in.pauseRequest(pauseClock(), "call-1", time.Hour))
+		if ended, err := in.s.EndBusySendLaunch(in.id, in.dest.LaunchToken); err != nil || !ended {
+			t.Fatalf("EndBusySendLaunch %t, %v; want the Launch ended", ended, err)
+		}
+		wantPauseClaims(t, in, "ended launch_end r2")
+		ev := *exitEvidenceForTest(t, in.s, in.id)
+		ev.Scope.Launches[0].Processes = slices.DeleteFunc(slices.Clone(ev.Scope.Launches[0].Processes),
+			func(p store.BusySendLaunchProcess) bool { return p.Role != store.BusySendProcessAgent })
+		before := readBusySendTables(t, in.path)
+		if ok, err := in.s.EstablishBusySendExit(ev); err != nil || ok {
+			t.Fatalf("exit evidence omitting the issuer %t, %v; want refused", ok, err)
+		}
+		if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+			t.Fatal("refused exit evidence wrote something")
+		}
+		if ok, err := in.s.EstablishBusySendExit(*exitEvidenceForTest(t, in.s, in.id)); err != nil || !ok {
+			t.Fatalf("full exit evidence %t, %v; want established", ok, err)
+		}
+		wantPauseClaims(t, in, "ended launch_end r2")
+	})
+}
+
+// TestBusySendPauseClaimPublication (SR-6.5; M2 P-C4.7 ResumeStep and
+// ReusePublishStep): resume and reuse staging apply exit evidence, so the old
+// Launch's claim ends launch_end before publication, which leaves that history
+// alone. A claim still standing on the old Launch at publication, seeded raw
+// after staging (synthetic setup: no production path leaves one), ends
+// launch_published in the publication's own transaction through each direct
+// entrance: the creator's RecordLaunchIdentity, PublishBusySendLaunch after an
+// uncertain mark, and an adoption's reported publication, whose helper the
+// hook, recovery and relay report-ins share. A restore, a wrong-token
+// publication and the uncertain mark end nothing, and a failure of the claim's
+// end or of the publication after it rolls both back. The new Launch is
+// claimed on its own facts alone, the old owner's ref inert.
+func TestBusySendPauseClaimPublication(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const token = "1122334455667788"
+	for _, kind := range []string{"resume", "reuse"} {
+		for _, entrance := range []string{"creator", "lost reply", "adoption", "restore"} {
+			t.Run(kind+"/"+entrance, func(t *testing.T) {
+				t.Parallel()
+				in := newBusySendInbox(t, "held")
+				clock := pauseClock()
+				old := in.pauseClaim(t, in.pauseRequest(clock, "call-1", time.Hour))
+				if a := storefix.ApplyAgentHook(t, in.s, in.id, "SessionEnd", in.dest.SessionID); !a.Applied {
+					t.Fatalf("SessionEnd %+v; want applied", a)
+				}
+				accepted := readBusySendAccepted(t, in.path, in.id)
+				row := in.row(t)
+				prior, _, err := in.s.ReadForReuse(in.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var res store.CondResult
+				var version int64
+				if kind == "resume" {
+					res, version, err = in.s.MoveToPendingWithExit(in.id, row.Snapshot, 2000, token, "", "", store.LaunchOwner{},
+						store.BusySendDefaultsChoice{}, exitEvidenceForTest(t, in.s, in.id))
+				} else {
+					res, version, err = in.reuse(t, token, exitEvidenceForTest(t, in.s, in.id))
+				}
+				if err := applied(res, err); err != nil {
+					t.Fatalf("%s staging: %v", kind, err)
+				}
+				wantPauseClaims(t, in, "ended launch_end r2")
+				storefix.SeedBusySendPauseClaim(t, in.path, in.id)
+				seeded := []string{"ended launch_end r2", "standing r1"}
+				if res, err := in.s.RecordLaunchIdentity(in.id, version, "ffffffffffffffff", store.LaunchIdentity{}); err != nil || res != store.CondChanged {
+					t.Fatalf("wrong-token publication %v, %v; want CondChanged", res, err)
+				}
+				if entrance == "lost reply" {
+					if err := in.s.MarkBusySendLaunchUncertain(in.id, token); err != nil {
+						t.Fatal(err)
+					}
+				}
+				wantPauseClaims(t, in, seeded...)
+				publish := func() error {
+					switch entrance {
+					case "creator":
+						return applied(in.s.RecordLaunchIdentity(in.id, version, token, store.LaunchIdentity{}))
+					case "lost reply":
+						return applied(in.s.PublishBusySendLaunch(in.id, version, token))
+					case "adoption":
+						return applied(in.s.AdoptIdentityIfUnchanged(in.id, in.row(t).Snapshot,
+							store.LaunchIdentity{PaneID: "%9", PanePID: 4444, PaneStarttime: apitest.LinuxProcStarttime}))
+					}
+					if kind == "resume" {
+						return applied(in.s.RestoreAfterFailedResume(in.id, version, store.ResumePrior{State: row.State, Identity: row.Identity,
+							TurnStarts: row.TurnStarts}))
+					}
+					return applied(in.s.RestoreAfterFailedReuse(in.id, version, prior.Life, time.Unix(3, 0)))
+				}
+				if entrance == "restore" {
+					if err := publish(); err != nil {
+						t.Fatal(err)
+					}
+					wantPauseClaims(t, in, seeded...)
+					return
+				}
+				raw := openBusySendRaw(t, in.path)
+				for _, trigger := range []string{failPauseClaimEnd, `CREATE TRIGGER fail_claim_end BEFORE UPDATE ON busy_send_launches
+				    WHEN NEW.phase = 'current' AND OLD.phase <> 'current' BEGIN SELECT RAISE(ABORT, 'injected publication failure'); END`} {
+					if _, err := raw.Exec(trigger); err != nil {
+						t.Fatal(err)
+					}
+					before := readBusySendTables(t, in.path)
+					if err := publish(); err == nil || !strings.Contains(err.Error(), "injected") {
+						t.Fatalf("publication %v; want the injected failure", err)
+					}
+					if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+						t.Fatal("a failed publication wrote part of itself")
+					}
+					if _, err := raw.Exec(`DROP TRIGGER fail_claim_end`); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := publish(); err != nil {
+					t.Fatal(err)
+				}
+				wantPauseClaims(t, in, "ended launch_end r2", "ended launch_published r2")
+				if got := readBusySendAccepted(t, in.path, in.id); !reflect.DeepEqual(got, accepted) {
+					t.Errorf("accepted facts %v; want them unchanged %v", got, accepted)
+				}
+				pub, err := in.s.GetBusySendPublishedLaunch(in.id)
+				if err != nil || pub.LaunchID == in.dest.LaunchID {
+					t.Fatalf("published %+v, %v; want the new Launch", pub, err)
+				}
+				in.dest.LaunchID, in.dest.LaunchToken = pub.LaunchID, pub.LaunchToken
+				setBusySendFact(t, in.path, `UPDATE spawns SET state = 'waiting' WHERE instance_id = ?`, in.id)
+				in.pauseClaim(t, in.pauseRequest(clock, "call-2", time.Hour))
+				if w, err := in.s.PersistBusySendPauseSignalWithin(ctx, store.BusySendPauseWriteRequest{Ref: old.Ref, Now: clock.Now}, time.Minute); err != nil || w.Applied {
+					t.Fatalf("the old owner's intent %+v, %v; want nothing applied", w, err)
+				}
+				wantPauseClaims(t, in, "ended launch_end r2", "ended launch_published r2", "standing r1")
+			})
+		}
+	}
 }
