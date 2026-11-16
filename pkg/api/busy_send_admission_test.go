@@ -16,9 +16,6 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// busySteerUnsupported is steer_turn's refusal while no provider offers it.
-var busySteerUnsupported = api.CantSendDetails{Class: "cant_send", Reason: "steer_unsupported", ResendSafe: true, RetryWith: "new_send"}
-
 // assertCantSendDetails fails unless err is ErrCantSend alone with exactly want.
 func assertCantSendDetails(t *testing.T, err error, want api.CantSendDetails) {
 	t.Helper()
@@ -98,7 +95,9 @@ func busyHeld(id, caller, request, reason string, since time.Time) api.DeliveryR
 // SR-5.4, SR-5.6; M1 during-coding Result field and reason mapping): a Covered
 // Agent's send types nothing and returns its Message's stored Held Result,
 // which get-delivery finds unchanged: a confirmed one with its canonical or
-// AD-made pair, an unconfirmed one with none. The exact bytes are kept, the
+// AD-made pair, an unconfirmed one with none. A per-Message steer_turn is
+// accepted and kept like wait_turn, its confirmation decided apart from its
+// mode (SR-1.4). The exact bytes are kept, the
 // limit counts bytes and allow_pending does nothing. A repeat of the pair,
 // with other options too, returns the owner's Result and stores nothing; a
 // changed text or target is id_conflict carrying it. get shows the actual Held
@@ -120,7 +119,7 @@ func TestBusySendCoveredAdmission(t *testing.T) {
 	from := time.Now().Truncate(time.Millisecond)
 	first := busyAdmit(t, c, confirmed)
 	plain := busyAdmit(t, c, api.SendKeysParams{InstanceID: r.ID, Text: "plain"})
-	made := busyAdmit(t, c, api.SendKeysParams{InstanceID: r.ID, Text: "made", ConfirmedDelivery: ptr(true), CallerUUID: ptr(busyCaller)})
+	made := busyAdmit(t, c, api.SendKeysParams{InstanceID: r.ID, Text: "made", SendMode: ptr("steer_turn"), ConfirmedDelivery: ptr(true), CallerUUID: ptr(busyCaller)})
 	busyAdmit(t, c, api.SendKeysParams{InstanceID: r.ID, Text: atLimit})
 	if first.Wait == nil || first.Wait.Since.Before(from) || first.Wait.Since.After(time.Now()) {
 		t.Fatalf("first Result wait = %+v; want one since the send", first.Wait)
@@ -154,14 +153,15 @@ func TestBusySendCoveredAdmission(t *testing.T) {
 	facts := busyFacts(t, e.dbPath, r.ID)
 	pair := func(caller, request string) [2]string { return [2]string{caller, request} }
 	for i, want := range []struct {
-		text      string
-		confirmed bool
-		pair      [2]string
-	}{{text, true, pair(busyCaller, "m-1")}, {"plain", false, pair("", "")}, {"made", true, pair(busyCaller, made.RequestID)}, {atLimit, false, pair("", "")}} {
+		text, mode string
+		confirmed  bool
+		pair       [2]string
+	}{{text, "wait_turn", true, pair(busyCaller, "m-1")}, {"plain", "wait_turn", false, pair("", "")},
+		{"made", "steer_turn", true, pair(busyCaller, made.RequestID)}, {atLimit, "wait_turn", false, pair("", "")}} {
 		m := facts.Messages[i]
-		if string(m.Text) != want.text || m.Seq != int64(i+1) || m.SendMode != "wait_turn" || m.Confirmed != want.confirmed ||
+		if string(m.Text) != want.text || m.Seq != int64(i+1) || m.SendMode != want.mode || m.Confirmed != want.confirmed ||
 			m.Place != "held" || !m.Reserved || pair(m.CallerUUID.String, m.RequestID.String) != want.pair || m.Conversation != facts.Binding {
-			t.Errorf("Message %d = %+v; want %q (%t) Held and reserved at %d, pair %v", i+1, m, want.text, want.confirmed, i+1, want.pair)
+			t.Errorf("Message %d = %+v; want %q %s (%t) Held and reserved at %d, pair %v", i+1, m, want.text, want.mode, want.confirmed, i+1, want.pair)
 		}
 	}
 	held := int64(len(text) + len("plain") + len("made") + len(atLimit))
@@ -246,8 +246,8 @@ func TestBusySendCoveredAdmission(t *testing.T) {
 // supplied empty Message ID with or without a Caller UUID (an omitted one is
 // made: TestBusySendCoveredAdmission; F1), a Message ID with no Caller UUID,
 // caller identity on an unconfirmed send (the call's or the default's) and a
-// confirmed send with no Caller UUID. An Agent Command, Steer Turn, a CR, NUL
-// or other control byte and text over the byte limit are ErrCantSend with
+// confirmed send with no Caller UUID. An Agent Command, a CR, NUL or other
+// control byte and text over the byte limit are ErrCantSend with
 // their reason, retry and limit. Each stores no Message or pair, takes no
 // sequence, types nothing and writes only its call record.
 func TestBusySendCoveredRefusals(t *testing.T) {
@@ -286,7 +286,6 @@ func TestBusySendCoveredRefusals(t *testing.T) {
 		{"confirmed_delivery without caller_uuid", api.SendKeysParams{Text: "hi", ConfirmedDelivery: ptr(true)}, nil},
 		{"slash command", caller(api.SendKeysParams{Text: " \n/compact"}), refusal("agent_command")},
 		{"bang command", api.SendKeysParams{Text: "\t!ls"}, refusal("agent_command")},
-		{"steer_turn", caller(api.SendKeysParams{Text: "hi", SendMode: ptr("steer_turn")}), &busySteerUnsupported},
 		{"CR kept, not stripped", caller(api.SendKeysParams{Text: "line\r\nnext"}), refusal("text_kind")},
 		{"NUL", api.SendKeysParams{Text: "a\x00b"}, refusal("text_kind")},
 		{"escape", api.SendKeysParams{Text: "\x1b[A"}, refusal("text_kind")},
@@ -314,9 +313,10 @@ func TestBusySendCoveredRefusals(t *testing.T) {
 	}
 }
 
-// TestBusySendHeldWhileBusy (SR-1.1, SR-2.6, SR-3.9): a Covered Agent's send
-// is admitted Held whatever the row's state, where today's send-keys refuses:
-// on a running turn it waits turn_running, behind an open Dialog dialog and
+// TestBusySendHeldWhileBusy (SR-1.1, SR-1.4, SR-2.6, SR-3.9): a Covered
+// Agent's send is admitted Held whatever the row's state, where today's
+// send-keys refuses: on a running turn, a Steer Turn one included, it waits
+// turn_running, behind an open Dialog dialog and
 // on an ended row launch_ended. The row and its permission request are
 // untouched, and neither input path is reached: the native-input backend is
 // never opened and tmux is never called (assertNoInputPath).
@@ -333,15 +333,18 @@ func TestBusySendHeldWhileBusy(t *testing.T) {
 		busyWake(t, e, id) // a recorded route, so the row's own state decides the wait
 	}
 	calls := len(e.rec.SocketCalls())
-	for _, tc := range []struct{ id, wait string }{
-		{working.ID, "turn_running"}, {dialog.ID, "dialog"}, {ended.ID, "launch_ended"},
+	for _, tc := range []struct {
+		id, wait string
+		mode     *string
+	}{
+		{working.ID, "turn_running", ptr("steer_turn")}, {dialog.ID, "dialog", nil}, {ended.ID, "launch_ended", nil},
 	} {
 		cols := e.columns(t, tc.id)
 		requests, err := e.st.PermissionRequestsForSpawn(tc.id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if res := coveredSend(t, ne, api.SendKeysParams{InstanceID: tc.id, Text: "while busy"}); res.Class != "held" || res.Wait == nil || res.Wait.Reason != tc.wait {
+		if res := coveredSend(t, ne, api.SendKeysParams{InstanceID: tc.id, Text: "while busy", SendMode: tc.mode}); res.Class != "held" || res.Wait == nil || res.Wait.Reason != tc.wait {
 			t.Errorf("Result on the %s row = %+v; want Held, waiting %s", tc.wait, res, tc.wait)
 		}
 		e.assertRowUnchanged(t, tc.id, cols)

@@ -76,16 +76,17 @@ one whole prompt to stderr and exits 2, so Claude Code hands that prompt to
 the agent as its next input, or writes nothing and exits 0:
 
 - Ordinary delivery writes a prompt of Held Messages only when the main agent
-  is idle at its prompt, no dialog is open, and the agent's
-  `UserPromptSubmit` has shown every earlier delivered prompt.
+  is idle at its prompt, no dialog is open, and agent-director has
+  [evidence the agent took](caller-contract.md#busy-send-coverage) every
+  earlier delivered prompt.
 - While a [force](caller-contract.md#stored-force-attempts) call runs, the
   hook writes only that force's next prompt, one per touch, whether the agent
   is working, in a dialog or compacting. Only the force call touches the file
   for its next prompt.
 
 The main agent's `UserPromptSubmit` records agent-director's sighting of its
-own prompt: what lets ordinary delivery go on, and a force prompt's
-admission. It and the main `SessionStart` also finish a force call that never
+own prompt: evidence the agent took it, and a force prompt's admission. It
+and the main `SessionStart` also finish a force call that never
 ended, once its deadline has passed: its never-issued Messages return to Held,
 and the wake file is touched when any did. Neither issues a prompt.
 

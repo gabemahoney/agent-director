@@ -222,6 +222,45 @@ var claudeWaitTurn = BusySendModeLimits{
 	TextKind:     BusySendTextUTF8TabLF,
 }
 
+// claudeSteerWrapping is how Claude Code shows a Steer Turn prompt that a
+// parent PostToolBatch hook returns as its additionalContext (SR-1.6): no
+// fixed text around the body, and its escaping of the two reserved
+// system-reminder tags, each shown as &lt;... (Research b.87a / t1.87a.12 P6:
+// on the 1,900-byte multiline Unicode and tag corpus both tags were escaped
+// and the delivered context grew 1,700 to 1,706 bytes). AD emits the body
+// unchanged; this counts what Claude makes of it. These are measured
+// transformations under O4's qualification, not a guarantee of Claude's: a
+// later change E8 measures changes this table only. The JSON quoting of the
+// hook's output is not part of what the agent receives, so it is not counted.
+var claudeSteerWrapping = BusySendWrapping{
+	Escapes: []BusySendEscape{
+		{Raw: "<system-reminder>", Escaped: "&lt;system-reminder>"},
+		{Raw: "</system-reminder>", Escaped: "&lt;/system-reminder>"},
+	},
+}
+
+// claudeSteerTurn is Claude Code's Steer Turn, handed over at a parent tool
+// boundary as PostToolBatch additionalContext. Its Message limit is Wait
+// Turn's, so changing a Message's mode never changes what a caller may send,
+// and its prompt limit is too: Claude shows additionalContext over 10,000
+// characters as a preview instead (P6: exact through 10,000, nothing at
+// 10,001), and a byte count is never below that character count. Its wrapper
+// budget is Wait Turn's, of which this route's fixed text uses none. A valid
+// Message at the text limit always fits a prompt alone: the escapes add 3
+// bytes per tag, at most for text made of the shorter tag, 470 of
+// <system-reminder> in 8,000 bytes, which renders to 8,000 + 33 separator +
+// 1,410 escaping = 9,443 bytes, under 9,600. A Steer Turn Message still Held
+// at turn end goes in a Wait Turn prompt, which it fits alone as any Message
+// at the same text limit does (claudeWaitTurn).
+var claudeSteerTurn = BusySendModeLimits{
+	Mode:         BusySendSteerTurn,
+	MessageBytes: claudeWaitTurnMessageBytes,
+	PromptBytes:  claudeWaitTurnPromptBytes,
+	WrapperBytes: claudeWaitTurn.WrapperBytes,
+	Wrapping:     claudeSteerWrapping,
+	TextKind:     BusySendTextUTF8TabLF,
+}
+
 // claudeForceStates is Claude Code's force-state table (E5 Main Agent
 // decision 4): its keyless forced wake reaches the next input boundary in a
 // busy, Dialog or compaction state without answering the Dialog, and AD's
@@ -247,7 +286,7 @@ var busySendCapabilityTable = []BusySendCapabilities{{
 	Provider:                     AgentClaude,
 	HeldCount:                    claudeHeldCount,
 	HeldBytes:                    claudeHeldBytes,
-	Modes:                        []BusySendModeLimits{claudeWaitTurn},
+	Modes:                        []BusySendModeLimits{claudeWaitTurn, claudeSteerTurn},
 	ForceAdmission:               BusySendAdmissionPromptSighting,
 	ForceLimits:                  claudeForceLimits,
 	ForceStates:                  claudeForceStates,
@@ -258,8 +297,10 @@ var busySendCapabilityTable = []BusySendCapabilities{{
 // busySendFallbackCapabilities admits for a covered provider this version has
 // no row for, a conversation a later release covered: every version admits and
 // holds a covered Launch's Messages whatever its provider (SR-7.2), under
-// limits that keep the PRD's corpus and SR-1.6's held minimum. It publishes no
-// force route, and this version reads no transcript to confirm a force for it.
+// limits that keep the PRD's corpus and SR-1.6's held minimum. It offers Wait
+// Turn only, since Steer Turn needs a provider route this version knows, so a
+// Steer Turn send is refused steer_unsupported. It publishes no force route,
+// and this version reads no transcript to confirm a force for it.
 var busySendFallbackCapabilities = BusySendCapabilities{
 	HeldCount:              claudeHeldCount,
 	HeldBytes:              claudeHeldBytes,

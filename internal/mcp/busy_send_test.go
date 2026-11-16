@@ -112,7 +112,8 @@ func TestBusySendMCPOptionsReachTheVerb(t *testing.T) {
 // delivery_request_id that is invalid UTF-8 or holds a lone surrogate escape
 // reaches it as malformed, not replaced, so send_keys is ErrInvalidFlags
 // naming each and stores no Message or pair; a confirmed send's
-// delivery_request_id reaches the store unchanged, and its Result is the one
+// delivery_request_id reaches the store unchanged, as its send_mode
+// steer_turn does (SR-1.4), and its Result is the one
 // get_delivery returns; its text's U+FFFD is kept, so the same pair with the
 // character escaped is a repeat returning that Result, while other text is
 // ErrCantSend, id_conflict, with that Result in err_details. force reaches
@@ -152,12 +153,15 @@ func TestBusySendMCPCoveredSend(t *testing.T) {
 	}
 
 	send := func(textJSON string) *mcp.Response {
-		return callTool(t, e.d, "send_keys", `{"instance_id":"`+id+`","text":`+textJSON+`,`+confirmed+`,"delivery_request_id":"`+requestID+`"}`)
+		return callTool(t, e.d, "send_keys", `{"instance_id":"`+id+`","text":`+textJSON+`,`+confirmed+`,"delivery_request_id":"`+requestID+`","send_mode":"steer_turn"}`)
 	}
 	sent := toolText(t, send(`"hi �"`))
 	var result map[string]any
 	if err := json.Unmarshal([]byte(sent), &result); err != nil || result["caller_uuid"] != paramToken || result["request_id"] != requestID || result["class"] != "held" {
 		t.Errorf("Result = %s (%v); want held, with the lowercase caller_uuid and request_id %q", sent, err, requestID)
+	}
+	if m := facts().Messages; len(m) != 1 || m[0].SendMode != "steer_turn" || m[0].RequestID.String != requestID {
+		t.Errorf("stored Messages = %+v; want the one steer_turn Message %q", m, requestID)
 	}
 	lookup := paramJSON(t, map[string]any{"caller_uuid": paramToken, "delivery_request_id": requestID})
 	if got := toolText(t, callTool(t, e.d, "get_delivery", lookup)); got != `{"lookup":"found","result":`+sent+`}` {

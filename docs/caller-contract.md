@@ -175,7 +175,21 @@ limits also count Messages handed over that could still return to Held, so
 staying under them does not promise the next send fits.
 `delivery.awaiting_turn_start` counts the current launch's hand-overs with an
 issued prompt but no admission or negative evidence, whatever their output
-state. It is zero after Launch End. `delivery.force` is the agent's running or
+state. On Claude Code a prompt is admitted by agent-director's own
+[sighting](#claude-code-force-capability) of it or, for input handed into a
+running turn, by a later main-agent turn end. That turn end counts the input
+only when agent-director's initial check at the turn end finds its complete
+output already recorded, and that output was observed before the turn end
+began, to the millisecond. Output recorded after that check, or observed in
+the turn end's millisecond or later, waits for a later turn end, as does
+input in a turn interrupted before it ended; meanwhile ordinary Wait Turn
+delivery waits `readiness_unknown`. Comparing the output's observation with
+the turn end's start uses the host's wall clock across hook processes, a
+known limit: a clock step can count output observed just after the turn end
+began, or hold back earlier output until a later turn end.
+Neither kind of admission makes a Message `delivered_confirmed`, changes a
+Final Result or permits a resend. The count is zero after Launch End.
+`delivery.force` is the agent's running or
 pending [force](#stored-force-attempts), else the latest force that began a
 hand-over, as a `force_result`; null with neither. A refusal before any
 hand-over never replaces it. Reading these fields hands nothing over,
@@ -270,9 +284,9 @@ no agent is checked at each spawn that uses it. For the experimental
 ### Covered sends
 
 A Covered Agent's `send-keys` stores its `text` as a Message in the agent's
-inbox and returns its [Result](#message-results). Claude Code delivers ordinary
-Messages keylessly in `wait_turn` mode. Acceptance types nothing and does not
-wait for the agent: a Message is accepted in any state, `pending`, `ended` and `missing`
+inbox and returns its [Result](#message-results). Claude Code delivers
+Messages keylessly. Acceptance types nothing and does not wait for the agent:
+a Message is accepted in any state, `pending`, `ended` and `missing`
 included, so `allow_pending` changes nothing.
 
 The text is kept byte for byte: TAB, LF, Unicode and whitespace included,
@@ -334,14 +348,15 @@ in the table's order.
 | `prompt_size` | The Message would not fit one prompt on its own. | `false`, `none` |
 | `held_count`, `held_bytes` | The agent's held limit is full. | `true`, `new_send`: send again once Held Messages drain. |
 
-`false`, `none`: the same send can never succeed. Read limits from
-`delivery_capabilities`, which can change: they are agent-director's policy,
-counted in UTF-8 bytes, not measured provider maxima. `message_bytes` counts a
-Message's own text; `prompt_bytes` counts a whole prompt with agent-director's
-separators and wrapper, and a Message within `message_bytes` always fits a
-prompt on its own. Claude Code's `wait_turn` allows 8,000 Message bytes and
-9,600 prompt bytes, and its held limits are 1,000 Messages and 8,000,000
-bytes.
+`false`, `none`: the same send can never succeed. Read each `send_mode`'s
+limits from `delivery_capabilities.modes`, which can change: they are
+agent-director's policy, counted in UTF-8 bytes, not measured provider
+maxima. `message_bytes` counts a Message's own text; `prompt_bytes` counts a
+whole prompt with agent-director's separators and the mode's wrapping and
+escaping, and a Message within `message_bytes` always fits a prompt on its
+own, whichever mode delivers it. Claude Code offers `wait_turn` and
+`steer_turn`, each allowing 8,000 Message bytes and 9,600 prompt bytes of
+`utf8_tab_lf` text; its held limits are 1,000 Messages and 8,000,000 bytes.
 
 ### Message Results
 
@@ -416,8 +431,9 @@ never upgrades on later evidence. Neither that reason nor missing proof
 permits a resend.
 
 A prompt the [sighting limits](#sighting-limits) hide leaves
-`awaiting_turn_start` nonzero, and later Messages wait `readiness_unknown`
-until Launch End. Message-caused screen changes reset the ordinary
+`awaiting_turn_start` nonzero until Launch End: ordinary Wait Turn delivery
+waits `readiness_unknown` and a force is refused `input_unresolved`
+meanwhile. Message-caused screen changes reset the ordinary
 `idle_screen` clock. No length of waiting alone becomes `needs_intelligence`.
 
 ### Checking whether work is done
@@ -425,8 +441,10 @@ until Launch End. Message-caused screen changes reset the ordinary
 For a Covered Agent, assess `waiting` together with
 [`confirmations.state`](#confirmations), its confirmation time and uncertainty.
 Also require `delivery.held_count == 0`, `handover_count == 0`, no
-`startup_wait`, and `awaiting_turn_start == 0`. A Final hand-over issued while
-idle can precede its next turn; Final alone does not mean that turn finished.
+`startup_wait`, and [`awaiting_turn_start`](#busy-send-coverage) `== 0`. A
+Final Result alone does not mean the turn its Message started or steered has
+finished: a hand-over issued while idle can precede its turn, and one handed
+into a running turn precedes that turn's end.
 This observation proves neither continuous inactivity nor completion of
 descendants; see [Family reporting limits](#family-reporting-limits).
 

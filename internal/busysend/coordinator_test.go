@@ -3,14 +3,16 @@ package busysend_test
 // The provider-neutral coordinator (Task t2.xis.oo.xe) driven by one fake
 // route over real SQLite custody: the invocation-order part of M2 P-C4.3 and
 // the coordinator side of M1's order-barrier release and Held-to-Final
-// progress, as bounded, conditional event traces. Store guards, partition
+// progress, as bounded, conditional event traces, with E4's one prompt per
+// tool-boundary output (Task t2.xis.wm.o7). Store guards, partition
 // arithmetic, transaction atomicity and evidence repeats are internal/store's
-// (t3.xis.oo.xe.58); Claude's actual hook output is Task 3's.
+// (t3.xis.oo.xe.58); Claude's actual hook output is internal/hook's.
 
 import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -42,13 +44,15 @@ var delivered = busysend.Disposition{Output: store.BusySendOutputComplete, Order
 	UnprovenBoundary: true, More: true}
 
 // fakeRoute is the one Route here: it records every issued prompt, and its
-// optional hooks run outside its lock (issue's nil default is delivered).
+// optional hooks run outside its lock (issue's nil default is delivered;
+// measure's nil default is the Wait Turn row's whole wrapper budget).
 type fakeRoute struct {
 	elig        busysend.Eligibility
 	eligibility func()
 	authorize   func(context.Context, busysend.Prepared) busysend.Authority
 	issue       func(context.Context, busysend.Prepared) busysend.Disposition
 	observe     func(string, context.Context)
+	measure     store.BusySendPromptMeasure
 
 	mu     sync.Mutex
 	issued []busysend.Prepared
@@ -65,6 +69,9 @@ func (r *fakeRoute) Eligibility(ctx context.Context, _ busysend.Event) (busysend
 }
 
 func (r *fakeRoute) Measure(body []byte) int64 {
+	if r.measure != nil {
+		return r.measure(body)
+	}
 	limits, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
 	return int64(len(body)) + limits.WrapperBytes
 }
@@ -202,17 +209,33 @@ func newCoordEnv(t *testing.T) *coordEnv {
 // deliver runs one eligible turn-end event (1 min issue phase, 2 min job) on
 // e.clock, which each issue commit also reads (store.BusySendIssueRequest.Now).
 func (e *coordEnv) deliver(ctx context.Context) (busysend.Outcome, error) {
-	c := busysend.Coordinator{Store: e.seam, Route: e.route, Budgets: busysend.Budgets{Issue: time.Minute, Job: 2 * time.Minute},
-		Now: e.clock.Now}
-	return c.Deliver(ctx, busysend.Event{InstanceID: e.id, Boundary: store.BusySendBoundaryTurnEnd})
+	return e.event(ctx, store.BusySendBoundaryTurnEnd)
 }
 
-// admit admits text as a confirmed Message with Message ID request.
+// event runs one eligible event at boundary, as deliver does.
+func (e *coordEnv) event(ctx context.Context, boundary store.BusySendBoundary) (busysend.Outcome, error) {
+	c := busysend.Coordinator{Store: e.seam, Route: e.route, Budgets: busysend.Budgets{Issue: time.Minute, Job: 2 * time.Minute},
+		Now: e.clock.Now}
+	return c.Deliver(ctx, busysend.Event{InstanceID: e.id, Boundary: boundary})
+}
+
+// admit admits text as a confirmed Message with Message ID request, in the
+// agent's default Send Mode.
 func (e *coordEnv) admit(t *testing.T, request, text string) {
 	t.Helper()
+	e.admitIn(t, "", request, text)
+}
+
+// admitIn is admit in Send Mode mode ("" for the default).
+func (e *coordEnv) admitIn(t *testing.T, mode store.BusySendMode, request, text string) {
+	t.Helper()
 	confirmed := true
-	if _, err := e.st.AdmitBusySend(store.BusySendAdmissionRequest{InstanceID: e.id, Text: []byte(text), CallerUUID: coordCaller,
-		DeliveryRequestID: request, Confirmed: &confirmed}); err != nil {
+	req := store.BusySendAdmissionRequest{InstanceID: e.id, Text: []byte(text), CallerUUID: coordCaller, DeliveryRequestID: request,
+		Confirmed: &confirmed}
+	if mode != "" {
+		req.SendMode = &mode
+	}
+	if _, err := e.st.AdmitBusySend(req); err != nil {
 		t.Fatalf("admit %s: %v", request, err)
 	}
 }
@@ -817,6 +840,136 @@ func TestCoordinatorHonorsRouteWaits(t *testing.T) {
 				t.Errorf("next eligible event = %+v, %v; want the Message issued", out, err)
 			}
 		})
+	}
+}
+
+// steered is Claude's PostToolBatch output for a Steer Turn prompt: complete,
+// with its emission order at its unproven boundary, and at most one prompt
+// per output (More false).
+var steered = busysend.Disposition{Output: store.BusySendOutputComplete, Order: store.BusySendOrderEmissionComplete,
+	UnprovenBoundary: true}
+
+// TestCoordinatorSteersOnePromptPerBoundary (SR-2.2, SR-2.3, SR-3.3, SR-3.4's
+// store side; M1 Held-to-Final progress; M2 P-C4.2): at a working agent's
+// parent tool boundary, under the Steer Turn row's own measure, an invocation
+// claims only the Steer Turn prefix before the first Wait Turn Message and,
+// with a route that hands over one prompt per output, issues the first
+// prompt, records its completion and returns only the never-issued remainder
+// to Held, still reserved and ahead of every later Message. The next tool
+// boundary claims that remainder first, though the first prompt still awaits
+// take evidence, and nothing later overtakes it. At turn end the
+// AD-owned-work rule waits readiness_unknown until the parent Stop's
+// evidence; then the Wait Turn Message and everything after it go in one
+// prompt under Wait Turn's measure. Each Message ends with its own Final
+// Result.
+func TestCoordinatorSteersOnePromptPerBoundary(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newCoordEnv(t)
+	limits, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendSteerTurn)
+	texts := map[string]string{"s1": strings.Repeat("a", 5000), "s2": strings.Repeat("b", 5000), "s3": "<system-reminder>s3</system-reminder>",
+		"w1": "a Wait Turn Message", "s4": "a Steer Turn Message behind it", "late": "a Steer Turn Message sent after the first boundary"}
+	requests := []string{"s1", "s2", "s3", "w1", "s4"}
+	for _, r := range requests {
+		mode := store.BusySendSteerTurn
+		if r == "w1" {
+			mode = store.BusySendWaitTurn
+		}
+		e.admitIn(t, mode, r, texts[r])
+	}
+	if a := apitest.ApplyAgentHook(t, e.path, e.id, "UserPromptSubmit", e.dest.SessionID); !a.Applied {
+		t.Fatalf("UserPromptSubmit %+v; want applied", a)
+	}
+	custody := func() []string {
+		facts, err := apitest.ReadBusySendFacts(e.path, e.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, m := range facts.Messages {
+			out = append(out, fmt.Sprintf("%s reserved=%t", m.Place, m.Reserved))
+		}
+		return out
+	}
+	e.route.measure = limits.Measure
+	e.route.issue = func(context.Context, busysend.Prepared) busysend.Disposition { return steered }
+
+	out, err := e.event(ctx, store.BusySendBoundaryToolBoundary)
+	issued := e.route.prepared()
+	if err != nil || len(issued) != 1 {
+		t.Fatalf("first tool boundary = %+v, %v with %d prompts issued; want one", out, err, len(issued))
+	}
+	if want := (busysend.Outcome{Kind: busysend.OutcomeIssued, HandoverID: issued[0].HandoverID,
+		Issued: []busysend.Disposition{steered}}); !reflect.DeepEqual(out, want) {
+		t.Errorf("first tool boundary = %+v; want %+v", out, want)
+	}
+	held := "held reserved=true"
+	if got := custody(); !slices.Equal(got, []string{"closed reserved=false", held, held, held, held}) {
+		t.Fatalf("custody after the first tool boundary %q; want s1 closed and the rest Held and reserved", got)
+	}
+	e.admitIn(t, store.BusySendSteerTurn, "late", texts["late"])
+	out, err = e.event(ctx, store.BusySendBoundaryToolBoundary)
+	if issued = e.route.prepared(); err != nil || out.Kind != busysend.OutcomeIssued || len(issued) != 2 {
+		t.Fatalf("next tool boundary = %+v, %v with %d prompts issued in all; want the returned remainder issued", out, err, len(issued))
+	}
+	closed := "closed reserved=false"
+	if got := custody(); !slices.Equal(got, []string{closed, closed, closed, held, held, held}) {
+		t.Fatalf("custody after the next tool boundary %q; want s1 to s3 closed and the rest Held and reserved", got)
+	}
+
+	e.route.measure, e.route.issue = nil, nil
+	if out, err := e.deliver(ctx); err != nil || out.Kind != busysend.OutcomeNoIssue || out.Wait != store.BusySendWaitReadinessUnknown ||
+		len(e.route.prepared()) != 2 {
+		t.Fatalf("turn end before the Stop's evidence = %+v, %v; want no issue, waiting readiness_unknown", out, err)
+	}
+	pid, start, err := storefix.AgentHookParent(e.st, e.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := store.BusySendTurnEnd{InstanceID: e.id, Gate: store.HookGate{Event: "Stop", ParentPID: pid, ParentStart: start,
+		SessionID: e.dest.SessionID}, Destination: e.dest, At: e.clock.Now().Add(time.Millisecond)}
+	if stop.Prompts, err = e.st.ReadBusySendTurnEndPrompts(ctx, stop); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.st.RecordBusySendTurnEnd(ctx, stop); err != nil ||
+		got != (store.BusySendTurnEndResult{Outcome: store.BusySendTurnEndRecorded, Recorded: 2}) {
+		t.Fatalf("parent Stop = %+v, %v; want both steered prompts admitted", got, err)
+	}
+	if out, err := e.deliver(ctx); err != nil || out.Kind != busysend.OutcomeIssued {
+		t.Fatalf("turn end after the Stop = %+v, %v; want issued", out, err)
+	}
+
+	body := func(texts ...string) string {
+		var b strings.Builder
+		for i, s := range texts {
+			if i > 0 {
+				b.WriteString("\n\n")
+			}
+			fmt.Fprintf(&b, "[agent-director: message %d of %d]\n%s", i+1, len(texts), s)
+		}
+		return b.String()
+	}
+	issued = e.route.prepared()
+	prompt := func(i, count int, measure store.BusySendPromptMeasure, texts ...string) busysend.Prepared {
+		return busysend.Prepared{HandoverID: issued[i].HandoverID, PromptCount: count, Destination: e.dest, Body: []byte(body(texts...)),
+			RenderedBytes: measure([]byte(body(texts...))), IssueDeadline: e.start.Add(time.Minute)}
+	}
+	want := []busysend.Prepared{
+		prompt(0, 2, limits.Measure, texts["s1"]),
+		prompt(1, 1, limits.Measure, texts["s2"], texts["s3"]),
+		prompt(2, 1, e.route.Measure, texts["w1"], texts["s4"], texts["late"]),
+	}
+	if !reflect.DeepEqual(issued, want) || issued[0].HandoverID == issued[1].HandoverID || issued[1].HandoverID == issued[2].HandoverID {
+		for i := range issued {
+			t.Errorf("issued prompt %d: %s %d/%d, %d bytes (%d measured)", i, issued[i].HandoverID, issued[i].PromptIndex,
+				issued[i].PromptCount, len(issued[i].Body), issued[i].RenderedBytes)
+		}
+		t.Fatal("want s1 alone of two prompts, then s2 and s3, then w1, s4 and late, each in its own hand-over with its exact bytes")
+	}
+	for _, request := range append(requests, "late") {
+		if r := e.result(t, request); r.Class != store.BusySendClassSentUnconfirmed || !r.Final || r.Reason != "handed_over_not_proven" {
+			t.Errorf("%s Result = %+v; want Final sent_unconfirmed handed_over_not_proven", request, r)
+		}
 	}
 }
 

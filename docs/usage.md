@@ -106,7 +106,7 @@ ordinary Message, including while the agent works or starts; it types no keys.
 Codex, Cursor and the experimental agents keep their existing input paths.
 Read `get.busy_send` for the current launch's coverage.
 
-`wait_turn` is Claude's supported Send Mode. The model sees
+Claude offers the Send Modes `wait_turn` and `steer_turn`. The model sees
 `[agent-director: message N of M]` before each Message body. See
 [Wait Turn delivery and waits](caller-contract.md#wait-turn-delivery-and-waits)
 for batching, order, delivery schedule, risks and limits.
@@ -158,7 +158,7 @@ Covered Messages default to `send_mode: wait_turn` and
 See [Agent Defaults](caller-contract.md#agent-defaults) for precedence.
 
 For reconnection, see [Pause and resume](#pause-and-resume).
-`steer_turn` and `only_if_waiting` are unavailable. For the experimental
+`only_if_waiting` is unavailable. For the experimental
 `confirm_from_transcripts` setting, see
 [Confirm From Transcripts](caller-contract.md#confirm-from-transcripts).
 

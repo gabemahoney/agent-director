@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -38,7 +39,13 @@ import (
 //     or Message Result, is never delivered_confirmed and never a proof that
 //     sibling hooks let the prompt through. Claude ordinary delivery goes only
 //     through its asyncRewake wake (Main Agent decision 10), so no turn
-//     counting stands in for a sighting.
+//     counting stands in for a sighting. Input Claude took into its running
+//     turn at a tool boundary has no sighting: its take evidence is the
+//     parent Stop that ends that turn, under O4's turn-end premise, when the
+//     prompt's completion was committed before that Stop's entry read and its
+//     output observed before the Stop's start (SR-3.3;
+//     ReadBusySendTurnEndPrompts, RecordBusySendTurnEnd), recorded as
+//     native_signal. A wake or force prompt never takes this evidence.
 
 // claudeTurnStartSQL is the condition, on a spawns row, under which an owned
 // main-agent Claude UserPromptSubmit advances the Turn Start counter: the row
@@ -85,7 +92,10 @@ const busySendAwaitingWhere = `h.conversation_id = ? AND h.launch_id = ? AND p.e
 // readBusySendAwaiting counts launchID's hand-overs with at least one
 // awaiting obligation (SR-5.6's awaiting_turn_start), zero once the Launch's
 // End is recorded: Launch End finalizes their Messages and no evidence of
-// the ended Launch's intake is awaited any more (decision 11). It only reads.
+// the ended Launch's intake is awaited any more (decision 11). Input issued
+// into a running turn at a tool boundary counts, whatever its transport, until
+// a parent turn end whose entry read found its completion committed
+// (RecordBusySendTurnEnd). It only reads.
 func readBusySendAwaiting(ctx context.Context, q busySendLaunchSQL, conversation, launchID string) (int64, error) {
 	var n int64
 	err := q.QueryRowContext(ctx, `SELECT COUNT(DISTINCT p.handover_id) FROM busy_send_prompts p
@@ -224,6 +234,250 @@ func (s *Store) RecordBusySendSighting(ctx context.Context, in BusySendSighting)
 		return BusySendSightingResult{}, err
 	}
 	return out, nil
+}
+
+// BusySendTurnEnd is a route's own native turn end of the agent's main turn
+// (SR-3.3): for Claude, its owned parent Stop hook, with no agent_id and a
+// payload session that agrees with its transcript's.
+type BusySendTurnEnd struct {
+	InstanceID string
+	// Gate is the reporting hook's parent gate; the turn end counts only
+	// while it holds, judged in each read and write's own transaction.
+	Gate HookGate
+	// Destination is the current Launch's destination the hook authenticated
+	// (its Launch, token, provider, session, route and connection
+	// generation); each read and write compares it with the current facts
+	// again.
+	Destination BusySendDestination
+	// At is the callback's own observation, its start, captured before any
+	// store call. Zero, or a time at or before the epoch, grants nothing: no
+	// later time stands in for it.
+	At time.Time
+	// Prompts are what the turn end's entry read found
+	// (ReadBusySendTurnEndPrompts): the prompts whose completion was
+	// committed before that read's snapshot, with output observed before At.
+	// Only these, still at the same revision, can be admitted.
+	Prompts []BusySendTurnEndPrompt
+}
+
+// BusySendTurnEndPrompt is one prompt a turn end's entry read found it could
+// admit, at its revision then.
+type BusySendTurnEndPrompt struct {
+	HandoverID  string
+	PromptIndex int
+	Revision    int64
+}
+
+// BusySendTurnEndOutcome is what a turn end established.
+type BusySendTurnEndOutcome string
+
+const (
+	// BusySendTurnEndRecorded: native_signal was recorded for at least one
+	// prompt (BusySendTurnEndResult.Recorded).
+	BusySendTurnEndRecorded BusySendTurnEndOutcome = "recorded"
+	// BusySendTurnEndUnchanged: the turn end is the current Launch's, and no
+	// prompt of its entry read still qualifies, so nothing changed.
+	BusySendTurnEndUnchanged BusySendTurnEndOutcome = "unchanged"
+	// BusySendTurnEndStale: no observation, the hook's gate does not hold, or
+	// the current Launch is not a covered, running Claude hooks Launch at
+	// the turn end's destination.
+	BusySendTurnEndStale BusySendTurnEndOutcome = "stale"
+)
+
+// BusySendTurnEndResult is a turn end's outcome and how many prompts it
+// admitted.
+type BusySendTurnEndResult struct {
+	Outcome  BusySendTurnEndOutcome
+	Recorded int
+}
+
+// busySendTurnEndWhere selects, among the awaiting obligations
+// (busySendAwaitingWhere's two placeholders), the prompts a turn end can
+// admit, with eight more placeholders: the turn end's observation in
+// milliseconds, then the captured destination's launch token, session,
+// provider, route kind, route id and connection generation, which must be
+// the turn end's, and the store. They are an ordinary (non-forced) hand-over's
+// prompts issued into a running turn at a tool boundary, with complete output
+// (transport written) whose observation is strictly before the turn end's.
+const busySendTurnEndWhere = busySendAwaitingWhere + ` AND h.boundary = 'tool_boundary' AND h.forced = 0
+    AND h.intent_running_turn = 1 AND p.emission = 'issued' AND p.transport = 'written' AND p.transport_at_ms < ?
+    AND COALESCE(h.launch_token, '') = ? AND COALESCE(h.session_id, '') = ? AND h.provider = ? AND h.route_kind = ?
+    AND COALESCE(h.route_id, '') = ? AND h.connection_generation = ? AND h.store_id = ?`
+
+// observed is the turn end's observation in milliseconds, and false when it
+// has none or names no session, so it grants nothing.
+func (in BusySendTurnEnd) observed() (int64, bool) {
+	ms := in.At.UnixMilli()
+	return ms, !in.At.IsZero() && ms > 0 && in.Destination.SessionID != ""
+}
+
+// ReadBusySendTurnEndPrompts is a turn end's entry read (SR-3.3; E4 Main
+// Agent decision 2), made at its callback's entry before its own write and
+// any wait on another writer. In one read transaction it checks in's authority
+// as RecordBusySendTurnEnd does and returns the prompts that write could
+// admit, each at its revision: those whose completion was committed before
+// the read's SQLite snapshot, with an output observation strictly earlier
+// than in.At, the callback's start, which was captured separately and before
+// the snapshot. A read sees only committed transactions, so a completion that
+// commits after the snapshot is never among them, even one whose output was
+// observed earlier; it waits for a later turn end. That exclusion is the one
+// unconditional guarantee. A completion committed between the callback's
+// start and the snapshot is included when its output observation is earlier
+// than in.At, and that comparison relies on the host's wall clock: a clock
+// step can misorder an output against the callback's start. No observation,
+// no authority or a missing row returns none. It writes nothing.
+func (s *Store) ReadBusySendTurnEndPrompts(ctx context.Context, in BusySendTurnEnd) ([]BusySendTurnEndPrompt, error) {
+	if _, ok := in.observed(); !ok {
+		return nil, nil
+	}
+	var out []BusySendTurnEndPrompt
+	err := s.WithContext(ctx).readWithin(DefaultLockWait, "", func(ctx context.Context, conn *sql.Conn) error {
+		if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
+			return err
+		}
+		defer rollbackConn(ctx, conn)
+		out = nil
+		f, ok, err := readBusySendTurnEndAuthority(ctx, conn, in)
+		if err != nil || !ok {
+			return err
+		}
+		out, err = readBusySendTurnEndPrompts(ctx, conn, s.StoreID(), f, in)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: read busy-send turn end: %w", err)
+	}
+	return out, nil
+}
+
+// RecordBusySendTurnEnd applies a route's own turn end as take evidence for
+// the input it issued into that running turn (SR-3.3, SR-5.6; E4 Main Agent
+// decisions 1 and 2), in one transaction on a WAL synchronous=FULL connection
+// bounded by ctx. Inside it: the hook's gate must hold (hookGateSQL), and the
+// published current Launch must be covered, running, route claude_hooks (the
+// one route whose turn end is qualified evidence, under O4's turn-end premise)
+// and exactly in.Destination. Then each prompt of in.Prompts, the turn end's
+// entry read (ReadBusySendTurnEndPrompts), that still qualifies at the same
+// revision gets its admission recorded as native_signal at in.At, comparing and
+// advancing that prompt's revision. A prompt qualifies when it awaits evidence
+// for that Launch, its hand-over is ordinary (not a force's), was claimed at a
+// tool boundary and issued into a running turn, it was captured for this same
+// destination (a callback cannot admit another Launch's or session's input,
+// even in a reused provider session), and its complete output (transport
+// written) was observed strictly before in.At's millisecond.
+//
+// So two facts order the output before the turn end: the entry read, which
+// saw the completion committed before its snapshot, and the output's
+// observation, earlier than in.At, the callback's start. A completion that
+// committed after the entry read's snapshot, output observed in the same
+// millisecond or later, no completion yet, or partial or uncertain output
+// gives nothing: such a prompt stays awaiting until a later turn end, or
+// Launch End reads it zero. A repeat is inert. Only the exclusion of
+// completions committed after the snapshot is unconditional, since it rests
+// on commit order. The time comparison relies on the host's wall clock
+// agreeing across hook processes, a known limit: a clock step can misorder
+// an output against the callback's start, so an output observed after that
+// start but committed before the snapshot can count, or one observed before
+// it can be withheld.
+//
+// It changes no custody, reservation, transport, order, Result, force or
+// hand-over or conversation revision, and grants no output or replay
+// authority; a wake or force prompt keeps its sighting as its only take
+// evidence. Its one effect is that the shared awaiting count
+// (readBusySendAwaiting) drops, so an ordinary turn-end claim at this turn end
+// is no longer refused for it. A failed read or write records nothing.
+func (s *Store) RecordBusySendTurnEnd(ctx context.Context, in BusySendTurnEnd) (BusySendTurnEndResult, error) {
+	out := BusySendTurnEndResult{Outcome: BusySendTurnEndStale}
+	observed, ok := in.observed()
+	if !ok {
+		return out, nil
+	}
+	entry := make(map[BusySendTurnEndPrompt]bool, len(in.Prompts))
+	for _, p := range in.Prompts {
+		entry[p] = true
+	}
+	err := s.inDurableWriteTxContext(ctx, DefaultLockWait, func(ctx context.Context, conn *sql.Conn) error {
+		out = BusySendTurnEndResult{Outcome: BusySendTurnEndStale}
+		f, ok, err := readBusySendTurnEndAuthority(ctx, conn, in)
+		if err != nil || !ok {
+			return err
+		}
+		qualified, err := readBusySendTurnEndPrompts(ctx, conn, s.StoreID(), f, in)
+		if err != nil {
+			return err
+		}
+		out = BusySendTurnEndResult{Outcome: BusySendTurnEndUnchanged}
+		for _, p := range qualified {
+			if !entry[p] {
+				continue
+			}
+			if err := busySendChange(ctx, conn, `UPDATE busy_send_prompts SET admission_kind = ?, admitted_at_ms = ?, revision = revision + 1
+			    WHERE handover_id = ? AND prompt_index = ? AND revision = ? AND admission_kind IS NULL AND negative_kind IS NULL`,
+				string(BusySendAdmissionNativeSignal), observed, p.HandoverID, p.PromptIndex, p.Revision); err != nil {
+				return err
+			}
+			out.Recorded++
+		}
+		if out.Recorded > 0 {
+			out.Outcome = BusySendTurnEndRecorded
+		}
+		return nil
+	})
+	if err != nil {
+		return BusySendTurnEndResult{}, err
+	}
+	return out, nil
+}
+
+// readBusySendTurnEndAuthority is a turn end's authority, judged in its
+// caller's transaction: the hook's gate holds, and the published current
+// Launch is covered, running, route claude_hooks and exactly in.Destination.
+// ok is false, with no error, for any of those that fails or a missing row.
+func readBusySendTurnEndAuthority(ctx context.Context, conn *sql.Conn, in BusySendTurnEnd) (busySendIssueFacts, bool, error) {
+	var gate bool
+	err := conn.QueryRowContext(ctx, `SELECT CASE WHEN `+hookGateSQL+` THEN 1 ELSE 0 END FROM spawns WHERE instance_id = ?`,
+		append(hookGateArgs(in.Gate), in.InstanceID)...).Scan(&gate)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && !gate {
+		return busySendIssueFacts{}, false, nil
+	}
+	if err != nil {
+		return busySendIssueFacts{}, false, err
+	}
+	f, err := readBusySendIssueFacts(ctx, conn, in.InstanceID)
+	if errors.Is(err, ErrSpawnNotFound) {
+		return f, false, nil
+	}
+	if err != nil {
+		return f, false, err
+	}
+	ok := f.launchCoverage == BusySendCovered && f.launchWait() == "" && f.routeKind == string(BusySendRouteClaudeHooks) &&
+		f.destinationMatches(in.Destination)
+	return f, ok, nil
+}
+
+// readBusySendTurnEndPrompts reads the prompts of f's Launch a turn end at
+// in.At can admit (busySendTurnEndWhere), in hand-over and prompt order, each
+// at its current revision.
+func readBusySendTurnEndPrompts(ctx context.Context, conn *sql.Conn, storeID string, f busySendIssueFacts, in BusySendTurnEnd) ([]BusySendTurnEndPrompt, error) {
+	d := in.Destination
+	rows, err := conn.QueryContext(ctx, `SELECT p.handover_id, p.prompt_index, p.revision FROM busy_send_prompts p
+	    JOIN busy_send_handovers h ON h.handover_id = p.handover_id
+	    WHERE `+busySendTurnEndWhere+` ORDER BY h.handover_seq, p.prompt_index`,
+		f.conversation, f.launch, in.At.UnixMilli(), d.LaunchToken, d.SessionID, d.Provider, string(d.RouteKind), d.RouteID,
+		d.ConnectionGeneration, storeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BusySendTurnEndPrompt
+	for rows.Next() {
+		var p BusySendTurnEndPrompt
+		if err := rows.Scan(&p.HandoverID, &p.PromptIndex, &p.Revision); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // busySendAwaitingPrompt is one awaiting prompt as a sighting compares it:

@@ -104,11 +104,16 @@ func TestAdviceFollow_A32_CantSendSameLaunchWithout(t *testing.T) {
 	}
 }
 
-// busyAdviceRow is a Client and a covered live row for a covered send's
-// literal-follow test.
-func busyAdviceRow(t *testing.T) (*killEnv, *api.Client, string) {
+// busySteerUnsupported is steer_turn's refusal for a covered provider with no
+// capability row, whose fallback offers Wait Turn only.
+var busySteerUnsupported = api.CantSendDetails{Class: "cant_send", Reason: "steer_unsupported", ResendSafe: true, RetryWith: "new_send"}
+
+// busyAdviceRow is a Client and a covered live row of agent ("" is Claude)
+// for a covered send's literal-follow test.
+func busyAdviceRow(t *testing.T, agent string) (*killEnv, *api.Client, string) {
 	t.Helper()
 	e := newKillEnv(t)
+	e.rowAgent = agent
 	c, _ := e.client(t)
 	r := e.seedRow(t, killRowSpec{})
 	seedBusyCovered(t, e, r.ID)
@@ -129,30 +134,37 @@ func busyFollowAccepted(t *testing.T, e *killEnv, c *api.Client, p api.SendKeysP
 	return res
 }
 
-// TestAdviceFollow_E25_SteerUnsupportedSendWaitTurn: a covered send with Steer Turn, then the same send with Wait Turn.
+// TestAdviceFollow_E25_SteerUnsupportedSendWaitTurn: a covered send with Steer Turn to a provider with no capability row (a later release's covered Codex row, whose fallback offers Wait Turn only), then the same send with Wait Turn.
 // E25: "send it with send_mode wait_turn"
 func TestAdviceFollow_E25_SteerUnsupportedSendWaitTurn(t *testing.T) {
 	t.Parallel()
-	e, c, id := busyAdviceRow(t)
+	e, c, id := busyAdviceRow(t, "codex")
 	p := api.SendKeysParams{InstanceID: id, Text: "steer", SendMode: ptr("steer_turn")}
 	_, err := c.SendKeys(p)
 	adviceAssertAdvice(t, err, api.ErrCantSend, "send it with send_mode wait_turn")
+	assertCantSendDetails(t, err, busySteerUnsupported)
 	p.SendMode = ptr("wait_turn")
 	busyFollowAccepted(t, e, c, p, 1)
 }
 
-// TestAdviceFollow_B18_SteerUnsupportedResumeWaitTurn: a covered resume with Steer Turn, then the same resume with Wait Turn.
+// TestAdviceFollow_B18_SteerUnsupportedResumeWaitTurn: a covered resume with Steer Turn of a provider with no capability row (a covered Codex row, as for E25), then the same resume with Wait Turn.
 // B18: "use wait_turn"
 func TestAdviceFollow_B18_SteerUnsupportedResumeWaitTurn(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
-	r := e.seedResumable(t, time.Hour, agentGone)
+	e.rowAgent = "codex"
+	r := e.seedResumableRow(t, e.resumableSpec(rlkSettled(e), agentNotRecorded))
 	seedBusyCovered(t, e, r.ID)
+	before := busyFacts(t, e.dbPath, r.ID)
 	cfg := config.Default()
 	cfg.Tmux = e.cfg
 	p := api.ResumeParams{InstanceID: r.ID, SendMode: ptr("steer_turn")}
 	_, err := api.Resume(e.st, e.rec, e.pc, cfg, e.storeID, e.clock.Now, nil, p)
 	adviceAssertAdvice(t, err, api.ErrCantSend, "use wait_turn")
+	assertCantSendDetails(t, err, busySteerUnsupported)
+	if got := busyFacts(t, e.dbPath, r.ID); !reflect.DeepEqual(got, before) {
+		t.Errorf("busy-send core after the refusal = %+v; want unchanged %+v", got, before)
+	}
 	p.SendMode = ptr("wait_turn")
 	if _, err := api.Resume(e.st, e.rec, e.pc, cfg, e.storeID, e.clock.Now, nil, p); err != nil {
 		t.Fatalf("the same resume with send_mode wait_turn: %v", err)
@@ -164,7 +176,7 @@ func TestAdviceFollow_B18_SteerUnsupportedResumeWaitTurn(t *testing.T) {
 // E26: "send this Message only as a new send under a new delivery_request_id"
 func TestAdviceFollow_E26_IDConflictNewMessageID(t *testing.T) {
 	t.Parallel()
-	e, c, id := busyAdviceRow(t)
+	e, c, id := busyAdviceRow(t, "")
 	p := api.SendKeysParams{InstanceID: id, Text: "first", ConfirmedDelivery: ptr(true), CallerUUID: ptr(busyCaller), DeliveryRequestID: "c-1"}
 	owner := busyAdmit(t, c, p)
 	p.Text = "second"
@@ -184,7 +196,7 @@ func TestAdviceFollow_E26_IDConflictNewMessageID(t *testing.T) {
 // E27: "omit it to have one made"
 func TestAdviceFollow_E27_EmptyMessageIDOmitIt(t *testing.T) {
 	t.Parallel()
-	e, c, id := busyAdviceRow(t)
+	e, c, id := busyAdviceRow(t, "")
 	p := api.SendKeysParams{InstanceID: id, Text: "made", ConfirmedDelivery: ptr(true), CallerUUID: ptr(busyCaller), DeliveryRequestIDSupplied: true}
 	_, err := c.SendKeys(p)
 	adviceAssertAdvice(t, err, api.ErrInvalidFlags, "omit it to have one made")
@@ -199,7 +211,7 @@ func TestAdviceFollow_E27_EmptyMessageIDOmitIt(t *testing.T) {
 // E28: "send it again once Held Messages drain"
 func TestAdviceFollow_E28_HeldCountRetryAfterDrain(t *testing.T) {
 	t.Parallel()
-	e, c, id := busyAdviceRow(t)
+	e, c, id := busyAdviceRow(t, "")
 	if err := apitest.SeedBusySendReservation(e.dbPath, id, 1000, 1000*int64(len("earlier"))); err != nil {
 		t.Fatal(err)
 	}

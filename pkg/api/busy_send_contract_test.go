@@ -266,10 +266,9 @@ func TestBusySendUncoveredRefusalMatrix(t *testing.T) {
 // Codex rows). On a covered Claude Launch, pause only_if_waiting, like a
 // resume through a store that cannot read coverage, is an unnamed error that
 // never falls back to today's behaviour (a covered force is E5's; its calls'
-// tests are Task t2.xis.p8.y2's), and a resume's
-// steer_turn is steer_unsupported before the launch (SR-1.4; its accepted
-// defaults: TestBusySendResumeDefaults). Every refusal writes, sends and
-// stores nothing.
+// tests are Task t2.xis.p8.y2's; a covered resume's accepted defaults,
+// steer_turn included, are TestBusySendResumeDefaults'). Every refusal
+// writes, sends and stores nothing.
 func TestBusySendOptionOrder(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
@@ -286,7 +285,6 @@ func TestBusySendOptionOrder(t *testing.T) {
 	done := e.seedResumable(t, time.Hour, agentGone)
 	e.rowAgent = "" // Claude's, covered as shipped
 	coveredLive := resumeRow{killRow: e.seedRow(t, killRowSpec{})}
-	coveredDone := e.seedResumable(t, time.Hour, agentGone)
 	e.rowAgent = "droid"
 	paneOnly := resumeRow{killRow: e.seedRow(t, killRowSpec{})}
 	send := func(p api.SendKeysParams) func() error {
@@ -342,14 +340,11 @@ func TestBusySendOptionOrder(t *testing.T) {
 		{"make-template malformed send_mode", waiting, makeTemplate(api.MakeTemplateParams{Name: "order", SendMode: ptr("now")}), "ErrTemplateMalformed", ""},
 		{"make-template unknown agent", waiting, makeTemplate(api.MakeTemplateParams{Name: "order", Agent: "nope", ConfirmedDelivery: ptr(false)}), "ErrTemplateMalformed", ""},
 		{"covered pause", coveredLive, pause(coveredLive.ID), "", ""},
-		{"covered resume steer_turn before the launch", coveredDone, resume(e.st, api.ResumeParams{InstanceID: coveredDone.ID, SendMode: ptr("steer_turn")}), "steer_unsupported", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := e.snapshotBusy(t, tc.name, tc.row)
 			err := tc.run()
 			switch {
-			case tc.want == "steer_unsupported":
-				assertCantSendDetails(t, err, busySteerUnsupported)
 			case tc.want == "ErrCantSend":
 				assertCantSend(t, err, tc.options)
 			case tc.want == "ErrSpawnNotPausable":

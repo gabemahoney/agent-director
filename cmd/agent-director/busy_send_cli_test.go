@@ -113,7 +113,8 @@ func TestBusySendCLIFlagsReachTheVerb(t *testing.T) {
 // TestBusySendCLICoveredSend (SR-1.3, SR-1.5, SR-5.1): on a Claude row, a
 // raw-key flag given at its zero value, or an empty --delivery-request-id,
 // still reaches the verb as supplied, so the send is ErrInvalidFlags naming it;
-// a confirmed send's --delivery-request-id reaches the store byte for byte, and
+// a confirmed send's --delivery-request-id reaches the store byte for byte, as
+// its --send-mode steer_turn does (SR-1.4), and
 // its printed Result is the one get-delivery prints; the pair's repeat with
 // other text is ErrCantSend, id_conflict, with that Result in err_details.
 // --force and force-delivery reach the verbs (see below).
@@ -143,13 +144,17 @@ func TestBusySendCLICoveredSend(t *testing.T) {
 
 	const requestID = "msg 多 🦋"
 	pair := slices.Concat(confirmed, []string{"--delivery-request-id", requestID})
-	sent, stderr, code := run(send("hi", pair...)...)
+	sent, stderr, code := run(send("hi", slices.Concat(pair, []string{"--send-mode", "steer_turn"})...)...)
 	var result map[string]any
 	if code != 0 || json.Unmarshal([]byte(sent), &result) != nil {
 		t.Fatalf("confirmed send exit = %d, stdout = %q, stderr = %q; want its Result", code, sent, stderr)
 	}
 	if result["caller_uuid"] != "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa" || result["request_id"] != requestID || result["class"] != "held" {
 		t.Errorf("Result = %v; want held, with the lowercase caller_uuid and request_id %q", result, requestID)
+	}
+	if facts, err := apitest.ReadBusySendFacts(stateDB(home), id); err != nil || len(facts.Messages) != 1 ||
+		facts.Messages[0].SendMode != "steer_turn" || facts.Messages[0].RequestID.String != requestID {
+		t.Errorf("stored Messages = %+v (%v); want the one steer_turn Message %q", facts.Messages, err, requestID)
 	}
 	lookup := []string{"get-delivery", "--caller-uuid", "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", "--delivery-request-id", requestID}
 	if got, stderr, code := run(lookup...); code != 0 || got != `{"lookup":"found","result":`+strings.TrimSuffix(sent, "\n")+"}\n" {

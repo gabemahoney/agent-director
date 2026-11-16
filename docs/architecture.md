@@ -6327,7 +6327,7 @@ its own table, in [The agent-aware hook classifier](#the-agent-aware-hook-classi
 | `PreToolUse` | `tool_name = AskUserQuestion` | `ask_user` |
 | `PreToolUse` | any other tool | `working`; for `tool_name` `Agent`, the row write is followed by its own gated entry transaction (see [Subagent capture](#subagent-capture)); no trail record, and `upsert_outcome` stays the row write's |
 | `PostToolUse`, `PostToolUseFailure` | — | `working` (for `tool_name` `Agent`, followed by its own gated entry transaction, as `PreToolUse`'s); with relay on and a `tool_use_id` in the payload, the ordinary write is preceded by the proof of the row's requests with that `tool_use_id` (`tool_ran`; see "The dialog hold" under [Permission relay](#permission-relay)), then the close of the row's fallen-back request with that `tool_use_id` (see "The PostToolUse close" under [Permission relay](#permission-relay)); a request the proof covers no longer holds the `working` write, closed or not (b.omt) |
-| `Stop` | — | `waiting`; with relay on and no `agent_id`, preceded by the proof of the row's durably eligible requests with no `agent_id` recorded before the hook started (`turn_end`; b.omt); a main-agent `Stop` (no `agent_id`) is followed, when its row write applied and a plain read finds something the transaction can change (a claimable launch or running background entry to close, or a listed subagent), by its own gated entry transaction: the claimable-launch close, then its `background_tasks` snapshot (create, fill, confirm, then close); a `Stop` carrying `agent_id` opens none (see [Subagent capture](#subagent-capture)); on a covered Launch an applied main `Stop`, like the idle prompt, can re-signal the wake ([The Claude route](#the-claude-route)) |
+| `Stop` | — | `waiting`; with relay on and no `agent_id`, preceded by the proof of the row's durably eligible requests with no `agent_id` recorded before the hook started (`turn_end`; b.omt); a main-agent `Stop` (no `agent_id`) is followed, when its row write applied and a plain read finds something the transaction can change (a claimable launch or running background entry to close, or a listed subagent), by its own gated entry transaction: the claimable-launch close, then its `background_tasks` snapshot (create, fill, confirm, then close); a `Stop` carrying `agent_id` opens none (see [Subagent capture](#subagent-capture)); on a covered Launch an applied main `Stop` can record [turn-end take evidence](#busy-send-admission-and-results), then, like the idle prompt, re-signal the wake ([The Claude route](#the-claude-route)) |
 | `Notification` | `notification_type = idle_prompt` and no `agent_id` (the main agent idle at the prompt) | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request holding it (one still awaiting an answer and not proven gone; b.omt), as the write lands (`ApplyHookWaitingIfWorking`); any other state: soft refresh — no state change; bumps `last_seen_at`. Every applied write sets `idle_since` (see "The idle-prompt Notification" below). With relay on, preceded by the same proof as `Stop` |
 | `Notification` | any other `notification_type` (`permission_prompt`, `auth_success`, `elicitation_dialog`, missing or unknown), or an idle prompt with `agent_id` | soft refresh — no state change; bumps `last_seen_at` |
 | `PermissionRequest` | — | `check_permission`; with relay on, written by the relay hook's first write (`InsertRelayRequest`) in one transaction with the request (see [Permission relay](#permission-relay)) |
@@ -9278,7 +9278,12 @@ is the one per-provider, per-Send-Mode limit definition
 Admission, the coordinator's prompt partition, the routes and
 `delivery_capabilities` read it; none keeps a limit or wrapper of its own.
 `Wrapping` is the provider's exact transformation of a prompt body (prefix,
-suffix and escapes), recorded where a route has one (Claude's Wait Turn).
+suffix and escapes), recorded where a route has one. Claude's row offers Wait
+Turn, whose wake adds a measured prefix and suffix and escapes two closing
+tags, and Steer Turn, whose body Claude receives as a parent `PostToolBatch`
+hook's `additionalContext`: no wake wrapper, only the measured escaping of
+both `<system-reminder>` and `</system-reminder>`, kept below the 10,000
+characters past which Claude previews that context instead.
 `Measure` is the one complete-size measure: the body with each escape counted
 at its escaped length, plus prefix and suffix, or the body plus `WrapperBytes`
 for a mode with no `Wrapping`. The partition's default measure and
@@ -9290,8 +9295,9 @@ row also holds the provider's force capability (`ForceAdmission`,
 (`ConfirmFromTranscripts`, `ConfirmFromTranscriptsReason`), which
 `deliveryCapabilitiesOf` (`pkg/api/busy_send_types.go`) projects; they
 describe measured behaviour and grant no issue or admission authority. A
-covered provider without a row gets the fallback row: no `Wrapping`, no force
-(`force: null`) and `cannot_confirm`. A new agent or a changed limit is a
+covered provider without a row gets the fallback row: Wait Turn only (Steer
+Turn is `steer_unsupported`), no `Wrapping`, no force (`force: null`) and
+`cannot_confirm`. A new agent or a changed limit is a
 table change only. Callers' limits:
 [Busy-send refusals](caller-contract.md#busy-send-refusals).
 
@@ -9346,10 +9352,45 @@ apart from reservations.
 **Must use:** `readBusySendAwaiting` (`busy_send_turns.go`) is the one
 derivation of `awaiting_turn_start`: the current Launch's hand-overs holding a
 prompt whose emission intent is persisted and that has no admission or
-negative evidence, whatever its output state; 0 once the Launch has ended. The
-obligation is the one [the issue commit](#the-inbox-coordinator) records, so
-it exists before any output; only recorded evidence clears it, and no read
-repairs it. The turn-end claim and the route facts read the same count.
+negative evidence, whatever its output state, input issued into a running
+turn included; 0 once the Launch has ended. The obligation is the one [the
+issue commit](#the-inbox-coordinator) records, so it exists before any output;
+only recorded evidence clears it, and no read repairs it. The turn-end claim
+and the route facts read the same count; no route or Send Mode keeps a
+predicate of its own.
+
+**Must use: turn-end take evidence.** Input issued into a running turn gets
+no prompt sighting; `Store.RecordBusySendTurnEnd` is its one evidence writer.
+It records `native_signal`, whose meaning is route-neutral: a provider's own
+native event that, under a qualified premise, shows AD's input was taken. For
+Claude that is the parent `Stop` (no `agent_id`) ending the turn, under O4's
+turn-end premise; subagent and background callbacks never record it. The
+writer accepts route `claude_hooks` only, and a later route with a qualified
+turn end extends it rather than adding a writer. Claude's `Stop` hook makes
+the entry read, `ReadBusySendTurnEndPrompts`, before its own lifecycle write
+and any wait on another writer, and records after that write applied, before
+its wake hint reads the count. The write revalidates the hook gate and a
+covered, running current Launch at the turn end's exact destination (token,
+session, provider, route, connection generation), then admits only the entry
+read's prompts still at their revision: an ordinary (not forced) hand-over's,
+claimed at `tool_boundary` and issued into a running turn for that
+destination, with complete output observed strictly before the callback's
+start.
+
+A completion committed after the entry read's snapshot never counts at that
+turn end; resting on commit order, that is the one unconditional guarantee.
+Output observed in the start's millisecond or later, partial, uncertain or
+missing output, and input of a turn interrupted with no `Stop` stay awaiting
+until a later turn end, or Launch End reads them zero: a liveness cost only.
+Comparing the output's observation with the callback's start relies on the
+host's wall clock agreeing across hook processes, a known limit: a clock step
+can count output observed after the start but committed before the entry
+read, or withhold output observed before it. The evidence changes only the
+prompt's admission, its time and revision; custody, order, transport, force
+outcomes and Message Results stay separate, nothing becomes
+`delivered_confirmed`, and nothing gains replay authority. Wake and force
+prompts keep the exact sighting as their only take evidence ([The Claude
+route](#the-claude-route)).
 
 ### The inbox coordinator
 
@@ -9544,7 +9585,9 @@ table](#busy-send-admission-and-results)'s. **Must use:** a later route reuses
 its store pieces for the same steps: `store.ReadBusySendRouteFacts`, one
 advisory snapshot of the current Launch's authority and readiness that every
 store step judges again; `store.BusySendWakePath` and
-`store.TouchBusySendWake`; and `store.RecordBusySendSighting`.
+`store.TouchBusySendWake`; `store.RecordBusySendSighting`; and, for a
+qualified turn end, the [turn-end take
+evidence](#busy-send-admission-and-results) reads and writer.
 
 **Seams.** `internal/hook` never imports `internal/spawn`. It reaches
 `spawn.PrepareBusySendWake` and `spawn.HasClaudeStartupPrompt` only through
@@ -9671,8 +9714,10 @@ gives this hook a non-blocking stderr that takes a write deadline
 (`hookStderr`), keeps the hook logger and teardown diagnostics
 (`teardownDiagnostics`) off it, and turns a panic into exit 0.
 
-**Take evidence.** The only evidence that Claude took a prompt is the main
-agent's own `UserPromptSubmit`, after its gated write applied (held
+**Take evidence.** Input issued into a running turn takes the parent `Stop`'s
+[turn-end evidence](#busy-send-admission-and-results). For a wake or force
+prompt the only evidence that Claude took it is the main agent's own
+`UserPromptSubmit`, after its gated write applied (held
 included), whose sessions agree (`claudeCallbackSession`) and whose prompt
 `unwrapClaudeWake` unwraps exactly from the table's `Wrapping`; a body showing
 an escaped or raw reserved closing tag gives none.

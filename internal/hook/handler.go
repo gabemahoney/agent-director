@@ -359,8 +359,14 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // Launch's wake endpoint when Messages are Held and no earlier issued input
 // awaits take evidence, or when a force was abandoned by its call
 // (resignalClaudeWake). A main UserPromptSubmit or SessionStart whose write
-// applied finishes such a force itself (recoverClaudeAbandonedForce).
-// Delivery never answers a permission request or writes a decision envelope.
+// applied finishes such a force itself (recoverClaudeAbandonedForce). A main
+// Stop reads, before its own write, which input issued at a tool boundary into
+// the turn it ends already had its completion committed, with its output
+// observed before the hook's start (readClaudeTurnEnd; the time comparison
+// relies on the wall clock), and once its write applied records that as take
+// evidence (recordClaudeTurnEnd), with the hook's start as its observation,
+// before that re-signal reads the awaiting count. Delivery never answers a
+// permission request or writes a decision envelope.
 func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore, hc HandleConfig, logger *log.Logger) error {
 	// The hook's start, from which the relay hook's kill instant is counted
 	// (b.146 rule 4), and before which a turn_end proof's requests were
@@ -544,6 +550,10 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	}
 	codexTurnGate(&gate, res)
 	claudeTurnGate(&gate, res)
+	// SR-3.3: a parent Claude Stop's take evidence counts only steered output
+	// whose completion was committed before its entry read, observed before
+	// the hook's start, so it reads that before its own write.
+	turnEnd := readClaudeTurnEnd(ctx, st, instanceID, gate, res, start, logger)
 	if res.Agent == store.AgentCursor {
 		reader, ok := st.(interface {
 			ReadCursorRuntime(string) (store.CursorRuntime, error)
@@ -691,10 +701,13 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			// SR-3.3, SR-3.5: an owned main-agent Claude UserPromptSubmit
 			// carrying AD's own wake is the take evidence for it; as
 			// provider-input completion (SR-3.1) it then finishes a force
-			// abandoned by its call. A main Stop or idle prompt re-signals a
-			// covered Launch's wake.
+			// abandoned by its call. A main Stop is the take evidence for
+			// input issued into its turn at a tool boundary whose completion
+			// its entry read found committed; then it, or an idle
+			// prompt, re-signals a covered Launch's wake.
 			recordClaudeSighting(ctx, st, instanceID, gate, res, logger)
 			recoverClaudeInputForce(ctx, st, hc, instanceID, gate, res, logger)
+			recordClaudeTurnEnd(ctx, st, turnEnd, logger)
 			resignalClaudeWake(ctx, st, hc, instanceID, gate, res, logger)
 		}
 	}

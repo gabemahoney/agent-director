@@ -23,7 +23,10 @@ import (
 // naming the hook, the text with two closing tags escaped, and a fixed
 // suffix. AD's own UserPromptSubmit hook sees the wrapped prompt; undoing the
 // wrapping exactly gives the take evidence SR-3.3 needs
-// (recordClaudeSighting). No marker, nonce or id is ever added to the text.
+// (recordClaudeSighting). Input issued into a running turn at a tool boundary
+// is seen by no such hook: the parent Stop ending that turn is its take
+// evidence instead (recordClaudeTurnEnd). No marker, nonce or id is ever
+// added to the text.
 // A force (SR-3.4, SR-4.2) takes the same wake: while its call runs, each
 // wake issues at most its one frozen prompt that may issue now, and the same
 // sighting is that prompt's admission. The force's call alone touches the
@@ -169,6 +172,73 @@ func writeClaudeWatchPath(ctx context.Context, stdout io.Writer, st HookStore, h
 		ParentPID: gate.ParentPID, ParentStart: gate.ParentStart, Deadline: hc.clock()().Add(claudeStartupWakeBudget)}
 	if err := hc.ScheduleClaudeStartupWake(job); err != nil {
 		logf(logger, "hook: schedule busy-send startup wake (instance=%s): %v", instanceID, err)
+	}
+}
+
+// busySendTurnEnder is the store's turn-end take evidence: its entry read
+// (store.Store ReadBusySendTurnEndPrompts) and its write
+// (RecordBusySendTurnEnd). A store without it records none.
+type busySendTurnEnder interface {
+	ReadBusySendTurnEndPrompts(context.Context, store.BusySendTurnEnd) ([]store.BusySendTurnEndPrompt, error)
+	RecordBusySendTurnEnd(context.Context, store.BusySendTurnEnd) (store.BusySendTurnEndResult, error)
+}
+
+// readClaudeTurnEnd is an owned parent Claude Stop's entry read for its take
+// evidence (SR-3.3; E4 Main Agent decisions 1 and 2), made before that
+// Stop's own gated write and any wait on another writer. Only a Stop with no
+// agent_id and a consistent payload session, for the hook's gate in the
+// current covered Launch (claudeRouteFacts), reads it, and only while some
+// issued input of that Launch awaits evidence; a subagent's or background
+// callback, a SubagentStop, a Notification or any other event never does.
+// observed is the hook's start (Handle's start), captured before any store
+// call. The read returns the tool-boundary prompts whose completion was
+// committed before its SQLite snapshot, with an output observation strictly
+// before observed (store.ReadBusySendTurnEndPrompts): a completion that
+// commits after the snapshot never counts at this Stop, while the time
+// comparison relies on the wall clock, which a step can misorder. It returns
+// nil when there is nothing to record; a failed read is logged and supplies
+// no evidence.
+func readClaudeTurnEnd(ctx context.Context, st HookStore, instanceID string, gate store.HookGate, res ClassifyResult,
+	observed time.Time, logger *log.Logger) *store.BusySendTurnEnd {
+	if res.Agent != store.AgentClaude || res.EventName != EventNameStop || res.AgentID != "" || res.UnknownEvent {
+		return nil
+	}
+	s, ok := st.(busySendTurnEnder)
+	if !ok {
+		return nil
+	}
+	f, ok := claudeRouteFacts(ctx, st, instanceID, gate, res, logger)
+	if !ok || f.Awaiting == 0 {
+		return nil
+	}
+	te := store.BusySendTurnEnd{InstanceID: instanceID, Gate: gate, Destination: f.Destination, At: observed}
+	prompts, err := s.ReadBusySendTurnEndPrompts(ctx, te)
+	if err != nil {
+		logf(logger, "hook: busy-send turn end read (instance=%s): %v", instanceID, err)
+		return nil
+	}
+	if len(prompts) == 0 {
+		return nil
+	}
+	te.Prompts = prompts
+	return &te
+}
+
+// recordClaudeTurnEnd records te, a parent Claude Stop's entry read
+// (readClaudeTurnEnd), as take evidence after that Stop's own gated write
+// applied and before resignalClaudeWake reads the awaiting count. The store
+// revalidates the gate and destination in its own transaction and admits
+// only te's prompts still at their entry revision. A nil te records nothing.
+// It is fail-open: it writes nothing to stdout, carries no continuation,
+// permission decision or force authority, and a failure is logged and
+// supplies no evidence.
+func recordClaudeTurnEnd(ctx context.Context, st HookStore, te *store.BusySendTurnEnd, logger *log.Logger) {
+	s, ok := st.(busySendTurnEnder)
+	if te == nil || !ok {
+		return
+	}
+	if _, err := s.RecordBusySendTurnEnd(ctx, *te); err != nil {
+		logf(logger, "hook: busy-send turn end (instance=%s): %v", te.InstanceID, err)
 	}
 }
 

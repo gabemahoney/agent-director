@@ -1,9 +1,9 @@
 package store_test
 
 // The inbox's claim and prompt partition (Task t2.xis.oo.xe; SR-2.1 to
-// SR-2.3, M1's Claim), on real SQLite through ClaimBusySendHandover. The
-// helpers here are this Task's store-test assembly, shared with
-// busy_send_emission_test.go. Packing and limit arithmetic are E4's; the
+// SR-2.3, M1's Claim), on real SQLite through ClaimBusySendHandover, with
+// E4's packing and limit arithmetic for both offered Send Modes (Task
+// t2.xis.wm.o7). The helpers here are the store tests' shared assembly; the
 // coordinator's use of these steps is internal/busysend's.
 
 import (
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,19 +24,22 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // busySendInbox is a covered Claude agent with a route, its Messages Held in
 // order (the first confirmed under pair), and dest its current destination.
 // force is the running force whose hand-over commit issues under (forceClaim
-// sets it), nil for an ordinary hand-over.
+// sets it), nil for an ordinary hand-over. clock, when set, is the time its
+// issue commits and completions record (nil: now).
 type busySendInbox struct {
 	s        *store.Store
 	path, id string
 	pair     store.BusySendPair
 	dest     store.BusySendDestination
 	force    *store.BusySendForceRef
+	clock    *tmuxfix.Clock
 }
 
 func newBusySendInbox(t *testing.T, texts ...string) *busySendInbox {
@@ -66,6 +70,17 @@ func newBusySendInbox(t *testing.T, texts ...string) *busySendInbox {
 	return in
 }
 
+// admit admits each text as an unconfirmed Message in mode, Held behind the
+// inbox's earlier Messages.
+func (in *busySendInbox) admit(t *testing.T, mode store.BusySendMode, texts ...string) {
+	t.Helper()
+	for _, text := range texts {
+		if _, err := in.s.AdmitBusySend(store.BusySendAdmissionRequest{InstanceID: in.id, Text: []byte(text), SendMode: &mode}); err != nil {
+			t.Fatalf("admit %s %.40q: %v", mode, text, err)
+		}
+	}
+}
+
 // claimRequest is a turn-end claim for dest at at (zero: now) with a one-hour
 // issue budget inside a two-hour job.
 func (in *busySendInbox) claimRequest(at time.Time, race bool) store.BusySendClaimRequest {
@@ -73,12 +88,33 @@ func (in *busySendInbox) claimRequest(at time.Time, race bool) store.BusySendCla
 		RaceExposed: race, IssueBudget: time.Hour, JobBudget: 2 * time.Hour, At: at}
 }
 
+// steerRequest is claimRequest at a parent tool boundary of the running turn,
+// as Claude's PostToolBatch route claims: not race-exposed, under the Steer
+// Turn row's own measure.
+func (in *busySendInbox) steerRequest(at time.Time) store.BusySendClaimRequest {
+	req := in.claimRequest(at, false)
+	req.Boundary = store.BusySendBoundaryToolBoundary
+	return req
+}
+
 // claim claims as claimRequest and requires a new hand-over.
 func (in *busySendInbox) claim(t *testing.T, at time.Time, race bool) *store.BusySendHandover {
 	t.Helper()
-	c, err := in.s.ClaimBusySendHandover(context.Background(), in.claimRequest(at, race))
+	return in.claimed(t, in.claimRequest(at, race))
+}
+
+// steer claims as steerRequest and requires a new hand-over.
+func (in *busySendInbox) steer(t *testing.T, at time.Time) *store.BusySendHandover {
+	t.Helper()
+	return in.claimed(t, in.steerRequest(at))
+}
+
+// claimed claims req and requires a new hand-over.
+func (in *busySendInbox) claimed(t *testing.T, req store.BusySendClaimRequest) *store.BusySendHandover {
+	t.Helper()
+	c, err := in.s.ClaimBusySendHandover(context.Background(), req)
 	if err != nil || c.Outcome != store.BusySendClaimMade {
-		t.Fatalf("claim %+v, %v; want a new hand-over", c, err)
+		t.Fatalf("claim at %s %+v, %v; want a new hand-over", req.Boundary, c, err)
 	}
 	return c.Handover
 }
@@ -86,10 +122,19 @@ func (in *busySendInbox) claim(t *testing.T, at time.Time, race bool) *store.Bus
 // busySendHelper is the issuing hook's identity every issue records.
 var busySendHelper = store.BusySendIssuer{Role: store.BusySendProcessHelper, PID: 4242, StartTime: "100"}
 
+// now is in's clock, nil for the wall clock.
+func (in *busySendInbox) now() func() time.Time {
+	if in.clock == nil {
+		return nil
+	}
+	return in.clock.Now
+}
+
 func (in *busySendInbox) commit(ctx context.Context, h *store.BusySendHandover, k int, revision int64) (store.BusySendIssue, error) {
 	issuer := busySendHelper
 	return in.s.CommitBusySendIssue(ctx, store.BusySendIssueRequest{
-		Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, PromptIndex: k, Revision: revision}, Force: in.force, Issuer: &issuer})
+		Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, PromptIndex: k, Revision: revision}, Force: in.force, Issuer: &issuer,
+		Now: in.now()})
 }
 
 // issue commits prompt k's issue at revision and requires it to pass.
@@ -102,13 +147,17 @@ func (in *busySendInbox) issue(t *testing.T, h *store.BusySendHandover, k int, r
 	return got
 }
 
-// complete records the issuing job's completion for prompt k.
+// complete records the issuing job's completion for prompt k, at in's clock.
 func (in *busySendInbox) complete(t *testing.T, h *store.BusySendHandover, k int, revision int64, out store.BusySendOutput,
 	order store.BusySendOrderKind, unproven bool) store.BusySendCompletionResult {
 	t.Helper()
+	var at time.Time
+	if in.clock != nil {
+		at = in.clock.Now()
+	}
 	res, err := in.s.RecordBusySendCompletion(context.Background(), store.BusySendCompletion{
 		Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, PromptIndex: k, Revision: revision}, Output: out, Order: order,
-		UnprovenBoundary: unproven})
+		UnprovenBoundary: unproven, At: at})
 	if err != nil {
 		t.Fatalf("completion %s of prompt %d: %v", out, k, err)
 	}
@@ -269,89 +318,192 @@ func setBusySendFact(t *testing.T, path, query string, args ...any) {
 	}
 }
 
-// TestBusySendPartitionPrompts: the one renderer and partitioner pack whole
-// Messages, in order, into the longest prefix whose complete measured prompt
-// fits the published Claude Wait Turn limits (SR-2.3): each body is its
-// separator line with local N of M and the original bytes, Messages joined by
-// LF LF; a two-digit M is counted (under explicit local limits); sizes derive
-// from the table's limits; the route's measure, not the table's
-// wrapper budget alone, decides a fit; a Message at the text limit fits alone
-// exactly; a route wrapper over the budget leaves it unfit; and a measure
-// below the body is an error.
+// busySendRoute is how a published Claude Send Mode's route delivers a prompt,
+// counted by hand from what the agent receives rather than by the table's
+// measure (SR-1.6): the wake's fixed text around the body at turn end and
+// none at a parent tool boundary, and the bytes each reserved tag grows by
+// where Claude escapes it (Research b.p8z / t1.p8z.9e for the wake; b.87a /
+// t1.87a.12 P6 for PostToolBatch additionalContext, where both reminder tags
+// were escaped). The hook output's JSON quoting is never what the agent gets.
+type busySendRoute struct {
+	mode  store.BusySendMode
+	fixed int64
+	grows map[string]int
+}
+
+var busySendRoutes = []busySendRoute{
+	{store.BusySendWaitTurn, 169, map[string]int{"</system-reminder>": 3, "</task-notification>": 1}},
+	{store.BusySendSteerTurn, 0, map[string]int{"<system-reminder>": 3, "</system-reminder>": 3}},
+}
+
+// rendered is the complete size of the prompt carrying texts (SR-2.3): each
+// separator with local N of M and the text, LF LF between Messages, the fixed
+// text and each escaped tag's growth.
+func (r busySendRoute) rendered(texts ...string) int64 {
+	n := r.fixed + int64(2*(len(texts)-1))
+	for i, s := range texts {
+		n += int64(len(fmt.Sprintf("[agent-director: message %d of %d]\n", i+1, len(texts))) + len(s))
+		for tag, grows := range r.grows {
+			n += int64(strings.Count(s, tag) * grows)
+		}
+	}
+	return n
+}
+
+// busySendBody is the body of the prompt carrying texts, written by hand:
+// each separator line, then the original bytes, LF LF between Messages.
+func busySendBody(texts ...string) string {
+	var b strings.Builder
+	for i, s := range texts {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "[agent-director: message %d of %d]\n%s", i+1, len(texts), s)
+	}
+	return b.String()
+}
+
+// busySendFill is n bytes of one- to four-byte characters with no tag.
+func busySendFill(n int) string {
+	return strings.Repeat("é🙂漢abc", n/12) + strings.Repeat("a", n%12)
+}
+
+// busySendCorpus is the PRD's 1,900-byte multi-line Unicode Message with
+// markup-like tags, made as Research b.87a / t1.87a.12 P6's steer case was:
+// its first lines, then mixed characters. Its one opening and one closing
+// reminder tag grew Claude's PostToolBatch additionalContext by 6 bytes.
+var busySendCorpus = func() string {
+	head := "line-one\n<system-reminder>literal</system-reminder>\n<note>α🙂漢é</note>\n"
+	return head + busySendFill(1900-len(head))
+}()
+
+// busySendTagText is a Message at the 8,000-byte text limit made of tag, the
+// most a route that escapes tag can grow a valid Message.
+func busySendTagText(tag string) string {
+	return strings.Repeat(tag, 8000/len(tag)) + strings.Repeat("x", 8000%len(tag))
+}
+
+// TestBusySendPartitionPrompts (SR-1.6, SR-2.3; M1's during-coding packing and
+// limit arithmetic, Model Doc t1.kii.91 "Not here (during-coding)", E2 decision
+// 2): the one renderer and partitioner pack whole Messages, in order, into the
+// fewest prompts, each the longest prefix that fits Claude's published
+// 9,600-byte prompt, in both offered modes under each mode's own measure: Wait
+// Turn's wake text and escapes, Steer Turn's escaping of both reminder tags
+// with no wrapper. Expected sizes and bodies are counted by hand
+// (busySendRoute, busySendBody): separator lines with local N of M, the
+// original bytes, LF LF between Messages. One byte under and exactly at the
+// limit fit one prompt and one byte over moves the last Message to the next,
+// for two Messages and across the separators' 9-to-10 and 99-to-100 digit
+// growth. Five of the research corpus pack four and one. A Message at the
+// 8,000-byte text limit fits alone even made of the tag a mode escapes most.
+// Under a route's explicit measure, that measure, not the table's wrapper
+// budget alone, decides a fit; a route wrapper over the budget leaves a
+// maximum-size Message unfit; and a measure below the body is an error.
 func TestBusySendPartitionPrompts(t *testing.T) {
 	t.Parallel()
-	limits, ok := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
-	if !ok {
-		t.Fatal("Claude offers no Wait Turn")
+	partition := func(texts []string, limits store.BusySendModeLimits, measure store.BusySendPromptMeasure) ([]store.BusySendPromptPart, error) {
+		b := make([][]byte, len(texts))
+		for i, s := range texts {
+			b[i] = []byte(s)
+		}
+		return store.PartitionBusySendPrompts(b, limits, measure)
 	}
+	letters := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = string(rune('a' + i%26))
+		}
+		return out
+	}
+	shapes := []struct {
+		name  string
+		texts []string // the first grows to put the prompt at the limit
+	}{
+		{"two Messages", []string{"", busySendCorpus}},
+		{"ten Messages", append([]string{"", "[agent-director: message 9 of 9]\n<system-reminder>not a separator</system-reminder>"},
+			slices.Repeat([]string{busySendFill(300)}, 8)...)},
+		{"a hundred Messages", append([]string{"", "</system-reminder>"}, letters(98)...)},
+	}
+	for _, route := range busySendRoutes {
+		limits, ok := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(route.mode)
+		if !ok || limits.MessageBytes != 8000 || limits.PromptBytes != 9600 || limits.TextKind != store.BusySendTextUTF8TabLF {
+			t.Fatalf("Claude's %s %+v, offered %t; want 8,000-byte Messages in 9,600-byte prompts of utf8_tab_lf", route.mode, limits, ok)
+		}
+		type packing struct {
+			name   string
+			texts  []string
+			counts []int // Messages per prompt, in order
+		}
+		var cases []packing
+		for _, over := range []int64{-1, 0, 1} {
+			for _, shape := range shapes {
+				texts := slices.Clone(shape.texts)
+				texts[0] = busySendFill(int(9600 + over - route.rendered(texts...)))
+				counts := []int{len(texts)}
+				if over > 0 {
+					counts = []int{len(texts) - 1, 1}
+				}
+				cases = append(cases, packing{fmt.Sprintf("%s at the limit %+d", shape.name, over), texts, counts})
+			}
+		}
+		cases = append(cases,
+			packing{"five research corpus Messages", slices.Repeat([]string{busySendCorpus}, 5), []int{4, 1}},
+			packing{"each tag's most escaping at the text limit", []string{busySendTagText("<system-reminder>"),
+				busySendTagText("</system-reminder>")}, []int{1, 1}})
+		for _, tc := range cases {
+			t.Run(string(route.mode)+"/"+tc.name, func(t *testing.T) {
+				var want []store.BusySendPromptPart
+				first := 0
+				for _, n := range tc.counts {
+					want = append(want, store.BusySendPromptPart{First: first, Count: n, RenderedBytes: route.rendered(tc.texts[first : first+n]...)})
+					first += n
+				}
+				got, err := partition(tc.texts, limits, nil)
+				if err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("partition %+v, %v; want %+v", got, err, want)
+				}
+				for _, p := range got {
+					part := tc.texts[p.First : p.First+p.Count]
+					b := make([][]byte, len(part))
+					for i, s := range part {
+						b[i] = []byte(s)
+					}
+					if body := string(store.RenderBusySendPromptBody(b)); body != busySendBody(part...) {
+						t.Errorf("prompt of Messages %d to %d: body %.200q; want %.200q", p.First, p.First+p.Count-1, body, busySendBody(part...))
+					}
+				}
+			})
+		}
+	}
+
+	limits, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
 	wrapped := func(n int64) store.BusySendPromptMeasure { return func(b []byte) int64 { return int64(len(b)) + n } }
-	// budget measures the table's whole wrapper budget, which the arithmetic
-	// below is built on; a nil measure is Claude's exact wrapping instead.
-	budget := wrapped(limits.WrapperBytes)
 	sep1, sep2 := int64(len("[agent-director: message 1 of 1]\n")), int64(len("[agent-director: message 1 of 2]\n"))
-	largest := strings.Repeat("m", int(limits.MessageBytes))
 	// Two Messages of half bytes fill one prompt under the table's wrapper
 	// budget; a route wrapper one byte larger than that leaves no room for both.
 	half := (limits.PromptBytes - limits.WrapperBytes - 2*sep2 - 2) / 2
 	both := 2*sep2 + 2 + 2*half
 	over := limits.PromptBytes - both + 1
-	// The decimal-width case has its own limits: nine 10-byte Messages render
-	// 403 bytes; a tenth of 55 needs 504 with two-digit M, 493 without.
-	local := store.BusySendModeLimits{Mode: store.BusySendWaitTurn, MessageBytes: 100, PromptBytes: 500, TextKind: store.BusySendTextUTF8TabLF}
-	nine := make([]string, 9)
-	for i := range nine {
-		nine[i] = strings.Repeat("n", 10)
-	}
-	tagged := "[agent-director: message 1 of 2]\ncafé 🌍\tTAB\nand LF\n\n[agent-director: message 2 of 2]\n[agent-director: message 9 of 9]\nnot a separator"
-	ten := "[agent-director: message 1 of 10]\na\n\n[agent-director: message 2 of 10]\nb\n\n" +
-		"[agent-director: message 3 of 10]\nc\n\n[agent-director: message 4 of 10]\nd\n\n" +
-		"[agent-director: message 5 of 10]\ne\n\n[agent-director: message 6 of 10]\nf\n\n" +
-		"[agent-director: message 7 of 10]\ng\n\n[agent-director: message 8 of 10]\nh\n\n" +
-		"[agent-director: message 9 of 10]\ni\n\n[agent-director: message 10 of 10]\nj"
 	for _, tc := range []struct {
 		name    string
-		limits  *store.BusySendModeLimits // nil: Claude's published Wait Turn
 		texts   []string
 		measure store.BusySendPromptMeasure
 		want    []store.BusySendPromptPart
-		body    string // the first prompt's exact body, when given
 		wantErr func(error) bool
 	}{
-		{name: "whole bodies, local N of M", texts: []string{"café 🌍\tTAB\nand LF", "[agent-director: message 9 of 9]\nnot a separator"},
-			measure: budget, want: []store.BusySendPromptPart{{First: 0, Count: 2, RenderedBytes: int64(len(tagged)) + limits.WrapperBytes}}, body: tagged},
 		{name: "the table's wrapper budget fits two", texts: []string{strings.Repeat("a", int(half)), strings.Repeat("b", int(half))},
-			measure: budget, want: []store.BusySendPromptPart{{First: 0, Count: 2, RenderedBytes: both + limits.WrapperBytes}}},
+			measure: wrapped(limits.WrapperBytes), want: []store.BusySendPromptPart{{First: 0, Count: 2, RenderedBytes: both + limits.WrapperBytes}}},
 		{name: "the route's larger wrapper splits them", texts: []string{strings.Repeat("a", int(half)), strings.Repeat("b", int(half))},
 			measure: wrapped(over), want: []store.BusySendPromptPart{{First: 0, Count: 1, RenderedBytes: sep1 + half + over},
 				{First: 1, Count: 1, RenderedBytes: sep1 + half + over}}},
-		// R2-4: a nil measure is the table's exact one, Claude's fixed
-		// wrapping plus a reserved closing tag counted escaped.
-		{name: "a nil measure is the table's exact one", texts: []string{"</system-reminder>"},
-			want: []store.BusySendPromptPart{{First: 0, Count: 1,
-				RenderedBytes: sep1 + int64(len("&lt;/system-reminder>")) + limits.Measure(nil)}}},
-		{name: "a two-digit M is counted", limits: &local, texts: append(nine, strings.Repeat("x", 55)),
-			want: []store.BusySendPromptPart{{First: 0, Count: 9, RenderedBytes: 403}, {First: 9, Count: 1, RenderedBytes: 88}}},
-		{name: "ten Messages in one prompt", texts: strings.Split("abcdefghij", ""),
-			measure: budget, want: []store.BusySendPromptPart{{First: 0, Count: 10, RenderedBytes: int64(len(ten)) + limits.WrapperBytes}}, body: ten},
-		{name: "a maximum-size Message alone, then the longest prefix", texts: []string{largest, "x", "y"},
-			measure: budget, want: []store.BusySendPromptPart{{First: 0, Count: 1, RenderedBytes: sep1 + limits.MessageBytes + limits.WrapperBytes},
-				{First: 1, Count: 2, RenderedBytes: 2*sep2 + 2 + 2 + limits.WrapperBytes}}},
-		{name: "a route wrapper leaving no room for a maximum-size Message", texts: []string{largest},
+		{name: "a route wrapper leaving no room for a maximum-size Message", texts: []string{strings.Repeat("m", int(limits.MessageBytes))},
 			measure: wrapped(limits.PromptBytes - sep1 - limits.MessageBytes + 1),
 			wantErr: func(err error) bool { return errors.Is(err, store.ErrBusySendPromptUnfit) }},
 		{name: "a measure below the body", texts: []string{"x"}, measure: func(b []byte) int64 { return int64(len(b)) - 1 },
 			wantErr: func(err error) bool { return err != nil && !errors.Is(err, store.ErrBusySendPromptUnfit) }},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			texts := make([][]byte, len(tc.texts))
-			for i, s := range tc.texts {
-				texts[i] = []byte(s)
-			}
-			lim := limits
-			if tc.limits != nil {
-				lim = *tc.limits
-			}
-			got, err := store.PartitionBusySendPrompts(texts, lim, tc.measure)
+		t.Run("route measure/"+tc.name, func(t *testing.T) {
+			got, err := partition(tc.texts, limits, tc.measure)
 			if tc.wantErr != nil {
 				if !tc.wantErr(err) || got != nil {
 					t.Fatalf("partition %+v, %v; want the error", got, err)
@@ -361,120 +513,163 @@ func TestBusySendPartitionPrompts(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("partition %+v, %v; want %+v", got, err, tc.want)
 			}
-			if body := store.RenderBusySendPromptBody(texts[:got[0].Count]); tc.body != "" && string(body) != tc.body {
-				t.Errorf("first prompt body %q; want %q", body, tc.body)
-			}
 		})
 	}
 }
 
 // TestBusySendClaimFreezesPrefixAtCutoff (SR-2.2, SR-2.3; M1 Claim): a claim
-// freezes every Held Message at its accepted cutoff into one hand-over that
-// owns the conversation, partitioned under the route's measure with the exact
-// bodies, the Messages claimed with their reservations kept. An admission
-// that commits while the claim holds its write transaction (a causal barrier
-// at the hand-over insert) takes the next sequence and stays Held outside the
-// group; it neither joins nor stales it, so the owner still issues. A repeated
-// eligible event finds the owner and changes nothing. A reopened store reads
-// the same frozen partition, byte for byte.
+// freezes the eligible Held prefix at its accepted cutoff into one hand-over
+// that owns the conversation, partitioned under the route's measure with the
+// exact bodies, the Messages claimed with their reservations kept: every Held
+// Message at turn end; at a working agent's parent tool boundary only the
+// Steer Turn Messages before the first Wait Turn Message, under the Steer Turn
+// row's own measure, leaving that Wait Turn Message and every later one Held.
+// An admission that commits while the claim holds its write transaction (a
+// causal barrier at the hand-over insert) takes the next sequence and stays
+// Held outside the group; it neither joins nor stales it, so the owner still
+// issues. A repeated eligible event finds the owner and changes nothing. A
+// reopened store reads the same frozen partition, byte for byte. A Wait Turn
+// Message first leaves a tool boundary nothing to claim, and nothing changes.
 func TestBusySendClaimFreezesPrefixAtCutoff(t *testing.T) {
 	t.Parallel()
 	limits, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
-	texts := []string{"café 🌍\tTAB\nand LF", "[agent-director: message 1 of 1]\na tag in the text", strings.Repeat("z", int(limits.MessageBytes))}
-	// The route's wrapper, one byte under the table's budget, fits the
-	// maximum-size third Message alone but not after the first two.
+	texts := []string{"café 🌍\tTAB\nand LF <system-reminder>kept</system-reminder>", "[agent-director: message 1 of 1]\na tag in the text",
+		busySendTagText("<system-reminder>")}
+	// At turn end the route's wrapper, one byte under the table's budget, fits
+	// the maximum-size third Message alone but not after the first two; at a
+	// tool boundary Steer Turn's escaping of its tags does the same.
 	wrapper := limits.WrapperBytes - 1
-	in := newBusySendInbox(t, texts...)
-	rival, err := store.Open(in.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = rival.Close() })
-	holding, release, begun := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	var holdOnce, releaseOnce, begunOnce sync.Once
-	store.ObserveDecisionBoundaryForTest(t, in.s, in.path, func(_ context.Context, q string) error {
-		if strings.Contains(q, "INSERT INTO busy_send_handovers") {
-			holdOnce.Do(func() { close(holding); <-release })
-		}
-		return nil
-	}, nil)
-	store.ObserveDecisionBoundaryForTest(t, rival, in.path, func(_ context.Context, q string) error {
-		if q == "BEGIN IMMEDIATE" {
-			begunOnce.Do(func() { close(begun) })
-		}
-		return nil
-	}, nil)
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	t.Cleanup(unblock)
-	req := in.claimRequest(time.Time{}, false)
-	req.Measure = func(b []byte) int64 { return int64(len(b)) + wrapper }
-	type claimed struct {
-		c   store.BusySendClaim
-		err error
-	}
-	claimDone, admitDone := make(chan claimed, 1), make(chan error, 1)
-	go func() { c, err := in.s.ClaimBusySendHandover(context.Background(), req); claimDone <- claimed{c, err} }()
-	awaitSignal(t, holding, "the claim's hand-over insert")
-	go func() {
-		_, err := rival.AdmitBusySend(store.BusySendAdmissionRequest{InstanceID: in.id, Text: []byte("late")})
-		admitDone <- err
-	}()
-	awaitSignal(t, begun, "the late admission's BEGIN IMMEDIATE")
-	unblock()
-	var got claimed
-	select {
-	case got = <-claimDone:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the claim did not return within 10 s of the barrier's release")
-	}
-	select {
-	case err := <-admitDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the late admission did not return within 10 s of the barrier's release")
-	}
-	if got.err != nil || got.c.Outcome != store.BusySendClaimMade {
-		t.Fatalf("claim %+v, %v; want a new hand-over", got.c, got.err)
-	}
-	h := got.c.Handover
-	held := wantBusySendCustody(t, in.path, in.id,
-		"claimed held handover_in_progress reserved member", "claimed held handover_in_progress reserved member",
-		"claimed held handover_in_progress reserved member", "held held handover_in_progress reserved")
-	first := "[agent-director: message 1 of 2]\n" + texts[0] + "\n\n[agent-director: message 2 of 2]\n" + texts[1]
-	third := "[agent-director: message 1 of 1]\n" + texts[2]
-	want := []store.BusySendPrompt{
-		{Index: 0, MessageIDs: []string{held[0].id, held[1].id}, Body: []byte(first), RenderedBytes: int64(len(first)) + wrapper, Emission: store.BusySendEmissionNone},
-		{Index: 1, MessageIDs: []string{held[2].id}, Body: []byte(third), RenderedBytes: int64(len(third)) + wrapper, Emission: store.BusySendEmissionNone},
-	}
-	brief := func(ps []store.BusySendPrompt) (out []string) {
-		for _, p := range ps {
-			out = append(out, fmt.Sprintf("%d %v %d bytes %s %q", p.Index, p.MessageIDs, p.RenderedBytes, p.Emission, p.Body[:min(len(p.Body), 120)]))
-		}
-		return out
-	}
-	if h.CutoffSeq != 3 || h.HandoverSeq != 1 || h.Destination != in.dest || !h.Open || h.PromptCursor != 0 || !reflect.DeepEqual(h.Prompts, want) {
-		t.Fatalf("hand-over %d cutoff %d at %+v, open %t, cursor %d, prompts %q; want 1, cutoff 3, open at cursor 0 with %q",
-			h.HandoverSeq, h.CutoffSeq, h.Destination, h.Open, h.PromptCursor, brief(h.Prompts), brief(want))
-	}
+	for _, tc := range []struct {
+		name    string
+		mode    store.BusySendMode
+		request func(in *busySendInbox) store.BusySendClaimRequest
+		size    func(texts ...string) int64
+		behind  int // Messages Held behind the prefix: a Wait Turn one, then a Steer Turn one
+	}{
+		{"turn end", store.BusySendWaitTurn, func(in *busySendInbox) store.BusySendClaimRequest {
+			req := in.claimRequest(time.Time{}, false)
+			req.Measure = func(b []byte) int64 { return int64(len(b)) + wrapper }
+			return req
+		}, func(texts ...string) int64 { return int64(len(busySendBody(texts...))) + wrapper }, 0},
+		{"a working agent's tool boundary", store.BusySendSteerTurn, func(in *busySendInbox) store.BusySendClaimRequest {
+			return in.steerRequest(time.Time{})
+		}, busySendRoutes[1].rendered, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := newBusySendInbox(t)
+			in.admit(t, tc.mode, texts...)
+			if tc.behind > 0 {
+				in.admit(t, store.BusySendWaitTurn, "a Wait Turn Message")
+				in.admit(t, store.BusySendSteerTurn, "a later Steer Turn Message")
+				setBusySendFact(t, in.path, `UPDATE spawns SET state = 'working' WHERE instance_id = ?`, in.id)
+			}
+			rival, err := store.Open(in.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = rival.Close() })
+			holding, release, begun := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var holdOnce, releaseOnce, begunOnce sync.Once
+			store.ObserveDecisionBoundaryForTest(t, in.s, in.path, func(_ context.Context, q string) error {
+				if strings.Contains(q, "INSERT INTO busy_send_handovers") {
+					holdOnce.Do(func() { close(holding); <-release })
+				}
+				return nil
+			}, nil)
+			store.ObserveDecisionBoundaryForTest(t, rival, in.path, func(_ context.Context, q string) error {
+				if q == "BEGIN IMMEDIATE" {
+					begunOnce.Do(func() { close(begun) })
+				}
+				return nil
+			}, nil)
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(unblock)
+			req := tc.request(in)
+			type claimed struct {
+				c   store.BusySendClaim
+				err error
+			}
+			claimDone, admitDone := make(chan claimed, 1), make(chan error, 1)
+			go func() { c, err := in.s.ClaimBusySendHandover(context.Background(), req); claimDone <- claimed{c, err} }()
+			awaitSignal(t, holding, "the claim's hand-over insert")
+			go func() {
+				_, err := rival.AdmitBusySend(store.BusySendAdmissionRequest{InstanceID: in.id, Text: []byte("late"), SendMode: &tc.mode})
+				admitDone <- err
+			}()
+			awaitSignal(t, begun, "the late admission's BEGIN IMMEDIATE")
+			unblock()
+			var got claimed
+			select {
+			case got = <-claimDone:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the claim did not return within 10 s of the barrier's release")
+			}
+			select {
+			case err := <-admitDone:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the late admission did not return within 10 s of the barrier's release")
+			}
+			if got.err != nil || got.c.Outcome != store.BusySendClaimMade {
+				t.Fatalf("claim %+v, %v; want a new hand-over", got.c, got.err)
+			}
+			h := got.c.Handover
+			custody := slices.Repeat([]string{"claimed held handover_in_progress reserved member"}, 3)
+			custody = append(custody, slices.Repeat([]string{"held held handover_in_progress reserved"}, tc.behind+1)...)
+			held := wantBusySendCustody(t, in.path, in.id, custody...)
+			want := []store.BusySendPrompt{
+				{Index: 0, MessageIDs: []string{held[0].id, held[1].id}, Body: []byte(busySendBody(texts[0], texts[1])),
+					RenderedBytes: tc.size(texts[0], texts[1]), Emission: store.BusySendEmissionNone},
+				{Index: 1, MessageIDs: []string{held[2].id}, Body: []byte(busySendBody(texts[2])), RenderedBytes: tc.size(texts[2]),
+					Emission: store.BusySendEmissionNone},
+			}
+			brief := func(ps []store.BusySendPrompt) (out []string) {
+				for _, p := range ps {
+					out = append(out, fmt.Sprintf("%d %v %d bytes %s %q", p.Index, p.MessageIDs, p.RenderedBytes, p.Emission, p.Body[:min(len(p.Body), 120)]))
+				}
+				return out
+			}
+			if h.CutoffSeq != 3 || h.HandoverSeq != 1 || h.Boundary != req.Boundary || h.Destination != in.dest || !h.Open ||
+				h.PromptCursor != 0 || !reflect.DeepEqual(h.Prompts, want) {
+				t.Fatalf("hand-over %d at %s cutoff %d at %+v, open %t, cursor %d, prompts %q; want 1 at %s, cutoff 3, open at cursor 0 with %q",
+					h.HandoverSeq, h.Boundary, h.CutoffSeq, h.Destination, h.Open, h.PromptCursor, brief(h.Prompts), req.Boundary, brief(want))
+			}
 
-	before := readBusySendTables(t, in.path)
-	again, err := in.s.ClaimBusySendHandover(context.Background(), in.claimRequest(time.Time{}, false))
-	if err != nil || again.Outcome != store.BusySendClaimOwned || again.Wait != store.BusySendWaitHandoverInProgress ||
-		again.Handover != nil || again.ReleasedExpired != 0 {
-		t.Errorf("repeated event %+v, %v; want owned, waiting handover_in_progress", again, err)
-	}
-	if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
-		t.Error("a repeated event changed the inbox")
-	}
+			before := readBusySendTables(t, in.path)
+			again, err := in.s.ClaimBusySendHandover(context.Background(), tc.request(in))
+			if err != nil || again.Outcome != store.BusySendClaimOwned || again.Wait != store.BusySendWaitHandoverInProgress ||
+				again.Handover != nil || again.ReleasedExpired != 0 {
+				t.Errorf("repeated event %+v, %v; want owned, waiting handover_in_progress", again, err)
+			}
+			if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+				t.Error("a repeated event changed the inbox")
+			}
 
-	in.reopen(t)
-	read, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
-	if err != nil || !reflect.DeepEqual(read, *h) {
-		t.Fatalf("reopened hand-over %+v, %v; want %+v", read, err, *h)
+			in.reopen(t)
+			read, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+			if err != nil || !reflect.DeepEqual(read, *h) {
+				t.Fatalf("reopened hand-over %+v, %v; want %+v", read, err, *h)
+			}
+			in.issue(t, h, 0, h.Revision)
+			if tc.behind == 0 {
+				return
+			}
+
+			lead := newBusySendInbox(t, "a Wait Turn Message first")
+			lead.admit(t, store.BusySendSteerTurn, "then a Steer Turn Message")
+			before = readBusySendTables(t, lead.path)
+			if c, err := lead.s.ClaimBusySendHandover(context.Background(), lead.steerRequest(time.Time{})); err != nil ||
+				c.Outcome != store.BusySendClaimEmpty || c.Handover != nil {
+				t.Errorf("tool-boundary claim behind a Wait Turn Message %+v, %v; want empty", c, err)
+			}
+			if !reflect.DeepEqual(before, readBusySendTables(t, lead.path)) {
+				t.Error("an empty tool-boundary claim changed the inbox")
+			}
+		})
 	}
-	in.issue(t, h, 0, h.Revision)
 }
 
 // TestBusySendClaimRefusals (SR-2.2): an event for another session, an

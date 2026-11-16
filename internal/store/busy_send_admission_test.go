@@ -247,6 +247,57 @@ func TestBusySendAdmissionHoldsCustody(t *testing.T) {
 	}
 }
 
+// TestBusySendAdmissionByteLimits (SR-1.6; M1's during-coding limit
+// arithmetic, Model Doc t1.kii.91): in either Send Mode Claude offers, a
+// Message of 7,999 or 8,000 bytes is admitted, and so is one of 8,000 bytes
+// made of the reserved tag either mode escapes most, which still fits a
+// prompt alone (no prompt_size refusal); 8,001 bytes is refused text_bytes at
+// the published 8,000 and changes nothing. Each Message is Held with its exact
+// bytes and mode. A turn-end claim, which any Held Message can wait for (a
+// Steer Turn one Held until turn end included), gives each its own Wait Turn
+// prompt under Wait Turn's measure.
+func TestBusySendAdmissionByteLimits(t *testing.T) {
+	t.Parallel()
+	texts := []string{busySendFill(7999), strings.Repeat("é", 4000), busySendTagText("<system-reminder>"), busySendTagText("</system-reminder>")}
+	for _, mode := range []store.BusySendMode{store.BusySendWaitTurn, store.BusySendSteerTurn} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			in := newBusySendInbox(t)
+			before := readAdmissionInbox(t, in.path, in.id)
+			_, err := in.s.AdmitBusySend(store.BusySendAdmissionRequest{InstanceID: in.id, Text: []byte(texts[1] + "x"), SendMode: &mode})
+			var refusal *store.BusySendRefusal
+			if !errors.As(err, &refusal) || refusal.Reason != store.BusySendRefuseTextBytes ||
+				!reflect.DeepEqual(refusal.Limit, &store.BusySendLimit{Actual: 8001, Allowed: 8000}) {
+				t.Fatalf("8,001 bytes: %v; want text_bytes at 8,000", err)
+			}
+			if after := readAdmissionInbox(t, in.path, in.id); after != before {
+				t.Fatalf("inbox %+v after the refusal; want it unchanged at %+v", after, before)
+			}
+			in.admit(t, mode, texts...)
+			stored := readStoredMessages(t, in.path, in.id)
+			if len(stored) != len(texts) {
+				t.Fatalf("%d Messages stored; want %d", len(stored), len(texts))
+			}
+			for i, m := range stored {
+				if m.mode != string(mode) || string(m.text) != texts[i] || m.size != int64(len(texts[i])) || m.place != "held" || !m.reserved {
+					t.Errorf("Message %d: %s, %d bytes, %s, reserved %t; want %s, its %d exact bytes, Held and reserved",
+						i+1, m.mode, m.size, m.place, m.reserved, mode, len(texts[i]))
+				}
+			}
+			h := in.claim(t, time.Time{}, false)
+			if len(h.Prompts) != len(texts) {
+				t.Fatalf("turn-end claim of %d prompts; want one per Message", len(h.Prompts))
+			}
+			for i, p := range h.Prompts {
+				if string(p.Body) != busySendBody(texts[i]) || p.RenderedBytes != busySendRoutes[0].rendered(texts[i]) {
+					t.Errorf("prompt %d: %d bytes rendering %d; want Message %d alone rendering %d", i, len(p.Body), p.RenderedBytes,
+						i+1, busySendRoutes[0].rendered(texts[i]))
+				}
+			}
+		})
+	}
+}
+
 // TestBusySendAdmissionArbitratesPairFirst: a confirmed pair is arbitrated
 // store-wide before any new-send check (SR-1.2). Pair replay: a repeat with
 // the same target and exact text bytes returns the owner's current Result,
@@ -282,7 +333,7 @@ func TestBusySendAdmissionArbitratesPairFirst(t *testing.T) {
 		limit        *store.BusySendLimit
 		notFound     bool
 	}{
-		{name: "same target and text with an unoffered Send Mode", target: id, text: text, pair: pair, mode: &steer},
+		{name: "same target and text with the other Send Mode", target: id, text: text, pair: pair, mode: &steer},
 		{name: "text one byte longer", target: id, text: text + " ", pair: pair, want: store.BusySendRefuseIDConflict},
 		{name: "another covered target", target: other, text: text, pair: pair, want: store.BusySendRefuseIDConflict},
 		{name: "a target with no row", target: "no-such-row", text: text, pair: pair, want: store.BusySendRefuseIDConflict},

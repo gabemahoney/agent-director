@@ -275,11 +275,14 @@ const (
 )
 
 // BusySendAdmissionKind is the qualified admission event recorded for a
-// prompt (busy_send_prompts.admission_kind; SR-4.3, SR-4.4, SR-4.5a):
+// prompt (busy_send_prompts.admission_kind; SR-3.3, SR-4.3, SR-4.4, SR-4.5a):
 // Claude's own UserPromptSubmit sighting of the exact prompt; Codex's
 // turn/start or turn/steer RPC success; Cursor's correlated session/prompt
-// response or a qualified earlier native signal; a Confirm From Transcripts
-// match; or an exact receipt, which also admits.
+// response; a native signal, the provider's own native event that, under a
+// qualified premise, shows AD's issued input was taken (for Claude, the
+// parent Stop that ends the turn a tool-boundary prompt's complete output
+// went into, under O4's turn-end premise; RecordBusySendTurnEnd); a Confirm
+// From Transcripts match; or an exact receipt, which also admits.
 type BusySendAdmissionKind string
 
 const (
