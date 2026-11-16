@@ -33,8 +33,10 @@ var execFormEvents = map[string]bool{
 // exec-form agent-director hook for exe; SessionStart also carries the
 // shell-form help entry wantHelp (exactly {type, command}, no timeout) when
 // it is non-empty. A covered Claude Launch (covered; SR-3.4) also has exactly
-// busy send's owned wake: one FileChanged entry, exec form with asyncRewake,
-// no matcher and no timeout; an uncovered one has no FileChanged at all.
+// busy send's owned wake, one FileChanged entry, exec form with asyncRewake,
+// no matcher and no timeout, and its owned steer, one PostToolBatch entry,
+// exec form with no asyncRewake, matcher or timeout; an uncovered one has
+// neither.
 func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cfg config.Config, covered bool) {
 	t.Helper()
 	if strings.Contains(settingsJSON, ` hook"`) {
@@ -60,6 +62,11 @@ func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cf
 		want := []map[string]any{{"hooks": []any{map[string]any{"type": "command", "command": exe, "args": []any{"hook"}, "asyncRewake": true}}}}
 		if got := top.Hooks["FileChanged"]; !reflect.DeepEqual(got, want) {
 			t.Errorf("FileChanged = %v; want only the owned wake %v", got, want)
+		}
+		wantEvents = append(wantEvents, "PostToolBatch")
+		want = []map[string]any{{"hooks": []any{map[string]any{"type": "command", "command": exe, "args": []any{"hook"}}}}}
+		if got := top.Hooks["PostToolBatch"]; !reflect.DeepEqual(got, want) {
+			t.Errorf("PostToolBatch = %v; want only the owned steer %v", got, want)
 		}
 	}
 	sort.Strings(wantEvents)
@@ -127,7 +134,7 @@ func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cf
 // TestHookExecFormSettings: every agent-director hook is exec form with the
 // path verbatim (never quoted); the help entry, only with inject_help_hook,
 // stays shell form and quotes a path with a space. A covered Claude Launch
-// adds only the owned wake beside them.
+// adds only the owned wake and steer beside them.
 func TestHookExecFormSettings(t *testing.T) {
 	cases := []struct {
 		name, exe, helpBin, wantHelp string
@@ -139,7 +146,7 @@ func TestHookExecFormSettings(t *testing.T) {
 			helpBin: "/home/op/.config/agent-director/bin/agent-director", wantHelp: "/home/op/.config/agent-director/bin/agent-director help"},
 		{name: "help entry quoted, hooks verbatim", exe: "/opt/with space/agent-director", injectHelp: true,
 			helpBin: "/opt/help dir/agent-director", wantHelp: `"/opt/help dir/agent-director" help`},
-		{name: "covered Launch adds the owned wake", exe: "/opt/with space/agent-director", injectHelp: true, covered: true,
+		{name: "covered Launch adds the owned wake and steer", exe: "/opt/with space/agent-director", injectHelp: true, covered: true,
 			helpBin: "/opt/help/agent-director", wantHelp: "/opt/help/agent-director help"},
 	}
 	for _, tc := range cases {
@@ -159,9 +166,10 @@ func TestHookExecFormSettings(t *testing.T) {
 
 // TestHookExecFormLaunchArgv: a spawn's and a resume relaunch's create argv
 // has at least two elements, starts with the Claude binary and carries
-// exec-form settings. The owned wake follows the coverage the Launch records
-// (SR-3.4): a spawn's is this binary's covered set, whatever its caller set,
-// and a resume's is RelaunchInput.BusySendCoverage.
+// exec-form settings. The owned wake and steer follow the coverage the Launch
+// records (SR-3.4): a spawn's or reuse's (one composer, ComposeLaunch) is this
+// binary's covered set, whatever its caller set, and a resume's is
+// RelaunchInput.BusySendCoverage.
 func TestHookExecFormLaunchArgv(t *testing.T) {
 	binaryCovers := store.BusySendCoverageForAgent(store.AgentClaude) == store.BusySendCovered
 	relaunch := func(coverage store.BusySendCoverage) func(t *testing.T) ([]string, config.Config) {

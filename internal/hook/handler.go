@@ -346,7 +346,8 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // Stdout is reserved for the decision envelope; state-tracking events
 // (everything except an on-relay PermissionRequest) leave it empty, except
 // that a covered Claude Launch's main SessionStart returns its busy-send wake
-// endpoint in watchPaths (writeClaudeWatchPath).
+// endpoint in watchPaths (writeClaudeWatchPath), and its parent PostToolBatch
+// may return one Steer Turn prompt as additionalContext (handleClaudeSteer).
 //
 // Busy send's Claude route A (SR-3.4; decision 10): a covered Claude Launch's
 // owned FileChanged hook writes no state and drives one coordinator
@@ -354,7 +355,11 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // HandleConfig.Stderr, Handle returns ErrRewake and the verb exits
 // RewakeExitCode, so Claude Code takes that prompt; otherwise it returns nil
 // and the hook exits 0. While a force's call runs, that invocation is the
-// force's forced wake, issuing only its frozen prompt that may issue now. A
+// force's forced wake, issuing only its frozen prompt that may issue now. Its
+// owned PostToolBatch hook writes no state either and drives one coordinator
+// invocation at the parent's tool boundary (handleClaudeSteer), which may
+// write one Steer Turn prompt as stdout's additionalContext; Handle then
+// returns nil and the hook exits 0, whatever it wrote. A
 // main Stop or idle-prompt Notification whose write applied touches the
 // Launch's wake endpoint when Messages are Held and no earlier issued input
 // awaits take evidence, or when a force was abandoned by its call
@@ -621,6 +626,14 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		if handleClaudeWake(ctx, hc.Stderr, st, hc, instanceID, gate, res, logger) {
 			return ErrRewake
 		}
+		return nil
+	}
+	if res.Agent == store.AgentClaude && res.EventName == EventNamePostToolBatch {
+		// SR-3.4: busy send's owned steer writes no state; a parent tool
+		// boundary may return one Steer Turn prompt on stdout, and the hook
+		// exits 0 whatever it wrote.
+		fields["upsert_outcome"] = string(store.UpsertNoChange)
+		handleClaudeSteer(ctx, stdout, st, hc, instanceID, gate, res, logger)
 		return nil
 	}
 	jsonlPresent := transcriptPresent(transcriptPath)

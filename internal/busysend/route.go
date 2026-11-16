@@ -26,8 +26,9 @@ import (
 // Event is one eligible event for an agent: an owned callback from that same
 // agent's current Launch (startup or readiness, turn end, tool boundary,
 // permission resolution or provider-input completion; SR-3.1), already
-// authenticated by its route. Boundary selects the claim's prefix (turn_end in
-// this release).
+// authenticated by its route. Boundary selects the claim's prefix: turn_end
+// claims every Held Message, tool_boundary the Steer Turn Messages ahead of
+// the first Wait Turn Message (store.BusySendClaimRequest).
 type Event struct {
 	InstanceID string
 	Boundary   store.BusySendBoundary

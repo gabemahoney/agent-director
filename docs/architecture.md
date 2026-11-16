@@ -16,7 +16,7 @@ A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
   `pkg/api/manifest`. See `docs/cli-reference.md` for the canonical
   list.
 - **Internal Cursor gateway** — `agent-director cursor-host`, the direct pane process for a fresh, reused or resumed Cursor row; CLI-only launch plumbing, excluded from MCP discovery and dispatch.
-- **Hook entrypoint** — the same binary invoked by the agent on hook events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, Stop, Notification, SessionEnd, PermissionRequest, SubagentStart, SubagentStop), plus a covered Claude Launch's owned `FileChanged` wake ([The Claude route](#the-claude-route)).
+- **Hook entrypoint** — the same binary invoked by the agent on hook events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, Stop, Notification, SessionEnd, PermissionRequest, SubagentStart, SubagentStop), plus a covered Claude Launch's owned `FileChanged` wake and `PostToolBatch` steer ([The Claude route](#the-claude-route)).
 - **Stdio MCP server** — same binary invoked as `agent-director serve --stdio`. Stdio transport, lifetime scoped to a single agent session.
 - **Operator tool** — a second binary, `agent-director-admin`, for
   `kill-finished`, `delete`, `migrate-journal` and `snapshot-store`.
@@ -1666,7 +1666,7 @@ in `init`. The verb registry
 | `internal/cursormcp` | Typed session-scoped ACP stdio registration, explicit protected routing scope and finite nonce observation. Gateway and scoped CLI serve MUST reuse its `New`, `Parse`, `Binding` and observation owners; routing is not permission or publication authority. | stdlib; `internal/store`. | `pkg/api`; `internal/cursorhost`; `internal/mcp`; native configuration/authentication access. |
 | `internal/helptext` | Pure canonical JSON help renderer shared by CLI help and scoped MCP instructions; consumers MUST reuse `Marshal`/`Plain` and leave agent wrapping at adapters. | stdlib; `pkg/api`. | Config/store/process access; agent-specific wrappers. |
 | `internal/cursortranscript` | Shared protected transcript verification, append access for resume/recording and read-only access for send-keys. Owns shared submission record kinds and `TextSHA256`; writers and readers must reuse them. | stdlib; `golang.org/x/sys/unix`. | `pkg/api`; `internal/cursorhost`; native Cursor storage parsing. |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` uses for `kill-finished` and `delete`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. Internal `cursor-host` is parsed/dispatched before public client setup and delegates to `internal/cursorhost`; `hookCursorVerifier` wires independent runtime/transcript/pane verification into the hook without changing its dependency boundary. Privately scoped `serve` uses `cursorMCPScope` before client setup and `cursorMCPOptions` for the bounded protected guidance bootstrap described above. `serve` opens a second Client for its MCP tools, from the same global-flag overrides (`clisetup.APIOptions`) with no logger, and names a failed open of it with `clisetup.NewOpenError`, as `Open` names its own (b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `version` and its aliases never read stdin; `help` and its aliases read it only when `AGENT_DIRECTOR_AGENT` is `codex`, through the same bounded reader (see [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)). **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. For Claude/Codex it opens the verbs' configured store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). For Cursor, `runHook` instead uses the actual opened store path propagated by the launch in `AGENT_DIRECTOR_CURSOR_STORE_PATH`; the hook still has no `--store-path` flag. It opens that store with `store.OpenOrInitWithBusyTimeout` for Claude/Codex or non-initializing `store.OpenWithBusyTimeout` for Cursor, and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. It also wires [the Claude route](#the-claude-route)'s seams and its `FileChanged` stderr. `parseHookArgs` reads `--agent` and `--timeout` in one pass, in either order; an unknown flag or a positional is skipped without losing a valid one, `--agent` with no value or an empty one reaches `Handle` as the invalid value `(no value)` (a hook failure, below), and an absent `--agent` stays empty, which `ResolveAgent` reads as `claude`. `runHook` hands the raw value to `HandleConfig.Agent`; the manifest's `hook` verb lists the optional `agent` param in agent-neutral terms, keeping experimental agents out of generated references (see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, `serve`'s `APIOptions` and `NewOpenError`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook` and scoped `cursorMCPOptions`; `internal/spawn` (launch argument, permission and environment helpers, and the hook's busy-send seams); `internal/cursormcp`; `internal/helptext`; `internal/cursorhost` for the internal gateway and injected Cursor verifier. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger` and the narrowly scoped `cursorMCPOptions` bootstrap (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` uses for `kill-finished` and `delete`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. Internal `cursor-host` is parsed/dispatched before public client setup and delegates to `internal/cursorhost`; `hookCursorVerifier` wires independent runtime/transcript/pane verification into the hook without changing its dependency boundary. Privately scoped `serve` uses `cursorMCPScope` before client setup and `cursorMCPOptions` for the bounded protected guidance bootstrap described above. `serve` opens a second Client for its MCP tools, from the same global-flag overrides (`clisetup.APIOptions`) with no logger, and names a failed open of it with `clisetup.NewOpenError`, as `Open` names its own (b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `version` and its aliases never read stdin; `help` and its aliases read it only when `AGENT_DIRECTOR_AGENT` is `codex`, through the same bounded reader (see [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)). **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. For Claude/Codex it opens the verbs' configured store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). For Cursor, `runHook` instead uses the actual opened store path propagated by the launch in `AGENT_DIRECTOR_CURSOR_STORE_PATH`; the hook still has no `--store-path` flag. It opens that store with `store.OpenOrInitWithBusyTimeout` for Claude/Codex or non-initializing `store.OpenWithBusyTimeout` for Cursor, and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. It also wires [the Claude route](#the-claude-route)'s seams, its `FileChanged` stderr and its `PostToolBatch` stdout. `parseHookArgs` reads `--agent` and `--timeout` in one pass, in either order; an unknown flag or a positional is skipped without losing a valid one, `--agent` with no value or an empty one reaches `Handle` as the invalid value `(no value)` (a hook failure, below), and an absent `--agent` stays empty, which `ResolveAgent` reads as `claude`. `runHook` hands the raw value to `HandleConfig.Agent`; the manifest's `hook` verb lists the optional `agent` param in agent-neutral terms, keeping experimental agents out of generated references (see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, `serve`'s `APIOptions` and `NewOpenError`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook` and scoped `cursorMCPOptions`; `internal/spawn` (launch argument, permission and environment helpers, and the hook's busy-send seams); `internal/cursormcp`; `internal/helptext`; `internal/cursorhost` for the internal gateway and injected Cursor verifier. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger` and the narrowly scoped `cursorMCPOptions` bootstrap (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
 | `cmd/agent-director-admin` | Thin operator shim for `kill-finished`, `delete`, `migrate-journal`, `snapshot-store`, `help` and `version`; verbs come from `internal/adminapi.Verbs`, never the public manifest. Shared global-flag parsing uses `internal/clisetup`. Only `kill-finished`/`delete` open a Client through `clisetup.Open` and call the private API hooks. Migration resolves config and calls `adminapi.MigrateJournal`; with `--check-only` it calls `adminapi.CheckJournalMigration` (arguments only) or, with an explicit `--store-path`, `adminapi.CheckJournalMigrationHolders`, loading no config and opening no store; snapshot requires an explicit source and calls `adminapi.SnapshotStore` without config or Client initialization. JSON results go to stdout; stderr errors carry `err_name` and `err_description`, and every `migrate-journal` error also carries `details` with its commit state, written only by `writeJournalError` (must use). Help/version and their aliases open no store and load no config. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `internal/config` for migration path resolution; `internal/store` for snapshot constants and the migration result type; `internal/oldnames`; `pkg/api`; `pkg/api/errnames`. | `pkg/api/manifest`; direct SQL or store opening; direct tmux construction; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. The administrator-only `MigrateJournal` and `SnapshotStore` call typed store primitives without a public Client; `CheckJournalMigrationHolders` reuses the migration verifier for read-only pre-flight inventory; see schema versioning and install-time preflight below. | stdlib; `internal/store`; `internal/probe`; `golang.org/x/sys/unix`. | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `APIOptions(Overrides)` builds the `pkg/api.Options` of every Client a command binary opens: the config path, `CreateIfMissing` (true unless the overrides set it false, b.78b) and the overrides' store path and tmux command, with `Logger` nil. `Open(Overrides)` builds the `pkg/api.Client` used by public store-backed CLI verbs and admin `kill-finished`/`delete`, from `APIOptions` plus the recovery logger (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`). `Open` returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired`, `ErrOldLayout` or `ErrStoreOpen`; it refuses with `ErrOldLayout` first (Pin 4, before the recovery logger and `errors.log`), under the rule in [Old layout (step 2b)](#pkgapi-client-lifecycle), and `ErrOldLayout` is the store's own sentinel, `store.ErrOldLayout`, re-exported by `clisetup` and `pkg/api`. `NewOpenError(err)` holds the one naming of a `pkg/api.New` failure: the `*OpenError` named `ErrSchemaMismatch` or `ErrSchemaMigrationRequired` when the store's schema refused the open, `ErrStoreOpen` otherwise; `Open` names its `pkg/api.New` failure with it, and `serve` the failure of its MCP Client's, so every Client a command binary opens names a failed open alike (b.uii). It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the five names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels and `ErrOldLayout` are the store's own, `store.ErrSchemaMismatch`, `store.ErrSchemaMigrationRequired` and `store.ErrOldLayout` (`pkg/api` re-exports them under the same names), so `Classify` gives a schema or old-layout refusal the same name whether it comes as an `OpenError` or straight from `pkg/api.New` (b.x8s); the store returns them only when it opens (`ErrOldLayout`, when the open is about to begin), so no verb error wraps them. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path`, `--tmux-command` and `--create-if-missing` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `--create-if-missing` takes exactly `true` or `false`; any other value, or none, is `ErrInvalidFlags` with exit 1 before any verb runs, `help` and `version` included (b.78b). `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` (a Client that must not log, such as `serve`'s MCP Client, takes its options from `APIOptions` and names a failed `pkg/api.New` with `NewOpenError`) and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup, options builder, open-failure naming or flag parser. A new override goes into `APIOptions`, so every Client a binary opens gets it. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
@@ -6311,7 +6311,7 @@ any state
   │   any hook before the row records its pane; a SessionStart only after
   │   its bounded wait for the identity write), or a subagent's or
   │   in-process teammate's SessionStart / SessionEnd (agent_id in the
-  │   payload); FileChanged: see The Claude route
+  │   payload); FileChanged, PostToolBatch: see The Claude route
 unchanged   (nothing written; one ad.hook.ignored)
 ```
 
@@ -6334,9 +6334,9 @@ its own table, in [The agent-aware hook classifier](#the-agent-aware-hook-classi
 | `SessionEnd` | missing or any reason other than `logout`, `prompt_input_exit`, `exit` | soft refresh — no state change; bumps `last_seen_at` |
 | `SessionEnd` | `reason ∈ {logout, prompt_input_exit, exit}` | `ended` (also sets `ended_at`), with the close of the row's open permission requests and of its running subagent entries in the same transaction (`applyEndedTransition`; see "The ended transition closes the row's requests" under [Permission relay](#permission-relay) and [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries)) |
 | `SubagentStart`, `SubagentStop` | — | soft refresh — no state change; bumps `last_seen_at`; `idle_since` and the settle columns are untouched (`ApplySubagentLifecycle`). With relay on, a `SubagentStop` with an `agent_id` is preceded by the proof of that subagent's requests recorded before the hook started (`turn_end`; b.wbs). With an `agent_id` the soft refresh and the subagent's entry writes are one `BEGIN IMMEDIATE` transaction, the entry writes only when the row write applied (a `SubagentStop`'s are the stop, then its `background_tasks` listing's confirm, move and fill); no `agent_id`: the soft refresh alone, no entry (a session id is then recorded by today's rule). `ad.hook.fired` `upsert_outcome` is `updated` (committed), `no_change` (the gate did not hold; nothing written) or `error` (rolled back, row and entries as they were). One `ad.spawn.state_transition` (`soft_refresh` true) after the commit; the entry writes emit none |
-| `FileChanged` | registered only on a covered Launch | unchanged: no row write and, whatever the gate, no `ad.hook.ignored` (`upsert_outcome` `no_change`); the owned wake ([The Claude route](#the-claude-route)) |
+| `FileChanged`, `PostToolBatch` | registered only on a covered Launch | unchanged: no row write and, whatever the gate, no `ad.hook.ignored` (`upsert_outcome` `no_change`); the owned wake and steer ([The Claude route](#the-claude-route)) |
 | unknown event | — | soft refresh + info-level log entry |
-| any state-tracking event (not `FileChanged`) | the gate does not apply (the hook's parent is not the row's recorded pane process, or the row records no pane) | unchanged; one `ad.hook.ignored` (for a `pending` row's SessionStart whose parent is the pane process's child, also one `ad.hook.pane_is_grandparent`; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)) |
+| any state-tracking event (not `FileChanged` or `PostToolBatch`) | the gate does not apply (the hook's parent is not the row's recorded pane process, or the row records no pane) | unchanged; one `ad.hook.ignored` (for a `pending` row's SessionStart whose parent is the pane process's child, also one `ad.hook.pane_is_grandparent`; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)) |
 | `SessionStart`, `SessionEnd` | the payload carries a non-empty `agent_id` (a subagent or in-process teammate), any reason or source | unchanged, decided before the gate; one `ad.hook.ignored` `subagent_event` (none when no row has the id) |
 
 Every ordinary (non-SessionStart) hook that applies to a row with no
@@ -6466,9 +6466,10 @@ deliberate delay is SessionStart's bounded wait for its launch's identity
 write: it can hold the hook, and so the agent's first response, until the
 launch start plus the pending grace period or 540 s after the wait began,
 whichever comes first; the hook still exits 0, with empty stdout unless the
-Launch is covered. A covered Claude Launch's `SessionStart` watch path and
-`FileChanged` exit 2 are the only other hook output ([The Claude
-route](#the-claude-route)); neither is a permission decision.
+Launch is covered. A covered Claude Launch's `SessionStart` watch path,
+`FileChanged` exit 2 and `PostToolBatch` `additionalContext` are the only
+other hook output ([The Claude route](#the-claude-route)); none is a
+permission decision.
 
 ### The agent-aware hook classifier
 
@@ -6499,8 +6500,8 @@ from the result's outputs: `NewState`, `SoftRefresh`, `WaitingIfWorking`,
 `SubagentStopped()`; Claude's `Prompt`, `FilePath` and `PayloadSessionID`
 serve only [the Claude route](#the-claude-route). The
 result's `EventName` and `ToolName` are still read where an event needs its
-own handling (`Handle` for `SessionStart`, `PermissionRequest` and
-`FileChanged`, `subagent.go` for the subagent events and the `Agent` tool). The result's
+own handling (`Handle` for `SessionStart`, `PermissionRequest`,
+`FileChanged` and `PostToolBatch`, `subagent.go` for the subagent events and the `Agent` tool). The result's
 `Agent` is read by `ToolRan()`, `TurnEnded()` and `SubagentStopped()`, and the handler branches
 on Cursor to authenticate its runtime binding and populate `gate.Cursor`
 before a lifecycle write. This gate does not admit authorization requests.
@@ -6756,7 +6757,7 @@ capture](#subagent-capture)).
   nor end a live row.
 - **Every other state-tracking hook** with `agent_id` goes through the gate
   as any hook does and applies its state transition (a subagent's
-  `FileChanged` changes and delivers nothing: [The Claude
+  `FileChanged` or `PostToolBatch` changes and delivers nothing: [The Claude
   route](#the-claude-route)), but the handler passes an empty
   session id (in the `store.HookGate`) and an empty transcript path, so
   it records neither. A relayed PermissionRequest from a subagent uses the
@@ -7421,9 +7422,11 @@ payload over 1 MiB is dropped whole before any of this.
   event goes in `internal/hook/testdata/hook-payloads/` and has a row in the
   `payloadFixtures` table of `hook_payload_fixtures_test.go`
   (`TestPayloadFixtureEventsMatchRegistered` fails on a file with none, and on a registered event with no fixture), never inline.
-  An event registered only on some Launches, such as `FileChanged`, is listed
-  in `claudeConditional`; `file-changed.json` follows the Claude hooks
-  reference's documented shape and is not a capture.
+  An event registered only on some Launches, such as `FileChanged` or
+  `PostToolBatch`, is listed in `claudeConditional`. Neither's fixtures are
+  captures: `file-changed.json` follows the Claude hooks reference's
+  documented shape, and the `post-tool-batch*.json` files the key names
+  measured on Claude Code with synthetic values.
   The table's first column is the row's agent: a Codex payload goes in
   `internal/hook/testdata/codex-hook-payloads/` with the agent `codex`, and a
   test names it `codex/<file>` to `readPayloadFixture` (`fixtureName` builds
@@ -9438,11 +9441,14 @@ advances its revision, so an obsolete job can neither issue nor release.
 
 1. `ClaimBusySendHandover` freezes the contiguous eligible prefix of Held
    Messages at the last accepted sequence, so later arrivals wait for another
-   event. At `turn_end` it refuses (`readiness_unknown`) while the awaiting
-   count is above zero: turn-end evidence is not idleness while AD's own input
-   may still be pending. `PartitionBusySendPrompts` packs it, in accepted order, into the
+   event: at `turn_end` every Held Message, at `tool_boundary` the Steer Turn
+   Messages ahead of the first Wait Turn Message. At `turn_end` it refuses
+   (`readiness_unknown`) while the awaiting count is above zero: turn-end
+   evidence is not idleness while AD's own input may still be pending.
+   `PartitionBusySendPrompts` packs it, in accepted order, into the
    fewest whole-Message prompts whose complete rendering
-   (`RenderBusySendPromptBody`'s separators plus the route's measure) fits;
+   (`RenderBusySendPromptBody`'s separators plus the route's measure) fits
+   the boundary's Send Mode row (Steer Turn at `tool_boundary`, else Wait Turn);
    the hand-over records the partition, destination, Turn Start counter,
    permission epoch and deadlines, and owns the conversation until it
    closes.
@@ -9597,7 +9603,8 @@ path; a nil `ClaudeStartupPrompt` claims and issues nothing and waits
 `readiness_unknown` on every Launch.
 
 **Composition.** `Resolved.BusySendCovered` adds one exec-form `FileChanged`
-entry with `"asyncRewake": true`, no matcher and no timeout, beside the eleven
+entry with `"asyncRewake": true`, and one synchronous exec-form
+`PostToolBatch` entry, each with no matcher and no timeout, beside the eleven
 state-tracking entries; an uncovered Launch's settings are unchanged.
 `ComposeLaunch` sets it from the agent's coverage, and `ComposeRelaunch` from
 `RelaunchInput.BusySendCoverage` (`resumeBusySendCoverage` in
@@ -9611,12 +9618,18 @@ Launch whose token or home names no wake path records no route, and its
 Messages wait `route_unavailable`.
 
 **Authority.** Every callback first passes `claudeRouteFacts`: a main-agent
-hook (no `agent_id`) whose gate holds, on a covered, unended current Launch
+hook (no `agent_id`, which alone tells it apart, since a subagent's or
+background agent's callback reports the parent's session and transcript)
+whose gate holds, on a covered, unended current Launch
 with route `claude_hooks` and a wake path, from that Launch's recorded session
 (`claudeCallbackSession`: the transcript-path session equals it, and a payload
 `session_id`, when present, agrees). Any other callback claims, records and
 touches nothing. A facts read failing other than for a missing row is logged
-to the hook's diagnostic sink.
+to the hook's diagnostic sink. The route (`newClaudeRoute`) pins the
+destination those facts authenticated (`dest`: Launch, token, provider,
+session, route and connection generation). Once a later read's current
+destination differs, even with the same session, the callback is stale: it
+claims, records and issues nothing, not even a wait.
 
 **Wake endpoint.** The Launch's own main `SessionStart`, once its write
 applied, creates the file when missing through the `PrepareBusySendWake` seam
@@ -9650,8 +9663,8 @@ uses a 100 ms busy timeout. An independent process-exit timer enforces that
 deadline without logging or waiting for diagnostic I/O. A separate timer
 attempts a notice in the final 250 ms without delaying exit. Failures are
 logged best-effort and leave custody Held; a stale or ended Launch is a no-op.
-There is no continuing poll or retry. FileChanged alone decides delivery
-again from SQLite; the startup job claims nothing, sends no input or keys,
+There is no continuing poll or retry. The `FileChanged` hook it wakes decides
+delivery again from SQLite; the startup job claims nothing, sends no input or keys,
 and supplies no take evidence.
 
 **Delivery.** The owned `FileChanged` hook writes no state and, whatever its
@@ -9680,12 +9693,24 @@ read):
   budgets (30 s issue, 60 s job, 30 s cleanup), which first finishes an
   abandoned force.
 
+**Steer.** The owned `PostToolBatch` hook likewise writes no state and no
+`ad.hook.ignored`. On a parent callback that passes `claudeRouteFacts`,
+`handleClaudeSteer` runs one `Deliver` at `tool_boundary` with the same fixed
+budgets, through the same `claudeRoute` with `steer` set and the Steer Turn
+row (`claudeSteerTurn`; none offered, nothing steered). That `Deliver` first
+finishes an abandoned force but takes no force authority: a live force's
+hand-over bars its claim. **Must use:** every tool-boundary Steer Turn prompt
+goes through this invocation; never a second steer issuer, queue or output
+writer.
+
 The route's steps:
 
-- `Eligibility` re-reads the facts and is always race-exposed, since Claude
-  cannot exclude a person's typing or another hook's continuation, so its
-  Results can carry the sticky `wait_turn_raced`. Only `waiting` is
-  eligible. `working` waits `turn_running`; a permission hold,
+- `Eligibility` re-reads the facts. A wake's attempt is race-exposed, since
+  Claude cannot exclude a person's typing or another hook's continuation, so
+  its Results can carry the sticky `wait_turn_raced`. A steer's is not: it
+  goes into the running turn, so a complete steer ends
+  `handed_over_not_proven`, or `confirmation_off` unconfirmed. For a wake only
+  `waiting` is eligible. `working` waits `turn_running`; a permission hold,
   `check_permission` or `ask_user` waits `dialog`; `pending` waits
   `agent_starting`, as does a spawn or reuse whose arguments carry a startup
   prompt until the Turn Start counter reaches 1, so that prompt goes first. An
@@ -9696,26 +9721,41 @@ The route's steps:
   skips the readiness ones (Dialog, running turn, awaiting, not `waiting`);
   the force issue guard judges order, owner, revision, destination and the
   call and pause fences, and records each prompt's current turn and
-  permission facts. The destination carries the callback's session, so the
-  claim and issue guards refuse a changed one.
+  permission facts. A steer keeps the Launch's own waits and `dialog`, and
+  skips the running turn, an awaiting obligation (such as an earlier
+  complete steer still lacking take evidence) and every other state; the
+  store's guards still judge order, transport, turn, helper and pause fence.
 - `Authorize` re-reads the facts and refuses (`readiness_unknown`) when the
-  destination changed, the hook's own identity is unreadable or its output
-  stream takes no write deadline. Otherwise it names the hook process as the
-  Launch's helper, which the issue commit registers.
-- `Issue` writes the body once to stderr under the job deadline as its write
-  deadline (`writeBounded`), so no writer outlives the job. Every byte is
-  `complete` with `emission_complete` at the unproven boundary; some is
-  `partial`; none is `uncertain`. `More` is false.
+  current or prepared destination is not the pinned one, the hook's own
+  identity is unreadable or its output stream takes no write deadline. For a
+  steer it then serializes the prompt's whole output (`claudeSteerEnvelope`)
+  before the issue commit; a body that is not valid UTF-8 refuses. Otherwise
+  it names the hook process as the Launch's helper, which the issue commit
+  registers.
+- `Issue` writes once under the job deadline as its write deadline
+  (`writeBounded`), so no writer outlives the job: a wake's body to stderr; a
+  steer's envelope to stdout, one JSON object and LF,
+  `{"hookSpecificOutput":{"additionalContext":<body>,"hookEventName":"PostToolBatch"}}`,
+  with nothing else (no decision, stop control or wrapper) and the body
+  unchanged once decoded. Every byte is `complete` with `emission_complete`
+  at the unproven boundary; some is `partial`; none is `uncertain`. `More` is
+  false, so a steer's never-issued rest returns to Held, ahead of later
+  Messages, for the next parent tool boundary or, once the turn ends, the
+  wake.
 
-A complete write makes `Handle` return `ErrRewake` and the verb exit
+A complete wake write makes `Handle` return `ErrRewake` and the verb exit
 `RewakeExitCode` (2), so Claude Code takes stderr as the agent's next input.
-Anything else exits 0, and Claude Code takes nothing. `cmd/agent-director`
-gives this hook a non-blocking stderr that takes a write deadline
-(`hookStderr`), keeps the hook logger and teardown diagnostics
-(`teardownDiagnostics`) off it, and turns a panic into exit 0.
+Anything else exits 0, and Claude Code takes nothing. A steer always exits 0;
+Claude Code adds a complete envelope's `additionalContext` to the running
+turn. `cmd/agent-director` gives the wake a non-blocking stderr that takes a
+write deadline (`hookStderr`) and keeps the hook logger and teardown
+diagnostics (`teardownDiagnostics`) off it. It gives the steer a
+non-blocking stdout (`hookStdout`) and ignores SIGPIPE in that process, so a
+reader that closed returns EPIPE, recorded `partial` or `uncertain`. Both
+turn a panic into exit 0.
 
-**Take evidence.** Input issued into a running turn takes the parent `Stop`'s
-[turn-end evidence](#busy-send-admission-and-results). For a wake or force
+**Take evidence.** A steer's prompt, input issued into a running turn, takes
+the parent `Stop`'s [turn-end evidence](#busy-send-admission-and-results). For a wake or force
 prompt the only evidence that Claude took it is the main agent's own
 `UserPromptSubmit`, after its gated write applied (held
 included), whose sessions agree (`claudeCallbackSession`) and whose prompt
@@ -17688,7 +17728,7 @@ agent-aware hook classifier](#the-agent-aware-hook-classifier)) calls.
 | Event | Source | Description |
 |-------|--------|-------------|
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
-| `ad.hook.ignored` | `ad_hook` | Exactly one per state-tracking hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)); never for the owned `FileChanged` ([The Claude route](#the-claude-route)). Fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane, for a SessionStart only after its bounded wait for the launch's identity write; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
+| `ad.hook.ignored` | `ad_hook` | Exactly one per state-tracking hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)); never for the owned `FileChanged` or `PostToolBatch` ([The Claude route](#the-claude-route)). Fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane, for a SessionStart only after its bounded wait for the launch's identity write; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
 | `ad.hook.pane_is_grandparent` | `ad_hook` | One per SessionStart refused with `pid_mismatch` on a `pending` row whose pane process is the hook's grandparent (b.9n6, b.zde; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), written by `emitPaneIsGrandparent` (`internal/hook/gate.go`) right after that hook's `ad.hook.ignored`; not once-only. Carries `instance_id`, `pane_pid` (the row's pane process), `pane_command` (its command name; null when unreadable), `parent_pid` and `parent_command` (the `ad.hook.ignored` record's values), `advice` and `source`. The event name is the contract and claims only that structure; `advice` is supplementary English naming both causes (a launcher that does not exec, a hook run through a shell), chosen by the row's agent: a Claude row's also names `[launch] claude_path`, a Codex row's names the `codex` program, the launcher case and `[launch] codex_path`. Fail-open; it changes nothing else. Never another row's id or any session-environment content (SR-14, SR-15) |
 | `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write, including same-state and soft-refresh writes, per authenticated `InsertCursorRequest` admission after COMMIT (prior state to `check_permission`, `PermissionRequest`, `soft_refresh=false`), per Cursor tool proof that moves its row after COMMIT (`CommitCursorProof` through `proveCursorTool`, only while a prompt turn is open and no rotation is under way, and never for a request whose retained decision is deny: `check_permission` to `working`, `PostToolUse`, or `PostToolUseFailure` for validated failed MCP invocation (`Ran=false`), `soft_refresh=false`; no `ad.hook.fired` accompanies it), and per sampled Codex turn end after COMMIT (`EndCodexTurnSample`, from a selected read or `find-missing`: `working` to `waiting`, `task_complete`, `soft_refresh=false`, plus `cause` `codex_rollout_task_complete`, the one record of this event that carries `cause`; see "The Codex turn" under [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). Ignored hooks and failed admissions emit none. Ack/timeout writes do not change state. Spawn insert, terminal liveness moves, resume and reuse keep their own event contracts. |
 | `ad.row_mutation.committed` | `ad_store` | After COMMIT, one per request insert and established decision mutation, with final persisted request id/token/tool/decision/reason. `writer_process` uses the closed `WriterProcess*` set: `hook`, `cursor_host`, `decide`, `find_missing`, `send_keys`, `record_pane_answer`, `resume`. Actual gateway admission, timeout, native claim and exact-tool proof use `cursor_host`; genuine hook paths retain `hook`. Cursor native/proof writes reuse `emitDecisionCommitted`; complete duplicate proof performs no UPDATE or event. Pure acknowledgement of an existing verdict, hook-gone/attempt/intent/release writes, nonmatch, errors and rollback emit no mutation event. Trail failure after COMMIT is fail-open and cannot undo the mutation. No raw ACP params or execution output is logged. |
@@ -22060,7 +22100,7 @@ except to assert that such a hook is ignored. Instead:
   version probe does not accept that line. The Claude row still uses its
   recorded covered delivery. The rcfile installs a SIGTERM exit trap for
   keyless pause; it avoids `PROMPT_COMMAND`, which clears `PIPESTATUS` and
-  prevents `pane-hook.sh --stderr-pipe` from recording its pipeline status.
+  prevents `pane-hook.sh`'s pipe options from recording the hook's status.
   A case selects
   it with a PATH prefix on the agent-director command, on the spawn and on
   every resume that should relaunch it:
@@ -22116,11 +22156,16 @@ except to assert that such a hook is ignored. Instead:
   `--agent claude|codex` (default `claude`) names the agent the hook is
   for: `codex` types `agent-director hook --agent codex`, for a Codex row
   whose pane process is the Codex stand-in. `--stderr-pipe` gives the hook
-  a pipe for stderr, as Claude Code does, and the hook stays the pane bash's
-  direct child. **Must use:** a case that fires
+  a pipe for stderr, as Claude Code does, and `--stdout-pipe` one for
+  stdout: the hook's stream goes `| cat` to its file, the other stream to a
+  file of its own, and `rc` holds the hook's own status (`PIPESTATUS[0]`),
+  written once `cat` has finished. The hook stays the pane bash's direct
+  child, so only one stream can be a pipe and the two options exclude each
+  other. **Must use:** a case that fires
   a Codex hook from a pane passes `--agent codex` to `pane-hook.sh`, one
-  that checks wake output passes `--stderr-pipe` (a regular file takes no
-  write deadline, so the owned `FileChanged` writes nothing there), and
+  that checks wake output passes `--stderr-pipe` and one that checks steer
+  output `--stdout-pipe` (a regular file takes no write deadline, so the
+  owned `FileChanged` and `PostToolBatch` write nothing there), and
   one that wants the agent's own `/exit` types it at the stand-in instead;
   never type a hook line by hand.
   It reads the row's `pane_id` and `tmux_socket` with one read-only query
@@ -22136,7 +22181,8 @@ except to assert that such a hook is ignored. Instead:
   hook from the driver's shell with `AGENT_DIRECTOR_INSTANCE_ID="$id"` and
   asserts the row is unchanged and `~/.config/agent-director/ad-trail.jsonl`
   holds an `ad.hook.ignored` with `reason` `pid_mismatch`. An outside
-  `FileChanged` writes no such record ([The Claude route](#the-claude-route)).
+  `FileChanged` or `PostToolBatch` writes no such record ([The Claude
+  route](#the-claude-route)).
 - The no-verb case (`spawn-21-no-verb-hook-payload`, `t2.75s.qo.7v` in
   `epic-03-spawn`) needs no stand-in and no row: it pipes a SessionStart
   payload into `agent-director` with no verb from the driver's shell and
@@ -22191,14 +22237,17 @@ back.
 **Must use:** extend `test/driver/busy-send-claude.sh` for the
 `busy-send-claude-wait-turn` collector. It selects the stand-in Claude and
 `delay-create-tmux` call recorder, sets a private work directory and cleanup,
-and supplies owned hook, wake, intake-sighting, Message-send and Result-read
-helpers. `launched` checks production coverage and the launch-owned wake;
+and supplies owned hook, wake, steer, intake-sighting, Message-send (any Send
+Mode) and Result-read helpers, unconfirmed Messages' Results included.
+`launched` checks production coverage and the launch-owned wake;
 `no_product_input` checks recorded product calls and the empty native journal.
-Hooks run through `pane-hook.sh --stderr-pipe`. The fixture simulates the
-harness watcher, wrapping and intake; real Claude qualification owns those
-provider premises. A force case runs its call in the background with
-`start_call`, waits for the call's wake notification with `await_touch` and
-joins it with `join_call`. Never seed coverage or add a second collector for
+`hook` types each hook through [`pane-hook.sh`](#docker-hook-pattern-the-stand-in-claude-and-pane-hooksh),
+with `--stdout-pipe` for `PostToolBatch` and `--stderr-pipe` otherwise. The
+fixture simulates the harness watcher, wrapping, intake and the parent's and
+children's tool batches; real Claude qualification owns those provider
+premises, hook timing included. A force case runs its call in the background
+with `start_call`, waits for the call's wake notification with `await_touch`
+and joins it with `join_call`. Never seed coverage or add a second collector for
 these paths.
 
 ### Release Check Kit (`test/release-check/`)
@@ -22945,6 +22994,8 @@ instance's published conversation. `ExpireBusySendForce` expires an ended
 force attempt. `UnbindBusySend` clears a row's published binding.
 With `Transport` set, `SeedBusySendResult` also records the Message's one-prompt
 hand-over on the current Launch with that observed transport.
+`SeedBusySendPauseClaim` inserts one standing pause claim on the current
+Launch; E6 owns the pause claim and may replace it.
 `ReadBusySendCounts` counts Messages, pairs, force attempts and input
 attempts, so a refusal can show it stored nothing. Tests MUST use these rather
 than inline SQL. These helpers are fixture setup only; schema and migration

@@ -238,28 +238,35 @@ func TestClassifyEventAgentID(t *testing.T) {
 	}
 }
 
-// TestClassifyEventSubagentStartStop (SR-2.2, SR-13.1): SubagentStart and
-// SubagentStop, with and without agent_id, are known events that carry the
-// agent_id verbatim, and are none of a subagent SessionStart/SessionEnd (so
-// never ignored as subagent_event), the main agent's end of turn or a tool that
-// ran.
-func TestClassifyEventSubagentStartStop(t *testing.T) {
-	for _, event := range []string{"SubagentStart", "SubagentStop"} {
+// TestClassifyEventKnownSoftEvents (SR-2.2, SR-13.1; SR-3.4): SubagentStart,
+// SubagentStop and busy send's owned PostToolBatch steer, with and without
+// agent_id, are known events (no unknown-event log) that write no state and
+// carry the agent_id, both session ids and the transcript path verbatim, so a
+// child's callback reporting its parent's transcript stays a child's. None is
+// a subagent SessionStart/SessionEnd (so never ignored as subagent_event), the
+// main agent's end of turn, a tool that ran (so no permission request is
+// proved gone), an idle prompt or a Turn Start.
+func TestClassifyEventKnownSoftEvents(t *testing.T) {
+	for _, event := range []string{"SubagentStart", "SubagentStop", EventNamePostToolBatch} {
 		for _, agentID := range []string{"a1", ""} {
 			name := event + "/agent_id=" + agentID
 			t.Run(name, func(t *testing.T) {
-				p := map[string]any{"hook_event_name": event, "tool_use_id": "toolu_01", "agent_id": agentID}
+				p := map[string]any{"hook_event_name": event, "tool_use_id": "toolu_01", "agent_id": agentID,
+					"session_id": "payload-sess", "transcript_path": "~/x/abc.jsonl"}
 				res := classifyMap(t, p)
 				if res.EventName != event || res.UnknownEvent || !res.SoftRefresh || res.NewState != "" {
 					t.Errorf("EventName/UnknownEvent/SoftRefresh/NewState = %q/%v/%v/%q; want %q/false/true/empty",
 						res.EventName, res.UnknownEvent, res.SoftRefresh, res.NewState, event)
 				}
-				if res.AgentID != agentID {
-					t.Errorf("AgentID = %q; want %q", res.AgentID, agentID)
+				if res.AgentID != agentID || res.SessionID != "abc" || res.PayloadSessionID != "payload-sess" || res.TranscriptPath != "~/x/abc.jsonl" {
+					t.Errorf("AgentID/SessionID/PayloadSessionID/TranscriptPath = %q/%q/%q/%q; want %q/abc/payload-sess/~/x/abc.jsonl",
+						res.AgentID, res.SessionID, res.PayloadSessionID, res.TranscriptPath, agentID)
 				}
-				if res.SubagentLifecycle() || res.TurnEnded() || res.ToolRan() || res.WaitingIfWorking {
-					t.Errorf("SubagentLifecycle/TurnEnded/ToolRan/WaitingIfWorking = %v/%v/%v/%v; want all false",
-						res.SubagentLifecycle(), res.TurnEnded(), res.ToolRan(), res.WaitingIfWorking)
+				var gate store.HookGate
+				claudeTurnGate(&gate, res)
+				if res.SubagentLifecycle() || res.TurnEnded() || res.ToolRan() || res.WaitingIfWorking || gate.ClaudeTurnStart {
+					t.Errorf("SubagentLifecycle/TurnEnded/ToolRan/WaitingIfWorking/ClaudeTurnStart = %v/%v/%v/%v/%v; want all false",
+						res.SubagentLifecycle(), res.TurnEnded(), res.ToolRan(), res.WaitingIfWorking, gate.ClaudeTurnStart)
 				}
 			})
 		}

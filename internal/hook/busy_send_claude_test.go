@@ -2,15 +2,19 @@ package hook_test
 
 // busy_send_claude_test.go — busy send's Claude route A (Task t2.xis.oo.u8;
 // Main Agent decisions 10 to 12) through hook.Handle on a real store: the
-// owned FileChanged wake is the only callback that consumes the inbox, and
+// owned FileChanged wake and, for Steer Turn, the owned parent PostToolBatch
+// steer (Task t2.xis.wm.hg) are the only callbacks that consume the inbox, and
 // only for the parent agent of the current Launch; Stop and the idle prompt
-// only re-signal its wake endpoint; AD's own UserPromptSubmit sighting of the
-// exact wake text is the only take evidence; SessionStart returns the endpoint
-// to watch. The store's predicates (Turn Start counter, awaiting obligation,
-// sighting outcomes) are internal/store's (t3.xis.oo.u8.gr), the coordinator's
-// generic order and custody internal/busysend's (Task .xe). The force's forced
-// wake and sighting admission on this route are Task t2.xis.p8.zp's, over
-// y2's real force claim and call end; y2's store matrix and call budgets are
+// only re-signal the wake endpoint; AD's own UserPromptSubmit sighting of the
+// exact wake text is a wake's only take evidence, and the parent Stop ending
+// the turn a steer went into is the steer's (E4 Main Agent decisions 1 and
+// 2); SessionStart returns the endpoint to watch. The store's predicates (Turn
+// Start counter, awaiting obligation, sighting and turn-end outcomes) are
+// internal/store's (t3.xis.oo.u8.gr, t3.xis.wm.o7.cm), the coordinator's
+// generic order and custody internal/busysend's (Task .xe); Steer Turn's
+// limits, packing and prefix arithmetic are o7.cm's. The force's forced wake
+// and sighting admission on this route are Task t2.xis.p8.zp's, over y2's real
+// force claim and call end; y2's store matrix and call budgets are
 // internal/store's and pkg/api's.
 
 import (
@@ -116,19 +120,30 @@ func newResumedWakeEnvWithHeld(t *testing.T, texts []string, configure func(*wak
 	if err := apitest.SeedBusySendCoverage(db, id, store.BusySendCovered, store.BusySendCovered); err != nil {
 		t.Fatal(err)
 	}
-	old := &wakeEnv{st: st, db: db, id: id}
+	e := &wakeEnv{st: st, db: db, id: id}
 	for i, text := range texts {
-		old.admit(t, fmt.Sprint(i), text)
+		e.admit(t, fmt.Sprint(i), text)
 	}
-	res, moved, err := st.MoveToPendingWithExit(id, mustGetSpawn(t, st, id).Snapshot, time.Now().UnixMilli(), ssgNewPane.Token, ssgNewPane.Socket, "", store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, st, id))
+	e.resume(t, ssgNewPane, configure)
+	return e
+}
+
+// resume moves e's ended row to a new Launch on pane in the same session, as
+// resume's move and identity write do, and reports its agent in
+// (SessionStart resume), so the new Launch records its own route and creates
+// its endpoint; configure, when set, changes that SessionStart's config.
+func (e *wakeEnv) resume(t *testing.T, pane store.LaunchIdentity, configure func(*wakeEnv, *hook.HandleConfig)) {
+	t.Helper()
+	res, moved, err := e.st.MoveToPendingWithExit(e.id, mustGetSpawn(t, e.st, e.id).Snapshot, time.Now().UnixMilli(), pane.Token, pane.Socket, "",
+		store.LaunchOwner{}, store.BusySendDefaultsChoice{}, storefix.ExitEvidence(t, e.st, e.id))
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want applied", res, err)
 	}
-	if res, err := st.RecordLaunchIdentity(id, moved, ssgNewPane.Token, ssgNewPane); err != nil || res != store.CondApplied {
+	if res, err := e.st.RecordLaunchIdentity(e.id, moved, pane.Token, pane); err != nil || res != store.CondApplied {
 		t.Fatalf("RecordLaunchIdentity = %v, %v; want applied", res, err)
 	}
-	e := &wakeEnv{st: st, db: db, id: id, token: ssgNewPane.Token, parent: agentParent(t, st, id)}
-	if e.endpoint, err = store.BusySendWakePath(st.StoreID(), e.token); err != nil {
+	e.token, e.parent = pane.Token, agentParent(t, e.st, e.id)
+	if e.endpoint, err = store.BusySendWakePath(e.st.StoreID(), e.token); err != nil {
 		t.Fatal(err)
 	}
 	start := e.payload(t, "session-start-resume.json", map[string]any{"transcript_path": writeTranscript(t, wakeSession)})
@@ -141,12 +156,11 @@ func newResumedWakeEnvWithHeld(t *testing.T, texts []string, configure func(*wak
 	if err := hook.Handle(context.Background(), bytes.NewReader(start), &stdout, e.st, hc, newSilentLogger()); err != nil {
 		t.Fatalf("SessionStart: %v", err)
 	}
-	f, err := st.ReadBusySendRouteFacts(context.Background(), id, store.HookGate{})
+	f, err := e.st.ReadBusySendRouteFacts(context.Background(), e.id, store.HookGate{})
 	if err != nil || f.Kind != store.BusySendLaunchResume || !f.Covered || f.WakePath != e.endpoint || f.State != store.StateWaiting ||
 		f.TurnStarts != 0 {
 		t.Fatalf("resumed route facts = %+v, %v; want a waiting covered resume Launch with its own route and no Turn Start", f, err)
 	}
-	return e
 }
 
 // payload is fixture in e's session with fields set (nil removes one).
@@ -168,15 +182,81 @@ func (e *wakeEnv) fileChanged(t *testing.T, fields map[string]any) []byte {
 // handle runs one Handle of payload from p with the hook's own identity and
 // stderr, and returns its stdout and error.
 func (e *wakeEnv) handle(ctx context.Context, p hookParent, payload []byte, stderr io.Writer) (string, error) {
+	var stdout bytes.Buffer
+	err := e.handleTo(ctx, p, payload, &stdout, stderr)
+	return stdout.String(), err
+}
+
+// handleTo is handle onto stdout as given: a steer writes only to a stream
+// that takes a write deadline, as the CLI's stdout for PostToolBatch does.
+func (e *wakeEnv) handleTo(ctx context.Context, p hookParent, payload []byte, stdout, stderr io.Writer) error {
 	hc := hookConfig(envHook(e.id, ""), p)
 	hc.Self, hc.Stderr, hc.Now = wakeHelper, stderr, e.now
 	var st hook.HookStore = e.st
 	if e.seam != nil {
 		st = e.seam
 	}
-	var stdout bytes.Buffer
-	err := hook.Handle(ctx, bytes.NewReader(payload), &stdout, st, hc, newSilentLogger())
-	return stdout.String(), err
+	return hook.Handle(ctx, bytes.NewReader(payload), stdout, st, hc, newSilentLogger())
+}
+
+// tick moves every later callback's clock d on, starting from the wall clock
+// the first time; tick(0) only freezes it.
+func (e *wakeEnv) tick(d time.Duration) {
+	at := time.Now()
+	if e.now != nil {
+		at = e.now()
+	}
+	at = at.Add(d)
+	e.now = func() time.Time { return at }
+}
+
+// steerWith fires the parent's PostToolBatch from the agent onto w as its
+// stdout and returns what it wrote there: Handle returns nil (exit 0, never
+// ErrRewake) and writes nothing on stderr, whatever it wrote.
+func (e *wakeEnv) steerWith(t *testing.T, w *wakeStderr) string {
+	t.Helper()
+	var stderr bytes.Buffer
+	if err := e.handleTo(context.Background(), e.parent, e.payload(t, "post-tool-batch.json", nil), w, &stderr); err != nil || stderr.Len() != 0 {
+		t.Fatalf("PostToolBatch Handle = %v, stderr %q; want nil and nothing on stderr", err, stderr.String())
+	}
+	return w.String()
+}
+
+// steer fires the parent's PostToolBatch onto a stdout that takes every byte
+// and returns the one prompt it carries (steerContext).
+func (e *wakeEnv) steer(t *testing.T) string {
+	t.Helper()
+	return steerContext(t, e.steerWith(t, &wakeStderr{keep: -1}))
+}
+
+// steerContext is the one prompt a steer's whole output carries, "" for no
+// output: exactly one JSON object, its newline and nothing after, whose only
+// key is hookSpecificOutput holding exactly hookEventName PostToolBatch and
+// additionalContext (no decision, permission decision, continue or stop
+// control). Decoding gives the prompt back byte for byte.
+func steerContext(t *testing.T, out string) string {
+	t.Helper()
+	if out == "" {
+		return ""
+	}
+	if !strings.HasPrefix(out, "{") || !strings.HasSuffix(out, "}\n") {
+		t.Fatalf("steer output %q; want one JSON object ended by one newline", out)
+	}
+	dec := json.NewDecoder(strings.NewReader(out))
+	var env map[string]json.RawMessage
+	var inner map[string]string
+	if err := dec.Decode(&env); err != nil || len(env) != 1 || json.Unmarshal(env["hookSpecificOutput"], &inner) != nil ||
+		len(inner) != 2 || inner["hookEventName"] != hook.EventNamePostToolBatch {
+		t.Fatalf("steer output %q (%v); want only hookSpecificOutput with hookEventName PostToolBatch and additionalContext", out, err)
+	}
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+		t.Fatalf("steer output %q continues after its envelope (%v); want EOF", out, err)
+	}
+	prompt, ok := inner["additionalContext"]
+	if !ok {
+		t.Fatalf("steer output %q has no additionalContext", out)
+	}
+	return prompt
 }
 
 // fire runs payload from the agent with no stderr expected: it must return nil
@@ -212,12 +292,26 @@ func (e *wakeEnv) wake(t *testing.T) string {
 	return e.wakeWith(t, &wakeStderr{keep: -1})
 }
 
-// admit admits text as confirmed Message request, failing on a refusal.
+// admit admits text as confirmed Message request in the Agent Default mode
+// (Wait Turn), failing on a refusal.
 func (e *wakeEnv) admit(t *testing.T, request, text string) {
 	t.Helper()
-	confirmed := true
-	if _, err := e.st.AdmitBusySend(store.BusySendAdmissionRequest{InstanceID: e.id, Text: []byte(text), CallerUUID: wakeCaller,
-		DeliveryRequestID: request, Confirmed: &confirmed}); err != nil {
+	e.admitAs(t, request, text, "", true)
+}
+
+// admitAs admits text as Message request in mode ("": the Agent Default),
+// confirmed or not, failing on a refusal. An unconfirmed Message carries no
+// pair, so it has no Result to read: request only names it in failures.
+func (e *wakeEnv) admitAs(t *testing.T, request, text string, mode store.BusySendMode, confirmed bool) {
+	t.Helper()
+	req := store.BusySendAdmissionRequest{InstanceID: e.id, Text: []byte(text), Confirmed: &confirmed}
+	if confirmed {
+		req.CallerUUID, req.DeliveryRequestID = wakeCaller, request
+	}
+	if mode != "" {
+		req.SendMode = &mode
+	}
+	if _, err := e.st.AdmitBusySend(req); err != nil {
 		t.Fatalf("admit %s: %v", request, err)
 	}
 }
@@ -294,11 +388,18 @@ func (e *wakeEnv) endCall(t *testing.T, c store.BusySendForceClaim) store.BusySe
 // ahead of handed_over_not_proven) on e's Launch and session.
 func (e *wakeEnv) assertRaced(t *testing.T, requests ...string) {
 	t.Helper()
+	e.assertSent(t, store.BusySendReasonWaitTurnRaced, requests...)
+}
+
+// assertSent fails unless each request's Result is Final sent_unconfirmed
+// with reason on e's Launch and session.
+func (e *wakeEnv) assertSent(t *testing.T, reason store.BusySendResultReason, requests ...string) {
+	t.Helper()
 	for _, request := range requests {
 		r := e.result(t, request)
-		if r.Class != store.BusySendClassSentUnconfirmed || !r.Final || r.Reason != string(store.BusySendReasonWaitTurnRaced) ||
+		if r.Class != store.BusySendClassSentUnconfirmed || !r.Final || r.Reason != string(reason) ||
 			r.LaunchToken == nil || *r.LaunchToken != e.token || r.SessionID != wakeSession {
-			t.Errorf("%s Result = %+v; want Final sent_unconfirmed wait_turn_raced on the captured Launch and session", request, r)
+			t.Errorf("%s Result = %+v; want Final sent_unconfirmed %s on the captured Launch and session", request, r, reason)
 		}
 	}
 }
@@ -312,9 +413,10 @@ func (e *wakeEnv) assertHeld(t *testing.T, request string, waits ...store.BusySe
 	}
 }
 
-// wakeStderr is a hook's error stream that takes a write deadline, as the
-// route requires (R2-2), and keeps the last one set: before runs once at its
-// first write; each write keeps keep bytes (all when negative) and returns err.
+// wakeStderr is a hook's error stream, or a steer's stdout, that takes a
+// write deadline, as the route requires (R2-2), and keeps the last one set:
+// before runs once at its first write; each write keeps keep bytes (all when
+// negative) and returns err.
 type wakeStderr struct {
 	bytes.Buffer
 	before   func()
@@ -437,7 +539,12 @@ func TestClaudeWakeDeliversHeldPrompts(t *testing.T) {
 // callback's own authority read (the first) succeeded; fired records it. With
 // before set, that read instead runs before and then reads: a causal barrier.
 // With read set, each force prompt read first runs it with the read's context,
-// and readErr keeps what the read then returned.
+// and readErr keeps what the read then returned. steps records a parent
+// Stop's take-evidence steps as Handle reaches them: "read" (its entry read,
+// ReadBusySendTurnEndPrompts), "write" (its own gated lifecycle write) and
+// "record" (RecordBusySendTurnEnd), each with the step's request (the zero one
+// for "write"); turnEnd, when set, runs first, and an error it returns replaces
+// the store's call (errNotApplied: a write that did not apply).
 type failRouteFacts struct {
 	*store.Store
 	n       int
@@ -445,6 +552,52 @@ type failRouteFacts struct {
 	before  func()
 	read    func(context.Context)
 	readErr error
+	steps   []string
+	turnEnd func(step string, te store.BusySendTurnEnd) error
+}
+
+// errNotApplied makes failRouteFacts' lifecycle write one whose gate did not
+// hold: nothing written, no error.
+var errNotApplied = errors.New("the write did not apply")
+
+func (s *failRouteFacts) step(name string, te store.BusySendTurnEnd) error {
+	s.steps = append(s.steps, name)
+	if s.turnEnd == nil {
+		return nil
+	}
+	return s.turnEnd(name, te)
+}
+
+func (s *failRouteFacts) ReadBusySendTurnEndPrompts(ctx context.Context, te store.BusySendTurnEnd) ([]store.BusySendTurnEndPrompt, error) {
+	if err := s.step("read", te); err != nil {
+		return nil, err
+	}
+	return s.Store.ReadBusySendTurnEndPrompts(ctx, te)
+}
+
+func (s *failRouteFacts) ApplyHookTransitionResult(id string, gate store.HookGate, state string, soft bool, event, path string,
+	present bool) (store.UpsertOutcome, store.HookApplied, error) {
+	switch err := s.step("write", store.BusySendTurnEnd{}); {
+	case errors.Is(err, errNotApplied):
+		return store.UpsertNoChange, store.HookApplied{}, nil
+	case err != nil:
+		return store.UpsertError, store.HookApplied{}, err
+	}
+	return s.Store.ApplyHookTransitionResult(id, gate, state, soft, event, path, present)
+}
+
+func (s *failRouteFacts) RecordBusySendTurnEnd(ctx context.Context, te store.BusySendTurnEnd) (store.BusySendTurnEndResult, error) {
+	if err := s.step("record", te); err != nil {
+		return store.BusySendTurnEndResult{}, err
+	}
+	return s.Store.RecordBusySendTurnEnd(ctx, te)
+}
+
+// noTurnEndSeam is the store without the turn-end take-evidence seam: its
+// fields hide the store's two methods of it.
+type noTurnEndSeam struct {
+	*store.Store
+	ReadBusySendTurnEndPrompts, RecordBusySendTurnEnd struct{}
 }
 
 func (s *failRouteFacts) ReadBusySendForcePrompt(ctx context.Context, id string) (store.BusySendForcePrompt, error) {
@@ -479,7 +632,16 @@ func (s *failRouteFacts) ReadBusySendRouteFacts(ctx context.Context, id string, 
 // startup-prompt reader on any turn of any Launch (code repairs 2 and 3),
 // issues nothing. While a force's call runs (SR-3.4, SR-3.9), the forced wake
 // skips only the turn, Dialog and compaction waits: each case marked force
-// also refuses it, issuing none of the force's frozen prompt.
+// also refuses it, issuing none of the force's frozen prompt. Each case marked
+// steer also refuses the parent's PostToolBatch steer of a Steer Turn Message
+// (SR-3.4, SR-3.1; M2 P-C4.1, P-C4.6): a foreground or background child's
+// callback (agent_id, the payload fixtures' own, though it reports the
+// parent's session and process parent), another process, session or Launch,
+// a payload session that contradicts its transcript, a failed facts read, no
+// startup seam, no issuer identity or a stdout that takes no write deadline
+// consume nothing, write no context on stdout and exit 0; neither does a
+// Dialog or startup precedence, which a steer still waits on. No case logs an
+// unknown event, and the steer writes no row.
 func TestClaudeWakeRefusals(t *testing.T) {
 	startup := []apitest.SpawnOption{apitest.WithRawAgentArgs(`["--model","opus","fix the tests"]`), apitest.WithTurnStarts(0)}
 	cases := []struct {
@@ -491,56 +653,71 @@ func TestClaudeWakeRefusals(t *testing.T) {
 		parent    func(t *testing.T, e *wakeEnv) hookParent
 		failAt    int // the route-facts read that fails; 0 for none
 		noSelf    bool
-		plain     bool   // stderr takes no write deadline
+		plain     bool   // the output stream (stderr, a steer's stdout) takes no write deadline
 		noStartup bool   // no HandleConfig.ClaudeStartupPrompt
 		resumed   bool   // the row is on a resumed Launch (newResumedWakeEnv)
 		logged    string // a diagnostic the hook logs; "" checks none
 		waits     []store.BusySendWaitReason
-		force     bool // also run with a force's call running
+		force     bool   // also run with a force's call running
+		steer     string // also run as the parent's PostToolBatch from this fixture ("": none)
+		noWake    bool   // run only as the steer
 	}{
-		{name: "another process's callback", parent: func(t *testing.T, e *wakeEnv) hookParent { return foreignParent(t, e.st, e.id) }, force: true},
+		{name: "another process's callback", parent: func(t *testing.T, e *wakeEnv) hookParent { return foreignParent(t, e.st, e.id) }, force: true,
+			steer: "post-tool-batch.json"},
 		{name: "a subagent's callback", fields: map[string]any{"agent_id": "a5b92f0e7d3c6184", "agent_type": "Explore"}, force: true},
+		{name: "a foreground child's callback", steer: "post-tool-batch-subagent.json", noWake: true},
+		{name: "a background child's callback", steer: "post-tool-batch-background.json", noWake: true},
 		{name: "another watched path", fields: map[string]any{"file_path": "/work/demo/.envrc"}, force: true},
 		{name: "uncovered Launch", prep: func(t *testing.T, e *wakeEnv) {
 			if err := apitest.SeedBusySendCoverage(e.db, e.id, store.BusySendNotCovered, store.BusySendCovered); err != nil {
 				t.Fatal(err)
 			}
-		}, force: true},
+		}, force: true, steer: "post-tool-batch.json"},
 		{name: "ended Launch", prep: func(t *testing.T, e *wakeEnv) {
 			e.fire(t, e.payload(t, "session-end-prompt-input-exit.json", nil))
-		}, waits: []store.BusySendWaitReason{store.BusySendWaitLaunchEnded}, force: true},
+		}, waits: []store.BusySendWaitReason{store.BusySendWaitLaunchEnded}, force: true, steer: "post-tool-batch.json"},
 		{name: "another session (F2)", fields: map[string]any{"session_id": "0d1c2b3a-4f5e-4d6c-8b7a-9e8f7a6b5c4d",
-			"transcript_path": "/x/0d1c2b3a-4f5e-4d6c-8b7a-9e8f7a6b5c4d.jsonl"}, force: true},
+			"transcript_path": "/x/0d1c2b3a-4f5e-4d6c-8b7a-9e8f7a6b5c4d.jsonl"}, force: true, steer: "post-tool-batch.json"},
+		{name: "a payload session contradicting its transcript", fields: map[string]any{"session_id": "0d1c2b3a-4f5e-4d6c-8b7a-9e8f7a6b5c4d"},
+			steer: "post-tool-batch.json"},
 		{name: "no session (F2)", fields: map[string]any{"session_id": nil, "transcript_path": nil}},
 		{name: "running turn", state: store.StateWorking, waits: []store.BusySendWaitReason{store.BusySendWaitTurnRunning}},
 		{name: "open Dialog", state: store.StateCheckPermission, prep: func(t *testing.T, e *wakeEnv) {
 			if _, err := apitest.SeedPermissionRequest(e.db, e.id, "Bash"); err != nil {
 				t.Fatal(err)
 			}
-		}, waits: []store.BusySendWaitReason{store.BusySendWaitDialog}},
-		{name: "agent starting", state: store.StatePending, waits: []store.BusySendWaitReason{store.BusySendWaitAgentStarting}},
-		{name: "startup prompt not yet taken", opts: startup, waits: []store.BusySendWaitReason{store.BusySendWaitAgentStarting}, force: true},
-		{name: "facts unreadable at first (R2-5)", failAt: 1, logged: "hook: busy-send route facts", force: true},
-		{name: "facts unreadable at eligibility", failAt: 2, waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
-		{name: "facts unreadable at authorize", failAt: 3, waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
-		{name: "no helper identity", noSelf: true, force: true},
+		}, waits: []store.BusySendWaitReason{store.BusySendWaitDialog}, steer: "post-tool-batch.json"},
+		{name: "agent starting", state: store.StatePending, waits: []store.BusySendWaitReason{store.BusySendWaitAgentStarting},
+			steer: "post-tool-batch.json"},
+		{name: "startup prompt not yet taken", opts: startup, waits: []store.BusySendWaitReason{store.BusySendWaitAgentStarting}, force: true,
+			steer: "post-tool-batch.json"},
+		{name: "facts unreadable at first (R2-5)", failAt: 1, logged: "hook: busy-send route facts", force: true, steer: "post-tool-batch.json"},
+		{name: "facts unreadable at eligibility", failAt: 2, waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown},
+			steer: "post-tool-batch.json"},
+		{name: "facts unreadable at authorize", failAt: 3, waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown},
+			steer: "post-tool-batch.json"},
+		{name: "no helper identity", noSelf: true, force: true, steer: "post-tool-batch.json"},
 		{name: "output that takes no write deadline (R2-2)", plain: true, logged: "takes no write deadline",
-			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}, force: true},
+			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}, force: true, steer: "post-tool-batch.json"},
 		{name: "no startup-prompt reader on a first turn (R2-7)", noStartup: true,
 			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}, force: true},
 		{name: "no startup-prompt reader after a Turn Start (R3-1)", noStartup: true, opts: []apitest.SpawnOption{apitest.WithTurnStarts(1)},
-			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
+			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}, steer: "post-tool-batch.json"},
 		{name: "no startup-prompt reader on a resumed Launch (R3-1)", noStartup: true, resumed: true,
 			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
 	}
 	for _, tc := range cases {
-		for _, forced := range []bool{false, true} {
-			if forced && !tc.force {
+		for _, mode := range []string{"wake", "forced wake", "steer"} {
+			if mode == "wake" && tc.noWake || mode == "forced wake" && !tc.force || mode == "steer" && tc.steer == "" {
 				continue
 			}
+			forced, steer := mode == "forced wake", mode == "steer"
 			name := tc.name
-			if forced {
+			switch mode {
+			case "forced wake":
 				name += ", a force's call running"
+			case "steer":
+				name += ", a steer"
 			}
 			t.Run(name, func(t *testing.T) {
 				state := tc.state
@@ -553,7 +730,11 @@ func TestClaudeWakeRefusals(t *testing.T) {
 				} else {
 					e = newWakeEnv(t, state, tc.opts...)
 				}
-				e.admit(t, "m1", "hello")
+				if steer {
+					e.admitAs(t, "m1", "hello", store.BusySendSteerTurn, true)
+				} else {
+					e.admit(t, "m1", "hello")
+				}
 				admitted := e.result(t, "m1")
 				var force store.BusySendForceClaim
 				if forced {
@@ -584,23 +765,33 @@ func TestClaudeWakeRefusals(t *testing.T) {
 				if tc.noStartup {
 					hc.ClaudeStartupPrompt = nil
 				}
-				var plain, stdout, logs bytes.Buffer
-				stderr := &wakeStderr{keep: -1}
+				var plain, logs bytes.Buffer
+				// Both streams take a write deadline, as the CLI gives the owned
+				// hooks theirs; plain replaces the one the callback writes to.
+				stdout, stderr := &wakeStderr{keep: -1}, &wakeStderr{keep: -1}
+				var out io.Writer = stdout
 				hc.Stderr = stderr
-				if tc.plain {
+				payload := e.fileChanged(t, tc.fields)
+				switch {
+				case steer:
+					payload = e.payload(t, tc.steer, tc.fields)
+					if tc.plain {
+						out = &plain
+					}
+				case tc.plain:
 					hc.Stderr = &plain
 				}
-				if err := hook.Handle(context.Background(), bytes.NewReader(e.fileChanged(t, tc.fields)), &stdout, st, hc, log.New(&logs, "", 0)); err != nil {
+				if err := hook.Handle(context.Background(), bytes.NewReader(payload), out, st, hc, log.New(&logs, "", 0)); err != nil {
 					t.Errorf("Handle = %v; want nil (exit 0)", err)
 				}
 				if stdout.Len() != 0 || stderr.Len() != 0 || plain.Len() != 0 {
-					t.Errorf("wrote stdout %q, stderr %q%q; want nothing", stdout.String(), stderr.String(), plain.String())
+					t.Errorf("wrote stdout %q, stderr %q, %q; want nothing", stdout.String(), stderr.String(), plain.String())
 				}
 				if failing.fired != (tc.failAt > 0) {
 					t.Errorf("injected route-facts failure fired = %t; want %t", failing.fired, tc.failAt > 0)
 				}
-				if !strings.Contains(logs.String(), tc.logged) {
-					t.Errorf("hook log %q; want it to name %q", logs.String(), tc.logged)
+				if !strings.Contains(logs.String(), tc.logged) || strings.Contains(logs.String(), "unknown event") {
+					t.Errorf("hook log %q; want it to name %q and no unknown event", logs.String(), tc.logged)
 				}
 				assertRowUnchanged(t, e.st, e.id, row)
 				if after, err := e.st.OpenPermissionRequestsForSpawn(e.id); err != nil || len(after) != len(requests) {
@@ -634,6 +825,14 @@ func TestClaudeWakeRefusals(t *testing.T) {
 // write is partial and a failed one uncertain, both non-Final, never retried
 // by a later wake, their obligation kept. The agent's sighting arriving before
 // the completion record still binds, and the completion then secures order.
+// A steer's output (M2 P-C4.2, P-C4.3; SR-2.5, SR-3.4) is its one stdout
+// envelope, under the Job deadline: intent and the obligation are durable at
+// its first byte, and only the whole envelope, its newline included, is
+// complete (Final handed_over_not_proven, never wait_turn_raced), returning the
+// prefix's never-issued prompt to Held for the next parent boundary. A short
+// or failed envelope keeps the barrier and its obligation: neither a later
+// boundary nor, after the turn's Stop, a wake retries it or issues the
+// remainder.
 func TestClaudeWakeOutputBoundary(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -679,6 +878,48 @@ func TestClaudeWakeOutputBoundary(t *testing.T) {
 			}
 			if o := e.observe(t); o.AwaitingTurnStart != 1 {
 				t.Errorf("awaiting = %d; want the obligation kept", o.AwaitingTurnStart)
+			}
+		})
+		t.Run(tc.name+", a steer", func(t *testing.T) {
+			e := newWakeEnv(t, store.StateWorking)
+			a, b := strings.Repeat("a", 5000), strings.Repeat("b", 5000)
+			e.admitAs(t, "m1", a, store.BusySendSteerTurn, true)
+			e.admitAs(t, "m2", b, store.BusySendSteerTurn, true)
+			w := &wakeStderr{keep: tc.keep, err: tc.err}
+			w.before = func() {
+				if o := e.observe(t); o.AwaitingTurnStart != 1 || o.HeldCount != 0 {
+					t.Errorf("at the first byte: awaiting %d, Held %d; want the issued prompt's obligation 1, Held 0", o.AwaitingTurnStart, o.HeldCount)
+				}
+			}
+			began := time.Now()
+			got := e.steerWith(t, w)
+			if w.deadline.Before(began) || w.deadline.After(time.Now().Add(time.Minute)) {
+				t.Errorf("write deadline %v; want the Job's, within a minute of the callback", w.deadline)
+			}
+			if !tc.sight {
+				if r := e.result(t, "m1"); r.Final || r.Class != store.BusySendClassSentUnconfirmed || r.PartialTransport != tc.partial {
+					t.Errorf("Result = %+v; want non-Final sent_unconfirmed, partial transport %t", r, tc.partial)
+				}
+				again := e.steer(t)
+				// The turn's Stop is no evidence for output never complete.
+				e.fire(t, e.payload(t, "stop.json", nil))
+				if wake := e.wake(t); again != "" || wake != "" {
+					t.Errorf("a later boundary wrote %q and a wake after the Stop %q; want no retry and no remainder behind the barrier", again, wake)
+				}
+				if o := e.observe(t); o.AwaitingTurnStart != 1 || o.HeldCount != 1 {
+					t.Errorf("awaiting %d, Held %d; want the obligation kept and m2 Held", o.AwaitingTurnStart, o.HeldCount)
+				}
+				return
+			}
+			if got := steerContext(t, got); got != "[agent-director: message 1 of 1]\n"+a {
+				t.Fatalf("steer wrote %d bytes of context; want m1 alone", len(got))
+			}
+			e.assertSent(t, store.BusySendReasonHandedOverNotProven, "m1")
+			if o := e.observe(t); o.AwaitingTurnStart != 1 || o.HeldCount != 1 {
+				t.Errorf("awaiting %d, Held %d; want m1's obligation and m2 returned to Held", o.AwaitingTurnStart, o.HeldCount)
+			}
+			if got := e.steer(t); got != "[agent-director: message 1 of 1]\n"+b {
+				t.Errorf("the next boundary wrote %d bytes of context; want the remainder m2", len(got))
 			}
 		})
 	}
@@ -1204,12 +1445,46 @@ func TestClaudeForceSightingNeedsExactText(t *testing.T) {
 // deadline with no end; E5 decision 7) a Stop touches the wake even with
 // nothing Held, and the wake's ordinary invocation finishes the force first,
 // then delivers its returned Message at this turn end.
+//
+// After a complete steer (o7.c4's wiring, E4 Main Agent decisions 1 and 2;
+// M2 P-C4.2, P-C4.3), the parent's Stop reads its take evidence at entry
+// (steps "read"), makes its own lifecycle write ("write"), then, the write
+// applied and visible, records it ("record") at its entry observation, never a
+// time read later, and only then re-signals: the steer's obligation is cleared
+// and the Held remainder's wake touched, its Final Result unchanged, and
+// nothing written. Output observed in the Stop's own millisecond, a write that
+// does not apply or fails, a failed evidence write or no evidence seam
+// records nothing, so the remainder's wake is not touched; neither does newer
+// steered output completed during the write. A subagent's Stop, SubagentStop,
+// the idle prompt, a soft SessionEnd and a Stop-like unknown event never
+// supply that evidence.
 func TestClaudeTurnEndResignals(t *testing.T) {
 	held := func(t *testing.T, e *wakeEnv) { e.admit(t, "m1", "hello") }
 	forced := func(at time.Duration) func(t *testing.T, e *wakeEnv) {
 		return func(t *testing.T, e *wakeEnv) {
 			held(t, e)
 			e.inCall(e.force(t), at)
+		}
+	}
+	// steered issues a complete Steer Turn prompt, s1, at the parent's tool
+	// boundary, returning s2 to Held, and moves the clock gap on.
+	steered := func(gap time.Duration) func(t *testing.T, e *wakeEnv) {
+		return func(t *testing.T, e *wakeEnv) {
+			e.admitAs(t, "s1", strings.Repeat("a", 5000), store.BusySendSteerTurn, true)
+			e.admitAs(t, "s2", strings.Repeat("b", 5000), store.BusySendSteerTurn, true)
+			e.tick(0)
+			if e.steer(t) == "" {
+				t.Fatal("the steer wrote nothing")
+			}
+			e.tick(gap)
+		}
+	}
+	fail := func(at string, err error) func(t *testing.T, e *wakeEnv, step string) error {
+		return func(t *testing.T, e *wakeEnv, step string) error {
+			if step == at {
+				return err
+			}
+			return nil
 		}
 	}
 	cases := []struct {
@@ -1221,6 +1496,14 @@ func TestClaudeTurnEndResignals(t *testing.T) {
 		foreign bool
 		touch   bool
 		then    func(t *testing.T, e *wakeEnv)
+		// steer checks the callback's take evidence for prep's steer: the
+		// awaiting count after it, and its evidence steps when steps is set.
+		steer    bool
+		awaiting int64
+		steps    []string
+		turnEnd  func(t *testing.T, e *wakeEnv, step string) error // runs at each evidence step
+		noSeam   bool                                              // the store has no turn-end evidence seam
+		claims   bool                                              // turnEnd claims and issues meanwhile
 	}{
 		{name: "Stop with Messages Held", state: store.StateWorking, fixture: "stop.json", prep: held, touch: true},
 		{name: "idle prompt with Messages Held", state: store.StateWorking, fixture: "notification.json", prep: held, touch: true},
@@ -1248,6 +1531,42 @@ func TestClaudeTurnEndResignals(t *testing.T) {
 					t.Errorf("m1 %+v; want delivered unforced", r)
 				}
 			}},
+		{name: "Stop after a complete steer, its remainder Held", state: store.StateWorking, fixture: "stop.json", prep: steered(time.Second),
+			touch: true, steer: true, steps: []string{"read", "write", "record"}, then: func(t *testing.T, e *wakeEnv) {
+				e.assertSent(t, store.BusySendReasonHandedOverNotProven, "s1")
+			}},
+		{name: "Stop in the steer's own millisecond", state: store.StateWorking, fixture: "stop.json", prep: steered(0),
+			steer: true, awaiting: 1, steps: []string{"read", "write"}},
+		{name: "Stop whose write does not apply", state: store.StateWorking, fixture: "stop.json", prep: steered(time.Second),
+			steer: true, awaiting: 1, steps: []string{"read", "write"}, turnEnd: fail("write", errNotApplied)},
+		{name: "Stop whose write fails", state: store.StateWorking, fixture: "stop.json", prep: steered(time.Second),
+			steer: true, awaiting: 1, steps: []string{"read", "write"}, turnEnd: fail("write", errors.New("injected write failure"))},
+		{name: "Stop whose evidence write fails", state: store.StateWorking, fixture: "stop.json", prep: steered(time.Second),
+			steer: true, awaiting: 1, steps: []string{"read", "write", "record"}, turnEnd: fail("record", errors.New("injected evidence failure"))},
+		{name: "Stop with no evidence seam", state: store.StateWorking, fixture: "stop.json", prep: steered(time.Second),
+			steer: true, awaiting: 1, noSeam: true},
+		{name: "Stop with newer steered output during its write", state: store.StateWorking, fixture: "stop.json", prep: steered(time.Second),
+			steer: true, awaiting: 1, steps: []string{"read", "write", "record"}, claims: true,
+			turnEnd: func(t *testing.T, e *wakeEnv, step string) error {
+				if step == "write" {
+					e.tick(time.Second)
+					if got := e.steer(t); got != "[agent-director: message 1 of 1]\n"+strings.Repeat("b", 5000) {
+						t.Errorf("the steer during the Stop wrote %d bytes of context; want s2", len(got))
+					}
+					e.tick(time.Second)
+				}
+				return nil
+			}},
+		{name: "a subagent's Stop after a steer", state: store.StateWorking, fixture: "stop.json", prep: steered(time.Second),
+			fields: map[string]any{"agent_id": "a5b92f0e7d3c6184", "agent_type": "Explore"}, steer: true, awaiting: 1},
+		{name: "SubagentStop after a steer", state: store.StateWorking, fixture: "subagent-stop.json", prep: steered(time.Second),
+			steer: true, awaiting: 1},
+		{name: "idle prompt after a steer", state: store.StateWorking, fixture: "notification.json", prep: steered(time.Second),
+			steer: true, awaiting: 1},
+		{name: "soft SessionEnd after a steer", state: store.StateWorking, fixture: "session-end-clear.json", prep: steered(time.Second),
+			steer: true, awaiting: 1},
+		{name: "a Stop-like unknown event after a steer", state: store.StateWorking, fixture: "stop.json", prep: steered(time.Second),
+			fields: map[string]any{"hook_event_name": "StopFailure"}, steer: true, awaiting: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1260,17 +1579,46 @@ func TestClaudeTurnEndResignals(t *testing.T) {
 			if tc.foreign {
 				p = foreignParent(t, e.st, e.id)
 			}
+			var seam *failRouteFacts
+			switch {
+			case tc.noSeam:
+				e.seam = &noTurnEndSeam{Store: e.st}
+			case tc.steer:
+				entry := e.now()
+				seam = &failRouteFacts{Store: e.st, turnEnd: func(step string, te store.BusySendTurnEnd) error {
+					if step != "write" && !te.At.Equal(entry) {
+						t.Errorf("%s at %v; want the Stop's entry observation %v", step, te.At, entry)
+					}
+					if step == "record" {
+						if got := mustGetSpawn(t, e.st, e.id).State; got != store.StateWaiting {
+							t.Errorf("at the evidence write the row is %s; want the Stop's applied write visible", got)
+						}
+					}
+					if tc.turnEnd != nil {
+						return tc.turnEnd(t, e, step)
+					}
+					return nil
+				}}
+				e.seam = seam
+			}
 			touched := e.wakeMtime(t)
 			var stderr bytes.Buffer
 			if out, err := e.handle(context.Background(), p, e.payload(t, tc.fixture, tc.fields), &stderr); err != nil || out != "" || stderr.Len() != 0 {
 				t.Errorf("Handle = stdout %q, stderr %q, %v; want nothing, nil", out, stderr.String(), err)
 			}
+			e.seam = nil
 			if got := touched(); got != tc.touch {
 				t.Errorf("wake endpoint touched = %t; want %t", got, tc.touch)
 			}
-			if after := e.observe(t); after.HeldCount != before.HeldCount || after.HandoverCount != before.HandoverCount {
+			if after := e.observe(t); !tc.claims && (after.HeldCount != before.HeldCount || after.HandoverCount != before.HandoverCount) {
 				t.Errorf("Held %d → %d, hand-overs %d → %d; want nothing claimed", before.HeldCount, after.HeldCount,
 					before.HandoverCount, after.HandoverCount)
+			}
+			if after := e.observe(t); tc.steer && after.AwaitingTurnStart != tc.awaiting {
+				t.Errorf("awaiting %d → %d; want %d", before.AwaitingTurnStart, after.AwaitingTurnStart, tc.awaiting)
+			}
+			if seam != nil && tc.steps != nil && !slices.Equal(seam.steps, tc.steps) {
+				t.Errorf("take-evidence steps %v; want %v", seam.steps, tc.steps)
 			}
 			if n := storefix.ReadBusySendCounts(t, e.db).Forces; n != forces {
 				t.Errorf("%d forces → %d; want none created", forces, n)
@@ -1539,6 +1887,292 @@ func TestClaudeStartupWakeRevalidatesAndExpires(t *testing.T) {
 			if name == "unreadable facts" && !strings.Contains(logs.String(), "injected route-facts read failure") {
 				t.Errorf("read failure not diagnosed: %q", logs.String())
 			}
+		})
+	}
+}
+
+// TestClaudeSteerConsecutiveBoundaries (SR-3.1, SR-3.4, SR-2.5, SR-3.3a, SR-3.5;
+// E4 acceptance criteria 2 and 3; M2 P-C4.2, P-C4.3): on a fresh Launch with
+// a startup prompt, a parent tool boundary before the agent's own
+// UserPromptSubmit takes that prompt issues nothing (agent_starting); after it,
+// the boundaries of that same startup turn are eligible. A Steer Turn prefix
+// needing two prompts, ahead of a Wait Turn Message, goes one prompt per
+// consecutive parent PostToolBatch, in accepted order with exact separators
+// and its original text (JSON-, tag- and Unicode-sensitive), grouped by the
+// Steer Turn row's measure (test review R1-1: the first prompt fits it but
+// not Wait Turn's, whose wake wrapper would split it), the second while
+// the first still awaits take evidence, with no AD input between them: a wake
+// meanwhile writes nothing, and so does a third boundary once the prefix is
+// spent. No steer writes the row. A complete steer is Final sent_unconfirmed
+// handed_over_not_proven when confirmed, never wait_turn_raced, and its
+// unconfirmed Message Final too (confirmation_off, which no caller can read
+// without a pair). The parent Stop then admits both steers and re-signals,
+// and the ordinary wake delivers the rest, the Wait Turn Message and a later
+// Steer Turn one, as one Wait Turn prompt with the wake's own exposure
+// (wait_turn_raced). Packing and the prefix arithmetic are o7.cm's.
+func TestClaudeSteerConsecutiveBoundaries(t *testing.T) {
+	e := newWakeEnv(t, store.StateWaiting, apitest.WithRawAgentArgs(`["--model","opus","fix the tests"]`), apitest.WithTurnStarts(0))
+	e.tick(0)
+	s1 := "naïve café ✓ \"quoted\" \\ <b>&amp;</b> <system-reminder>\tend\nnext line"
+	s1 += strings.Repeat("x", 1450-len(s1))
+	b, c := strings.Repeat("b", 8000), strings.Repeat("c", 5000)
+	first := "[agent-director: message 1 of 2]\n" + s1 + "\n\n[agent-director: message 2 of 2]\n" + b
+	steerRow, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendSteerTurn)
+	waitRow, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
+	if steerRow.Measure([]byte(first)) > steerRow.PromptBytes || waitRow.Measure([]byte(first)) <= waitRow.PromptBytes {
+		t.Fatalf("s1 and s2 measure %d as a steer, %d as a wake; want only the steer within its %d-byte prompt",
+			steerRow.Measure([]byte(first)), waitRow.Measure([]byte(first)), steerRow.PromptBytes)
+	}
+	e.admitAs(t, "s1", s1, store.BusySendSteerTurn, true)
+	e.admitAs(t, "s2", b, store.BusySendSteerTurn, false)
+	e.admitAs(t, "s3", c, store.BusySendSteerTurn, true)
+	e.admit(t, "w1", "after the turn")
+	e.admitAs(t, "s4", "a later steer", store.BusySendSteerTurn, true)
+
+	if got := e.steer(t); got != "" {
+		t.Fatalf("a boundary before the startup prompt was taken wrote %q; want nothing", got)
+	}
+	e.assertHeld(t, "s1", store.BusySendWaitAgentStarting)
+	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": "fix the tests"}))
+	row := mustGetSpawn(t, e.st, e.id)
+	if row.TurnStarts != 1 || row.State != store.StateWorking {
+		t.Fatalf("after the startup prompt: Turn Starts %d, state %s; want 1, working", row.TurnStarts, row.State)
+	}
+
+	e.tick(time.Second)
+	if got := e.steer(t); got != first {
+		t.Fatalf("the first boundary of the startup turn wrote %d bytes of context; want s1 and s2 as one prompt (%d bytes)", len(got), len(first))
+	}
+	e.assertSent(t, store.BusySendReasonHandedOverNotProven, "s1")
+	// s2, unconfirmed, has no pair and so no readable Result: handed over
+	// with s1 and Final (no non-Final hand-over left); its reason is
+	// confirmation_off by the store's mapping (o7.cm, E2), and the hand-over's
+	// one race exposure is s1's, never wait_turn_raced.
+	facts, err := apitest.ReadBusySendFacts(e.db, e.id)
+	if err != nil || facts.Messages[1].Confirmed || facts.Messages[1].Place != "closed" {
+		t.Errorf("s2 facts %+v, %v; want unconfirmed and handed over", facts.Messages, err)
+	}
+	if o := e.observe(t); o.HandoverCount != 0 {
+		t.Errorf("non-Final hand-overs %d; want s1's and s2's Results Final", o.HandoverCount)
+	}
+	e.tick(time.Second)
+	if got := e.wake(t); got != "" {
+		t.Errorf("a wake between the boundaries wrote %q; want nothing", got)
+	}
+	e.tick(time.Second)
+	if o := e.observe(t); o.AwaitingTurnStart != 1 || o.HeldCount != 3 {
+		t.Fatalf("before the second boundary: awaiting %d, Held %d; want the first steer awaiting, s3, w1 and s4 Held", o.AwaitingTurnStart, o.HeldCount)
+	}
+	if got, want := e.steer(t), "[agent-director: message 1 of 1]\n"+c; got != want {
+		t.Fatalf("the second boundary wrote %d bytes of context; want s3 alone (%d)", len(got), len(want))
+	}
+	e.assertSent(t, store.BusySendReasonHandedOverNotProven, "s3")
+	e.tick(time.Second)
+	if got := e.steer(t); got != "" {
+		t.Errorf("a third boundary wrote %q; want nothing: the next Message waits for turn end", got)
+	}
+	assertRowUnchanged(t, e.st, e.id, row)
+	if o := e.observe(t); o.AwaitingTurnStart != 2 || o.HeldCount != 2 {
+		t.Fatalf("before the turn's end: awaiting %d, Held %d; want both steers awaiting, w1 and s4 Held", o.AwaitingTurnStart, o.HeldCount)
+	}
+
+	e.tick(time.Second)
+	touched := e.wakeMtime(t)
+	e.fire(t, e.payload(t, "stop.json", nil))
+	if o := e.observe(t); !touched() || o.AwaitingTurnStart != 0 {
+		t.Fatalf("the parent's Stop: touched %t, awaiting %d; want the wake re-signalled with both steers admitted", touched(), o.AwaitingTurnStart)
+	}
+	rest := "[agent-director: message 1 of 2]\nafter the turn\n\n[agent-director: message 2 of 2]\na later steer"
+	if got := e.wake(t); got != rest {
+		t.Fatalf("the wake wrote %q; want w1 and s4 as one prompt %q", got, rest)
+	}
+	e.assertRaced(t, "w1", "s4")
+	e.assertSent(t, store.BusySendReasonHandedOverNotProven, "s1", "s3")
+}
+
+// TestClaudeSteerKeepsItsBinding (M2 P-C4.1, P-C4.6, P-C4.7; SR-2.4, SR-3.9):
+// a steer is pinned to the destination its callback authenticated. When the
+// Launch is replaced after that, by a resume reusing the provider session and
+// the same process identity (so the gate still holds), before the steer's
+// eligibility read or its last look before the issue commit, the callback
+// adopts nothing: it writes no context and its Message stays Held, never
+// issued, for the new Launch's own parent boundary to deliver. A Dialog
+// opening between eligibility and the last look refuses too: the request
+// stays open and unanswered, and nothing is written. So does a standing pause
+// claim made then (test review R1-2): the issue commit's pause fence refuses,
+// so nothing is issued or written and the Message stays Held. A route or
+// connection changes only with a new Launch (its route identity is its Launch
+// id, its connection generation 0). E6 owns the pause claim's matrix.
+func TestClaudeSteerKeepsItsBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		at     int // the route-facts read the change runs before
+		dialog bool
+		pause  bool
+	}{
+		{name: "the Launch replaced before eligibility", at: 2},
+		{name: "the Launch replaced before the last look", at: 3},
+		{name: "a Dialog opened before the last look", at: 3, dialog: true},
+		{name: "a pause claimed before the last look", at: 3, pause: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newWakeEnv(t, store.StateWorking)
+			e.admitAs(t, "m1", "hello", store.BusySendSteerTurn, true)
+			callback, token := e.parent, e.token
+			seam := &failRouteFacts{Store: e.st, n: tc.at}
+			seam.before = func() {
+				e.seam = nil
+				switch {
+				case tc.dialog:
+					if _, err := apitest.SeedPermissionRequest(e.db, e.id, "Bash"); err != nil {
+						t.Fatal(err)
+					}
+					return
+				case tc.pause:
+					storefix.SeedBusySendPauseClaim(t, e.db, e.id)
+					return
+				}
+				e.fire(t, e.payload(t, "session-end-prompt-input-exit.json", nil))
+				e.resume(t, ssgPane("4444444444444444", callback.PID), nil)
+				if e.parent != callback {
+					t.Fatalf("the new Launch's process %+v; want the callback's %+v, so its gate still holds", e.parent, callback)
+				}
+			}
+			e.seam = seam
+			if got := e.steer(t); got != "" || !seam.fired {
+				t.Fatalf("steer wrote %q (change made %t); want nothing", got, seam.fired)
+			}
+			if o := e.observe(t); o.AwaitingTurnStart != 0 || o.HeldCount != 1 {
+				t.Errorf("awaiting %d, Held %d; want m1 never issued and Held", o.AwaitingTurnStart, o.HeldCount)
+			}
+			if tc.dialog {
+				e.assertHeld(t, "m1", store.BusySendWaitDialog)
+				if open, err := e.st.OpenPermissionRequestsForSpawn(e.id); err != nil || len(open) != 1 {
+					t.Errorf("open permission requests %d, %v; want the Dialog's, unanswered", len(open), err)
+				}
+				return
+			}
+			if tc.pause {
+				e.assertHeld(t, "m1", store.BusySendWaitReadinessUnknown)
+				return
+			}
+			if r := e.result(t, "m1"); r.Final || r.Class != store.BusySendClassHeld || e.token == token {
+				t.Fatalf("m1 %+v on Launch %s; want Held on a new Launch", r, e.token)
+			}
+			if got := e.steer(t); got != "[agent-director: message 1 of 1]\nhello" {
+				t.Errorf("the new Launch's own boundary wrote %q; want m1", got)
+			}
+			e.assertSent(t, store.BusySendReasonHandedOverNotProven, "m1")
+		})
+	}
+}
+
+// TestClaudeSteerRaces (M2 P-C4.2, P-C4.3; SR-2.2, SR-3.3; E4 Main Agent
+// decision 2): while a steer writes its envelope, a send admitted then joins
+// nothing and causes no further output, and its wake writes nothing; a parent
+// Stop then, before the steer's completion is recorded, supplies no take
+// evidence and touches nothing, and the wake after it neither replays the
+// steer nor delivers the later Message ahead of its evidence. A later parent
+// Stop admits the steer and re-signals the wake, which delivers that Message.
+// o7.cm owns both store transactions' serializations.
+func TestClaudeSteerRaces(t *testing.T) {
+	e := newWakeEnv(t, store.StateWorking)
+	e.tick(0)
+	e.admitAs(t, "s1", "first steer", store.BusySendSteerTurn, true)
+	w := &wakeStderr{keep: -1}
+	w.before = func() {
+		e.admitAs(t, "late", "second steer", store.BusySendSteerTurn, true)
+		e.tick(time.Second)
+		touched := e.wakeMtime(t)
+		e.fire(t, e.payload(t, "stop.json", nil))
+		if got := e.wake(t); touched() || got != "" {
+			t.Errorf("a Stop during the steer's write touched the wake (%t), which wrote %q; want neither", touched(), got)
+		}
+	}
+	if got := steerContext(t, e.steerWith(t, w)); got != "[agent-director: message 1 of 1]\nfirst steer" {
+		t.Fatalf("steer wrote %q; want s1 alone", got)
+	}
+	e.assertSent(t, store.BusySendReasonHandedOverNotProven, "s1")
+	if o := e.observe(t); o.AwaitingTurnStart != 1 || o.HeldCount != 1 {
+		t.Fatalf("awaiting %d, Held %d; want s1 awaiting evidence, late Held", o.AwaitingTurnStart, o.HeldCount)
+	}
+	if got := e.wake(t); got != "" {
+		t.Errorf("a wake after the steer completed wrote %q; want nothing before its evidence", got)
+	}
+	e.tick(time.Second)
+	touched := e.wakeMtime(t)
+	e.fire(t, e.payload(t, "stop.json", nil))
+	if o := e.observe(t); !touched() || o.AwaitingTurnStart != 0 {
+		t.Fatalf("a later Stop: touched %t, awaiting %d; want s1 admitted and the wake re-signalled", touched(), o.AwaitingTurnStart)
+	}
+	if got := e.wake(t); got != "[agent-director: message 1 of 1]\nsecond steer" {
+		t.Errorf("the wake wrote %q; want late", got)
+	}
+}
+
+// TestClaudeSteerForces (SR-3.4, SR-4.2, SR-4.3; E5 decision 7; M2 P-C4.4): a
+// parent PostToolBatch never carries a force's authority. While a force's
+// call runs, its hand-over bars the steer's claim: nothing is written, the
+// force's prompt stays unissued and a later Steer Turn Message waits
+// handover_in_progress. Once the call is abandoned, the boundary, as the
+// agent's eligible event, finishes the force before its own waits, even when
+// a Dialog or startup precedence then blocks it and when its stdout could take
+// no output: the force's Messages are Held again, unforced, nothing is issued
+// and no forced wake writes. E5 owns the force outcome matrix.
+func TestClaudeSteerForces(t *testing.T) {
+	startup := []apitest.SpawnOption{apitest.WithRawAgentArgs(`["--model","opus","fix the tests"]`), apitest.WithTurnStarts(0)}
+	for _, tc := range []struct {
+		name   string
+		state  string
+		opts   []apitest.SpawnOption
+		dialog bool
+		at     time.Duration // the callback's clock after the call's entry
+		plain  bool          // stdout takes no write deadline
+		wait   store.BusySendWaitReason
+	}{
+		{name: "a force's call running", state: store.StateWorking, at: time.Second, wait: store.BusySendWaitHandoverInProgress},
+		{name: "an abandoned force, then a Dialog", state: store.StateCheckPermission, dialog: true, at: 15*time.Second + time.Millisecond,
+			wait: store.BusySendWaitDialog},
+		{name: "an abandoned force, then the startup prompt's precedence, no output possible", state: store.StateWaiting, opts: startup,
+			at: 15*time.Second + time.Millisecond, plain: true, wait: store.BusySendWaitAgentStarting},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newWakeEnv(t, tc.state, tc.opts...)
+			if tc.dialog {
+				if _, err := apitest.SeedPermissionRequest(e.db, e.id, "Bash"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e.admitAs(t, "m1", "hello", store.BusySendSteerTurn, true)
+			c := e.force(t)
+			e.admitAs(t, "m2", "next", store.BusySendSteerTurn, true)
+			e.inCall(c, tc.at)
+			var plain bytes.Buffer
+			stdout := &wakeStderr{keep: -1}
+			var out io.Writer = stdout
+			if tc.plain {
+				out = &plain
+			}
+			if err := e.handleTo(context.Background(), e.parent, e.payload(t, "post-tool-batch.json", nil), out, nil); err != nil ||
+				stdout.Len() != 0 || plain.Len() != 0 {
+				t.Fatalf("PostToolBatch = %v, stdout %q%q; want nil and nothing written", err, stdout.String(), plain.String())
+			}
+			if o := e.observe(t); o.AwaitingTurnStart != 0 {
+				t.Errorf("awaiting %d; want nothing issued", o.AwaitingTurnStart)
+			}
+			f := e.forceResult(t, c)
+			if tc.at < 15*time.Second {
+				h, err := e.st.ReadBusySendHandover(context.Background(), c.Handover.HandoverID)
+				if f.Outcome != store.BusySendForceRunning || err != nil || h.Prompts[0].Emission != store.BusySendEmissionNone {
+					t.Errorf("force %s, its prompt %+v (%v); want running, never issued", f.Outcome, h.Prompts, err)
+				}
+				e.assertHeld(t, "m2", tc.wait)
+				return
+			}
+			if r := e.result(t, "m1"); f.Outcome == store.BusySendForceRunning || r.Forced {
+				t.Errorf("force %s, m1 %+v; want the force finished and m1 unforced", f.Outcome, r)
+			}
+			e.assertHeld(t, "m1", tc.wait)
 		})
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -179,6 +180,32 @@ func ExpireBusySendForce(t *testing.T, dbPath, forceID string, atMillis int64) {
 	}
 	if err != nil {
 		t.Fatalf("storefix.ExpireBusySendForce(%s): %v", forceID, err)
+	}
+}
+
+// SeedBusySendPauseClaim records a standing pause claim on instanceID's
+// current Launch, as SR-6.5's pause call claims it before its signal, so the
+// Launch's issue commits refuse (BusySendGuardPause) until Launch End
+// (reusable fixture). This release has no claim writer: E6 t1.xis.8a owns the
+// pause claim and its matrix, and may replace this seed with its writer.
+func SeedBusySendPauseClaim(t *testing.T, dbPath, instanceID string) {
+	t.Helper()
+	raw := openRawStore(t, dbPath, "SeedBusySendPauseClaim")
+	defer func() { _ = raw.Close() }()
+	now := time.Now().UnixMilli()
+	r, err := raw.Exec(`INSERT INTO busy_send_pause_claims (claim_id, store_id, instance_id, launch_id, owner_call_id,
+	        claimed_at_ms, deadline_ms, signal_kind, state)
+	    SELECT ?, store_id, instance_id, launch_id, ?, ?, ?, 'sigterm', 'standing'
+	    FROM busy_send_launches WHERE instance_id = ? AND phase = 'current'`,
+		uuid.NewString(), uuid.NewString(), now, now+(15*time.Second).Milliseconds(), instanceID)
+	if err == nil {
+		var n int64
+		if n, err = r.RowsAffected(); err == nil && n != 1 {
+			err = fmt.Errorf("%d current Launches; want 1", n)
+		}
+	}
+	if err != nil {
+		t.Fatalf("storefix.SeedBusySendPauseClaim(%s): %v", instanceID, err)
 	}
 }
 

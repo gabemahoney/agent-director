@@ -55,6 +55,13 @@ var hookEvents = []hookEventName{
 // a wake prompt.
 const hookFileChanged hookEventName = "FileChanged"
 
+// hookPostToolBatch is busy send's owned steer (SR-3.4): registered, as a
+// synchronous hook, only for a covered Claude Launch (Resolved.BusySendCovered),
+// beside the owned wake and never as a state report. Claude Code runs it once
+// a batch of tool calls has finished; a parent's stdout may return one Steer
+// Turn prompt as additionalContext.
+const hookPostToolBatch hookEventName = "PostToolBatch"
+
 var matcherFields = map[hookEventName]bool{
 	hookPreToolUse:        true,
 	hookPermissionRequest: true,
@@ -149,7 +156,9 @@ const sessionStartHookTimeoutSeconds = 600
 //
 // A covered Claude Launch (r.BusySendCovered; SR-3.4) also gets the owned
 // FileChanged entry, in exec form with "asyncRewake": true and no timeout
-// (hookFileChanged); an uncovered Launch's settings are exactly as before.
+// (hookFileChanged), and the owned PostToolBatch entry, in exec form with no
+// asyncRewake, matcher or timeout (hookPostToolBatch); an uncovered Launch's
+// settings are exactly as before.
 // Other people's hooks and settings are never read, reordered or replaced.
 //
 // `statusLine` and `subagentStatusLine` carry the context-fullness callbacks
@@ -206,6 +215,11 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 		// carries no matcher and no timeout of its own.
 		hooks[string(hookFileChanged)] = []any{map[string]any{"hooks": []any{
 			map[string]any{"type": "command", "command": exe, "args": []string{"hook"}, "asyncRewake": true},
+		}}}
+		// The owned steer, synchronous so its stdout reaches the running
+		// turn: exec form, no matcher and no timeout of its own.
+		hooks[string(hookPostToolBatch)] = []any{map[string]any{"hooks": []any{
+			map[string]any{"type": "command", "command": exe, "args": []string{"hook"}},
 		}}}
 	}
 

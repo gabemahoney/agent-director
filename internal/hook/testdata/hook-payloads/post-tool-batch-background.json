@@ -1,0 +1,27 @@
+{
+  "session_id": "5acdf0e3-8b8c-47c8-83d6-870c0b0cebd1",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/5acdf0e3-8b8c-47c8-83d6-870c0b0cebd1.jsonl",
+  "cwd": "/work/demo",
+  "hook_event_name": "PostToolBatch",
+  "prompt_id": "6e1f0c2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "agent_id": "a6c3f9e0d2b71548",
+  "agent_type": "general-purpose",
+  "tool_calls": [
+    {
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "sleep 8"
+      },
+      "tool_use_id": "toolu_01BATCHBACKGROUND1",
+      "tool_response": {
+        "stdout": "",
+        "stderr": "",
+        "interrupted": false
+      }
+    }
+  ]
+}

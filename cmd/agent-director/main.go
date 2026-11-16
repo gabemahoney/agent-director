@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
 	"syscall"
 	"time"
@@ -187,6 +188,11 @@ func runHook() (exit int) {
 		// own sink is known, and a panic, which would exit 2 with its trace
 		// on stderr, exits 0 instead and hands the agent nothing.
 		teardownDiagnostics = io.Discard
+	}
+	if eventName == hook.EventNameFileChanged || eventName == hook.EventNamePostToolBatch {
+		// Busy send's owned wake and steer (SR-3.4): a panic, which would exit
+		// 2 with its trace on stderr, exits 0 instead. Neither hands the agent
+		// that trace, and a steer's stdout gets nothing appended.
 		defer func() {
 			if recover() != nil {
 				exit = hookExitCode
@@ -335,7 +341,7 @@ func runHook() (exit int) {
 		},
 		ClaudeStartupPrompt: spawn.HasClaudeStartupPrompt,
 	}
-	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
+	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), hookStdout(eventName, stdout), st, hc, logger); err != nil {
 		if errors.Is(err, hook.ErrRewake) {
 			// Busy send's owned wake wrote one whole prompt on stderr.
 			return hook.RewakeExitCode
@@ -551,6 +557,26 @@ func hookStderr(eventName string) io.Writer {
 		return os.Stderr
 	}
 	return os.NewFile(uintptr(syscall.Stderr), "/dev/stderr")
+}
+
+// hookStdout is the output stream Handle writes to. For busy send's owned
+// PostToolBatch hook, which may write one Steer Turn prompt there as
+// additionalContext, it is the process's stdout made non-blocking, so the
+// route's write deadline bounds a stalled pipe (SR-3.2) and no write outlives
+// its job. That hook process also ignores SIGPIPE, so a write to a reader
+// that closed its end returns EPIPE with the bytes it wrote, which the route
+// records as partial or uncertain output before the hook exits 0, instead of
+// Go's rule for stdout ending the process by that signal. Any other event, or
+// a descriptor that cannot be made non-blocking, gets stdout as it is, which
+// takes no write deadline, so the route issues nothing to it; the relay's
+// decision, SessionStart's watchPaths and every other process keep their
+// path and signal handling.
+func hookStdout(eventName string, stdout *os.File) io.Writer {
+	if eventName != hook.EventNamePostToolBatch || syscall.SetNonblock(syscall.Stdout, true) != nil {
+		return stdout
+	}
+	signal.Ignore(syscall.SIGPIPE)
+	return os.NewFile(uintptr(syscall.Stdout), "/dev/stdout")
 }
 
 // hookLog is a small wrapper so the hook code path uses one log-line

@@ -9,15 +9,16 @@ import (
 	"testing"
 )
 
-// TestPaneHookStderrPipe (Task t2.xis.oo.u8): the line pane-hook.sh types runs
-// the hook as the pane shell's direct child, with its stdout in out, its
-// stderr in err and its exit status in rc. With --stderr-pipe the hook's
-// stderr is a pipe, as Claude Code gives it (busy send's owned wake writes
+// TestPaneHookPipes (Task t2.xis.oo.u8; Subtask t3.xis.wm.hg.k1): the line
+// pane-hook.sh types runs the hook as the pane shell's direct child, with its
+// stdout in out, its stderr in err and its exit status in rc. With
+// --stderr-pipe the hook's stderr is a pipe, and with --stdout-pipe its
+// stdout, as Claude Code gives them (busy send's owned wake and steer write
 // only to a stream that takes a write deadline, which a regular file does
-// not), and rc follows a complete err; without it the line is as before. A
-// fake tmux keeps the typed line, and bash runs it as the pane's shell would,
-// with a stub agent-director.
-func TestPaneHookStderrPipe(t *testing.T) {
+// not), the other stream staying a file; without either the line is as
+// before. A fake tmux keeps the typed line, and bash runs it as the pane's
+// shell would, with a stub agent-director.
+func TestPaneHookPipes(t *testing.T) {
 	db := newStore(t)
 	if r := run(t, nil, "", "sqlite3", db, `INSERT INTO spawns VALUES ('id-p', '%7', '');`); r.code != 0 {
 		t.Fatalf("seed row: %s", r)
@@ -29,18 +30,21 @@ func TestPaneHookStderrPipe(t *testing.T) {
 exit 0
 `, 0o755)
 	writeFile(t, bin, "agent-director", `#!/bin/bash
-# stub hook: reports its stderr's kind and its parent, writes to stderr, exits 2
-if [ -p /dev/stderr ]; then echo "pipe $PPID"; else echo "file $PPID"; fi
+# stub hook: reports its stdout's and stderr's kinds and its parent, writes to stderr, exits 2
+o=file; [ -p /dev/stdout ] && o=pipe
+e=file; [ -p /dev/stderr ] && e=pipe
+echo "$o $e $PPID"
 printf 'to stderr' >&2
 exit 2
 `, 0o755)
 	for _, tc := range []struct {
 		name  string
 		flags []string
-		kind  string
+		kind  string // stdout's, then stderr's
 	}{
-		{"default", nil, "file"},
-		{"--stderr-pipe", []string{"--stderr-pipe"}, "pipe"},
+		{"default", nil, "file file"},
+		{"--stderr-pipe", []string{"--stderr-pipe"}, "file pipe"},
+		{"--stdout-pipe", []string{"--stdout-pipe"}, "pipe file"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typed := filepath.Join(t.TempDir(), "typed")

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # busy-send-claude.sh — the shared steps of the busy-send-claude-wait-turn
-# cases (tickets/testplans/b.75s/t1.75s.cw; Idea b.kii, Epics t1.xis.oo and
-# t1.xis.p8). A case's bash block sources it right after `set -euo pipefail`:
+# cases (tickets/testplans/b.75s/t1.75s.cw; Idea b.kii, Epics t1.xis.oo,
+# t1.xis.p8 and t1.xis.wm). A case's bash block sources it right after
+# `set -euo pipefail`:
 #
 #   . /opt/driver/busy-send-claude.sh <name>
 #
@@ -15,11 +16,14 @@
 # every tmux call is logged with its caller's command name (no_product_input).
 #
 # The case plays Claude Code's part. It types each hook into the row's pane
-# with pane-hook.sh --stderr-pipe, so the hook is the pane process's direct
-# child with a pipe for its stderr, as Claude Code gives it, and runs the owned
+# with pane-hook.sh, so the hook is the pane process's direct child with a
+# pipe, as Claude Code gives it, for the stream its owned output goes to:
+# stdout for PostToolBatch (--stdout-pipe), whose steer is additionalContext
+# there, and stderr for every other event (--stderr-pipe). It runs the owned
 # FileChanged hook itself where Claude Code would once the watched wake
-# endpoint changed. That makes no claim about Claude Code's own intake, watcher
-# or wrapping, which live qualification on the AD test VM covers.
+# endpoint changed, and PostToolBatch where a parent or child tool batch would
+# end. That makes no claim about Claude Code's own intake, watcher, wrapping or
+# hook timing, which live qualification on the AD test VM covers.
 #
 # A force call (force-delivery, or send-keys with --force) is finite but
 # returns only once its force is decided or its 12 s active phase is over, so
@@ -55,6 +59,7 @@ call_pid=""
 call_bound=60
 stop='{"stop_hook_active":false,"last_assistant_message":"done"}'
 raced='["sent_unconfirmed",true,"wait_turn_raced"]'
+steered='["sent_unconfirmed",true,"handed_over_not_proven"]'
 
 fail() { echo "FAIL: $*"; exit 1; }
 
@@ -111,13 +116,15 @@ payload() {
 }
 
 # hook EVENT [EXTRA_JSON]: type the hook into the row's pane (its parent is the
-# pane process) with a pipe for its stderr; its stdout lands in $work/out, its
-# stderr in $work/err and its exit status in rc.
+# pane process) with a pipe for its stdout (PostToolBatch) or stderr (any
+# other event); its stdout lands in $work/out, its stderr in $work/err and its
+# exit status in rc.
 hook() {
-    local body pane_pid
+    local body pane_pid stream=--stderr-pipe
+    [ "$1" != PostToolBatch ] || stream=--stdout-pipe
     body="$(payload "$@")"
     set +e
-    /opt/driver/pane-hook.sh --stderr-pipe "$id" "$body" >"$work/out" 2>"$work/err"
+    /opt/driver/pane-hook.sh "$stream" "$id" "$body" >"$work/out" 2>"$work/err"
     rc=$?
     set -e
     if [ "$rc" -eq 124 ]; then
@@ -143,6 +150,18 @@ wakes() {
     cp "$work/err" "$work/prompt"
 }
 
+# steers WANT: the typed parent PostToolBatch (no agent_id) exits 0 with
+# nothing on stderr and one line on stdout, ended by its newline: exactly one
+# JSON object, {"hookSpecificOutput": {"hookEventName": "PostToolBatch",
+# "additionalContext": WANT}}, with no other key.
+steers() {
+    hook PostToolBatch
+    [ "$rc" -eq 0 ] && [ ! -s "$work/err" ] || fail "PostToolBatch exited $rc, stderr [$(cat "$work/err")]; want 0 and nothing"
+    [ "$(wc -l <"$work/out")" -eq 1 ] && [ -z "$(tail -c 1 "$work/out")" ] \
+        && jq -e -s --arg c "$1" '. == [{hookSpecificOutput: {hookEventName: "PostToolBatch", additionalContext: $c}}]' "$work/out" >/dev/null \
+        || fail "PostToolBatch wrote [$(cat -A "$work/out")]; want one line, one PostToolBatch additionalContext of [$1]"
+}
+
 # sighting: type the UserPromptSubmit whose prompt is $work/prompt as Claude
 # Code shows a FileChanged hook's exit-2 text: in its measured wrapping, with
 # its two reserved closing tags escaped (claudeWakeWrapping in
@@ -155,12 +174,13 @@ sighting() {
         '{prompt: ($pre + ($b | gsub("</system-reminder>"; "&lt;/system-reminder>") | gsub("</task-notification>"; "<\\/task-notification>")) + $suf)}')"
 }
 
-# send NAME TEXT WAIT: a confirmed send of TEXT as Message NAME (the case's
-# Caller UUID); it returns Held, waiting WAIT, with that pair.
+# send NAME TEXT WAIT [MODE]: a confirmed send of TEXT as Message NAME (the
+# case's Caller UUID), in send mode MODE when given (the Agent Default
+# otherwise); it returns Held, waiting WAIT, with that pair.
 send() {
     local out
     out="$(agent-director send-keys --instance-id "$id" --text "$2" --confirmed-delivery \
-        --caller-uuid "$caller" --delivery-request-id "$1")" || fail "send-keys $1 exited non-zero"
+        --caller-uuid "$caller" --delivery-request-id "$1" ${4:+--send-mode "$4"})" || fail "send-keys $1 exited non-zero"
     [ "$(jq -c '[.class, .final, .wait.reason, .request_id]' <<<"$out")" = "[\"held\",false,\"$3\",\"$1\"]" ] \
         || fail "send $1 returned [$out]; want Held $3"
 }
@@ -168,6 +188,13 @@ send() {
 # result NAME: Message NAME's class, finality and reason (get-delivery).
 result() {
     agent-director get-delivery --caller-uuid "$caller" --delivery-request-id "$1" | jq -c '.result | [.class, .final, .reason]'
+}
+
+# unconfirmed: each unconfirmed Message's Result class, finality and reason,
+# in accepted order, one line each (an unconfirmed Message has no Lookup).
+unconfirmed() {
+    /opt/driver/sql.sh -readonly -separator '|' "$db" "SELECT result_class, result_final, IFNULL(result_reason, '')
+        FROM busy_send_messages WHERE instance_id = '$id' AND confirmed = 0 ORDER BY accepted_seq;"
 }
 state() { agent-director get --instance-id "$id" | jq -r '.state'; }
 delivery() { agent-director get --instance-id "$id" | jq -c "[.delivery | $1]"; }

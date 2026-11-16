@@ -63,7 +63,8 @@ To disable Claude Code's prompt-suggestion background work, set
 ### Busy-send delivery to a covered Claude launch
 
 A Claude launch that busy send covers also registers one `FileChanged` entry
-with `asyncRewake`. It reports no state. The launch's main `SessionStart`
+with `asyncRewake` and one synchronous `PostToolBatch` entry. Neither is a
+state-tracking hook or reports state. The launch's main `SessionStart`
 creates the launch's private wake file and returns it in `watchPaths`.
 
 The wake file carries no content. agent-director touches it when it accepts a
@@ -89,6 +90,13 @@ own prompt: evidence the agent took it, and a force prompt's admission. It
 and the main `SessionStart` also finish a force call that never
 ended, once its deadline has passed: its never-issued Messages return to Held,
 and the wake file is touched when any did. Neither issues a prompt.
+
+When a batch of the main agent's tool calls finishes, the `PostToolBatch`
+hook can hand [Steer Turn](caller-contract.md#steer-turn-delivery) Messages
+into the running turn. It writes at most one prompt to stdout, as
+`{"hookSpecificOutput":{"additionalContext":"<prompt>","hookEventName":"PostToolBatch"}}`
+and a newline, or nothing, and always exits 0. It returns no permission
+decision. It too first finishes a force call that never ended.
 
 - A spawn's own startup prompt always goes first, forced or not.
 - Repeated touches never deliver a Message twice.
@@ -245,9 +253,11 @@ does not block a stop. Relay permission decisions have a separate
 [fail-closed boundary](#fail-closed-boundary).
 
 [Busy-send delivery](#busy-send-delivery-to-a-covered-claude-launch) is the
-only other hook output: the `SessionStart` watch path and the `FileChanged`
-prompt. It carries no permission decision and changes no dialog, settings or
-hooks of yours. A failed delivery exits 0 and gives the agent nothing.
+only other hook output: the `SessionStart` watch path, the `FileChanged`
+prompt on stderr and the `PostToolBatch` prompt on stdout. It carries no
+permission decision and changes no dialog, settings or hooks of yours. A
+failed delivery exits 0. A failed wake gives the agent nothing; a prompt cut
+short is never written again.
 
 For a spawn that never reports, see
 [Pending rows and startup screens](caller-contract.md#pending-rows-and-startup-screens).

@@ -421,9 +421,12 @@ An accepted Message has no age timeout. Read its Result's `wait`, or
 | `readiness_unknown` | Inspect the agent and outstanding hand-over; waiting alone supplies no readiness evidence. |
 
 A send's wake, [launch startup](#launch-end-resume-and-reuse), an idle-prompt
-Notification or a turn end can enable delivery.
-A lost wake delays it until a later eligible event: reads, `sweep` and elapsed
-time never deliver. Claude's wake hand-over is race-exposed: its Result ends
+Notification, a turn end or, for [Steer Turn](#steer-turn-delivery), a tool
+boundary can enable delivery. A lost or coalesced wake leaves Messages Held,
+with no time limit, until a later eligible event or a
+[force](#stored-force-attempts): reads, `sweep` and elapsed time never
+deliver, and nothing retries while the agent is idle. Claude's wake hand-over
+is race-exposed, a Steer Turn Message it carries included: its Result ends
 `sent_unconfirmed`, reason `wait_turn_raced`, even if exact intake later
 secures order and clears `awaiting_turn_start`. The sticky reason records
 exposure to overlapping work, not proof that a race happened. A Final Result
@@ -435,6 +438,40 @@ A prompt the [sighting limits](#sighting-limits) hide leaves
 waits `readiness_unknown` and a force is refused `input_unresolved`
 meanwhile. Message-caused screen changes reset the ordinary
 `idle_screen` clock. No length of waiting alone becomes `needs_intelligence`.
+
+### Steer Turn delivery
+
+A working Claude agent takes Steer Turn Messages inside its running turn, at
+the main agent's next tool boundary, once a batch of its tool calls finishes.
+The waiting Steer Turn Messages ahead of the first Wait Turn Message go
+together, whole and in accepted order, in the fewest prompts that fit the
+[limits](#busy-send-refusals); that Wait Turn Message and every later one wait
+for turn end. Each tool boundary takes one prompt. When the Messages need
+several, each goes at the next tool boundary, with no other agent-director
+input between them, and any left at turn end follow
+[Wait Turn delivery](#wait-turn-delivery-and-waits). A subagent's or
+background agent's tool boundary delivers nothing. An idle agent takes Steer
+Turn Messages through the same wake as Wait Turn.
+
+A steer never interrupts or cancels the turn and answers no Dialog. An open
+Dialog, a spawn's startup prompt not yet taken and an earlier hand-over still
+unresolved hold it; earlier steered input still counted in
+[`awaiting_turn_start`](#busy-send-coverage) does not. Tool boundaries in the
+startup prompt's own turn are eligible once that prompt is taken.
+
+With nothing ahead of it and nothing holding it, a Steer Turn Message reaches
+the model at the same point as the same text typed at the agent's terminal at
+the same moment, or sooner, as measured on Claude Code. One sent after the
+turn's last tool boundary goes by the wake at turn end instead, with that
+path's delays: a lost wake, or earlier input still counted in
+`awaiting_turn_start`. No time is promised.
+
+A complete steer at a tool boundary is not race-exposed, unlike the wake. Its
+Result ends `sent_unconfirmed`, reason `handed_over_not_proven` for a
+confirmed Message (`confirmation_off` for an unconfirmed one, which no lookup
+reads), never `wait_turn_raced`. Partial or uncertain output holds every later
+Message and is never written again ([Message Results](#message-results)).
+Neither reason permits a resend.
 
 ### Checking whether work is done
 

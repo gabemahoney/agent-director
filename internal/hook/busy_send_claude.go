@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,13 +11,15 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gabemahoney/agent-director/internal/busysend"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // Claude's busy-send route A (SR-3.4, SR-3.5): a covered Claude Launch's Held
-// Messages reach the agent only as the output of its owned FileChanged hook
+// Messages reach the agent only as the output of one of its owned hooks. At
+// turn end, while it is idle, and for a force, that is its FileChanged hook
 // with asyncRewake, which Claude Code turns into a queued wake prompt. That
 // prompt is the hook's text inside Claude Code's measured wrapping, recorded
 // once in the capability table (claudeWaitTurn's Wrapping): a fixed prefix
@@ -31,12 +34,25 @@ import (
 // wake issues at most its one frozen prompt that may issue now, and the same
 // sighting is that prompt's admission. The force's call alone touches the
 // wake to advance it.
+// Steer Turn (SR-3.4, SR-3.1) goes the same route at a parent tool boundary
+// instead: the owned PostToolBatch hook of the running turn returns the next
+// prompt of the Steer Turn prefix, its body unchanged, as its stdout's one
+// additionalContext (handleClaudeSteer), measured by the table's Steer Turn
+// row (claudeSteerTurn). That is the input issued into a running turn whose
+// parent Stop is its take evidence.
 
 // claudeWaitTurn is Claude's Wait Turn row of the capability table, whose
 // limits and wrapping this route reads and keeps none of its own.
 func claudeWaitTurn() store.BusySendModeLimits {
 	limits, _ := store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendWaitTurn)
 	return limits
+}
+
+// claudeSteerTurn is Claude's Steer Turn row of the capability table, whose
+// limits and measure the steer reads and keeps none of its own; false when
+// the table offers no Steer Turn for Claude, and then nothing is steered.
+func claudeSteerTurn() (store.BusySendModeLimits, bool) {
+	return store.BusySendCapabilitiesFor(store.AgentClaude).Mode(store.BusySendSteerTurn)
 }
 
 // unwrapClaudeWake undoes the table's wrapping of a UserPromptSubmit prompt
@@ -65,6 +81,11 @@ func unwrapClaudeWake(prompt string) ([]byte, bool) {
 // wake (SR-3.4): registered with asyncRewake for a covered Claude Launch only.
 const EventNameFileChanged = "FileChanged"
 
+// EventNamePostToolBatch is Claude Code's PostToolBatch hook, busy send's
+// owned steer (SR-3.4): registered, synchronous, for a covered Claude Launch
+// only.
+const EventNamePostToolBatch = "PostToolBatch"
+
 // ErrRewake is Handle's result when an owned FileChanged hook wrote one whole
 // wake prompt to its error stream: the verb exits RewakeExitCode, which is
 // what makes Claude Code take that stream as the agent's next input. Any other
@@ -74,10 +95,10 @@ var ErrRewake = errors.New("hook: wake prompt written")
 // RewakeExitCode is the exit status of a hook that wrote a wake (ErrRewake).
 const RewakeExitCode = 2
 
-// claudeWakeBudgets are one wake's finite phases (SR-3.2): the issue phase
-// bounds eligibility, the claim and the issue commit; the job bounds the
-// stderr write; cleanup records what it observed. Each is far inside Claude
-// Code's command-hook timeout.
+// claudeWakeBudgets are one wake's or steer's finite phases (SR-3.2): the
+// issue phase bounds eligibility, the claim and the issue commit; the job
+// bounds the output write (stderr or stdout); cleanup records what it
+// observed. Each is far inside Claude Code's command-hook timeout.
 var claudeWakeBudgets = busysend.Budgets{Issue: 30 * time.Second, Job: time.Minute, Cleanup: 30 * time.Second}
 
 // claudeRouteStore is the store surface the Claude route drives: the
@@ -369,12 +390,7 @@ func handleClaudeWake(ctx context.Context, stderr io.Writer, st HookStore, hc Ha
 	if !ok || filepath.Clean(res.FilePath) != f.WakePath {
 		return false
 	}
-	route := &claudeRoute{st: rs, instanceID: instanceID, launchID: f.Destination.LaunchID, session: res.SessionID, gate: gate,
-		limits: claudeWaitTurn(), startupPrompt: hc.ClaudeStartupPrompt, out: stderr, logger: logger}
-	if self := hc.self(); self.PID > 0 && self.Starttime != "" {
-		route.issuer = &store.BusySendIssuer{Role: store.BusySendProcessHelper, PID: self.PID, StartTime: self.Starttime,
-			PIDNamespace: self.PIDNamespace}
-	}
+	route := newClaudeRoute(rs, hc, instanceID, gate, f, claudeWaitTurn(), stderr, logger)
 	c := busysend.Coordinator{Store: rs, Route: route, Budgets: claudeWakeBudgets, Now: hc.clock()}
 	deliver, ev := c.Deliver, busysend.Event{InstanceID: instanceID, Boundary: store.BusySendBoundaryTurnEnd}
 	if now := c.Now(); claudeForceCallRunning(f, now) {
@@ -401,22 +417,85 @@ func handleClaudeWake(ctx context.Context, stderr io.Writer, st HookStore, hc Ha
 	return false
 }
 
+// handleClaudeSteer is the owned PostToolBatch hook (SR-3.4, SR-3.1, SR-2.5,
+// SR-3.9): a parent tool boundary of the Launch's running turn, from the agent
+// process the gate names, makes one finite coordinator invocation at the
+// tool_boundary boundary through claudeRoute in its steer mode. As the
+// agent's eligible event, that invocation first finishes a force abandoned by
+// its call (busysend.Coordinator.Deliver; E5 decision 7), whatever it then
+// decides. It then claims the Steer Turn Messages ahead of the first Wait
+// Turn Message, partitioned under the Steer Turn row's limits and measure,
+// and writes at most the first prompt, whole, as stdout's one PostToolBatch
+// additionalContext; its never-issued rest returns to Held, ahead of every
+// later Message, for the next parent boundary or, once the turn ends, the
+// wake. It waits on neither the running turn nor earlier issued input still
+// awaiting take evidence, but on the Launch's own waits and a Dialog, and the
+// store's guards still judge order, transport, the turn, the helper and the
+// pause fence. It never carries a force's authority: a live force's
+// hand-over bars its claim. A subagent's or background child's callback
+// (agent_id), another or a changed session, a stale gate, an uncovered
+// Launch, a table offering no Steer Turn, or a failed read delivers and
+// consumes nothing. It writes no state, answers no permission and returns no
+// decision or stop control: PostToolBatch is not a state report, and the hook
+// exits 0 whatever it wrote.
+func handleClaudeSteer(ctx context.Context, stdout io.Writer, st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
+	rs, ok := st.(claudeRouteStore)
+	limits, offered := claudeSteerTurn()
+	if !ok || !offered || stdout == nil {
+		return
+	}
+	f, ok := claudeRouteFacts(ctx, st, instanceID, gate, res, logger)
+	if !ok {
+		return
+	}
+	route := newClaudeRoute(rs, hc, instanceID, gate, f, limits, stdout, logger)
+	route.steer = true
+	c := busysend.Coordinator{Store: rs, Route: route, Budgets: claudeWakeBudgets, Now: hc.clock()}
+	if _, err := c.Deliver(ctx, busysend.Event{InstanceID: instanceID, Boundary: store.BusySendBoundaryToolBoundary}); err != nil {
+		logf(logger, "hook: busy-send steer (instance=%s): %v", instanceID, err)
+	}
+}
+
+// newClaudeRoute is the route of one owned callback that claudeRouteFacts
+// authenticated with f: it pins f's destination, the callback's own session
+// included, with limits, the mode's row of the capability table, and records
+// this hook process's identity, when readable, as its helper issuer.
+func newClaudeRoute(st claudeRouteStore, hc HandleConfig, instanceID string, gate store.HookGate, f store.BusySendRouteFacts,
+	limits store.BusySendModeLimits, out io.Writer, logger *log.Logger) *claudeRoute {
+	r := &claudeRoute{st: st, instanceID: instanceID, dest: f.Destination, gate: gate, limits: limits,
+		startupPrompt: hc.ClaudeStartupPrompt, out: out, logger: logger}
+	if self := hc.self(); self.PID > 0 && self.Starttime != "" {
+		r.issuer = &store.BusySendIssuer{Role: store.BusySendProcessHelper, PID: self.PID, StartTime: self.Starttime,
+			PIDNamespace: self.PIDNamespace}
+	}
+	return r
+}
+
 // claudeRoute is Claude's route A on the provider-neutral coordinator
 // (busysend.Route): an owned FileChanged hook's one invocation, issuing at
-// most one prompt (More false) on its own error stream.
+// most one prompt (More false) on its own error stream, or in its steer mode
+// a parent PostToolBatch hook's, issuing at most one on its stdout.
 type claudeRoute struct {
 	// force is whether the invocation is a running force's forced wake
 	// (handleClaudeWake): its waits keep only the Launch's own (launchWait),
 	// skipping the turn-end, Dialog and compaction readiness waits (SR-4.2).
-	force      bool
+	force bool
+	// steer is whether the invocation is a parent PostToolBatch's Steer Turn
+	// at a tool boundary (handleClaudeSteer): its waits keep the Launch's own
+	// and a Dialog's but not the running turn's or earlier input's awaiting
+	// evidence, it is not race-exposed (SR-3.3a), and its output is one
+	// additionalContext envelope (claudeSteerEnvelope).
+	steer      bool
 	st         claudeRouteStore
 	instanceID string
-	// launchID and session are the Launch and provider session the callback
-	// was authorized for (claudeRouteFacts): the destination it may claim and
-	// issue for, never a later one.
-	launchID, session string
-	gate              store.HookGate
-	// limits are Claude's Wait Turn row of the capability table.
+	// dest is the destination the callback was authenticated for
+	// (claudeRouteFacts): its Launch and token, provider, session, route and
+	// connection, the one it may claim and issue for. A replacement, even one
+	// that reuses the provider session, is never adopted.
+	dest store.BusySendDestination
+	gate store.HookGate
+	// limits are Claude's Wait Turn row of the capability table, or its Steer
+	// Turn row for a steer.
 	limits store.BusySendModeLimits
 	// startupPrompt is HandleConfig.ClaudeStartupPrompt: whether agent
 	// arguments carry a startup prompt, which goes first in the Launch's
@@ -425,8 +504,22 @@ type claudeRoute struct {
 	startupPrompt func(args []string) bool
 	// issuer is this hook process's own identity, nil when unreadable.
 	issuer *store.BusySendIssuer
-	out    io.Writer
-	logger *log.Logger
+	// envelope is a steer's whole output for the prompt Authorize last
+	// authorized (envelopeHandover, envelopeIndex), serialized there before
+	// that prompt's issue commit; Issue writes it as is.
+	envelope         []byte
+	envelopeHandover string
+	envelopeIndex    int
+	out              io.Writer
+	logger           *log.Logger
+}
+
+// event names the route's callback in its diagnostics.
+func (r *claudeRoute) event() string {
+	if r.steer {
+		return "steer"
+	}
+	return "wake"
 }
 
 // facts re-reads the route facts; a failed read is logged, and the caller
@@ -440,35 +533,39 @@ func (r *claudeRoute) facts(ctx context.Context) (store.BusySendRouteFacts, bool
 	return f, true
 }
 
-// destination is f's destination as this callback may use it: in the
-// callback's own session, so the claim and issue guards refuse it when the
-// current session is another.
-func (r *claudeRoute) destination(f store.BusySendRouteFacts) store.BusySendDestination {
-	d := f.Destination
-	d.SessionID = r.session
-	return d
-}
-
-// Eligibility reads the route's own boundary (SR-3.3): only the main agent
-// at its prompt, with no earlier issued input lacking take evidence, may be
-// woken; Claude cannot exclude a person's typing or a sibling Stop hook's
-// continuation, so every attempt is race-exposed (SR-3.3a). A failed read of
-// the facts claims nothing and waits readiness_unknown.
+// Eligibility reads the route's own boundary (SR-3.3) at the callback's
+// pinned destination: once that is no longer the current one (another Launch
+// or token, session, route or connection), the callback is stale, and claims
+// and records nothing. Only the main agent at its prompt, with no earlier
+// issued input lacking take evidence, may be woken; Claude cannot exclude a
+// person's typing or a sibling Stop hook's continuation, so every wake
+// attempt is race-exposed (SR-3.3a). A steer goes into the running turn at its
+// parent tool boundary and is no Wait Turn attempt, so it is not
+// race-exposed. A failed read of the facts claims nothing and waits
+// readiness_unknown.
 func (r *claudeRoute) Eligibility(ctx context.Context, _ busysend.Event) (busysend.Eligibility, error) {
 	if r.startupPrompt == nil {
-		logf(r.logger, "hook: busy-send wake (instance=%s): no startup seam (HandleConfig.ClaudeStartupPrompt); nothing issued", r.instanceID)
+		logf(r.logger, "hook: busy-send %s (instance=%s): no startup seam (HandleConfig.ClaudeStartupPrompt); nothing issued", r.event(), r.instanceID)
 	}
 	f, ok := r.facts(ctx)
-	if !ok {
+	switch {
+	case !ok:
 		return busysend.Eligibility{Wait: store.BusySendWaitReadinessUnknown,
-			Destination: store.BusySendDestination{LaunchID: r.launchID}}, nil
+			Destination: store.BusySendDestination{LaunchID: r.dest.LaunchID}}, nil
+	case f.Destination != r.dest:
+		// With no Launch named, the coordinator records no wait either.
+		return busysend.Eligibility{Wait: store.BusySendWaitReadinessUnknown}, nil
 	}
-	return busysend.Eligibility{Wait: r.wait(f), Destination: r.destination(f), RaceExposed: true}, nil
+	return busysend.Eligibility{Wait: r.wait(f), Destination: r.dest, RaceExposed: !r.steer}, nil
 }
 
-// wait is the cause that forbids a wake now, "" for none. A forced wake's is
-// launchWait's alone: the store's issue guard judges the force's order,
-// ownership, destination and pause fence.
+// wait is the cause that forbids a wake or steer now, "" for none. A forced
+// wake's is launchWait's alone: the store's issue guard judges the force's
+// order, ownership, destination and pause fence. A steer's is launchWait's or
+// a Dialog's: its tool boundary is inside the running turn, so neither that
+// turn nor earlier issued input still awaiting take evidence holds it (E4
+// Main Agent decision 2), and the store's guards judge its order, transport,
+// turn, helper and pause fence.
 func (r *claudeRoute) wait(f store.BusySendRouteFacts) store.BusySendWaitReason {
 	if w := r.launchWait(f); w != "" || r.force {
 		return w
@@ -476,6 +573,8 @@ func (r *claudeRoute) wait(f store.BusySendRouteFacts) store.BusySendWaitReason 
 	switch {
 	case f.PermissionHold || f.State == store.StateCheckPermission || f.State == store.StateAskUser:
 		return store.BusySendWaitDialog
+	case r.steer:
+		return ""
 	case f.State == store.StateWorking:
 		return store.BusySendWaitTurnRunning
 	case f.Awaiting > 0 || f.State != store.StateWaiting:
@@ -509,7 +608,8 @@ func (r *claudeRoute) launchWait(f store.BusySendRouteFacts) store.BusySendWaitR
 }
 
 // Measure is the complete prompt as the agent receives it: the capability
-// table's exact measure of Claude's wrapping and escaping (decision 12).
+// table's exact measure of the mode's wrapping and escaping (decision 12),
+// Wait Turn's for a wake, Steer Turn's for a steer.
 func (r *claudeRoute) Measure(body []byte) int64 { return r.limits.Measure(body) }
 
 // Authorize looks once more just before the issue commit, which records this
@@ -517,50 +617,92 @@ func (r *claudeRoute) Measure(body []byte) int64 { return r.limits.Measure(body)
 // identity cannot be read issues nothing, because nothing could later prove
 // it gone (M1 G4); neither does one whose output stream cannot take a write
 // deadline, because its write could outlive the Job (SR-3.2), nor one whose
-// facts cannot be read or whose destination, its session included, is no
-// longer the current one. Each keeps custody with readiness_unknown.
+// facts cannot be read or whose current destination, or p's, is no longer
+// the pinned one, nor, for a steer, one whose prompt has no envelope
+// (claudeSteerEnvelope), which it serializes here, before any commit. Each
+// keeps custody with readiness_unknown.
 func (r *claudeRoute) Authorize(ctx context.Context, p busysend.Prepared) (busysend.Authority, error) {
 	if !r.boundedOutput() {
-		logf(r.logger, "hook: busy-send wake (instance=%s): the output stream takes no write deadline; nothing issued", r.instanceID)
+		logf(r.logger, "hook: busy-send %s (instance=%s): the output stream takes no write deadline; nothing issued", r.event(), r.instanceID)
 		return busysend.Authority{Wait: store.BusySendWaitReadinessUnknown}, nil
 	}
 	f, ok := r.facts(ctx)
 	switch {
-	case !ok || r.issuer == nil || f.Destination != p.Destination || p.Destination.SessionID != r.session:
+	case !ok || r.issuer == nil || f.Destination != r.dest || p.Destination != r.dest:
 		return busysend.Authority{Wait: store.BusySendWaitReadinessUnknown}, nil
 	}
 	if wait := r.wait(f); wait != "" {
 		return busysend.Authority{Wait: wait}, nil
 	}
+	if r.steer {
+		env, err := claudeSteerEnvelope(p.Body)
+		if err != nil {
+			logf(r.logger, "hook: busy-send steer (instance=%s): prompt %d: %v; nothing issued", r.instanceID, p.PromptIndex, err)
+			return busysend.Authority{Wait: store.BusySendWaitReadinessUnknown}, nil
+		}
+		r.envelope, r.envelopeHandover, r.envelopeIndex = env, p.HandoverID, p.PromptIndex
+	}
 	return busysend.Authority{Issuer: r.issuer}, nil
 }
 
-// Issue writes p's whole body to the hook's error stream, the one
-// irreversible call, under the coordinator's Job deadline as the stream's
-// write deadline (writeBounded), so the write ends by then and no writer
-// outlives it: complete only when every byte was written (Claude takes it on
-// the hook's exit 2, in completion order: emission_complete at the
+// Issue writes p's whole output to the route's stream, the one irreversible
+// call, under the coordinator's Job deadline as the stream's write deadline
+// (writeBounded), so the write ends by then and no writer outlives it. A
+// wake's output is its body, on the hook's error stream, which Claude takes on
+// the hook's exit 2; a steer's is the envelope Authorize serialized for p, on
+// stdout, which Claude takes on the hook's exit 0. It is complete only when
+// every byte was written (in completion order: emission_complete at the
 // handed_over_not_proven boundary, SR-2.5, SR-3.5); some bytes is partial and
-// none uncertain, both unproven and never retried. More is false: one wake
-// carries one prompt.
+// none uncertain, both unproven and never retried. More is false: one wake or
+// steer carries one prompt, and nothing is written after it.
 func (r *claudeRoute) Issue(ctx context.Context, p busysend.Prepared) busysend.Disposition {
-	n, err := writeBounded(ctx, r.out, p.Body)
+	out := p.Body
+	if r.steer {
+		if r.envelope == nil || r.envelopeHandover != p.HandoverID || r.envelopeIndex != p.PromptIndex {
+			logf(r.logger, "hook: busy-send steer output (instance=%s): prompt %d was not serialized; nothing written", r.instanceID, p.PromptIndex)
+			return busysend.Disposition{Output: store.BusySendOutputUncertain}
+		}
+		out = r.envelope
+	}
+	n, err := writeBounded(ctx, r.out, out)
 	switch {
-	case err == nil && n == len(p.Body):
+	case err == nil && n == len(out):
 		return busysend.Disposition{Output: store.BusySendOutputComplete, Order: store.BusySendOrderEmissionComplete,
 			UnprovenBoundary: true}
 	case n > 0:
 		return busysend.Disposition{Output: store.BusySendOutputPartial}
 	}
 	if err != nil {
-		logf(r.logger, "hook: busy-send wake output (instance=%s): %v", r.instanceID, err)
+		logf(r.logger, "hook: busy-send %s output (instance=%s): %v", r.event(), r.instanceID, err)
 	}
 	return busysend.Disposition{Output: store.BusySendOutputUncertain}
 }
 
+// claudeSteerEnvelope is a steer prompt's whole PostToolBatch output: one
+// JSON object ended by a newline, whose hookSpecificOutput names the event and
+// carries body, unchanged with its separators, as additionalContext, and
+// nothing else: no decision, permission decision, continue or stop control,
+// wrapper, caller identity or other input. JSON's escaping is only its wire
+// form; decoding gives body back byte for byte, so the agent receives the
+// prompt the Steer Turn measure counted. A body that is not valid UTF-8,
+// which JSON would change, has none.
+func claudeSteerEnvelope(body []byte) ([]byte, error) {
+	if !utf8.Valid(body) {
+		return nil, errors.New("the prompt is not valid UTF-8")
+	}
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName": EventNamePostToolBatch, "additionalContext": string(body)}}); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
 // deadlineWriter is a stream whose writes a deadline can cut short, such as an
 // *os.File on a descriptor the runtime polls (cmd/agent-director's hook
-// stderr for this event).
+// stderr for FileChanged and stdout for PostToolBatch).
 type deadlineWriter interface {
 	io.Writer
 	SetWriteDeadline(time.Time) error

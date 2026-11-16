@@ -106,10 +106,20 @@ ordinary Message, including while the agent works or starts; it types no keys.
 Codex, Cursor and the experimental agents keep their existing input paths.
 Read `get.busy_send` for the current launch's coverage.
 
-Claude offers the Send Modes `wait_turn` and `steer_turn`. The model sees
-`[agent-director: message N of M]` before each Message body. See
+Claude offers two Send Modes, which decide when a Message reaches a working
+agent:
+
+- `wait_turn` waits for the agent's turn to end.
+- `steer_turn` goes into the running turn at the main agent's next tool
+  boundary, once its current batch of tool calls finishes. Use it to redirect
+  an agent while it works.
+
+While the agent is idle, either goes in as soon as it safely can. Neither
+interrupts or cancels the turn or answers a Dialog. The model sees
+`[agent-director: message N of M]` before each Message body. Batching, order,
+timing, risks and limits are in
 [Wait Turn delivery and waits](caller-contract.md#wait-turn-delivery-and-waits)
-for batching, order, delivery schedule, risks and limits.
+and [Steer Turn delivery](caller-contract.md#steer-turn-delivery).
 
 Delivered means the message was passed to the harness, but not necessarily confirmed received by the LLM.
 
@@ -124,6 +134,17 @@ agent-director send-keys --instance-id "$id" --text 'Review the project entry po
     --send-mode wait_turn --confirmed-delivery --caller-uuid "$caller" \
     --delivery-request-id "$message"
 agent-director get-delivery --caller-uuid "$caller" --delivery-request-id "$message"
+```
+
+A bot that steers its agent can make Steer Turn and Confirmed Delivery the
+agent's [Agent Defaults](#agent-defaults), so each send names only its pair:
+
+```sh
+id=$(agent-director spawn --agent claude --cwd "$PWD" --send-mode steer_turn \
+    --confirmed-delivery | jq -r '.instance_id')
+agent-director send-keys --instance-id "$id" --text 'Finish this step, then report' \
+    --caller-uuid "$caller" --delivery-request-id status-1
+agent-director get-delivery --caller-uuid "$caller" --delivery-request-id status-1
 ```
 
 Keep the pair for that Message; use a fresh Message ID for each new one.
@@ -906,7 +927,7 @@ not manufacture `waiting`. Transient queued, provisionally held and
 editable draft text are not restored. Session-selector filtering is defined in
 the [Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
 
-For Claude, `send-keys` continues through Wait Turn, carrying Held Messages in
+For Claude, `send-keys` continues through busy send, carrying Held Messages in
 accepted order. The resumed launch's startup wakes an idle agent to receive
 them without another send; see [startup delivery](caller-contract.md#launch-end-resume-and-reuse).
 A migrated Claude launch without a route holds

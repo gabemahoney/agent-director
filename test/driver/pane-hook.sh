@@ -50,6 +50,13 @@
 #                      written all of err, and the pane's shell must be bash.
 #                      Busy send's owned wake needs it: a regular file takes no
 #                      write deadline, so the hook writes nothing there.
+#   --stdout-pipe      the same for stdout, which busy send's owned
+#                      PostToolBatch steer writes to: the typed line is
+#                      `agent-director hook < <dir>/payload.json 2> <dir>/err | cat > <dir>/out;
+#                      echo ${PIPESTATUS[0]} > <dir>/rc`, and rc is written once
+#                      cat has written all of out. Only one stream can be a
+#                      pipe while the hook stays the shell's direct child, so
+#                      it excludes --stderr-pipe.
 #
 # The pane and socket come from one read-only SELECT of the row's pane_id
 # and tmux_socket in $PANE_HOOK_DB (default $HOME/.config/agent-director/state.db),
@@ -78,6 +85,7 @@ job=""
 envs=()
 agent=claude
 stderr_pipe=""
+stdout_pipe=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -95,6 +103,7 @@ while [[ $# -gt 0 ]]; do
             timeout_s="$2"; shift 2 ;;
         --no-wait) mode=nowait; shift ;;
         --stderr-pipe) stderr_pipe=1; shift ;;
+        --stdout-pipe) stdout_pipe=1; shift ;;
         --wait) [[ $# -ge 2 ]] || die 2 "--wait needs a job directory"; mode=join; job="$2"; shift 2 ;;
         --) shift; break ;;
         -*) die 2 "unknown option $1" ;;
@@ -136,7 +145,8 @@ if [[ "$mode" == join ]]; then
     finish "$job"
 fi
 
-[[ $# -eq 2 ]] || die 2 "usage: pane-hook.sh [--agent claude|codex] [--pane <target>] [--env K=V]... [--timeout <secs>] [--stderr-pipe] [--no-wait] <instance-id> <payload-json | ->"
+[[ $# -eq 2 ]] || die 2 "usage: pane-hook.sh [--agent claude|codex] [--pane <target>] [--env K=V]... [--timeout <secs>] [--stderr-pipe | --stdout-pipe] [--no-wait] <instance-id> <payload-json | ->"
+[[ -z "$stderr_pipe" || -z "$stdout_pipe" ]] || die 2 "--stderr-pipe and --stdout-pipe exclude each other"
 id="$1"
 payload="$2"
 
@@ -172,6 +182,8 @@ hook_cmd="agent-director hook"
 [[ "$agent" == claude ]] || hook_cmd+=" --agent $agent"
 if [[ -n "$stderr_pipe" ]]; then
     line+="$hook_cmd < $job/payload.json 2>&1 > $job/out | cat > $job/err; echo \${PIPESTATUS[0]} > $job/rc"
+elif [[ -n "$stdout_pipe" ]]; then
+    line+="$hook_cmd < $job/payload.json 2> $job/err | cat > $job/out; echo \${PIPESTATUS[0]} > $job/rc"
 else
     line+="$hook_cmd < $job/payload.json > $job/out 2> $job/err; echo \$? > $job/rc"
 fi

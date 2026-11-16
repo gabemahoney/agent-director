@@ -433,6 +433,12 @@ func classifyClaude(p payload) ClassifyResult {
 		// it to handleClaudeWake, which writes no state.
 		res.SoftRefresh = true
 		res.FilePath = p.FilePath
+	case EventNamePostToolBatch:
+		// Busy send's owned steer (SR-3.4): a tool boundary, not a state
+		// report, turn start or end, permission resolution or proof a tool
+		// ran. Handle routes it to handleClaudeSteer, which writes no state;
+		// AgentID and both session ids decide whose boundary it is.
+		res.SoftRefresh = true
 	case "SessionEnd":
 		// b.pmn: soft-refresh by default. Only mark `ended` on known-
 		// terminal causes. Empty/unknown causes (which Claude Code emits
