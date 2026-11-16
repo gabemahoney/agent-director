@@ -145,11 +145,9 @@ agent-director get-force --force-id "$force"
 
 `send-keys --force` sends a Message and forces in one call; its result adds a
 `force_result` beside the Message's Result. Outcomes, reasons and recovery
-are in [Stored force attempts](caller-contract.md#stored-force-attempts).
-
-In this version Claude Code's route issues no force prompt: a force that
-carries Messages returns `refused`, reason `not_issued`, after its wait, and
-its Messages go back to ordinary delivery.
+are in [Stored force attempts](caller-contract.md#stored-force-attempts);
+what a force returns in each agent state, and its limits, are in
+[Claude Code force capability](caller-contract.md#claude-code-force-capability).
 
 ## Agent Defaults
 
@@ -160,8 +158,9 @@ Covered Messages default to `send_mode: wait_turn` and
 See [Agent Defaults](caller-contract.md#agent-defaults) for precedence.
 
 For reconnection, see [Pause and resume](#pause-and-resume).
-`steer_turn` and `only_if_waiting` are unavailable; the
-experimental `confirm_from_transcripts` setting provides no confirmation.
+`steer_turn` and `only_if_waiting` are unavailable. For the experimental
+`confirm_from_transcripts` setting, see
+[Confirm From Transcripts](caller-contract.md#confirm-from-transcripts).
 
 ## Family state
 

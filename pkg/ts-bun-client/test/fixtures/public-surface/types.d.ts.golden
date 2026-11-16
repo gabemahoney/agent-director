@@ -449,6 +449,46 @@ export interface DeliveryCapabilities {
     /** The most Held Messages and bytes, counting custody that can return to Held. */
     held_count: number;
     held_bytes: number;
+    /** The agent's force capability; null when this version publishes none for its agent. */
+    force: ForceCapability | null;
+    /**
+     * What the experimental Confirm From Transcripts setting can add to a force's evidence, whatever
+     * the setting: `not_needed` on Claude Code.
+     */
+    confirm_from_transcripts_capability: ConfirmFromTranscriptsCapability;
+    /**
+     * Why, a stable code (`""` for none recorded): `hook_sighting_first` on Claude Code, since AD's
+     * own UserPromptSubmit sighting preceded the native input record in every measured state.
+     */
+    confirm_from_transcripts_reason: string;
+}
+/** What Confirm From Transcripts can do for an agent's force evidence. */
+export type ConfirmFromTranscriptsCapability = "can_confirm" | "not_needed" | "cannot_confirm";
+/**
+ * A Covered Agent's force capability: `admission`, the route's qualified admission event
+ * (`prompt_sighting` on Claude Code); `limits`, that evidence's named limits in order
+ * (`duplicate_text`, `unrecoverable_escaping`, `user_hook_after_sighting`); and `states`, the
+ * force-state table in order. It describes measured behaviour only and promises no time: a force
+ * whose sighting arrives after its call returns reports `pending`, even in a state listed
+ * `handed_over`, and a force's own outcome and reason are its `force_result`'s.
+ */
+export interface ForceCapability {
+    admission: string;
+    limits: string[];
+    states: ForceStateCapability[];
+}
+/**
+ * One row of a force-state table: the agent's `state` when a force is made (`idle`,
+ * `tool_running`, `between_tools`, `permission_dialog`, `plan_dialog`, `compacting`,
+ * `not_started` or `ended`), the measured `outcome` (`handed_over` at once; `pending` first, then
+ * `handed_over` on the later sighting; or `refused`, its Messages Held) and `reason`, an existing
+ * force reason: the outcome's own, or for `pending` its wait cause (`turn_running`, `dialog` or
+ * `compaction`).
+ */
+export interface ForceStateCapability {
+    state: string;
+    outcome: "handed_over" | "pending" | "refused";
+    reason: ForceReason;
 }
 /** A busy-send Send Mode. */
 export type SendMode = "wait_turn" | "steer_turn";

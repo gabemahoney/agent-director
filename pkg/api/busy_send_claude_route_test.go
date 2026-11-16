@@ -8,6 +8,8 @@ import (
 	"io"
 	"maps"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +51,7 @@ func (brokenStderr) SetWriteDeadline(time.Time) error { return nil }
 
 // fireClaudeHook runs Claude hook event with fields, in session, for id's row
 // from its own pane process with a readable helper identity and stderr, as
-// the agent's settings run it; it must write nothing on stdout.
+// the agent's settings run it, on e's clock; it must write nothing on stdout.
 func fireClaudeHook(t *testing.T, e *killEnv, id, session, event string, fields map[string]any, stderr io.Writer) error {
 	t.Helper()
 	row, err := e.st.GetSpawn(id)
@@ -75,6 +77,7 @@ func fireClaudeHook(t *testing.T, e *killEnv, id, session, event string, fields 
 		Self:                func() store.ProcessIdentity { return store.ProcessIdentity{PID: 4242, Starttime: "4242"} },
 		Stderr:              stderr,
 		ClaudeStartupPrompt: spawn.HasClaudeStartupPrompt, // as cmd/agent-director wires it
+		Now:                 e.clock.Now,
 	}
 	var stdout bytes.Buffer
 	err = hook.Handle(context.Background(), bytes.NewReader(raw), &stdout, e.st, hc, nil)
@@ -149,9 +152,7 @@ func TestBusySendClaudeHookRoute(t *testing.T) {
 	if got := busyFacts(t, e.dbPath, r.ID); !reflect.DeepEqual(got, facts) {
 		t.Errorf("busy-send core after get and status = %+v; want unchanged %+v", got, facts)
 	}
-	prompt := "<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\n" +
-		`Stop hook blocking error from command "FileChanged": ` + body + "\n</system-reminder>"
-	if err := fireClaudeHook(t, e, r.ID, session, "UserPromptSubmit", map[string]any{"prompt": prompt}, nil); err != nil {
+	if err := fireClaudeHook(t, e, r.ID, session, "UserPromptSubmit", map[string]any{"prompt": claudeWakePrompt(body)}, nil); err != nil {
 		t.Fatal(err)
 	}
 	awaiting(0)
@@ -170,6 +171,106 @@ func TestBusySendClaudeHookRoute(t *testing.T) {
 	if err := fireClaudeHook(t, e, noRoute.ID, session, "FileChanged", changed, &stderr); err != nil || stderr.Len() != 0 ||
 		held.Wait == nil || held.Wait.Reason != "route_unavailable" {
 		t.Errorf("wake with no route = %v, wrote %q, Message %+v; want nothing written, Held route_unavailable", err, stderr.String(), held)
+	}
+	assertNoInputPath(t, ne)
+}
+
+// claudeWakePrompt is body as the agent's UserPromptSubmit hook receives a
+// wake: Claude Code's measured asyncRewake wrapping (Research t1.p8z.9e).
+func claudeWakePrompt(body string) string {
+	return "<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\n" +
+		`Stop hook blocking error from command "FileChanged": ` + body + "\n</system-reminder>"
+}
+
+// TestBusySendClaudeForceRoute (SR-3.4, SR-3.5, SR-4.3, SR-3.9; M1
+// ForceAdmissionSound at the real sighting, ForceFencedAtCallEnd and
+// NoOrphanForceClaim after the call; M2 P-C4.4): force-delivery on a live
+// covered Claude agent holding a, b and c, one prompt each, through the
+// agent's own hooks while the call waits on virtual time. The call's
+// notification after its claim makes the FileChanged wake issue prompt a;
+// another callback, with a's output complete but unsighted (order alone),
+// issues nothing. The agent's sighting of a admits it and touches no wake; only
+// the call's next notification brings the wake that issues b. With b unsighted
+// the call returns pending at its 12 s active phase, c Held again. A callback
+// after the call issues nothing; b's later sighting makes the force
+// handed_over; and c goes by ordinary delivery at the next turn end, unforced.
+// Nothing reaches the native composer or the pane.
+func TestBusySendClaudeForceRoute(t *testing.T) {
+	t.Parallel()
+	ne := newNativeSubmissionEnv(t)
+	f := newForceAgent(t, ne.killEnv)
+	texts := map[string]string{"a": strings.Repeat("a", 5000), "b": strings.Repeat("b", 5000), "c": strings.Repeat("c", 5000)}
+	for _, request := range []string{"a", "b", "c"} {
+		f.send(t, request, texts[request])
+	}
+	prompt := func(request string) string { return "[agent-director: message 1 of 1]\n" + texts[request] }
+	changed := map[string]any{"file_path": f.wake, "event": "change"}
+	wake := func() string {
+		t.Helper()
+		var stderr wakeBuffer
+		err := fireClaudeHook(t, f.e, f.id, f.session, "FileChanged", changed, &stderr)
+		if err != nil && !errors.Is(err, hook.ErrRewake) || errors.Is(err, hook.ErrRewake) != (stderr.Len() > 0) {
+			t.Errorf("FileChanged = %v after writing %d bytes; want ErrRewake exactly for a written prompt", err, stderr.Len())
+		}
+		return stderr.String()
+	}
+	sight := func(request string) {
+		t.Helper()
+		if err := fireClaudeHook(t, f.e, f.id, f.session, "UserPromptSubmit", map[string]any{"prompt": claudeWakePrompt(prompt(request))}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if f.touched() {
+			t.Errorf("the sighting of %s touched the wake; want only the force's call to", request)
+		}
+	}
+	var issued []string
+	f.drive = func(pause int, woke bool) {
+		switch {
+		case woke:
+			issued = append(issued, wake())
+		case pause == 1:
+			if got := wake(); got != "" {
+				t.Errorf("a callback with a unsighted wrote %d bytes; want nothing", len(got))
+			}
+			sight("a")
+		}
+	}
+
+	got, _ := f.force(t)
+
+	f.drive = nil
+	if !slices.Equal(issued, []string{prompt("a"), prompt("b")}) || !slices.Equal(f.woke, []int{0, 2}) || len(f.paused) != 120 {
+		t.Errorf("the call notified the route by pauses %v in %d pauses, issuing %d prompts; want a, b by pauses [0 2] in 120",
+			f.woke, len(f.paused), len(issued))
+	}
+	if got.Outcome != "pending" || got.Reason != "awaiting_admission" {
+		t.Errorf("force_result = %+v; want pending awaiting_admission", got)
+	}
+	var held []string
+	for i, m := range busyFacts(t, f.e.dbPath, f.id).Messages {
+		if m.Place == "held" {
+			held = append(held, []string{"a", "b", "c"}[i])
+		}
+	}
+	if !slices.Equal(held, []string{"c"}) || !f.touched() {
+		t.Errorf("Held after the call = %v; want c alone, and the route notified", held)
+	}
+	if got := wake(); got != "" {
+		t.Errorf("a callback after the call wrote %d bytes; want nothing while b awaits its sighting", len(got))
+	}
+	sight("b")
+	if found, err := f.c.GetForce(api.GetForceParams{ForceID: got.ForceID}); err != nil || found.ForceResult == nil ||
+		found.ForceResult.Outcome != "handed_over" || found.ForceResult.Reason != "admitted" {
+		t.Errorf("get-force after b's sighting = %+v, %v; want handed_over admitted", found.ForceResult, err)
+	}
+	if err := fireClaudeHook(t, f.e, f.id, f.session, "Stop", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := wake(); got != prompt("c") {
+		t.Errorf("the wake after the next turn end wrote %d bytes; want c alone by ordinary delivery", len(got))
+	}
+	if c, err := f.c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: "c"}); err != nil || c.Result == nil || c.Result.Forced {
+		t.Errorf("c = %+v, %v; want delivered, not forced", c.Result, err)
 	}
 	assertNoInputPath(t, ne)
 }

@@ -9,7 +9,7 @@ import * as ad from "../src/index.js";
 import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import type { SweepParams, SweepResult, SweepCheck, FindMissingParams, FindMissingResult, DialogMaybeOpenDetails, ProvenGoneHow, IdleScreenAvailability } from "../src/index.js";
 import type { SendKeysResult, ResumeParams, PauseParams, GetForceResult, GetDeliveryResult, ForceResult, ForceOutcome, ForceReason, DeliveryResult, CantSendDetails } from "../src/index.js";
-import type { AgentDefaults, DeliveryFacts, DeliveryCapabilities, DeliveryModeLimits } from "../src/index.js";
+import type { AgentDefaults, DeliveryFacts, DeliveryCapabilities, DeliveryModeLimits, ForceCapability, ForceStateCapability, ConfirmFromTranscriptsCapability } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
@@ -199,6 +199,23 @@ function _assertCoveredSendTypes(client: ad.Client, sent: SendKeysResult, got: G
   void [confirmed, uncovered, requestID, outcome, covered, numericID, listDelivery];
 }
 void _assertCoveredSendTypes;
+
+// Typecheck (SR-4.4, SR-4.5; E5 Main Agent decision 4): delivery_capabilities' force is null unless published,
+// a state row's outcome is one a force call returns, and the Confirm From Transcripts capability is closed.
+function _assertForceCapabilityTypes(caps: DeliveryCapabilities): void {
+  const force: ForceCapability | null = caps.force;
+  const states: ForceStateCapability[] | undefined = force?.states;
+  const confirm: ConfirmFromTranscriptsCapability[] = [caps.confirm_from_transcripts_capability, "can_confirm", "not_needed", "cannot_confirm"];
+  const reason: string = caps.confirm_from_transcripts_reason;
+  // @ts-expect-error — force is null, never omitted, when unpublished
+  const omitted: ForceCapability = caps.force;
+  // @ts-expect-error — a state row never reads running
+  const running: ForceStateCapability = { state: "idle", outcome: "running", reason: "" };
+  // @ts-expect-error — the capability is one of the three codes
+  const badConfirm: ConfirmFromTranscriptsCapability = "transcript_match";
+  void [force, states, confirm, reason, omitted, running, badConfirm];
+}
+void _assertForceCapabilityTypes;
 
 // Both names remain source-compatible and share the exact check records.
 function _assertSweepAliases(client: ad.Client, result: SweepResult): void {

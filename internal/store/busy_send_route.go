@@ -59,7 +59,8 @@ func TouchBusySendWake(path string) error {
 // read transaction, before it may drive delivery (SR-3.3, SR-3.4): whether
 // its hook's gate holds, the published current Launch's coverage, route,
 // destination and lifecycle, the row's raw state, Turn Start counter and
-// permission hold, and the inbox's Held and awaiting counts. It is advisory:
+// permission hold, the inbox's Held and awaiting counts, and its running
+// force's call deadline. It is advisory:
 // every store step judges its own captured facts again.
 type BusySendRouteFacts struct {
 	// GateHolds: the hook's parent is the row's recorded pane process.
@@ -86,6 +87,15 @@ type BusySendRouteFacts struct {
 	// Held and Awaiting are the Messages Held now and the current Launch's
 	// hand-overs whose input has no evidence it was taken (zero once ended).
 	Held, Awaiting int64
+	// ForceCallDeadlineMillis is the recorded call deadline of the
+	// conversation's running force, whose call end is not recorded; 0 when
+	// none runs. Until it passes the force's call owns its claims; after it,
+	// the force was abandoned by its call and the agent's next eligible event
+	// finishes it (ReleaseAbandonedBusySendForce). ForceIssueDeadlineMillis is
+	// that force's hand-over's recorded issue deadline, the end of its call's
+	// active phase; 0 when none runs. Both are the force's original deadlines,
+	// fixed at its claim and never renewed.
+	ForceCallDeadlineMillis, ForceIssueDeadlineMillis int64
 }
 
 // ReadBusySendRouteFacts reads instanceID's route facts for a hook with
@@ -130,6 +140,14 @@ func (s *Store) ReadBusySendRouteFacts(ctx context.Context, instanceID string, g
 		if out.Held, _, _, err = readBusySendHeld(ctx, conn, f.conversation); err != nil {
 			return err
 		}
+		err = conn.QueryRowContext(ctx, `SELECT f.call_deadline_ms, h.issue_deadline_ms FROM busy_send_forces f
+		    JOIN busy_send_handovers h ON h.handover_id = f.handover_id
+		    WHERE f.conversation_id = ? AND f.outcome = 'running' AND f.call_ended_at_ms IS NULL`,
+			f.conversation).Scan(&out.ForceCallDeadlineMillis, &out.ForceIssueDeadlineMillis)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		err = nil
 		if !f.launchEnded {
 			out.Awaiting, err = readBusySendAwaiting(ctx, conn, f.conversation, f.launch)
 		}

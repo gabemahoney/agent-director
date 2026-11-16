@@ -32,9 +32,11 @@ import (
 //     prompt's exact body, uniquely bound to one awaiting prompt of the
 //     current Launch, session and connection generation
 //     (RecordBusySendSighting), recorded as that prompt's admission
-//     (prompt_sighting). It releases only the AD-owned-work gate: it is never
-//     delivered_confirmed, never a proof that sibling hooks let the prompt
-//     through, and it changes no Result. Claude ordinary delivery goes only
+//     (prompt_sighting). It releases the AD-owned-work gate and, as a force
+//     prompt's last missing admission, finishes a pending force
+//     (settleBusySendForceEvidence); it changes no custody, order, transport
+//     or Message Result, is never delivered_confirmed and never a proof that
+//     sibling hooks let the prompt through. Claude ordinary delivery goes only
 //     through its asyncRewake wake (Main Agent decision 10), so no turn
 //     counting stands in for a sighting.
 
@@ -146,8 +148,10 @@ type BusySendSightingResult struct {
 // its Messages' retained text. Exactly one equal body binds: if its captured
 // session and connection generation are the current ones, its admission is
 // recorded (prompt_sighting, through the evidence writer, so a repeat is
-// inert), which only lifts the AD-owned-work gate; no custody, transport,
-// order or Result changes, and nothing is delivered_confirmed. Two or more
+// inert), which lifts the AD-owned-work gate and, when it is a pending
+// force's last missing admission, makes that force handed_over
+// (settleBusySendForceEvidence); no custody, transport, order or Message
+// Result changes, and nothing is delivered_confirmed. Two or more
 // equal bodies, or a candidate whose text is gone, bind none. A sighting that
 // arrives before its prompt's completion record binds the same way; the
 // completion still secures order when it lands.

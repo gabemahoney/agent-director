@@ -115,6 +115,12 @@ func TestBusySendResumeDefaults(t *testing.T) {
 		if got, want := defaults(t, e, r.ID), `{"send_mode":"wait_turn","confirmed_delivery":false,"confirm_from_transcripts":true}`; got != want {
 			t.Errorf("agent_defaults after publication = %s; want %s", got, want)
 		}
+		// Confirm From Transcripts on changes no capability (SR-4.5; E5 decision 4).
+		if out, err := api.Get(e.st, api.RelayView{}, r.ID); err != nil {
+			t.Fatal(err)
+		} else if raw, _ := jsonField(t, out, "delivery_capabilities"); string(raw) != busyCapabilitiesJSON {
+			t.Errorf("delivery_capabilities with confirm_from_transcripts on = %s; want %s", raw, busyCapabilitiesJSON)
+		}
 		assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", store.BusySendCovered)
 		assertKept(t, e, c, r.ID, *pending, "agent_starting")
 		// Unconfirmed now by default: a Caller UUID alone is malformed.

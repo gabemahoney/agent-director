@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
 // backlogBody is Message i of the backlog: exactly 1,900 UTF-8 bytes,
@@ -34,7 +35,8 @@ func backlogBody(i int) string {
 // body whole, once, in accepted order, with exact separators, each the
 // longest prefix of the rest that fits the published complete-prompt limit,
 // until none is Held. Each confirmed Message ends sent_unconfirmed
-// (wait_turn_raced): hook output is no proof the model took it.
+// (wait_turn_raced): hook output is no proof the model took it. No turn end
+// creates a force (SR-4.4).
 func TestClaudeWakeDrainsBacklog(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping the 1,000-Message backlog in short mode")
@@ -110,6 +112,9 @@ func TestClaudeWakeDrainsBacklog(t *testing.T) {
 	}
 	if o := e.observe(t); o.HeldCount != 0 || o.AwaitingTurnStart != 0 {
 		t.Errorf("after the drain: Held %d, awaiting %d; want 0, 0", o.HeldCount, o.AwaitingTurnStart)
+	}
+	if n := storefix.ReadBusySendCounts(t, e.db).Forces; n != 0 {
+		t.Errorf("the drain's turn ends created %d forces; want none (SR-4.4)", n)
 	}
 	for i := 0; i < n; i += 3 {
 		e.assertRaced(t, request(i))

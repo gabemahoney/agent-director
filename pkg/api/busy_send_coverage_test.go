@@ -168,7 +168,18 @@ func TestBusySendPublicSpawnAllAgents(t *testing.T) {
 const (
 	busyDefaultsJSON     = `{"send_mode":"wait_turn","confirmed_delivery":false,"confirm_from_transcripts":false}`
 	busyEmptyInboxJSON   = `{"held_count":0,"held_bytes":0,"first_wait":null,"handover_count":0,"startup_wait":null,"force":null,"awaiting_turn_start":0}`
-	busyCapabilitiesJSON = `{"modes":[{"send_mode":"wait_turn","message_bytes":8000,"prompt_bytes":9600,"text_kind":"utf8_tab_lf"}],"held_count":1000,"held_bytes":8000000}`
+	busyCapabilitiesJSON = `{"modes":[{"send_mode":"wait_turn","message_bytes":8000,"prompt_bytes":9600,"text_kind":"utf8_tab_lf"}],"held_count":1000,"held_bytes":8000000,` +
+		`"force":{"admission":"prompt_sighting","limits":["duplicate_text","unrecoverable_escaping","user_hook_after_sighting"],"states":[` +
+		`{"state":"idle","outcome":"handed_over","reason":"admitted"},{"state":"tool_running","outcome":"pending","reason":"turn_running"},` +
+		`{"state":"between_tools","outcome":"pending","reason":"turn_running"},{"state":"permission_dialog","outcome":"pending","reason":"dialog"},` +
+		`{"state":"plan_dialog","outcome":"pending","reason":"dialog"},{"state":"compacting","outcome":"pending","reason":"compaction"},` +
+		`{"state":"not_started","outcome":"refused","reason":"agent_starting"},{"state":"ended","outcome":"refused","reason":"launch_ended"}]},` +
+		`"confirm_from_transcripts_capability":"not_needed","confirm_from_transcripts_reason":"hook_sighting_first"}`
+	// busyFallbackCapabilitiesJSON is a covered row of a provider this version
+	// has no capability row for (a later release's covered Codex row): Wait
+	// Turn limits, and no force route or transcript confirmation.
+	busyFallbackCapabilitiesJSON = `{"modes":[{"send_mode":"wait_turn","message_bytes":8000,"prompt_bytes":9600,"text_kind":"utf8_tab_lf"}],"held_count":1000,"held_bytes":8000000,` +
+		`"force":null,"confirm_from_transcripts_capability":"cannot_confirm","confirm_from_transcripts_reason":""}`
 )
 
 // assertBusyPublic checks get's busy-send projection of a row whose inbox is
@@ -196,7 +207,11 @@ func assertBusyPublic(t *testing.T, out api.SpawnRow, want store.BusySendCoverag
 // covered, and none of the three blocks otherwise.
 func assertBusyBlocks(t *testing.T, out any, id string, covered bool, shown ...string) {
 	t.Helper()
-	for key, block := range map[string]string{"agent_defaults": busyDefaultsJSON, "delivery": busyEmptyInboxJSON, "delivery_capabilities": busyCapabilitiesJSON} {
+	capabilities := busyCapabilitiesJSON
+	if raw, ok := jsonField(t, out, "agent"); ok && string(raw) != `"claude"` {
+		capabilities = busyFallbackCapabilitiesJSON
+	}
+	for key, block := range map[string]string{"agent_defaults": busyDefaultsJSON, "delivery": busyEmptyInboxJSON, "delivery_capabilities": capabilities} {
 		raw, ok := jsonField(t, out, key)
 		if want := covered && slices.Contains(shown, key); ok != want || want && string(raw) != block {
 			t.Errorf("%s %s=%s, present=%t; want present=%t (%s)", id, key, raw, ok, want, block)

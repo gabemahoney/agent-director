@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # busy-send-claude.sh — the shared steps of the busy-send-claude-wait-turn
-# cases (tickets/testplans/b.75s/t1.75s.cw; Idea b.kii, Epic t1.xis.oo). A
-# case's bash block sources it right after `set -euo pipefail`:
+# cases (tickets/testplans/b.75s/t1.75s.cw; Idea b.kii, Epics t1.xis.oo and
+# t1.xis.p8). A case's bash block sources it right after `set -euo pipefail`:
 #
 #   . /opt/driver/busy-send-claude.sh <name>
 #
@@ -20,6 +20,16 @@
 # FileChanged hook itself where Claude Code would once the watched wake
 # endpoint changed. That makes no claim about Claude Code's own intake, watcher
 # or wrapping, which live qualification on the AD test VM covers.
+#
+# A force call (force-delivery, or send-keys with --force) is finite but
+# returns only once its force is decided or its 12 s active phase is over, so
+# a case runs it in the background with start_call while it plays the agent's
+# hooks, waits for the call's wake notification with await_touch, and joins it
+# with join_call. start_call bounds the call with the fixture's own watchdog
+# (coreutils timeout, call_bound seconds, far past the product's 15 s), so a
+# stalled call fails the case instead of hanging it, whichever join meets it.
+# The EXIT trap joins a call still running before it ends the session, and
+# shows the call's output when the case failed.
 
 unset ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
 
@@ -39,6 +49,10 @@ old=1000000000
 wake=""
 changed=""
 rc=0
+call_pid=""
+# call_bound: start_call's watchdog in seconds, four times the product's own
+# 15 s force-call allowance; it never shortens the product's deadlines.
+call_bound=60
 stop='{"stop_hook_active":false,"last_assistant_message":"done"}'
 raced='["sent_unconfirmed",true,"wait_turn_raced"]'
 
@@ -56,7 +70,24 @@ write_config() {
 }
 
 bsc_cleanup() {
-    local row sock pane s
+    local status=$? row sock pane s f joined=0
+    # A force call still running ends by its own recorded deadline, or at the
+    # latest by start_call's watchdog: join (reap) it before anything is torn
+    # down; a watchdog end fails the case. Its output is failure evidence.
+    if [ -n "$call_pid" ]; then
+        wait "$call_pid" 2>/dev/null || joined=$?
+        call_pid=""
+        if call_timed_out "$joined"; then
+            echo "FAIL: the force call was still running at its ${call_bound} s watchdog"
+            [ "$status" -ne 0 ] || status=1
+        fi
+    fi
+    if [ "$status" -ne 0 ] && [ -e "$work/call.out" ]; then
+        for f in "$work/call.out" "$work/call.err"; do
+            [ ! -s "$f" ] || echo "evidence ${f##*/}: $(cat "$f")"
+        done
+        echo "evidence delivery: $(agent-director get --instance-id "$id" 2>/dev/null | jq -c '.delivery' 2>/dev/null || true)"
+    fi
     [ -z "$wrote_config" ] || rm -f "$config_toml"
     row="$(/opt/driver/sql.sh -readonly "$db" \
         "SELECT IFNULL(tmux_socket,'') || '|' || IFNULL(pane_id,'') FROM spawns WHERE instance_id = '$id';" 2>/dev/null || true)"
@@ -67,6 +98,7 @@ bsc_cleanup() {
         [ -z "$s" ] || tmux ${sock:+-S "$sock"} kill-session -t "$s" 2>/dev/null || true
     fi
     rm -rf "$work"
+    exit "$status"
 }
 trap bsc_cleanup EXIT
 
@@ -141,6 +173,53 @@ state() { agent-director get --instance-id "$id" | jq -r '.state'; }
 delivery() { agent-director get --instance-id "$id" | jq -c "[.delivery | $1]"; }
 rewind() { touch -m -d "@$old" "$wake"; }
 touched() { [ "$(stat -c %Y "$wake")" != "$old" ]; }
+
+# await_touch WHO: wait until something touched the wake endpoint since rewind
+# (touched), as Claude Code's watcher would see it: on the endpoint's own
+# change events (node's fs.watch, an inotify watch), armed before the first
+# look so a touch already made counts, never on a timer or poll; at most 10 s.
+# WHO names the expected toucher in the failure.
+await_touch() {
+    node -e '
+        const fs = require("fs");
+        const [path, old] = process.argv.slice(1);
+        const touched = () => Math.floor(fs.statSync(path).mtimeMs / 1000) !== Number(old);
+        fs.watch(path, () => { if (touched()) process.exit(0); });
+        if (touched()) process.exit(0);
+        setTimeout(() => process.exit(1), 10000);
+    ' "$wake" "$old" || fail "$1 did not touch the wake endpoint within 10 s"
+}
+
+# start_call CMD...: run one finite force call, force-delivery or send-keys
+# with --force, in the background, its stdout in $work/call.out and stderr in
+# $work/call.err, under the fixture's watchdog: coreutils timeout sends TERM at
+# call_bound seconds and KILL 5 s later, and is the job that a join reaps,
+# after it has reaped the call. One runs at a time; join_call joins it, or the
+# EXIT trap does.
+start_call() {
+    [ -z "$call_pid" ] || fail "a force call is already running"
+    timeout --kill-after=5s "${call_bound}s" "$@" >"$work/call.out" 2>"$work/call.err" &
+    call_pid=$!
+}
+
+# call_timed_out STATUS: a joined call's status is the watchdog's end, 124
+# after its TERM or 137 after its KILL (or any other SIGKILL).
+call_timed_out() { [ "$1" -eq 124 ] || [ "$1" -eq 137 ]; }
+
+# join_call: wait for the running force call, which returns by its recorded
+# deadline (about 15 s); it must exit 0 with a force_result in $work/call.out.
+# A watchdog end is a failure.
+join_call() {
+    local status=0
+    wait "$call_pid" || status=$?
+    call_pid=""
+    if call_timed_out "$status"; then
+        fail "the force call was still running at its ${call_bound} s watchdog (status $status): [$(cat "$work/call.err")]"
+    fi
+    [ "$status" -eq 0 ] || fail "the force call exited $status: [$(cat "$work/call.err")]"
+    jq -e '.force_result | type == "object"' "$work/call.out" >/dev/null \
+        || fail "the force call returned [$(cat "$work/call.out")]; want a force_result"
+}
 
 # launched KIND SOURCE: the newest Launch spawn, reuse or resume recorded,
 # from this binary's covered set (no coverage is seeded), is a covered Launch

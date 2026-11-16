@@ -11,15 +11,15 @@ import (
 
 func TestLegacyPreservesExactTranscriptProof(t *testing.T) {
 	t.Parallel()
-	s, a, j := legacyEvidence(t)
+	s, a, j, path, meta := legacyEvidence(t)
 	a.Payload = "use <>&\n\"quoted\" \\ / café 🌍 ☺"
 	a.PayloadSHA256 = Hash([]byte(a.Payload))
 	a.Phase, a.BytesAttempted = "enter_attempted", len(a.Payload)
 	// JSONL whitespace, literal HTML, alternate escapes and Unicode are evidence bytes.
-	raw := []byte(" \t" + fmt.Sprintf(`{ "type" : "user", "uuid": "cde93519-6972-4b1b-a650-830a0042e876", "sessionId": %q, "cwd": "/work", "version": "2.1.280", "message": { "role": "user", "content": "use <>&\n\"quoted\" \\ \/ café 🌍 \u263a" } }`, s.manifest.SessionID) + " \t")
-	writeEvidence(t, s.manifest.Transcript, append(append([]byte(nil), raw...), '\n'))
+	raw := []byte(" \t" + `{ "type" : "response_item", "payload": { "type": "message", "role": "user", "id": "turn-1", "content": [ { "type": "input_text", "text": "use <>&\n\"quoted\" \\ \/ café 🌍 \u263a" } ], "internal_chat_message_metadata_passthrough": { "content_item_kinds": [ "user.text" ] } } }` + " \t")
+	writeEvidence(t, path, append(append(append([]byte(nil), meta...), raw...), '\n'))
 	proof, err := s.Confirm(a)
-	if err != nil || proof == nil || !bytes.Equal(proof.Raw, raw) || proof.RawSHA256 != Hash(raw) {
+	if err != nil || proof == nil || !bytes.Equal(proof.Raw, raw) || proof.RawSHA256 != Hash(raw) || proof.RecordID != "turn-1" {
 		t.Fatalf("exact native proof=%+v, err=%v; want raw=%q", proof, err, raw)
 	}
 	a.Proof, a.Phase = proof, "submitted"
@@ -36,13 +36,12 @@ func TestLegacyPreservesExactTranscriptProof(t *testing.T) {
 func TestLegacyRejectsAlteredRawProofOnCurrentAndArchivedRequests(t *testing.T) {
 	t.Parallel()
 	for _, archived := range []bool{false, true} {
-		for _, mode := range []string{"changed bytes", "malformed record with matching hash", "legacy object raw", "invalid base64"} {
+		for _, mode := range []string{"unaltered", "changed bytes", "malformed record with matching hash", "legacy object raw", "invalid base64"} {
 			t.Run(fmt.Sprintf("archived=%t/%s", archived, mode), func(t *testing.T) {
-				s, a, j := legacyEvidence(t)
+				_, a, j, rollout, meta := legacyEvidence(t)
 				a.Phase, a.BytesAttempted = "submitted", len(a.Payload)
-				raw := claudeRecord(t, s, a.Payload, nil)
-				recordID, _ := s.matchRecord(raw, a, s.manifest.SessionID)
-				a.Proof = &Proof{Path: s.manifest.Transcript, SessionID: s.manifest.SessionID, RecordID: recordID, Raw: raw, RawSHA256: Hash(raw)}
+				raw := bytes.TrimSuffix(codexRecord(t, "turn", a.Payload), []byte("\n"))
+				a.Proof = &Proof{Path: rollout, SessionID: a.NativeSessionID, RecordID: "turn", Offset: int64(len(meta)), Raw: raw, RawSHA256: Hash(raw)}
 				path := filepath.Join(j.Dir, "attempt.json")
 				if archived {
 					path = filepath.Join(j.Dir, "request-"+Hash([]byte(a.RequestID))+".json")
@@ -78,7 +77,18 @@ func TestLegacyRejectsAlteredRawProofOnCurrentAndArchivedRequests(t *testing.T) 
 				}
 				writeEvidence(t, path, data)
 				r, err := j.Read(context.Background(), a.Identity.StoreID, &a.Identity)
-				if err != nil || r.Launch.Blocker == "" || len(r.Attempts) != 0 {
+				if mode == "unaltered" {
+					// The control: only the alteration refuses this proof.
+					var proved *Attempt
+					for _, imported := range r.Attempts {
+						if imported.RequestID == a.RequestID {
+							proved = imported
+						}
+					}
+					if err != nil || r.Launch.Blocker != "" || proved == nil || proved.Proof == nil || !bytes.Equal(proved.Proof.Raw, raw) {
+						t.Fatalf("exact proof refused: %+v, err=%v", r, err)
+					}
+				} else if err != nil || r.Launch.Blocker == "" || len(r.Attempts) != 0 {
 					t.Fatalf("altered proof accepted: %+v, err=%v", r, err)
 				}
 			})

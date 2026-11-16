@@ -8,14 +8,16 @@ import (
 	"testing"
 )
 
-// legacyEvidence reuses native records for importer-only JSON fixtures.
-func legacyEvidence(t *testing.T) (*nativeSession, *Attempt, *LegacyJournal) {
+// legacyEvidence reuses native records for importer-only JSON fixtures: a's
+// watermark validates the rollout at path, which holds only its metadata meta.
+func legacyEvidence(t *testing.T) (*nativeSession, *Attempt, *LegacyJournal, string, []byte) {
 	t.Helper()
 	s, a := evidenceSession(t)
-	a.Identity = Identity{StoreID: "0123456789abcdef", Token: "fedcba9876543210", InstanceID: "owner", Socket: "/own/socket", Agent: "claude", CWD: "/work", LifeNumber: 3, PaneID: "%1", PID: 123, Starttime: "456"}
+	path, meta, _ := codexRollout(t, s, a, "")
+	a.Identity = Identity{StoreID: "0123456789abcdef", Token: "fedcba9876543210", InstanceID: "owner", Socket: "/own/socket", Agent: "codex", CWD: s.manifest.CWD, LifeNumber: 3, PaneID: "%1", PID: 123, Starttime: "456"}
 	s.manifest.Token, s.manifest.InstanceID, s.manifest.Socket = a.Identity.Token, a.Identity.InstanceID, a.Identity.Socket
-	a.NativeSessionID = s.manifest.SessionID
-	a.Watermark = map[string]Watermark{s.manifest.Transcript: {PrefixSHA256: Hash(nil)}}
+	writeEvidence(t, path, meta)
+	a.Watermark = map[string]Watermark{path: codexMark(meta, meta, a.NativeSessionID)}
 	dir := filepath.Join(t.TempDir(), a.Identity.Token)
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -30,7 +32,7 @@ func legacyEvidence(t *testing.T) (*nativeSession, *Attempt, *LegacyJournal) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { j.Close() })
-	return s, a, j
+	return s, a, j, path, meta
 }
 
 func writeLegacyAttempt(t *testing.T, j *LegacyJournal, a *Attempt, history bool) {
@@ -50,7 +52,7 @@ func TestLegacyCurrentPrecedenceAndConservativeBlockers(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"current wins", "history retained", "missing owner", "conflicting owner", "corrupt current", "unsupported capability", "unreadable history"} {
 		t.Run(mode, func(t *testing.T) {
-			s, a, j := legacyEvidence(t)
+			s, a, j, path, _ := legacyEvidence(t)
 			a.Phase, a.BytesAttempted = "enter_attempted", len(a.Payload)
 			writeLegacyAttempt(t, j, a, false)
 			// An interrupted legacy history write cannot supersede current.
@@ -76,7 +78,7 @@ func TestLegacyCurrentPrecedenceAndConservativeBlockers(t *testing.T) {
 				data, _ := json.Marshal(s.manifest)
 				writeEvidence(t, filepath.Join(j.Dir, "launch.json"), data)
 			case "unreadable history":
-				if err := os.Symlink(s.manifest.Transcript, filepath.Join(j.Dir, "request-other.json")); err != nil {
+				if err := os.Symlink(path, filepath.Join(j.Dir, "request-other.json")); err != nil {
 					t.Fatal(err)
 				}
 			}

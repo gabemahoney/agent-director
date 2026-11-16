@@ -161,10 +161,13 @@ resume/reuse keeps the earlier published coverage and
 [Agent Defaults](#agent-defaults) visible, and sends use those defaults, until
 the new launch is published following creation, adoption or report-in.
 
-A covered row also shows `agent_defaults` on `get`, `get-many`, `status` and
-`list`; `delivery`, its inbox, on `get`, `get-many` and `status`; and
-`delivery_capabilities`, its limits, on `get` and `get-many`. Uncovered rows
-omit all three. Permission-request delivery fields keep their separate
+A covered row also shows `agent_defaults`, its [settings](#agent-defaults),
+on `get`, `get-many`, `status` and `list`; `delivery`, its inbox, on `get`,
+`get-many` and `status`; and `delivery_capabilities`, what busy send can do
+for it, on `get` and `get-many`: its [limits](#busy-send-refusals), its
+[force capability](#claude-code-force-capability) and its
+[Confirm From Transcripts](#confirm-from-transcripts) capability. Uncovered
+rows omit all three. Permission-request delivery fields keep their separate
 meaning.
 
 `delivery.held_count` and `held_bytes` count the Messages Held now. The held
@@ -188,7 +191,7 @@ These options apply only to Covered Agents:
   `caller_uuid` and `force`.
 - `spawn` (reuse included), `resume` and `make-template`: the Agent Defaults
   `send_mode` and `confirmed_delivery`, and the experimental
-  `confirm_from_transcripts`.
+  [`confirm_from_transcripts`](#confirm-from-transcripts).
 - `pause`: `only_if_waiting`.
 
 Any supplied value counts, `false`, `wait_turn` and a value inherited from a
@@ -261,8 +264,8 @@ its own:
 
 A `send_mode` the agent does not offer is `ErrCantSend`, reason
 `steer_unsupported`, before anything is written or launched; a template with
-no agent is checked at each spawn that uses it. `confirm_from_transcripts` is
-experimental: this version stores and shows it, and it changes nothing.
+no agent is checked at each spawn that uses it. For the experimental
+`confirm_from_transcripts`, see [Confirm From Transcripts](#confirm-from-transcripts).
 
 ### Covered sends
 
@@ -412,12 +415,10 @@ exposure to overlapping work, not proof that a race happened. A Final Result
 never upgrades on later evidence. Neither that reason nor missing proof
 permits a resend.
 
-User hooks can block or rewrite intake without agent-director detecting it or
-changing those hooks. Reserved closing tags can be escaped by the harness,
-preventing exact intake evidence; `awaiting_turn_start` can then stay nonzero
-and later Messages wait `readiness_unknown` until Launch End. Message-caused
-screen changes reset the ordinary `idle_screen` clock. No length of waiting
-alone becomes `needs_intelligence`.
+A prompt the [sighting limits](#sighting-limits) hide leaves
+`awaiting_turn_start` nonzero, and later Messages wait `readiness_unknown`
+until Launch End. Message-caused screen changes reset the ordinary
+`idle_screen` clock. No length of waiting alone becomes `needs_intelligence`.
 
 ### Checking whether work is done
 
@@ -539,6 +540,96 @@ passed, the agent's next eligible event, or the next accepted `send-keys` or
 `force-delivery` for that agent, finishes it by the rules above; a force
 refused `agent_starting`, `launch_ended` or `route_unavailable` does not.
 Nothing retries in the background.
+
+#### Claude Code force capability
+
+On Claude Code a force prompt is admitted when agent-director's own
+`UserPromptSubmit` hook sees the whole prompt exactly, once Claude Code's
+measured wrapping is undone, on the launch, session, connection and hand-over
+that issued it: its sighting. Finished output is not admission, and admission
+is neither a Message's receipt nor the model acting on it. Claude Code gives
+no negative: a missing sighting, a hook's exit or elapsed time never fails or
+refuses a force.
+
+`delivery_capabilities.force` publishes `admission: "prompt_sighting"`, the
+[sighting limits](#sighting-limits) as `limits`, and `states`: what a force
+made in each agent state returns, in this order.
+
+| `state` | `outcome` | `reason` |
+|---|---|---|
+| `idle` | `handed_over` | `admitted` |
+| `tool_running` | `pending` | `turn_running` |
+| `between_tools` | `pending` | `turn_running` |
+| `permission_dialog` | `pending` | `dialog` |
+| `plan_dialog` | `pending` | `dialog` |
+| `compacting` | `pending` | `compaction` |
+| `not_started` | `refused` | `agent_starting` |
+| `ended` | `refused` | `launch_ended` |
+
+The rows describe measured behaviour and promise no time; a force's own
+`force_result` is its outcome. A force made while idle still
+returns `pending` when its sighting comes after the call returns, and one in a
+`pending` row returns `handed_over` when its sighting comes during the call. A
+`pending` row's reason is what the prompt waits behind; a pending force's own
+reason is `awaiting_admission`. The refusal order and every other guard above
+still apply.
+
+**Several prompts.** Each forced wake hands over one whole prompt. While the
+same call runs, another forced wake can issue the next prompt once the
+previous prompt is sighted and its order is secured; no turn end is required.
+Prompts not issued when the call ends go back to ordinary delivery, as above,
+on its own schedule ([Wait Turn delivery and waits](#wait-turn-delivery-and-waits)).
+Wakes during the call serve only the force, so a Message accepted meanwhile
+waits for an eligible event after it.
+
+A force types no keys, answers no Dialog, changes no permission and cancels
+nothing, and a spawn's startup prompt still goes first. agent-director never
+forces on its own: `idle_screen`, startup, `resume` and turn ends start no
+force.
+
+#### Sighting limits
+
+`force.limits` names, in this order, where a sighting cannot show whether
+Claude Code took a prompt, forced or not:
+
+- `duplicate_text`: when two prompts awaiting a sighting render to the same
+  text, a sighting binds to neither.
+- `unrecoverable_escaping`: Claude Code escapes reserved closing tags, and
+  text that only looks escaped reads the same, so a prompt holding either
+  gives no sighting. Nor does one whose wrapping changed.
+- `user_hook_after_sighting`: a hook of yours can block or rewrite the prompt
+  after agent-director's sighting without agent-director detecting it.
+  agent-director never changes your hooks.
+
+agent-director adds no marker, nonce or ID to the text the model sees. These
+limits can leave a force `pending` until Launch End, and ordinary delivery's
+`awaiting_turn_start` nonzero. That uncertainty never permits a resend.
+
+### Confirm From Transcripts
+
+`confirm_from_transcripts` is an experimental setting, `false` out of the
+box, that lets agent-director count a match in the agent's own transcript as
+evidence that a force was admitted, where the agent's capability allows. It
+is set ahead of the launch like the [Agent Defaults](#agent-defaults): at
+`spawn` or reuse, in a template, or at `resume`. A plain `resume` keeps it.
+Nothing changes it during a launch; a `resume` naming a new value applies it
+to the new launch, and the earlier launch's end has already finished any
+force pending there ([Launch end](#launch-end-resume-and-reuse)).
+
+`agent_defaults.confirm_from_transcripts` shows the setting on `status`,
+`get`, `get-many` and `list`. `delivery_capabilities` on `get` and `get-many`
+shows what it can do for the agent, whatever the setting:
+`confirm_from_transcripts_capability` is `can_confirm`, `not_needed` or
+`cannot_confirm`, and `confirm_from_transcripts_reason` is a stable code
+saying why.
+
+Claude Code is `not_needed`, reason `hook_sighting_first`: agent-director's
+own [sighting](#claude-code-force-capability) came before Claude Code's
+transcript record in every state measured. Claude Code accepts the setting,
+and it changes nothing: agent-director reads no transcript to confirm a force,
+and no force reason names a transcript match. For an agent busy send does not
+cover, setting it, `false` included, is refused with `agent_not_covered`
+([Busy-send options](#busy-send-options)).
 
 ### Durable lookups
 
@@ -1882,8 +1973,11 @@ was recorded, it stays recorded: inspect with `get` before continuing.
 A Claude row's clean exit ends the row at once. A Codex agent that exits other
 than through `pause`, an `/exit` typed at its pane, leaves its row in its last
 state, and so does a crash or a `kill` of either agent. Until something sees
-the agent gone, `send-keys` gets `ErrTmuxSendKeys` and `read-pane`
-`ErrTmuxCaptureFailed`. Run `sweep`: it marks the row `ended` when the
+the agent gone, `read-pane` gets `ErrTmuxCaptureFailed`, and `send-keys` to
+an agent busy send does not cover gets `ErrTmuxSendKeys`. A Covered Agent's
+`send-keys` still accepts its Message ([Covered sends](#covered-sends)); what
+then happens to it is in
+[Launch end, resume and reuse](#launch-end-resume-and-reuse). Run `sweep`: it marks the row `ended` when the
 agent's end was reported, else `missing`, and an `ended` row is in neither of
 its lists (see [How a Codex row ends](hooks.md#how-a-codex-row-ends)). Selected
 state reads can make the same guarded move through

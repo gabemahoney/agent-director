@@ -462,5 +462,20 @@ test.each([
 
 test("public-surface: the covered-only blocks' types are exported from the package root", () => {
   const index = fs.readFileSync(path.join(fixtureDir, "index.d.ts.golden"), "utf8");
-  for (const name of ["AgentDefaults", "DeliveryFacts", "DeliveryCapabilities", "DeliveryModeLimits"]) expect(index, name).toMatch(new RegExp(`\\b${name}\\b`));
+  for (const name of ["AgentDefaults", "DeliveryFacts", "DeliveryCapabilities", "DeliveryModeLimits", "ForceCapability",
+    "ForceStateCapability", "ConfirmFromTranscriptsCapability"]) expect(index, name).toMatch(new RegExp(`\\b${name}\\b`));
+});
+
+// SR-4.4, SR-4.5 (E5 Main Agent decision 4): delivery_capabilities carries a nullable force object and the closed
+// Confirm From Transcripts capability with its reason code.
+test("public-surface: delivery_capabilities declares force and Confirm From Transcripts", () => {
+  const types = typesGolden();
+  expect(types).toMatch(/export type ConfirmFromTranscriptsCapability = "can_confirm" \| "not_needed" \| "cannot_confirm";/);
+  for (const [iface, shape] of [
+    ["DeliveryCapabilities", /\bforce\s*:\s*ForceCapability\s*\|\s*null\s*;/],
+    ["DeliveryCapabilities", /\bconfirm_from_transcripts_capability\s*:\s*ConfirmFromTranscriptsCapability\s*;/],
+    ["DeliveryCapabilities", /\bconfirm_from_transcripts_reason\s*:\s*string\s*;/],
+    ["ForceCapability", /\bstates\s*:\s*ForceStateCapability\[\]\s*;/],
+    ["ForceStateCapability", /\boutcome\s*:\s*"handed_over"\s*\|\s*"pending"\s*\|\s*"refused"\s*;/],
+  ] as const) expect(interfaceBody(types, iface), iface).toMatch(shape);
 });

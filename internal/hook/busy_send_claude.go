@@ -24,6 +24,10 @@ import (
 // suffix. AD's own UserPromptSubmit hook sees the wrapped prompt; undoing the
 // wrapping exactly gives the take evidence SR-3.3 needs
 // (recordClaudeSighting). No marker, nonce or id is ever added to the text.
+// A force (SR-3.4, SR-4.2) takes the same wake: while its call runs, each
+// wake issues at most its one frozen prompt that may issue now, and the same
+// sighting is that prompt's admission. The force's call alone touches the
+// wake to advance it.
 
 // claudeWaitTurn is Claude's Wait Turn row of the capability table, whose
 // limits and wrapping this route reads and keeps none of its own.
@@ -127,14 +131,18 @@ func claudeCallbackSession(res ClassifyResult, session string) bool {
 // an endpoint that cannot be created where the Launch's record names it,
 // writes nothing. A send's touch before the watch is registered is recovered
 // by one finite detached startup touch after this hook exits (decision 19).
-// With a startup prompt its first Stop still supplies the touch instead. It
-// carries no permission decision.
+// With a startup prompt its first Stop still supplies the touch instead. As
+// the Launch's startup or readiness event (SR-3.1) it first finishes a force
+// abandoned by its call (recoverClaudeAbandonedForce), such as one left
+// running across a compaction's SessionStart. It carries no permission
+// decision.
 func writeClaudeWatchPath(ctx context.Context, stdout io.Writer, st HookStore, hc HandleConfig,
 	instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
 	f, ok := claudeRouteFacts(ctx, st, instanceID, gate, res, logger)
 	if !ok {
 		return
 	}
+	recoverClaudeAbandonedForce(ctx, st, hc, instanceID, f, logger)
 	id, ok := st.(interface{ StoreID() string })
 	if !ok || hc.PrepareBusySendWake == nil {
 		return
@@ -167,29 +175,121 @@ func writeClaudeWatchPath(ctx context.Context, stdout io.Writer, st HookStore, h
 // resignalClaudeWake is the main agent's turn end for busy send (decision 10):
 // after a Stop's, or the idle-prompt Notification's, own write applied, a
 // covered Claude Launch with Messages Held and no earlier issued input still
-// awaiting evidence it was taken gets its wake endpoint touched. It claims
-// nothing and emits nothing: the owned FileChanged hook decides again from
-// SQLite. A lost touch leaves the Messages Held for the next eligible event.
-func resignalClaudeWake(ctx context.Context, st HookStore, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
+// awaiting evidence it was taken gets its wake endpoint touched. So does one
+// whose force was abandoned by its call (claudeForceAbandoned), even with no
+// Message Held because the force still claims them all: this turn end is the
+// agent's eligible event, and the wake's ordinary invocation finishes that
+// force first (busysend.Coordinator.Deliver; E5 decision 7). It claims
+// nothing, emits nothing and carries no force authority: the owned FileChanged
+// hook decides again from SQLite, and issues a forced prompt only while a
+// force's call runs. A lost touch leaves the Messages Held, and the abandoned
+// force open, for the next eligible event.
+func resignalClaudeWake(ctx context.Context, st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
 	if res.EventName != EventNameStop && !res.WaitingIfWorking {
 		return
 	}
 	f, ok := claudeRouteFacts(ctx, st, instanceID, gate, res, logger)
-	if !ok || f.Held == 0 || f.Awaiting > 0 {
+	if !ok || !claudeForceAbandoned(f, hc.clock()()) && (f.Held == 0 || f.Awaiting > 0) {
 		return
 	}
 	store.TouchBusySendWake(f.WakePath)
 }
 
+// abandonedForceReleaser is the store's abandoned-force release
+// (store.ReleaseAbandonedBusySendForce). A store without it releases nothing.
+type abandonedForceReleaser interface {
+	ReleaseAbandonedBusySendForce(ctx context.Context, instanceID string, at time.Time) (store.BusySendForceRelease, error)
+}
+
+// recoverClaudeAbandonedForce is an eligible event of a covered Claude Launch
+// whose force was abandoned by its call (claudeForceAbandoned on f, the
+// event's own authenticated route facts) finishing that force (SR-3.1,
+// SR-3.2, SR-4.3; E5 decision 7) through the shared release, as its own
+// transaction: it fences the force by owner revision, returns its
+// never-issued Messages to Held in accepted order and finishes it by the
+// call-end rules; a call end recorded meanwhile wins and the release changes
+// nothing. When it returned Messages it notifies the route, as every
+// releasing command does. It issues nothing and grants no force authority. A
+// failure is logged and leaves the force for the next eligible event.
+func recoverClaudeAbandonedForce(ctx context.Context, st HookStore, hc HandleConfig, instanceID string, f store.BusySendRouteFacts, logger *log.Logger) {
+	r, ok := st.(abandonedForceReleaser)
+	now := hc.clock()()
+	if !ok || !claudeForceAbandoned(f, now) {
+		return
+	}
+	rel, err := r.ReleaseAbandonedBusySendForce(ctx, instanceID, now)
+	if err != nil {
+		logf(logger, "hook: busy-send abandoned force (instance=%s): %v", instanceID, err)
+		return
+	}
+	if rel.Returned > 0 {
+		store.TouchBusySendWake(rel.WakePath)
+	}
+}
+
+// recoverClaudeInputForce is an owned main-agent Claude UserPromptSubmit's
+// provider-input completion (SR-3.1), after its own gated write applied and
+// its sighting, if any, was offered (recordClaudeSighting): for the hook's
+// gate and session in the current covered Launch (claudeRouteFacts), it
+// finishes a force abandoned by its call (recoverClaudeAbandonedForce), so a
+// sighting that arrives after the force's recorded deadline both admits its
+// prompt and ends the force. Recording the sighting itself changes no
+// custody, order or Result; only this separate release does.
+func recoverClaudeInputForce(ctx context.Context, st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
+	if !gate.ClaudeTurnStart {
+		return
+	}
+	if f, ok := claudeRouteFacts(ctx, st, instanceID, gate, res, logger); ok {
+		recoverClaudeAbandonedForce(ctx, st, hc, instanceID, f, logger)
+	}
+}
+
+// claudeForceCallRunning reports whether f names a force whose call still
+// runs at now: running, with no call end recorded and its recorded deadline
+// not passed. That call owns its claims and every forced wake (SR-3.4).
+func claudeForceCallRunning(f store.BusySendRouteFacts, now time.Time) bool {
+	return f.ForceCallDeadlineMillis != 0 && now.UnixMilli() <= f.ForceCallDeadlineMillis
+}
+
+// claudeForceBudgets is a forced wake's budgets at now: what remains of the
+// running force's original issue phase and of its call, from f's recorded
+// deadlines (SR-3.2). They bound the whole invocation, its first prompt read
+// included, so no wake starts a budget of its own; false once the issue phase
+// has ended, when nothing may issue.
+func claudeForceBudgets(f store.BusySendRouteFacts, now time.Time) (busysend.Budgets, bool) {
+	issue := time.UnixMilli(f.ForceIssueDeadlineMillis).Sub(now)
+	call := time.UnixMilli(f.ForceCallDeadlineMillis).Sub(now)
+	if issue <= 0 || call < issue {
+		return busysend.Budgets{}, false
+	}
+	return busysend.Budgets{Issue: issue, Job: call}, true
+}
+
+// claudeForceAbandoned reports whether f names a force whose call never
+// reached its end: running, with no call end recorded, past its recorded
+// deadline at now, compared in milliseconds as
+// store.ReleaseAbandonedBusySendForce compares it.
+func claudeForceAbandoned(f store.BusySendRouteFacts, now time.Time) bool {
+	return f.ForceCallDeadlineMillis != 0 && now.UnixMilli() > f.ForceCallDeadlineMillis
+}
+
 // handleClaudeWake is the owned FileChanged hook (SR-3.4; decision 10): a
 // change of the Launch's own wake endpoint, from the agent process the gate
-// names, makes one finite coordinator invocation at the turn-end boundary
-// through claudeRoute, which re-reads SQLite and emits one whole prompt on
-// stderr only when eligible Held work and the agent's state authorize it. It
-// reports whether that prompt was written whole (the hook then exits 2). A
-// change of any other path, a subagent's callback, a stale gate or an
-// uncovered Launch delivers nothing, and the hook writes no state: FileChanged
-// is not a state report.
+// names, makes one finite coordinator invocation through claudeRoute, which
+// re-reads SQLite and emits at most one whole prompt on stderr. While a force's
+// call runs (claudeForceCallRunning) the wake is that force's forced wake
+// (busysend.Coordinator.DeliverForcePrompt): it issues only the force's frozen
+// prompt that may issue now, whatever the turn, Dialog or compaction state,
+// and never falls through to ordinary work, whose claim the force's hand-over
+// bars. The force's original deadlines bound that whole invocation, its first
+// prompt read included (claudeForceBudgets); past its issue phase it reads
+// and writes nothing. Otherwise it is the ordinary invocation at the turn-end
+// boundary, which first finishes an abandoned force and emits only when
+// eligible Held work and the agent's state authorize it. It reports whether
+// that prompt was written whole (the hook then exits 2). A change of any
+// other path, a subagent's callback, a stale gate or an uncovered Launch
+// delivers nothing, and the hook writes no state: FileChanged is not a state
+// report.
 func handleClaudeWake(ctx context.Context, stderr io.Writer, st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) bool {
 	rs, ok := st.(claudeRouteStore)
 	if !ok || stderr == nil || res.FilePath == "" {
@@ -206,7 +306,20 @@ func handleClaudeWake(ctx context.Context, stderr io.Writer, st HookStore, hc Ha
 			PIDNamespace: self.PIDNamespace}
 	}
 	c := busysend.Coordinator{Store: rs, Route: route, Budgets: claudeWakeBudgets, Now: hc.clock()}
-	out, err := c.Deliver(ctx, busysend.Event{InstanceID: instanceID, Boundary: store.BusySendBoundaryTurnEnd})
+	deliver, ev := c.Deliver, busysend.Event{InstanceID: instanceID, Boundary: store.BusySendBoundaryTurnEnd}
+	if now := c.Now(); claudeForceCallRunning(f, now) {
+		b, ok := claudeForceBudgets(f, now)
+		if !ok {
+			// The force's issue phase has ended: its call alone settles it.
+			return false
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, b.Job)
+		defer cancel()
+		route.force, c.Budgets = true, b
+		deliver, ev.Boundary = c.DeliverForcePrompt, store.BusySendBoundaryForce
+	}
+	out, err := deliver(ctx, ev)
 	if err != nil {
 		logf(logger, "hook: busy-send wake (instance=%s): %v", instanceID, err)
 	}
@@ -222,6 +335,10 @@ func handleClaudeWake(ctx context.Context, stderr io.Writer, st HookStore, hc Ha
 // (busysend.Route): an owned FileChanged hook's one invocation, issuing at
 // most one prompt (More false) on its own error stream.
 type claudeRoute struct {
+	// force is whether the invocation is a running force's forced wake
+	// (handleClaudeWake): its waits keep only the Launch's own (launchWait),
+	// skipping the turn-end, Dialog and compaction readiness waits (SR-4.2).
+	force      bool
 	st         claudeRouteStore
 	instanceID string
 	// launchID and session are the Launch and provider session the callback
@@ -279,8 +396,28 @@ func (r *claudeRoute) Eligibility(ctx context.Context, _ busysend.Event) (busyse
 	return busysend.Eligibility{Wait: r.wait(f), Destination: r.destination(f), RaceExposed: true}, nil
 }
 
-// wait is the cause that forbids a wake now, "" for none.
+// wait is the cause that forbids a wake now, "" for none. A forced wake's is
+// launchWait's alone: the store's issue guard judges the force's order,
+// ownership, destination and pause fence.
 func (r *claudeRoute) wait(f store.BusySendRouteFacts) store.BusySendWaitReason {
+	if w := r.launchWait(f); w != "" || r.force {
+		return w
+	}
+	switch {
+	case f.PermissionHold || f.State == store.StateCheckPermission || f.State == store.StateAskUser:
+		return store.BusySendWaitDialog
+	case f.State == store.StateWorking:
+		return store.BusySendWaitTurnRunning
+	case f.Awaiting > 0 || f.State != store.StateWaiting:
+		return store.BusySendWaitReadinessUnknown
+	}
+	return ""
+}
+
+// launchWait is the cause that forbids any wake, forced or not, now: the
+// route's authority, the Launch's lifecycle and startup-input precedence. ""
+// for none.
+func (r *claudeRoute) launchWait(f store.BusySendRouteFacts) store.BusySendWaitReason {
 	firstTurn := f.TurnStarts == 0 && f.Kind != store.BusySendLaunchResume && f.Kind != store.BusySendLaunchMigrated
 	switch {
 	case !f.GateHolds || !f.Covered || f.Destination.RouteKind != store.BusySendRouteClaudeHooks:
@@ -297,12 +434,6 @@ func (r *claudeRoute) wait(f store.BusySendRouteFacts) store.BusySendWaitReason 
 		// The startup prompt goes first in the Launch's order; its own
 		// UserPromptSubmit is the only evidence it was taken.
 		return store.BusySendWaitAgentStarting
-	case f.PermissionHold || f.State == store.StateCheckPermission || f.State == store.StateAskUser:
-		return store.BusySendWaitDialog
-	case f.State == store.StateWorking:
-		return store.BusySendWaitTurnRunning
-	case f.Awaiting > 0 || f.State != store.StateWaiting:
-		return store.BusySendWaitReadinessUnknown
 	}
 	return ""
 }

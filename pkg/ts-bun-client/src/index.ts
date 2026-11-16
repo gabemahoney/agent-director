@@ -170,5 +170,6 @@ export type {
   GetDeliveryParams, GetDeliveryResult, DeliveryResult, DeliveryWait, DeliveryPair, Lookup,
   AgentDefaultParams, SendMode,
   AgentDefaults, DeliveryFacts, DeliveryCapabilities, DeliveryModeLimits,
+  ForceCapability, ForceStateCapability, ConfirmFromTranscriptsCapability,
   VersionParams, VersionResult,
 } from "./types.js";

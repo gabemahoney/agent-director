@@ -134,7 +134,8 @@ Messages without replaying startup input.
 
 `SpawnParams`, `ResumeParams` and `MakeTemplateParams` take the Agent Defaults
 `SendMode` and `ConfirmedDelivery` and the experimental
-`ConfirmFromTranscripts`. Each is a pointer: nil leaves it unset, and a pointer
+`ConfirmFromTranscripts` ([Confirm From Transcripts](../../docs/caller-contract.md#confirm-from-transcripts)).
+Each is a pointer: nil leaves it unset, and a pointer
 to any value, `false` or `"wait_turn"` included, sets it. They apply only to
 Covered Agents; see
 [Busy-send options](../../docs/caller-contract.md#busy-send-options).
@@ -241,6 +242,12 @@ in [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-
 `AgentDefaults`, `Delivery` and `DeliveryCapabilities`. `Status` has defaults
 and delivery facts; `List` has defaults. Reads deliver nothing. See
 [Busy-send coverage](../../docs/caller-contract.md#busy-send-coverage).
+`DeliveryCapabilities.Force` is a `*DeliveryForceCapability` (nil when none)
+whose `States` are `DeliveryForceState` rows
+([Claude Code force capability](../../docs/caller-contract.md#claude-code-force-capability)).
+`ConfirmFromTranscriptsCapability` is one of the `api.ConfirmFromTranscripts*`
+constants, with `ConfirmFromTranscriptsReason`
+([Confirm From Transcripts](../../docs/caller-contract.md#confirm-from-transcripts)).
 
 ```go
 	result, err := c.GetMany([]string{"agent-b", "unknown", "agent-a"})

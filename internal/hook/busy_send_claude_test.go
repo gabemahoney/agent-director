@@ -8,11 +8,16 @@ package hook_test
 // exact wake text is the only take evidence; SessionStart returns the endpoint
 // to watch. The store's predicates (Turn Start counter, awaiting obligation,
 // sighting outcomes) are internal/store's (t3.xis.oo.u8.gr), the coordinator's
-// generic order and custody internal/busysend's (Task .xe).
+// generic order and custody internal/busysend's (Task .xe). The force's forced
+// wake and sighting admission on this route are Task t2.xis.p8.zp's, over
+// y2's real force claim and call end; y2's store matrix and call budgets are
+// internal/store's and pkg/api's.
 
 import (
 	"bytes"
 	"context"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,15 +25,19 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -59,6 +68,10 @@ type wakeEnv struct {
 	db, id          string
 	endpoint, token string
 	parent          hookParent
+	// now is every callback's clock (HandleConfig.Now; nil: the wall clock)
+	// and seam the store it runs on (nil: st).
+	now  func() time.Time
+	seam hook.HookStore
 }
 
 // newWakeEnv seeds the row in state with opts.
@@ -156,9 +169,13 @@ func (e *wakeEnv) fileChanged(t *testing.T, fields map[string]any) []byte {
 // stderr, and returns its stdout and error.
 func (e *wakeEnv) handle(ctx context.Context, p hookParent, payload []byte, stderr io.Writer) (string, error) {
 	hc := hookConfig(envHook(e.id, ""), p)
-	hc.Self, hc.Stderr = wakeHelper, stderr
+	hc.Self, hc.Stderr, hc.Now = wakeHelper, stderr, e.now
+	var st hook.HookStore = e.st
+	if e.seam != nil {
+		st = e.seam
+	}
 	var stdout bytes.Buffer
-	err := hook.Handle(ctx, bytes.NewReader(payload), &stdout, e.st, hc, newSilentLogger())
+	err := hook.Handle(ctx, bytes.NewReader(payload), &stdout, st, hc, newSilentLogger())
 	return stdout.String(), err
 }
 
@@ -225,6 +242,53 @@ func (e *wakeEnv) observe(t *testing.T) store.BusySendObservation {
 	return *o
 }
 
+// force claims every Held Message into a force whose call enters now, through
+// y2's real claim with the API call's 12 s active phase and 3 s cleanup (E5
+// decision 1), as force-delivery does, and sets every later callback's clock
+// a second into that call (inCall).
+func (e *wakeEnv) force(t *testing.T) store.BusySendForceClaim {
+	t.Helper()
+	l, err := e.st.GetBusySendPublishedLaunch(e.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := e.st.ClaimBusySendForce(context.Background(), store.BusySendForceClaimRequest{InstanceID: e.id, Launch: l,
+		ForceID: uuid.NewString(), OwnerCallID: uuid.NewString(), ActiveBudget: 12 * time.Second, CleanupBudget: 3 * time.Second,
+		At: time.Now()})
+	if err != nil || c.Handover == nil || c.Force.Outcome != store.BusySendForceRunning {
+		t.Fatalf("force claim %+v, %v; want a running force", c, err)
+	}
+	e.inCall(c, time.Second)
+	return c
+}
+
+// inCall sets every later callback's clock to d after c's call entered.
+func (e *wakeEnv) inCall(c store.BusySendForceClaim, d time.Duration) {
+	at := time.UnixMilli(c.Force.StartedAtMillis).Add(d)
+	e.now = func() time.Time { return at }
+}
+
+// forceResult is c's force as get-force reads it.
+func (e *wakeEnv) forceResult(t *testing.T, c store.BusySendForceClaim) store.BusySendForce {
+	t.Helper()
+	l, err := e.st.ReadBusySendForce(c.Force.ForceID)
+	if err != nil || l.ForceResult == nil {
+		t.Fatalf("ReadBusySendForce = %+v, %v; want found", l, err)
+	}
+	return *l.ForceResult
+}
+
+// endCall records c's call end as the API call does when its active phase
+// runs out, 12 s after its entry.
+func (e *wakeEnv) endCall(t *testing.T, c store.BusySendForceClaim) store.BusySendForce {
+	t.Helper()
+	end, err := e.st.EndBusySendForceCall(context.Background(), c.Ref, time.UnixMilli(c.Force.StartedAtMillis).Add(12*time.Second))
+	if err != nil || !end.Ended {
+		t.Fatalf("EndBusySendForceCall = %+v, %v; want the call's end recorded", end, err)
+	}
+	return end.Force
+}
+
 // assertRaced fails unless each request's Result is Final sent_unconfirmed
 // with the sticky wait_turn_raced (every Claude wake is race-exposed, SR-3.3a,
 // ahead of handed_over_not_proven) on e's Launch and session.
@@ -249,16 +313,20 @@ func (e *wakeEnv) assertHeld(t *testing.T, request string, waits ...store.BusySe
 }
 
 // wakeStderr is a hook's error stream that takes a write deadline, as the
-// route requires (R2-2): before runs once at its first write; each write
-// keeps keep bytes (all when negative) and returns err.
+// route requires (R2-2), and keeps the last one set: before runs once at its
+// first write; each write keeps keep bytes (all when negative) and returns err.
 type wakeStderr struct {
 	bytes.Buffer
-	before func()
-	keep   int
-	err    error
+	before   func()
+	keep     int
+	err      error
+	deadline time.Time
 }
 
-func (w *wakeStderr) SetWriteDeadline(time.Time) error { return nil }
+func (w *wakeStderr) SetWriteDeadline(d time.Time) error {
+	w.deadline = d
+	return nil
+}
 
 func (w *wakeStderr) Write(p []byte) (int, error) {
 	if f := w.before; f != nil {
@@ -339,6 +407,7 @@ func TestClaudeWakeDeliversHeldPrompts(t *testing.T) {
 		t.Errorf("awaiting after a sighting under a contradicting payload session = %d; want 1", o.AwaitingTurnStart)
 	}
 	turns := mustGetSpawn(t, e.st, e.id).TurnStarts
+	touched := e.wakeMtime(t)
 	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(first)}))
 	if got := mustGetSpawn(t, e.st, e.id); got.TurnStarts != turns+1 || got.State != store.StateWorking {
 		t.Errorf("after the sighting: Turn Starts %d, state %s; want %d, working", got.TurnStarts, got.State, turns+1)
@@ -347,8 +416,12 @@ func TestClaudeWakeDeliversHeldPrompts(t *testing.T) {
 		t.Errorf("awaiting after the exact sighting = %d; want 0", o.AwaitingTurnStart)
 	}
 	e.assertRaced(t, "m1", "m2")
+	// An ordinary group's next prompt waits for a later turn end, never a
+	// sighting (decision 13; only a force advances on one, SR-3.4).
+	if touched() {
+		t.Error("the sighting touched the wake endpoint; want only the next turn end to")
+	}
 
-	touched := e.wakeMtime(t)
 	e.fire(t, e.payload(t, "stop.json", nil))
 	if !touched() {
 		t.Error("the parent's Stop with Messages Held left the wake endpoint untouched")
@@ -361,17 +434,35 @@ func TestClaudeWakeDeliversHeldPrompts(t *testing.T) {
 }
 
 // failRouteFacts is the store with its nth route-facts read failing, after the
-// callback's own authority read (the first) succeeded; fired records it.
+// callback's own authority read (the first) succeeded; fired records it. With
+// before set, that read instead runs before and then reads: a causal barrier.
+// With read set, each force prompt read first runs it with the read's context,
+// and readErr keeps what the read then returned.
 type failRouteFacts struct {
 	*store.Store
-	n     int
-	fired bool
+	n       int
+	fired   bool
+	before  func()
+	read    func(context.Context)
+	readErr error
+}
+
+func (s *failRouteFacts) ReadBusySendForcePrompt(ctx context.Context, id string) (store.BusySendForcePrompt, error) {
+	if s.read != nil {
+		s.read(ctx)
+	}
+	p, err := s.Store.ReadBusySendForcePrompt(ctx, id)
+	s.readErr = err
+	return p, err
 }
 
 func (s *failRouteFacts) ReadBusySendRouteFacts(ctx context.Context, id string, gate store.HookGate) (store.BusySendRouteFacts, error) {
 	if s.n--; s.n == 0 {
 		s.fired = true
-		return store.BusySendRouteFacts{}, errors.New("injected route-facts read failure")
+		if s.before == nil {
+			return store.BusySendRouteFacts{}, errors.New("injected route-facts read failure")
+		}
+		s.before()
 	}
 	return s.Store.ReadBusySendRouteFacts(ctx, id, gate)
 }
@@ -386,7 +477,9 @@ func (s *failRouteFacts) ReadBusySendRouteFacts(ctx context.Context, id string, 
 // eligibility or at the last look before the issue commit claims nothing or
 // releases its claim. A stream that takes no write deadline (logged), or no
 // startup-prompt reader on any turn of any Launch (code repairs 2 and 3),
-// issues nothing.
+// issues nothing. While a force's call runs (SR-3.4, SR-3.9), the forced wake
+// skips only the turn, Dialog and compaction waits: each case marked force
+// also refuses it, issuing none of the force's frozen prompt.
 func TestClaudeWakeRefusals(t *testing.T) {
 	startup := []apitest.SpawnOption{apitest.WithRawAgentArgs(`["--model","opus","fix the tests"]`), apitest.WithTurnStarts(0)}
 	cases := []struct {
@@ -403,17 +496,21 @@ func TestClaudeWakeRefusals(t *testing.T) {
 		resumed   bool   // the row is on a resumed Launch (newResumedWakeEnv)
 		logged    string // a diagnostic the hook logs; "" checks none
 		waits     []store.BusySendWaitReason
+		force     bool // also run with a force's call running
 	}{
-		{name: "another process's callback", parent: func(t *testing.T, e *wakeEnv) hookParent { return foreignParent(t, e.st, e.id) }},
-		{name: "a subagent's callback", fields: map[string]any{"agent_id": "a5b92f0e7d3c6184", "agent_type": "Explore"}},
-		{name: "another watched path", fields: map[string]any{"file_path": "/work/demo/.envrc"}},
+		{name: "another process's callback", parent: func(t *testing.T, e *wakeEnv) hookParent { return foreignParent(t, e.st, e.id) }, force: true},
+		{name: "a subagent's callback", fields: map[string]any{"agent_id": "a5b92f0e7d3c6184", "agent_type": "Explore"}, force: true},
+		{name: "another watched path", fields: map[string]any{"file_path": "/work/demo/.envrc"}, force: true},
 		{name: "uncovered Launch", prep: func(t *testing.T, e *wakeEnv) {
 			if err := apitest.SeedBusySendCoverage(e.db, e.id, store.BusySendNotCovered, store.BusySendCovered); err != nil {
 				t.Fatal(err)
 			}
-		}},
+		}, force: true},
+		{name: "ended Launch", prep: func(t *testing.T, e *wakeEnv) {
+			e.fire(t, e.payload(t, "session-end-prompt-input-exit.json", nil))
+		}, waits: []store.BusySendWaitReason{store.BusySendWaitLaunchEnded}, force: true},
 		{name: "another session (F2)", fields: map[string]any{"session_id": "0d1c2b3a-4f5e-4d6c-8b7a-9e8f7a6b5c4d",
-			"transcript_path": "/x/0d1c2b3a-4f5e-4d6c-8b7a-9e8f7a6b5c4d.jsonl"}},
+			"transcript_path": "/x/0d1c2b3a-4f5e-4d6c-8b7a-9e8f7a6b5c4d.jsonl"}, force: true},
 		{name: "no session (F2)", fields: map[string]any{"session_id": nil, "transcript_path": nil}},
 		{name: "running turn", state: store.StateWorking, waits: []store.BusySendWaitReason{store.BusySendWaitTurnRunning}},
 		{name: "open Dialog", state: store.StateCheckPermission, prep: func(t *testing.T, e *wakeEnv) {
@@ -422,91 +519,112 @@ func TestClaudeWakeRefusals(t *testing.T) {
 			}
 		}, waits: []store.BusySendWaitReason{store.BusySendWaitDialog}},
 		{name: "agent starting", state: store.StatePending, waits: []store.BusySendWaitReason{store.BusySendWaitAgentStarting}},
-		{name: "startup prompt not yet taken", opts: startup, waits: []store.BusySendWaitReason{store.BusySendWaitAgentStarting}},
-		{name: "facts unreadable at first (R2-5)", failAt: 1, logged: "hook: busy-send route facts"},
+		{name: "startup prompt not yet taken", opts: startup, waits: []store.BusySendWaitReason{store.BusySendWaitAgentStarting}, force: true},
+		{name: "facts unreadable at first (R2-5)", failAt: 1, logged: "hook: busy-send route facts", force: true},
 		{name: "facts unreadable at eligibility", failAt: 2, waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
 		{name: "facts unreadable at authorize", failAt: 3, waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
-		{name: "no helper identity", noSelf: true},
+		{name: "no helper identity", noSelf: true, force: true},
 		{name: "output that takes no write deadline (R2-2)", plain: true, logged: "takes no write deadline",
-			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
+			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}, force: true},
 		{name: "no startup-prompt reader on a first turn (R2-7)", noStartup: true,
-			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
+			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}, force: true},
 		{name: "no startup-prompt reader after a Turn Start (R3-1)", noStartup: true, opts: []apitest.SpawnOption{apitest.WithTurnStarts(1)},
 			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
 		{name: "no startup-prompt reader on a resumed Launch (R3-1)", noStartup: true, resumed: true,
 			waits: []store.BusySendWaitReason{store.BusySendWaitReadinessUnknown}},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			state := tc.state
-			if state == "" {
-				state = store.StateWaiting
+		for _, forced := range []bool{false, true} {
+			if forced && !tc.force {
+				continue
 			}
-			var e *wakeEnv
-			if tc.resumed {
-				e = newResumedWakeEnv(t)
-			} else {
-				e = newWakeEnv(t, state, tc.opts...)
+			name := tc.name
+			if forced {
+				name += ", a force's call running"
 			}
-			e.admit(t, "m1", "hello")
-			admitted := e.result(t, "m1")
-			if tc.prep != nil {
-				tc.prep(t, e)
-			}
-			p := e.parent
-			if tc.parent != nil {
-				p = tc.parent(t, e)
-			}
-			var st hook.HookStore = e.st
-			failing := &failRouteFacts{Store: e.st, n: tc.failAt}
-			if tc.failAt > 0 {
-				st = failing
-			}
-			requests, err := e.st.OpenPermissionRequestsForSpawn(e.id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			row := mustGetSpawn(t, e.st, e.id)
-			hc := hookConfig(envHook(e.id, ""), p)
-			hc.Self = wakeHelper
-			if tc.noSelf {
-				hc.Self = nil
-			}
-			if tc.noStartup {
-				hc.ClaudeStartupPrompt = nil
-			}
-			var plain, stdout, logs bytes.Buffer
-			stderr := &wakeStderr{keep: -1}
-			hc.Stderr = stderr
-			if tc.plain {
-				hc.Stderr = &plain
-			}
-			if err := hook.Handle(context.Background(), bytes.NewReader(e.fileChanged(t, tc.fields)), &stdout, st, hc, log.New(&logs, "", 0)); err != nil {
-				t.Errorf("Handle = %v; want nil (exit 0)", err)
-			}
-			if stdout.Len() != 0 || stderr.Len() != 0 || plain.Len() != 0 {
-				t.Errorf("wrote stdout %q, stderr %q%q; want nothing", stdout.String(), stderr.String(), plain.String())
-			}
-			if failing.fired != (tc.failAt > 0) {
-				t.Errorf("injected route-facts failure fired = %t; want %t", failing.fired, tc.failAt > 0)
-			}
-			if !strings.Contains(logs.String(), tc.logged) {
-				t.Errorf("hook log %q; want it to name %q", logs.String(), tc.logged)
-			}
-			waits := tc.waits
-			if waits == nil {
-				waits = []store.BusySendWaitReason{admitted.Wait.Reason}
-			}
-			e.assertHeld(t, "m1", waits...)
-			assertRowUnchanged(t, e.st, e.id, row)
-			// An uncovered Launch shows no delivery facts (nil).
-			if o, err := e.st.ReadBusySendObservation(e.id, time.Second); err != nil || (o != nil && (o.HandoverCount != 0 || o.AwaitingTurnStart != 0)) {
-				t.Errorf("delivery facts = %+v, %v; want no hand-over claimed or issued", o, err)
-			}
-			if after, err := e.st.OpenPermissionRequestsForSpawn(e.id); err != nil || len(after) != len(requests) {
-				t.Errorf("open permission requests %d → %d (%v); want unchanged", len(requests), len(after), err)
-			}
-		})
+			t.Run(name, func(t *testing.T) {
+				state := tc.state
+				if state == "" {
+					state = store.StateWaiting
+				}
+				var e *wakeEnv
+				if tc.resumed {
+					e = newResumedWakeEnv(t)
+				} else {
+					e = newWakeEnv(t, state, tc.opts...)
+				}
+				e.admit(t, "m1", "hello")
+				admitted := e.result(t, "m1")
+				var force store.BusySendForceClaim
+				if forced {
+					force = e.force(t)
+				}
+				if tc.prep != nil {
+					tc.prep(t, e)
+				}
+				p := e.parent
+				if tc.parent != nil {
+					p = tc.parent(t, e)
+				}
+				var st hook.HookStore = e.st
+				failing := &failRouteFacts{Store: e.st, n: tc.failAt}
+				if tc.failAt > 0 {
+					st = failing
+				}
+				requests, err := e.st.OpenPermissionRequestsForSpawn(e.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				row := mustGetSpawn(t, e.st, e.id)
+				hc := hookConfig(envHook(e.id, ""), p)
+				hc.Self, hc.Now = wakeHelper, e.now
+				if tc.noSelf {
+					hc.Self = nil
+				}
+				if tc.noStartup {
+					hc.ClaudeStartupPrompt = nil
+				}
+				var plain, stdout, logs bytes.Buffer
+				stderr := &wakeStderr{keep: -1}
+				hc.Stderr = stderr
+				if tc.plain {
+					hc.Stderr = &plain
+				}
+				if err := hook.Handle(context.Background(), bytes.NewReader(e.fileChanged(t, tc.fields)), &stdout, st, hc, log.New(&logs, "", 0)); err != nil {
+					t.Errorf("Handle = %v; want nil (exit 0)", err)
+				}
+				if stdout.Len() != 0 || stderr.Len() != 0 || plain.Len() != 0 {
+					t.Errorf("wrote stdout %q, stderr %q%q; want nothing", stdout.String(), stderr.String(), plain.String())
+				}
+				if failing.fired != (tc.failAt > 0) {
+					t.Errorf("injected route-facts failure fired = %t; want %t", failing.fired, tc.failAt > 0)
+				}
+				if !strings.Contains(logs.String(), tc.logged) {
+					t.Errorf("hook log %q; want it to name %q", logs.String(), tc.logged)
+				}
+				assertRowUnchanged(t, e.st, e.id, row)
+				if after, err := e.st.OpenPermissionRequestsForSpawn(e.id); err != nil || len(after) != len(requests) {
+					t.Errorf("open permission requests %d → %d (%v); want unchanged", len(requests), len(after), err)
+				}
+				if forced {
+					// The frozen prompt stays unissued: still claimed, or released by Launch End.
+					if h, err := e.st.ReadBusySendHandover(context.Background(), force.Handover.HandoverID); err != nil ||
+						!slices.Contains([]store.BusySendEmission{store.BusySendEmissionNone, store.BusySendEmissionReleased}, h.Prompts[0].Emission) {
+						t.Errorf("the force's prompt = %+v, %v; want never issued", h.Prompts, err)
+					}
+					return
+				}
+				waits := tc.waits
+				if waits == nil {
+					waits = []store.BusySendWaitReason{admitted.Wait.Reason}
+				}
+				e.assertHeld(t, "m1", waits...)
+				// An uncovered Launch shows no delivery facts (nil).
+				if o, err := e.st.ReadBusySendObservation(e.id, time.Second); err != nil || (o != nil && (o.HandoverCount != 0 || o.AwaitingTurnStart != 0)) {
+					t.Errorf("delivery facts = %+v, %v; want no hand-over claimed or issued", o, err)
+				}
+			})
+		}
 	}
 }
 
@@ -725,14 +843,375 @@ func TestClaudeWakeMeasuresEscaping(t *testing.T) {
 	}
 }
 
+// TestClaudeForcedWake (SR-3.4, SR-4.2, SR-3.9; M2 P-C4.3): while a force's
+// call runs, the agent's own FileChanged is that force's forced wake in any
+// turn or Dialog state, with every Held Message already claimed by
+// the force: its only output is the frozen prompt, byte for byte, on stderr,
+// exit 2 (ErrRewake) and nothing on stdout, and no row, Dialog or permission
+// request changes. At its first byte the prompt's intent is durable and its
+// Message forced; a callback coalesced into it, and a later one before the
+// prompt's sighting, writes nothing. Its write deadline is the force's
+// recorded call deadline (y2's clip, M1 ForceFencedAtCallEnd), never an
+// ordinary wake's budget.
+func TestClaudeForcedWake(t *testing.T) {
+	for _, tc := range []struct {
+		name, state string
+		dialog      bool
+	}{
+		{name: "idle", state: store.StateWaiting},
+		{name: "a running turn", state: store.StateWorking},
+		{name: "a permission Dialog", state: store.StateCheckPermission, dialog: true},
+		{name: "a question", state: store.StateAskUser},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newWakeEnv(t, tc.state)
+			if tc.dialog {
+				if _, err := apitest.SeedPermissionRequest(e.db, e.id, "Bash"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e.admit(t, "m1", "hello")
+			c := e.force(t)
+			if o := e.observe(t); o.HeldCount != 0 {
+				t.Fatalf("Held %d after the force's claim; want 0", o.HeldCount)
+			}
+			row := mustGetSpawn(t, e.st, e.id)
+			requests, err := e.st.OpenPermissionRequestsForSpawn(e.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const body = "[agent-director: message 1 of 1]\nhello"
+			w := &wakeStderr{keep: -1}
+			w.before = func() {
+				if o := e.observe(t); o.AwaitingTurnStart != 1 || !e.result(t, "m1").Forced {
+					t.Errorf("at the first byte: awaiting %d, m1 %+v; want the issued prompt's obligation and m1 forced", o.AwaitingTurnStart, e.result(t, "m1"))
+				}
+				if got := e.wakeWith(t, &wakeStderr{keep: -1}); got != "" {
+					t.Errorf("a callback coalesced into the forced wake wrote %q; want nothing", got)
+				}
+			}
+			left, began := c.Handover.JobDeadline.Sub(e.now()), time.Now()
+			if got := e.wakeWith(t, w); got != body {
+				t.Fatalf("forced wake wrote %q; want %q", got, body)
+			}
+			if w.deadline.Before(began.Add(left)) || w.deadline.After(time.Now().Add(left)) {
+				t.Errorf("write deadline %v; want the force's call deadline, %v from the callback's clock", w.deadline, left)
+			}
+			if got := e.wake(t); got != "" {
+				t.Errorf("a later callback before the sighting wrote %q; want nothing", got)
+			}
+			assertRowUnchanged(t, e.st, e.id, row)
+			if after, err := e.st.OpenPermissionRequestsForSpawn(e.id); err != nil || !reflect.DeepEqual(after, requests) {
+				t.Errorf("open permission requests %+v, %v; want unchanged %+v", after, err, requests)
+			}
+		})
+	}
+}
+
+// TestClaudeForcedWakeBoundaries (SR-3.2, SR-3.4, SR-4.3; M1
+// ForceFencedAtCallEnd, NoOrphanForceClaim; M2 P-C4.3): a forced wake of a
+// two-prompt force that does not write prompt 0 whole is never replayed and
+// supplies no admission or negative. A partial write keeps prompt 1 back even
+// once prompt 0 is sighted (admission alone); an unacknowledged issue commit
+// writes nothing; a callback past the force's 12 s issue phase but within its
+// call writes nothing and leaves the claim to the call; and one held at its
+// last look while the call ends consumes the call's fence: nothing is written
+// and the returned Messages are not delivered by that callback. A wake 100 ms
+// before the issue phase ends reads the prompt under those 100 ms, never a
+// fresh wake budget (code review F1): a read delayed past them is cancelled,
+// writing and issuing nothing, and the whole invocation ends at the call's
+// recorded deadline even when the clock it reads later steps back. When the
+// call's caller is lost after prompt 0 was written whole (no call end; SR-3.1,
+// SR-3.2, E5 decision 7; product review F1), the agent's exact sighting after
+// the recorded deadline both admits prompt 0 and finishes the force:
+// handed_over admitted, b Held again unforced in its place, a's Final Result
+// unchanged and the wake touched for b. The same sighting before the deadline
+// releases nothing, and a SessionStart past it leaves the force pending with b
+// Held.
+func TestClaudeForcedWakeBoundaries(t *testing.T) {
+	a, b := strings.Repeat("a", 5000), strings.Repeat("b", 5000)
+	first := "[agent-director: message 1 of 1]\n" + a
+	for _, tc := range []struct {
+		name     string
+		at       time.Duration // the callback's clock after the call's entry
+		keep     int
+		err      error
+		barrier  string        // at the route's last look: "lost ack" or "call end"; at the prompt read: "delayed read" or "clock back"
+		event    string        // then, with no call end recorded: "sighting" (prompt 0 whole) or "SessionStart"
+		eventAt  time.Duration // the event's clock after the call's entry
+		touch    bool          // the event touches the wake
+		wrote    string
+		outcome  store.BusySendForceOutcome
+		reason   store.BusySendForceReason // "": not checked
+		held     int64
+		awaiting int64
+	}{
+		{name: "a short write, then its sighting", at: time.Second, keep: 10, err: io.ErrShortWrite, event: "sighting", eventAt: time.Second,
+			wrote: first[:10], outcome: store.BusySendForceRunning},
+		{name: "a failed write", at: time.Second, keep: 0, err: errors.New("write |1: broken pipe"), outcome: store.BusySendForceRunning,
+			awaiting: 1},
+		{name: "an unacknowledged issue commit", at: time.Second, keep: -1, barrier: "lost ack", outcome: store.BusySendForceRunning,
+			awaiting: 1},
+		{name: "after the issue phase", at: 13 * time.Second, keep: -1, outcome: store.BusySendForceRunning},
+		{name: "the call ends at the last look", at: time.Second, keep: -1, barrier: "call end", outcome: store.BusySendForceRefused, held: 2},
+		{name: "a prompt read delayed past the issue phase", at: 11900 * time.Millisecond, keep: -1, barrier: "delayed read",
+			outcome: store.BusySendForceRunning},
+		{name: "the clock steps back during the prompt read", at: 11900 * time.Millisecond, keep: -1, barrier: "clock back", wrote: first,
+			outcome: store.BusySendForceRunning, awaiting: 1},
+		{name: "the caller lost, then a sighting past the call's deadline", at: time.Second, keep: -1, wrote: first, event: "sighting",
+			eventAt: 16 * time.Second, touch: true, outcome: store.BusySendForceHandedOver, reason: store.BusySendForceAdmitted, held: 1},
+		{name: "the caller lost, then a sighting within the call", at: time.Second, keep: -1, wrote: first, event: "sighting",
+			eventAt: 14 * time.Second, outcome: store.BusySendForceRunning},
+		{name: "the caller lost, then a SessionStart past the call's deadline", at: time.Second, keep: -1, wrote: first, event: "SessionStart",
+			eventAt: 16 * time.Second, touch: true, outcome: store.BusySendForcePending, reason: store.BusySendForceAwaitingAdmission, held: 1,
+			awaiting: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newWakeEnv(t, store.StateWorking)
+			e.admit(t, "a", a)
+			e.admit(t, "b", b)
+			c := e.force(t)
+			now := time.UnixMilli(c.Force.StartedAtMillis).Add(tc.at)
+			e.now = func() time.Time { return now }
+			issueLeft, callLeft := c.Handover.IssueDeadline.Sub(now), time.UnixMilli(c.Force.CallDeadlineMillis).Sub(now)
+			var lost atomic.Bool
+			var began, readAt time.Time
+			seam := &failRouteFacts{Store: e.st, n: 2, before: func() {
+				switch tc.barrier {
+				case "lost ack":
+					lost.Store(true)
+				case "call end":
+					e.endCall(t, c)
+				}
+			}, read: func(ctx context.Context) {
+				readAt = time.Now()
+				if d, ok := ctx.Deadline(); !ok || d.Before(began.Add(issueLeft)) || d.After(readAt.Add(issueLeft)) {
+					t.Errorf("the prompt read's context ends at %v (%t); want the %v left of the original issue phase", d, ok, issueLeft)
+					return
+				}
+				switch tc.barrier {
+				case "delayed read":
+					<-ctx.Done()
+				case "clock back":
+					now = time.UnixMilli(c.Force.StartedAtMillis).Add(time.Second)
+				}
+			}}
+			e.seam = seam
+			stop, err := store.ObserveSQLiteForTest(e.st, func(d driver.Driver) driver.Driver {
+				return sqliteobserve.Wrap(d, sqliteobserve.Hooks{AfterCommit: func(context.Context) error {
+					if lost.CompareAndSwap(true, false) {
+						return errors.New("the issue commit's acknowledgement was lost")
+					}
+					return nil
+				}})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := &wakeStderr{keep: tc.keep, err: tc.err}
+			began = time.Now()
+			got := e.wakeWith(t, w)
+			if err := stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			looked := tc.at < 12*time.Second && tc.barrier != "delayed read"
+			if got != tc.wrote || seam.fired != looked || lost.Load() {
+				t.Fatalf("forced wake wrote %q (last look reached %t, ack still to lose %t); want %q", got, seam.fired, lost.Load(), tc.wrote)
+			}
+			switch tc.barrier {
+			case "delayed read":
+				if seam.readErr == nil {
+					t.Error("the delayed prompt read returned no error; want it cancelled at the issue phase's end")
+				}
+			case "clock back":
+				if w.deadline.Before(began.Add(callLeft)) || w.deadline.After(readAt.Add(callLeft)) {
+					t.Errorf("write deadline %v; want the call's recorded deadline, %v from the wake's start", w.deadline, callLeft)
+				}
+			}
+			e.seam = nil
+			if tc.event != "" {
+				now = time.UnixMilli(c.Force.StartedAtMillis).Add(tc.eventAt)
+				before, touched := e.result(t, "a"), e.wakeMtime(t)
+				payload := e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(first)})
+				if tc.event == "SessionStart" {
+					payload = e.payload(t, "session-start-compact.json", nil)
+				}
+				var stderr bytes.Buffer
+				if out, err := e.handle(context.Background(), e.parent, payload, &stderr); err != nil || stderr.Len() != 0 ||
+					tc.event == "sighting" && out != "" {
+					t.Errorf("%s = stdout %q, stderr %q, %v; want no output but SessionStart's watch path", tc.event, out, stderr.String(), err)
+				}
+				if got := touched(); got != tc.touch {
+					t.Errorf("%s touched the wake: %t; want %t", tc.event, got, tc.touch)
+				}
+				if r := e.result(t, "a"); !reflect.DeepEqual(r, before) || tc.touch && !r.Final {
+					t.Errorf("a after the %s = %+v; want its Result unchanged %+v, Final once the force is finished", tc.event, r, before)
+				}
+			}
+			if tc.held == 1 {
+				facts, err := apitest.ReadBusySendFacts(e.db, e.id)
+				if r := e.result(t, "b"); err != nil || r.Class != store.BusySendClassHeld || r.Forced || facts.Messages[1].Place != "held" ||
+					facts.Messages[1].Seq != 2 {
+					t.Errorf("b = %+v (%+v, %v); want Held again in its accepted place, unforced", r, facts.Messages, err)
+				}
+			}
+			if tc.outcome == store.BusySendForceRunning && tc.barrier != "delayed read" {
+				if again := e.wake(t); again != "" {
+					t.Errorf("a later forced wake wrote %d bytes; want no replay and no next prompt", len(again))
+				}
+			}
+			if f := e.forceResult(t, c); f.Outcome != tc.outcome || tc.reason != "" && f.Reason != tc.reason {
+				t.Errorf("force %+v; want %s %s", f, tc.outcome, tc.reason)
+			}
+			if o := e.observe(t); o.HeldCount != tc.held || o.AwaitingTurnStart != tc.awaiting {
+				t.Errorf("Held %d, awaiting %d; want %d, %d", o.HeldCount, o.AwaitingTurnStart, tc.held, tc.awaiting)
+			}
+		})
+	}
+}
+
+// TestClaudeForceSightingAfterCallReturn (SR-3.5, SR-4.3, SR-4.5; M1
+// ForceAdmissionSound and ForceOutcomeStable at the real sighting; M2 P-C4.4):
+// an idle force whose prompt was written whole but not sighted when its call
+// ended is pending awaiting_admission, its carried Result Final. A Stop, a
+// FileChanged after the call, the agent's transcript recording the prompt
+// and a store reopen admit nothing; AD's own later UserPromptSubmit sighting
+// of the exact text makes it handed_over admitted, its Result unchanged, and a
+// repeated sighting changes nothing. Confirm From Transcripts, on or off, is
+// read back as set and changes none of it (no transcript reader, decision 4).
+func TestClaudeForceSightingAfterCallReturn(t *testing.T) {
+	for _, confirm := range []bool{false, true} {
+		t.Run(fmt.Sprintf("confirm_from_transcripts %t", confirm), func(t *testing.T) {
+			e := newWakeEnv(t, store.StateWaiting)
+			defaults := store.BusySendAgentDefaults{SendMode: store.BusySendWaitTurn, ConfirmFromTranscripts: confirm}
+			if err := apitest.SeedBusySendDefaults(e.db, e.id, defaults); err != nil {
+				t.Fatal(err)
+			}
+			e.admit(t, "m1", "hello")
+			c := e.force(t)
+			const body = "[agent-director: message 1 of 1]\nhello"
+			if got := e.wake(t); got != body {
+				t.Fatalf("forced wake wrote %q; want %q", got, body)
+			}
+			transcript := filepath.Join(t.TempDir(), wakeSession+".jsonl")
+			record, err := json.Marshal(map[string]any{"type": "user", "sessionId": wakeSession,
+				"message": map[string]any{"role": "user", "content": claudeWake(body)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(transcript, append(record, '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			e.fire(t, e.payload(t, "stop.json", map[string]any{"transcript_path": transcript}))
+			ended := e.endCall(t, c)
+			final := e.result(t, "m1")
+			if ended.Outcome != store.BusySendForcePending || ended.Reason != store.BusySendForceAwaitingAdmission || !final.Final || !final.Forced {
+				t.Fatalf("call end %s %s, m1 %+v; want pending awaiting_admission, m1 Final and forced", ended.Outcome, ended.Reason, final)
+			}
+			if got := e.wake(t); got != "" {
+				t.Errorf("a FileChanged after the call wrote %q; want nothing", got)
+			}
+			reopened, err := store.Open(e.db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			e.st = reopened
+			if f := e.forceResult(t, c); f.Outcome != store.BusySendForcePending {
+				t.Fatalf("force after the reopen %+v; want still pending", f)
+			}
+			for range 2 {
+				e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(body)}))
+				if f, r := e.forceResult(t, c), e.result(t, "m1"); f.Outcome != store.BusySendForceHandedOver ||
+					f.Reason != store.BusySendForceAdmitted || !reflect.DeepEqual(f.CarriedResults, []store.BusySendResult{final}) || !reflect.DeepEqual(r, final) {
+					t.Errorf("after the sighting: force %s %s carrying %+v, m1 %+v; want handed_over admitted, m1 still %+v",
+						f.Outcome, f.Reason, f.CarriedResults, r, final)
+				}
+			}
+			facts, err := apitest.ReadBusySendFacts(e.db, e.id)
+			if err != nil || facts.Conversations[0].Defaults != defaults {
+				t.Errorf("Agent Defaults read back %+v, %v; want %+v", facts.Conversations, err, defaults)
+			}
+		})
+	}
+}
+
+// TestClaudeForceSightingNeedsExactText (SR-3.5): only the main agent's own
+// UserPromptSubmit carrying a forced prompt's exact text, in the measured
+// wrapping, admits it: a changed wrapping, a trailing newline, another
+// Unicode normalization, a prefix of the text and another process's prompt
+// admit nothing. A prompt with a reserved closing tag gives no evidence at
+// all, in Claude's escaped rendering or raw. E2's other text, subagent and
+// literal escaped-form cases are TestClaudeWakeSightingNeedsExactText's; a
+// stale session, Launch or connection the store's TestBusySendSightingRefusals.
+func TestClaudeForceSightingNeedsExactText(t *testing.T) {
+	e := newWakeEnv(t, store.StateWorking)
+	e.admit(t, "m1", "naïve café")
+	c := e.force(t)
+	body := e.wake(t)
+	if body != "[agent-director: message 1 of 1]\nnaïve café" {
+		t.Fatalf("forced wake wrote %q", body)
+	}
+	sight := func(name string, p hookParent, fields map[string]any, admitted bool) {
+		t.Helper()
+		if out, err := e.handle(context.Background(), p, e.payload(t, "user-prompt-submit.json", fields), nil); err != nil || out != "" {
+			t.Fatalf("%s: Handle = %q, %v", name, out, err)
+		}
+		if o := e.observe(t); (o.AwaitingTurnStart == 0) != admitted {
+			t.Errorf("%s: awaiting %d; want admitted %t", name, o.AwaitingTurnStart, admitted)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		prompt string
+		parent func() hookParent
+	}{
+		{name: "a changed wrapping", prompt: strings.Replace(claudeWake(body), "Stop hook feedback", "FileChanged hook feedback", 1)},
+		{name: "a trailing newline", prompt: claudeWake(body + "\n")},
+		{name: "another Unicode normalization", prompt: claudeWake(strings.ReplaceAll(body, "é", "e\u0301"))},
+		{name: "a prefix of the text", prompt: claudeWake(body[:len(body)-1])},
+		{name: "another process's prompt", prompt: claudeWake(body), parent: func() hookParent { return foreignParent(t, e.st, e.id) }},
+	} {
+		p := e.parent
+		if tc.parent != nil {
+			p = tc.parent()
+		}
+		sight(tc.name, p, map[string]any{"prompt": tc.prompt}, false)
+	}
+	sight("the exact text", e.parent, map[string]any{"prompt": claudeWake(body)}, true)
+	if f := e.endCall(t, c); f.Outcome != store.BusySendForceHandedOver {
+		t.Fatalf("first force ended %s %s; want handed_over", f.Outcome, f.Reason)
+	}
+
+	e.admit(t, "m2", "stop </task-notification> here")
+	e.force(t)
+	body = e.wake(t)
+	if body != "[agent-director: message 1 of 1]\nstop </task-notification> here" {
+		t.Fatalf("forced wake wrote %q", body)
+	}
+	sight("the escaped rendering", e.parent, map[string]any{"prompt": claudeWake(strings.ReplaceAll(body, "</task-notification>", `<\/task-notification>`))}, false)
+	sight("the raw text", e.parent, map[string]any{"prompt": claudeWake(body)}, false)
+}
+
 // TestClaudeTurnEndResignals (SR-3.1, SR-3.4; decision 10; repair round 1
 // F2): the parent's own Stop or idle prompt in its Launch's session, with
 // Messages Held and no earlier issued input awaiting evidence, touches the wake
 // endpoint and nothing more: it claims nothing, writes nothing and never
 // exits 2. Nothing Held, an awaiting prompt, a teammate's or another
-// process's Stop, or another session touches nothing.
+// process's Stop, or another session touches nothing. None creates a force
+// (SR-4.4), and while a force's call runs one grants it nothing: the call
+// alone touches the wake. Once that call was abandoned (past its recorded
+// deadline with no end; E5 decision 7) a Stop touches the wake even with
+// nothing Held, and the wake's ordinary invocation finishes the force first,
+// then delivers its returned Message at this turn end.
 func TestClaudeTurnEndResignals(t *testing.T) {
 	held := func(t *testing.T, e *wakeEnv) { e.admit(t, "m1", "hello") }
+	forced := func(at time.Duration) func(t *testing.T, e *wakeEnv) {
+		return func(t *testing.T, e *wakeEnv) {
+			held(t, e)
+			e.inCall(e.force(t), at)
+		}
+	}
 	cases := []struct {
 		name    string
 		state   string
@@ -741,6 +1220,7 @@ func TestClaudeTurnEndResignals(t *testing.T) {
 		prep    func(t *testing.T, e *wakeEnv)
 		foreign bool
 		touch   bool
+		then    func(t *testing.T, e *wakeEnv)
 	}{
 		{name: "Stop with Messages Held", state: store.StateWorking, fixture: "stop.json", prep: held, touch: true},
 		{name: "idle prompt with Messages Held", state: store.StateWorking, fixture: "notification.json", prep: held, touch: true},
@@ -758,6 +1238,16 @@ func TestClaudeTurnEndResignals(t *testing.T) {
 		{name: "another process's Stop", state: store.StateWorking, fixture: "stop.json", prep: held, foreign: true},
 		{name: "another session (F2)", state: store.StateWorking, fixture: "stop.json", prep: held, fields: map[string]any{
 			"session_id": "0d1c2b3a-4f5e-4d6c-8b7a-9e8f7a6b5c4d", "transcript_path": "/x/0d1c2b3a-4f5e-4d6c-8b7a-9e8f7a6b5c4d.jsonl"}},
+		{name: "Stop while a force's call runs", state: store.StateWorking, fixture: "stop.json", prep: forced(time.Second)},
+		{name: "Stop after a force's call was abandoned", state: store.StateWorking, fixture: "stop.json",
+			prep: forced(15*time.Second + time.Millisecond), touch: true, then: func(t *testing.T, e *wakeEnv) {
+				if got, want := e.wake(t), "[agent-director: message 1 of 1]\nhello"; got != want {
+					t.Errorf("the next wake wrote %q; want the returned Message %q by ordinary delivery", got, want)
+				}
+				if r := e.result(t, "m1"); r.Forced {
+					t.Errorf("m1 %+v; want delivered unforced", r)
+				}
+			}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -765,7 +1255,7 @@ func TestClaudeTurnEndResignals(t *testing.T) {
 			if tc.prep != nil {
 				tc.prep(t, e)
 			}
-			before := e.observe(t)
+			before, forces := e.observe(t), storefix.ReadBusySendCounts(t, e.db).Forces
 			p := e.parent
 			if tc.foreign {
 				p = foreignParent(t, e.st, e.id)
@@ -781,6 +1271,12 @@ func TestClaudeTurnEndResignals(t *testing.T) {
 			if after := e.observe(t); after.HeldCount != before.HeldCount || after.HandoverCount != before.HandoverCount {
 				t.Errorf("Held %d → %d, hand-overs %d → %d; want nothing claimed", before.HeldCount, after.HeldCount,
 					before.HandoverCount, after.HandoverCount)
+			}
+			if n := storefix.ReadBusySendCounts(t, e.db).Forces; n != forces {
+				t.Errorf("%d forces → %d; want none created", forces, n)
+			}
+			if tc.then != nil {
+				tc.then(t, e)
 			}
 		})
 	}
@@ -866,6 +1362,7 @@ func TestClaudeSessionStartWatchPath(t *testing.T) {
 
 // Q5 / t2.xis.oo.67: discard every pre-watch hint, release only the finite
 // startup job, then drive FileChanged. No subsequent send or Stop rescues it.
+// Neither startup nor resume creates a force (SR-4.4).
 func TestClaudeStartupWakeDeliversHeldInOrder(t *testing.T) {
 	for _, resumed := range []bool{true, false} {
 		t.Run(fmt.Sprintf("resume=%v", resumed), func(t *testing.T) {
@@ -941,6 +1438,9 @@ func TestClaudeStartupWakeDeliversHeldInOrder(t *testing.T) {
 			}
 			if got := e.wake(t); got != "" {
 				t.Errorf("wake after take duplicated prompt %q", got)
+			}
+			if n := storefix.ReadBusySendCounts(t, e.db).Forces; n != 0 {
+				t.Errorf("startup delivery created %d forces; want none (SR-4.4)", n)
 			}
 		})
 	}

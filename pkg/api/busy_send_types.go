@@ -135,14 +135,61 @@ type DeliveryFacts struct {
 
 // DeliveryCapabilities is what busy send offers a Covered Agent, on get and
 // get-many (SR-5.6): its Send Modes with their limits and its held limits,
-// all in UTF-8 bytes, from the one published capability table. An uncovered
-// row has none.
+// all in UTF-8 bytes, its force capability, and what Confirm From Transcripts
+// can do for it, from the one published capability table. An uncovered row
+// has none.
 type DeliveryCapabilities struct {
 	Modes []DeliveryModeLimits `json:"modes"`
 	// HeldCount and HeldBytes cap the agent's Held Messages and their bytes,
 	// counting custody that can return to Held.
 	HeldCount int64 `json:"held_count"`
 	HeldBytes int64 `json:"held_bytes"`
+	// Force is the agent's force capability (SR-4.4); nil when this version
+	// publishes none for its agent.
+	Force *DeliveryForceCapability `json:"force"`
+	// ConfirmFromTranscriptsCapability is what the experimental Confirm From
+	// Transcripts setting can add to a force's evidence, whatever the setting
+	// (SR-4.5): ConfirmFromTranscriptsNotNeeded on Claude Code.
+	// ConfirmFromTranscriptsReason is why, a stable code ("" for none
+	// recorded): hook_sighting_first on Claude Code, since AD's own
+	// UserPromptSubmit sighting preceded the native input record in every
+	// measured state.
+	ConfirmFromTranscriptsCapability string `json:"confirm_from_transcripts_capability"`
+	ConfirmFromTranscriptsReason     string `json:"confirm_from_transcripts_reason"`
+}
+
+// A delivery_capabilities' confirm_from_transcripts_capability (SR-4.5).
+const (
+	ConfirmFromTranscriptsCanConfirm    = "can_confirm"
+	ConfirmFromTranscriptsNotNeeded     = "not_needed"
+	ConfirmFromTranscriptsCannotConfirm = "cannot_confirm"
+)
+
+// DeliveryForceCapability is a Covered Agent's force capability (SR-3.5,
+// SR-4.4): Admission, the route's qualified admission event (prompt_sighting
+// on Claude Code); Limits, that evidence's named limits in order
+// (duplicate_text, unrecoverable_escaping, user_hook_after_sighting); and
+// States, the force-state table in order. It describes measured behaviour
+// only: it grants no issue or admission, promises no time, and a force's own
+// outcome and reason are its force_result's. A force whose sighting arrives
+// after its call returns reports pending, even in a state listed handed_over.
+type DeliveryForceCapability struct {
+	Admission string               `json:"admission"`
+	Limits    []string             `json:"limits"`
+	States    []DeliveryForceState `json:"states"`
+}
+
+// DeliveryForceState is one row of the force-state table: the agent's State
+// when a force is made (idle, tool_running, between_tools,
+// permission_dialog, plan_dialog, compacting, not_started or ended), the
+// measured Outcome (handed_over at once; pending first, then handed_over on
+// the later sighting; or refused, its Messages Held) and Reason, an existing
+// force reason: the outcome's own, or for pending its wait cause
+// (turn_running, dialog or compaction).
+type DeliveryForceState struct {
+	State   string `json:"state"`
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason"`
 }
 
 // DeliveryModeLimits is one offered Send Mode's limits: a Message's own text
@@ -180,6 +227,19 @@ func deliveryCapabilitiesOf(provider string) *DeliveryCapabilities {
 	for _, m := range caps.Modes {
 		out.Modes = append(out.Modes, DeliveryModeLimits{SendMode: string(m.Mode), MessageBytes: m.MessageBytes,
 			PromptBytes: m.PromptBytes, TextKind: string(m.TextKind)})
+	}
+	out.ConfirmFromTranscriptsCapability = string(caps.ConfirmFromTranscripts)
+	out.ConfirmFromTranscriptsReason = string(caps.ConfirmFromTranscriptsReason)
+	if caps.ForceAdmission == "" {
+		return out
+	}
+	out.Force = &DeliveryForceCapability{Admission: string(caps.ForceAdmission), Limits: []string{}, States: []DeliveryForceState{}}
+	for _, l := range caps.ForceLimits {
+		out.Force.Limits = append(out.Force.Limits, string(l))
+	}
+	for _, s := range caps.ForceStates {
+		out.Force.States = append(out.Force.States, DeliveryForceState{State: string(s.State), Outcome: string(s.Outcome),
+			Reason: string(s.Reason)})
 	}
 	return out
 }

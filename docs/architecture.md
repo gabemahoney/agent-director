@@ -9284,10 +9284,16 @@ at its escaped length, plus prefix and suffix, or the body plus `WrapperBytes`
 for a mode with no `Wrapping`. The partition's default measure and
 `SinglePromptBytes(text)` use it. `WrapperBytes` covers a route's fixed
 wrapper and worst-case escaping, so a Message at `MessageBytes` always fits a
-prompt alone; admission's `prompt_size` refusal stays only as a guard. A
-covered provider without a row gets the fallback row, which has no
-`Wrapping`. A new agent or a changed limit is a table change only. Callers'
-limits: [Busy-send refusals](caller-contract.md#busy-send-refusals).
+prompt alone; admission's `prompt_size` refusal stays only as a guard. The
+row also holds the provider's force capability (`ForceAdmission`,
+`ForceLimits`, `ForceStates`) and Confirm From Transcripts capability
+(`ConfirmFromTranscripts`, `ConfirmFromTranscriptsReason`), which
+`deliveryCapabilitiesOf` (`pkg/api/busy_send_types.go`) projects; they
+describe measured behaviour and grant no issue or admission authority. A
+covered provider without a row gets the fallback row: no `Wrapping`, no force
+(`force: null`) and `cannot_confirm`. A new agent or a changed limit is a
+table change only. Callers' limits:
+[Busy-send refusals](caller-contract.md#busy-send-refusals).
 
 **Agent Defaults.** The published conversation holds them
 (`default_send_mode`, `default_confirmed`, `confirm_from_transcripts`), so
@@ -9301,7 +9307,8 @@ Launch's nullable `override_*` columns (only a `resume` Launch may carry them).
 update that publishes the Launch, whichever writer publishes it; a failed,
 uncertain or replaced candidate never applies them. `busySendDefaultsGate`
 (`pkg/api/busy_send_options.go`) checks the offered Send Mode for spawn,
-reuse, `make-template` and resume before any write.
+reuse, `make-template` and resume before any write. No force code reads
+`confirm_from_transcripts`, and no transcript reader confirms a force.
 
 **Must use: the published read and the Result projection.**
 `readBusySendPublished` (`busy_send_launch_writes.go`; `readExaminedBusySendLaunch`
@@ -9481,8 +9488,9 @@ force's owner call and revision (`BusySendForceRef`):
    force the same way (`settleBusySendForceCall`), recording no call end, only
    when its time is strictly after the recorded call deadline and no call end
    is recorded. `Coordinator.Deliver`, the ordinary claim, the force claim
-   past its lifecycle and route refusals (so `force-delivery`), and every
-   accepted `send-keys` run it; reads, Lookup, sweep, store open, timers and
+   past its lifecycle and route refusals (so `force-delivery`), every
+   accepted `send-keys` and [Claude's](#the-claude-route) `UserPromptSubmit`
+   and `SessionStart` run it; reads, Lookup, sweep, store open, timers and
    retention never do. The generic expired-claim release never frees a
    force's hand-over.
 5. **Evidence and pending.** No worker waits, and evidence takes no force
@@ -9575,7 +9583,11 @@ of the current user) and returns it in `hookSpecificOutput.watchPaths`
 lost wake until startup or another eligible event touches it again.
 `ReclaimLaunchFiles` removes it. Admission touches it, as does a main `Stop`
 or idle-prompt `Notification` whose write applied while Messages are Held and
-the awaiting count is 0 (`resignalClaudeWake`). A touch claims and emits nothing.
+the awaiting count is 0, or while a force abandoned by its call still claims
+them (`resignalClaudeWake`, `claudeForceAbandoned`: past its recorded call
+deadline with no call end, compared in milliseconds as the release compares
+it), so that wake's ordinary `Deliver` finishes the force first. A touch
+claims and emits nothing and carries no force authority.
 
 **Startup wake.** After successfully writing `watchPaths`, SessionStart
 schedules one detached job through `HandleConfig.ScheduleClaudeStartupWake`
@@ -9601,8 +9613,31 @@ and supplies no take evidence.
 
 **Delivery.** The owned `FileChanged` hook writes no state and, whatever its
 gate, no `ad.hook.ignored`. When its `file_path` is the current Launch's wake
-path, it runs one `Deliver` at `turn_end` with fixed budgets (30 s issue,
-60 s job, 30 s cleanup):
+path, `handleClaudeWake` makes one finite invocation, chosen from the facts
+it already read (`BusySendRouteFacts.ForceCallDeadlineMillis` and
+`ForceIssueDeadlineMillis`, the running force's original deadlines; no extra
+read):
+
+- **Forced wake.** While a force's call runs (`claudeForceCallRunning`: no
+  call end recorded and the call deadline not passed), the wake belongs to
+  that force. **Must use:** every Claude force prompt goes through
+  `Coordinator.DeliverForcePrompt` at boundary `force` with
+  `claudeRoute.force` set, reusing `ReadBusySendForcePrompt`, the bounded
+  `Authorize`/`Issue` path below and the capability table; never a second
+  issuer. `claudeForceBudgets` takes its issue and job budgets from what
+  remains of the force's recorded issue and call deadlines, and bounds the
+  whole invocation, first prompt read included, by the call's remainder; past
+  the issue phase the hook reads and writes nothing. No wake starts or renews
+  a budget ([The force protocol](#the-force-protocol)). One callback issues at
+  most the one frozen prompt that may issue now and leaves the rest claimed.
+  It never falls through to ordinary work: the force's hand-over bars an
+  ordinary claim, and Held reading zero, as it does once the force has claimed
+  every Message, never suppresses the force's prompt.
+- **Ordinary wake.** Otherwise it runs one `Deliver` at `turn_end` with fixed
+  budgets (30 s issue, 60 s job, 30 s cleanup), which first finishes an
+  abandoned force.
+
+The route's steps:
 
 - `Eligibility` re-reads the facts and is always race-exposed, since Claude
   cannot exclude a person's typing or another hook's continuation, so its
@@ -9613,7 +9648,12 @@ path, it runs one `Deliver` at `turn_end` with fixed budgets (30 s issue,
   prompt until the Turn Start counter reaches 1, so that prompt goes first. An
   awaiting obligation or any other state waits `readiness_unknown`; an ended
   Launch or row waits `launch_ended`; a lost gate, coverage or route waits
-  `route_unavailable`. The destination carries the callback's session, so the
+  `route_unavailable`. A forced wake keeps only the Launch's own waits
+  (`launchWait`: route authority, lifecycle and the startup prompt first) and
+  skips the readiness ones (Dialog, running turn, awaiting, not `waiting`);
+  the force issue guard judges order, owner, revision, destination and the
+  call and pause fences, and records each prompt's current turn and
+  permission facts. The destination carries the callback's session, so the
   claim and issue guards refuse a changed one.
 - `Authorize` re-reads the facts and refuses (`readiness_unknown`) when the
   destination changed, the hook's own identity is unreadable or its output
@@ -9638,13 +9678,27 @@ included), whose sessions agree (`claudeCallbackSession`) and whose prompt
 an escaped or raw reserved closing tag gives none.
 `RecordBusySendSighting` binds it in one durable transaction, under the gate,
 Launch, session and connection generation, to the one awaiting prompt whose
-re-rendered body is equal: `admitted` records that prompt's admission
-(`prompt_sighting`); `ambiguous` (two equal bodies, or one whose text is gone),
-`unmatched` and `stale` record nothing. A sighting lifts only the awaiting
-gate: no custody, order or Result changes and nothing becomes
-`delivered_confirmed`. Turn starts never clear an obligation. A lost sighting
-keeps later Wait Turn Messages Held as `readiness_unknown` until Launch End;
-the prompt is never replayed.
+re-rendered body is equal, across all of the Launch's hand-overs: `admitted`
+records that prompt's admission (`prompt_sighting`); `ambiguous` (two equal
+bodies, or one whose text is gone), `unmatched` and `stale` record nothing.
+A sighting lifts the awaiting gate and is a force prompt's admission: in the
+same transaction the force protocol's settlement (`settleBusySendForceEvidence`)
+finishes a pending force once its last issued prompt is admitted, also after
+the call has returned, a store reopen or every carried Result went Final. It
+changes no custody, order or Result, makes nothing `delivered_confirmed` and
+touches no wake: only a running call that sees admission with order secured
+notifies the next prompt's wake, so a sighting after the call's end issues
+nothing more. The route records no negative, not-submitted or transcript
+evidence, so only Launch End fails an unadmitted force. After the sighting,
+the same `UserPromptSubmit`, as provider-input completion, runs the separate
+abandoned-force release (`recoverClaudeInputForce` →
+`recoverClaudeAbandonedForce` → `ReleaseAbandonedBusySendForce`, touching the
+wake when it returned Messages), as the Launch's main `SessionStart` does
+(`writeClaudeWatchPath`). So a sighting after the call deadline admits its
+prompt and then ends the force; the sighting's own write is unchanged. Turn starts never
+clear an obligation. A lost sighting keeps later Wait Turn Messages Held as
+`readiness_unknown`, and a force pending, until Launch End; the prompt is
+never replayed.
 
 **Helper replacement.** The issue commit registers the issuing hook as the
 Launch's helper (`registerBusySendIssuer`). Another identity replaces it only
@@ -22097,8 +22151,10 @@ helpers. `launched` checks production coverage and the launch-owned wake;
 `no_product_input` checks recorded product calls and the empty native journal.
 Hooks run through `pane-hook.sh --stderr-pipe`. The fixture simulates the
 harness watcher, wrapping and intake; real Claude qualification owns those
-provider premises. Never seed coverage or add a second collector for these
-paths.
+provider premises. A force case runs its call in the background with
+`start_call`, waits for the call's wake notification with `await_touch` and
+joins it with `join_call`. Never seed coverage or add a second collector for
+these paths.
 
 ### Release Check Kit (`test/release-check/`)
 

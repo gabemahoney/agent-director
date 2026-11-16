@@ -43,7 +43,19 @@ test("get: happy path — returns full spawn row fields", async () => {
     expect(result.delivery).toEqual({ held_count: 0, held_bytes: 0, first_wait: null, handover_count: 0, startup_wait: null, force: null,
       awaiting_turn_start: 0 });
     expect(result.delivery_capabilities).toEqual({ modes: [{ send_mode: "wait_turn", message_bytes: 8000, prompt_bytes: 9600,
-      text_kind: "utf8_tab_lf" }], held_count: 1000, held_bytes: 8000000 });
+      text_kind: "utf8_tab_lf" }], held_count: 1000, held_bytes: 8000000,
+      force: { admission: "prompt_sighting", limits: ["duplicate_text", "unrecoverable_escaping", "user_hook_after_sighting"],
+        states: [
+          { state: "idle", outcome: "handed_over", reason: "admitted" },
+          { state: "tool_running", outcome: "pending", reason: "turn_running" },
+          { state: "between_tools", outcome: "pending", reason: "turn_running" },
+          { state: "permission_dialog", outcome: "pending", reason: "dialog" },
+          { state: "plan_dialog", outcome: "pending", reason: "dialog" },
+          { state: "compacting", outcome: "pending", reason: "compaction" },
+          { state: "not_started", outcome: "refused", reason: "agent_starting" },
+          { state: "ended", outcome: "refused", reason: "launch_ended" },
+        ] },
+      confirm_from_transcripts_capability: "not_needed", confirm_from_transcripts_reason: "hook_sighting_first" });
     for (const key of ["busy_conversation_id", "turn_starts"]) expect(Object.keys(result)).not.toContain(key);
     expect(result.context).toEqual(expectedContext("unknown"));
   });

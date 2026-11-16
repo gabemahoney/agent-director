@@ -108,7 +108,8 @@ whole seconds (`0`, `null` or omitted for none); its range and lifecycle are
 in [Configuration](../../docs/configuration.md#idle-screen-timeout-state).
 
 `send_mode` and `confirmed_delivery` (Agent Defaults) and the experimental
-`confirm_from_transcripts` come from `AgentDefaultParams`, which `SpawnParams`,
+[`confirm_from_transcripts`](../../docs/caller-contract.md#confirm-from-transcripts)
+come from `AgentDefaultParams`, which `SpawnParams`,
 `ResumeParams` and `MakeTemplateParams` extend. An omitted or `undefined`
 field is not sent; any value, `false` included, is. They apply only to Covered
 Agents; a new launch busy send does not cover rejects with `ErrCantSend`. See
@@ -172,6 +173,12 @@ Commands judge live state, which may differ from the reported state.
 include `agent_defaults`, `delivery` and `delivery_capabilities`. `status`
 has defaults and delivery facts; `list` has defaults. Reads deliver nothing.
 See [Busy-send coverage](../../docs/caller-contract.md#busy-send-coverage).
+`delivery_capabilities.force` is a `ForceCapability | null` whose `states`
+are `ForceStateCapability` rows
+([Claude Code force capability](../../docs/caller-contract.md#claude-code-force-capability)).
+`confirm_from_transcripts_capability` is a `ConfirmFromTranscriptsCapability`,
+with `confirm_from_transcripts_reason`
+([Confirm From Transcripts](../../docs/caller-contract.md#confirm-from-transcripts)).
 
 ```ts
 const result = await client.getMany({ instance_ids: ["agent-a", "agent-b"] });

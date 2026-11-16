@@ -45,3 +45,41 @@ func TestSplitAdvancesInRuneAlignedPieces(t *testing.T) {
 		}
 	})
 }
+
+func pasted(id, text string) string {
+	return "\n\n<pasted_content id=\"" + id + "\">\n" + text + "\n</pasted_content id=\"" + id + "\">\n"
+}
+
+// TestHistoricalClaudeExactConsumesAllKnownSegments is historical-record
+// coverage. A covered Claude Launch writes no native attempt, but a store from
+// an earlier release can hold submitted Claude attempts, and every read and
+// legacy import re-validates their proof through MatchRecord's ClaudeExact.
+// Claude wraps pasted text, so those wrapped records must keep validating.
+func TestHistoricalClaudeExactConsumesAllKnownSegments(t *testing.T) {
+	t.Parallel()
+	payload := strings.Repeat("a", 512) + "🌍\nlast"
+	first, last := payload[:512], payload[512:]
+	wrapped := pasted("ab12", first) + pasted("ab12", last)
+	for _, tc := range []struct {
+		name, text string
+		want       bool
+	}{
+		{"literal", payload, true},
+		{"whole wrapper", pasted("abc", payload), true},
+		{"adjacent repeated wrapper ids", wrapped, true},
+		{"mixed literal wrapper", first + pasted("1", last), true},
+		{"prefix", "x" + wrapped, false},
+		{"suffix", wrapped + "x", false},
+		{"mismatched ids", strings.Replace(wrapped, "</pasted_content id=\"ab12\">", "</pasted_content id=\"ab13\">", 1), false},
+		{"changed text", strings.Replace(wrapped, "last", "lost", 1), false},
+		{"extra separator", pasted("1", first) + "\n" + pasted("2", last), false},
+		{"nonhex id", pasted("zz", payload), false},
+		{"unpaired wrapper", strings.TrimSuffix(wrapped, "\n"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClaudeExact(tc.text, payload); got != tc.want {
+				t.Fatalf("exact = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

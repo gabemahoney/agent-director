@@ -68,22 +68,36 @@ creates the launch's private wake file and returns it in `watchPaths`.
 
 The wake file carries no content. agent-director touches it when it accepts a
 Message, and again at a main-agent `Stop` or idle-prompt `Notification` while
-Messages are Held. [Startup also wakes eligible launches](caller-contract.md#launch-end-resume-and-reuse).
-On each touch the `FileChanged` hook checks the agent
-again. It writes one prompt of Held Messages to stderr and exits 2 only when
-the main agent is idle at its prompt, no dialog is open, and the agent's
-`UserPromptSubmit` has shown every earlier delivered prompt. Claude Code then
-hands that prompt to the agent as its next input. Otherwise the hook writes
-nothing and exits 0.
+Messages are Held, or claimed by a
+[force call that never ended](caller-contract.md#stored-force-attempts).
+[Startup also wakes eligible launches](caller-contract.md#launch-end-resume-and-reuse).
+On each touch the `FileChanged` hook checks the agent again. It either writes
+one whole prompt to stderr and exits 2, so Claude Code hands that prompt to
+the agent as its next input, or writes nothing and exits 0:
 
-- A spawn's own startup prompt always goes first.
+- Ordinary delivery writes a prompt of Held Messages only when the main agent
+  is idle at its prompt, no dialog is open, and the agent's
+  `UserPromptSubmit` has shown every earlier delivered prompt.
+- While a [force](caller-contract.md#stored-force-attempts) call runs, the
+  hook writes only that force's next prompt, one per touch, whether the agent
+  is working, in a dialog or compacting. Only the force call touches the file
+  for its next prompt.
+
+The main agent's `UserPromptSubmit` records agent-director's sighting of its
+own prompt: what lets ordinary delivery go on, and a force prompt's
+admission. It and the main `SessionStart` also finish a force call that never
+ended, once its deadline has passed: its never-issued Messages return to Held,
+and the wake file is touched when any did. Neither issues a prompt.
+
+- A spawn's own startup prompt always goes first, forced or not.
 - Repeated touches never deliver a Message twice.
 - A lost touch leaves Messages Held until the next eligible event.
-- Subagent and teammate hooks never deliver.
-- A delivered prompt's `UserPromptSubmit` shows that the agent took it, not
-  that it acted on it.
+- Subagent and teammate hooks never deliver or record a sighting.
+- A sighting shows that the agent took the prompt, not that it acted on it.
 
-Results, waits and recovery are in [Covered sends](caller-contract.md#covered-sends).
+Results, waits and recovery are in [Covered sends](caller-contract.md#covered-sends);
+force outcomes by agent state, and the sighting limits, in
+[Claude Code force capability](caller-contract.md#claude-code-force-capability).
 
 ## Cursor reporting
 

@@ -7,8 +7,10 @@ import (
 )
 
 // The published busy-send capability table (SR-1.6, SR-5.6): per provider, the
-// Send Modes it offers, each mode's Message, prompt and text-kind limits, and
-// the per-agent held limits. It is the one definition admission, the inbox
+// Send Modes it offers, each mode's Message, prompt and text-kind limits, the
+// per-agent held limits, its force admission, limits and force-state table
+// (SR-4.4), and its Confirm From Transcripts capability (SR-4.5). It is the
+// one definition admission, the inbox
 // coordinator's partitioner, a route's prompt renderer and get's
 // delivery_capabilities read; none of them keeps a limit of its own. Live
 // qualification (O4, SR-8.3) may raise a limit by changing this table only.
@@ -102,7 +104,79 @@ type BusySendCapabilities struct {
 	// whose issued prompt is unadmitted at its call's end is then failed
 	// admission_unknown rather than pending, since no admission can arrive.
 	ForceAdmission BusySendAdmissionKind
+	// ForceLimits are the named limits of that admission evidence (SR-3.5)
+	// and ForceStates the route's force-state table (SR-4.4), each in
+	// published order; none without ForceAdmission. They describe measured
+	// behaviour only: they grant no issue or admission authority, promise no
+	// time and never stand for a force's recorded outcome and reason.
+	ForceLimits []BusySendForceLimit
+	ForceStates []BusySendForceStateOutcome
+	// ConfirmFromTranscripts is what the experimental Confirm From
+	// Transcripts setting can add to the provider's force evidence, whatever
+	// the setting (SR-4.5), and ConfirmFromTranscriptsReason why ("" for
+	// none recorded).
+	ConfirmFromTranscripts       BusySendConfirmCapability
+	ConfirmFromTranscriptsReason BusySendConfirmReason
 }
+
+// BusySendForceLimit is a named limit of a route's force admission evidence
+// (SR-3.5), a code get publishes: duplicate unresolved prompt texts bind to
+// none, a text whose escaping cannot be undone exactly gives no evidence, and
+// a user's own hook that blocks or rewrites the prompt after AD's sighting is
+// not detected.
+type BusySendForceLimit string
+
+const (
+	BusySendForceLimitDuplicateText         BusySendForceLimit = "duplicate_text"
+	BusySendForceLimitUnrecoverableEscaping BusySendForceLimit = "unrecoverable_escaping"
+	BusySendForceLimitUserHookAfterSighting BusySendForceLimit = "user_hook_after_sighting"
+)
+
+// BusySendForceState is the agent's state when a force is made, a code get
+// publishes (SR-4.4).
+type BusySendForceState string
+
+const (
+	BusySendForceStateIdle             BusySendForceState = "idle"
+	BusySendForceStateToolRunning      BusySendForceState = "tool_running"
+	BusySendForceStateBetweenTools     BusySendForceState = "between_tools"
+	BusySendForceStatePermissionDialog BusySendForceState = "permission_dialog"
+	BusySendForceStatePlanDialog       BusySendForceState = "plan_dialog"
+	BusySendForceStateCompacting       BusySendForceState = "compacting"
+	BusySendForceStateNotStarted       BusySendForceState = "not_started"
+	BusySendForceStateEnded            BusySendForceState = "ended"
+)
+
+// BusySendForceStateOutcome is one row of a route's force-state table
+// (SR-4.4): a force made in State, as measured, is handed_over at once,
+// pending first (handed_over on the agent's later sighting) or refused with
+// its Messages Held. Reason is an existing force reason: the outcome's own for
+// handed_over and refused, the wait cause for pending. Any force whose
+// sighting arrives after its call returns reports pending, whatever its row.
+type BusySendForceStateOutcome struct {
+	State   BusySendForceState
+	Outcome BusySendForceOutcome
+	Reason  BusySendForceReason
+}
+
+// BusySendConfirmCapability is whether Confirm From Transcripts can confirm
+// a force for a provider (SR-4.5), a code get publishes.
+type BusySendConfirmCapability string
+
+const (
+	BusySendConfirmCanConfirm    BusySendConfirmCapability = "can_confirm"
+	BusySendConfirmNotNeeded     BusySendConfirmCapability = "not_needed"
+	BusySendConfirmCannotConfirm BusySendConfirmCapability = "cannot_confirm"
+)
+
+// BusySendConfirmReason is why a provider's Confirm From Transcripts
+// capability is what it is, a code get publishes. hook_sighting_first: AD's
+// own UserPromptSubmit sighting preceded the native input record in every
+// measured state, so a transcript match is never a force's last missing
+// evidence (Research b.p8z / t1.p8z.9e, Claude Code 2.1.309).
+type BusySendConfirmReason string
+
+const BusySendConfirmHookSightingFirst BusySendConfirmReason = "hook_sighting_first"
 
 // Claude Code's Wait Turn limits (E2 decision 4, 2026-11-14), with the
 // complete-prompt limit raised to 9,600 bytes by Plan b.xis decision 12 as
@@ -148,17 +222,49 @@ var claudeWaitTurn = BusySendModeLimits{
 	TextKind:     BusySendTextUTF8TabLF,
 }
 
-var busySendCapabilityTable = []BusySendCapabilities{
-	{Provider: AgentClaude, HeldCount: claudeHeldCount, HeldBytes: claudeHeldBytes, Modes: []BusySendModeLimits{claudeWaitTurn},
-		ForceAdmission: BusySendAdmissionPromptSighting},
+// claudeForceStates is Claude Code's force-state table (E5 Main Agent
+// decision 4): its keyless forced wake reaches the next input boundary in a
+// busy, Dialog or compaction state without answering the Dialog, and AD's
+// own UserPromptSubmit sighting of the prompt, delayed behind the turn, the
+// Dialog or the compaction, admits it (SR-4.4; Research b.p8z / t1.p8z.9e,
+// Claude Code 2.1.309). A Launch not yet started or ended refuses.
+var claudeForceStates = []BusySendForceStateOutcome{
+	{BusySendForceStateIdle, BusySendForceHandedOver, BusySendForceAdmitted},
+	{BusySendForceStateToolRunning, BusySendForcePending, BusySendForceTurnRunning},
+	{BusySendForceStateBetweenTools, BusySendForcePending, BusySendForceTurnRunning},
+	{BusySendForceStatePermissionDialog, BusySendForcePending, BusySendForceDialog},
+	{BusySendForceStatePlanDialog, BusySendForcePending, BusySendForceDialog},
+	{BusySendForceStateCompacting, BusySendForcePending, BusySendForceCompaction},
+	{BusySendForceStateNotStarted, BusySendForceRefused, BusySendForceAgentStarting},
+	{BusySendForceStateEnded, BusySendForceRefused, BusySendForceLaunchEnded},
 }
+
+// claudeForceLimits are the named limits of Claude's sighting (SR-3.5).
+var claudeForceLimits = []BusySendForceLimit{BusySendForceLimitDuplicateText, BusySendForceLimitUnrecoverableEscaping,
+	BusySendForceLimitUserHookAfterSighting}
+
+var busySendCapabilityTable = []BusySendCapabilities{{
+	Provider:                     AgentClaude,
+	HeldCount:                    claudeHeldCount,
+	HeldBytes:                    claudeHeldBytes,
+	Modes:                        []BusySendModeLimits{claudeWaitTurn},
+	ForceAdmission:               BusySendAdmissionPromptSighting,
+	ForceLimits:                  claudeForceLimits,
+	ForceStates:                  claudeForceStates,
+	ConfirmFromTranscripts:       BusySendConfirmNotNeeded,
+	ConfirmFromTranscriptsReason: BusySendConfirmHookSightingFirst,
+}}
 
 // busySendFallbackCapabilities admits for a covered provider this version has
 // no row for, a conversation a later release covered: every version admits and
 // holds a covered Launch's Messages whatever its provider (SR-7.2), under
-// limits that keep the PRD's corpus and SR-1.6's held minimum.
+// limits that keep the PRD's corpus and SR-1.6's held minimum. It publishes no
+// force route, and this version reads no transcript to confirm a force for it.
 var busySendFallbackCapabilities = BusySendCapabilities{
-	HeldCount: claudeHeldCount, HeldBytes: claudeHeldBytes, Modes: []BusySendModeLimits{busySendFallbackWaitTurn},
+	HeldCount:              claudeHeldCount,
+	HeldBytes:              claudeHeldBytes,
+	Modes:                  []BusySendModeLimits{busySendFallbackWaitTurn},
+	ConfirmFromTranscripts: BusySendConfirmCannotConfirm,
 }
 
 // busySendFallbackWaitTurn is Claude's Wait Turn limits without Claude's
@@ -180,6 +286,8 @@ func BusySendCapabilitiesFor(provider string) BusySendCapabilities {
 	}
 	c.Provider = provider
 	c.Modes = append([]BusySendModeLimits(nil), c.Modes...)
+	c.ForceLimits = append([]BusySendForceLimit(nil), c.ForceLimits...)
+	c.ForceStates = append([]BusySendForceStateOutcome(nil), c.ForceStates...)
 	return c
 }
 

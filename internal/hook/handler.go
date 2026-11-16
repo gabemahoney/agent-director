@@ -353,10 +353,14 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // invocation (handleClaudeWake). When it wrote one whole prompt to
 // HandleConfig.Stderr, Handle returns ErrRewake and the verb exits
 // RewakeExitCode, so Claude Code takes that prompt; otherwise it returns nil
-// and the hook exits 0. A main Stop or idle-prompt Notification whose write
-// applied touches the Launch's wake endpoint when Messages are Held and no
-// earlier issued input awaits take evidence (resignalClaudeWake). Delivery
-// never answers a permission request or writes a decision envelope.
+// and the hook exits 0. While a force's call runs, that invocation is the
+// force's forced wake, issuing only its frozen prompt that may issue now. A
+// main Stop or idle-prompt Notification whose write applied touches the
+// Launch's wake endpoint when Messages are Held and no earlier issued input
+// awaits take evidence, or when a force was abandoned by its call
+// (resignalClaudeWake). A main UserPromptSubmit or SessionStart whose write
+// applied finishes such a force itself (recoverClaudeAbandonedForce).
+// Delivery never answers a permission request or writes a decision envelope.
 func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore, hc HandleConfig, logger *log.Logger) error {
 	// The hook's start, from which the relay hook's kill instant is counted
 	// (b.146 rule 4), and before which a turn_end proof's requests were
@@ -685,10 +689,13 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		}
 		if applied.Applied {
 			// SR-3.3, SR-3.5: an owned main-agent Claude UserPromptSubmit
-			// carrying AD's own wake is the take evidence for it. A main
-			// Stop or idle prompt re-signals a covered Launch's wake.
+			// carrying AD's own wake is the take evidence for it; as
+			// provider-input completion (SR-3.1) it then finishes a force
+			// abandoned by its call. A main Stop or idle prompt re-signals a
+			// covered Launch's wake.
 			recordClaudeSighting(ctx, st, instanceID, gate, res, logger)
-			resignalClaudeWake(ctx, st, instanceID, gate, res, logger)
+			recoverClaudeInputForce(ctx, st, hc, instanceID, gate, res, logger)
+			resignalClaudeWake(ctx, st, hc, instanceID, gate, res, logger)
 		}
 	}
 
