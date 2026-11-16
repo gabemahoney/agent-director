@@ -8,7 +8,7 @@ import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
 import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import type { SweepParams, SweepResult, SweepCheck, FindMissingParams, FindMissingResult, DialogMaybeOpenDetails, ProvenGoneHow, IdleScreenAvailability } from "../src/index.js";
-import type { SendKeysResult, ResumeParams, PauseParams, GetForceResult, GetDeliveryResult, ForceResult, DeliveryResult, CantSendDetails } from "../src/index.js";
+import type { SendKeysResult, ResumeParams, PauseParams, GetForceResult, GetDeliveryResult, ForceResult, ForceOutcome, ForceReason, DeliveryResult, CantSendDetails } from "../src/index.js";
 import type { AgentDefaults, DeliveryFacts, DeliveryCapabilities, DeliveryModeLimits } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
@@ -165,6 +165,21 @@ function _assertBusySendTypes(client: ad.Client, force: GetForceResult, delivery
   void [sent, launches, pause, badMode, forced, result, details];
 }
 void _assertBusySendTypes;
+
+// Typecheck (SR-4.1, SR-4.3; MI decision 10): a forced send's result carries its force_result, every
+// force_result its carried_results, and a read's outcome may be running, with reason "".
+function _assertForceTypes(sent: SendKeysResult, force: ForceResult): void {
+  const attached: ForceResult | undefined = sent.force_result;
+  const carried: DeliveryResult[] = force.carried_results;
+  const running: ForceOutcome = "running";
+  const unset: ForceReason = "";
+  // @ts-expect-error — an outcome is one of the five
+  const badOutcome: ForceOutcome = "admitted";
+  // @ts-expect-error — carried_results is required
+  const noResults: ForceResult = { force_id: "f", outcome: "refused", reason: "not_issued", started_at: "t", ended_at: null, carried_pairs: [] };
+  void [attached, carried, running, unset, badOutcome, noResults];
+}
+void _assertForceTypes;
 
 // Typecheck (SR-1.3, SR-5.1, SR-5.6): a send names its Message ID; an uncovered send's result stays {}, a
 // covered one's is the Result with a string request_id; the covered-only read blocks are optional, and their

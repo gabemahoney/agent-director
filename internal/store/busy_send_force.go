@@ -115,17 +115,17 @@ func (e busySendNoBindingError) Is(target error) bool { return target == ErrBusy
 // written. A write lock not taken within the store's wait is ErrStoreBusy,
 // with nothing written, as a busy GetBusySendPublishedLaunch is; a failed
 // COMMIT is unconfirmed, never ErrStoreBusy. It stores only attempts that
-// began no hand-over (no HandoverID, no carried Messages); a force that
-// carries Messages is not built in this release. It runs no Active Check
-// and starts no work. Every force attempt must be stored through it, with
-// the Launch GetBusySendPublishedLaunch read; no other path inserts into
+// began no hand-over (no HandoverID, no carried Messages), such as the
+// refusal for an agent busy send does not cover; a force that may carry
+// Messages is ClaimBusySendForce's, which shares its insert. It runs no
+// Active Check and starts no work. No other path inserts into
 // busy_send_forces.
 func (s *Store) InsertBusySendForce(attempt BusySendForce) error {
 	if attempt.ForceID == "" || attempt.InstanceID == "" || attempt.OwnerCallID == "" || attempt.LaunchID == "" {
 		return fmt.Errorf("store: insert busy-send force: force_id, instance_id, owner_call_id and launch_id are required")
 	}
 	if attempt.HandoverID != "" || len(attempt.CarriedPairs) > 0 {
-		return fmt.Errorf("store: insert busy-send force: an attempt that began a hand-over is not supported")
+		return fmt.Errorf("store: insert busy-send force: an attempt that began a hand-over is ClaimBusySendForce's")
 	}
 	err := s.inWriteTx(DefaultLockWait, func(ctx context.Context, conn *sql.Conn) error {
 		p, err := readExaminedBusySendLaunch(ctx, conn, attempt.InstanceID)
@@ -136,15 +136,7 @@ func (s *Store) InsertBusySendForce(attempt BusySendForce) error {
 			p.token != attempt.LaunchToken || p.provider != attempt.Provider {
 			return ErrBusySendLaunchChanged
 		}
-		_, err = conn.ExecContext(ctx, `INSERT INTO busy_send_forces
-		    (force_id, store_id, instance_id, conversation_id, launch_id, launch_token, provider, owner_call_id, revision,
-		     call_deadline_ms, call_ended_at_ms, outcome, reason, started_at_ms, ended_at_ms)
-		    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			attempt.ForceID, s.StoreID(), attempt.InstanceID, p.conversation, p.launch,
-			nullableStringArg(p.token), p.provider, attempt.OwnerCallID, attempt.Revision,
-			attempt.CallDeadlineMillis, positiveInt64Arg(attempt.CallEndedAtMillis), string(attempt.Outcome),
-			nullableStringArg(string(attempt.Reason)), attempt.StartedAtMillis, positiveInt64Arg(attempt.EndedAtMillis))
-		return err
+		return insertBusySendForceRow(ctx, conn, s.StoreID(), attempt)
 	})
 	if errors.Is(err, ErrSpawnNotFound) || errors.Is(err, ErrBusySendLaunchChanged) {
 		return err
@@ -155,14 +147,32 @@ func (s *Store) InsertBusySendForce(attempt BusySendForce) error {
 	return nil
 }
 
+// insertBusySendForceRow inserts attempt's busy_send_forces row in its
+// caller's transaction, which has already bound it to what it examined. Its
+// carried membership is the caller's to insert.
+func insertBusySendForceRow(ctx context.Context, conn *sql.Conn, storeID string, attempt BusySendForce) error {
+	_, err := conn.ExecContext(ctx, `INSERT INTO busy_send_forces
+	    (force_id, store_id, instance_id, conversation_id, launch_id, launch_token, provider, owner_call_id, revision,
+	     handover_id, call_deadline_ms, call_ended_at_ms, outcome, reason, started_at_ms, ended_at_ms)
+	    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		attempt.ForceID, storeID, attempt.InstanceID, nullableStringArg(attempt.ConversationID),
+		nullableStringArg(attempt.LaunchID), nullableStringArg(attempt.LaunchToken), nullableStringArg(attempt.Provider),
+		attempt.OwnerCallID, attempt.Revision, nullableStringArg(attempt.HandoverID), attempt.CallDeadlineMillis,
+		positiveInt64Arg(attempt.CallEndedAtMillis), string(attempt.Outcome), nullableStringArg(string(attempt.Reason)),
+		attempt.StartedAtMillis, positiveInt64Arg(attempt.EndedAtMillis))
+	return err
+}
+
 // ReadBusySendForce reads one force attempt by force_id (SR-4.1), from
 // durable facts only: no Active Check, provider, tmux or process probe, and
 // no write. The attempt needs no agent row, so it reads the same after
 // restarts, Launch End and the agent's deletion. An unknown force_id is
 // BusySendLookupUnknown and an expired attempt BusySendLookupRetentionExpired,
 // both with no ForceResult; a read failure is an error, never either answer.
-// Every read of a force attempt by force_id must use it, so no reader turns a
-// store failure into unknown or starts work.
+// A carried Message's expired Result leaves the attempt found: its pair stays
+// in CarriedPairs and it has no CarriedResults entry. Every read of a force
+// attempt by force_id must use it, so no reader turns a store failure into
+// unknown or starts work.
 func (s *Store) ReadBusySendForce(forceID string) (BusySendForceLookup, error) {
 	var out BusySendForceLookup
 	err := s.readWithin(DefaultLockWait, "store: read busy-send force", func(ctx context.Context, conn *sql.Conn) error {
@@ -181,13 +191,36 @@ func (s *Store) ReadBusySendForce(forceID string) (BusySendForceLookup, error) {
 }
 
 // readBusySendForceByID is ReadBusySendForce's read inside its caller's
-// transaction, shared with the delivery observation's force summary.
+// transaction, shared with the delivery observation's force summary and the
+// force writers' recorded results, so every reader sees one projection.
 func readBusySendForceByID(ctx context.Context, conn *sql.Conn, storeID, forceID string) (BusySendForceLookup, error) {
+	f, found, err := readBusySendForceRow(ctx, conn, storeID, forceID)
+	if err != nil {
+		return BusySendForceLookup{}, err
+	}
+	if !found {
+		return BusySendForceLookup{Lookup: BusySendLookupUnknown}, nil
+	}
+	if f.Retention == BusySendExpired {
+		return BusySendForceLookup{Lookup: BusySendLookupRetentionExpired}, nil
+	}
+	if f.CarriedPairs, err = readBusySendForcePairs(ctx, conn, forceID); err != nil {
+		return BusySendForceLookup{}, err
+	}
+	if f.CarriedResults, err = readBusySendForceResults(ctx, conn, storeID, forceID); err != nil {
+		return BusySendForceLookup{}, err
+	}
+	return BusySendForceLookup{Lookup: BusySendLookupFound, ForceResult: &f}, nil
+}
+
+// readBusySendForceRow reads one force row as its writers compare it, with no
+// carried membership; found is false for an unknown force_id.
+func readBusySendForceRow(ctx context.Context, q busySendLaunchSQL, storeID, forceID string) (BusySendForce, bool, error) {
 	var f BusySendForce
 	var conversation, launch, token, provider, handover, reason sql.NullString
 	var callEnded, ended, expired sql.NullInt64
 	var outcome, retention string
-	err := conn.QueryRowContext(ctx, `SELECT force_id, instance_id, conversation_id, launch_id, launch_token, provider,
+	err := q.QueryRowContext(ctx, `SELECT force_id, instance_id, conversation_id, launch_id, launch_token, provider,
 	        owner_call_id, revision, handover_id, call_deadline_ms, call_ended_at_ms, outcome, reason,
 	        started_at_ms, ended_at_ms, retention, expired_at_ms
 	    FROM busy_send_forces WHERE force_id = ? AND store_id = ?`, forceID, storeID).Scan(
@@ -195,21 +228,16 @@ func readBusySendForceByID(ctx context.Context, conn *sql.Conn, storeID, forceID
 		&handover, &f.CallDeadlineMillis, &callEnded, &outcome, &reason, &f.StartedAtMillis, &ended,
 		&retention, &expired)
 	if errors.Is(err, sql.ErrNoRows) {
-		return BusySendForceLookup{Lookup: BusySendLookupUnknown}, nil
+		return f, false, nil
 	}
 	if err != nil {
-		return BusySendForceLookup{}, err
-	}
-	if BusySendRetention(retention) == BusySendExpired {
-		return BusySendForceLookup{Lookup: BusySendLookupRetentionExpired}, nil
+		return f, false, err
 	}
 	f.ConversationID, f.LaunchID, f.LaunchToken, f.Provider = conversation.String, launch.String, token.String, provider.String
 	f.HandoverID, f.Outcome, f.Reason = handover.String, BusySendForceOutcome(outcome), BusySendForceReason(reason.String)
 	f.CallEndedAtMillis, f.EndedAtMillis, f.Retention = callEnded.Int64, ended.Int64, BusySendRetention(retention)
-	if f.CarriedPairs, err = readBusySendForcePairs(ctx, conn, forceID); err != nil {
-		return BusySendForceLookup{}, err
-	}
-	return BusySendForceLookup{Lookup: BusySendLookupFound, ForceResult: &f}, nil
+	f.ExpiredAtMillis = expired.Int64
+	return f, true, nil
 }
 
 // readBusySendForcePairs reads a force's carried confirmed pairs in carried
@@ -231,4 +259,29 @@ func readBusySendForcePairs(ctx context.Context, conn *sql.Conn, forceID string)
 		pairs = append(pairs, p)
 	}
 	return pairs, rows.Err()
+}
+
+// readBusySendForceResults reads the current Results of a force's confirmed
+// carried Messages whose Result is still retained, in carried order, in one
+// query through the one Result projection (busySendResultSelect), so a force
+// of any size costs its readers one statement. An unconfirmed Message, or one
+// whose Result expired, has no entry.
+func readBusySendForceResults(ctx context.Context, conn *sql.Conn, storeID, forceID string) ([]BusySendResult, error) {
+	rows, err := conn.QueryContext(ctx, busySendResultSelect+`
+	    JOIN busy_send_force_members fm ON fm.message_id = m.message_id
+	    WHERE fm.force_id = ? AND m.store_id = ? AND m.retention = 'retained' AND p.message_id IS NOT NULL
+	    ORDER BY fm.member_index`, forceID, storeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	results := []BusySendResult{}
+	for rows.Next() {
+		r, err := scanBusySendResult(rows)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
 }

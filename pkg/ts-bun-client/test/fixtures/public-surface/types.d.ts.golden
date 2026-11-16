@@ -425,7 +425,10 @@ export interface DeliveryFacts {
     handover_count: number;
     /** Waiting startup work; null for Claude Code, whose startup prompt is part of its Launch. */
     startup_wait: DeliveryWait | null;
-    /** The pending force, else the latest force that began a hand-over; null with neither. */
+    /**
+     * The running or pending force, else the latest force that began a hand-over; null with
+     * neither. Its outcome is `running` while that force's call has not returned.
+     */
     force: ForceResult | null;
     /** This Launch's completed hand-overs with no evidence yet that the agent took their input. */
     awaiting_turn_start: number;
@@ -951,10 +954,13 @@ export interface SendKeysParams {
 }
 /**
  * A Covered Agent's accepted send returns its Message's current Result, stored Held before the
- * call returns (an unconfirmed send has no `caller_uuid` or `request_id`). Other successful
- * sendKeys calls return an empty object, or native proof fields.
+ * call returns (an unconfirmed send has no `caller_uuid` or `request_id`), and, with `force:
+ * true`, its own force attempt as `force_result`. Other successful sendKeys calls return an empty
+ * object, or native proof fields.
  */
 export interface SendKeysResult extends Partial<DeliveryResult> {
+    /** A send with `force: true` only: its force attempt, as forceDelivery returns it. */
+    force_result?: ForceResult;
 }
 /** Parameters for capturing the agent's pane. */
 export interface ReadPaneParams {
@@ -1556,21 +1562,39 @@ export interface DeliveryPair {
     request_id: string;
 }
 /**
- * One force attempt's outcome. `force_id` is AD-made; `ended_at` is null while `pending`;
- * `carried_pairs` lists the carried Messages' confirmed pairs in carried order.
+ * One force attempt's outcome. `force_id` is AD-made; `ended_at` is null while `pending` or
+ * `running`; `carried_pairs` lists the carried Messages' confirmed pairs in carried order, and
+ * `carried_results` the Results of those still retained, in the same order (shorter once one has
+ * expired). A force call (forceDelivery, sendKeys with `force: true`) resolves with one of the four
+ * call outcomes; only a read of a stored attempt (getForce, `delivery.force`) may show `running`,
+ * with `reason` `""`, while that attempt's call has not returned.
  */
 export interface ForceResult {
     force_id: string;
-    outcome: "handed_over" | "pending" | "refused" | "failed";
-    reason: string;
+    outcome: ForceOutcome;
+    reason: ForceReason;
     started_at: string;
     ended_at: string | null;
     carried_pairs: DeliveryPair[];
+    carried_results: DeliveryResult[];
 }
 /**
- * forceDelivery's result: this attempt, stored before the call returns (each call its own),
- * which getForce reads again by `force_id`. When the row's published current Launch is recorded
- * `not_covered` it is `refused`, reason `agent_not_covered`.
+ * A force_result's outcome. A force call resolves with `handed_over`, `pending`, `refused` or
+ * `failed`; `running` appears only on reads, while the attempt's call has not returned. `pending`
+ * means an issued prompt's admission can still arrive; `running` says nothing about admission.
+ */
+export type ForceOutcome = "handed_over" | "pending" | "refused" | "failed" | "running";
+/**
+ * A force_result's reason: why it was refused or failed, that it is `awaiting_admission` while
+ * `pending`, `admitted` once `handed_over`, or `""` while `running`. Other strings may be added
+ * later.
+ */
+export type ForceReason = "admitted" | "awaiting_admission" | "no_held_messages" | "handover_in_progress" | "earlier_message" | "input_unresolved" | "agent_starting" | "launch_ended" | "route_unavailable" | "not_submitted" | "not_issued" | "admission_unknown" | "agent_not_covered" | "record_deleted" | "" | (string & {});
+/**
+ * forceDelivery's result: this attempt, stored before the call returns (each call its own, within
+ * about 15 seconds), which getForce reads again by `force_id`. Every outcome is a success. When
+ * the row's published current Launch is recorded `not_covered` it is `refused`, reason
+ * `agent_not_covered`.
  */
 export interface ForceDeliveryResult {
     force_result: ForceResult;
@@ -1582,7 +1606,10 @@ export interface GetForceParams {
     /** A force_result's `force_id`: a hyphenated hexadecimal UUID. */
     force_id: string;
 }
-/** getForce's answer: `force_result` is null unless `lookup` is `found`. Reads durable facts only. */
+/**
+ * getForce's answer: `force_result` is null unless `lookup` is `found`; its outcome may be
+ * `running` while the attempt's call has not returned. Reads durable facts only.
+ */
 export interface GetForceResult {
     lookup: Lookup;
     force_result: ForceResult | null;

@@ -19,6 +19,7 @@ type Store interface {
 	RecordBusySendCompletion(context.Context, store.BusySendCompletion) (store.BusySendCompletionResult, error)
 	ReleaseBusySendClaims(context.Context, store.BusySendReleaseRequest) (store.BusySendRelease, error)
 	RecordBusySendWait(context.Context, store.BusySendWaitRequest) (bool, error)
+	ReleaseAbandonedBusySendForce(ctx context.Context, instanceID string, at time.Time) (store.BusySendForceRelease, error)
 }
 
 var _ Store = (*store.Store)(nil)
@@ -88,8 +89,13 @@ func (c *Coordinator) now() time.Time {
 }
 
 // Deliver runs one finite invocation for ev (SR-2.2 to SR-2.6, SR-3.2). It
-// fixes the invocation's phases first (Budgets), then reads the route's
-// eligibility; when that forbids an attempt it records the wait and returns.
+// fixes the invocation's phases first (Budgets). As the agent's eligible
+// event, it then finishes the agent's force whose call never reached its end
+// (store.ReleaseAbandonedBusySendForce; SR-3.2, SR-4.3), whatever the route
+// then decides: that returns only never-issued Messages to Held, which follow
+// the ordinary waits, so a waiting route still delivers nothing. It then reads
+// the route's eligibility; when that forbids an attempt it records the wait
+// and returns.
 // Otherwise, while the issue phase lasts, it claims the eligible prefix at its
 // cutoff (later admissions wait for a later event), and for each frozen
 // prompt in order: asks the route's final authority, commits the prompt's
@@ -115,6 +121,12 @@ func (c *Coordinator) Deliver(ctx context.Context, ev Event) (Outcome, error) {
 	cleanup, cancelCleanup := context.WithTimeout(ctx, b.Job+b.Cleanup)
 	defer cancelCleanup()
 	inv := &invocation{c: c, ev: ev, start: start, issueDeadline: start.Add(b.Issue), issue: issue, job: job, cleanup: cleanup}
+	// A row gone or with no published binding has no force to finish; the
+	// route's own reading then decides the event as before.
+	_, err := c.Store.ReleaseAbandonedBusySendForce(issue, ev.InstanceID, start)
+	if err != nil && !errors.Is(err, store.ErrSpawnNotFound) && !errors.Is(err, store.ErrBusySendNoBinding) {
+		return Outcome{}, err
+	}
 	return inv.deliver()
 }
 

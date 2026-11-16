@@ -1674,7 +1674,7 @@ in `init`. The verb registry
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v21; see "Schema versioning convention" below), exposes typed CRUD primitives. Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import; `internal/inputjournal` persisted records, validation and legacy import; no live-delivery dependency. | `pkg/api`; `internal/config`; `cmd/*`. |
 | `internal/inputjournal` | Neutral persisted input protocol, exact proof parser, bounded evidence reader and legacy import/lock primitives. Store and delivery must reuse it; see [Ordinary input delivery](#ordinary-input-delivery). | stdlib; UUID parsing; platform file locks. | `internal/store`; live delivery, process discovery, terminal probes or tmux. |
 | `internal/inputdelivery` | Live input coordination and provider observation behind `Backend`/`Session`; store operations use the neutral `Persistence` contract. | `internal/inputjournal`; `internal/probe`; launch configuration and provider utilities. | SQL; a second persisted protocol or proof parser. |
-| `internal/busysend` | The provider-neutral busy-send inbox coordinator: the `Route` contract (`route.go`) and the finite `Coordinator` invocation (`coordinator.go`). See [The inbox coordinator](#the-inbox-coordinator). | stdlib; `internal/store`. | `pkg/api`; provider, process, tmux or file access; SQL. `internal/store` never imports it. |
+| `internal/busysend` | The provider-neutral busy-send inbox coordinator: the `Route` contract (`route.go`) and the finite `Coordinator` invocation (`coordinator.go`) and its forced-wake driver (`force.go`). See [The inbox coordinator](#the-inbox-coordinator) and [The force protocol](#the-force-protocol). | stdlib; `internal/store`. | `pkg/api`; provider, process, tmux or file access; SQL. `internal/store` never imports it. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.config/agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets an old `[defaults]` key (`oldKeyRefusal`; see [Refusal of old names](#refusal-of-old-names)), then a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both the shared active checker's hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only the checker's window. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, a Claude launch's pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it (a Codex launch takes no lock and ignores the key), in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[state] settle_ms` (b.3ie), the settle time of the state `status`, `get` and `list` report, in whole milliseconds: `DefaultStateSettleMs` (0, off), `MaxStateSettleMs` (60000, one minute, far above the recommended 1 to 2 s; a longer one would hide whole turns from every polling caller on the host) and `State.EffectiveSettleMs()` (the configured value when positive, else 0). Unlike the keys above, 0 is the default itself, not its stand-in: a missing key or 0 turns the settle time off. A negative value and one above the maximum are refused at load in the same `*config.ConfigError` ("[state] settle_ms = <value>, outside its range 0 to 60000 milliseconds"), never clamped. Also owns `[state] idle_screen_timeout_seconds`, how long a working Claude or Codex row's sampled pane must stay unchanged before it can display `idle_screen`: `DefaultIdleScreenTimeoutSeconds` (1200), `MaxIdleScreenTimeoutSeconds` (`MaxPauseTimeoutSeconds`, the largest whole number of seconds a `time.Duration` holds, also the per-spawn override's ceiling) and `State.EffectiveIdleScreenTimeoutSeconds()` (the configured value when positive, else 1200); a negative value and one above the maximum are refused at load in the same `*config.ConfigError`, never clamped. `[state] needs_intelligence_timeout_seconds` has no effect: `Load` still refuses it by the same rule against `MaxNeedsIntelligenceTimeoutSeconds`, and `Default()` seeds `DefaultNeedsIntelligenceTimeoutSeconds` (30), so existing files keep loading, but nothing reads it. **Must use:** read the idle-screen timeout only through its accessor and its limit only from its `Max*` constant (see [Displayed State reporting](#displayed-state-reporting)). **Must use:** read the settle time only through `EffectiveSettleMs` and its limit only from `MaxStateSettleMs`; every opener that loads the config (`pkg/api.New` and `runHook`) passes it to the store through `Store.SetSettleMs`, and the Client's `status`, `get` and `list` take it from the loaded config (`settleRead`), so each process uses the value it loaded (see [Settle time (b.3ie)](#settle-time-b3ie)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.config/agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and Claude/Codex `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). Also owns `[launch]` (`config.Launch`: `claude_path`, `codex_path`, `cursor_path` and `droid_path`), the program each agent's launch runs. A value is an absolute path or starts with `~/`, which `Load` joins onto `$HOME`; empty is unset. `droid_path` also accepts a bare executable name. `Load` refuses a blank value, other relative paths, `~` alone, `~user/...`, and a `~/` value when `HOME` is unset or empty, as `*config.ConfigError` (surfaced as `ErrConfigMalformed`) naming the key, never a silent default (`launchRefusals`, `launchRefusal`). **Must use:** launch composition takes the Claude program from `spawn`'s `claudeProgram(cfg)` (`claude_path` when set, else `claude` on `PATH`), read at each launch, never from `Launch.ClaudePath` directly or a literal `claude`; and takes the Codex program from `codexProgram(cfg)` (`codexlaunch.go`: `codex_path` when set, as one unchanged argument, else `codex` on the `PATH` of the agents' tmux server), read at each launch for spawn, reuse and resume, never from `Launch.CodexPath` directly or a literal `codex`. Fresh, reused and resumed Cursor composition selects `Launch.CursorPath` (else `agent` on `PATH`) in `composeCursorCommand` (`cursorlaunch.go`); all future Cursor argv construction must reuse that function. Also owns the template file's `agent` key (`TemplateFile.Agent`): `LoadTemplate` refuses a non-empty value outside `claude`, `codex`, `cursor` and `droid` as `ErrTemplateMalformed`, and non-empty `agent_args` with no `agent` as `ErrTemplateAgentMissing`, and `config.ValidAgent`, `config.AgentClaude`, `config.AgentCodex`, `config.AgentCursor` and `config.AgentDroid` are the one statement of the valid values (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `internal/layout` | The one definition of where agent-director keeps its files: `DirRel` (`.config/agent-director`), `Display` (`~/.config/agent-director`), the file and directory names in it (`ConfigFile`, `StoreFile`, `ErrorLogFile`, `TrailFile`, `TemplatesDir`, `BinDir`, `BinaryName`), the `~/` forms of the defaults (`DisplayConfigPath`, `DisplayStorePath`, `DisplayErrorLogPath`, `DisplayTemplatesDir`), `Dir(home)` and `Join(home, ...)`; and, in `old.go`, the presence rules `OldPresent`, `NewPresent`, `OnlyOldPresent` and `StoreExists`, the only code that names the old directory. See [`internal/layout`](#internallayout). **Must use:** every default path in the Go code derives from this package, never a literal `.config/agent-director`; a presence question about the two directories is asked only through `old.go`. | stdlib only. | Every other `internal/` and `pkg/` package (it is a leaf, so each can import it without a cycle). |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture` (with `SeedDecideFixtureAgent`), `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); the template body builder `TemplateBody` (see [apitest template factory](#apitest-template-factory-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
@@ -4268,13 +4268,13 @@ record and lookup types (`BusySendForce`, `BusySendForceLookup`,
 `BusySendResult`, `BusySendResultLookup`, `BusySendPair`, `BusySendWait`).
 Launch lifecycle and deletion transactions maintain the core's identity,
 coverage and Agent Defaults records; the v20→v21 hop backfills them. Beyond
-that, admission stores Held Messages and their pairs, refused force attempts
-are stored, the durable lookups and delivery reads read the core (see
-[Launch coverage](#launch-coverage) and
-[Busy-send admission and Results](#busy-send-admission-and-results)), and
+that, admission stores Held Messages and their pairs, the durable lookups and
+delivery reads read the core (see [Launch coverage](#launch-coverage) and
+[Busy-send admission and Results](#busy-send-admission-and-results)),
 [the inbox coordinator](#the-inbox-coordinator)'s job steps claim, issue and
-settle hand-overs, and [lifecycle custody](#lifecycle-custody-and-exit-evidence)
-records Launch End and exit. No force delivery or pause claim exists. The tables hold:
+settle hand-overs, [the force protocol](#the-force-protocol) stores and
+settles force attempts, and [lifecycle custody](#lifecycle-custody-and-exit-evidence)
+records Launch End and exit. No pause claim exists. The tables hold:
 
 - **Identity.** A conversation (`busy_conversations`: an opaque id and a
   per-instance generation, independent of `life_number` and the provider
@@ -4344,7 +4344,8 @@ advances it by one in the same statement as its applied write
 (`claudeHeldTurnSQL`, which keeps `check_permission`), on a Claude row whose
 recorded session is the hook's or that records none
 (`busy_send_turns.go`). Nothing else advances it; Codex turns are not counted.
-A hand-over captures it, the issue commit refuses a changed one, and the
+A hand-over captures it, an ordinary issue commit refuses a changed one (a
+[force](#the-force-protocol) prompt records the current one instead), and the
 [Claude route](#the-claude-route) orders a startup prompt by it. `InsertPending`,
 `MoveToPending` and `ResetForReuse` store 0 in their own conditional
 statement, never the caller's `Spawn.TurnStarts`, so a refused or rolled-back
@@ -9204,15 +9205,20 @@ returns `ErrSpawnNotFound`, and store/corruption failures remain errors, never
 `ResumeLaunchCoverage`; fresh spawn/reuse uses the new agent's membership.
 
 **Must use: force attempts and durable lookups.** A force decides and binds
-from one read: `Store.GetBusySendPublishedLaunch(instanceID)` returns the
+from one read: `Store.GetBusySendPublishedLaunch(instanceID)` (or
+`GetBusySendPublishedLaunchWithin`, under a caller's context) returns the
 published current Launch's conversation, Launch id, that Launch's own token,
 provider and coverage in one read transaction (`ErrSpawnNotFound` for no row;
 a missing or inconsistent binding is an error, never `not_covered`). Never take
 the token from `spawns.launch_token`, which can name a staged candidate. Every
-force attempt is stored through `Store.InsertBusySendForce` with that Launch:
-under the write lock it reads the published Launch again and inserts only if
-it is unchanged, else `ErrBusySendLaunchChanged` with nothing written, and the
-caller reads and decides again, a bounded number of times. Reads by
+force attempt is stored with that Launch through `Store.InsertBusySendForce`
+(an uncovered refusal) or `ClaimBusySendForce` ([a covered
+force](#the-force-protocol)), which share one row insert: under the write
+lock each reads the published Launch again and writes only if it is
+unchanged, else `ErrBusySendLaunchChanged` with nothing written, and the
+caller reads and decides again, a bounded number of times. A send's repeat
+after the target's deletion stores its refusal through
+`RefuseBusySendForceForDeleted`, bound to the pair's retained owner. Reads by
 `force_id` use `Store.ReadBusySendForce`, and reads of a confirmed Message's
 Result by its canonical pair use `Store.ReadBusySendResult`. Both read durable
 facts only, with no Active Check, provider, tmux or process probe and no write;
@@ -9254,9 +9260,11 @@ return to Held.
 The store returns a `BusySendAdmission` only after a verified COMMIT; a COMMIT
 of unknown outcome is `errCommitUnconfirmed` (`CommitUnconfirmed`), never a
 rollback, a free pair, wake or delivery authority, and `pkg/api` reports it as
-an unnamed error naming the pair. Only a verified new admission
+an unnamed error naming the pair. Of admissions, only a verified new one
 (`BusySendAdmitted`) lets `pkg/api` touch the published current Launch's
-recorded wake path. **Must use:** every wake touch is `store.TouchBusySendWake`
+recorded wake path for the new Message; a send's abandoned-force release and
+a force call make their own notifications ([The force
+protocol](#the-force-protocol)). **Must use:** every wake touch is `store.TouchBusySendWake`
 (`busy_send_route.go`: `os.Chtimes` on a recorded absolute path, never
 creating one). The file is a content-free hint with no authority;
 a failed touch is a lost wake and changes no Result. The transaction does no
@@ -9340,10 +9348,11 @@ repairs it. The turn-end claim and the route facts read the same count.
 
 **Must use: `internal/busysend`.** It turns a conversation's Held Messages
 into prompts and hands each to a provider route. Every route and Send Mode,
-Claude's and every later one, force included, implements its `Route` and runs
-through `Coordinator.Deliver`, the store's job steps below and the
-[capability table](#busy-send-admission-and-results); none builds a second
-inbox, queue or delivery engine. [Claude's](#the-claude-route) is the one
+Claude's and every later one, implements its `Route` and runs through
+`Coordinator.Deliver` (a force's prompts through `DeliverForcePrompt`; see
+[The force protocol](#the-force-protocol)), the store's job steps below and
+the [capability table](#busy-send-admission-and-results); none builds a
+second inbox, queue or delivery engine. [Claude's](#the-claude-route) is the one
 route wired so far. Imports go one way: a provider adapter imports `busysend` and
 `internal/store`, `busysend` imports only `internal/store`, and the store's
 transactions (`busy_send_claim.go`, `busy_send_emission.go`,
@@ -9351,7 +9360,9 @@ transactions (`busy_send_claim.go`, `busy_send_emission.go`,
 provider dependency.
 
 **A finite, event-owned invocation.** `Deliver` runs only when a route's own
-eligible event for the current Launch calls it. Admission's wake touch is a
+eligible event for the current Launch calls it, and first finishes the
+agent's [abandoned force](#the-force-protocol), before the route's wait
+decision. Admission's wake touch is a
 hint, and reads, Lookup, store open, sweep and elapsed time never deliver.
 `Budgets` fixes the issue, job and cleanup phases once, at the start; nothing
 renews them, and nothing is retried or runs in the background. Messages have
@@ -9389,7 +9400,8 @@ advances its revision, so an obsolete job can neither issue nor release.
    closes.
 2. `CommitBusySendIssue` re-checks owner, revision, issue deadline (on the
    caller's clock), Launch, session, route, Turn Start counter, permission
-   and pause fence, and in the same transaction persists the prompt's
+   and pause fence (a force prompt's guard differs as [the force
+   protocol](#the-force-protocol) says), and in the same transaction persists the prompt's
    emission intent with its destination, Turn Start counter and running-turn
    flag, records the issuer in `busy_send_launch_processes` and makes the
    Messages non-Final `sent_unconfirmed`. The issued prompt with no
@@ -9404,14 +9416,15 @@ advances its revision, so an obsolete job can neither issue nor release.
    returns this and every later never-issued prompt to Held. Anything else
    keeps custody and the order barrier, and ambiguous output is never
    re-emitted. `RecordBusySendEvidence` records later callbacks once each:
-   an admission changes nothing else, an acceptance secures order, an exact
+   an admission changes no custody, order or Result (it can finish a
+   [force](#the-force-protocol)), an acceptance secures order, an exact
    receipt also makes confirmed Messages `delivered_confirmed`.
 4. The next prompt follows only once order is secured, the route reports
    `More` and the budgets allow. `ReleaseBusySendClaims` then returns the
    never-issued remainder to Held; the revision it advances is the positive
    never-issued evidence, since no issue commit can pass it. A later claim
-   does the same for a dead job once its issue deadline has passed. A prompt
-   with intent is never released.
+   does the same for a dead job once its issue deadline has passed, never
+   for a force's hand-over. A prompt with intent is never released.
 
 **Custody is not the Result.** Order evidence lifts the barrier and moves
 custody; the public Result follows [the Result rules](#busy-send-admission-and-results).
@@ -9425,6 +9438,94 @@ are the custody steps of a Launch End and of its exit evidence; lifecycle
 writers reach them only as [Lifecycle custody and exit
 evidence](#lifecycle-custody-and-exit-evidence) says. Worker death, elapsed
 time, or an ended or missing row never authorizes replay.
+
+### The force protocol
+
+**Must use:** every force, on any route, runs this one route-neutral protocol
+over the core's force records (`internal/store/busy_send_force_call.go`,
+`internal/busysend/force.go`, `pkg/api/force_delivery.go`); no route keeps
+its own force state, budget or settlement. Each store step is its own durable
+transaction. Only a prompt's issue commit and the call's end compare the
+force's owner call and revision (`BusySendForceRef`):
+
+1. **Claim.** `ClaimBusySendForce` stores the attempt, bound to the Launch the
+   call examined, and refuses in the [caller's
+   order](caller-contract.md#stored-force-attempts), storing only the
+   attempt. `agent_starting`, `launch_ended` and `route_unavailable` run no
+   recovery. Then it releases an abandoned force and refuses for an open one,
+   then releases a dead ordinary job's expired claims and refuses for an
+   ordinary owner that remains, before the Held checks. Otherwise it freezes
+   every Held Message, in accepted order, into a hand-over with boundary
+   `force`, the capability table's partition and the captured destination,
+   and the conversation's `handover_force_id` names it.
+2. **Issue.** A route's forced wake calls `Coordinator.DeliverForcePrompt`,
+   which reads the frozen next prompt (`ReadBusySendForcePrompt`) and runs
+   the coordinator's authorize, issue-commit, issue and completion steps for
+   at most that one prompt, committing through `CommitBusySendIssue` with
+   `BusySendIssueRequest.Force`. That guard needs the force running under its
+   owner and revision, no recorded call end, its call deadline not passed,
+   and every earlier prompt admitted with its order secured. It never refuses
+   a changed Turn Start counter or permission epoch, recording the current
+   ones instead (the hand-over keeps its first prompt's; `BusySendIssue`
+   returns each prompt's own); every other guard stands. The issue commit
+   sets `forced`, and every return to Held clears it. `DeliverForcePrompt`
+   creates no force, releases no claim and never falls through to ordinary
+   delivery.
+3. **Call end.** `EndBusySendForceCall` fences the job (never-issued prompts
+   released, their Messages Held in accepted order), records the outcome
+   (`busySendForceOutcome`) and applies the member rules
+   (`finishBusySendForce`). An end that lost to a release, Launch End or
+   not-submitted changes nothing and returns its own force as recorded, never
+   a later force.
+4. **Abandoned call.** `ReleaseAbandonedBusySendForce` settles a running
+   force the same way (`settleBusySendForceCall`), recording no call end, only
+   when its time is strictly after the recorded call deadline and no call end
+   is recorded. `Coordinator.Deliver`, the ordinary claim, the force claim
+   past its lifecycle and route refusals (so `force-delivery`), and every
+   accepted `send-keys` run it; reads, Lookup, sweep, store open, timers and
+   retention never do. The generic expired-claim release never frees a
+   force's hand-over.
+5. **Evidence and pending.** No worker waits, and evidence takes no force
+   authority. `settleBusySendForceEvidence`, composed into
+   `RecordBusySendEvidence` (so `RecordBusySendSighting`),
+   `RecordBusySendCompletion` and `RecordBusySendNegative`, matches an
+   admission, negative or not-submitted to its issued prompt and destination
+   and settles the force in that transaction, after its call has ended too: a
+   pending force finishes once every issued prompt is admitted (a
+   not-submitted one no longer counts as issued), or on a negative; a running
+   one is refused at once when every prompt it issued was not submitted. `endBusySendLaunchForces`, composed into
+   `applyBusySendLaunchEnd`, finishes every open force at Launch End. Order,
+   admission and Message Results stay independent: admission releases no
+   order barrier, and may arrive after every carried Result is Final.
+
+**Budget.** `forceCallEnv.begin` fixes one action's budget before its first
+store step and carries it through every Launch read, rebind, claim, progress
+read and end, never renewed: 12 seconds active (`forceActivePhase`), then 3
+seconds of cleanup (`forceCleanupPhase`). The hand-over's issue deadline is
+entry + 12 s; its job deadline and the force's recorded call deadline, the
+abandonment deadline, are entry + 15 s. `DeliverForcePrompt` clips its own
+`Budgets` to those original deadlines, measured after its read, so no wake
+renews them. While active the call only reads its force's durable progress
+(`ReadBusySendForceProgress`) every 100 ms.
+
+**Notifications.** The API call (`runForceCall`) owns every wake touch for a
+force (`store.TouchBusySendWake`): after the claim, once per later prompt when the
+one before it is admitted with order secured, after the end when carried
+Messages are Held, and after a refused claim whose recovery returned
+Messages. A route's hook only drives the frozen next prompt and records
+evidence. A send with force holds back its Message's ordinary wake until the
+force has had its turn, and gives it when the force claimed nothing; a send
+without force touches the wake when its abandoned-force release returned
+Messages, a pair repeat included.
+
+**Reads.** `readBusySendForceResults` reads `carried_results` in the force's
+own read transaction, in one statement through the one Result projection
+(`busySendResultSelect`): confirmed, still-retained members in carried order.
+`readBusySendForceSummary` gives `delivery.force`: the open force, else
+`handover_force_id`. A force whose call has not returned reads `running`.
+`BusySendCapabilities.ForceAdmission` (Claude: `prompt_sighting`) is the one
+source of whether a route can still show admission; without it an unadmitted
+force fails `admission_unknown`.
 
 ### The Claude route
 

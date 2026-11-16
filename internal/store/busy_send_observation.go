@@ -34,9 +34,10 @@ type BusySendObservation struct {
 	// StartupWait is waiting startup work (SR-6.1). Always nil here: Claude's
 	// startup prompt is part of its Launch and never waits in the inbox.
 	StartupWait *BusySendWait
-	// Force is the conversation's pending force, else its latest force that
-	// began a hand-over (busy_conversations.handover_force_id); nil when
-	// neither exists, so a force refused before any hand-over never shows.
+	// Force is the conversation's running or pending force, else its latest
+	// force that began a hand-over (busy_conversations.handover_force_id); nil
+	// when neither exists, so a force refused before any hand-over never
+	// shows. A running one's call has not returned (outcome running).
 	Force *BusySendForce
 	// AwaitingTurnStart is SR-5.6's awaiting_turn_start: the current
 	// Launch's hand-overs whose issued input is still AD-owned work with no

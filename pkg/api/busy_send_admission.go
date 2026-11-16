@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -104,19 +106,19 @@ func coveredAdmissionRequest(p SendKeysParams, callerUUID *string) (store.BusySe
 
 // sendCovered admits a send to a Covered Agent through the store's one
 // transactional path (SR-1.1, SR-3.9): no native, pane or relay input code
-// runs, before or after. A call naming force keeps E1's interim refusal until
-// forced delivery is built. On a newly committed admission it touches the
-// Launch's recorded wake file, then returns the stored Result; a repeat of an
-// owned pair returns the owner's current Result. row is nil when the target
-// row does not exist and the call names a pair, whose repeat is answered even
-// after the record's deletion (SR-1.2).
+// runs, before or after. It returns the stored Result; a repeat of an owned
+// pair returns the owner's current Result. row is nil when the target row
+// does not exist and the call names a pair, whose repeat is answered even
+// after the record's deletion (SR-1.2). A refused, conflicting or uncertain
+// admission forces nothing. After an accepted send or a repeat, force true
+// makes its own force attempt (forceAfterSend), each repeat a new one; any
+// other send first finishes the agent's force whose call never reached its
+// end (SR-3.2), then touches the Launch's recorded wake file when the send
+// was newly admitted or that release returned Messages to Held.
 func (r *sendKeysRun) sendCovered(row *Spawn, params SendKeysParams, callerUUID *string) error {
 	req, err := coveredAdmissionRequest(params, callerUUID)
 	if err != nil {
 		return err
-	}
-	if params.Force != nil {
-		return busySendGate("send-keys "+params.InstanceID, "force", store.BusySendCovered)
 	}
 	admitter, ok := r.s.(busySendAdmitter)
 	if !ok {
@@ -140,14 +142,122 @@ func (r *sendKeysRun) sendCovered(row *Spawn, params SendKeysParams, callerUUID 
 	case err != nil:
 		return fmt.Errorf("send-keys %s: %w", params.InstanceID, err)
 	}
-	if adm.Outcome == store.BusySendAdmitted {
-		store.TouchBusySendWake(adm.WakePath)
-	}
 	result := deliveryResultOf(adm.Result)
 	r.deliveryResult = SendKeysResult{Delivery: &result, CallerUUID: result.CallerUUID, Class: result.Class,
 		RequestID: result.RequestID, Outcome: result.Outcome, SessionID: result.SessionID, RecordID: result.RecordID,
 		RecordSHA256: result.RecordSHA256}
+	if params.Force != nil && *params.Force {
+		force, err := r.forceAfterSend(row, req, adm)
+		if err != nil {
+			return forceAfterSendError(params.InstanceID, req, err)
+		}
+		forced := forceResultOf(force)
+		r.deliveryResult.Force = &forced
+		return nil
+	}
+	wake := ""
+	if adm.Outcome == store.BusySendAdmitted {
+		wake = adm.WakePath
+	}
+	if releaser, ok := r.s.(abandonedForceReleaser); ok && row != nil {
+		// The release is the agent's to finish on its next eligible event or
+		// command too, so a failed one leaves the send's own outcome standing.
+		if rel, err := releaser.ReleaseAbandonedBusySendForce(r.forceEnv().context(), params.InstanceID, r.forceEnv().clock()); err == nil && rel.Returned > 0 {
+			wake = rel.WakePath
+		}
+	}
+	if wake != "" {
+		store.TouchBusySendWake(wake)
+	}
 	return nil
+}
+
+// abandonedForceReleaser is the store's release of a force whose call never
+// reached its end (store.ReleaseAbandonedBusySendForce), which an explicit
+// send for the agent runs (SR-3.2). A store without it releases nothing.
+type abandonedForceReleaser interface {
+	ReleaseAbandonedBusySendForce(ctx context.Context, instanceID string, at time.Time) (store.BusySendForceRelease, error)
+}
+
+var _ abandonedForceReleaser = (*store.Store)(nil)
+
+// deletedForceRefuser is the store's record_deleted refusal of a repeated
+// pair's force (store.RefuseBusySendForceForDeleted).
+type deletedForceRefuser interface {
+	RefuseBusySendForceForDeleted(ctx context.Context, req store.BusySendForceDeletedRequest) (store.BusySendForce, bool, error)
+}
+
+var _ deletedForceRefuser = (*store.Store)(nil)
+
+// forceEnv is the force call environment of a send with force: the call's
+// context, the relay view's clock and the call's sleep.
+func (r *sendKeysRun) forceEnv() forceCallEnv {
+	return forceCallEnv{ctx: r.env.Context, now: r.env.Relay.Now, sleep: r.env.Sleep}
+}
+
+// forceAfterSend makes an accepted or repeated send's own force attempt
+// (SR-4.1): a repeat whose pair's owner was retired by its record's deletion
+// gets a stored refused attempt, reason record_deleted, bound to that
+// retained ownership and never to an agent created since under the same id;
+// any other forces the target as force-delivery does (forceAgent). The send
+// is never accepted again and its pair, acceptance order and options never
+// change. The force's budget is fixed once, after the confirmed admission and
+// before the deleted-record check, and the whole force runs within it. A
+// newly admitted Message's ordinary wake waits until the force has had its
+// turn, so the ordinary notifier does not take the Message the caller asked to
+// force; whenever the force leaves no claim of its own to notify the route
+// (it was refused before a hand-over, or it failed before claiming), the send
+// gives that wake as any accepted send does (SR-3.1).
+func (r *sendKeysRun) forceAfterSend(row *Spawn, req store.BusySendAdmissionRequest, adm store.BusySendAdmission) (force store.BusySendForce, err error) {
+	if adm.Outcome == store.BusySendAdmitted {
+		defer func() {
+			if force.HandoverID == "" {
+				store.TouchBusySendWake(adm.WakePath)
+			}
+		}()
+	}
+	s, ok := r.s.(forceDeliveryStore)
+	if !ok {
+		return store.BusySendForce{}, fmt.Errorf("the store cannot force delivery")
+	}
+	a := r.forceEnv().begin()
+	defer a.cancel()
+	if pair, confirmed := req.CallerUUID, req.CallerUUID != ""; confirmed && adm.Outcome == store.BusySendReplayed {
+		refuser, ok := r.s.(deletedForceRefuser)
+		if !ok {
+			return store.BusySendForce{}, fmt.Errorf("the store cannot refuse a deleted record's force")
+		}
+		forceID, err := uuid.NewRandom()
+		if err != nil {
+			return store.BusySendForce{}, fmt.Errorf("no force_id could be made (%v); nothing was forced", err)
+		}
+		callID, err := uuid.NewRandom()
+		if err != nil {
+			return store.BusySendForce{}, fmt.Errorf("no call id could be made (%v); nothing was forced", err)
+		}
+		force, deleted, err := refuser.RefuseBusySendForceForDeleted(a.active, store.BusySendForceDeletedRequest{
+			ForceID: forceID.String(), OwnerCallID: callID.String(),
+			Pair: store.BusySendPair{CallerUUID: pair, DeliveryRequestID: req.DeliveryRequestID}, At: a.entry})
+		if err != nil || deleted {
+			return force, err
+		}
+	}
+	if row == nil {
+		return store.BusySendForce{}, fmt.Errorf("%w: %s", store.ErrSpawnNotFound, req.InstanceID)
+	}
+	return forceAgent(s, a, req.InstanceID)
+}
+
+// forceAfterSendError is a send's force that failed after its Message was
+// accepted or repeated: an unnamed error, never an admission refusal,
+// ErrStoreBusy or a sign that the send may go again as new, since the
+// Message is durably accepted. A confirmed send's pair reads its Result.
+func forceAfterSendError(id string, req store.BusySendAdmissionRequest, err error) error {
+	if req.CallerUUID != "" {
+		return fmt.Errorf("send-keys %s: the Message was accepted (caller_uuid %s, delivery_request_id %q), but its force could not be made: %v; do not send it as new: repeat it with the same pair to force again, or read its Result with get-delivery",
+			id, req.CallerUUID, req.DeliveryRequestID, err)
+	}
+	return fmt.Errorf("send-keys %s: the Message was accepted, but its force could not be made: %v; do not send it again: call force-delivery to force the agent's Held Messages", id, err)
 }
 
 // admissionUncertain is a covered send whose admission COMMIT outcome is

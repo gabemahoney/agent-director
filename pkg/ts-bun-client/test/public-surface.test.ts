@@ -423,18 +423,24 @@ test("public-surface: only status, get and list agent results carry confirmation
 });
 
 
-// SR-4.1, SR-5.4: a lookup answers found, unknown or retention_expired, its payload null unless
-// found; force-delivery's own force_result is never null, and only a pending force lacks ended_at.
+// SR-4.1, SR-4.3, SR-5.4: a lookup answers found, unknown or retention_expired, its payload null unless
+// found; force-delivery's own force_result is never null, a forced send's is optional, only a pending or
+// running force lacks ended_at, and every force_result lists carried_results; running is a fifth outcome
+// (MI decision 10).
 test("public-surface: lookups answer a Lookup with a payload null unless found", () => {
   const types = typesGolden();
   expect(types).toMatch(/export type Lookup = "found" \| "unknown" \| "retention_expired";/);
+  expect(types).toMatch(/export type ForceOutcome = "handed_over" \| "pending" \| "refused" \| "failed" \| "running";/);
   for (const [iface, shape] of [
     ["GetForceResult", /\blookup\s*:\s*Lookup\s*;/],
     ["GetForceResult", /\bforce_result\s*:\s*ForceResult\s*\|\s*null\s*;/],
     ["GetDeliveryResult", /\blookup\s*:\s*Lookup\s*;/],
     ["GetDeliveryResult", /\bresult\s*:\s*DeliveryResult\s*\|\s*null\s*;/],
     ["ForceDeliveryResult", /\bforce_result\s*:\s*ForceResult\s*;/],
+    ["SendKeysResult", /\bforce_result\?\s*:\s*ForceResult\s*;/],
+    ["ForceResult", /\boutcome\s*:\s*ForceOutcome\s*;/],
     ["ForceResult", /\bended_at\s*:\s*string\s*\|\s*null\s*;/],
+    ["ForceResult", /\bcarried_results\s*:\s*DeliveryResult\[\]\s*;/],
   ] as const) expect(interfaceBody(types, iface), iface).toMatch(shape);
 });
 

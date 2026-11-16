@@ -263,9 +263,10 @@ func TestBusySendUncoveredRefusalMatrix(t *testing.T) {
 // options' shapes alike, come before the coverage decision, and an unknown id
 // stays ErrSpawnNotFound; a valid option is refused agent_not_covered before
 // today's state, relay, permission, capability and lifecycle branches (on
-// Codex rows). On a covered Claude Launch, force, pause only_if_waiting and force-delivery,
-// like a resume through a store that cannot read coverage, are an unnamed
-// error that never falls back to today's behaviour, and a resume's
+// Codex rows). On a covered Claude Launch, pause only_if_waiting, like a
+// resume through a store that cannot read coverage, is an unnamed error that
+// never falls back to today's behaviour (a covered force is E5's; its calls'
+// tests are Task t2.xis.p8.y2's), and a resume's
 // steer_turn is steer_unsupported before the launch (SR-1.4; its accepted
 // defaults: TestBusySendResumeDefaults). Every refusal writes, sends and
 // stores nothing.
@@ -340,12 +341,7 @@ func TestBusySendOptionOrder(t *testing.T) {
 		{"spawn of a disabled experimental agent", waiting, spawn(plain, api.SpawnParams{Agent: "droid", AgentArgs: busyAgentArgs("droid"), ConfirmedDelivery: ptr(false)}), "ErrExperimentalAgentDisabled", ""},
 		{"make-template malformed send_mode", waiting, makeTemplate(api.MakeTemplateParams{Name: "order", SendMode: ptr("now")}), "ErrTemplateMalformed", ""},
 		{"make-template unknown agent", waiting, makeTemplate(api.MakeTemplateParams{Name: "order", Agent: "nope", ConfirmedDelivery: ptr(false)}), "ErrTemplateMalformed", ""},
-		{"covered send-keys", coveredLive, send(with(text(coveredLive.ID), func(p *api.SendKeysParams) { p.Force = ptr(false) })), "", ""},
 		{"covered pause", coveredLive, pause(coveredLive.ID), "", ""},
-		{"covered force-delivery", coveredLive, func() error {
-			_, err := c.ForceDelivery(api.ForceDeliveryParams{InstanceID: coveredLive.ID})
-			return err
-		}, "", ""},
 		{"covered resume steer_turn before the launch", coveredDone, resume(e.st, api.ResumeParams{InstanceID: coveredDone.ID, SendMode: ptr("steer_turn")}), "steer_unsupported", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

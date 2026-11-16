@@ -1,6 +1,7 @@
 package smoke_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -18,6 +19,10 @@ import (
 //
 // Field-presence rules:
 //   - Nullable=true: field must exist on the struct; value may be zero/nil.
+//     A result with its own MarshalJSON may carry a field only on the wire
+//     (send-keys' force_result, api.SendKeysResult.Force tagged "-"); such a
+//     field is read from the result's JSON, where a Nullable one may be
+//     absent or null.
 //   - AllowEmpty=true: field must exist; value may be the empty form of its
 //     type. Slice/map kinds must be non-nil but may be length-zero; scalar
 //     kinds may be the zero value (e.g. empty string, 0, false).
@@ -27,7 +32,7 @@ import (
 func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result any) {
 	t.Helper()
 	if len(verbDef.ResultFields) == 0 {
-		// Verb returns no fields (e.g. send-keys, pause) — nothing to assert.
+		// Verb returns no fields (e.g. pause) — nothing to assert.
 		return
 	}
 
@@ -49,6 +54,9 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 		// Find the Go struct field whose json tag matches fd.Name.
 		sf, fv, found := findFieldByJSONTag(rt, rv, fd.Name)
 		if !found {
+			if present, null, ok := wireField(result, fd.Name); ok && (present && !null || fd.Nullable) {
+				continue
+			}
 			t.Errorf("AssertResultMatchesManifest(%s): manifest field %q not found on %T (no matching json tag or Go field name)",
 				verbDef.Name, fd.Name, result)
 			continue
@@ -191,6 +199,22 @@ func findFieldByJSONTag(rt reflect.Type, rv reflect.Value, name string) (reflect
 		}
 	}
 	return reflect.StructField{}, reflect.Value{}, false
+}
+
+// wireField reads name in the JSON object of a result that has its own
+// MarshalJSON: whether the key is present and whether its value is null. ok
+// is false for a result without one, or whose JSON is not an object.
+func wireField(result any, name string) (present, null, ok bool) {
+	if _, ok := result.(json.Marshaler); !ok {
+		return false, false, false
+	}
+	raw, err := json.Marshal(result)
+	var obj map[string]json.RawMessage
+	if err != nil || json.Unmarshal(raw, &obj) != nil {
+		return false, false, false
+	}
+	v, present := obj[name]
+	return present, present && string(v) == "null", true
 }
 
 // isZero reports whether v holds the zero value of its type.

@@ -63,17 +63,38 @@ type DeliveryPair struct {
 	RequestID  string `json:"request_id"`
 }
 
+// A force_result's outcome (SR-4.3; MI decision 10). A force call
+// (force-delivery, send-keys with force) returns one of the first four. A read
+// of a stored attempt (get-force, and delivery.force on get and status) may
+// also show ForceOutcomeRunning while the attempt's call has not returned,
+// with reason "" and ended_at null; it means nothing about admission, unlike
+// pending, which has an issued prompt whose admission can still arrive.
+const (
+	ForceOutcomeHandedOver = "handed_over"
+	ForceOutcomePending    = "pending"
+	ForceOutcomeRefused    = "refused"
+	ForceOutcomeFailed     = "failed"
+	ForceOutcomeRunning    = "running"
+)
+
 // ForceResult is one force attempt's outcome (SR-4.1, SR-4.3): its AD-made
-// force_id, outcome (handed_over, pending, refused or failed), reason, start
-// and end times (end null while pending) and its carried Messages' confirmed
-// pairs, in carried order ([] when none).
+// force_id, outcome (ForceOutcomeHandedOver, ForceOutcomePending,
+// ForceOutcomeRefused or ForceOutcomeFailed; a read may show
+// ForceOutcomeRunning), reason ("" while running), start and end times (end
+// null while pending or running), its carried Messages' confirmed pairs, in
+// carried order ([] when none), and the current Results of those of them
+// whose Result is still retained, in the same order ([] when none). A carried
+// Message whose Result has expired keeps its pair and has no Result, so
+// carried_results can be shorter; an unconfirmed carried Message is in
+// neither list.
 type ForceResult struct {
-	ForceID      string         `json:"force_id"`
-	Outcome      string         `json:"outcome"`
-	Reason       string         `json:"reason"`
-	StartedAt    time.Time      `json:"started_at"`
-	EndedAt      *time.Time     `json:"ended_at"`
-	CarriedPairs []DeliveryPair `json:"carried_pairs"`
+	ForceID        string           `json:"force_id"`
+	Outcome        string           `json:"outcome"`
+	Reason         string           `json:"reason"`
+	StartedAt      time.Time        `json:"started_at"`
+	EndedAt        *time.Time       `json:"ended_at"`
+	CarriedPairs   []DeliveryPair   `json:"carried_pairs"`
+	CarriedResults []DeliveryResult `json:"carried_results"`
 }
 
 // AgentDefaults are a Covered Agent's Agent Defaults, the Send Mode and
@@ -103,8 +124,9 @@ type DeliveryFacts struct {
 	// StartupWait is waiting startup work; null for Claude Code, whose
 	// startup prompt is part of its Launch.
 	StartupWait *DeliveryWait `json:"startup_wait"`
-	// Force is the pending force, else the latest force that began a
-	// hand-over; null when there is neither.
+	// Force is the running or pending force, else the latest force that
+	// began a hand-over; null when there is neither. Its outcome is
+	// ForceOutcomeRunning while that force's call has not returned.
 	Force *ForceResult `json:"force"`
 	// AwaitingTurnStart is the current Launch's completed hand-overs whose
 	// input has no evidence yet that the agent took it (SR-3.3).
@@ -266,13 +288,16 @@ func compatibilityOutcome(class store.BusySendResultClass, partial bool) string 
 // forceResultOf projects a stored force attempt (SR-4.1).
 func forceResultOf(f store.BusySendForce) ForceResult {
 	out := ForceResult{ForceID: f.ForceID, Outcome: string(f.Outcome), Reason: string(f.Reason),
-		StartedAt: time.UnixMilli(f.StartedAtMillis).UTC(), CarriedPairs: []DeliveryPair{}}
+		StartedAt: time.UnixMilli(f.StartedAtMillis).UTC(), CarriedPairs: []DeliveryPair{}, CarriedResults: []DeliveryResult{}}
 	if f.EndedAtMillis != 0 {
 		ended := time.UnixMilli(f.EndedAtMillis).UTC()
 		out.EndedAt = &ended
 	}
 	for _, p := range f.CarriedPairs {
 		out.CarriedPairs = append(out.CarriedPairs, DeliveryPair{CallerUUID: p.CallerUUID, RequestID: p.DeliveryRequestID})
+	}
+	for _, r := range f.CarriedResults {
+		out.CarriedResults = append(out.CarriedResults, deliveryResultOf(r))
 	}
 	return out
 }

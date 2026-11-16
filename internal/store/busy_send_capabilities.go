@@ -97,6 +97,11 @@ type BusySendCapabilities struct {
 	HeldBytes int64
 	// Modes are the offered Send Modes, in published order.
 	Modes []BusySendModeLimits
+	// ForceAdmission is the route's qualified admission event for a force's
+	// issued prompt (SR-4.3, SR-4.4), "" when the route has none: a force
+	// whose issued prompt is unadmitted at its call's end is then failed
+	// admission_unknown rather than pending, since no admission can arrive.
+	ForceAdmission BusySendAdmissionKind
 }
 
 // Claude Code's Wait Turn limits (E2 decision 4, 2026-11-14), with the
@@ -144,7 +149,8 @@ var claudeWaitTurn = BusySendModeLimits{
 }
 
 var busySendCapabilityTable = []BusySendCapabilities{
-	{Provider: AgentClaude, HeldCount: claudeHeldCount, HeldBytes: claudeHeldBytes, Modes: []BusySendModeLimits{claudeWaitTurn}},
+	{Provider: AgentClaude, HeldCount: claudeHeldCount, HeldBytes: claudeHeldBytes, Modes: []BusySendModeLimits{claudeWaitTurn},
+		ForceAdmission: BusySendAdmissionPromptSighting},
 }
 
 // busySendFallbackCapabilities admits for a covered provider this version has

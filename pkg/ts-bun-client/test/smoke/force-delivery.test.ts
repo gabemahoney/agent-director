@@ -17,7 +17,7 @@ test("force-delivery: happy path — a refused attempt that getForce finds", asy
     runHelper("seed-spawn", { store: homeStore(homeDir), state: "waiting", id: "smoke-force-id", agent: "codex", "create-store": true });
     using client = await openClient(homeStore(homeDir));
     const { force_result } = await client.forceDelivery({ instance_id: "smoke-force-id" });
-    expect(force_result).toMatchObject({ outcome: "refused", reason: "agent_not_covered", carried_pairs: [] });
+    expect(force_result).toMatchObject({ outcome: "refused", reason: "agent_not_covered", carried_pairs: [], carried_results: [] });
     expect(force_result.force_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(await client.getForce({ force_id: force_result.force_id })).toEqual({ lookup: "found", force_result });
   });

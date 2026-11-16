@@ -407,7 +407,14 @@ func agentDefaultParams(before string, covered func(value string) string) []Para
 }
 
 // forceResultText describes a force_result object (SR-4.1).
-const forceResultText = "force_id (AD-made UUID), outcome (handed_over, pending, refused or failed), reason, started_at, ended_at (null while pending) and carried_pairs (each caller_uuid and request_id; [] when none)."
+const forceResultText = "force_id (AD-made UUID), outcome (handed_over, pending, refused or failed), reason, started_at, ended_at (null while pending), carried_pairs (each caller_uuid and request_id; [] when none) and carried_results (the Results of those still retained, in that order; [] when none)."
+
+// forceRunningText is what a read of a stored force may show besides a call's
+// four outcomes (MI decision 10).
+const forceRunningText = "A read may also show outcome running, with reason \"\" and ended_at null, while the attempt's call has not returned; a force call's own force_result never does."
+
+// forceOutcomesText lists a force's outcomes and reasons (SR-4.2, SR-4.3).
+const forceOutcomesText = "Every outcome is a success. refused: no_held_messages, handover_in_progress, earlier_message, input_unresolved, agent_starting, launch_ended, route_unavailable, not_submitted or not_issued (no prompt issued by the call's end), or agent_not_covered. handed_over: admitted. pending: awaiting_admission, ended later by that admission, a definitive negative or Launch End. failed: admission_unknown or launch_ended. Carried Messages not issued by the call's end return to Held for ordinary delivery."
 
 // deliveryResultText describes a Message's Result (SR-5.1, SR-5.3): a
 // Lookup's result and a Covered Agent's send-keys result.
@@ -422,7 +429,7 @@ const coveredRow = "Covered Agents only (omitted otherwise): "
 var agentDefaultsField = FieldDef{Name: "agent_defaults", Type: "object?", Description: coveredRow + "the published Agent Defaults a Message takes when its send names none, send_mode and confirmed_delivery, and the experimental confirm_from_transcripts.", Nullable: true, AllowEmpty: false}
 
 // deliveryField is a covered row's inbox facts on get, get-many and status.
-var deliveryField = FieldDef{Name: "delivery", Type: "object?", Description: coveredRow + "inbox facts read from durable records, delivering nothing: held_count and held_bytes (Messages Held now and their bytes), first_wait (the first Held Message's reason, since and optional earlier pair; null with none Held), handover_count (non-Final hand-overs: each hand-over of one or more Messages with a member whose Result is not Final counts once), startup_wait (null for Claude Code), force (the pending force, else the latest that began a hand-over, as a force_result; null with neither) and awaiting_turn_start (this Launch's hand-overs with no evidence yet that the agent took them).", Nullable: true, AllowEmpty: false}
+var deliveryField = FieldDef{Name: "delivery", Type: "object?", Description: coveredRow + "inbox facts read from durable records, delivering nothing: held_count and held_bytes (Messages Held now and their bytes), first_wait (the first Held Message's reason, since and optional earlier pair; null with none Held), handover_count (non-Final hand-overs: each hand-over of one or more Messages with a member whose Result is not Final counts once), startup_wait (null for Claude Code), force (the running or pending force, else the latest that began a hand-over, as a force_result, outcome running while its call has not returned; null with neither) and awaiting_turn_start (this Launch's hand-overs with no evidence yet that the agent took them).", Nullable: true, AllowEmpty: false}
 
 // deliveryCapabilitiesField is a covered row's offered limits on get and
 // get-many.
@@ -870,7 +877,7 @@ var Verbs = []VerbDef{
 			{Name: "send_mode", Type: "string", Description: "This Message's Send Mode: wait_turn or steer_turn; omitted, the Agent Default. One the agent is not offered: ErrCantSend, reason steer_unsupported. " + coveredOnlySend("wait_turn"), Nullable: false, AllowEmpty: false, AllowedValues: []string{"wait_turn", "steer_turn"}},
 			{Name: "confirmed_delivery", Type: "bool", Description: "This Message's Confirmed Delivery; omitted, the Agent Default. Confirmed needs caller_uuid; unconfirmed takes neither caller_uuid nor delivery_request_id (else ErrInvalidFlags). " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
 			{Name: "caller_uuid", Type: "string", Description: "Caller UUID: hyphenated hexadecimal, either case. With delivery_request_id it names the Message store-wide: the same text to the same target returns its current Result; anything else, ErrCantSend, reason id_conflict, with the owner's Result. " + coveredOnlySend(""), Nullable: false, AllowEmpty: false},
-			{Name: "force", Type: "bool", Description: "Also force Held Messages, as force-delivery does. " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
+			{Name: "force", Type: "bool", Description: "true: once the Message is accepted, or its pair repeated, also force the agent's Held Messages, as force-delivery does, adding force_result; each repeat forces again, and a refused send forces nothing. " + coveredOnlySend("false"), Nullable: false, AllowEmpty: false},
 		},
 		ResultFields: []FieldDef{
 			{Name: "caller_uuid", Type: "string", Description: "A Covered Agent's confirmed send: its Caller UUID, lowercase; omitted otherwise.", AllowEmpty: true},
@@ -880,6 +887,7 @@ var Verbs = []VerbDef{
 			{Name: "session_id", Type: "string", Description: "Native session that recorded the ordinary prompt.", AllowEmpty: true},
 			{Name: "record_id", Type: "string", Description: "Native user record id when provided by the pinned schema.", AllowEmpty: true},
 			{Name: "record_sha256", Type: "string", Description: "SHA-256 of the exact structured user record.", AllowEmpty: true},
+			{Name: "force_result", Type: "object?", Description: "A Covered Agent's send with force true only (omitted otherwise): its own force attempt, as force-delivery returns it; after the target's deletion, refused, record_deleted. " + forceResultText, Nullable: true, AllowEmpty: false},
 		},
 		ErrorNames: []string{
 			"ErrAgentCapabilityUnsupported",
@@ -911,7 +919,7 @@ var Verbs = []VerbDef{
 			{Name: "instance_id", Type: "string", Description: "Id of the agent whose Held Messages to force.", Required: true, Nullable: false, AllowEmpty: false},
 		},
 		ResultFields: []FieldDef{
-			{Name: "force_result", Type: "object", Description: "This attempt, stored before the call returns; each call stores its own, and get-force reads it by force_id: " + forceResultText, Nullable: false, AllowEmpty: false},
+			{Name: "force_result", Type: "object", Description: "This attempt, stored before the call returns, within about 15 seconds; each call stores its own, and get-force reads it by force_id: " + forceResultText + " " + forceOutcomesText, Nullable: false, AllowEmpty: false},
 		},
 		ErrorNames: []string{"ErrInvalidFlags", "ErrSpawnNotFound", "ErrStoreBusy"},
 	},
@@ -925,7 +933,7 @@ var Verbs = []VerbDef{
 		},
 		ResultFields: []FieldDef{
 			lookupField,
-			{Name: "force_result", Type: "object?", Description: "Null unless lookup is found: " + forceResultText, Nullable: true, AllowEmpty: false},
+			{Name: "force_result", Type: "object?", Description: "Null unless lookup is found: " + forceResultText + " " + forceRunningText, Nullable: true, AllowEmpty: false},
 		},
 		ErrorNames: []string{"ErrInvalidFlags", "ErrStoreBusy"},
 	},

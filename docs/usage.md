@@ -132,6 +132,25 @@ An unconfirmed send has no lookup: never automatically resend after a lost
 reply. Result handling belongs in the
 [caller contract](caller-contract.md#message-results).
 
+### Force delivery
+
+To hand an agent's Held Messages over without waiting for its turn to end, a
+Dialog or compaction, force them. The call blocks for up to about 15 seconds.
+Keep the `force_id` to read the attempt again:
+
+```sh
+force=$(agent-director force-delivery --instance-id "$id" | jq -r '.force_result.force_id')
+agent-director get-force --force-id "$force"
+```
+
+`send-keys --force` sends a Message and forces in one call; its result adds a
+`force_result` beside the Message's Result. Outcomes, reasons and recovery
+are in [Stored force attempts](caller-contract.md#stored-force-attempts).
+
+In this version Claude Code's route issues no force prompt: a force that
+carries Messages returns `refused`, reason `not_issued`, after its wait, and
+its Messages go back to ordinary delivery.
+
 ## Agent Defaults
 
 Covered Messages default to `send_mode: wait_turn` and
@@ -141,7 +160,7 @@ Covered Messages default to `send_mode: wait_turn` and
 See [Agent Defaults](caller-contract.md#agent-defaults) for precedence.
 
 For reconnection, see [Pause and resume](#pause-and-resume).
-`steer_turn`, forced delivery and `only_if_waiting` are unavailable; the
+`steer_turn` and `only_if_waiting` are unavailable; the
 experimental `confirm_from_transcripts` setting provides no confirmation.
 
 ## Family state

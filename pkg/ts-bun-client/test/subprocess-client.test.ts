@@ -165,8 +165,8 @@ test.each([
   expect(argv.slice(argv.indexOf(want[0]))).toEqual([...want]);
 });
 
-// SR-4.1, SR-5.1, SR-5.4: a lookup's payload, null outside found, and a covered send's Result reach the
-// caller as the CLI printed them.
+// SR-4.1, SR-5.1, SR-5.4: a lookup's payload, null outside found, and a covered send's Result, with a forced
+// send's force_result, reach the caller as the CLI printed them.
 const PAIR: DeliveryPair = { caller_uuid: "0f8e2a34-5b6c-4d7e-8f90-a1b2c3d4e5f6", request_id: "msg 2 多" };
 const EARLIER: DeliveryPair = { caller_uuid: "0f8e2a34-5b6c-4d7e-8f90-a1b2c3d4e5f6", request_id: "msg 1" };
 const HELD: DeliveryResult = {
@@ -181,10 +181,16 @@ const DELIVERED: DeliveryResult = {
 };
 const PENDING: ForceResult = {
   force_id: "6f1c0d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f", outcome: "pending", reason: "awaiting_admission",
-  started_at: "2026-11-13T10:00:00Z", ended_at: null, carried_pairs: [EARLIER, PAIR],
+  started_at: "2026-11-13T10:00:00Z", ended_at: null, carried_pairs: [EARLIER, PAIR], carried_results: [],
+};
+// A read while the call runs (MI decision 10); EARLIER's Result has expired, so carried_results is shorter.
+const RUNNING: ForceResult = { ...PENDING, outcome: "running", reason: "", carried_results: [HELD] };
+const NOT_ISSUED: ForceResult = {
+  ...PENDING, outcome: "refused", reason: "not_issued", ended_at: "2026-11-13T10:00:12Z", carried_pairs: [PAIR], carried_results: [HELD],
 };
 test.each([
   ["getForce found", (c: Client) => c.getForce({ force_id: PENDING.force_id }), { lookup: "found", force_result: PENDING }],
+  ["getForce found, running", (c: Client) => c.getForce({ force_id: RUNNING.force_id }), { lookup: "found", force_result: RUNNING }],
   ["getForce retention_expired", (c: Client) => c.getForce({ force_id: PENDING.force_id }), { lookup: "retention_expired", force_result: null }],
   ["getDelivery found, waiting", (c: Client) => c.getDelivery({ caller_uuid: PAIR.caller_uuid, delivery_request_id: PAIR.request_id }),
     { lookup: "found", result: HELD }],
@@ -194,6 +200,9 @@ test.each([
     { lookup: "retention_expired", result: null }],
   ["sendKeys accepted by a Covered Agent", (c: Client) => c.sendKeys({ instance_id: "id-1", text: "hi", confirmed_delivery: true,
     caller_uuid: PAIR.caller_uuid, delivery_request_id: PAIR.request_id }), HELD],
+  ["sendKeys with force: its Result and its force_result", (c: Client) => c.sendKeys({ instance_id: "id-1", text: "hi",
+    confirmed_delivery: true, caller_uuid: PAIR.caller_uuid, delivery_request_id: PAIR.request_id, force: true }),
+    { ...HELD, force_result: NOT_ISSUED }],
 ] as const)("%s: the payload reaches the caller intact", async (_label, call, payload) => {
   const cli = path.join(tmp, `${crypto.randomUUID()}-lookup.sh`);
   fs.writeFileSync(cli, `#!/bin/sh

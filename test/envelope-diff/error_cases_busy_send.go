@@ -1,7 +1,8 @@
 // error_cases_busy_send.go holds busy send's error rows (Task t2.xis.pu.ar),
 // appended to errorCases: each option's refusal on an uncovered Codex row,
-// ErrCantSend's and pause's err_details pinned on both sides, and the new
-// verbs' error paths. Each row sends the same call through both runners, so
+// ErrCantSend's and pause's err_details pinned on both sides, the new verbs'
+// error paths, and a refused covered send with force, which forces nothing
+// (Task t2.xis.p8.y2). Each row sends the same call through both runners, so
 // matching descriptions show the same options reached the API.
 package envelope_diff
 
@@ -41,6 +42,14 @@ var busySendErrorCases = []errorCase{
 		map[string]any{"instance_id": "id-busy-pause", "only_if_waiting": true},
 		[]string{"pause", "--instance-id", "id-busy-pause", "--only-if-waiting"},
 		map[string]any{"cause": "agent_not_covered"}, "only_if_waiting needs a Covered Agent"),
+	busySendRow("send-keys", "ErrCantSend", func(t *testing.T) string {
+		t.Helper()
+		return seedBusyRow(t, "id-busy-force", store.StateWaiting, apitest.WithAgent("claude"))
+	},
+		map[string]any{"instance_id": "id-busy-force", "text": "bad\rtext", "force": true},
+		[]string{"send-keys", "--instance-id", "id-busy-force", "--text", "bad\rtext", "--force"},
+		map[string]any{"class": "cant_send", "reason": "text_kind", "resend_safe": false, "retry_with": "none"},
+		"nothing was stored, sent or typed"),
 	busySendRow("force-delivery", "ErrSpawnNotFound", busySendSeedNone,
 		map[string]any{"instance_id": "nonexistent-id"}, []string{"force-delivery", "--instance-id", "nonexistent-id"}, nil),
 	busySendRow("get-force", "ErrInvalidFlags", busySendSeedNone,
@@ -83,10 +92,6 @@ func busySendSeedNone(t *testing.T) string {
 func busySendSeedRow(id, state string) func(t *testing.T) string {
 	return func(t *testing.T) string {
 		t.Helper()
-		dbPath := filepath.Join(t.TempDir(), "state.db")
-		if _, err := apitest.SeedSpawn(dbPath, id, state, "/tmp", "off", "", true, apitest.WithAgent("codex")); err != nil {
-			t.Fatalf("busySendSeedRow: %v", err)
-		}
-		return filepath.Dir(dbPath)
+		return seedBusyRow(t, id, state, apitest.WithAgent("codex"))
 	}
 }

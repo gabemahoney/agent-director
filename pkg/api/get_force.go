@@ -48,7 +48,9 @@ func getForce(s forceReader, params GetForceParams) (GetForceResult, error) {
 
 // GetForce reads one force attempt by the force_id its force_result carried
 // (SR-4.1): found with its current force_result, unknown when the store holds
-// no such attempt, or retention_expired once it has expired. It reads durable
+// no such attempt, or retention_expired once it has expired. Its outcome is
+// ForceOutcomeRunning, with reason "", while the attempt's call has not
+// returned (MI decision 10). It reads durable
 // facts only: no Active Check, provider, tmux or process probe, and it starts
 // no work. It works after restarts, Launch End and the agent's deletion.
 // unknown and retention_expired are answers, not permission to resend.

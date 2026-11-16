@@ -113,6 +113,13 @@ func TestBusySendIssueCommitsIntentFirst(t *testing.T) {
 // read inside the transaction), refuses with its failure
 // and wait and writes nothing, so the prompt stays only claimed and the job's
 // release returns it to Held waiting that cause: no guard strands an intent.
+// Each row runs again on a force's hand-over (SR-4.2; E5 Main Agent decision
+// 2; M1 G3 ForceFencedAtCallEnd): a force's prompt issues across the turn and
+// permission changes, capturing the current Turn Start counter, actual
+// running turn and permission epoch (decision 9), while every other guard
+// refuses alike, as do a recorded call end and a step without the
+// hand-over's force authority; the call's end then returns the prompt's
+// Messages to Held.
 func TestBusySendIssueRevalidation(t *testing.T) {
 	t.Parallel()
 	set := func(q string) func(*testing.T, *busySendInbox) {
@@ -126,6 +133,13 @@ func TestBusySendIssueRevalidation(t *testing.T) {
 		cross   bool // the job's clock passes the issue deadline at the issue's BEGIN IMMEDIATE
 		failure store.BusySendGuardFailure
 		wait    store.BusySendWaitReason
+		only    string // "force" or "ordinary" for a row of one kind only
+		// A readiness change a force's prompt passes, capturing the Turn
+		// Start counter's change and the actual running turn.
+		readiness bool
+		turns     int64
+		epochs    int64
+		running   bool
 	}{
 		{name: "a revision the hand-over does not have", stale: true, failure: store.BusySendGuardOwner},
 		{name: "not the next prompt", prompt: 1, failure: store.BusySendGuardPrompt},
@@ -145,55 +159,101 @@ func TestBusySendIssueRevalidation(t *testing.T) {
 			failure: store.BusySendGuardDestination, wait: store.BusySendWaitReadinessUnknown},
 		{name: "the connection generation advanced", change: set(`UPDATE busy_send_launches SET connection_generation = 1
 		    WHERE instance_id = ? AND phase = 'current'`), failure: store.BusySendGuardDestination, wait: store.BusySendWaitReadinessUnknown},
-		{name: "a turn started", change: set(`UPDATE spawns SET turn_starts = turn_starts + 1 WHERE instance_id = ?`),
-			failure: store.BusySendGuardTurn, wait: store.BusySendWaitTurnRunning},
+		{name: "a turn started", change: set(`UPDATE spawns SET turn_starts = turn_starts + 1, state = 'working' WHERE instance_id = ?`),
+			failure: store.BusySendGuardTurn, wait: store.BusySendWaitTurnRunning, readiness: true, turns: 1, running: true},
 		{name: "the permission epoch moved", change: set(`UPDATE spawns SET permission_epoch = permission_epoch + 1 WHERE instance_id = ?`),
-			failure: store.BusySendGuardPermission, wait: store.BusySendWaitReadinessUnknown},
+			failure: store.BusySendGuardPermission, wait: store.BusySendWaitReadinessUnknown, readiness: true, epochs: 1},
 		{name: "a permission request is open", change: func(t *testing.T, in *busySendInbox) {
 			storefix.SeedOpenPermissionRequests(t, in.s, in.id, []string{"tok-1"})
-		}, failure: store.BusySendGuardPermission, wait: store.BusySendWaitDialog},
+			setBusySendFact(t, in.path, `UPDATE spawns SET state = 'check_permission' WHERE instance_id = ?`, in.id)
+		}, failure: store.BusySendGuardPermission, wait: store.BusySendWaitDialog, readiness: true, running: true},
+		{name: "the force's call end is recorded", only: "force", change: func(t *testing.T, in *busySendInbox) {
+			if end, err := in.s.EndBusySendForceCall(context.Background(), *in.force, time.Now()); err != nil || !end.Ended {
+				t.Fatalf("call end %+v, %v", end, err)
+			}
+		}, failure: store.BusySendGuardOwner},
+		{name: "no force authority for a force's hand-over", only: "force",
+			change: func(_ *testing.T, in *busySendInbox) { in.force = nil }, failure: store.BusySendGuardOwner},
+		{name: "a force authority for an ordinary hand-over", only: "ordinary", change: func(_ *testing.T, in *busySendInbox) {
+			in.force = &store.BusySendForceRef{ForceID: "another-force", OwnerCallID: "another-call", Revision: 1}
+		}, failure: store.BusySendGuardOwner},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			in := newBusySendInbox(t, "only")
-			h := in.claim(t, time.Time{}, false)
-			if tc.change != nil {
-				tc.change(t, in)
+		for _, force := range []bool{false, true} {
+			if tc.only != "" && (tc.only == "force") != force {
+				continue
 			}
-			req := store.BusySendIssueRequest{Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, PromptIndex: tc.prompt, Revision: h.Revision}}
-			if tc.stale {
-				req.Ref.Revision++
+			name := tc.name
+			if force {
+				name += ", force"
 			}
-			if tc.cross {
-				var now atomic.Int64
-				now.Store(h.ClaimedAt.Add(time.Second).UnixMilli())
-				store.ObserveDecisionBoundaryForTest(t, in.s, in.path, func(_ context.Context, q string) error {
-					if q == "BEGIN IMMEDIATE" {
-						now.Store(h.IssueDeadline.Add(time.Millisecond).UnixMilli())
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				in := newBusySendInbox(t, "only")
+				var h *store.BusySendHandover
+				var claim store.BusySendForceClaim
+				if force {
+					claim = in.forceClaim(t, time.Time{})
+					h = claim.Handover
+				} else {
+					h = in.claim(t, time.Time{}, false)
+				}
+				if tc.change != nil {
+					tc.change(t, in)
+				}
+				req := store.BusySendIssueRequest{Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, PromptIndex: tc.prompt, Revision: h.Revision},
+					Force: in.force}
+				if force && tc.readiness {
+					got, err := in.s.CommitBusySendIssue(context.Background(), req)
+					if err != nil || got.TurnStarts != h.ExpectedTurnStarts+tc.turns || got.RunningTurn != tc.running ||
+						got.PermissionEpoch != h.PermissionEpoch+tc.epochs {
+						t.Fatalf("force issue %+v, %v; want it issued at Turn Starts %d, running %t, permission epoch %d",
+							got, err, h.ExpectedTurnStarts+tc.turns, tc.running, h.PermissionEpoch+tc.epochs)
 					}
-					return nil
-				}, nil)
-				req.Now = func() time.Time { return time.UnixMilli(now.Load()) }
-			}
-			before := readBusySendTables(t, in.path)
-			got, err := in.s.CommitBusySendIssue(context.Background(), req)
-			var guard *store.BusySendGuardError
-			if !errors.As(err, &guard) || guard.Failure != tc.failure || guard.Wait != tc.wait || got != (store.BusySendIssue{}) {
-				t.Fatalf("issue %+v, %v; want %s refused waiting %q", got, err, tc.failure, tc.wait)
-			}
-			if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
-				t.Fatal("a refused issue wrote part of its intent")
-			}
-			if tc.wait == "" {
-				return
-			}
-			r, err := in.s.ReleaseBusySendClaims(context.Background(), store.BusySendReleaseRequest{HandoverID: h.HandoverID,
-				Revision: h.Revision, Wait: guard.Wait})
-			if err != nil || r.Released != 1 || !r.Closed {
-				t.Fatalf("the job's release %+v, %v; want the Message released and the hand-over closed", r, err)
-			}
-			wantBusySendCustody(t, in.path, in.id, "held held "+string(tc.wait)+" reserved")
-		})
+					wantBusySendCustody(t, in.path, in.id, "issued sent_unconfirmed handover_in_progress reserved member forced")
+					return
+				}
+				if tc.stale {
+					req.Ref.Revision++
+				}
+				if tc.cross {
+					var now atomic.Int64
+					now.Store(h.ClaimedAt.Add(time.Second).UnixMilli())
+					store.ObserveDecisionBoundaryForTest(t, in.s, in.path, func(_ context.Context, q string) error {
+						if q == "BEGIN IMMEDIATE" {
+							now.Store(h.IssueDeadline.Add(time.Millisecond).UnixMilli())
+						}
+						return nil
+					}, nil)
+					req.Now = func() time.Time { return time.UnixMilli(now.Load()) }
+				}
+				before := readBusySendTables(t, in.path)
+				got, err := in.s.CommitBusySendIssue(context.Background(), req)
+				var guard *store.BusySendGuardError
+				if !errors.As(err, &guard) || guard.Failure != tc.failure || guard.Wait != tc.wait || got != (store.BusySendIssue{}) {
+					t.Fatalf("issue %+v, %v; want %s refused waiting %q", got, err, tc.failure, tc.wait)
+				}
+				if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+					t.Fatal("a refused issue wrote part of its intent")
+				}
+				if force {
+					end, err := in.s.EndBusySendForceCall(context.Background(), claim.Ref, time.Now())
+					if err != nil || end.Force.Outcome != store.BusySendForceRefused || end.Force.Reason != store.BusySendForceNotIssued {
+						t.Fatalf("the call's end %+v, %v; want refused not_issued", end, err)
+					}
+					wantBusySendCustody(t, in.path, in.id, "held held readiness_unknown reserved")
+					return
+				}
+				if tc.wait == "" {
+					return
+				}
+				r, err := in.s.ReleaseBusySendClaims(context.Background(), store.BusySendReleaseRequest{HandoverID: h.HandoverID,
+					Revision: h.Revision, Wait: guard.Wait})
+				if err != nil || r.Released != 1 || !r.Closed {
+					t.Fatalf("the job's release %+v, %v; want the Message released and the hand-over closed", r, err)
+				}
+				wantBusySendCustody(t, in.path, in.id, "held held "+string(tc.wait)+" reserved")
+			})
+		}
 	}
 }
 
@@ -277,6 +337,12 @@ func TestBusySendStaleOwnerCannotIssue(t *testing.T) {
 // end report, kill's verified exit, sweep's proven-exit mark) and lifts the
 // fence with the shared exit-evidence operation. A tmux-only missing mark
 // records logical Launch End too, while keeping the physical exit fence.
+// Task t2.xis.p8.y2 adds a force's hand-over (SR-4.3, SR-3.2; M1 G3
+// ForceEndReleases and NoOrphanForceClaim, M2 P-C4.4) ended by its call's end
+// or by an eligible event's release of the abandoned call: neither replays
+// issued work nor clears its barrier, a no-intent prompt returns to Held, and
+// the force finishes owning no claim (refused not_issued with no intent,
+// handed_over once the callback admitted its issued prompt).
 func TestBusySendCustodyMatrix(t *testing.T) {
 	t.Parallel()
 	injected := errors.New("injected issue failure")
@@ -389,12 +455,24 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 		{"complete output with no order evidence", issued(store.BusySendOutputComplete), true, "expiry", store.BusySendClaimOwned},
 		{"issued, agent row marked missing", issued(""), true, "tmux-only missing mark", ""},
 		{"claimed only, agent row marked missing", claimOnly, false, "tmux-only missing mark", ""},
+		{"force: claimed only", claimOnly, false, "call end", ""},
+		{"force: issue rolled back before COMMIT", rolledBack, false, "abandoned release", store.BusySendClaimMade},
+		{"force: issue COMMIT unacknowledged", lostAck, true, "abandoned release", store.BusySendClaimOwned},
+		{"force: issued, worker lost before completion", issued(""), true, "call end", ""},
+		{"force: partial output", issued(store.BusySendOutputPartial), true, "abandoned release", store.BusySendClaimOwned},
+		{"force: uncertain output", issued(store.BusySendOutputUncertain), true, "call end", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			in := newBusySendInbox(t, busySendTwoPrompts...)
-			h := in.claim(t, time.Time{}, false)
+			forced := tc.end == "call end" || tc.end == "abandoned release"
+			var h *store.BusySendHandover
+			if forced {
+				h = in.forceClaim(t, time.Time{}).Handover
+			} else {
+				h = in.claim(t, time.Time{}, false)
+			}
 			tc.drive(t, in, h)
 			in.reopen(t)
 			if n, listed := in.awaiting(t), in.listsIssuer(t, busySendHelper); n != int64(boolCount(tc.intent)) || listed != tc.intent {
@@ -425,6 +503,39 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 				}
 			}
 			a, b := "held held readiness_unknown reserved", "held held earlier_message reserved"
+			if forced {
+				ref := *in.force
+				if tc.end == "call end" {
+					if e, err := in.s.EndBusySendForceCall(ctx, ref, time.Now()); err != nil || !e.Ended {
+						t.Fatalf("call end %+v, %v; want it recorded", e, err)
+					}
+				} else {
+					f := in.readForce(t, ref.ForceID)
+					c, err := in.s.ClaimBusySendHandover(ctx, in.claimRequest(time.UnixMilli(f.CallDeadlineMillis+1), false))
+					if want := 2 - boolCount(tc.intent); err != nil || c.Outcome != tc.claim || c.ReleasedExpired != want {
+						t.Fatalf("an eligible event after the call's deadline %+v, %v; want %s with %d released", c, err, tc.claim, want)
+					}
+				}
+				outcome := store.BusySendForceRefused
+				switch {
+				case tc.intent:
+					a, b, outcome = "issued sent_unconfirmed handover_in_progress reserved member forced", "held held handover_in_progress reserved",
+						store.BusySendForceHandedOver
+				case tc.claim == store.BusySendClaimMade:
+					a, b = "claimed held handover_in_progress reserved member", "claimed held handover_in_progress reserved member"
+				}
+				wantBusySendCustody(t, in.path, in.id, a, b)
+				if f := in.readForce(t, ref.ForceID); f.Outcome != outcome {
+					t.Errorf("force after its end %+v; want %s", f, outcome)
+				}
+				for k := range 2 {
+					unchanged(t, in, func() error { _, err := in.commit(ctx, h, k, in.revision(t, h)); return err }, func(err error) bool {
+						var guard *store.BusySendGuardError
+						return errors.As(err, &guard)
+					})
+				}
+				return
+			}
 			if tc.end == "expiry" {
 				r, err := in.s.ReleaseBusySendClaims(ctx, store.BusySendReleaseRequest{HandoverID: h.HandoverID, At: h.IssueDeadline.Add(time.Millisecond)})
 				if want := 2 - boolCount(tc.intent); err != nil || r.Released != want || r.Closed == tc.intent {

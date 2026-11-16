@@ -116,6 +116,7 @@ func TestBusySendCLIFlagsReachTheVerb(t *testing.T) {
 // a confirmed send's --delivery-request-id reaches the store byte for byte, and
 // its printed Result is the one get-delivery prints; the pair's repeat with
 // other text is ErrCantSend, id_conflict, with that Result in err_details.
+// --force and force-delivery reach the verbs (see below).
 func TestBusySendCLICoveredSend(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home, id, _ := seedRowOnSocket(t, store.StateWaiting) // a Claude row, covered as shipped
@@ -164,6 +165,62 @@ func TestBusySendCLICoveredSend(t *testing.T) {
 	if err := json.Unmarshal([]byte(stderr), &got); err != nil || !reflect.DeepEqual(got.Details, want) {
 		t.Errorf("id_conflict err_details = %#v (%v); want %#v", got.Details, err, want)
 	}
+
+	// SR-4.1: --force reaches the verb. The pair's repeat with it prints the
+	// Result with the repeat's own force attempt beside it, refused at once
+	// (the row records no route), which get-force prints found; with
+	// --force=false it prints the Result alone, and force-delivery's own
+	// attempt is the same short refusal.
+	forced, stderr, code := run(send("hi", slices.Concat(pair, []string{"--force"})...)...)
+	var withForce, plain map[string]json.RawMessage
+	if code != 0 || json.Unmarshal([]byte(forced), &withForce) != nil || json.Unmarshal([]byte(sent), &plain) != nil {
+		t.Fatalf("forced repeat exit = %d, stdout = %q, stderr = %q; want its Result and force_result", code, forced, stderr)
+	}
+	force := withForce["force_result"]
+	delete(withForce, "force_result")
+	if !reflect.DeepEqual(withForce, plain) {
+		t.Errorf("forced repeat = %s; want the send's Result %s with force_result beside it", forced, sent)
+	}
+	forceID := cliRefusedForce(t, force, "route_unavailable")
+	if got, stderr, code := run("get-force", "--force-id", forceID); code != 0 || got != `{"lookup":"found","force_result":`+string(force)+"}\n" {
+		t.Errorf("get-force exit = %d, stdout = %q, stderr = %q; want found with %s", code, got, stderr, force)
+	}
+	if got, stderr, code := run(send("hi", slices.Concat(pair, []string{"--force=false"})...)...); code != 0 || got != sent {
+		t.Errorf("repeat with --force=false exit = %d, stdout = %q, stderr = %q; want the Result alone %q", code, got, stderr, sent)
+	}
+	stdout, stderr, code = run("force-delivery", "--instance-id", id)
+	var standalone struct {
+		ForceResult json.RawMessage `json:"force_result"`
+	}
+	if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &standalone) != nil {
+		t.Fatalf("force-delivery exit = %d, stdout = %q, stderr = %q; want a force_result", code, stdout, stderr)
+	}
+	cliRefusedForce(t, standalone.ForceResult, "route_unavailable")
+}
+
+// cliRefusedForce checks a printed force_result refused, with reason, before
+// any hand-over, and returns its force_id: an AD-made lowercase UUID, started
+// and ended in one instant, carrying no pair or Result.
+func cliRefusedForce(t *testing.T, raw json.RawMessage, reason string) string {
+	t.Helper()
+	var force map[string]any
+	if err := json.Unmarshal(raw, &force); err != nil {
+		t.Fatalf("force_result %s: %v", raw, err)
+	}
+	forceID, _ := force["force_id"].(string)
+	started, _ := force["started_at"].(string)
+	if parsed, err := uuid.Parse(forceID); err != nil || parsed.String() != forceID {
+		t.Errorf("force_id = %q (%v); want a hyphenated lowercase UUID", forceID, err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, started); err != nil {
+		t.Errorf("started_at = %q: %v", started, err)
+	}
+	want := map[string]any{"force_id": forceID, "outcome": "refused", "reason": reason,
+		"started_at": started, "ended_at": started, "carried_pairs": []any{}, "carried_results": []any{}}
+	if !reflect.DeepEqual(force, want) {
+		t.Errorf("force_result = %v; want %v", force, want)
+	}
+	return forceID
 }
 
 // TestBusySendCLIAgentlessTemplateKeepsExplicitFalse: make-template with no
@@ -198,23 +255,10 @@ func TestBusySendCLIForceAndLookups(t *testing.T) {
 	var forced struct {
 		ForceResult json.RawMessage `json:"force_result"`
 	}
-	var force map[string]any
-	if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &forced) != nil || json.Unmarshal(forced.ForceResult, &force) != nil {
+	if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &forced) != nil {
 		t.Fatalf("force-delivery exit = %d, stdout = %q, stderr = %q; want a force_result", code, stdout, stderr)
 	}
-	forceID, _ := force["force_id"].(string)
-	started, _ := force["started_at"].(string)
-	if parsed, err := uuid.Parse(forceID); err != nil || parsed.String() != forceID {
-		t.Errorf("force_id = %q (%v); want a hyphenated lowercase UUID", forceID, err)
-	}
-	if _, err := time.Parse(time.RFC3339Nano, started); err != nil {
-		t.Errorf("started_at = %q: %v", started, err)
-	}
-	want := map[string]any{"force_id": forceID, "outcome": "refused", "reason": "agent_not_covered",
-		"started_at": started, "ended_at": started, "carried_pairs": []any{}}
-	if !reflect.DeepEqual(force, want) {
-		t.Errorf("force_result = %v; want %v", force, want)
-	}
+	forceID := cliRefusedForce(t, forced.ForceResult, "agent_not_covered")
 
 	unused := uuid.NewString()
 	for _, tc := range []struct {

@@ -165,7 +165,7 @@ export type {
   ListParams, ListResult,
   ListSubagentsParams, ListSubagentsResult, SubagentRecord,
   PauseParams, PauseResult,
-  ForceDeliveryParams, ForceDeliveryResult, ForceResult,
+  ForceDeliveryParams, ForceDeliveryResult, ForceResult, ForceOutcome, ForceReason,
   GetForceParams, GetForceResult,
   GetDeliveryParams, GetDeliveryResult, DeliveryResult, DeliveryWait, DeliveryPair, Lookup,
   AgentDefaultParams, SendMode,

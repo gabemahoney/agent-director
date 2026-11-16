@@ -136,8 +136,12 @@ const busySendPromptMemberSQL = `message_id IN (SELECT message_id FROM busy_send
 // published current covered Launch, its route identity and connection
 // generation, the provider session, the Turn Start counter and the permission
 // epoch are all still the captured ones, with no authoritative permission
-// hold and no standing pause fence. Its refusals are *BusySendGuardError.
-func checkBusySendJob(ctx context.Context, conn *sql.Conn, storeID string, ref BusySendPromptRef, now int64) (busySendHandoverRow, busySendIssueFacts, error) {
+// hold and no standing pause fence. A force's hand-over takes force's
+// authority instead of none (checkBusySendForceJob) and skips only the
+// readiness facts a force may skip (SR-4.2): the Turn Start counter, the
+// permission hold and the permission epoch. Its refusals are
+// *BusySendGuardError.
+func checkBusySendJob(ctx context.Context, conn *sql.Conn, storeID string, ref BusySendPromptRef, force *BusySendForceRef, now int64) (busySendHandoverRow, busySendIssueFacts, error) {
 	var f busySendIssueFacts
 	h, err := readBusySendHandover(ctx, conn, storeID, ref.HandoverID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -145,6 +149,10 @@ func checkBusySendJob(ctx context.Context, conn *sql.Conn, storeID string, ref B
 	}
 	if err != nil {
 		return h, f, err
+	}
+	forced := h.ForceID != ""
+	if forced != (force != nil) || forced && force.ForceID != h.ForceID {
+		return h, f, busySendGuard(BusySendGuardOwner, "", "the step's force authority is not the hand-over's")
 	}
 	var owner sql.NullString
 	if err := conn.QueryRowContext(ctx, `SELECT owner_handover_id FROM busy_conversations WHERE conversation_id = ?`,
@@ -158,6 +166,11 @@ func checkBusySendJob(ctx context.Context, conn *sql.Conn, storeID string, ref B
 		return h, f, busySendGuard(BusySendGuardPrompt, "", fmt.Sprintf("prompt %d is not the next prompt", ref.PromptIndex))
 	case now > h.IssueDeadline.UnixMilli():
 		return h, f, busySendGuard(BusySendGuardDeadline, BusySendWaitReadinessUnknown, "the job's issue deadline has passed")
+	}
+	if forced {
+		if err := checkBusySendForceJob(ctx, conn, storeID, *force, h, ref.PromptIndex, now); err != nil {
+			return h, f, err
+		}
 	}
 	f, err = readBusySendIssueFacts(ctx, conn, h.InstanceID)
 	if errors.Is(err, ErrSpawnNotFound) {
@@ -174,16 +187,56 @@ func checkBusySendJob(ctx context.Context, conn *sql.Conn, storeID string, ref B
 		return h, f, busySendGuard(BusySendGuardLaunch, f.launchWait(), "the captured Launch is not running")
 	case !f.destinationMatches(h.Destination):
 		return h, f, busySendGuard(BusySendGuardDestination, BusySendWaitReadinessUnknown, "the captured session, route or connection changed")
-	case f.turnStarts != h.ExpectedTurnStarts:
+	case !forced && f.turnStarts != h.ExpectedTurnStarts:
 		return h, f, busySendGuard(BusySendGuardTurn, BusySendWaitTurnRunning, "a turn started since the claim")
-	case f.permissionHold:
+	case !forced && f.permissionHold:
 		return h, f, busySendGuard(BusySendGuardPermission, BusySendWaitDialog, "an open permission request holds the agent")
-	case f.permissionEpoch != h.PermissionEpoch:
+	case !forced && f.permissionEpoch != h.PermissionEpoch:
 		return h, f, busySendGuard(BusySendGuardPermission, BusySendWaitReadinessUnknown, "the permission epoch changed since the claim")
 	case f.pauseFence:
 		return h, f, busySendGuard(BusySendGuardPause, BusySendWaitReadinessUnknown, "a standing pause claim fences the Launch")
 	}
 	return h, f, nil
+}
+
+// checkBusySendForceJob is a force prompt's own authority (SR-4.3, SR-3.4;
+// M1's ForceFencedAtCallEnd): the hand-over's force still runs under the
+// owner and revision force captured, its call's end is not recorded and its
+// recorded call deadline has not passed; and a later prompt goes only once
+// the prompt before it is admitted with no negative (its order is secured by
+// the cursor check). After the call's end or release nothing of the force
+// passes.
+func checkBusySendForceJob(ctx context.Context, conn *sql.Conn, storeID string, force BusySendForceRef, h busySendHandoverRow, index int, now int64) error {
+	fo, found, err := readBusySendForceRow(ctx, conn, storeID, force.ForceID)
+	if err != nil {
+		return err
+	}
+	if !found || fo.Outcome != BusySendForceRunning || fo.OwnerCallID != force.OwnerCallID || fo.Revision != force.Revision ||
+		fo.CallEndedAtMillis != 0 || now > fo.CallDeadlineMillis {
+		return busySendGuard(BusySendGuardOwner, "", "the force's call no longer owns its hand-over")
+	}
+	if index == 0 {
+		return nil
+	}
+	prev, err := readBusySendPrompt(ctx, conn, h.HandoverID, index-1)
+	if err != nil {
+		return err
+	}
+	if !prev.effectivelyAdmitted() {
+		return busySendGuard(BusySendGuardPrompt, "", "the force's earlier prompt has no recorded admission")
+	}
+	return nil
+}
+
+// busySendTurnRunning reports whether a row's raw state is inside a running
+// turn: working, or a Dialog or question the turn raised. A force's prompt
+// records it as its intent's running-turn fact (b.7si t1.7si.nc SR-1.4).
+func busySendTurnRunning(state string) bool {
+	switch state {
+	case StateWorking, StateCheckPermission, StateAskUser, StateNeedsIntelligence:
+		return true
+	}
+	return false
 }
 
 // advanceBusySendHandover compares and advances a hand-over's revision, once
@@ -211,11 +264,14 @@ type BusySendIssuer struct {
 }
 
 // BusySendIssueRequest asks to commit ref's issue, recording Issuer, when set,
-// as the Launch's process in its role. Now is the caller's clock, the one its
-// hand-over's deadlines were fixed on (nil: the wall clock); the commit reads
-// it inside its transaction, never before the wait for the write lock.
+// as the Launch's process in its role. Force is the running force's authority
+// for a force hand-over's prompt (ReadBusySendForcePrompt), nil for an
+// ordinary one. Now is the caller's clock, the one its hand-over's deadlines
+// were fixed on (nil: the wall clock); the commit reads it inside its
+// transaction, never before the wait for the write lock.
 type BusySendIssueRequest struct {
 	Ref    BusySendPromptRef
+	Force  *BusySendForceRef
 	Issuer *BusySendIssuer
 	Now    func() time.Time
 }
@@ -234,11 +290,19 @@ func (r BusySendIssueRequest) clock() time.Time {
 type BusySendIssue struct {
 	// Revision is the hand-over revision the job holds from here on.
 	Revision int64
-	// TurnStarts and RunningTurn are the hand-over's intent facts, captured
-	// in its first issue's transaction (b.7si t1.7si.nc SR-1.3, SR-1.4).
-	TurnStarts  int64
-	RunningTurn bool
-	IssuedAt    time.Time
+	// TurnStarts, RunningTurn and PermissionEpoch are this issue's own intent
+	// facts, read in its transaction: the row's Turn Start counter, whether
+	// the prompt goes into a running turn and the permission epoch (b.7si
+	// t1.7si.nc SR-1.3, SR-1.4; E5 decisions 2 and 9). The hand-over stores
+	// only its first issue's (intent_turn_starts, intent_running_turn and,
+	// for a force, permission_epoch); a later prompt's are returned here and
+	// not stored. An ordinary hand-over's later prompts pass only with the
+	// same turn and epoch, so theirs equal the stored ones; a force's may
+	// differ, since its guard skips those readiness facts.
+	TurnStarts      int64
+	RunningTurn     bool
+	PermissionEpoch int64
+	IssuedAt        time.Time
 }
 
 // CommitBusySendIssue persists ref's emission intent and captured
@@ -258,10 +322,16 @@ type BusySendIssue struct {
 // outcome, BusySendGuardIssuer otherwise; the agent role is never an
 // issuer's); the prompt's emission becomes issued, with its intent and issue
 // times; the hand-over's first issue records spawns.turn_starts and whether it
-// went into a running turn (false for a turn-end hand-over); and the Messages
+// went into a running turn (false for a turn-end hand-over, the row's actual
+// running turn for a force's, read in this transaction), and a force's first
+// issue its current permission epoch, while every issue returns its own
+// (BusySendIssue); and the Messages
 // become issued, take the hand-over's sticky race exposure, keep their
-// reservations and become non-Final sent_unconfirmed bound to the captured
-// Launch and session, since output may now reach the provider (SR-5.2). The
+// reservations, show forced for a force's hand-over (its start, SR-4.2) and
+// become non-Final sent_unconfirmed bound to the captured Launch and session,
+// since output may now reach the provider (SR-5.2). A force's prompt passes
+// across turn and permission changes since its claim or earlier prompt; every
+// other guard, its destination included, stands (checkBusySendJob). The
 // prompt row with emission issued and no admission or negative evidence is
 // the durable owned-input obligation the awaiting count and the turn-end
 // claim's AD-owned-work gate read (SR-3.3, SR-5.6; readBusySendAwaiting); it
@@ -277,7 +347,7 @@ func (s *Store) CommitBusySendIssue(ctx context.Context, req BusySendIssueReques
 	var out BusySendIssue
 	err := s.inDurableWriteTxContext(ctx, DefaultLockWait, func(ctx context.Context, conn *sql.Conn) error {
 		now := busySendAt(req.clock())
-		h, f, err := checkBusySendJob(ctx, conn, s.StoreID(), req.Ref, now)
+		h, f, err := checkBusySendJob(ctx, conn, s.StoreID(), req.Ref, req.Force, now)
 		if err != nil {
 			return err
 		}
@@ -303,24 +373,29 @@ func (s *Store) CommitBusySendIssue(ctx context.Context, req BusySendIssueReques
 			now, now, h.HandoverID, p.index, p.revision); err != nil {
 			return err
 		}
+		forced := h.ForceID != ""
 		running := h.Boundary != BusySendBoundaryTurnEnd
+		if forced {
+			running = busySendTurnRunning(f.state)
+		}
+		// A force hand-over's stored permission epoch becomes its first
+		// prompt's intent fact, as its turn facts do; an ordinary one's is the
+		// claim's, which its every issue must still match.
 		if out.Revision, err = advanceBusySendHandover(ctx, conn, h, `intent_at_ms = COALESCE(intent_at_ms, ?),
-		        intent_turn_starts = COALESCE(intent_turn_starts, ?), intent_running_turn = COALESCE(intent_running_turn, ?)`,
-			now, f.turnStarts, boolInt(running)); err != nil {
+		        intent_turn_starts = COALESCE(intent_turn_starts, ?), intent_running_turn = COALESCE(intent_running_turn, ?),
+		        permission_epoch = CASE WHEN forced = 1 AND intent_at_ms IS NULL THEN ? ELSE permission_epoch END`,
+			now, f.turnStarts, boolInt(running), f.permissionEpoch); err != nil {
 			return err
 		}
 		if _, err := conn.ExecContext(ctx, `UPDATE busy_send_messages SET place = 'issued', race_exposed = MAX(race_exposed, ?),
-		        result_class = CASE WHEN result_final = 0 THEN 'sent_unconfirmed' ELSE result_class END,
+		        forced = MAX(forced, ?), result_class = CASE WHEN result_final = 0 THEN 'sent_unconfirmed' ELSE result_class END,
 		        bound_launch_id = ?, bound_launch_token = ?, bound_session_id = ?, revision = revision + 1
 		    WHERE handover_id = ? AND place = 'claimed' AND `+busySendPromptMemberSQL,
-			boolInt(h.RaceExposed), h.Destination.LaunchID, nullableStringArg(h.Destination.LaunchToken),
+			boolInt(h.RaceExposed), boolInt(forced), h.Destination.LaunchID, nullableStringArg(h.Destination.LaunchToken),
 			nullableStringArg(h.Destination.SessionID), h.HandoverID, h.HandoverID, p.index); err != nil {
 			return err
 		}
-		if err := conn.QueryRowContext(ctx, `SELECT intent_turn_starts, intent_running_turn FROM busy_send_handovers
-		    WHERE handover_id = ?`, h.HandoverID).Scan(&out.TurnStarts, &out.RunningTurn); err != nil {
-			return err
-		}
+		out.TurnStarts, out.RunningTurn, out.PermissionEpoch = f.turnStarts, running, f.permissionEpoch
 		out.IssuedAt = time.UnixMilli(now).UTC()
 		return nil
 	})
@@ -454,7 +529,9 @@ type BusySendCompletionResult struct {
 // leave custody, their reservations end and their Results follow the
 // acceptance rules; the cursor moves to the next prompt and the hand-over
 // closes after its last. not_submitted returns the prompt's and every later
-// never-issued prompt's Messages to Held (M1's RecNs). Partial, uncertain and
+// never-issued prompt's Messages to Held (M1's RecNs); for a force's prompt it
+// no longer counts as issued, and a force that issued nothing else is refused
+// not_submitted (settleBusySendForceEvidence). Partial, uncertain and
 // unqualified complete output keep custody and the order barrier: nothing is
 // re-emitted, and only Launch End and exit evidence resolve them.
 func (s *Store) RecordBusySendCompletion(ctx context.Context, c BusySendCompletion) (BusySendCompletionResult, error) {
@@ -510,7 +587,9 @@ func (s *Store) RecordBusySendCompletion(ctx context.Context, c BusySendCompleti
 				err = applyBusySendOrder(ctx, conn, &h, p, c.Order, c.UnprovenBoundary, now)
 				out.Recorded = true
 			case c.Output == BusySendOutputNotSubmitted && p.negative == "":
-				out.Returned, err = returnBusySendNotSubmitted(ctx, conn, &h, p, now)
+				if out.Returned, err = returnBusySendNotSubmitted(ctx, conn, &h, p, now); err == nil {
+					err = settleBusySendForceEvidence(ctx, conn, s.StoreID(), h.HandoverID, now)
+				}
 				out.Recorded = true
 			}
 			if err != nil {
@@ -647,11 +726,11 @@ func returnBusySendNotSubmitted(ctx context.Context, conn *sql.Conn, h *busySend
 
 // returnBusySendHeld returns every Message where selects to Held: no current
 // membership (its busy_send_handover_members rows stay as its earlier
-// attempts), its reservation kept, its Result held (SR-2.1). Its caller
-// records the waits (refreshBusySendHeldWaits) once the hand-over's state is
-// settled.
+// attempts), its reservation kept, its Result held and no longer forced, since
+// its next hand-over decides that (SR-2.1, SR-4.2). Its caller records the
+// waits (refreshBusySendHeldWaits) once the hand-over's state is settled.
 func returnBusySendHeld(ctx context.Context, conn *sql.Conn, where string, args ...any) (int, error) {
-	r, err := conn.ExecContext(ctx, `UPDATE busy_send_messages SET place = 'held', handover_id = NULL, result_class = 'held',
+	r, err := conn.ExecContext(ctx, `UPDATE busy_send_messages SET place = 'held', handover_id = NULL, result_class = 'held', forced = 0,
 	        bound_launch_id = NULL, bound_launch_token = NULL, bound_session_id = NULL, revision = revision + 1
 	    WHERE result_final = 0 AND place IN ('claimed', 'issued') AND `+where, args...)
 	if err != nil {
@@ -712,7 +791,10 @@ type BusySendPromptEvidence struct {
 // nothing. Each fact is recorded once, so a repeated acceptance, admission or
 // receipt changes nothing the second time (M1 "repeats are inert"). An
 // admission changes no custody or Result (it never releases an order
-// barrier). On the live Launch, with the Messages still bound to this
+// barrier); it is recorded by the prompt's identity, whatever its Messages'
+// custody or Results, and the last missing admission of a pending force makes
+// it handed_over (settleBusySendForceEvidence). On the live Launch, with the
+// Messages still bound to this
 // hand-over: the first acceptance secures order as a completion's does; a
 // receipt secures order if needed and makes each non-Final confirmed Message
 // Final delivered_confirmed (exact_receipt) and each unconfirmed one Final
@@ -794,6 +876,11 @@ func recordBusySendEvidence(ctx context.Context, conn *sql.Conn, storeID string,
 			out.Recorded = true
 		}
 	}
+	if out.Recorded {
+		if err := settleBusySendForceEvidence(ctx, conn, storeID, h.HandoverID, now); err != nil {
+			return out, err
+		}
+	}
 	err = readBusySendCompletionState(ctx, conn, h.HandoverID, p.index, &out)
 	return out, err
 }
@@ -869,7 +956,8 @@ type BusySendRelease struct {
 // with persisted intent is never released here, whatever its job's fate. The
 // hand-over closes once nothing of it is in custody. An owner release with a
 // stale revision is a *BusySendGuardError; an expiry release before the
-// deadline changes nothing and is an error.
+// deadline, or of a force's hand-over at any time, changes nothing and is an
+// error.
 func (s *Store) ReleaseBusySendClaims(ctx context.Context, req BusySendReleaseRequest) (BusySendRelease, error) {
 	var out BusySendRelease
 	err := s.inDurableWriteTxContext(ctx, DefaultLockWait, func(ctx context.Context, conn *sql.Conn) error {
@@ -898,7 +986,10 @@ func releaseBusySendClaims(ctx context.Context, conn *sql.Conn, storeID, handove
 		return out, busySendGuard(BusySendGuardOwner, "", "the hand-over no longer belongs to this job")
 	case !h.Open:
 		return out, nil
-	case revision == 0 && now <= h.IssueDeadline.UnixMilli():
+	case revision == 0 && (h.ForceID != "" || now <= h.IssueDeadline.UnixMilli()):
+		// A force's claims belong to its call: only the force's own
+		// settlement (EndBusySendForceCall, ReleaseAbandonedBusySendForce,
+		// Launch End) returns them, never generic expiry.
 		return out, errBusySendNotExpired
 	}
 	r, err := conn.ExecContext(ctx, `UPDATE busy_send_prompts SET emission = 'released', released_at_ms = ?, revision = revision + 1
@@ -937,8 +1028,10 @@ func releaseBusySendClaims(ctx context.Context, conn *sql.Conn, storeID, handove
 // each non-Final one becomes Final sent_unconfirmed (wait_turn_raced,
 // confirmation_off or launch_ended) and is never carried. Messages this
 // Launch handed over still awaiting proof become Final the same way, and Held
-// Messages wait launch_ended. Every hand-over's revision advances, so no old
-// job persists intent or passes revalidation. Only exit evidence
+// Messages wait launch_ended. The Launch's open forces then finish
+// (endBusySendLaunchForces): a pending one failed launch_ended. Every
+// hand-over's revision advances, so no old job persists intent or passes
+// revalidation. Only exit evidence
 // (applyBusySendLaunchExit) lifts a fence; a store fence, the absence of a
 // passed revalidation, an ended or missing row or elapsed time never does.
 func applyBusySendLaunchEnd(ctx context.Context, conn *sql.Conn, storeID, launchID string, now int64) error {
@@ -982,6 +1075,9 @@ func applyBusySendLaunchEnd(ctx context.Context, conn *sql.Conn, storeID, launch
 		}
 	}
 	if err := finalizeBusySendSent(ctx, conn, BusySendReasonLaunchEnded, now, `place = 'closed' AND bound_launch_id = ?`, launchID); err != nil {
+		return err
+	}
+	if err := endBusySendLaunchForces(ctx, conn, storeID, launchID, now); err != nil {
 		return err
 	}
 	return setBusySendWaits(ctx, conn, BusySendWaitLaunchEnded, now, `conversation_id = ? AND place = 'held'`, conversation)

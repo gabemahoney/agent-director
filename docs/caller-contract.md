@@ -172,8 +172,11 @@ limits also count Messages handed over that could still return to Held, so
 staying under them does not promise the next send fits.
 `delivery.awaiting_turn_start` counts the current launch's hand-overs with an
 issued prompt but no admission or negative evidence, whatever their output
-state. It is zero after Launch End. Reading these fields hands nothing over,
-wakes nothing and changes no Result; `state`,
+state. It is zero after Launch End. `delivery.force` is the agent's running or
+pending [force](#stored-force-attempts), else the latest force that began a
+hand-over, as a `force_result`; null with neither. A refusal before any
+hand-over never replaces it. Reading these fields hands nothing over,
+wakes nothing, finishes no force and changes no Result; `state`,
 `process_liveness`, `displayed_state`, `confirmations` and the permission
 fields keep their own meanings.
 
@@ -205,11 +208,12 @@ A call decides from the coverage of the launch its options apply to:
   Claude Code conversations are covered; Codex, Cursor, Droid and OpenCode
   are not.
 
-Where it is `covered`, `send-keys` sends a Message, and `spawn`, reuse,
-`resume` and `make-template` store the [Agent Defaults](#agent-defaults). In
-this version `force` on `send-keys`, `force-delivery` and `pause` with
-`only_if_waiting: true` fail there with `ErrInternal`; nothing is stored,
-sent, typed or ended.
+Where it is `covered`, `send-keys` sends a Message, `force` and
+`force-delivery` [force its Held Messages](#stored-force-attempts), and
+`spawn`, reuse, `resume` and `make-template` store the
+[Agent Defaults](#agent-defaults). In this version `pause` with
+`only_if_waiting: true` fails there with `ErrInternal`; nothing is sent or
+ended.
 
 Where it is `not_covered`:
 
@@ -339,7 +343,8 @@ bytes.
 ### Message Results
 
 Every accepted send succeeds and returns its Message's Result, never
-`ErrSubmissionUnconfirmed`. A found `get-delivery` and an `id_conflict`
+`ErrSubmissionUnconfirmed`, except that a send with `force` can fail after
+its Message was accepted ([Stored force attempts](#stored-force-attempts)). A found `get-delivery` and an `id_conflict`
 refusal carry the same shape. Decide from `class` and `final`:
 
 | `class` | `final` | Meaning | Next step |
@@ -426,13 +431,114 @@ descendants; see [Family reporting limits](#family-reporting-limits).
 
 ### Stored force attempts
 
-`force-delivery` on a target whose current launch is `not_covered` succeeds. Its
-`force_result` has `outcome: "refused"`, `reason: "agent_not_covered"`,
-`ended_at` equal to `started_at` and `carried_pairs: []`. Each call stores its
-own attempt under a new `force_id` that agent-director makes; nothing is
-delivered, typed or changed. An empty id is `ErrInvalidFlags`, an unknown or
-deleted one `ErrSpawnNotFound`, and a store failure an error, never a refused
-force. A refused `send-keys` with `force` stores no force attempt.
+`force-delivery`, and `send-keys` with `force: true`, force a Covered Agent's
+Held Messages: they skip only the waits for turn end, a Dialog or compaction,
+and every other guard stands. **A force call blocks for up to about 15
+seconds**: 12 to issue and observe, then 3 to record its end. Budget for that
+wait, and set any call timeout above it. Each call stores its own attempt
+under a new `force_id` that agent-director makes, and `get-force` reads it
+again ([Durable lookups](#durable-lookups)).
+
+**`force-delivery`.** Every outcome, refused included, is a success. Only an
+empty id (`ErrInvalidFlags`), an unknown or deleted one (`ErrSpawnNotFound`)
+and a store failure are errors: `ErrStoreBusy` stored nothing, and any other
+is unnamed. An unnamed error that names a `force_id` means the attempt is
+stored: read it with `get-force`, and never treat it as refused. One without a
+`force_id` may still have stored a running attempt whose commit was not
+acknowledged: `get` or `status` then shows it as `delivery.force`. Either is
+finished as a call that never ends, below. On a target whose current launch
+is `not_covered` the attempt is `refused`, reason
+`agent_not_covered`, with `ended_at` equal to `started_at` and nothing
+carried; nothing is delivered, typed or changed.
+
+**`send-keys` with `force: true`.** The send is decided first, as any send. A
+refused or uncertain send forces nothing and stores no attempt. An accepted
+send returns its Message's [Result](#message-results) and a separate
+`force_result`. Each repeat of the pair with `force` makes a new attempt and
+never accepts the Message again; after the target's deletion, a repeat returns
+the owner's Result with a `refused` force, reason `record_deleted`. A force
+that fails after acceptance is an unnamed error: the Message stays accepted,
+so never send it again as a new Message; repeat the pair, or call
+`force-delivery`. Its force may still be stored and running, as above.
+`force: false` is an ordinary send.
+
+**`force_result`** has `force_id`, `outcome`, `reason`, `started_at`,
+`ended_at` (null while `pending` or `running`) and two arrays, `[]` when
+empty:
+
+- `carried_pairs`: the pair of every confirmed Message the force carries, in
+  accepted order.
+- `carried_results`: the current [Results](#message-results) of those whose
+  Result is still retained, in the same order, read with the force at one
+  moment. An expired Result drops out, so it can be shorter than
+  `carried_pairs`.
+
+An unconfirmed carried Message appears in neither. A force carries every
+Message Held when it starts and nothing accepted later; those wait as usual.
+A Message's `forced` turns true only when its own prompt is issued, and false
+again if it returns to Held.
+
+| `outcome` | `reason` | Meaning |
+|---|---|---|
+| `handed_over` | `admitted` | The agent's route took in every issued prompt. This is not Delivered: read each Message's Result. |
+| `pending` | `awaiting_admission` | An issued prompt's admission can still arrive. |
+| `refused` | below | This force handed nothing over. Existing custody is unchanged, and any Message it carried is Held again. |
+| `failed` | `admission_unknown` | The route showed an issued prompt will never be admitted, or can never show admission. |
+| `failed` | `launch_ended` | The launch ended before every issued prompt was admitted. |
+
+Before carrying anything, a force is refused for the first of these that
+applies:
+
+1. `agent_starting`: the current launch has not started.
+2. `launch_ended`: it has ended.
+3. `route_unavailable`: it has no delivery route.
+4. `handover_in_progress`: another force is running or pending, or an
+   ordinary hand-over still owns the agent's order or input.
+5. `no_held_messages`: nothing is Held.
+6. `earlier_message`: an earlier Message is still being handed over.
+7. `input_unresolved`: agent-director's earlier input still awaits evidence
+   that the agent took it (`awaiting_turn_start` above 0).
+
+So `agent_starting` and `launch_ended` apply even with nothing Held, and a
+pending force makes a later force `handover_in_progress`, not
+`no_held_messages`. A force that carried Messages is refused `not_issued`
+when it issued no prompt by its call's end, even if the launch ended
+meanwhile, or `not_submitted` when the route proved every issued prompt was
+not submitted; a missing admission is not that proof.
+
+**When the call ends**, carried Messages whose prompt was never issued return
+to Held in accepted order, and agent-director notifies the agent's route, so
+ordinary delivery follows with no later send. An issued Message keeps its
+hand-over and is never issued again, unless the route proves its prompt
+`not_submitted`: then its non-Final Messages, and those of any later
+never-issued prompt, return to Held, unforced, for ordinary delivery.
+agent-director returns them; that is no permission to resend. When a force
+fails, a Final Result stays, a Message with no issued prompt stays Held, and
+every other issued Message becomes Final `sent_unconfirmed`. Never resend it.
+
+**Pending** needs no running process and survives a restart, with confirmed
+delivery off too. It ends only when the route admits the last unadmitted
+prompt (`handed_over`), shows it will never be admitted (`failed`,
+`admission_unknown`) or proves it `not_submitted`, or the launch ends
+(`failed`, `launch_ended`). A `not_submitted` prompt no longer counts as
+issued, so the force ends `refused`, `not_submitted` if no issued prompt is
+left, or `handed_over` if every other was admitted; as above, a missing
+admission is not that proof. Reads, `sweep` and elapsed time never end it,
+though a Launch End they record does.
+A force's outcome and its Messages' Results are separate: a Message can be
+Final while its force is pending, and admission never changes a Final Result.
+
+**Running.** `get-force` and `delivery.force` show `outcome: "running"`,
+`reason: ""` and `ended_at: null` while the attempt's call has not returned.
+A force call's own `force_result` never does, and `running` says nothing
+about admission.
+
+**A call that never ends**, because its caller died or its end could not be
+recorded, leaves the force `running`. Once its recorded 15-second deadline has
+passed, the agent's next eligible event, or the next accepted `send-keys` or
+`force-delivery` for that agent, finishes it by the rules above; a force
+refused `agent_starting`, `launch_ended` or `route_unavailable` does not.
+Nothing retries in the background.
 
 ### Durable lookups
 
@@ -444,10 +550,13 @@ UTF-8. Any other form is `ErrInvalidFlags`.
 
 Each returns `lookup`: `found`, `unknown` (nothing stored) or
 `retention_expired`, with `force_result` or `result` null unless `found`. A
-refused force attempt is `found`; a pair no Message holds, including one only
-refused sends used and a native `delivery_request_id` sent without
-`caller_uuid`, is `unknown`. A found `result` is the [Result](#message-results)
-a repeat of the owner's send would return at that moment.
+force attempt, refused ones included, stays `found` until its own retention
+ends, even after a carried Message's Result has expired. A pair no Message
+holds, including one only refused sends used and a native
+`delivery_request_id` sent without `caller_uuid`, is `unknown`. A found
+`result` is the [Result](#message-results) a repeat of the owner's send would
+return at that moment; a found `force_result` is the
+[attempt as stored now](#stored-force-attempts).
 
 They read stored facts only: they start no work, run no
 [recovery checks](#bounded-recovery-on-state-reads) and probe no agent, tmux
@@ -468,6 +577,9 @@ and types and resends nothing:
   reason `wait_turn_raced` or `confirmation_off` where they apply, else
   `launch_ended`. Never resend it.
 - A final Result never changes.
+- A running or pending [force](#stored-force-attempts) ends: `refused`,
+  `not_issued` if it issued nothing, `handed_over` if every issued prompt was
+  admitted, else `failed`, `launch_ended`. No force carries to a new launch.
 
 An agent marked `missing` may still be running. If it reports in again, its
 old launch's delivery authority stays fenced; Held Messages still wait

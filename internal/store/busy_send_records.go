@@ -463,6 +463,26 @@ type BusySendForce struct {
 	// CarriedPairs are the confirmed pairs of the carried Messages, in carried
 	// order; unconfirmed carried Messages have none to show.
 	CarriedPairs []BusySendPair
+	// CarriedResults are the current Results of the confirmed carried
+	// Messages whose Result is still retained, in carried order, read in the
+	// force's own read transaction. A member whose Result expired keeps its
+	// pair in CarriedPairs and has no entry here, so this can be shorter;
+	// nothing is made up for it and its retention is not extended.
+	CarriedResults []BusySendResult
+}
+
+// BusySendForceRef names a running force and the authority its holder
+// captured: the owning call and the force's revision. A prompt's issue commit
+// (BusySendIssueRequest.Force) and the call's end (EndBusySendForceCall)
+// compare all three, so a call that lost its force (a release, Launch End or
+// a not-submitted finished it) can issue nothing and record no end. Evidence
+// takes none of it: an admission, negative or not-submitted is matched to the
+// issued prompt and its destination, and still settles the force after its
+// call has ended.
+type BusySendForceRef struct {
+	ForceID     string
+	OwnerCallID string
+	Revision    int64
 }
 
 // BusySendForceLookup is a read of one force attempt by force_id: Lookup is

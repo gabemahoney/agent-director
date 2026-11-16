@@ -104,9 +104,19 @@ func (r *fakeRoute) prepared() []busysend.Prepared {
 type storeSeam struct {
 	*store.Store
 	observe func(string, context.Context)
+	// forceRead, when set, runs as a forced wake reads its prompt, so the
+	// read can consume injected time.
+	forceRead func()
 
 	mu     sync.Mutex
 	issues []store.BusySendIssue
+}
+
+func (s *storeSeam) ReadBusySendForcePrompt(ctx context.Context, instanceID string) (store.BusySendForcePrompt, error) {
+	if s.forceRead != nil {
+		s.forceRead()
+	}
+	return s.Store.ReadBusySendForcePrompt(ctx, instanceID)
 }
 
 func (s *storeSeam) see(name string, ctx context.Context) {
@@ -807,5 +817,318 @@ func TestCoordinatorHonorsRouteWaits(t *testing.T) {
 				t.Errorf("next eligible event = %+v, %v; want the Message issued", out, err)
 			}
 		})
+	}
+}
+
+// forceClaim claims a force call on e's agent at the clock's now, under the
+// route's measure, with the API call's 12 s active phase and 3 s cleanup.
+func (e *coordEnv) forceClaim(t *testing.T) store.BusySendForceClaim {
+	t.Helper()
+	l, err := e.st.GetBusySendPublishedLaunch(e.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := e.st.ClaimBusySendForce(context.Background(), store.BusySendForceClaimRequest{InstanceID: e.id, Launch: l,
+		ForceID: uuid.NewString(), OwnerCallID: uuid.NewString(), Measure: e.route.Measure, ActiveBudget: 12 * time.Second,
+		CleanupBudget: 3 * time.Second, At: e.clock.Now()})
+	if err != nil || c.Handover == nil {
+		t.Fatalf("force claim %+v, %v; want a running force", c, err)
+	}
+	return c
+}
+
+// forceBudgets are a forced wake's own phases, wider than the force's.
+var forceBudgets = busysend.Budgets{Issue: time.Minute, Job: 2 * time.Minute, Cleanup: 30 * time.Second}
+
+// wake runs one forced wake's finite invocation on e.clock.
+func (e *coordEnv) wake(ctx context.Context) (busysend.Outcome, error) {
+	c := busysend.Coordinator{Store: e.seam, Route: e.route, Budgets: forceBudgets, Now: e.clock.Now}
+	return c.DeliverForcePrompt(ctx, busysend.Event{InstanceID: e.id, Boundary: store.BusySendBoundaryForce})
+}
+
+// force reads forceID as get-force does.
+func (e *coordEnv) force(t *testing.T, forceID string) store.BusySendForce {
+	t.Helper()
+	l, err := e.st.ReadBusySendForce(forceID)
+	if err != nil || l.ForceResult == nil {
+		t.Fatalf("ReadBusySendForce(%s) = %+v, %v", forceID, l, err)
+	}
+	return *l.ForceResult
+}
+
+// TestCoordinatorDrivesForcePrompts (SR-3.4, SR-4.3; M2 P-C4.3 and P-C4.6 at
+// the intent and output seam): each forced wake issues at most one frozen
+// prompt of the running force. At its only output the prompt's intent is
+// durable and its Messages show forced; the remainder stays claimed by the
+// force after the wake, and a repeated wake issues nothing. The next prompt
+// issues only once the first has both its order secured and its admission
+// recorded, each alone being insufficient, to the original destination under
+// the original issue deadline.
+func TestCoordinatorDrivesForcePrompts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		order, admit bool
+	}{
+		{"admission without order", false, true},
+		{"order without admission", true, false},
+		{"admission and order", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newCoordEnv(t)
+			e.admit(t, "a", strings.Repeat("a", 5000))
+			e.admit(t, "b", strings.Repeat("b", 5000))
+			c := e.forceClaim(t)
+			first := delivered
+			if !tc.order {
+				first = busysend.Disposition{Output: store.BusySendOutputComplete, More: true}
+			}
+			e.route.issue = func(ctx context.Context, p busysend.Prepared) busysend.Disposition {
+				h, err := e.st.ReadBusySendHandover(ctx, p.HandoverID)
+				if err != nil {
+					t.Errorf("ReadBusySendHandover at output: %v", err)
+					return first
+				}
+				if got := h.Prompts[p.PromptIndex]; got.Emission != store.BusySendEmissionIssued || got.Transport != "" ||
+					!e.result(t, "a").Forced {
+					t.Errorf("at prompt %d's output its record is %+v, a forced %t; want issued with nothing observed, forced",
+						p.PromptIndex, got, e.result(t, "a").Forced)
+				}
+				return first
+			}
+			ctx := context.Background()
+			out, err := e.wake(ctx)
+			if err != nil || out.Kind != busysend.OutcomeIssued || len(out.Issued) != 1 || len(e.route.prepared()) != 1 ||
+				e.places(t)[1] != "claimed" {
+				t.Fatalf("first wake = %+v, %v with %d prompts issued, custody %v; want prompt 0 alone, b still claimed",
+					out, err, len(e.route.prepared()), e.places(t))
+			}
+			e.route.issue = nil
+			if again, err := e.wake(ctx); err != nil || again.Kind != busysend.OutcomeNoIssue || len(e.route.prepared()) != 1 {
+				t.Fatalf("repeated wake = %+v, %v; want nothing issued", again, err)
+			}
+			if tc.admit {
+				e.sight(t, c.Handover.HandoverID, 1)
+			}
+			next, err := e.wake(ctx)
+			issued := e.route.prepared()
+			if !tc.order || !tc.admit {
+				if err != nil || next.Kind != busysend.OutcomeNoIssue || len(issued) != 1 {
+					t.Errorf("wake with order %t, admission %t = %+v, %v with %d issued; want nothing more", tc.order, tc.admit, next, err, len(issued))
+				}
+				return
+			}
+			if err != nil || next.Kind != busysend.OutcomeIssued || len(issued) != 2 || issued[1].HandoverID != c.Handover.HandoverID ||
+				issued[1].PromptIndex != 1 || issued[1].Destination != e.dest || !issued[1].IssueDeadline.Equal(e.start.Add(12*time.Second)) {
+				t.Fatalf("wake after order and admission = %+v, %v, issued %+v; want prompt 1 to %+v under the original deadline",
+					next, err, issued, e.dest)
+			}
+			if last, err := e.wake(ctx); err != nil || last.Kind != busysend.OutcomeNoIssue || len(e.route.prepared()) != 2 {
+				t.Errorf("wake with nothing left = %+v, %v; want no issue", last, err)
+			}
+		})
+	}
+}
+
+// TestCoordinatorClipsForcePhases (SR-3.2; E5 Main Agent decision 1): a
+// forced wake's phases are its own budgets clipped to the force's original
+// recorded deadlines, never renewed: the route's authority and the issue
+// commit end by the 12 s active phase, and the output and the completion
+// record by the 15 s call deadline (code review y2 F1). Time the prompt's
+// read consumes comes out of them too (test review y2 F2): a wake near the
+// active phase's end gets only what remains after its read, and one whose
+// read outlasts the active phase calls nothing.
+func TestCoordinatorClipsForcePhases(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		offset, read time.Duration // the wake's clock after the force's claim, and what its prompt read takes
+		issue, job   time.Duration // what remains of the force's phases after the read; 0 for no call
+	}{
+		{"a wake at the call's entry", 0, 5 * time.Second, 7 * time.Second, 10 * time.Second},
+		{"a wake near the active phase's end", 10 * time.Second, time.Second, time.Second, 4 * time.Second},
+		{"a read that outlasts the active phase", 11 * time.Second, time.Second + time.Millisecond, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newCoordEnv(t)
+			e.admit(t, "a", strings.Repeat("a", 5000))
+			e.admit(t, "b", strings.Repeat("b", 5000))
+			c := e.forceClaim(t)
+			if h := c.Handover; !h.IssueDeadline.Equal(e.start.Add(12*time.Second)) || !h.JobDeadline.Equal(e.start.Add(15*time.Second)) ||
+				c.Force.CallDeadlineMillis != e.start.Add(15*time.Second).UnixMilli() {
+				t.Fatalf("force %+v with hand-over deadlines %v, %v; want 12 s and 15 s after its entry", c.Force, h.IssueDeadline, h.JobDeadline)
+			}
+			e.clock.Advance(tc.offset)
+			var mu sync.Mutex
+			var authorizeAt time.Time
+			seen := map[string][]time.Time{}
+			observe := func(name string, ctx context.Context) {
+				d, _ := ctx.Deadline()
+				mu.Lock()
+				defer mu.Unlock()
+				if name == "authorize" {
+					authorizeAt = time.Now()
+				}
+				seen[name] = append(seen[name], d)
+			}
+			e.route.observe, e.seam.observe = observe, observe
+			e.seam.forceRead = func() { e.clock.Advance(tc.read) }
+			entry := time.Now()
+			out, err := e.wake(context.Background())
+			if tc.issue == 0 {
+				if err != nil || out.Kind != busysend.OutcomeNoIssue || len(seen) != 0 || !slices.Equal(e.places(t), []string{"claimed", "claimed"}) {
+					t.Errorf("wake whose read outlasts the active phase = %+v, %v, calls %v; want no call and both Messages still claimed",
+						out, err, seen)
+				}
+				return
+			}
+			if err != nil || out.Kind != busysend.OutcomeIssued {
+				t.Fatalf("wake = %+v, %v; want prompt 0 issued", out, err)
+			}
+			if issued := e.route.prepared(); !issued[0].IssueDeadline.Equal(c.Handover.IssueDeadline) {
+				t.Errorf("prompt 0's issue deadline %v; want the force's original %v", issued[0].IssueDeadline, c.Handover.IssueDeadline)
+			}
+			for _, phase := range []struct {
+				calls  []string
+				budget time.Duration
+			}{
+				{[]string{"authorize", "issue commit"}, tc.issue},
+				{[]string{"output"}, tc.job},
+				{[]string{"completion"}, tc.job},
+			} {
+				low, high := entry.Add(phase.budget), authorizeAt.Add(phase.budget)
+				for _, call := range phase.calls {
+					if len(seen[call]) != 1 {
+						t.Errorf("%s ran %d times; want once", call, len(seen[call]))
+					}
+					for _, d := range seen[call] {
+						if d.Before(low) || d.After(high) {
+							t.Errorf("%s ran with deadline %v; want one fixed at entry, in [%v, %v]", call, d, low, high)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestCoordinatorForceCallEndFence (SR-4.3, SR-2.4; M1 G3
+// ForceFencedAtCallEnd; E2 decision 9): a wake holding the force's prompt
+// cannot persist intent once the call has ended, so nothing is output and the
+// call's end has returned the Messages to Held. A call end during an
+// authorized output leaves that output's completion its meaning: it secures
+// order and the pending force keeps waiting for admission. An unacknowledged
+// issue commit grants no output and leaves its landed intent in custody.
+func TestCoordinatorForceCallEndFence(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		endAt   string // "authorize" or "output": where the call ends; "" for none
+		lostAck bool
+		kind    busysend.OutcomeKind
+		issued  int
+		places  []string
+		outcome store.BusySendForceOutcome
+	}{
+		{"the call ends before the issue commit", "authorize", false, busysend.OutcomeStale, 0, []string{"held", "held"},
+			store.BusySendForceRefused},
+		{"the call ends during output", "output", false, busysend.OutcomeIssued, 1, []string{"closed", "held"},
+			store.BusySendForcePending},
+		{"the issue COMMIT unacknowledged", "", true, busysend.OutcomeUncertain, 0, []string{"issued", "claimed"},
+			store.BusySendForceRunning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newCoordEnv(t)
+			e.admit(t, "a", strings.Repeat("a", 5000))
+			e.admit(t, "b", strings.Repeat("b", 5000))
+			c := e.forceClaim(t)
+			end := func() {
+				if got, err := e.st.EndBusySendForceCall(context.Background(), c.Ref, e.clock.Now()); err != nil || !got.Ended {
+					t.Errorf("call end %+v, %v; want it recorded", got, err)
+				}
+			}
+			var commit atomic.Bool
+			e.route.authorize = func(context.Context, busysend.Prepared) busysend.Authority {
+				if tc.endAt == "authorize" {
+					end()
+				}
+				commit.Store(tc.lostAck)
+				return busysend.Authority{Issuer: helper}
+			}
+			e.route.issue = func(context.Context, busysend.Prepared) busysend.Disposition {
+				if tc.endAt == "output" {
+					end()
+				}
+				return delivered
+			}
+			stop, err := store.ObserveSQLiteForTest(e.st, func(d driver.Driver) driver.Driver {
+				return sqliteobserve.Wrap(d, sqliteobserve.Hooks{AfterCommit: func(context.Context) error {
+					if commit.CompareAndSwap(true, false) {
+						return errors.New("the issue commit's acknowledgement was lost")
+					}
+					return nil
+				}})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := e.wake(context.Background())
+			if err := stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := e.places(t); err != nil || out.Kind != tc.kind || len(e.route.prepared()) != tc.issued || !slices.Equal(got, tc.places) {
+				t.Fatalf("wake = %+v, %v: %d issued, custody %v; want %s, %d issued, custody %v",
+					out, err, len(e.route.prepared()), got, tc.kind, tc.issued, tc.places)
+			}
+			if f := e.force(t, c.Force.ForceID); f.Outcome != tc.outcome {
+				t.Errorf("force %+v; want %s", f, tc.outcome)
+			}
+		})
+	}
+}
+
+// TestCoordinatorReleasesAbandonedForce (SR-3.2, SR-4.3; E5 Main Agent
+// decisions 7 and 8; M1 G3 ForceEndReleases): an eligible event finishes a
+// force whose call never ended, once its recorded deadline has strictly
+// passed, even while the route then waits: nothing is issued, the issued
+// Message keeps its custody and stays forced, and the never-issued one is Held
+// again, no longer forced, waiting the route's cause. Once the route is
+// eligible, ordinary delivery hands it over in a new hand-over.
+func TestCoordinatorReleasesAbandonedForce(t *testing.T) {
+	t.Parallel()
+	e := newCoordEnv(t)
+	e.admit(t, "a", strings.Repeat("a", 5000))
+	e.admit(t, "b", strings.Repeat("b", 5000))
+	c := e.forceClaim(t)
+	ctx := context.Background()
+	if out, err := e.wake(ctx); err != nil || out.Kind != busysend.OutcomeIssued {
+		t.Fatalf("forced wake = %+v, %v; want prompt 0 issued", out, err)
+	}
+	e.route.elig.Wait = store.BusySendWaitTurnRunning
+	e.clock.Advance(15 * time.Second)
+	if out, err := e.deliver(ctx); err != nil || out.Kind != busysend.OutcomeNoIssue || out.Wait != store.BusySendWaitTurnRunning ||
+		e.force(t, c.Force.ForceID).Outcome != store.BusySendForceRunning || !slices.Equal(e.places(t), []string{"closed", "claimed"}) {
+		t.Fatalf("event at the call's deadline = %+v, %v, custody %v; want the force still running", out, err, e.places(t))
+	}
+	e.clock.Advance(time.Millisecond)
+	out, err := e.deliver(ctx)
+	if f := e.force(t, c.Force.ForceID); err != nil || out.Kind != busysend.OutcomeNoIssue || out.Wait != store.BusySendWaitTurnRunning ||
+		len(e.route.prepared()) != 1 || f.Outcome != store.BusySendForcePending || f.CallEndedAtMillis != 0 {
+		t.Fatalf("event just after the deadline = %+v, %v, force %+v; want the force pending with no call end, nothing issued", out, err, f)
+	}
+	if a, b := e.result(t, "a"), e.result(t, "b"); !a.Forced || b.Forced || b.Class != store.BusySendClassHeld || b.Wait == nil ||
+		b.Wait.Reason != store.BusySendWaitTurnRunning {
+		t.Errorf("Results a %+v, b %+v; want a forced, b Held unforced waiting turn_running", a, b)
+	}
+	e.sight(t, c.Handover.HandoverID, 1)
+	e.route.elig.Wait = ""
+	if out, err := e.deliver(ctx); err != nil || out.Kind != busysend.OutcomeIssued || out.HandoverID == c.Handover.HandoverID {
+		t.Fatalf("eligible event = %+v, %v; want b issued in a new hand-over", out, err)
+	}
+	if b := e.result(t, "b"); !b.Final || b.Forced || e.force(t, c.Force.ForceID).Outcome != store.BusySendForceHandedOver {
+		t.Errorf("b %+v; want Final by ordinary delivery, unforced, and the force handed_over", b)
 	}
 }

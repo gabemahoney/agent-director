@@ -436,10 +436,10 @@ export class SubprocessClient {
   }
 
   /**
-   * forceDelivery — force an agent's Held Messages now. When the row's published current Launch is
-   * recorded not_covered it resolves with force_result refused, reason agent_not_covered, stored
-   * under its force_id; a Launch recorded covered rejects with this version's unavailable error
-   * (ErrInternal) and stores nothing.
+   * forceDelivery — force an agent's Held Messages now, past the waits for turn end, a Dialog or
+   * compaction. It resolves within about 15 seconds with this attempt's force_result, stored under
+   * its force_id: handed_over, pending, refused or failed, each with its reason. When the row's
+   * published current Launch is recorded not_covered it is refused, reason agent_not_covered.
    */
   async forceDelivery(params: ForceDeliveryParams): Promise<ForceDeliveryResult> {
     this.#assertOpen();

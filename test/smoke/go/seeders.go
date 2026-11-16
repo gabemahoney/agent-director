@@ -174,7 +174,7 @@ type seederSpec struct {
 	// RowAgent, when non-empty, is the agent of the seeded row (seedResumable,
 	// seedLiveSession, seedPause) for a verb whose input busy send's coverage
 	// changes: busy send covers Claude, whose send-keys admits a Message, whose
-	// pause is keyless and whose force is refused before anything is stored,
+	// pause is keyless and whose force is a finite call of up to 15 seconds,
 	// so send-keys, pause, force-delivery and get-force run on Codex rows,
 	// where their typed or stored results still apply. Unlike Agent, it adds no
 	// launch checks.

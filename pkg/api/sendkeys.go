@@ -214,24 +214,35 @@ type SendKeysResult struct {
 	RecordSHA256 string `json:"record_sha256,omitempty"`
 	// Delivery is a Covered Agent's accepted send's current Result, the same
 	// Result get-delivery reads for its pair; nil for every other send. When
-	// set, the JSON result is Delivery alone, and the fields above repeat its
-	// caller_uuid, class, request_id, outcome, session_id, record_id and
+	// set, the JSON result is Delivery's fields, and the fields above repeat
+	// its caller_uuid, class, request_id, outcome, session_id, record_id and
 	// record_sha256 for Go callers.
 	Delivery *DeliveryResult `json:"-"`
+	// Force is the force_result of an accepted send with force true, its own
+	// attempt beside the Message's Result (SR-4.1); nil otherwise. When set,
+	// the JSON result adds it to Delivery's fields as force_result.
+	Force *ForceResult `json:"-"`
 }
 
-// MarshalJSON writes Delivery when it is set, and the fields above otherwise,
-// so an uncovered send's result is unchanged.
+// coveredSendJSON is a Covered Agent's send result as JSON: the Message's
+// Result's fields, with force_result beside them for a send with force.
+type coveredSendJSON struct {
+	DeliveryResult
+	ForceResult *ForceResult `json:"force_result,omitempty"`
+}
+
+// MarshalJSON writes Delivery, with Force as force_result, when it is set,
+// and the fields above otherwise, so an uncovered send's result is unchanged.
 func (r SendKeysResult) MarshalJSON() ([]byte, error) {
 	if r.Delivery != nil {
-		return json.Marshal(r.Delivery)
+		return json.Marshal(coveredSendJSON{DeliveryResult: *r.Delivery, ForceResult: r.Force})
 	}
 	type plain SendKeysResult
 	return json.Marshal(plain(r))
 }
 
 // UnmarshalJSON reads either form MarshalJSON writes: an object with a class
-// is a Covered Agent's Result.
+// is a Covered Agent's Result, with its force_result when it has one.
 func (r *SendKeysResult) UnmarshalJSON(data []byte) error {
 	type plain SendKeysResult
 	var out plain
@@ -245,11 +256,11 @@ func (r *SendKeysResult) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if probe.Class != nil {
-		var d DeliveryResult
-		if err := json.Unmarshal(data, &d); err != nil {
+		var covered coveredSendJSON
+		if err := json.Unmarshal(data, &covered); err != nil {
 			return err
 		}
-		out.Delivery = &d
+		out.Delivery, out.Force = &covered.DeliveryResult, covered.ForceResult
 	}
 	*r = SendKeysResult(out)
 	return nil
@@ -1354,6 +1365,17 @@ func isInteractiveState(state string) bool {
 //   - [ErrStoreBusy]: the store's lock or connection was not taken in time;
 //     nothing was stored. A COMMIT whose outcome is unknown is an unnamed
 //     error: repeat the same pair, or get-delivery, to learn the Result.
+//
+// With Force true, an accepted send, or a repeat of an owned pair, then makes
+// its own force attempt, as ForceDelivery does, and its result adds that
+// attempt's force_result (SendKeysResult.Force) beside the Message's Result;
+// a refused send forces nothing, each repeat forces again, and a repeat whose
+// target's record was deleted gets a stored refused force, reason
+// record_deleted. The newly accepted Message's ordinary wake waits until the
+// force has had its turn. A force that fails after the Message was accepted
+// is an unnamed error, never a refusal or ErrStoreBusy: the Message stays
+// accepted. Any other accepted send or repeat to a Covered Agent also
+// finishes the agent's force whose call never reached its end.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs; pending Claude fallback on

@@ -94,28 +94,42 @@ func readBusySendPairAbsent(ctx context.Context, q busySendLaunchSQL, storeID st
 	return nil
 }
 
-// readBusySendMessageResult reads the current Result of the retained Message
-// messageID, with its confirmed pair when it has one (an unconfirmed Message
-// has none). It is the one projection of a stored Result: a send's response,
-// a conflict's owner Result and get-delivery read it alike, so all agree at
-// the same durable state. PartialTransport comes from the Message's latest
-// hand-over attempt, so the compatibility outcome need not guess it.
-func readBusySendMessageResult(ctx context.Context, q busySendLaunchSQL, storeID, messageID string) (BusySendResult, error) {
+// busySendResultSelect is the one projection of a stored Result
+// (scanBusySendResult): a retained Message m with its confirmed pair p (NULL
+// for an unconfirmed one), the pair e of the earlier Message it waits behind,
+// if any, and the transport fact of the prompt of its latest hand-over
+// attempt, with that fact's time. A reader appends its own WHERE on m.
+const busySendResultSelect = `SELECT p.caller_uuid, p.delivery_request_id, m.instance_id, m.send_mode,
+        m.result_class, m.result_final, m.result_reason, m.forced, m.wait_reason, m.wait_since_ms,
+        e.caller_uuid, e.delivery_request_id, m.bound_launch_token, m.bound_session_id, m.evidence_kind, m.record_id,
+        m.record_sha256, m.accepted_at_ms, m.queued_at_ms, m.handed_over_at_ms, m.delivered_at_ms, m.final_at_ms,
+        (SELECT lp.transport FROM busy_send_handover_members lhm
+            JOIN busy_send_handovers lh ON lh.handover_id = lhm.handover_id
+            JOIN busy_send_prompts lp ON lp.handover_id = lhm.handover_id AND lp.prompt_index = lhm.prompt_index
+            WHERE lhm.message_id = m.message_id ORDER BY lh.handover_seq DESC LIMIT 1),
+        (SELECT lp.transport_at_ms FROM busy_send_handover_members lhm
+            JOIN busy_send_handovers lh ON lh.handover_id = lhm.handover_id
+            JOIN busy_send_prompts lp ON lp.handover_id = lhm.handover_id AND lp.prompt_index = lhm.prompt_index
+            WHERE lhm.message_id = m.message_id ORDER BY lh.handover_seq DESC LIMIT 1)
+    FROM busy_send_messages m LEFT JOIN busy_send_results p ON p.message_id = m.message_id
+    LEFT JOIN busy_send_results e ON e.message_id = m.wait_earlier_message_id`
+
+// busySendScanner is a *sql.Row or *sql.Rows positioned on a row.
+type busySendScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanBusySendResult scans one busySendResultSelect row into its Result.
+func scanBusySendResult(row busySendScanner) (BusySendResult, error) {
 	var r BusySendResult
 	var mode string
-	var caller, request, class, reason, waitReason, earlier, token, session, evidence, recordID, recordSHA sql.NullString
-	var waitSince, queued, handedOver, delivered, final sql.NullInt64
-	err := q.QueryRowContext(ctx, `SELECT p.caller_uuid, p.delivery_request_id, m.instance_id, m.send_mode,
-	        m.result_class, m.result_final, m.result_reason, m.forced, m.wait_reason, m.wait_since_ms,
-	        m.wait_earlier_message_id, m.bound_launch_token, m.bound_session_id, m.evidence_kind, m.record_id,
-	        m.record_sha256, m.accepted_at_ms, m.queued_at_ms, m.handed_over_at_ms, m.delivered_at_ms, m.final_at_ms
-	    FROM busy_send_messages m LEFT JOIN busy_send_results p ON p.message_id = m.message_id
-	    WHERE m.message_id = ? AND m.store_id = ? AND m.retention = 'retained'`, messageID, storeID).Scan(
-		&caller, &request, &r.InstanceID, &mode, &class, &r.Final, &reason, &r.Forced, &waitReason, &waitSince,
-		&earlier, &token, &session, &evidence, &recordID, &recordSHA,
-		&r.AcceptedAtMillis, &queued, &handedOver, &delivered, &final)
-	if err != nil {
-		return r, fmt.Errorf("store: read busy-send Message Result: %w", err)
+	var caller, request, class, reason, waitReason, earlierCaller, earlierRequest, token, session, evidence, recordID,
+		recordSHA, transport sql.NullString
+	var waitSince, queued, handedOver, delivered, final, transportAt sql.NullInt64
+	if err := row.Scan(&caller, &request, &r.InstanceID, &mode, &class, &r.Final, &reason, &r.Forced, &waitReason, &waitSince,
+		&earlierCaller, &earlierRequest, &token, &session, &evidence, &recordID, &recordSHA,
+		&r.AcceptedAtMillis, &queued, &handedOver, &delivered, &final, &transport, &transportAt); err != nil {
+		return r, err
 	}
 	r.Pair = BusySendPair{CallerUUID: caller.String, DeliveryRequestID: request.String}
 	r.SendMode, r.Class, r.Reason = BusySendMode(mode), BusySendResultClass(class.String), reason.String
@@ -131,26 +145,32 @@ func readBusySendMessageResult(ctx context.Context, q busySendLaunchSQL, storeID
 	}
 	if waitReason.Valid {
 		r.Wait = &BusySendWait{Reason: BusySendWaitReason(waitReason.String), SinceMillis: waitSince.Int64}
-		if earlier.Valid {
-			if r.Wait.Earlier, err = readBusySendEarlierPair(ctx, q, earlier.String); err != nil {
-				return r, err
-			}
+		if earlierCaller.Valid {
+			// An unconfirmed earlier Message has no pair to show.
+			r.Wait.Earlier = &BusySendPair{CallerUUID: earlierCaller.String, DeliveryRequestID: earlierRequest.String}
 		}
-	}
-	var transport sql.NullString
-	var transportAt sql.NullInt64
-	err = q.QueryRowContext(ctx, `SELECT p.transport, p.transport_at_ms FROM busy_send_handover_members hm
-	    JOIN busy_send_handovers h ON h.handover_id = hm.handover_id
-	    JOIN busy_send_prompts p ON p.handover_id = hm.handover_id AND p.prompt_index = hm.prompt_index
-	    WHERE hm.message_id = ? ORDER BY h.handover_seq DESC LIMIT 1`, messageID).Scan(&transport, &transportAt)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return r, fmt.Errorf("store: read busy-send Message transport: %w", err)
 	}
 	// A Final Result projects only a fact recorded by its Final time; a later
 	// fact is stamped after it (RecordBusySendCompletion), so the Final Result,
 	// its compatibility outcome included, never changes (SR-5.1).
 	r.PartialTransport = BusySendTransport(transport.String) == BusySendTransportPartial &&
 		(!r.Final || transportAt.Int64 <= r.FinalAtMillis)
+	return r, nil
+}
+
+// readBusySendMessageResult reads the current Result of the retained Message
+// messageID, with its confirmed pair when it has one (an unconfirmed Message
+// has none). It is the one projection of a stored Result
+// (busySendResultSelect): a send's response, a conflict's owner Result,
+// get-delivery and a force's carried Results read it alike, so all agree at
+// the same durable state. PartialTransport comes from the Message's latest
+// hand-over attempt, so the compatibility outcome need not guess it.
+func readBusySendMessageResult(ctx context.Context, q busySendLaunchSQL, storeID, messageID string) (BusySendResult, error) {
+	r, err := scanBusySendResult(q.QueryRowContext(ctx, busySendResultSelect+`
+	    WHERE m.message_id = ? AND m.store_id = ? AND m.retention = 'retained'`, messageID, storeID))
+	if err != nil {
+		return r, fmt.Errorf("store: read busy-send Message Result: %w", err)
+	}
 	return r, nil
 }
 

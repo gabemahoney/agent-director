@@ -391,6 +391,13 @@ covered, a call naming one
 returns `ErrCantSend` (see [Errors](#errors)) and sends nothing. See
 [Busy-send options](../../docs/caller-contract.md#busy-send-options).
 
+With `Force: &force` (`force := true`), an accepted send also forces the
+agent's Held Messages, as [ForceDelivery](#forcedelivery) does, and blocks for
+up to about 15 seconds: `SendKeysResult.Force` is that attempt's
+`*ForceResult`, nil for any other send, and its JSON is `force_result`. Such
+a send can fail after its Message was accepted; see
+[Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
+
 `SendKeysContext(ctx, params)` uses the caller's context; `SendKeys` uses a
 background context. A cleanup error can accompany a confirmed result;
 `api.ErrDetails(err)` retains that result. See `(*Client).SendKeys` godoc and
@@ -578,13 +585,14 @@ state, with
 
 ### ForceDelivery
 
-Standalone `ForceDelivery` currently returns `ErrInternal` for a Covered
-Agent, doing nothing; see [Busy-send options](../../docs/caller-contract.md#busy-send-options).
-For an uncovered target, `c.ForceDelivery(api.ForceDeliveryParams{InstanceID: id})` returns
-`ForceDeliveryResult`, whose `ForceResult` has `ForceID`, `Outcome`, `Reason`,
-`StartedAt`, `EndedAt` (`*time.Time`) and `CarriedPairs` (never nil). When the
-target's current launch is not covered, it succeeds with `Outcome` `"refused"` and
-`Reason` `"agent_not_covered"`, and stores the attempt for `GetForce`. See
+`res, err := c.ForceDelivery(api.ForceDeliveryParams{InstanceID: id})` forces
+a Covered Agent's Held Messages and blocks for up to about 15 seconds. It
+returns `ForceDeliveryResult`, whose `ForceResult` has `ForceID`, `Outcome`
+(`api.ForceOutcomeHandedOver`, `ForceOutcomePending`, `ForceOutcomeRefused` or
+`ForceOutcomeFailed`), `Reason`, `StartedAt`, `EndedAt` (`*time.Time`, nil
+while pending), `CarriedPairs` and `CarriedResults` (`[]DeliveryResult`; both
+never nil). Keep `res.ForceResult.ForceID` for `GetForce`. Outcomes, reasons
+and errors are in
 [Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
 
 ---
@@ -592,7 +600,9 @@ target's current launch is not covered, it succeeds with `Outcome` `"refused"` a
 ### GetForce and GetDelivery
 
 `c.GetForce(api.GetForceParams{ForceID: id})` returns `GetForceResult`
-(`Lookup`, `ForceResult *ForceResult`).
+(`Lookup`, `ForceResult *ForceResult`). A read's `Outcome` may also be
+`api.ForceOutcomeRunning`, with `Reason` `""`, while the attempt's call has
+not returned; so may `Delivery.Force` on `Get`, `GetMany` and `Status`.
 `c.GetDelivery(api.GetDeliveryParams{CallerUUID: caller, DeliveryRequestID: request})`
 returns `GetDeliveryResult` (`Lookup`, `Result *DeliveryResult`). `Lookup` is
 `"found"`, `"unknown"` or `"retention_expired"`; the pointer is nil unless

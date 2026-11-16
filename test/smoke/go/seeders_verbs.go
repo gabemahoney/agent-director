@@ -166,9 +166,9 @@ func init() {
 
 	// ── force-delivery, get-force, get-delivery ───────────────────────────
 	// Busy send covers Claude only, so a force of the seeded ended Codex row
-	// succeeds, refused, and is stored (SR-9.2); a Claude row's force is
-	// refused before anything is stored (a force is not built in this
-	// release). get-force reads the attempt force-delivery stores, its only
+	// succeeds, refused agent_not_covered, and is stored (SR-9.2), with no
+	// wait; a Claude row's force runs a finite call of up to 15 seconds.
+	// get-force reads the attempt force-delivery stores, its only
 	// public writer; a lookup other than found fails the happy path.
 	// get-delivery has no public writer, so it reads a pair no Message holds:
 	// unknown with a null result.

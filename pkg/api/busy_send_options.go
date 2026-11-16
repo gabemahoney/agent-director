@@ -56,15 +56,15 @@ func checkCallerUUID(verb string, id *string) (*string, error) {
 
 // busySendGate decides a call that names a busy-send option from coverage,
 // the coverage of the Launch the option would apply to (SR-9.1, SR-9.2): the
-// current Launch's recorded coverage for send-keys' force, pause's
-// only_if_waiting and force-delivery, and the coverage the new Launch would
-// record for an Agent Default (busySendDefaultsGate, which calls it only for
-// an uncovered Launch). It never returns nil: for an agent busy send does not cover it is
+// current Launch's recorded coverage for an uncovered send-keys' options and
+// pause's only_if_waiting, and the coverage the new Launch would record for an
+// Agent Default (busySendDefaultsGate, which calls it only for an uncovered
+// Launch). It never returns nil: for an agent busy send does not cover it is
 // ErrCantSend with reason agent_not_covered, and for a Covered Agent an
-// unnamed interim error until forced delivery and pause only if waiting are
-// built; either way nothing has been stored, sent, typed or launched, and the
-// call never falls back to today's behaviour. target names what was checked;
-// options names what the call set.
+// unnamed interim error until pause only if waiting is built; either way
+// nothing has been stored, sent, typed or launched, and the call never falls
+// back to today's behaviour. target names what was checked; options names
+// what the call set.
 func busySendGate(target, options string, coverage store.BusySendCoverage) error {
 	switch coverage {
 	case store.BusySendNotCovered:

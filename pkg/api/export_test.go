@@ -40,6 +40,18 @@ func SpawnWithReuseStore(c *Client, rs ReuseStore, params SpawnParams) (SpawnRes
 	return runSpawnWithReuseStore(c.st, c.st, rs, c.tmuxClient, c.procChecker, c.cfg, c.now, c.logger, params)
 }
 
+// ForceDeliveryStore is a force's store surface (forceDeliveryStore), so
+// package api_test can wrap a real store to observe each step's context.
+type ForceDeliveryStore = forceDeliveryStore
+
+// ForceDeliveryForTest runs force-delivery's flow on s with the force call's
+// existing injection points (forceCallEnv): the caller's context, clock,
+// pause and wake notification. External callers use (c *Client).ForceDelivery.
+func ForceDeliveryForTest(s ForceDeliveryStore, ctx context.Context, now func() time.Time, sleep func(time.Duration),
+	touch func(string) error, params ForceDeliveryParams) (ForceDeliveryResult, error) {
+	return forceDelivery(s, forceCallEnv{ctx: ctx, now: now, sleep: sleep, touch: touch}, params)
+}
+
 // SetClockForTest replaces c's clock (time.Now in production) for this Client only (Appendix F.5).
 func SetClockForTest(c *Client, now func() time.Time) { c.now = now }
 

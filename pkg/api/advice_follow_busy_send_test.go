@@ -344,3 +344,195 @@ func TestAdviceFollow_E24_UnconfirmedUncertainUseConfirmed(t *testing.T) {
 		t.Errorf("records = %+v; want two Messages, one pair", got)
 	}
 }
+
+// busyFailForce makes the next force attempt's insert on c's store fail, after
+// the send's admission committed. Its stop fails the test unless it did.
+func busyFailForce(t *testing.T, c *api.Client) (stop func()) {
+	t.Helper()
+	var failed atomic.Bool
+	end, err := api.ObserveClientSQLiteForTest(c, func(d driver.Driver) driver.Driver {
+		return sqliteobserve.Wrap(d, sqliteobserve.Hooks{Before: func(_ context.Context, q string) error {
+			if strings.Contains(q, "INSERT INTO busy_send_forces") && !failed.Swap(true) {
+				return errors.New("injected force insert failure")
+			}
+			return nil
+		}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		if err := end(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if !failed.Load() {
+			t.Fatal("no force attempt was inserted")
+		}
+	}
+}
+
+// busyForceFailed sends p, with force, to f's agent with its force's insert
+// failing, and checks the answer: an unnamed error with no details, never a
+// refusal or ErrStoreBusy; the Message accepted, with the ordinary wake of
+// any accepted send (SR-7.2), and no force stored.
+func busyForceFailed(t *testing.T, f *forceAgent, p api.SendKeysParams) error {
+	t.Helper()
+	stop := busyFailForce(t, f.c)
+	_, err := f.c.SendKeys(p)
+	stop()
+	assertOneName(t, err, "")
+	if api.ErrDetails(err) != nil {
+		t.Errorf("err_details = %+v; want none", api.ErrDetails(err))
+	}
+	if got := storefix.ReadBusySendCounts(t, f.e.dbPath); got.Messages != 1 || got.Forces != 0 {
+		t.Errorf("records = %+v; want the one accepted Message and no force", got)
+	}
+	if !f.touched() {
+		t.Error("the accepted Message's wake was never touched")
+	}
+	return err
+}
+
+// TestAdviceFollow_E33_ForceFailedRepeatPair: a confirmed covered send with force whose force fails after its Message was accepted; get-delivery, then the same send.
+// E33: "do not send it as new: repeat it with the same pair to force again, or read its Result with get-delivery"
+func TestAdviceFollow_E33_ForceFailedRepeatPair(t *testing.T) {
+	t.Parallel()
+	e := newKillEnv(t)
+	f := newForceAgent(t, e)
+	p := api.SendKeysParams{InstanceID: f.id, Text: "forced", ConfirmedDelivery: ptr(true), CallerUUID: ptr(busyCaller), DeliveryRequestID: "f-1",
+		Force: ptr(true)}
+
+	err := busyForceFailed(t, f, p)
+
+	adviceAssertPhrase(t, err, `the Message was accepted (caller_uuid `+busyCaller+`, delivery_request_id "f-1"), but its force could not be made`)
+	adviceAssertPhrase(t, err, "do not send it as new: repeat it with the same pair to force again, or read its Result with get-delivery")
+	got, err := f.c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: "f-1"})
+	if err != nil || got.Lookup != "found" || got.Result == nil {
+		t.Fatalf("get-delivery as advised = %+v, %v; want found", got, err)
+	}
+	again, err := f.c.SendKeys(p)
+	if err != nil || again.Delivery == nil || !reflect.DeepEqual(*again.Delivery, *got.Result) || again.Force == nil ||
+		!reflect.DeepEqual(again.Force.CarriedPairs, []api.DeliveryPair{{CallerUUID: busyCaller, RequestID: "f-1"}}) {
+		t.Errorf("the same send as advised = %+v, %v; want the found Result and a force carrying it", again, err)
+	}
+	if got := storefix.ReadBusySendCounts(t, e.dbPath); got.Messages != 1 || got.Pairs != 1 || got.Forces != 1 {
+		t.Errorf("records = %+v; want the one Message, accepted once, and its force", got)
+	}
+}
+
+// TestAdviceFollow_E34_ForceFailedForceDelivery: an unconfirmed covered send with force whose force fails after its Message was accepted; force-delivery, never the send again.
+// E34: "do not send it again: call force-delivery to force the agent's Held Messages"
+func TestAdviceFollow_E34_ForceFailedForceDelivery(t *testing.T) {
+	t.Parallel()
+	e := newKillEnv(t)
+	f := newForceAgent(t, e)
+
+	err := busyForceFailed(t, f, api.SendKeysParams{InstanceID: f.id, Text: "forced", Force: ptr(true)})
+
+	adviceAssertPhrase(t, err, "the Message was accepted, but its force could not be made")
+	adviceAssertPhrase(t, err, "do not send it again: call force-delivery to force the agent's Held Messages")
+	// The Held Message is claimed, then (no forced wake yet) returned unissued.
+	if got, _ := f.force(t); got.Outcome != "refused" || got.Reason != "not_issued" {
+		t.Errorf("force-delivery as advised = %+v; want the Held Message claimed, then refused not_issued", got)
+	}
+	if got := storefix.ReadBusySendCounts(t, e.dbPath); got.Messages != 1 || got.Forces != 1 {
+		t.Errorf("records = %+v; want the one Message and the advised force", got)
+	}
+}
+
+// TestAdviceFollow_E35_ForceEndFailedFinishByCommand: a force call whose caller cancels it mid-wait, so its end is never recorded; get-force, then an explicit send-keys or force-delivery once its recorded deadline has passed.
+// E35: "get-force reads it, and the agent's next eligible event or an explicit send-keys or force-delivery finishes it once its recorded deadline has passed; do not treat it as refused"
+//
+// SR-3.2, SR-4.3; M1 G3 NoOrphanForceClaim; MI decision 10. The error is
+// unnamed, never a refusal or ErrStoreBusy (which promises nothing was
+// stored), and names the stored force: get-force and get read it running
+// (reason "", no end), holding a and u. Past the deadline a refused send with
+// force forces and releases nothing; an accepted send, a repeat of a's pair
+// or force-delivery finishes it through the store's one release path, and
+// force-delivery then makes its own new force.
+func TestAdviceFollow_E35_ForceEndFailedFinishByCommand(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		explicit func(t *testing.T, f *forceAgent)
+		forces   int // force attempts stored after the command
+	}{
+		{"an accepted send", func(t *testing.T, f *forceAgent) {
+			busyAdmit(t, f.c, api.SendKeysParams{InstanceID: f.id, Text: "next"})
+		}, 1},
+		{"a repeat of a's pair", func(t *testing.T, f *forceAgent) {
+			busyAdmit(t, f.c, api.SendKeysParams{InstanceID: f.id, Text: "hello", ConfirmedDelivery: ptr(true), CallerUUID: ptr(busyCaller),
+				DeliveryRequestID: "a"})
+		}, 1},
+		{"force-delivery", func(t *testing.T, f *forceAgent) {
+			if got, _ := f.force(t); got.Outcome != "refused" || got.Reason != "not_issued" ||
+				!reflect.DeepEqual(got.CarriedPairs, []api.DeliveryPair{{CallerUUID: busyCaller, RequestID: "a"}}) {
+				t.Errorf("force-delivery after the release = %+v; want its own force of a and u, refused not_issued", got)
+			}
+		}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			f := newForceAgent(t, e)
+			f.send(t, "a", "hello")
+			f.send(t, "", "unconfirmed")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			entry := e.clock.Now()
+
+			_, err := api.ForceDeliveryForTest(e.st, ctx, e.clock.Now, func(d time.Duration) {
+				if e.clock.Now().Sub(entry) >= 400*time.Millisecond {
+					cancel()
+				}
+				e.clock.Advance(d)
+			}, nil, api.ForceDeliveryParams{InstanceID: f.id})
+
+			assertOneName(t, err, "")
+			if api.ErrDetails(err) != nil {
+				t.Errorf("err_details = %+v; want none", api.ErrDetails(err))
+			}
+			adviceAssertPhrase(t, err, "get-force reads it, and the agent's next eligible event or an explicit send-keys or force-delivery "+
+				"finishes it once its recorded deadline has passed; do not treat it as refused")
+			named := regexp.MustCompile(`force ([0-9a-f-]{36}) is stored and ran`).FindStringSubmatch(err.Error())
+			if named == nil {
+				t.Fatalf("description %q names no stored force", err)
+			}
+			if !f.touched() {
+				t.Error("the cancelled call never notified the route after its claim")
+			}
+			read := func() api.ForceResult {
+				t.Helper()
+				found, err := f.c.GetForce(api.GetForceParams{ForceID: named[1]})
+				if err != nil || found.ForceResult == nil {
+					t.Fatalf("get-force as advised = %+v, %v; want found", found, err)
+				}
+				return *found.ForceResult
+			}
+			running := read()
+			want := api.ForceResult{ForceID: named[1], Outcome: "running", StartedAt: time.UnixMilli(entry.UnixMilli()).UTC(),
+				CarriedPairs: []api.DeliveryPair{{CallerUUID: busyCaller, RequestID: "a"}}, CarriedResults: running.CarriedResults}
+			if !reflect.DeepEqual(running, want) || len(running.CarriedResults) != 1 {
+				t.Errorf("get-force = %+v; want %+v with a's Result", running, want)
+			}
+			if row, err := f.c.Get(f.id); err != nil || row.Delivery == nil || !reflect.DeepEqual(row.Delivery.Force, &running) {
+				t.Errorf("get delivery = %+v, %v; want force %+v", row.Delivery, err, running)
+			}
+
+			e.clock.Advance(entry.Add(15*time.Second + time.Millisecond).Sub(e.clock.Now()))
+			counts := storefix.ReadBusySendCounts(t, e.dbPath)
+			_, err = f.c.SendKeys(api.SendKeysParams{InstanceID: f.id, Text: "bad\rtext", Force: ptr(true)})
+			assertOneName(t, err, "ErrCantSend")
+			if got := storefix.ReadBusySendCounts(t, e.dbPath); got != counts || !reflect.DeepEqual(read(), running) || f.touched() {
+				t.Errorf("after a refused send with force: records %+v, force %+v; want %+v and the force still running, no wake", got, read(), counts)
+			}
+
+			f.assertReleased(t, named[1], tc.explicit)
+
+			if got := storefix.ReadBusySendCounts(t, e.dbPath).Forces; got != tc.forces {
+				t.Errorf("%d force attempts; want %d", got, tc.forces)
+			}
+		})
+	}
+}

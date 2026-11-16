@@ -240,7 +240,9 @@ Behavior follows `get`/`getMany`'s `busy_send`. Covered Claude stores an
 ordinary Message byte for byte. CR is refused; empty text and raw-key
 parameters are malformed. `allow_pending` changes nothing. Permission and
 dialog boundaries hold accepted Messages; they never become pane answers.
-An accepted send resolves with its Result, never `ErrSubmissionUnconfirmed`.
+An accepted send resolves with its Result, never `ErrSubmissionUnconfirmed`,
+except that one with `force` can reject after its Message was accepted; see
+[Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
 
 `SendKeysParams.delivery_request_id` supplies the Message ID, and
 `SendKeysResult` extends `Partial<DeliveryResult>`. For a confirmed Wait Turn
@@ -283,6 +285,11 @@ follow the same rule as spawn's Agent Defaults: omitted or `undefined` is not
 sent, and any value, `false` included, is. They apply only to Covered Agents;
 when the target's current launch is not covered, a call naming one rejects
 with `ErrCantSend` and sends nothing. See [Busy-send options](../../docs/caller-contract.md#busy-send-options).
+
+With `force: true`, an accepted send also forces the agent's Held Messages,
+as [forceDelivery](#forcedelivery-getforce-and-getdelivery) does, taking up to
+about 15 seconds; its result adds that attempt as `force_result`, which is
+absent for any other send.
 
 ### readPane
 
@@ -387,26 +394,30 @@ await client.makeTemplate({ name: "dev", cwd: "/repos/widget", agent: "claude", 
 
 ### forceDelivery, getForce and getDelivery
 
-Standalone `forceDelivery` currently rejects with `ErrInternal` for a Covered
-Agent, doing nothing; see [Busy-send options](../../docs/caller-contract.md#busy-send-options).
-For an uncovered target, a refused attempt remains readable:
+`forceDelivery` forces a Covered Agent's Held Messages and takes up to about
+15 seconds to resolve, so keep `callTimeoutMs` above that. Keep the
+`force_id` to read the attempt again:
 
 ```ts
-const { force_result } = await client.forceDelivery({ instance_id: "<uncovered-id>" });
+const { force_result } = await client.forceDelivery({ instance_id: "<id>" });
+console.log(force_result.outcome, force_result.reason, force_result.carried_results.length);
 const read = await client.getForce({ force_id: force_result.force_id });
 console.log(read.lookup, read.force_result?.outcome);
 ```
 
-`forceDelivery` resolves with `force_result` (`ForceResult`). When the target's
-current launch is not covered, `outcome` is `"refused"` and `reason`
-`"agent_not_covered"`; the attempt is stored for `getForce`. See
+`forceDelivery` resolves with `force_result` (`ForceResult`): `outcome`
+(`ForceOutcome`), `reason` (`ForceReason`), `started_at`, `ended_at` (null
+while pending), `carried_pairs` and `carried_results` (`DeliveryResult[]`).
+Outcomes, reasons and errors are in
 [Stored force attempts](../../docs/caller-contract.md#stored-force-attempts).
 
 `getForce({ force_id })` and
 `getDelivery({ caller_uuid, delivery_request_id })` resolve with `lookup`
 (`Lookup`: `"found"`, `"unknown"` or `"retention_expired"`) and
 `force_result: ForceResult | null` or `result: DeliveryResult | null`, null
-unless `"found"`. A store failure rejects; it never resolves `"unknown"`. See
+unless `"found"`. A read's `outcome`, there or in `delivery.force` on `get`,
+`getMany` and `status`, may also be `"running"`, with `reason` `""`, while the
+attempt's call has not returned. A store failure rejects; it never resolves `"unknown"`. See
 [Durable lookups](../../docs/caller-contract.md#durable-lookups).
 
 ### decide

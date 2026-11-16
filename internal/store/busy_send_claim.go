@@ -91,14 +91,17 @@ type BusySendClaim struct {
 // re-claim or fence advances it too, so a job holding an older one has no
 // authority left.
 type BusySendHandover struct {
-	HandoverID         string
-	InstanceID         string
-	ConversationID     string
-	HandoverSeq        int64
-	Revision           int64
-	OwnerRevision      int64
-	CutoffSeq          int64
-	Boundary           BusySendBoundary
+	HandoverID     string
+	InstanceID     string
+	ConversationID string
+	HandoverSeq    int64
+	Revision       int64
+	OwnerRevision  int64
+	CutoffSeq      int64
+	Boundary       BusySendBoundary
+	// ForceID is the force whose hand-over this is (boundary force), "" for
+	// an ordinary hand-over. Only that force's running call may issue it.
+	ForceID            string
 	RaceExposed        bool
 	Destination        BusySendDestination
 	ExpectedTurnStarts int64
@@ -193,10 +196,13 @@ func (f busySendIssueFacts) destinationMatches(d BusySendDestination) bool {
 // transaction on a WAL synchronous=FULL connection, bounded by ctx. In order
 // it: reads the published current Launch and refuses an uncovered one, one
 // that is not req's destination (ineligible, no Wait), an ended or starting
-// one, one with no recorded route and an authoritative permission hold
-// (ineligible with the Wait); releases a dead job's expired never-issued
-// claims (ReleaseBusySendClaims' expiry rule); finds an earlier hand-over
-// still owning order and transport (owned); at turn end, refuses while the
+// one and one with no recorded route (ineligible with the Wait); finishes a
+// force whose call never reached its end (ReleaseAbandonedBusySendForce's
+// rule, as the agent's eligible event); refuses an authoritative permission
+// hold (ineligible, dialog); releases a dead job's expired never-issued
+// claims (ReleaseBusySendClaims' expiry rule, never a force's); finds an
+// earlier hand-over still owning order and transport (owned); at turn end,
+// refuses while the
 // current Launch has an awaiting obligation, earlier issued input with no
 // evidence it was taken (ineligible, readiness_unknown; SR-3.3,
 // readBusySendAwaiting); then freezes the eligible
@@ -244,16 +250,32 @@ func claimBusySendHandover(ctx context.Context, conn *sql.Conn, storeID string, 
 		return ineligible(BusySendWaitRouteUnavailable, "the current Launch has no recorded route")
 	case !f.destinationMatches(req.Destination):
 		return ineligible("", "the event's session, route or connection is not the current one")
-	case f.permissionHold:
-		return ineligible(BusySendWaitDialog, "an open permission request holds the agent")
 	}
-	var released int
+	// Once the event is the current running Launch's, it finishes a force
+	// whose call never reached its end (SR-3.2, SR-4.3) before its other
+	// refusals, so neither the force's claims nor its outcome wait on a dead
+	// caller (the coordinator has usually done so already, before its route's
+	// wait decision); generic expiry never releases a force's claims.
+	abandoned, err := releaseAbandonedBusySendForce(ctx, conn, storeID, f.conversation, now)
+	if err != nil {
+		return BusySendClaim{}, err
+	}
+	released := abandoned.Returned
+	if abandoned.Released {
+		if f, err = readBusySendIssueFacts(ctx, conn, req.InstanceID); err != nil {
+			return BusySendClaim{}, err
+		}
+	}
+	if f.permissionHold {
+		return BusySendClaim{Outcome: BusySendClaimIneligible, Wait: BusySendWaitDialog, ReleasedExpired: released,
+			Detail: "an open permission request holds the agent"}, nil
+	}
 	if f.ownerHandover != "" {
 		r, err := releaseBusySendClaims(ctx, conn, storeID, f.ownerHandover, 0, BusySendWaitReadinessUnknown, now)
 		if err != nil && !errors.Is(err, errBusySendNotExpired) {
 			return BusySendClaim{}, err
 		}
-		released = r.Released
+		released += r.Released
 		if !r.Closed {
 			return BusySendClaim{Outcome: BusySendClaimOwned, Wait: BusySendWaitHandoverInProgress, ReleasedExpired: released,
 				Detail: "an earlier hand-over still owns the conversation's order and transport"}, nil
@@ -297,7 +319,9 @@ func claimBusySendHandover(ctx context.Context, conn *sql.Conn, storeID string, 
 	if err != nil {
 		return BusySendClaim{}, err
 	}
-	h, err := insertBusySendHandover(ctx, conn, storeID, f, req, members, parts, now)
+	h, err := insertBusySendHandover(ctx, conn, storeID, f, busySendHandoverSpec{InstanceID: req.InstanceID,
+		Destination: req.Destination, Boundary: req.Boundary, RaceExposed: req.RaceExposed,
+		IssueDeadline: now + req.IssueBudget.Milliseconds(), JobDeadline: now + req.JobBudget.Milliseconds()}, members, parts, now)
 	if err != nil {
 		return BusySendClaim{}, err
 	}
@@ -315,9 +339,9 @@ type busySendClaimMember struct {
 // readBusySendEligiblePrefix reads the conversation's Held Messages in
 // accepted order and returns the eligible contiguous prefix: all of them at
 // turn end, the Steer Turn ones before the first Wait Turn Message at a tool
-// boundary (SR-2.2). A force's selection is E5's.
+// boundary (SR-2.2). A force carries every Held Message (ClaimBusySendForce).
 func readBusySendEligiblePrefix(ctx context.Context, conn *sql.Conn, conversation string, boundary BusySendBoundary) ([]busySendClaimMember, error) {
-	if boundary != BusySendBoundaryTurnEnd && boundary != BusySendBoundaryToolBoundary {
+	if boundary != BusySendBoundaryTurnEnd && boundary != BusySendBoundaryToolBoundary && boundary != BusySendBoundaryForce {
 		return nil, fmt.Errorf("store: busy-send claim at boundary %q is not supported", boundary)
 	}
 	rows, err := conn.QueryContext(ctx, `SELECT message_id, accepted_seq, revision, send_mode, text FROM busy_send_messages
@@ -341,9 +365,22 @@ func readBusySendEligiblePrefix(ctx context.Context, conn *sql.Conn, conversatio
 	return out, rows.Err()
 }
 
+// busySendHandoverSpec is what a claim decides for its new hand-over beyond
+// the current facts: its target, captured destination, boundary and race
+// exposure, the force it belongs to ("" for an ordinary claim) and its
+// original issue and job deadlines in milliseconds.
+type busySendHandoverSpec struct {
+	InstanceID                 string
+	Destination                BusySendDestination
+	Boundary                   BusySendBoundary
+	RaceExposed                bool
+	ForceID                    string
+	IssueDeadline, JobDeadline int64
+}
+
 // insertBusySendHandover records a claim's hand-over, prompts and membership
 // and moves its Messages to claimed, in the claim's transaction.
-func insertBusySendHandover(ctx context.Context, conn *sql.Conn, storeID string, f busySendIssueFacts, req BusySendClaimRequest,
+func insertBusySendHandover(ctx context.Context, conn *sql.Conn, storeID string, f busySendIssueFacts, spec busySendHandoverSpec,
 	members []busySendClaimMember, parts []BusySendPromptPart, now int64) (*BusySendHandover, error) {
 	id, err := uuid.NewRandom()
 	if err != nil {
@@ -354,23 +391,23 @@ func insertBusySendHandover(ctx context.Context, conn *sql.Conn, storeID string,
 		f.conversation).Scan(&seq); err != nil {
 		return nil, err
 	}
-	d := req.Destination
-	h := &BusySendHandover{HandoverID: id.String(), InstanceID: req.InstanceID, ConversationID: f.conversation,
+	d := spec.Destination
+	h := &BusySendHandover{HandoverID: id.String(), InstanceID: spec.InstanceID, ConversationID: f.conversation,
 		HandoverSeq: seq, Revision: 1, OwnerRevision: f.conversationRevision + 1, CutoffSeq: members[len(members)-1].seq,
-		Boundary: req.Boundary, RaceExposed: req.RaceExposed, Destination: d, ExpectedTurnStarts: f.turnStarts,
-		PermissionEpoch: f.permissionEpoch, Open: true, ClaimedAt: time.UnixMilli(now).UTC(),
-		IssueDeadline: time.UnixMilli(now + req.IssueBudget.Milliseconds()).UTC(),
-		JobDeadline:   time.UnixMilli(now + req.JobBudget.Milliseconds()).UTC()}
+		Boundary: spec.Boundary, ForceID: spec.ForceID, RaceExposed: spec.RaceExposed, Destination: d,
+		ExpectedTurnStarts: f.turnStarts, PermissionEpoch: f.permissionEpoch, Open: true, ClaimedAt: time.UnixMilli(now).UTC(),
+		IssueDeadline: time.UnixMilli(spec.IssueDeadline).UTC(), JobDeadline: time.UnixMilli(spec.JobDeadline).UTC()}
 	if _, err := conn.ExecContext(ctx, `INSERT INTO busy_send_handovers
 	    (handover_id, store_id, conversation_id, handover_seq, instance_id, launch_id, launch_token, provider, session_id,
 	     route_kind, route_id, connection_generation, owner_revision, revision, cutoff_seq, boundary, race_exposed, forced,
-	     expected_turn_starts, expected_turn_id, permission_epoch, prompt_count, prompt_cursor, state,
+	     force_id, expected_turn_starts, expected_turn_id, permission_epoch, prompt_count, prompt_cursor, state,
 	     claimed_at_ms, issue_deadline_ms, job_deadline_ms)
-	    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0, ?, ?, ?, ?, 0, 'open', ?, ?, ?)`,
-		h.HandoverID, storeID, f.conversation, seq, req.InstanceID, f.launch, nullableStringArg(f.token), f.provider,
+	    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'open', ?, ?, ?)`,
+		h.HandoverID, storeID, f.conversation, seq, spec.InstanceID, f.launch, nullableStringArg(f.token), f.provider,
 		nullableStringArg(f.sessionID), f.routeKind, nullableStringArg(f.routeID), f.connectionGeneration, h.OwnerRevision,
-		h.CutoffSeq, string(req.Boundary), boolInt(req.RaceExposed), f.turnStarts, nullableStringArg(d.TurnID),
-		f.permissionEpoch, len(parts), now, h.IssueDeadline.UnixMilli(), h.JobDeadline.UnixMilli()); err != nil {
+		h.CutoffSeq, string(spec.Boundary), boolInt(spec.RaceExposed), boolInt(spec.ForceID != ""),
+		nullableStringArg(spec.ForceID), f.turnStarts, nullableStringArg(d.TurnID),
+		f.permissionEpoch, len(parts), now, spec.IssueDeadline, spec.JobDeadline); err != nil {
 		return nil, err
 	}
 	for i, part := range parts {
@@ -442,22 +479,22 @@ type busySendHandoverRow struct {
 
 func readBusySendHandover(ctx context.Context, q busySendLaunchSQL, storeID, handoverID string) (busySendHandoverRow, error) {
 	var h busySendHandoverRow
-	var token, session, routeID, turnID sql.NullString
+	var token, session, routeID, turnID, forceID sql.NullString
 	var state, boundary, routeKind string
 	var claimed, issue, job int64
 	err := q.QueryRowContext(ctx, `SELECT handover_id, instance_id, conversation_id, handover_seq, revision, owner_revision,
-	        cutoff_seq, boundary, race_exposed, launch_id, launch_token, provider, session_id, route_kind, route_id,
+	        cutoff_seq, boundary, force_id, race_exposed, launch_id, launch_token, provider, session_id, route_kind, route_id,
 	        connection_generation, expected_turn_id, expected_turn_starts, permission_epoch, state, prompt_count,
 	        prompt_cursor, claimed_at_ms, issue_deadline_ms, job_deadline_ms
 	    FROM busy_send_handovers WHERE handover_id = ? AND store_id = ?`, handoverID, storeID).Scan(
 		&h.HandoverID, &h.InstanceID, &h.ConversationID, &h.HandoverSeq, &h.Revision, &h.OwnerRevision,
-		&h.CutoffSeq, &boundary, &h.RaceExposed, &h.Destination.LaunchID, &token, &h.Destination.Provider, &session,
+		&h.CutoffSeq, &boundary, &forceID, &h.RaceExposed, &h.Destination.LaunchID, &token, &h.Destination.Provider, &session,
 		&routeKind, &routeID, &h.Destination.ConnectionGeneration, &turnID, &h.ExpectedTurnStarts, &h.PermissionEpoch,
 		&state, &h.promptCount, &h.PromptCursor, &claimed, &issue, &job)
 	if err != nil {
 		return h, err
 	}
-	h.Boundary, h.Open = BusySendBoundary(boundary), BusySendHandoverState(state) == BusySendHandoverOpen
+	h.Boundary, h.ForceID, h.Open = BusySendBoundary(boundary), forceID.String, BusySendHandoverState(state) == BusySendHandoverOpen
 	h.Destination.LaunchToken, h.Destination.SessionID = token.String, session.String
 	h.Destination.RouteKind, h.Destination.RouteID, h.Destination.TurnID = BusySendRouteKind(routeKind), routeID.String, turnID.String
 	h.ClaimedAt, h.IssueDeadline, h.JobDeadline = time.UnixMilli(claimed).UTC(), time.UnixMilli(issue).UTC(), time.UnixMilli(job).UTC()

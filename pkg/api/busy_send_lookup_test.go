@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -37,7 +38,7 @@ func forceRefused(t *testing.T, c *api.Client, id string, now time.Time) api.For
 	}
 	at := time.UnixMilli(now.UnixMilli()).UTC()
 	want := api.ForceResult{ForceID: f.ForceID, Outcome: "refused", Reason: "agent_not_covered", StartedAt: at, EndedAt: &at,
-		CarriedPairs: []api.DeliveryPair{}}
+		CarriedPairs: []api.DeliveryPair{}, CarriedResults: []api.DeliveryResult{}}
 	if !reflect.DeepEqual(f, want) {
 		t.Errorf("force_result = %+v; want %+v", f, want)
 	}
@@ -106,7 +107,7 @@ func TestForceDeliveryStoresRefusedAttempt(t *testing.T) {
 			raw, _ := json.Marshal(api.GetForceResult{Lookup: "found", ForceResult: &first})
 			at, _ := json.Marshal(first.StartedAt)
 			want := `{"lookup":"found","force_result":{"force_id":"` + first.ForceID +
-				`","outcome":"refused","reason":"agent_not_covered","started_at":` + string(at) + `,"ended_at":` + string(at) + `,"carried_pairs":[]}}`
+				`","outcome":"refused","reason":"agent_not_covered","started_at":` + string(at) + `,"ended_at":` + string(at) + `,"carried_pairs":[],"carried_results":[]}}`
 			if string(raw) != want {
 				t.Errorf("get-force JSON = %s\nwant %s", raw, want)
 			}
@@ -198,8 +199,11 @@ func TestForceDeliveryBindsExaminedPublishedLaunch(t *testing.T) {
 	})
 	// A publication between the read and the insert: the call decides again
 	// from the new Launch, its coverage included. An uncovered replacement gets
-	// the refused attempt; a covered one gets the unnamed error and no attempt,
-	// never the first Launch's agent_not_covered (test-review TR2).
+	// the refused agent_not_covered attempt; a covered one gets its own force
+	// attempt, refused before any hand-over by the covered claim's rules, never
+	// the first Launch's agent_not_covered (test-review TR2). The second
+	// attempt keeps the call's entry as its start, however much time passed
+	// (E5 code review F2).
 	for _, covered := range []bool{false, true} {
 		t.Run(fmt.Sprintf("publication between read and insert, covered=%t", covered), func(t *testing.T) {
 			t.Parallel()
@@ -221,6 +225,7 @@ func TestForceDeliveryBindsExaminedPublishedLaunch(t *testing.T) {
 					if res, err := e.st.PublishBusySendLaunch(r.ID, version, token); err != nil || res != store.CondApplied {
 						t.Errorf("publish between read and insert = %v, %v", res, err)
 					}
+					e.clock.Advance(time.Second)
 					if covered {
 						if err := apitest.SeedBusySendCoverage(e.dbPath, r.ID, store.BusySendCovered, store.BusySendCovered); err != nil {
 							t.Error(err)
@@ -233,14 +238,16 @@ func TestForceDeliveryBindsExaminedPublishedLaunch(t *testing.T) {
 				t.Fatal(err)
 			}
 			var f api.ForceResult
+			entry := e.clock.Now()
 			if covered {
 				res, ferr := c.ForceDelivery(api.ForceDeliveryParams{InstanceID: r.ID})
-				assertOneName(t, ferr, "ErrInternal")
-				if api.ErrDetails(ferr) != nil || !reflect.DeepEqual(res, api.ForceDeliveryResult{}) {
-					t.Errorf("force on a covered replacement = %+v, details %+v; want a bare error", res, api.ErrDetails(ferr))
+				f = res.ForceResult
+				if ferr != nil || f.Outcome != "refused" || f.Reason != "agent_starting" || !f.StartedAt.Equal(entry) {
+					t.Errorf("force on a covered replacement = %+v, %v; want the covered claim's own refusal, agent_starting, started at the entry %v",
+						res, ferr, entry)
 				}
 			} else {
-				f = forceRefused(t, c, r.ID, e.clock.Now())
+				f = forceRefused(t, c, r.ID, entry)
 			}
 			if err := stop(context.Background()); err != nil {
 				t.Fatal(err)
@@ -252,14 +259,9 @@ func TestForceDeliveryBindsExaminedPublishedLaunch(t *testing.T) {
 			if now.ID == old.ID || now.Token.String != token {
 				t.Fatalf("current Launch = %+v; want the published candidate", now)
 			}
-			want := 1
-			if covered {
-				want = 0
-			} else {
-				assertForceBound(t, e.st, f.ForceID, r.ID, now)
-			}
-			if got := storefix.ReadBusySendCounts(t, e.dbPath); got != (storefix.BusySendCounts{Forces: want}) {
-				t.Errorf("records = %+v; want %d attempts and nothing else", got, want)
+			assertForceBound(t, e.st, f.ForceID, r.ID, now)
+			if got := storefix.ReadBusySendCounts(t, e.dbPath); got != (storefix.BusySendCounts{Forces: 1}) {
+				t.Errorf("records = %+v; want one attempt and nothing else", got)
 			}
 		})
 	}
@@ -580,7 +582,7 @@ func TestBusySendLookupRefusals(t *testing.T) {
 		{"get-force attempt", "FROM busy_send_forces WHERE force_id = ?", getForce, api.GetForceResult{}},
 		{"get-force carried pairs", "FROM busy_send_force_members m JOIN", getForce, api.GetForceResult{}},
 		{"get-delivery Result", "FROM busy_send_results p JOIN busy_send_messages m", getDelivery("held"), api.GetDeliveryResult{}},
-		{"get-delivery earlier pair", "FROM busy_send_results WHERE message_id = ?", getDelivery("queued"), api.GetDeliveryResult{}},
+		{"get-delivery Result with its earlier pair", "LEFT JOIN busy_send_results e ON e.message_id = m.wait_earlier_message_id", getDelivery("queued"), api.GetDeliveryResult{}},
 		{"get-delivery absent pair", "SELECT EXISTS(SELECT 1 FROM busy_send_results", getDelivery("never-sent"), api.GetDeliveryResult{}},
 	} {
 		hits.Store(0)
@@ -616,4 +618,171 @@ func TestBusySendLookupRefusals(t *testing.T) {
 	assertOneName(t, err, "ErrStoreBusy")
 	_, err = c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: "m-1"})
 	assertOneName(t, err, "ErrStoreBusy")
+}
+
+// expireBusyResult marks the Final Result of busyCaller's pair for request
+// expired at at, in the shape SR-5.5's retention leaves it
+// (storefix.BusySendResultSeed's Expired: no text or Result, the pair kept);
+// E3 builds the expiry writer.
+func expireBusyResult(t *testing.T, e *killEnv, request string, at time.Time) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+e.dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	r, err := raw.Exec(`UPDATE busy_send_messages SET text = NULL, text_sha256 = NULL, result_class = NULL, result_reason = NULL,
+	        retention = 'expired', expired_at_ms = ?
+	    WHERE result_final = 1 AND message_id = (SELECT message_id FROM busy_send_results WHERE caller_uuid = ? AND delivery_request_id = ?)`,
+		at.UnixMilli(), busyCaller, request)
+	if err == nil {
+		var n int64
+		if n, err = r.RowsAffected(); err == nil && n != 1 {
+			err = fmt.Errorf("%d Final Results; want 1", n)
+		}
+	}
+	if err != nil {
+		t.Fatalf("expire %s's Result: %v", request, err)
+	}
+}
+
+// TestForceCarriedResults (SR-4.1, SR-4.3, SR-5.5, SR-5.6; E5 Main Agent
+// decision 6): a force that handed over a, an unconfirmed u and b lists a and
+// b in carried_pairs and their Results in carried_results, u in neither.
+// Once a's Result has expired (E3's retention, as the store keeps it),
+// get-force stays found with a's pair kept and only b's Result, nothing made
+// up for a, and get's and status's delivery.force filter the same; a's
+// get-delivery reads retention_expired. get-force reads the same after Launch
+// End, the record's deletion and a reopen.
+func TestForceCarriedResults(t *testing.T) {
+	t.Parallel()
+	e := newKillEnv(t)
+	f := newForceAgent(t, e)
+	f.send(t, "a", forceText)
+	f.send(t, "", "unconfirmed")
+	f.send(t, "b", forceText)
+	f.drive = forceTurns(t, f, 2, false)
+	got, _ := f.force(t)
+	f.drive = nil
+	if got.Outcome != "handed_over" || len(got.CarriedPairs) != 2 || len(got.CarriedResults) != 2 {
+		t.Fatalf("force = %+v; want a and b handed over with their Results", got)
+	}
+
+	expireBusyResult(t, e, "a", e.clock.Now())
+
+	want := got
+	want.CarriedResults = got.CarriedResults[1:]
+	f.assertRecorded(t, want)
+	if a, err := f.c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: "a"}); err != nil || a.Lookup != "retention_expired" {
+		t.Errorf("get-delivery a = %+v, %v; want retention_expired", a, err)
+	}
+	read := func(c *api.Client, after string) {
+		t.Helper()
+		if found, err := c.GetForce(api.GetForceParams{ForceID: got.ForceID}); err != nil || found.Lookup != "found" ||
+			found.ForceResult == nil || !reflect.DeepEqual(*found.ForceResult, want) {
+			t.Errorf("get-force after %s = %+v, %v; want found %+v", after, found, err, want)
+		}
+	}
+	if a := storefix.ApplyAgentHook(t, e.st, f.id, "SessionEnd", f.session); !a.Applied {
+		t.Fatalf("SessionEnd %+v; want applied", a)
+	}
+	read(f.c, "Launch End")
+	if err := storefix.DeleteWithExit(t, e.st, f.id); err != nil {
+		t.Fatal(err)
+	}
+	read(f.c, "the record's deletion")
+	reopened, _ := e.client(t)
+	read(reopened, "a reopen")
+}
+
+// TestForceReadsResultsWithItsFacts (SR-4.1, SR-5.6; M1 G3
+// returned-equals-recorded): get-force and get's delivery.force read a
+// force's outcome and its carried Messages' Results in one read transaction.
+// A release of the force, committed while the read that answers is between
+// them (its last read of the carried Results), shows in neither: the answer
+// is the running force with its Messages still claimed, as before, and the
+// next read returns both changed.
+func TestForceReadsResultsWithItsFacts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		read func(c *api.Client, id, forceID string) (api.ForceResult, error)
+	}{
+		{"get-force", func(c *api.Client, _, forceID string) (api.ForceResult, error) {
+			got, err := c.GetForce(api.GetForceParams{ForceID: forceID})
+			if err == nil && got.ForceResult == nil {
+				err = fmt.Errorf("lookup %s", got.Lookup)
+			}
+			if err != nil {
+				return api.ForceResult{}, err
+			}
+			return *got.ForceResult, nil
+		}},
+		{"get delivery.force", func(c *api.Client, id, _ string) (api.ForceResult, error) {
+			row, err := c.Get(id)
+			if err == nil && (row.Delivery == nil || row.Delivery.Force == nil) {
+				err = errors.New("no delivery.force")
+			}
+			if err != nil {
+				return api.ForceResult{}, err
+			}
+			return *row.Delivery.Force, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			f := newForceAgent(t, e)
+			f.send(t, "a", "hello")
+			f.send(t, "b", "again")
+			pub, err := e.st.GetBusySendPublishedLaunch(f.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim, err := e.st.ClaimBusySendForce(context.Background(), store.BusySendForceClaimRequest{InstanceID: f.id, Launch: pub,
+				ForceID: uuid.NewString(), OwnerCallID: uuid.NewString(), ActiveBudget: 12 * time.Second, CleanupBudget: 3 * time.Second, At: e.clock.Now()})
+			if err != nil || claim.Handover == nil {
+				t.Fatalf("force claim = %+v, %v; want running", claim, err)
+			}
+			e.clock.Advance(15*time.Second + time.Millisecond)
+			// read reads through tc.read while counting its reads of the carried
+			// Results, releasing the force just before the at-th (0: never).
+			read := func(at int32) (api.ForceResult, int32) {
+				t.Helper()
+				var seen atomic.Int32
+				stop, err := api.ObserveClientSQLiteForTest(f.c, func(d driver.Driver) driver.Driver {
+					return sqliteobserve.Wrap(d, sqliteobserve.Hooks{Before: func(_ context.Context, q string) error {
+						if strings.Contains(q, "JOIN busy_send_force_members fm ON fm.message_id") && seen.Add(1) == at {
+							if rel, err := e.st.ReleaseAbandonedBusySendForce(context.Background(), f.id, e.clock.Now()); err != nil || !rel.Released || rel.Returned != 2 {
+								t.Errorf("release between the force's facts and its Results = %+v, %v; want both Messages returned", rel, err)
+							}
+						}
+						return nil
+					}})
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, rerr := tc.read(f.c, f.id, claim.Force.ForceID)
+				if err := stop(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if rerr != nil {
+					t.Fatalf("read: %v", rerr)
+				}
+				return got, seen.Load()
+			}
+			before, reads := read(0)
+			if before.Outcome != "running" || len(before.CarriedResults) != 2 || reads == 0 {
+				t.Fatalf("read before = %+v after %d reads of its Results; want the running force with two Results", before, reads)
+			}
+			if during, _ := read(reads); !reflect.DeepEqual(during, before) {
+				t.Errorf("read across the release = %+v; want it as before %+v", during, before)
+			}
+			after, _ := read(0)
+			if after.Outcome != "refused" || after.Reason != "not_issued" || reflect.DeepEqual(after.CarriedResults, before.CarriedResults) {
+				t.Errorf("read after the release = %+v; want refused not_issued with the Messages' new Results", after)
+			}
+		})
+	}
 }

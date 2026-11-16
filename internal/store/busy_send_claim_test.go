@@ -28,11 +28,14 @@ import (
 
 // busySendInbox is a covered Claude agent with a route, its Messages Held in
 // order (the first confirmed under pair), and dest its current destination.
+// force is the running force whose hand-over commit issues under (forceClaim
+// sets it), nil for an ordinary hand-over.
 type busySendInbox struct {
 	s        *store.Store
 	path, id string
 	pair     store.BusySendPair
 	dest     store.BusySendDestination
+	force    *store.BusySendForceRef
 }
 
 func newBusySendInbox(t *testing.T, texts ...string) *busySendInbox {
@@ -86,7 +89,7 @@ var busySendHelper = store.BusySendIssuer{Role: store.BusySendProcessHelper, PID
 func (in *busySendInbox) commit(ctx context.Context, h *store.BusySendHandover, k int, revision int64) (store.BusySendIssue, error) {
 	issuer := busySendHelper
 	return in.s.CommitBusySendIssue(ctx, store.BusySendIssueRequest{
-		Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, PromptIndex: k, Revision: revision}, Issuer: &issuer})
+		Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, PromptIndex: k, Revision: revision}, Force: in.force, Issuer: &issuer})
 }
 
 // issue commits prompt k's issue at revision and requires it to pass.
@@ -129,12 +132,12 @@ func (in *busySendInbox) reopen(t *testing.T) {
 // busySendCustody is one Message's stored custody and Result.
 type busySendCustody struct {
 	id, place, class, reason, wait, handover string
-	final, reserved                          bool
+	final, reserved, forced                  bool
 	since, finalAt, size                     int64
 }
 
 // String is the custody compared by value: place, class, Final, reason (and a
-// wait that differs from it), reservation and current membership.
+// wait that differs from it), reservation, current membership and forced.
 func (c busySendCustody) String() string {
 	s := c.place + " " + c.class
 	if c.final {
@@ -149,6 +152,9 @@ func (c busySendCustody) String() string {
 	}
 	if c.handover != "" {
 		s += " member"
+	}
+	if c.forced {
+		s += " forced"
 	}
 	return s
 }
@@ -172,7 +178,8 @@ func openBusySendRaw(t *testing.T, path string) *sql.DB {
 func readBusySendCustody(t *testing.T, path, id string) []busySendCustody {
 	t.Helper()
 	rows, err := openBusySendRaw(t, path).Query(`SELECT message_id, place, result_class, result_final, COALESCE(result_reason, ''),
-	        COALESCE(wait_reason, ''), COALESCE(wait_since_ms, 0), COALESCE(handover_id, ''), reserved, COALESCE(final_at_ms, 0), text_bytes
+	        COALESCE(wait_reason, ''), COALESCE(wait_since_ms, 0), COALESCE(handover_id, ''), reserved, COALESCE(final_at_ms, 0), text_bytes,
+	        forced
 	    FROM busy_send_messages WHERE instance_id = ? ORDER BY accepted_seq`, id)
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +189,7 @@ func readBusySendCustody(t *testing.T, path, id string) []busySendCustody {
 	for rows.Next() {
 		var c busySendCustody
 		if err := rows.Scan(&c.id, &c.place, &c.class, &c.final, &c.reason, &c.wait, &c.since, &c.handover, &c.reserved,
-			&c.finalAt, &c.size); err != nil {
+			&c.finalAt, &c.size, &c.forced); err != nil {
 			t.Fatal(err)
 		}
 		out = append(out, c)

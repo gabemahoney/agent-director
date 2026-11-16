@@ -115,7 +115,8 @@ func TestBusySendMCPOptionsReachTheVerb(t *testing.T) {
 // delivery_request_id reaches the store unchanged, and its Result is the one
 // get_delivery returns; its text's U+FFFD is kept, so the same pair with the
 // character escaped is a repeat returning that Result, while other text is
-// ErrCantSend, id_conflict, with that Result in err_details.
+// ErrCantSend, id_conflict, with that Result in err_details. force reaches
+// the verb (see below).
 func TestBusySendMCPCoveredSend(t *testing.T) {
 	const id = "mcp-covered-row"
 	e := newEnv(t)
@@ -170,6 +171,34 @@ func TestBusySendMCPCoveredSend(t *testing.T) {
 	want := map[string]any{"class": "cant_send", "reason": "id_conflict", "resend_safe": true, "retry_with": "new_send", "result": result}
 	if data.ErrName != "ErrCantSend" || !reflect.DeepEqual(data.ErrDetails, want) {
 		t.Errorf("repeat with other text = %s, err_details %#v; want ErrCantSend with %#v", data.ErrName, data.ErrDetails, want)
+	}
+
+	// SR-4.1: force reaches the verb. The pair's repeat with force true is the
+	// Result with the repeat's own force attempt beside it, refused at once
+	// (the row records no route), which get_force returns found; with force
+	// false it is the Result alone.
+	repeat := func(force string) *mcp.Response {
+		return callTool(t, e.d, "send_keys", `{"instance_id":"`+id+`","text":"hi �",`+confirmed+`,"delivery_request_id":"`+requestID+`","force":`+force+`}`)
+	}
+	var withForce, plain map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(toolText(t, repeat("true"))), &withForce); err != nil || json.Unmarshal([]byte(sent), &plain) != nil {
+		t.Fatalf("forced repeat: %v", err)
+	}
+	var force api.ForceResult
+	if err := json.Unmarshal(withForce["force_result"], &force); err != nil || force.Outcome != "refused" || force.Reason != "route_unavailable" ||
+		len(force.CarriedPairs) != 0 || len(force.CarriedResults) != 0 || force.EndedAt == nil || !force.EndedAt.Equal(force.StartedAt) {
+		t.Errorf("force_result = %s (%v); want refused route_unavailable at once, carrying nothing", withForce["force_result"], err)
+	}
+	found := callToolText(t, e.d, "get_force", `{"force_id":"`+force.ForceID+`"}`)
+	if string(found["lookup"]) != `"found"` || string(found["force_result"]) != string(withForce["force_result"]) {
+		t.Errorf("get_force = %v; want found with the send's force_result %s", found, withForce["force_result"])
+	}
+	delete(withForce, "force_result")
+	if !reflect.DeepEqual(withForce, plain) {
+		t.Errorf("forced repeat's Result = %v; want the send's %s", withForce, sent)
+	}
+	if got := toolText(t, repeat("false")); got != sent {
+		t.Errorf("repeat with force false = %s; want the Result alone %s", got, sent)
 	}
 }
 
@@ -256,7 +285,8 @@ func TestBusySendMCPForceAndLookups(t *testing.T) {
 
 // TestBusySendMCPReaderPayloadsForwardUnchanged: the lookup tools forward a
 // dispatcher's found and retention_expired answers byte for byte, nulls and
-// omitted receipt fields included, and its store failure as an error (busy
+// omitted receipt fields included (a running force's empty reason and its
+// carried_results, shorter than carried_pairs, too), and its store failure as an error (busy
 // stays ErrStoreBusy), never a lookup.
 func TestBusySendMCPReaderPayloadsForwardUnchanged(t *testing.T) {
 	since := time.Date(2026, 11, 13, 1, 2, 3, 4e6, time.UTC)
@@ -276,9 +306,21 @@ func TestBusySendMCPReaderPayloadsForwardUnchanged(t *testing.T) {
 				`"instance_id":"row-1","launch_token":null,"evidence_kind":null,"outcome":"submission_unconfirmed"}}`},
 		{"delivery expired", "get_delivery", api.GetDeliveryResult{Lookup: "retention_expired"}, nil, `{"lookup":"retention_expired","result":null}`},
 		{"force found", "get_force", api.GetForceResult{Lookup: "found", ForceResult: &api.ForceResult{
-			ForceID: paramToken, Outcome: "pending", Reason: "awaiting_admission", StartedAt: since, CarriedPairs: []api.DeliveryPair{earlier}}},
+			ForceID: paramToken, Outcome: "pending", Reason: "awaiting_admission", StartedAt: since, CarriedPairs: []api.DeliveryPair{earlier},
+			CarriedResults: []api.DeliveryResult{}}},
 			nil, `{"lookup":"found","force_result":{"force_id":"` + paramToken + `","outcome":"pending","reason":"awaiting_admission",` +
-				`"started_at":"2026-11-13T01:02:03.004Z","ended_at":null,"carried_pairs":[{"caller_uuid":"` + paramToken + `","request_id":"r0"}]}}`},
+				`"started_at":"2026-11-13T01:02:03.004Z","ended_at":null,"carried_pairs":[{"caller_uuid":"` + paramToken + `","request_id":"r0"}],` +
+				`"carried_results":[]}}`},
+		{"force running", "get_force", api.GetForceResult{Lookup: "found", ForceResult: &api.ForceResult{
+			ForceID: paramToken, Outcome: "running", StartedAt: since, CarriedPairs: []api.DeliveryPair{earlier, {CallerUUID: paramToken, RequestID: "r1"}},
+			CarriedResults: []api.DeliveryResult{{CallerUUID: paramToken, RequestID: "r1", Class: "held", Reason: "turn_running", RetryWith: "none",
+				Wait: &api.DeliveryWait{Reason: "turn_running", Since: since}, InstanceID: "row-1", Outcome: "not_started"}}}},
+			nil, `{"lookup":"found","force_result":{"force_id":"` + paramToken + `","outcome":"running","reason":"",` +
+				`"started_at":"2026-11-13T01:02:03.004Z","ended_at":null,"carried_pairs":[{"caller_uuid":"` + paramToken + `","request_id":"r0"},` +
+				`{"caller_uuid":"` + paramToken + `","request_id":"r1"}],"carried_results":[{"caller_uuid":"` + paramToken + `","request_id":"r1",` +
+				`"class":"held","final":false,"reason":"turn_running","resend_safe":false,"retry_with":"none","wait":{"reason":"turn_running",` +
+				`"since":"2026-11-13T01:02:03.004Z"},"forced":false,"instance_id":"row-1","launch_token":null,"evidence_kind":null,` +
+				`"outcome":"not_started"}]}}`},
 		{"force expired", "get_force", api.GetForceResult{Lookup: "retention_expired"}, nil, `{"lookup":"retention_expired","force_result":null}`},
 		{"store busy", "get_force", nil, fmt.Errorf("get-force: %w", store.ErrStoreBusy), "ErrStoreBusy"},
 		{"store failure", "get_delivery", nil, errors.New("read busy_send_results: disk I/O error"), "ErrInternal"},
