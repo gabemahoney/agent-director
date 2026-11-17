@@ -19,7 +19,8 @@ import (
 // find-missing on Codex rows (SR-6.5, SR-7.1, SR-7.5, MC-2): a live Codex row whose agent process is proven gone
 // and which holds an end report (its agent's SessionEnd) moves to ended and is in neither result list; every
 // other gone row is marked missing. The cells sweep a fake store (the outcome tables); the records, the lists and
-// the follow-ups run on a real store. Each test owns uuid row ids, so all run in parallel.
+// the follow-ups run on a real store. UUID row ids permit parallel tests; writer-holding regressions and
+// tests changing HOME run serially.
 
 // cxEndReported is the end report (Unix ms) a cell's row holds, and cxPID the agent process its checker answers.
 var cxEndReported = fmNow.Add(-time.Minute).UnixMilli()
@@ -146,6 +147,24 @@ func TestFindMissingCodexOutcomeTable(t *testing.T) {
 	}
 }
 
+// b.86d: runCxCell must see accepted move ticks even when the real writer outlasts the bounded wait.
+func TestFindMissingCodexSlowTrail(t *testing.T) {
+	// Serial: it holds the process-wide trail singleton's mutex.
+	for _, report := range []bool{true, false} {
+		t.Run(fmt.Sprintf("end report %v", report), func(t *testing.T) {
+			c := cxCell{row: cxRow(store.AgentCodex, store.StateWorking, report),
+				pc: mxChecker(cxPID, procfix.Gone()), reason: "proc_absent", noTmux: true}
+			if report {
+				c.ops, c.newState = []string{"ended"}, store.StateEnded
+			} else {
+				c.ops, c.newState, c.ids = []string{"mark"}, store.StateMissing, []string{c.row.InstanceID}
+			}
+			holdTrailUntilReader(t)
+			runCxCell(t, c)
+		})
+	}
+}
+
 // cxAdoptedCell is a Codex row recording no pane (a lost create reply) whose adopted pane's process (the token
 // pane its own session lists) is gone.
 func cxAdoptedCell(agent string, report bool) cxCell {
@@ -241,6 +260,7 @@ type moveWant struct {
 // state, reason, source ad_find_missing); and nothing else (no ad.spawn.state_transition, no other event).
 func assertMoveRecords(t *testing.T, mark int, id string, w moveWant) {
 	t.Helper()
+	drainTrail(t)
 	source := w.source
 	if source == "" {
 		source = "ad_find_missing"
@@ -355,6 +375,26 @@ func TestFindMissingCodexEndedRecords(t *testing.T) {
 			}
 		})
 	}
+}
+
+// b.86d: the real-store mustFindMissing/assertMoveRecords path must wait for an accepted move tick.
+func TestFindMissingCodexEndedRecordsSlowTrail(t *testing.T) {
+	// Serial: it holds the process-wide trail singleton's mutex.
+	id := "cx-" + uuid.NewString()
+	s, dbPath := openSeeded(t, func(t *testing.T, p string, create bool, _ string) {
+		cxSeed(t, p, create, id, store.AgentCodex, store.StateWorking, true)
+	})
+	pc := mxChecker(cxPID, procfix.Gone())
+	mark := trailLen(t)
+	holdTrailUntilReader(t)
+
+	res := mustFindMissing(t, s, pc)
+
+	assertLists(t, res, nil, nil)
+	if row := readOne(t, dbPath, id); row.State != store.StateEnded {
+		t.Fatalf("row state after sweep = %s; want ended before reading its tick", row.State)
+	}
+	assertMoveRecords(t, mark, id, moveWant{prior: store.StateWorking, now: store.StateEnded, reason: "proc_absent"})
 }
 
 // readOne reads id's row raw through apitest.ReadSpawnColumns.

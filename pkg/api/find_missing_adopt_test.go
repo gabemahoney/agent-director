@@ -54,6 +54,7 @@ func paneAdopted(r store.LiveSpawnIdentity, start string) store.LaunchIdentity {
 // assertOneDisagree fails unless id has exactly count reason records since before (one: with action).
 func assertOneDisagree(t *testing.T, before int, id, reason, action string, count int) {
 	t.Helper()
+	drainTrail(t)
 	var recs []map[string]any
 	for _, r := range ptRecords(t, before, "ad.provenance.disagree", id) {
 		if r["reason"] == reason {

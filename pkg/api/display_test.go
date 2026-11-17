@@ -114,6 +114,14 @@ func assertDisplayState(t *testing.T, c *api.Client, id, want string) api.Status
 	return observeStatus(t, c, id, want, commit)
 }
 
+// recoveryDisplayEvents waits for accepted bounded observation records before checking their fields.
+// Direct lifecycle-writer assertions use displayEvents to retain their synchronous-write oracle.
+func recoveryDisplayEvents(t *testing.T, mark int, id string) []map[string]any {
+	t.Helper()
+	drainTrail(t)
+	return displayEvents(t, mark, id)
+}
+
 // displayEvents returns id's ad.spawn.displayed_state_transition records after mark, failing any
 // not of exactly the record's fields (SR-5.1) or of the replaced event; callers on shared ids are serial.
 func displayEvents(t *testing.T, mark int, id string) []map[string]any {

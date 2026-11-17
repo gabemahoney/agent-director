@@ -172,6 +172,7 @@ func TestSettleGuardFindMissing(t *testing.T) {
 	if err != nil || !slices.Contains(res.IDs, r.ID) {
 		t.Fatalf("FindMissing = %+v, %v; want %s marked", res, err, r.ID)
 	}
+	drainTrail(t)
 	ticks := pendTrail(t, "ad.find_missing.tick", r.ID)
 	if len(ticks) != 1 || ticks[0]["prior_state"] != store.StateWaiting {
 		t.Errorf("ticks = %v; want one from the raw state %s", ticks, store.StateWaiting)
