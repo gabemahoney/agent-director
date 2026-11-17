@@ -51,9 +51,18 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	_, got, found := strings.Cut(string(b), "## Going back to the previous release\n")
 	got, _, complete := strings.Cut(got, "\nEOF\n")
-	if !found || !complete || got+"\n" != section {
-		t.Fatalf("%s: complete recovery text differs from linked operator advice", expectedPath)
+	// The copied historical testplan pins the restore recipe. The new
+	// versioned-layout preamble has its own literal teardown follow below.
+	const restoreStart = "For an upgrade within the current `~/.config/agent-director` layout,"
+	_, legacyCopy, legacyFound := strings.Cut(got, restoreStart)
+	legacyDoc := opsDocSection(t, "Restore the previous release")
+	_, legacyBody, _ := strings.Cut(legacyDoc.text, "\n")
+	if !found || !complete || !legacyFound || strings.TrimSpace(restoreStart+legacyCopy) != strings.TrimSpace(legacyBody) {
+		t.Fatalf("%s: complete legacy restore recipe differs from linked operator advice", expectedPath)
 	}
+	section = legacyDoc.text
+	teardown := opsDocSection(t, "Returning across the exempt conversion")
+	teardown.Pin("Obtain explicit operator authorization. Stop all writers", "Run it without `--purge` and without `--mcp-also`", "It must print `exempt`")
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
 		"including schema v9→v10 through v20→v21, the old-layout steps below do not apply",
@@ -213,6 +222,16 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			rollbackRestoreStore(t, h, inspection, postUpgradeEvidence)
 			if got := h.Sqlite(inspection, "SELECT instance_id,cwd FROM spawns ORDER BY instance_id; SELECT count(*) FROM input_attempts; SELECT count(*) FROM input_launches;"); got != "after|/after\nbefore|/after\n0\n0\n" {
 				t.Fatalf("preserved evidence must retain later writes and establish no input to reconcile before older runtime use: %q", got)
+			}
+			// DR3: only after retaining the complete later evidence and
+			// confirming the previous installer supports this host, follow
+			// the authorized non-purge teardown before restoring any DB.
+			kept := stagedSnapshot(t, h, moveNewRel+"/config.toml")
+			currentStore := rollbackStoreCopy(t, db)
+			stagedDocTeardown(t, h, teardown, "<layout-tag>")
+			kept.Unchanged(t, h)
+			if !reflect.DeepEqual(rollbackStoreCopy(t, db), currentStore) {
+				t.Fatal("non-purge teardown changed current runtime evidence")
 			}
 			rollbackRestoreStore(t, h, db, postUpgradeCopy)
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {

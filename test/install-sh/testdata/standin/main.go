@@ -20,6 +20,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+
+	"github.com/gabemahoney/agent-director/internal/installfacts"
+	"github.com/gabemahoney/agent-director/internal/installversion"
 )
 
 // Set with -ldflags "-X main.<name>=<value>"; configDir is left out of the
@@ -34,6 +37,17 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "standin: no verb")
 		os.Exit(2)
+	}
+	// The synthetic current-layout runtime is paired with the real admin.
+	// Its staged facts probe has a scrubbed environment, so it cannot use
+	// SCHED_TEST_DELEGATE. Earlier-layout stand-ins keep their old surface.
+	if configDir == "~/.config/agent-director" && (os.Args[1] == installversion.RuntimeFactsArgument || os.Args[1] == "version-facts") {
+		facts := installfacts.Compiled()
+		facts.Version, facts.Commit = version, commit
+		if err := json.NewEncoder(os.Stdout).Encode(facts); err != nil {
+			os.Exit(1)
+		}
+		return
 	}
 	// Scheduling cases inspect every invocation, including accidental recovery
 	// probes. All other move-fixture consumers retain their original behavior.

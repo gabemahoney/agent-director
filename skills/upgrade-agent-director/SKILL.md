@@ -1,6 +1,6 @@
 ---
 name: upgrade-agent-director
-description: Upgrade or re-install an existing agent-director install on this machine, step by step - stop the agents (with the operator's go-ahead), sweep with the installed release's find-missing, run install.sh, verify, hand a refusal's documented fix to the operator, resume the agents. Use this skill whenever agent-director is already installed and the user says "upgrade agent-director", "update agent-director", "upgrade agent-director on this machine" or asks to re-install it. For a first install, use install-agent-director.
+description: Upgrade or re-install agent-director. Classify by layout files first; a versioned install upgrades file-only with agents running. An exempt install retains operator-authorized stops, migration, verification and restart. Use when asked to upgrade, update or re-install an existing install. For a first install, use install-agent-director.
 ---
 
 # Upgrade agent-director
@@ -15,9 +15,125 @@ Follow the steps in order, as the agents' user. The commands name an install
 in `~/.config/agent-director` (0.12.0 onward; no directory move). For
 0.3.0–0.11.1 in
 `~/.agent-director` ([the old directory](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#upgrading-an-install-from-the-old-directory)),
-use that directory in steps 1 and 2, and do that section's "Before you run"
-steps with the operator before step 3's one-time move. Run
-[one upgrade at a time](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#upgrading-the-native-input-journal).
+use that directory in exempt steps 1 and 2, and do that section's "Before you
+run" steps with the operator before step 3's one-time move.
+
+## Choose the upgrade path first
+
+Follow the [install policy](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#choose-the-upgrade-path).
+Before any process exclusion, MCP/session check, config-based store resolution,
+schema copy/read or runtime command, classify using files only:
+
+```sh
+ad_upgrade_root="$HOME/.config/agent-director"
+ad_upgrade_path=exempt
+for ad_entry in install-contract.json install-initialization.json current versions publications install.lock; do
+  if [ -e "$ad_upgrade_root/$ad_entry" ] || [ -L "$ad_upgrade_root/$ad_entry" ]; then
+    ad_upgrade_path=file-only
+  fi
+done
+ad_upgrade_clean_path() {
+  local rest="$1" part clean=
+  while [ -n "$rest" ]; do
+    part=${rest%%/*}
+    if [ "$part" = "$rest" ]; then rest=; else rest=${rest#*/}; fi
+    case "$part" in
+      ''|.) ;;
+      ..) clean=${clean%/*} ;;
+      *) clean="$clean/$part" ;;
+    esac
+  done
+  printf '%s\n' "${clean:-/}"
+}
+ad_upgrade_root=$(ad_upgrade_clean_path "$ad_upgrade_root")
+for ad_entry in "$ad_upgrade_root/bin/agent-director" "$ad_upgrade_root/admin/agent-director-admin"; do
+  if [ -L "$ad_entry" ]; then
+    ad_target=$(readlink "$ad_entry") || exit 1
+    case "$ad_target" in /*) ;; *) ad_target="${ad_entry%/*}/$ad_target" ;; esac
+    ad_target=$(ad_upgrade_clean_path "$ad_target")
+    case "$ad_target" in
+      "$ad_upgrade_root/current"|"$ad_upgrade_root/current/"*|"$ad_upgrade_root/versions"|"$ad_upgrade_root/versions/"*) ad_upgrade_path=file-only ;;
+    esac
+  fi
+done
+printf '%s\n' "$ad_upgrade_path"
+```
+
+Any evidence, dangling links included, selects file-only validation/recovery
+or `layout_invalid`. Missing/corrupt `current` or old-script regular-file entry
+overwrites never justify falling back to the exempt path while evidence remains.
+Do not inspect a DB or infer its age from config to change this decision.
+
+### Choose the release
+
+Choose a layout-aware release tag once for this upgrade and reuse it for every
+re-run. To find the latest, run this read-only command:
+
+```sh
+curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
+```
+
+If curl fails or its URL does not end in `/releases/tag/<tag>`, stop and
+hand the operator the output unless they provide a release tag. Replace both
+`<tag>`s in the install command with that tag: installer and binaries must
+come from the same release.
+
+### File-only upgrade
+
+When classification prints `file-only`, run this branch and finish here.
+It may run from an AD-managed session or one using AD MCP tools; no process,
+agent, caller or `serve` must stop or resume. Retain the original install's
+flags and any the operator requests, appended after `upgrade-agent-director`;
+the outer `pipefail` catches download failure and `"$@"` forwards the flags.
+
+```sh
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag> "$@"' upgrade-agent-director
+```
+
+On exit 0 verify using files and the store-free version command only:
+
+```sh
+~/.config/agent-director/bin/agent-director version
+readlink ~/.config/agent-director/current
+readlink ~/.config/agent-director/bin/agent-director
+readlink ~/.config/agent-director/admin/agent-director-admin
+```
+
+Check the chosen stamp, a `versions/<id>` selection, and canonical entry targets
+`../current/agent-director` and `../current/agent-director-admin`. This makes no
+claim about the store's schema. Direct admin inspection or rollback is human-run
+or requires explicit human approval for that individual run; prepare the full
+command from [versioned-install recovery](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#recovering-a-versioned-install).
+The installer's internal admin call is part of the authorized install.
+
+On exit 5, read `details.reason`, `publication_state`, `durable` and recovered
+facts using that procedure, not the journal's `details.refusal`/`cutover` shape.
+Unknown or unreadable output proves no rollback: preserve it and rerun the
+same install for forward recovery once the reported cause is corrected.
+Do not invent a reason or restore old files. Exit 3 for missing version-command
+support needs a compatible candidate. On exit 6, installation completed but MCP
+registration failed: hand its stderr and the
+[MCP remedy](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#the-mcp-registration-or-deregistration-failed-exit-6)
+to the operator, then perform the file-only verification above and finish.
+Other failures go to the operator with their output.
+
+No failure or verification here authorizes `list`, a store/sidecar snapshot or
+header read, holder/process inventory, `pause`, `kill`, `sweep`, `find-missing`,
+`resume`, a wake or input. An ordinary later upgrade finishes here. If this
+branch was invoked by [an original exempt publication-failure continuation](#publication-failure-after-an-exempt-install),
+return to that continuation after file-only verification; it retains the
+original exempt settlement obligations. Do not start the generic exempt steps.
+
+### Exempt upgrade
+
+Run only one installer at a time throughout the exempt attempt and its
+verification, recovery or restore settlement. Keep that exclusion until the
+attempt is settled; the publication lock does not serialize exempt migration.
+
+Only classification `exempt` proceeds through steps 1–6. Keep all their
+authorization, same-user/tmux and every-agent restart requirements. An older
+candidate without version commands can install here without creating a layout;
+the next current-release install is exempt again.
 
 ## 1. Stop the agents
 
@@ -35,22 +151,6 @@ user or to a session agent-director did not start, saying why: your own row is
 live, so the install refuses, and your own hooks would run the new binary
 mid-upgrade. Do the same if this session has agent-director's MCP tools: their
 `agent-director serve` must stop too.
-
-### Choose the release
-
-Choose the release tag once for this upgrade, such as `v0.18.1`, and reuse
-it for every re-run of the install. To find the latest, run this read-only
-command:
-
-```sh
-curl -fsSLI -o /dev/null -w '%{url_effective}\n' https://github.com/gabemahoney/agent-director/releases/latest
-```
-
-If curl fails or its URL does not end in `/releases/tag/<tag>`, stop and
-hand the operator the output unless they provide a release tag.
-
-Replace both `<tag>`s below with that tag, so the installer and binaries
-come from the same release.
 
 ### Read the store schema
 
@@ -210,7 +310,7 @@ the same journal flags. Exit 5: show the operator the output, including the
 listed processes, and stop. On any other non-zero exit, stop and hand the
 operator the output. With no crossing, skip this check.
 
-For every upgrade, from this shell:
+For this exempt upgrade, from this shell:
 
 ```sh
 bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/<tag>/skills/install-agent-director/install.sh | bash -s -- --from-release <tag> "$@"' upgrade-agent-director
@@ -224,10 +324,18 @@ Otherwise pass no journal flags.
 Add the original install's other
 [flags](https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#install-from-a-release),
 plus any the operator adds now, such as `--register-mcp`.
-Exit 0: step 4. Exit 5 or 6: step 5. Another exit:
+Exit 0: step 4. Exit 5 or 6: step 5. If the cause is
+`ErrVersionInstallRefused`, use its exempt publication continuation there.
+Keep step 1's original schema result, recorded parents, stopped writers and
+flags across retries; do not replace them with a post-conversion schema read.
+Another exit:
 [When install.sh fails](https://github.com/gabemahoney/agent-director/blob/main/skills/install-agent-director/SKILL.md#when-installsh-fails).
 
 ## 4. Verify
+
+This is verification of the original exempt install, not of a file-only retry.
+After an exempt publication failure, use the separate continuation in step 5;
+do not route a file-only retry through this section's `list` command.
 
 ```sh
 ~/.config/agent-director/bin/agent-director version
@@ -254,6 +362,11 @@ An error goes to step 5.
 
 ## 5. On a refusal
 
+First distinguish `ErrVersionInstallRefused` (or interrupted/unreadable
+publication output) from a journal/store failure. For publication after this
+exempt attempt, follow the subsection below. Its `details.reason` and
+publication facts do not use `details.refusal` or `cutover`.
+
 `install.sh`'s last stderr line names the cause, `install.sh: err_name=<Name>`;
 `agent-director-admin`'s JSON envelope names it as `err_name`. The envelope
 gives `details.refusal.reason` and `action`. Find that reason's row in
@@ -278,6 +391,54 @@ says, then go on with step 4 and step 6.
 For a row that leads to neither step, or an `err_name` or reason with no row,
 stop and hand the operator the output.
 
+### Publication failure after an exempt install
+
+Keep the original exempt attempt open: all stopped writers and launchers stay
+excluded, along with a second installer. Retain its pre-install schema result,
+resolved store path (updated for a completed directory move), recorded parent
+links, chosen tag and flags. The installer reached publication only after its
+store setup and schema verification settled; publication failure does not mean
+the store open failed or its migration authorization was unconsumed.
+
+Use [versioned-install recovery](https://github.com/gabemahoney/agent-director/blob/main/docs/operator-actions.md#recovering-a-versioned-install)
+for the envelope's `details.reason`, requested `publication_state`, `durable`,
+`published_version`, `recovered_version` and initialization facts. Unknown or
+unreadable output proves no rollback. After correcting the cause, run
+[the file classifier](#choose-the-upgrade-path-first) again before retrying:
+
+- `file-only`: rerun the same tag/pair/flags using **File-only upgrade** and
+  verify only its version/layout facts. That retry performs no store read,
+  holder inventory, stop, sweep or resume. Instead of ending the original
+  exempt workflow, return here after that branch succeeds.
+- `exempt`: evidence was not established. With the original exclusion still
+  maintained, rerun step 3 using the same tag and flags. On success return
+  here, retaining the original schema result.
+
+Exit 6 after recovery keeps the installation: give the MCP remedy to the
+operator, perform the selected branch's file-only version/layout checks and
+return here. Another failure stays in its branch's recovery; it does not
+authorize a store-opening fallback.
+
+Once publication and entry initialization complete, finish the **original
+exempt settlement** separately. Do not run step 4's generic `list` block for
+the file-only retry. Store verification already completed before the original
+publication attempt. If the saved original schema result was 0 or at least 16,
+that exempt verification is complete. If it was 1–15, prepare only the
+original journal verification, with its saved resolved store and declared
+roots (repeat `--legacy-root` for each additional root):
+
+```sh
+~/.config/agent-director/admin/agent-director-admin --store-path <store> migrate-journal --maintenance-window --roots-complete --backup-dir <new-absolute-directory>
+```
+
+Show the filled-in command to the operator for explicit approval for this
+individual run, or let them run it. This is settlement of the original exempt
+cutover, not verification of the file-only retry. It must exit 0 with
+`"authority": "sqlite"`; a refusal follows the journal procedure while writers
+remain excluded. Then perform step 6 using the original recorded parents:
+restart every stopped agent, `serve`, caller and launcher, parents before
+children. A file-only retry never cancels those exempt restart obligations.
+
 ## 6. Resume the agents
 
 Ask the operator to restart whatever starts agents, every `serve` and every
@@ -286,6 +447,9 @@ caller
 then bring back each agent stopped in step 1, parents before children. If a
 row's recorded parent was also stopped in step 1, attempt that parent's
 resume first.
+
+Every agent must restart on the exempt release, including any still running
+from before the install; do not carry an old launch across the exempt hop.
 
 With no recorded parent, use the first resume command below. With a recorded
 parent, check its row first:

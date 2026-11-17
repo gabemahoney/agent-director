@@ -1,0 +1,6 @@
+{
+  "Replace": {
+    "@SOURCE@/internal/adminapi/install_versions.go": "@BUILD@/install_versions.go",
+    "@SOURCE@/internal/adminapi/install_test_observer.go": "@BUILD@/observe.go"
+  }
+}

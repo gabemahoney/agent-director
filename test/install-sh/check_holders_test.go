@@ -40,10 +40,10 @@ func TestInstallHolders(t *testing.T) {
 			var flags []string
 			if tc.current {
 				h = newMoveHome(t)
-				moveMustInstall(t, h)
+				h.BuildLegacyCurrent()
 				db = filepath.Join(h.New, "state.db")
 				if v, want := moveUserVersion(t, h, db), moveCurrentVersion(t, h); v != want {
-					t.Fatalf("fresh install's store is at v%s, want v%s", v, want)
+					t.Fatalf("legacy install's store is at v%s, want v%s", v, want)
 				}
 				flags = []string{"--journal-maintenance-window", "--journal-roots-complete",
 					"--journal-backup", filepath.Join(h.Root, "unused-backup")}

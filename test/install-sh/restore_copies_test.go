@@ -252,8 +252,8 @@ func assertNoCopiesIn(t *testing.T, dir string) {
 }
 
 // assertKeptUnlinked fails unless the move kept the old directory whole
-// with its own agent-director, and the swap made no link: none at the old
-// path, and this release's agent-director a regular file.
+// with its own regular agent-director and made no PATH link at the old path.
+// The settled exempt install publishes the new pair through permanent links.
 func assertKeptUnlinked(t *testing.T, h *moveHome) {
 	t.Helper()
 	if _, err := os.Lstat(h.Old); err == nil {
@@ -263,11 +263,11 @@ func assertKeptUnlinked(t *testing.T, h *moveHome) {
 	if len(kept) != 1 {
 		t.Fatalf("kept directories = %v; want one", kept)
 	}
-	for _, p := range []string{filepath.Join(kept[0], "bin", "agent-director"), filepath.Join(h.New, "bin", "agent-director")} {
-		if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
-			t.Errorf("%s is not a regular file (%v): the swap linked it", p, err)
-		}
+	p := filepath.Join(kept[0], "bin", "agent-director")
+	if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
+		t.Errorf("%s is not a regular file (%v): the swap linked it", p, err)
 	}
+	stagedLayout(t, h, moveVersion)
 }
 
 // TestRestoreCopies: each run makes the copies the rules say, sees them

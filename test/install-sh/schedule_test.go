@@ -661,7 +661,7 @@ func schedRerun(t *testing.T, cwd, script string, argv []string) string {
 }
 
 // schedRunArgv is schedRun with install.sh's whole argument list.
-func schedRunArgv(t *testing.T, h *moveHome, script string, piped bool, argv []string) moveResult {
+func schedRunArgv(t *testing.T, h *moveHome, script string, piped bool, argv []string, run ...func(*exec.Cmd) moveResult) moveResult {
 	t.Helper()
 	cmd := h.command()
 	if piped {
@@ -674,6 +674,9 @@ func schedRunArgv(t *testing.T, h *moveHome, script string, piped bool, argv []s
 		cmd.Stdin = f
 	} else {
 		cmd.Args = append([]string{cmd.Args[0], script}, argv...)
+	}
+	if len(run) != 0 {
+		return run[0](cmd)
 	}
 	return schedExec(t, cmd)
 }
@@ -1063,9 +1066,9 @@ func TestScheduleSystemd(t *testing.T) {
 		timers := "agent-director-find-missing.timer agent-director-expire.timer"
 		wantLines(t, "systemctl calls", strings.Join(stub.SystemctlCalls(), "\n"), "--user show-environment", "--user daemon-reload", "--user enable "+timers, "--user restart "+timers)
 
-		// A re-run writes the same files and enables again.
+		// A later re-run keeps matching units and their healthy timers unchanged.
 		again := schedRun(t, h, script, false, "--schedule")
-		wantLines(t, "re-run stdout", again.Stdout, "  schedule: systemd: the user timers already held these units; enabled again, nothing changed ("+schedUnitDir(h)+")")
+		wantLines(t, "re-run stdout", again.Stdout, "  schedule: systemd: the user timers already hold these units and are enabled and active; unchanged ("+schedUnitDir(h)+")")
 		unitsWant(t, h, "/run/ad-tmux")
 		if strings.Contains(again.Stderr, "WARNING") {
 			t.Errorf("re-run warns:\n%s", again.Stderr)
@@ -1173,7 +1176,7 @@ func TestScheduleSystemd(t *testing.T) {
 
 			// A re-run finds them in the same directory.
 			again := schedRun(t, h, script, false, "--schedule")
-			wantLines(t, "re-run stdout", again.Stdout, "  schedule: systemd: the user timers already held these units; enabled again, nothing changed ("+dir+")")
+			wantLines(t, "re-run stdout", again.Stdout, "  schedule: systemd: the user timers already hold these units and are enabled and active; unchanged ("+dir+")")
 		})
 	}
 

@@ -96,6 +96,13 @@ func extractCreateRootBlock(t *testing.T, root string) string {
 		t.Fatalf("end marker %q not found after the install-root section — update if install.sh was reordered", endMarker)
 	}
 	block := src[start : start+end]
+	// m5 encloses root creation and the later binary swap in one exempt-only
+	// branch. Extract its body here, not an unterminated outer if statement.
+	const exemptGuard = "if [[ \"$LATER_INSTALL\" -eq 0 ]]; then\n"
+	_, block, ok := strings.Cut(block, exemptGuard)
+	if !ok {
+		t.Fatalf("exempt root-creation guard %q not found", exemptGuard)
+	}
 
 	// Sanity: the block must actually run chmod on the install root; if it
 	// doesn't, the extraction is wrong and the mode assertion would be vacuous.

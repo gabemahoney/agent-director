@@ -1,13 +1,26 @@
 # Writing a SQLite Schema Migration
 
-How to add the next schema version to the agent-director store safely.
+How to maintain the exempt migration chain and permanent shared store contract.
 
 This guide is for engineers (and Worker Claudes) changing the DDL in
 `internal/store/`. The store is the **only** package permitted to speak SQL
 (`internal/store/store.go` package doc, SRD §4.5); every schema change lands
-here. Read this end-to-end before bumping the version — the rules below are
-not optional, and one of them (the b.8dr rule, §5) exists because it was
+here. Later releases preserve the permanent core and compatibility with old
+processes; they do not add an install-time schema hop. Read this end-to-end
+before changing schema code — the rules below are not optional, and one of
+them (the b.8dr rule, §5) exists because it was
 learned the hard way against the production database.
+
+The exempt v20 → v21 installation is the last conversion for this protocol.
+It retains the exact-sentinel authorization and stopped-writer rules below.
+With any versioned-layout evidence, installation, validation, recovery and
+rollback are file-only: they never open, read, lock, checkpoint, rewrite or
+convert the live DB or sidecars, directly, through a copied snapshot, or via
+an ordinary CLI probe. Runtime opens never migrate. Every later upgrade
+preserves sends and every AD CLI call; future features must preserve the fixed
+shared core and old processes' compatibility. Reuse the
+[publication engine](architecture.md#upgrade-safety-pattern); operational
+procedures belong in [operator actions](operator-actions.md#recovering-a-versioned-install).
 
 ## 1. Architecture as it exists today
 
@@ -29,7 +42,9 @@ Earlier hops retain their owning files: `cursor_runtime.go`,
 `request_eligibility.go`, `family_schema.go`, `codex_startup.go` /
 `claude_capacity.go`, `display_schema.go` and `codex_turn.go`.
 
-**The version contract.** Every open reads `PRAGMA user_version` and checks:
+**The version contract.** Store opens read `PRAGMA user_version` and check
+the cases below. Layout operations never open the store. The authorization
+cases apply only to the exempt/legacy administrator path, never runtime opens:
 
 | Version on disk | Result |
 |---|---|
@@ -74,6 +89,9 @@ creation shares the latest DDL and FULL commit discipline; it never accepts
 a nonempty hand-reset schema as a fresh store.
 
 ## 1a. The chained step engine and the sentinel gate
+
+This engine is retained for fresh/exempt/legacy use. Its authorization does
+not authorize store access during a later versioned installation.
 
 **The chain.** Once an older-than-binary administrator open is authorized (below),
 `runMigrationChainWithInputWindow(db, from, window)` (`schema.go`) loops while `version <
@@ -152,21 +170,13 @@ never touching `state.db`) — there is no logger plumbed into the store:
   **succeeds** (the migration is already done and correct; the stale sentinel is
   inert per above).
 
-**Adding a step.** For a later vN→vN+1, use the validate-first pattern (§2):
-
-1. Bump `schemaVersion` to the chosen next version (`store.go`).
-2. Evolve fresh DDL to that version (the two-places rule — §1, §4), preserving
-   the store id and existing authority.
-3. Write the new hop using one transaction, validation before mutation and
-   the version stamp last (§2).
-4. Append its entry to `migrationSteps` (`schema.go`).
-5. Document the recovery policy in §5. Where an in-place reverse recipe is
-   supported, add its matching test copy to `TestDowngradeRecipe_MatchesGuide`
-   and chain the applicable older recipe to it. Otherwise record the technical
-   exception and require a stopped-writer pre-upgrade backup and restore;
-   never imply that an older recipe can operate on the new schema.
-
-The engine walks the actual registry; do not fold later changes into settled hops.
+**Adding a step.** Do not add v21 → v22 or another live-store conversion for
+a later release under this protocol. The registry ends at the exempt v20 → v21
+hop. Maintain its validate-first transactions (§2), identity/authority
+preservation, fresh-DDL convergence (§4) and tested recovery policy (§5).
+New release functionality must use the permanent compatible contract, not a
+new sentinel, installer DB probe or runtime migration. Do not fold later
+changes into settled hops.
 
 ### Current schema facts: v20 → v21
 
@@ -647,6 +657,9 @@ installs get another. §4's identical-schema assertion is what catches this.
 
 ## 2. The validate-first phased pattern
 
+This pattern governs the retained exempt/legacy hops. It is not a mechanism
+for a later file-only upgrade to mutate the shared store.
+
 Structure the body of a hop in four ordered phases inside the one transaction.
 This ordering means a precondition failure aborts *before* any mutation, so the
 DB stays cleanly at the old version.
@@ -862,11 +875,11 @@ double-run test in §3 pass. The SQLite-specific idioms:
 
 ## 3. Test by running the upgrade twice
 
-A migration is not done until a test proves the upgrade is correct **and
-idempotent**. The version-independent tests in `internal/store/schema_test.go`
-loop over every released version (`for from := 1; from < schemaVersion;
-from++`), so registering your step and bumping `schemaVersion` adds your
-version to them. Each older version is built by `makeVersionedDB`
+An exempt/legacy migration is not done until a test proves the upgrade is
+correct **and idempotent**. Keep the version-independent tests in
+`internal/store/schema_test.go`, which loop over every earlier schema
+(`for from := 1; from < schemaVersion; from++`). Do not extend that chain for
+later releases. Each older version is built by `makeVersionedDB`
 (`migration_fixtures_test.go`): `testdata/schema_v1.sql`, then the real
 registered steps up to that version, in WAL mode so a refused open touches no
 bytes. What they cover, step by step:
@@ -905,7 +918,7 @@ bytes. What they cover, step by step:
    enforcement of the two-places rule (§1): if `schemaDDL` and your hop
    drifted, the shapes differ and the test fails.
 
-**What a new version adds by hand:**
+**Coverage to maintain when repairing an exempt/legacy hop:**
 
 - **Re-entry rows** in `TestMigrationStepReentry`: `"vN→vN+1 run twice"`,
   and one row per partial state the step can be re-run over, with a helper in
@@ -1008,8 +1021,8 @@ permission columns match `v17PermissionColumns`; v18 shares
 `v19EvidenceColumns`, followed by v20's nullable `display_evidence TEXT` and
 `observation_writer TEXT` (`v20Columns`) and v21's three `spawns` columns
 (`busySendSpawnColumns`); the busy-send core shares `busySendCoreDDL` with
-its hop. Future changes must update
-both fresh DDL and the next hop. The §3 step 4
+its hop. Repairs must keep fresh DDL and the applicable retained hop
+consistent without changing the permanent contract. The §3 step 4
 `schemaShape` comparison guards that both paths land in the same place. If you
 only touch the hop, fresh installs are stuck on the old schema; if you only
 touch `schemaDDL`, upgrades never happen.
@@ -1067,6 +1080,14 @@ docs/engineering-guide.md §10 "Sandboxed execution" for the full rationale and
 the b.nh2 sandbox harness, and the **run-tests** skill for usage.
 
 ### Emergency downgrade recipe
+
+These recipes concern exempt/legacy schema recovery only. With versioned
+layout evidence, use [publication-only rollback](operator-actions.md#rolling-back-a-versioned-install)
+without restoring or changing the DB, and preserve every retained version and
+publication record. The separate exception for returning past the exempt
+conversion is [authorized non-purge teardown and pre-upgrade backup restore](operator-actions.md#returning-across-the-exempt-conversion),
+with writers stopped and later-write loss reconciled. No recipe below reverses
+the permanent v21 core.
 
 Only use an in-place reverse procedure for a schema version with an explicitly
 supported and tested recipe below. The historical b.8dr recovery pattern for a

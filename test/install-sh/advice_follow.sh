@@ -105,8 +105,38 @@ OTHER_COMMIT=0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e
 STAMP="-X $VERSION_PKG.Version=0.0.2-advice -X $VERSION_PKG.Commit=$CUR_COMMIT"
 STAMP_OLD="-X $VERSION_PKG.Version=0.0.1-advice-old -X $VERSION_PKG.Commit=$OLD_COMMIT"
 STAMP_OTHER="-X $VERSION_PKG.Version=0.0.2-advice -X $VERSION_PKG.Commit=$OTHER_COMMIT"
+# These synthetic releases exercise the legacy advice (including repeated
+# store migration and .prior rollback), not the versioned-install procedure.
+# Preserve that capability boundary explicitly: only their admin command
+# registration/help omits the four version commands. Store/restore code stays
+# real and current. Decision 14 permits these candidates only without layout
+# evidence; staged_* tests cover capable candidates and later installs.
+sed -E '/^[[:space:]]*"(version-facts|publish-version|rollback-version|list-versions)":/d' \
+    "$REPO_ROOT/cmd/agent-director-admin/main.go" >"$ROOT/legacy-admin-main.go"
+cat >"$ROOT/legacy-admin-help.go" <<'EOF'
+package adminapi
+
+func init() {
+    legacy := make([]Verb, 0, len(Verbs))
+    for _, verb := range Verbs {
+        switch verb.Name {
+        case "version-facts", "publish-version", "rollback-version", "list-versions":
+        default:
+            legacy = append(legacy, verb)
+        }
+    }
+    Verbs = legacy
+}
+EOF
+jq -n --arg main "$REPO_ROOT/cmd/agent-director-admin/main.go" --arg replacement "$ROOT/legacy-admin-main.go" \
+    --arg help "$REPO_ROOT/internal/adminapi/advice_legacy_fixture.go" --arg added "$ROOT/legacy-admin-help.go" \
+    '{Replace: {($main): $replacement, ($help): $added}}' >"$ROOT/legacy-admin-overlay.json"
 # go_build <ldflags> <out> <package>: CGO_ENABLED=0 go build in the repo.
-go_build() { (cd "$REPO_ROOT" && CGO_ENABLED=0 go build -ldflags "$1" -o "$2" "$3") || die "go build $2"; }
+go_build() {
+    local overlay=()
+    [[ "$3" != ./cmd/agent-director-admin ]] || overlay=(-overlay "$ROOT/legacy-admin-overlay.json")
+    (cd "$REPO_ROOT" && CGO_ENABLED=0 go build "${overlay[@]}" -ldflags "$1" -o "$2" "$3") || die "go build $2"
+}
 go_build "$STAMP" "$BIN" ./cmd/agent-director
 go_build "$STAMP_OLD" "$BIN_OLD" ./cmd/agent-director
 cmp -s "$BIN" "$BIN_OLD" && die "old and current binaries are identical"
@@ -179,7 +209,7 @@ import (
 	"syscall"
 )
 
-var version, commit, around string
+var version, commit, around, administrator string
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
@@ -187,6 +217,11 @@ func main() {
 		return
 	}
 	mode, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), "fake-list"))
+	// The runtime's no-store outcome must not replace admin help/capability
+	// responses. All admin commands still delegate to the real legacy admin.
+	if administrator == "1" {
+		mode = []byte("around")
+	}
 	switch string(mode) {
 	case "ok": // exit 0, no store created
 	case "around": // FAKE_AROUND does the list
@@ -222,7 +257,7 @@ for arg in "\$@"; do [[ "\$arg" == snapshot-store || "\$arg" == --check-only || 
 if [[ -e "\$HOME/fake-after" ]]; then . "\$HOME/fake-after"; rm "\$HOME/fake-after"; fi
 EOF
 chmod 0755 "$FAKE_ADMIN_AROUND" || die "chmod $FAKE_ADMIN_AROUND"
-(cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT -X main.around=$FAKE_ADMIN_AROUND" -o "$FAKE_ADMIN" .) \
+(cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT -X main.around=$FAKE_ADMIN_AROUND -X main.administrator=1" -o "$FAKE_ADMIN" .) \
     || die "go build (administrator after-open fixture)"
 
 # ---- install.sh copies ----------------------------------------------------
@@ -604,7 +639,7 @@ expect_installed() {
     [[ -x "$a" ]] || { bad "no installed agent-director-admin at $a"; return; }
     cmp -s "$a" "$admin_src" || bad "installed agent-director-admin is not $admin_src"
     [[ "$(stat -c %a "${a%/*}")" == 700 ]] || bad "${a%/*} has mode $(stat -c %a "${a%/*}"); want 700"
-    [[ "$(stat -c %a "$a")" == 755 ]] || bad "$a has mode $(stat -c %a "$a"); want 755"
+    [[ "$(stat -Lc %a "$a")" == 755 ]] || bad "$a's executable has mode $(stat -Lc %a "$a"); want 755"
     [[ -f "$home/.config/agent-director/state.db" ]] || bad "no state.db after install"
 }
 
@@ -891,7 +926,7 @@ test_J3_InstalledSkillRerunPairsInstalledAdmin() {
         grep -qxF "  source  : $src" "$OUT" || bad "$how: no \"source  : $src\" line: $(flat "$OUT")"
         grep -qxF "  admin source: $J11A" "$OUT" || bad "$how: no \"admin source: $J11A\" line: $(flat "$OUT")"
         expect_installed "$J3H" "$want" "$ADMIN"
-        [[ "$(stat -c %a "$J11C")" == 755 ]] || bad "$how: $J11C has mode $(stat -c %a "$J11C"); want 755"
+        [[ "$(stat -Lc %a "$J11C")" == 755 ]] || bad "$how: $J11C's executable has mode $(stat -Lc %a "$J11C"); want 755"
         hooks_injected "$J3H" || bad "$how: hooks not injected: $(cat "$J3H/.claude/settings.json" 2>&1)"
         [[ "$how" == --binary ]] || continue
         grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" \
@@ -2050,7 +2085,7 @@ test_J10_PreAdminReleaseInstallNewer() {
     h="$(new_home)"
     run "$h" bash "$LOOSE" --help
     expect_rc 0 "install.sh --help" || return
-    [[ "$(flat "$OUT")" == *"~/.config/agent-director (a binary from an earlier release: install that release with its own install.sh (that release's install.sh must support this host), fetched from its tag; this install reads no store for the check)"* ]] \
+    [[ "$(flat "$OUT")" == *"~/.config/agent-director (an earlier release). Only without layout evidence, install that release with its own install.sh, fetched from its tag and supporting this host; this check reads no store."* ]] \
         || bad "--help lacks exit 3's host-qualified earlier-installer advice: $(flat "$OUT")"
     PATH_EXTRA="$GH_DIR"
     FAKE_CURL_ADMIN_STATUS=404
@@ -2133,6 +2168,46 @@ test_J11_KeepPriorRollBackBoth() {
     j11_roll_back_both "$h" 0.0.1-advice-old || return
     cmp -s "$J11C" "$BIN_OLD" || bad "rolled-back agent-director is not the old one"
     cmp -s "$J11A" "$ADMIN_OLD" || bad "rolled-back agent-director-admin is not the old one"
+}
+
+# CR5-1: --keep-prior must consume the selected pair before overwriting its
+# source files with the installed pair, even through aliases outside the root.
+test_J11_KeepPriorSourcesFromPrior() {
+    local shell how h c a evidence
+    local shells=(bash)
+    [[ -z "${AD_TEST_BASH32:-}" ]] || shells+=("$AD_TEST_BASH32")
+    for shell in "${shells[@]}"; do
+        for how in direct external-alias; do
+            echo "    CR5-1: $shell, $how"
+            h="$(new_home)"; j11_paths "$h"
+            # The shared synthetic admins omit version commands: B is a
+            # current-schema legacy install, and the selected older pair A
+            # remains valid without establishing publication evidence.
+            run "$h" "$shell" "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
+            expect_rc 0 "$shell/$how: install pair B" || continue
+            expect_installed "$h" "$BIN" "$ADMIN"
+            for evidence in install-contract.json install-initialization.json current versions publications install.lock; do
+                [[ ! -e "$h/.config/agent-director/$evidence" && ! -L "$h/.config/agent-director/$evidence" ]] \
+                    || { bad "$shell/$how: fixture has layout evidence $evidence"; return; }
+            done
+            [[ ! -L "$J11C" && ! -L "$J11A" ]] || { bad "$shell/$how: fixture canonical pair is linked"; return; }
+            cp "$BIN_OLD" "$J11C.prior" && cp "$ADMIN_OLD" "$J11A.prior" \
+                || { bad "$shell/$how: seed pair A in .prior"; return; }
+            c="$J11C.prior" a="$J11A.prior"
+            if [[ "$how" == external-alias ]]; then
+                c="$h/runtime-input" a="$h/admin-input"
+                ln -s "$J11C.prior" "$c" && ln -s "$J11A.prior" "$a" \
+                    || { bad "$shell/$how: alias .prior inputs"; return; }
+            fi
+            run "$h" "$shell" "$LOOSE" --keep-prior --binary "$c" --admin-binary "$a" --no-hooks --no-symlink
+            expect_rc 0 "$shell/$how: install pair A from .prior" || continue
+            # Compare with immutable originals outside the overwritten input
+            # paths, so installing B again cannot satisfy these assertions.
+            expect_installed "$h" "$BIN_OLD" "$ADMIN_OLD"
+            cmp -s "$J11C.prior" "$BIN" || bad "$shell/$how: runtime .prior does not hold pair B"
+            cmp -s "$J11A.prior" "$ADMIN" || bad "$shell/$how: admin .prior does not hold pair B"
+        done
+    done
 }
 
 # J11: "Both binaries are snapshotted ..., so rolling back both restores a
@@ -2910,7 +2985,7 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
     local -a J7ARGV # j17_fake sets its own
     run "$(new_home)" bash "$LOOSE" --help
     expect_rc 0 "install.sh --help" || return
-    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), ErrMoveConflict (the directory layout cannot be moved as it is: the message names the one cause and its remedy; change nothing else, apply the remedy, re-run), ErrAgentsLive (an agent or an agent-director process runs against the old ~/.agent-director, or its live rows could not be read: stop whatever starts agents, then every agent, every serve and every caller, and re-run; a re-run reads the rows again), ErrMoveFailed (moving ~/.agent-director to ~/.config/agent-director failed before the rename, a full disk being the usual cause: the partial new directory was removed and the old directory is untouched; fix the cause and re-run), or, when the store open fails another way, agent-director'"'"'s own err_name. ErrTemplateMalformed is agent-director'"'"'s own catalogued name (errnames.Catalog); fix the template the message names, then re-run. ErrMoveConflict, ErrAgentsLive and ErrMoveFailed come from the move of AD'"'"'s directory (SR-11.7), which this release makes once on an upgrade from a release that kept its files in ~/.agent-director, before any binary is replaced; ErrMoveConflict and ErrAgentsLive are raised in pre-flight, changing nothing. They are install.sh'"'"'s own names, as ErrVersionUnreadable is, not agent-director'"'"'s. An upgrade that crosses the native-input journal cutover adds three: ErrJournalMigrationRefused (pre-flight refused, or the cutover refused and the installer put the previous install back: the install is as before the run; fix the reported cause, then re-run with a new --journal-backup directory), ErrJournalMigrationIncomplete (the install did not finish successfully, though the cutover may have committed, and this release stays installed; follow the message, then docs/operator-actions.md "install.sh stops with ErrJournalMigrationIncomplete") and ErrSchemaVerifyFailed for a restore that could not finish (needs a human; put the listed copies back as docs/operator-actions.md "Putting back a kept install" describes). ErrJournalMigrationIncomplete is install.sh'"'"'s own name.'* ]] \
+    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it. ErrVersionInstallRefused preserves the admin publication details; unreadable or interrupted output means an unknown outcome, not rollback. Correct the cause and rerun the same install with the same tag, pair and flags for forward recovery: docs/operator-actions.md "Recovering a versioned install". Other causes: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), ErrMoveConflict (the directory layout cannot be moved as it is: the message names the one cause and its remedy; change nothing else, apply the remedy, re-run), ErrAgentsLive (an agent or an agent-director process runs against the old ~/.agent-director, or its live rows could not be read: stop whatever starts agents, then every agent, every serve and every caller, and re-run; a re-run reads the rows again), ErrMoveFailed (moving ~/.agent-director to ~/.config/agent-director failed before the rename, a full disk being the usual cause: the partial new directory was removed and the old directory is untouched; fix the cause and re-run), or, when the store open fails another way, agent-director'"'"'s own err_name. ErrTemplateMalformed is agent-director'"'"'s own catalogued name (errnames.Catalog); fix the template the message names, then re-run. ErrMoveConflict, ErrAgentsLive and ErrMoveFailed come from the move of AD'"'"'s directory (SR-11.7), which this release makes once on an upgrade from a release that kept its files in ~/.agent-director, before any binary is replaced; ErrMoveConflict and ErrAgentsLive are raised in pre-flight, changing nothing. They are install.sh'"'"'s own names, as ErrVersionUnreadable is, not agent-director'"'"'s. An upgrade that crosses the native-input journal cutover adds three: ErrJournalMigrationRefused (pre-flight refused, or the cutover refused and the installer put the previous install back: the install is as before the run; fix the reported cause, then re-run with a new --journal-backup directory), ErrJournalMigrationIncomplete (the install did not finish successfully, though the cutover may have committed, and this release stays installed; follow the message, then docs/operator-actions.md "install.sh stops with ErrJournalMigrationIncomplete") and ErrSchemaVerifyFailed for a restore that could not finish (needs a human; put the listed copies back as docs/operator-actions.md "Putting back a kept install" describes). ErrJournalMigrationIncomplete is install.sh'"'"'s own name.'* ]] \
         || bad "--help lacks the cause-line contract: $(flat "$OUT")"
     while IFS='|' read -r setup headline name fix <&3; do
         j17_reap
@@ -3013,8 +3088,11 @@ j17_agents_live|install.sh: AD's old directory is in use; refusing to upgrade wh
 j17_fifo|install.sh: moving @J7H@/.agent-director to @J7H@/.config/agent-director failed: cannot copy @J7H@/.agent-director/odd.fifo: it is not a regular file, a directory or a link (a fifo, a socket or a device, say). Remove it or move it out of @J7H@/.agent-director, then re-run|ErrMoveFailed|
 EOF
     j17_reap
-    # SKILL.md's table: every name has a j17_remedy case and a row above.
+    # SKILL.md's legacy rows each have a j17_remedy case and a row above.
+    # The publication row is exercised with capable pairs by
+    # TestStagedPublicationOutcomes and TestStagedDocumentUpgradeRollbackRecovery.
     while IFS= read -r tname; do
+        [[ "$tname" != ErrVersionInstallRefused ]] || continue
         [[ "$(j17_remedy "$tname")" != rerun-once ]] || bad "SKILL.md's exit-5 table has $tname, which j17_remedy has no case for"
         [[ " ${seen[*]} " == *" $tname "* ]] || bad "SKILL.md's exit-5 table has $tname, which no J17 row triggers"
     done < <(j17_table_names)

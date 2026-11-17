@@ -329,7 +329,7 @@ func TestMigrationWhileTheMoveIsDue(t *testing.T) {
 // post-v16 path: the ordinary list open with the exact sentinel step 3 writes
 // beside the resolved store, no migrate-journal. It lands at the current
 // version with the busy-send core and the row's conversation and current
-// Launch, and consumes the sentinel. A second install finds it current and
+// Launch, and consumes the sentinel. A second install is file-only and
 // writes no sentinel; v0.18.4's own binary then refuses the store
 // (ErrSchemaMismatch) and leaves it as it is, so the way back is the
 // restore of docs/migration-guide.md §5.
@@ -376,7 +376,7 @@ func TestMigrationExemptCoreHop(t *testing.T) {
 
 	migrated := h.Sqlite(db, ".dump")
 	res = moveMustInstall(t, h)
-	if line := "  schema  : state.db at v" + current + "; no migration authorization needed"; !strings.Contains(res.Stdout, line+"\n") {
+	if line := "  schema  : not inspected (file-only upgrade)"; !strings.Contains(res.Stdout, line+"\n") {
 		t.Errorf("the second install's stdout lacks %q:\n%s", line, res.Stdout)
 	}
 	if _, err := os.Lstat(sentinel); !os.IsNotExist(err) {
@@ -593,7 +593,11 @@ func TestAdviceFollow_G14_AuthorizationMissingRunsInstaller(t *testing.T) {
 		t.Skip("administrator process inventory requires Linux")
 	}
 	h := newMoveHome(t)
-	moveMustInstall(t, h)
+	// This is legacy/exempt authorization advice. A versioned layout with an
+	// old configured store instead follows the explicit non-purge recovery
+	// covered by TestStagedRetainedCustomStoreExemptRecovery.
+	h.Copy(h.Pair.Main, filepath.Join(h.New, "bin/agent-director"), 0755)
+	h.Copy(h.Pair.Admin, filepath.Join(h.New, "admin/agent-director-admin"), 0700)
 	current := moveCurrentVersion(t, h)
 	db := filepath.Join(h.Home, "custom", "state.db")
 	h.WriteStore(db) // genuine released schema, with the fixture's journal flags and no sentinel

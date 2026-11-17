@@ -341,8 +341,13 @@ func forwardOutcome(t *testing.T, tc forwardOutcomeCase, wayBack func(f *cutover
 	}
 	if tc.rebase || tc.relativePaths {
 		canonical := filepath.Join(h.New, "bin", "agent-director")
-		for _, pair := range [][2]string{{h.S.Current.Main, canonical}, {h.S.ScheduleProbe.Main, filepath.Join(h.New, "admin", "agent-director-admin")}} {
-			if restoreDescribe(t, pair[0]) != restoreDescribe(t, pair[1]) {
+		for _, pair := range [][2]string{{h.S.Current.Main, canonical}, {h.S.Current.Admin, filepath.Join(h.New, "admin", "agent-director-admin")}} {
+			installed, err := filepath.EvalSymlinks(pair[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The routed real admin publishes its own executable and stable entries.
+			if restoreDescribe(t, pair[0]) != restoreDescribe(t, installed) {
 				t.Errorf("retry installed the wrong source at %s", pair[1])
 			}
 		}

@@ -245,6 +245,7 @@ type upgradeFollow struct {
 	holderCommands        []string          // commands submitted for those checks
 	fetches               int               // candidate installer downloads attempted
 	failFetch             int               // download to fail with exit 22 and no script
+	releaseTag            string            // selected tag; empty uses the current fixture build
 	journalArgs           string            // identical flags for both checks and install
 	earlySchema           bool              // the skill reads the schema in step 1
 	journalVerifications  int               // step 4 migrate-journal runs
@@ -407,9 +408,9 @@ func (f *upgradeFollow) step1() step1Next {
 	// This shell has no MCP tools.
 	f.earlySchema = strings.Contains(s.text, "### Read the store schema")
 	if f.earlySchema {
-		s.Pin("Choose the release tag once for this upgrade, such as `v0.18.1`, and reuse it for every re-run of the install.",
-			"If curl fails or its URL does not end in `/releases/tag/<tag>`, stop and hand the operator the output unless they provide a release tag.",
-			"Only when the schema read above says this upgrade crosses the cutover, before stopping any row, first confirm with the operator that steps 1 and 2 of",
+		docSection(t, upgradeSkill, "Choose the release").Pin("Choose a layout-aware release tag once for this upgrade and reuse it for every re-run.",
+			"If curl fails or its URL does not end in `/releases/tag/<tag>`, stop and hand the operator the output unless they provide a release tag.")
+		s.Pin("Only when the schema read above says this upgrade crosses the cutover, before stopping any row, first confirm with the operator that steps 1 and 2 of",
 			"For a crossing upgrade, append `--journal-maintenance-window --journal-roots-complete --journal-backup <new-absolute-directory>` and add `--journal-legacy-root <dir>` for each additional input root.",
 			"Keep exactly these journal flags for the second holder check and step 3's install.",
 			"With no crossing, skip this confirmation and both holder checks, and pass no journal flags.")
@@ -576,7 +577,7 @@ func (f *upgradeFollow) step3() moveResult {
 	}
 	s.Pin(
 		"Add the original install's other",
-		"Exit 0: step 4. Exit 5 or 6: step 5. Another exit:")
+		"Exit 0: step 4. Exit 5 or 6: step 5.")
 	command := f.releaseCommand(s, false)
 	f.installCommands = append(f.installCommands, command)
 	res := f.sh.RunWithin(command, upgradeInstallWait)
@@ -631,7 +632,11 @@ func (f *upgradeFollow) releaseCommand(s *opsSection, check bool) string {
 		block += " " + f.journalArgs
 	}
 	if strings.Contains(networkInstall, "<tag>") {
-		pairs = append(pairs, "<tag>", "v"+moveVersion)
+		tag := f.releaseTag
+		if tag == "" {
+			tag = "v" + moveVersion
+		}
+		pairs = append(pairs, "<tag>", tag)
 	}
 	block = s.Fill(block, pairs...)
 	// Preserve the documented outer shell rather than assuming its options
@@ -717,6 +722,10 @@ func (f *upgradeFollow) step5(res moveResult, before moveTree) int {
 	t := f.t
 	t.Helper()
 	s := docSection(t, upgradeSkill, "5. On a refusal")
+	if res.Code == 5 && res.Last() == "install.sh: err_name=ErrVersionInstallRefused" {
+		f.publicationRecovery(res)
+		return 6 // original exempt settlement is complete; no generic list verification
+	}
 	s.Pin("`install.sh`'s last stderr line names the cause, `install.sh: err_name=<Name>`; `agent-director-admin`'s JSON envelope names it as `err_name`. The envelope gives `details.refusal.reason` and `action`. Find that reason's row in",
 		"Show the operator the output (the envelope, when there is one) and that row: the operator performs its fix, up to its re-run of the install or its verification, which stay yours. Then resume at that step: step 3 to re-run the install, or step 4 for the verification, under that step's rules.",
 		"For `agents_live` or `ErrAgentsLive`, instead, the row's stops are step 1's and its `find-missing` is step 2's: do those steps, with step 1's checks and the operator's confirmation, then step 3.",
@@ -901,8 +910,11 @@ func (f *upgradeFollow) run() bool {
 			f.step4()
 			return true
 		case 5, 6:
-			if f.step5(res, before) == 4 {
+			switch f.step5(res, before) {
+			case 4:
 				f.step4()
+				return true
+			case 6:
 				return true
 			}
 		default:
@@ -1161,11 +1173,12 @@ esac`, process.Pid, moveQuote(argv0), process.Pid, moveQuote(argv0),
 	}
 	// b.3k7: execute the skill's resume commands rather than assuming that
 	// bringing back each row also brings back its recorded family.
-	for _, name := range []string{"two-level family survives", "missing parent", "ended parent", "parent resume fails"} {
+	for _, name := range []string{"two-level family survives", "publication recovery restarts family", "missing parent", "ended parent", "parent resume fails"} {
 		t.Run(name, func(t *testing.T) {
 			c, x := setup(t, false)
 			parent, child := "z-parent-"+uuid.NewString(), "a-child-"+uuid.NewString()
-			if name == "two-level family survives" || name == "parent resume fails" {
+			wholeFamily := name == "two-level family survives" || name == "publication recovery restarts family"
+			if wholeFamily || name == "parent resume fails" {
 				x.liveAgent(t, c, parent)
 			} else {
 				c.h.Sqlite(c.db, crossingLiveRowSQL(parent, "ended"))
@@ -1177,9 +1190,20 @@ esac`, process.Pid, moveQuote(argv0), process.Pid, moveQuote(argv0),
 				c.h.Write(filepath.Join(c.h.Home, ".claude", "projects", "-tmp", "sess-"+id+".jsonl"),
 					`{"type":"summary","sessionId":"sess-`+id+`"}`+"\n", 0o600)
 			}
+			var publication *cutoverFixture
+			if name == "publication recovery restarts family" {
+				publication = newOutcomeFixture(t, c.h, "publish-version")
+				c.h.Write(publication.After, "printf '{lost-publication-result' >"+moveQuote(publication.Output)+"\nrm -- "+moveQuote(publication.After)+"\n", 0600)
+			}
 			f := newUpgradeFollow(t, c, x, true, yes)
+			if publication != nil {
+				f.must("export SCHED_TEST_DELEGATE=" + moveQuote(c.h.Env["SCHED_TEST_DELEGATE"]) + " SCHED_TEST_DELEGATE_EXEC=1")
+			}
 			if !f.run() {
 				t.Fatal("the follow stopped before verification")
+			}
+			if publication != nil && (len(f.installs) != 1 || f.installs[0].Code != 5 || f.journalVerifications != 1 || !f.crossing) {
+				t.Fatalf("publication recovery lost original exempt context: installs=%+v verification=%d crossing=%v", f.installs, f.journalVerifications, f.crossing)
 			}
 			// The installer uses the toolbox's Claude for its version and MCP
 			// probes. Only the resume launches need the sleeping stand-in.
@@ -1207,7 +1231,7 @@ esac`, process.Pid, moveQuote(argv0), process.Pid, moveQuote(argv0),
 				t.Errorf("child state|parent_id = %q; want %q", got, "pending|"+wantParent+"\n")
 			}
 			wantOrder := []string{child}
-			if name == "two-level family survives" {
+			if wholeFamily {
 				wantOrder = []string{parent, child}
 				if got := c.h.Sqlite(c.db, "SELECT state, COALESCE(parent_id, '') FROM spawns WHERE instance_id = '"+parent+"';", "-readonly"); got != "pending|\n" {
 					t.Errorf("root state|parent_id = %q; want pending with no parent", got)
@@ -1238,7 +1262,7 @@ esac`, process.Pid, moveQuote(argv0), process.Pid, moveQuote(argv0),
 					t.Error("the failed parent resume launched a session")
 				}
 			}
-			if name != "two-level family survives" {
+			if !wholeFamily {
 				want := child + "'s parent " + parent + " is not running; its parent link was restored."
 				if name == "missing parent" {
 					want = child + "'s parent " + parent + " no longer has a row; it will resume with no parent."
