@@ -192,8 +192,9 @@ Final Result or permits a resend. The count is zero after Launch End.
 `delivery.force` is the agent's running or
 pending [force](#stored-force-attempts), else the latest force that began a
 hand-over, as a `force_result`; null with neither. A refusal before any
-hand-over never replaces it. Reading these fields hands nothing over,
-wakes nothing, finishes no force and changes no Result; `state`,
+hand-over never replaces it. Once the selected force expires, the summary is
+null; it never falls back to an older force. Reading these fields hands nothing
+over, wakes nothing, finishes no force and changes no Result; `state`,
 `process_liveness`, `displayed_state`, `confirmations` and the permission
 fields keep their own meanings.
 
@@ -313,10 +314,13 @@ repeated safely. An unconfirmed send returns no ID and has no lookup.
 **Repeats.** A pair of Caller UUID and Message ID belongs, store-wide, to the
 first Message accepted with it. A send repeating the pair with the same target
 and the exact text bytes stores nothing and returns the owner's current
-Result, even after the launch ended, the row was deleted or the inbox filled.
-Only malformed parameters, a store failure or a target now `not_covered`
-refuse it, and the owner's options stand. The same pair with another target
-or text is `ErrCantSend`, reason `id_conflict`. A refused send claims no pair.
+Result while retained, even after the launch ended, the row was deleted or the
+inbox filled. The owner's options stand; malformed parameters, a store failure
+or a target now `not_covered` can refuse the repeat. While retained, the same
+pair with another target or text is `ErrCantSend`, reason `id_conflict`.
+After [expiry](#durable-lookups), matching repeats and uses with another text
+or target are refused with `ErrCantSend`, reason
+`retention_expired`. The pair stays owned forever. A refused send claims no pair.
 
 **When the reply is uncertain.** `ErrStoreBusy` stored nothing. An
 `ErrInternal` saying whether the Message was accepted is unknown (it has no
@@ -337,8 +341,8 @@ in the table's order.
 
 | `reason` | Refused because | Next step (`resend_safe`, `retry_with`) |
 |---|---|---|
-| `id_conflict` | The pair names a Message with another target or text. | `true`, `new_send`: send it under a new `delivery_request_id`. |
-| `retention_expired` | The pair's Message is past retention; the pair stays owned. | `false`, `none`: never reuse the pair. |
+| `retention_expired` | `expire` removed the pair's Result; the pair stays owned. | `false`, `none`: never reuse the pair. |
+| `id_conflict` | The pair names a retained Message with another target or text. | `true`, `new_send`: send it under a new `delivery_request_id`. |
 | `agent_not_covered` | Busy send does not cover the launch. | `true`, `new_send`: the same call without busy-send options. |
 | `agent_command` | The text's first non-whitespace character is `/` or `!`. | `false`, `none` |
 | `steer_unsupported` | The agent does not offer the resolved `send_mode`. | `true`, `new_send`: use `wait_turn`. |
@@ -509,9 +513,9 @@ carried; nothing is delivered, typed or changed.
 **`send-keys` with `force: true`.** The send is decided first, as any send. A
 refused or uncertain send forces nothing and stores no attempt. An accepted
 send returns its Message's [Result](#message-results) and a separate
-`force_result`. Each repeat of the pair with `force` makes a new attempt and
-never accepts the Message again; after the target's deletion, a repeat returns
-the owner's Result with a `refused` force, reason `record_deleted`. A force
+`force_result`. A successful repeat of the pair with `force` makes a new attempt
+and never accepts the Message again; after the target's deletion, it returns
+the retained Result with a `refused` force, reason `record_deleted`. A force
 that fails after acceptance is an unnamed error: the Message stays accepted,
 so never send it again as a new Message; repeat the pair, or call
 `force-delivery`. Its force may still be stored and running, as above.
@@ -522,11 +526,11 @@ so never send it again as a new Message; repeat the pair, or call
 empty:
 
 - `carried_pairs`: the pair of every confirmed Message the force carries, in
-  accepted order.
+  accepted order, even after its Result expires.
 - `carried_results`: the current [Results](#message-results) of those whose
   Result is still retained, in the same order, read with the force at one
   moment. An expired Result drops out, so it can be shorter than
-  `carried_pairs`.
+  `carried_pairs`, without expiring the force itself.
 
 An unconfirmed carried Message appears in neither. A force carries every
 Message Held when it starts and nothing accepted later; those wait as usual.
@@ -695,13 +699,21 @@ UTF-8. Any other form is `ErrInvalidFlags`.
 
 Each returns `lookup`: `found`, `unknown` (nothing stored) or
 `retention_expired`, with `force_result` or `result` null unless `found`. A
-force attempt, refused ones included, stays `found` until its own retention
-ends, even after a carried Message's Result has expired. A pair no Message
-holds, including one only refused sends used and a native
+pair no Message holds, including one only refused sends used and a native
 `delivery_request_id` sent without `caller_uuid`, is `unknown`. A found
 `result` is the [Result](#message-results) a repeat of the owner's send would
 return at that moment; a found `force_result` is the
 [attempt as stored now](#stored-force-attempts).
+
+Non-Final Messages remain retained. Final Results become eligible for `expire`
+after `defaults.expire_retention_days` (31 days by default) from their Final
+transition; ended forces, refused attempts included, use their own end time.
+An operator's `older_than` overrides that window; explicit zero removes the
+age requirement. They stay `found` until `expire` removes their retained
+payload: elapsed time alone never expires a lookup. See
+[maintenance](maintenance.md#scheduling-the-sweeps) for cleanup and text
+protection. An expired pair remains owned and never becomes `unknown` or free
+for another send.
 
 They read stored facts only: they start no work, run no
 [recovery checks](#bounded-recovery-on-state-reads) and probe no agent, tmux

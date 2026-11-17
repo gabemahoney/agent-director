@@ -12,12 +12,15 @@ import (
 	"errors"
 	"math"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -137,6 +140,9 @@ func TestExpireOnlyExplicitZeroSelectsEvery(t *testing.T) {
 			res, lg, err := e.expireWithDays(w, tc.days, tc.over)
 			if tc.refused {
 				e.assertExpireRefused(t, res, strings.Join(lg.lines, "\n"), err, mark, rows)
+				if len(w.calls) != 0 || len(e.pc.StartTimeCalls()) != 0 || e.pc.EnvReads() != 0 {
+					t.Errorf("invalid arguments reached store %v or process checker", w.calls)
+				}
 				return
 			}
 			if err != nil {
@@ -202,5 +208,92 @@ func TestClientExpireRetentionConfig(t *testing.T) {
 				t.Errorf("Client log = %q; want none", logs)
 			}
 		})
+	}
+}
+
+// TestExpireBusySendRetentionWiring applies both entry points to retained
+// Messages and ended forces, even though no agent row is a delete candidate.
+func TestExpireBusySendRetentionWiring(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		days   int
+		over   *time.Duration
+		window time.Duration
+	}{
+		{"default", config.DefaultExpireRetentionDays, nil, 31 * 24 * time.Hour},
+		{"zero days", 0, nil, 31 * 24 * time.Hour},
+		{"configured", 2, nil, 48 * time.Hour},
+		{"override", 2, olderThan(time.Hour), time.Hour},
+		{"explicit zero", 2, olderThan(0), 0},
+	} {
+		for _, client := range []bool{false, true} {
+			t.Run(tc.name+"/client="+strconv.FormatBool(client), func(t *testing.T) {
+				t.Parallel()
+				e := newKillEnv(t)
+				e.rowAgent = "codex"
+				r := e.seedRow(t, killRowSpec{})
+				cfg := filepath.Join(t.TempDir(), "config.toml")
+				apitest.WriteRetentionConfig(t, cfg, int64(tc.days))
+				c, _, err := e.clientFor(t, cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				finalAt := e.clock.Now()
+				force := forceRefused(t, c, r.ID, finalAt)
+				storefix.SeedBusySendResult(t, e.dbPath, storefix.BusySendResultSeed{
+					InstanceID: r.ID, Pair: busyPair("old"), Class: store.BusySendClassNotStarted,
+					Final: true, FinalAt: &finalAt, Reason: "launch_ended"})
+				e.clock.Advance(tc.window + time.Hour)
+				runAt := e.clock.Now()
+				// Explicit zero also selects a Final transition ahead of the clock.
+				recent := runAt.Add(time.Hour)
+				storefix.SeedBusySendResult(t, e.dbPath, storefix.BusySendResultSeed{
+					InstanceID: r.ID, Pair: busyPair("recent"), Class: store.BusySendClassNotStarted,
+					Final: true, FinalAt: &recent, Reason: "launch_ended"})
+				clockCalls := 0
+				now := func() time.Time {
+					clockCalls++
+					return runAt.Add(time.Duration(clockCalls-1) * time.Second)
+				}
+				w := e.expireStore()
+				var res api.ExpireResult
+				if client {
+					api.SetClockForTest(c, now)
+					res, err = c.Expire(tc.over)
+				} else {
+					res, err = api.Expire(w, e.rec, e.pc, tc.days, tc.over, e.cfg.EffectiveSweepBudget(), now, nil)
+					cutoff := runAt.Add(-tc.window)
+					if tc.window == 0 {
+						cutoff = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+					}
+					if !w.cutoff.Equal(cutoff) || !w.expiredAt.Equal(runAt) || !slices.Equal(w.calls, []string{"retention", "list"}) {
+						t.Errorf("retention(%s, %s), calls %v; want (%s, %s), retention then list", w.cutoff, w.expiredAt, w.calls, cutoff, runAt)
+					}
+				}
+				if err != nil || clockCalls != 1 {
+					t.Fatalf("Expire = %v, clock calls %d; want success and one shared run time", err, clockCalls)
+				}
+				assertExpireJSON(t, res, `{"count":0,"ids":[],"kept":0,"kept_ids":[]}`)
+				api.SetClockForTest(c, e.clock.Now)
+				for _, request := range []string{"old", "recent"} {
+					got, err := c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: request})
+					if request == "old" || tc.window == 0 {
+						if err != nil || got.Lookup != "retention_expired" || got.Result != nil {
+							t.Errorf("%s lookup = %+v, %v; want retention_expired with no Result", request, got, err)
+						}
+					} else if err != nil || got.Lookup != "found" || got.Result == nil || !got.Result.Final {
+						t.Errorf("recent lookup = %+v, %v; want retained Final", got, err)
+					}
+				}
+				if got, err := c.GetForce(api.GetForceParams{ForceID: force.ForceID}); err != nil || got.Lookup != "retention_expired" || got.ForceResult != nil {
+					t.Errorf("force lookup = %+v, %v; want retention_expired with no force", got, err)
+				}
+				e.assertLookupsOn(t)
+				if len(e.pc.StartTimeCalls()) != 0 || e.pc.EnvReads() != 0 {
+					t.Error("retention probed processes despite having no candidate rows")
+				}
+			})
+		}
 	}
 }

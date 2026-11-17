@@ -13,12 +13,13 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// BusySendResultSeed is one confirmed Message and its Result as a later
-// release's admission and Result writers leave them; this release has no
-// public writer for either (reusable fixture). Pair is canonical: a lowercase
+// BusySendResultSeed seeds one confirmed Message and its Result for reader
+// tests (reusable fixture). Retention tests invoke the real expiry writer.
+// Pair is canonical: a lowercase
 // hyphenated Caller UUID and a nonempty Message ID. A non-Final Result waits
 // on Wait, whose Earlier names an earlier seed's pair; a Final one has
-// final_at set. Expired seeds SR-5.5's tombstone: the pair and non-content
+// final_at set (FinalAt overrides its default fixture timestamp).
+// Expired seeds SR-5.5's tombstone: the pair and non-content
 // facts, with no text, Result or receipt identity. Transport, when set,
 // records the Message's one hand-over on the instance's current Launch, a
 // single prompt whose observed transport it is; a non-Final seed is then
@@ -29,6 +30,7 @@ type BusySendResultSeed struct {
 	SendMode     store.BusySendMode // default wait_turn
 	Class        store.BusySendResultClass
 	Final        bool
+	FinalAt      *time.Time
 	Reason       string
 	Forced       bool
 	Wait         *store.BusySendWait
@@ -74,6 +76,9 @@ func SeedBusySendResult(t *testing.T, dbPath string, seed BusySendResultSeed) st
 	place, retention, expiredAt, final := "held", string(store.BusySendRetained), any(nil), any(nil)
 	if seed.Final || seed.Expired {
 		place, final = "closed", at
+		if seed.FinalAt != nil {
+			final = seed.FinalAt.UnixMilli()
+		}
 	}
 	if seed.Expired {
 		content = []any{nil, nil, nil, nil}
@@ -163,9 +168,8 @@ func seedBusySendHandover(tx *sql.Tx, storeID, conversation, instanceID, handove
 	return err
 }
 
-// ExpireBusySendForce marks an ended force attempt expired at atMillis, as
-// SR-4.1's retention would; this release has no expiry writer (reusable
-// fixture).
+// ExpireBusySendForce seeds an ended force's expired lookup shape (reusable
+// fixture). Tests of retention itself use Store.ExpireBusySendRetention.
 func ExpireBusySendForce(t *testing.T, dbPath, forceID string, atMillis int64) {
 	t.Helper()
 	raw := openRawStore(t, dbPath, "ExpireBusySendForce")

@@ -8,7 +8,7 @@ Neither command runs an internal scheduler:
 ```sh
 # Check all agents once; run often (e.g. every 2 min):
 agent-director sweep
-# Delete finished rows older than expire_retention_days that nothing runs:
+# Expire retained content and delete old finished rows whose agents are gone:
 agent-director expire
 ```
 
@@ -31,7 +31,7 @@ anything.
 Equal pane samples do not prove continuous inactivity; unknown or pending
 results need later evidence. See the [caller contract](caller-contract.md)
 for confirmation and completeness semantics. Without `expire`, finished rows
-pile up past `expire_retention_days`.
+and retained content accumulate past their retention windows.
 
 ### Let the install schedule them
 
@@ -139,14 +139,38 @@ The hold and repair conditions for stale `check_permission` rows are in
 remains governed by the [permission contract](caller-contract.md#permission-relay).
 A relayed request's delivery is worked out each time the request is read.
 
+`expire` cleans up retained Message content and ended forces before processing
+finished agent rows, even when no agent row is eligible for deletion. See
+[Durable lookups](caller-contract.md#durable-lookups) for the windows and
+caller answers. For an eligible Final Message, confirmed or unconfirmed, it
+removes the text, its digest, the retained Result and receipt identity. It
+keeps permanent confirmed-pair ownership, custody, and the acceptance,
+hand-over and fencing facts that contain no text. Those facts authorize no
+replay or new acceptance. Every non-Final Message and its custody remain
+indefinitely; Held or claimed Messages and text needed by a not-yet-issued
+prompt are protected too. Ended-force expiry removes its public lookup payload
+but keeps its outcome, times and carried membership. Running and pending
+forces remain retained.
+
+A short `older_than` can remove a just-issued Final Message's text before its
+prompt is sighted. That late sighting cannot match the prompt;
+`awaiting_turn_start` keeps counting the hand-over until Launch End. Expiry
+does not wait for that sighting or authorize replay.
+
+A retention failure stops the verb before agent-row processing or deletion;
+earlier retention batches may already have committed. An operator can safely
+rerun it. The result's counts and lists describe agent rows, not expired
+Messages or forces.
+
 `expire` deletes a finished row (`ended` or `missing`, listed in `ids`) only
 when its agent process is not running and tmux shows no session of the agent.
 The others are in `kept_ids`; the trail's `ad.expire.kept` records give each
 reason. A row whose recorded tmux session name cannot be used is always kept
 ([Operator actions](operator-actions.md)). So is a Covered Agent's row whose
 inbox still holds Messages (Held, or in an unfinished hand-over), with reason
-`held_messages`, however old: retention never discards a Message. A `resume`
-carries them, and a reuse or a human's `delete` ends them `not_started`
+`held_messages`, however old. Result expiry neither closes that custody nor
+makes the row deletable. A `resume` carries the Held Messages, and a reuse or
+a human's `delete` ends them `not_started`
 ([Launch end, resume and reuse](caller-contract.md#launch-end-resume-and-reuse)).
 
 A run of either verb as another user, as root or against another tmux server

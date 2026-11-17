@@ -24,14 +24,18 @@ import (
 // expireKeptEvent is the trail event of a row expire kept (SR-12.5).
 const expireKeptEvent = "ad.expire.kept"
 
-// expireStore is api.ExpireStore over the real store; failList, failDelete,
-// refuseDelete and beforeDelete inject a failure or a write, else it delegates.
+// expireStore is api.ExpireStore over the real store; failRetention, failList,
+// failDelete, refuseDelete and beforeDelete inject a failure or a write, else
+// it delegates. calls records ordering; cutoff/expiredAt record retention's time.
 type expireStore struct {
-	st        *store.Store
-	listErr   error
-	deleteErr map[string]error
-	deleteRes map[string]api.CondResult
-	before    map[string]func()
+	st                *store.Store
+	retentionErr      error
+	calls             []string
+	cutoff, expiredAt time.Time
+	listErr           error
+	deleteErr         map[string]error
+	deleteRes         map[string]api.CondResult
+	before            map[string]func()
 }
 
 var _ api.ExpireStore = (*expireStore)(nil)
@@ -45,6 +49,9 @@ func (e *killEnv) expireStore() *expireStore {
 // failList makes every candidate read return err (errInjectedStore when nil).
 func (w *expireStore) failList(err error) { w.listErr = orInjected(err) }
 
+// failRetention returns err before any retention write.
+func (w *expireStore) failRetention(err error) { w.retentionErr = orInjected(err) }
+
 // failDelete makes id's delete return err (errInjectedStore when nil), deleting nothing.
 func (w *expireStore) failDelete(id string, err error) { w.deleteErr[id] = orInjected(err) }
 
@@ -56,15 +63,27 @@ func (w *expireStore) beforeDelete(id string, fn func()) { w.before[id] = fn }
 
 // ListExpireCandidates returns failList's error, else delegates.
 func (w *expireStore) ListExpireCandidates(cutoff time.Time) ([]api.ExpireCandidate, error) {
+	w.calls = append(w.calls, "list")
 	if w.listErr != nil {
 		return nil, w.listErr
 	}
 	return w.st.ListExpireCandidates(cutoff)
 }
 
+// ExpireBusySendRetention records its call, then fails or delegates.
+func (w *expireStore) ExpireBusySendRetention(cutoff, expiredAt time.Time) error {
+	w.calls = append(w.calls, "retention")
+	w.cutoff, w.expiredAt = cutoff, expiredAt
+	if w.retentionErr != nil {
+		return w.retentionErr
+	}
+	return w.st.ExpireBusySendRetention(cutoff, expiredAt)
+}
+
 // DeleteFinishedIfSameLife returns id's injected answer, else runs its
 // beforeDelete hook and delegates.
 func (w *expireStore) DeleteFinishedIfSameLife(id string, examined api.RowSnapshot) (api.CondResult, error) {
+	w.calls = append(w.calls, "delete")
 	if err := w.deleteErr[id]; err != nil {
 		return 0, err
 	}

@@ -2,7 +2,6 @@ package api_test
 
 import (
 	"context"
-	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -620,60 +619,160 @@ func TestBusySendLookupRefusals(t *testing.T) {
 	assertOneName(t, err, "ErrStoreBusy")
 }
 
-// expireBusyResult marks the Final Result of busyCaller's pair for request
-// expired at at, in the shape SR-5.5's retention leaves it
-// (storefix.BusySendResultSeed's Expired: no text or Result, the pair kept);
-// E3 builds the expiry writer.
-func expireBusyResult(t *testing.T, e *killEnv, request string, at time.Time) {
-	t.Helper()
-	raw, err := sql.Open("sqlite", "file:"+e.dbPath)
-	if err != nil {
-		t.Fatalf("open raw db: %v", err)
+// TestBusySendRetentionLookups exercises durable Lookup and permanent pair
+// ownership after real expiry, including a never-issued deleted Message.
+func TestBusySendRetentionLookups(t *testing.T) {
+	t.Parallel()
+	e := newKillEnv(t)
+	f := newForceAgent(t, e)
+	const otherCaller = "1f8fad5b-d9cb-469f-a165-70867728950e"
+	f.send(t, "same", "first")
+	f.drive = forceTurns(t, f, 0, false)
+	first, _ := f.force(t)
+	if len(first.CarriedResults) != 1 || !first.CarriedResults[0].Final {
+		t.Fatalf("first force = %+v; want one Final Result", first)
 	}
-	defer func() { _ = raw.Close() }()
-	r, err := raw.Exec(`UPDATE busy_send_messages SET text = NULL, text_sha256 = NULL, result_class = NULL, result_reason = NULL,
-	        retention = 'expired', expired_at_ms = ?
-	    WHERE result_final = 1 AND message_id = (SELECT message_id FROM busy_send_results WHERE caller_uuid = ? AND delivery_request_id = ?)`,
-		at.UnixMilli(), busyCaller, request)
-	if err == nil {
-		var n int64
-		if n, err = r.RowsAffected(); err == nil && n != 1 {
-			err = fmt.Errorf("%d Final Results; want 1", n)
+	cutoff := e.clock.Now().Add(time.Millisecond)
+	e.clock.Advance(time.Hour)
+	busyAdmit(t, f.c, api.SendKeysParams{InstanceID: f.id, Text: "second", ConfirmedDelivery: ptr(true),
+		CallerUUID: ptr(otherCaller), DeliveryRequestID: "same"})
+	f.touched()
+	f.drive = forceTurns(t, f, 0, false)
+	second, _ := f.force(t)
+	f.drive = nil
+	if len(second.CarriedResults) != 1 || !second.CarriedResults[0].Final {
+		t.Fatalf("second force = %+v; want one independent Final Result", second)
+	}
+	f.send(t, "deleted", "never issued")
+	inputs, issued := paneInputs(e), len(f.route.issued)
+	counts := storefix.ReadBusySendCounts(t, e.dbPath)
+	other := e.seedRow(t, killRowSpec{})
+	seedBusyCovered(t, e, other.ID)
+	_, otherTouched := busyWake(t, e, other.ID)
+	// Close every long-lived connection before opening the store again.
+	reopen := func() {
+		t.Helper()
+		if err := f.c.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		st, err := store.Open(e.dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		e.st, e.store.st = st, st
+		f.c, _ = e.client(t)
+	}
+	want := map[store.BusySendPair]api.GetDeliveryResult{busyPair("same"): {Lookup: "found", Result: &first.CarriedResults[0]}}
+	want[store.BusySendPair{CallerUUID: otherCaller, DeliveryRequestID: "same"}] = api.GetDeliveryResult{Lookup: "found", Result: &second.CarriedResults[0]}
+	read := func() {
+		t.Helper()
+		for pair, expected := range want {
+			got, err := f.c.GetDelivery(api.GetDeliveryParams{CallerUUID: pair.CallerUUID, DeliveryRequestID: pair.DeliveryRequestID})
+			if err != nil || !reflect.DeepEqual(got, expected) {
+				t.Errorf("Lookup(%+v) = %+v, %v; want %+v", pair, got, err, expected)
+			}
 		}
 	}
-	if err != nil {
-		t.Fatalf("expire %s's Result: %v", request, err)
+	reopen()
+	read()
+	if a := apitest.ApplyAgentHook(t, e.dbPath, f.id, "SessionEnd", f.session); !a.Applied {
+		t.Fatalf("SessionEnd = %+v; want applied", a)
+	}
+	read()
+	if err := storefix.DeleteWithExit(t, e.st, f.id); err != nil {
+		t.Fatal(err)
+	}
+	deleted := api.DeliveryResult{CallerUUID: busyCaller, RequestID: "deleted", InstanceID: f.id,
+		Class: "not_started", Final: true, Reason: "record_deleted", ResendSafe: true, RetryWith: "new_id", Outcome: "not_started"}
+	want[busyPair("deleted")] = api.GetDeliveryResult{Lookup: "found", Result: &deleted}
+	read()
+	reopen()
+	read()
+	if res, err := f.c.Expire(olderThan(e.clock.Now().Sub(cutoff))); err != nil || res.Count != 0 || res.Kept != 0 {
+		t.Fatalf("Expire after deletion = %+v, %v; want retention only", res, err)
+	}
+	want[busyPair("same")] = api.GetDeliveryResult{Lookup: "retention_expired"}
+	read() // the identical Message ID owned by otherCaller still has its Result
+	reopen()
+	read()
+	for _, tc := range []struct{ id, text string }{
+		{f.id, "first"}, // valid repeat, despite the deleted target
+		{f.id, "changed text"},
+		{other.ID, "first"},
+	} {
+		res, err := f.c.SendKeys(api.SendKeysParams{InstanceID: tc.id, Text: tc.text, ConfirmedDelivery: ptr(true),
+			CallerUUID: ptr(busyCaller), DeliveryRequestID: "same"})
+		assertCantSendDetails(t, err, api.CantSendDetails{Class: "cant_send", Reason: "retention_expired", RetryWith: "none"})
+		if !reflect.DeepEqual(res, api.SendKeysResult{}) {
+			t.Errorf("expired-pair refusal returned %+v; want no acceptance", res)
+		}
+	}
+	if _, err := f.c.Expire(olderThan(0)); err != nil {
+		t.Fatal(err)
+	}
+	for pair := range want {
+		want[pair] = api.GetDeliveryResult{Lookup: "retention_expired"}
+	}
+	reopen()
+	read()
+	if storefix.ReadBusySendCounts(t, e.dbPath) != counts || paneInputs(e) != inputs || len(f.route.issued) != issued || f.touched() || otherTouched() {
+		t.Error("retention, Lookup or an expired-pair refusal created a Message, pair, force, input or wake")
 	}
 }
 
 // TestForceCarriedResults (SR-4.1, SR-4.3, SR-5.5, SR-5.6; E5 Main Agent
 // decision 6): a force that handed over a, an unconfirmed u and b lists a and
 // b in carried_pairs and their Results in carried_results, u in neither.
-// Once a's Result has expired (E3's retention, as the store keeps it),
+// Once Client.Expire removes a's Result,
 // get-force stays found with a's pair kept and only b's Result, nothing made
 // up for a, and get's and status's delivery.force filter the same; a's
-// get-delivery reads retention_expired. get-force reads the same after Launch
-// End, the record's deletion and a reopen.
+// get-delivery reads retention_expired. The force's own expiry clears the
+// summary without falling back to an older retained force. Lookup survives
+// Launch End, deletion and reopening.
 func TestForceCarriedResults(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
 	f := newForceAgent(t, e)
+	// An older force with a later end timestamp catches a fallback to an
+	// older retained force when the latest expires (a clock adjustment).
+	e.clock.Advance(time.Hour)
+	f.send(t, "older", "older")
+	f.drive = forceTurns(t, f, 0, false)
+	older, _ := f.force(t)
+	e.clock.Advance(-time.Hour)
 	f.send(t, "a", forceText)
 	f.send(t, "", "unconfirmed")
 	f.send(t, "b", forceText)
-	f.drive = forceTurns(t, f, 2, false)
+	turns := forceTurns(t, f, 2, false)
+	priorPrompts := len(f.route.issued)
+	var firstFinal time.Time
+	f.drive = func(pause int, woke bool) {
+		turns(pause, woke)
+		if firstFinal.IsZero() && len(f.route.issued) > priorPrompts {
+			firstFinal = e.clock.Now()
+		}
+	}
 	got, _ := f.force(t)
 	f.drive = nil
 	if got.Outcome != "handed_over" || len(got.CarriedPairs) != 2 || len(got.CarriedResults) != 2 {
 		t.Fatalf("force = %+v; want a and b handed over with their Results", got)
 	}
 
-	expireBusyResult(t, e, "a", e.clock.Now())
+	inputs, issued := paneInputs(e), len(f.route.issued)
+	counts := storefix.ReadBusySendCounts(t, e.dbPath)
+	f.touched()
+	if res, err := f.c.Expire(olderThan(e.clock.Now().Sub(firstFinal.Add(time.Millisecond)))); err != nil || res.Count != 0 || res.Kept != 0 {
+		t.Fatalf("member expiry = %+v, %v; want retention only", res, err)
+	}
 
 	want := got
 	want.CarriedResults = got.CarriedResults[1:]
 	f.assertRecorded(t, want)
-	if a, err := f.c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: "a"}); err != nil || a.Lookup != "retention_expired" {
+	if a, err := f.c.GetDelivery(api.GetDeliveryParams{CallerUUID: busyCaller, DeliveryRequestID: "a"}); err != nil || a.Lookup != "retention_expired" || a.Result != nil {
 		t.Errorf("get-delivery a = %+v, %v; want retention_expired", a, err)
 	}
 	read := func(c *api.Client, after string) {
@@ -687,12 +786,46 @@ func TestForceCarriedResults(t *testing.T) {
 		t.Fatalf("SessionEnd %+v; want applied", a)
 	}
 	read(f.c, "Launch End")
+	if err := f.c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.c, _ = e.client(t)
+	read(f.c, "a reopen")
+	// End time, not the member's Final time, decides the force's retention.
+	e.clock.Advance(time.Second)
+	if _, err := f.c.Expire(olderThan(e.clock.Now().Sub(got.EndedAt.Add(time.Millisecond)))); err != nil {
+		t.Fatal(err)
+	}
+	readExpired := func(c *api.Client) {
+		t.Helper()
+		if found, err := c.GetForce(api.GetForceParams{ForceID: got.ForceID}); err != nil || found.Lookup != "retention_expired" || found.ForceResult != nil {
+			t.Errorf("get-force = %+v, %v; want retention_expired with no force", found, err)
+		}
+	}
+	readExpired(f.c)
+	if found, err := f.c.GetForce(api.GetForceParams{ForceID: older.ForceID}); err != nil || found.Lookup != "found" || found.ForceResult == nil {
+		t.Errorf("older force = %+v, %v; want still retained", found, err)
+	}
+	row, err := f.c.Get(f.id)
+	if err != nil || row.Delivery == nil || row.Delivery.Force != nil {
+		t.Errorf("get after force expiry = %+v, %v; want no force", row.Delivery, err)
+	}
+	status, err := f.c.Status(f.id)
+	if err != nil || status.Delivery == nil || status.Delivery.Force != nil {
+		t.Errorf("status after force expiry = %+v, %v; want no force", status.Delivery, err)
+	}
 	if err := storefix.DeleteWithExit(t, e.st, f.id); err != nil {
 		t.Fatal(err)
 	}
-	read(f.c, "the record's deletion")
+	readExpired(f.c)
+	if err := f.c.Close(); err != nil {
+		t.Fatal(err)
+	}
 	reopened, _ := e.client(t)
-	read(reopened, "a reopen")
+	readExpired(reopened)
+	if f.touched() || paneInputs(e) != inputs || len(f.route.issued) != issued || storefix.ReadBusySendCounts(t, e.dbPath) != counts {
+		t.Error("retention or its projections created a wake, input, Message or force")
+	}
 }
 
 // TestForceReadsResultsWithItsFacts (SR-4.1, SR-5.6; M1 G3

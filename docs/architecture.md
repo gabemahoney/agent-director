@@ -4304,6 +4304,8 @@ for `pause`. The tables hold:
 - **Results and ownership.** `busy_send_results` is store-wide confirmed pair
   ownership. The Result and its retention are Message columns, so an expired
   Message stays as a tombstone with its pair and no text, Result or receipt.
+  `Store.ExpireBusySendRetention` removes that content while keeping custody,
+  acceptance and hand-over fencing facts; see [`expire`](#expire).
 - **Pause claims.** `busy_send_pause_claims` keeps each claim on one Launch,
   at most one standing: owning call, revision, deadline, signal intent, and
   the call's outcome (`call_outcome`, `call_cause`) kept apart from the
@@ -9261,8 +9263,10 @@ Message Held: the next `accepted_seq`, its count and bytes added to the
 conversation's reservations, original text, digest, immutable options, pair
 and initial wait (`initialBusySendWait`, from durable facts only), comparing
 and advancing the conversation's revision. A refusal (`*BusySendRefusal`)
-writes nothing. A replay returns the owner's current Result and writes
-nothing. Later partition, hand-over and lifecycle code must consume these rows
+writes nothing. A repeat returns the owner's retained Result and writes
+nothing; an expired owner refuses every use of the pair with
+`retention_expired`, before comparing target or text. Later partition,
+hand-over and lifecycle code must consume these rows
 in `accepted_seq` order and keep the reservation until custody can no longer
 return to Held.
 
@@ -19673,7 +19677,8 @@ proof that the agent has exited.
 
 ### `expire`
 
-`pkg/api/expire.go` (the verb), `expire_trail.go` (its trail records) and
+`pkg/api/expire.go` (the verb), `expire_trail.go` (its trail records),
+`internal/store/busy_send_expire.go` (content retention) and
 `internal/store/expire.go` (the candidate read and the conditional delete).
 `expire` deletes a finished row only when its agent's recorded process is
 not seen running and tmux shows no session of the agent; every other
@@ -19684,10 +19689,12 @@ delete by itself (SR-18.2).
 
 **Selection (SR-12.1).** The window is `older_than` (`--older-than` on the
 CLI) when given, else `defaults.expire_retention_days` days of 24 h; the
-cutoff is the injected clock's `now` minus the window. Only an explicit
-zero `older_than` selects every finished row with an `ended_at`: the cutoff
-is then the fixed `farFutureCutoff` (9999-12-31 23:59:59 UTC) and the clock
-is not read. No other input gives a zero window, and none gives a negative
+cutoff is the injected clock's run time minus the window. Only an explicit
+zero `older_than` removes the age requirement for finished rows, eligible
+Final Messages and ended forces: the cutoff is then the fixed
+`farFutureCutoff` (9999-12-31 23:59:59 UTC). After validation, one `now()`
+supplies the run time and retention's recorded expiry time, even for zero.
+No other input gives a zero window, and none gives a negative
 one: the retention setting never does (below), and a negative `older_than`
 is refused (b.f4v).
 
@@ -19726,9 +19733,9 @@ is refused (b.f4v).
 - **Refusals.** A negative `retentionDays` (even beside a non-nil
   `olderThan`) and a negative `olderThan` are refused before anything
   runs: `ErrInvalidFlags`, an empty `ExpireResult` (counts 0, `IDs` and
-  `KeptIDs` non-nil and empty), and no candidate read, tmux call, log line
-  or trail record. As supplementary advice, each description says what to
-  pass instead: `retentionDays = <n> is negative; pass 0 for the default
+  `KeptIDs` non-nil and empty), and no retention pass, candidate read, tmux
+  call, log line or trail record. As supplementary advice, each description
+  says what to pass instead: `retentionDays = <n> is negative; pass 0 for the default
   of 31 days or a positive number of days (only an explicit zero olderThan
   selects every finished row)` and
   `olderThan = <d> is negative; pass a positive duration, nil for the
@@ -19738,19 +19745,62 @@ is refused (b.f4v).
   `ErrInvalidFlags` item of "Documented exclusions" under
   [Err-name five-way coherence](#err-name-five-way-coherence).
 
-`ListExpireCandidates(cutoff)` is the one read: rows in `ended` or
-`missing` whose `ended_at` is set and older than the cutoff (compared as
+**Content retention.** After validation and before `ListExpireCandidates` or
+any process, tmux, per-row or trail work, `Expire` calls
+`Store.ExpireBusySendRetention(cutoff, expiredAt)`, even with no finished rows.
+Both times come from the caller; the store compares and records whole
+milliseconds. It processes Messages, then forces:
+
+- A retained Message must be Final strictly before the cutoff and either
+  closed with no current hand-over, or issued with current membership in an
+  issued prompt. Held, claimed, current unissued or inconsistent custody is
+  protected. Historical released attempts do not block expiry. An issued
+  Final Waiting Item can expire with admission or output unresolved; neither
+  hand-over closure nor zero `awaiting_turn_start` is required.
+- A retained force must have ended strictly before the cutoff, with an
+  outcome other than `running` or `pending`.
+
+Message expiry clears text, digest, Result class/reason and receipt identity,
+sets `retention`/`expired_at_ms` and advances `revision`. It keeps the pair,
+text length, acceptance order/time, current custody and all hand-over records,
+including the last hand-over's Launch, running-turn flag and captured Turn
+Start counter. `readBusySendPromptBody` cannot match a late sighting without
+the text. Force expiry changes only retention, expiry time and revision;
+outcome, times and carried membership stay. No delivery authority is created.
+
+The pass reads each table's maximum primary key at entry, then reads eligible
+keys and revisions in key order up to that bound, at most 32 per page. Each
+read materializes and closes its rows outside a write transaction. One
+`inWriteTx(DefaultLockWait)` per page rechecks each selected revision and the
+full eligibility rule under `BEGIN IMMEDIATE`; changed records are skipped.
+The cursor advances past every key read, skips included, and no connection or
+transaction is held between pages. A repeat send serializes on the write lock
+and sees either the retained Result or the expired owner, never a free pair.
+An unchanged second pass writes nothing. This uses the existing schema and
+indexes. **Must use:** future retention callers use
+`Store.ExpireBusySendRetention`, not separate cleanup SQL.
+
+A read, write, lock or commit failure stops retention. Earlier committed pages
+stay expired; an unconfirmed commit is not retried. The API logs the failure
+and returns an unnamed error containing its diagnostic text but no cause
+chain or matchable store sentinel (generic `ErrInternal` on CLI, MCP and
+TypeScript). No candidate read or later work runs. A later retention run is
+safe; the failure does not mean nothing changed.
+
+`ListExpireCandidates(cutoff)` selects agent rows in `ended` or `missing`
+whose `ended_at` is set and older than the cutoff (compared as
 stored text in the `storeTimestamp` layout), in instance-id order, each an
 `ExpireCandidate` with its recorded session name, SessionStart `pid` +
 `proc_starttime`, launch identity and `RowSnapshot`. It decodes no label,
 `agent_args` or `extra_env` and parses no timestamp, so a malformed row is
 judged like any other. Live rows, `pending` included, and rows with a NULL
 `ended_at` are never selected and get no tmux call. A failed candidate read
-is logged and fails the verb, with no tmux call; besides the two refusals
-above, it is the verb's only failure, and `Client.Expire` adds
-`ErrClientClosed` on a closed Client. Every failure returns the refusals'
-empty `ExpireResult` (counts 0, `IDs` and `KeptIDs` non-nil and empty, so
-`[]` in JSON), as a run that selected no row does (b.hbt).
+is logged and fails the verb, with no tmux call. The two validation refusals,
+retention failure and candidate-read failure are `Expire`'s only failures;
+`Client.Expire` adds `ErrClientClosed` on a closed Client. Every failure returns
+the refusals' empty `ExpireResult` (counts 0, `IDs` and `KeptIDs` non-nil and
+empty, so `[]` in JSON), as a run that selected no row does (b.hbt). Empty row
+lists do not imply no content expired.
 
 **Per-row order (SR-12.2).** Rows are judged in instance-id order, so the
 per-socket stop and the budget's cut-off fall on the same rows on every
@@ -19808,9 +19858,9 @@ none of them behind.
 
 **The result (SR-12.4).** `count` / `ids` are the rows deleted; `kept` /
 `kept_ids` are the selected rows kept. Both lists are sorted and never null
-(`[]` when empty); `count` and `kept` are their lengths. The verb has no
-verb-level error: tmux problems and a failed delete of one row never fail
-the run.
+(`[]` when empty); `count` and `kept` are their lengths. They do not count
+expired Messages or forces. The manifest's named-error list stays empty;
+tmux problems and a failed delete of one row never fail the run.
 
 **Trail (SR-12.5, SR-14).** Once a row's outcome is final (`emitRow`), a
 kept row gets exactly one `ad.expire.kept`, and a row whose lookup reported
@@ -19840,9 +19890,9 @@ transcripts, and reads no process environment.
   time.Time, lg ExpireLogger) (ExpireResult, error)` is exported. It never
   reads `time.Now`. It turns `retentionDays` into the window with
   `retentionWindow` (see Selection above).
-- `ExpireStore`: `ListExpireCandidates`, `DeleteFinishedIfSameLife` and
-  `StoreID`; `*store.Store` satisfies it. `ExpireCandidate` is an alias of
-  `store.ExpireCandidate`.
+- `ExpireStore`: `ExpireBusySendRetention`, `ListExpireCandidates`,
+  `DeleteFinishedIfSameLife` and `StoreID`; `*store.Store` satisfies it.
+  `ExpireCandidate` is an alias of `store.ExpireCandidate`.
 - `ExpireTmux`: `TmuxLookup` only; `TmuxClient`, `*tmux.Client` and
   `tmuxfix.Recorder` satisfy it.
 - `Client.Expire(olderThan)` passes the Client's store, tmux client,
@@ -23111,11 +23161,15 @@ actual AD controller/store/pipe paths against synthetic runtime authority;
 seeded store rows alone do not establish controller behavior. Future authors
 MUST reuse these fixtures for their respective responsibilities.
 
-**Busy-send records without a public writer (reusable test fixtures).**
+**Busy-send record seeders (reusable test fixtures).**
 `internal/testsupport/storefix/busy_send.go`: `SeedBusySendResult` seeds a
 confirmed Message with its pair and Result, or an expired tombstone, in the
 instance's published conversation. `ExpireBusySendForce` expires an ended
 force attempt. `UnbindBusySend` clears a row's published binding.
+`BusySendResultSeed.FinalAt` optionally sets the Final transition time;
+nil keeps the fixture timestamp. Synthetic expired records serve reader
+tests; retention behavior tests MUST invoke `Store.ExpireBusySendRetention`
+or `expire` on retained records.
 With `Transport` set, `SeedBusySendResult` also records the Message's one-prompt
 hand-over on the current Launch with that observed transport.
 `ReadBusySendCounts` counts Messages, pairs, force attempts and input
@@ -27413,6 +27467,9 @@ comments carry the detail.
 
 - **Store wrapper.** `e.expireStore()` returns an `expireStore`, an
   `api.ExpireStore` over the env's real store with nothing injected:
+  its required `ExpireBusySendRetention` delegates to the real writer unless
+  `failRetention(err)` is set. `calls` records `retention`, `list` and
+  `delete` in order; `cutoff` and `expiredAt` capture retention's arguments.
   `failList(err)` fails every candidate read; `failDelete(id, err)` and
   `refuseDelete(id, res)` (`CondChanged` or `CondAbsent`) answer one row's
   delete without deleting; `beforeDelete(id, fn)` runs `fn` once just
@@ -27500,10 +27557,10 @@ every run, fail-open through the re-exec child). Beside them:
   `internal/mcp/expire_test.go`, the envelope-diff cases in
   `test/envelope-diff/success_expire.go`, and `test/realtmux/expire_test.go`.
 
-**Must use:** a new `expire` test in `pkg/api` seeds through
+**Must use:** a new `expire` test in `pkg/api` seeds agent rows through
 `seedFinished` / `finishedSpec`, runs through `e.expire` / `e.expireWith` /
-`e.expireWithDays` / `e.expireClient` / `e.expireClientDays`, injects
-store faults through `expireStore`, and checks
+`e.expireWithDays` / `e.expireClient` / `e.expireClientDays`, and uses
+`expireStore` for store faults and retention order/times. Check row outcomes
 through `assertExpired` and `assertLookupsOn`. Never seed with
 `apitest.SeedExpireFixture` there: it backdates by wall time and records no
 socket.
