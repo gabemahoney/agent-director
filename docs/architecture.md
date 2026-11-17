@@ -20901,6 +20901,19 @@ the upgrade and way-back cases (`epic-12-install`):
   its `xtrace` tail in `details`, so a case that checks several things collects
   its failures and repeats them, trimmed, in its last line.
 
+### Ending a real agent: `kill-retry.sh` (reusable driver helper)
+
+Cases that need a real agent ended source `/opt/driver/kill-retry.sh` and
+call `kill_with_retry --instance-id "$id"`. It retries only a failed kill
+whose JSON `err_name` is `ErrTmuxKillFailed`, with six total attempts and
+1/2/4/8/8 second backoff. Other failures return immediately. Every failed
+answer is printed to stderr; successful stdout is the final kill's output.
+This follows the [caller contract](caller-contract.md): a real agent can
+outlive kill's exit wait under load. Keep stub-only calls and assertions of
+specific refusals as single calls. `test/driver-scripts/kill_retry_test.go`
+uses a stub CLI and a recording sleep to check recovery, refusal and the cap
+without launching agents or waiting.
+
 ### Store access from a case: `sql.sh` (reusable driver helper)
 
 `test/driver/sql.sh` (installed at `/opt/driver/sql.sh`) is the `sqlite3`

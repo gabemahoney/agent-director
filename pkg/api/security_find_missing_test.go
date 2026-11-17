@@ -21,13 +21,17 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-func securitySweepCall(_ *testing.T, c *api.Client, _ *securityScene) (any, error) {
-	return c.Sweep(context.Background())
+func securitySweepCall(t *testing.T, c *api.Client, _ *securityScene) (any, error) {
+	res, err := c.Sweep(context.Background())
+	drainTrail(t)
+	return res, err
 }
 
 // securityFindMissingCall runs one find-missing sweep through the Client.
-func securityFindMissingCall(_ *testing.T, c *api.Client, _ *securityScene) (any, error) {
-	return c.FindMissing(context.Background())
+func securityFindMissingCall(t *testing.T, c *api.Client, _ *securityScene) (any, error) {
+	res, err := c.FindMissing(context.Background())
+	drainTrail(t)
+	return res, err
 }
 
 // securityFindMissingRecord checks find-missing's ad.launch.name_held record

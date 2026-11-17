@@ -321,9 +321,11 @@ func sweepFrom(t *testing.T, s api.FindMissingStore, pc api.ProcChecker, o fmSwe
 	return mustSweep(t, s, pc, o), lg, before
 }
 
-// ticksSince returns id's ad.find_missing.tick lines written after the first before trail lines.
+// ticksSince drains accepted bounded records, then returns id's ad.find_missing.tick lines written after the
+// first before trail lines. Callers holding the writer must release it before reading ticks.
 func ticksSince(t *testing.T, before int, id string) []map[string]any {
 	t.Helper()
+	drainTrail(t)
 	return ptRecords(t, before, "ad.find_missing.tick", id)
 }
 

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"strings"
 	"testing"
 
@@ -14,6 +16,56 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
+
+// Regression b.e2a: parse diagnostics must not log request bytes, including
+// the offending character that encoding/json embeds in syntax-error text.
+func TestServeParseErrorLogOmitsInput(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		line      string
+		errorType string
+		message   string
+	}{
+		{
+			name:      "truncated spawn with credential",
+			line:      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"spawn","arguments":{"cwd":"/tmp/é","extra_env":{"ANTHROPIC_API_KEY":"DECOY_TOKEN_e2a"}}}`,
+			errorType: "*json.SyntaxError",
+			message:   "unexpected end of JSON input",
+		},
+		{
+			name:      "syntax error quotes input character",
+			line:      `QDECOY_TOKEN_e2a`,
+			errorType: "*json.SyntaxError",
+			message:   "invalid character 'Q' looking for beginning of value",
+		},
+		{
+			name:      "invalid envelope field type",
+			line:      `{"jsonrpc":"2.0","id":1,"method":123,"params":{"secret":"DECOY_TOKEN_e2a"}}`,
+			errorType: "*json.UnmarshalTypeError",
+			message:   "json: cannot unmarshal number into Go struct field Request.method of type string",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var diagnostics, out bytes.Buffer
+			srv := mcp.New(&fakeDispatcher{}, log.New(&diagnostics, "", 0))
+			if err := srv.Serve(context.Background(), strings.NewReader(tc.line+"\n"), &out); err != nil {
+				t.Fatalf("Serve: %v", err)
+			}
+			if strings.Contains(diagnostics.String(), "DECOY_TOKEN_e2a") {
+				t.Error("parse-error log leaked the decoy credential")
+			}
+			// Only the error type and byte count may depend on the request.
+			wantLog := fmt.Sprintf("mcp: parse error: %s (bytes=%d)\n", tc.errorType, len(tc.line))
+			if got := diagnostics.String(); got != wantLog {
+				t.Errorf("parse-error log = %q; want value-free diagnostic %q", got, wantLog)
+			}
+			wantReply := fmt.Sprintf("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32700,\"message\":%q}}\n", "parse error: "+tc.message)
+			if got := out.String(); got != wantReply {
+				t.Errorf("reply = %q; want unchanged JSON-RPC parse error %q", got, wantReply)
+			}
+		})
+	}
+}
 
 // TestServeFraming: a malformed line is answered with -32700 and the session
 // keeps reading; a notification (no id) gets no response; initialize returns
