@@ -265,7 +265,7 @@ func TestNeedsIntelligenceSamplingSkipsLeasedConnection(t *testing.T) {
 					if err != nil || after.DisplayObservation != before.DisplayObservation || after.ObservationVersion != before.ObservationVersion || after.RowVersion != before.RowVersion || e.request(t) != request {
 						t.Errorf("skipped observation changed persisted facts: before=%+v after=%+v err=%v", before, after, err)
 					}
-					if events := displayEvents(t, mark, e.id); len(events) != 0 {
+					if events := recoveryDisplayEvents(t, mark, e.id); len(events) != 0 {
 						t.Errorf("skipped observation emitted %v", events)
 					}
 				})

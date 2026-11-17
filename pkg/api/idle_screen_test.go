@@ -502,7 +502,7 @@ func TestIdleScreenFailedCaptureResets(t *testing.T) {
 					exitAt = e.now
 					observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
 				}
-				events := displayEvents(t, mark, e.id)
+				events := recoveryDisplayEvents(t, mark, e.id)
 				if want := map[bool]int{false: 0, true: 1}[tc.phase == "after"]; len(events) != want {
 					t.Fatalf("events = %v; want %d exit at %s", events, want, exitAt)
 				}
@@ -535,6 +535,7 @@ func TestIdleScreenSkippedWriteKeepsBaseline(t *testing.T) {
 					e.now = start.Add(time.Minute)
 					shown, want = assertDisplayState(t, c, e.id, api.StateIdleScreen), api.StateIdleScreen
 				}
+				drainTrail(t) // Finish the setup entry before checking that the skipped read emits nothing.
 				committed := e.row(t)
 				release := func() {}
 				if failure == "held lock" {
@@ -563,7 +564,7 @@ func TestIdleScreenSkippedWriteKeepsBaseline(t *testing.T) {
 				if displayed && (got.Since != shown.Since || minutes(t, got) != minutes(t, shown)) {
 					t.Fatalf("skipped sample=%+v; want the committed %+v", got, shown)
 				}
-				if events := displayEvents(t, mark, e.id); len(events) != 0 {
+				if events := recoveryDisplayEvents(t, mark, e.id); len(events) != 0 {
 					t.Fatalf("a skipped sample emitted %v", events)
 				}
 				if failure == "held lock" {
@@ -643,7 +644,7 @@ func TestIdleScreenOlderSampleNeverOverwrites(t *testing.T) {
 				row.PaneSHA256 != newer.PaneSHA256 || row.PaneSinceMillis != newer.PaneSinceMillis {
 				t.Fatalf("the older sample overwrote the newer write: newer=%+v after=%+v", newer, row)
 			}
-			if events := displayEvents(t, mark, e.id); len(events) != 0 {
+			if events := recoveryDisplayEvents(t, mark, e.id); len(events) != 0 {
 				t.Fatalf("the refused sample emitted %v", events)
 			}
 		})
@@ -799,7 +800,7 @@ func TestIdleScreenUnsampledReadKeepsOnlyCurrentFinding(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				after, events := e.row(t), displayEvents(t, mark, e.id)
+				after, events := e.row(t), recoveryDisplayEvents(t, mark, e.id)
 				wantDisplayed := ""
 				if tc.kept && committed.State == api.StateIdleScreen {
 					wantDisplayed = api.StateIdleScreen
@@ -936,7 +937,7 @@ func TestIdleScreenRecordOnlyAndStoredReads(t *testing.T) {
 			if before.DisplayEvidence == after.DisplayEvidence || before.ObservationVersion != after.ObservationVersion || before.DisplayObservation != after.DisplayObservation || before.PaneSinceMillis != after.PaneSinceMillis || before.StateEvidence != after.StateEvidence || before.FamilyState != after.FamilyState || before.RowVersion != after.RowVersion {
 				t.Fatal("record-only sample changed the display, baseline, state, family or version")
 			}
-			if events := displayEvents(t, mark, e.id); len(events) != 0 {
+			if events := recoveryDisplayEvents(t, mark, e.id); len(events) != 0 {
 				t.Fatalf("record-only sample emitted %v", events)
 			}
 			reopened, err := store.Open(e.dbPath)

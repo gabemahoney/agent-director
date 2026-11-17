@@ -75,6 +75,7 @@ func rlfNeverReported(t *testing.T, e *killEnv, id string) {
 	if _, err := c.FindMissing(context.Background()); err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
+	drainTrail(t)
 	if st := rlfRow(t, e, id).State; st != store.StateMissing {
 		t.Fatalf("state after find-missing = %s; want missing", st)
 	}

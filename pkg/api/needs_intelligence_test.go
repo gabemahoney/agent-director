@@ -245,7 +245,7 @@ func TestPackageStatusJudgesHookWithCallersView(t *testing.T) {
 		e.now = gone.Add(wait)
 		observeDisplay(t, e.s, e.id, store.StateCheckPermission, nil, read)
 	}
-	if events := displayEvents(t, mark, e.id); len(events) != 0 {
+	if events := recoveryDisplayEvents(t, mark, e.id); len(events) != 0 {
 		t.Fatalf("events=%v; want none", events)
 	}
 }

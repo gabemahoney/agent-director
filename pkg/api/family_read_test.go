@@ -243,7 +243,7 @@ func TestFamilyRetainedDisplayExitFirstRead(t *testing.T) {
 					}
 					e.now = e.now.Add(time.Duration(ms-1) * time.Millisecond)
 					read(display, false)
-					if events := displayEvents(t, mark, e.id); len(events) != 0 {
+					if events := recoveryDisplayEvents(t, mark, e.id); len(events) != 0 {
 						t.Fatalf("early exit records=%v", events)
 					}
 					e.now = e.now.Add(time.Millisecond)
@@ -277,7 +277,7 @@ func TestFamilyRetainedDisplayExitFirstRead(t *testing.T) {
 						t.Errorf("first committed %s row %s family=%s; want %s", first, id, r.family, wantFamily)
 					}
 				}
-				events := displayEvents(t, mark, e.id)
+				events := recoveryDisplayEvents(t, mark, e.id)
 				if len(events) != 1 {
 					t.Fatalf("exit events=%v", events)
 				}
@@ -428,7 +428,7 @@ func TestFamilyExitOwnershipRaceKeepsEarlierSnapshot(t *testing.T) {
 				if after := readFamilyHistories(t, e.dbPath, ids); !reflect.DeepEqual(after, hookedHistory) {
 					t.Errorf("refused exit changed histories: hooked=%+v after=%+v", hookedHistory, after)
 				}
-				if events := displayEvents(t, mark, e.id); len(events) != 0 {
+				if events := recoveryDisplayEvents(t, mark, e.id); len(events) != 0 {
 					t.Errorf("refused exit emitted %v", events)
 				}
 			})
@@ -510,7 +510,7 @@ func TestFamilyExitSkipsLeasedConnection(t *testing.T) {
 					t.Errorf("committed family %s=%+v", id, h)
 				}
 			}
-			if events := displayEvents(t, mark, e.id); len(events) != 1 {
+			if events := recoveryDisplayEvents(t, mark, e.id); len(events) != 1 {
 				t.Errorf("exit events=%v; want one", events)
 			} else {
 				assertDisplayEvent(t, events[0], api.StateIdleScreen, store.StateWaiting, e.now)
@@ -520,7 +520,7 @@ func TestFamilyExitSkipsLeasedConnection(t *testing.T) {
 				if err != nil || !reflect.DeepEqual(after, laterBefore) {
 					t.Errorf("later skipped observation changed row: before=%+v after=%+v err=%v", laterBefore, after, err)
 				}
-				if events := displayEvents(t, mark, later); len(events) != 0 {
+				if events := recoveryDisplayEvents(t, mark, later); len(events) != 0 {
 					t.Errorf("later skipped observation emitted %v", events)
 				}
 			}
@@ -646,7 +646,7 @@ func TestFamilyExitListReportsCommittedState(t *testing.T) {
 				}
 			}
 			for _, id := range members {
-				if events := displayEvents(t, mark, id); len(events) != 1 {
+				if events := recoveryDisplayEvents(t, mark, id); len(events) != 1 {
 					t.Errorf("exit events %s=%v; want one", id, events)
 				} else {
 					assertDisplayEvent(t, events[0], api.StateIdleScreen, store.StateWaiting, e.now)

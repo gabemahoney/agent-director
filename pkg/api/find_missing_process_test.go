@@ -111,6 +111,7 @@ func fpAssertOutcome(t *testing.T, st *fakeFindMissingStore, res api.FindMissing
 // fpAssertNoDisagree fails if any ad.provenance.disagree record for id was written after trail line mark.
 func fpAssertNoDisagree(t *testing.T, mark int, id string) {
 	t.Helper()
+	drainTrail(t)
 	for _, rec := range trailSince(t, mark, "ad.provenance.disagree") {
 		if rec["instance_id"] == id {
 			t.Errorf("ad.provenance.disagree record for %s = %v; want none (pid_mismatch is retired)", id, rec)

@@ -76,7 +76,7 @@ func TestStoredNeedsIntelligenceEndsAtOnce(t *testing.T) {
 				if after, err := e.s.GetSpawn(e.id); err != nil || after.DisplayObservation != before.DisplayObservation || after.ObservationVersion != before.ObservationVersion {
 					t.Fatalf("an uncommitted read changed the row: before=%+v after=%+v %v", before, after, err)
 				}
-				if events := displayEvents(t, mark, e.id); len(events) != 0 {
+				if events := recoveryDisplayEvents(t, mark, e.id); len(events) != 0 {
 					t.Fatalf("an uncommitted read emitted %v", events)
 				}
 				if failure != "held lock" {
@@ -95,7 +95,7 @@ func TestStoredNeedsIntelligenceEndsAtOnce(t *testing.T) {
 				if got := observationVersion(t, e); got != version {
 					t.Errorf("a later read wrote: observation_version %d -> %d", version, got)
 				}
-				events := displayEvents(t, mark, e.id)
+				events := recoveryDisplayEvents(t, mark, e.id)
 				if len(events) != 1 {
 					t.Fatalf("events=%v; want the exit once", events)
 				}

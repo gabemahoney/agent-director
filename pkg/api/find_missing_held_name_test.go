@@ -252,6 +252,7 @@ func TestFindMissingHeldNameRecord(t *testing.T) {
 			if c := e.cols(t, r.id); c.State != store.StateMissing {
 				t.Errorf("state = %v; want missing", c.State)
 			}
+			drainTrail(t)
 			recs := ptRecords(t, mark, "ad.launch.name_held", r.id)
 			if tc.absentOK {
 				assertMarkTick(t, mark, r, "tmux_absent", tc.lookup)
@@ -300,8 +301,10 @@ func TestFindMissingHeldNamePendingGrace(t *testing.T) {
 				if now := e.cols(t, r.id); !reflect.DeepEqual(now, was) {
 					t.Errorf("row inside grace:\ngot  %+v\nwant %+v", now, was)
 				}
-				if n := len(e.rec.SocketCalls()); n != 0 || len(readAPITrailLines(t)) != mark {
-					t.Errorf("inside grace: %d tmux calls, trail %d -> %d lines; want none", n, mark, len(readAPITrailLines(t)))
+				drainTrail(t)
+				// No sweep record: the only new line is the drain's sentinel.
+				if n, lines := len(e.rec.SocketCalls()), len(readAPITrailLines(t)); n != 0 || lines != mark+1 {
+					t.Errorf("inside grace: %d tmux calls, trail %d -> %d lines; want no calls and only the drain sentinel", n, mark, lines)
 				}
 				if pr, err := e.s.GetPermissionRequest(r.id, perm.RequestToken); err != nil || pr.Decision != "" {
 					t.Errorf("permission request inside grace = %+v, %v; want it still open", pr, err)

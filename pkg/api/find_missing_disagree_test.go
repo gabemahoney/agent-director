@@ -192,6 +192,7 @@ func dgSweep(t *testing.T, prefix string, c dgCase) dgRun {
 // other trail line and store write of the row (written once its write settled).
 func dgRecords(t *testing.T, before int, id string, st *fakeFindMissingStore) []map[string]any {
 	t.Helper()
+	drainTrail(t)
 	settled := 0
 	for _, c := range st.calls {
 		if c.id == id {
@@ -310,6 +311,7 @@ func TestFindMissingDisagreeFailOpen(t *testing.T) {
 	prefix := "fo-" + uuid.NewString()[:8]
 	before := trailLen(t)
 	want := foRuns(t, prefix)
+	drainTrail(t)
 	wantRecs := 0
 	for _, c := range dgCases() {
 		wantRecs += len(c.want)

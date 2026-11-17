@@ -35,10 +35,15 @@ func (g *trailEncodingGate) MarshalJSON() ([]byte, error) {
 	return []byte(`"released"`), nil
 }
 
+var trailReaderEntries sync.Map // *testing.T -> one-shot func(), for held-writer reader regressions.
+
 // drainTrail acknowledges the existing worker's FIFO with one bounded sentinel.
 // Tests reading accepted bounded records must reuse this barrier before disk assertions.
 func drainTrail(t *testing.T) {
 	t.Helper()
+	if entry, ok := trailReaderEntries.LoadAndDelete(t); ok {
+		entry.(func())()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := trail.Emit(ctx, "ad.test.trail_emitters_drained", nil); err != nil {
@@ -81,6 +86,32 @@ func holdTrail(t *testing.T) (release func()) {
 		t.Fatal("holder did not acquire the real writer mutex")
 	}
 	return release
+}
+
+// holdTrailUntilReader holds one operation's tick until its reader enters drainTrail.
+// The reader checks that the tick is still pending, then releases before starting its drain deadline.
+// Callers must be serial and emit exactly one bounded record before entering their reader.
+func holdTrailUntilReader(t *testing.T) {
+	t.Helper()
+	release := holdTrail(t)
+	writer := trail.Default()
+	baseline := writer.Status()
+	entered := false
+	trailReaderEntries.Store(t, func() {
+		entered = true
+		if s := writer.Status(); s.Pending != 1 || s.Failed != baseline.Failed || s.Rejected != baseline.Rejected {
+			t.Fatalf("reader entered without exactly one pending operation tick: %+v (baseline %+v)", s, baseline)
+		}
+		t.Log("operation returned with its tick pending; reader entered drain barrier (Pending=1)")
+		release()
+	})
+	t.Cleanup(func() {
+		trailReaderEntries.Delete(t)
+		release()
+		if !entered {
+			t.Error("reader did not enter its drain barrier before returning")
+		}
+	})
 }
 
 // cancelAtMark is the fake store whose mark cancels the sweep's context once the mark is made, so the mark's tick
