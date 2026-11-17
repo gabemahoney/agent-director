@@ -135,6 +135,23 @@ func siteText(t *testing.T, verb, param, field string) string {
 	return ""
 }
 
+// b.acg: an expired positive bound must not inherit explicit zero's allowance.
+func TestDecideMaxWaitDescription(t *testing.T) {
+	text := siteText(t, "decide", "max_wait_ms", "")
+	for _, phrase := range []string{
+		"An expired positive bound starts no new SQL, even if the store is free",
+		"already-entered SQL may continue",
+		"Zero: one-second allowance for immediately available work, store free at once, no lock retries",
+	} {
+		if !strings.Contains(text, phrase) {
+			t.Errorf("decide.max_wait_ms lacks %q", phrase)
+		}
+	}
+	if strings.Contains(text, "With no time left, recording proceeds") {
+		t.Error("decide.max_wait_ms permits recording after a positive bound expires")
+	}
+}
+
 // TestSurfaceJSONMirrorsManifest: the committed surface.json carries every
 // manifest verb, in order, with its description, markers, params, result
 // fields and error names (an absent enum as null, no error names as []), and
