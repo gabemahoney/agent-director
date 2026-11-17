@@ -1,0 +1,124 @@
+// Included only by prepare-overlay.sh; no shipping file imports this adapter.
+package main
+
+import (
+	"context"
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"sync"
+	"syscall"
+
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
+)
+
+// The harness supplies a small regular plan file on fd 198, a release pipe on
+// fd 199, and an event pipe on fd 200. They never use the hook's input/output or
+// environment. Unarmed adapter builds behave normally. No helper process is
+// inserted between the hook and its real parent.
+func observeMixedHookForTest(st *store.Store) error {
+	planFile := os.NewFile(198, "mixed-hook-plan")
+	info, err := planFile.Stat()
+	if errors.Is(err, os.ErrInvalid) || errors.Is(err, syscall.EBADF) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer planFile.Close()
+	if !info.Mode().IsRegular() || info.Size() > 4096 {
+		return errors.New("plan must be a regular file of at most 4096 bytes")
+	}
+	var plan struct {
+		Target     string `json:"target"`
+		Occurrence int    `json:"occurrence"`
+	}
+	data, err := io.ReadAll(io.LimitReader(planFile, 4097))
+	if err != nil || len(data) > 4096 {
+		return errors.New("cannot read bounded plan")
+	}
+	if err := json.Unmarshal(data, &plan); err != nil {
+		return err
+	}
+	if (plan.Target != "admission" && plan.Target != "intent") || plan.Occurrence < 1 {
+		return errors.New("plan needs target admission or intent and occurrence >= 1")
+	}
+	release, events := os.NewFile(199, "mixed-hook-release"), os.NewFile(200, "mixed-hook-events")
+	for _, pipe := range []*os.File{release, events} {
+		info, err := pipe.Stat()
+		if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+			return fmt.Errorf("%s must be an inherited pipe", pipe.Name())
+		}
+		syscall.CloseOnExec(int(pipe.Fd()))
+	}
+	var mu sync.Mutex
+	var matched, used bool
+	commits := 0
+	_, err = store.ObserveSQLiteForTest(st, func(d driver.Driver) driver.Driver {
+		return sqliteobserve.Wrap(d, sqliteobserve.Hooks{
+			AfterExec: func(_ context.Context, sql string, err error) {
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil || used {
+					return
+				}
+				q := strings.Join(strings.Fields(sql), " ")
+				if strings.HasPrefix(q, "BEGIN") || q == "ROLLBACK" {
+					matched = false
+				}
+				// Both UserPromptSubmit sightings and Stop native signals admit
+				// an issued prompt through this guarded update. Message acceptance
+				// is a different operation, performed outside the hook's Store.
+				if plan.Target == "admission" && strings.HasPrefix(q, "UPDATE busy_send_prompts SET admission_kind = ?, admitted_at_ms = ?, revision = revision + 1 ") {
+					matched = true
+				}
+				if plan.Target == "intent" && strings.HasPrefix(q, "UPDATE busy_send_prompts SET emission = 'issued', intent_at_ms =") {
+					matched = true
+				}
+			},
+			AfterCommit: func(context.Context) error {
+				mu.Lock()
+				if used || !matched {
+					mu.Unlock()
+					return nil
+				}
+				matched = false
+				commits++
+				if commits != plan.Occurrence {
+					mu.Unlock()
+					return nil
+				}
+				used = true
+				mu.Unlock()
+				// SQLite has really committed. Deliberately ignore ctx here to
+				// model an uncooperative native return; the Store retains its
+				// original deadline and CommitUnconfirmed classification.
+				if err := json.NewEncoder(events).Encode(map[string]any{
+					"barrier": "after_commit", "target": plan.Target, "occurrence": commits,
+					"pid": os.Getpid(), "parent_pid": os.Getppid(), "store_path": st.Path(),
+				}); err != nil {
+					return err
+				}
+				var reply struct {
+					Release   bool `json:"release"`
+					LoseReply bool `json:"lose_reply"`
+				}
+				if err := json.NewDecoder(io.LimitReader(release, 4096)).Decode(&reply); err != nil {
+					return err
+				}
+				if !reply.Release || reply.LoseReply {
+					return errors.New("mixed-hook: lost native COMMIT reply")
+				}
+				return nil
+			},
+		})
+	})
+	// This Store belongs to one hook process and its ordinary deferred Close;
+	// restoring the observer would add a new wait after the hook deadline.
+	return err
+}

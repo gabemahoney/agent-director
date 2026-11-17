@@ -2,6 +2,7 @@ package installversion
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -30,11 +31,39 @@ func decode(data []byte, value any) error {
 }
 
 func readBytes(path string) ([]byte, error) {
+	return readBytesContext(context.Background(), path)
+}
+
+// contextReader checks cancellation between bounded reads. In particular it
+// hides os.File's WriterTo so hashing cannot bypass these checks in io.Copy.
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(p) > 32*1024 {
+		p = p[:32*1024]
+	}
+	n, err := r.r.Read(p)
+	if ctxErr := r.ctx.Err(); ctxErr != nil {
+		return n, ctxErr
+	}
+	return n, err
+}
+
+func readBytesContext(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f, err := openRegular(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
-	b, err := io.ReadAll(io.LimitReader(f, metadataLimit+1))
+	b, err := io.ReadAll(io.LimitReader(contextReader{ctx, f}, metadataLimit+1))
 	err = errors.Join(err, f.Close())
 	if err != nil {
 		return nil, err
@@ -56,6 +85,13 @@ func readJSON(path string, value any) error {
 func digest(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }
 
 func fileRecord(path, name string) (FileRecord, error) {
+	return fileRecordContext(context.Background(), path, name)
+}
+
+func fileRecordContext(ctx context.Context, path, name string) (FileRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return FileRecord{}, err
+	}
 	f, err := openRegular(path, os.O_RDONLY, 0)
 	if err != nil {
 		return FileRecord{}, err
@@ -66,7 +102,7 @@ func fileRecord(path, name string) (FileRecord, error) {
 		return FileRecord{}, err
 	}
 	h := sha256.New()
-	size, err := io.Copy(h, f)
+	size, err := io.Copy(h, contextReader{ctx, f})
 	if err != nil {
 		return FileRecord{}, err
 	}
@@ -97,7 +133,14 @@ func canonicalRoot(root string) (string, error) {
 }
 
 func readVersion(root, id string, ready bool) (InstalledVersion, string, error) {
+	return readVersionContext(context.Background(), root, id, ready)
+}
+
+func readVersionContext(ctx context.Context, root, id string, ready bool) (InstalledVersion, string, error) {
 	var v InstalledVersion
+	if err := ctx.Err(); err != nil {
+		return v, "", err
+	}
 	if !validDigest(id) {
 		return v, "", invalid("invalid version directory name")
 	}
@@ -108,7 +151,7 @@ func readVersion(root, id string, ready bool) (InstalledVersion, string, error) 
 	if err := checkDir(dir); err != nil {
 		return v, "", err
 	}
-	b, err := readBytes(filepath.Join(dir, layout.VersionRecord))
+	b, err := readBytesContext(ctx, filepath.Join(dir, layout.VersionRecord))
 	if err != nil {
 		return v, "", err
 	}
@@ -120,7 +163,7 @@ func readVersion(root, id string, ready bool) (InstalledVersion, string, error) 
 	}
 	hash := digest(b)
 	if ready {
-		marker, err := readBytes(filepath.Join(dir, layout.VersionReady))
+		marker, err := readBytesContext(ctx, filepath.Join(dir, layout.VersionReady))
 		if err != nil {
 			return v, "", err
 		}
@@ -129,7 +172,7 @@ func readVersion(root, id string, ready bool) (InstalledVersion, string, error) 
 		}
 	}
 	for _, want := range v.Files {
-		got, err := fileRecord(filepath.Join(dir, want.Path), want.Path)
+		got, err := fileRecordContext(ctx, filepath.Join(dir, want.Path), want.Path)
 		if err != nil {
 			return v, "", err
 		}
@@ -138,24 +181,49 @@ func readVersion(root, id string, ready bool) (InstalledVersion, string, error) 
 		}
 	}
 	v.VersionID, v.Directory, v.RuntimeExecutable = id, dir, filepath.Join(dir, layout.BinaryName)
-	return v, hash, nil
+	return v, hash, ctx.Err()
 }
 
 // ListInstalled validates ready generations without inspecting current, the
 // anchor, history, a database, or an installation lock. Missing roots and
 // unfinished staging are empty discovery, never a request to initialize.
 func ListInstalled(root string) ([]InstalledVersion, error) {
+	versions, err := ListInstalledContext(context.Background(), root)
+	sortVersions(versions)
+	return versions, err
+}
+
+// ListInstalledContext performs the same lock-free validation, checking the
+// caller's context between directory batches, versions and resource reads.
+// Results are unordered: deadline-bound callers select by installed_sequence
+// directly, without spending an uninterruptible sort on an unlimited history.
+func ListInstalledContext(ctx context.Context, root string) ([]InstalledVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	root, err := canonicalRoot(root)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return []InstalledVersion{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return listVersions(root, true)
+	return listVersionsContext(ctx, root, true)
 }
 
 func listVersions(root string, readyOnly bool) ([]InstalledVersion, error) {
+	versions, err := listVersionsContext(context.Background(), root, readyOnly)
+	sortVersions(versions)
+	return versions, err
+}
+
+func listVersionsContext(ctx context.Context, root string, readyOnly bool) ([]InstalledVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(root, layout.VersionsDir)
 	if err := checkDir(dir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -163,38 +231,64 @@ func listVersions(root string, readyOnly bool) ([]InstalledVersion, error) {
 		}
 		return nil, err
 	}
-	entries, err := os.ReadDir(dir)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f, err := openDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	versions := make([]InstalledVersion, 0, len(entries))
+	defer f.Close()
+	versions := make([]InstalledVersion, 0)
 	sequences := make(map[uint64]bool)
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".staging-") {
-			continue
-		}
-		if !validDigest(entry.Name()) || !entry.IsDir() {
-			return nil, invalid("unexpected retained-version entry")
-		}
-		_, markerErr := os.Lstat(filepath.Join(dir, entry.Name(), layout.VersionReady))
-		ready := markerErr == nil
-		if errors.Is(markerErr, os.ErrNotExist) {
-			if readyOnly {
-				continue
-			}
-		} else if markerErr != nil {
-			return nil, markerErr
-		}
-		v, _, err := readVersion(root, entry.Name(), ready)
-		if err != nil {
+	for {
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if sequences[v.InstalledSequence] {
-			return nil, invalid("duplicate installed sequence")
+		entries, readErr := f.ReadDir(64)
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		sequences[v.InstalledSequence] = true
-		versions = append(versions, v)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, readErr
+		}
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if strings.HasPrefix(entry.Name(), ".staging-") {
+				continue
+			}
+			if !validDigest(entry.Name()) || !entry.IsDir() {
+				return nil, invalid("unexpected retained-version entry")
+			}
+			_, markerErr := os.Lstat(filepath.Join(dir, entry.Name(), layout.VersionReady))
+			ready := markerErr == nil
+			if errors.Is(markerErr, os.ErrNotExist) {
+				if readyOnly {
+					continue
+				}
+			} else if markerErr != nil {
+				return nil, markerErr
+			}
+			v, _, err := readVersionContext(ctx, root, entry.Name(), ready)
+			if err != nil {
+				return nil, err
+			}
+			if sequences[v.InstalledSequence] {
+				return nil, invalid("duplicate installed sequence")
+			}
+			sequences[v.InstalledSequence] = true
+			versions = append(versions, v)
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
 	}
+	return versions, ctx.Err()
+}
+
+func sortVersions(versions []InstalledVersion) {
 	slices.SortFunc(versions, func(a, b InstalledVersion) int {
 		if a.InstalledSequence < b.InstalledSequence {
 			return -1
@@ -204,7 +298,6 @@ func listVersions(root string, readyOnly bool) ([]InstalledVersion, error) {
 		}
 		return 0
 	})
-	return versions, nil
 }
 
 // ReadPublished observes a single current link separately from discovery. A

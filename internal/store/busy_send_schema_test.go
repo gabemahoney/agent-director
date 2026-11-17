@@ -31,9 +31,9 @@ import (
 // declared, and open refuses any other declaration (SR-7.2). So once v21 is
 // released this value never changes; a change to it strands every store
 // already at v21. Before release it changed in place for the pause claim's
-// refusal after its signal intent (b.kii E6 decision 3), and v21 test stores
-// are recreated.
-const busySendCoreV1Digest = "7300a8c1297fd415f14f9fb0ddbc05d7da60283c0d5586b162d8f79a7e766cfa"
+// refusal after its signal intent (b.kii E6 decision 3) and removal of the
+// retired Cursor codes (E7). Existing v21 test stores are recreated.
+const busySendCoreV1Digest = "62f1d2c9b2481a47b9271d4a5f92dae5c7e5ee70180e6f87d641bb3a3e112bf6"
 
 // busySendCoreDigest hashes db's recorded core declarations, each object's
 // type, name and SQL text (whitespace collapsed) in name order, and returns
@@ -142,16 +142,16 @@ func TestBusySendCoreContract(t *testing.T) {
 		{"busy_send_launches", "busy_send", codes(BusySendNotCovered, BusySendCovered)},
 		{"busy_send_launches", "kind", codes(BusySendLaunchSpawn, BusySendLaunchReuse, BusySendLaunchResume, BusySendLaunchMigrated)},
 		{"busy_send_launches", "phase", codes(BusySendLaunchCandidate, BusySendLaunchUncertain, BusySendLaunchFailed, BusySendLaunchCurrent, BusySendLaunchSuperseded)},
-		{"busy_send_launches", "route_kind", codes(BusySendRouteClaudeHooks, BusySendRouteCodexAppServer, BusySendRouteCursorACP)},
+		{"busy_send_launches", "route_kind", codes(BusySendRouteClaudeHooks, BusySendRouteCodexAppServer)},
 		{"busy_send_launches", "override_send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
 		{"busy_send_launches", "end_cause", codes(BusySendProcessExited, BusySendLaunchPublished, BusySendCreationFailed, BusySendLaunchRecordDeleted, BusySendLaunchCandidateReplaced, busySendAgentMissing)},
-		{"busy_send_launch_processes", "role", codes(BusySendProcessAgent, BusySendProcessAppServer, BusySendProcessTUI, BusySendProcessHelper, BusySendProcessGateway)},
+		{"busy_send_launch_processes", "role", codes(BusySendProcessAgent, BusySendProcessAppServer, BusySendProcessTUI, BusySendProcessHelper)},
 		{"busy_send_messages", "send_mode", codes(BusySendWaitTurn, BusySendSteerTurn)},
 		{"busy_send_messages", "place", codes(BusySendHeld, BusySendClaimed, BusySendIssued, BusySendClosed)},
 		{"busy_send_messages", "result_class", codes(BusySendClassHeld, BusySendClassQueued, BusySendClassDeliveredConfirmed, BusySendClassSentUnconfirmed, BusySendClassNotStarted)},
-		{"busy_send_messages", "evidence_kind", codes(BusySendEvidenceCodexItemStarted, BusySendEvidenceCodexThreadItems, BusySendEvidenceCursorEndTurn)},
+		{"busy_send_messages", "evidence_kind", codes(BusySendEvidenceCodexItemStarted, BusySendEvidenceCodexThreadItems)},
 		{"busy_send_messages", "retention", codes(BusySendRetained, BusySendExpired)},
-		{"busy_send_handovers", "route_kind", codes(BusySendRouteClaudeHooks, BusySendRouteCodexAppServer, BusySendRouteCursorACP)},
+		{"busy_send_handovers", "route_kind", codes(BusySendRouteClaudeHooks, BusySendRouteCodexAppServer)},
 		{"busy_send_handovers", "boundary", codes(BusySendBoundaryTurnEnd, BusySendBoundaryToolBoundary, BusySendBoundaryForce)},
 		{"busy_send_handovers", "state", codes(BusySendHandoverOpen, BusySendHandoverClosed)},
 		{"busy_send_prompts", "emission", codes(BusySendEmissionNone, BusySendEmissionIntent, BusySendEmissionIssued, BusySendEmissionReleased)},
@@ -159,11 +159,11 @@ func TestBusySendCoreContract(t *testing.T) {
 		{"busy_send_prompts", "order_kind", codes(BusySendOrderOrderedAcceptance, BusySendOrderExactReceipt, BusySendOrderEmissionComplete)},
 		{"busy_send_prompts", "admission_kind", codes(BusySendAdmissionPromptSighting, BusySendAdmissionRPCSuccess, BusySendAdmissionPromptResponse,
 			BusySendAdmissionNativeSignal, BusySendAdmissionTranscriptMatch, BusySendAdmissionExactReceipt)},
-		{"busy_send_prompts", "evidence_kind", codes(BusySendEvidenceCodexItemStarted, BusySendEvidenceCodexThreadItems, BusySendEvidenceCursorEndTurn)},
+		{"busy_send_prompts", "evidence_kind", codes(BusySendEvidenceCodexItemStarted, BusySendEvidenceCodexThreadItems)},
 		{"busy_send_prompts", "negative_kind", codes(BusySendNegativeNotSubmitted, BusySendNegativeNoAdmission)},
 		{"busy_send_forces", "outcome", codes(BusySendForceRunning, BusySendForcePending, BusySendForceHandedOver, BusySendForceRefused, BusySendForceFailed)},
 		{"busy_send_forces", "retention", codes(BusySendRetained, BusySendExpired)},
-		{"busy_send_pause_claims", "signal_kind", codes(BusySendSignalSIGTERM, BusySendSignalServerShutdown, BusySendSignalGatewayExit)},
+		{"busy_send_pause_claims", "signal_kind", codes(BusySendSignalSIGTERM, BusySendSignalServerShutdown)},
 		{"busy_send_pause_claims", "state", codes(BusySendPauseClaimStanding, BusySendPauseClaimReleased, BusySendPauseClaimEnded)},
 		{"busy_send_pause_claims", "call_outcome", codes(BusySendPausePaused, BusySendPauseRefused, BusySendPauseExitUncertain, BusySendPauseFailed)},
 		{"busy_send_pause_claims", "closed_by", codes(BusySendPauseRefusedBeforeSignal, BusySendPauseAbandonedBeforeSignal, BusySendPauseLaunchEnd, BusySendPauseLaunchPublished)},
@@ -227,6 +227,47 @@ func TestBusySendCoveredSet(t *testing.T) {
 		if got := BusySendCoverageForAgent(agent); got != want {
 			t.Errorf("BusySendCoverageForAgent(%q) = %s; want %s", agent, got, want)
 		}
+	}
+}
+
+// E7: exercise SQLite's six changed CHECKs on valid records, including every
+// surviving code, so a rejection by an unrelated constraint cannot pass.
+func TestBusySendCursorFreeChecks(t *testing.T) {
+	for _, tc := range []struct {
+		table, column, retired string
+		kept                   []string
+	}{
+		{"busy_send_launches", "route_kind", "cursor_acp", []string{"claude_hooks", "codex_app_server"}},
+		{"busy_send_handovers", "route_kind", "cursor_acp", []string{"claude_hooks", "codex_app_server"}},
+		{"busy_send_launch_processes", "role", "gateway", []string{"agent", "app_server", "tui", "helper"}},
+		{"busy_send_messages", "evidence_kind", "cursor_end_turn", []string{"codex_item_started", "codex_thread_items"}},
+		{"busy_send_prompts", "evidence_kind", "cursor_end_turn", []string{"codex_item_started", "codex_thread_items"}},
+		{"busy_send_pause_claims", "signal_kind", "gateway_exit", []string{"sigterm", "server_shutdown"}},
+	} {
+		t.Run(tc.table+"/"+tc.column, func(t *testing.T) {
+			s, _ := seedBusySendRecordsRow(t)
+			set := tc.column + "=?"
+			if tc.table == "busy_send_prompts" {
+				set += ", receipt_at_ms=4000"
+			}
+			q := "UPDATE " + tc.table + " SET " + set + " WHERE rowid=(SELECT min(rowid) FROM " + tc.table + ")"
+			before := dbDump(t, s.filePath)
+			if _, err := s.db.Exec(q, tc.retired); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+				t.Fatalf("retired %s: %v; want CHECK refusal", tc.retired, err)
+			}
+			if !reflect.DeepEqual(before, dbDump(t, s.filePath)) {
+				t.Fatal("rejected code changed the store")
+			}
+			for _, kept := range tc.kept {
+				res, err := s.db.Exec(q, kept)
+				if err != nil {
+					t.Fatalf("surviving %s: %v", kept, err)
+				}
+				if n, err := res.RowsAffected(); err != nil || n != 1 {
+					t.Fatalf("surviving %s changed %d rows: %v", kept, n, err)
+				}
+			}
+		})
 	}
 }
 
@@ -971,6 +1012,12 @@ func TestV21OpenRefusesUnrecognizedCore(t *testing.T) {
 		{"a core index missing", exec(`DROP INDEX idx_busy_send_forces_open`)},
 		{"a spawns column missing", exec(`ALTER TABLE spawns DROP COLUMN busy_conversation_id`)},
 		{"a table declared otherwise", rewrite("busy_send_pause_claims", "'standing', 'released', 'ended')", "'standing', 'released', 'ended', 'lost')")},
+		{"unreleased Cursor launch route", rewrite("busy_send_launches", "'claude_hooks', 'codex_app_server'", "'claude_hooks', 'codex_app_server', 'cursor_acp'")},
+		{"unreleased Cursor handover route", rewrite("busy_send_handovers", "'claude_hooks', 'codex_app_server'", "'claude_hooks', 'codex_app_server', 'cursor_acp'")},
+		{"unreleased gateway process", rewrite("busy_send_launch_processes", "'agent', 'app_server', 'tui', 'helper'", "'agent', 'app_server', 'tui', 'helper', 'gateway'")},
+		{"unreleased Cursor message evidence", rewrite("busy_send_messages", "'codex_item_started', 'codex_thread_items'", "'codex_item_started', 'codex_thread_items', 'cursor_end_turn'")},
+		{"unreleased Cursor prompt evidence", rewrite("busy_send_prompts", "'codex_item_started', 'codex_thread_items'", "'codex_item_started', 'codex_thread_items', 'cursor_end_turn'")},
+		{"unreleased gateway exit", rewrite("busy_send_pause_claims", "'sigterm', 'server_shutdown'", "'sigterm', 'server_shutdown', 'gateway_exit'")},
 		{"coverage CHECK missing", rewrite("spawns", " CHECK(busy_send IN ('not_covered', 'covered'))", "")},
 		{"Turn Start CHECK altered", rewrite("spawns", "CHECK(typeof(turn_starts) = 'integer' AND turn_starts >= 0)", "CHECK(turn_starts >= 0)")},
 	} {

@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/resumedelegate"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sqliteobserve"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -150,26 +152,43 @@ func TestAdviceFollow_E25_SteerUnsupportedSendWaitTurn(t *testing.T) {
 // TestAdviceFollow_B18_SteerUnsupportedResumeWaitTurn: a covered resume with Steer Turn of a provider with no capability row (a covered Codex row, as for E25), then the same resume with Wait Turn.
 // B18: "use wait_turn"
 func TestAdviceFollow_B18_SteerUnsupportedResumeWaitTurn(t *testing.T) {
-	t.Parallel()
-	e := newKillEnv(t)
-	e.rowAgent = "codex"
-	r := e.seedResumableRow(t, e.resumableSpec(rlkSettled(e), agentNotRecorded))
-	seedBusyCovered(t, e, r.ID)
-	before := busyFacts(t, e.dbPath, r.ID)
-	cfg := config.Default()
-	cfg.Tmux = e.cfg
-	p := api.ResumeParams{InstanceID: r.ID, SendMode: ptr("steer_turn")}
-	_, err := api.Resume(e.st, e.rec, e.pc, cfg, e.storeID, e.clock.Now, nil, p)
+	// Serial: scratch HOME and trail. The covering runtime supplies B18;
+	// this older runtime cannot perform a local covered-Codex resume (SR-9.1).
+	e := newDelegateEnv(t)
+	e.covering(t)
+	e.run(t, func(req resumedelegate.Request) ([]byte, bool, error) {
+		var p api.ResumeParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.SendMode != nil && *p.SendMode == "steer_turn" {
+			details, _ := json.Marshal(busySteerUnsupported)
+			b, _ := json.Marshal(resumedelegate.Response{ResponseFormat: 1, Error: &resumedelegate.Error{
+				Name: "ErrCantSend", Description: "steer_turn is unsupported; use wait_turn", Details: details}})
+			return b, true, nil
+		}
+		if p.SendMode == nil || *p.SendMode != "wait_turn" {
+			t.Fatalf("advice not followed: %+v", p)
+		}
+		return delegateResult(e.row.ID), true, nil
+	})
+	check := e.untouched(t)
+	p := api.ResumeParams{InstanceID: e.row.ID, SendMode: ptr("steer_turn")}
+	_, err := e.c.Resume(p)
 	adviceAssertAdvice(t, err, api.ErrCantSend, "use wait_turn")
-	assertCantSendDetails(t, err, busySteerUnsupported)
-	if got := busyFacts(t, e.dbPath, r.ID); !reflect.DeepEqual(got, before) {
-		t.Errorf("busy-send core after the refusal = %+v; want unchanged %+v", got, before)
+	b, _ := json.Marshal(api.ErrDetails(err))
+	want, _ := json.Marshal(busySteerUnsupported)
+	if string(b) != string(want) {
+		t.Fatalf("details %s; want %s", b, want)
 	}
 	p.SendMode = ptr("wait_turn")
-	if _, err := api.Resume(e.st, e.rec, e.pc, cfg, e.storeID, e.clock.Now, nil, p); err != nil {
+	if res, err := e.c.Resume(p); err != nil || res.InstanceID != e.row.ID {
 		t.Fatalf("the same resume with send_mode wait_turn: %v", err)
 	}
-	assertBusyLaunchPhase(t, e.dbPath, r.ID, "resume", "current", store.BusySendCovered)
+	if len(e.calls) != 2 {
+		t.Fatalf("delegation calls = %d; want the original and literal retry", len(e.calls))
+	}
+	check()
 }
 
 // TestAdviceFollow_E26_IDConflictNewMessageID: a covered send reusing an owned pair for other text, then under a new delivery_request_id.

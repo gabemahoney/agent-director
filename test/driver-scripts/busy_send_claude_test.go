@@ -1,12 +1,15 @@
 package driverscripts_test
 
 import (
+	"bufio"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestPaneHookPipes (Task t2.xis.oo.u8; Subtask t3.xis.wm.hg.k1): the line
@@ -69,5 +72,126 @@ exit 2
 				}
 			}
 		})
+	}
+}
+
+// The mixed-version hook stays the pane's direct child while observation
+// descriptors and either delayed stream remain separate. Background mode must
+// leave the pane available before the pending hook's release (TR4-1/TR4-2).
+func TestPaneHookObservedFIFO(t *testing.T) {
+	for _, mode := range []string{"foreground", "background"} {
+		for _, stream := range []string{"stdout", "stderr"} {
+			t.Run(mode+"/"+stream, func(t *testing.T) {
+				db := newStore(t)
+				if r := run(t, nil, "", "sqlite3", db, `INSERT INTO spawns VALUES ('id-m', '%8', '');`); r.code != 0 {
+					t.Fatal(r)
+				}
+				bin, observation := t.TempDir(), t.TempDir()
+				writeFile(t, bin, "tmux", `#!/bin/bash
+[[ " $* " == *" -l -- "* ]] && printf '%s\n' "${@: -1}" > "$PANE_COMMANDS"
+exit 0
+`, 0o755)
+				writeFile(t, bin, "agent-director", "#!/bin/bash\nexit 91\n", 0o755)
+				executable := filepath.Join(bin, "captured A's runtime")
+				writeFile(t, bin, filepath.Base(executable), `#!/bin/bash
+read -r plan <&198
+printf '%s %s %s\n' "$plan" "$PPID" "$$" >&200
+read -r release <&199
+[[ "$release" == release ]] || exit 92
+printf 'captured %s\n' "$PPID"
+printf 'whole\nstream' >&2
+exit 2
+`, 0o755)
+				writeFile(t, observation, "plan.json", "plan\n", 0o600)
+				pipes := map[string]*os.File{}
+				for _, name := range []string{"release", "events", "stream", "commands", "free"} {
+					path := filepath.Join(observation, name)
+					if r := run(t, nil, "", "mkfifo", path); r.code != 0 {
+						t.Fatal(r)
+					}
+					f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { f.Close() })
+					pipes[name] = f
+				}
+				readLine := func(name string) (string, error) {
+					if err := pipes[name].SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					return bufio.NewReader(pipes[name]).ReadString('\n')
+				}
+				env := []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "PANE_HOOK_DB=" + db,
+					"PANE_COMMANDS=" + filepath.Join(observation, "commands")}
+				pane := exec.Command("bash", "--noprofile", "--norc")
+				pane.Env, pane.Stdin = env, pipes["commands"]
+				if err := pane.Start(); err != nil {
+					t.Fatal(err)
+				}
+				done := make(chan error, 1)
+				job := ""
+				go func() { done <- pane.Wait() }()
+				t.Cleanup(func() {
+					pipes["release"].WriteString("release\n")
+					pipes["commands"].WriteString("wait\nexit\n")
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						pane.Process.Kill()
+						<-done
+					}
+					if job != "" {
+						os.RemoveAll(job)
+					}
+				})
+				args := []string{"--executable", executable, "--observe-commit", observation,
+					"--" + stream + "-pipe", "--stream-fifo", filepath.Join(observation, "stream"), "--no-wait"}
+				if mode == "background" {
+					args = append(args, "--background")
+				}
+				r := run(t, env, "", driverScript(t, "pane-hook.sh"), append(args, "id-m", "{}")...)
+				job = strings.TrimSpace(r.stdout)
+				if r.code != 0 || !strings.HasPrefix(job, "/tmp/pane-hook.") {
+					t.Fatalf("prepare: %s", r)
+				}
+				event, err := readLine("events")
+				fields := strings.Fields(event)
+				if err != nil || len(fields) != 3 || fields[0] != "plan" || fields[1] != strconv.Itoa(pane.Process.Pid) {
+					t.Fatalf("hook identity: %q %v", event, err)
+				}
+				if mode == "background" {
+					if _, err := pipes["commands"].WriteString("printf 'pane-free\\n' > " + filepath.Join(observation, "free") + "\n"); err != nil {
+						t.Fatal(err)
+					}
+					if free, err := readLine("free"); err != nil || free != "pane-free\n" {
+						t.Fatalf("pane serialized a pending hook: %q %v", free, err)
+					}
+					pid, err := os.ReadFile(filepath.Join(job, "pid"))
+					if err != nil || strings.TrimSpace(string(pid)) != fields[2] {
+						t.Fatalf("background PID: %q %v; hook %s", pid, err, fields[2])
+					}
+				}
+				if _, err := pipes["release"].WriteString("release\n"); err != nil {
+					t.Fatal(err)
+				}
+				got := run(t, env, "", driverScript(t, "pane-hook.sh"), "--timeout", "3", "--wait", job)
+				captured := "captured " + strconv.Itoa(pane.Process.Pid) + "\n"
+				wantOut, wantErr, wantFIFO := captured, "", "whole\nstream"
+				if stream == "stdout" {
+					wantOut, wantErr, wantFIFO = "", "whole\nstream", captured
+				}
+				if got.code != 2 || got.stdout != wantOut || got.stderr != wantErr {
+					t.Fatalf("collect: %s; want exit 2, stdout %q, stderr %q", got, wantOut, wantErr)
+				}
+				if err := pipes["stream"].SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				bytes := make([]byte, len(wantFIFO))
+				if _, err := io.ReadFull(pipes["stream"], bytes); err != nil || string(bytes) != wantFIFO {
+					t.Fatalf("FIFO: %q %v; want %q", bytes, err, wantFIFO)
+				}
+			})
+		}
 	}
 }

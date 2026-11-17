@@ -86,20 +86,44 @@ func (s *Store) GetBusySendCoverage(instanceID string) (BusySendCoverage, error)
 // corrupt bindings are errors, never an uncovered answer. Fresh spawn/reuse
 // preflight uses BusySendCoverageForAgent with the new agent instead.
 func (s *Store) GetBusySendConversationCoverage(instanceID string) (BusySendCoverage, error) {
-	var binding, conversation, publication, owner, identity, raw any
+	fact, err := s.GetBusySendConversationBinding(instanceID)
+	return fact.Coverage, err
+}
+
+// BusySendConversationBinding is the validated published conversation fact,
+// independent of the current Launch's coverage and this binary's provider set.
+type BusySendConversationBinding struct {
+	ConversationID string
+	Provider       string
+	Coverage       BusySendCoverage
+}
+
+// GetBusySendConversationBinding reads one binding snapshot without writing.
+// A missing or corrupt core binding is never interpreted as uncovered.
+func (s *Store) GetBusySendConversationBinding(instanceID string) (BusySendConversationBinding, error) {
+	var fact BusySendConversationBinding
+	var binding, conversation, publication, owner, identity, raw, provider any
 	err := s.db.QueryRow(`SELECT s.busy_conversation_id, c.conversation_id,
-	        c.publication, c.instance_id, c.store_id, c.busy_send
+	        c.publication, c.instance_id, c.store_id, c.busy_send, c.provider
 	    FROM spawns s LEFT JOIN busy_conversations c ON c.conversation_id = s.busy_conversation_id
-	    WHERE s.instance_id = ?`, instanceID).Scan(&binding, &conversation, &publication, &owner, &identity, &raw)
+	    WHERE s.instance_id = ?`, instanceID).Scan(&binding, &conversation, &publication, &owner, &identity, &raw, &provider)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+		return fact, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
 	}
 	if err != nil {
-		return "", fmt.Errorf("store: read busy-send conversation coverage: %w", err)
+		return fact, fmt.Errorf("store: read busy-send conversation coverage: %w", err)
 	}
 	id, ok := binding.(string)
 	if !ok || id == "" || conversation != id || publication != string(BusySendPublished) || owner != instanceID || identity != s.StoreID() {
-		return "", fmt.Errorf("store: invalid busy-send conversation binding")
+		return fact, fmt.Errorf("store: invalid busy-send conversation binding")
 	}
-	return decodeBusySendCoverage(raw)
+	agent, ok := provider.(string)
+	if !ok || agent == "" {
+		return fact, fmt.Errorf("store: invalid busy-send conversation provider")
+	}
+	coverage, err := decodeBusySendCoverage(raw)
+	if err != nil {
+		return fact, err
+	}
+	return BusySendConversationBinding{ConversationID: id, Provider: agent, Coverage: coverage}, nil
 }

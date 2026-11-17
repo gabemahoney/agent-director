@@ -144,6 +144,7 @@ export type {
   DialogMaybeOpenDetails,
   CantSendDetails,
   NotPausableDetails,
+  NotResumableDetails,
 } from "./types.js";
 
 // Verb Params / Result interfaces.

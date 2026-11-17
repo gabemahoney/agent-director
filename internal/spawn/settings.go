@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/installversion"
 	"github.com/gabemahoney/agent-director/internal/layout"
 )
 
@@ -93,7 +93,7 @@ var matcherFields = map[hookEventName]bool{
 const sessionStartHookTimeoutSeconds = 600
 
 // synthesizeSettings builds the inline JSON passed to `claude --settings`.
-// Returns the JSON string and any error from os.Executable / json encoding.
+// Returns the JSON string and any executable-capture or JSON-encoding error.
 //
 // Shape (SRD §6.1; SR-22.9):
 //
@@ -288,47 +288,14 @@ func mergePermissions(p *Permissions, disableAUQ bool) (allow, deny, ask []strin
 	return allow, deny, ask
 }
 
-// executablePath returns the absolute, symlink-resolved path to the
-// currently-running binary. The result is written verbatim into every
-// hook command this spawn-side pipeline produces (SR-1.8, b.ue3).
-//
-// Mechanism (SR-1.8):
-//
-//	os.Executable()  → kernel-reported path (Linux's /proc/self/exe,
-//	                   macOS's _NSGetExecutablePath); already absolute on
-//	                   both supported platforms.
-//	filepath.EvalSymlinks(...) → chases any symlinks in the path so the
-//	                   hook command points at the real on-disk file.
-//
-// Stability assumption (load-bearing per SR-1.8): install.sh writes the
-// AD CLI binary to ~/.config/agent-director/bin/agent-director and re-runs of
-// install.sh overwrite the file at the same absolute path — the
-// directory entry's identity is stable across re-installs even though
-// the file's inode may change.  Hook commands captured into a spawned
-// Claude session therefore continue to invoke the same path after an
-// in-place upgrade.  If install.sh is ever changed to write to a
-// per-version path (e.g. ~/.config/agent-director/bin/agent-director-0.7.0),
-// the spawn-side hook contract breaks and this site plus the
-// architecture doc need synchronized updates.
-//
+// executablePath shares the startup helper's own-image capture rule: a ready
+// immutable directory named for this binary's compiled stamp, or the resolved
+// build path outside a layout. An unsafe in-layout lookup refuses generation;
+// it never falls back to current, the permanent entry or an unresolved path.
+// Each settings block passes this single captured value to all delivery and
+// context hooks. Optional help deliberately keeps the permanent entry.
 // Held as a var so tests can stub it without touching the actual filesystem.
-var executablePath = func() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	abs, err := filepath.Abs(exe)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		// If the binary is gone between exec and resolve, fall back to
-		// the absolute non-resolved path — better than failing the spawn.
-		return abs, nil
-	}
-	return resolved, nil
-}
+var executablePath = installversion.CaptureExecutable
 
 // helpHookBinPath returns the canonical install-tree path of the
 // agent-director binary used in the inject_help_hook SessionStart

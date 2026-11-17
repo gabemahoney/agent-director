@@ -20,6 +20,9 @@ import (
 // This uses only pre-fix symbols so it can reproduce the behavioral gap on 6ea0df4e.
 func TestHookCLIStartupWakeAfterWatchPaths(t *testing.T) {
 	h := newGateHome(t)
+	// b.kii / SR-7.4: both the ordinary hook and detached bounded helper
+	// must open the existing store while an administrator owns its lock.
+	holdRuntimeInstallationLock(t, h.home)
 	const id, session = "id-startup-wake", "7d1e2f3a-4b5c-4d6e-8f70-91a2b3c4d5e6"
 	h.seed(t, id, "off", withTestProcessPane(t))
 	st := openDBForRead(t, h.home)

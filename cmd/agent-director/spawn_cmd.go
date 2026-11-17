@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -578,7 +579,11 @@ func writeApiErrorAndDispatch(name, description string) error {
 // (pkgapi.ErrDetails; b.146 rule 15) when it carries them.
 func writeVerbError(err error) error {
 	name, desc := errnames.Classify(err)
-	env := errorEnvelope{ErrName: name, ErrDescription: errnames.TrimNamePrefix(name, desc), ErrDetails: pkgapi.ErrDetails(err)}
+	var named interface{ ErrorName() string }
+	if !errors.As(err, &named) {
+		desc = errnames.TrimNamePrefix(name, desc)
+	}
+	env := errorEnvelope{ErrName: name, ErrDescription: desc, ErrDetails: pkgapi.ErrDetails(err)}
 	if werr := writeEnvelope(os.Stderr, env); werr != nil {
 		return werr
 	}

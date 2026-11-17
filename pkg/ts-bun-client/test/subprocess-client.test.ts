@@ -18,12 +18,44 @@ import * as path from "node:path";
 
 import type { Client } from "../src/client.js";
 import type { SweepCheck, SweepResult, Confirmation, DeliveryPair, DeliveryResult, ForceResult } from "../src/types.js";
-import { ErrCallTimeout, ErrConsumerSignal, ErrInvalidFlags, ErrStoreBusy, ErrTooManyIds, ErrUnknownVerb } from "../src/errors.js";
+import { AgentDirectorError, ErrCallTimeout, ErrConsumerSignal, ErrInternal, ErrInvalidFlags, ErrSpawnNotResumable, ErrStoreBusy, ErrTooManyIds, ErrUnknownVerb } from "../src/errors.js";
 import { PKG_VERSION, openClient, rejection, withProcessEnv } from "./internal/helper.js";
 
 const FIXTURES = path.resolve(import.meta.dir, "fixtures/epic-a");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ad-sct-"));
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+// b.kii / SR-9.1: resume uses the ordinary subprocess adapter and preserves
+// delegated outcomes, including future fields, without a second transport.
+test.each([
+  ["success", { instance_id: "delegated", pre_trust: "skipped", future: false, nullable: null }, null],
+  ["cover unavailable", { err_name: "ErrSpawnNotResumable", err_description: "no covering runtime", err_details: { cause: "covering_version_unavailable", provider: "codex" } }, ErrSpawnNotResumable],
+  ["unknown name", { err_name: "ErrFutureResume", err_description: "future refusal", err_details: { future: false, nullable: null } }, AgentDirectorError],
+  ["unknown outcome", { err_name: "ErrInternal", err_description: "outcome unknown; check get" }, ErrInternal],
+] as const)("delegated resume %s forwards its outcome and explicit false options", async (_label, payload, ctor) => {
+  const dir = fs.mkdtempSync(path.join(tmp, "resume-"));
+  const cli = path.join(dir, "cli"), argvFile = path.join(dir, "argv");
+  fs.writeFileSync(cli, `#!/bin/sh
+case " $* " in
+  *" version "*) printf '{"version":"0.0.0-dev","commit":"resume-fixture"}\\n'; exit 0;;
+  *" resume "*) printf '%s\\n' "$@" > '${argvFile}'; printf '%s\\n' '${JSON.stringify(payload)}' ${ctor ? ">&2; exit 1" : "; exit 0"};;
+  *) exit 71;;
+esac
+`, { mode: 0o700 });
+  using client = await openClient(path.join(dir, "state.db"), { _cliPath: cli });
+  const call = client.resume({ instance_id: "delegated", confirmed_delivery: false, confirm_from_transcripts: false });
+  if (ctor) {
+    const err = await rejection(call);
+    expect(err).toBeInstanceOf(ctor);
+    expect(err).toMatchObject({ verb: "resume", errName: payload.err_name, errDescription: payload.err_description,
+      errDetails: "err_details" in payload ? payload.err_details : null });
+  } else {
+    expect(await call).toEqual(payload);
+  }
+  const argv = fs.readFileSync(argvFile, "utf8").trim().split("\n");
+  expect(argv.slice(argv.indexOf("resume"))).toEqual(["resume", "--instance-id", "delegated", "--confirmed-delivery=false", "--confirm-from-transcripts=false"]);
+  expect(await client.version({})).toMatchObject({ commit: "resume-fixture" });
+});
 
 /** A Client on a fresh temp store whose CLI is the named fixture. */
 function makeClient(fixture: string, extra: Record<string, unknown> = {}) {

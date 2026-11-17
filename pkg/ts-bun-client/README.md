@@ -615,9 +615,13 @@ try {
 }
 ```
 
+For an unmapped `resume` outcome, catch the base `AgentDirectorError` and
+preserve its `errName`, `errDescription` and `errDetails`; it is not
+`ErrUnknownErrorName`. See [Covering-version resume](../../docs/architecture.md#covering-version-resume).
+
 Every `AgentDirectorError` has `errName`, `errDescription` and `errDetails`:
-the error envelope's optional `err_details` object, unchanged, or `null`. Ten
-errors carry one, typed as exported interfaces: `ErrRelayFallenBack`
+the error envelope's optional `err_details` object, unchanged, or `null`.
+Local structured types include: `ErrRelayFallenBack`
 (`RelayFallenBackDetails`, with `OpenRequestFacts`), `ErrPaneAnswerInProgress`
 (`PaneAnswerInProgressDetails`), `ErrClaimTooSoon` (`ClaimTooSoonDetails`),
 `ErrPaneChanged` (`PaneChangedDetails`), `ErrDialogMaybeOpen`
@@ -667,7 +671,7 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 |---|---|
 | `ErrCallTimeout` | The subprocess exceeded `callTimeoutMs`; carries `verb`, `elapsedMs`, `timeoutMs`. |
 | `ErrConsumerSignal` | The subprocess ended by signal; carries `verb`, `signal`. |
-| `ErrUnknownErrorName` | An unmapped `err_name`; carries `unknownName` and the original `envelope`. |
+| `ErrUnknownErrorName` | An unmapped `err_name` outside `resume`; carries `unknownName` and the original `envelope`. |
 
 ### 4. Catalog-derived (CLI-side validation)
 

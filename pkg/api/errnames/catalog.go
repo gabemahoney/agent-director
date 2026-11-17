@@ -175,6 +175,12 @@ func Classify(err error) (name, description string) {
 	if err == nil {
 		return "", ""
 	}
+	// A retained newer version can return a name this binary predates. Keep
+	// that structured outcome intact instead of classifying it as internal.
+	var named interface{ ErrorName() string }
+	if errors.As(err, &named) {
+		return named.ErrorName(), err.Error()
+	}
 	for _, ec := range Catalog {
 		if errors.Is(err, ec.Err) {
 			return ec.Name, err.Error()

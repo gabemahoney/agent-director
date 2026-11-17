@@ -1375,6 +1375,12 @@ export interface PaneChangedDetails {
   request_token?: string;
 }
 
+/** No retained compatible version covers this conversation; nothing changed. */
+export interface NotResumableDetails {
+  cause: "covering_version_unavailable";
+  provider: string;
+}
+
 /** Parameters for relaunching the latest session. */
 export interface ResumeParams extends AgentDefaultParams {
   /** Id of the finished (ended or missing) row whose latest session is resumed. */

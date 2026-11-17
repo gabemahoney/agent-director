@@ -331,7 +331,7 @@ func TestAdviceFollow_B15_CursorFinishedSurvivorStopsForHuman(t *testing.T) {
 		_, err := c.Resume(api.ResumeParams{InstanceID: r.ID})
 		assertOneName(t, err, "ErrNoSessionId")
 		adviceAssertPhrase(t, err, "missing state or a finished-row kill no-op is not proof of exit; if public operations cannot resolve survivors, STOP and ask a human to follow docs/operator-actions.md#inspect-and-end-a-session-by-hand before any fresh launch")
-		adviceAssertManifest(t, "resume", "", "Fresh: kill's live-row advice; unresolved survivors: STOP, human: docs/operator-actions.md#inspect-and-end-a-session-by-hand", "same HOME, known supported extra_env/template intent", "Unavailable intent/needs protected data: STOP, human; no saved-env edit/drop credential intent")
+		adviceAssertManifest(t, "resume", "", "Fresh: follow kill; survivors: STOP, human (docs/operator-actions.md#inspect-and-end-a-session-by-hand)", "same HOME, supported extra_env/template intent", "Unavailable intent/needs protected data: STOP, human; no saved-env edit/drop credential intent")
 		row, getErr := c.Get(r.ID)
 		if getErr != nil || row.State != store.StateEnded {
 			t.Fatalf("finished read: %+v %v", row, getErr)

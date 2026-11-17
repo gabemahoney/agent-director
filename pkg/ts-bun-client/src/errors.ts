@@ -520,7 +520,9 @@ export class ErrTemplateExists extends AgentDirectorError {}
 export class ErrTemplateAgentMissing extends AgentDirectorError {}
 /** Mirrors ErrProbeUnsupported (package: probe) */
 export class ErrProbeUnsupported extends AgentDirectorError {}
-/** Mirrors ErrSpawnNotResumable (package: api) */
+/** Mirrors ErrSpawnNotResumable (package: api). `NotResumableDetails` cause
+ * `covering_version_unavailable` names the recorded provider: install a version
+ * that covers it and retry resume. Nothing was changed or launched. */
 export class ErrSpawnNotResumable extends AgentDirectorError {}
 /** Mirrors ErrNoSessionId (package: api) */
 export class ErrNoSessionId extends AgentDirectorError {}

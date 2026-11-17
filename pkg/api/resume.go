@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/gabemahoney/agent-director/internal/inputdelivery"
@@ -233,6 +234,9 @@ func resumeDefaultsChoice(p ResumeParams) store.BusySendDefaultsChoice {
 // The saved prompt is never replayed, and changed Claude clusters are
 // re-encoded only when needed to preserve the original parsed meaning.
 type ResumeResult struct {
+	// The full delegated result survives an older library's JSON encoding,
+	// including fields this version does not yet know and explicit nulls.
+	delegatedJSON string
 	// InstanceID is the id of the resumed row — identical to the
 	// value passed in ResumeParams.InstanceID.
 	InstanceID string `json:"instance_id"`
@@ -257,6 +261,14 @@ type ResumeResult struct {
 	PreTrust string `json:"pre_trust"`
 }
 
+func (r ResumeResult) MarshalJSON() ([]byte, error) {
+	if r.delegatedJSON != "" {
+		return []byte(r.delegatedJSON), nil
+	}
+	type plain ResumeResult
+	return json.Marshal(plain(r))
+}
+
 // resumeDeps is what resume's launch uses besides the row: the handler's
 // store, tmux client, start-time reader, configuration, this store's id, clock
 // and logger, and the caller identity collected at entry, carried from
@@ -270,6 +282,7 @@ type resumeDeps struct {
 	now     func() time.Time
 	lg      *log.Logger
 	who     caller
+	parent  string
 	// defaults are the call's Agent Default overrides, staged by the move
 	// with the candidate Launch (busySendResumeMover).
 	defaults store.BusySendDefaultsChoice
@@ -419,11 +432,17 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 // examined, and followed by one ad.launch.name_held). Every refusal before
 // the move writes nothing: no move, no parent id, no trust entry, no
 // ad.resume.* event.
-func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, storeID string, now func() time.Time, lg *log.Logger, params ResumeParams) (ResumeResult, error) {
+func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, storeID string, now func() time.Time, lg *log.Logger, params ResumeParams, calls ...resumeCall) (ResumeResult, error) {
 	if lg == nil {
 		lg = log.New(io.Discard, "", 0)
 	}
-	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg, who: callerIdentity(), defaults: resumeDefaultsChoice(params)}
+	var call resumeCall
+	if len(calls) != 0 {
+		call = calls[0]
+	} else {
+		call = resumeCall{who: callerIdentity(), parent: spawn.ParentIDFromEnv()}
+	}
+	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg, who: call.who, parent: call.parent, defaults: resumeDefaultsChoice(params)}
 
 	if err := checkSendMode("resume", params.SendMode); err != nil {
 		return ResumeResult{}, err
@@ -431,6 +450,18 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	row, err := s.GetSpawn(params.InstanceID)
 	if err != nil {
 		return ResumeResult{}, err
+	}
+	if reader, ok := s.(busySendConversationBindingReader); ok {
+		binding, err := reader.GetBusySendConversationBinding(params.InstanceID)
+		if err != nil {
+			return ResumeResult{}, err
+		}
+		if binding.Coverage == store.BusySendCovered && store.BusySendCoverageForAgent(binding.Provider) != store.BusySendCovered {
+			if call.delegate == nil {
+				return ResumeResult{}, fmt.Errorf("resume: this runtime cannot serve the covered provider; nothing was written or launched")
+			}
+			return call.delegate(params, binding.Provider)
+		}
 	}
 	if err := resumeDefaultsGate(s, row, params); err != nil {
 		return ResumeResult{}, err
@@ -723,8 +754,8 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     for the stored opt-out; its permission policy is unchanged.
 //  6. The move to pending (MoveToPending): one conditional write with the
 //     snapshot of the row as read, the launch start from one read of now in
-//     milliseconds, the token, the socket, the parent id re-derived from
-//     the caller's AGENT_DIRECTOR_INSTANCE_ID (spawn.ParentIDFromEnv, "" =
+//     milliseconds, the token, the socket, the parent id captured from
+//     the original caller's AGENT_DIRECTOR_INSTANCE_ID at call entry ("" =
 //     NULL; the only parent-id write) and the launch owner, this process
 //     (spawn.CurrentLaunchOwner through the start-time reader; b.kdf), with
 //     the exit evidence, which the move validates and applies in its own
@@ -812,7 +843,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	// A failure never fails the launch; the outcome goes into the result.
 	preTrust := spawn.RunPreTrust(row.Agent, composed.PreTrust, row.CWD, row.ExtraEnv, row.NoPreTrust, d.cfg.PreTrust)
 
-	parent := spawn.ParentIDFromEnv()
+	parent := d.parent
 	owner := spawn.CurrentLaunchOwner(d.pc)
 	move := d.s.MoveToPending
 	if mover, ok := d.s.(busySendResumeMover); ok {
@@ -1200,5 +1231,6 @@ func (c *Client) Resume(params ResumeParams) (ResumeResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ResumeResult{}, err
 	}
-	return resumeImpl(c.st, c.tmuxClient, c.procChecker, c.cfg, c.st.StoreID(), c.now, c.logger, params)
+	call := c.newResumeCall()
+	return resumeImpl(c.st, c.tmuxClient, c.procChecker, c.cfg, c.st.StoreID(), c.now, c.logger, params, call)
 }

@@ -3,6 +3,9 @@ package api
 import (
 	"errors"
 
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -18,8 +21,90 @@ import (
 // sentinel (SR-1.5), so the order of the cases does not matter. An error that
 // matches none of them, a store error or an unusable recorded name included,
 // is ErrInternal. err must not be nil.
+// A delegated resume additionally retains the recipient's explicit name,
+// including one unknown to this older runtime's catalog.
 func errorName(err error) string {
+	var named interface{ ErrorName() string }
+	if errors.As(err, &named) {
+		return named.ErrorName()
+	}
 	switch {
+	case errors.Is(err, spawn.ErrCwdMissing):
+		return "ErrCwdMissing"
+	case errors.Is(err, spawn.ErrCwdNotAPath):
+		return "ErrCwdNotAPath"
+	case errors.Is(err, spawn.ErrRelayModeInvalid):
+		return "ErrRelayModeInvalid"
+	case errors.Is(err, spawn.ErrSpawnDeniedFlag):
+		return "ErrSpawnDeniedFlag"
+	case errors.Is(err, ErrAgentMissing):
+		return "ErrAgentMissing"
+	case errors.Is(err, ErrAgentInvalid):
+		return "ErrAgentInvalid"
+	case errors.Is(err, ErrAgentArgsMismatch):
+		return "ErrAgentArgsMismatch"
+	case errors.Is(err, ErrPermissionsUnsupported):
+		return "ErrPermissionsUnsupported"
+	case errors.Is(err, spawn.ErrInstanceIdCollision):
+		return "ErrInstanceIdCollision"
+	case errors.Is(err, spawn.ErrTmuxSessionNameEmpty):
+		return "ErrTmuxSessionNameEmpty"
+	case errors.Is(err, spawn.ErrTmuxSessionNameInvalid):
+		return "ErrTmuxSessionNameInvalid"
+	case errors.Is(err, spawn.ErrTmuxSessionNameTooLong):
+		return "ErrTmuxSessionNameTooLong"
+	case errors.Is(err, ErrTmuxCaptureFailed):
+		return "ErrTmuxCaptureFailed"
+	case errors.Is(err, ErrSpawnNotPausable):
+		return "ErrSpawnNotPausable"
+	case errors.Is(err, ErrPauseTimeout):
+		return "ErrPauseTimeout"
+	case errors.Is(err, ErrListInvalidLabel):
+		return "ErrListInvalidLabel"
+	case errors.Is(err, config.ErrTemplateNameUnsafe):
+		return "ErrTemplateNameUnsafe"
+	case errors.Is(err, config.ErrTemplateNotFound):
+		return "ErrTemplateNotFound"
+	case errors.Is(err, config.ErrTemplateMalformed):
+		return "ErrTemplateMalformed"
+	case errors.Is(err, config.ErrTemplateExists):
+		return "ErrTemplateExists"
+	case errors.Is(err, ErrTemplateAgentMissing):
+		return "ErrTemplateAgentMissing"
+	case errors.Is(err, probe.ErrProbeUnsupported):
+		return "ErrProbeUnsupported"
+	case errors.Is(err, ErrRelayModeOff):
+		return "ErrRelayModeOff"
+	case errors.Is(err, ErrClaimTooSoon):
+		return "ErrClaimTooSoon"
+	case errors.Is(err, ErrInvalidDecision):
+		return "ErrInvalidDecision"
+	case errors.Is(err, ErrTooManyIds):
+		return "ErrTooManyIds"
+	case errors.Is(err, ErrMissingRequestToken):
+		return "ErrMissingRequestToken"
+	case errors.Is(err, ErrPermissionRequestNotFound):
+		return "ErrPermissionRequestNotFound"
+	case errors.Is(err, store.ErrAmbiguousRequest):
+		return "ErrAmbiguousRequest"
+	case errors.Is(err, ErrNoSessionId):
+		return "ErrNoSessionId"
+	case errors.Is(err, ErrJsonlMissing):
+		return "ErrJsonlMissing"
+	case errors.Is(err, ErrJsonlNeverWritten):
+		return "ErrJsonlNeverWritten"
+	case errors.Is(err, spawn.ErrReservedEnvKey):
+		return "ErrReservedEnvKey"
+	case errors.Is(err, spawn.ErrCwdNotFound):
+		return "ErrCwdNotFound"
+	case errors.Is(err, spawn.ErrCwdNotADirectory):
+		return "ErrCwdNotADirectory"
+	case errors.Is(err, ErrSchemaMismatch):
+		return "ErrSchemaMismatch"
+	case errors.Is(err, ErrSchemaMigrationRequired):
+		return "ErrSchemaMigrationRequired"
+	case errors.Is(err, ErrOldLayout):
+		return "ErrOldLayout"
 	case errors.Is(err, ErrHostCredentialMissing):
 		return "ErrHostCredentialMissing"
 	case errors.Is(err, ErrPermissionRulesRefused):

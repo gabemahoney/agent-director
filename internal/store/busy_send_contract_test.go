@@ -11,7 +11,7 @@ func TestBusySendCoreContractIdentity(t *testing.T) {
 	objects, columns := busySendCoreObjects, busySendSpawnColumns
 	t.Cleanup(func() { busySendCoreObjects, busySendSpawnColumns = objects, columns })
 	version, digest := BusySendCoreContractIdentity()
-	if version != "busy-send-core-v1:" || digest != "7a56c8fe69875a0c57934c5312de9be62220cf111800635269fd81c55acecbd8" {
+	if version != "busy-send-core-v1:" || digest != "45bbc95a6429e2f483f3ab4bc1cc0b8d12d40f607e06b6bf4416d87fff1cb7f7" {
 		t.Fatalf("identity = %q, %q", version, digest)
 	}
 	check := func(t *testing.T, changed bool) {

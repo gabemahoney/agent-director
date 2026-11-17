@@ -108,19 +108,17 @@ const (
 
 // BusySendRouteKind is a Launch's provider route (busy_send_launches.route_kind,
 // busy_send_handovers.route_kind): Claude's hook route A (SR-3.4), and the
-// Codex app-server and Cursor ACP routes of the later releases (SR-3.6, SR-3.8).
+// Codex app-server route of a later release (SR-3.6).
 type BusySendRouteKind string
 
 const (
 	BusySendRouteClaudeHooks    BusySendRouteKind = "claude_hooks"
 	BusySendRouteCodexAppServer BusySendRouteKind = "codex_app_server"
-	BusySendRouteCursorACP      BusySendRouteKind = "cursor_acp"
 )
 
 // BusySendProcessRole is the role of a process a Launch binds
 // (busy_send_launch_processes.role): the agent itself, and the later
-// releases' Codex app-server, remote TUI and connection helper and Cursor
-// gateway (SR-3.6, SR-3.8).
+// release's Codex app-server, remote TUI and connection helper (SR-3.6).
 type BusySendProcessRole string
 
 const (
@@ -128,7 +126,6 @@ const (
 	BusySendProcessAppServer BusySendProcessRole = "app_server"
 	BusySendProcessTUI       BusySendProcessRole = "tui"
 	BusySendProcessHelper    BusySendProcessRole = "helper"
-	BusySendProcessGateway   BusySendProcessRole = "gateway"
 )
 
 // BusySendPlace is a Message's current physical custody
@@ -181,7 +178,7 @@ const (
 // BusySendResultReason is a Result's stable reason
 // (busy_send_messages.result_reason; SR-5.1). A non-Final Result's reason is
 // its wait reason (BusySendWaitReason, converted). The codes below are the
-// Final reasons: exact_receipt for delivered_confirmed (SR-3.7, SR-3.8);
+// Final reasons: exact_receipt for delivered_confirmed (SR-3.7);
 // confirmation_off, handed_over_not_proven (SR-3.5) and the sticky
 // wait_turn_raced (SR-3.3a) for sent_unconfirmed; launch_ended and
 // admission_unknown for the Launch End and force terminal rules (SR-4.3,
@@ -275,10 +272,10 @@ const (
 )
 
 // BusySendAdmissionKind is the qualified admission event recorded for a
-// prompt (busy_send_prompts.admission_kind; SR-3.3, SR-4.3, SR-4.4, SR-4.5a):
+// prompt (busy_send_prompts.admission_kind; SR-3.3, SR-4.3, SR-4.4):
 // Claude's own UserPromptSubmit sighting of the exact prompt; Codex's
-// turn/start or turn/steer RPC success; Cursor's correlated session/prompt
-// response; a native signal, the provider's own native event that, under a
+// turn/start or turn/steer RPC success; a correlated prompt response;
+// a native signal, the provider's own native event that, under a
 // qualified premise, shows AD's issued input was taken (for Claude, the
 // parent Stop that ends the turn a tool-boundary prompt's complete output
 // went into, under O4's turn-end premise; RecordBusySendTurnEnd); a Confirm
@@ -297,13 +294,12 @@ const (
 // BusySendEvidenceKind is a qualified receipt's kind
 // (busy_send_prompts.evidence_kind, busy_send_messages.evidence_kind; SR-5.1):
 // Codex's exact userMessage from item/started or from thread/items/list
-// reconciliation (SR-3.7), and Cursor's correlated normal end_turn (SR-3.8).
+// reconciliation (SR-3.7).
 type BusySendEvidenceKind string
 
 const (
 	BusySendEvidenceCodexItemStarted BusySendEvidenceKind = "codex_item_started"
 	BusySendEvidenceCodexThreadItems BusySendEvidenceKind = "codex_thread_items"
-	BusySendEvidenceCursorEndTurn    BusySendEvidenceKind = "cursor_end_turn"
 )
 
 // BusySendNegativeKind is definitive negative evidence for a prompt
@@ -332,7 +328,7 @@ const (
 )
 
 // BusySendForceReason is a force attempt's stable reason
-// (busy_send_forces.reason; SR-4.2 to SR-4.5a, SR-9.2): why it was refused,
+// (busy_send_forces.reason; SR-4.2 to SR-4.4, SR-9.2): why it was refused,
 // failed, is pending, or how its hand-over was admitted.
 type BusySendForceReason string
 
@@ -411,13 +407,12 @@ const (
 
 // BusySendPauseSignal is the keyless shutdown a pause claim intends
 // (busy_send_pause_claims.signal_kind; SR-6.4): Claude's SIGTERM, and the
-// later releases' Codex server shutdown and Cursor gateway exit.
+// later release's Codex server shutdown.
 type BusySendPauseSignal string
 
 const (
 	BusySendSignalSIGTERM        BusySendPauseSignal = "sigterm"
 	BusySendSignalServerShutdown BusySendPauseSignal = "server_shutdown"
-	BusySendSignalGatewayExit    BusySendPauseSignal = "gateway_exit"
 )
 
 // The durable lookups' answers (SR-4.1, SR-5.4): found, no durable record

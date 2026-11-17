@@ -36,6 +36,13 @@ error:
   `send-keys`, follow [Manual input ownership](#manual-input-ownership).
 - `ErrCantSend`: nothing was stored, sent or typed; act on its `reason`
   ([Busy-send refusals](#busy-send-refusals)).
+- `ErrStoreBusy` before admission stored nothing; retry within the existing
+  call allowances. A migrator suspended or stalled by the host while holding
+  SQLite's writer lock beyond a caller's finite allowance returns this ordinary
+  error. Zero-wait and small-positive waits remain bounded; do not increase
+  budgets or accept outside SQLite. Normal [upgrades](install.md#upgrade)
+  preserve sends and CLI availability. An uncertain commit is a different
+  outcome: follow [When the reply is uncertain](#covered-sends).
 - `ErrPauseTimeout`: inspect before further input; never retry `pause`
   automatically. Follow [When pause cannot confirm exit](#when-pause-cannot-confirm-exit).
   A Covered Agent's `pause` refuses with `ErrSpawnNotPausable` instead: act on
@@ -44,12 +51,14 @@ error:
   starting": wait and retry. Refused with "this row's own id", or
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
   session to a human; never end it yourself.
-- After a timed-out `spawn` or `resume` the row stays `pending`: do not retry
+- After a tmux-create timeout in `spawn` or `resume` the row stays `pending`: do not retry
   until `get` shows `ended` or `missing`, then `spawn --instance-id`
   with `--reuse-finished` and the row's agent (`get` shows it). For Cursor,
   inspect the latest session and follow the
   [resume or fresh-instance boundary](#cursor-operation-boundaries). A row noted `unreported` has a running agent: use it
   or end it first (see [Maintenance](maintenance.md)).
+  A [delegated resume without a usable reply](#launch-end-resume-and-reuse)
+  has an unknown outcome; it does not promise a `pending` row.
 - `ErrConfigMalformed` (a config value is refused): store-backed verbs fail,
   `serve` does not start, hooks record nothing and relayed permission requests
   are denied. Take no action, alert once, never read it as "dead"; a human fixes
@@ -156,10 +165,12 @@ decisions; agent kind and the calling binary's version do not determine it.
 error; it never fabricates a successful `not_covered` row.
 
 Resume retains the conversation and preserves its coverage; fresh reuse
-starts a new conversation even with the same agent. Pending or uncertain
-resume/reuse keeps the earlier published coverage and
+starts a new conversation even with the same agent. A candidate awaiting
+creation or publication keeps the earlier published coverage and
 [Agent Defaults](#agent-defaults) visible, and sends use those defaults, until
 the new launch is published following creation, adoption or report-in.
+A lost [delegated resume reply](#launch-end-resume-and-reuse) does not tell
+you whether that publication occurred.
 
 A covered row also shows `agent_defaults`, its [settings](#agent-defaults),
 on `get`, `get-many`, `status` and `list`; `delivery`, its inbox, on `get`,
@@ -272,8 +283,9 @@ its own:
   out-of-box value. An explicit `false` or `wait_turn` overrides the template.
 - `resume`: the conversation keeps its values; a value the call names replaces
   that one when the resumed launch is published (see
-  [Busy-send coverage](#busy-send-coverage)). A failed or uncertain resume
-  changes nothing. To change an agent's defaults, resume it with new ones.
+  [Busy-send coverage](#busy-send-coverage)). Until publication the earlier
+  values remain. A lost [delegated reply](#launch-end-resume-and-reuse) can
+  leave publication unknown. To change an agent's defaults, resume it with new ones.
 - `make-template`: stored for the spawns that use the template.
 
 A `send_mode` the agent does not offer is `ErrCantSend`, reason
@@ -322,11 +334,13 @@ After [expiry](#durable-lookups), matching repeats and uses with another text
 or target are refused with `ErrCantSend`, reason
 `retention_expired`. The pair stays owned forever. A refused send claims no pair.
 
-**When the reply is uncertain.** `ErrStoreBusy` stored nothing. An
+**When the reply is uncertain.** A [pre-admission `ErrStoreBusy`](#caller-contract)
+is a refusal. An
 `ErrInternal` saying whether the Message was accepted is unknown (it has no
 `err_details`) is not a refusal: the Message may be Held. For a confirmed
-send, repeat it with the pair the error names, or call `get-delivery` with
-that pair; a repeat never accepts it twice. An unconfirmed send has no
+send, repeat the SAME Caller UUID and Message ID, target and exact text bytes,
+or call `get-delivery` with that pair; the [repeat rules above](#covered-sends)
+preserve ownership and never accept it twice. An unconfirmed send has no
 identity, so nothing resolves it: `get`'s `delivery` counts are aggregates.
 Never resend it automatically. Where a send must be recoverable, use confirmed
 delivery with your own `caller_uuid` and `delivery_request_id`.
@@ -723,6 +737,23 @@ resend; `unknown` and `retention_expired` never are. A store failure is an
 error (`ErrStoreBusy` when a bounded read runs out of time), never `unknown`.
 
 ### Launch end, resume and reuse
+
+If this process lacks a covered conversation's provider, `resume` transparently
+delegates the whole call to the newest compatible retained installed version
+that covers it, independently of the published version or rollback. Results
+and named errors, descriptions and details keep their meaning through CLI,
+MCP, Go and TypeScript. This applies only to `resume`; a covered target never
+falls back to raw typing or an uncovered launch.
+
+No matching retained version returns `ErrSpawnNotResumable` with
+`err_details.cause: covering_version_unavailable` and `err_details.provider`.
+Nothing changed or launched; installing a compatible covering version permits
+retry. An unreadable or malformed installation is a diagnostic failure, not
+evidence that no covering version exists. A pre-start failure reports that no
+delegate started. If a delegate started but supplied no usable response,
+plain `ErrInternal` without `err_details` means the outcome is unknown: a
+Launch may exist. Check `get` and do not automatically retry. The original
+process never falls back locally or tries another delegate.
 
 When a Covered Agent becomes `ended` or `missing` (after `pause`, `kill`,
 `sweep` or a crash), or its row is deleted, agent-director records launch end

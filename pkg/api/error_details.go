@@ -15,7 +15,8 @@ import (
 // RelayFallenBackDetails, PaneAnswerInProgressDetails, ClaimTooSoonDetails,
 // PaneChangedDetails, PaneKeySentDetails, DialogMaybeOpenDetails,
 // PauseTimeoutDetails, TooManyIdsDetails, CantSendDetails and
-// NotPausableDetails.
+// NotPausableDetails or NotResumableDetails. A delegated resume retains the
+// recipient's raw details, including unknown fields and explicit null.
 //
 // The CLI writes Details as the error envelope's err_details key, the MCP
 // server as its error data's err_details, and the TypeScript client exposes
@@ -35,13 +36,25 @@ func (e *DetailedError) Error() string { return e.Err.Error() }
 func (e *DetailedError) Unwrap() error { return e.Err }
 
 // ErrDetails returns err's err_details object: the Details of the first
-// DetailedError in err's chain, or nil when there is none (b.146 rule 15).
+// DetailedError in err's chain, or the recipient's raw delegated details,
+// or nil when there is none (b.146 rule 15).
 func ErrDetails(err error) any {
+	var remote *delegatedResumeError
+	if errors.As(err, &remote) && len(remote.remote.Details) != 0 {
+		return remote.remote.Details
+	}
 	var de *DetailedError
 	if errors.As(err, &de) {
 		return de.Details
 	}
 	return nil
+}
+
+// NotResumableDetails is resume's refusal when no retained installed version
+// with the permanent core covers the conversation's recorded provider.
+type NotResumableDetails struct {
+	Cause    string `json:"cause"`
+	Provider string `json:"provider"`
 }
 
 // TooManyIdsDetails is ErrTooManyIds's err_details from get-many.

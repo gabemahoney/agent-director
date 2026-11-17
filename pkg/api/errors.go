@@ -133,6 +133,10 @@ var ErrPauseTimeout = errors.New("ErrPauseTimeout")
 // cursor. It is also returned when resume
 // loses a race: the row changed between resume's read and its move to
 // `pending`, and nothing was written.
+// Before those local guards, a covered provider this runtime lacks delegates
+// to a retained covering version. With none, NotResumableDetails carries cause
+// covering_version_unavailable and provider; install a covering version and
+// retry. That refusal changes nothing and launches nothing.
 var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 
 // ErrNoSessionId is returned by resume when the row's current session_id

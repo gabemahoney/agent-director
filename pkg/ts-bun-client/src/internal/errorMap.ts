@@ -9,6 +9,8 @@
  * Exports `throwFromEnvelope(verb, envelope)` which:
  *   - Looks up `envelope.err_name` in the static map.
  *   - Throws the typed subclass when found (carrying verb + envelope fields).
+ *   - For resume, preserves an unknown recipient name and fields in the base
+ *     AgentDirectorError: a newer retained runtime may serve the call (SR-9.1).
  *   - Throws `ErrUnknownErrorName` when the err_name is not in the map
  *     (SRD SR-4.3). The catalog lists every name the binary of this client's
  *     version emits (b.cm7), so that means a binary of another version,
@@ -140,6 +142,12 @@ export function throwFromEnvelope(verb: string, envelope: unknown): never {
   const Ctor = errorMap.get(errName);
   if (Ctor !== undefined) {
     throw new Ctor(verb, errName, errDescription, errDetails);
+  }
+
+  // Resume may be served by a newer retained runtime. Its named outcome is
+  // authoritative even when this client's catalog predates that error.
+  if (verb === "resume") {
+    throw new errors.AgentDirectorError(verb, errName, errDescription, errDetails);
   }
 
   // Unknown err_name (SRD SR-4.3): a binary of another version emitted a name

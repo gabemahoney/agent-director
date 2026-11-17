@@ -651,10 +651,11 @@ For uncovered agents, `SendKeys` answers a pane request using `RequestToken`, `A
 `PaneAnswer` is `sent`, `outside` or `tool_ran`; `PaneAs` is the caller's claim.
 `Pause` accepts no pane hash. Handling and dialog proof are defined in
 [Permission relay](../../docs/caller-contract.md#permission-relay).
-`api.DetailedError` is the error type that carries such facts: its `Err`
+Local errors carry such facts in `api.DetailedError`: its `Err`
 holds the catalogued sentinel (`errors.Is` sees through it) and `Details`
 the object; `api.ErrDetails(err)` returns the `Details` of the first one in
-`err`'s chain, or nil. `ErrPaneChanged` (`PaneChangedDetails`),
+`err`'s chain, or nil. Delegated `resume` uses the [raw details described below](#errors).
+`ErrPaneChanged` (`PaneChangedDetails`),
 `ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`),
 `ErrClaimTooSoon` (`ClaimTooSoonDetails`), `ErrDialogMaybeOpen`
 (`DialogMaybeOpenDetails`) and `ErrTooManyIds` (`TooManyIdsDetails`)
@@ -679,6 +680,10 @@ binary: `pkg/api@v0.X.Y` requires binary `v0.X.Y`.
 
 Named errors can wrap sentinel values and structured details. Use `errors.Is`
 to inspect them — never compare error strings.
+Delegated `resume` preserves known `errors.Is` identity; its details remain raw
+`json.RawMessage` even for a known sentinel, including explicit null (nil means
+omitted). Decode those details instead of assuming the local concrete type;
+see [Covering-version resume](../../docs/architecture.md#covering-version-resume).
 
 For uncovered agents, `ErrPauseTimeout` matches with `errors.Is`; `api.ErrDetails(err)`
 returns an `api.PauseTimeoutDetails` value after exit keys were sent but
@@ -686,7 +691,7 @@ returns an `api.PauseTimeoutDetails` value after exit keys were sent but
 `ExitConfirmed` and `RowState`, with the shared meanings and recovery in
 [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit).
 
-`ErrCantSend` matches with `errors.Is`; `api.ErrDetails(err)` returns an
+For local `ErrCantSend`, `errors.Is` matches and `api.ErrDetails(err)` returns an
 `api.CantSendDetails` with `Class`, `Reason`, `ResendSafe` and `RetryWith`.
 `Limit` describes a capacity refusal; `Result` carries the owner of a
 conflicting pair. Both are nil for `"agent_not_covered"`. Meanings are in

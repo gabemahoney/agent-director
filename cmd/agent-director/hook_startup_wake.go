@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/installversion"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -29,9 +30,15 @@ type claudeStartupWakeJob struct {
 	HookPID   int
 }
 
+// Consumer seam for capture refusal and immutable-child-path tests. The
+// running-image algorithm itself lives only in installversion.
+var startupWakeExecutable = installversion.CaptureExecutable
+
 // scheduleClaudeStartupWake detaches one bounded re-exec. No pipe from the
 // provider is inherited, so it cannot delay SessionStart's output or exit.
 // Its stderr is a regular diagnostic file, never a wake-prompt stream.
+// Capture uses the running image's stamp, even if publication preceded path
+// resolution. An unsafe in-layout capture refuses the hint through this error.
 func scheduleClaudeStartupWake(path string, logger *log.Logger, wake hook.ClaudeStartupWake) error {
 	if logger == nil {
 		return fmt.Errorf("startup wake requires a diagnostic file")
@@ -44,7 +51,7 @@ func scheduleClaudeStartupWake(path string, logger *log.Logger, wake hook.Claude
 	if err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("startup wake requires a regular diagnostic file")
 	}
-	executable, err := os.Executable()
+	executable, err := startupWakeExecutable()
 	if err != nil {
 		return err
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/helptext"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/resumedelegate"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -808,6 +809,9 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 func run() int {
 	if handled, code := installVersionFacts(os.Args[1:]); handled {
 		return code
+	}
+	if len(os.Args) > 1 && os.Args[1] == resumedelegate.Argument {
+		return runResumeDelegation(os.Args[2:])
 	}
 	if len(os.Args) > 1 && os.Args[1] == "cursor-host" {
 		if err := cursorHostHandler(os.Args[2:]); err != nil {
