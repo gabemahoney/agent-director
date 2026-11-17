@@ -23,7 +23,7 @@ import (
 //	(e) Committed catalog.json and surface.json (covered by
 //	    TestCatalogJSONUpToDate and TestSurfaceJSONUpToDate).
 //
-// Non-callable verbs (help, serve, hook) are intentionally excluded from
+// Non-callable verbs are intentionally excluded by manifest.CallableVerbs from
 // source (c): they have no handler code in pkg/api/*.go, so including their
 // ErrorNames would produce false-positive failures.
 func TestFiveWayCoherence(t *testing.T) {

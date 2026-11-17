@@ -4,7 +4,7 @@
 
 ## Tool: help
 
-JSON verbs for SessionStart and SessionEnd reason=compact hooks. CLI aliases: --help, -h.
+JSON verbs for SessionStart/SessionEnd reason=compact hooks. Aliases: --help, -h.
 
 ### Input schema
 
@@ -80,7 +80,7 @@ Launch a tracked agent in tmux. Returns the instance_id and pre_trust (ok, skipp
 
 ## Tool: status
 
-Check this row; report state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.
+Check row; state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.
 
 ### Input schema
 
@@ -111,7 +111,7 @@ Check this row; report state: pending/waiting/working/ask_user/check_permission/
 
 ## Tool: get
 
-Check this row; return identity, state, session and tmux socket.
+Check row; identity, state, session, tmux socket.
 
 ### Input schema
 
@@ -226,7 +226,7 @@ Strip CR, keep LF, add Enter (empty text: Enter only). request_token: one key. N
 
 ## Tool: read-pane
 
-Capture the last N lines of the agent's own pane (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Capture this agent's last N pane lines (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Input schema
 
@@ -433,7 +433,7 @@ One bounded pass of status/get/list recovery checks on a fixed all-agent snapsho
 
 ## Tool: find-missing
 
-Compatibility alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.
+Alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.
 
 ### Input schema
 

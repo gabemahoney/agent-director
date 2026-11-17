@@ -1,9 +1,8 @@
 // Command agent-director is the CLI entrypoint for the agent-director tool.
 //
-// This file provides the argv dispatch skeleton and the startup wiring that
-// every invocation performs (config load + store open). Real verb handlers
-// live in pkg/api; this file marshals their results to JSON per
-// SRD §12.3.
+// This file provides the argv dispatch skeleton and the config/store startup
+// wiring for store-backed ordinary invocations. Public verb handlers live in
+// pkg/api; this file marshals their results to JSON per SRD §12.3.
 package main
 
 import (
@@ -54,8 +53,8 @@ const (
 )
 
 // errDispatch is a sentinel returned by handlers when they have already
-// written a JSON error envelope to stderr. run() uses this to set the exit
-// code without double-printing.
+// written a JSON error envelope to stderr. runOrdinary() uses this to set
+// the exit code without double-printing.
 var errDispatch = errors.New("dispatch error")
 
 // configPath is the canonical TOML config location.
@@ -63,10 +62,10 @@ const configPath = clisetup.ConfigPath
 
 // verbAliases maps each alias of a verb to that verb: --help and -h run help,
 // --version and -v run version (b.fv2), the flags most CLIs accept, so people
-// and scripts try them first. run() replaces an alias with its verb when it is
-// the first argument after the global flags, before any dispatch, so an alias
-// runs exactly as its verb does (same stdout, same exit code, no store); an
-// alias anywhere else is no alias. They are no verbs of their own: no manifest
+// and scripts try them first. runOrdinary() replaces an alias with its verb
+// when it is the first argument after the global flags, before any dispatch,
+// so an alias runs exactly as its verb does (same stdout, same exit code, no
+// store); an alias anywhere else is no alias. They are no verbs of their own: no manifest
 // entry and no handlers() entry names them, and help's and version's
 // manifest descriptions list them.
 var verbAliases = map[string]string{
@@ -77,28 +76,31 @@ var verbAliases = map[string]string{
 }
 
 // handlers maps verb names to their implementations. Verb aliases (--help,
-// -h, --version, -v) are not in this table: run() has already replaced them
-// with their verbs (verbAliases). client and cfg are captured in closures so
+// -h, --version, -v) are not in this table: runOrdinary() has already replaced
+// them with their verbs (verbAliases). client and cfg are captured in closures so
 // each verb sees the same already-opened Client — construction is done once
-// in run() via setupClient(). o is the run's --store-path, --tmux-command and
-// --create-if-missing overrides setupClient opened client with; serve builds
-// its separate MCP Client from them too (b.wb7, b.78b).
+// in runOrdinary() via setupClient(). o carries the --store-path,
+// --tmux-command and --create-if-missing overrides setupClient opened client
+// with; serve builds its separate MCP Client from them too (b.wb7, b.78b).
 //
 // `hook` is intentionally NOT in this table — runHook() short-circuits
 // the dispatch loop before setupClient() so hook fires can't be blocked
 // by config/store failures (SRD §3.2 fail-open invariant).
 //
 // The DB-free static-data verbs `help` and `version` remain in this
-// table for the unknown-verb-free lookup shape, but run() dispatches them (and
-// the no-verb case: help, or nothing for a hook payload on stdin, SR-22.9)
+// table for the unknown-verb-free lookup shape, but runOrdinary() dispatches
+// them (and the no-verb case: help, or nothing for a hook payload on stdin, SR-22.9)
 // BEFORE setupClient with a zero-value Client, so on the normal path these
 // entries are never reached (SR-4.1/4.2, b.93m). Their
 // closures here are the store-backed fallback only and behave identically —
 // helpHandler ignores its client and versionHandler consults no store.
 func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) map[string]func([]string) error {
 	return map[string]func([]string) error{
-		"help":               func(args []string) error { return helpHandler(client, args) },
-		"cursor-host":        cursorHostHandler,
+		"help":        func(args []string) error { return helpHandler(client, args) },
+		"cursor-host": cursorHostHandler,
+		// Structural registration only; run rejects every prefixed form
+		// before setupClient. There is no store-backed Guard execution route.
+		"tool-guard":         func([]string) error { return errDispatch },
 		"version":            func(args []string) error { return versionHandler(client, args) },
 		"spawn":              func(args []string) error { return spawnHandlerWith(client, args) },
 		"status":             func(args []string) error { return statusHandlerWith(client, args) },
@@ -131,7 +133,7 @@ func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) ma
 // for Epic 3 every hook event takes the state-tracking fail-open path.
 const hookExitCode = 0
 
-// runHook is the hook-verb entry point. It is invoked directly from run()
+// runHook is the hook-verb entry point. It is invoked directly from runOrdinary()
 // before the normal store-setup-and-dispatch path so that *every* failure
 // mode (missing config, store open failure, malformed payload, DB
 // unreachable) yields exit 0 with empty stdout (state-tracking) or a
@@ -629,7 +631,7 @@ func writeEnvelope(w io.Writer, env errorEnvelope) error {
 }
 
 // dispatch picks a handler for argv and invokes it. argv is the verb and its
-// arguments, global flags stripped. run() handles the no-verb case itself
+// arguments, global flags stripped. runOrdinary() handles the no-verb case itself
 // before setupClient (help, or nothing for a hook payload on stdin, SR-22.9),
 // so an empty argv reaches dispatch only from a direct caller; it routes to
 // help (PM call, see Subtask 1.2 spec).
@@ -653,20 +655,21 @@ func dispatch(argv []string, table map[string]func([]string) error) error {
 	return handler(argv[1:])
 }
 
-// setupClient constructs the pkg/api.Client used by every non-hook verb,
+// setupClient constructs the pkg/api.Client used by store-backed ordinary verbs,
 // through clisetup.Open (whose comment holds the design pins), which
 // agent-director-admin shares so both binaries open the store alike.
 //
 // b.32k: o carries the --store-path, --tmux-command and --create-if-missing
-// overrides of the global flags run() parsed and applied before dispatch;
+// overrides of the global flags runOrdinary() parsed and applied before dispatch;
 // --home was applied there (os.Setenv) BEFORE this function runs, so every
 // "~/" expansion of the config and store paths sees the override. With
 // --create-if-missing false a missing store is refused here (ErrStoreOpen)
-// before any verb runs, and none of it is created (b.78b). run() also hands o
-// to serve, whose MCP Client opens with the same overrides (b.wb7).
+// before dispatching a store-backed verb, and none of it is created (b.78b).
+// runOrdinary() also hands o to serve, whose MCP Client opens with the same
+// overrides (b.wb7).
 //
 // On any error it writes the JSON envelope to stderr and returns errDispatch
-// so run() can exit non-zero without double-printing.
+// so runOrdinary() can exit non-zero without double-printing.
 func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 	client, cfg, err := clisetup.Open(o)
 	if err != nil {
@@ -683,8 +686,18 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 	return client, cfg, nil
 }
 
-// run is the testable body of main. Returning an int lets main use
-// os.Exit(run()) so deferred cleanup in run() still executes.
+// run is the testable body of main. It returns the exit code and whether the
+// invocation must bypass audit shutdown as well as ordinary startup. Deferred
+// cleanup still runs before main calls os.Exit. Guard selection precedes
+// runOrdinary's global parsing and startup.
+func run() (code int, standalone bool) {
+	if args, guard := toolGuardInvocation(os.Args[1:]); guard {
+		return toolGuardHandler(args), true
+	}
+	return runOrdinary(), false
+}
+
+// runOrdinary retains the public CLI and lifecycle-hook startup contracts.
 //
 // Startup wiring (config + store) runs on every STORE-BACKED invocation to
 // satisfy Epic 1 AC #4 (idempotent dir/file creation, which
@@ -719,14 +732,14 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // `--store-path`/`--home`/`--tmux-command`/`--create-if-missing` and would
 // otherwise be a blocking failure mode on the hook hot path.
 //
-// b.32k: after the hook short-circuit, run() pre-scans argv for the four
+// b.32k: after the hook short-circuit, runOrdinary() pre-scans argv for the four
 // global flags (--store-path, --home, --tmux-command, --create-if-missing)
 // with clisetup.ParseGlobalFlags, which agent-director-admin shares (b.vqr),
 // and strips them before per-verb dispatch sees argv. GlobalFlags.Apply then sets
 // HOME when --home is given, so config.Load's tilde-expansion picks it up —
 // the CLI binary is short-lived and single-threaded at startup, so
 // process-wide env mutation is safe.
-func run() int {
+func runOrdinary() int {
 	if len(os.Args) > 1 && os.Args[1] == "cursor-host" {
 		if err := cursorHostHandler(os.Args[2:]); err != nil {
 			return 1
@@ -843,9 +856,14 @@ func run() int {
 }
 
 func main() {
-	code := run()
-	// Verb deadlines end at the result. Process teardown has a separate,
-	// fixed allowance within the CLI's existing one-second return reserve:
+	code, standalone := run()
+	if standalone {
+		// The Guard has no audit work. Even constructing the default writer
+		// would violate its independent, side-effect-free invocation boundary.
+		os.Exit(code)
+	}
+	// For ordinary invocations, verb deadlines end at the result. Process teardown
+	// has a separate, fixed allowance within the CLI's existing one-second reserve:
 	// accepted memory-resident audit events must get a chance to reach fsync
 	// before os.Exit kills the worker. An expired drain is still unconfirmed.
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

@@ -206,7 +206,7 @@ func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "get-many", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
+	want := []string{"help", "spawn", "status", "get", "get-many", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "sweep", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "tool-guard", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -235,10 +235,10 @@ func TestLookup(t *testing.T) {
 
 // ── Callable and HandleFree ─────────────────────────────────────────────────
 
-// TestCallableVerbsExcludesNonCallable asserts help, serve, and hook are not
-// in the callable set.
+// TestCallableVerbsExcludesNonCallable keeps informational and internal CLI
+// entry points out of the callable set.
 func TestCallableVerbsExcludesNonCallable(t *testing.T) {
-	excluded := []string{"help", "serve", "hook"}
+	excluded := []string{"help", "serve", "hook", "trail-emit", "cursor-host", "tool-guard"}
 	for _, cv := range manifest.CallableVerbs() {
 		for _, name := range excluded {
 			if cv.Name == name {
@@ -873,7 +873,7 @@ func TestSweepAliasManifest(t *testing.T) {
 	if !ok {
 		t.Fatal("missing find-missing")
 	}
-	if alias.Description != "Compatibility alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety." {
+	if alias.Description != "Alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety." {
 		t.Errorf("alias description = %q", alias.Description)
 	}
 	if len(canonical.Params) != 0 || len(alias.Params) != 0 {

@@ -103,10 +103,10 @@ func TestServeFraming(t *testing.T) {
 	}
 }
 
-// TestToolsListMatchesManifest: tools/list is exactly the manifest's exposed
-// verbs (not hook, serve or trail-emit; no delete, an agent-director-admin
-// verb only, b.vqr), each with a description, and nothing in it names an
-// operator action (SR-6.8). TestMCPParamToolsListNames pins the schemas.
+// TestToolsListMatchesManifest: tools/list is exactly the manifest's verbs
+// accepted by mcp.ExposedVerb, each with a description. It includes no delete
+// (an agent-director-admin verb only, b.vqr) or operator action (SR-6.8).
+// TestMCPParamToolsListNames pins the schemas.
 func TestToolsListMatchesManifest(t *testing.T) {
 	tools, body := toolsList(t)
 	var got, want []string
@@ -123,7 +123,7 @@ func TestToolsListMatchesManifest(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("tools = %v; want the manifest's exposed verbs %v", got, want)
 	}
-	for _, name := range []string{"cursor-host", "hook", "serve", "trail-emit", "delete"} {
+	for _, name := range []string{"cursor-host", "tool-guard", "hook", "serve", "trail-emit", "delete"} {
 		if listed[mcp.ToolName(name)] {
 			t.Errorf("tools/list exposes %s", name)
 		}

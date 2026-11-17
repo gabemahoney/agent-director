@@ -100,10 +100,8 @@ func matrixCases() map[string]matrixCase {
 		// so a dropped json tag on agent surfaces as ErrTemplateAgentMissing.
 		"make-template": {args: `{"name":"dispatch-matrix-test","agent":"claude","agent_args":["--model","opus"]}`},
 
-		// No entry for trail-emit (nor hook/serve): ExposedVerb excludes
-		// those verbs from the MCP surface (server.go:318), so the matrix
-		// walk skips them (see the !mcp.ExposedVerb continue below) and
-		// they never need a dispatch case.
+		// The matrix walk below skips verbs rejected by mcp.ExposedVerb,
+		// so they need no dispatch case here.
 	}
 }
 

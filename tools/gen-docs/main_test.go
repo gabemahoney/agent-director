@@ -97,8 +97,7 @@ func TestGenerate_References(t *testing.T) {
 }
 
 // TestGenerate_MCPRespectsExposedVerb guards b.gk8: mcp-reference.md has a
-// tool section for exactly the verbs mcp.ExposedVerb admits (never hook,
-// serve or trail-emit).
+// tool section for exactly the verbs mcp.ExposedVerb admits.
 func TestGenerate_MCPRespectsExposedVerb(t *testing.T) {
 	got := readDoc(t, filepath.Join(generateDocs(t, nil), "mcp-reference.md"))
 	seen := map[bool]bool{}

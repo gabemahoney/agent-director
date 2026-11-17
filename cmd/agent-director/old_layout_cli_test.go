@@ -20,9 +20,9 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
-// dbFreeVerbs are the manifest verbs that open no store: help, version,
-// trail-emit and the hook, which run() and runHook dispatch before
-// setupClient.
+// dbFreeVerbs covers help, version, trail-emit and the hook, which runOrdinary()
+// dispatches before setupClient. Other internal verbs are handled separately
+// in storeOpeningVerbs below.
 var dbFreeVerbs = []string{"help", "version", "trail-emit", "hook"}
 
 // storeOpeningVerbs returns every verb of the manifest that opens the store,
@@ -34,8 +34,9 @@ func storeOpeningVerbs(t *testing.T) [][]string {
 	var argvs [][]string
 	for _, v := range manifest.Verbs {
 		// Internal gateway plumbing parses and opens an existing store itself,
-		// before public setupClient and its ErrOldLayout envelope.
-		if slices.Contains(dbFreeVerbs, v.Name) || v.Name == "cursor-host" {
+		// before public setupClient and its ErrOldLayout envelope. The Guard
+		// opens no store and has a silent/fixed-line contract of its own.
+		if slices.Contains(dbFreeVerbs, v.Name) || v.Name == "cursor-host" || v.Name == "tool-guard" {
 			continue
 		}
 		argv := []string{v.Name}

@@ -13,8 +13,8 @@ import (
 
 // trailEmitHandlerWith implements `agent-director trail-emit`. It dispatches
 // on the first positional argument (sub-verb) — currently only "relay-attempt"
-// is defined. Called from run() before setupClient so the verb works even when
-// state.db is missing or corrupted (SR-A-2.3 / ticket t3.4uk.nz.j9.2k).
+// is defined. Called from runOrdinary() before setupClient so the verb works
+// even when state.db is missing or corrupted (SR-A-2.3 / ticket t3.4uk.nz.j9.2k).
 func trailEmitHandlerWith(args []string) error {
 	if len(args) == 0 {
 		return writeApiErrorAndDispatch("ErrInvalidFlags",
