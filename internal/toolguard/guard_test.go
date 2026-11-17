@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/toolguardfix"
 )
 
 // Later path/Execute cases append rows here; setup may create files and replace
@@ -24,9 +27,12 @@ type guardCase struct {
 	input any
 	want  Result
 	setup func(*testing.T, *guardCall)
+	// next mutates the same fixture between two calls, retaining argv.
+	next func(*testing.T, *guardCall) Result
 }
 
 type guardCall struct {
+	files    toolguardfix.Layout
 	args     []string
 	envelope map[string]any
 	stdin    io.Reader
@@ -36,12 +42,14 @@ type guardCall struct {
 	finished <-chan struct{}
 	release  func()
 	expires  bool
+	deadline time.Time
 }
 
 func TestGuardDecisions(t *testing.T) {
 	// These literals are independent of the implementation's outcome formatter.
 	failed := Result{2, "agent-director blocked this call: agent-director could not check it\n"}
 	disabled := Result{2, "agent-director blocked this call: this call is disabled\n"}
+	covered := Result{2, "agent-director blocked this call: this call accesses a protected path\n"}
 	const marker = "DECOY-CARRIED-TEXT"
 	const patch = "*** Begin Patch\n*** Add File: note.txt\n+ordinary text\n*** End Patch\n"
 	cases := []guardCase{
@@ -160,7 +168,7 @@ func TestGuardDecisions(t *testing.T) {
 	}
 	cases = append(cases, guardCase{name: "absolute absent entries stay literal", tool: "Read", input: map[string]any{"file_path": "note.txt"}, setup: func(t *testing.T, c *guardCall) {
 		wantEntries := []string{
-			c.args[1],
+			c.files.MissingSecret,
 			filepath.Join(filepath.Dir(c.args[1]), "missing 'quoted' $dollar; space"),
 			filepath.Join(filepath.Dir(c.args[1]), "another \"quoted\" entry"),
 		}
@@ -236,24 +244,354 @@ func TestGuardDecisions(t *testing.T) {
 		}
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			cwd := filepath.Join(home, "work")
-			if err := os.Mkdir(cwd, 0700); err != nil {
+	// SR-6.2 / SR-8.1: real decoys, with independent witnesses for both
+	// resolution orders and both interpretations of a tilde spelling.
+	cases = append(cases,
+		guardCase{name: "paths/directory equality", tool: "Read", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.SecretDir}
+		}},
+		guardCase{name: "paths/missing descendant", tool: "Create", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.MissingSecret + "/new/file", "content": "ordinary"}
+		}},
+		guardCase{name: "paths/existing file equality", tool: "Edit", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.SecretFile}
+		}},
+		guardCase{name: "paths/relative link", tool: "Read", want: covered, input: map[string]any{"file_path": "secret-link/key"}},
+		guardCase{name: "paths/absolute parent link", tool: "Edit", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.ParentLink + "/.ssh/key"}
+		}},
+		guardCase{name: "paths/relative parent components", tool: "Create", want: covered, input: map[string]any{"file_path": "../home/.ssh/new/file"}},
+		guardCase{name: "paths/resolved listed alias", tool: "Read", want: covered, setup: func(t *testing.T, c *guardCall) {
+			// cwd, listed entry and absolute target are in three different folders.
+			c.args = []string{"--", c.files.ListedLink}
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.ResolvedSecret + "/decoy"}
+		}},
+		guardCase{name: "paths/listed alias", tool: "Read", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.ListedLink + "/decoy"}
+		}},
+		guardCase{name: "paths/kernel order only", tool: "Read", want: covered, input: map[string]any{"file_path": "detour/../key"}},
+		guardCase{name: "paths/lexical order only", tool: "Read", want: covered, input: map[string]any{"file_path": "detour/../protected"}, setup: func(t *testing.T, c *guardCall) {
+			// The kernel form is HOME/.ssh/protected, outside this sole entry.
+			c.args = []string{"--", filepath.Join(c.files.Work, "protected")}
+		}},
+		guardCase{name: "paths/missing safe suffix", tool: "Create", input: map[string]any{"file_path": "not-yet/new/file"}},
+		guardCase{name: "paths/ordinary existing file", tool: "Read", setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.OrdinaryFile}
+		}},
+		guardCase{name: "paths/tilde HOME descendant", tool: "Read", input: map[string]any{"file_path": "~/.ssh/key"}, want: covered},
+		guardCase{name: "paths/tilde HOME equality", tool: "Read", input: map[string]any{"file_path": "~"}, want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", c.files.Home}
+		}},
+		guardCase{name: "paths/tilde literal descendant", tool: "Read", input: map[string]any{"file_path": "~/key"}, want: covered, setup: func(t *testing.T, c *guardCall) {
+			if err := os.Symlink(c.files.SecretDir, filepath.Join(c.files.Work, "~")); err != nil {
 				t.Fatal(err)
 			}
+		}},
+		guardCase{name: "paths/tilde literal equality", tool: "Read", input: map[string]any{"file_path": "~"}, want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", filepath.Join(c.files.Work, "~")}
+		}},
+		guardCase{name: "paths/root covers decoy", tool: "Read", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", "/"}
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.SafeFile}
+		}},
+		guardCase{name: "paths/fresh listed link", tool: "Read", setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.LateTarget + "/decoy"}
+			fixed := slices.Clone(c.args)
+			t.Cleanup(func() {
+				if !slices.Equal(c.args, fixed) {
+					t.Error("argv changed between decisions")
+				}
+			})
+		}, next: func(t *testing.T, c *guardCall) Result {
+			if err := os.Symlink(c.files.LateTarget, c.files.LateLink); err != nil {
+				t.Fatal(err)
+			}
+			return covered
+		}},
+	)
+	for _, sibling := range []string{"~/.sshx/key", "~/.ssh.bak/key"} {
+		cases = append(cases, guardCase{name: "paths/component sibling " + sibling, tool: "Read", input: map[string]any{"file_path": sibling}})
+	}
+	for _, fold := range []bool{false, true} {
+		want, label := Result{}, "Linux"
+		if fold {
+			want, label = covered, "Darwin simulated"
+		}
+		cases = append(cases, guardCase{name: "paths/case " + label, tool: "Read", want: want, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": filepath.Join(c.files.Home, ".SSH", "key")}
+			c.ctx = context.Background()
+			c.check = func(ctx context.Context, p payload, entries []string) reason {
+				r := newPathResolver(ctx)
+				r.foldCase = fold
+				return decideFiles(p, entries, r)
+			}
+		}})
+	}
+
+	// SR-6.3: every header is a target; patch bodies are carried text.
+	for _, header := range []string{"Add File", "Update File", "Delete File", "Move to"} {
+		cases = append(cases, guardCase{name: "patch/late " + header, tool: "ApplyPatch", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"input": "*** Begin Patch\n*** Update File: ordinary.txt\n@@\n-old\n+new\n*** " + header + ": " + c.files.SecretDirFile + "\n*** End Patch\n"}
+		}})
+	}
+	cases = append(cases,
+		guardCase{name: "patch/unsafe move source", tool: "ApplyPatch", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"input": "*** Begin Patch\n*** Update File: " + c.files.SecretFile + "\n*** Move to: ordinary.txt\n*** End Patch\n"}
+		}},
+		guardCase{name: "patch/safe files and carried headers CRLF", tool: "ApplyPatch", setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"input": "*** Begin Patch\r\n*** Add File: new.txt\r\n+*** Delete File: " + c.files.SecretFile + "\r\n*** Update File: ordinary.txt\r\n@@ " + c.files.SecretDir + "\r\n-" + c.files.SecretFile + "\r\n+replacement\r\n*** Move to: moved.txt\r\n*** Delete File: old.txt\r\n*** End Patch\r\n"}
+		}},
+		guardCase{name: "patch/significant filename whitespace", tool: "ApplyPatch", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", filepath.Join(c.files.Work, " protected ")}
+			c.envelope["tool_input"] = map[string]any{"input": "*** Begin Patch\n*** Add File:  protected \n+ordinary\n*** End Patch\n"}
+		}},
+		// R1: Droid trims header targets. Raw and provider interpretations
+		// must both be checked, including JavaScript's non-ASCII whitespace.
+		guardCase{name: "patch/R1 leading Add", tool: "ApplyPatch", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"input": "*** Begin Patch\n*** Add File:   " + c.files.SecretDir + "/new\n+ordinary\n*** End Patch\n"}
+		}},
+		guardCase{name: "patch/R1 leading Delete", tool: "ApplyPatch", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"input": "*** Begin Patch\n*** Delete File: \t" + c.files.SecretFile + "\n*** End Patch\n"}
+		}},
+		guardCase{name: "patch/R1 trailing Update", tool: "ApplyPatch", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"input": "*** Begin Patch\n*** Update File: " + c.files.SecretFile + "\u00a0\n@@\n-old\n+new\n*** End Patch\n"}
+		}},
+		guardCase{name: "patch/R1 FEFF Move", tool: "ApplyPatch", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"input": "*** Begin Patch\n*** Update File: ordinary.txt\n*** Move to: \ufeff" + c.files.SecretDir + "/moved\n@@\n-old\n+new\n*** End Patch\n"}
+		}},
+		guardCase{name: "patch/R1 whitespace-only target", tool: "ApplyPatch", want: failed, input: map[string]any{"input": "*** Begin Patch\n*** Add File:  \t\u00a0\ufeff\n+ordinary\n*** End Patch\n"}},
+		guardCase{name: "patch/R1 safe whitespace and NEL control", tool: "ApplyPatch", setup: func(t *testing.T, c *guardCall) {
+			// U+0085 is a filename character, unlike U+FEFF and U+00A0.
+			c.envelope["tool_input"] = map[string]any{"input": "*** Begin Patch\n*** Add File: \ufeff " + c.files.SafeDir + "/new \u00a0\n+ordinary\n*** Delete File: \u0085" + c.files.SecretFile + "\u0085\n*** End Patch\n"}
+		}},
+	)
+	for _, bad := range []struct{ name, text string }{
+		{"missing begin", "*** Add File: note.txt\n*** End Patch\n"},
+		{"missing end", "*** Begin Patch\n*** Add File: note.txt\n+body\n"},
+		{"trailing data", patch + "extra"},
+		{"empty target", "*** Begin Patch\n*** Delete File: \n*** End Patch\n"},
+		{"malformed header", "*** Begin Patch\n*** Add File:note.txt\n*** End Patch\n"},
+		{"unknown control", "*** Begin Patch\n*** Add File: note.txt\n*** Unknown: " + marker + "\n*** End Patch\n"},
+	} {
+		cases = append(cases, guardCase{name: "patch/" + bad.name, tool: "ApplyPatch", input: map[string]any{"input": bad.text}, want: failed})
+	}
+
+	// Search-root checking is independent of patterns and carried exclusions.
+	for _, tool := range []string{"LS", "Grep", "Glob"} {
+		field := map[string]string{"LS": "directory_path", "Grep": "path", "Glob": "folder"}[tool]
+		for _, root := range []string{"covered", "ancestor", "omitted ancestor", "resolved ancestor", "safe with links"} {
+			want := covered
+			if root == "safe with links" || (tool == "LS" && root != "covered") {
+				want = Result{}
+			}
+			cases = append(cases, guardCase{name: "search/" + tool + "/" + root, tool: tool, want: want, setup: func(t *testing.T, c *guardCall) {
+				path := c.files.Work
+				switch root {
+				case "covered":
+					path = c.files.WorkLink
+				case "ancestor", "omitted ancestor":
+					path = c.files.Home
+				case "resolved ancestor":
+					path = c.files.ResolvedSecret
+					c.args = []string{"--", c.files.ListedLink + "/decoy"}
+				}
+				fields := map[string]any{field: path}
+				if root == "omitted ancestor" {
+					delete(fields, field)
+					c.envelope["cwd"] = path
+				}
+				switch tool {
+				case "LS":
+					fields["ignorePatterns"] = []string{c.files.SecretDir}
+				case "Grep":
+					fields["pattern"], fields["glob_pattern"] = c.files.SecretFile, c.files.SecretDir+"/*"
+				case "Glob":
+					fields["patterns"], fields["excludePatterns"] = []string{"narrow/*.txt"}, []string{c.files.SecretDir + "/*", "*/../ignored"}
+				}
+				c.envelope["tool_input"] = fields
+			}})
+		}
+		// Explicit absolute roots need neither cwd nor HOME.
+		cases = append(cases, guardCase{name: "search/" + tool + "/absolute without bases", tool: tool, setup: func(t *testing.T, c *guardCall) {
+			delete(c.envelope, "cwd")
+			if err := os.Unsetenv("HOME"); err != nil {
+				t.Fatal(err)
+			}
+			c.envelope["tool_input"] = map[string]any{field: c.files.SafeDir}
+		}})
+	}
+	cases = append(cases,
+		guardCase{name: "search/root ancestor", tool: "Grep", input: map[string]any{"path": "/"}, want: covered},
+		guardCase{name: "paths/absolute file without bases", tool: "Read", setup: func(t *testing.T, c *guardCall) {
+			c.envelope["cwd"] = "relative"
+			if err := os.Unsetenv("HOME"); err != nil {
+				t.Fatal(err)
+			}
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.SafeFile}
+		}},
+		guardCase{name: "Glob/absolute later pattern", tool: "Glob", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"folder": c.files.SafeDir, "patterns": []string{"*.txt", c.files.ResolvedSecret + "/*"}}
+		}},
+		guardCase{name: "Glob/literal prefix link", tool: "Glob", input: map[string]any{"patterns": "secret-link/*.txt"}, want: covered},
+		guardCase{name: "Glob/raw root before parent", tool: "Glob", want: covered, setup: func(t *testing.T, c *guardCall) {
+			// Resolving folder first would lose Work/protected's lexical form.
+			c.args = []string{"--", filepath.Join(c.files.Work, "protected")}
+			c.envelope["tool_input"] = map[string]any{"folder": c.files.DotDotLink, "patterns": "../protected/*"}
+		}},
+		guardCase{name: "Glob/folder sibling", tool: "Glob", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"folder": c.files.GlobRoot, "patterns": "../secret/*"}
+		}},
+		guardCase{name: "Glob/in folder control", tool: "Glob", setup: func(t *testing.T, c *guardCall) {
+			// Rebasing this onto cwd would see Work/secret-link and block.
+			c.envelope["tool_input"] = map[string]any{"folder": c.files.GlobRoot, "patterns": "secret-link/*"}
+		}},
+		guardCase{name: "Glob/absolute safe without bases", tool: "Glob", setup: func(t *testing.T, c *guardCall) {
+			delete(c.envelope, "cwd")
+			if err := os.Unsetenv("HOME"); err != nil {
+				t.Fatal(err)
+			}
+			c.envelope["tool_input"] = map[string]any{"folder": c.files.SafeDir, "patterns": c.files.SafeDir + "/*.txt"}
+		}},
+		guardCase{name: "Glob/bounded wildcard controls", tool: "Glob", input: map[string]any{"patterns": []string{"*.txt", "file?.go", "[ab]/*.go", "{src,lib}/**/*.go", `quoted\*/file`, `[{]/*.go`, `\{literal/*.go`, "missing/../*.txt"}}},
+	)
+	for _, interpretation := range []string{"literal link", "HOME"} {
+		cases = append(cases, guardCase{name: "Glob/tilde root " + interpretation, tool: "Glob", want: covered, input: map[string]any{"folder": "~", "patterns": "../secret/*"}, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", c.files.GlobSecret}
+			if interpretation == "HOME" {
+				t.Setenv("HOME", c.files.GlobRoot)
+			} else if err := os.Symlink(c.files.GlobRoot, filepath.Join(c.files.Work, "~")); err != nil {
+				t.Fatal(err)
+			}
+		}})
+	}
+	for _, pattern := range []string{"*/../escape", "?/../escape", "[ab]/../escape", "{a,b}/../escape", `quoted\*/../escape`, `*/\.\./escape`, "{safe,../secret}/*", "{left/right,safe}/*", "{safe,..}/*", "{safe,~user}/*"} {
+		cases = append(cases, guardCase{name: "Glob/unbounded " + pattern, tool: "Glob", input: map[string]any{"patterns": pattern}, want: failed})
+	}
+
+	// SR-5.4: required bases and metadata failures must fail closed, without
+	// replacing real traversal with a decision stub.
+	for _, cwd := range []string{"", "relative"} {
+		for _, tool := range []string{"Read", "LS", "Grep", "Glob"} {
+			cases = append(cases, guardCase{name: "bases/" + tool + "/cwd " + cwd, tool: tool, want: failed, setup: func(t *testing.T, c *guardCall) {
+				c.envelope["cwd"] = cwd
+				if cwd == "" {
+					delete(c.envelope, "cwd")
+				}
+				fields := map[string]any{}
+				if tool == "Read" {
+					fields["file_path"] = "ordinary.txt"
+				}
+				c.envelope["tool_input"] = fields
+			}})
+		}
+	}
+	for _, home := range []string{"", "relative"} {
+		cases = append(cases, guardCase{name: "bases/tilde HOME " + home, tool: "Read", input: map[string]any{"file_path": "~/ordinary"}, want: failed, setup: func(t *testing.T, c *guardCall) {
+			if home == "" {
+				if err := os.Unsetenv("HOME"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Setenv("HOME", home)
+			}
+		}})
+	}
+	for _, fault := range []string{"target permission", "entry permission", "link read"} {
+		cases = append(cases, guardCase{name: "lookup/" + fault, tool: "Read", want: failed, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.SafeFile}
+			c.ctx = context.Background()
+			c.check = func(ctx context.Context, p payload, entries []string) reason {
+				r := newPathResolver(ctx)
+				if fault == "link read" {
+					r.readlink = func(path string) (string, error) {
+						if path == c.files.ListedLink {
+							return "", errors.New(marker)
+						}
+						return os.Readlink(path)
+					}
+				} else {
+					target := c.files.SafeFile
+					if fault == "entry permission" {
+						target = c.files.SecretDir
+					}
+					r.lstat = func(path string) (os.FileInfo, error) {
+						if path == target {
+							return nil, &os.PathError{Op: "lstat", Path: path, Err: os.ErrPermission}
+						}
+						return os.Lstat(path)
+					}
+				}
+				return decideFiles(p, entries, r)
+			}
+		}})
+	}
+	for _, suffix := range []string{"/child", "/../safe", "/"} {
+		cases = append(cases, guardCase{name: "lookup/nonfolder " + suffix, tool: "Read", input: map[string]any{"file_path": "ordinary.txt" + suffix}, want: failed})
+	}
+	for _, chain := range []bool{false, true} {
+		label := "loop"
+		if chain {
+			label = "excessive chain"
+		}
+		cases = append(cases, guardCase{name: "lookup/" + label, tool: "Read", input: map[string]any{"file_path": "link-0"}, want: failed, setup: func(t *testing.T, c *guardCall) {
+			count := 1
+			if chain {
+				count = 41
+			}
+			for i := 0; i < count; i++ {
+				target := "link-0"
+				if chain {
+					target = fmt.Sprintf("link-%d", i+1)
+					if i == count-1 {
+						target = c.files.SafeFile
+					}
+				}
+				if err := os.Symlink(target, filepath.Join(c.files.Work, fmt.Sprintf("link-%d", i))); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}})
+	}
+	cases = append(cases, guardCase{name: "unchecked/no eager path work", tool: "Task", setup: func(t *testing.T, c *guardCall) {
+		if err := os.Symlink("loop", filepath.Join(c.files.Work, "loop")); err != nil {
+			t.Fatal(err)
+		}
+		c.args = []string{"--", filepath.Join(c.files.Work, "loop")}
+		delete(c.envelope, "cwd")
+		if err := os.Unsetenv("HOME"); err != nil {
+			t.Fatal(err)
+		}
+		c.envelope["tool_input"] = map[string]any{"file_path": "~/loop"}
+	}})
+	for _, expires := range []bool{false, true} {
+		label, want := "healthy", Result{}
+		if expires {
+			label, want = "original deadline", failed
+		}
+		cases = append(cases, guardCase{name: "lookup/" + label, tool: "Read", want: want, setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"file_path": c.files.SafeFile}
+			gateGuardOperation(t, c, "lookup", expires)
+		}})
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := toolguardfix.New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", files.Home)
 			// Serial capture observes accidental output, including after expiry.
 			stdout, stderr := captureGuardOutput(t)
 			synctest.Test(t, func(t *testing.T) {
 				c := guardCall{
-					args: []string{"--", filepath.Join(home, "decoy-secret")},
+					files: files,
+					args:  append([]string{"--"}, files.Entries...),
 					envelope: map[string]any{
-						"hook_event_name": "PreToolUse", "tool_name": tc.tool, "tool_input": tc.input, "cwd": cwd,
+						"hook_event_name": "PreToolUse", "tool_name": tc.tool, "tool_input": tc.input, "cwd": files.Work,
 						"session_id": "decoy-session", "permission_mode": "auto-low",
 						// This path cannot be read; envelope metadata stays opaque.
-						"transcript_path": filepath.Join(home, "absent", "transcript.jsonl"),
+						"transcript_path": filepath.Join(files.Home, "absent", "transcript.jsonl"),
 						"future_metadata": map[string]any{"value": nil},
 					},
 					check: decide,
@@ -261,43 +599,54 @@ func TestGuardDecisions(t *testing.T) {
 				if tc.setup != nil {
 					tc.setup(t, &c)
 				}
-				if c.stdin == nil {
-					c.stdin = guardInput(t, c.envelope)
-				}
-				result := make(chan Result, 1)
-				go func() {
-					if c.ctx == nil {
-						result <- Run(c.args, c.stdin)
-					} else {
-						result <- run(c.ctx, c.args, c.stdin, c.check)
+				want := tc.want
+				for invocation := 0; ; invocation++ {
+					if c.stdin == nil {
+						c.stdin = guardInput(t, c.envelope)
 					}
-				}()
-				if c.started != nil {
-					<-c.started
-					if !c.expires {
+					result := make(chan Result, 1)
+					go func() {
+						if c.ctx == nil {
+							result <- Run(c.args, c.stdin)
+						} else {
+							result <- run(c.ctx, c.args, c.stdin, c.check)
+						}
+					}()
+					if c.started != nil {
+						<-c.started
+						if !c.expires {
+							c.release()
+						}
+					}
+					got := <-result
+					synctest.Wait()
+					assertGuardOutcome(t, got, want, stdout, stderr)
+					if c.expires {
+						if !c.deadline.IsZero() && !time.Now().Equal(c.deadline) {
+							t.Errorf("outcome at %v; want original deadline %v", time.Now(), c.deadline)
+						}
+						select {
+						case <-c.finished:
+							t.Error("operation finished before its deadline outcome")
+						default:
+						}
+						if c.ctx.Err() != context.DeadlineExceeded {
+							t.Errorf("context error = %v; want deadline exceeded", c.ctx.Err())
+						}
 						c.release()
 					}
-				}
-				got := <-result
-				synctest.Wait()
-				assertGuardOutcome(t, got, tc.want, stdout, stderr)
-				if c.expires {
-					select {
-					case <-c.finished:
-						t.Error("operation finished before its deadline outcome")
-					default:
+					if c.finished != nil {
+						<-c.finished
+						// Join the released worker, including its private publication.
+						// synctest also fails if any goroutine survives this test bubble.
+						synctest.Wait()
+						assertGuardOutcome(t, got, want, stdout, stderr)
 					}
-					if c.ctx.Err() != context.DeadlineExceeded {
-						t.Errorf("context error = %v; want deadline exceeded", c.ctx.Err())
+					if tc.next == nil || invocation != 0 {
+						break
 					}
-					c.release()
-				}
-				if c.finished != nil {
-					<-c.finished
-					// Join the released worker, including its private publication.
-					// synctest also fails if any goroutine survives this test bubble.
-					synctest.Wait()
-					assertGuardOutcome(t, got, tc.want, stdout, stderr)
+					want = tc.next(t, &c)
+					c.stdin = nil
 				}
 			})
 		})
@@ -317,7 +666,7 @@ func guardInput(t *testing.T, envelope map[string]any) io.Reader {
 	return strings.NewReader(string(b) + "\n \t")
 }
 
-// Hold a real input read or the injected rule until released. synctest advances
+// Hold an input read, metadata lookup or rule until released. synctest advances
 // the deadline only when the caller and operation are both causally blocked.
 func gateGuardOperation(t *testing.T, c *guardCall, stage string, expires bool) {
 	t.Helper()
@@ -340,6 +689,33 @@ func gateGuardOperation(t *testing.T, c *guardCall, stage string, expires bool) 
 			}
 			return input.Read(p)
 		})
+	} else if stage == "lookup" {
+		c.deadline, _ = ctx.Deadline()
+		// In the fake clock, input consumes three quarters of the original
+		// budget before metadata stalls. A renewed timeout would return late.
+		input := guardInput(t, c.envelope)
+		first := true
+		c.stdin = readFunc(func(p []byte) (int, error) {
+			if first {
+				first = false
+				<-time.After(3 * time.Second / 4)
+			}
+			return input.Read(p)
+		})
+		c.check = func(ctx context.Context, p payload, entries []string) reason {
+			defer close(finished)
+			r := newPathResolver(ctx)
+			held := false
+			r.lstat = func(path string) (os.FileInfo, error) {
+				if path == c.files.SafeFile && !held {
+					held = true
+					close(started)
+					<-release
+				}
+				return os.Lstat(path)
+			}
+			return decideFiles(p, entries, r)
+		}
 	} else {
 		c.check = func(ctx context.Context, p payload, entries []string) reason {
 			close(started)

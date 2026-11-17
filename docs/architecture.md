@@ -1652,7 +1652,7 @@ in `init`. The verb registry
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `internal/toolguard` | Reusable PreToolUse decision owner. `Run(args []string, stdin io.Reader) Result` returns the complete outcome; see [Guard decision boundary](#guard-decision-boundary-reusable-component) for its contract and mandatory reuse. | stdlib only (`context`, `encoding/json`, `io`, `path/filepath`, `time`). | Other internal packages; `pkg/api`; config/store, logging, network and output writers. |
+| `internal/toolguard` | Reusable PreToolUse decision owner. `Run(args []string, stdin io.Reader) Result` returns the complete outcome; see [Guard decision boundary](#guard-decision-boundary-reusable-component) for its contract and mandatory reuse. | stdlib only; filesystem metadata/links and HOME for path rules. | Other internal packages; `pkg/api`; config/store, logging, network and output writers. |
 | `internal/cursorenv` | Shared explicit Cursor selector validation and ambient-selection removal/runtime overlay. Future consumers MUST reuse its `Validate`, `Selectors`, `WithoutSelection` and `Runtime`; see [Cursor environment authority](#cursor-gateway-and-current-launch-binding). | stdlib only. | Store/config/native I/O; credential transport; other internal packages; `pkg/api`. |
 | `internal/cursorhost` | Fresh/latest-loaded owned Cursor ACP gateway, protected Linux lifetime, single pane input controller and synced protected transcripts; reuses `internal/cursormcp` for current-attempt guidance before publication/admission. See [Cursor gateway](#cursor-gateway-and-current-launch-binding). | stdlib; `internal/config`, `internal/layout`, `internal/store`, `internal/trail`, `internal/version`, `internal/tmux`, `internal/probe`, `internal/cursortranscript`; `golang.org/x/sys/unix`; `internal/cursorenv`; `internal/cursormcp` | `pkg/api`; `internal/mcp`; lifecycle screen classification. |
 | `internal/cursormcp` | Typed session-scoped ACP stdio registration, explicit protected routing scope and finite nonce observation. Gateway and scoped CLI serve MUST reuse its `New`, `Parse`, `Binding` and observation owners; routing is not permission or publication authority. | stdlib; `internal/store`. | `pkg/api`; `internal/cursorhost`; `internal/mcp`; native configuration/authentication access. |
@@ -1685,20 +1685,23 @@ This form must survive installed-executable upgrades because running launches
 keep invoking it. The Guard accepts exactly one PreToolUse JSON object on
 stdin. Its permitted inputs are argv, stdin, `HOME` and filesystem metadata
 and links; it reads no configuration, store or file contents, writes no files,
-trail records or logs, and makes no network calls. The current decisions need
-only argv and stdin; launch integration and path/Execute rules are not yet
-implemented.
+trail records or logs, and makes no network calls. Launch integration and
+Execute matching are not yet implemented.
 
 `internal/toolguard.Run` owns decoding, checked-tool field validation and
-decisions. It blocks AskUser with `this call is disabled`; valid checked
-inputs and unchecked tools receive no decision. Unchecked tool inputs are not
-schema-validated, and carried text is not scanned for paths.
+decisions. It blocks AskUser with `this call is disabled`. File Tools check
+resolved targets. ApplyPatch checks raw and provider-trimmed header targets;
+a target empty after trimming fails closed. Recursive searches also refuse
+roots that hold a Secret Path. Glob checks bounded literal prefixes; relative
+prefixes use its Search Root, and absolute prefixes keep their root. Other calls
+receive no decision. Unchecked tool inputs are not schema-validated, and carried
+text is not scanned for paths.
 
 No decision is exit 0 with empty stdout and stderr. A block is exit 2 with
 exactly one newline-terminated stderr line,
 `agent-director blocked this call: <reason>`. Reasons are fixed: `this call is disabled`,
 `agent-director could not check it`, and
-`this call accesses a protected path` (reserved for path rules). No input or path text reaches
+`this call accesses a protected path`. No input or path text reaches
 output. The Guard never writes stdout or JSON allow/ask/rewrite decisions,
 and never exits 1 or 3. Invalid arguments or input, read failures, internal
 failures (including panics) and deadline expiry fail closed with
@@ -1720,9 +1723,28 @@ duplicate decisions or decoding in cmd, hooks, spawn or clients. Extend
 `TestGuardDecisions` in `internal/toolguard/guard_test.go` through its shared
 setup/invocation/assertions and private causal deadline helpers.
 
+`pathResolver` in `paths.go` owns path forms and whole-component containment.
+It retains raw absolute candidates until both lexical-first and kernel-order
+link resolution finish, preserving missing suffixes and rejecting other lookup
+failures. Relative paths use their supplied base; tilde paths retain both literal
+and HOME interpretations. `secretForms` retains listed entries and recomputes
+their resolved forms per decision. **Must reuse:** all Guard path rules, including
+Execute, use this resolver and comparison under the original context. Search
+ancestry uses the same comparison in reverse; Darwin comparisons ignore case.
+
 The verb is non-callable in `pkg/api/manifest`: neither Go nor TypeScript
 exposes a callable client method. `internal/mcp.ExposedVerb` excludes it
 from both discovery and dispatch; see [Filtered verbs](#filtered-verbs).
+
+### toolguardfix: decoy paths (reusable test fixture)
+
+`internal/testsupport/toolguardfix.New` creates a decoy HOME, separate work and
+safe folders, linked and missing Secret Paths, and a Glob root with a secret
+sibling, beneath a supplied fresh absolute temporary root. Its `Layout` returns
+the entries and named paths, including an absent link for creation after entries
+are fixed. It is a leaf package with no runner or ambient HOME/cwd changes.
+**Must reuse:** Guard decision tests and sandbox transcripts use this constructor;
+callers own the temporary root, environment setup and cleanup.
 
 ### `[tmux]` timing settings
 

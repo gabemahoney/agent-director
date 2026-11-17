@@ -140,5 +140,9 @@ func decide(ctx context.Context, p payload, entries []string) reason {
 	if p.tool == "AskUser" {
 		return callDisabled
 	}
+	switch p.tool {
+	case "Read", "Create", "Edit", "ApplyPatch", "LS", "Grep", "Glob":
+		return decideFiles(p, entries, newPathResolver(ctx))
+	}
 	return noDecision
 }
