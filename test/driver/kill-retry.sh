@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reusable Docker testplan helper (b.69m). Source /opt/driver/kill-retry.sh,
-# then call kill_with_retry with kill's arguments. Only ErrTmuxKillFailed
-# grants retry authority; print every failed answer to stderr for diagnosis.
+# then call kill_with_retry with kill's arguments. ErrTmuxKillFailed and ErrTmuxUnresponsive
+# grant retry authority; print every failed answer to stderr for diagnosis.
 # Six attempts, with 1/2/4/8/8 s backoff (23 s total), give a slow agent
 # several times the observed ~5.2 s exit time before the case gives up.
 # Successful stdout and the final exit code belong to the last kill call.
@@ -18,7 +18,7 @@ kill_with_retry() {
         printf 'kill attempt %s/%s (exit %s):\n%s\n' "$attempt" "$max_attempts" "$rc" "$output" >&2
         # CLI errors are the last JSON line, after any diagnostic text.
         error_name="$(printf '%s\n' "$output" | awk '/^\{/{line=$0} END{print line}' | jq -r '.err_name // empty' 2>/dev/null)" || error_name=""
-        if [[ "$error_name" != ErrTmuxKillFailed || "$attempt" -ge "$max_attempts" ]]; then
+        if [[ ( "$error_name" != ErrTmuxKillFailed && "$error_name" != ErrTmuxUnresponsive ) || "$attempt" -ge "$max_attempts" ]]; then
             return "$rc"
         fi
         sleep "$delay" || return "$?"
