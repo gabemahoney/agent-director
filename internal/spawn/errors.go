@@ -175,3 +175,10 @@ var ErrHostCredentialMissing = errors.New("ErrHostCredentialMissing")
 // text, file content or the agent's output. Refusal writes none of
 // agent-director's launch resources: no row, session, trust entry or launch file.
 var ErrPermissionRulesRefused = errors.New("ErrPermissionRulesRefused")
+
+// ErrLaunchGuardRefused means the launch's required guard could not be checked.
+// It is a configuration error: retrying without an operator change gives the
+// same result. The description names only a problem kind and, where known, a
+// source line number, never file content, paths or child output. No row,
+// session, trust entry or launch file was written and nothing launched.
+var ErrLaunchGuardRefused = errors.New("ErrLaunchGuardRefused")

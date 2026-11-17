@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -88,7 +90,9 @@ func TestPaneOnlySpawnEnvironmentExclusion(t *testing.T) {
 				if err := os.WriteFile(stub, []byte(codexStubScript), 0700); err != nil {
 					t.Fatal(err)
 				}
-				f := newSpawnFix(t, "[experimental]\ndroid = true\nopencode = true\n[launch]\ndroid_path = "+strconv.Quote(stub)+"\nclaude_path = "+strconv.Quote(stub)+"\nopencode_path = "+strconv.Quote(stub)+"\n")
+				guard := droidfix.NewGuard(t)
+				t.Cleanup(spawn.SetDroidGuardProgramForTest(func() (string, error) { return guard.Path, nil }))
+				f := newSpawnFix(t, "[experimental]\ndroid = true\nopencode = true\n[launch]\ndroid_path = "+strconv.Quote(stub)+"\nclaude_path = "+strconv.Quote(stub)+"\nopencode_path = "+strconv.Quote(stub)+"\n"+guard.ConfigLine())
 				if warm {
 					f.startSession(t, "")
 				}

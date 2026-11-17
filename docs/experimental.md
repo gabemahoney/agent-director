@@ -11,8 +11,8 @@ so a supervisor reads everything from each agent's pane.
 
 - `droid` 1.5.0 with auto-update disabled, signed in through a Factory
   subscription (no API key or BYOK). For executable selection, see
-  [`droid_path`](#keys). Repeat the live startup, model, prompt, input and quit
-  checks before using another version.
+  [`droid_path`](#keys). Before using another version, repeat the live Guard
+  compatibility check and the startup, model, prompt, input and quit checks.
 - For OpenCode's pin and host-key setup, see [Supervising OpenCode](#supervising-opencode).
 - `install.sh` neither discovers nor counts these agents; the install still needs one
   of the agents in [Requirements](install.md#requirements).
@@ -30,6 +30,7 @@ opencode = true
 |---|---|---|---|
 | `[launch] droid_path` | executable name, absolute path or `~/` path | unset | The program a Droid spawn or finished-ID reuse runs; empty or unset selects `droid`. With no Rule Set, bare names use the tmux server's `PATH`, without an advance check. For rules-configured resolution, see [Droid rules](#droid-rules). Paths follow the other launch keys' expansion and refusals; a set value is one executable, without shell parsing or fallback. Follows the [configuration reload rules](configuration.md#when-a-change-takes-effect). |
 | `[launch] droid_rules_path` | absolute path or `~/` path | unset | Operator's Rule Set File; empty or unset means no rules. Loading validates the path without reading the file; malformed values give `ErrConfigMalformed`. See [Droid rules](#droid-rules) for reloads, file reads and caller limits. |
+| `[launch] droid_secret_paths_file` | absolute path or `~/` path | unset | Operator's Path List File; empty or unset refuses Droid launches. Loading validates and expands the path without opening the file; malformed values give `ErrConfigMalformed`. See [Droid secret paths](#droid-secret-paths) for content, refusals and reloads. |
 | `[experimental] droid` | `true`, `false` | `false` | Enables Droid spawn, finished-ID reuse into Droid and Droid template creation. Reads, `kill`, `sweep`/`find-missing` and `expire` never consult it. |
 | `[launch] opencode_path` | executable name, absolute path or `~/` path | unset | The program an OpenCode spawn or finished-ID reuse runs. Empty or unset runs `opencode` from the tmux server's `PATH`; a bare name also uses that `PATH`. Paths follow the other launch keys' expansion and refusals. A set value is one executable, without shell parsing, fallback or an advance check. Applies at the next launch. |
 | `[experimental] opencode` | `true`, `false` | `false` | Enables OpenCode spawn, finished-ID reuse into OpenCode and OpenCode template creation, independently of `droid`. Reads, `kill`, `sweep`/`find-missing` and `expire` never consult it. |
@@ -42,9 +43,10 @@ switch off, its launches and templates are refused with
 
 ## Supervising Droid
 
-Launch with exactly one model ID and no task. The pane shows a model display
-name, not the ID: `droid exec --help` maps the current canonical IDs to their
-display names.
+First configure [Droid secret paths](#droid-secret-paths) and check its operator
+prerequisites. Launch with exactly one model ID and no task. The pane shows a
+model display name, not the ID: `droid exec --help` maps the current canonical
+IDs to their display names.
 
 Droid's generated settings require user-owned directories from `~/.config`
 down, with no group or other write permission; `agent-director/launch` and
@@ -117,7 +119,114 @@ relay, structured questions, context, subagent and spend readings.
 effect. The primary model does not pin native side calls, compaction or
 subagents, whose model and spend stay outside accounting. The operator remains
 responsible for the development network's approved-code, data and spending
-rules; the lane does not isolate Droid or prevent reads or disclosure.
+rules. The lane blocks Secret Paths and AskUser as [Droid secret paths](#droid-secret-paths)
+describes; it otherwise does not isolate Droid.
+
+## Droid secret paths
+
+Every Droid spawn and finished-ID reuse requires an operator's Path List and
+a working Guard. Set `droid_secret_paths_file = "/opt/example/secret-paths.txt"`
+under `[launch]` in agent-director's configuration.
+
+The file must be readable, regular, UTF-8 and at most 1 MiB, with at least one
+entry. Each entry is an absolute or `~/` path, without surrounding whitespace
+or control characters. Blank lines and lines starting with `#` are skipped:
+
+```text
+# Example protected paths
+/opt/example/private
+~/example-private
+```
+
+Agent-director requires a usable absolute HOME, expands `~/` against it and
+cleans `.` and `..` lexically. Launch checks read the list, not the paths it
+names. Consider including agent-director's install folder: the worker account
+can rewrite its executable.
+
+Before use, check both prerequisites: no organisation policy sets
+`hooksDisabled` or `allowManagedHooksOnly`, and no other Droid hook rewrites
+tool input, whether supplied by the user, project, folder, plugin or organisation.
+
+After setting, changing or clearing the key, **restart a running MCP server**.
+A Go Client takes the key at construction; CLI and TypeScript calls take it on
+their next call ([configuration reload rules](configuration.md#when-a-change-takes-effect)).
+The file's contents are read afresh at every Droid spawn and finished-ID reuse,
+including through an existing Client or MCP server. File edits therefore apply
+at the next launch. Reads, templates, cleanup and other agents never read it.
+Running sessions keep their launch's settings; sessions started before the
+Guard was added remain unguarded. Finished-ID reuse always gets the current
+Guard and list, including reuse of an older row.
+
+The Guard and expanded list belong to the launch's private overlay, alongside
+the model and any [Droid rules](#droid-rules). Autonomy remains Low and no native
+settings are written. A plain Droid started without that overlay has no Guard.
+
+**Blocked calls.** A protected path is a listed path or anything inside it:
+
+- Read, Create and Edit check the target path. ApplyPatch checks every add,
+  update, delete and move header target, not the patch body.
+- LS cannot list inside a protected folder, but may show its name when listing
+  the parent. Grep and Glob block the whole search if its root reaches or
+  contains a protected path; an omitted root uses the working folder. Glob
+  also checks each pattern's literal folder before its first wildcard. Relative
+  patterns start at the search root, absolute ones keep their own root, and
+  patterns whose reach cannot be bounded are blocked. Searches are never narrowed.
+- Execute blocks literal mentions of a protected path, even in text a command
+  would only print: its full listed or resolved path, or `~/…`, `$HOME/…` and
+  `${HOME}/…` for paths under HOME. A name must be delimited, so
+  `~/example-private/file` and `~/example-private*` match, but
+  `~/example-private-copy` does not. It does not interpret shell code.
+- AskUser is always blocked, independently of `disable_ask_user`. Task itself
+  receives no Guard decision; its subagent's tool calls get the same Guard.
+
+File paths may be absolute or relative to the call's working folder. `~` and
+`~/` are checked both literally relative to that folder and expanded against
+HOME. Checks cover both lexical cleaning and link traversal with `..`, follow
+the existing prefix of a nonexistent target, and resolve listed links anew on
+each call. Comparisons ignore case on macOS. Text merely carried by Create,
+Edit or a patch, Grep's search/filter text and Glob's exclusion patterns is
+not scanned for paths.
+
+A block displays `agent-director blocked this call: <reason>`, with a fixed
+reason and no path or input content. The call fails and the session continues.
+The Guard only blocks: it adds no allow, ask or input rewrite. Unblocked calls
+retain all other controls; a Guard block wins over a Rule Set allow. Invalid
+input, decision errors and the Guard's own deadline failures block the call.
+
+**Launch refusals.** `ErrLaunchGuardRefused` is an operator/configuration
+refusal. It covers an unset list, an unreadable, nonregular, oversized or
+non-UTF-8 file, no entries, an invalid entry or unusable HOME, an unavailable
+Guard program or `sh`, an overlong command, or a failed or timed-out self-check.
+The complete command must be shorter than 128 KiB to leave room for its
+terminating NUL. Before launch, agent-director checks that command through
+`sh` on its own PATH; wrong statuses, output-bound failures and incomplete
+process cleanup refuse it. Repair the list or the installed program/shell
+dependency, then retry. If cleanup failed, stop the leftover check processes
+before retrying.
+
+The refusal names a problem kind and, for an invalid entry, its source line;
+it never echoes entries, file contents or check output. It writes no row,
+session, trust entry or launch file and launches nothing. Refused reuse keeps
+the prior records and files. Tmux's shared socket directory may already exist
+and is outside this guarantee. Later launch-file I/O failures retain their
+existing error and rollback behavior.
+
+**Limits.** This is not an operating-system boundary:
+
+- Execute can still reach protected paths through partial globs such as
+  `~/example-pr*/file`, other variables, `cd` followed by relative paths, or
+  strings generated or encoded at run time. Scripts and programs can open
+  files themselves, including a nested agent started by the worker.
+- MCP/plugin tools and unchecked native features are outside the path checks,
+  including Script's own code, FetchUrl, missions, automations and custom droids.
+- Hard links are not covered. A symbolic link can change between check and use.
+- Input-rewriting hooks or organisation policy can defeat the Guard. If the
+  hook cannot run for Droid's whole 60-second timeout, Droid can fail open;
+  this outer timeout remains a limit despite the Guard's own blocking deadline.
+  Rewriting agent-director's executable also weakens the Guard.
+- Changes outside listed paths, including agent-director's configuration and
+  native settings, can affect later launches. Reading or disclosing anything
+  outside the list remains possible.
 
 ## Droid rules
 
@@ -198,9 +307,8 @@ cleanup fails, the error says so. Stop any check processes reported as left
 running, and remove only the failed check's `agent-director-droid-rules-*`
 temporary directory before retrying.
 
-Agent-director keeps Droid's Low autonomy and writes no `~/.factory` settings.
-The rules belong only to the launch's private overlay; a Droid started without
-it has none of them. Give workers the exact **Covered Spellings** that match
+The rules share the [Guard's private launch overlay](#droid-secret-paths).
+Give workers the exact **Covered Spellings** that match
 the operator's allow rules, each alone or piped into `tail` or `head`, without
 redirects. Relative or `./` spellings, `bash` prefixes, leading assignments,
 and pipelines containing an uncovered command gain no allow. No other chain
@@ -212,14 +320,14 @@ Keep these limits in mind:
 - Only Covered Spellings gain an allow, with unrestricted trailing arguments.
   Other rules, safeguards or hooks can still ask or block. Uncovered commands
   keep Low's native decision and can sometimes run without asking.
-- At Low, the worker can edit non-system files without asking, including
-  agent-director's configuration and listed wrappers; these remain trusted.
+- At Low, the worker can edit non-system files outside protected paths without
+  asking, including unprotected configuration and listed wrappers.
   Project or user Droid rules can still add allows. Wrapper checks can race
   their runs: a test file can be swapped
   after checking, or repository settings can add a git filter or text-conversion
   program after a read-only wrapper checks them.
-- Shell rules do not protect secret paths from Droid's native read/edit
-  tools. Shell reads keep Low's decision, and AskUser remains available.
+- Shell Rule Sets alone provide no path protection; the separate
+  [Guard](#droid-secret-paths) supplies path checks and the AskUser block.
 - Block rules cover listed spellings only, not alternate invocations of the
   same program. Matching uses whole tokens: `pkill tmux` does not cover
   `pkill tmuxd`, nor `git clean` a `git cleanup` alias or external command.
@@ -386,6 +494,8 @@ template is written.
 - `ErrAgentCapabilityUnsupported`: explicit or template-inherited
   `relay_mode: "on"`. Omitted relay is `off` whatever the global default.
 - `ErrPermissionsUnsupported`: any `allow`, `deny` or `ask` entry.
+- `ErrLaunchGuardRefused`: the [Droid launch Guard](#droid-secret-paths)
+  could not be set up or checked.
 - `ErrPermissionRulesRefused`: the operator's [Droid Rule Set](#droid-rules)
   or its native check was refused.
 - `ErrReservedEnvKey`: Droid `extra_env` holds `FACTORY_API_KEY`,
@@ -404,8 +514,9 @@ matching error classes.
 This applies to Droid; OpenCode launches write no launch files.
 
 `~/.config/agent-director/launch/<store_id>/<launch_token>/` holds a launch's
-private `droid-settings.json` overlay: the requested model ID and optional
-checked Rule Set, with no credentials. The warning `retained launch files may
+private `droid-settings.json` overlay: the requested model ID, optional
+checked Rule Set, Guard and expanded Path List, with no credentials.
+The warning `retained launch files may
 be unreachable after failed reuse` means a failed attempt's files were kept because its launch may
 still run; its `store_id`, `launch_token`, `row_state` and `owning_path`
 identify it, and ordinary cleanup may never reach it.

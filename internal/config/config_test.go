@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -46,6 +47,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Launch.OpenCodePath", d.Launch.OpenCodePath, ""},
 		{"Launch.DroidPath", d.Launch.DroidPath, ""},
 		{"Launch.DroidRulesPath", d.Launch.DroidRulesPath, ""},
+		{"Launch.DroidSecretPathsFile", d.Launch.DroidSecretPathsFile, ""},
 		{"Defaults.RelayMode", d.Defaults.RelayMode, "off"},
 		{"Defaults.ExpireRetentionDays", d.Defaults.ExpireRetentionDays, 31},
 		{"Defaults.DisableAskUser", d.Defaults.DisableAskUser, false},
@@ -127,6 +129,13 @@ func TestLoadKeepsDefaults(t *testing.T) {
 			func(c *config.Config) { c.Launch.DroidRulesPath = filepath.Join(home, "rules.json") }},
 		{"rules case variant", makeConfigFile(t, "[LAUNCH]\nDROID_RULES_PATH = \"/rules.json\"\n"),
 			func(c *config.Config) { c.Launch.DroidRulesPath = "/rules.json" }},
+		{"secret paths empty", makeConfigFile(t, "[launch]\ndroid_secret_paths_file = \"\"\n"), func(*config.Config) {}},
+		{"secret paths absolute", makeConfigFile(t, "[launch]\ndroid_secret_paths_file = \"/opt/my lists/paths.txt\"\n"),
+			func(c *config.Config) { c.Launch.DroidSecretPathsFile = "/opt/my lists/paths.txt" }},
+		{"secret paths tilde", makeConfigFile(t, "[launch]\ndroid_secret_paths_file = \"~/paths.txt\"\n"),
+			func(c *config.Config) { c.Launch.DroidSecretPathsFile = filepath.Join(home, "paths.txt") }},
+		{"secret paths case variant", makeConfigFile(t, "[LAUNCH]\nDROID_SECRET_PATHS_FILE = \"/paths.txt\"\n"),
+			func(c *config.Config) { c.Launch.DroidSecretPathsFile = "/paths.txt" }},
 		{"opencode opt-in", makeConfigFile(t, "[experimental]\nopencode = true\n"), func(c *config.Config) { c.Experimental.OpenCode = true }},
 		{"claude_path absolute", makeConfigFile(t, "[launch]\nclaude_path = \"/opt/bin/claude\"\n"),
 			func(c *config.Config) { c.Launch.ClaudePath = "/opt/bin/claude" }},
@@ -342,21 +351,27 @@ func TestPaneOnlyLaunchPaths(t *testing.T) {
 	}
 }
 
-// Load validates syntax only, even when the target cannot be a Rule Set.
+// Load validates syntax only, even when neither launch file can be read.
 func TestDroidRulesLoadDoesNotReadTarget(t *testing.T) {
 	root := t.TempDir()
 	unreadable := filepath.Join(root, "unreadable.json")
 	if err := os.WriteFile(unreadable, []byte("not JSON"), 0); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{filepath.Join(root, "missing.json"), root, unreadable} {
+	fifo := filepath.Join(root, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// No FIFO writer: an accidental blocking open fails the test run's timeout.
+	for _, path := range []string{filepath.Join(root, "missing.json"), root, unreadable, fifo} {
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			cfg, err := config.Load(makeConfigFile(t, "[launch]\ndroid_rules_path = "+quoted(path)+"\n"))
+			cfg, err := config.Load(makeConfigFile(t, "[launch]\ndroid_rules_path = "+quoted(path)+"\ndroid_secret_paths_file = "+quoted(path)+"\n"))
 			if err != nil {
 				t.Fatalf("syntax-only Load failed: %v", err)
 			}
-			if cfg.Launch.DroidRulesPath != path {
-				t.Fatalf("syntax-only Load = %q; want %q", cfg.Launch.DroidRulesPath, path)
+			want := config.Launch{DroidRulesPath: path, DroidSecretPathsFile: path}
+			if cfg.Launch != want {
+				t.Fatalf("syntax-only Load = %+v; want %+v", cfg.Launch, want)
 			}
 		})
 	}

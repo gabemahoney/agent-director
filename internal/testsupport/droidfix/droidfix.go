@@ -121,7 +121,7 @@ type Call struct {
 	Args              []string          // the arguments after the program
 	Env               map[string]string // its environment
 	File              string            // its --file argument; "" when none
-	Input             []byte            // that file's content as the call read it
+	Input             []byte            // checked file bytes, or recorded stdin when File is empty
 	FileMode, DirMode os.FileMode       // the permission bits of that file and its directory
 }
 
@@ -141,7 +141,7 @@ func (p *Program) Calls(t *testing.T) []Call {
 			t.Fatal(err)
 		}
 		args := strings.Split(strings.TrimSuffix(string(read(t, dir, "args")), "\n"), "\n")
-		c := Call{Args: args, Env: ReadEnv(t, filepath.Join(dir, "env"))}
+		c := Call{Args: args, Env: ReadEnv(t, filepath.Join(dir, "env")), Input: read(t, dir, "input")}
 		if file := read(t, dir, "file"); file != nil {
 			c.File, c.Input = string(file), read(t, dir, "input")
 			c.FileMode, c.DirMode = perm(read(t, dir, "file-mode")), perm(read(t, dir, "dir-mode"))

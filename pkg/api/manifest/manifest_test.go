@@ -624,7 +624,7 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey", "ErrInvalidFlags", "ErrInstanceIdCollision",
 		"ErrTmuxSessionNameInvalid", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate", "ErrTmuxUnresponsive", "ErrTmuxSessionConflict",
 		"ErrAgentMissing", "ErrAgentInvalid", "ErrAgentArgsMismatch", "ErrPermissionsUnsupported", "ErrTemplateAgentMissing",
-		"ErrExperimentalAgentDisabled", "ErrModelMissing", "ErrAgentCapabilityUnsupported", "ErrHostCredentialMissing", "ErrPermissionRulesRefused")
+		"ErrExperimentalAgentDisabled", "ErrModelMissing", "ErrAgentCapabilityUnsupported", "ErrHostCredentialMissing", "ErrPermissionRulesRefused", "ErrLaunchGuardRefused")
 	conflict := goDocErrorBulletText(t, "Spawn", "ErrTmuxSessionConflict")
 	for _, phrase := range []string{`after "duplicate session"`, "the new row is ended"} {
 		if !strings.Contains(conflict, phrase) {

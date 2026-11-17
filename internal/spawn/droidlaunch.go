@@ -82,21 +82,41 @@ func droidProgram(cfg config.Config) string {
 	return "droid"
 }
 
-// droidOverlay is the one owner of the Droid overlay's keys (SR-3.1): the
-// explicit model and, with a checked Rule Set, permissionRules. Another key
-// needs its own amendment and is added here. With no Rule Set the bytes are
-// the model-only overlay's.
+// droidOverlay is the one owner of the Droid overlay's keys (b.s8e SR-3):
+// model, optional checked permissionRules, then the required Guard hooks.
+// This amends b.7tx SR-2.3 and b.i4t SR-3.1: no credentials, caller-controlled
+// settings, autonomy, sandbox, other hooks or permission bypass.
 type droidOverlay struct {
 	Model string `json:"model"`
 	// PermissionRules is Resolved.DroidRules as checked; encoding a compact
 	// json.Marshal output again leaves its bytes unchanged.
 	PermissionRules json.RawMessage `json:"permissionRules,omitempty"`
+	Hooks           droidGuardHooks `json:"hooks"`
+}
+
+type droidGuardHooks struct {
+	HooksDisabled bool                `json:"hooksDisabled"`
+	PreToolUse    []droidGuardMatcher `json:"PreToolUse"`
+}
+
+type droidGuardMatcher struct {
+	Matcher string           `json:"matcher"`
+	Hooks   []droidGuardHook `json:"hooks"`
+}
+
+type droidGuardHook struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+	Timeout int    `json:"timeout"`
 }
 
 // composeDroid describes the overlay and argv without I/O; the launch's
-// ResolveDroidRules step supplied any checked rules and the program that
-// checked them.
+// ResolveDroidGuard step supplied the checked command, and ResolveDroidRules
+// supplied any checked rules and the program that checked them.
 func composeDroid(r Resolved, program string) ([]string, []LaunchFile, error) {
+	if r.droidGuard == nil || len(r.droidGuard.entries) == 0 || r.droidGuard.command == "" {
+		return nil, nil, droidGuardRefusal(0, guardUnchecked)
+	}
 	model, err := DroidModel(r.AgentArgs, true)
 	if err != nil {
 		return nil, nil, err
@@ -105,7 +125,20 @@ func composeDroid(r Resolved, program string) ([]string, []LaunchFile, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	content, err := json.Marshal(droidOverlay{Model: model, PermissionRules: r.DroidRules})
+	content, err := json.Marshal(droidOverlay{
+		Model:           model,
+		PermissionRules: r.DroidRules,
+		Hooks: droidGuardHooks{
+			HooksDisabled: false,
+			PreToolUse: []droidGuardMatcher{{
+				Matcher: "*",
+				Hooks: []droidGuardHook{{
+					Type: "command", Command: r.droidGuard.command,
+					Timeout: 60, // Droid's documented default; the Guard bounds its own work below it.
+				}},
+			}},
+		},
+	})
 	if err != nil {
 		return nil, nil, err
 	}

@@ -16,6 +16,45 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
+func TestEnvelopeParityDroidGuardRefusal(t *testing.T) {
+	for _, reuse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "spawn", true: "reuse"}[reuse], func(t *testing.T) {
+			home, id, _ := seedRowOnSocket(t, "ended", apitest.WithAgent("droid"))
+			before := rowColumns(t, home, id)
+			apitest.SeedErrLaunchGuardRefused(t, directorDir(home))
+			args := []string{"spawn", "--agent", "droid", "--cwd", home}
+			params := map[string]any{"agent": "droid", "cwd": home, "agent_args": []string{"--model", "model"}}
+			if reuse {
+				args = append(args, "--instance-id", id, "--reuse-finished")
+				params["instance_id"], params["reuse_finished"] = id, true
+			}
+			args = append(args, "--", "--model", "model")
+			srv := startServe(t, home)
+			t.Cleanup(srv.kill)
+			srv.initialize(t)
+			stdout, stderr, code := runCLIWithHome(t, home, args...)
+			cli := assertOnlyEnvelope(t, stdout, stderr, code, "ErrLaunchGuardRefused")
+			mcp := srv.callTool(t, "spawn", jsonOf(t, params))
+			const want = "Droid launch Guard refused: line 3: the entry is not an absolute or ~/ path; an operator must fix the Path List File named by [launch] droid_secret_paths_file or the Guard installation and environment (see docs/experimental.md#droid-secret-paths); no row, session, trust entry or launch file was written and nothing was launched"
+			if cli.ErrDescription != want || mcp.Error == nil || mcp.Error.Data.ErrName != cli.ErrName || errnames.TrimNamePrefix(mcp.Error.Data.ErrName, mcp.Error.Message) != want {
+				t.Fatalf("CLI=%+v MCP=%+v; want %q", cli, mcp.Error, want)
+			}
+			if !reflect.DeepEqual(rowColumns(t, home, id), before) {
+				t.Fatal("refusal changed the old row")
+			}
+			if ids := srv.callToolOK(t, "list", `{}`); strings.Count(ids, `"instance_id"`) != 1 {
+				t.Fatalf("refusal created a row: %s", ids)
+			}
+			for _, rel := range []string{"launch", "templates"} {
+				if _, err := os.Stat(filepath.Join(directorDir(home), rel)); !os.IsNotExist(err) {
+					t.Fatalf("refusal created %s: %v", rel, err)
+				}
+			}
+			srv.stop(t)
+		})
+	}
+}
+
 func TestEnvelopeParityDroidRulesRefusal(t *testing.T) {
 	for _, reuse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "spawn", true: "reuse"}[reuse], func(t *testing.T) {
@@ -182,7 +221,7 @@ func TestEnvelopeDroidRulesConfigLifetime(t *testing.T) {
 	if refreshed.Error == nil || refreshed.Error.Data.ErrName != "ErrPermissionRulesRefused" || !strings.Contains(refreshed.Error.Message, "the file is not a rules object:") {
 		t.Fatalf("file edit not observed: %+v", refreshed.Error)
 	}
-	content := fmt.Sprintf("[experimental]\ndroid = true\n[launch]\ndroid_rules_path = %q\n", filepath.Join(home, "missing.json"))
+	content := fmt.Sprintf("[experimental]\ndroid = true\n[launch]\ndroid_rules_path = %q\n", filepath.Join(home, "missing.json")) + droidfix.NewGuard(t).ConfigLine()
 	if err := os.WriteFile(filepath.Join(directorDir(home), "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -42,6 +43,18 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 					t.Fatal(err)
 				}
 				r.LaunchStoreID, r.LaunchToken = "store", "token"
+				guard := droidfix.NewGuard(t)
+				cfg.Launch.DroidSecretPathsFile = guard.List
+				t.Cleanup(SetDroidGuardProgramForTest(func() (string, error) { return guard.Path, nil }))
+				if agent == "droid" {
+					if _, err := ComposeLaunch(r, cfg); !errors.Is(err, ErrLaunchGuardRefused) {
+						t.Fatalf("unchecked compose: %v", err)
+					}
+				}
+				r, err = ResolveDroidGuard(r, cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
 				// With no Rule Set configured the Rule Set step reads and runs
 				// nothing (droid_path names no program) and changes nothing.
 				if checked, err := ResolveDroidRules(r, cfg); err != nil || !reflect.DeepEqual(checked, r) {
@@ -53,7 +66,7 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 				}
 				if agent == "droid" {
 					path := filepath.Join(home, ".config", "agent-director", "launch", "store", "token", "droid-settings.json")
-					if !reflect.DeepEqual(c.Create.Command, []string{cfg.Launch.DroidPath, "--settings", path}) || !reflect.DeepEqual(c.Files, []LaunchFile{{Path: path, Content: []byte(`{"model":"ordinary-custom-model"}`)}}) {
+					if !reflect.DeepEqual(c.Create.Command, []string{cfg.Launch.DroidPath, "--settings", path}) || !reflect.DeepEqual(c.Files, []LaunchFile{{Path: path, Content: []byte(`{"model":"ordinary-custom-model",` + guardHooksJSON(r.droidGuard.command) + `}`)}}) {
 						t.Fatalf("composition: command=%q files=%+v", c.Create.Command, c.Files)
 					}
 					keys := []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE"}
@@ -65,8 +78,8 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 					if !slices.Equal(c.Create.ExcludeEnv, keys) || !slices.Equal(unsets, keys) || len(c.Create.ForwardEnv) != 0 {
 						t.Fatalf("Droid environment policy: %+v", c.Create)
 					}
-					// With a Rule Set, the overlay is {model, permissionRules} holding
-					// exactly the bytes Droid's check received, IDs under this
+					// With a Rule Set, the overlay is {model, permissionRules, hooks}.
+					// permissionRules holds the bytes Droid's check received, IDs under this
 					// launch's token; the launch runs the program that checked them,
 					// and nothing else in the create changes.
 					fake := droidfix.New(t, droidfix.Pass)
@@ -87,7 +100,7 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 					}
 					want := c.Create
 					want.Command = []string{fake.Path, "--settings", path}
-					if !reflect.DeepEqual(rc.Create, want) || !reflect.DeepEqual(rc.Files, []LaunchFile{{Path: path, Content: []byte(`{"model":"ordinary-custom-model","permissionRules":` + input + `}`)}}) {
+					if !reflect.DeepEqual(rc.Create, want) || !reflect.DeepEqual(rc.Files, []LaunchFile{{Path: path, Content: []byte(`{"model":"ordinary-custom-model","permissionRules":` + input + `,` + guardHooksJSON(r.droidGuard.command) + `}`)}}) {
 						t.Fatalf("composition with a Rule Set: create=%+v files=%+v", rc.Create, rc.Files)
 					}
 				} else {
@@ -127,4 +140,10 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 			}
 		})
 	}
+}
+
+// guardHooksJSON is the independently specified overlay contract, not its encoder.
+func guardHooksJSON(command string) string {
+	quoted, _ := json.Marshal(command)
+	return `"hooks":{"hooksDisabled":false,"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":` + string(quoted) + `,"timeout":60}]}]}`
 }

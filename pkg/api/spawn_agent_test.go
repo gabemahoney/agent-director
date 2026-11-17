@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -69,7 +70,7 @@ func TestPaneOnlyDisabledWritesNothing(t *testing.T) {
 		for _, operation := range []string{"spawn", "reuse", "make-template"} {
 			t.Run(agent+"/"+operation, func(t *testing.T) {
 				e := newSpawnEnv(t)
-				c := agentClientWithConfig(t, e, droidRulesConfig(filepath.Join(t.TempDir(), "missing-rules.json"), ""))
+				c := agentClientWithConfig(t, e, droidRulesConfig(t, filepath.Join(t.TempDir(), "missing-rules.json"), ""))
 				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: []string{"--model", "model"}}
 				if operation == "reuse" {
 					p.InstanceID, _ = seedFinishedRow(t, e.dbPath, store.StateEnded)
@@ -100,7 +101,12 @@ func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 			t.Setenv("OPENROUTER_API_KEY", "synthetic-api-key")
 			fake := droidfix.New(t, droidfix.Pass)
 			rulesPath := filepath.Join(t.TempDir(), "rules.json")
-			c := agentClientWithConfig(t, e, droidRulesConfig(rulesPath, fake.Path, agent)+"[defaults]\nrelay_mode = \"on\"\n")
+			guard := passingDroidGuard(t)
+			if err := os.Remove(guard.List); err != nil {
+				t.Fatal(err)
+			}
+			body := fmt.Sprintf("[experimental]\n%s = true\n[launch]\ndroid_path = %q\ndroid_rules_path = %q\n", agent, fake.Path, rulesPath) + guard.ConfigLine()
+			c := agentClientWithConfig(t, e, body+"[defaults]\nrelay_mode = \"on\"\n")
 			if _, err := c.MakeTemplate(api.MakeTemplateParams{Name: "lane", Agent: agent}); err != nil {
 				t.Fatal(err)
 			}
@@ -132,6 +138,9 @@ func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 			if err := os.WriteFile(rulesPath, []byte(droidfix.RuleSet("tail")), 0600); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.WriteFile(guard.List, []byte("/invented/vault\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			res, err := c.Spawn(p)
 			if err != nil || res.PreTrust != "skipped" {
 				t.Fatalf("Spawn=%+v, %v", res, err)
@@ -144,6 +153,9 @@ func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 				t.Fatalf("stored request=%+v", row)
 			}
 			if err := os.Remove(rulesPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(guard.List); err != nil {
 				t.Fatal(err)
 			}
 			// Inspection stays available to the original client, its flag off,
@@ -217,7 +229,7 @@ func agentClientWithConfig(t *testing.T, env spawnEnv, body string) *api.Client 
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	c, err := api.New(api.Options{StorePath: env.dbPath, ConfigPath: cfgPath, TmuxClient: env.rec})
+	c, err := api.New(api.Options{StorePath: env.dbPath, ConfigPath: cfgPath, TmuxClient: env.rec, Logger: log.New(env.logs, "", 0)})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
@@ -385,7 +397,7 @@ func TestSpawnRecordsResolvedAgent(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newSpawnEnv(t)
-			c := agentClientWithConfig(t, env, droidRulesConfig(refusedRulesFile(t), ""))
+			c := agentClientWithConfig(t, env, droidRulesConfig(t, refusedRulesFile(t), ""))
 			p := api.SpawnParams{Agent: tc.agent, CWD: t.TempDir(), NoPreTrust: true}
 			if tc.tmpl != nil {
 				seedAgentTemplate(t, env, *tc.tmpl)
@@ -810,7 +822,7 @@ func TestOpenCodeMissingHostKeyWritesNothing(t *testing.T) {
 			if err := os.Unsetenv("OPENROUTER_API_KEY"); err != nil {
 				t.Fatal(err)
 			}
-			c := agentClientWithConfig(t, e, "[experimental]\ndroid = true\n")
+			c := agentClientWithConfig(t, e, droidRulesConfig(t, "", "", "droid"))
 			if _, err := c.Spawn(api.SpawnParams{Agent: agent, CWD: t.TempDir(), NoPreTrust: true, AgentArgs: paneOnlyArgs(agent, "model")}); err != nil {
 				t.Fatal(err)
 			}
@@ -827,7 +839,7 @@ func TestOpenCodeRecomposesWithoutSavingHostKey(t *testing.T) {
 	const secret = "synthetic-host-key-uc-distinctive-47b91"
 	t.Setenv("OPENROUTER_API_KEY", secret)
 	e := newKillEnv(t)
-	c, _ := e.configClient(t, droidRulesConfig(refusedRulesFile(t), "", "opencode"))
+	c, _ := e.configClient(t, droidRulesConfig(t, refusedRulesFile(t), "", "opencode"))
 	caller := map[string]string{"CALLER_TAG": "kept", "OPENCODE_DISABLE_AUTOUPDATE": "0"}
 	p := api.SpawnParams{Agent: "opencode", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("opencode", "model"), ExtraEnv: caller}
 	var first store.Spawn

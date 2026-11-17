@@ -57,6 +57,7 @@ Launch a tracked agent in tmux. Returns the instance_id and pre_trust (ok, skipp
 - `ErrModelMissing`
 - `ErrHostCredentialMissing`
 - `ErrPermissionRulesRefused`
+- `ErrLaunchGuardRefused`
 - `ErrAgentMissing`
 - `ErrAgentInvalid`
 - `ErrAgentArgsMismatch`

@@ -407,6 +407,13 @@ func TestDroidRuleSetCheckEnvironment(t *testing.T) {
 				r.ExtraEnv[key] = "supplied-" + plantedValue
 			}
 			r.LaunchStoreID, r.LaunchToken = "store", rulesToken
+			guard := droidfix.NewGuard(t)
+			cfg.Launch.DroidSecretPathsFile = guard.List
+			t.Cleanup(SetDroidGuardProgramForTest(func() (string, error) { return guard.Path, nil }))
+			r, err = ResolveDroidGuard(r, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
 			checked, err := ResolveDroidRules(r, cfg)
 			if err != nil || checked.DroidProgram != fake.Path {
 				t.Fatalf("check: program %q, %v; want %s", checked.DroidProgram, err, fake.Path)
