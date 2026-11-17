@@ -168,6 +168,7 @@ func effectiveHome(env map[string]string) (string, error) {
 // helper run and the launch use the same one even if tmux has another PATH: a
 // path is made absolute; a bare name is looked up on env's PATH, or this
 // process's when env has none, in absolute directories only.
+// Use ResolveProgram for program resolution shared by helpers and launches.
 func ResolveProgram(program string, env map[string]string) (string, error) {
 	if strings.ContainsRune(program, filepath.Separator) {
 		return filepath.Abs(program)
@@ -192,6 +193,7 @@ func ResolveProgram(program string, env map[string]string) (string, error) {
 // ProbeOutput keeps at most Limit bytes of a probe's output; a write past the
 // limit fails, and with it the probe. The buffer is a field, not embedded, so
 // io.Copy cannot bypass Write through bytes.Buffer's ReadFrom.
+// Use ProbeOutput for bounded helper output.
 type ProbeOutput struct {
 	Limit int
 	buf   bytes.Buffer
@@ -217,6 +219,7 @@ const probeWaitDelay = 200 * time.Millisecond
 // credential. So its environment is this process's, then env's entries, each
 // without agent-director's identity keys, hostenv's credentials and the keys
 // in excluded.
+// Use ProbeCommand for filtered helper environments.
 func ProbeCommand(ctx context.Context, program string, args []string, env map[string]string, excluded []string) *exec.Cmd {
 	command := exec.CommandContext(ctx, program, args...)
 	command.WaitDelay = probeWaitDelay

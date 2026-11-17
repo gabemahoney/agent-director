@@ -13,6 +13,7 @@ import (
 // when the command ends or its context is done, so neither the probe nor its
 // descendants outlive the call. It returns the run's error and, separately, a
 // failure to kill the group, so a caller can report each.
+// Use RunProbe for helper process-group cleanup.
 func RunProbe(command *exec.Cmd) (runErr, cleanupErr error) {
 	// A launcher may ignore its arguments and wait for children, or exit while
 	// they keep its stdout open. Keep the whole probe separate from the caller's group.

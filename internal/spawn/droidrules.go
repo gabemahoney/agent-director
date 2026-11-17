@@ -149,6 +149,8 @@ type droidTests struct {
 // ErrPermissionRulesRefused and writes none of agent-director's launch resources:
 // no row, session, trust entry or launch file. Only a failed removal of the
 // check's temporary copy, which the refusal names, leaves that copy behind.
+// Every Droid launch path must call ResolveDroidRules before composition and
+// any launch write, including spawn and finished-ID reuse.
 func ResolveDroidRules(r Resolved, cfg config.Config) (Resolved, error) {
 	return resolveDroidRules(r, cfg, DroidRulesCheckDeadline)
 }

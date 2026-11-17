@@ -7,7 +7,8 @@
 // operator fixing the droid program would; LockCopyDir makes the caller's
 // removal of the --file directory fail.
 //
-// It is a leaf package (standard library only). Reusable test fixture:
+// It is a leaf package (standard library only). Droid rules-check tests must
+// use droidfix.New rather than a hand-written fake droid; see
 // docs/architecture.md "droidfix: the fake droid program".
 package droidfix
 

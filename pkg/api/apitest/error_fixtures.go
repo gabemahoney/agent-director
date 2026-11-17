@@ -26,6 +26,7 @@ import (
 
 // SeedErrPermissionRulesRefused writes operator config and a Rule Set refused
 // locally at rules[0]. It returns the Rule Set path so a surface test can edit it.
+// Surface tests needing locally refused rules must use SeedErrPermissionRulesRefused.
 func SeedErrPermissionRulesRefused(t *testing.T, configDir string) string {
 	t.Helper()
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
