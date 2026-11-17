@@ -25,6 +25,7 @@ fi
 printf '{"kill_sent":false}\n'
 `
 
+// b.cbb: an exiting tmux server is retryable too, under the same cap.
 func TestKillWithRetry(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -40,7 +41,9 @@ func TestKillWithRetry(t *testing.T) {
 		{"last attempt succeeds", 5, "ErrTmuxKillFailed", 6, "1\n2\n4\n8\n8\n", true},
 		{"cap", 20, "ErrTmuxKillFailed", 6, "1\n2\n4\n8\n8\n", false},
 		{"conflict", 1, "ErrTmuxSessionConflict", 1, "", false},
-		{"unresponsive", 1, "ErrTmuxUnresponsive", 1, "", false},
+		{"unresponsive", 1, "ErrTmuxUnresponsive", 2, "1\n", true},
+		{"unresponsive cap", 20, "ErrTmuxUnresponsive", 6, "1\n2\n4\n8\n8\n", false},
+		{"unavailable", 1, "ErrTmuxNotAvailable", 1, "", false},
 		{"malformed", 1, "malformed", 1, "", false},
 		{"empty", 1, "empty", 1, "", false},
 	} {
