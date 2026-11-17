@@ -157,7 +157,8 @@ func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) e
 		}
 		var req Request
 		if err := json.Unmarshal(line, &req); err != nil {
-			s.logger.Printf("mcp: parse error: %v (line=%q)", err, line)
+			// JSON error text can quote input bytes; log only value-free facts.
+			s.logger.Printf("mcp: parse error: %T (bytes=%d)", err, len(line))
 			_ = enc.Encode(Response{
 				JSONRPC: "2.0",
 				Error: &ResponseError{
