@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/installversion"
+	"github.com/gabemahoney/agent-director/internal/layout"
 )
 
 // oldIDRefusal is the description of the old instance-id flag's refusal.
@@ -136,6 +139,40 @@ func TestAdviceFollow_H3_AdminFlagIsRequired(t *testing.T) {
 				t.Fatalf("%s %s %s: exit = %d, stderr = %q; want 0 and empty", tc.verb, flag, r.id, code, stderr)
 			}
 			tc.check(t, r, stdout)
+		})
+	}
+	for _, tc := range []struct {
+		verb, want, value string
+	}{
+		{"publish-version", "--binary is required", mainPath},
+		{"rollback-version", "--version is required", testVersion},
+	} {
+		t.Run(tc.verb, func(t *testing.T) {
+			home := poisonedHome(t)
+			var result installversion.Result
+			if tc.verb == "rollback-version" {
+				stdout, stderr, code := runAdmin(t, home, "publish-version", "--binary", mainPath)
+				versionSuccess(t, stdout, stderr, code, &result)
+				later := versionVariant(t, "later")
+				stdout, stderr, code = runBin(t, later.admin, home, "publish-version", "--binary", later.runtime)
+				versionSuccess(t, stdout, stderr, code, &result)
+			}
+			before := versionTree(t, layout.Dir(home))
+			stdout, stderr, code := runAdmin(t, home, tc.verb)
+			desc := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags").ErrDescription
+			if desc != tc.want {
+				t.Fatalf("description = %q; want %q", desc, tc.want)
+			}
+			versionUnchanged(t, layout.Dir(home), before)
+			assertInvocationKinds(t, home)
+
+			flag, _, _ := strings.Cut(desc, " ")
+			stdout, stderr, code = runAdmin(t, home, tc.verb, flag, tc.value)
+			versionSuccess(t, stdout, stderr, code, &result)
+			if result.Version != testVersion || result.PublishedVersion == nil || *result.PublishedVersion != testVersion || result.PublicationState != "published" || !result.Durable || !result.InitializationComplete || result.Reused != (tc.verb == "rollback-version") {
+				t.Fatalf("required-flag correction did not complete: %+v", result)
+			}
+			assertInvocationKinds(t, home)
 		})
 	}
 }

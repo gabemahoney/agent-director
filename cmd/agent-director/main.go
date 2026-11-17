@@ -806,6 +806,9 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // the CLI binary is short-lived and single-threaded at startup, so
 // process-wide env mutation is safe.
 func run() int {
+	if handled, code := installVersionFacts(os.Args[1:]); handled {
+		return code
+	}
 	if len(os.Args) > 1 && os.Args[1] == "cursor-host" {
 		if err := cursorHostHandler(os.Args[2:]); err != nil {
 			return 1
@@ -929,6 +932,11 @@ func run() int {
 var teardownDiagnostics io.Writer = os.Stderr
 
 func main() {
+	// The installation handshake must also bypass audit-worker teardown:
+	// constructing the default trail would introduce a filesystem participant.
+	if handled, code := installVersionFacts(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	code := run()
 	// Verb deadlines end at the result. Process teardown has a separate,
 	// fixed allowance within the CLI's existing one-second return reserve:

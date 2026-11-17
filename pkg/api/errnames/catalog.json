@@ -325,6 +325,11 @@
     "description": ""
   },
   {
+    "name": "ErrVersionInstallRefused",
+    "package": "adminapi",
+    "description": ""
+  },
+  {
     "name": "ErrUnknownVerb",
     "package": "clisetup",
     "description": ""

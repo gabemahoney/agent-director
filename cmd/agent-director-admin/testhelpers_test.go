@@ -7,6 +7,7 @@ package main_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -130,7 +131,13 @@ func runBin(t *testing.T, bin, home string, args ...string) (string, string, int
 // exactly env as its environment; it returns stdout, stderr and the exit code.
 func runBinIn(t *testing.T, bin, cwd string, env []string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
+	return runBinInContext(t, context.Background(), bin, cwd, env, args...)
+}
+
+// runBinInContext adds a caller-owned bound for nonwaiting contract tests.
+func runBinInContext(t *testing.T, ctx context.Context, bin, cwd string, env []string, args ...string) (string, string, int) {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir, cmd.Env = cwd, env
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

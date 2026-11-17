@@ -134,6 +134,7 @@ var packageOf = map[string]string{
 	"ErrOldLayout":               "clisetup",
 	// The separate administrator tool's existing typed refusal.
 	"ErrJournalMigrationRefused": "adminapi",
+	"ErrVersionInstallRefused":   "adminapi",
 	// internal/clisetup (b.cm7): written by the command binaries themselves,
 	// outside any verb handler.
 	"ErrUnknownVerb": "clisetup",

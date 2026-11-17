@@ -138,6 +138,7 @@ var Catalog = []Entry{
 	// The separate administrator command emits this existing typed category.
 	// It is not a public Client/MCP verb error or an additional API sentinel.
 	{Name: "ErrJournalMigrationRefused", Err: &adminapi.JournalRefusal{}},
+	{Name: "ErrVersionInstallRefused", Err: &adminapi.VersionInstallRefusal{}},
 	// ErrUnknownVerb, ErrJSONMarshal and ErrTrailWrite come from no verb
 	// handler either: the command binaries write them themselves (a verb the
 	// binary does not know; a JSON result the binary cannot write; a trail
