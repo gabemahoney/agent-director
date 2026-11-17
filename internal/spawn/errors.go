@@ -165,3 +165,13 @@ var ErrModelMissing = errors.New("ErrModelMissing")
 // ErrHostCredentialMissing means a required host credential is unset or empty
 // in agent-director's own environment. The launch refuses before mutation.
 var ErrHostCredentialMissing = errors.New("ErrHostCredentialMissing")
+
+// ErrPermissionRulesRefused means the operator's configured permission rules
+// for the launch were refused: their file could not be read, failed
+// agent-director's checks, or failed the agent's own check (ResolveDroidRules).
+// It is a configuration error: a retry without an operator change to the
+// configuration or the file gives the same result. The description names the
+// problem kind and, where known, the rule's position as rules[N], never rule
+// text, file content or the agent's output. Refusal writes none of
+// agent-director's launch resources: no row, session, trust entry or launch file.
+var ErrPermissionRulesRefused = errors.New("ErrPermissionRulesRefused")

@@ -22,6 +22,8 @@ func errorName(err error) string {
 	switch {
 	case errors.Is(err, ErrHostCredentialMissing):
 		return "ErrHostCredentialMissing"
+	case errors.Is(err, ErrPermissionRulesRefused):
+		return "ErrPermissionRulesRefused"
 	case errors.Is(err, ErrModelMissing):
 		return "ErrModelMissing"
 	case errors.Is(err, ErrAgentCapabilityUnsupported):

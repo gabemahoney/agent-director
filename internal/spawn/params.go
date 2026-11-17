@@ -161,6 +161,15 @@ type Resolved struct {
 	LaunchStoreID string
 	LaunchToken   string
 
+	// DroidRules is a Droid launch's checked Rule Set, serialized once with its
+	// per-launch rule IDs, which the overlay embeds as permissionRules
+	// byte for byte; DroidProgram is the executable that checked it, which the
+	// launch runs. ResolveDroidRules sets both from the operator's config, never
+	// from caller input or a template; both are empty when no Rule Set is
+	// configured.
+	DroidRules   []byte
+	DroidProgram string
+
 	// DropResumeArgs is set only from a successful finished reuse snapshot
 	// whose raw stored agent differs exactly from the resolved agent.
 	DropResumeArgs bool

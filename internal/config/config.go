@@ -527,7 +527,8 @@ type Experimental struct {
 }
 
 // Launch holds the optional executable selection for each agent (SR-5.0),
-// used by spawn, reuse_finished and, for agents that support it, resume.
+// used by spawn, reuse_finished and, for agents that support it, resume, and
+// the optional path of Droid's Rule Set File (DroidRulesPath).
 // A key that is unset or empty selects the program by its name: claude,
 // codex, agent (Cursor), droid or opencode, found on the PATH of the pane's environment.
 //
@@ -552,10 +553,16 @@ type Launch struct {
 	DroidPath string `toml:"droid_path"`
 	// OpenCodePath accepts an executable name, absolute path, or ~/ path.
 	OpenCodePath string `toml:"opencode_path"`
+	// DroidRulesPath is the operator's Rule Set File for Droid launches, as
+	// Load resolved it ("" when unset: no Rule Set). Like ClaudePath it takes
+	// only an absolute or "~/" path. Load never opens it: each Droid spawn and
+	// finished-ID reuse reads and checks the file afresh (spawn.ResolveDroidRules).
+	DroidRulesPath string `toml:"droid_rules_path"`
 }
 
 // launchRefusals returns the description of each refused [launch] value, in
-// key order (claude_path, codex_path, cursor_path, droid_path, opencode_path), or nil when every value loads. home is
+// key order (claude_path, codex_path, cursor_path, droid_path, opencode_path,
+// droid_rules_path), or nil when every value loads. home is
 // the user's home directory as Load read it ("" when unset), which a "~/"
 // value needs.
 func (l Launch) launchRefusals(home string) []string {
@@ -566,6 +573,7 @@ func (l Launch) launchRefusals(home string) []string {
 		{"cursor_path", l.CursorPath},
 		{"droid_path", l.DroidPath},
 		{"opencode_path", l.OpenCodePath},
+		{"droid_rules_path", l.DroidRulesPath},
 	} {
 		allowed := "an absolute path or start with \"~/\""
 		withoutHome := "an absolute path"
@@ -695,7 +703,8 @@ func (e *ConfigError) Unwrap() error {
 // Load also refuses a [launch] claude_path, codex_path or cursor_path that is neither
 // empty, an absolute path nor "~/..." with HOME set (launchRefusal, SR-5.0),
 // and joins a "~/" value onto HOME (resolvePaths). The same rules apply to
-// droid_path and opencode_path, which additionally accept bare executable names.
+// droid_path and opencode_path, which additionally accept bare executable names,
+// and to droid_rules_path, which Load resolves without opening its file.
 //
 // Load then validates the [tmux] table (SR-4.1): a negative value of any key,
 // and a positive value below its key's safe minimum, are refused, never
@@ -996,6 +1005,7 @@ func resolvePaths(cfg Config, home string) Config {
 	cfg.Launch.CursorPath = expandTilde(cfg.Launch.CursorPath, home)
 	cfg.Launch.DroidPath = expandTilde(cfg.Launch.DroidPath, home)
 	cfg.Launch.OpenCodePath = expandTilde(cfg.Launch.OpenCodePath, home)
+	cfg.Launch.DroidRulesPath = expandTilde(cfg.Launch.DroidRulesPath, home)
 	return cfg
 }
 

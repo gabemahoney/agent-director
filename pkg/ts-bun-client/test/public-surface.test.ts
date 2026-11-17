@@ -197,7 +197,7 @@ test("public-surface: pane-only reads retain optional integration_mode", () => {
     expect(interfaceBody(typesGolden(), iface)).toMatch(/\bintegration_mode\?\s*:\s*"pane_only"\s*;/);
   }
   const errors = fs.readFileSync(path.join(fixtureDir, "errors.d.ts.golden"), "utf-8");
-  for (const name of ["ErrExperimentalAgentDisabled", "ErrAgentCapabilityUnsupported", "ErrModelMissing", "ErrHostCredentialMissing"]) {
+  for (const name of ["ErrExperimentalAgentDisabled", "ErrAgentCapabilityUnsupported", "ErrModelMissing", "ErrHostCredentialMissing", "ErrPermissionRulesRefused"]) {
     expect(errors).toContain(`class ${name} extends AgentDirectorError`);
   }
 });

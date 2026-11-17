@@ -248,7 +248,9 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     listing, proceed or the refusal.
 //  2. Its ad.provenance.disagree records, on a refusal as on proceed.
 //  3. A new launch token (spawn.NewLaunchToken); a failure is ErrInternal,
-//     with nothing written.
+//     with nothing written. A Droid launch with a configured Rule Set then
+//     reads and checks it (spawn.ResolveDroidRules); its refusal,
+//     ErrPermissionRulesRefused, leaves the finished row as it was.
 //  4. The composition (spawn.ComposeLaunch): the create request (name, cwd,
 //     environment, settings and argv) and the request fields the reset
 //     writes, with the parent id from the caller's AGENT_DIRECTOR_INSTANCE_ID.
@@ -318,6 +320,10 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 		return SpawnResult{}, err
 	}
 	r.LaunchStoreID, r.LaunchToken = d.storeID, token
+	r, err = spawn.ResolveDroidRules(r, d.cfg)
+	if err != nil {
+		return SpawnResult{}, err
+	}
 	c, err := spawn.ComposeLaunch(r, d.cfg)
 	if err != nil {
 		return SpawnResult{}, err

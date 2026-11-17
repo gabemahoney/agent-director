@@ -248,6 +248,8 @@ func TestLoadRefusesCaseVariantKeys(t *testing.T) {
 	const dbPathTwice = "[Store]\ndb_path = \"/upper.db\"\n\n[store]\ndb_path = \"/lower.db\"\n"
 	cases := []struct{ name, content, want string }{
 		{"two_table_spellings", dbPathTwice, caseVariantText("[Store] db_path and [store] db_path")},
+		{"rules_two_spellings", "[launch]\ndroid_rules_path = \"/a\"\nDROID_RULES_PATH = \"/b\"\n",
+			caseVariantText("[launch] droid_rules_path and [launch] DROID_RULES_PATH")},
 		{"two_key_spellings", "[store]\nDB_PATH = \"/upper.db\"\ndb_path = \"/lower.db\"\n",
 			caseVariantText("[store] DB_PATH and [store] db_path")},
 		{"long_s_table_quoted", "[\"ſtore\"]\ndb_path = \"/upper.db\"\n\n[store]\ndb_path = \"/lower.db\"\n",
@@ -516,6 +518,13 @@ func TestLoadRefusesLaunchValue(t *testing.T) {
 		{"both_refused_in_key_order", "[launch]\ncodex_path = \"b\"\nclaude_path = \"a\"\n",
 			clause("claude_path", "a") + "; " + clause("codex_path", "b")},
 		{"beside_valid_value", "[launch]\nclaude_path = \"/a/claude\"\ncodex_path = \"codex\"\n", clause("codex_path", "codex")},
+		{"rules_bare", "[launch]\ndroid_rules_path = \"rules.json\"\n", clause("droid_rules_path", "rules.json")},
+		{"rules_dot_relative", "[launch]\ndroid_rules_path = \"./rules.json\"\n", clause("droid_rules_path", "./rules.json")},
+		{"rules_relative", "[launch]\ndroid_rules_path = \"rules/file.json\"\n", clause("droid_rules_path", "rules/file.json")},
+		{"rules_tilde_only", "[launch]\ndroid_rules_path = \"~\"\n", clause("droid_rules_path", "~")},
+		{"rules_named_user", "[launch]\ndroid_rules_path = \"~user/rules.json\"\n", clause("droid_rules_path", "~user/rules.json")},
+		{"rules_blank", "[launch]\ndroid_rules_path = \" \"\n", clause("droid_rules_path", " ")},
+		{"rules_dash", "[launch]\ndroid_rules_path = \"-bad\"\n", clause("droid_rules_path", "-bad")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -527,6 +536,9 @@ func TestLoadRefusesLaunchValue(t *testing.T) {
 		})
 	}
 	for _, tc := range []struct{ name, content, key string }{
+		{"rules_integer", "[launch]\ndroid_rules_path = 5\n", "droid_rules_path"},
+		{"rules_boolean", "[launch]\ndroid_rules_path = false\n", "droid_rules_path"},
+		{"rules_array", "[launch]\ndroid_rules_path = []\n", "droid_rules_path"},
 		{"claude_integer", "[launch]\nclaude_path = 5\n", "claude_path"},
 		{"codex_boolean", "[launch]\ncodex_path = true\n", "codex_path"},
 		{"claude_array", "[launch]\nclaude_path = [\"/a/claude\"]\n", "claude_path"},
@@ -550,7 +562,7 @@ func TestLoadRefusesLaunchTildeWithoutHome(t *testing.T) {
 		unset bool
 	}{{"home_empty", false}, {"home_unset", true}} {
 		t.Run(home.name, func(t *testing.T) {
-			path := makeConfigFile(t, "[launch]\nclaude_path = \"~/bin/claude\"\ncodex_path = \"/b/codex\"\n")
+			path := makeConfigFile(t, "[launch]\nclaude_path = \"~/bin/claude\"\ndroid_rules_path = \"~/rules.json\"\ncodex_path = \"/b/codex\"\n")
 			t.Setenv("HOME", "")
 			if home.unset {
 				if err := os.Unsetenv("HOME"); err != nil {
@@ -562,6 +574,8 @@ func TestLoadRefusesLaunchTildeWithoutHome(t *testing.T) {
 
 			var ce *config.ConfigError
 			want := `refused [launch] values: claude_path = "~/bin/claude", which must be an absolute path or start with "~/", ` +
+				`but HOME is unset or empty so "~/" cannot be resolved; use an absolute path; ` +
+				`droid_rules_path = "~/rules.json", which must be an absolute path or start with "~/", ` +
 				`but HOME is unset or empty so "~/" cannot be resolved; use an absolute path` + ". An empty value counts as unset."
 			if !errors.As(err, &ce) || ce.Err.Error() != want {
 				t.Fatalf("Load error = %v; want a ConfigError describing %q", err, want)

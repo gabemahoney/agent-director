@@ -390,6 +390,7 @@ func docConfigKeys() []docKey {
 func docExperimentalKeys() []docKey {
 	return []docKey{
 		{"launch.droid_path", "unset", "", true},
+		{"launch.droid_rules_path", "unset", "", true},
 		{"experimental.droid", strconv.FormatBool(config.Default().Experimental.Droid), "", false},
 		{"launch.opencode_path", "unset", "", true},
 		{"experimental.opencode", strconv.FormatBool(config.Default().Experimental.OpenCode), "", false},

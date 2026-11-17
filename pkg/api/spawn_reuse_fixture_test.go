@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -29,6 +30,48 @@ func (e *killEnv) paneOnlyClient(t *testing.T, agent string) (*api.Client, *byte
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[experimental]\n"+agent+" = true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, log, err := e.clientFor(t, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, log
+}
+
+// droidRulesConfig is a config body enabling the pane-only agents, with
+// [launch] droid_rules_path rules and droid_path program, each when not "".
+func droidRulesConfig(rules, program string, agents ...string) string {
+	body := "[experimental]\n"
+	for _, agent := range agents {
+		body += agent + " = true\n"
+	}
+	body += "[launch]\n"
+	if rules != "" {
+		body += "droid_rules_path = " + strconv.Quote(rules) + "\n"
+	}
+	if program != "" {
+		body += "droid_path = " + strconv.Quote(program) + "\n"
+	}
+	return body
+}
+
+// refusedRulesFile writes a Rule Set File agent-director refuses and returns
+// its path, for launches a refused Rule Set must not reach.
+func refusedRulesFile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "refused-rules.json")
+	if err := os.WriteFile(path, []byte("not a rules object"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// configClient is a Client on e's store, clock and tmux fake whose config file holds body.
+func (e *killEnv) configClient(t *testing.T, body string) (*api.Client, *bytes.Buffer) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
 	c, log, err := e.clientFor(t, path)

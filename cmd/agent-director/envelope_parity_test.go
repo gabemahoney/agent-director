@@ -2,14 +2,208 @@ package main_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
+
+func TestEnvelopeParityDroidRulesRefusal(t *testing.T) {
+	for _, reuse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "spawn", true: "reuse"}[reuse], func(t *testing.T) {
+			home, id, _ := seedRowOnSocket(t, "ended", apitest.WithAgent("droid"))
+			before := rowColumns(t, home, id)
+			apitest.SeedErrPermissionRulesRefused(t, directorDir(home))
+			args := []string{"spawn", "--agent", "droid", "--cwd", home}
+			params := map[string]any{"agent": "droid", "cwd": home, "agent_args": []string{"--model", "model"}}
+			if reuse {
+				args = append(args, "--instance-id", id, "--reuse-finished")
+				params["instance_id"], params["reuse_finished"] = id, true
+			}
+			args = append(args, "--", "--model", "model")
+			srv := startServe(t, home)
+			t.Cleanup(srv.kill)
+			srv.initialize(t)
+			stdout, stderr, code := runCLIWithHome(t, home, args...)
+			cli := assertOnlyEnvelope(t, stdout, stderr, code, "ErrPermissionRulesRefused")
+			mcp := srv.callTool(t, "spawn", jsonOf(t, params))
+			const want = "Droid Rule Set refused: rules[0] is an allow rule whose program is not tail, head or an absolute path to a program other than a shell, interpreter or command runner; an operator must fix the Rule Set File [launch] droid_rules_path names, or the droid program (see docs/experimental.md#droid-rules); no row, session, trust entry or launch file was written and nothing was launched"
+			if cli.ErrDescription != want || mcp.Error == nil || mcp.Error.Data.ErrName != cli.ErrName || errnames.TrimNamePrefix(mcp.Error.Data.ErrName, mcp.Error.Message) != want {
+				t.Fatalf("CLI=%+v MCP=%+v; want %q", cli, mcp.Error, want)
+			}
+			if !reflect.DeepEqual(rowColumns(t, home, id), before) {
+				t.Fatal("refusal changed the old row")
+			}
+			if ids := srv.callToolOK(t, "list", `{}`); strings.Count(ids, `"instance_id"`) != 1 {
+				t.Fatalf("refusal created a row: %s", ids)
+			}
+			for _, rel := range []string{"launch", "templates"} {
+				if _, err := os.Stat(filepath.Join(directorDir(home), rel)); !os.IsNotExist(err) {
+					t.Fatalf("refusal created %s: %v", rel, err)
+				}
+			}
+			srv.stop(t)
+		})
+	}
+}
+
+// One table covers the missing Droid caller paths on both wire transports.
+// The configured Rule Set is valid: caller policy must still answer first.
+func TestEnvelopeParityDroidCallerRules(t *testing.T) {
+	type refusal struct {
+		name, permission, want string
+		args                   []string
+	}
+	cases := []refusal{
+		{"allow", "allow", "ErrPermissionsUnsupported", nil},
+		{"deny", "deny", "ErrPermissionsUnsupported", nil},
+		{"ask", "ask", "ErrPermissionsUnsupported", nil},
+		{"settings", "", "ErrSpawnDeniedFlag", []string{"--settings", "/caller/settings.json"}},
+		{"joined model", "", "ErrSpawnDeniedFlag", []string{"--model=model"}},
+		{"duplicate model", "", "ErrSpawnDeniedFlag", []string{"--model", "model", "--model", "other"}},
+		{"positional", "", "ErrSpawnDeniedFlag", []string{"prompt"}},
+		{"rule field", "", "ErrTemplateMalformed", nil},
+	}
+	fakeDir := buildFakeTmux(t)
+	for _, mode := range []string{"spawn", "reuse", "make-template", "template", "template reuse"} {
+		for _, tc := range cases {
+			// Inheritance uses the same argument validator: settings and a
+			// permission entry suffice; other spellings are covered directly.
+			inherited := strings.HasPrefix(mode, "template")
+			if inherited && tc.name != "settings" && tc.name != "ask" && tc.name != "rule field" {
+				continue
+			}
+			if !inherited && tc.name == "rule field" {
+				continue
+			}
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				home, id, _ := seedRowOnSocket(t, "ended", apitest.WithAgent("droid"))
+				before := rowColumns(t, home, id)
+				rules := apitest.SeedErrPermissionRulesRefused(t, directorDir(home))
+				if err := os.WriteFile(rules, []byte(droidfix.RuleSet("operator")), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				verb, tool := "spawn", "spawn"
+				argv := []string{"--agent", "droid", "--cwd", home}
+				params := map[string]any{"agent": "droid", "cwd": home}
+				if mode == "reuse" || mode == "template reuse" {
+					argv = append(argv, "--instance-id", id, "--reuse-finished")
+					params["instance_id"], params["reuse_finished"] = id, true
+				}
+				agentArgs := tc.args
+				if agentArgs == nil {
+					agentArgs = []string{"--model", "model"}
+				}
+				if inherited {
+					fields := apitest.TemplateFields{Agent: "droid", AgentArgs: agentArgs}
+					if tc.name == "rule field" {
+						fields.RawKeys = []string{`droid_rules_path = "/caller/rules.json"`}
+					}
+					if tc.permission != "" {
+						fields.Permissions = &config.TemplatePermissions{Ask: []string{"Bash"}}
+					}
+					seedTemplate(t, home, "caller", fields)
+					argv = append(argv, "--template", "caller")
+					params["template"] = "caller"
+				} else {
+					if tc.permission != "" {
+						argv = append(argv, "--"+tc.permission, "Bash")
+						params[tc.permission] = []string{"Bash"}
+					}
+					params["agent_args"] = agentArgs
+					if mode == "make-template" {
+						verb, tool = "make-template", "make_template"
+						argv = append(argv, "--name", "refused")
+						params["name"] = "refused"
+						for _, a := range agentArgs {
+							argv = append(argv, "--agent-args", a)
+						}
+					} else {
+						argv = append(append(argv, "--"), agentArgs...)
+					}
+				}
+				templatePath := filepath.Join(directorDir(home), "templates", "caller.toml")
+				templateBefore, _ := os.ReadFile(templatePath)
+				srv := startServe(t, home, "PATH="+fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_TMUX_LOG="+filepath.Join(home, "fake-tmux.log"))
+				t.Cleanup(srv.kill)
+				srv.initialize(t)
+				out, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{verb}, argv...)...)
+				cli := assertOnlyEnvelope(t, out, stderr, code, tc.want)
+				mcp := srv.callTool(t, tool, jsonOf(t, params))
+				if mcp.Error == nil || mcp.Error.Data.ErrName != tc.want || errnames.TrimNamePrefix(mcp.Error.Data.ErrName, mcp.Error.Message) != cli.ErrDescription {
+					t.Fatalf("CLI=%+v MCP=%+v", cli, mcp.Error)
+				}
+				if !reflect.DeepEqual(rowColumns(t, home, id), before) || len(listIDs(t, home, fakeDir)) != 1 {
+					t.Fatal("caller refusal changed rows")
+				}
+				assertInvocationKinds(t, home)
+				if inherited {
+					after, err := os.ReadFile(templatePath)
+					if err != nil || string(after) != string(templateBefore) {
+						t.Fatalf("refusal rewrote the inherited template: %v", err)
+					}
+				}
+				for _, rel := range []string{"launch", "templates/refused.toml"} {
+					if _, err := os.Stat(filepath.Join(directorDir(home), rel)); !os.IsNotExist(err) {
+						t.Fatalf("caller refusal created %s: %v", rel, err)
+					}
+				}
+				srv.stop(t)
+			})
+		}
+	}
+}
+
+// PM-1: an MCP server keeps its configured path until restart, but reads
+// the bytes at that path on every launch. CLI calls reload the path too.
+func TestEnvelopeDroidRulesConfigLifetime(t *testing.T) {
+	home := t.TempDir()
+	rules := apitest.SeedErrPermissionRulesRefused(t, directorDir(home))
+	srv := startServe(t, home)
+	t.Cleanup(srv.kill)
+	srv.initialize(t)
+	params := jsonOf(t, map[string]any{"agent": "droid", "cwd": home, "agent_args": []string{"--model", "model"}})
+	initial := srv.callTool(t, "spawn", params)
+	if initial.Error == nil || !strings.Contains(initial.Error.Message, "rules[0]") {
+		t.Fatalf("initial refusal=%+v", initial.Error)
+	}
+	if err := os.WriteFile(rules, []byte(`{"version":1,"rules":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := srv.callTool(t, "spawn", params)
+	if refreshed.Error == nil || refreshed.Error.Data.ErrName != "ErrPermissionRulesRefused" || !strings.Contains(refreshed.Error.Message, "the file is not a rules object:") {
+		t.Fatalf("file edit not observed: %+v", refreshed.Error)
+	}
+	content := fmt.Sprintf("[experimental]\ndroid = true\n[launch]\ndroid_rules_path = %q\n", filepath.Join(home, "missing.json"))
+	if err := os.WriteFile(filepath.Join(directorDir(home), "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	retained := srv.callTool(t, "spawn", params)
+	if !reflect.DeepEqual(retained.Error, refreshed.Error) {
+		t.Fatalf("running server reloaded config: %+v", retained.Error)
+	}
+	out, stderr, code := runCLIWithHome(t, home, "spawn", "--agent", "droid", "--cwd", home, "--", "--model", "model")
+	cli := assertOnlyEnvelope(t, out, stderr, code, "ErrPermissionRulesRefused")
+	if !strings.Contains(cli.ErrDescription, "the file is not a readable regular file of at most 1 MiB") {
+		t.Fatalf("CLI did not reload path: %+v", cli)
+	}
+	srv.stop(t)
+	srv = startServe(t, home)
+	t.Cleanup(srv.kill)
+	srv.initialize(t)
+	if got := srv.callTool(t, "spawn", params); got.Error == nil || errnames.TrimNamePrefix(got.Error.Data.ErrName, got.Error.Message) != cli.ErrDescription {
+		t.Fatalf("restarted server did not reload path: %+v", got.Error)
+	}
+	srv.stop(t)
+}
 
 // configDirValue is the literal both binaries' version results report as
 // config_dir, whatever HOME is (SR-11.7): no path is resolved.
