@@ -213,6 +213,8 @@ func TestMCPParamUnknownRefused(t *testing.T) {
 		{"make-template", "template", "tpl"}, {"make-template", "instance_id", "tpl-id"}, {"make-template", "tmux_session_name", "tpl-session"},
 		{"make-template", "reuse_finished", true}, {"make-template", "reuse-finished", true},
 		{"spawn", "no_screen_change_timeout_seconds", 60},
+		{"spawn", "droid_rules_path", "/caller/rules.json"},
+		{"make-template", "permissionRules", map[string]any{"version": 1}},
 	} {
 		cases = append(cases, refusal{old.verb + ", " + old.key, old.verb, old.key, old.value})
 	}

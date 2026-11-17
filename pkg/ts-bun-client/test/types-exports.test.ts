@@ -61,6 +61,20 @@ function _assertSpawnParamsCwdIsRequired(): void {
 }
 void _assertSpawnParamsCwdIsRequired;
 
+// SR-1.4: rules belong to operator config, never caller parameters (reuse
+// uses SpawnParams too). The existing export/golden checks pin the new error.
+function _assertNoCallerRules(spawn: SpawnParams, template: MakeTemplateParams): void {
+  // @ts-expect-error — no caller Rule Set path
+  void spawn.droid_rules_path;
+  // @ts-expect-error — no caller rules object
+  void spawn.permissionRules;
+  // @ts-expect-error — templates gain no Rule Set path
+  void template.droid_rules_path;
+  // @ts-expect-error — templates gain no rules object
+  void template.permissionRules;
+}
+void _assertNoCallerRules;
+
 // Typecheck (b.146 rule 15): decide's delivery is never fallen_back (decide refuses such a request with
 // ErrRelayFallenBack), get's and list's rows carry permission_requests arrays, and get's singular
 // permission_request is gone; tsc reports an unused directive if any of these loosens.

@@ -23,7 +23,128 @@ import {
 } from "../internal/helper.js";
 import {
   ErrSpawnDeniedFlag, ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, ErrAgentMissing, ErrAgentInvalid, AgentDirectorError,
+  ErrPermissionRulesRefused, ErrPermissionsUnsupported, ErrTemplateMalformed,
+  type SpawnParams,
 } from "../../src/index.js";
+
+const operatorRules = {
+  version: 1,
+  rules: [{ id: "PRIVATE_RULE_ID", decision: "allow", reason: "PRIVATE_REASON",
+    match: { prefix: ["tail"] }, tests: { match: ["tail x"], noMatch: ["head x"] } }],
+};
+
+/** Operator config only; returning its path lets the same client observe edits. */
+function configureDroidRules(home: string, rules = operatorRules): string {
+  const dir = path.dirname(homeStore(home));
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "rules.json");
+  fs.writeFileSync(file, JSON.stringify(rules));
+  fs.writeFileSync(path.join(dir, "config.toml"), `[experimental]\ndroid = true\n[launch]\ndroid_rules_path = ${JSON.stringify(file)}\n`);
+  return file;
+}
+
+test.each([false, true])("spawn: configured rules give a sanitized typed refusal (reuse=%s)", async (reuse) => {
+  await withTempHome(async (home) => {
+    const rules = configureDroidRules(home, { ...operatorRules, rules: [{ ...operatorRules.rules[0], decision: "deny" }] });
+    const store = homeStore(home);
+    const id = `droid-rules-${crypto.randomUUID().slice(0, 8)}`;
+    runHelper("seed-spawn", { store, id, agent: "droid", state: "ended", "create-store": true, socket: privateTmuxSocket(home) });
+    using client = await openClient(store);
+    const before = await client.get({ instance_id: id });
+    const log = path.join(home, "fake-tmux.log");
+    await withProcessEnv({ FAKE_TMUX_LOG: log }, async () => {
+      const params = { agent: "droid", cwd: home, agent_args: ["--model", "model"],
+        ...(reuse ? { instance_id: id, reuse_finished: true } : {}) };
+      const err = await rejection(client.spawn(params)) as AgentDirectorError;
+      expect(err).toBeInstanceOf(ErrPermissionRulesRefused);
+      expect(err.errName).toBe("ErrPermissionRulesRefused");
+      expect(err.errDescription).toBe("Droid Rule Set refused: rules[0] has a decision other than allow, ask or block; an operator must fix the Rule Set File [launch] droid_rules_path names, or the droid program (see docs/experimental.md#droid-rules); no row, session, trust entry or launch file was written and nothing was launched");
+      for (const secret of ["PRIVATE_RULE_ID", "PRIVATE_REASON", "tail x", "head x"]) expect(err.message).not.toContain(secret);
+      expect(await client.get({ instance_id: id })).toEqual(before);
+      expect((await client.list({})).spawns.map((row) => row.instance_id)).toEqual([id]);
+      expect(newSessionCount(log)).toBe(0);
+      expect(fs.existsSync(path.join(path.dirname(store), "launch"))).toBe(false);
+
+      // PM-1: TS uses a new CLI invocation for each call. The current client
+      // observes both a file edit and a later configured-path edit.
+      if (!reuse) {
+        fs.writeFileSync(rules, "{}");
+        const changed = await rejection(client.spawn(params)) as AgentDirectorError;
+        expect(changed).toBeInstanceOf(ErrPermissionRulesRefused);
+        expect(changed.errDescription).toContain("the file is not a rules object:");
+        fs.writeFileSync(path.join(path.dirname(store), "config.toml"), `[experimental]\ndroid = true\n[launch]\ndroid_rules_path = ${JSON.stringify(path.join(home, "absent.json"))}\n`);
+        const moved = await rejection(client.spawn(params)) as AgentDirectorError;
+        expect(moved).toBeInstanceOf(ErrPermissionRulesRefused);
+        expect(moved.errDescription).toContain("the file is not a readable regular file of at most 1 MiB");
+      }
+    });
+  });
+}, 20_000);
+
+const droidCallerCases: { name: string; params: Partial<SpawnParams>; error: typeof AgentDirectorError }[] = [
+  ...(["allow", "deny", "ask"] as const).map((key) => ({ name: key, params: { [key]: ["Bash"] }, error: ErrPermissionsUnsupported })),
+  ...[
+    ["settings", ["--settings", "/caller/settings.json"]],
+    ["joined model", ["--model=model"]],
+    ["duplicate model", ["--model", "model", "--model", "other"]],
+    ["positional", ["prompt"]],
+  ].map(([name, args]) => ({ name: name as string, params: { agent_args: args as string[] }, error: ErrSpawnDeniedFlag })),
+];
+
+for (const mode of ["spawn", "reuse", "make-template"] as const) {
+  test.each(droidCallerCases)(`${mode}: operator rules cannot enable caller $name`, async ({ params, error }) => {
+    await withTempHome(async (home) => {
+      configureDroidRules(home);
+      const store = homeStore(home);
+      const id = `droid-caller-${crypto.randomUUID().slice(0, 8)}`;
+      runHelper("seed-spawn", { store, id, agent: "droid", state: "ended", "create-store": true, socket: privateTmuxSocket(home) });
+      using client = await openClient(store);
+      const before = await client.get({ instance_id: id });
+      const log = path.join(home, "fake-tmux.log");
+      await withProcessEnv({ FAKE_TMUX_LOG: log }, async () => {
+        const p = { agent: "droid", cwd: home, agent_args: ["--model", "model"], ...params };
+        const call = mode === "make-template" ? client.makeTemplate({ ...p, name: "refused" }) :
+          client.spawn({ ...p, ...(mode === "reuse" ? { instance_id: id, reuse_finished: true } : {}) });
+        await expect(call).rejects.toBeInstanceOf(error);
+        expect(await client.get({ instance_id: id })).toEqual(before);
+        expect((await client.list({})).spawns.map((row) => row.instance_id)).toEqual([id]);
+        expect(newSessionCount(log)).toBe(0);
+        for (const rel of ["launch", "templates/refused.toml"]) expect(fs.existsSync(path.join(path.dirname(store), rel))).toBe(false);
+      });
+    });
+  }, 10_000);
+}
+
+test.each([
+  ["settings", ErrSpawnDeniedFlag], ["permissions", ErrPermissionsUnsupported], ["rule field", ErrTemplateMalformed],
+] as const)("spawn: hand-edited template %s stays refused with operator rules", async (kind, error) => {
+  await withTempHome(async (home) => {
+    configureDroidRules(home);
+    const store = homeStore(home);
+    const id = `droid-template-${crypto.randomUUID().slice(0, 8)}`;
+    runHelper("seed-spawn", { store, id, agent: "droid", state: "ended", "create-store": true, socket: privateTmuxSocket(home) });
+    using client = await openClient(store);
+    const { path: template } = await client.makeTemplate({ name: "caller", agent: "droid", agent_args: ["--model", "model"] });
+    let body = fs.readFileSync(template, "utf8");
+    if (kind === "settings") {
+      expect(body).toMatch(/agent_args = \[[^\]]*\]/);
+      body = body.replace(/agent_args = \[[^\]]*\]/, 'agent_args = ["--settings", "/caller/settings.json"]');
+    } else if (kind === "permissions") body += '\n[permissions]\nask = ["Bash"]\n';
+    else body = 'droid_rules_path = "/caller/rules.json"\n' + body;
+    fs.writeFileSync(template, body);
+    const before = await client.get({ instance_id: id });
+    const log = path.join(home, "fake-tmux.log");
+    await withProcessEnv({ FAKE_TMUX_LOG: log }, async () => {
+      for (const reuse of [false, true]) {
+        await expect(client.spawn({ cwd: home, template: "caller", ...(reuse ? { instance_id: id, reuse_finished: true } : {}) })).rejects.toBeInstanceOf(error);
+        expect(await client.get({ instance_id: id })).toEqual(before);
+        expect((await client.list({})).spawns.map((row) => row.instance_id)).toEqual([id]);
+        expect(fs.readFileSync(template, "utf8")).toBe(body);
+        expect(newSessionCount(log)).toBe(0);
+      }
+    });
+  });
+}, 20_000);
 
 /** fake-tmux invocations in logPath whose argv includes new-session. */
 const newSessionCount = (logPath: string) => fakeTmuxCalls(logPath).filter((argv) => argv.includes("new-session")).length;

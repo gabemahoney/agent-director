@@ -636,6 +636,7 @@ var Verbs = []VerbDef{
 			"ErrSpawnDeniedFlag",
 			"ErrModelMissing",
 			"ErrHostCredentialMissing",
+			"ErrPermissionRulesRefused",
 			"ErrAgentMissing",
 			"ErrAgentInvalid",
 			"ErrAgentArgsMismatch",

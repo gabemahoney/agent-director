@@ -4,7 +4,8 @@ package api_test
 // SR-3.8, SR-10.4, SR-13.2; AC-LKP-17, AC-REUSE-08, AC-REUSE-16): the identity
 // write and its guard, the label step, the create argv through test/fake-tmux
 // (labels chained, by id for a $ name, a # doubled, equal to a plain spawn's),
-// and the longest paths' virtual time.
+// and the longest paths' virtual time; and the Droid lane's refusals and
+// checked Rule Set on its fresh spawns and reuses.
 
 import (
 	"errors"
@@ -23,6 +24,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -32,12 +34,19 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
+// TestPaneOnlyReuseValidationWritesNothing: each request refusal of a lane
+// reuse, from the call or an inherited template (SR-1.4's --settings and
+// permission entries included), comes before the Rule Set step, so a missing
+// Rule Set File never answers instead, and writes nothing.
 func TestPaneOnlyReuseValidationWritesNothing(t *testing.T) {
 	// Serial: refusal snapshots check the shared trail and temporary HOME.
 	for _, agent := range []string{"droid", "opencode"} {
 		type refusal struct{ name, want, key string }
 		cases := []refusal{
 			{"custom model", "ErrSpawnDeniedFlag", ""},
+			{"settings", "ErrSpawnDeniedFlag", ""},
+			{"inherited settings", "ErrSpawnDeniedFlag", ""},
+			{"inherited permissions", "ErrPermissionsUnsupported", ""},
 			{"relay", "ErrAgentCapabilityUnsupported", ""},
 		}
 		keys := []string{"AWS_BEARER_TOKEN_BEDROCK"}
@@ -53,17 +62,27 @@ func TestPaneOnlyReuseValidationWritesNothing(t *testing.T) {
 				e := newKillEnv(t)
 				r := e.seedReusable(t, agentGone, reuseRowSpec{Opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
 				seedLaneOverlay(t, e.storeID, r.Token)
-				c, _ := e.paneOnlyClient(t, agent)
+				c, _ := e.configClient(t, droidRulesConfig(filepath.Join(t.TempDir(), "missing-rules.json"), "", agent))
 				p := api.SpawnParams{Agent: agent, CWD: r.CWD, InstanceID: r.ID, ReuseFinished: true, AgentArgs: paneOnlyArgs(agent, "model")}
+				settings := append(paneOnlyArgs(agent, "model"), "--settings", "private-lane-sentinel")
+				var tmpl *apitest.TemplateFields
 				switch tc.name {
 				case "custom model":
 					p.AgentArgs = []string{"--model", "custom:private-lane-sentinel"}
+				case "settings":
+					p.AgentArgs = settings
 				case "relay":
 					p.RelayMode = "on"
 				case "inherited environment":
+					tmpl = &apitest.TemplateFields{Agent: agent, ExtraEnv: map[string]string{tc.key: "private-lane-sentinel"}}
+				case "inherited settings":
+					p.AgentArgs, tmpl = nil, &apitest.TemplateFields{Agent: agent, AgentArgs: settings}
+				case "inherited permissions":
+					tmpl = &apitest.TemplateFields{Agent: agent, Permissions: &config.TemplatePermissions{Ask: []string{"Bash(private-lane-sentinel)"}}}
+				}
+				if tmpl != nil {
 					p.Template = "lane"
-					body := apitest.TemplateBody(apitest.TemplateFields{Agent: agent, ExtraEnv: map[string]string{tc.key: "private-lane-sentinel"}})
-					if _, err := apitest.SeedTemplate(filepath.Join(adConfigDir(home), "templates"), p.Template, body); err != nil {
+					if _, err := apitest.SeedTemplate(filepath.Join(adConfigDir(home), "templates"), p.Template, apitest.TemplateBody(*tmpl)); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -85,6 +104,181 @@ func TestPaneOnlyReuseValidationWritesNothing(t *testing.T) {
 			})
 		}
 	}
+}
+
+// droidRulesRefusalEnd closes every ErrPermissionRulesRefused description.
+const droidRulesRefusalEnd = "; an operator must fix the Rule Set File [launch] droid_rules_path names, or the droid program (see docs/experimental.md#droid-rules); no row, session, trust entry or launch file was written and nothing was launched"
+
+// launcherRuleSet is a Rule Set File agent-director refuses at rules[1], an
+// allow rule for a versioned interpreter, holding sentinel as its id, test
+// and reason.
+func launcherRuleSet(sentinel string) string {
+	return `{"version":1,"rules":[{"id":"tail","decision":"allow","match":{"prefix":["tail"]},"tests":{"match":["tail x"],"noMatch":["head x"]}},` +
+		`{"id":"` + sentinel + `","decision":"allow","match":{"prefix":["/usr/bin/python3.11"]},"tests":{"match":["` + sentinel + `"],"noMatch":["x"]},"reason":"` + sentinel + `"}]}`
+}
+
+// TestDroidRulesRefusalWritesNothing (SR-2.1, SR-2.5): a Rule Set refused by
+// agent-director's own check or by Droid's refuses a fresh Droid spawn and a
+// finished-ID reuse with ErrPermissionRulesRefused before any launch-resource
+// write: no row or reset, launch file, trust entry or session. The shared tmux
+// socket directory is outside this guarantee. It also checks no trail record
+// (reuse's lookup read aside); the reused row's history, requests and old
+// overlay stay; and neither the error nor the log holds the rules or Droid's output.
+func TestDroidRulesRefusalWritesNothing(t *testing.T) {
+	// Serial: it sets HOME and checks every record written to the shared trail since its mark.
+	const sentinel = "private-rules-sentinel"
+	for _, operation := range []string{"spawn", "reuse"} {
+		for _, failure := range []string{"own check", "Droid's check"} {
+			t.Run(operation+"/"+failure, func(t *testing.T) {
+				fake := droidfix.New(t, droidfix.Pass)
+				rules, kind, calls := launcherRuleSet(sentinel), "rules[1] is an allow rule whose program is not tail, head or an absolute path to a program other than a shell, interpreter or command runner", 0
+				if failure == "Droid's check" {
+					fake.SetMode(t, droidfix.Fail)
+					rules, kind, calls = droidfix.RuleSet(sentinel), "Droid's rules check failed with a nonzero exit status (a rule is invalid or one of its tests fails)", 1
+				}
+				rulesPath := filepath.Join(t.TempDir(), "rules.json")
+				if err := os.WriteFile(rulesPath, []byte(rules), 0600); err != nil {
+					t.Fatal(err)
+				}
+				body := droidRulesConfig(rulesPath, fake.Path, "droid")
+				var err error
+				if operation == "spawn" {
+					e := newSpawnEnv(t)
+					// The launch resolves tmux's per-user socket directory before the
+					// Rule Set step; as after any earlier launch, it already exists.
+					if err := os.MkdirAll(filepath.Dir(e.socket), 0700); err != nil {
+						t.Fatal(err)
+					}
+					c := agentClientWithConfig(t, e, body)
+					err = e.checkCreationWrites(t, func() error {
+						_, err := c.Spawn(api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")})
+						return err
+					})
+				} else {
+					home := withTempHome(t)
+					e := newKillEnv(t)
+					r := e.seedReusable(t, agentGone, reuseRowSpec{Opts: []apitest.SpawnOption{apitest.WithAgent("droid")}})
+					old := seedLaneOverlay(t, e.storeID, r.Token)
+					c, logs := e.configClient(t, body)
+					p := reuseParams(t, r, reuseRequest{Args: paneOnlyArgs("droid", "model")})
+					p.Agent = "droid"
+					roots := []string{filepath.Join(adConfigDir(home), "launch"), filepath.Join(adConfigDir(home), "templates")}
+					files, before := snapshotTrees(t, roots), e.snapshotReuse(t, r)
+					_, err = c.Spawn(p)
+					e.assertWroteNothing(t, before)
+					if diff := files.diff(snapshotTrees(t, roots)); len(diff) != 0 {
+						t.Errorf("refusal changed launch/template files: %v", diff)
+					}
+					assertLaneOverlay(t, old, true)
+					if strings.Contains(logs.String(), sentinel) || strings.Contains(logs.String(), droidfix.FailOutput) {
+						t.Errorf("log holds the rules or Droid's output: %q", logs.String())
+					}
+				}
+				assertOneName(t, err, "ErrPermissionRulesRefused")
+				if want := "ErrPermissionRulesRefused: Droid Rule Set refused: " + kind + droidRulesRefusalEnd; errText(err) != want {
+					t.Errorf("refusal = %q\nwant %q", errText(err), want)
+				}
+				if n := len(fake.Calls(t)); n != calls {
+					t.Errorf("Droid's check ran %d times; want %d", n, calls)
+				}
+			})
+		}
+	}
+}
+
+// TestDroidRulesReadAtEachLaunch (SR-1.2 as MI decision PM-1 reads it,
+// SR-2.4, SR-3.2): one long-lived Client reads the Rule Set File afresh at
+// each Droid launch. A fresh spawn and a finished-ID reuse each run the
+// checked program with an overlay holding byte for byte what Droid's check
+// received, its IDs under that launch's own token; a change to the file
+// after the check has read it does not reach that launch.
+func TestDroidRulesReadAtEachLaunch(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
+	withTempHome(t)
+	e := newKillEnv(t)
+	fake := droidfix.New(t, droidfix.Pass)
+	rulesPath := filepath.Join(t.TempDir(), "rules.json")
+	writeRules := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(rulesPath, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, _ := e.configClient(t, droidRulesConfig(rulesPath, fake.Path, "droid"))
+	tokens := map[string]bool{}
+	// launched checks launch n of row id, whose operator rule id is operatorID.
+	launched := func(id string, n int, operatorID string) {
+		t.Helper()
+		token, _ := e.columns(t, id).LaunchToken.(string)
+		calls, creates := fake.Calls(t), e.rec.SocketCallsOf(tmux.CallCreate)
+		if len(calls) != n+1 || len(creates) != n+1 {
+			t.Fatalf("launch %d: %d checks, %d creates", n, len(calls), len(creates))
+		}
+		input, command := string(calls[n].Input), creates[n].Command
+		if len(command) != 3 || command[0] != fake.Path || command[1] != "--settings" {
+			t.Fatalf("launch %d command %q; want the checked program with its overlay", n, command)
+		}
+		overlay, err := os.ReadFile(command[2])
+		if want := `{"model":"model","permissionRules":` + input + `}`; err != nil || string(overlay) != want {
+			t.Fatalf("launch %d overlay %s, %v; want %s", n, overlay, err, want)
+		}
+		if !strings.Contains(input, `"id":"agent-director/`+token+`/`+operatorID+`"`) || tokens[token] {
+			t.Fatalf("launch %d checked %s; want rule %s under its own new token %s", n, input, operatorID, token)
+		}
+		tokens[token] = true
+	}
+
+	writeRules(droidfix.RuleSet("first"))
+	p := api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")}
+	res, err := c.Spawn(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launched(res.InstanceID, 0, "first")
+
+	first, err := e.st.GetSpawn(res.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range e.rec.Sessions(first.Identity.Socket) {
+		if err := e.rec.KillSessionID(first.Identity.Socket, session.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, applied, err := e.st.MarkMissingIfSameLife(first.InstanceID, first.Snapshot); err != nil || applied != store.CondApplied {
+		t.Fatalf("finish first launch: %v, %v", applied, err)
+	}
+	writeRules(droidfix.RuleSet("second"))
+	p.InstanceID, p.ReuseFinished = res.InstanceID, true
+	if _, err := c.Spawn(p); err != nil {
+		t.Fatal(err)
+	}
+	launched(res.InstanceID, 1, "second")
+
+	// The check holds while the file changes to one agent-director would refuse.
+	writeRules(droidfix.RuleSet("third"))
+	fake.SetMode(t, droidfix.Hold)
+	type outcome struct {
+		res api.SpawnResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := c.Spawn(api.SpawnParams{Agent: "droid", CWD: p.CWD, AgentArgs: p.AgentArgs})
+		done <- outcome{res, err}
+	}()
+	select {
+	case <-fake.Held():
+	case o := <-done:
+		t.Fatalf("spawn ended before its check held: %+v, %v", o.res, o.err)
+	}
+	writeRules("not a rules object")
+	fake.Release(t)
+	third := <-done
+	if third.err != nil {
+		t.Fatal(third.err)
+	}
+	launched(third.res.InstanceID, 2, "third")
 }
 
 func TestPaneOnlyFilesBeforeStoreWrite(t *testing.T) {

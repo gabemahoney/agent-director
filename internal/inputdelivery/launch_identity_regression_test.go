@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 )
 
 func TestPrepareProbeOmitsHookIdentityButLaunchRetainsIt(t *testing.T) {
@@ -53,7 +55,7 @@ func TestPrepareProbeOmitsHookIdentityButLaunchRetainsIt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			probe := readCapturedEnvironment(t, filepath.Join(root, "probe.env"))
+			probe := droidfix.ReadEnv(t, filepath.Join(root, "probe.env"))
 			for key := range probe {
 				if strings.HasPrefix(key, "AGENT_DIRECTOR_") || key == "TMUX" || key == "TMUX_PANE" || key == "OPENROUTER_API_KEY" {
 					t.Errorf("version probe retained hook identity %s", key)
@@ -73,7 +75,7 @@ func TestPrepareProbeOmitsHookIdentityButLaunchRetainsIt(t *testing.T) {
 			if output, err := launch.CombinedOutput(); err != nil {
 				t.Fatalf("launch: %v: %s", err, output)
 			}
-			actual := readCapturedEnvironment(t, filepath.Join(root, "launch.env"))
+			actual := droidfix.ReadEnv(t, filepath.Join(root, "launch.env"))
 			for key, want := range env {
 				if actual[key] != want || launchEnv[key] != want {
 					t.Errorf("launch %s=%q prepared=%q; want %q", key, actual[key], launchEnv[key], want)
@@ -84,18 +86,4 @@ func TestPrepareProbeOmitsHookIdentityButLaunchRetainsIt(t *testing.T) {
 			}
 		})
 	}
-}
-
-func readCapturedEnvironment(t *testing.T, path string) map[string]string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	env := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		key, value, _ := strings.Cut(line, "=")
-		env[key] = value
-	}
-	return env
 }

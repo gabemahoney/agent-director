@@ -48,7 +48,10 @@ func launchAgentError(agent string) error {
 //     directory (ResolveLaunchSocket), and mints a new launch token
 //     (NewLaunchToken). Both come before pre-trust and the insert, so a
 //     refused socket directory (ErrTmuxNotAvailable) or a token failure
-//     writes nothing and launches nothing (SR-20.6).
+//     writes nothing and launches nothing (SR-20.6). A Droid launch with a
+//     configured Rule Set then reads and checks it (ResolveDroidRules), so
+//     its refusal (ErrPermissionRulesRefused) writes none of agent-director's
+//     launch resources: no row, session, trust entry or launch file.
 //  2. Composes the launch through ComposeLaunch: the session environment,
 //     the agent's argv (the synthesized --settings of a claude agent; for a
 //     codex agent the per-launch settings on its command line and the pre-trust
@@ -123,6 +126,11 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	}
 
 	r.LaunchStoreID, r.LaunchToken = s.StoreID(), token
+	// The rules' IDs carry the token; refusal precedes any launch-resource write.
+	r, err = ResolveDroidRules(r, cfg)
+	if err != nil {
+		return "", "", err
+	}
 	c, err := ComposeLaunch(r, cfg)
 	if err != nil {
 		return "", "", err

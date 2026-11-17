@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 )
 
 func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
@@ -41,6 +42,11 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 					t.Fatal(err)
 				}
 				r.LaunchStoreID, r.LaunchToken = "store", "token"
+				// With no Rule Set configured the Rule Set step reads and runs
+				// nothing (droid_path names no program) and changes nothing.
+				if checked, err := ResolveDroidRules(r, cfg); err != nil || !reflect.DeepEqual(checked, r) {
+					t.Fatalf("Rule Set step with none configured: %+v, %v", checked, err)
+				}
 				c, err := ComposeLaunch(r, cfg)
 				if err != nil {
 					t.Fatal(err)
@@ -58,6 +64,31 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 					}
 					if !slices.Equal(c.Create.ExcludeEnv, keys) || !slices.Equal(unsets, keys) || len(c.Create.ForwardEnv) != 0 {
 						t.Fatalf("Droid environment policy: %+v", c.Create)
+					}
+					// With a Rule Set, the overlay is {model, permissionRules} holding
+					// exactly the bytes Droid's check received, IDs under this
+					// launch's token; the launch runs the program that checked them,
+					// and nothing else in the create changes.
+					fake := droidfix.New(t, droidfix.Pass)
+					ruled := cfg
+					ruled.Launch.DroidPath, ruled.Launch.DroidRulesPath = fake.Path, writeRuleSet(t, droidfix.RuleSet("tail"))
+					checked, err := ResolveDroidRules(r, ruled)
+					if err != nil {
+						t.Fatal(err)
+					}
+					rc, err := ComposeLaunch(checked, ruled)
+					if err != nil {
+						t.Fatal(err)
+					}
+					calls := fake.Calls(t)
+					input := string(calls[len(calls)-1].Input)
+					if input != `{"version":1,"rules":[{"id":"agent-director/token/tail","decision":"allow","match":{"prefix":["tail"]},"tests":{"match":["tail -n 1 x"],"noMatch":["head x"]}}]}` {
+						t.Fatalf("checked rules %s", input)
+					}
+					want := c.Create
+					want.Command = []string{fake.Path, "--settings", path}
+					if !reflect.DeepEqual(rc.Create, want) || !reflect.DeepEqual(rc.Files, []LaunchFile{{Path: path, Content: []byte(`{"model":"ordinary-custom-model","permissionRules":` + input + `}`)}}) {
+						t.Fatalf("composition with a Rule Set: create=%+v files=%+v", rc.Create, rc.Files)
 					}
 				} else {
 					if !slices.Equal(c.Create.Command, []string{cfg.Launch.OpenCodePath, "--model", args[1]}) || len(c.Files) != 0 {

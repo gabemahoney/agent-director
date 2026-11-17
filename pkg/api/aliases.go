@@ -331,3 +331,9 @@ var ErrModelMissing = spawn.ErrModelMissing
 
 // ErrHostCredentialMissing means a required host credential is unset or empty.
 var ErrHostCredentialMissing = spawn.ErrHostCredentialMissing
+
+// ErrPermissionRulesRefused means the operator's configured permission rules
+// for the launch were refused. It is a configuration error: a retry without an
+// operator change gives the same result. Refusal writes none of agent-director's
+// launch resources: no row, session, trust entry or launch file.
+var ErrPermissionRulesRefused = spawn.ErrPermissionRulesRefused

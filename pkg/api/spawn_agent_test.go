@@ -23,6 +23,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -60,12 +61,15 @@ func (e spawnEnv) checkCreationWrites(t *testing.T, call func() error) error {
 	return err
 }
 
+// TestPaneOnlyDisabledWritesNothing: a lane whose flag is off is refused
+// before anything else, a configured Rule Set File (missing here) included.
 func TestPaneOnlyDisabledWritesNothing(t *testing.T) {
 	// Serial: it sets HOME and checks the shared trail.
 	for _, agent := range []string{"droid", "opencode"} {
 		for _, operation := range []string{"spawn", "reuse", "make-template"} {
 			t.Run(agent+"/"+operation, func(t *testing.T) {
 				e := newSpawnEnv(t)
+				c := agentClientWithConfig(t, e, droidRulesConfig(filepath.Join(t.TempDir(), "missing-rules.json"), ""))
 				p := api.SpawnParams{Agent: agent, CWD: t.TempDir(), AgentArgs: []string{"--model", "model"}}
 				if operation == "reuse" {
 					p.InstanceID, _ = seedFinishedRow(t, e.dbPath, store.StateEnded)
@@ -73,10 +77,10 @@ func TestPaneOnlyDisabledWritesNothing(t *testing.T) {
 				}
 				err := e.checkCreationWrites(t, func() error {
 					if operation == "make-template" {
-						_, err := e.c.MakeTemplate(api.MakeTemplateParams{Name: "lane", Agent: agent})
+						_, err := c.MakeTemplate(api.MakeTemplateParams{Name: "lane", Agent: agent})
 						return err
 					}
-					_, err := e.c.Spawn(p)
+					_, err := c.Spawn(p)
 					return err
 				})
 				assertOneName(t, err, "ErrExperimentalAgentDisabled")
@@ -85,13 +89,18 @@ func TestPaneOnlyDisabledWritesNothing(t *testing.T) {
 	}
 }
 
+// TestPaneOnlyTemplatePrecedenceAndReads: with the Rule Set File missing,
+// template creation and the reads still work and a template's own refusals
+// come first; once the file is valid, the spawn launches.
 func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 	// Serial: it sets HOME and the parent environment.
 	for _, agent := range []string{"droid", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			e := newSpawnEnv(t)
 			t.Setenv("OPENROUTER_API_KEY", "synthetic-api-key")
-			c := agentClientWithConfig(t, e, "[experimental]\n"+agent+" = true\n[defaults]\nrelay_mode = \"on\"\n")
+			fake := droidfix.New(t, droidfix.Pass)
+			rulesPath := filepath.Join(t.TempDir(), "rules.json")
+			c := agentClientWithConfig(t, e, droidRulesConfig(rulesPath, fake.Path, agent)+"[defaults]\nrelay_mode = \"on\"\n")
 			if _, err := c.MakeTemplate(api.MakeTemplateParams{Name: "lane", Agent: agent}); err != nil {
 				t.Fatal(err)
 			}
@@ -120,30 +129,42 @@ func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 					}
 				}
 			})
+			if err := os.WriteFile(rulesPath, []byte(droidfix.RuleSet("tail")), 0600); err != nil {
+				t.Fatal(err)
+			}
 			res, err := c.Spawn(p)
 			if err != nil || res.PreTrust != "skipped" {
 				t.Fatalf("Spawn=%+v, %v", res, err)
+			}
+			if checks, want := len(fake.Calls(t)), map[string]int{"droid": 1, "opencode": 0}[agent]; checks != want {
+				t.Fatalf("Droid's check ran %d times; want %d, for the launch only", checks, want)
 			}
 			row, _, _ := spawnRow(t, e, res.InstanceID)
 			if row.Agent != agent || row.ParentID != "supervisor" || !slices.Equal(storedAgentArgs(t, row), p.AgentArgs) {
 				t.Fatalf("stored request=%+v", row)
 			}
-			// The original client still has the flag off: inspection must remain available.
-			g, err := e.c.Get(res.InstanceID)
-			if err != nil || g.Agent != agent || g.State != "pending" || g.IntegrationMode != "pane_only" || g.Context != (api.ContextReading{}) || g.IdleScreenAvailability != "unavailable" {
-				t.Fatalf("Get=%+v, %v", g, err)
+			if err := os.Remove(rulesPath); err != nil {
+				t.Fatal(err)
 			}
-			s, err := e.c.Status(res.InstanceID)
-			if err != nil || s.State != "pending" || s.IntegrationMode != "pane_only" || s.Context != (api.ContextReading{}) || s.IdleScreenAvailability != "unavailable" {
-				t.Fatalf("Status=%+v, %v", s, err)
-			}
-			l, err := e.c.List(api.ListParams{Parent: "supervisor"})
-			if err != nil || len(l.Spawns) != 1 || l.Spawns[0].Agent != agent || l.Spawns[0].IntegrationMode != "pane_only" || l.Spawns[0].IdleScreenAvailability != "unavailable" {
-				t.Fatalf("List=%+v, %v", l, err)
-			}
-			subs, err := e.c.ListSubagents(res.InstanceID)
-			if err != nil || jsonOf(t, subs) != emptySubagentsJSON {
-				t.Fatalf("ListSubagents=%+v, %v", subs, err)
+			// Inspection stays available to the original client, its flag off,
+			// and to the lane's client, its Rule Set File gone.
+			for _, reader := range []*api.Client{e.c, c} {
+				g, err := reader.Get(res.InstanceID)
+				if err != nil || g.Agent != agent || g.State != "pending" || g.IntegrationMode != "pane_only" || g.Context != (api.ContextReading{}) || g.IdleScreenAvailability != "unavailable" {
+					t.Fatalf("Get=%+v, %v", g, err)
+				}
+				s, err := reader.Status(res.InstanceID)
+				if err != nil || s.State != "pending" || s.IntegrationMode != "pane_only" || s.Context != (api.ContextReading{}) || s.IdleScreenAvailability != "unavailable" {
+					t.Fatalf("Status=%+v, %v", s, err)
+				}
+				l, err := reader.List(api.ListParams{Parent: "supervisor"})
+				if err != nil || len(l.Spawns) != 1 || l.Spawns[0].Agent != agent || l.Spawns[0].IntegrationMode != "pane_only" || l.Spawns[0].IdleScreenAvailability != "unavailable" {
+					t.Fatalf("List=%+v, %v", l, err)
+				}
+				subs, err := reader.ListSubagents(res.InstanceID)
+				if err != nil || jsonOf(t, subs) != emptySubagentsJSON {
+					t.Fatalf("ListSubagents=%+v, %v", subs, err)
+				}
 			}
 		})
 	}
@@ -336,6 +357,8 @@ func TestSpawnAgentRefusals(t *testing.T) {
 
 // TestSpawnRecordsResolvedAgent (SR-1.2, SR-5.0): the row records the agent
 // the spawn resolved to, the call's own over a template's, and get shows it.
+// A Rule Set File agent-director refuses is configured: it never reaches
+// these Claude, Codex and Cursor launches (b.i4t SR-1.2).
 func TestSpawnRecordsResolvedAgent(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
@@ -362,13 +385,14 @@ func TestSpawnRecordsResolvedAgent(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newSpawnEnv(t)
+			c := agentClientWithConfig(t, env, droidRulesConfig(refusedRulesFile(t), ""))
 			p := api.SpawnParams{Agent: tc.agent, CWD: t.TempDir(), NoPreTrust: true}
 			if tc.tmpl != nil {
 				seedAgentTemplate(t, env, *tc.tmpl)
 				p.Template = "t"
 			}
 
-			res, err := env.c.Spawn(p)
+			res, err := c.Spawn(p)
 			if err != nil {
 				t.Fatalf("Spawn: %v", err)
 			}
@@ -794,13 +818,16 @@ func TestOpenCodeMissingHostKeyWritesNothing(t *testing.T) {
 	}
 }
 
+// TestOpenCodeRecomposesWithoutSavingHostKey: OpenCode's spawn, reuse and
+// template spawn recompose its configuration without saving the host key,
+// and a refused Rule Set File configured beside it never reaches them.
 func TestOpenCodeRecomposesWithoutSavingHostKey(t *testing.T) {
 	// Serial: it sets HOME and the host credential and observes the shared trail.
 	home := withTempHome(t)
 	const secret = "synthetic-host-key-uc-distinctive-47b91"
 	t.Setenv("OPENROUTER_API_KEY", secret)
 	e := newKillEnv(t)
-	c, _ := e.paneOnlyClient(t, "opencode")
+	c, _ := e.configClient(t, droidRulesConfig(refusedRulesFile(t), "", "opencode"))
 	caller := map[string]string{"CALLER_TAG": "kept", "OPENCODE_DISABLE_AUTOUPDATE": "0"}
 	p := api.SpawnParams{Agent: "opencode", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("opencode", "model"), ExtraEnv: caller}
 	var first store.Spawn

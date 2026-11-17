@@ -55,6 +55,11 @@
     "description": "A required host credential is unset or empty in agent-director's own environment; the launch refuses before mutation."
   },
   {
+    "name": "ErrPermissionRulesRefused",
+    "package": "spawn",
+    "description": "The operator's configured permission rules for this launch were refused; the description names the problem kind and, where known, the rule's position, never the rules. A configuration error: retrying without an operator change gives the same result. Refusal writes none of agent-director's launch resources: no row, session, trust entry or launch file."
+  },
+  {
     "name": "ErrAgentMissing",
     "package": "spawn",
     "description": ""

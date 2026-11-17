@@ -14,6 +14,7 @@ package apitest
 // registered for t.Cleanup; callers do not need to close it themselves.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,6 +23,26 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
+
+// SeedErrPermissionRulesRefused writes operator config and a Rule Set refused
+// locally at rules[0]. It returns the Rule Set path so a surface test can edit it.
+// Surface tests needing locally refused rules must use SeedErrPermissionRulesRefused.
+func SeedErrPermissionRulesRefused(t *testing.T, configDir string) string {
+	t.Helper()
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rulesPath := filepath.Join(configDir, "rules.json")
+	rules := `{"version":1,"rules":[{"id":"PRIVATE_RULE_ID","decision":"allow","reason":"PRIVATE_REASON","match":{"prefix":["/private/python3.11"]},"tests":{"match":["PRIVATE_MATCH"],"noMatch":["PRIVATE_NO_MATCH"]}}]}`
+	if err := os.WriteFile(rulesPath, []byte(rules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content := fmt.Sprintf("[experimental]\ndroid = true\n[launch]\ndroid_rules_path = %q\n", rulesPath)
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return rulesPath
+}
 
 // openErrStore creates a fresh temp store, registers a cleanup, and returns
 // the open handle and its db path.

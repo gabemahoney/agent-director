@@ -46,6 +46,7 @@ export {
   ErrAgentCapabilityUnsupported,
   ErrModelMissing,
   ErrHostCredentialMissing,
+  ErrPermissionRulesRefused,
   ErrAgentMissing,
   ErrAgentInvalid,
   ErrAgentArgsMismatch,

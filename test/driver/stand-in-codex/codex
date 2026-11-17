@@ -74,6 +74,30 @@
 # stand-in's (test/realtmux/codex_standin_test.go); a realtmux test compares
 # them, so change both together.
 
+# Opt-in Droid rules fixture. The checker has no launch identity, so its
+# caller supplies a record directory. The normal launch still uses the
+# shared recorder and interactive shell below, including all no-rules cases.
+if [[ -n "${AD_DROID_RULES_RECORD_DIR:-}" ]]; then
+    if [[ "${1:-}" == rules && "${2:-}" == check ]]; then
+        [[ $# == 4 && "$3" == --file ]] || exit 97
+        rec="$AD_DROID_RULES_RECORD_DIR/check"
+        mkdir -p "$rec"
+        printf '%s\n' "$4" >"$rec/path"
+        stat -c %a "$4" >"$rec/file-mode"
+        stat -c %a "$(dirname "$4")" >"$rec/dir-mode"
+        cp "$4" "$rec/input"
+        env -0 >"$rec/env"
+        printf 'check\n' >>"$AD_DROID_RULES_RECORD_DIR/calls"
+        if [[ "${AD_DROID_RULES_CHECK_EXIT:-0}" != 0 ]]; then
+            printf 'PRIVATE_NATIVE_OUTPUT\n'
+            printf 'PRIVATE_NATIVE_OUTPUT\n' >&2
+        fi
+        exit "${AD_DROID_RULES_CHECK_EXIT:-0}"
+    fi
+    [[ $# == 2 && "$1" == --settings ]] || exit 98
+    cp "$2" "$AD_DROID_RULES_RECORD_DIR/pane-settings"
+fi
+
 # >>> shared with test/realtmux/codex_standin_test.go
 id="${AGENT_DIRECTOR_INSTANCE_ID:-}"
 dir=""

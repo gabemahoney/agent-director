@@ -87,6 +87,21 @@ var zeroPaneHash = strings.Repeat("0", 64)
 // init() guard below validates every errName and verb name at startup.
 // TestErrorTableCoverage (error_cases_test.go) enforces completeness.
 var errorCases = append(append(append(append(append(append([]errorCase{
+	{
+		verb:    "spawn",
+		errName: "ErrPermissionRulesRefused",
+		seed: func(t *testing.T) (string, map[string]any) {
+			srcDir := filepath.Dir(apitest.SeedEmptyStore(t))
+			apitest.SeedErrPermissionRulesRefused(t, srcDir)
+			return srcDir, nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"cwd": "/tmp", "agent": "droid", "agent_args": []string{"--model", "model"}}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"spawn", "--agent", "droid", "--cwd", "/tmp", "--", "--model", "model"}
+		},
+	},
 
 	{
 		verb: "get-many", errName: "ErrTooManyIds",

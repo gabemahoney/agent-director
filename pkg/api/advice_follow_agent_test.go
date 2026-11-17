@@ -20,6 +20,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -66,6 +67,7 @@ func TestAdviceFollow_A28_PaneOnlyModelAdvice(t *testing.T) {
 			{"missing", nil, api.ErrModelMissing, "supply exactly one explicit subscription model"},
 			{"joined", []string{"--model=model"}, spawn.ErrSpawnDeniedFlag, "supply --model and its ID as separate arguments"},
 			{"positional", []string{"--model", "model", "task"}, spawn.ErrSpawnDeniedFlag, "remove this argument and any following value; supply only --model ID"},
+			{"settings", []string{"--model", "model", "--settings", "/tmp/caller-overlay.json"}, spawn.ErrSpawnDeniedFlag, "remove this argument and any following value; supply only --model ID"},
 			{"duplicate", []string{"--model", "model", "--model", "second"}, spawn.ErrSpawnDeniedFlag, "supply exactly one --model ID"},
 			{"option value", []string{"--model", "--verbose"}, spawn.ErrSpawnDeniedFlag, "--model requires a nonempty ID that is not an option; supply --model ID"},
 			{"custom", []string{"--model", "custom:private"}, spawn.ErrSpawnDeniedFlag, "supply a subscription model ID"},
@@ -555,5 +557,119 @@ func TestAdviceFollow_A30_HostCredential(t *testing.T) {
 	restarted := agentClientWithConfig(t, e, "[experimental]\nopencode = true\n")
 	if _, err := restarted.Spawn(p); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// advRulesLaunched fails unless res is a pending Droid row whose one create
+// ran program, the program that checked its Rule Set.
+func advRulesLaunched(t *testing.T, env spawnEnv, res api.SpawnResult, program string) {
+	t.Helper()
+	creates := env.rec.SocketCallsOf(tmux.CallCreate)
+	if len(creates) != 1 || len(creates[0].Command) != 3 || creates[0].Command[0] != program {
+		t.Fatalf("creates = %+v; want one, launching %s with its overlay", creates, program)
+	}
+	if cols, err := apitest.ReadSpawnColumns(env.dbPath, res.InstanceID); err != nil || cols.Agent != "droid" || cols.State != store.StatePending {
+		t.Fatalf("row {agent %v, state %v}, %v; want a pending droid row", cols.Agent, cols.State, err)
+	}
+}
+
+// A32: "an operator must fix the Rule Set File [launch] droid_rules_path
+// names, or the droid program"; without that change the same call gets the
+// same refusal and writes no row, session, trust entry or launch file;
+// after either fix it launches.
+func TestAdviceFollow_A32_DroidRulesOperatorFix(t *testing.T) {
+	// Serial: it sets HOME for configuration and launch files.
+	for _, fix := range []string{"the Rule Set File", "the droid program"} {
+		t.Run(fix, func(t *testing.T) {
+			e := newSpawnEnv(t)
+			// The launch resolves tmux's per-user socket directory before the Rule Set step.
+			if err := os.MkdirAll(filepath.Dir(e.socket), 0700); err != nil {
+				t.Fatal(err)
+			}
+			fake := droidfix.New(t, droidfix.Pass)
+			rules, content := filepath.Join(t.TempDir(), "rules.json"), launcherRuleSet("operator-rule")
+			if fix == "the droid program" {
+				content = droidfix.RuleSet("tail")
+				fake.SetMode(t, droidfix.Fail)
+			}
+			if err := os.WriteFile(rules, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c := agentClientWithConfig(t, e, droidRulesConfig(rules, fake.Path, "droid"))
+			p := api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")}
+			var first string
+			for try := range 2 {
+				err := e.checkCreationWrites(t, func() error {
+					_, err := c.Spawn(p)
+					return err
+				})
+				adviceAssertAdvice(t, err, api.ErrPermissionRulesRefused, "an operator must fix the Rule Set File [launch] droid_rules_path names, or the droid program")
+				if try == 1 && errText(err) != first {
+					t.Fatalf("unchanged retry = %q; want the same refusal %q", errText(err), first)
+				}
+				first = errText(err)
+			}
+			if fix == "the Rule Set File" {
+				if err := os.WriteFile(rules, []byte(droidfix.RuleSet("tail")), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				fake.SetMode(t, droidfix.Pass)
+			}
+			res, err := c.Spawn(p)
+			if err != nil {
+				t.Fatalf("followed spawn: %v; want it launched", err)
+			}
+			advRulesLaunched(t, e, res, fake.Path)
+		})
+	}
+}
+
+// A33: "delete the agent-director-droid-rules-* directory left in the
+// temporary directory"; that directory is there to delete, and once the
+// cause is gone the same call launches and leaves nothing behind.
+func TestAdviceFollow_A33_DroidRulesLeftCopy(t *testing.T) {
+	// Serial: it sets HOME and TMPDIR.
+	if os.Geteuid() == 0 {
+		t.Skip("root removes a 0500 directory's entries")
+	}
+	e := newSpawnEnv(t)
+	if err := os.MkdirAll(filepath.Dir(e.socket), 0700); err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	fake := droidfix.New(t, droidfix.Pass)
+	fake.LockCopyDir(t, true)
+	rules := filepath.Join(t.TempDir(), "rules.json")
+	if err := os.WriteFile(rules, []byte(droidfix.RuleSet("tail")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := agentClientWithConfig(t, e, droidRulesConfig(rules, fake.Path, "droid"))
+	p := api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")}
+	err := e.checkCreationWrites(t, func() error {
+		_, err := c.Spawn(p)
+		return err
+	})
+	adviceAssertAdvice(t, err, api.ErrPermissionRulesRefused, "delete the agent-director-droid-rules-* directory left in the temporary directory")
+	left, err := filepath.Glob(filepath.Join(tmp, "agent-director-droid-rules-*"))
+	if err != nil || len(left) != 1 {
+		t.Fatalf("left directories = %q, %v; want the one the refusal names", left, err)
+	}
+	// The operator deletes it (its owner can restore write permission first).
+	if err := os.Chmod(left[0], 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(left[0]); err != nil {
+		t.Fatal(err)
+	}
+	fake.LockCopyDir(t, false)
+	res, err := c.Spawn(p)
+	if err != nil {
+		t.Fatalf("spawn once the copy can be removed: %v; want it launched", err)
+	}
+	advRulesLaunched(t, e, res, fake.Path)
+	if entries, err := os.ReadDir(tmp); err != nil || len(entries) != 0 {
+		t.Fatalf("temporary directory holds %v, %v; want nothing", entries, err)
 	}
 }
