@@ -172,5 +172,6 @@ var ErrHostCredentialMissing = errors.New("ErrHostCredentialMissing")
 // It is a configuration error: a retry without an operator change to the
 // configuration or the file gives the same result. The description names the
 // problem kind and, where known, the rule's position as rules[N], never rule
-// text, file content or the agent's output. Nothing was written or launched.
+// text, file content or the agent's output. Refusal writes none of
+// agent-director's launch resources: no row, session, trust entry or launch file.
 var ErrPermissionRulesRefused = errors.New("ErrPermissionRulesRefused")

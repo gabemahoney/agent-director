@@ -146,9 +146,9 @@ type droidTests struct {
 // runs Droid's own check on a private copy of exactly the bytes the overlay
 // will embed, and returns r carrying those bytes and that program
 // (Resolved.DroidRules, Resolved.DroidProgram). Every failure is
-// ErrPermissionRulesRefused and writes nothing of the launch; only a failed
-// removal of the check's temporary copy, which the refusal names, leaves that
-// copy behind.
+// ErrPermissionRulesRefused and writes none of agent-director's launch resources:
+// no row, session, trust entry or launch file. Only a failed removal of the
+// check's temporary copy, which the refusal names, leaves that copy behind.
 func ResolveDroidRules(r Resolved, cfg config.Config) (Resolved, error) {
 	return resolveDroidRules(r, cfg, DroidRulesCheckDeadline)
 }

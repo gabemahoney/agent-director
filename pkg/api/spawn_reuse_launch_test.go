@@ -118,10 +118,11 @@ func launcherRuleSet(sentinel string) string {
 
 // TestDroidRulesRefusalWritesNothing (SR-2.1, SR-2.5): a Rule Set refused by
 // agent-director's own check or by Droid's refuses a fresh Droid spawn and a
-// finished-ID reuse with ErrPermissionRulesRefused before any write: no row
-// or reset, launch file, trust entry, session or trail record (reuse's lookup
-// read aside); the reused row's history, requests and old overlay stay; and
-// neither the error nor the log holds the rules or Droid's output.
+// finished-ID reuse with ErrPermissionRulesRefused before any launch-resource
+// write: no row or reset, launch file, trust entry or session. The shared tmux
+// socket directory is outside this guarantee. It also checks no trail record
+// (reuse's lookup read aside); the reused row's history, requests and old
+// overlay stay; and neither the error nor the log holds the rules or Droid's output.
 func TestDroidRulesRefusalWritesNothing(t *testing.T) {
 	// Serial: it sets HOME and checks every record written to the shared trail since its mark.
 	const sentinel = "private-rules-sentinel"

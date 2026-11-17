@@ -191,7 +191,9 @@ to finish within 10 seconds refuses the launch. No partial Rule Set launches.
 the file or Droid program before retrying. It names the problem kind and,
 when known, the zero-based `rules[N]`, without rule text, file contents or
 native output. Refusal precedes any row insert/reset, session, trust entry or
-launch file write. The private check copy is removed before returning; if
+launch file write. This guarantee covers agent-director's own launch resources;
+tmux's shared per-user socket directory may already have been prepared.
+The private check copy is removed before returning; if
 cleanup fails, the error says so. Stop any check processes reported as left
 running, and remove only the failed check's `agent-director-droid-rules-*`
 temporary directory before retrying.

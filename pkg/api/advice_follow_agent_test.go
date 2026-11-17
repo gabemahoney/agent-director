@@ -575,7 +575,8 @@ func advRulesLaunched(t *testing.T, env spawnEnv, res api.SpawnResult, program s
 
 // A32: "an operator must fix the Rule Set File [launch] droid_rules_path
 // names, or the droid program"; without that change the same call gets the
-// same refusal and writes nothing again, and after either fix it launches.
+// same refusal and writes no row, session, trust entry or launch file;
+// after either fix it launches.
 func TestAdviceFollow_A32_DroidRulesOperatorFix(t *testing.T) {
 	// Serial: it sets HOME for configuration and launch files.
 	for _, fix := range []string{"the Rule Set File", "the droid program"} {

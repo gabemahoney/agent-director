@@ -8323,8 +8323,10 @@ serializes once. `runDroidRulesCheck` passes those exact bytes to
 0600 regardless of umask, exclusive/no-follow create). It removes the copy
 and directory before returning; check, process-cleanup or removal failures
 refuse with sanitized `ErrPermissionRulesRefused`, preserving both check and
-cleanup problems. A rule-check refusal on reuse leaves the old row and its
-launch files intact.
+cleanup problems. Refusal writes none of agent-director's launch resources:
+no row, session, trust entry or launch file. The shared per-user tmux socket
+directory may already have been prepared and is outside that guarantee.
+A rule-check refusal on reuse leaves the old row and its launch files intact.
 
 The check and executable version probe share `internal/inputdelivery`'s
 `ResolveProgram`, `ProbeCommand`, `ProbeOutput` and `RunProbe`. **Must use:**
