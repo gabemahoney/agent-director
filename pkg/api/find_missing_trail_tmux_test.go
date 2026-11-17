@@ -206,6 +206,7 @@ func TestFindMissingMarkOrderTrail(t *testing.T) {
 			if ord.markCalls != 1 {
 				t.Fatalf("mark calls = %d; want 1", ord.markCalls)
 			}
+			drainTrail(t)
 			var ticks []map[string]any
 			var at []int // trail line index of each of id's ticks
 			for i, line := range readAPITrailLines(t) {

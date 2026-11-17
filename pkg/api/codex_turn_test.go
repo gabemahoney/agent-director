@@ -172,6 +172,7 @@ var codexTurnReads = []codexTurnRead{
 // turnEnds counts the trail's working-to-waiting moves of id since mark.
 func turnEnds(t *testing.T, mark int, id string) int {
 	t.Helper()
+	drainTrail(t)
 	n := 0
 	for _, l := range readAPITrailLines(t)[mark:] {
 		if l["instance_id"] == id && l["event"] == "ad.spawn.state_transition" &&

@@ -35,7 +35,9 @@ func enterIdleScreen(t *testing.T, e *paneEnv, c *api.Client, settle time.Durati
 		observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
 		e.now = e.now.Add(settle)
 	}
-	return assertDisplayState(t, c, e.id, api.StateIdleScreen)
+	got := assertDisplayState(t, c, e.id, api.StateIdleScreen)
+	drainTrail(t) // Keep the setup's entry out of callers' later trail checkpoints.
+	return got
 }
 
 // b.j4p: a turn start on an already-working row, or either adoption write,
@@ -158,7 +160,7 @@ func TestIdleScreenTurnAndAdoptionResetBaseline(t *testing.T) {
 				if after.PermissionEpoch != before.PermissionEpoch {
 					t.Fatalf("read changed permission_epoch: %d -> %d", before.PermissionEpoch, after.PermissionEpoch)
 				}
-				if events := displayEvents(t, mark, e.id); len(events) != wantEvents {
+				if events := recoveryDisplayEvents(t, mark, e.id); len(events) != wantEvents {
 					t.Fatalf("post-observation exit events=%v; want %d, with no delayed or duplicate exit", events, wantEvents)
 				}
 			})
@@ -253,12 +255,12 @@ func TestIdleScreenSettlementAndActualTransitionTime(t *testing.T) {
 			}
 			exited := observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
 			assertPaneRecord(t, exited.Confirmations.DisplayedState, e.now, e.now, "")
+			events := recoveryDisplayEvents(t, mark, e.id)
 			for _, ev := range readAPITrailLines(t)[mark:] {
 				if ev["instance_id"] == e.id && ev["event"] == "ad.spawn.state_transition" {
 					t.Errorf("the report impersonated a raw transition: %v", ev)
 				}
 			}
-			events := displayEvents(t, mark, e.id)
 			if len(events) != 2 {
 				t.Fatalf("events=%v; want the entry and the exit once", events)
 			}
@@ -312,7 +314,7 @@ func TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 	// The first qualifying read ends the old episode at once.
 	e.now = start.Add(time.Second)
 	observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
-	events := displayEvents(t, mark, e.id)
+	events := recoveryDisplayEvents(t, mark, e.id)
 	if len(events) != 1 {
 		t.Fatalf("events=%v; want only the old episode's exit", events)
 	}
@@ -332,7 +334,7 @@ func TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 	if got.Since != e.now.Format(displayTS) || minutes(t, got) != int64(e.now.Sub(start)/time.Minute) {
 		t.Fatalf("new episode inherited the old one: old=%+v new=%+v", old, got)
 	}
-	events = displayEvents(t, mark, e.id)
+	events = recoveryDisplayEvents(t, mark, e.id)
 	if len(events) != 2 {
 		t.Fatalf("events=%v; want one exit and one entry", events)
 	}
@@ -560,7 +562,7 @@ func TestIdleScreenRawMoveSettlesOut(t *testing.T) {
 				row.StateDetail != (api.StateDetail{}) || listed.DisplayedState != "" {
 				t.Fatalf("status=%+v get=%+v list=%+v; want ordinary %s", got, row.StateDetail, listed, raw)
 			}
-			events := displayEvents(t, mark, e.id)
+			events := recoveryDisplayEvents(t, mark, e.id)
 			if len(events) != 1 {
 				t.Fatalf("exit=%v; want one to %s at the read", events, raw)
 			}

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
@@ -121,6 +123,7 @@ func fskAssertCalls(t *testing.T, rec *tmuxfix.Recorder, want ...fskCall) {
 // server and verdict, on socket.
 func fskAssertDisagree(t *testing.T, before int, id, socket, server, verdict string, reasons ...string) {
 	t.Helper()
+	drainTrail(t)
 	var got []string
 	for _, rec := range trailSince(t, before, "ad.provenance.disagree") {
 		if rec["instance_id"] != id {
@@ -184,6 +187,20 @@ func TestFindMissingSocketsOneLookupPerSocket(t *testing.T) {
 			fskAssertCalls(t, c.rec, c.calls...)
 		})
 	}
+}
+
+// b.86d: fskSweep's trail readers must see a move tick queued behind a busy real writer.
+func TestFindMissingSocketsSlowTrail(t *testing.T) {
+	// Serial: it holds the process-wide trail singleton's mutex.
+	id := "fsk-" + uuid.NewString()
+	rec := tmuxfix.NewRecorder()
+	row := liveRow(id, unknownEvidence())
+	holdTrailUntilReader(t)
+
+	st, res, before := fskSweep(t, rec, fskChecker(), nil, row)
+
+	fskAssertRows(t, st, res, before, map[string]fskWant{id: fskMarked("tmux_absent")})
+	fskAssertCalls(t, rec, lookupOn(apitest.TestSocket))
 }
 
 // TestFindMissingSocketsStopRulePerSocket: a hung, unavailable or permission-denied socket (lookup or adoption

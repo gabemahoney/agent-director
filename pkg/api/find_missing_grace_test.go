@@ -67,6 +67,7 @@ func fgcSweep(t *testing.T, c *api.Client, rec *tmuxfix.Recorder, pc *procfix.Ch
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
+	drainTrail(t)
 	return fgcRun{res: res, tmux: pendCalls(rec) - tmuxBefore,
 		lookups: len(rec.SocketCallsOf(tmux.CallLookup)) - lookupsBefore, reads: len(pc.StartTimeCalls()) - readsBefore}
 }

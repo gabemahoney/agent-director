@@ -580,7 +580,7 @@ func TestSweepProtectedCursorUnknownGatewayReason(t *testing.T) {
 				if _, err := e.st.ReadCursorRuntime(b.InstanceID); err != nil {
 					t.Errorf("binding: %v", err)
 				}
-				if records := ptRecords(t, mark, "ad.find_missing.tick", b.InstanceID); len(records) != 0 {
+				if records := ticksSince(t, mark, b.InstanceID); len(records) != 0 {
 					t.Errorf("protected row ticked: %+v", records)
 				}
 				samples := 0
@@ -659,7 +659,7 @@ func TestSweepOptionalWriterCoverage(t *testing.T) {
 			if raw, err := e.st.GetSpawn(r.ID); err != nil || raw.State != state {
 				t.Fatalf("optional writer changed state: %+v %v", raw, err)
 			}
-			if records := ptRecords(t, mark, "ad.find_missing.tick", r.ID); len(records) != 0 {
+			if records := ticksSince(t, mark, r.ID); len(records) != 0 {
 				t.Errorf("unavailable/no-op repair ticked: %+v", records)
 			}
 			e.assertNoTmuxCall(t)
