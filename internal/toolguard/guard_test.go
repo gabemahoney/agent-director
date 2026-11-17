@@ -574,6 +574,130 @@ func TestGuardDecisions(t *testing.T) {
 		}})
 	}
 
+	// SR-6.4: literal names and the two boundary sets, without shell parsing.
+	for _, spelling := range []string{"tilde", "HOME", "braced HOME", "absolute"} {
+		for _, suffix := range []string{"", "/key"} {
+			cases = append(cases, guardCase{name: "Execute/spelling/" + spelling + suffix, tool: "Execute", want: covered, setup: func(t *testing.T, c *guardCall) {
+				name := map[string]string{"tilde": "~/.ssh", "HOME": "$HOME/.ssh", "braced HOME": "${HOME}/.ssh", "absolute": c.files.SecretDir}[spelling]
+				c.envelope["tool_input"] = map[string]any{"command": name + suffix}
+			}})
+		}
+		for _, suffix := range []string{"", "/key"} {
+			cases = append(cases, guardCase{name: "Execute/resolved/" + spelling + suffix, tool: "Execute", want: covered, setup: func(t *testing.T, c *guardCall) {
+				// This listed path is outside HOME; only its resolved form is inside.
+				c.args = []string{"--", c.files.WorkLink}
+				name := map[string]string{"tilde": "~/.ssh", "HOME": "$HOME/.ssh", "braced HOME": "${HOME}/.ssh", "absolute": c.files.SecretDir}[spelling]
+				c.envelope["tool_input"] = map[string]any{"command": "cat " + name + suffix}
+			}})
+		}
+	}
+	for _, boundary := range []struct {
+		name, before, after string
+		want                Result
+	}{
+		{"space", "echo ", " ", covered}, {"quotes", `cat "`, `"`, covered},
+		{"operators", "true;(", ")|cat", covered}, {"newline", "echo\n", "\n", covered},
+		{"equals and wildcard", "dest=", "*", covered}, {"braces", "{", "}", covered},
+		{"backslash and question", `\`, "?", covered},
+		{"start letter", "a", "", Result{}}, {"start digit", "1", "", Result{}},
+		{"start dot", ".", "", Result{}}, {"start underscore", "_", "", Result{}},
+		{"start hyphen", "-", "", Result{}}, {"start slash", "/", "", Result{}},
+		{"start Unicode letter", "é", "", Result{}}, {"start Unicode digit", "٣", "", Result{}},
+		{"sshx", "echo ", "x", Result{}}, {"ssh.bak", "echo ", ".bak", Result{}},
+		{"end digit", "", "1", Result{}}, {"end underscore", "", "_", Result{}},
+		{"end hyphen", "", "-", Result{}},
+		{"end Unicode letter", "", "é", Result{}}, {"end Unicode digit", "", "٣", Result{}},
+	} {
+		cases = append(cases, guardCase{name: "Execute/boundary/" + boundary.name, tool: "Execute", want: boundary.want,
+			input: map[string]any{"command": boundary.before + "~/.ssh" + boundary.after}})
+	}
+	cases = append(cases,
+		guardCase{name: "Execute/later occurrence", tool: "Execute", want: covered, input: map[string]any{"command": "echo x~/.ssh ~/.ssh.bak; cat ~/.ssh/key"}},
+		guardCase{name: "Execute/listed literal", tool: "Execute", want: covered, setup: func(t *testing.T, c *guardCall) {
+			entry := c.files.Home + "/./protected-link"
+			c.args = []string{"--", entry}
+			c.envelope["tool_input"] = map[string]any{"command": "cat " + entry + "/decoy"}
+		}},
+		guardCase{name: "Execute/resolved outside HOME", tool: "Execute", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", c.files.ListedLink}
+			c.envelope["tool_input"] = map[string]any{"command": "cat " + c.files.ResolvedSecret + "/decoy"}
+		}},
+		guardCase{name: "Execute/HOME component sibling", tool: "Execute", input: map[string]any{"command": "echo ~/.ssh"}, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", c.files.Home + "x/.ssh"}
+		}},
+		guardCase{name: "Execute/carried fields", tool: "Execute", input: map[string]any{
+			"command": "printf safe", "summary": "cat ~/.ssh/key", "riskLevelReason": "cat $HOME/.ssh/key",
+			"riskLevel": "${HOME}/.ssh", "timeout": 1, "fireAndForget": true,
+		}},
+		guardCase{name: "Execute/entry resolution failure", tool: "Execute", want: failed, input: map[string]any{"command": "printf safe"}, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", c.files.OrdinaryFile + "/child"}
+		}},
+		guardCase{name: "Execute/root descendant", tool: "Execute", want: covered, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", "/"}
+			c.envelope["tool_input"] = map[string]any{"command": "cat " + c.files.SafeFile}
+		}},
+		guardCase{name: "Execute/HOME itself", tool: "Execute", want: covered, input: map[string]any{"command": "cat $HOME/ordinary"}, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", c.files.Home}
+		}},
+		guardCase{name: "Execute/listed HOME suffix", tool: "Execute", want: covered, input: map[string]any{"command": "cat ~/./protected-link/decoy"}, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", c.files.Home + "/./protected-link"}
+		}},
+		guardCase{name: "Execute/literal metacharacters", tool: "Execute", input: map[string]any{"command": "cat ~/decoyXtxt"}, setup: func(t *testing.T, c *guardCall) {
+			c.args = []string{"--", c.files.Home + "/decoy.txt"}
+		}},
+		guardCase{name: "Execute/fresh listed link", tool: "Execute", setup: func(t *testing.T, c *guardCall) {
+			c.envelope["tool_input"] = map[string]any{"command": "cat " + c.files.LateTarget + "/decoy"}
+		}, next: func(t *testing.T, c *guardCall) Result {
+			if err := os.Symlink(c.files.LateTarget, c.files.LateLink); err != nil {
+				t.Fatal(err)
+			}
+			return covered
+		}},
+	)
+	for _, home := range []string{"", "relative"} {
+		cases = append(cases, guardCase{name: "Execute/unusable HOME/" + home, tool: "Execute", want: failed, input: map[string]any{"command": "printf safe"}, setup: func(t *testing.T, c *guardCall) {
+			if home == "" {
+				if err := os.Unsetenv("HOME"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Setenv("HOME", home)
+			}
+		}})
+	}
+	for _, fold := range []bool{false, true} {
+		want, label := Result{}, "Linux"
+		if fold {
+			want, label = covered, "Darwin simulated"
+		}
+		for _, spelling := range []string{"absolute", "HOME"} {
+			cases = append(cases, guardCase{name: "Execute/case/" + label + "/" + spelling, tool: "Execute", want: want, setup: func(t *testing.T, c *guardCall) {
+				command := "cat " + strings.ToUpper(c.files.SecretDirFile)
+				if spelling == "HOME" {
+					// Vary the base's case too: the relative spelling is still needed.
+					t.Setenv("HOME", strings.ToUpper(c.files.Home))
+					command = "cat ${HOME}/.SSH/key"
+				}
+				c.envelope["tool_input"] = map[string]any{"command": command}
+				c.ctx = context.Background()
+				c.check = func(ctx context.Context, p payload, entries []string) reason {
+					r := newPathResolver(ctx)
+					r.foldCase = fold
+					return decideExecute(p, entries, r)
+				}
+			}})
+		}
+	}
+	for _, expires := range []bool{false, true} {
+		label, want := "healthy", Result{}
+		if expires {
+			label, want = "original deadline", failed
+		}
+		cases = append(cases, guardCase{name: "Execute/" + label, tool: "Execute", want: want, input: map[string]any{"command": "printf safe"}, setup: func(t *testing.T, c *guardCall) {
+			gateGuardOperation(t, c, "Execute lookup", expires)
+		}})
+	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			files, err := toolguardfix.New(t.TempDir())
@@ -689,7 +813,7 @@ func gateGuardOperation(t *testing.T, c *guardCall, stage string, expires bool) 
 			}
 			return input.Read(p)
 		})
-	} else if stage == "lookup" {
+	} else if stage == "lookup" || stage == "Execute lookup" {
 		c.deadline, _ = ctx.Deadline()
 		// In the fake clock, input consumes three quarters of the original
 		// budget before metadata stalls. A renewed timeout would return late.
@@ -706,13 +830,20 @@ func gateGuardOperation(t *testing.T, c *guardCall, stage string, expires bool) 
 			defer close(finished)
 			r := newPathResolver(ctx)
 			held := false
+			target := c.files.SafeFile
+			if stage == "Execute lookup" {
+				target = c.files.SecretDir
+			}
 			r.lstat = func(path string) (os.FileInfo, error) {
-				if path == c.files.SafeFile && !held {
+				if path == target && !held {
 					held = true
 					close(started)
 					<-release
 				}
 				return os.Lstat(path)
+			}
+			if stage == "Execute lookup" {
+				return decideExecute(p, entries, r)
 			}
 			return decideFiles(p, entries, r)
 		}

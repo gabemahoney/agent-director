@@ -1685,15 +1685,17 @@ This form must survive installed-executable upgrades because running launches
 keep invoking it. The Guard accepts exactly one PreToolUse JSON object on
 stdin. Its permitted inputs are argv, stdin, `HOME` and filesystem metadata
 and links; it reads no configuration, store or file contents, writes no files,
-trail records or logs, and makes no network calls. Launch integration and
-Execute matching are not yet implemented.
+trail records or logs, and makes no network calls. Launch integration is not
+yet implemented.
 
 `internal/toolguard.Run` owns decoding, checked-tool field validation and
 decisions. It blocks AskUser with `this call is disabled`. File Tools check
 resolved targets. ApplyPatch checks raw and provider-trimmed header targets;
 a target empty after trimming fails closed. Recursive searches also refuse
 roots that hold a Secret Path. Glob checks bounded literal prefixes; relative
-prefixes use its Search Root, and absolute prefixes keep their root. Other calls
+prefixes use its Search Root, and absolute prefixes keep their root. Execute
+checks literal names of listed and resolved Secret Paths, including their
+HOME spellings, with name boundaries; an unusable HOME fails closed. Other calls
 receive no decision. Unchecked tool inputs are not schema-validated, and carried
 text is not scanned for paths.
 
@@ -1710,8 +1712,8 @@ fail-open behavior.
 
 One named deadline bounds argument validation, stdin ingestion and all rule
 work, leaving time for startup and exit within the provider hook timeout.
-It never resets between rules; the final bound still requires measurement
-with the completed rules. `Run` returns only `Result.ExitCode` and
+It never resets between rules; the bound includes a margin over the measured
+built-binary decoy calls. `Run` returns only `Result.ExitCode` and
 `Result.Stderr`. The CLI publishes that result once and exits, bypassing even
 trail shutdown. A blocked worker may remain until process exit, but receives
 no writer and cannot publish late output.

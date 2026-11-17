@@ -11,11 +11,12 @@ import (
 	"time"
 )
 
-// decisionTimeout initially reserves 55 of the hook's 60 seconds for startup,
-// scheduling and exit: five seconds bounds stdin plus all decision work. This
-// is a conservative starting budget, not a runtime measurement; Task
-// t2.jo7.dj.z3 measures the finished path/Execute rules and sets the final value.
-const decisionTimeout = 5 * time.Second
+// decisionTimeout bounds stdin and all rules. The nine decoy transcript calls,
+// repeated 20 times in the Debian 12 linux/amd64 scheduler with Go 1.27.3,
+// took 1.42–11.24 ms including process startup/exit. Two seconds gives over
+// 170x that measured maximum while leaving 58 s of the hook's 60 s for startup,
+// scheduling and exit; slower or stalled work fails closed.
+const decisionTimeout = 2 * time.Second
 
 // maxPayloadBytes allows 64 MiB of JSON: two 5 MiB Edit strings can each expand
 // sixfold as JSON escapes (60 MiB), leaving 4 MiB for paths and the envelope.
@@ -131,7 +132,7 @@ func pathEntries(args []string) ([]string, bool) {
 	return append([]string(nil), args[1:]...), true
 }
 
-// decide is the one rule entry point. Later path/Execute rules must consume p,
+// decide is the one rule entry point. All path/Execute rules must consume p,
 // reuse entries and ctx, and return a fixed reason without I/O to any writer.
 func decide(ctx context.Context, p payload, entries []string) reason {
 	if ctx.Err() != nil {
@@ -143,6 +144,8 @@ func decide(ctx context.Context, p payload, entries []string) reason {
 	switch p.tool {
 	case "Read", "Create", "Edit", "ApplyPatch", "LS", "Grep", "Glob":
 		return decideFiles(p, entries, newPathResolver(ctx))
+	case "Execute":
+		return decideExecute(p, entries, newPathResolver(ctx))
 	}
 	return noDecision
 }
