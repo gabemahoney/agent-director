@@ -41,8 +41,9 @@ type kpSignal struct {
 // (first is its Result). Keyless pause's signals are recorded in sent and
 // answered by answer (nil: sent, and the agent exits); atSleep runs at the
 // pause's first poll sleep. Keyless pause's clock (api.SetPauseNowForTest) is
-// real time plus skew: each poll sleep adds its 100 ms to skew instead of
-// sleeping, and advance adds more, so a deadline is crossed without waiting.
+// real time plus skew: each poll sleep adds step (100 ms when unset) to skew
+// instead of sleeping, and advance adds more, so a deadline is crossed without
+// waiting. A spec with a cwd seeds a resumable row (seedResumableRow).
 type kpEnv struct {
 	*killEnv
 	r       killRow
@@ -52,8 +53,20 @@ type kpEnv struct {
 	sent    []kpSignal
 	answer  func(kpSignal) error
 	atSleep func()
+	step    time.Duration
 	skew    atomic.Int64
 }
+
+// kpBudget is a real pause budget, in seconds, that no machine load uses up
+// before a call's last store write, for a call whose test is not about the
+// budget running out. A test that waits such a budget out does so on the
+// injected clock, with kpStep per poll; one about the budget running out
+// moves the clock past the deadline, never waiting for real time.
+const kpBudget = 30
+
+// kpStep is the injected time a poll adds when a test waits a kpBudget out:
+// about ten polls.
+const kpStep = 3 * time.Second
 
 // advance moves keyless pause's clock d ahead.
 func (e *kpEnv) advance(d time.Duration) { e.skew.Add(int64(d)) }
@@ -62,7 +75,11 @@ func newKeylessEnv(t *testing.T, spec killRowSpec) *kpEnv {
 	t.Helper()
 	e := &kpEnv{killEnv: newKillEnv(t)}
 	spec.SessionID = uuid.NewString()
-	e.r = e.seedRow(t, spec)
+	if spec.CWD != "" {
+		e.r = e.seedResumableRow(t, spec).killRow
+	} else {
+		e.r = e.seedRow(t, spec)
+	}
 	seedBusyCovered(t, e.killEnv, e.r.ID)
 	_, e.woken = busyWake(t, e.killEnv, e.r.ID)
 	e.c, _ = e.client(t)
@@ -82,7 +99,11 @@ func newKeylessEnv(t *testing.T, spec killRowSpec) *kpEnv {
 	t.Cleanup(api.SetPauseNowForTest(func() time.Time { return time.Now().Add(time.Duration(e.skew.Load())) }))
 	const poll = 100 * time.Millisecond
 	pauSleeps(t, poll, false, func(n int) {
-		e.advance(poll)
+		if e.step > 0 {
+			e.advance(e.step)
+		} else {
+			e.advance(poll)
+		}
 		if n == 1 && e.atSleep != nil {
 			e.atSleep()
 		}
@@ -96,12 +117,17 @@ func newKeylessEnv(t *testing.T, spec killRowSpec) *kpEnv {
 // before the first of them: 0 asks for the smallest budget, 1 s, as
 // production's pause.timeout_seconds never gives less.
 func (e *kpEnv) pause(ctx context.Context, st api.PauseStore, timeoutSeconds int) error {
+	return e.pauseOpt(ctx, st, timeoutSeconds, false)
+}
+
+// pauseOpt is pause with only_if_waiting set to onlyIfWaiting.
+func (e *kpEnv) pauseOpt(ctx context.Context, st api.PauseStore, timeoutSeconds int, onlyIfWaiting bool) error {
 	if st == nil {
 		st = e.st
 	}
 	timeoutSeconds = max(timeoutSeconds, 1)
 	_, err := api.Pause(ctx, st, e.rec, api.PauseEnv{Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()}},
-		timeoutSeconds, api.PauseParams{InstanceID: e.r.ID})
+		timeoutSeconds, api.PauseParams{InstanceID: e.r.ID, OnlyIfWaiting: onlyIfWaiting})
 	return err
 }
 
@@ -201,13 +227,15 @@ var kpHelper = store.BusySendIssuer{Role: store.BusySendProcessHelper, PID: 7001
 
 // issueHelper claims r's Held Messages at turn end and issues the first
 // prompt as helper, alive in the fake, then admits one more Message, which
-// stays Held: an owned issuer that may still emit for the Launch.
-func (e *kpEnv) issueHelper(t *testing.T, helper store.BusySendIssuer) {
+// stays Held: an owned issuer that may still emit for the Launch. It returns
+// the prompt as the issuing job holds it.
+func (e *kpEnv) issueHelper(t *testing.T, helper store.BusySendIssuer) store.BusySendPromptRef {
 	t.Helper()
-	e.busyIssue(t, e.r, &helper)
+	ref := e.busyIssue(t, e.r, &helper)
 	e.pc.Set(helper.PID, procfix.Alive(helper.StartTime))
 	busyAdmit(t, e.c, api.SendKeysParams{InstanceID: e.r.ID, Text: "third"})
 	e.woken()
+	return ref
 }
 
 // TestPauseKeylessAnyLiveState (SR-6.4): through Client.Pause, a Covered
@@ -273,8 +301,7 @@ func TestPauseKeylessEndsRowAfterSweepMissing(t *testing.T) {
 	e := newKeylessEnv(t, killRowSpec{})
 	held := e.held(t)
 	var mark int
-	e.answer = func(s kpSignal) error {
-		e.pc.Set(s.pid, procfix.Gone())
+	st := &kpSignalHookStore{Store: e.st, after: func() {
 		if _, err := e.c.Sweep(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -283,9 +310,8 @@ func TestPauseKeylessEndsRowAfterSweepMissing(t *testing.T) {
 			t.Fatalf("sweep before pause completion: state=%s, err=%v; want missing", row.State, err)
 		}
 		mark = trailMark(t)
-		return nil
-	}
-	if err := e.pause(context.Background(), nil, 1); err != nil {
+	}}
+	if err := e.pause(context.Background(), st, kpBudget); err != nil {
 		t.Fatalf("Pause: %v; want success after concurrent sweep", err)
 	}
 	e.assertEnded(t)
@@ -429,6 +455,25 @@ func (s *kpExitHookStore) MarkKeylessPauseEndedWithin(ctx context.Context, row a
 		s.afterEnd()
 	}
 	return prior, res, err
+}
+
+// kpSignalHookStore runs after once, just after a plain pause's signal
+// returns: the signal runs under the store's write lock, so no claim is made
+// between its check and its signal, and a race that uses the store right
+// after the signal runs here, once that lock is released.
+type kpSignalHookStore struct {
+	*store.Store
+	after func()
+}
+
+func (s *kpSignalHookStore) SignalPlainBusySendPauseWithin(ctx context.Context, req store.BusySendPauseRequest, signal func() error, wait time.Duration) (store.BusySendPlainPauseSignalResult, error) {
+	res, err := s.Store.SignalPlainBusySendPauseWithin(ctx, req, signal, wait)
+	if s.after != nil {
+		f := s.after
+		s.after = nil
+		f()
+	}
+	return res, err
 }
 
 // read counts a row read and runs its hook.
@@ -588,9 +633,10 @@ func TestPauseKeylessLaunchReplaced(t *testing.T) {
 	t.Run("after the signal", func(t *testing.T) {
 		e := newKeylessEnv(t, killRowSpec{})
 		var replacement apitest.BusyLaunchFact
-		e.answer = func(kpSignal) error { replacement = e.replace(t); return nil }
+		e.answer = func(kpSignal) error { return nil }
+		st := &kpSignalHookStore{Store: e.st, after: func() { replacement = e.replace(t) }}
 
-		err := e.pause(context.Background(), nil, 0)
+		err := e.pause(context.Background(), st, kpBudget)
 
 		assertOneName(t, err, "ErrSpawnNotPausable")
 		if got, want := jsonOf(t, api.ErrDetails(err)), `{"cause":"launch_changed","signal_sent":true}`; got != want {
@@ -667,7 +713,7 @@ func (e *kpEnv) followBudgetAdvice(t *testing.T, err error, phrase string, inspe
 		}
 	}
 	if retry {
-		if err := e.pause(context.Background(), nil, 1); err != nil {
+		if err := e.pause(context.Background(), nil, kpBudget); err != nil {
 			t.Fatalf("retried pause: %v; want success", err)
 		}
 	}
@@ -705,6 +751,12 @@ func TestPauseKeylessBudgetBoundsStore(t *testing.T) {
 			defer free()
 			e.answer = func(s kpSignal) error {
 				e.pc.Set(s.pid, procfix.Gone())
+				if tc == "cancelled at the signal" {
+					cancel()
+				}
+				return nil
+			}
+			st := &kpSignalHookStore{Store: e.st, after: func() {
 				switch tc {
 				case "store connection held":
 					take, _, release := holdReadConnection(t, e.st, e.r.ID)
@@ -715,16 +767,14 @@ func TestPauseKeylessBudgetBoundsStore(t *testing.T) {
 				case "write lock held":
 					frees <- apitest.HoldWriteLock(t, e.dbPath, time.Minute)
 				default:
-					cancel()
-					return nil
+					return
 				}
 				e.advance(time.Hour)
-				return nil
-			}
+			}}
 			held := e.held(t)
 			start := time.Now()
 
-			err := e.pauseWatched(t, ctx, nil, 1, free)
+			err := e.pauseWatched(t, ctx, st, kpBudget, free)
 
 			elapsed := time.Since(start)
 			free()

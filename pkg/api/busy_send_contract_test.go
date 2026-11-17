@@ -263,9 +263,11 @@ func TestBusySendUncoveredRefusalMatrix(t *testing.T) {
 // options' shapes alike, come before the coverage decision, and an unknown id
 // stays ErrSpawnNotFound; a valid option is refused agent_not_covered before
 // today's state, relay, permission, capability and lifecycle branches (on
-// Codex rows). On a covered Claude Launch, pause only_if_waiting, like a
-// resume through a store that cannot read coverage, is an unnamed error that
-// never falls back to today's behaviour (a covered force is E5's; its calls'
+// Codex rows). On a covered Claude Launch, pause only_if_waiting through a
+// store that cannot pause keylessly (or claim), like a resume through a store
+// that cannot read coverage, is an unnamed error that never falls back to
+// today's behaviour (a covered pause's claim answers are pause_claim_test.go's;
+// a covered force is E5's; its calls'
 // tests are Task t2.xis.p8.y2's; a covered resume's accepted defaults,
 // steer_turn included, are TestBusySendResumeDefaults'). Every refusal
 // writes, sends and stores nothing.

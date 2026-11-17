@@ -1247,16 +1247,25 @@ export interface CantSendDetails {
 
 /**
  * `ErrSpawnNotPausable`'s `errDetails`: its cause. `agent_not_covered` when pause refuses
- * `only_if_waiting`; a covered agent's keyless pause adds `signal_sent` (whether its SIGTERM
- * was sent, absent when not known) and one of `agent_process_unverifiable`, `launch_changed`,
- * `signal_unsupported`, `signal_uncertain`, `exit_uncertain` (signalled, exit not verified
- * within the budget), `budget_exhausted` (the budget ran out at a store read or write, or
- * before the signal), `owned_process_running`, `owned_process_unverifiable` or
- * `destination_unfenced`.
+ * `only_if_waiting` for an agent busy send does not cover; on a Covered Agent `only_if_waiting`
+ * refuses `not_waiting` (with `observed_state`, the raw state) or `turn_pending`, changing
+ * nothing. A pause claim standing on the Launch answers a pause, with or without the option,
+ * signalling nothing (see `PauseParams.only_if_waiting` for the exceptions): `pause_in_progress`,
+ * `pause_uncertain` (past the claiming pause's deadline, its signal intent has no outcome), or
+ * the earlier pause's recorded outcome replayed (`exit_uncertain` with `signal_sent` true; a
+ * failure's cause, or `pause_uncertain` with none, `signal_sent` omitted). A covered agent's
+ * keyless pause adds
+ * `signal_sent` (whether its SIGTERM was sent, absent when not known) and one of
+ * `agent_process_unverifiable`, `launch_changed`, `signal_unsupported`, `signal_uncertain`,
+ * `exit_uncertain` (signalled, exit not verified within the budget), `budget_exhausted` (the
+ * budget ran out at a store read or write, or before the signal), `owned_process_running`,
+ * `owned_process_unverifiable` or `destination_unfenced`.
  */
 export interface NotPausableDetails {
   cause: string;
   signal_sent?: boolean;
+  /** The raw lifecycle state pause observed, for cause `not_waiting` only. */
+  observed_state?: string;
 }
 
 /**
@@ -1687,10 +1696,23 @@ export interface PauseParams {
   instance_id: string;
   /**
    * Pause only an agent proven waiting with no turn pending. Covered Agents only. With `true`, the
-   * coverage the row's current Launch recorded decides first, in any state, and nothing is ended:
-   * `not_covered` rejects with `ErrSpawnNotPausable`, `errDetails` NotPausableDetails cause
-   * `agent_not_covered`; `covered` rejects with this version's unavailable `ErrInternal`. `false`
-   * or omitted is today's pause.
+   * coverage the row's current Launch recorded decides first, in any state: `not_covered` rejects
+   * with `ErrSpawnNotPausable`, `errDetails` NotPausableDetails cause `agent_not_covered`, nothing
+   * ended. On a covered Launch one store transaction checks the raw state and delivery records:
+   * not waiting rejects with cause `not_waiting` (`observed_state` holds the state), and a turn
+   * pending (input not started, a prompt with incomplete output, or a pending force) with
+   * `turn_pending`, each changing nothing and retryable; otherwise pause claims the Launch, so no
+   * input is issued to it after the claim, and ends the agent keylessly, Held Messages kept. With
+   * or without this option, a pause of a Launch whose claim stands signals nothing and gets the
+   * claim's answer: `pause_in_progress`, `pause_uncertain`, or the claiming pause's recorded
+   * `exit_uncertain` (`signal_sent` true) or failure (its cause, or `pause_uncertain`); a claim
+   * abandoned before its signal intent is instead released and the pause goes on as if none
+   * stood. Once the agent's exit is known (the claim ended, or recorded `paused`) or, with this
+   * option, the Launch ended with no claim, pause of a finished row resolves as a no-op and of a
+   * live row finishes the shutdown with no signal. The claim and its fence end only at Launch End
+   * with exit evidence (kill establishes it) or a new Launch, judged on its own. Table:
+   * docs/caller-contract.md#standing-pause-claims. `false` or omitted is today's pause, which
+   * signals only while no claim stands.
    */
   only_if_waiting?: boolean;
 }

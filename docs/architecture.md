@@ -4273,8 +4273,9 @@ delivery reads read the core (see [Launch coverage](#launch-coverage) and
 [Busy-send admission and Results](#busy-send-admission-and-results)),
 [the inbox coordinator](#the-inbox-coordinator)'s job steps claim, issue and
 settle hand-overs, [the force protocol](#the-force-protocol) stores and
-settles force attempts, and [lifecycle custody](#lifecycle-custody-and-exit-evidence)
-records Launch End and exit. No pause claim exists. The tables hold:
+settles force attempts, [lifecycle custody](#lifecycle-custody-and-exit-evidence)
+records Launch End and exit, and [pause claims](#pause-claims) fence a Launch
+for `pause`. The tables hold:
 
 - **Identity.** A conversation (`busy_conversations`: an opaque id and a
   per-instance generation, independent of `life_number` and the provider
@@ -4303,10 +4304,15 @@ records Launch End and exit. No pause claim exists. The tables hold:
 - **Results and ownership.** `busy_send_results` is store-wide confirmed pair
   ownership. The Result and its retention are Message columns, so an expired
   Message stays as a tombstone with its pair and no text, Result or receipt.
-- **Reserved fields.** Pause claims (`busy_send_pause_claims`: one Launch,
-  owning call, deadline, signal intent, and the call's outcome kept apart
-  from the fence's lifetime) and Codex and Cursor route kinds are schema
-  capacity only: nothing uses them yet. Only a covered Claude Launch records a
+- **Pause claims.** `busy_send_pause_claims` keeps each claim on one Launch,
+  at most one standing: owning call, revision, deadline, signal intent, and
+  the call's outcome (`call_outcome`, `call_cause`) kept apart from the
+  claim's own closure (`state`, `closed_by`). A refusal proven before any
+  signal is outcome `refused`, released `refused_before_signal`, and keeps
+  any intent already recorded; an `abandoned_before_signal` release has
+  neither outcome nor intent.
+- **Reserved fields.** Codex and Cursor route kinds are schema capacity only:
+  nothing uses them yet. Only a covered Claude Launch records a
   route and wake path ([The Claude route](#the-claude-route)). Of the process
   roles (`busy_send_launch_processes`), only the issuers the coordinator's
   issue commit records and the agent identity that exit evidence keeps are
@@ -9895,8 +9901,22 @@ Launch), judges it with `judgeBusySendExit` through `busySendExitFor`
   write back, if claimed or issued custody remains.
 - Covered deletion is [`delete`](#delete)'s; `DeleteSpawn` refuses a covered
   conversation, and [`expire`](#expire) keeps a row that holds custody.
-- The pause claim (`only_if_waiting`) is to close on the same evidence; it is
-  not built yet.
+- A standing [pause claim](#pause-claims) ends through
+  `endBusySendPauseClaim` (`busy_send_pause.go`), in the transaction that
+  records its reason: `launch_end` once the Launch's End is recorded with
+  positive evidence of its recorded agent's exit (`EndBusySendLaunchWithin`
+  for `kill`'s and keyless `pause`'s verified exit; a terminal mark whose
+  own write stored applicable exited process evidence, `provenAgentExit`;
+  `RecordProcessEvidence` newly accepting such evidence after the End;
+  `exitBusySendLaunches`), and `launch_published` when
+  `publishBusySendCandidate` supersedes the Launch. Since every covered
+  staging applies exit evidence, a resume or reuse normally ends it as
+  `launch_end` first. It compares the claim's owner and revision, advances
+  the revision and keeps the intent and any outcome; the first closure wins.
+  A logical End alone (a hook's end report, a mark without exit evidence,
+  `MarkBusySendLaunchUncertain`, candidate closure) and a refused `kill` or
+  `resume` leave it standing. Closure needs only the recorded agent's exit,
+  not Exit: resume and reuse still need Exit of every owned process.
 
 **Waits.** After a staging, a publication or a failed create's restoration
 (`execBusySendRestore`, which keeps Messages accepted meanwhile),
@@ -21174,6 +21194,9 @@ SR-7.1 to SR-7.3). `pause` polls for the ended state; `kill` also polls
 for process exit and `decide` for relay delivery or legacy settlement:
 
 1. **Row read.** Unknown id → `ErrSpawnNotFound`.
+   **With `only_if_waiting`**, `onlyIfWaitingGate` decides first, in any
+   state: `not_covered` → `ErrSpawnNotPausable`, cause `agent_not_covered`,
+   nothing ended; covered → conditional [keyless pause](#keyless-pause).
    **A covered row** (`Spawn.BusySend` `covered`) gets
    [keyless pause](#keyless-pause) instead of every rule below.
    **The Codex end check** (`endIfGone`), before every rule below. A Codex
@@ -21403,10 +21426,11 @@ allowance and errors.
 Only `queried: false` (no setup or query ran) falls back to `GetSpawn`, with its
 existing connection wait; a completed SQL error never gets a second allowance.
 
-After the row is read, a finished row is a no-op success. For a live covered
-row, `keyless` checks caller cancellation (bare context error), then the spent
-budget (`budget_exhausted`, `signal_sent: false`), before any further store
-call, signal or write. Initial connection contention or the query's lock wait
+After the row is read, `keyless` checks caller cancellation (bare context
+error), then the spent budget (`budget_exhausted`, `signal_sent: false`),
+before any further store call, signal or write; only a store without the
+claim seam keeps a finished row's earlier no-op. Initial connection
+contention or the query's lock wait
 can delay this refusal past `pause.timeout_seconds`. Subsequent shutdown
 store waits and exit polls use the original budget's remaining time. Uncovered
 pause retains its existing first-read behavior and full post-input wait.
@@ -21414,19 +21438,33 @@ The remaining covered shutdown is:
 
 1. The captured Launch: the published current Launch
    (`GetBusySendPublishedLaunchWithin`) must be covered and the row's own (its
-   launch token), else `launch_changed`. Its recorded agent process
+   launch token), else `launch_changed`. Then the [pause claim](#pause-claims)
+   decides (`decideClaim`), for finished rows too: a conditional pause of a
+   live row calls `ClaimBusySendPauseWithin`, every other pause
+   `CheckBusySendPauseWithin`. A refusal or a standing claim's answer is the
+   call's result, nothing signalled. `claimEnded` (the claim ended or stands
+   with `paused`, so the agent's exit is known, or a claim attempt found the
+   Launch's End recorded with no claim) is a finished row's no-op and, on a
+   live row, steps 3 to 5 with no claim and no signal. Otherwise a finished
+   row is the no-op success. The recorded agent process
    (`agentProcess`, judged by `tmux.JudgeProcess`) gone needs no signal;
    unjudgeable is `agent_process_unverifiable`.
 2. The signal: the row and Launch are read again (another launch, life or
-   agent identity is `launch_changed`), then `probe.TerminateIdentity`
-   sends SIGTERM through the [shared signal](#probe-layer-internalprobe),
-   with its platform limits. Gone needs none;
-   `ErrSignalTargetUnverifiable` is `agent_process_unverifiable`,
-   `ErrProbeUnsupported` `signal_unsupported`, any other failure
-   `signal_uncertain`.
+   agent identity is `launch_changed`). A claim's owner persists its signal
+   intent, then signals outside any lock; any other pause signals only
+   inside `SignalPlainBusySendPauseWithin`'s write lock. Either way
+   `probe.TerminateIdentity` sends SIGTERM through the
+   [shared signal](#probe-layer-internalprobe), with its platform limits.
+   Gone needs none; `ErrSignalTargetUnverifiable` is
+   `agent_process_unverifiable`, `ErrProbeUnsupported` `signal_unsupported`,
+   any other failure `signal_uncertain`.
 3. The agent's exit, polled every `pausePollInterval`; still running at the
-   deadline is `exit_uncertain`.
-4. `Store.EndBusySendLaunchWithin` for the captured token, then
+   deadline is `exit_uncertain`. With no signal sent under `claimEnded` it is
+   `owned_process_running`, `signal_sent: false`, and an agent that can no
+   longer be judged is `agent_process_unverifiable` at once. A claim's owner
+   records `paused` at the verified exit, before step 4 ends its claim.
+4. `Store.EndBusySendLaunchWithin` for the captured token (recording an End
+   an earlier pause could not, which ends a standing `paused` claim), then
    `busySendExitForLaunch` retried until applied through
    `EstablishBusySendExitWithin` (success) or the deadline: a replaced Launch is
    `launch_changed`; an owned process still running at the deadline, or any
@@ -21448,7 +21486,7 @@ The remaining covered shutdown is:
 
 After the initial row read, budget expiry at a store read/write or before the
 signal is `budget_exhausted`, with `signal_sent`; expiry while polling the
-agent remains `exit_uncertain`.
+agent is step 3's cause.
 The budget is checked before the signal, Exit write and row completion, then
 `established` checks cancellation and time again before reporting success.
 Cancellation before that boundary is the bare context error; after the last
@@ -21457,10 +21495,96 @@ the signal facts. If Exit committed, the error says its evidence stays
 recorded; neither refusal rolls it back.
 
 Keyless shutdown refusals use `ErrSpawnNotPausable` with `NotPausableDetails` (`cause`,
-and `signal_sent`, nil only for `signal_uncertain`); callers act on
+and `signal_sent`, nil when this call's signal fact is not known or does not
+apply); callers act on
 [Keyless pause of a Covered
 Agent](caller-contract.md#keyless-pause-of-a-covered-agent). It signals no
 process but the captured agent and never returns `ErrPauseTimeout`.
+
+#### Pause claims
+
+**Must use: the pause claim protocol.** The store side is
+`internal/store/busy_send_pause.go`; the call side is `pkg/api/pause_claim.go`
+(`pauseClaimStore`, `claimAnswer`, `pauseOwner`), wired into
+[keyless pause](#keyless-pause). Every call-side claim read and write goes
+through the six bounded store methods, each within the caller's context and
+the remaining original pause budget, never renewed:
+`ClaimBusySendPauseWithin`, `CheckBusySendPauseWithin`,
+`SignalPlainBusySendPauseWithin`, `PersistBusySendPauseSignalWithin`,
+`RecordBusySendPauseOutcomeWithin` and
+`ReleaseBusySendPauseBeforeSignalWithin`. Public answers, recorded outcomes'
+replays included, come only from `claimAnswer`
+([the caller's table](caller-contract.md#standing-pause-claims)). Callers add
+no other claim writer, answer mapping or lock.
+
+**The decision.** `decideBusySendPause` is the one durable transaction behind
+Claim and Check. It validates the captured Launch (a changed or uncovered one,
+or a row holding a candidate's token, is `ErrBusySendLaunchChanged`) and
+answers from that Launch's claim: an ended claim is `ended`; a standing one
+is its recorded outcome, `pause_in_progress` while its owner is within its
+deadline, `pause_uncertain` past it with a signal intent, or, past it with
+neither, released `abandoned_before_signal` in this transaction. Check then
+answers `clear`. Claim never claims an ended Launch (`ended`, no claim) and
+refuses, writing nothing more, on the four raw facts
+(`readBusySendPauseRefusal`): the raw state not `waiting` (`not_waiting`,
+which wins, with the state), else an awaiting obligation, an emission intent
+without `written` transport on any of the Launch's prompts, or a pending
+force (`turn_pending`). Otherwise it records the standing claim with the
+call's owner id and original deadline, and its `BusySendPauseRef` is the only
+owner authority. Check and the plain signal apply no End check, so a plain
+pause of a live row whose Launch ended with no claim keeps its signal. The
+call side treats an `ended` decision and a claim standing with `paused` alike
+(`claimEnded`): the agent's exit is known, so it sends no signal; a finished
+row is the no-op, and a live row finishes Launch End, Exit and row end. A new claim, an intent and the
+plain signal need `now < deadline`. Past it, a claim attempt or plain signal
+is an `ErrStoreBusy` wrapping `context.DeadlineExceeded`, and an intent write
+is `Applied: false` with no error, granting no signal; nothing is written.
+
+**Owner writes.** `writeBusySendPauseOwner` compares the ref's claim, Launch,
+owner and revision and advances the revision. A failed comparison (a stale
+ref, a released or ended claim, an outcome already recorded, or for an intent
+a Launch changed or ended) is `Applied: false` with no error, so a late
+callback changes nothing. The call writes only while `pauseOwner.admits`
+(owner not done, call not cancelled, budget not spent): nothing after its
+deadline or a cancellation, leaving the claim to the repeat rules. A
+conditional pause persists its intent, committed, and signals outside any
+lock only on an applied write; it records `paused` at the verified exit
+(within the deadline, compared in whole milliseconds), `exit_uncertain`, or
+`failed` with its cause. A refusal it proves sent nothing records `refused`
+and releases in one transaction, keeping an intent already persisted. A claim
+that Launch End closed first can keep a NULL outcome while the call still
+succeeds: never write a `paused` to fill it, nor assume every call records an
+outcome.
+
+**Plain pause** never claims or writes an intent. Its identity-checked signal
+runs inside `SignalPlainBusySendPauseWithin`: one `BEGIN IMMEDIATE`
+transaction, bounded by the remaining budget and writing nothing, rechecks
+the captured Launch, answers a standing claim, and only then calls the passed
+signal once. An earlier `clear` grants no signal. An abandoned claim returns
+`Recheck` (internal, never a public cause): a separate Check commits the
+release, then the locked signal is tried again in the same budget. A claim
+found `claimEnded` sends nothing, and the call goes on as for an agent already
+gone.
+Admission runs under the bounded operation's own mutex, so an abandoned
+operation never calls the signal; once admitted, a caller that stops waiting
+gets `CommitUnconfirmed` with `Invoked` true and `Completed` false, and
+`plainSignalFact` keeps the signal's own fact (sent, not sent, unknown) apart
+from that outer error; a rollback or cleanup failure after the signal keeps
+those facts. Cancellation does not interrupt a signal already running. The
+lock is held over one identity-checked signal.
+
+**The fence.** A standing claim fences its Launch at the shared issue
+revalidation: `readBusySendIssueFacts` reads it, and `checkBusySendJob`
+refuses `BusySendGuardPause` (wait `readiness_unknown`) inside
+`CommitBusySendIssue`. Every issue path reaches that commit: ordinary turn
+end, idle and startup wakes, `PostToolBatch` steer, and a force's first and
+later prompts, so prepared work cannot bypass it. `ClaimBusySendHandover`
+does not check the fence; the issue is refused and never-issued Messages
+return to Held in order with their options. A fenced force prompt ends under
+the [force protocol](#the-force-protocol)'s existing call-end rules, with no
+new reason, and nothing is restored or delivered to that Launch. Closure is
+in [Lifecycle custody](#lifecycle-custody-and-exit-evidence): evidence of the
+recorded agent's exit, not old-issuer Exit, which resume still requires.
 
 ### kill vs find-missing
 
@@ -22994,13 +23118,20 @@ instance's published conversation. `ExpireBusySendForce` expires an ended
 force attempt. `UnbindBusySend` clears a row's published binding.
 With `Transport` set, `SeedBusySendResult` also records the Message's one-prompt
 hand-over on the current Launch with that observed transport.
-`SeedBusySendPauseClaim` inserts one standing pause claim on the current
-Launch; E6 owns the pause claim and may replace it.
 `ReadBusySendCounts` counts Messages, pairs, force attempts and input
 attempts, so a refusal can show it stored nothing. Tests MUST use these rather
 than inline SQL. These helpers are fixture setup only; schema and migration
 tests own the tables. A test of a Held Message admits it through production
 (`AdmitBusySend` or `send-keys`), never a seed.
+
+`SeedBusySendPauseClaim` inserts one raw standing pause claim on the current
+Launch, skipping the claim's checks. Use it only for explicitly synthetic
+fence setup on a Launch in any state, such as a claim still standing at a
+publication after normal staging ended the real one. It proves neither
+eligibility nor a fence race: those tests claim through the real writer,
+`store.ClaimBusySendPauseWithin` ([Pause claims](#pause-claims)). Ending it
+through the synthetic lifecycle callers below shows synthetic exit, not OS
+exit.
 
 **Must use:** synthetic lifecycle callers reuse `storefix.ExitEvidence`,
 `WithExit` and `DeleteWithExit` in `busy_send.go` when judging a covered
@@ -24962,6 +25093,19 @@ reservations, so a held limit is reached without that many sends;
 pane identity on an uncertain candidate without publishing it. Consumers use
 these helpers rather than inline SQL.
 
+**Must use: conditional pause surface fixture.**
+[`pkg/api/apitest/busy_send_pause.go`](../pkg/api/apitest/busy_send_pause.go):
+`PauseSurfaces` lists the conditional pause's representative envelope shapes,
+each with the exact `err_details` `pause` with `only_if_waiting` returns:
+`not_waiting` with its raw `observed_state`, a standing claim's
+`exit_uncertain` replay (`signal_sent` true) and a `failed` replay with a
+structured cause (`signal_sent` omitted). `SeedPauseSurface(dbPath, id, name)`
+seeds a covered Claude row in one shape; its claim, intent and outcome come
+from the store's own pause claim writers, and nothing is signalled. The
+CLI/API envelope-diff rows, the MCP test and the TS envelope-diff tests
+(through ts-helper `seed-pause-surface`) seed with it. It sets up envelopes
+only; the full replay table and native shutdown are `pkg/api`'s pause tests.
+
 **Options, by group:**
 
 - Identity/name: `WithTmuxSessionName(name)`: stored exactly as given.
@@ -26860,12 +27004,16 @@ each file's doc comments carry the detail.
   fixture, seeds a covered row with a session id and a `claude_hooks` route
   and wake file, and admits two Messages through the Client. Its signal,
   injected with `api.SetPauseTerminateForTest`, records each SIGTERM and
-  answers "sent, agent exits" by default. A first-poll sleep hook drives
+  answers "sent, agent exits" by default; for a plain pause it runs inside
+  the store's write lock, so it must not use the store. A first-poll sleep hook drives
   interleavings; polls sleep in real 1 ms steps, and a zero requested timeout
-  gets the minimum 1 s call budget. `issueHelper` makes a real claim and
-  issue that registers an owned helper, `replace` a real SessionEnd,
-  `MoveToPendingWithExit` and publication, and `kpHookedStore` runs a hook
-  just before pause's re-read at the signal.
+  gets the minimum 1 s call budget. `pauseOpt` passes `only_if_waiting`, and
+  a spec with a cwd seeds a resumable row for `kill` then `resume`.
+  `issueHelper` makes a real hand-over claim and issue that registers an
+  owned helper and returns its prompt ref, `replace` a real SessionEnd,
+  `MoveToPendingWithExit` and publication. `kpHookedStore` runs a hook just
+  before pause's re-read at the signal, and `kpSignalHookStore` right after a
+  plain pause's locked signal.
   `api.SetBusySendExitNamespaceForTest` replaces the exit judgement's
   pid-namespace reader; without it a seeded process that records a namespace
   is unverifiable. **Must use** for `pkg/api` tests of keyless pause.
@@ -27491,6 +27639,7 @@ emptiness on success means a non-empty stderr is an unambiguous failure signal.
 | `set-settle` | `--store`, `--id`, `--settled`, `--stamp-ms` (b.3ie: an existing row's settle columns, through `apitest.SetSettle`) | `{"instance_id": "..."}` |
 | `write-family-transition` | `--store`, `--id`, `--state` (default `working`), `--settle-ms` (default 0); real gated lifecycle write for the family restart collector | `{"instance_id": "..."}` |
 | `seed-subagent` | `--store`, `--instance-id` (an existing row; both required, else exit 1 with `<flags>: required` on stderr and nothing written), `--subagent-id` (a UUID when empty), `--state`, `--close-reason`, `--session-id`, `--type`, `--description`, `--model`, `--tool-use-id`, `--run-mode` (each applied when non-empty), `--parent-type` and `--parent-id` (both or neither), `--first-started-at-ms`, `--started-at-ms`, `--stopped-at-ms`, `--lost-at-ms` (each applied when given), `--confirmed` (default true: a record; false: an unconfirmed observation that `list-subagents` never returns), all through `apitest.SeedSubagent` | `{"instance_id": "...", "subagent_id": "..."}` |
+| `seed-pause-surface` | `--store` (created when missing), `--id`, `--shape` (an `apitest.PauseSurfaces` name: `not_waiting`, `exit_uncertain`, `failed_cause`), all through `apitest.SeedPauseSurface` | `{"instance_id": "...", "err_details": {...}}`: the shape's exact `err_details` |
 | `json-schema` | — | machine-readable result-shape map for all subcommands |
 
 `seed-row-session` (`row_session.go`) writes a seeded row's own labelled

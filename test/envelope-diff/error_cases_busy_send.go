@@ -1,9 +1,11 @@
 // error_cases_busy_send.go holds busy send's error rows (Task t2.xis.pu.ar),
 // appended to errorCases: each option's refusal on an uncovered Codex row,
 // ErrCantSend's and pause's err_details pinned on both sides, the new verbs'
-// error paths, and a refused covered send with force, which forces nothing
-// (Task t2.xis.p8.y2). Each row sends the same call through both runners, so
-// matching descriptions show the same options reached the API.
+// error paths, a refused covered send with force, which forces nothing
+// (Task t2.xis.p8.y2), and a covered row's conditional pause in each
+// apitest.PauseSurfaces shape (Task t2.xis.8a.sv). Each row sends the same
+// call through both runners, so matching descriptions show the same options
+// reached the API.
 package envelope_diff
 
 import (
@@ -17,7 +19,7 @@ import (
 // cantSendDetails is ErrCantSend's err_details for agent_not_covered (SR-9.4).
 var cantSendDetails = map[string]any{"class": "cant_send", "reason": "agent_not_covered", "resend_safe": true, "retry_with": "new_send"}
 
-var busySendErrorCases = []errorCase{
+var busySendErrorCases = append([]errorCase{
 	busySendRow("send-keys", "ErrCantSend", busySendSeedRow("id-busy-keys", store.StateWaiting),
 		map[string]any{"instance_id": "id-busy-keys", "text": "hi", "send_mode": "wait_turn", "confirmed_delivery": false},
 		[]string{"send-keys", "--instance-id", "id-busy-keys", "--text", "hi", "--send-mode", "wait_turn", "--confirmed-delivery=false"},
@@ -59,6 +61,26 @@ var busySendErrorCases = []errorCase{
 		map[string]any{"caller_uuid": "{aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa}", "delivery_request_id": "r1"},
 		[]string{"get-delivery", "--caller-uuid", "{aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa}", "--delivery-request-id", "r1"},
 		nil, `caller_uuid "{aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa}" must be a hyphenated hexadecimal UUID`),
+}, pauseSurfaceRows()...)
+
+// pauseSurfaceRows are pause --only-if-waiting on a covered Claude row in each
+// apitest.PauseSurfaces shape (SR-6.5), its exact err_details on both sides.
+func pauseSurfaceRows() []errorCase {
+	var rows []errorCase
+	for _, s := range apitest.PauseSurfaces {
+		id := "id-pause-" + s.Name
+		rows = append(rows, busySendRow("pause", "ErrSpawnNotPausable", func(t *testing.T) string {
+			t.Helper()
+			dbPath := filepath.Join(t.TempDir(), "state.db")
+			if err := apitest.SeedPauseSurface(dbPath, id, s.Name); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Dir(dbPath)
+		},
+			map[string]any{"instance_id": id, "only_if_waiting": true},
+			[]string{"pause", "--instance-id", id, "--only-if-waiting"}, s.Details))
+	}
+	return rows
 }
 
 // busySendRow is an error row of verb whose fixture store seed builds and

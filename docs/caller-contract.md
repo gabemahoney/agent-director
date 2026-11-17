@@ -226,11 +226,10 @@ A call decides from the coverage of the launch its options apply to:
   are not.
 
 Where it is `covered`, `send-keys` sends a Message, `force` and
-`force-delivery` [force its Held Messages](#stored-force-attempts), and
+`force-delivery` [force its Held Messages](#stored-force-attempts),
 `spawn`, reuse, `resume` and `make-template` store the
-[Agent Defaults](#agent-defaults). In this version `pause` with
-`only_if_waiting: true` fails there with `ErrInternal`; nothing is sent or
-ended.
+[Agent Defaults](#agent-defaults), and `pause` with `only_if_waiting: true`
+[ends the agent only if it is waiting](#pause-only-if-waiting).
 
 Where it is `not_covered`:
 
@@ -1980,18 +1979,21 @@ authorize `resume`. A Codex agent that exits after inspection follows
 ### Keyless pause of a Covered Agent
 
 `pause` on a Covered Agent types nothing, and neither waits for nor sends its
-Held Messages: they stay Held for `resume`. A finished row is a no-op success
-that checks nothing. In any live state, a running turn or an open dialog
-included, `pause` sends SIGTERM to the agent's recorded process, checked by
-pid and start time. It succeeds only once, within `pause.timeout_seconds`,
-the agent has exited and every other process its launch owned is checked
-gone. Successful verified shutdown records `ended` and keeps `session_id`;
-`resume` may then follow. A row already `missing` for another cause stays
-`missing`. It never returns `ErrPauseTimeout`. The budget bounds shutdown work,
-not the time before a refusal can return.
+Held Messages: they stay Held for `resume`. A finished row is a no-op success.
+In any live state, a running turn or an open dialog included, `pause` sends
+SIGTERM to the agent's recorded process, checked by pid and start time. A
+[pause claim](#standing-pause-claims) on the launch changes both, and
+`only_if_waiting: true` first
+[checks that the agent is waiting](#pause-only-if-waiting). It succeeds only
+once, within `pause.timeout_seconds`, the agent has exited and
+every other process its launch owned is checked gone. Successful verified
+shutdown records `ended` and keeps `session_id`; `resume` may then follow. A
+row already `missing` for another cause stays `missing`. It never returns
+`ErrPauseTimeout`. The budget bounds shutdown work, not the time before a
+refusal can return.
 
 If the initial read outlasts the budget while the store is occupied, `pause`
-waits until it can read the row. A live covered row then refuses with
+waits until it can read the row. A covered row then refuses with
 `ErrSpawnNotPausable`, `cause: budget_exhausted` and `signal_sent: false`,
 with nothing signalled or written. This refusal can arrive after
 `pause.timeout_seconds`. Caller cancellation at this point is the bare
@@ -1999,8 +2001,9 @@ context error. Uncovered pause is unchanged.
 
 A shutdown refusal returns `ErrSpawnNotPausable` with `err_details` `cause` and
 `signal_sent`, whether this call sent the SIGTERM (absent when that is not
-known). A refusal is never shutdown: neither a sent signal nor an uncertain
-exit makes a resend safe or permits `resume`.
+known). It can follow a sent signal or recorded exit evidence. A refusal is
+never shutdown: neither a sent signal nor an uncertain exit makes a resend
+safe or permits `resume`.
 
 On Darwin (macOS), the start-time check immediately precedes the signal, but
 a narrow PID-reuse gap remains: a replacement process can be signalled.
@@ -2013,15 +2016,99 @@ Linux binds the signal to the checked process with pidfd. See the
 | `agent_process_unverifiable` | The agent's recorded process cannot be checked; nothing was signalled. | To end the agent, follow the [live-row sequence](#caller-contract) instead. |
 | `signal_unsupported` | This system cannot send an identity-checked signal; nothing was signalled. | As for `agent_process_unverifiable`. |
 | `signal_uncertain` | The signal call failed; whether it arrived is not known. | Inspect with `get` before retrying. |
-| `budget_exhausted` | The one pause budget ran out at a store read/write, before the signal or at the final success check. | `signal_sent: false`: nothing was signalled; retry `pause`. `true`: inspect with `get` before more input, and retry `pause`. |
+| `budget_exhausted` | The one pause budget ran out at a store read/write, before the signal or at the final success check. | `signal_sent: false`: nothing was signalled; retry `pause`. `true`: inspect with `get` before more input, and retry `pause`. Absent, the signal's result is not known: inspect with `get` before more input or another `pause`. |
 | `exit_uncertain` | The signal was sent; the agent did not exit in time. | Inspect with `get` before more input. |
-| `owned_process_running` | The agent exited; another process its launch owned still runs. | Inspect with `get`, and retry `pause` once that process has exited. |
+| `owned_process_running` | A process its launch owned still runs: after the agent exited, another one, or, when this pause sent no signal because the agent's exit was already known or its launch [had ended](#standing-pause-claims), possibly the agent itself. | Inspect with `get`, and retry `pause` once that process has exited. |
 | `owned_process_unverifiable` | The agent exited; a process its launch owned cannot be checked. | Inspect with `get`, and retry `pause` once it can be checked gone. |
 | `destination_unfenced` | The agent exited; an open hand-over's destination cannot be fenced. | Inspect with `get`, and retry `pause` once that hand-over has closed. |
 
 At the final success check, cancellation returns a wrapped context error and
 budget expiry returns `budget_exhausted`. If the error says exit evidence
 was recorded, it stays recorded: inspect with `get` before continuing.
+
+#### Pause only if waiting
+
+`pause` with `only_if_waiting: true` ends a Covered Agent only if it is
+waiting with no turn pending, so it never ends a turn that started after the
+caller looked. One store transaction decides from the row's raw state and
+delivery records, never from the state a
+[settle time](configuration.md#settle-time-state) shows or from
+`displayed_state`. It refuses with `ErrSpawnNotPausable` for the first of
+these that applies:
+
+| `cause` | When | Next step |
+|---|---|---|
+| `not_waiting` | The raw state is not `waiting`; `err_details.observed_state` holds it. | Retry `pause` once the agent is waiting, or `pause` without the option. |
+| `turn_pending` | [`delivery.awaiting_turn_start`](#busy-send-coverage) is above 0, an issued prompt's output is not recorded complete, or a [force](#stored-force-attempts) is `pending`. | Retry `pause` after that turn. |
+
+Either refusal sends, ends and changes nothing, leaves no claim and has no
+`signal_sent`. Otherwise the same transaction claims the launch, and the
+keyless shutdown above goes on under the claim, within the same budget. From
+the claim on, agent-director hands that launch no Message, wake, steer or
+force prompt; Held Messages stay Held for `resume`.
+
+Limits:
+
+- A turn the agent starts itself in the instant before it exits, such as
+  from input typed at its terminal, cannot be detected or prevented.
+- A turn interrupted with Esc ends with no main-agent turn end, so the row
+  stays `working` and input handed into that turn stays counted in
+  `awaiting_turn_start`. So does input whose output was recorded too late to
+  count at a turn end ([Busy-send coverage](#busy-send-coverage)).
+  `not_waiting` or `turn_pending` then repeats until the agent's next turn
+  ends or its launch ends. A prompt the [sighting limits](#sighting-limits)
+  hide keeps `turn_pending` until launch end.
+
+When a refusal repeats, retry after the agent's next turn, or use a plain
+`pause`, which ends the agent in any live state and still honours a standing
+claim.
+
+#### Standing pause claims
+
+A conditional pause's claim stands until its launch ends with evidence that
+the agent exited, or a `resume` or reuse publishes a new launch. Row state,
+elapsed time, reads and retries never end it. `kill` establishes that evidence
+through the usual [live-row sequence](#caller-contract); a failed `kill`, one
+that leaves the agent running, a finished-row `kill` no-op and a refused
+`resume` leave the claim as it was. A new launch is judged on its own, never
+by an old claim. After a claim ends, `resume` and reuse still
+[check every process the earlier launch owned](#launch-end-resume-and-reuse).
+
+While a claim stands, every `pause` of that launch, with or without
+`only_if_waiting` and on a finished row too, sends no signal and answers from
+the claim:
+
+| The claiming pause | Answer |
+|---|---|
+| Recorded no outcome and is within its `pause.timeout_seconds` budget | `pause_in_progress`: retry `pause`. |
+| Past its budget before recording its intent to signal | None: the claim is released and this `pause` goes on as if none stood. |
+| Recorded its intent to signal, no outcome, past its budget | `pause_uncertain` |
+| Recorded `paused`: it verified the agent's exit | Success on a finished row; on a live row, see below |
+| Recorded `exit_uncertain` | `exit_uncertain` |
+| Recorded a failure with a cause | That cause |
+| Recorded a failure with no cause | `pause_uncertain` |
+
+Of these answers only `exit_uncertain` carries `signal_sent` (`true`): an
+intent alone proves no signal. A recorded answer belongs to the earlier pause,
+which returned its own error; it repeats on every retry until the claim ends,
+and no retry sends another signal. For `pause_uncertain` and a replayed
+refusal, inspect with `get` before more input; `kill` ends the claim once it
+establishes the agent's exit. A claiming pause that proves it sent nothing, such as
+`agent_process_unverifiable` or `signal_unsupported`, releases its claim, so
+the next `pause` starts afresh. A plain `pause` signals only while no claim
+stands, so overlapping pauses send at most one SIGTERM per claim.
+
+Once the agent's exit is known, because the claim ended or recorded `paused`,
+`pause` with either option sends no signal: of a finished row it is a no-op
+success, and of a live row it finishes the shutdown (the launch's end, the
+owned-process checks and the row's end) and returns their result.
+`only_if_waiting` does the same on a live row whose launch ended with no
+claim; a plain `pause` there signals as usual. A row stays live this way when
+a pause verified the agent's exit but not every owned process, or could not
+record the launch's end, or when a `missing` agent reports in again. With no
+signal sent, a process still running at the deadline is
+`owned_process_running`, and an agent that cannot be checked is
+`agent_process_unverifiable`, both with `signal_sent: false`.
 
 ## When a Codex agent exits
 

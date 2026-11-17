@@ -360,7 +360,9 @@ For covered Claude, `pause` is keyless in any live state, preserves Held
 Messages for resume, and refuses with structured `NotPausableDetails`. See
 [keyless pause](../../docs/caller-contract.md#keyless-pause-of-a-covered-agent).
 For uncovered agents, shut down a waiting Spawn within `pause.timeout_seconds`.
-Without `only_if_waiting`, a finished Spawn is a no-op. Codex exit handling is defined in the
+A finished Spawn is a no-op, unless a
+[pause claim](../../docs/caller-contract.md#standing-pause-claims) still stands
+or `only_if_waiting` is refused below. Codex exit handling is defined in the
 [caller contract](../../docs/caller-contract.md#when-a-codex-agent-exits).
 
 ```ts
@@ -375,12 +377,16 @@ For `ErrPauseTimeout`, `errDetails` has the exported `PauseTimeoutDetails`
 shape. Its fields and handling are defined in
 [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit).
 
-`only_if_waiting: true` currently rejects with `ErrInternal` on a Covered
-Agent, ending nothing; see [Busy-send options](../../docs/caller-contract.md#busy-send-options).
-When the row's current launch is not covered, `true` rejects with `ErrSpawnNotPausable` in any row state,
-finished included, with
-`errDetails` a `NotPausableDetails` whose `cause` is `"agent_not_covered"`;
-nothing is ended. `false` or omitted is the pause above.
+`only_if_waiting: true` ends a Covered Agent only if it is waiting with no
+turn pending, else rejects with `ErrSpawnNotPausable` whose
+`errDetails` is a `NotPausableDetails` with `cause` `"not_waiting"`, the raw
+state in `observed_state`, or `"turn_pending"`; nothing is changed. When the
+row's current launch is not covered, `true` rejects with `ErrSpawnNotPausable`
+in any row state, finished included, `cause` `"agent_not_covered"`; nothing
+is ended. `signal_sent` is optional, absent when not known or not applicable.
+`false` or omitted is the pause above. Causes, retries, standing claims and
+limits are in
+[Pause only if waiting](../../docs/caller-contract.md#pause-only-if-waiting).
 
 ### makeTemplate
 

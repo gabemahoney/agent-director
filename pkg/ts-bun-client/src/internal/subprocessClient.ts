@@ -553,9 +553,10 @@ export class SubprocessClient {
 
   /**
    * pause — politely shut down a waiting Spawn. With only_if_waiting: true, the row's current
-   * Launch's recorded coverage decides first, in any state, ending nothing: not_covered rejects with
-   * ErrSpawnNotPausable (cause agent_not_covered), covered with this version's unavailable
-   * ErrInternal; the rest of this applies only without it. Held like a plain sendKeys without
+   * Launch's recorded coverage decides first, in any state: not_covered rejects with
+   * ErrSpawnNotPausable (cause agent_not_covered), ending nothing; covered claims the Launch or
+   * rejects not_waiting or turn_pending (PauseParams.only_if_waiting); the rest of this applies
+   * only without it. Held like a plain sendKeys without
    * expect_pane_sha256: rejects, typing nothing, with ErrSendKeysWhileRelayed, ErrRelayFallenBack
    * or ErrDialogMaybeOpen whenever that sendKeys would. It takes no pane hash, and the hold
    * (ErrDialogMaybeOpen) lasts until the agent's hooks prove each request gone, whatever is

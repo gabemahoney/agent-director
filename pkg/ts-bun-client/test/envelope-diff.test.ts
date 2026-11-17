@@ -1901,6 +1901,39 @@ describe("pause", () => {
     },
     TIMEOUT
   );
+
+  // SR-6.5, E6 decision 5: only_if_waiting on a covered Claude row in each shared conditional pause shape
+  // (ts-helper seed-pause-surface): the CLI and the typed ErrSpawnNotPausable carry that shape's exact
+  // err_details, the raw observed_state kept and signal_sent true or omitted as the replayed outcome recorded.
+  for (const shape of ["not_waiting", "exit_uncertain", "failed_cause"]) {
+    test(
+      `error path: only_if_waiting on a covered agent → ErrSpawnNotPausable, ${shape}`,
+      async () => {
+        const id = `id-pause-${shape}`;
+        let details: unknown;
+        const { homeA, storeB, cleanup } = prepareStores((store) => {
+          details = runHelper("seed-pause-surface", { store, id, shape }).err_details;
+        });
+        try {
+          const cli = runCli(["pause", "--instance-id", id, "--only-if-waiting"], cliEnv(homeA));
+          expect(cli.exitCode).not.toBe(0);
+          const cliErr = JSON.parse(cli.stderr) as { err_details?: unknown };
+          expect(cliErr.err_details).toStrictEqual(details);
+
+          using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+          const err = (await rejection(client.pause({ instance_id: id, only_if_waiting: true }))) as ErrSpawnNotPausable;
+          expect(err).toBeInstanceOf(ErrSpawnNotPausable);
+          expect(err.errDetails).toStrictEqual(details);
+          assertEnvelopesEqual(cliErr, {
+            err_name: err.errName, err_description: trimNamePrefix(err.errName, err.errDescription), err_details: err.errDetails,
+          }, { ignorePaths: loadIgnorePathsForVerb("pause") });
+        } finally {
+          cleanup();
+        }
+      },
+      TIMEOUT
+    );
+  }
 });
 
 // ── version ───────────────────────────────────────────────────────────────────

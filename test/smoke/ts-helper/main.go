@@ -37,6 +37,9 @@
 //	set-settle           Write an existing row's settle columns: its settled
 //	                     state and the time of its last raw state change
 //	                     (apitest.SetSettle; b.3ie).
+//	seed-pause-surface   Seed a covered Claude row in one conditional pause
+//	                     shape and print its exact err_details
+//	                     (apitest.SeedPauseSurface; t2.xis.8a.sv).
 //	json-schema          Print the result shapes of every subcommand.
 //	install-write-failure Install canonical failure SQL on an existing temp DB;
 //	                     returns a handle, without opening/migrating a Store.
@@ -78,6 +81,7 @@ var availableSubcmds = []string{
 	"seed-needs-intelligence-surface",
 	"seed-idle-screen-surface",
 	"set-settle",
+	"seed-pause-surface",
 	"install-write-failure",
 	"remove-write-failure",
 	"json-schema",
@@ -119,6 +123,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedReadSurfaceStore(args[1:], stdout, stderr)
 	case "set-settle":
 		return cmdSetSettle(args[1:], stdout, stderr)
+	case "seed-pause-surface":
+		return cmdSeedPauseSurface(args[1:], stdout, stderr)
 	case "install-write-failure", "remove-write-failure":
 		return cmdWriteFailure(args[0], args[1:], stdout, stderr)
 	case "write-family-transition":
@@ -618,6 +624,7 @@ var resultSchemas = map[string]map[string]string{
 	"set-settle": {
 		"instance_id": "string",
 	},
+	"seed-pause-surface": {"instance_id": "string", "err_details": "object"},
 }
 
 func cmdJSONSchema(_ []string, stdout, stderr io.Writer) int {

@@ -178,8 +178,7 @@ Covered Messages default to `send_mode: wait_turn` and
 `resume` keeps the conversation's defaults unless it supplies replacements.
 See [Agent Defaults](caller-contract.md#agent-defaults) for precedence.
 
-For reconnection, see [Pause and resume](#pause-and-resume).
-`only_if_waiting` is unavailable. For the experimental
+For reconnection, see [Pause and resume](#pause-and-resume). For the experimental
 `confirm_from_transcripts` setting, see
 [Confirm From Transcripts](caller-contract.md#confirm-from-transcripts).
 
@@ -969,14 +968,18 @@ only at its first prompt, so it reads `pending` until then and `pause` and
 `pause` ends the row instead, see the
 [caller contract](caller-contract.md#when-a-codex-agent-exits)).
 
+To reconnect covered Claude without ending a turn it started after you looked,
+pause it only if it is waiting, and resume only once that pause succeeds:
+
 ```sh
-agent-director pause --instance-id "$id"
-agent-director resume --instance-id "$id"
+agent-director pause --instance-id "$id" --only-if-waiting &&
+    agent-director resume --instance-id "$id"
 ```
 
-Run `resume` once `get` shows `ended` or `missing`. For a covered pause refusal,
-follow its [structured cause](caller-contract.md#keyless-pause-of-a-covered-agent);
-for an uncovered agent, follow the
+An error is never permission to resume: act on its
+[cause](caller-contract.md#keyless-pause-of-a-covered-agent). For other
+agents, use `pause` without `--only-if-waiting` and run `resume` once `get`
+shows `ended` or `missing`; on a timeout, follow the
 [pause timeout procedure](caller-contract.md#when-pause-cannot-confirm-exit).
 
 On a Codex row `pause` clears a draft of up to 64 lines before it types

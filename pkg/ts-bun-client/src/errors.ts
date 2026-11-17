@@ -490,8 +490,12 @@ export class ErrCantSend extends AgentDirectorError {}
  * (`exit_uncertain` is a sent signal whose exit was not verified, never success). With
  * `only_if_waiting: true` on a row whose current Launch is recorded `not_covered`, in any
  * state, `errDetails` is a `NotPausableDetails` with cause `agent_not_covered` and nothing is
- * ended; a Launch recorded `covered` rejects with this version's unavailable `ErrInternal`
- * instead.
+ * ended; on a Launch recorded `covered` it refuses `not_waiting` (with `observed_state`) or
+ * `turn_pending`, changing nothing. A pause claim standing on the Launch answers a pause,
+ * signalling nothing: `pause_in_progress`, `pause_uncertain`, or the earlier pause's recorded
+ * outcome replayed (`exit_uncertain` with `signal_sent` true; a failure's cause, or
+ * `pause_uncertain`, with `signal_sent` omitted); `PauseParams.only_if_waiting` has the
+ * exceptions.
  */
 export class ErrSpawnNotPausable extends AgentDirectorError {}
 /**

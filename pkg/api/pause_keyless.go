@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -26,7 +28,10 @@ import (
 // agent_not_covered and the shared exit judgement's causes
 // (owned_process_running, owned_process_unverifiable, destination_unfenced),
 // which keyless pause returns when the agent exited but its Launch's
-// exclusion was not established within the budget.
+// exclusion was not established within the budget, and, owned_process_running,
+// when a pause that sends no signal (its agent's exit already known, or its
+// Launch ended with no claim) finds the recorded agent itself still running
+// at the deadline.
 const (
 	// pauseCauseAgentUnverifiable: the recorded agent process cannot be
 	// judged (no identity recorded, its start time unreadable, or a pid-only
@@ -60,11 +65,12 @@ var pauseTerminate = probe.TerminateIdentity
 
 // keylessPauseStore is the store surface keyless pause needs besides
 // PauseStore, every read and write within the caller's context and wait:
-// the row read again before the signal, the published current Launch, the
-// Launch End a verified agent exit records, the shared exit evidence, and
-// the guarded row completion after that evidence is established.
-// *store.Store satisfies it.
+// the pause claim protocol (pauseClaimStore), the row read again before the
+// signal, the published current Launch, the Launch End a verified agent exit
+// records, the shared exit evidence, and the guarded row completion after
+// that evidence is established. *store.Store satisfies it.
 type keylessPauseStore interface {
+	pauseClaimStore
 	GetSpawnContext(ctx context.Context, instanceID string, maxWait time.Duration) (Spawn, error)
 	GetBusySendPublishedLaunchWithin(ctx context.Context, instanceID string, maxWait time.Duration) (store.BusySendPublishedLaunch, error)
 	EndBusySendLaunchWithin(ctx context.Context, instanceID, token string, maxWait time.Duration) (bool, error)
@@ -113,15 +119,35 @@ func notPausable(instanceID, description, cause string, signalSent *bool) error 
 	}
 }
 
+// agentUnverifiable is the refusal when the recorded agent process cannot be
+// judged (not recorded, or unreadable) and nothing was signalled.
+func agentUnverifiable(instanceID string) error {
+	notSent := false
+	return notPausable(instanceID, "its recorded agent process cannot be checked, so a keyless shutdown cannot be verified; nothing was signalled",
+		pauseCauseAgentUnverifiable, &notSent)
+}
+
 // budgetExhausted is the refusal when the budget ran out at a store call or
 // before the signal, keeping the signal facts.
 func budgetExhausted(instanceID string, sent bool) error {
-	if !sent {
+	return budgetExhaustedAfter(instanceID, &sent)
+}
+
+// budgetExhaustedAfter is budgetExhausted with the signal fact sent, nil when
+// it is not known (a plain signal begun under the store's lock whose result
+// was not returned, or failed with an unknown result): signal_sent is then
+// omitted, never false.
+func budgetExhaustedAfter(instanceID string, sent *bool) error {
+	switch {
+	case sent == nil:
+		return notPausable(instanceID, "the pause budget ran out while the signal was being sent, so whether the agent got it is not known; inspect with get before more input or another pause",
+			pauseCauseBudgetExhausted, nil)
+	case !*sent:
 		return notPausable(instanceID, "the pause budget ran out before keyless shutdown was established (the store did not answer in time); nothing was signalled; retry pause",
-			pauseCauseBudgetExhausted, &sent)
+			pauseCauseBudgetExhausted, sent)
 	}
 	return notPausable(instanceID, "the signal was sent but the pause budget ran out before keyless shutdown was established (the store did not answer in time); inspect with get before more input, and retry pause",
-		pauseCauseBudgetExhausted, &sent)
+		pauseCauseBudgetExhausted, sent)
 }
 
 // storeFailed maps a keyless store call's error: the caller's own
@@ -129,11 +155,17 @@ func budgetExhausted(instanceID string, sent bool) error {
 // running out (the call's deadline, or a wait cut short: ErrStoreBusy) is
 // budget_exhausted with the signal facts; anything else is the store's.
 func (r *pauseRun) storeFailed(b keylessBudget, instanceID string, sent bool, err error) error {
+	return r.storeFailedAfter(b, instanceID, &sent, err)
+}
+
+// storeFailedAfter is storeFailed with the signal fact sent, nil when it is
+// not known (budgetExhaustedAfter).
+func (r *pauseRun) storeFailedAfter(b keylessBudget, instanceID string, sent *bool, err error) error {
 	if cerr := r.ctxErr(); cerr != nil {
 		return cerr
 	}
 	if b.cut(err) {
-		return budgetExhausted(instanceID, sent)
+		return budgetExhaustedAfter(instanceID, sent)
 	}
 	return err
 }
@@ -179,31 +211,48 @@ func (r *pauseRun) readRow(b keylessBudget, instanceID string) (Spawn, error) {
 }
 
 // keyless is pause of a row whose current Launch is recorded covered, row as
-// pause first read it (readRow). A finished row (ended or missing) is the
-// no-op success it is today: it signals nothing and establishes no
-// exclusion. Otherwise the caller's cancellation is its bare error and a
+// pause first read it (readRow); conditional is only_if_waiting. A finished
+// row (ended or missing) that no claim can answer for is the no-op success it
+// was before the pause claim, with no claim check: at once through a store
+// without keyless pause or with no launch token, and, after the published
+// read, with no published binding or a published Launch that is not its own
+// covered one. Through a store without keyless pause a live row is refused with
+// nothing sent. Otherwise the caller's cancellation is its bare error and a
 // spent budget is budget_exhausted, nothing signalled or written: the first
 // read can return after both when another holder kept the store's connection
 // past them (readRow's fallback), or a lock held its read for up to the
-// store's busy timeout. Otherwise, within the rest of the same
-// budget b (keylessBudget: timeoutSeconds from the start of the call, within
-// r.ctx), which bounds every store read and write as well as the polls:
+// store's busy timeout. Otherwise, within the rest of the same budget b
+// (keylessBudget: timeoutSeconds from the start of the call, within r.ctx),
+// which bounds every store read and write as well as the polls:
 //
 //  1. The captured Launch: the published current Launch must be covered and
-//     the row's own (its launch token), else launch_changed. Its recorded
-//     agent process (agentProcess) judged gone needs no signal; alive is
-//     signalled; anything else is agent_process_unverifiable.
-//  2. Just before the signal the row is read again: another launch, life or
-//     agent identity is launch_changed. The budget is checked again right
-//     before the signal. The signal (pauseTerminate) checks the identity once
-//     more at its boundary and finds the process gone (no signal needed),
-//     unverifiable (agent_process_unverifiable), unsupported
-//     (signal_unsupported) or fails (signal_uncertain).
-//  3. The agent's exit is polled every pausePollInterval; still running at
-//     the deadline is exit_uncertain, the signal sent.
-//  4. Its verified exit records the Launch End (store.EndBusySendLaunchWithin,
-//     for the captured token only), then the shared exit judgement of the
-//     captured Launch (busySendExitForLaunch) is retried until the deadline:
+//     the row's own (its launch token), else launch_changed.
+//  2. Its pause claim (SR-6.5), before any finished-row shortcut: a
+//     conditional pause of a live row claims it (ClaimBusySendPauseWithin);
+//     any other pause checks it (CheckBusySendPauseWithin), which releases a
+//     claim abandoned before its signal intent. A refusal, a standing claim's
+//     answer or a recorded failure's or uncertain exit's replay is the call's
+//     answer (claimAnswer), nothing signalled. With no claim standing a
+//     finished row is the no-op success, and a live one goes on, conditional
+//     as the claim's owner. A Launch whose agent's exit is already known (its
+//     claim ended on exit evidence, or stands with paused recorded) or, for a
+//     claim attempt, whose End is recorded with no claim, is no answer
+//     (claimEnded): a finished row is the no-op success, and a live one goes
+//     on as a plain pause that signals nothing, to finish the exclusion and
+//     row end a partial pause left.
+//  3. Its recorded agent process (agentProcess) judged gone needs no signal;
+//     alive is signalled (signal), except after claimEnded; anything else is
+//     agent_process_unverifiable.
+//  4. The agent's exit is polled every pausePollInterval; still running at
+//     the deadline is exit_uncertain, the signal sent, or, with no signal
+//     sent (claimEnded), owned_process_running, an agent that can no
+//     longer be judged then being agent_process_unverifiable at once. A
+//     claim's owner records paused once the exit is verified after its
+//     signal intent.
+//  5. Its verified exit records the Launch End (store.EndBusySendLaunchWithin,
+//     for the captured token only), which ends a claim on the Launch, then
+//     the shared exit judgement of the captured Launch
+//     (busySendExitForLaunch) is retried until the deadline:
 //     store.EstablishBusySendExitWithin applies the exit evidence, then
 //     MarkKeylessPauseEndedWithin records ended, retaining session_id. Both
 //     writes recheck the captured Launch and share the budget, checked before
@@ -213,47 +262,111 @@ func (r *pauseRun) readRow(b keylessBudget, instanceID string) (Spawn, error) {
 //     refuses with the judgement's cause; a Launch that replaced the captured
 //     one is launch_changed, with nothing judged or recorded for it.
 //
-// A store call the budget cuts short is budget_exhausted, with the signal
-// facts; the caller's cancellation is its bare context error. It never types,
-// reads the pane or waits for Messages, never extends the budget and never
-// signals any process but the captured agent.
-func (r *pauseRun) keyless(b keylessBudget, row Spawn) error {
-	if row.State == store.StateEnded || row.State == store.StateMissing {
+// A claim's owner then records the call's disposition of any error
+// (pauseOwner.settle) while its budget lasts. A store call the budget cuts
+// short is budget_exhausted, with the signal facts; the caller's cancellation
+// is its bare context error. It never types, reads the pane or waits for
+// Messages, never extends the budget and never signals any process but the
+// captured agent.
+func (r *pauseRun) keyless(b keylessBudget, row Spawn, conditional bool) error {
+	finished := row.State == store.StateEnded || row.State == store.StateMissing
+	st, ok := r.s.(keylessPauseStore)
+	// A claim can answer only for the published Launch whose token the row
+	// holds, so a finished row with no launch token has none to read.
+	if finished && (!ok || row.Identity.Token == "") {
 		return nil
 	}
-	sent := false
 	if err := r.ctxErr(); err != nil {
 		return err
 	}
 	if b.spent() {
-		return budgetExhausted(row.InstanceID, sent)
+		return budgetExhausted(row.InstanceID, false)
 	}
-	st, ok := r.s.(keylessPauseStore)
-	if !ok || r.procs == nil {
+	if !ok || (r.procs == nil && !finished) {
 		return fmt.Errorf("pause %s: this store cannot pause a covered agent keylessly; nothing was sent", row.InstanceID)
 	}
 	published, err := st.GetBusySendPublishedLaunchWithin(b.ctx, row.InstanceID, b.wait())
+	if finished && errors.Is(err, store.ErrBusySendNoBinding) {
+		return nil
+	}
 	if err != nil {
-		return r.storeFailed(b, row.InstanceID, sent, err)
+		return r.storeFailed(b, row.InstanceID, false, err)
 	}
 	if published.Coverage != store.BusySendCovered || published.LaunchToken == "" || published.LaunchToken != row.Identity.Token {
+		if finished {
+			// The published Launch is not the row's own covered one, so no
+			// claim answers for this row.
+			return nil
+		}
+		notSent := false
 		return notPausable(row.InstanceID, "the agent's current Launch is starting or changed; nothing was signalled; retry pause once get shows it waiting",
-			pauseCauseLaunchChanged, &sent)
+			pauseCauseLaunchChanged, &notSent)
 	}
+	own, ended, answered, err := r.decideClaim(b, st, row, published, conditional && !finished)
+	if answered || finished {
+		return err
+	}
+	err = r.keylessShutdown(b, st, row, published, own, ended)
+	own.settle(r, b, err)
+	return err
+}
+
+// decideClaim is keyless pause's claim decision on the captured Launch:
+// claim makes a conditional pause's claim attempt, and otherwise the claim is
+// checked. answered says the decision is the call's answer (err, nil for
+// success); otherwise no claim stands but, when claimed, the call's own
+// (own), and ended says nothing may signal the Launch (claimEnded).
+func (r *pauseRun) decideClaim(b keylessBudget, st keylessPauseStore, row Spawn, published store.BusySendPublishedLaunch, claim bool) (own *pauseOwner, ended, answered bool, err error) {
+	req := pauseClaimRequest(b, row.InstanceID, published, "")
+	decide := st.CheckBusySendPauseWithin
+	if claim {
+		owner, uerr := uuid.NewRandom()
+		if uerr != nil {
+			return nil, false, true, fmt.Errorf("pause %s: make the pause call's identity: %w; nothing was signalled", row.InstanceID, uerr)
+		}
+		req.OwnerCallID, decide = owner.String(), st.ClaimBusySendPauseWithin
+	}
+	d, err := decide(b.ctx, req, b.wait())
+	if err != nil {
+		return nil, false, true, r.claimFailed(b, row.InstanceID, err)
+	}
+	switch {
+	case d.Kind == store.BusySendPauseDecisionClaimed && d.Claim != nil:
+		return &pauseOwner{claims: st, ref: d.Claim.Ref}, false, false, nil
+	case d.Kind == store.BusySendPauseDecisionClear:
+		return nil, false, false, nil
+	case claimEnded(d):
+		return nil, true, false, nil
+	}
+	return nil, false, true, claimAnswer(row.InstanceID, d)
+}
+
+// keylessShutdown is keyless pause's steps 3 to 5 (keyless) for the captured
+// Launch, own the call's claim (nil for none). ended says nothing may signal
+// the Launch (claimEnded): its agent is then never signalled, and an agent
+// that still runs is waited for and refused as an owned process still
+// running.
+func (r *pauseRun) keylessShutdown(b keylessBudget, st keylessPauseStore, row Spawn, published store.BusySendPublishedLaunch, own *pauseOwner, ended bool) error {
+	sent := false
 	agent := agentProcess(row, row.Identity).Identity
 	switch tmux.JudgeProcess(r.procs, agent) {
 	case tmux.ProcGone:
 	case tmux.ProcAlive:
-		if sent, err = r.signal(b, st, row, published, agent); err != nil {
+		if ended {
+			break
+		}
+		var answered bool
+		var err error
+		if sent, answered, err = r.signal(b, st, row, published, agent, own); err != nil || answered {
 			return err
 		}
 	default:
-		return notPausable(row.InstanceID, "its recorded agent process cannot be checked, so a keyless shutdown cannot be verified; nothing was signalled",
-			pauseCauseAgentUnverifiable, &sent)
+		return agentUnverifiable(row.InstanceID)
 	}
-	if err := r.awaitAgentExit(row.InstanceID, agent, b.deadline); err != nil {
+	if err := r.awaitAgentExit(row.InstanceID, agent, b.deadline, sent); err != nil {
 		return err
 	}
+	own.verified(r, b, pauseNow())
 	if _, err := st.EndBusySendLaunchWithin(b.ctx, row.InstanceID, published.LaunchToken, b.wait()); err != nil {
 		return r.storeFailed(b, row.InstanceID, sent, err)
 	}
@@ -261,58 +374,184 @@ func (r *pauseRun) keyless(b keylessBudget, row Spawn) error {
 }
 
 // signal revalidates the captured Launch and sends the identity-checked
-// SIGTERM, checking the budget right before it. It reports whether the
-// signal was sent; a target already gone is (false, nil), as no signal is
-// needed.
-func (r *pauseRun) signal(b keylessBudget, st keylessPauseStore, row Spawn, published store.BusySendPublishedLaunch, agent tmux.ProcIdentity) (bool, error) {
+// SIGTERM, checking the budget right before it: a claim's owner (own) after
+// persisting its signal intent, any other pause under the store's write lock
+// while no claim stands (signalPlain). It reports whether the signal was
+// sent; a target already gone is (false, nil), as no signal is needed.
+// answered says a claim found standing answered the call instead (err, nil
+// for success), nothing signalled.
+func (r *pauseRun) signal(b keylessBudget, st keylessPauseStore, row Spawn, published store.BusySendPublishedLaunch, agent tmux.ProcIdentity, own *pauseOwner) (sent, answered bool, err error) {
 	notSent := false
 	again, err := st.GetSpawnContext(b.ctx, row.InstanceID, b.wait())
 	if err != nil {
-		return false, r.storeFailed(b, row.InstanceID, notSent, err)
+		return false, false, r.storeFailed(b, row.InstanceID, notSent, err)
 	}
 	now, err := st.GetBusySendPublishedLaunchWithin(b.ctx, row.InstanceID, b.wait())
 	if err != nil {
-		return false, r.storeFailed(b, row.InstanceID, notSent, err)
+		return false, false, r.storeFailed(b, row.InstanceID, notSent, err)
 	}
 	if launchOf(again) != launchOf(row) || agentProcess(again, again.Identity).Identity != agent || now.LaunchID != published.LaunchID {
-		return false, notPausable(row.InstanceID, "the agent's Launch changed before the signal; nothing was signalled; retry pause",
+		return false, false, launchChangedBeforeSignal(row.InstanceID)
+	}
+	if err := r.ctxErr(); err != nil {
+		return false, false, err
+	}
+	if b.spent() {
+		return false, false, budgetExhausted(row.InstanceID, notSent)
+	}
+	terminate := func() error { return pauseTerminate(agent.PID, agent.Starttime) }
+	if own == nil {
+		return r.signalPlain(b, st, pauseClaimRequest(b, row.InstanceID, published, ""), terminate)
+	}
+	// The owner's intent is persisted right before the signal, which checks
+	// the identity once more at its own boundary, keeping Darwin's gap between
+	// that check and the kill as narrow as before.
+	applied, err := own.persistIntent(b)
+	if err != nil {
+		return false, false, r.storeFailed(b, row.InstanceID, notSent, err)
+	}
+	if !applied {
+		// The store compares the claim's deadline in whole milliseconds.
+		if b.spent() || pauseNow().UnixMilli() >= b.deadline.UnixMilli() {
+			return false, false, budgetExhausted(row.InstanceID, notSent)
+		}
+		return false, false, notPausable(row.InstanceID, "the agent's Launch changed or ended before the signal; nothing was signalled; retry pause",
 			pauseCauseLaunchChanged, &notSent)
 	}
 	if err := r.ctxErr(); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if b.spent() {
-		return false, budgetExhausted(row.InstanceID, notSent)
+		return false, false, budgetExhausted(row.InstanceID, notSent)
 	}
-	switch err := pauseTerminate(agent.PID, agent.Starttime); {
+	sent, err = signalOutcome(row.InstanceID, terminate())
+	return sent, false, err
+}
+
+// signalPlain sends a plain pause's signal: through the store's write lock,
+// while no claim stands on req's Launch, so a claim made meanwhile is never
+// signalled a second time, calling terminate at most once and never retrying
+// it. A standing claim found there answers the call (claimAnswer), nothing
+// signalled; one whose agent's exit is already known (claimEnded) sends
+// nothing and lets the call go on as for an agent already gone; a claim
+// abandoned before its signal intent is released by a separately committed
+// check, in the same budget, before the signal is tried again. Once the
+// signal was tried, its own fact (plainSignalFact: sent, not sent, or not
+// known) is kept apart from the store's outer error, which comes first: the
+// caller's cancellation is its bare error, a budget the call ran out of is
+// budget_exhausted with that fact (signal_sent omitted when not known, never
+// false), and any other outer error is returned as the store gave it. Only
+// with no outer error does the signal's own refusal answer.
+func (r *pauseRun) signalPlain(b keylessBudget, st keylessPauseStore, req store.BusySendPauseRequest, terminate func() error) (sent, answered bool, err error) {
+	id := req.InstanceID
+	for {
+		res, err := st.SignalPlainBusySendPauseWithin(b.ctx, req, terminate, b.wait())
+		switch {
+		case res.Invoked:
+			fact, refusal := plainSignalFact(id, res)
+			if err != nil {
+				return false, false, r.storeFailedAfter(b, id, fact, err)
+			}
+			if refusal != nil {
+				return false, false, refusal
+			}
+			return *fact, false, nil
+		case err != nil:
+			return false, false, r.claimFailed(b, id, err)
+		case res.Recheck:
+			d, err := st.CheckBusySendPauseWithin(b.ctx, req, b.wait())
+			if err != nil {
+				return false, false, r.claimFailed(b, id, err)
+			}
+			switch {
+			case d.Kind == store.BusySendPauseDecisionClear:
+			case claimEnded(d):
+				return false, false, nil
+			default:
+				return false, true, claimAnswer(id, d)
+			}
+			if err := r.ctxErr(); err != nil {
+				return false, false, err
+			}
+			if b.spent() {
+				return false, false, budgetExhausted(id, false)
+			}
+		case res.Decision != nil && claimEnded(*res.Decision):
+			return false, false, nil
+		case res.Decision != nil:
+			return false, true, claimAnswer(id, *res.Decision)
+		default:
+			return false, false, fmt.Errorf("pause %s: the store neither signalled nor answered; nothing was signalled", id)
+		}
+	}
+}
+
+// plainSignalFact is a plain signal's own fact, apart from the store's outer
+// error: whether it was sent, nil when that is not known (the callback was
+// begun and its result not returned, or it failed with an unknown result),
+// and the refusal its result alone would give. A nil refusal comes with a
+// known fact.
+func plainSignalFact(instanceID string, res store.BusySendPlainPauseSignalResult) (*bool, error) {
+	if !res.Completed {
+		return nil, notPausable(instanceID, "the signal was begun but its result was not returned, so whether the agent got it is not known; inspect with get before retrying",
+			pauseCauseSignalUncertain, nil)
+	}
+	sent, refusal := signalOutcome(instanceID, res.SignalError)
+	if d, ok := ErrDetails(refusal).(NotPausableDetails); ok && d.SignalSent == nil {
+		return nil, refusal
+	}
+	return &sent, refusal
+}
+
+// signalOutcome reads the identity-checked signal's return err (probe's): nil
+// is sent; a target already gone is (false, nil), as no signal is needed; an
+// unverifiable target or an unsupported system is a refusal with nothing
+// sent; any other failure is signal_uncertain, whether it was sent not known.
+func signalOutcome(instanceID string, err error) (bool, error) {
+	notSent := false
+	switch {
 	case err == nil:
 		return true, nil
 	case errors.Is(err, probe.ErrSignalTargetGone):
 		return false, nil
 	case errors.Is(err, probe.ErrSignalTargetUnverifiable):
-		return false, notPausable(row.InstanceID, "its recorded agent process cannot be checked at the signal, so a keyless shutdown cannot be verified; nothing was signalled",
+		return false, notPausable(instanceID, "its recorded agent process cannot be checked at the signal, so a keyless shutdown cannot be verified; nothing was signalled",
 			pauseCauseAgentUnverifiable, &notSent)
 	case errors.Is(err, probe.ErrProbeUnsupported):
-		return false, notPausable(row.InstanceID, "this system cannot send an identity-checked signal; nothing was signalled",
+		return false, notPausable(instanceID, "this system cannot send an identity-checked signal; nothing was signalled",
 			pauseCauseSignalUnsupported, &notSent)
 	default:
-		return false, notPausable(row.InstanceID, fmt.Sprintf("the signal failed (%v), so whether the agent got it is not known; inspect with get before retrying", err),
+		return false, notPausable(instanceID, fmt.Sprintf("the signal failed (%v), so whether the agent got it is not known; inspect with get before retrying", err),
 			pauseCauseSignalUncertain, nil)
 	}
 }
 
 // awaitAgentExit polls the captured agent process until it is gone, the
-// deadline passes (exit_uncertain: the signal was sent) or r.ctx ends.
-func (r *pauseRun) awaitAgentExit(instanceID string, agent tmux.ProcIdentity, deadline time.Time) error {
+// deadline passes or r.ctx ends. With a signal sent, the deadline is
+// exit_uncertain. With none sent (keylessShutdown's ended, which never
+// signals), an agent that can no longer be
+// judged is agent_process_unverifiable at once, as the first judgement
+// refuses it, and one still running at the deadline is owned_process_running,
+// nothing signalled either way.
+func (r *pauseRun) awaitAgentExit(instanceID string, agent tmux.ProcIdentity, deadline time.Time, sent bool) error {
 	for {
 		if err := r.ctxErr(); err != nil {
 			return err
 		}
-		if tmux.JudgeProcess(r.procs, agent) == tmux.ProcGone {
+		switch tmux.JudgeProcess(r.procs, agent) {
+		case tmux.ProcGone:
 			return nil
+		case tmux.ProcAlive:
+		default:
+			if !sent {
+				return agentUnverifiable(instanceID)
+			}
 		}
 		if !pauseNow().Before(deadline) {
-			sent := true
+			if !sent {
+				return notPausable(instanceID, "its agent's exit is already recorded or its Launch has ended, so this pause sends it no signal, but its recorded agent process still runs, so its keyless shutdown is not established; nothing was signalled; inspect with get, and retry pause once that process has exited, or kill",
+					exitCauseProcessRunning, &sent)
+			}
 			return notPausable(instanceID, "the signal was sent and the agent did not exit within the pause budget; its exit is uncertain, not done; inspect with get before more input",
 				pauseCauseExitUncertain, &sent)
 		}

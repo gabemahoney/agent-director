@@ -85,10 +85,14 @@ var ErrCantSend = errors.New("ErrCantSend")
 // live state (SR-6.4), and gets this error, with NotPausableDetails' cause,
 // when its resumable keyless shutdown cannot be established.
 // With only_if_waiting true, the coverage the row's published current Launch
-// recorded decides first, in any state, and nothing is ended: not_covered
-// returns this error with err_details (NotPausableDetails) cause
-// agent_not_covered (SR-9.2); covered gets this version's unnamed
-// busy-send-unavailable error (ErrInternal), not this one.
+// recorded decides first, in any state: not_covered returns this error with
+// err_details (NotPausableDetails) cause agent_not_covered (SR-9.2), nothing
+// ended; a Covered Agent not waiting gets cause not_waiting (with
+// observed_state) and one with a turn pending turn_pending, nothing changed
+// (SR-6.5). A pause of a Launch whose pause claim stands gets the claim's
+// answer, nothing signalled: pause_in_progress, pause_uncertain, or the
+// earlier pause's recorded exit_uncertain or failure replayed (Pause has the
+// exceptions).
 var ErrSpawnNotPausable = errors.New("ErrSpawnNotPausable")
 
 // ErrSpawnNotDeletable is agent-director-admin delete's per-id refusal of a

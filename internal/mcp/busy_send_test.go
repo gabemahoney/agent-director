@@ -7,7 +7,7 @@ package mcp_test
 // its machine fields; force_delivery, get_force and get_delivery forward their
 // results and errors unchanged. pkg/api's tests own the refusals themselves.
 // Task t2.xis.oo.tc adds a covered send's raw-key presence, Message ID, Result
-// and id_conflict details.
+// and id_conflict details; Task t2.xis.8a.sv a covered row's conditional pause.
 
 import (
 	"encoding/json"
@@ -101,6 +101,29 @@ func TestBusySendMCPOptionsReachTheVerb(t *testing.T) {
 			}
 			if tc.wantDetails != nil && !reflect.DeepEqual(data.ErrDetails, tc.wantDetails) {
 				t.Errorf("err_details = %#v; want %#v", data.ErrDetails, tc.wantDetails)
+			}
+		})
+	}
+}
+
+// TestBusySendMCPConditionalPause (SR-6.5; M2 P-C4.1, P-C4.5, P-C4.6): pause's
+// only_if_waiting true reaches the shared API through the live dispatcher, so a
+// covered Claude row in each apitest.PauseSurfaces shape is ErrSpawnNotPausable
+// with exactly that shape's err_details: the raw observed_state kept, and
+// signal_sent true or omitted as the replayed outcome recorded. The option's
+// other values and empty success are TestBusySendMCPOptionsReachTheVerb's and
+// TestBusySendMCPNullRefused's.
+func TestBusySendMCPConditionalPause(t *testing.T) {
+	for _, s := range apitest.PauseSurfaces {
+		t.Run(s.Name, func(t *testing.T) {
+			e := newEnv(t)
+			id := "mcp-pause-" + s.Name
+			if err := apitest.SeedPauseSurface(e.storePath, id, s.Name); err != nil {
+				t.Fatal(err)
+			}
+			data := toolErrorData(t, callTool(t, e.d, "pause", `{"instance_id":"`+id+`","only_if_waiting":true}`))
+			if data.ErrName != "ErrSpawnNotPausable" || !reflect.DeepEqual(data.ErrDetails, s.Details) {
+				t.Errorf("pause = %s: %q, err_details %#v; want ErrSpawnNotPausable with %#v", data.ErrName, data.ErrDescription, data.ErrDetails, s.Details)
 			}
 		})
 	}

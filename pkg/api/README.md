@@ -579,14 +579,20 @@ in any live state. It preserves Held Messages for resume and returns
 `ErrSpawnNotPausable` with `NotPausableDetails` on refusal; see
 [keyless pause](../../docs/caller-contract.md#keyless-pause-of-a-covered-agent).
 For uncovered agents it types exit only while waiting and can return
-`ErrPauseTimeout` (see [Errors](#errors)). A finished row is a no-op.
+`ErrPauseTimeout` (see [Errors](#errors)). A finished row is a no-op, unless
+a [pause claim](../../docs/caller-contract.md#standing-pause-claims) still
+stands or `OnlyIfWaiting` is refused below.
 
-`PauseParams.OnlyIfWaiting: true` currently returns `ErrInternal` on a Covered
-Agent, ending nothing; see [Busy-send options](../../docs/caller-contract.md#busy-send-options).
-When the row's current launch is not covered, `true` returns `ErrSpawnNotPausable` in any row
-state, with
-`api.ErrDetails(err)` a `NotPausableDetails` whose `Cause` is
-`"agent_not_covered"`; nothing is ended. `false` is the default pause.
+`PauseParams.OnlyIfWaiting: true` ends a Covered Agent only if it is waiting
+with no turn pending, else returns `ErrSpawnNotPausable` with
+`api.ErrDetails(err)` a `NotPausableDetails` whose `Cause` is `"not_waiting"`,
+with the raw state in `ObservedState`, or `"turn_pending"`; nothing is
+changed. When the row's current launch is not covered, `true` returns
+`ErrSpawnNotPausable` in any row state, `Cause` `"agent_not_covered"`;
+nothing is ended. `SignalSent` is a `*bool`, nil when not known or not
+applicable. `false` is the default pause. Causes, retries, standing claims and
+limits are in
+[Pause only if waiting](../../docs/caller-contract.md#pause-only-if-waiting).
 
 ---
 

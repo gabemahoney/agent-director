@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -234,19 +235,20 @@ func TestAdviceFollow_B2_KillOrPauseThenResume(t *testing.T) {
 			advResumeAssertState(t, c, r.ID, store.StateMissing)
 		}},
 		// A covered Claude row's pause is keyless: it signals the agent, whose
-		// exit (its SessionEnd, its process and session gone) ends the row.
+		// exit (its SessionEnd, its process and session gone) ends the row. The
+		// signal runs under the store's write lock, so the agent's SessionEnd
+		// comes at pause's first wait for its exit.
 		{"pause", func(t *testing.T, e *killEnv, r resumeRow) {
-			fastPausePolls(t)
-			signals := 0
-			t.Cleanup(api.SetPauseTerminateForTest(func(int, string) error {
-				if signals++; signals == 1 {
+			pauSleeps(t, time.Millisecond, false, func(n int) {
+				if n == 1 {
 					if ok, why := e.endAsAgent(t, r.killRow); !ok {
-						t.Errorf("SessionEnd at the signal: %s", why)
+						t.Errorf("SessionEnd after the signal: %s", why)
 					}
 					advResumeConditionEnds(t, e, r)
 				}
-				return nil
-			}))
+			})
+			signals := 0
+			t.Cleanup(api.SetPauseTerminateForTest(func(int, string) error { signals++; return nil }))
 			c, _ := e.client(t)
 			if _, err := c.Pause(context.Background(), pauseParams(r.killRow)); err != nil || signals != 1 {
 				t.Fatalf("pause = %v after %d signals; want the row ended after one", err, signals)
