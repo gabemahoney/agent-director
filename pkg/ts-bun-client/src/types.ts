@@ -1119,8 +1119,10 @@ export interface DecideParams {
   /**
    * Optional bound on the whole call, in milliseconds from its start (no default). Required
    * waits before recording, for the store or a request with no recorded settle instant, must
-   * fit within it; otherwise `ErrStoreBusy`, nothing recorded, so a retry is safe. With no time
-   * left, recording proceeds only if the store is free at once. Once
+   * fit within it; otherwise `ErrStoreBusy`, nothing recorded, so a retry is safe. An expired
+   * positive bound starts no new SQL, even if the store is free; already-entered SQL may continue.
+   * Zero permits immediately available work within a fixed one-second allowance, with the store
+   * free at once and no lock retries. Once
    * the verdict is recorded the call never rejects with `ErrStoreBusy`: the wait for the relay
    * hook's ack ends at the bound with `not_confirmed`. Pass at most your deadline minus 1 s.
    * Negative: `ErrInvalidFlags`.
