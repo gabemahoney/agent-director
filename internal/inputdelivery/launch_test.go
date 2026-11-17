@@ -15,7 +15,7 @@ func TestPreparePinsDiagnosticsToFreshLaunch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	for _, agent := range []string{"codex", "claude"} {
-		for _, mode := range []string{"supported", "unsupported version", "custom bindings", "unsafe args"} {
+		for _, mode := range []string{"supported", "unsupported version", "oversized version output", "custom bindings", "unsafe args"} {
 			t.Run(agent+"/"+mode, func(t *testing.T) {
 				root := t.TempDir()
 				t.Setenv("HOME", root)
@@ -26,8 +26,16 @@ func TestPreparePinsDiagnosticsToFreshLaunch(t *testing.T) {
 				if mode == "unsupported version" {
 					version += "-future"
 				}
+				// Oversized: the pinned version padded with whitespace past the
+				// probe's 4096-byte cap, which ProbeOutput must hold even though
+				// the trimmed text matches (the cap never held before
+				// t3.ba6.3q.u6.1m, as io.Copy used the embedded buffer's ReadFrom).
+				padding := ""
+				if mode == "oversized version output" {
+					padding = "printf '%4096s\\n' ''\n"
+				}
 				program := filepath.Join(root, "agent")
-				if err := os.WriteFile(program, []byte("#!/bin/sh\nprintf '%s\\n' '"+version+"'\n"), 0700); err != nil {
+				if err := os.WriteFile(program, []byte("#!/bin/sh\nprintf '%s\\n' '"+version+"'\n"+padding), 0700); err != nil {
 					t.Fatal(err)
 				}
 				configDir := filepath.Join(root, "config")
@@ -62,7 +70,7 @@ func TestPreparePinsDiagnosticsToFreshLaunch(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if mode == "unsupported version" || mode == "unsafe args" {
+				if mode == "unsupported version" || mode == "oversized version output" || mode == "unsafe args" {
 					if !reflect.DeepEqual(cmd, []string{program}) || !reflect.DeepEqual(gotEnv, env) {
 						t.Fatalf("compatibility launch changed command/environment: %q %+v", cmd, gotEnv)
 					}

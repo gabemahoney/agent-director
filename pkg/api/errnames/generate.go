@@ -61,6 +61,7 @@ var packageOf = map[string]string{
 	"ErrAgentCapabilityUnsupported": "spawn",
 	"ErrModelMissing":               "spawn",
 	"ErrHostCredentialMissing":      "spawn",
+	"ErrPermissionRulesRefused":     "spawn",
 	"ErrAgentMissing":               "spawn",
 	"ErrAgentInvalid":               "spawn",
 	"ErrAgentArgsMismatch":          "spawn",

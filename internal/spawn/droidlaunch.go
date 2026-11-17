@@ -82,6 +82,20 @@ func droidProgram(cfg config.Config) string {
 	return "droid"
 }
 
+// droidOverlay is the one owner of the Droid overlay's keys (SR-3.1): the
+// explicit model and, with a checked Rule Set, permissionRules. Another key
+// needs its own amendment and is added here. With no Rule Set the bytes are
+// the model-only overlay's.
+type droidOverlay struct {
+	Model string `json:"model"`
+	// PermissionRules is Resolved.DroidRules as checked; encoding a compact
+	// json.Marshal output again leaves its bytes unchanged.
+	PermissionRules json.RawMessage `json:"permissionRules,omitempty"`
+}
+
+// composeDroid describes the overlay and argv without I/O; the launch's
+// ResolveDroidRules step supplied any checked rules and the program that
+// checked them.
 func composeDroid(r Resolved, program string) ([]string, []LaunchFile, error) {
 	model, err := DroidModel(r.AgentArgs, true)
 	if err != nil {
@@ -91,11 +105,13 @@ func composeDroid(r Resolved, program string) ([]string, []LaunchFile, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	content, err := json.Marshal(struct {
-		Model string `json:"model"`
-	}{model})
+	content, err := json.Marshal(droidOverlay{Model: model, PermissionRules: r.DroidRules})
 	if err != nil {
 		return nil, nil, err
+	}
+	if r.DroidProgram != "" {
+		// The launch runs exactly the executable that checked its rules.
+		program = r.DroidProgram
 	}
 	path := filepath.Join(dir, droidSettingsFile)
 	return []string{program, "--settings", path}, []LaunchFile{{Path: path, Content: content}}, nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/adminapi"
@@ -31,6 +32,9 @@ func TestClassifyKnown(t *testing.T) {
 			if desc != wrapped.Error() {
 				t.Errorf("Classify(%q wrapped): description = %q, want %q", entry.Name, desc, wrapped.Error())
 			}
+			if entry.Name == "ErrPermissionRulesRefused" && !strings.Contains(entry.Description, "A configuration error: retrying without an operator change gives the same result.") {
+				t.Errorf("catalog lost the operator configuration refusal: %q", entry.Description)
+			}
 		})
 	}
 }
@@ -45,6 +49,7 @@ func TestClassifyAgentErrors(t *testing.T) {
 		"ErrPermissionsUnsupported": api.ErrPermissionsUnsupported,
 		"ErrTemplateAgentMissing":   api.ErrTemplateAgentMissing,
 		"ErrHostCredentialMissing":  api.ErrHostCredentialMissing,
+		"ErrPermissionRulesRefused": api.ErrPermissionRulesRefused,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, _ := errnames.Classify(fmt.Errorf("%w: context", sentinel)); got != name {

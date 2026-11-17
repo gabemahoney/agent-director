@@ -40,6 +40,14 @@ func TestMCPSpawnAgentReachesRow(t *testing.T) {
 	for _, agent := range []string{"claude", "codex", "cursor"} {
 		t.Run(agent, func(t *testing.T) {
 			e, c := newReuseParamEnv(t)
+			configDir := filepath.Join(os.Getenv("HOME"), ".config", "agent-director")
+			apitest.SeedErrPermissionRulesRefused(t, configDir)
+			client, err := api.New(api.Options{StorePath: e.storePath, ConfigPath: filepath.Join(configDir, "config.toml"), TmuxClient: e.rec})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = client.Close() })
+			e.d = mcp.NewLiveDispatcher(client)
 			id := "agent-" + uuid.NewString()[:8]
 
 			callToolText(t, e.d, "spawn", agentSpawnArgs(t, t.TempDir(), c, map[string]any{"instance_id": id, "agent": agent, "no_pre_trust": true}))

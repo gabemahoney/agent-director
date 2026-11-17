@@ -37,6 +37,7 @@ func TestPaneOnlyMakeTemplateRefusalsWriteNothing(t *testing.T) {
 		cases := []refusal{
 			{"joined model", "ErrSpawnDeniedFlag", api.MakeTemplateParams{AgentArgs: []string{"--model=" + rejected}}},
 			{"custom model", "ErrSpawnDeniedFlag", api.MakeTemplateParams{AgentArgs: []string{"--model", "custom:" + rejected}}},
+			{"settings", "ErrSpawnDeniedFlag", api.MakeTemplateParams{AgentArgs: []string{"--settings", rejected}}},
 			{"relay", "ErrAgentCapabilityUnsupported", api.MakeTemplateParams{RelayMode: "on"}},
 			{"allow", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Allow: []string{rejected}}}},
 			{"deny", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Deny: []string{rejected}}}},

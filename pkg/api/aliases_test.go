@@ -131,6 +131,7 @@ func TestAgentSentinelAliases(t *testing.T) {
 		{"ErrAgentInvalid", api.ErrAgentInvalid, spawn.ErrAgentInvalid},
 		{"ErrAgentArgsMismatch", api.ErrAgentArgsMismatch, spawn.ErrAgentArgsMismatch},
 		{"ErrPermissionsUnsupported", api.ErrPermissionsUnsupported, spawn.ErrPermissionsUnsupported},
+		{"ErrPermissionRulesRefused", api.ErrPermissionRulesRefused, spawn.ErrPermissionRulesRefused},
 		{"ErrTemplateAgentMissing", api.ErrTemplateAgentMissing, config.ErrTemplateAgentMissing},
 	}
 	for _, tc := range cases {

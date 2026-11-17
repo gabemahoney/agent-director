@@ -430,6 +430,8 @@ export class ErrAgentCapabilityUnsupported extends AgentDirectorError {}
 export class ErrModelMissing extends AgentDirectorError {}
 /** A required host credential is unset or empty in agent-director's environment. */
 export class ErrHostCredentialMissing extends AgentDirectorError {}
+/** The operator's configured permission rules for the launch were refused; retrying without an operator change gives the same result. */
+export class ErrPermissionRulesRefused extends AgentDirectorError {}
 /** Mirrors ErrAgentMissing (package: spawn) */
 export class ErrAgentMissing extends AgentDirectorError {}
 /** Mirrors ErrAgentInvalid (package: spawn) */
@@ -628,6 +630,7 @@ const ERROR_TABLE = {
   ErrAgentCapabilityUnsupported,
   ErrModelMissing,
   ErrHostCredentialMissing,
+  ErrPermissionRulesRefused,
   ErrAgentMissing,
   ErrAgentInvalid,
   ErrAgentArgsMismatch,

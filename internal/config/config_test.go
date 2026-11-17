@@ -45,6 +45,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Experimental.OpenCode", d.Experimental.OpenCode, false},
 		{"Launch.OpenCodePath", d.Launch.OpenCodePath, ""},
 		{"Launch.DroidPath", d.Launch.DroidPath, ""},
+		{"Launch.DroidRulesPath", d.Launch.DroidRulesPath, ""},
 		{"Defaults.RelayMode", d.Defaults.RelayMode, "off"},
 		{"Defaults.ExpireRetentionDays", d.Defaults.ExpireRetentionDays, 31},
 		{"Defaults.DisableAskUser", d.Defaults.DisableAskUser, false},
@@ -119,6 +120,13 @@ func TestLoadKeepsDefaults(t *testing.T) {
 		{"unrelated unknown [defaults] key ignored", makeConfigFile(t, "[defaults]\ndisable_something_else = true\nrelay_mode = \"on\"\n"),
 			func(c *config.Config) { c.Defaults.RelayMode = "on" }},
 		{"droid opt-in", makeConfigFile(t, "[experimental]\ndroid = true\n"), func(c *config.Config) { c.Experimental.Droid = true }},
+		{"rules empty", makeConfigFile(t, "[launch]\ndroid_rules_path = \"\"\n"), func(*config.Config) {}},
+		{"rules absolute", makeConfigFile(t, "[launch]\ndroid_rules_path = \"/opt/my rules/rules.json\"\n"),
+			func(c *config.Config) { c.Launch.DroidRulesPath = "/opt/my rules/rules.json" }},
+		{"rules tilde", makeConfigFile(t, "[launch]\ndroid_rules_path = \"~/rules.json\"\n"),
+			func(c *config.Config) { c.Launch.DroidRulesPath = filepath.Join(home, "rules.json") }},
+		{"rules case variant", makeConfigFile(t, "[LAUNCH]\nDROID_RULES_PATH = \"/rules.json\"\n"),
+			func(c *config.Config) { c.Launch.DroidRulesPath = "/rules.json" }},
 		{"opencode opt-in", makeConfigFile(t, "[experimental]\nopencode = true\n"), func(c *config.Config) { c.Experimental.OpenCode = true }},
 		{"claude_path absolute", makeConfigFile(t, "[launch]\nclaude_path = \"/opt/bin/claude\"\n"),
 			func(c *config.Config) { c.Launch.ClaudePath = "/opt/bin/claude" }},
@@ -331,6 +339,26 @@ func TestPaneOnlyLaunchPaths(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Load validates syntax only, even when the target cannot be a Rule Set.
+func TestDroidRulesLoadDoesNotReadTarget(t *testing.T) {
+	root := t.TempDir()
+	unreadable := filepath.Join(root, "unreadable.json")
+	if err := os.WriteFile(unreadable, []byte("not JSON"), 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(root, "missing.json"), root, unreadable} {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			cfg, err := config.Load(makeConfigFile(t, "[launch]\ndroid_rules_path = "+quoted(path)+"\n"))
+			if err != nil {
+				t.Fatalf("syntax-only Load failed: %v", err)
+			}
+			if cfg.Launch.DroidRulesPath != path {
+				t.Fatalf("syntax-only Load = %q; want %q", cfg.Launch.DroidRulesPath, path)
+			}
+		})
 	}
 }
 

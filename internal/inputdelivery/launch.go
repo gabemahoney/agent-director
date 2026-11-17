@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,7 +47,7 @@ func Prepare(id Identity, command []string, env map[string]string, safe bool, pe
 	if !safe || (id.Agent != "claude" && id.Agent != "codex") || !inputjournal.ValidID(id.StoreID) || !inputjournal.ValidID(id.Token) {
 		return command, env, nil
 	}
-	program, err := resolveProgram(command[0], env)
+	program, err := ResolveProgram(command[0], env)
 	if err != nil {
 		return command, env, nil
 	}
@@ -163,7 +164,11 @@ func effectiveHome(env map[string]string) (string, error) {
 	return os.UserHomeDir()
 }
 
-func resolveProgram(program string, env map[string]string) (string, error) {
+// ResolveProgram finds the executable a launch of program would run, so a
+// helper run and the launch use the same one even if tmux has another PATH: a
+// path is made absolute; a bare name is looked up on env's PATH, or this
+// process's when env has none, in absolute directories only.
+func ResolveProgram(program string, env map[string]string) (string, error) {
 	if strings.ContainsRune(program, filepath.Separator) {
 		return filepath.Abs(program)
 	}
@@ -184,37 +189,62 @@ func resolveProgram(program string, env map[string]string) (string, error) {
 	return "", fmt.Errorf("agent executable cannot be resolved")
 }
 
-type versionOutput struct{ bytes.Buffer }
+// ProbeOutput keeps at most Limit bytes of a probe's output; a write past the
+// limit fails, and with it the probe. The buffer is a field, not embedded, so
+// io.Copy cannot bypass Write through bytes.Buffer's ReadFrom.
+type ProbeOutput struct {
+	Limit int
+	buf   bytes.Buffer
+}
 
-func (b *versionOutput) Write(p []byte) (int, error) {
-	if len(p) > 4096-b.Len() {
-		return 0, fmt.Errorf("version output exceeds limit")
+func (b *ProbeOutput) Write(p []byte) (int, error) {
+	if len(p) > b.Limit-b.buf.Len() {
+		return 0, fmt.Errorf("probe output exceeds limit")
 	}
-	return b.Buffer.Write(p)
+	return b.buf.Write(p)
+}
+
+// String returns the output kept so far.
+func (b *ProbeOutput) String() string { return b.buf.String() }
+
+// probeWaitDelay bounds the wait for a probe's output pipes after it ends or
+// its context is done, as a launcher's descendants may keep them open.
+const probeWaitDelay = 200 * time.Millisecond
+
+// ProbeCommand builds a helper run of program with args, bounded by ctx, for
+// RunProbe. A helper run is not the launched pane: a wrapper must not run
+// hooks as either the caller or the new launch, and must not receive a host
+// credential. So its environment is this process's, then env's entries, each
+// without agent-director's identity keys, hostenv's credentials and the keys
+// in excluded.
+func ProbeCommand(ctx context.Context, program string, args []string, env map[string]string, excluded []string) *exec.Cmd {
+	command := exec.CommandContext(ctx, program, args...)
+	command.WaitDelay = probeWaitDelay
+	command.Env = make([]string, 0, len(env))
+	keep := func(key string) bool {
+		return !probeIdentityKey(key) && !hostenv.IsCredential(key) && !slices.Contains(excluded, key)
+	}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if keep(key) {
+			command.Env = append(command.Env, entry)
+		}
+	}
+	for k, v := range env {
+		if keep(k) {
+			command.Env = append(command.Env, k+"="+v)
+		}
+	}
+	return command
 }
 
 func probeVersion(agent, program string, env map[string]string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	version := exec.CommandContext(ctx, program, "--version")
-	version.WaitDelay = 200 * time.Millisecond
-	version.Env = make([]string, 0, len(env))
-	// This is a capability probe, not the launched pane. A wrapper that ignores
-	// --version must not run hooks as either the caller or the new launch.
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if !probeIdentityKey(key) && !hostenv.IsCredential(key) {
-			version.Env = append(version.Env, entry)
-		}
-	}
-	for k, v := range env {
-		if !probeIdentityKey(k) && !hostenv.IsCredential(k) {
-			version.Env = append(version.Env, k+"="+v)
-		}
-	}
-	var output versionOutput
+	version := ProbeCommand(ctx, program, []string{"--version"}, env, nil)
+	output := ProbeOutput{Limit: 4096}
 	version.Stdout = &output
-	if runVersionProbe(version) == nil {
+	if runErr, cleanupErr := RunProbe(version); runErr == nil && cleanupErr == nil {
 		switch {
 		case agent == "codex" && strings.TrimSpace(output.String()) == "codex-cli 0.159.2":
 			return "0.159.2"

@@ -295,6 +295,10 @@ func hasControlChar(id string) bool {
 //   - ErrHostCredentialMissing: a required host credential is unset or empty;
 //     set it in agent-director's own environment and restart an MCP server
 //     after changing it. Nothing is written or launched.
+//   - ErrPermissionRulesRefused: the operator's configured permission rules
+//     for this launch were refused; the description names the problem kind
+//     and, where known, the rule's position, never the rules. Only an
+//     operator change fixes it. Nothing is written or launched.
 //   - ErrAgentCapabilityUnsupported: a pane-only launch requests RelayMode
 //     "on"; omit that capability and supervise the owned pane.
 //   - ErrAgentArgsMismatch: the template's agent_args are for another agent

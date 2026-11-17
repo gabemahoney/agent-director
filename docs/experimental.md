@@ -10,8 +10,8 @@ so a supervisor reads everything from each agent's pane.
 ## Setup
 
 - `droid` 1.5.0 with auto-update disabled, signed in through a Factory
-  subscription (no API key or BYOK), on the agents' tmux server `PATH` or named
-  by `droid_path`. Repeat the live startup, model, prompt, input and quit
+  subscription (no API key or BYOK). For executable selection, see
+  [`droid_path`](#keys). Repeat the live startup, model, prompt, input and quit
   checks before using another version.
 - For OpenCode's pin and host-key setup, see [Supervising OpenCode](#supervising-opencode).
 - `install.sh` neither discovers nor counts these agents; the install still needs one
@@ -28,7 +28,8 @@ opencode = true
 
 | Key | Range | Default | Effect |
 |---|---|---|---|
-| `[launch] droid_path` | executable name, absolute path or `~/` path | unset | The program a Droid spawn or finished-ID reuse runs. Empty or unset runs `droid` from the tmux server's `PATH`; a bare name also uses that `PATH`. Paths follow the other launch keys' expansion and refusals. A set value is one executable, without shell parsing, fallback or an advance check. Applies at the next launch. |
+| `[launch] droid_path` | executable name, absolute path or `~/` path | unset | The program a Droid spawn or finished-ID reuse runs; empty or unset selects `droid`. With no Rule Set, bare names use the tmux server's `PATH`, without an advance check. For rules-configured resolution, see [Droid rules](#droid-rules). Paths follow the other launch keys' expansion and refusals; a set value is one executable, without shell parsing or fallback. Follows the [configuration reload rules](configuration.md#when-a-change-takes-effect). |
+| `[launch] droid_rules_path` | absolute path or `~/` path | unset | Operator's Rule Set File; empty or unset means no rules. Loading validates the path without reading the file; malformed values give `ErrConfigMalformed`. See [Droid rules](#droid-rules) for reloads, file reads and caller limits. |
 | `[experimental] droid` | `true`, `false` | `false` | Enables Droid spawn, finished-ID reuse into Droid and Droid template creation. Reads, `kill`, `sweep`/`find-missing` and `expire` never consult it. |
 | `[launch] opencode_path` | executable name, absolute path or `~/` path | unset | The program an OpenCode spawn or finished-ID reuse runs. Empty or unset runs `opencode` from the tmux server's `PATH`; a bare name also uses that `PATH`. Paths follow the other launch keys' expansion and refusals. A set value is one executable, without shell parsing, fallback or an advance check. Applies at the next launch. |
 | `[experimental] opencode` | `true`, `false` | `false` | Enables OpenCode spawn, finished-ID reuse into OpenCode and OpenCode template creation, independently of `droid`. Reads, `kill`, `sweep`/`find-missing` and `expire` never consult it. |
@@ -69,11 +70,9 @@ tokens.
    trust prompt in a fresh directory or git repository. If one appears,
    inspect and answer it; after declining, kill and reconcile without
    assigning work.
-3. **Permission prompts.** Inspect each one and choose the one-time allow or
-   cancel; never a persistent "always allow" choice. agent-director answers
-   nothing. Droid's default autonomy ran commands without asking, and can edit
-   files, so no prompt is no protection. When plain text hides the selected
-   choice, read with `read-pane --ansi` or
+3. **Permission prompts.** Inspect and answer each prompt under
+   [Droid rules](#droid-rules); agent-director answers nothing.
+   When plain text hides the selected choice, read with `read-pane --ansi` or
    [attach to the pane](usage.md#attach-to-a-spawns-pane). Answer with the
    menu's displayed key through `send-keys --allow-pending --key`; for a hash
    guard, take `pane_sha256` from a plain (non-ANSI) read and pass it as
@@ -119,6 +118,111 @@ effect. The primary model does not pin native side calls, compaction or
 subagents, whose model and spend stay outside accounting. The operator remains
 responsible for the development network's approved-code, data and spending
 rules; the lane does not isolate Droid or prevent reads or disclosure.
+
+## Droid rules
+
+The operator can set `droid_rules_path = "/opt/example/droid-rules.json"`
+under `[launch]` in agent-director's configuration. Empty or unset keeps the
+existing launch behavior. Callers cannot supply, change or remove rules through
+spawn, finished-ID reuse, `make-template` or template files; caller permission
+entries and `--settings` remain [refused](#refusals).
+
+After setting, changing or clearing `droid_rules_path`, **restart a running
+MCP server**. A Go Client takes the key when constructed; CLI and TypeScript
+client calls take it on the next call. These are the existing
+[configuration reload rules](configuration.md#when-a-change-takes-effect).
+The Rule Set File itself is read afresh at every Droid spawn and finished-ID
+reuse on every surface, so file edits apply at the next launch. Templates,
+reads, cleanup commands and other agents never read it.
+
+The file is a readable regular file of at most 1 MiB containing Droid's
+standalone JSON rules object, for example:
+
+```json
+{
+  "version": 1,
+  "rules": [{
+    "id": "scheduler-read",
+    "decision": "allow",
+    "match": {"prefix": ["/opt/example/bin/jobsched", ["wait", "status", "results", "list"]]},
+    "tests": {
+      "match": ["/opt/example/bin/jobsched status job-1"],
+      "noMatch": ["/opt/example/bin/jobsched submit"]
+    }
+  }]
+}
+```
+
+Only `version` and `rules` are allowed at the top level. `version` must be 1
+and `rules` nonempty. Each rule requires string `id` and `decision`,
+`match.prefix` (a nonempty array of strings or nonempty string-alternative
+arrays), and `tests.match` and `tests.noMatch` (string arrays, both nonempty
+for Droid 1.5.0). Optional fields are string `reason` and boolean `enabled`,
+which must be `true`; remove disabled rules. Unknown fields, wrong JSON types,
+empty or repeated IDs and IDs beginning `builtin/` are refused.
+
+`allow` gives a matching command an allow; `ask` requires approval and `block`
+refuses it. For `allow`, every alternative at prefix position zero must be
+exactly `tail` or `head`, or an absolute program path. Relative paths, `~/`
+paths and other bare names are refused. Recognized shells, interpreters and
+command runners are refused even by absolute path, including versioned names
+such as `python3.11`, `pypy3`, `lua5.4`, `node18` and `ruby-3.1`, and runners
+such as `env`, `xargs`, `ssh` and `docker`. Any other absolute program is
+trusted as listed by the operator; agent-director cannot judge its safety.
+Ask and block rules may use any prefix and only add prompts or refusals.
+
+See [Droid's permission rules](https://docs.factory.com/autonomy-and-safety/permission-rules)
+for matching and examples. Check the file with the same Droid program the
+launch uses:
+
+```sh
+droid rules check --file /opt/example/droid-rules.json
+```
+
+Each launch rewrites IDs to `agent-director/<launch token>/<operator id>` so
+they cannot shadow inherited rules. It then runs Droid's check on a private
+copy of the exact rules it will launch. With rules configured, a bare
+`droid_path` or the default `droid` is resolved on agent-director's `PATH`
+(or `extra_env`'s `PATH`); the check and pane use that same absolute program.
+An unavailable program, nonzero exit, output over 1 MiB per stream or failure
+to finish within 10 seconds refuses the launch. No partial Rule Set launches.
+
+`ErrPermissionRulesRefused` is a configuration refusal: an operator must fix
+the file or Droid program before retrying. It names the problem kind and,
+when known, the zero-based `rules[N]`, without rule text, file contents or
+native output. Refusal precedes any row insert/reset, session, trust entry or
+launch file write. The private check copy is removed before returning; if
+cleanup fails, the error says so. Stop any check processes reported as left
+running, and remove only the failed check's `agent-director-droid-rules-*`
+temporary directory before retrying.
+
+Agent-director keeps Droid's Low autonomy and writes no `~/.factory` settings.
+The rules belong only to the launch's private overlay; a Droid started without
+it has none of them. Give workers the exact **Covered Spellings** that match
+the operator's allow rules, each alone or piped into `tail` or `head`, without
+redirects. Relative or `./` spellings, `bash` prefixes, leading assignments,
+and pipelines containing an uncovered command gain no allow. No other chain
+is promised. Inspect remaining prompts and choose one-time allow or cancel,
+never a persistent "always allow" choice.
+
+Keep these limits in mind:
+
+- Only Covered Spellings gain an allow, with unrestricted trailing arguments.
+  Other rules, safeguards or hooks can still ask or block. Uncovered commands
+  keep Low's native decision and can sometimes run without asking.
+- At Low, the worker can edit non-system files without asking, including
+  agent-director's configuration and listed wrappers; these remain trusted.
+  Project or user Droid rules can still add allows. Wrapper checks can race
+  their runs: a test file can be swapped
+  after checking, or repository settings can add a git filter or text-conversion
+  program after a read-only wrapper checks them.
+- Shell rules do not protect secret paths from Droid's native read/edit
+  tools. Shell reads keep Low's decision, and AskUser remains available.
+- Block rules cover listed spellings only, not alternate invocations of the
+  same program. Matching uses whole tokens: `pkill tmux` does not cover
+  `pkill tmuxd`, nor `git clean` a `git cleanup` alias or external command.
+  Those spellings retain native handling. Rules are no sandbox or guarantee
+  against arbitrary commands.
 
 ## Supervising OpenCode
 
@@ -280,6 +384,8 @@ template is written.
 - `ErrAgentCapabilityUnsupported`: explicit or template-inherited
   `relay_mode: "on"`. Omitted relay is `off` whatever the global default.
 - `ErrPermissionsUnsupported`: any `allow`, `deny` or `ask` entry.
+- `ErrPermissionRulesRefused`: the operator's [Droid Rule Set](#droid-rules)
+  or its native check was refused.
 - `ErrReservedEnvKey`: Droid `extra_env` holds `FACTORY_API_KEY`,
   `AWS_BEARER_TOKEN_BEDROCK` or `FACTORY_HOME_OVERRIDE`; OpenCode `extra_env`
   holds `OPENROUTER_API_KEY`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`,
@@ -296,9 +402,9 @@ matching error classes.
 This applies to Droid; OpenCode launches write no launch files.
 
 `~/.config/agent-director/launch/<store_id>/<launch_token>/` holds a launch's
-private `droid-settings.json` overlay: only the requested model ID, no
-credentials. The warning `retained launch files may be unreachable after
-failed reuse` means a failed attempt's files were kept because its launch may
+private `droid-settings.json` overlay: the requested model ID and optional
+checked Rule Set, with no credentials. The warning `retained launch files may
+be unreachable after failed reuse` means a failed attempt's files were kept because its launch may
 still run; its `store_id`, `launch_token`, `row_state` and `owning_path`
 identify it, and ordinary cleanup may never reach it.
 

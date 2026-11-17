@@ -141,6 +141,7 @@ func TestSpawnCLITemplateAgentArgs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
+			apitest.SeedErrPermissionRulesRefused(t, directorDir(home))
 			seedTemplate(t, home, "tpl", apitest.TemplateFields{Agent: tc.agent, AgentArgs: []string{tc.templateArg}})
 			id := spawnOK(t, home, fakeDir, append([]string{"--agent", tc.agent, "--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust"}, tc.extra...)...)
 
@@ -244,6 +245,28 @@ func TestSpawnCLIAgentRefusals(t *testing.T) {
 			assertInvocationKinds(t, home)
 			if ids := listIDs(t, home, fakeDir); len(ids) != 0 {
 				t.Errorf("rows = %v; want none", ids)
+			}
+		})
+	}
+}
+
+func TestDroidRulesUnknownCLIFlags(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	for _, verb := range []string{"spawn", "make-template"} {
+		t.Run(verb, func(t *testing.T) {
+			home := t.TempDir()
+			apitest.SeedErrPermissionRulesRefused(t, directorDir(home))
+			out, stderr, code := runSpawnCLI(t, home, fakeDir, verb, "--agent", "droid", "--droid-rules-path", "/caller/rules.json")
+			env := assertOnlyEnvelope(t, out, stderr, code, "ErrInvalidFlags")
+			if env.ErrDescription != "flag provided but not defined: -droid-rules-path" {
+				t.Fatalf("unknown rule flag: %+v", env)
+			}
+			assertInvocationKinds(t, home)
+			if ids := listIDs(t, home, fakeDir); len(ids) != 0 {
+				t.Fatalf("unknown flag created rows: %v", ids)
+			}
+			if _, err := os.Stat(filepath.Join(directorDir(home), "templates")); !os.IsNotExist(err) {
+				t.Fatalf("unknown flag created templates: %v", err)
 			}
 		})
 	}
