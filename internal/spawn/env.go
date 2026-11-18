@@ -1,15 +1,15 @@
 package spawn
 
 import (
+	"os"
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // composeEnv builds the env-var map handed to tmux's -e flags (SRD §7.4
-// step 1). The result is deterministic given identical inputs — order is
-// not relevant to tmux, but a deterministic map makes test assertions
-// straightforward.
+// step 1). The result depends on r and, for Droid, agent-director's PATH.
+// Map order is not relevant to tmux.
 //
 // Composition rules:
 //
@@ -23,6 +23,8 @@ import (
 //     (SR-10.1, Q5(c)); a BASH_ENV in ExtraEnv wins.
 //   - AGENT_DIRECTOR_AGENT — also set for Cursor and pane-only agents, so
 //     the session overrides any agent identity held by an existing server.
+//   - PATH — for Droid only, explicitly agent-director's own PATH, shared
+//     by its Guard self-check, Rule Set check and pane even on a warm server.
 //   - everything in ExtraEnv — including auth env vars (ANTHROPIC_API_KEY,
 //     CLAUDE_CODE_OAUTH_TOKEN). The validation step has already rejected
 //     every key whose env-var name (the part before the first '=', the name
@@ -65,6 +67,11 @@ func composeEnv(r Resolved) map[string]string {
 	// native auto-update flag without mutating that caller's saved input.
 	for k, v := range paneOnlyAgents[r.Agent].sessionEnv {
 		out[k] = v
+	}
+	if r.Agent == config.AgentDroid {
+		// Caller PATH is refused by validation. Override here as well so
+		// every Droid program lookup uses the operator's environment.
+		out["PATH"] = os.Getenv("PATH")
 	}
 	return out
 }

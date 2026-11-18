@@ -8392,6 +8392,10 @@ its own error and rollback behavior below.
 Guard boundary. It reads `[launch] droid_secret_paths_file` once per launch,
 validates and lexically cleans the entries without following them, selects
 the Guard program, composes its command and self-checks those exact bytes.
+Before resolving `sh` or self-checking, this same boundary refuses an unset
+or empty process PATH or any empty or relative component, with the sanitized
+`ErrLaunchGuardRefused`. It never skips invalid components: native lookup
+could otherwise select a different shell from the worker's directory.
 Only success sets private `Resolved.droidGuard` checked entries and command;
 `composeDroid` refuses missing checked data with `ErrLaunchGuardRefused`.
 Other agents return unchanged. Both operator-file keys are syntax-checked
@@ -8502,8 +8506,21 @@ There is no scanner or cleanup timer.
 
 **Must use:** each adapter's policy owns its caller refusal list and client
 exclusions (`PaneOnlyExcludedEnv`), separately from session unsets, supplied
-values and forwarded host-key names. Droid's `DroidForbiddenEnvKeys` retains
-its credential and alternate-home exclusions through `NewSessionWithEnvExclusions`.
+values and forwarded host-key names. Droid's `DroidForbiddenEnvKeys` is the
+single list of credentials, alternate-home and settings selectors for caller
+validation, both filtered probes, tmux client exclusion and target-session
+unsets. `validatePaneOnlyEnv` separately refuses Droid caller/template `PATH`
+and every `LD_`-prefixed key by presence, even empty, with `ErrReservedEnvKey`.
+These caller-only restrictions do not join the ambient exclusion list;
+operator ambient loader handling is unchanged.
+
+`composeEnv` explicitly supplies agent-director's process PATH for Droid
+through the existing session environment transport. The Guard self-check,
+Droid program/Rule Set resolution and pane share that PATH even when a warm
+tmux server has another. Composition adds no filesystem I/O, and this supplied
+PATH never enters `Resolved.ExtraEnv`, the saved row's caller input or templates.
+OpenCode keeps its server PATH unless the caller supplies PATH.
+
 OpenCode excludes six controls from the client: `OPENROUTER_API_KEY`,
 `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG_CONTENT`,
 `OPENCODE_AUTH_CONTENT` and `OPENCODE_PERMISSION`. It overrides the key and

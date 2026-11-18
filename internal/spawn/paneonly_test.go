@@ -32,7 +32,12 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 				args[1] = "openrouter/provider/model"
 			}
 			for _, off := range []bool{false, true} {
-				r, err := Resolve(SpawnParams{Agent: agent, CWD: home, AgentArgs: args, NoPreTrust: off, ExtraEnv: map[string]string{"OPENCODE_DISABLE_AUTOUPDATE": "0"}}, cfg)
+				cfg.Defaults.DisableAskUser = off
+				caller := map[string]string{"OPENCODE_DISABLE_AUTOUPDATE": "0", "CALLER_TAG": "kept"}
+				if agent == "opencode" && off {
+					caller["PATH"], caller["LD_GUARD_TEST"] = "/invented/caller/bin", "ordinary-loader-value"
+				}
+				r, err := Resolve(SpawnParams{Agent: agent, CWD: home, AgentArgs: args, NoPreTrust: off, ExtraEnv: caller}, cfg)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -69,7 +74,9 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 					if !reflect.DeepEqual(c.Create.Command, []string{cfg.Launch.DroidPath, "--settings", path}) || !reflect.DeepEqual(c.Files, []LaunchFile{{Path: path, Content: []byte(`{"model":"ordinary-custom-model",` + guardHooksJSON(r.droidGuard.command) + `}`)}}) {
 						t.Fatalf("composition: command=%q files=%+v", c.Create.Command, c.Files)
 					}
-					keys := []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE"}
+					keys := []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE",
+						"FACTORY_RUNTIME_SETTINGS_PATH", "FACTORY_RUNTIME_SETTINGS_SOURCE", "FACTORY_RUNTIME_SETTINGS_SHA256", "FACTORY_RUNTIME_SETTINGS_ORIGIN",
+						"FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH", "FACTORY_ORG_MANAGED_SETTINGS_URL"}
 					// A nil unset list retains the documented legacy exclusion-to-unset alias.
 					unsets := c.Create.UnsetEnv
 					if unsets == nil {
@@ -77,6 +84,9 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 					}
 					if !slices.Equal(c.Create.ExcludeEnv, keys) || !slices.Equal(unsets, keys) || len(c.Create.ForwardEnv) != 0 {
 						t.Fatalf("Droid environment policy: %+v", c.Create)
+					}
+					if c.Create.Env["PATH"] != os.Getenv("PATH") || c.Create.Env["PATH"] == "" {
+						t.Fatal("Droid session did not receive ambient PATH")
 					}
 					// With a Rule Set, the overlay is {model, permissionRules, hooks}.
 					// permissionRules holds the bytes Droid's check received, IDs under this
@@ -104,6 +114,9 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 						t.Fatalf("composition with a Rule Set: create=%+v files=%+v", rc.Create, rc.Files)
 					}
 				} else {
+					if path, present := c.Create.Env["PATH"]; path != caller["PATH"] || present != off || c.Create.Env["LD_GUARD_TEST"] != caller["LD_GUARD_TEST"] {
+						t.Fatal("OpenCode changed caller PATH/loader behavior or adopted ambient PATH")
+					}
 					if !slices.Equal(c.Create.Command, []string{cfg.Launch.OpenCodePath, "--model", args[1]}) || len(c.Files) != 0 {
 						t.Fatalf("composition: command=%q files=%+v", c.Create.Command, c.Files)
 					}
@@ -129,6 +142,9 @@ func TestPaneOnlyCompositionAndPreTrust(t *testing.T) {
 				}
 				if c.Row.Agent != agent || c.Row.ParentID != "supervisor" || c.Row.RelayMode != "off" || !reflect.DeepEqual(c.Row.AgentArgs, args) || c.Create.Env["AGENT_DIRECTOR_AGENT"] != agent || c.Create.OrdinaryInputSafe {
 					t.Fatalf("lane identity/settings: %+v", c)
+				}
+				if !reflect.DeepEqual(c.Row.ExtraEnv, caller) || !reflect.DeepEqual(r.ExtraEnv, caller) || caller["OPENCODE_DISABLE_AUTOUPDATE"] != "0" || c.Create.Env["CALLER_TAG"] != "kept" {
+					t.Fatal("composition changed saved/caller environment or lost ordinary input")
 				}
 				if c.PreTrust != PreTrustSkipped || RunPreTrust(agent, c.PreTrust, home, nil, off, cfg.PreTrust) != PreTrustSkipped {
 					t.Fatal("lane pre-trust was not skipped")

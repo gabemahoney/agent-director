@@ -299,7 +299,6 @@ func TestDroidRuleSetNativeCheck(t *testing.T) {
 			}
 			cfg := config.Default()
 			cfg.Launch.DroidRulesPath, cfg.Launch.DroidPath = writeRuleSet(t, droidfix.RuleSet("tail")), fake.Path
-			var extraEnv map[string]string
 			switch tc.program {
 			case "missing":
 				cfg.Launch.DroidPath = filepath.Join(t.TempDir(), "droid")
@@ -307,7 +306,8 @@ func TestDroidRuleSetNativeCheck(t *testing.T) {
 				cfg.Launch.DroidPath = filepath.Join(t.TempDir(), "droid")
 				mustDo(t, os.WriteFile(cfg.Launch.DroidPath, []byte("#!/bin/sh\nexit 0\n"), 0o600))
 			case "not on PATH":
-				cfg.Launch.DroidPath, extraEnv = "", map[string]string{"PATH": t.TempDir()}
+				cfg.Launch.DroidPath = ""
+				t.Setenv("PATH", t.TempDir())
 			}
 			deadline := DroidRulesCheckDeadline
 			if tc.deadline != 0 {
@@ -318,7 +318,7 @@ func TestDroidRuleSetNativeCheck(t *testing.T) {
 				mask = unix.Umask(tc.umask)
 			}
 			start := time.Now()
-			got, err := resolveDroidRules(rulesLaunch(extraEnv), cfg, deadline)
+			got, err := resolveDroidRules(rulesLaunch(nil), cfg, deadline)
 			elapsed := time.Since(start)
 			if mask >= 0 {
 				unix.Umask(mask)
@@ -373,17 +373,21 @@ func TestDroidRuleSetNativeCheck(t *testing.T) {
 // TestDroidRuleSetCheckEnvironment (SR-2.4): the check gets the version
 // probe's environment without DroidForbiddenEnvKeys: no agent-director
 // identity key, tmux key, host credential or Droid credential, ambient or
-// supplied, while other keys and a supplied PATH stay; the program comes from
-// droid_path or that PATH, and the launch runs the program that checked.
+// supplied, while ordinary supplied keys survive. Agent-director's ambient
+// PATH serves program lookup, both probes and session composition; droid_path
+// can select an absolute program, and the launch runs the program that checked.
 func TestDroidRuleSetCheckEnvironment(t *testing.T) {
 	// Serial: it sets HOME and the ambient environment with t.Setenv.
 	t.Setenv("HOME", t.TempDir())
 	withheld := []string{"AGENT_DIRECTOR_INSTANCE_ID", "AGENT_DIRECTOR_AMBIENT", "TMUX", "TMUX_PANE",
-		"OPENROUTER_API_KEY", "FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE"}
+		"OPENROUTER_API_KEY", "FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE",
+		"FACTORY_RUNTIME_SETTINGS_PATH", "FACTORY_RUNTIME_SETTINGS_SOURCE", "FACTORY_RUNTIME_SETTINGS_SHA256", "FACTORY_RUNTIME_SETTINGS_ORIGIN",
+		"FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH", "FACTORY_ORG_MANAGED_SETTINGS_URL"}
 	for _, key := range withheld {
 		t.Setenv(key, "ambient-"+plantedValue)
 	}
 	t.Setenv("AMBIENT_KEEP", "kept")
+	t.Setenv("LD_GUARD_TEST", "ambient-loader-kept")
 	for _, lookup := range []string{"droid_path", "PATH"} {
 		t.Run(lookup, func(t *testing.T) {
 			fake := droidfix.New(t, droidfix.Pass)
@@ -392,7 +396,7 @@ func TestDroidRuleSetCheckEnvironment(t *testing.T) {
 			cfg.Launch.DroidRulesPath = writeRuleSet(t, droidfix.RuleSet("tail"))
 			extra := map[string]string{"SUPPLIED_KEEP": "kept"}
 			if lookup == "PATH" {
-				extra["PATH"] = filepath.Dir(fake.Path)
+				t.Setenv("PATH", filepath.Dir(fake.Path)+string(os.PathListSeparator)+os.Getenv("PATH"))
 			} else {
 				cfg.Launch.DroidPath = fake.Path
 			}
@@ -428,12 +432,30 @@ func TestDroidRuleSetCheckEnvironment(t *testing.T) {
 					t.Errorf("check environment holds %s", key)
 				}
 			}
-			if env["AMBIENT_KEEP"] != "kept" || env["SUPPLIED_KEEP"] != "kept" || lookup == "PATH" && env["PATH"] != extra["PATH"] {
+			if env["AMBIENT_KEEP"] != "kept" || env["SUPPLIED_KEEP"] != "kept" || env["LD_GUARD_TEST"] != "ambient-loader-kept" || env["PATH"] != os.Getenv("PATH") {
 				t.Errorf("check environment lost ordinary keys: AMBIENT_KEEP=%q SUPPLIED_KEEP=%q PATH=%q", env["AMBIENT_KEEP"], env["SUPPLIED_KEEP"], env["PATH"])
 			}
 			c, err := ComposeLaunch(checked, cfg)
 			if err != nil || len(c.Create.Command) != 3 || c.Create.Command[0] != fake.Path {
 				t.Fatalf("launch command %q, %v; want the checked program %s", c.Create.Command, err, fake.Path)
+			}
+			for _, call := range guard.Calls(t) {
+				if call.Env["PATH"] != env["PATH"] || call.Env["LD_GUARD_TEST"] != "ambient-loader-kept" {
+					t.Fatal("Guard and Rule Set checks used different ambient environments")
+				}
+				for _, key := range withheld {
+					if _, present := call.Env[key]; present {
+						t.Errorf("Guard check retained %s", key)
+					}
+				}
+			}
+			if c.Create.Env["PATH"] != env["PATH"] {
+				t.Fatal("session PATH differs from checked PATH")
+			}
+			for _, saved := range []map[string]string{extra, r.ExtraEnv, checked.ExtraEnv, c.Row.ExtraEnv} {
+				if _, present := saved["PATH"]; present {
+					t.Fatal("AD-owned PATH entered saved/caller input")
+				}
 			}
 		})
 	}

@@ -531,6 +531,8 @@ type Experimental struct {
 // the optional paths of Droid's Rule Set File and Path List File.
 // A key that is unset or empty selects the program by its name: claude,
 // codex, agent (Cursor), droid or opencode, found on the PATH of the pane's environment.
+// Droid's pane gets agent-director's own PATH explicitly; OpenCode keeps the
+// tmux server's PATH unless the caller supplies one.
 //
 // A value is an absolute path, or "~/" followed by a path, which Load joins
 // onto HOME (as [store] db_path's "~/" is). DroidPath and OpenCodePath also accept a bare

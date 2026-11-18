@@ -171,6 +171,8 @@ func resolveDroidRules(r Resolved, cfg config.Config, deadline time.Duration) (R
 		return r, err
 	}
 	env := composeEnv(r)
+	// composeEnv supplies agent-director's PATH for Droid, never a caller's
+	// or a warm tmux server's. Keep the shared resolver for the check and pane.
 	program, err := inputdelivery.ResolveProgram(droidProgram(cfg), env)
 	if err != nil {
 		return r, droidRulesRefusal(-1, checkCouldNotRun)

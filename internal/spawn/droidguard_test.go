@@ -188,6 +188,8 @@ func TestDroidGuardSelfCheck(t *testing.T) {
 			if tc.name == "expired deadline" {
 				deadline = 0
 			}
+			// Deliberately bypass public validation: even an internal caller's
+			// PATH must not change the self-check's ambient lookup.
 			got, err := resolveDroidGuard(rulesLaunch(map[string]string{"PATH": t.TempDir()}), cfg, deadline)
 			if tc.kind != "" {
 				assertGuardError(t, err, 0, tc.kind)
@@ -212,6 +214,45 @@ func TestDroidGuardSelfCheck(t *testing.T) {
 			}
 			if len(calls) != 2 || string(calls[0].Input) != `{"hook_event_name":"PreToolUse","tool_name":"AskUser","tool_input":{}}` || string(calls[1].Input) != `{"hook_event_name":"PreToolUse","tool_name":"TodoWrite","tool_input":{}}` {
 				t.Fatalf("self-check calls=%+v", calls)
+			}
+		})
+	}
+}
+
+// A usable later directory cannot excuse an unsafe search component, even
+// with an absolute Droid executable and a harmless cwd-local shell.
+func TestDroidGuardSearchPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	g := droidfix.NewGuard(t)
+	t.Cleanup(SetDroidGuardProgramForTest(func() (string, error) { return g.Path, nil }))
+	cfg := config.Default()
+	cfg.Launch.DroidSecretPathsFile, cfg.Launch.DroidPath = g.List, g.Path
+	r := rulesLaunch(nil)
+	r.CWD = t.TempDir()
+	mustDo(t, os.Symlink(g.Path, filepath.Join(r.CWD, "sh")))
+	valid := "/usr/bin:/bin"
+	for _, tc := range []struct{ name, path string }{
+		{"unset", ""}, {"empty", ""}, {"leading empty", ":" + valid},
+		{"middle empty", "/usr/bin::/bin"}, {"trailing empty", valid + ":"},
+		{"leading dot", ".:" + valid}, {"middle relative", "/usr/bin:private-relative:/bin"},
+		{"trailing dot", valid + ":."}, {"absolute", valid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PATH", tc.path)
+			if tc.name == "unset" {
+				mustDo(t, os.Unsetenv("PATH"))
+			}
+			before := len(g.Calls(t))
+			got, err := ResolveDroidGuard(r, cfg)
+			if tc.name == "absolute" {
+				if err != nil || got.droidGuard == nil || len(g.Calls(t)) != before+2 {
+					t.Fatalf("valid PATH: checked=%v error=%v", got.droidGuard != nil, err)
+				}
+				return
+			}
+			assertGuardError(t, err, 0, "agent-director's PATH is unset, empty or contains an empty or relative component")
+			if got.droidGuard != nil || len(g.Calls(t)) != before {
+				t.Fatal("invalid PATH ran a shell/check or retained checked data")
 			}
 		})
 	}

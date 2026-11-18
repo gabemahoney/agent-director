@@ -43,6 +43,7 @@ const (
 	guardListEncoding    = "the Path List File is not valid UTF-8"
 	guardListEmpty       = "the Path List has no entries"
 	guardHome            = "HOME is not a usable absolute path"
+	guardPath            = "agent-director's PATH is unset, empty or contains an empty or relative component"
 	guardEntryWhitespace = "the entry has leading or trailing whitespace"
 	guardEntryControl    = "the entry has a control character"
 	guardEntryPath       = "the entry is not an absolute or ~/ path"
@@ -131,8 +132,20 @@ func resolveDroidGuard(r Resolved, cfg config.Config, deadline time.Duration) (R
 	if err != nil {
 		return r, err
 	}
+	// Native lookup searches empty/relative components from the worker's
+	// folder, while ResolveProgram skips them. Refuse every such component
+	// so the self-check and the pane cannot select different shells.
+	searchPath := os.Getenv("PATH")
+	if searchPath == "" {
+		return r, droidGuardRefusal(0, guardPath)
+	}
+	for _, dir := range filepath.SplitList(searchPath) {
+		if !filepath.IsAbs(dir) {
+			return r, droidGuardRefusal(0, guardPath)
+		}
+	}
 	// No caller extra_env enters this probe: sh and the wrapper's utilities
-	// resolve on agent-director's own PATH.
+	// resolve on agent-director's own PATH, also set explicitly for the pane.
 	shell, err := inputdelivery.ResolveProgram("sh", nil)
 	if err != nil {
 		return r, droidGuardRefusal(0, guardShell)

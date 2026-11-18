@@ -104,22 +104,29 @@ func TestAdviceFollow_A28_PaneOnlyModelAdvice(t *testing.T) {
 func TestAdviceFollow_A29_PaneOnlySettings(t *testing.T) {
 	// Serial: it sets HOME for launch files.
 	for _, agent := range []string{"droid", "opencode"} {
-		key := "FACTORY_API_KEY"
+		key := "FACTORY_RUNTIME_SETTINGS_PATH"
 		if agent == "opencode" {
 			key = "OPENCODE_PERMISSION"
 		}
-		for _, tc := range []struct {
+		type settingsCase struct {
 			name, advice string
 			want         error
 			set, follow  func(*api.SpawnParams)
-		}{
+		}
+		cases := []settingsCase{
 			{"relay", "omit this capability and supervise the owned pane", api.ErrAgentCapabilityUnsupported, func(p *api.SpawnParams) { p.RelayMode = "on" }, func(p *api.SpawnParams) { p.RelayMode = "" }},
 			{"permissions", "remove those entries and handle native permission prompts through the pane", api.ErrPermissionsUnsupported, func(p *api.SpawnParams) { p.Permissions = &api.Permissions{Allow: []string{"Bash"}} }, func(p *api.SpawnParams) { p.Permissions = nil }},
 			{"environment", "remove that key from extra_env", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) { p.ExtraEnv = map[string]string{key: "sentinel"} }, func(p *api.SpawnParams) { delete(p.ExtraEnv, key) }},
 			{"HOME", "remove that entry and keep the invoking HOME", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) {
 				p.ExtraEnv = map[string]string{"HOME": filepath.Join(p.CWD, "wrong-home"), "CALLER_TAG": "kept"}
 			}, func(p *api.SpawnParams) { delete(p.ExtraEnv, "HOME") }},
-		} {
+		}
+		if agent == "droid" {
+			cases = append(cases,
+				settingsCase{"PATH", "remove that key from extra_env", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) { p.ExtraEnv = map[string]string{"PATH": ""} }, func(p *api.SpawnParams) { delete(p.ExtraEnv, "PATH") }},
+				settingsCase{"loader", "remove that entry from extra_env", spawn.ErrReservedEnvKey, func(p *api.SpawnParams) { p.ExtraEnv = map[string]string{"LD_GUARD_TEST": ""} }, func(p *api.SpawnParams) { delete(p.ExtraEnv, "LD_GUARD_TEST") }})
+		}
+		for _, tc := range cases {
 			t.Run(agent+"/"+tc.name, func(t *testing.T) {
 				e := newSpawnEnv(t)
 				t.Setenv("OPENROUTER_API_KEY", "synthetic-advice-key")
@@ -678,21 +685,24 @@ func TestAdviceFollow_A33_DroidRulesLeftCopy(t *testing.T) {
 // droid_secret_paths_file or the Guard installation and environment".
 func TestAdviceFollow_A34_DroidGuardOperatorFix(t *testing.T) {
 	// Serial: it owns HOME and replaces the Guard program selector.
-	for _, fix := range []string{"Path List File", "Guard program"} {
+	for _, fix := range []string{"Path List File", "Guard program", "PATH"} {
 		t.Run(fix, func(t *testing.T) {
 			e := newSpawnEnv(t)
 			if err := os.MkdirAll(filepath.Dir(e.socket), 0700); err != nil {
 				t.Fatal(err)
 			}
 			g := passingDroidGuard(t)
+			validPath := os.Getenv("PATH")
 			if fix == "Path List File" {
 				if err := os.WriteFile(g.List, []byte("PRIVATE_ENTRY\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
-			} else {
+			} else if fix == "Guard program" {
 				if err := g.Set(droidfix.Pass); err != nil {
 					t.Fatal(err)
 				}
+			} else {
+				t.Setenv("PATH", ".:"+validPath)
 			}
 			c := agentClientWithConfig(t, e, "[experimental]\ndroid = true\n[launch]\n"+g.ConfigLine())
 			p := api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")}
@@ -709,10 +719,12 @@ func TestAdviceFollow_A34_DroidGuardOperatorFix(t *testing.T) {
 				if err := os.WriteFile(g.List, []byte("/invented/fixed-vault\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
-			} else {
+			} else if fix == "Guard program" {
 				if err := g.Set(droidfix.GuardPass); err != nil {
 					t.Fatal(err)
 				}
+			} else {
+				t.Setenv("PATH", validPath)
 			}
 			res, err := c.Spawn(p)
 			if err != nil {

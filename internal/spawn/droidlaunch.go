@@ -12,9 +12,14 @@ import (
 	"github.com/gabemahoney/agent-director/internal/layout"
 )
 
-// DroidForbiddenEnvKeys is the single list of credential and home selectors
+// DroidForbiddenEnvKeys is the single list of credential, home and settings selectors
 // refused in Droid requests and excluded from its ambient launch environment.
-var DroidForbiddenEnvKeys = []string{"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE"}
+var DroidForbiddenEnvKeys = []string{
+	"FACTORY_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "FACTORY_HOME_OVERRIDE",
+	"FACTORY_RUNTIME_SETTINGS_PATH", "FACTORY_RUNTIME_SETTINGS_SOURCE",
+	"FACTORY_RUNTIME_SETTINGS_SHA256", "FACTORY_RUNTIME_SETTINGS_ORIGIN",
+	"FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH", "FACTORY_ORG_MANAGED_SETTINGS_URL",
+}
 
 // DroidCustomModelPrefix selects Factory BYOK models rather than subscription use.
 // Pinned-version acceptance must confirm this documented selector.

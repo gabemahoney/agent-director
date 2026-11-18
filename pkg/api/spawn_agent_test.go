@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -90,6 +91,59 @@ func TestPaneOnlyDisabledWritesNothing(t *testing.T) {
 	}
 }
 
+// SR-4: caller and effective-template environment refusals precede launch writes.
+func TestDroidCallerEnvironmentWritesNothing(t *testing.T) {
+	// Serial: each case owns HOME and snapshots the shared trail.
+	const private = "PRIVATE_CALLER_ENV_VALUE"
+	keys := []string{"FACTORY_RUNTIME_SETTINGS_PATH", "FACTORY_RUNTIME_SETTINGS_SOURCE", "FACTORY_RUNTIME_SETTINGS_SHA256", "FACTORY_RUNTIME_SETTINGS_ORIGIN",
+		"FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH", "FACTORY_ORG_MANAGED_SETTINGS_URL", "PATH", "LD_GUARD_TEST"}
+	for _, key := range keys {
+		for _, value := range []string{"", private} {
+			t.Run("direct/"+key+"/"+value, func(t *testing.T) {
+				e := newSpawnEnv(t)
+				c := agentClientWithConfig(t, e, "[experimental]\ndroid = true\n")
+				caller := map[string]string{key: value, "CALLER_TAG": "kept"}
+				before := maps.Clone(caller)
+				err := e.checkCreationWrites(t, func() error {
+					_, err := c.Spawn(api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model"), ExtraEnv: caller})
+					return err
+				})
+				assertOneName(t, err, "ErrReservedEnvKey")
+				if strings.Contains(errText(err), private) || !maps.Equal(caller, before) {
+					t.Fatal("refusal exposed or changed caller input")
+				}
+			})
+		}
+	}
+	for _, tc := range []struct{ name, agent, key string }{
+		{"effective Droid", "droid", "FACTORY_ORG_MANAGED_SETTINGS_URL"},
+		{"generic deferral", "", "PATH"},
+		{"changed agent", "claude", "LD_GUARD_TEST"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newSpawnEnv(t)
+			c := agentClientWithConfig(t, e, "[experimental]\ndroid = true\n")
+			caller := map[string]string{tc.key: "", "CALLER_TAG": "kept"}
+			before := maps.Clone(caller)
+			if tc.agent == "droid" {
+				// Simulate a hand-edited template that MakeTemplate would refuse.
+				seedAgentTemplate(t, e, apitest.TemplateFields{Agent: tc.agent, ExtraEnv: caller})
+			} else if _, err := c.MakeTemplate(api.MakeTemplateParams{Name: "t", Agent: tc.agent, ExtraEnv: caller}); err != nil {
+				t.Fatalf("non-Droid template must defer this policy: %v", err)
+			}
+			p := api.SpawnParams{Template: "t", Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")}
+			if tc.agent == "droid" {
+				p.Agent = ""
+			}
+			err := e.checkCreationWrites(t, func() error { _, err := c.Spawn(p); return err })
+			assertOneName(t, err, "ErrReservedEnvKey")
+			if !maps.Equal(caller, before) {
+				t.Fatal("template validation changed caller map")
+			}
+		})
+	}
+}
+
 // TestPaneOnlyTemplatePrecedenceAndReads: with the Rule Set File missing,
 // template creation and the reads still work and a template's own refusals
 // come first; once the file is valid, the spawn launches.
@@ -116,7 +170,7 @@ func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 				return err
 			})
 			assertOneName(t, err, "ErrModelMissing")
-			seedAgentTemplate(t, e, apitest.TemplateFields{Agent: agent, AgentArgs: paneOnlyArgs(agent, "template-model"), RelayMode: "on"})
+			seedAgentTemplate(t, e, apitest.TemplateFields{Agent: agent, AgentArgs: paneOnlyArgs(agent, "template-model"), RelayMode: "on", ExtraEnv: map[string]string{"CALLER_TAG": "from-template"}})
 			p.Template = "t"
 			err = e.checkCreationWrites(t, func() error {
 				_, err := c.Spawn(p)
@@ -124,6 +178,15 @@ func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 			})
 			assertOneName(t, err, "ErrAgentCapabilityUnsupported")
 			p.RelayMode, p.AgentArgs = "off", paneOnlyArgs(agent, "caller-model")
+			for _, permissions := range []*api.Permissions{{Allow: []string{"PRIVATE_PERMISSION"}}, {Deny: []string{"PRIVATE_PERMISSION"}}, {Ask: []string{"PRIVATE_PERMISSION"}}} {
+				p.Permissions = permissions
+				err := e.checkCreationWrites(t, func() error { _, err := c.Spawn(p); return err })
+				assertOneName(t, err, "ErrPermissionsUnsupported")
+				if strings.Contains(errText(err), "PRIVATE_PERMISSION") {
+					t.Fatal("permission refusal disclosed caller input")
+				}
+			}
+			p.Permissions = nil
 			if _, err := apitest.SeedSpawn(e.dbPath, "supervisor", store.StateEnded, t.TempDir(), "off", "", false); err != nil {
 				t.Fatal(err)
 			}
@@ -151,6 +214,16 @@ func TestPaneOnlyTemplatePrecedenceAndReads(t *testing.T) {
 			row, _, _ := spawnRow(t, e, res.InstanceID)
 			if row.Agent != agent || row.ParentID != "supervisor" || !slices.Equal(storedAgentArgs(t, row), p.AgentArgs) {
 				t.Fatalf("stored request=%+v", row)
+			}
+			tmpl, err := config.LoadTemplate("t")
+			if err != nil || !maps.Equal(tmpl.ExtraEnv, map[string]string{"CALLER_TAG": "from-template"}) || !maps.Equal(storedExtraEnv(t, row), tmpl.ExtraEnv) {
+				t.Fatalf("saved/template environment changed: template=%+v error=%v", tmpl, err)
+			}
+			if agent == "droid" {
+				creates := e.rec.SocketCallsOf(tmux.CallCreate)
+				if len(creates) != 1 || creates[0].Envs["PATH"] != os.Getenv("PATH") || creates[0].Envs["CALLER_TAG"] != "from-template" {
+					t.Fatal("Droid template launch lost ambient PATH or ordinary caller environment")
+				}
 			}
 			if err := os.Remove(rulesPath); err != nil {
 				t.Fatal(err)
@@ -840,7 +913,7 @@ func TestOpenCodeRecomposesWithoutSavingHostKey(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", secret)
 	e := newKillEnv(t)
 	c, _ := e.configClient(t, droidRulesConfig(t, refusedRulesFile(t), "", "opencode"))
-	caller := map[string]string{"CALLER_TAG": "kept", "OPENCODE_DISABLE_AUTOUPDATE": "0"}
+	caller := map[string]string{"CALLER_TAG": "kept", "OPENCODE_DISABLE_AUTOUPDATE": "0", "PATH": "/invented/caller/bin", "LD_GUARD_TEST": "ordinary-loader-value"}
 	p := api.SpawnParams{Agent: "opencode", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("opencode", "model"), ExtraEnv: caller}
 	var first store.Spawn
 	var configContent string
@@ -874,12 +947,15 @@ func TestOpenCodeRecomposesWithoutSavingHostKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantCaller := map[string]string{"CALLER_TAG": "kept", "OPENCODE_DISABLE_AUTOUPDATE": "0"}
-		if !reflect.DeepEqual(row.ExtraEnv, wantCaller) {
+		wantCaller := map[string]string{"CALLER_TAG": "kept", "OPENCODE_DISABLE_AUTOUPDATE": "0", "PATH": "/invented/caller/bin", "LD_GUARD_TEST": "ordinary-loader-value"}
+		if !reflect.DeepEqual(row.ExtraEnv, wantCaller) || !reflect.DeepEqual(caller, wantCaller) {
 			t.Fatalf("saved caller env=%v; want %v", row.ExtraEnv, wantCaller)
 		}
 		creates := e.rec.SocketCallsOf(tmux.CallCreate)
 		create := creates[len(creates)-1]
+		if create.Envs["PATH"] != wantCaller["PATH"] || create.Envs["LD_GUARD_TEST"] != wantCaller["LD_GUARD_TEST"] {
+			t.Fatal("OpenCode lost caller PATH/loader values")
+		}
 		if operation == "spawn" {
 			first = row
 			configContent = create.Envs["OPENCODE_CONFIG_CONTENT"]

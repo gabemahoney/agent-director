@@ -100,24 +100,45 @@ func TestEnvelopeParityDroidCallerRules(t *testing.T) {
 	type refusal struct {
 		name, permission, want string
 		args                   []string
+		envKey, value, desc    string
 	}
 	cases := []refusal{
-		{"allow", "allow", "ErrPermissionsUnsupported", nil},
-		{"deny", "deny", "ErrPermissionsUnsupported", nil},
-		{"ask", "ask", "ErrPermissionsUnsupported", nil},
-		{"settings", "", "ErrSpawnDeniedFlag", []string{"--settings", "/caller/settings.json"}},
-		{"joined model", "", "ErrSpawnDeniedFlag", []string{"--model=model"}},
-		{"duplicate model", "", "ErrSpawnDeniedFlag", []string{"--model", "model", "--model", "other"}},
-		{"positional", "", "ErrSpawnDeniedFlag", []string{"prompt"}},
-		{"rule field", "", "ErrTemplateMalformed", nil},
+		{name: "allow", permission: "allow", want: "ErrPermissionsUnsupported"},
+		{name: "deny", permission: "deny", want: "ErrPermissionsUnsupported"},
+		{name: "ask", permission: "ask", want: "ErrPermissionsUnsupported"},
+		{name: "settings", want: "ErrSpawnDeniedFlag", args: []string{"--settings", "/caller/settings.json"}},
+		{name: "joined model", want: "ErrSpawnDeniedFlag", args: []string{"--model=model"}},
+		{name: "duplicate model", want: "ErrSpawnDeniedFlag", args: []string{"--model", "model", "--model", "other"}},
+		{name: "positional", want: "ErrSpawnDeniedFlag", args: []string{"prompt"}},
+		{name: "rule field", want: "ErrTemplateMalformed"},
+	}
+	// Independent SR-4 inventory: a production-list omission must fail here.
+	for _, key := range []string{
+		"FACTORY_RUNTIME_SETTINGS_PATH", "FACTORY_RUNTIME_SETTINGS_SOURCE",
+		"FACTORY_RUNTIME_SETTINGS_SHA256", "FACTORY_RUNTIME_SETTINGS_ORIGIN",
+		"FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH", "FACTORY_ORG_MANAGED_SETTINGS_URL",
+		"PATH", "LD_PRIVATE_SENTINEL",
+	} {
+		desc := "agent droid refuses extra_env key " + key + "; remove that key from extra_env"
+		if strings.HasPrefix(key, "LD_") {
+			desc = "agent droid refuses extra_env keys starting with LD_; remove that entry from extra_env"
+		}
+		for _, value := range []string{"", "PRIVATE_ENV_VALUE"} {
+			label := "empty"
+			if value != "" {
+				label = "sentinel"
+			}
+			cases = append(cases, refusal{name: key + "/" + label, want: "ErrReservedEnvKey", envKey: key, value: value, desc: desc})
+		}
 	}
 	fakeDir := buildFakeTmux(t)
 	for _, mode := range []string{"spawn", "reuse", "make-template", "template", "template reuse"} {
 		for _, tc := range cases {
-			// Inheritance uses the same argument validator: settings and a
-			// permission entry suffice; other spellings are covered directly.
+			// Representative inherited inputs cover each refusal family;
+			// the full inventory is exercised on direct calls above.
 			inherited := strings.HasPrefix(mode, "template")
-			if inherited && tc.name != "settings" && tc.name != "ask" && tc.name != "rule field" {
+			if inherited && tc.name != "settings" && tc.name != "ask" && tc.name != "rule field" &&
+				tc.envKey != "FACTORY_RUNTIME_SETTINGS_PATH" && tc.envKey != "PATH" && tc.envKey != "LD_PRIVATE_SENTINEL" {
 				continue
 			}
 			if !inherited && tc.name == "rule field" {
@@ -143,6 +164,18 @@ func TestEnvelopeParityDroidCallerRules(t *testing.T) {
 				}
 				if inherited {
 					fields := apitest.TemplateFields{Agent: "droid", AgentArgs: agentArgs}
+					if tc.envKey != "" {
+						fields.ExtraEnv = map[string]string{tc.envKey: tc.value}
+					}
+					if tc.envKey == "PATH" {
+						// A generic template defers validation to the caller's agent.
+						fields.Agent, fields.AgentArgs = "", nil
+						params["agent_args"] = agentArgs
+					} else {
+						// Resolve Droid from the template, with no request override.
+						argv = argv[2:]
+						delete(params, "agent")
+					}
 					if tc.name == "rule field" {
 						fields.RawKeys = []string{`droid_rules_path = "/caller/rules.json"`}
 					}
@@ -152,7 +185,14 @@ func TestEnvelopeParityDroidCallerRules(t *testing.T) {
 					seedTemplate(t, home, "caller", fields)
 					argv = append(argv, "--template", "caller")
 					params["template"] = "caller"
+					if tc.envKey == "PATH" {
+						argv = append(append(argv, "--"), agentArgs...)
+					}
 				} else {
+					if tc.envKey != "" {
+						argv = append(argv, "--extra-env", tc.envKey+"="+tc.value)
+						params["extra_env"] = map[string]string{tc.envKey: tc.value}
+					}
 					if tc.permission != "" {
 						argv = append(argv, "--"+tc.permission, "Bash")
 						params[tc.permission] = []string{"Bash"}
@@ -177,8 +217,16 @@ func TestEnvelopeParityDroidCallerRules(t *testing.T) {
 				out, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{verb}, argv...)...)
 				cli := assertOnlyEnvelope(t, out, stderr, code, tc.want)
 				mcp := srv.callTool(t, tool, jsonOf(t, params))
-				if mcp.Error == nil || mcp.Error.Data.ErrName != tc.want || errnames.TrimNamePrefix(mcp.Error.Data.ErrName, mcp.Error.Message) != cli.ErrDescription {
+				if mcp.Error == nil || mcp.Error.Code != -32000 || mcp.Error.Data.ErrName != tc.want ||
+					mcp.Error.Data.ErrDescription != mcp.Error.Message ||
+					errnames.TrimNamePrefix(mcp.Error.Data.ErrName, mcp.Error.Message) != cli.ErrDescription {
 					t.Fatalf("CLI=%+v MCP=%+v", cli, mcp.Error)
+				}
+				if tc.desc != "" && cli.ErrDescription != tc.desc {
+					t.Fatalf("description = %q; want %q", cli.ErrDescription, tc.desc)
+				}
+				if strings.Contains(out+stderr+mcp.Error.Message+mcp.Error.Data.ErrDescription, "PRIVATE_ENV_VALUE") {
+					t.Fatal("refusal disclosed the caller's environment value")
 				}
 				if !reflect.DeepEqual(rowColumns(t, home, id), before) || len(listIDs(t, home, fakeDir)) != 1 {
 					t.Fatal("caller refusal changed rows")

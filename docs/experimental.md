@@ -28,7 +28,7 @@ opencode = true
 
 | Key | Range | Default | Effect |
 |---|---|---|---|
-| `[launch] droid_path` | executable name, absolute path or `~/` path | unset | The program a Droid spawn or finished-ID reuse runs; empty or unset selects `droid`. With no Rule Set, bare names use the tmux server's `PATH`, without an advance check. For rules-configured resolution, see [Droid rules](#droid-rules). Paths follow the other launch keys' expansion and refusals; a set value is one executable, without shell parsing or fallback. Follows the [configuration reload rules](configuration.md#when-a-change-takes-effect). |
+| `[launch] droid_path` | executable name, absolute path or `~/` path | unset | The program a Droid spawn or finished-ID reuse runs; empty or unset selects `droid`. The pane and bare-name lookup use agent-director's own `PATH`, even with a warm tmux server whose `PATH` differs. See [Droid secret paths](#droid-secret-paths) for PATH requirements and [Droid rules](#droid-rules) for the native check. Paths follow the other launch keys' expansion and refusals; a set value is one executable, without shell parsing or fallback. Follows the [configuration reload rules](configuration.md#when-a-change-takes-effect). |
 | `[launch] droid_rules_path` | absolute path or `~/` path | unset | Operator's Rule Set File; empty or unset means no rules. Loading validates the path without reading the file; malformed values give `ErrConfigMalformed`. See [Droid rules](#droid-rules) for reloads, file reads and caller limits. |
 | `[launch] droid_secret_paths_file` | absolute path or `~/` path | unset | Operator's Path List File; empty or unset refuses Droid launches. Loading validates and expands the path without opening the file; malformed values give `ErrConfigMalformed`. See [Droid secret paths](#droid-secret-paths) for content, refusals and reloads. |
 | `[experimental] droid` | `true`, `false` | `false` | Enables Droid spawn, finished-ID reuse into Droid and Droid template creation. Reads, `kill`, `sweep`/`find-missing` and `expire` never consult it. |
@@ -197,19 +197,26 @@ input, decision errors and the Guard's own deadline failures block the call.
 refusal. It covers an unset list, an unreadable, nonregular, oversized or
 non-UTF-8 file, no entries, an invalid entry or unusable HOME, an unavailable
 Guard program or `sh`, an overlong command, or a failed or timed-out self-check.
+At every spawn and finished-ID reuse, agent-director's PATH must be set and
+nonempty, with only nonempty absolute components; any other value gives this
+refusal.
 The complete command must be shorter than 128 KiB to leave room for its
 terminating NUL. Before launch, agent-director checks that command through
 `sh` on its own PATH; wrong statuses, output-bound failures and incomplete
-process cleanup refuse it. Repair the list or the installed program/shell
+process cleanup refuse it. Repair the list, PATH or installed program/shell
 dependency, then retry. If cleanup failed, stop the leftover check processes
 before retrying.
 
 The refusal names a problem kind and, for an invalid entry, its source line;
-it never echoes entries, file contents or check output. It writes no row,
-session, trust entry or launch file and launches nothing. Refused reuse keeps
+it never echoes entries, file contents, environment values or check output.
+It writes no row, session, trust entry or launch file and launches nothing. Refused reuse keeps
 the prior records and files. Tmux's shared socket directory may already exist
 and is outside this guarantee. Later launch-file I/O failures retain their
 existing error and rollback behavior.
+
+Caller or template environment overrides also cannot select other settings,
+PATH or loader code: the [reserved environment keys](#refusals) give
+`ErrReservedEnvKey`, even with empty values.
 
 **Limits.** This is not an operating-system boundary:
 
@@ -291,8 +298,8 @@ droid rules check --file /opt/example/droid-rules.json
 Each launch rewrites IDs to `agent-director/<launch token>/<operator id>` so
 they cannot shadow inherited rules. It then runs Droid's check on a private
 copy of the exact rules it will launch. With rules configured, a bare
-`droid_path` or the default `droid` is resolved on agent-director's `PATH`
-(or `extra_env`'s `PATH`); the check and pane use that same absolute program.
+`droid_path` or the default `droid` follows the [executable lookup](#keys);
+the check and pane use that same absolute program.
 An unavailable program, nonzero exit, output over 1 MiB per stream or failure
 to finish within 10 seconds refuses the launch. No partial Rule Set launches.
 
@@ -499,11 +506,16 @@ template is written.
 - `ErrPermissionRulesRefused`: the operator's [Droid Rule Set](#droid-rules)
   or its native check was refused.
 - `ErrReservedEnvKey`: Droid `extra_env` holds `FACTORY_API_KEY`,
-  `AWS_BEARER_TOKEN_BEDROCK` or `FACTORY_HOME_OVERRIDE`; OpenCode `extra_env`
+  `AWS_BEARER_TOKEN_BEDROCK`, `FACTORY_HOME_OVERRIDE`,
+  `FACTORY_RUNTIME_SETTINGS_PATH`, `FACTORY_RUNTIME_SETTINGS_SOURCE`,
+  `FACTORY_RUNTIME_SETTINGS_SHA256`, `FACTORY_RUNTIME_SETTINGS_ORIGIN`,
+  `FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH`, `FACTORY_ORG_MANAGED_SETTINGS_URL`,
+  `PATH` or any key beginning `LD_`. OpenCode `extra_env`
   holds `OPENROUTER_API_KEY`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`,
-  `OPENCODE_CONFIG_CONTENT`, `OPENCODE_AUTH_CONTENT` or `OPENCODE_PERMISSION`,
-  even empty. A caller's `OPENCODE_DISABLE_AUTOUPDATE` is accepted and
-  overridden. The usual `HOME`, `AGENT_DIRECTOR_*` and malformed-key refusals
+  `OPENCODE_CONFIG_CONTENT`, `OPENCODE_AUTH_CONTENT` or `OPENCODE_PERMISSION`.
+  Presence is refused even with an empty value, for spawn, finished-ID reuse,
+  `make-template` and template use. A caller's `OPENCODE_DISABLE_AUTOUPDATE`
+  is accepted and overridden. The usual `HOME`, `AGENT_DIRECTOR_*` and malformed-key refusals
   also apply. Diagnostics never echo rejected values.
 
 The Go client exports these sentinels; the TypeScript client throws the
