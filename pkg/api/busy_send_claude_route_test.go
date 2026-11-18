@@ -113,9 +113,10 @@ func assertNoInputPath(t *testing.T, e *nativeSubmissionEnv) {
 // TestBusySendClaudeHookRoute (SR-3.9, SR-5.6; M2 P-C4.2): a covered Claude
 // agent's Messages reach it only through its own hooks. Once its wake wrote a
 // prompt, get and status show awaiting_turn_start 1, and reading them changes
-// nothing; the agent's exact sighting brings it to 0; a wake whose output
-// failed leaves it 1. No send and no wake reaches the native composer or the
-// pane: delivered, with output that failed, or with no route recorded.
+// nothing; the agent's exact sighting brings it to 0. After a later Stop
+// releases order, a wake whose output failed leaves it 1. No send and no wake
+// reaches the native composer or the pane: delivered, with output that failed,
+// or with no route recorded.
 func TestBusySendClaudeHookRoute(t *testing.T) {
 	t.Parallel()
 	ne := newNativeSubmissionEnv(t)
@@ -157,6 +158,7 @@ func TestBusySendClaudeHookRoute(t *testing.T) {
 	}
 	awaiting(0)
 
+	e.clock.Advance(time.Millisecond)
 	if err := fireClaudeHook(t, e, r.ID, session, "Stop", nil, nil); err != nil {
 		t.Fatal(err)
 	}

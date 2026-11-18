@@ -187,8 +187,8 @@ staying under them does not promise the next send fits.
 `delivery.awaiting_turn_start` counts the current launch's hand-overs with an
 issued prompt but no admission or negative evidence, whatever their output
 state. On Claude Code a prompt is admitted by agent-director's own
-[sighting](#claude-code-force-capability) of it or, for input handed into a
-running turn, by a later main-agent turn end. That turn end counts the input
+[sighting](#claude-code-force-capability) of it or, for Steer Turn input handed
+over at a tool boundary, by a later main-agent turn end. That turn end counts the input
 only when agent-director's initial check at the turn end finds its complete
 output already recorded, and that output was observed before the turn end
 began, to the millisecond. Output recorded after that check, or observed in
@@ -420,9 +420,13 @@ prompt is known written. No `outcome` is permission to resend.
 Claude receives whole Message bodies in accepted order, grouped into the fewest
 prompts that fit its [limits](#busy-send-refusals), each body introduced by
 `[agent-director: message N of M]`. When several prompts are needed, one goes
-per wake and each remaining prompt goes at the next turn end. No other
-agent-director input goes between them; a person's typing can. This adds
+per wake and each remaining prompt goes at the next eligible turn end. No
+other agent-director input goes between them; a person's typing can. This adds
 latency and exposure to `wait_turn_raced` between prompts.
+
+**Known host-clock limit.** If the host wall clock steps backwards after a
+parent `Stop` starts but before a forced wake is written, that `Stop` can
+release the wake's order, allowing a later steer to pass it.
 
 An accepted Message has no age timeout. Read its Result's `wait`, or
 `delivery.first_wait` for the first Held Message:
@@ -444,17 +448,29 @@ with no time limit, until a later eligible event or a
 [force](#stored-force-attempts): reads, `sweep` and elapsed time never
 deliver, and nothing retries while the agent is idle. Claude's wake hand-over
 is race-exposed, a Steer Turn Message it carries included: its Result ends
-`sent_unconfirmed`, reason `wait_turn_raced`, even if exact intake later
-secures order and clears `awaiting_turn_start`. The sticky reason records
+`sent_unconfirmed`, reason `wait_turn_raced`, even if a later exact sighting
+clears `awaiting_turn_start`. The sticky reason records
 exposure to overlapping work, not proof that a race happened. A Final Result
 never upgrades on later evidence. Neither that reason nor missing proof
 permits a resend.
 
-A prompt the [sighting limits](#sighting-limits) hide leaves
-`awaiting_turn_start` nonzero until Launch End: ordinary Wait Turn delivery
-waits `readiness_unknown` and a force is refused `input_unresolved`
-meanwhile. Message-caused screen changes reset the ordinary
-`idle_screen` clock. No length of waiting alone becomes `needs_intelligence`.
+Every Claude wake, ordinary or forced, holds later Messages and a separate
+force until a later parent turn end secures its order. A sighting supplies
+admission, not order. A Final `sent_unconfirmed` wake Result and zero
+`handover_count` do not mean order is released: later Messages can still wait
+`handover_in_progress`, even after a sighting clears `awaiting_turn_start`.
+Turn end releases that order barrier without
+supplying admission or changing the Final Result; ordinary Wait Turn still
+waits while `awaiting_turn_start` is nonzero. Only the
+[same running force](#claude-code-force-capability) has the next-prompt
+exception.
+
+An ordinary wake whose prompt the [sighting limits](#sighting-limits) hide leaves
+`awaiting_turn_start` nonzero until Launch End. After the order barrier
+clears, ordinary Wait Turn delivery waits `readiness_unknown` and a force
+is refused `input_unresolved`. Message-caused screen changes reset the
+ordinary `idle_screen` clock. No length of waiting alone becomes
+`needs_intelligence`.
 
 ### Steer Turn delivery
 
@@ -475,6 +491,9 @@ Dialog, a spawn's startup prompt not yet taken and an earlier hand-over still
 unresolved hold it; earlier steered input still counted in
 [`awaiting_turn_start`](#busy-send-coverage) does not. Tool boundaries in the
 startup prompt's own turn are eligible once that prompt is taken.
+An earlier wake holds a steer until the later parent turn end described
+under [Wait Turn delivery](#wait-turn-delivery-and-waits), even after the
+wake's sighting or Final Result.
 
 With nothing ahead of it and nothing holding it, a Steer Turn Message reaches
 the model at the same point as the same text typed at the agent's terminal at
@@ -566,7 +585,8 @@ applies:
 2. `launch_ended`: it has ended.
 3. `route_unavailable`: it has no delivery route.
 4. `handover_in_progress`: another force is running or pending, or an
-   ordinary hand-over still owns the agent's order or input.
+   earlier hand-over still owns the agent's order or input, including one
+   from a finished force.
 5. `no_held_messages`: nothing is Held.
 6. `earlier_message`: an earlier Message is still being handed over.
 7. `input_unresolved`: agent-director's earlier input still awaits evidence
@@ -648,7 +668,9 @@ still apply.
 
 **Several prompts.** Each forced wake hands over one whole prompt. While the
 same call runs, another forced wake can issue the next prompt once the
-previous prompt is sighted and its order is secured; no turn end is required.
+previous prompt's output is complete and it is sighted; no turn end is
+required. This exception belongs only to that running force and does not
+release the order barrier for ordinary delivery or a separate force.
 Prompts not issued when the call ends go back to ordinary delivery, as above,
 on its own schedule ([Wait Turn delivery and waits](#wait-turn-delivery-and-waits)).
 Wakes during the call serve only the force, so a Message accepted meanwhile

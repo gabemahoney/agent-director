@@ -45,7 +45,9 @@ import (
 //     prompt's completion was committed before that Stop's entry read and its
 //     output observed before the Stop's start (SR-3.3;
 //     ReadBusySendTurnEndPrompts, RecordBusySendTurnEnd), recorded as
-//     native_signal. A wake or force prompt never takes this evidence.
+//     native_signal. A wake or force prompt never takes this admission
+//     evidence. O4/G3 separately releases a completed wake's order barrier
+//     at that later parent Stop, whether or not it already has a sighting.
 
 // claudeTurnStartSQL is the condition, on a spawns row, under which an owned
 // main-agent Claude UserPromptSubmit advances the Turn Start counter: the row
@@ -163,8 +165,8 @@ type BusySendSightingResult struct {
 // (settleBusySendForceEvidence); no custody, transport, order or Message
 // Result changes, and nothing is delivered_confirmed. Two or more
 // equal bodies, or a candidate whose text is gone, bind none. A sighting that
-// arrives before its prompt's completion record binds the same way; the
-// completion still secures order when it lands.
+// arrives before its prompt's completion record binds the same way; neither
+// the sighting nor completion releases a wake's ordinary order barrier.
 func (s *Store) RecordBusySendSighting(ctx context.Context, in BusySendSighting) (BusySendSightingResult, error) {
 	out := BusySendSightingResult{Outcome: BusySendSightingUnmatched}
 	if len(in.Body) == 0 {
@@ -256,12 +258,12 @@ type BusySendTurnEnd struct {
 	// Prompts are what the turn end's entry read found
 	// (ReadBusySendTurnEndPrompts): the prompts whose completion was
 	// committed before that read's snapshot, with output observed before At.
-	// Only these, still at the same revision, can be admitted.
+	// Only these, still at the same revision, can gain admission or wake order.
 	Prompts []BusySendTurnEndPrompt
 }
 
 // BusySendTurnEndPrompt is one prompt a turn end's entry read found it could
-// admit, at its revision then.
+// admit (steer) or order (wake), at its revision then.
 type BusySendTurnEndPrompt struct {
 	HandoverID  string
 	PromptIndex int
@@ -272,8 +274,8 @@ type BusySendTurnEndPrompt struct {
 type BusySendTurnEndOutcome string
 
 const (
-	// BusySendTurnEndRecorded: native_signal was recorded for at least one
-	// prompt (BusySendTurnEndResult.Recorded).
+	// BusySendTurnEndRecorded: admission or wake order was recorded for at
+	// least one prompt (BusySendTurnEndResult.Recorded).
 	BusySendTurnEndRecorded BusySendTurnEndOutcome = "recorded"
 	// BusySendTurnEndUnchanged: the turn end is the current Launch's, and no
 	// prompt of its entry read still qualifies, so nothing changed.
@@ -284,23 +286,25 @@ const (
 	BusySendTurnEndStale BusySendTurnEndOutcome = "stale"
 )
 
-// BusySendTurnEndResult is a turn end's outcome and how many prompts it
-// admitted.
+// BusySendTurnEndResult is a turn end's outcome and how many prompts gained
+// admission or wake order.
 type BusySendTurnEndResult struct {
 	Outcome  BusySendTurnEndOutcome
 	Recorded int
 }
 
-// busySendTurnEndWhere selects, among the awaiting obligations
-// (busySendAwaitingWhere's two placeholders), the prompts a turn end can
-// admit, with eight more placeholders: the turn end's observation in
+// busySendTurnEndWhere selects a conversation and Launch's prompts a turn end
+// can admit (ordinary tool-boundary input) or order (wakes, O4/G3). After
+// those two placeholders come eight more: the turn end's observation in
 // milliseconds, then the captured destination's launch token, session,
 // provider, route kind, route id and connection generation, which must be
-// the turn end's, and the store. They are an ordinary (non-forced) hand-over's
-// prompts issued into a running turn at a tool boundary, with complete output
-// (transport written) whose observation is strictly before the turn end's.
-const busySendTurnEndWhere = busySendAwaitingWhere + ` AND h.boundary = 'tool_boundary' AND h.forced = 0
-    AND h.intent_running_turn = 1 AND p.emission = 'issued' AND p.transport = 'written' AND p.transport_at_ms < ?
+// the turn end's, and the store. Every selected prompt has complete output
+// (transport written) observed strictly before the turn end. A sighted wake
+// still needs order evidence, so its admission does not exclude it.
+const busySendTurnEndWhere = `h.conversation_id = ? AND h.launch_id = ? AND p.negative_kind IS NULL
+    AND ((h.boundary = 'tool_boundary' AND h.forced = 0 AND h.intent_running_turn = 1 AND p.admission_kind IS NULL)
+        OR (h.boundary IN ('turn_end', 'force') AND p.order_kind IS NULL))
+    AND p.emission = 'issued' AND p.transport = 'written' AND p.transport_at_ms < ?
     AND COALESCE(h.launch_token, '') = ? AND COALESCE(h.session_id, '') = ? AND h.provider = ? AND h.route_kind = ?
     AND COALESCE(h.route_id, '') = ? AND h.connection_generation = ? AND h.store_id = ?`
 
@@ -315,7 +319,7 @@ func (in BusySendTurnEnd) observed() (int64, bool) {
 // Agent decision 2), made at its callback's entry before its own write and
 // any wait on another writer. In one read transaction it checks in's authority
 // as RecordBusySendTurnEnd does and returns the prompts that write could
-// admit, each at its revision: those whose completion was committed before
+// admit or order, each at its revision: those whose completion was committed before
 // the read's SQLite snapshot, with an output observation strictly earlier
 // than in.At, the callback's start, which was captured separately and before
 // the snapshot. A read sees only committed transactions, so a completion that
@@ -351,17 +355,17 @@ func (s *Store) ReadBusySendTurnEndPrompts(ctx context.Context, in BusySendTurnE
 }
 
 // RecordBusySendTurnEnd applies a route's own turn end as take evidence for
-// the input it issued into that running turn (SR-3.3, SR-5.6; E4 Main Agent
+// the input it issued into that running turn, or order evidence for a wake
+// (SR-3.3, SR-5.6, O4/G3; E4 Main Agent
 // decisions 1 and 2), in one transaction on a WAL synchronous=FULL connection
 // bounded by ctx. Inside it: the hook's gate must hold (hookGateSQL), and the
 // published current Launch must be covered, running, route claude_hooks (the
 // one route whose turn end is qualified evidence, under O4's turn-end premise)
 // and exactly in.Destination. Then each prompt of in.Prompts, the turn end's
 // entry read (ReadBusySendTurnEndPrompts), that still qualifies at the same
-// revision gets its admission recorded as native_signal at in.At, comparing and
-// advancing that prompt's revision. A prompt qualifies when it awaits evidence
-// for that Launch, its hand-over is ordinary (not a force's), was claimed at a
-// tool boundary and issued into a running turn, it was captured for this same
+// revision gets its admission recorded as native_signal (ordinary tool-boundary
+// input) or its order secured as ordered_acceptance (wake) at in.At. A prompt
+// qualifies when it awaits the relevant evidence for that Launch, was captured for this same
 // destination (a callback cannot admit another Launch's or session's input,
 // even in a reused provider session), and its complete output (transport
 // written) was observed strictly before in.At's millisecond.
@@ -380,12 +384,12 @@ func (s *Store) ReadBusySendTurnEndPrompts(ctx context.Context, in BusySendTurnE
 // start but committed before the snapshot can count, or one observed before
 // it can be withheld.
 //
-// It changes no custody, reservation, transport, order, Result, force or
-// hand-over or conversation revision, and grants no output or replay
-// authority; a wake or force prompt keeps its sighting as its only take
-// evidence. Its one effect is that the shared awaiting count
-// (readBusySendAwaiting) drops, so an ordinary turn-end claim at this turn end
-// is no longer refused for it. A failed read or write records nothing.
+// For tool-boundary input it changes only admission and the awaiting count.
+// For a wake it releases issued custody and order, keeping Final Results,
+// admission and force outcome unchanged: a sighting remains the wake's only
+// admission evidence. Neither case grants output or replay authority. The
+// ordinary Wait Turn AD-owned-work rule still checks the awaiting count after
+// the order barrier clears. A failed read or write records nothing.
 func (s *Store) RecordBusySendTurnEnd(ctx context.Context, in BusySendTurnEnd) (BusySendTurnEndResult, error) {
 	out := BusySendTurnEndResult{Outcome: BusySendTurnEndStale}
 	observed, ok := in.observed()
@@ -409,6 +413,27 @@ func (s *Store) RecordBusySendTurnEnd(ctx context.Context, in BusySendTurnEnd) (
 		out = BusySendTurnEndResult{Outcome: BusySendTurnEndUnchanged}
 		for _, p := range qualified {
 			if !entry[p] {
+				continue
+			}
+			h, err := readBusySendHandover(ctx, conn, s.StoreID(), p.HandoverID)
+			if err != nil {
+				return err
+			}
+			if h.claudeWake() {
+				// O4's fallback supplies order only. A force still needs its
+				// own exact sighting for admission, and ordinary Wait Turn's
+				// awaiting obligation is unchanged (SR-3.3, SR-4.3).
+				result, err := recordBusySendEvidence(ctx, conn, s.StoreID(), BusySendPromptEvidence{
+					HandoverID: p.HandoverID, PromptIndex: p.PromptIndex, LaunchID: f.launch,
+					ConnectionGeneration: h.Destination.ConnectionGeneration,
+					Order:                BusySendOrderOrderedAcceptance, UnprovenBoundary: true,
+				}, observed)
+				if err != nil {
+					return err
+				}
+				if result.Recorded {
+					out.Recorded++
+				}
 				continue
 			}
 			if err := busySendChange(ctx, conn, `UPDATE busy_send_prompts SET admission_kind = ?, admitted_at_ms = ?, revision = revision + 1

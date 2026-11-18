@@ -208,11 +208,10 @@ type busySendTurnEnder interface {
 // evidence (SR-3.3; E4 Main Agent decisions 1 and 2), made before that
 // Stop's own gated write and any wait on another writer. Only a Stop with no
 // agent_id and a consistent payload session, for the hook's gate in the
-// current covered Launch (claudeRouteFacts), reads it, and only while some
-// issued input of that Launch awaits evidence; a subagent's or background
+// current covered Launch (claudeRouteFacts), reads it. A subagent's or background
 // callback, a SubagentStop, a Notification or any other event never does.
 // observed is the hook's start (Handle's start), captured before any store
-// call. The read returns the tool-boundary prompts whose completion was
+// call. The read returns tool-boundary and wake prompts whose completion was
 // committed before its SQLite snapshot, with an output observation strictly
 // before observed (store.ReadBusySendTurnEndPrompts): a completion that
 // commits after the snapshot never counts at this Stop, while the time
@@ -229,7 +228,7 @@ func readClaudeTurnEnd(ctx context.Context, st HookStore, instanceID string, gat
 		return nil
 	}
 	f, ok := claudeRouteFacts(ctx, st, instanceID, gate, res, logger)
-	if !ok || f.Awaiting == 0 {
+	if !ok {
 		return nil
 	}
 	te := store.BusySendTurnEnd{InstanceID: instanceID, Gate: gate, Destination: f.Destination, At: observed}
@@ -249,7 +248,8 @@ func readClaudeTurnEnd(ctx context.Context, st HookStore, instanceID string, gat
 // (readClaudeTurnEnd), as take evidence after that Stop's own gated write
 // applied and before resignalClaudeWake reads the awaiting count. The store
 // revalidates the gate and destination in its own transaction and admits
-// only te's prompts still at their entry revision. A nil te records nothing.
+// only te's tool-boundary prompts still at their entry revision, or releases
+// their wake order barriers without admission. A nil te records nothing.
 // It is fail-open: it writes nothing to stdout, carries no continuation,
 // permission decision or force authority, and a failure is logged and
 // supplies no evidence.
@@ -428,9 +428,9 @@ func handleClaudeWake(ctx context.Context, stderr io.Writer, st HookStore, hc Ha
 // and writes at most the first prompt, whole, as stdout's one PostToolBatch
 // additionalContext; its never-issued rest returns to Held, ahead of every
 // later Message, for the next parent boundary or, once the turn ends, the
-// wake. It waits on neither the running turn nor earlier issued input still
-// awaiting take evidence, but on the Launch's own waits and a Dialog, and the
-// store's guards still judge order, transport, the turn, the helper and the
+// wake. It waits on neither the running turn nor earlier steered input still
+// awaiting take evidence, but on an unresolved wake, the Launch's own waits
+// and a Dialog. The store's guards still judge order, transport, the turn, the helper and the
 // pause fence. It never carries a force's authority: a live force's
 // hand-over bars its claim. A subagent's or background child's callback
 // (agent_id), another or a changed session, a stale gate, an uncovered
@@ -482,7 +482,7 @@ type claudeRoute struct {
 	force bool
 	// steer is whether the invocation is a parent PostToolBatch's Steer Turn
 	// at a tool boundary (handleClaudeSteer): its waits keep the Launch's own
-	// and a Dialog's but not the running turn's or earlier input's awaiting
+	// and a Dialog's but not the running turn's or earlier steered input's awaiting
 	// evidence, it is not race-exposed (SR-3.3a), and its output is one
 	// additionalContext envelope (claudeSteerEnvelope).
 	steer      bool
@@ -563,8 +563,9 @@ func (r *claudeRoute) Eligibility(ctx context.Context, _ busysend.Event) (busyse
 // wake's is launchWait's alone: the store's issue guard judges the force's
 // order, ownership, destination and pause fence. A steer's is launchWait's or
 // a Dialog's: its tool boundary is inside the running turn, so neither that
-// turn nor earlier issued input still awaiting take evidence holds it (E4
-// Main Agent decision 2), and the store's guards judge its order, transport,
+// turn nor earlier steered input still awaiting take evidence holds it (E4
+// Main Agent decision 2). An earlier wake keeps the store's order barrier
+// until a later parent Stop (O4/G3); its guards also judge transport,
 // turn, helper and pause fence.
 func (r *claudeRoute) wait(f store.BusySendRouteFacts) store.BusySendWaitReason {
 	if w := r.launchWait(f); w != "" || r.force {
@@ -651,8 +652,9 @@ func (r *claudeRoute) Authorize(ctx context.Context, p busysend.Prepared) (busys
 // wake's output is its body, on the hook's error stream, which Claude takes on
 // the hook's exit 2; a steer's is the envelope Authorize serialized for p, on
 // stdout, which Claude takes on the hook's exit 0. It is complete only when
-// every byte was written (in completion order: emission_complete at the
-// handed_over_not_proven boundary, SR-2.5, SR-3.5); some bytes is partial and
+// every byte was written (the handed_over_not_proven boundary, SR-3.5).
+// Only a steer supplies emission_complete order evidence; a wake keeps its
+// barrier until a later parent Stop (O4/G3). Some bytes is partial and
 // none uncertain, both unproven and never retried. More is false: one wake or
 // steer carries one prompt, and nothing is written after it.
 func (r *claudeRoute) Issue(ctx context.Context, p busysend.Prepared) busysend.Disposition {
@@ -667,8 +669,11 @@ func (r *claudeRoute) Issue(ctx context.Context, p busysend.Prepared) busysend.D
 	n, err := writeBounded(ctx, r.out, out)
 	switch {
 	case err == nil && n == len(out):
-		return busysend.Disposition{Output: store.BusySendOutputComplete, Order: store.BusySendOrderEmissionComplete,
-			UnprovenBoundary: true}
+		d := busysend.Disposition{Output: store.BusySendOutputComplete, UnprovenBoundary: true}
+		if r.steer {
+			d.Order = store.BusySendOrderEmissionComplete
+		}
+		return d
 	case n > 0:
 		return busysend.Disposition{Output: store.BusySendOutputPartial}
 	}

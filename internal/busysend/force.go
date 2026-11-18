@@ -34,8 +34,9 @@ var _ ForcePromptReader = (*store.Store)(nil)
 // route's final authority, commits the prompt's intent and its force
 // revalidation in one transaction (store.CommitBusySendIssue with the force's
 // authority), makes the route's one call and records what it observed. A
-// later prompt passes only once the one before it is admitted with its order
-// secured, and only while the call runs; a repeated or coalesced wake finds
+// later prompt passes only once the one before it is admitted with complete
+// Claude wake output (SR-3.4), or secured order on another route, and only
+// while the call runs; a repeated or coalesced wake finds
 // the prompt already issued and issues nothing. Nothing is retried. The Store
 // must also be a ForcePromptReader.
 func (c *Coordinator) DeliverForcePrompt(ctx context.Context, ev Event) (Outcome, error) {

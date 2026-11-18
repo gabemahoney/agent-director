@@ -434,8 +434,8 @@ covered send to type, parse native transcript proof or make a fallback resend.
 
 For the owned Claude route, reuse `newWakeEnv`/`newResumedWakeEnv` in
 `internal/hook/busy_send_claude_test.go`, their captured parent identities and
-injected I/O. A parent Stop only re-signals the owned FileChanged/asyncRewake
-wake; exact bound UserPromptSubmit intake evidence secures order. Assert one
+injected I/O. Follow the [admission and order distinction](architecture.md#busy-send-admission-and-results).
+Assert one
 whole prompt per wake, subsequent prompts at subsequent turn ends, stale-owner
 exclusion, lost-wake delay, no delivery from reads and conservative Results.
 `TestClaudeWakeDrainsBacklog` owns the 1,000-Message regression; do not duplicate

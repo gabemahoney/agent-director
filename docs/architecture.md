@@ -6383,7 +6383,7 @@ its own table, in [The agent-aware hook classifier](#the-agent-aware-hook-classi
 | `PreToolUse` | `tool_name = AskUserQuestion` | `ask_user` |
 | `PreToolUse` | any other tool | `working`; for `tool_name` `Agent`, the row write is followed by its own gated entry transaction (see [Subagent capture](#subagent-capture)); no trail record, and `upsert_outcome` stays the row write's |
 | `PostToolUse`, `PostToolUseFailure` | — | `working` (for `tool_name` `Agent`, followed by its own gated entry transaction, as `PreToolUse`'s); with relay on and a `tool_use_id` in the payload, the ordinary write is preceded by the proof of the row's requests with that `tool_use_id` (`tool_ran`; see "The dialog hold" under [Permission relay](#permission-relay)), then the close of the row's fallen-back request with that `tool_use_id` (see "The PostToolUse close" under [Permission relay](#permission-relay)); a request the proof covers no longer holds the `working` write, closed or not (b.omt) |
-| `Stop` | — | `waiting`; with relay on and no `agent_id`, preceded by the proof of the row's durably eligible requests with no `agent_id` recorded before the hook started (`turn_end`; b.omt); a main-agent `Stop` (no `agent_id`) is followed, when its row write applied and a plain read finds something the transaction can change (a claimable launch or running background entry to close, or a listed subagent), by its own gated entry transaction: the claimable-launch close, then its `background_tasks` snapshot (create, fill, confirm, then close); a `Stop` carrying `agent_id` opens none (see [Subagent capture](#subagent-capture)); on a covered Launch an applied main `Stop` can record [turn-end take evidence](#busy-send-admission-and-results), then, like the idle prompt, re-signal the wake ([The Claude route](#the-claude-route)) |
+| `Stop` | — | `waiting`; with relay on and no `agent_id`, preceded by the proof of the row's durably eligible requests with no `agent_id` recorded before the hook started (`turn_end`; b.omt); a main-agent `Stop` (no `agent_id`) is followed, when its row write applied and a plain read finds something the transaction can change (a claimable launch or running background entry to close, or a listed subagent), by its own gated entry transaction: the claimable-launch close, then its `background_tasks` snapshot (create, fill, confirm, then close); a `Stop` carrying `agent_id` opens none (see [Subagent capture](#subagent-capture)); on a covered Launch an applied main `Stop` can record [turn-end evidence](#busy-send-admission-and-results), then, like the idle prompt, re-signal the wake ([The Claude route](#the-claude-route)) |
 | `Notification` | `notification_type = idle_prompt` and no `agent_id` (the main agent idle at the prompt) | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request holding it (one still awaiting an answer and not proven gone; b.omt), as the write lands (`ApplyHookWaitingIfWorking`); any other state: soft refresh — no state change; bumps `last_seen_at`. Every applied write sets `idle_since` (see "The idle-prompt Notification" below). With relay on, preceded by the same proof as `Stop` |
 | `Notification` | any other `notification_type` (`permission_prompt`, `auth_success`, `elicitation_dialog`, missing or unknown), or an idle prompt with `agent_id` | soft refresh — no state change; bumps `last_seen_at` |
 | `PermissionRequest` | — | `check_permission`; with relay on, written by the relay hook's first write (`InsertRelayRequest`) in one transaction with the request (see [Permission relay](#permission-relay)) |
@@ -9465,38 +9465,44 @@ only recorded evidence clears it, and no read repairs it. The turn-end claim
 and the route facts read the same count; no route or Send Mode keeps a
 predicate of its own.
 
-**Must use: turn-end take evidence.** Input issued into a running turn gets
-no prompt sighting; `Store.RecordBusySendTurnEnd` is its one evidence writer.
-It records `native_signal`, whose meaning is route-neutral: a provider's own
-native event that, under a qualified premise, shows AD's input was taken. For
-Claude that is the parent `Stop` (no `agent_id`) ending the turn, under O4's
-turn-end premise; subagent and background callbacks never record it. The
-writer accepts route `claude_hooks` only, and a later route with a qualified
-turn end extends it rather than adding a writer. Claude's `Stop` hook makes
-the entry read, `ReadBusySendTurnEndPrompts`, before its own lifecycle write
+**Must use: turn-end evidence.** `Store.RecordBusySendTurnEnd` is the one
+writer for a parent `Stop`'s busy-send evidence. For ordinary tool-boundary
+input issued into a running turn, it records admission as `native_signal`:
+a provider's native event that, under a qualified premise, shows AD's input
+was taken. For a Claude wake, ordinary or forced, it instead secures order as
+`ordered_acceptance`, without admission. Subagent and background callbacks
+never record either. The writer accepts route `claude_hooks` only; a later
+route with a qualified turn end extends it rather than adding a writer.
+Claude's `Stop` hook makes the entry read, `ReadBusySendTurnEndPrompts`,
+before its own lifecycle write
 and any wait on another writer, and records after that write applied, before
 its wake hint reads the count. The write revalidates the hook gate and a
 covered, running current Launch at the turn end's exact destination (token,
-session, provider, route, connection generation), then admits only the entry
-read's prompts still at their revision: an ordinary (not forced) hand-over's,
-claimed at `tool_boundary` and issued into a running turn for that
-destination, with complete output observed strictly before the callback's
-start.
+session, provider, route, connection generation), then records only the entry
+read's prompts still at their revision, with complete output observed
+strictly before the callback's start. It selects ordinary `tool_boundary`
+input issued into a running turn that lacks admission, and `turn_end` or
+`force` wakes that lack order. A sighted wake still qualifies, even when
+`awaiting_turn_start` is zero.
 
 A completion committed after the entry read's snapshot never counts at that
 turn end; resting on commit order, that is the one unconditional guarantee.
 Output observed in the start's millisecond or later, partial, uncertain or
-missing output, and input of a turn interrupted with no `Stop` stay awaiting
-until a later turn end, or Launch End reads them zero: a liveness cost only.
+missing output, and input of a turn interrupted with no `Stop` gain no
+evidence; they wait for a later qualifying event or lifecycle resolution.
 Comparing the output's observation with the callback's start relies on the
-host's wall clock agreeing across hook processes, a known limit: a clock step
-can count output observed after the start but committed before the entry
-read, or withhold output observed before it. The evidence changes only the
-prompt's admission, its time and revision; custody, order, transport, force
-outcomes and Message Results stay separate, nothing becomes
-`delivered_confirmed`, and nothing gains replay authority. Wake and force
-prompts keep the exact sighting as their only take evidence ([The Claude
-route](#the-claude-route)).
+host's wall clock across hook processes, a known limit (H-1). A backward step
+after a parent `Stop` starts but before a forced wake is written can give
+that wake an earlier timestamp. If its completion commits before the entry
+snapshot, that `Stop` can release its order, allowing a later steer to pass
+it. A clock step can also withhold output observed before the start.
+For tool-boundary input the
+evidence changes only admission, its time and revision. For wakes it
+releases issued custody and order, keeping admission, force outcomes and
+Final Results unchanged. A wake still needs its exact sighting to clear
+`awaiting_turn_start`, so ordinary Wait Turn can remain blocked after order
+clears. Neither case changes transport, confirms delivery or grants replay
+authority ([The Claude route](#the-claude-route)).
 
 ### The inbox coordinator
 
@@ -9569,14 +9575,16 @@ advances its revision, so an obsolete job can neither issue nor release.
 3. `RecordBusySendCompletion` records the output by the prompt's issue
    identity: `complete`, proven `not_submitted`, `partial` or `uncertain`.
    Preparation, a hook's start or a wake touch is never complete. Complete
-   output with qualified order evidence secures order; `not_submitted`
-   returns this and every later never-issued prompt to Held. Anything else
-   keeps custody and the order barrier, and ambiguous output is never
+   output with qualified order evidence secures order; Claude wakes retain
+   custody and the order barrier until later parent `Stop` evidence.
+   `not_submitted` returns this and every later never-issued prompt to Held.
+   Anything else keeps custody and the order barrier, and ambiguous output is never
    re-emitted. `RecordBusySendEvidence` records later callbacks once each:
    an admission changes no custody, order or Result (it can finish a
    [force](#the-force-protocol)), an acceptance secures order, an exact
    receipt also makes confirmed Messages `delivered_confirmed`.
-4. The next prompt follows only once order is secured, the route reports
+4. The next prompt follows only once order is secured (apart from the
+   [same-running-force exception](#the-force-protocol)), the route reports
    `More` and the budgets allow. `ReleaseBusySendClaims` then returns the
    never-issued remainder to Held; the revision it advances is the positive
    never-issued evidence, since no issue commit can pass it. A later claim
@@ -9585,10 +9593,13 @@ advances its revision, so an obsolete job can neither issue nor release.
 
 **Custody is not the Result.** Order evidence lifts the barrier and moves
 custody; the public Result follows [the Result rules](#busy-send-admission-and-results).
-Complete keyless output can secure order without proving intake: at the
-route's qualified unproven boundary a confirmed Message ends
-`handed_over_not_proven`. Repeated or late evidence records its fact only and
-never reopens a Final Result.
+At a route's unproven boundary complete keyless output finalizes the Result
+without proving intake. Claude wake completion also frees the capacity
+reservation, but retains issued membership and the hand-over owner until
+order evidence arrives. Only the force cursor advances at completion; an
+ordinary cursor waits for order. A Final `sent_unconfirmed` Result and later
+Messages waiting `handover_in_progress` can coexist.
+Repeated or late evidence never reopens a Final Result.
 
 **Lifecycle seam.** `applyBusySendLaunchEnd` and `applyBusySendLaunchExit`
 are the custody steps of a Launch End and of its exit evidence; lifecycle
@@ -9610,8 +9621,9 @@ force's owner call and revision (`BusySendForceRef`):
    order](caller-contract.md#stored-force-attempts), storing only the
    attempt. `agent_starting`, `launch_ended` and `route_unavailable` run no
    recovery. Then it releases an abandoned force and refuses for an open one,
-   then releases a dead ordinary job's expired claims and refuses for an
-   ordinary owner that remains, before the Held checks. Otherwise it freezes
+   then releases a dead ordinary job's expired claims and refuses for any
+   hand-over owner that remains, including a finished force's, before the
+   Held checks. Otherwise it freezes
    every Held Message, in accepted order, into a hand-over with boundary
    `force`, the capability table's partition and the captured destination,
    and the conversation's `handover_force_id` names it.
@@ -9621,7 +9633,9 @@ force's owner call and revision (`BusySendForceRef`):
    at most that one prompt, committing through `CommitBusySendIssue` with
    `BusySendIssueRequest.Force`. That guard needs the force running under its
    owner and revision, no recorded call end, its call deadline not passed,
-   and every earlier prompt admitted with its order secured. It never refuses
+   and every earlier prompt admitted with no negative, with either secured
+   order or complete Claude wake output. The latter is the same running
+   force's exception; it releases no ordinary order barrier. It never refuses
    a changed Turn Start counter or permission epoch, recording the current
    ones instead (the hand-over keeps its first prompt's; `BusySendIssue`
    returns each prompt's own); every other guard stands. The issue commit
@@ -9668,7 +9682,7 @@ renews them. While active the call only reads its force's durable progress
 
 **Notifications.** The API call (`runForceCall`) owns every wake touch for a
 force (`store.TouchBusySendWake`): after the claim, once per later prompt when the
-one before it is admitted with order secured, after the end when carried
+one before it meets that force's issue guard, after the end when carried
 Messages are Held, and after a refused claim whose recovery returned
 Messages. A route's hook only drives the frozen next prompt and records
 evidence. A send with force holds back its Message's ordinary wake until the
@@ -9841,8 +9855,11 @@ The route's steps:
   steer's envelope to stdout, one JSON object and LF,
   `{"hookSpecificOutput":{"additionalContext":<body>,"hookEventName":"PostToolBatch"}}`,
   with nothing else (no decision, stop control or wrapper) and the body
-  unchanged once decoded. Every byte is `complete` with `emission_complete`
-  at the unproven boundary; some is `partial`; none is `uncertain`. `More` is
+  unchanged once decoded. Every byte is `complete` at the unproven boundary;
+  only a steer supplies `emission_complete` order evidence. A wake supplies
+  no order at completion: every wake may meet a competing turn start or
+  sibling Stop continuation, even from a row reporting `waiting`. Some output
+  is `partial`; none is `uncertain`. `More` is
   false, so a steer's never-issued rest returns to Held, ahead of later
   Messages, for the next parent tool boundary or, once the turn ends, the
   wake.
@@ -9875,24 +9892,27 @@ same transaction the force protocol's settlement (`settleBusySendForceEvidence`)
 finishes a pending force once its last issued prompt is admitted, also after
 the call has returned, a store reopen or every carried Result went Final. It
 changes no custody, order or Result, makes nothing `delivered_confirmed` and
-touches no wake: only a running call that sees admission with order secured
-notifies the next prompt's wake, so a sighting after the call's end issues
-nothing more. The route records no negative, not-submitted or transcript
-evidence, so only Launch End fails an unadmitted force. After the sighting,
+touches no wake: only a running call that sees admission with complete wake
+output (or secured order) notifies the next prompt's wake, so a sighting
+after the call's end issues nothing more. The route records no negative,
+not-submitted or transcript evidence, so only Launch End fails an unadmitted
+force. After the sighting,
 the same `UserPromptSubmit`, as provider-input completion, runs the separate
 abandoned-force release (`recoverClaudeInputForce` →
 `recoverClaudeAbandonedForce` → `ReleaseAbandonedBusySendForce`, touching the
 wake when it returned Messages), as the Launch's main `SessionStart` does
 (`writeClaudeWatchPath`). So a sighting after the call deadline admits its
 prompt and then ends the force; the sighting's own write is unchanged. Turn starts never
-clear an obligation. A lost sighting keeps later Wait Turn Messages Held as
-`readiness_unknown`, and a force pending, until Launch End; the prompt is
-never replayed.
+clear an obligation. A lost sighting keeps `awaiting_turn_start` nonzero
+and an issued force pending until Launch End; clearing wake order does not
+clear that admission obligation. The prompt is never replayed.
 
 **Helper replacement.** The issue commit registers the issuing hook as the
 Launch's helper (`registerBusySendIssuer`). Another identity replaces it only
 once every other issued prompt of the Launch has its order or a negative
-outcome recorded; that closure is not exit evidence. Replacement on verified
+outcome recorded. When issuing the same running force's next prompt,
+complete, admitted prompts of that force do not block replacement. Neither
+exception nor closure is exit evidence. Replacement on verified
 exit alone is not offered, since a live Launch's unresolved prompt still owns
 its conversation. Fencing and exit evidence are
 [lifecycle custody](#lifecycle-custody-and-exit-evidence)'s.

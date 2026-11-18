@@ -203,8 +203,9 @@ func checkBusySendJob(ctx context.Context, conn *sql.Conn, storeID string, ref B
 // M1's ForceFencedAtCallEnd): the hand-over's force still runs under the
 // owner and revision force captured, its call's end is not recorded and its
 // recorded call deadline has not passed; and a later prompt goes only once
-// the prompt before it is admitted with no negative (its order is secured by
-// the cursor check). After the call's end or release nothing of the force
+// the prompt before it is admitted with no negative and has either secured
+// order or complete Claude wake output (SR-3.4's same-force exception).
+// After the call's end or release nothing of the force
 // passes.
 func checkBusySendForceJob(ctx context.Context, conn *sql.Conn, storeID string, force BusySendForceRef, h busySendHandoverRow, index int, now int64) error {
 	fo, found, err := readBusySendForceRow(ctx, conn, storeID, force.ForceID)
@@ -222,10 +223,20 @@ func checkBusySendForceJob(ctx context.Context, conn *sql.Conn, storeID string, 
 	if err != nil {
 		return err
 	}
-	if !prev.effectivelyAdmitted() {
+	if !prev.effectivelyAdmitted() || prev.orderKind == "" && !(h.claudeWake() && prev.transport == BusySendTransportWritten) {
 		return busySendGuard(BusySendGuardPrompt, "", "the force's earlier prompt has no recorded admission")
 	}
 	return nil
+}
+
+// claudeWake identifies input whose completion cannot secure order (O4/G3).
+// Every wake may reach a busy agent: even an ordinary wake cannot exclude a
+// competing turn start or sibling Stop continuation. A sighting admits it,
+// but only a later parent Stop releases its ordinary order barrier. SR-3.4
+// separately permits the same running force's next wake after a sighting.
+func (h busySendHandoverRow) claudeWake() bool {
+	return h.Destination.RouteKind == BusySendRouteClaudeHooks &&
+		(h.Boundary == BusySendBoundaryTurnEnd || h.Boundary == BusySendBoundaryForce)
 }
 
 // busySendTurnRunning reports whether a row's raw state is inside a running
@@ -408,7 +419,8 @@ func (s *Store) CommitBusySendIssue(ctx context.Context, req BusySendIssueReques
 // registerBusySendIssuer records issuer as the Launch's process of its role,
 // in the issue's transaction. The same identity is kept as it is.
 // Another identity replaces an earlier one only when every other issued
-// prompt of the Launch has its order or a negative outcome recorded: the
+// prompt of the Launch has its order or a negative outcome recorded, or is a
+// completed, sighted wake of this same force (SR-3.4): the
 // earlier issuer can then emit nothing still unresolved. An issuer that may
 // still emit is never overwritten. This is the helper slot's serialization
 // (Main Agent decision 5): an earlier helper's hand-over closed with its
@@ -420,8 +432,10 @@ func registerBusySendIssuer(ctx context.Context, conn *sql.Conn, storeID string,
 	var unresolved bool
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM busy_send_prompts p
 	    JOIN busy_send_handovers o ON o.handover_id = p.handover_id
-	    WHERE o.launch_id = ? AND p.emission IN ('intent', 'issued') AND p.order_kind IS NULL AND p.negative_kind IS NULL)`,
-		h.Destination.LaunchID).Scan(&unresolved); err != nil {
+	    WHERE o.launch_id = ? AND p.emission IN ('intent', 'issued') AND p.order_kind IS NULL AND p.negative_kind IS NULL
+	        AND NOT (o.handover_id = ? AND o.forced = 1 AND o.route_kind = 'claude_hooks'
+	            AND p.transport IS 'written' AND p.admission_kind IS NOT NULL))`,
+		h.Destination.LaunchID, h.HandoverID).Scan(&unresolved); err != nil {
 		return err
 	}
 	var pid int
@@ -486,7 +500,8 @@ func (o BusySendOutput) transport() (BusySendTransport, error) {
 // unissued claims; RecAcc and RecNs apply to the issued prompt). ref.Revision
 // decides only whether the job keeps authority to go on with the hand-over
 // (BusySendCompletionResult.Revision). Order is qualified order evidence observed with complete output (Claude's
-// complete keyless emission is emission_complete, M1's non-admitting acc),
+// steer emission is emission_complete; its wake supplies no order evidence
+// until a later parent Stop, O4/G3),
 // "" for none; UnprovenBoundary says that complete output ends a confirmed
 // Message at the route's qualified handed_over_not_proven boundary (SR-3.5).
 type BusySendCompletion struct {
@@ -528,7 +543,10 @@ type BusySendCompletionResult struct {
 // with qualified Order secures the prompt's order (M1's RecAcc): the Messages
 // leave custody, their reservations end and their Results follow the
 // acceptance rules; the cursor moves to the next prompt and the hand-over
-// closes after its last. not_submitted returns the prompt's and every later
+// closes after its last. A Claude wake instead records its Final Result at
+// complete output but retains issued membership and the order barrier until
+// a later parent Stop; only its same-force successor may advance on a sighting
+// (SR-3.4). not_submitted returns the prompt's and every later
 // never-issued prompt's Messages to Held (M1's RecNs); for a force's prompt it
 // no longer counts as issued, and a force that issued nothing else is refused
 // not_submitted (settleBusySendForceEvidence). Partial, uncertain and
@@ -583,6 +601,14 @@ func (s *Store) RecordBusySendCompletion(ctx context.Context, c BusySendCompleti
 		}
 		if live && p.transport == transport {
 			switch {
+			case c.Output == BusySendOutputComplete && h.claudeWake() && c.Order == "" && c.UnprovenBoundary:
+				// Complete wake output is a Final hand-over, not ordered
+				// acceptance. Keep its issued membership and owner until Stop.
+				// Only a force's cursor advances, for SR-3.4's next prompt
+				// on a sighting. Ordinary issue still waits on this prompt.
+				if out.Recorded {
+					err = completeBusySendWake(ctx, conn, &h, p, now)
+				}
 			case c.Output == BusySendOutputComplete && c.Order != "" && p.orderKind == "":
 				err = applyBusySendOrder(ctx, conn, &h, p, c.Order, c.UnprovenBoundary, now)
 				out.Recorded = true
@@ -606,6 +632,34 @@ func (s *Store) RecordBusySendCompletion(ctx context.Context, c BusySendCompleti
 		return BusySendCompletionResult{}, err
 	}
 	return out, nil
+}
+
+// completeBusySendWake records the SR-3.5 Result without treating physical
+// completion as order evidence. Final Messages cannot return to Held, so
+// their capacity reservation ends; their issued membership retains the
+// conversation's order barrier independently of that Result.
+func completeBusySendWake(ctx context.Context, conn *sql.Conn, h *busySendHandoverRow, p busySendPromptRow, now int64) error {
+	members := `handover_id = ? AND place = 'issued' AND ` + busySendPromptMemberSQL
+	args := []any{h.HandoverID, h.HandoverID, p.index}
+	if err := freeBusySendReservations(ctx, conn, h.ConversationID, members, args...); err != nil {
+		return err
+	}
+	if err := finalizeBusySendSent(ctx, conn, BusySendReasonHandedOverNotProven, now, members, args...); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `UPDATE busy_send_messages SET handed_over_at_ms = COALESCE(handed_over_at_ms, ?)
+	    WHERE `+members, append([]any{now}, args...)...); err != nil {
+		return err
+	}
+	if h.ForceID != "" && h.PromptCursor == p.index {
+		var err error
+		h.Revision, err = advanceBusySendHandover(ctx, conn, *h, `prompt_cursor = ?`, p.index+1)
+		if err != nil {
+			return err
+		}
+		h.PromptCursor++
+	}
+	return nil
 }
 
 // busySendLive is M1's LiveCb with its v check: the hand-over's captured

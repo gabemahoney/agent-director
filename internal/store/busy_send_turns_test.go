@@ -124,7 +124,8 @@ func newBusySendIssuedAt(t *testing.T, boundary store.BusySendBoundary) (*busySe
 }
 
 // output records prompt 0's output out at in's clock: complete output with
-// Claude's emission order at its unproven boundary, or out with none.
+// explicitly qualified emission order at its unproven boundary, or out with
+// none. O4/G3 wake-order tests instead complete with empty order evidence.
 func (in *busySendInbox) output(t *testing.T, h *store.BusySendHandover, revision int64, out store.BusySendOutput) {
 	t.Helper()
 	if out == store.BusySendOutputComplete {
@@ -761,16 +762,23 @@ func TestBusySendTurnEndBindsItsLaunch(t *testing.T) {
 // other order: a completion that begins while the Stop holds its evidence
 // write (a causal barrier holds it until the completion has begun) waits
 // behind it and gives it nothing either. Each time the prompt still awaits,
-// and a later Stop admits it.
+// and a later Stop admits a steer or releases a wake's order (t2.xis.w3.9f).
 func TestBusySendTurnEndRaces(t *testing.T) {
 	t.Parallel()
-	for _, stopFirst := range []bool{false, true} {
-		name := map[bool]string{false: "a completion held across the Stop's entry read",
-			true: "a completion waiting behind the Stop's write"}[stopFirst]
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		boundary  store.BusySendBoundary
+		stopFirst bool
+	}{
+		{name: "steer completion across entry read", boundary: store.BusySendBoundaryToolBoundary},
+		{name: "steer completion behind Stop write", boundary: store.BusySendBoundaryToolBoundary, stopFirst: true},
+		{name: "wake completion across entry read", boundary: store.BusySendBoundaryTurnEnd},
+		{name: "wake completion behind Stop write", boundary: store.BusySendBoundaryTurnEnd, stopFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			in, h, revision := newBusySendIssuedAt(t, store.BusySendBoundaryToolBoundary)
+			in, h, revision := newBusySendIssuedAt(t, tc.boundary)
 			rival, err := store.Open(in.path)
 			if err != nil {
 				t.Fatal(err)
@@ -780,6 +788,9 @@ func TestBusySendTurnEndRaces(t *testing.T) {
 			completion := store.BusySendCompletion{Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, Revision: revision},
 				Output: store.BusySendOutputComplete, Order: store.BusySendOrderEmissionComplete, UnprovenBoundary: true,
 				At: observed.Add(-time.Millisecond)}
+			if tc.boundary == store.BusySendBoundaryTurnEnd {
+				completion.Order = "" // Real Claude wake completion, O4/G3.
+			}
 			lifecycle := func() {
 				if got, err := in.s.ApplyHookTransition(in.id, in.ownGate(t, "Stop"), store.StateWaiting, false, "Stop", "", false); err != nil ||
 					!got.Applied {
@@ -817,7 +828,7 @@ func TestBusySendTurnEndRaces(t *testing.T) {
 			}
 			completed, recorded := make(chan error, 1), make(chan error, 1)
 			var got store.BusySendTurnEndResult
-			if !stopFirst {
+			if !tc.stopFirst {
 				hold(rival, func(_ bool, q string) bool { return q == "COMMIT" })
 				go func() { _, err := rival.RecordBusySendCompletion(ctx, completion); completed <- err }()
 				awaitSignal(t, holding, "the completion's COMMIT")
@@ -861,10 +872,87 @@ func TestBusySendTurnEndRaces(t *testing.T) {
 				t.Errorf("Stop = %+v; want unchanged", got)
 			}
 			in.wantAwaiting(t, 1, "after both writes")
+			if tc.boundary == store.BusySendBoundaryTurnEnd {
+				got, err := in.s.ReadBusySendHandover(ctx, h.HandoverID)
+				if err != nil || !got.Open || got.Prompts[0].OrderKind != "" {
+					t.Fatalf("Stop without entry evidence released wake order: %+v, %v", got, err)
+				}
+			}
 			if got := in.endTurn(t, in.stop(t, observed.Add(2*time.Millisecond))); got != (store.BusySendTurnEndResult{Outcome: store.BusySendTurnEndRecorded, Recorded: 1}) {
 				t.Errorf("a later Stop = %+v; want one recorded", got)
 			}
-			in.wantAwaiting(t, 0, "after a later Stop")
+			if tc.boundary == store.BusySendBoundaryTurnEnd {
+				got, err := in.s.ReadBusySendHandover(ctx, h.HandoverID)
+				if err != nil || got.Open || got.Prompts[0].OrderKind != store.BusySendOrderOrderedAcceptance {
+					t.Errorf("later Stop wake order: %+v, %v; want closed, ordered_acceptance", got, err)
+				}
+				in.wantAwaiting(t, 1, "after order release without admission")
+			} else {
+				in.wantAwaiting(t, 0, "after a later Stop")
+			}
+		})
+	}
+}
+
+// Regression t2.xis.w3.9f: O4/G3 wake order uses the Stop's exact observation
+// and captured prompt revision. Admission during the Stop cannot refresh it.
+func TestBusySendWakeOrderEvidenceGuards(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		output  store.BusySendOutput
+		gap     time.Duration
+		sight   bool
+		foreign bool
+	}{
+		{name: "equal output and Stop times", output: store.BusySendOutputComplete},
+		{name: "Stop observed before output", output: store.BusySendOutputComplete, gap: -time.Millisecond},
+		{name: "sighting changes captured revision", output: store.BusySendOutputComplete, gap: time.Millisecond, sight: true},
+		{name: "foreign Stop gate", output: store.BusySendOutputComplete, gap: time.Millisecond, foreign: true},
+		{name: "partial output", output: store.BusySendOutputPartial, gap: time.Millisecond},
+		{name: "uncertain output", output: store.BusySendOutputUncertain, gap: time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in, h, revision := newBusySendIssuedAt(t, store.BusySendBoundaryTurnEnd)
+			in.complete(t, h, 0, revision, tc.output, "", tc.output == store.BusySendOutputComplete)
+			stop := in.stop(t, in.clock.Now().Add(tc.gap))
+			want := store.BusySendTurnEndUnchanged
+			awaiting := int64(1)
+			if tc.sight || tc.foreign {
+				if len(stop.Prompts) != 1 {
+					t.Fatalf("Stop entry %+v; want the completed wake before the intervening change", stop.Prompts)
+				}
+			}
+			if tc.sight {
+				if got := in.sight(t, in.sighting(t, h.Prompts[0].Body)); got.Outcome != store.BusySendSightingAdmitted {
+					t.Fatalf("sighting %+v; want admitted", got)
+				}
+				awaiting = 0
+			}
+			if tc.foreign {
+				stop.Gate.ParentPID = storefix.ForeignHookParentPID(stop.Gate.ParentPID)
+				want = store.BusySendTurnEndStale
+			}
+			before := readBusySendTables(t, in.path)
+			if got := in.endTurn(t, stop); got != (store.BusySendTurnEndResult{Outcome: want}) {
+				t.Errorf("Stop = %+v; want %s with no order release", got, want)
+			}
+			if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+				t.Fatal("ineligible Stop changed persistent facts")
+			}
+			got, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+			if err != nil || !got.Open || got.Prompts[0].OrderKind != "" {
+				t.Fatalf("wake handover %+v, %v; want order barrier retained", got, err)
+			}
+			in.wantAwaiting(t, awaiting, "after the refused order evidence")
+			if tc.output == store.BusySendOutputComplete {
+				in.clock.Advance(2 * time.Millisecond)
+				if got := in.endTurn(t, in.stop(t, in.clock.Now())); got != (store.BusySendTurnEndResult{Outcome: store.BusySendTurnEndRecorded, Recorded: 1}) {
+					t.Errorf("fresh later Stop = %+v; want order recorded", got)
+				}
+				in.wantAwaiting(t, awaiting, "after order release, with admission unchanged")
+			}
 		})
 	}
 }

@@ -76,6 +76,7 @@ type wakeEnv struct {
 	// and seam the store it runs on (nil: st).
 	now  func() time.Time
 	seam hook.HookStore
+	self func() store.ProcessIdentity // nil: wakeHelper; distinct hook invocations may replace it
 }
 
 // newWakeEnv seeds the row in state with opts.
@@ -192,6 +193,9 @@ func (e *wakeEnv) handle(ctx context.Context, p hookParent, payload []byte, stde
 func (e *wakeEnv) handleTo(ctx context.Context, p hookParent, payload []byte, stdout, stderr io.Writer) error {
 	hc := hookConfig(envHook(e.id, ""), p)
 	hc.Self, hc.Stderr, hc.Now = wakeHelper, stderr, e.now
+	if e.self != nil {
+		hc.Self = e.self
+	}
 	var st hook.HookStore = e.st
 	if e.seam != nil {
 		st = e.seam
@@ -515,7 +519,7 @@ func TestClaudeWakeDeliversHeldPrompts(t *testing.T) {
 	if got := e.wake(t); got != "" {
 		t.Errorf("a repeated wake before any sighting wrote %d bytes; want nothing", len(got))
 	}
-	e.assertHeld(t, "m3", store.BusySendWaitReadinessUnknown)
+	e.assertHeld(t, "m3", store.BusySendWaitHandoverInProgress)
 
 	// R2-1: the exact text from the right transcript under a contradicting
 	// payload session_id is no sighting.
@@ -548,7 +552,7 @@ func TestClaudeWakeDeliversHeldPrompts(t *testing.T) {
 		t.Errorf("the next wake wrote %d bytes; want m3 alone (%d bytes)", len(got), len(want))
 	}
 	e.assertRaced(t, "m3")
-	e.assertHeld(t, "late", store.BusySendWaitReadinessUnknown, store.BusySendWaitEarlierMessage)
+	e.assertHeld(t, "late", store.BusySendWaitHandoverInProgress)
 }
 
 // failRouteFacts is the store with its nth route-facts read failing, after the
@@ -848,7 +852,7 @@ func TestClaudeWakeRefusals(t *testing.T) {
 // durable. Only a whole write is complete output (exit 2, Final); a short
 // write is partial and a failed one uncertain, both non-Final, never retried
 // by a later wake, their obligation kept. The agent's sighting arriving before
-// the completion record still binds, and the completion then secures order.
+// the completion record still binds; the later parent Stop secures wake order.
 // A steer's output (M2 P-C4.2, P-C4.3; SR-2.5, SR-3.4) is its one stdout
 // envelope, under the Job deadline: intent and the obligation are durable at
 // its first byte, and only the whole envelope, its newline included, is
@@ -1447,6 +1451,10 @@ func TestClaudeForceSightingNeedsExactText(t *testing.T) {
 	if f := e.endCall(t, c); f.Outcome != store.BusySendForceHandedOver {
 		t.Fatalf("first force ended %s %s; want handed_over", f.Outcome, f.Reason)
 	}
+	// O4/G3: a sighting admits the force but does not release order for a
+	// separate force. Only the later parent Stop supplies that evidence.
+	e.tick(time.Millisecond)
+	e.fire(t, e.payload(t, "stop.json", nil))
 
 	e.admit(t, "m2", "stop </task-notification> here")
 	e.force(t)
@@ -1912,6 +1920,238 @@ func TestClaudeStartupWakeRevalidatesAndExpires(t *testing.T) {
 				t.Errorf("read failure not diagnosed: %q", logs.String())
 			}
 		})
+	}
+}
+
+// Regression t2.xis.w3.9f (b.kii, capture 4; SR-2.5/O4): complete output of
+// a busy-issued forced wake must not let a later steer pass it. Only the
+// parent's later Stop supplies the turn-end evidence for O4's fallback.
+func TestClaudeSteerWaitsForBusyWakeTurnEnd(t *testing.T) {
+	e := newWakeEnv(t, store.StateWaiting)
+	// Consume two earlier Messages so A and B have capture 4's sequences 3
+	// and 4. Finish that prefix's turn before starting the turn A interrupts.
+	e.admit(t, "prefix-1", "first")
+	e.admit(t, "prefix-2", "second")
+	const prefix = "[agent-director: message 1 of 2]\nfirst\n\n[agent-director: message 2 of 2]\nsecond"
+	if got := e.wake(t); got != prefix {
+		t.Fatalf("prefix wake wrote %q; want %q", got, prefix)
+	}
+	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(prefix)}))
+	e.tick(time.Millisecond)
+	e.fire(t, e.payload(t, "stop.json", nil))
+	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": "existing parent turn"}))
+	if row, o := mustGetSpawn(t, e.st, e.id), e.observe(t); row.State != store.StateWorking || o.AwaitingTurnStart != 0 || o.HeldCount != 0 {
+		t.Fatalf("before A: state %s, awaiting %d, Held %d; want working, 0, 0", row.State, o.AwaitingTurnStart, o.HeldCount)
+	}
+
+	e.admit(t, "A", "OVERLAP-WAKE")
+	c := e.force(t)
+	const wake = "[agent-director: message 1 of 1]\nOVERLAP-WAKE"
+	if got := e.wake(t); got != wake {
+		t.Fatalf("busy forced wake wrote %q; want A alone %q", got, wake)
+	}
+	h, err := e.st.ReadBusySendHandover(context.Background(), c.Handover.HandoverID)
+	if err != nil || len(h.Prompts) != 1 || h.Boundary != store.BusySendBoundaryForce ||
+		h.Prompts[0].Emission != store.BusySendEmissionIssued || h.Prompts[0].Transport != store.BusySendTransportWritten {
+		t.Fatalf("A hand-over %+v, %v; want one issued forced wake with complete output", h, err)
+	}
+	t.Logf("A complete output: transport=%s, order=%s", h.Prompts[0].Transport, h.Prompts[0].OrderKind)
+	// The live capture's steer came after the finite force call returned.
+	// A still has no sighting; ending the call must not clear its barrier.
+	if ended := e.endCall(t, c); ended.Outcome != store.BusySendForcePending {
+		t.Fatalf("force call ended %+v; want pending without A's sighting", ended)
+	}
+	e.inCall(c, 20*time.Second)
+	e.admitAs(t, "B", "STEER", store.BusySendSteerTurn, true)
+	facts, err := apitest.ReadBusySendFacts(e.db, e.id)
+	if err != nil || len(facts.Messages) != 4 || facts.Messages[2].RequestID.String != "A" || facts.Messages[2].Seq != 3 ||
+		facts.Messages[3].RequestID.String != "B" || facts.Messages[3].Seq != 4 {
+		t.Fatalf("Messages %+v, %v; want A at sequence 3 before B at sequence 4", facts.Messages, err)
+	}
+	if o := e.observe(t); o.AwaitingTurnStart != 1 || o.HeldCount != 1 {
+		t.Fatalf("before the tool boundary: awaiting %d, Held %d; want A awaiting, B Held", o.AwaitingTurnStart, o.HeldCount)
+	}
+
+	// No UserPromptSubmit for A and no Stop since its complete output.
+	got := e.steer(t)
+	if r := e.result(t, "B"); r.Class != store.BusySendClassHeld || r.Final {
+		t.Errorf("B released before take evidence for busy-issued wake A: Result %+v; want non-Final Held", r)
+	}
+	if got != "" {
+		t.Fatalf("PostToolBatch issued early steer %q before take evidence for busy-issued wake A; want no output", got)
+	}
+
+	// The Stop is strictly after A's completion. The next parent turn is
+	// started by unrelated text, never a sighting of A: this exercises only
+	// the turn-end fallback, without making Stop force-admission evidence.
+	e.tick(time.Second)
+	e.fire(t, e.payload(t, "stop.json", nil))
+	e.tick(time.Second)
+	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": "next parent turn"}))
+	e.tick(time.Second)
+	const steer = "[agent-director: message 1 of 1]\nSTEER"
+	if got := e.steer(t); got != steer {
+		t.Fatalf("PostToolBatch after A's turn-end evidence wrote %q; want B alone %q", got, steer)
+	}
+	e.assertSent(t, store.BusySendReasonHandedOverNotProven, "B")
+	if got := e.steer(t); got != "" {
+		t.Errorf("repeated PostToolBatch wrote %q; want B issued once", got)
+	}
+}
+
+// Regression t2.xis.w3.9f: O4/G3 order release is independent of admission,
+// Final Results and capacity. SR-3.3 still bars ordinary input after an
+// unsighted wake's Stop; SR-4.3 still requires the force's own sighting.
+func TestClaudeWakeOrderIsSeparateFromAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		forced  bool
+		sighted bool
+	}{
+		{name: "ordinary wake, no sighting"},
+		{name: "ordinary wake, sighted", sighted: true},
+		{name: "forced wake, sighted", forced: true, sighted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := store.StateWaiting
+			if tc.forced {
+				state = store.StateWorking
+			}
+			e := newWakeEnv(t, state)
+			e.tick(0)
+			e.admit(t, "A", "first wake")
+			var force store.BusySendForceClaim
+			if tc.forced {
+				force = e.force(t)
+			}
+			const body = "[agent-director: message 1 of 1]\nfirst wake"
+			if got := e.wake(t); got != body {
+				t.Fatalf("wake = %q; want %q", got, body)
+			}
+			if tc.forced {
+				e.assertSent(t, store.BusySendReasonHandedOverNotProven, "A")
+				if f := e.endCall(t, force); f.Outcome != store.BusySendForcePending {
+					t.Fatalf("force call end = %+v; want pending", f)
+				}
+				e.inCall(force, 20*time.Second)
+			} else {
+				e.assertRaced(t, "A")
+			}
+			final := e.result(t, "A")
+			awaiting := int64(1)
+			if tc.sighted {
+				e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(body)}))
+				awaiting = 0
+			}
+			checkA := func(place string) {
+				t.Helper()
+				facts, err := apitest.ReadBusySendFacts(e.db, e.id)
+				if err != nil || len(facts.Messages) == 0 || facts.Messages[0].Place != place || facts.Messages[0].Reserved {
+					t.Fatalf("A facts %+v, %v; want %s with capacity freed", facts.Messages, err, place)
+				}
+				if o := e.observe(t); o.AwaitingTurnStart != awaiting {
+					t.Errorf("awaiting %d; want %d independently of order", o.AwaitingTurnStart, awaiting)
+				}
+				if got := e.result(t, "A"); !reflect.DeepEqual(got, final) {
+					t.Errorf("A Result changed: %+v; want %+v", got, final)
+				}
+				if tc.forced {
+					if f := e.forceResult(t, force); f.Outcome != store.BusySendForceHandedOver || f.Reason != store.BusySendForceAdmitted {
+						t.Errorf("force %+v; want handed_over admitted from its sighting", f)
+					}
+				}
+			}
+			checkA("issued") // A can be Final and admitted but still own order.
+			e.admitAs(t, "B", "later steer", store.BusySendSteerTurn, true)
+			e.admit(t, "W", "later wait")
+			if got := e.steer(t); got != "" {
+				t.Fatalf("sighting without Stop allowed steer %q", got)
+			}
+			if got := e.wake(t); got != "" {
+				t.Fatalf("sighting without Stop allowed ordinary wake %q", got)
+			}
+			e.assertHeld(t, "B", store.BusySendWaitHandoverInProgress)
+			e.assertHeld(t, "W", store.BusySendWaitHandoverInProgress)
+			launch, err := e.st.GetBusySendPublishedLaunch(e.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			separate, err := e.st.ClaimBusySendForce(context.Background(), store.BusySendForceClaimRequest{InstanceID: e.id, Launch: launch,
+				ForceID: uuid.NewString(), OwnerCallID: uuid.NewString(), ActiveBudget: 12 * time.Second, CleanupBudget: 3 * time.Second, At: e.now()})
+			if err != nil || separate.Handover != nil || separate.Force.Outcome != store.BusySendForceRefused ||
+				separate.Force.Reason != store.BusySendForceHandoverInProgress {
+				t.Fatalf("separate force %+v, %v; want refused handover_in_progress", separate, err)
+			}
+			e.tick(time.Second)
+			e.fire(t, e.payload(t, "stop.json", nil))
+			checkA("closed")
+			if !tc.sighted {
+				if got := e.wake(t); got != "" {
+					t.Fatalf("Stop without sighting allowed ordinary wake %q", got)
+				}
+				e.assertHeld(t, "B", store.BusySendWaitReadinessUnknown)
+				e.assertHeld(t, "W", store.BusySendWaitEarlierMessage)
+				return
+			}
+			const rest = "[agent-director: message 1 of 2]\nlater steer\n\n[agent-director: message 2 of 2]\nlater wait"
+			if got := e.wake(t); got != rest {
+				t.Fatalf("wake after sighting and Stop = %q; want %q", got, rest)
+			}
+			e.assertRaced(t, "B", "W")
+		})
+	}
+}
+
+// Regression t2.xis.w3.9f, SR-3.4: only the same running force may advance
+// on complete output plus sighting before Stop, including a new hook issuer.
+func TestClaudeRunningForceAdvancesWithoutOrdinaryOrder(t *testing.T) {
+	e := newWakeEnv(t, store.StateWorking)
+	a, b := strings.Repeat("a", 5000), strings.Repeat("b", 5000)
+	e.admit(t, "a", a)
+	e.admit(t, "b", b)
+	c := e.force(t)
+	first := "[agent-director: message 1 of 1]\n" + a
+	if got := e.wake(t); got != first {
+		t.Fatalf("first force prompt = %q; want a alone", got)
+	}
+	final := e.result(t, "a")
+	if got := e.wake(t); got != "" {
+		t.Fatalf("force advanced without sighting: %q", got)
+	}
+	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(first)}))
+	e.self = func() store.ProcessIdentity {
+		p := wakeHelper()
+		p.PID++
+		p.Starttime = "4243"
+		return p
+	}
+	e.tick(time.Millisecond)
+	second := "[agent-director: message 1 of 1]\n" + b
+	if got := e.wake(t); got != second {
+		t.Fatalf("same force after sighting, before Stop = %q; want b alone", got)
+	}
+	h, err := e.st.ReadBusySendHandover(context.Background(), c.Handover.HandoverID)
+	if err != nil || len(h.Prompts) != 2 || !h.Open || h.Prompts[0].OrderKind != "" || h.Prompts[1].OrderKind != "" ||
+		h.Prompts[0].Transport != store.BusySendTransportWritten || h.Prompts[1].Transport != store.BusySendTransportWritten {
+		t.Fatalf("force handover %+v, %v; want both completed but neither ordered", h, err)
+	}
+	if got := e.wake(t); got != "" {
+		t.Fatalf("repeated force wake replayed %q", got)
+	}
+	if f := e.endCall(t, c); f.Outcome != store.BusySendForcePending {
+		t.Fatalf("call end %+v; want pending for b's admission", f)
+	}
+	e.inCall(c, 20*time.Second)
+	e.fire(t, e.payload(t, "stop.json", nil))
+	if o, f := e.observe(t), e.forceResult(t, c); o.AwaitingTurnStart != 1 || f.Outcome != store.BusySendForcePending {
+		t.Fatalf("after Stop: awaiting %d, force %+v; want b awaiting, force pending", o.AwaitingTurnStart, f)
+	}
+	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(second)}))
+	if f := e.forceResult(t, c); f.Outcome != store.BusySendForceHandedOver || f.Reason != store.BusySendForceAdmitted {
+		t.Errorf("after b's sighting: force %+v; want handed_over admitted", f)
+	}
+	if got := e.result(t, "a"); !reflect.DeepEqual(got, final) {
+		t.Errorf("a's Final Result changed: %+v; want %+v", got, final)
 	}
 }
 
