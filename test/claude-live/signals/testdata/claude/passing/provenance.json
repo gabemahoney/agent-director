@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "kind": "scrubbed-real-capture",
+  "capture": 6,
+  "capture_key": "4bc32d52892e",
+  "provider_version": "2.1.311 (Claude Code)",
+  "candidate": "2d667e3596f98c3d877c7d21bd6ea51f0a19a263/570be2967066fd4bdb85c07cd951f3a3f9feb6c1",
+  "kit_sha256": "510f57fceacb95f0c85e65c3fdd9ec406187c25b644d66f614d2662a1da26e57",
+  "observed_turns": 6,
+  "scheduled_turns": 6,
+  "turn_cap": 7,
+  "probe_plan": "wake-sighting-v1",
+  "continuation_variant": "held-steer-v1",
+  "analyzer_tree": "0b258f8d956086910385fdc37e413671ab55113c",
+  "source_drift": "MI authorized offline analyzer repairs 13 and 14 after capture; product, probe, runner and kit unchanged. Original capture verdict was incomplete; repaired offline replay passes 19 mandatory clauses.",
+  "provider_record": "PROVIDER-BEHAVIOUR.md",
+  "scrub_map": {
+    "uuid": "stable per-value 00000000-0000-4000-8000-N identifiers",
+    "launch_token": "0000000000000001/2",
+    "email": "stable fixture-userNN@example.invalid placeholders",
+    "tool_and_response_id": "stable toolu_fixtureN/msg_fixtureN identifiers",
+    "paths": "capture, kit and runtime suffixes replaced with fixture; fixed runner TestHome retained",
+    "auth": "original never opened, hashed or copied; empty object replacement",
+    "hashes": "artifact/receipt digests and exact canonical journal message hashes/references recomputed",
+    "transcript": "irrelevant rows and account/environment/session-context attachments replaced with fixture-omitted, preserving original line numbers; full request messages and output_config retained",
+    "snapshots": "named snapshots plus eleven indexed observations retaining state transitions, pre-terminal Held, last pre-result Held and first sighted Held; all timestamps unmodified"
+  },
+  "private_mapping": "CI worker scratch ci-ai-private-scrub-map.json; originals remain outside git"
+}

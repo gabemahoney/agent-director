@@ -121,10 +121,17 @@ func start(t *testing.T, env []string, stdin, name string, args ...string) *proc
 // startIn is start in dir, or in a fresh temp dir when dir is "".
 func startIn(t *testing.T, dir string, env []string, stdin, name string, args ...string) *proc {
 	t.Helper()
+	return startInLimit(t, dir, env, stdin, 30*time.Second, name, args...)
+}
+
+// startInLimit retains the shared process runner for cold native builds whose
+// compile time exceeds the ordinary script's 30-second bound.
+func startInLimit(t *testing.T, dir string, env []string, stdin string, limit time.Duration, name string, args ...string) *proc {
+	t.Helper()
 	if dir == "" {
 		dir = t.TempDir()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	for _, kv := range os.Environ() {

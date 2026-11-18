@@ -9944,6 +9944,68 @@ exit alone is not offered, since a live Launch's unresolved prompt still owns
 its conversation. Fencing and exit evidence are
 [lifecycle custody](#lifecycle-custody-and-exit-evidence)'s.
 
+### Claude signal qualification
+
+`test/claude-live/` explicitly qualifies [the Claude route](#the-claude-route):
+runner → `signals.Probe` → raw evidence → `signals.Analyze`. The live probe
+and offline CLI share the analyzer; [the kit README](../test/claude-live/README.md)
+owns commands, budgets, verdicts and requalification. A passive, silent,
+test-only user hook records native input beside AD's hooks and exits 0. It
+does not change the product route. Run-scoped read-only store snapshots and
+AD trail establish what AD did; exact model-request bytes establish uptake.
+Payloads and recorder times only corroborate those facts. No product
+transcript reader, automatic version gate or delivery proof is added.
+
+| Relied-on signal / premise | What the check establishes; effect of a change |
+|---|---|
+| Parent `SessionStart`, `source`, `watchPaths`; `FileChanged` event/path/session | The owned wake is registered and routed to its Launch. Changed identity or path breaks wake registration/routing. |
+| `asyncRewake`, exit-2 stderr and complete wake output | Claude takes the emitted wake without typed input. A changed output mechanism loses wake delivery. |
+| Parent `PostToolBatch`, `tool_calls`, whole `additionalContext` | A completed owned tool boundary carries the exact steer envelope. Changed fields or envelope break mid-turn input. |
+| Parent/session `UserPromptSubmit`, unique plain sighting, exact wrapping | AD associates one known wake and admits its force. Child, stale, unmatched or ambiguous input cannot supply sighting/order. |
+| Both reserved closing-tag transformations | `</system-reminder>` → `&lt;/system-reminder>` and `</task-notification>` → `<\/task-notification>` preserve complete rendered output while deliberately preventing sighting. A transformation change invalidates the measured wrapping/size assumptions. |
+| Whole next-model-input bytes and cardinality | Exact separators, provider framing, role and one complete block are retained. Preview, substring, normalization, duplicates or a later echo cannot prove integrity. The continuation-only form is recorded in the [provider fixture](../test/claude-live/signals/testdata/claude/passing/PROVIDER-BEHAVIOUR.md). |
+| Turn-end premise | Actual whole STEER uptake precedes its next authenticated parent Stop/native take evidence. A reversal invalidates that take evidence; this is separate from wake order. |
+| P-b | After AD's uniquely bound wake sighting, no later-issued prompt is taken first. The trace accepts STEER while the earlier wake is written but unsighted/unordered, retains Held overlap, and checks both wake facts before later issue and whole wake-before-steer uptake. A reversal breaks accepted order. |
+| Reachable P-c | Plain Wait Turn is accepted while STEER is still Held behind the wake, before STEER uptake. Both accepted lifetimes overlap; distinct prompts remain. Whole PostToolBatch context is taken before Plain issues/is taken. Sequential deliveries or emission order alone do not qualify this premise; a reversal breaks order across routes. |
+
+The AD barrier invariant is the [written-plus-sighting conjunction](#the-inbox-coordinator),
+in either fact order on the running Launch. Neither fact alone, Stop alone,
+ambiguous/unmatched/stale sightings nor completion after Launch End secures
+order. The provider-premise verdicts above test what Claude does after AD's
+own ordering obligations hold; they cannot excuse early AD issue.
+
+The sibling case binds the original parent terminal, authenticated Stop and
+one-shot continuation to an actual foreground tool, its result and both
+passive and AD PostToolBatch records. Before the original terminal, a completed
+read must already show the written, unsighted wake and later STEER Held.
+The after-tool Held witness requires all four facts together:
+
+1. The last retained pre-result observation has a completed read before the
+   sibling tool result, with that wake written/unsighted/unordered and the
+   same accepted STEER Held.
+2. AD's completed sibling PostToolBatch strictly precedes the wake's logged
+   sighting.
+3. The first snapshot showing that sighting still has that STEER Held.
+4. The final Message/member/handover/prompt log proves exactly one owned
+   issued STEER, strictly after sighting, with no issue in the intervening gap.
+   Sampled absence never proves this.
+
+The steer remains unissued across the Stop and sibling tool boundary. After
+both wake facts, it issues once at a distinct eligible post-sighting tool
+boundary, with whole wake intake first. Requested tools/reasons alone prove
+nothing; a missing exercise is incomplete and contrary observed behavior
+fails. Millisecond ties cannot supply strict cross-source order. The check
+neither requires wake intake before Stop nor prohibits the continuation tool.
+
+A Reserved or otherwise never-sighted wake holds every later Message, Steer
+Turn included, until Launch End, as [the route](#the-claude-route) describes;
+the probe therefore puts Reserved last. R-a names the opposite provider
+direction: a later wake never passes earlier pending PostToolBatch context.
+It remains unmeasured because force refuses `input_unresolved` and ordinary
+Wait Turn waits for steer take evidence. Reachable P-c does not measure it.
+The analyzer discloses R-a as `named_premises`, outside mandatory results;
+P-a and completion-order premises do not qualify current order.
+
 ### Lifecycle custody and exit evidence
 
 A covered conversation's custody outlives its Launches.
@@ -22753,6 +22815,54 @@ these paths.
 and requires an existing reset store. It deliberately leaves blank identity
 fields NULL. **Must use:** future Docker cases use this fixture rather than raw
 `INSERT INTO spawns`.
+
+### Claude live runner (reusable qualification fixture)
+
+Future live phases, including the qualification shakedown, MUST reuse
+`test/claude-live/runner`, whose package comment declares this shared fixture.
+`NewRun`/`ExecutePhase` own bounded commands, the cleanup reserve, private
+evidence and aggregate turn budget; `Commands.Run` records argv, time bounds,
+exit and outputs. `Observe`, `Bind`/`BindOwned`, `Collect` and `CollectFiles`
+keep reads and cleanup tied to owned Launch/process identities. `Evidence`
+confines files and indexes their hashes. Reuse these interfaces rather than
+another command loop, store exporter or cleanup implementation.
+
+`StartRecorder`/`InstallRecorder`/`Settings.Remove` preserve unrelated settings
+and remove only exact owned entries. `StartContinuationVariant`,
+`ArmContinuation` and `RemoveContinuation` own the one-shot sibling hook in
+the run's scratch working directory. The settings ledger and runtime socket
+stay outside exported evidence; unverified process exit retains the runtime
+for inspection. `signals.Probe`, `signals.Analyze` and `signals.Format` supply
+the shared exercise and verdict, described under
+[Claude signal qualification](#claude-signal-qualification); the
+[README](../test/claude-live/README.md) owns their operation.
+
+### Claude signal capture (reusable test fixture)
+
+Analyzer and exact CLI tests, and later qualification phases, MUST reuse
+`test/claude-live/internal/signalsfix`, whose package comment identifies the
+immutable captured fixture and shared copy/mutation helpers. `Passing(t)`
+loads `signals/testdata/claude/passing/`; `Copy(t)` creates an indexed
+`t.TempDir()` variant. `Hooks`, `Snapshots`, JSON/row helpers and `Reindex`
+share mutations; signal-package journal helpers maintain exact request
+hashes/references. Never edit the passing fixture in a test or add a second
+loader/positive baseline.
+
+`runner/probe_schedule_test.go` replays captured inputs through the real
+`signals.Probe` to controlled boundaries: Plain while STEER is Held, and
+missed windows without retry. Its test-only bridge,
+`runner/export_signals_test.go`, only aliases existing runner setup and changes
+no production confinement.
+
+This is scrubbed real capture 6, with both Launches, intermediate custody
+observations, exact inputs and [truthful provenance](../test/claude-live/signals/testdata/claude/passing/provenance.json).
+Its [provider behavior record](../test/claude-live/signals/testdata/claude/passing/PROVIDER-BEHAVIOUR.md)
+names the continuation-only system form. The hook parser's
+`internal/hook/hook_payload_fixtures_test.go` instead includes a constructed
+FileChanged sample and synthetic PostToolBatch values; those structural
+fixtures do not qualify live behavior. Keep real capture replacement and
+independent per-signal negative checks under the README's
+[requalification procedure](../test/claude-live/README.md#deliberate-requalification).
 
 ### Release Check Kit (`test/release-check/`)
 

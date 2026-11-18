@@ -1,0 +1,16 @@
+[
+  {
+    "file": "capture-3.jsonl",
+    "capture_key": "1cd53beebec0",
+    "source_sha256": "7e33dfbe3fe916ae109ffda9f303aee98af069297e5c099eb728364c344da9a2",
+    "scrub": "Stable UUID, tool/response, email and capture-path mapping; recomputed mechanical journal hashes; irrelevant and account/environment attachments omitted with original line coordinates retained. Full request messages/output_config retained.",
+    "session": "00000000-0000-4000-8000-000000000027"
+  },
+  {
+    "file": "capture-4.jsonl",
+    "capture_key": "1b23f2900a72",
+    "source_sha256": "4609d25d8c1b0eaa943fd636ccd887512025137ed8f4dceaf2d5d353aea6b6c6",
+    "scrub": "Stable UUID, tool/response, email and capture-path mapping; recomputed mechanical journal hashes; irrelevant and account/environment attachments omitted with original line coordinates retained. Full request messages/output_config retained.",
+    "session": "00000000-0000-4000-8000-000000000014"
+  }
+]
