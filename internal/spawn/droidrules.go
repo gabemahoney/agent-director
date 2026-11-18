@@ -32,7 +32,10 @@ const DroidRulesCheckDeadline = 10 * time.Second
 
 // droidRuleSetMaxBytes caps the Rule Set File a launch reads; a larger file
 // is refused as unreadable rather than read whole.
-const droidRuleSetMaxBytes = 1 << 20
+const droidRuleSetMaxBytes = launchInputMaxBytes
+
+// launchInputMaxBytes bounds both operator-supplied launch input files.
+const launchInputMaxBytes = 1 << 20
 
 // droidRulesCheckOutputLimit caps each output stream of Droid's check, which
 // is never parsed or echoed; more refuses the launch. Droid 1.5.0 wrote about
@@ -138,9 +141,9 @@ type droidTests struct {
 }
 
 // ResolveDroidRules is the Droid launch's Rule Set step (SR-2), run by spawn
-// and finished-ID reuse after request validation and the launch token, before
-// composition and any launch-file, trust, row or session write. For any other
-// agent, or with [launch] droid_rules_path unset, it returns r unchanged and
+// and finished-ID reuse after request validation, the launch token and
+// ResolveDroidGuard, before composition and any launch-file, trust, row or
+// session write. For any other agent, or with [launch] droid_rules_path unset, it returns r unchanged and
 // reads nothing. Otherwise it reads the Rule Set File once, checks it
 // (checkDroidRuleSet), resolves the droid program as the version probe does,
 // runs Droid's own check on a private copy of exactly the bytes the overlay
@@ -168,6 +171,8 @@ func resolveDroidRules(r Resolved, cfg config.Config, deadline time.Duration) (R
 		return r, err
 	}
 	env := composeEnv(r)
+	// composeEnv supplies agent-director's PATH for Droid, never a caller's
+	// or a warm tmux server's. Keep the shared resolver for the check and pane.
 	program, err := inputdelivery.ResolveProgram(droidProgram(cfg), env)
 	if err != nil {
 		return r, droidRulesRefusal(-1, checkCouldNotRun)
@@ -194,23 +199,35 @@ func droidRulesRefusal(index int, problem string) error {
 		ErrPermissionRulesRefused, where, problem, droidRulesDoc)
 }
 
-// readDroidRuleSet reads the Rule Set File once. It opens without blocking,
-// so a FIFO or device at the path is refused rather than waited on.
+// readDroidRuleSet preserves the Rule Set's sanitized refusal while sharing
+// the Path List's one bounded reader.
 func readDroidRuleSet(name string) ([]byte, error) {
-	f, err := os.OpenFile(name, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	data, err := readBoundedLaunchFile(name)
 	if err != nil {
 		return nil, droidRulesRefusal(-1, ruleSetUnreadable)
 	}
-	// Closing a read-only descriptor cannot lose data, and any read failure is
-	// already refused below, so its error changes nothing.
+	return data, nil
+}
+
+// readBoundedLaunchFile is the reusable reader for operator launch inputs.
+// Must use: Rule Set and Path List reads share this nonblocking open,
+// regular-file check and 1 MiB limit, including growth during the read. Each
+// caller supplies its own sanitized refusal; no raw OS error escapes here.
+func readBoundedLaunchFile(name string) ([]byte, error) {
+	unreadable := errors.New("unreadable launch input")
+	f, err := os.OpenFile(name, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, unreadable
+	}
+	// Closing a read-only descriptor cannot lose data; read failures refuse.
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > droidRuleSetMaxBytes {
-		return nil, droidRulesRefusal(-1, ruleSetUnreadable)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > launchInputMaxBytes {
+		return nil, unreadable
 	}
-	data, err := io.ReadAll(io.LimitReader(f, droidRuleSetMaxBytes+1))
-	if err != nil || len(data) > droidRuleSetMaxBytes {
-		return nil, droidRulesRefusal(-1, ruleSetUnreadable)
+	data, err := io.ReadAll(io.LimitReader(f, launchInputMaxBytes+1))
+	if err != nil || len(data) > launchInputMaxBytes {
+		return nil, unreadable
 	}
 	return data, nil
 }

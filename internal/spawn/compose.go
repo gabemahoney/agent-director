@@ -66,8 +66,8 @@ type ComposedLaunch struct {
 // defaulted request, for plain spawn's insert and for reuse's reset
 // (SR-10.3, SR-22.2). It makes no store/file write, tmux call or network I/O.
 // It reads Claude's selected settings to preserve native status-line commands
-// and the process environment for the parent id and a claude launch's
-// CLAUDE_CONFIG_DIR. So every
+// and the process environment for the parent id, a claude launch's
+// CLAUDE_CONFIG_DIR and a Droid session's PATH. So every
 // composition failure (a settings synthesis error) comes before the write
 // that begins the launch and writes nothing, and between that write and the
 // create there is only in-process work (SR-13.4).

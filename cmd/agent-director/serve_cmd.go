@@ -47,15 +47,15 @@ import (
 // The two Clients have distinct logger ownership.
 //
 // o is the run's global --store-path, --tmux-command and --create-if-missing
-// overrides, the same ones setupClient opened run()'s Client with (b.32k). The
-// MCP Client is built from them too (mcpClientOptions), so the MCP tools use
+// overrides, the same ones setupClient opened runOrdinary()'s Client with
+// (b.32k). The MCP Client is built from them too (mcpClientOptions), so the MCP tools use
 // the same store and tmux as setupClient's Client: the store serve opened and
 // checked at startup (b.wb7). With no overrides both fall back alike, to the
 // config's db_path or the default store (Pin 2) and to the tmux on PATH.
 // serve honours --create-if-missing false like every store-backed verb: on a
 // missing store setupClient refuses it (ErrStoreOpen) before serve starts, and
 // the MCP Client would refuse it alike, so serve never creates it (b.78b).
-// --home needs no threading: run() set HOME before either Client expands a
+// --home needs no threading: runOrdinary() set HOME before either Client expands a
 // "~/" path.
 //
 // newClient opens the MCP Client: pkg/api.New in production (handlers()); a
@@ -65,7 +65,7 @@ import (
 // refusal ErrOldLayout, anything else
 // ErrStoreOpen (b.uii).
 //
-// Pin H6: cfg is threaded in directly from run() via setupClient() so
+// Pin H6: cfg is threaded in directly from runOrdinary() via setupClient() so
 // newMCPLogger can receive it without a Client.Config() accessor, which
 // would leak internal/config.Config into pkg/api's public surface.
 func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
@@ -259,7 +259,7 @@ func newSignalCtx() (context.Context, context.CancelFunc) {
 // error log. Stdout is reserved for the JSON-RPC transport, so the
 // log destination must NOT be stdout.
 //
-// cfg is passed directly from run() (Pin H6 — no Client.Config() accessor).
+// cfg is passed directly from runOrdinary() (Pin H6 — no Client.Config() accessor).
 func newMCPLogger(cfg config.Config) *log.Logger {
 	dest := io.Writer(os.Stderr)
 	if cfg.Log.ErrorLogPath != "" {

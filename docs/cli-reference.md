@@ -4,7 +4,7 @@
 
 ## help
 
-JSON verbs for SessionStart and SessionEnd reason=compact hooks. CLI aliases: --help, -h.
+JSON verbs for SessionStart/SessionEnd reason=compact hooks. Aliases: --help, -h.
 
 ### Parameters
 
@@ -57,6 +57,7 @@ Launch a tracked agent in tmux. Returns the instance_id and pre_trust (ok, skipp
 - `ErrModelMissing`
 - `ErrHostCredentialMissing`
 - `ErrPermissionRulesRefused`
+- `ErrLaunchGuardRefused`
 - `ErrAgentMissing`
 - `ErrAgentInvalid`
 - `ErrAgentArgsMismatch`
@@ -80,7 +81,7 @@ Launch a tracked agent in tmux. Returns the instance_id and pre_trust (ok, skipp
 
 ## status
 
-Check this row; report state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.
+Check row; state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.
 
 ### Parameters
 
@@ -111,7 +112,7 @@ Check this row; report state: pending/waiting/working/ask_user/check_permission/
 
 ## get
 
-Check this row; return identity, state, session and tmux socket.
+Check row; identity, state, session, tmux socket.
 
 ### Parameters
 
@@ -226,7 +227,7 @@ Strip CR, keep LF, add Enter (empty text: Enter only). request_token: one key. N
 
 ## read-pane
 
-Capture the last N lines of the agent's own pane (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Capture this agent's last N pane lines (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Parameters
 
@@ -433,7 +434,7 @@ _None._
 
 ## find-missing
 
-Compatibility alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.
+Alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.
 
 ### Parameters
 
@@ -574,7 +575,7 @@ _None._
 
 ## serve
 
-MCP server (JSON-RPC stdio): CLI verbs except `hook`, `serve`, `trail-emit` and `cursor-host` as tools.
+MCP (JSON-RPC stdio): CLI verbs except `hook`, `serve`, `trail-emit`, `cursor-host`, `tool-guard`.
 
 ### Parameters
 
@@ -608,7 +609,7 @@ _None._
 
 ## trail-emit
 
-Emit an ad.* trail event (sub-verb relay-attempt) without opening state.db.
+Emit ad.* trail event (relay-attempt sub-verb), without state.db.
 
 ### Parameters
 
@@ -640,6 +641,23 @@ Internal CLI-only Cursor ACP pane gateway.
 - `initial_prompt` (string, optional): Fresh initial prompt (internal).
 - `load_session` (string, optional): Latest saved conversation to load, checked against the owned row (internal).
 - `requested_mode` (string, optional): Validated startup session mode to confirm before prompt admission (internal).
+
+### Result
+
+_None._
+
+### Errors
+
+_None._
+
+## tool-guard
+
+Internal CLI-only PreToolUse guard.
+
+### Parameters
+
+- `path_entries` ([]string, required): One or more absolute paths after the required -- separator; tool-guard must be the first argument. Stable across executable upgrades.
+- `stdin` (json, required): One PreToolUse object. Silent exit 0 means no decision; exit 2 blocks with one fixed stderr line. Never stdout or a JSON decision.
 
 ### Result
 

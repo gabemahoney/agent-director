@@ -418,10 +418,11 @@ func refuseClaudePrint(args []string) error {
 // each key's env-var name (envVarName), the name tmux actually sets, not the
 // raw key. The checks are case-sensitive (POSIX env vars are case-sensitive)
 // and permit auth env vars without the reserved prefix unless the effective
-// agent's credential profile refuses them.
+// agent's environment policy refuses them.
 //
 // The effective pane-only agent's forbidden keys are checked first, even
-// with empty values. HOME follows (ReservedHomeKey, bug b.nas): a key whose
+// with empty values; Droid also refuses PATH and every LD_ name there.
+// HOME follows (ReservedHomeKey, bug b.nas): a key whose
 // name is HOME, whatever its value, an empty one included, is refused.
 // For native agents the message quotes the key as given and says it sets
 // HOME, why that is refused

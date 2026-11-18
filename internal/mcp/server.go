@@ -331,10 +331,8 @@ type ServerInfo struct {
 	Version string `json:"version"`
 }
 
-// buildToolList produces the tools/list response from
-// manifest.Verbs. Filters out the `hook` verb (internal, not for MCP)
-// and the `serve` verb (would be self-referential). Other verbs map
-// to MCP tools 1:1.
+// buildToolList produces the tools/list response from exactly the
+// manifest.Verbs entries accepted by ExposedVerb.
 func buildToolList() []map[string]any {
 	out := make([]map[string]any, 0, len(manifest.Verbs))
 	for _, v := range manifest.Verbs {
@@ -354,10 +352,11 @@ func buildToolList() []map[string]any {
 // an MCP tool. The `hook` verb is internal (only Claude Code's hook
 // machinery calls it); `serve` would be self-referential; `trail-emit`
 // is a CLI-only write verb that runs without state.db and has no
-// dispatch handler.
+// dispatch handler. cursor-host is internal pane plumbing; tool-guard is an
+// internal stdin policy hook, with no public request/response dispatch.
 func ExposedVerb(name string) bool {
 	switch name {
-	case "hook", "serve", "trail-emit", "cursor-host":
+	case "hook", "serve", "trail-emit", "cursor-host", "tool-guard":
 		return false
 	}
 	return true

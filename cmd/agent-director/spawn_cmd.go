@@ -526,7 +526,7 @@ func writeJSON(w io.Writer, v any) error {
 }
 
 // writeApiErrorAndDispatch writes the SRD §13.1 envelope to stderr and
-// returns errDispatch so the run() exit code is non-zero without
+// returns errDispatch so the runOrdinary() exit code is non-zero without
 // re-printing.
 func writeApiErrorAndDispatch(name, description string) error {
 	if werr := writeError(os.Stderr, name, description); werr != nil {

@@ -171,11 +171,8 @@ func renderMCP(verbs []manifest.VerbDef) []byte {
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "# MCP reference")
 	for _, v := range verbs {
-		// Mirror the live MCP server's registration check: only verbs
-		// that mcp.ExposedVerb admits are registered as tools, so only
-		// those belong in this reference. Verbs the server excludes
-		// (hook, serve, trail-emit) are never callable over MCP and must
-		// not appear here.
+		// Match the live MCP server: include exactly the verbs mcp.ExposedVerb
+		// accepts so this reference stays aligned with tool registration.
 		if !mcp.ExposedVerb(v.Name) {
 			continue
 		}

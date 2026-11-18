@@ -20,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
@@ -37,11 +39,32 @@ func SeedErrPermissionRulesRefused(t *testing.T, configDir string) string {
 	if err := os.WriteFile(rulesPath, []byte(rules), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	content := fmt.Sprintf("[experimental]\ndroid = true\n[launch]\ndroid_rules_path = %q\n", rulesPath)
+	guard := droidfix.NewGuard(t)
+	t.Cleanup(spawn.SetDroidGuardProgramForTest(func() (string, error) { return guard.Path, nil }))
+	content := fmt.Sprintf("[experimental]\ndroid = true\n[launch]\ndroid_rules_path = %q\n", rulesPath) + guard.ConfigLine()
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return rulesPath
+}
+
+// SeedErrLaunchGuardRefused supplies a locally invalid Path List with a
+// physical line number and a planted value; no child program is needed.
+// Surface tests needing a locally refused Path List must use SeedErrLaunchGuardRefused.
+func SeedErrLaunchGuardRefused(t *testing.T, configDir string) string {
+	t.Helper()
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	guard := droidfix.NewGuard(t)
+	if err := os.WriteFile(guard.List, []byte("# comment\n\nPRIVATE_GUARD_ENTRY\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	body := "[experimental]\ndroid = true\n[launch]\n" + guard.ConfigLine()
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return guard.List
 }
 
 // openErrStore creates a fresh temp store, registers a cleanup, and returns

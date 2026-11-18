@@ -23,7 +23,8 @@ type VerbDef struct {
 
 	// Callable is true when the verb is exposed as a synchronous method on
 	// pkg/api.Client. help (informational/CLI-side), serve (long-running MCP
-	// server), and hook (SRD §3.2 fail-open) are Callable: false.
+	// server), and internal CLI plumbing (hook, trail-emit, cursor-host and
+	// tool-guard) are Callable: false.
 	Callable bool
 
 	// HandleFree is true when the verb can be invoked without a Client handle
@@ -360,7 +361,7 @@ var sweepResultFields = []FieldDef{
 var Verbs = []VerbDef{
 	{
 		Name:        "help",
-		Description: "JSON verbs for SessionStart and SessionEnd reason=compact hooks. CLI aliases: --help, -h.",
+		Description: "JSON verbs for SessionStart/SessionEnd reason=compact hooks. Aliases: --help, -h.",
 		Callable:    false,
 		HandleFree:  false,
 		Params:      []ParamDef{},
@@ -549,6 +550,7 @@ var Verbs = []VerbDef{
 			"ErrModelMissing",
 			"ErrHostCredentialMissing",
 			"ErrPermissionRulesRefused",
+			"ErrLaunchGuardRefused",
 			"ErrAgentMissing",
 			"ErrAgentInvalid",
 			"ErrAgentArgsMismatch",
@@ -573,7 +575,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "status",
-		Description: "Check this row; report state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.",
+		Description: "Check row; state: pending/waiting/working/ask_user/check_permission/ended/missing; displayed_state idle_screen: working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook yet; may be loading or at a startup prompt; resumed keeps session id/history.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -621,7 +623,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "get",
-		Description: "Check this row; return identity, state, session and tmux socket.",
+		Description: "Check row; identity, state, session, tmux socket.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -813,7 +815,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "read-pane",
-		Description: "Capture the last N lines of the agent's own pane (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Capture this agent's last N pane lines (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1130,7 +1132,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:         "find-missing",
-		Description:  "Compatibility alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.",
+		Description:  "Alias for sweep: identical checks, counters, guards and errors. See sweep for liveness, pending grace and same-user/tmux safety.",
 		Callable:     true,
 		HandleFree:   false,
 		Params:       []ParamDef{},
@@ -1410,7 +1412,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "serve",
-		Description: "MCP server (JSON-RPC stdio): CLI verbs except `hook`, `serve`, `trail-emit` and `cursor-host` as tools.",
+		Description: "MCP (JSON-RPC stdio): CLI verbs except `hook`, `serve`, `trail-emit`, `cursor-host`, `tool-guard`.",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1463,7 +1465,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "trail-emit",
-		Description: "Emit an ad.* trail event (sub-verb relay-attempt) without opening state.db.",
+		Description: "Emit ad.* trail event (relay-attempt sub-verb), without state.db.",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1548,6 +1550,16 @@ var Verbs = []VerbDef{
 		}, ResultFields: []FieldDef{}, ErrorNames: []string{},
 	},
 	{
+		Name:        "tool-guard",
+		Description: "Internal CLI-only PreToolUse guard.",
+		Callable:    false,
+		HandleFree:  false,
+		Params: []ParamDef{
+			{Name: "path_entries", Type: "[]string", Description: "One or more absolute paths after the required -- separator; tool-guard must be the first argument. Stable across executable upgrades.", Required: true},
+			{Name: "stdin", Type: "json", Description: "One PreToolUse object. Silent exit 0 means no decision; exit 2 blocks with one fixed stderr line. Never stdout or a JSON decision.", Required: true},
+		}, ResultFields: []FieldDef{}, ErrorNames: []string{},
+	},
+	{
 		Name:        "hook",
 		Description: "Internal: row's hooks write; others: ad.hook.ignored. Lifecycle: exit 0 (fail-open); Claude context callbacks forward command exit status.",
 		Callable:    false,
@@ -1607,7 +1619,8 @@ var Verbs = []VerbDef{
 // CallableVerbs returns the subset of Verbs that the pkg/api.Client
 // exposes as synchronous methods. help, serve, and hook are excluded:
 // help is informational and rendered cmd-side; serve is a long-running
-// server (not a one-shot verb); hook is SRD §3.2 fail-open.
+// server (not a one-shot verb); hook is SRD §3.2 fail-open. The internal
+// trail-emit, cursor-host and tool-guard entry points are excluded too.
 // Library callers wanting the verb list iterate this slice directly.
 func CallableVerbs() []VerbDef {
 	out := make([]VerbDef, 0, len(Verbs))

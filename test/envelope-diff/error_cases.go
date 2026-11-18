@@ -82,6 +82,21 @@ var zeroPaneHash = strings.Repeat("0", 64)
 var errorCases = append(append(append(append(append([]errorCase{
 	{
 		verb:    "spawn",
+		errName: "ErrLaunchGuardRefused",
+		seed: func(t *testing.T) (string, map[string]any) {
+			srcDir := filepath.Dir(apitest.SeedEmptyStore(t))
+			apitest.SeedErrLaunchGuardRefused(t, srcDir)
+			return srcDir, nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"cwd": "/tmp", "agent": "droid", "agent_args": []string{"--model", "model"}}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"spawn", "--agent", "droid", "--cwd", "/tmp", "--", "--model", "model"}
+		},
+	},
+	{
+		verb:    "spawn",
 		errName: "ErrPermissionRulesRefused",
 		seed: func(t *testing.T) (string, map[string]any) {
 			srcDir := filepath.Dir(apitest.SeedEmptyStore(t))

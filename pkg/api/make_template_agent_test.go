@@ -7,6 +7,7 @@ package api_test
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -43,7 +44,9 @@ func TestPaneOnlyMakeTemplateRefusalsWriteNothing(t *testing.T) {
 			{"deny", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Deny: []string{rejected}}}},
 			{"ask", "ErrPermissionsUnsupported", api.MakeTemplateParams{Permissions: &api.MakeTemplatePermissions{Ask: []string{rejected}}}},
 		}
-		keys := []string{"FACTORY_API_KEY", "FACTORY_HOME_OVERRIDE"}
+		keys := []string{"FACTORY_API_KEY", "FACTORY_HOME_OVERRIDE",
+			"FACTORY_RUNTIME_SETTINGS_PATH", "FACTORY_RUNTIME_SETTINGS_SOURCE", "FACTORY_RUNTIME_SETTINGS_SHA256", "FACTORY_RUNTIME_SETTINGS_ORIGIN",
+			"FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH", "FACTORY_ORG_MANAGED_SETTINGS_URL", "PATH", "LD_GUARD_TEST"}
 		if agent == "opencode" {
 			keys = []string{"OPENROUTER_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"}
 		}
@@ -67,6 +70,7 @@ func TestPaneOnlyMakeTemplateRefusalsWriteNothing(t *testing.T) {
 					if existing {
 						seedTemplateFile(t, p.Name)
 					}
+					before := maps.Clone(p.ExtraEnv)
 					err := e.checkCreationWrites(t, func() error {
 						_, err := c.MakeTemplate(p)
 						return err
@@ -74,6 +78,9 @@ func TestPaneOnlyMakeTemplateRefusalsWriteNothing(t *testing.T) {
 					assertOneName(t, err, tc.want)
 					if strings.Contains(errText(err), rejected) {
 						t.Errorf("refusal exposed a rejected value: %v", err)
+					}
+					if !maps.Equal(p.ExtraEnv, before) {
+						t.Fatal("template refusal changed caller map")
 					}
 				})
 			}

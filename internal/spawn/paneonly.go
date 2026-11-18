@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hostenv"
@@ -83,8 +84,19 @@ func validatePaneOnlyEnv(agent string, env map[string]string) error {
 	if !ok {
 		return nil
 	}
-	if key, found := firstEnvKey(env, func(key string) bool { return slices.Contains(p.forbiddenEnv, envVarName(key)) }); found {
-		return fmt.Errorf("%w: agent %s refuses extra_env key %s; remove that key from extra_env", ErrReservedEnvKey, agent, envVarName(key))
+	if key, found := firstEnvKey(env, func(key string) bool {
+		name := envVarName(key)
+		// PATH and loader keys restrict Droid caller input only. Ambient
+		// values must not join the shared probe/tmux exclusion list.
+		return slices.Contains(p.forbiddenEnv, name) ||
+			agent == config.AgentDroid && (name == "PATH" || strings.HasPrefix(name, "LD_"))
+	}); found {
+		name := envVarName(key)
+		if strings.HasPrefix(name, "LD_") {
+			// An arbitrary loader name can itself hold malformed/private text.
+			return fmt.Errorf("%w: agent %s refuses extra_env keys starting with LD_; remove that entry from extra_env", ErrReservedEnvKey, agent)
+		}
+		return fmt.Errorf("%w: agent %s refuses extra_env key %s; remove that key from extra_env", ErrReservedEnvKey, agent, name)
 	}
 	return nil
 }

@@ -9,6 +9,7 @@ package api_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,7 +19,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/droidfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -29,7 +32,7 @@ import (
 func (e *killEnv) paneOnlyClient(t *testing.T, agent string) (*api.Client, *bytes.Buffer) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("[experimental]\n"+agent+" = true\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(droidRulesConfig(t, "", "", agent)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	c, log, err := e.clientFor(t, path)
@@ -41,12 +44,23 @@ func (e *killEnv) paneOnlyClient(t *testing.T, agent string) (*api.Client, *byte
 
 // droidRulesConfig is a config body enabling the pane-only agents, with
 // [launch] droid_rules_path rules and droid_path program, each when not "".
-func droidRulesConfig(rules, program string, agents ...string) string {
+func droidRulesConfig(t *testing.T, rules, program string, agents ...string) string {
+	t.Helper()
 	body := "[experimental]\n"
 	for _, agent := range agents {
 		body += agent + " = true\n"
 	}
 	body += "[launch]\n"
+	guarded := false
+	for _, agent := range agents {
+		if agent == "droid" {
+			body += passingDroidGuard(t).ConfigLine()
+			guarded = true
+		}
+	}
+	if !guarded {
+		body += "droid_secret_paths_file = \"/invented/absent-path-list\"\n"
+	}
 	if rules != "" {
 		body += "droid_rules_path = " + strconv.Quote(rules) + "\n"
 	}
@@ -548,4 +562,44 @@ func (e *killEnv) assertReused(t *testing.T, r reuseRow, life any, calls int, er
 	if token == r.Token || labelled != 1 {
 		t.Errorf("token %q (was %q), %d sessions labelled with it; want a new token on one session", token, r.Token, labelled)
 	}
+}
+
+// passingDroidGuard supplies the shared stand-in to serial launch tests.
+func passingDroidGuard(t *testing.T) *droidfix.Guard {
+	t.Helper()
+	g := droidfix.NewGuard(t)
+	t.Cleanup(spawn.SetDroidGuardProgramForTest(func() (string, error) { return g.Path, nil }))
+	return g
+}
+
+// assertDroidOverlay pins every key and its order while allowing an opaque
+// command, whose execution is covered by the Guard command tests.
+func assertDroidOverlay(t *testing.T, data []byte, model, rules string) string {
+	t.Helper()
+	var overlay struct {
+		Hooks struct {
+			PreToolUse []struct{ Hooks []struct{ Command string } }
+		}
+	}
+	if err := json.Unmarshal(data, &overlay); err != nil {
+		t.Fatal(err)
+	}
+	if len(overlay.Hooks.PreToolUse) != 1 || len(overlay.Hooks.PreToolUse[0].Hooks) != 1 {
+		t.Fatalf("invalid hooks: %s", data)
+	}
+	command := overlay.Hooks.PreToolUse[0].Hooks[0].Command
+	if command == "" {
+		t.Fatal("empty guard command")
+	}
+	quoted, _ := json.Marshal(command)
+	m, _ := json.Marshal(model)
+	want := `{"model":` + string(m)
+	if rules != "" {
+		want += `,"permissionRules":` + rules
+	}
+	want += `,"hooks":{"hooksDisabled":false,"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":` + string(quoted) + `,"timeout":60}]}]}}`
+	if string(data) != want {
+		t.Fatalf("overlay=%s; want %s", data, want)
+	}
+	return command
 }

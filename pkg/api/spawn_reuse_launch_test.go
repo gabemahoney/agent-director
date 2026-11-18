@@ -9,13 +9,17 @@ package api_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -48,20 +52,30 @@ func TestPaneOnlyReuseValidationWritesNothing(t *testing.T) {
 			{"inherited permissions", "ErrPermissionsUnsupported", ""},
 			{"relay", "ErrAgentCapabilityUnsupported", ""},
 		}
-		keys := []string{"AWS_BEARER_TOKEN_BEDROCK"}
+		keys := []string{"AWS_BEARER_TOKEN_BEDROCK", "HOME",
+			"FACTORY_RUNTIME_SETTINGS_PATH", "FACTORY_RUNTIME_SETTINGS_SOURCE", "FACTORY_RUNTIME_SETTINGS_SHA256", "FACTORY_RUNTIME_SETTINGS_ORIGIN",
+			"FACTORY_ORG_MANAGED_SETTINGS_LOCAL_PATH", "FACTORY_ORG_MANAGED_SETTINGS_URL", "PATH", "LD_GUARD_TEST"}
 		if agent == "opencode" {
 			keys = []string{"OPENROUTER_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT", "OPENCODE_PERMISSION"}
 		}
 		for _, key := range keys {
 			cases = append(cases, refusal{"inherited environment", "ErrReservedEnvKey", key})
 		}
+		if agent == "droid" {
+			cases = append(cases,
+				refusal{"direct environment", "ErrReservedEnvKey", "FACTORY_RUNTIME_SETTINGS_PATH"},
+				refusal{"direct environment", "ErrReservedEnvKey", "PATH"},
+				refusal{"direct environment", "ErrReservedEnvKey", "LD_GUARD_TEST"},
+				refusal{"generic environment", "ErrReservedEnvKey", "PATH"})
+		}
 		for _, tc := range cases {
-			t.Run(agent+"/"+tc.name, func(t *testing.T) {
+			t.Run(agent+"/"+tc.name+"/"+tc.key, func(t *testing.T) {
 				home := withTempHome(t)
 				e := newKillEnv(t)
 				r := e.seedReusable(t, agentGone, reuseRowSpec{Opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
 				seedLaneOverlay(t, e.storeID, r.Token)
-				c, _ := e.configClient(t, droidRulesConfig(filepath.Join(t.TempDir(), "missing-rules.json"), "", agent))
+				c, _ := e.configClient(t, droidRulesConfig(t, filepath.Join(t.TempDir(), "missing-rules.json"), "", agent))
+				t.Cleanup(spawn.SetDroidGuardProgramForTest(func() (string, error) { return "", errors.New("validation must precede Guard selection") }))
 				p := api.SpawnParams{Agent: agent, CWD: r.CWD, InstanceID: r.ID, ReuseFinished: true, AgentArgs: paneOnlyArgs(agent, "model")}
 				settings := append(paneOnlyArgs(agent, "model"), "--settings", "private-lane-sentinel")
 				var tmpl *apitest.TemplateFields
@@ -74,6 +88,11 @@ func TestPaneOnlyReuseValidationWritesNothing(t *testing.T) {
 					p.RelayMode = "on"
 				case "inherited environment":
 					tmpl = &apitest.TemplateFields{Agent: agent, ExtraEnv: map[string]string{tc.key: "private-lane-sentinel"}}
+					p.Agent = "" // The effective agent must come from the template.
+				case "direct environment":
+					p.ExtraEnv = map[string]string{tc.key: ""}
+				case "generic environment":
+					tmpl = &apitest.TemplateFields{ExtraEnv: map[string]string{tc.key: ""}}
 				case "inherited settings":
 					p.AgentArgs, tmpl = nil, &apitest.TemplateFields{Agent: agent, AgentArgs: settings}
 				case "inherited permissions":
@@ -139,7 +158,7 @@ func TestDroidRulesRefusalWritesNothing(t *testing.T) {
 				if err := os.WriteFile(rulesPath, []byte(rules), 0600); err != nil {
 					t.Fatal(err)
 				}
-				body := droidRulesConfig(rulesPath, fake.Path, "droid")
+				body := droidRulesConfig(t, rulesPath, fake.Path, "droid")
 				var err error
 				if operation == "spawn" {
 					e := newSpawnEnv(t)
@@ -203,7 +222,7 @@ func TestDroidRulesReadAtEachLaunch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	c, _ := e.configClient(t, droidRulesConfig(rulesPath, fake.Path, "droid"))
+	c, _ := e.configClient(t, droidRulesConfig(t, rulesPath, fake.Path, "droid"))
 	tokens := map[string]bool{}
 	// launched checks launch n of row id, whose operator rule id is operatorID.
 	launched := func(id string, n int, operatorID string) {
@@ -218,9 +237,10 @@ func TestDroidRulesReadAtEachLaunch(t *testing.T) {
 			t.Fatalf("launch %d command %q; want the checked program with its overlay", n, command)
 		}
 		overlay, err := os.ReadFile(command[2])
-		if want := `{"model":"model","permissionRules":` + input + `}`; err != nil || string(overlay) != want {
-			t.Fatalf("launch %d overlay %s, %v; want %s", n, overlay, err, want)
+		if err != nil {
+			t.Fatal(err)
 		}
+		assertDroidOverlay(t, overlay, "model", input)
 		if !strings.Contains(input, `"id":"agent-director/`+token+`/`+operatorID+`"`) || tokens[token] {
 			t.Fatalf("launch %d checked %s; want rule %s under its own new token %s", n, input, operatorID, token)
 		}
@@ -887,4 +907,256 @@ func TestSpawnReuseCeilingPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+const droidGuardRefusalEnd = "; an operator must fix the Path List File named by [launch] droid_secret_paths_file or the Guard installation and environment (see docs/experimental.md#droid-secret-paths); no row, session, trust entry or launch file was written and nothing was launched"
+
+// SR-2.3: both real launch entry points retain their no-write contract for
+// every distinct pre-write refusal; the private short-deadline path is tested
+// in spawn.TestDroidGuardSelfCheck and TestDroidGuardCancelledProbeStopsProgram.
+func TestDroidGuardRefusalWritesNothing(t *testing.T) {
+	// Serial: it sets HOME/PATH, replaces the Guard selector, and snapshots the shared trail.
+	cases := []struct {
+		name, kind string
+		line       int
+	}{
+		{"unconfigured", "no Path List File is configured", 0},
+		{"missing", "the Path List File is not a readable regular file of at most 1 MiB", 0},
+		{"unreadable", "the Path List File is not a readable regular file of at most 1 MiB", 0},
+		{"directory", "the Path List File is not a readable regular file of at most 1 MiB", 0},
+		{"FIFO", "the Path List File is not a readable regular file of at most 1 MiB", 0},
+		{"oversize", "the Path List File is not a readable regular file of at most 1 MiB", 0},
+		{"encoding", "the Path List File is not valid UTF-8", 0},
+		{"empty", "the Path List has no entries", 0},
+		{"relative", "the entry is not an absolute or ~/ path", 3},
+		{"whitespace", "the entry has leading or trailing whitespace", 3},
+		{"control", "the entry has a control character", 3},
+		{"HOME", "HOME is not a usable absolute path", 0},
+		{"selection", "the Guard program is unavailable", 0},
+		{"length", "the Guard command exceeds the single-argument length limit", 0},
+		{"missing sh", "sh is unavailable on agent-director's PATH", 0},
+		{"missing program", "the Guard self-check failed", 0},
+		{"wrong exit", "the Guard self-check failed", 0},
+		{"output", "the Guard self-check output failed its bounds", 0},
+	}
+	invalidPaths := map[string]string{
+		"PATH unset": "", "PATH empty": "", "PATH leading empty": ":/usr/bin:/bin",
+		"PATH middle empty": "/usr/bin::/bin", "PATH trailing empty": "/usr/bin:/bin:",
+		"PATH leading dot": ".:/usr/bin:/bin", "PATH middle relative": "/usr/bin:PRIVATE_PATH_ENTRY:/bin", "PATH trailing dot": "/usr/bin:/bin:.",
+	}
+	for _, name := range slices.Sorted(maps.Keys(invalidPaths)) {
+		cases = append(cases, struct {
+			name, kind string
+			line       int
+		}{name, "agent-director's PATH is unset, empty or contains an empty or relative component", 0})
+	}
+	for _, operation := range []string{"spawn", "reuse"} {
+		for _, tc := range cases {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				g := passingDroidGuard(t)
+				list := g.List
+				contents := "/invented/PRIVATE_GUARD_ENTRY\n"
+				switch tc.name {
+				case "unconfigured":
+					list = ""
+				case "encoding":
+					contents = "/invented/PRIVATE_GUARD_ENTRY\xff"
+				case "empty":
+					contents = "# ignored\n \t\n"
+				case "relative":
+					contents = "# ignored\n\nPRIVATE_GUARD_ENTRY\n"
+				case "whitespace":
+					contents = "# ignored\n\n /invented/PRIVATE_GUARD_ENTRY\n"
+				case "control":
+					contents = "# ignored\n\n/invented/PRIVATE\x00GUARD_ENTRY\n"
+				case "oversize":
+					contents = strings.Repeat("#", (1<<20)+1)
+				case "length":
+					contents = "/" + strings.Repeat("'", 50000)
+				case "selection":
+					t.Cleanup(spawn.SetDroidGuardProgramForTest(func() (string, error) { return "", errors.New("PRIVATE_SELECTION_OUTPUT") }))
+				case "wrong exit":
+					if err := g.Set(droidfix.Pass); err != nil {
+						t.Fatal(err)
+					}
+				case "output":
+					if err := g.Set(droidfix.StderrFlood); err != nil {
+						t.Fatal(err)
+					}
+				case "missing program":
+					if err := os.Remove(g.Path); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(g.List, []byte(contents), 0600); err != nil {
+					t.Fatal(err)
+				}
+				switch tc.name {
+				case "missing", "directory", "FIFO":
+					if err := os.Remove(g.List); err != nil {
+						t.Fatal(err)
+					}
+					if tc.name == "directory" {
+						if err := os.Mkdir(g.List, 0700); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if tc.name == "FIFO" {
+						if err := syscall.Mkfifo(g.List, 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+				case "unreadable":
+					if err := os.Chmod(g.List, 0); err != nil {
+						t.Fatal(err)
+					}
+				}
+				body := "[experimental]\ndroid = true\n[launch]\ndroid_secret_paths_file = " + strconv.Quote(list) + "\ndroid_rules_path = " + strconv.Quote(refusedRulesFile(t)) + "\n"
+				if _, pathCase := invalidPaths[tc.name]; pathCase {
+					body += "droid_path = " + strconv.Quote(g.Path) + "\n"
+				}
+				invoke := func(c *api.Client, p api.SpawnParams) error {
+					if tc.name == "HOME" {
+						old := os.Getenv("HOME")
+						t.Setenv("HOME", "relative-home")
+						defer t.Setenv("HOME", old)
+					}
+					if tc.name == "missing sh" {
+						old := os.Getenv("PATH")
+						t.Setenv("PATH", t.TempDir())
+						defer t.Setenv("PATH", old)
+					}
+					if path, pathCase := invalidPaths[tc.name]; pathCase {
+						if err := os.Symlink(g.Path, filepath.Join(p.CWD, "sh")); err != nil {
+							t.Fatal(err)
+						}
+						old := os.Getenv("PATH")
+						t.Setenv("PATH", path)
+						defer t.Setenv("PATH", old)
+						if tc.name == "PATH unset" {
+							if err := os.Unsetenv("PATH"); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+					_, err := c.Spawn(p)
+					return err
+				}
+				var err error
+				var logs string
+				if operation == "spawn" {
+					e := newSpawnEnv(t)
+					if err := os.MkdirAll(filepath.Dir(e.socket), 0700); err != nil {
+						t.Fatal(err)
+					}
+					c := agentClientWithConfig(t, e, body)
+					err = e.checkCreationWrites(t, func() error {
+						return invoke(c, api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model")})
+					})
+					logs = e.logs.String()
+				} else {
+					home := withTempHome(t)
+					e := newKillEnv(t)
+					r := e.seedReusable(t, agentGone, reuseRowSpec{Opts: []apitest.SpawnOption{apitest.WithAgent("droid")}})
+					old := seedLaneOverlay(t, e.storeID, r.Token)
+					c, log := e.configClient(t, body)
+					p := reuseParams(t, r, reuseRequest{Args: paneOnlyArgs("droid", "model")})
+					p.Agent = "droid"
+					roots := []string{filepath.Join(adConfigDir(home), "launch"), filepath.Join(adConfigDir(home), "templates")}
+					files, before := snapshotTrees(t, roots), e.snapshotReuse(t, r)
+					err = invoke(c, p)
+					e.assertWroteNothing(t, before)
+					if diff := files.diff(snapshotTrees(t, roots)); len(diff) != 0 {
+						t.Errorf("Guard refusal changed files: %v", diff)
+					}
+					assertLaneOverlay(t, old, true)
+					logs = log.String()
+				}
+				assertOneName(t, err, "ErrLaunchGuardRefused")
+				where := ""
+				if tc.line > 0 {
+					where = fmt.Sprintf("line %d: ", tc.line)
+				}
+				want := "ErrLaunchGuardRefused: Droid launch Guard refused: " + where + tc.kind + droidGuardRefusalEnd
+				if errText(err) != want {
+					t.Errorf("error=%q; want %q", errText(err), want)
+				}
+				if strings.Contains(logs, contents) {
+					t.Error("refusal log leaked Path List contents")
+				}
+				if _, pathCase := invalidPaths[tc.name]; pathCase && len(g.Calls(t)) != 0 {
+					t.Fatal("invalid PATH reached the shell or Guard probe")
+				}
+				for _, private := range []string{"PRIVATE_GUARD_ENTRY", "PRIVATE_SELECTION_OUTPUT", "PRIVATE_PATH_ENTRY", g.List, g.Path, droidfix.FailOutput} {
+					if strings.Contains(logs, private) || strings.Contains(errText(err), private) {
+						t.Errorf("refusal leaked %q", private)
+					}
+				}
+			})
+		}
+	}
+}
+
+// SR-1.2/SR-2.1: one Client observes edited bytes at both entry points. A
+// pre-feature retained model-only overlay is replaced by a checked Guard.
+func TestDroidGuardReadAtEachLaunch(t *testing.T) {
+	// Serial: it owns HOME and replaces the Guard selector.
+	withTempHome(t)
+	e := newKillEnv(t)
+	g := passingDroidGuard(t)
+	fake := droidfix.New(t, droidfix.Pass)
+	rulesPath := filepath.Join(t.TempDir(), "rules.json")
+	if err := os.WriteFile(rulesPath, []byte(droidfix.RuleSet("tail")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := e.configClient(t, "[experimental]\ndroid = true\n[launch]\n"+g.ConfigLine()+"droid_rules_path = "+strconv.Quote(rulesPath)+"\n")
+	old := e.seedReusable(t, agentGone, reuseRowSpec{Opts: []apitest.SpawnOption{apitest.WithAgent("droid")}})
+	retained := seedLaneOverlay(t, e.storeID, old.Token)
+	caller := map[string]string{"CALLER_TAG": "kept"}
+	for i, operation := range []string{"spawn", "spawn", "reuse"} {
+		path := t.TempDir() + ":" + filepath.Dir(fake.Path) + ":/usr/bin:/bin"
+		t.Setenv("PATH", path)
+		entry := fmt.Sprintf("/invented/vault-%d", i)
+		if err := os.WriteFile(g.List, []byte(entry+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		p := api.SpawnParams{Agent: "droid", CWD: t.TempDir(), AgentArgs: paneOnlyArgs("droid", "model"), ExtraEnv: caller}
+		if operation == "reuse" {
+			p.InstanceID, p.ReuseFinished = old.ID, true
+		}
+		res, err := c.Spawn(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row, err := e.st.GetSpawn(res.InstanceID)
+		if err != nil || !maps.Equal(row.ExtraEnv, map[string]string{"CALLER_TAG": "kept"}) || !maps.Equal(row.ExtraEnv, caller) {
+			t.Fatalf("saved/caller environment changed: %+v %v", row.ExtraEnv, err)
+		}
+		creates, calls := e.rec.SocketCallsOf(tmux.CallCreate), g.Calls(t)
+		if len(creates) != i+1 || len(calls) != 2*(i+1) {
+			t.Fatalf("creates=%d checks=%d", len(creates), len(calls))
+		}
+		for _, call := range calls[2*i:] {
+			if !reflect.DeepEqual(call.Args, []string{"tool-guard", "--", entry}) || call.Env["PATH"] != path {
+				t.Fatalf("stale check: %q", call.Args)
+			}
+		}
+		argv := creates[i].Command
+		if len(argv) != 3 || argv[0] != fake.Path || argv[1] != "--settings" || creates[i].Envs["PATH"] != path || creates[i].Envs["CALLER_TAG"] != "kept" {
+			t.Fatalf("argv=%q", argv)
+		}
+		data, err := os.ReadFile(argv[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		rulesCalls := fake.Calls(t)
+		if len(rulesCalls) != i+1 || rulesCalls[i].Env["PATH"] != path || rulesCalls[i].Env["CALLER_TAG"] != "kept" {
+			t.Fatal("Rule Set lookup/probe did not use the current launch environment")
+		}
+		command := assertDroidOverlay(t, data, "model", string(rulesCalls[i].Input))
+		if !strings.Contains(command, "'"+entry+"'") {
+			t.Fatalf("stale overlay command: %s", command)
+		}
+	}
+	assertLaneOverlay(t, retained, false)
 }

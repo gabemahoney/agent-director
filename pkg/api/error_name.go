@@ -24,6 +24,8 @@ func errorName(err error) string {
 		return "ErrHostCredentialMissing"
 	case errors.Is(err, ErrPermissionRulesRefused):
 		return "ErrPermissionRulesRefused"
+	case errors.Is(err, ErrLaunchGuardRefused):
+		return "ErrLaunchGuardRefused"
 	case errors.Is(err, ErrModelMissing):
 		return "ErrModelMissing"
 	case errors.Is(err, ErrAgentCapabilityUnsupported):
