@@ -962,7 +962,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "max_wait_ms",
 				Type:          "int",
-				Description:   "Optional bound on the whole call, in milliseconds from its start (no default). Required waits before recording, for the store or a request with no recorded settle instant, respect the bound; if they cannot finish in time, ErrStoreBusy records nothing and a retry is safe. With no time left, recording proceeds only if the store is free at once. The wait for the relay hook's ack also ends at the bound, with not_confirmed: once the verdict is recorded decide never returns ErrStoreBusy. A caller with a deadline passes at most its deadline minus 1 s. Omitted: no bound, the store's busy timeout applies. Negative: ErrInvalidFlags.",
+				Description:   "Optional bound on the whole call, in milliseconds from its start (no default). Required waits before recording, for the store or a request with no recorded settle instant, respect the bound; if they cannot finish in time, ErrStoreBusy records nothing and a retry is safe. An expired positive bound starts no new SQL, even if the store is free; already-entered SQL may continue. Zero: one-second allowance for immediately available work, store free at once, no lock retries. The wait for the relay hook's ack also ends at the bound, with not_confirmed: once the verdict is recorded decide never returns ErrStoreBusy. A caller with a deadline passes at most its deadline minus 1 s. Omitted: no bound, the store's busy timeout applies. Negative: ErrInvalidFlags.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
