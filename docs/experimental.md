@@ -198,8 +198,9 @@ refusal. It covers an unset list, an unreadable, nonregular, oversized or
 non-UTF-8 file, no entries, an invalid entry or unusable HOME, an unavailable
 Guard program or `sh`, an overlong command, or a failed or timed-out self-check.
 At every spawn and finished-ID reuse, agent-director's PATH must be set and
-nonempty, with only nonempty absolute components; any other value gives this
-refusal.
+nonempty, with only nonempty absolute components. An empty or relative component
+gives `ErrLaunchGuardRefused`. A wholly empty or unset PATH can instead be refused
+first by the launch's tmux lookup, with `ErrTmuxNotAvailable`, before the Guard step.
 The complete command must be shorter than 128 KiB to leave room for its
 terminating NUL. Before launch, agent-director checks that command through
 `sh` on its own PATH; wrong statuses, output-bound failures and incomplete

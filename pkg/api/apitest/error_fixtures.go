@@ -50,6 +50,7 @@ func SeedErrPermissionRulesRefused(t *testing.T, configDir string) string {
 
 // SeedErrLaunchGuardRefused supplies a locally invalid Path List with a
 // physical line number and a planted value; no child program is needed.
+// Surface tests needing a locally refused Path List must use SeedErrLaunchGuardRefused.
 func SeedErrLaunchGuardRefused(t *testing.T, configDir string) string {
 	t.Helper()
 	if err := os.MkdirAll(configDir, 0700); err != nil {

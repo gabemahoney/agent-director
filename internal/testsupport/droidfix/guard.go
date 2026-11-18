@@ -9,6 +9,7 @@ import (
 )
 
 // Guard is the shared Path List and recording Guard stand-in for launch tests.
+// Tests needing a Path List and Guard stand-in must use NewGuard or CreateGuard.
 // It is independent of spawn; callers install Path with its selection seam.
 // See docs/architecture.md's droidfix fixture registration.
 type Guard struct {
@@ -44,6 +45,8 @@ func CreateGuard(root string) (*Guard, error) {
 	return g, nil
 }
 
+// NewGuard creates a Path List and recording Guard stand-in in a test-owned
+// temporary directory, with cleanup registered through t.
 func NewGuard(t *testing.T) *Guard {
 	t.Helper()
 	g, err := CreateGuard(t.TempDir())

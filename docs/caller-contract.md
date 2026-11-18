@@ -251,7 +251,7 @@ Use `get` or `get-many`'s `agent` field to identify recording support;
 | `agent` | `failure_reason` |
 | --- | --- |
 | `cursor` | Recorded reason, or explicit `null` when no applicable reason is recorded. |
-| `claude`, `codex`, `droid`, `opencode` | Always `null`, regardless of outcome. |
+| All other agents | Always `null`, regardless of outcome. |
 
 Legacy rows and failures without a recorded reason also return `null`; it
 does not prove success. The reason follows state settling, including the
