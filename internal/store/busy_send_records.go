@@ -261,8 +261,10 @@ const (
 
 // BusySendOrderKind is the evidence that secured a prompt's order
 // (busy_send_prompts.order_kind; SR-2.5): the route's qualified ordered
-// acceptance, an exact receipt, or Claude's complete keyless emission, which
-// releases the order barrier without claiming intake.
+// acceptance, an exact receipt, or a Claude steer's complete keyless emission
+// (O4 P-c). A Claude wake records ordered_acceptance only at its uniquely
+// bound sighting plus written output, in either order (O4 P-b). Neither
+// Claude order point claims confirmed intake.
 type BusySendOrderKind string
 
 const (

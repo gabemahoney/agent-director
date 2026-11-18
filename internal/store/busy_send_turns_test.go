@@ -338,7 +338,10 @@ func TestBusySendSightingRefusals(t *testing.T) {
 			if texts == nil {
 				texts = busySendTwoPrompts
 			}
-			in, h, _ := newBusySendIssuedPair(t, texts, false)
+			in, h, revision := newBusySendIssuedPair(t, texts, false)
+			// The target is a live completed but unordered wake. The earlier
+			// generic ordered prompt still supplies ambiguity controls.
+			in.complete(t, h, 1, revision, store.BusySendOutputComplete, "", true)
 			if tc.change != nil {
 				tc.change(t, in, h)
 			}
@@ -352,6 +355,10 @@ func TestBusySendSightingRefusals(t *testing.T) {
 			}
 			if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
 				t.Error("a sighting that bound nothing wrote")
+			}
+			if got, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID); err != nil || !got.Open ||
+				got.Prompts[1].OrderKind != "" {
+				t.Fatalf("refused sighting released wake order: %+v, %v", got, err)
 			}
 			if tc.awaiting >= 0 {
 				if n := in.awaiting(t); n != tc.awaiting {
@@ -762,7 +769,8 @@ func TestBusySendTurnEndBindsItsLaunch(t *testing.T) {
 // other order: a completion that begins while the Stop holds its evidence
 // write (a causal barrier holds it until the completion has begun) waits
 // behind it and gives it nothing either. Each time the prompt still awaits,
-// and a later Stop admits a steer or releases a wake's order (t2.xis.w3.9f).
+// and a later Stop admits only a steer. A wake is never a Stop candidate
+// and remains owned until its unique sighting (t2.xis.w3.ok).
 func TestBusySendTurnEndRaces(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -878,82 +886,261 @@ func TestBusySendTurnEndRaces(t *testing.T) {
 					t.Fatalf("Stop without entry evidence released wake order: %+v, %v", got, err)
 				}
 			}
-			if got := in.endTurn(t, in.stop(t, observed.Add(2*time.Millisecond))); got != (store.BusySendTurnEndResult{Outcome: store.BusySendTurnEndRecorded, Recorded: 1}) {
-				t.Errorf("a later Stop = %+v; want one recorded", got)
-			}
 			if tc.boundary == store.BusySendBoundaryTurnEnd {
-				got, err := in.s.ReadBusySendHandover(ctx, h.HandoverID)
-				if err != nil || got.Open || got.Prompts[0].OrderKind != store.BusySendOrderOrderedAcceptance {
-					t.Errorf("later Stop wake order: %+v, %v; want closed, ordered_acceptance", got, err)
+				stop := in.stop(t, observed.Add(2*time.Millisecond))
+				before := readBusySendTables(t, in.path)
+				if len(stop.Prompts) != 0 || in.endTurn(t, stop) != (store.BusySendTurnEndResult{Outcome: store.BusySendTurnEndUnchanged}) ||
+					!reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+					t.Fatal("a fresh Stop selected or changed a wake")
 				}
-				in.wantAwaiting(t, 1, "after order release without admission")
+				got, err := in.s.ReadBusySendHandover(ctx, h.HandoverID)
+				if err != nil || !got.Open || got.Prompts[0].OrderKind != "" {
+					t.Errorf("later Stop wake order: %+v, %v; want open, unordered", got, err)
+				}
+				in.wantAwaiting(t, 1, "after a later Stop without sighting")
 			} else {
+				if got := in.endTurn(t, in.stop(t, observed.Add(2*time.Millisecond))); got != (store.BusySendTurnEndResult{Outcome: store.BusySendTurnEndRecorded, Recorded: 1}) {
+					t.Errorf("a later Stop = %+v; want one recorded", got)
+				}
 				in.wantAwaiting(t, 0, "after a later Stop")
 			}
 		})
 	}
 }
 
-// Regression t2.xis.w3.9f: O4/G3 wake order uses the Stop's exact observation
-// and captured prompt revision. Admission during the Stop cannot refresh it.
+// TestBusySendWakeOrderEvidenceGuards (SR-2.5; M1 R2/R7/R9, M2 S1):
+// each second-fact transaction revalidates the complete captured destination
+// and current issued custody. Historical facts alone cannot release a wake.
 func TestBusySendWakeOrderEvidenceGuards(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name    string
-		output  store.BusySendOutput
-		gap     time.Duration
-		sight   bool
-		foreign bool
-	}{
-		{name: "equal output and Stop times", output: store.BusySendOutputComplete},
-		{name: "Stop observed before output", output: store.BusySendOutputComplete, gap: -time.Millisecond},
-		{name: "sighting changes captured revision", output: store.BusySendOutputComplete, gap: time.Millisecond, sight: true},
-		{name: "foreign Stop gate", output: store.BusySendOutputComplete, gap: time.Millisecond, foreign: true},
-		{name: "partial output", output: store.BusySendOutputPartial, gap: time.Millisecond},
-		{name: "uncertain output", output: store.BusySendOutputUncertain, gap: time.Millisecond},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, second := range []string{"completion", "sighting"} {
+		for _, tc := range []struct {
+			name, query string
+		}{
+			{"provider", `UPDATE busy_conversations SET provider = 'other' WHERE instance_id = ?`},
+			{"session", `UPDATE spawns SET session_id = 'rotated' WHERE instance_id = ?`},
+			{"route kind", `UPDATE busy_send_launches SET route_kind = 'codex_app_server' WHERE instance_id = ?`},
+			{"route identity", `UPDATE busy_send_launches SET route_id = 'rotated' WHERE instance_id = ?`},
+			{"connection", `UPDATE busy_send_launches SET connection_generation = 1 WHERE instance_id = ?`},
+			{"Launch token", `UPDATE busy_send_launches SET launch_token = 'rotated' WHERE instance_id = ?`},
+			{"Launch identity", `UPDATE busy_send_handovers SET launch_id = 'other-launch' WHERE instance_id = ?`},
+			{"coverage", `UPDATE busy_send_launches SET busy_send = 'not_covered' WHERE instance_id = ?`},
+			{"starting Launch", `UPDATE spawns SET state = 'pending' WHERE instance_id = ?`},
+			{"fenced prompt", `UPDATE busy_send_prompts SET fenced_at_ms = 1 WHERE handover_id IN
+			    (SELECT handover_id FROM busy_send_handovers WHERE instance_id = ?)`},
+			{"no current membership", `UPDATE busy_send_messages SET place = 'closed', handover_id = NULL WHERE instance_id = ?`},
+			{"no issued membership", `UPDATE busy_send_messages SET place = 'claimed' WHERE instance_id = ?`},
+			{"closed handover", `UPDATE busy_send_handovers SET state = 'closed', closed_at_ms = 1 WHERE instance_id = ?`},
+			{"negative", `UPDATE busy_send_prompts SET negative_kind = 'no_admission', negative_at_ms = 1 WHERE handover_id IN
+			    (SELECT handover_id FROM busy_send_handovers WHERE instance_id = ?)`},
+		} {
+			t.Run(second+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				in, h, revision := newBusySendIssuedAt(t, store.BusySendBoundaryTurnEnd)
+				sighting := in.sighting(t, h.Prompts[0].Body)
+				if second == "completion" {
+					in.sight(t, sighting)
+				} else {
+					in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true)
+				}
+				setBusySendFact(t, in.path, tc.query, in.id)
+				if tc.name == "provider" {
+					setBusySendFact(t, in.path, `UPDATE busy_send_launches SET provider = 'other' WHERE instance_id = ?`, in.id)
+				}
+				if tc.name == "coverage" {
+					setBusySendFact(t, in.path, `UPDATE spawns SET busy_send = 'not_covered' WHERE instance_id = ?`, in.id)
+				}
+				before := readBusySendCustody(t, in.path, in.id)
+				if second == "completion" {
+					if got := in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true); got.OrderSecured {
+						t.Fatalf("stale completion secured order: %+v", got)
+					}
+				} else {
+					in.sight(t, sighting)
+				}
+				got, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+				if err != nil || got.Prompts[0].OrderKind != "" || got.PromptCursor != 0 || got.Revision != revision {
+					t.Fatalf("stale second fact advanced order: %+v, %v", got, err)
+				}
+				after := readBusySendCustody(t, in.path, in.id)
+				if after[0].place != before[0].place || after[0].handover != before[0].handover ||
+					(before[0].final && after[0].result() != before[0].result()) {
+					t.Fatalf("stale second fact changed custody or a Final: %v -> %v", before, after)
+				}
+			})
+		}
+	}
+	for _, out := range []store.BusySendOutput{store.BusySendOutputPartial, store.BusySendOutputUncertain} {
+		t.Run(string(out), func(t *testing.T) {
 			t.Parallel()
 			in, h, revision := newBusySendIssuedAt(t, store.BusySendBoundaryTurnEnd)
-			in.complete(t, h, 0, revision, tc.output, "", tc.output == store.BusySendOutputComplete)
-			stop := in.stop(t, in.clock.Now().Add(tc.gap))
-			want := store.BusySendTurnEndUnchanged
-			awaiting := int64(1)
-			if tc.sight || tc.foreign {
-				if len(stop.Prompts) != 1 {
-					t.Fatalf("Stop entry %+v; want the completed wake before the intervening change", stop.Prompts)
-				}
+			in.complete(t, h, 0, revision, out, "", false)
+			in.sight(t, in.sighting(t, h.Prompts[0].Body))
+			// A contradictory later completion cannot replace the first fact.
+			if got := in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true); got.Recorded || got.OrderSecured || got.Closed {
+				t.Fatalf("non-written wake released by sighting or a repeated report: %+v", got)
 			}
-			if tc.sight {
-				if got := in.sight(t, in.sighting(t, h.Prompts[0].Body)); got.Outcome != store.BusySendSightingAdmitted {
-					t.Fatalf("sighting %+v; want admitted", got)
-				}
-				awaiting = 0
-			}
-			if tc.foreign {
-				stop.Gate.ParentPID = storefix.ForeignHookParentPID(stop.Gate.ParentPID)
-				want = store.BusySendTurnEndStale
-			}
-			before := readBusySendTables(t, in.path)
-			if got := in.endTurn(t, stop); got != (store.BusySendTurnEndResult{Outcome: want}) {
-				t.Errorf("Stop = %+v; want %s with no order release", got, want)
-			}
-			if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
-				t.Fatal("ineligible Stop changed persistent facts")
-			}
-			got, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
-			if err != nil || !got.Open || got.Prompts[0].OrderKind != "" {
-				t.Fatalf("wake handover %+v, %v; want order barrier retained", got, err)
-			}
-			in.wantAwaiting(t, awaiting, "after the refused order evidence")
-			if tc.output == store.BusySendOutputComplete {
-				in.clock.Advance(2 * time.Millisecond)
-				if got := in.endTurn(t, in.stop(t, in.clock.Now())); got != (store.BusySendTurnEndResult{Outcome: store.BusySendTurnEndRecorded, Recorded: 1}) {
-					t.Errorf("fresh later Stop = %+v; want order recorded", got)
-				}
-				in.wantAwaiting(t, awaiting, "after order release, with admission unchanged")
-			}
+			in.wantAwaiting(t, 0, "with sighting but no complete output")
 		})
+	}
+}
+
+// TestBusySendWakeOrderFacts (SR-2.5; M1 RecAcc/FinalStable, M2 RecAdm/RecAcc):
+// neither first fact moves custody or the cursor. The second orders exactly
+// its prompt, without Stop or another eligible event, and survives reopen.
+func TestBusySendWakeOrderFacts(t *testing.T) {
+	t.Parallel()
+	for _, forced := range []bool{false, true} {
+		for _, sightFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("force=%t/sighting-first=%t", forced, sightFirst), func(t *testing.T) {
+				t.Parallel()
+				in := newBusySendInbox(t, busySendTwoPrompts...)
+				h := (*store.BusySendHandover)(nil)
+				if forced {
+					h = in.forceClaim(t, time.Time{}).Handover
+				} else {
+					h = in.claim(t, time.Time{}, false)
+				}
+				in.admit(t, store.BusySendSteerTurn, "later steer")
+				revision := in.issue(t, h, 0, h.Revision).Revision
+				sighting := in.sighting(t, h.Prompts[0].Body)
+				complete := func() store.BusySendCompletionResult {
+					return in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true)
+				}
+				if sightFirst {
+					in.sight(t, sighting)
+				} else if got := complete(); !got.Recorded || got.OrderSecured || got.Revision != revision {
+					t.Fatalf("first completion: %+v", got)
+				}
+				in.reopen(t)
+				first, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+				if err != nil || !first.Open || first.PromptCursor != 0 || first.Revision != revision || first.Prompts[0].OrderKind != "" {
+					t.Fatalf("first fact released order: %+v, %v", first, err)
+				}
+				before := readBusySendCustody(t, in.path, in.id)
+				if before[0].place != "issued" || before[0].handover != h.HandoverID || before[0].final == sightFirst ||
+					before[0].reserved != sightFirst {
+					t.Fatalf("first-fact custody/finality/reservation: %v", before)
+				}
+				lookup, err := in.s.ReadBusySendResult(in.pair.CallerUUID, in.pair.DeliveryRequestID)
+				if err != nil || lookup.Result == nil {
+					t.Fatalf("first-fact Lookup: %+v, %v", lookup, err)
+				}
+				in.wantAwaiting(t, int64(boolCount(!sightFirst)), "after the first fact")
+				stop := in.stop(t, time.Now().Add(time.Second))
+				tables := readBusySendTables(t, in.path)
+				if len(stop.Prompts) != 0 || in.endTurn(t, stop).Outcome != store.BusySendTurnEndUnchanged ||
+					!reflect.DeepEqual(tables, readBusySendTables(t, in.path)) {
+					t.Fatal("Stop selected or changed a wake")
+				}
+				for _, req := range []store.BusySendClaimRequest{in.claimRequest(time.Time{}, false), in.steerRequest(time.Time{})} {
+					if got, err := in.s.ClaimBusySendHandover(context.Background(), req); err != nil || got.Outcome != store.BusySendClaimOwned {
+						t.Fatalf("first fact let later input claim: %+v, %v", got, err)
+					}
+				}
+				if sightFirst {
+					if got := complete(); !got.OrderSecured || got.Revision != revision+1 || got.Closed {
+						t.Fatalf("second completion did not advance once: %+v", got)
+					}
+				} else if got := in.sight(t, sighting); got.Outcome != store.BusySendSightingAdmitted {
+					t.Fatalf("second sighting: %+v", got)
+				}
+				in.reopen(t)
+				got, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+				if err != nil || !got.Open || got.PromptCursor != 1 || got.Revision != revision+1 ||
+					got.Prompts[0].OrderKind != store.BusySendOrderOrderedAcceptance || got.Prompts[1].Emission != store.BusySendEmissionNone {
+					t.Fatalf("second-fact handover: %+v, %v", got, err)
+				}
+				after := readBusySendCustody(t, in.path, in.id)
+				if after[0].place != "closed" || after[0].handover != "" || !after[0].final || after[0].reserved ||
+					after[0].reason != "handed_over_not_proven" || (before[0].final && before[0].result() != after[0].result()) ||
+					!reflect.DeepEqual(before[1:], after[1:]) {
+					t.Fatalf("order changed another member or Final Result: %v -> %v", before, after)
+				}
+				if final, err := in.s.ReadBusySendResult(in.pair.CallerUUID, in.pair.DeliveryRequestID); err != nil ||
+					(lookup.Result.Final && !reflect.DeepEqual(final, lookup)) {
+					t.Fatalf("order changed Final Lookup: %+v -> %+v, %v", lookup, final, err)
+				}
+				in.wantAwaiting(t, 0, "after both facts")
+				tables = readBusySendTables(t, in.path)
+				if got := complete(); got.Recorded || got.Revision != 0 {
+					t.Fatalf("repeated completion restored old job authority: %+v", got)
+				}
+				if got := in.sight(t, sighting); got.Outcome != store.BusySendSightingUnmatched ||
+					!reflect.DeepEqual(tables, readBusySendTables(t, in.path)) {
+					t.Fatalf("repeats changed the ordered handover: %+v", got)
+				}
+			})
+		}
+	}
+}
+
+// TestBusySendWakeOrderRaces holds one fact's real SQLite transaction at
+// COMMIT while the competing handle begins. Both serializations and duplicate
+// second facts must converge to one cursor advance (M1 repeated acc, M2 S1).
+func TestBusySendWakeOrderRaces(t *testing.T) {
+	t.Parallel()
+	for _, forced := range []bool{false, true} {
+		for _, tc := range []struct{ first, second, prior string }{
+			{"completion", "sighting", ""}, {"sighting", "completion", ""},
+			{"completion", "completion", "sighting"}, {"sighting", "sighting", "completion"},
+		} {
+			t.Run(fmt.Sprintf("force=%t/%s-%s", forced, tc.first, tc.second), func(t *testing.T) {
+				t.Parallel()
+				in := newBusySendInbox(t, busySendTwoPrompts...)
+				var h *store.BusySendHandover
+				if forced {
+					h = in.forceClaim(t, time.Time{}).Handover
+				} else {
+					h = in.claim(t, time.Time{}, false)
+				}
+				revision := in.issue(t, h, 0, h.Revision).Revision
+				sighting := in.sighting(t, h.Prompts[0].Body)
+				call := func(s *store.Store, kind string) error {
+					if kind == "sighting" {
+						_, err := s.RecordBusySendSighting(context.Background(), sighting)
+						return err
+					}
+					_, err := s.RecordBusySendCompletion(context.Background(), store.BusySendCompletion{
+						Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, Revision: revision}, Output: store.BusySendOutputComplete,
+						UnprovenBoundary: true})
+					return err
+				}
+				if tc.prior != "" {
+					if err := call(in.s, tc.prior); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before := readBusySendCustody(t, in.path, in.id)
+				var firstErr, secondErr error
+				raceBusySendSteps(t, in, "COMMIT", func(s *store.Store) { firstErr = call(s, tc.first) },
+					func(s *store.Store) { secondErr = call(s, tc.second) })
+				if firstErr != nil || secondErr != nil {
+					t.Fatalf("callbacks: %v, %v", firstErr, secondErr)
+				}
+				in.reopen(t)
+				got, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+				if err != nil || got.Revision != revision+1 || got.PromptCursor != 1 || !got.Open ||
+					got.Prompts[0].OrderKind != store.BusySendOrderOrderedAcceptance || got.Prompts[1].Emission != store.BusySendEmissionNone {
+					t.Fatalf("raced order advanced more or less than once: %+v, %v", got, err)
+				}
+				after := readBusySendCustody(t, in.path, in.id)
+				if after[0].place != "closed" || !after[0].final || !reflect.DeepEqual(before[1:], after[1:]) ||
+					(before[0].final && before[0].result() != after[0].result()) {
+					t.Fatalf("raced facts changed other custody or Final: %v -> %v", before, after)
+				}
+				tables := readBusySendTables(t, in.path)
+				if err := call(in.s, "sighting"); err != nil {
+					t.Fatal(err)
+				}
+				if err := call(in.s, "completion"); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(tables, readBusySendTables(t, in.path)) {
+					t.Fatal("repeats after the race wrote")
+				}
+			})
+		}
 	}
 }
 
@@ -1012,6 +1199,85 @@ func TestBusySendTurnEndCommitOutcome(t *testing.T) {
 			}
 			in.wantAwaiting(t, 0, "after the landed Stop")
 		})
+	}
+}
+
+// TestBusySendWakeOrderCommitOutcome extends the admission crash checks
+// above to the composed wake update: the second fact and its order/finality
+// either all commit or all roll back (M1 FinalStable, M2 S1).
+func TestBusySendWakeOrderCommitOutcome(t *testing.T) {
+	t.Parallel()
+	for _, completion := range []bool{false, true} {
+		for _, lost := range []bool{false, true} {
+			t.Run(fmt.Sprintf("completion=%t/lost=%t", completion, lost), func(t *testing.T) {
+				t.Parallel()
+				in, h, revision := newBusySendIssuedAt(t, store.BusySendBoundaryTurnEnd)
+				sighting := in.sighting(t, h.Prompts[0].Body)
+				if completion {
+					in.sight(t, sighting)
+				} else {
+					in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true)
+				}
+				call := func() error {
+					if !completion {
+						got, err := in.s.RecordBusySendSighting(context.Background(), sighting)
+						if err != nil && got != (store.BusySendSightingResult{}) {
+							t.Errorf("error returned outcome: %+v", got)
+						}
+						return err
+					}
+					got, err := in.s.RecordBusySendCompletion(context.Background(), store.BusySendCompletion{
+						Ref:    store.BusySendPromptRef{HandoverID: h.HandoverID, Revision: revision},
+						Output: store.BusySendOutputComplete, UnprovenBoundary: true, At: in.clock.Now()})
+					if err != nil && got != (store.BusySendCompletionResult{}) {
+						t.Errorf("error returned authority: %+v", got)
+					}
+					return err
+				}
+				before := readBusySendTables(t, in.path)
+				injected := errors.New("injected second-fact commit failure")
+				var fired atomic.Bool
+				store.ObserveDecisionBoundaryForTest(t, in.s, in.path, func(_ context.Context, q string) error {
+					if !lost && strings.Contains(q, "SET order_kind") && fired.CompareAndSwap(false, true) {
+						return injected
+					}
+					return nil
+				}, func(context.Context) error {
+					if lost && fired.CompareAndSwap(false, true) {
+						return injected
+					}
+					return nil
+				})
+				err := call()
+				if !fired.Load() || (lost && !store.CommitUnconfirmed(err)) ||
+					(!lost && (!errors.Is(err, injected) || store.CommitUnconfirmed(err))) {
+					t.Fatalf("commit error %v, lost=%t; want injected failure", err, lost)
+				}
+				in.reopen(t)
+				if !lost {
+					if !reflect.DeepEqual(before, readBusySendTables(t, in.path)) {
+						t.Fatal("failed commit persisted part of the second fact")
+					}
+					if err := call(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				got, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+				if err != nil || got.Open || got.PromptCursor != 1 || got.Revision != revision+1 ||
+					got.Prompts[0].OrderKind != store.BusySendOrderOrderedAcceptance {
+					t.Fatalf("committed conjunction incomplete: %+v, %v", got, err)
+				}
+				wantBusySendCustody(t, in.path, in.id, "closed sent_unconfirmed final confirmation_off")
+				tables := readBusySendTables(t, in.path)
+				if err := call(); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(tables, readBusySendTables(t, in.path)) {
+					t.Fatal("repeated committed evidence wrote")
+				}
+				in.wantAwaiting(t, 0, "after the landed commit")
+			})
+		}
 	}
 }
 

@@ -325,14 +325,16 @@ func TestBusySendStaleOwnerCannotIssue(t *testing.T) {
 // neither writing anything) returns to Held. A prompt with persisted intent
 // (an unacknowledged commit, a lost worker, partial, uncertain or unqualified
 // complete output) is never replayed, released, carried or not_started, by
-// elapsed time, a later callback or a missing row: it keeps the order barrier,
+// elapsed time, an unrelated admission or a missing row: it keeps the order barrier,
 // and Launch End makes it Final sent_unconfirmed (launch_ended), fenced, with
 // its reservation freed, until exit evidence lifts the fence. Exit before
 // Launch End is refused. Later Tasks add rows here. Task 3 checks every row
 // for M2 P-C4.2 and the helper slot: the awaiting obligation and the
 // registered issuer exist exactly when intent landed, an unacknowledged
 // commit's included, whatever the job did after it, and evidence the agent
-// took the prompt clears only the obligation. Task 4 (t3.xis.oo.sf.2b) ends
+// took the prompt clears only the obligation. This generic matrix uses native
+// admission; TestBusySendWakeOrderFacts covers the Claude sighting conjunction.
+// Task 4 (t3.xis.oo.sf.2b) ends
 // the Launch through each production writer of M1's EndLaunch (the agent's own
 // end report, kill's verified exit, sweep's proven-exit mark) and lifts the
 // fence with the shared exit-evidence operation. A tmux-only missing mark
@@ -493,7 +495,7 @@ func TestBusySendCustodyMatrix(t *testing.T) {
 				}
 				if tc.end != "tmux-only missing mark" {
 					res, err := in.s.RecordBusySendEvidence(ctx, store.BusySendPromptEvidence{HandoverID: h.HandoverID, LaunchID: in.dest.LaunchID,
-						Admission: store.BusySendAdmissionPromptSighting})
+						Admission: store.BusySendAdmissionNativeSignal})
 					if err != nil || res.OrderSecured || res.Closed {
 						t.Fatalf("a later admission callback %+v, %v; want the barrier kept", res, err)
 					}
@@ -607,7 +609,7 @@ func boolCount(b bool) int {
 // TestBusySendEvidenceRepeatsAreInert (M1's repeated acc, rc and ad; SR-2.5,
 // SR-3.3a, SR-5.1, SR-5.2): one issued prompt carrying a confirmed and an
 // unconfirmed Message takes each row's evidence in order. Written, order,
-// admission and receipt are separate facts: an admission releases nothing; an
+// admission and receipt are separate facts: an unrelated admission releases nothing; an
 // ordered acceptance frees custody and reservations, leaving a confirmed
 // Message awaiting proof and making an unconfirmed one Final
 // confirmation_off; Claude's complete emission at its unproven boundary makes
@@ -646,6 +648,7 @@ func TestBusySendEvidenceRepeatsAreInert(t *testing.T) {
 	}}
 	written := complete(store.BusySendOutputComplete, "", false)
 	ad := evidence("admission", store.BusySendPromptEvidence{Admission: store.BusySendAdmissionPromptSighting})
+	native := evidence("unrelated admission", store.BusySendPromptEvidence{Admission: store.BusySendAdmissionNativeSignal})
 	acc := evidence("acceptance", store.BusySendPromptEvidence{Order: store.BusySendOrderOrderedAcceptance})
 	rc := evidence("receipt", store.BusySendPromptEvidence{Receipt: &store.BusySendReceipt{Kind: store.BusySendEvidenceCodexItemStarted,
 		RecordID: "item-1", RecordSHA256: strings.Repeat("ab", 32)}})
@@ -665,8 +668,8 @@ func TestBusySendEvidenceRepeatsAreInert(t *testing.T) {
 		order, admission string
 		open, partial    bool
 	}{
-		{name: "an admission keeps the barrier", steps: []step{written, ad}, a: inFlight, b: inFlight,
-			admission: "prompt_sighting", open: true},
+		{name: "an unrelated admission keeps the barrier", steps: []step{written, native}, a: inFlight, b: inFlight,
+			admission: "native_signal", open: true},
 		{name: "an ordered acceptance", steps: []step{written, acc}, a: "closed sent_unconfirmed awaiting_proof", b: offB,
 			order: "ordered_acceptance"},
 		{name: "complete emission at the unproven boundary", steps: []step{emitted},

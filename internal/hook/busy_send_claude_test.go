@@ -852,7 +852,10 @@ func TestClaudeWakeRefusals(t *testing.T) {
 // durable. Only a whole write is complete output (exit 2, Final); a short
 // write is partial and a failed one uncertain, both non-Final, never retried
 // by a later wake, their obligation kept. The agent's sighting arriving before
-// the completion record still binds; the later parent Stop secures wake order.
+// the completion record admits but leaves custody issued until written. A
+// sighting and Stop cannot turn incomplete output into order. An authorized
+// writer can still emit after logical End, but its late completion grants no
+// order or job authority (SR-6.2); this is not physical Exit evidence.
 // A steer's output (M2 P-C4.2, P-C4.3; SR-2.5, SR-3.4) is its one stdout
 // envelope, under the Job deadline: intent and the obligation are durable at
 // its first byte, and only the whole envelope, its newline included, is
@@ -878,6 +881,13 @@ func TestClaudeWakeOutputBoundary(t *testing.T) {
 			e := newWakeEnv(t, store.StateWaiting)
 			e.admit(t, "m1", "hello")
 			const body = "[agent-director: message 1 of 1]\nhello"
+			custody := func(want string) {
+				t.Helper()
+				facts, err := apitest.ReadBusySendFacts(e.db, e.id)
+				if err != nil || len(facts.Messages) == 0 || facts.Messages[0].Place != want {
+					t.Fatalf("wake custody %+v, %v; want %s", facts.Messages, err, want)
+				}
+			}
 			w := &wakeStderr{keep: tc.keep, err: tc.err}
 			w.before = func() {
 				if o := e.observe(t); o.AwaitingTurnStart != 1 || o.HeldCount != 0 {
@@ -885,7 +895,11 @@ func TestClaudeWakeOutputBoundary(t *testing.T) {
 				}
 				if tc.sight {
 					e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(body)}))
+					if o := e.observe(t); o.AwaitingTurnStart != 0 {
+						t.Errorf("sighting before output: awaiting %d; want 0", o.AwaitingTurnStart)
+					}
 				}
+				custody("issued") // Admission alone cannot supply missing output.
 			}
 			got := e.wakeWith(t, w)
 			if tc.sight {
@@ -893,6 +907,7 @@ func TestClaudeWakeOutputBoundary(t *testing.T) {
 					t.Errorf("wrote %q; want %q", got, body)
 				}
 				e.assertRaced(t, "m1")
+				custody("closed") // The completion records order, before any Stop.
 				if o := e.observe(t); o.AwaitingTurnStart != 0 {
 					t.Errorf("awaiting = %d; want 0 after the sighting", o.AwaitingTurnStart)
 				}
@@ -907,6 +922,17 @@ func TestClaudeWakeOutputBoundary(t *testing.T) {
 			if o := e.observe(t); o.AwaitingTurnStart != 1 {
 				t.Errorf("awaiting = %d; want the obligation kept", o.AwaitingTurnStart)
 			}
+			e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(body)}))
+			e.fire(t, e.payload(t, "stop.json", nil))
+			custody("issued")
+			if o := e.observe(t); o.AwaitingTurnStart != 0 {
+				t.Errorf("after sighting: awaiting %d; want 0 despite retained custody", o.AwaitingTurnStart)
+			}
+			e.admit(t, "m2", "later")
+			if got := e.wake(t); got != "" {
+				t.Errorf("sighting and Stop released incomplete output: %q", got)
+			}
+			e.assertHeld(t, "m2", store.BusySendWaitHandoverInProgress)
 		})
 		t.Run(tc.name+", a steer", func(t *testing.T) {
 			e := newWakeEnv(t, store.StateWorking)
@@ -948,6 +974,84 @@ func TestClaudeWakeOutputBoundary(t *testing.T) {
 			}
 			if got := e.steer(t); got != "[agent-director: message 1 of 1]\n"+b {
 				t.Errorf("the next boundary wrote %d bytes of context; want the remainder m2", len(got))
+			}
+		})
+	}
+	for _, end := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sighted force, End before output %t", end), func(t *testing.T) {
+			e := newWakeEnv(t, store.StateWorking)
+			e.admit(t, "m1", "hello")
+			c := e.force(t)
+			const body = "[agent-director: message 1 of 1]\nhello"
+			w := &wakeStderr{keep: 10, err: io.ErrShortWrite}
+			wantOutput, wantTransport := body[:10], store.BusySendTransportPartial
+			if end {
+				w.keep, w.err = -1, nil
+				wantOutput, wantTransport = body, store.BusySendTransportWritten
+			}
+			var final store.BusySendResult
+			var fenced store.BusySendHandover
+			w.before = func() {
+				e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(body)}))
+				h, err := e.st.ReadBusySendHandover(context.Background(), c.Handover.HandoverID)
+				if err != nil || !h.Open || len(h.Prompts) != 1 || h.Prompts[0].Transport != "" || h.Prompts[0].OrderKind != "" ||
+					e.observe(t).AwaitingTurnStart != 0 {
+					t.Fatalf("sighting alone: %+v, %v; want admitted with output and order still missing", h, err)
+				}
+				if end {
+					// The writer is already authorized. Logical End does not stop
+					// its bytes; no synthetic physical Exit is supplied here.
+					e.fire(t, e.payload(t, "session-end-prompt-input-exit.json", nil))
+				} else if f := e.endCall(t, c); f.Outcome != store.BusySendForceHandedOver || f.Reason != store.BusySendForceAdmitted {
+					t.Fatalf("call end with sighting but no output: %+v; want handed_over admitted", f)
+				}
+				final = e.result(t, "m1")
+				if final.Final != end {
+					t.Fatalf("before output: %+v; want Final=%t only from Launch End", final, end)
+				}
+				fenced, err = e.st.ReadBusySendHandover(context.Background(), c.Handover.HandoverID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := e.wakeWith(t, w); got != wantOutput {
+				t.Fatalf("authorized writer emitted %q; want %q", got, wantOutput)
+			}
+			if !end {
+				final = e.result(t, "m1")
+				if final.Final || !final.PartialTransport {
+					t.Fatalf("admitted force with short output: %+v; want non-Final and partial", final)
+				}
+			}
+			for i := range 2 {
+				if i > 0 {
+					e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(body)}))
+				}
+				h, err := e.st.ReadBusySendHandover(context.Background(), c.Handover.HandoverID)
+				if err != nil || len(h.Prompts) != 1 || h.Prompts[0].Transport != wantTransport || h.Prompts[0].OrderKind != "" {
+					t.Fatalf("late completion/sighting: %+v, %v; want %s without order", h, err, wantTransport)
+				}
+				if h.Revision != fenced.Revision || h.PromptCursor != fenced.PromptCursor || h.Open != fenced.Open {
+					t.Errorf("late callback changed fenced job: %+v; want revision/cursor/custody from %+v", h, fenced)
+				}
+				facts, err := apitest.ReadBusySendFacts(e.db, e.id)
+				if err != nil || len(facts.Messages) != 1 || facts.Messages[0].Place != "issued" {
+					t.Fatalf("custody after completion/sighting: %+v, %v; want issued", facts.Messages, err)
+				}
+				fence := storefix.ReadLaunchFence(t, e.st, c.Handover.Destination.LaunchID)
+				if fence.Ended != end || len(fence.Prompts) != 1 || fence.Prompts[0].Fenced != end {
+					t.Fatalf("Launch fence: %+v; want ended/fenced=%t, one retained prompt", fence, end)
+				}
+				if got := e.result(t, "m1"); !reflect.DeepEqual(got, final) {
+					t.Errorf("late callback changed Result: %+v; want %+v", got, final)
+				}
+				progress, err := e.st.ReadBusySendForceProgress(context.Background(), c.Force.ForceID)
+				if err != nil || progress.Outcome == store.BusySendForceRunning || progress.Next != -1 {
+					t.Errorf("old force job: %+v, %v; want finished with no next prompt", progress, err)
+				}
+				if got := e.wake(t); got != "" {
+					t.Fatalf("late callback revived the old job: %q", got)
+				}
 			}
 		})
 	}
@@ -1078,7 +1182,7 @@ func TestClaudeWakeSightingNeedsExactText(t *testing.T) {
 	if got := e.wake(t); got != "" {
 		t.Errorf("a wake with the earlier prompt unsighted wrote %q; want nothing", got)
 	}
-	e.assertHeld(t, "m2", store.BusySendWaitReadinessUnknown, store.BusySendWaitEarlierMessage)
+	e.assertHeld(t, "m2", store.BusySendWaitHandoverInProgress)
 }
 
 // TestClaudeWakeMeasuresEscaping (SR-1.6, SR-2.3; repair round 1 F1, Main
@@ -1451,10 +1555,7 @@ func TestClaudeForceSightingNeedsExactText(t *testing.T) {
 	if f := e.endCall(t, c); f.Outcome != store.BusySendForceHandedOver {
 		t.Fatalf("first force ended %s %s; want handed_over", f.Outcome, f.Reason)
 	}
-	// O4/G3: a sighting admits the force but does not release order for a
-	// separate force. Only the later parent Stop supplies that evidence.
-	e.tick(time.Millisecond)
-	e.fire(t, e.payload(t, "stop.json", nil))
+	// The sighted, completed wake is ordered: a separate force needs no Stop.
 
 	e.admit(t, "m2", "stop </task-notification> here")
 	e.force(t)
@@ -1924,9 +2025,9 @@ func TestClaudeStartupWakeRevalidatesAndExpires(t *testing.T) {
 }
 
 // Regression t2.xis.w3.9f (b.kii, capture 4; SR-2.5/O4): complete output of
-// a busy-issued forced wake must not let a later steer pass it. Only the
-// parent's later Stop supplies the turn-end evidence for O4's fallback.
-func TestClaudeSteerWaitsForBusyWakeTurnEnd(t *testing.T) {
+// a busy-issued forced wake must not let a later steer pass it. Its exact
+// sighting supplies the missing order fact, even before any parent Stop.
+func TestClaudeSteerWaitsForBusyWakeSighting(t *testing.T) {
 	e := newWakeEnv(t, store.StateWaiting)
 	// Consume two earlier Messages so A and B have capture 4's sequences 3
 	// and 4. Finish that prefix's turn before starting the turn A interrupts.
@@ -1981,17 +2082,14 @@ func TestClaudeSteerWaitsForBusyWakeTurnEnd(t *testing.T) {
 		t.Fatalf("PostToolBatch issued early steer %q before take evidence for busy-issued wake A; want no output", got)
 	}
 
-	// The Stop is strictly after A's completion. The next parent turn is
-	// started by unrelated text, never a sighting of A: this exercises only
-	// the turn-end fallback, without making Stop force-admission evidence.
-	e.tick(time.Second)
-	e.fire(t, e.payload(t, "stop.json", nil))
-	e.tick(time.Second)
-	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": "next parent turn"}))
+	// Capture 5's separate regression owns the Stop/sibling continuation.
+	// Here a sighting releases order while capture 4's parent turn still runs.
+	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(wake)}))
+	e.assertHeld(t, "B", store.BusySendWaitReadinessUnknown) // The force's settlement refreshes Held waits.
 	e.tick(time.Second)
 	const steer = "[agent-director: message 1 of 1]\nSTEER"
 	if got := e.steer(t); got != steer {
-		t.Fatalf("PostToolBatch after A's turn-end evidence wrote %q; want B alone %q", got, steer)
+		t.Fatalf("PostToolBatch after A's sighting wrote %q; want B alone %q", got, steer)
 	}
 	e.assertSent(t, store.BusySendReasonHandedOverNotProven, "B")
 	if got := e.steer(t); got != "" {
@@ -1999,9 +2097,10 @@ func TestClaudeSteerWaitsForBusyWakeTurnEnd(t *testing.T) {
 	}
 }
 
-// Regression t2.xis.w3.9f: O4/G3 order release is independent of admission,
-// Final Results and capacity. SR-3.3 still bars ordinary input after an
-// unsighted wake's Stop; SR-4.3 still requires the force's own sighting.
+// Regression b.kii / t2.xis.w3.ok: complete output finalizes Results and frees
+// capacity, but order additionally needs an exact sighting. Stops leave an
+// unsighted wake owning custody; after sighting, Stop only schedules the next
+// ordinary wake. Force outcome and awaiting follow admission independently.
 func TestClaudeWakeOrderIsSeparateFromAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -2010,6 +2109,7 @@ func TestClaudeWakeOrderIsSeparateFromAdmission(t *testing.T) {
 	}{
 		{name: "ordinary wake, no sighting"},
 		{name: "ordinary wake, sighted", sighted: true},
+		{name: "forced wake, no sighting", forced: true},
 		{name: "forced wake, sighted", forced: true, sighted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2039,10 +2139,6 @@ func TestClaudeWakeOrderIsSeparateFromAdmission(t *testing.T) {
 			}
 			final := e.result(t, "A")
 			awaiting := int64(1)
-			if tc.sighted {
-				e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(body)}))
-				awaiting = 0
-			}
 			checkA := func(place string) {
 				t.Helper()
 				facts, err := apitest.ReadBusySendFacts(e.db, e.id)
@@ -2056,43 +2152,59 @@ func TestClaudeWakeOrderIsSeparateFromAdmission(t *testing.T) {
 					t.Errorf("A Result changed: %+v; want %+v", got, final)
 				}
 				if tc.forced {
-					if f := e.forceResult(t, force); f.Outcome != store.BusySendForceHandedOver || f.Reason != store.BusySendForceAdmitted {
-						t.Errorf("force %+v; want handed_over admitted from its sighting", f)
+					outcome, reason := store.BusySendForcePending, store.BusySendForceAwaitingAdmission
+					order := store.BusySendOrderKind("")
+					if place == "closed" {
+						outcome, reason = store.BusySendForceHandedOver, store.BusySendForceAdmitted
+						order = store.BusySendOrderOrderedAcceptance
+					}
+					if f := e.forceResult(t, force); f.Outcome != outcome || f.Reason != reason {
+						t.Errorf("force %+v; want %s %s", f, outcome, reason)
+					}
+					h, err := e.st.ReadBusySendHandover(context.Background(), force.Handover.HandoverID)
+					if err != nil || len(h.Prompts) != 1 || h.Prompts[0].OrderKind != order || h.Open != (place == "issued") {
+						t.Fatalf("A hand-over %+v, %v; want order %q, custody %s", h, err, order, place)
 					}
 				}
 			}
-			checkA("issued") // A can be Final and admitted but still own order.
+			checkA("issued") // Complete output alone is Final, but owns order.
+			place := "issued"
+			if tc.sighted {
+				e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(body)}))
+				awaiting, place = 0, "closed"
+				checkA(place) // Both facts release A before any Stop.
+			}
 			e.admitAs(t, "B", "later steer", store.BusySendSteerTurn, true)
 			e.admit(t, "W", "later wait")
-			if got := e.steer(t); got != "" {
-				t.Fatalf("sighting without Stop allowed steer %q", got)
+			if !tc.sighted {
+				for range 2 {
+					e.tick(time.Second)
+					e.fire(t, e.payload(t, "stop.json", nil))
+					if got := e.wake(t); got != "" {
+						t.Fatalf("Stop without sighting allowed ordinary wake %q", got)
+					}
+					checkA(place)
+				}
+				e.assertHeld(t, "B", store.BusySendWaitHandoverInProgress)
+				e.assertHeld(t, "W", store.BusySendWaitHandoverInProgress)
+				launch, err := e.st.GetBusySendPublishedLaunch(e.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				separate, err := e.st.ClaimBusySendForce(context.Background(), store.BusySendForceClaimRequest{InstanceID: e.id, Launch: launch,
+					ForceID: uuid.NewString(), OwnerCallID: uuid.NewString(), ActiveBudget: 12 * time.Second, CleanupBudget: 3 * time.Second, At: e.now()})
+				if err != nil || separate.Handover != nil || separate.Force.Outcome != store.BusySendForceRefused ||
+					separate.Force.Reason != store.BusySendForceHandoverInProgress {
+					t.Fatalf("separate force %+v, %v; want refused handover_in_progress", separate, err)
+				}
+				return
 			}
 			if got := e.wake(t); got != "" {
-				t.Fatalf("sighting without Stop allowed ordinary wake %q", got)
-			}
-			e.assertHeld(t, "B", store.BusySendWaitHandoverInProgress)
-			e.assertHeld(t, "W", store.BusySendWaitHandoverInProgress)
-			launch, err := e.st.GetBusySendPublishedLaunch(e.id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			separate, err := e.st.ClaimBusySendForce(context.Background(), store.BusySendForceClaimRequest{InstanceID: e.id, Launch: launch,
-				ForceID: uuid.NewString(), OwnerCallID: uuid.NewString(), ActiveBudget: 12 * time.Second, CleanupBudget: 3 * time.Second, At: e.now()})
-			if err != nil || separate.Handover != nil || separate.Force.Outcome != store.BusySendForceRefused ||
-				separate.Force.Reason != store.BusySendForceHandoverInProgress {
-				t.Fatalf("separate force %+v, %v; want refused handover_in_progress", separate, err)
+				t.Fatalf("ordinary wake during the sighted turn wrote %q", got)
 			}
 			e.tick(time.Second)
 			e.fire(t, e.payload(t, "stop.json", nil))
-			checkA("closed")
-			if !tc.sighted {
-				if got := e.wake(t); got != "" {
-					t.Fatalf("Stop without sighting allowed ordinary wake %q", got)
-				}
-				e.assertHeld(t, "B", store.BusySendWaitReadinessUnknown)
-				e.assertHeld(t, "W", store.BusySendWaitEarlierMessage)
-				return
-			}
+			checkA(place)
 			const rest = "[agent-director: message 1 of 2]\nlater steer\n\n[agent-director: message 2 of 2]\nlater wait"
 			if got := e.wake(t); got != rest {
 				t.Fatalf("wake after sighting and Stop = %q; want %q", got, rest)
@@ -2102,9 +2214,9 @@ func TestClaudeWakeOrderIsSeparateFromAdmission(t *testing.T) {
 	}
 }
 
-// Regression t2.xis.w3.9f, SR-3.4: only the same running force may advance
-// on complete output plus sighting before Stop, including a new hook issuer.
-func TestClaudeRunningForceAdvancesWithoutOrdinaryOrder(t *testing.T) {
+// Regression b.kii / t2.xis.w3.ok, SR-3.4: a running force advances through a
+// new hook issuer only after its predecessor has recorded order and admission.
+func TestClaudeRunningForceAdvancesAfterWakeOrder(t *testing.T) {
 	e := newWakeEnv(t, store.StateWorking)
 	a, b := strings.Repeat("a", 5000), strings.Repeat("b", 5000)
 	e.admit(t, "a", a)
@@ -2119,6 +2231,11 @@ func TestClaudeRunningForceAdvancesWithoutOrdinaryOrder(t *testing.T) {
 		t.Fatalf("force advanced without sighting: %q", got)
 	}
 	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(first)}))
+	ordered, err := e.st.ReadBusySendHandover(context.Background(), c.Handover.HandoverID)
+	if err != nil || len(ordered.Prompts) != 2 || ordered.Prompts[0].OrderKind != store.BusySendOrderOrderedAcceptance ||
+		ordered.Prompts[1].Emission != store.BusySendEmissionNone || e.observe(t).AwaitingTurnStart != 0 {
+		t.Fatalf("before issuer turnover: %+v, %v; want a ordered and admitted, b never issued", ordered, err)
+	}
 	e.self = func() store.ProcessIdentity {
 		p := wakeHelper()
 		p.PID++
@@ -2131,9 +2248,9 @@ func TestClaudeRunningForceAdvancesWithoutOrdinaryOrder(t *testing.T) {
 		t.Fatalf("same force after sighting, before Stop = %q; want b alone", got)
 	}
 	h, err := e.st.ReadBusySendHandover(context.Background(), c.Handover.HandoverID)
-	if err != nil || len(h.Prompts) != 2 || !h.Open || h.Prompts[0].OrderKind != "" || h.Prompts[1].OrderKind != "" ||
+	if err != nil || len(h.Prompts) != 2 || !h.Open || h.Prompts[0].OrderKind != store.BusySendOrderOrderedAcceptance || h.Prompts[1].OrderKind != "" ||
 		h.Prompts[0].Transport != store.BusySendTransportWritten || h.Prompts[1].Transport != store.BusySendTransportWritten {
-		t.Fatalf("force handover %+v, %v; want both completed but neither ordered", h, err)
+		t.Fatalf("force handover %+v, %v; want both completed, only a ordered", h, err)
 	}
 	if got := e.wake(t); got != "" {
 		t.Fatalf("repeated force wake replayed %q", got)
@@ -2142,6 +2259,9 @@ func TestClaudeRunningForceAdvancesWithoutOrdinaryOrder(t *testing.T) {
 		t.Fatalf("call end %+v; want pending for b's admission", f)
 	}
 	e.inCall(c, 20*time.Second)
+	if got := e.wake(t); got != "" {
+		t.Fatalf("wake after call end replayed %q", got)
+	}
 	e.fire(t, e.payload(t, "stop.json", nil))
 	if o, f := e.observe(t), e.forceResult(t, c); o.AwaitingTurnStart != 1 || f.Outcome != store.BusySendForcePending {
 		t.Fatalf("after Stop: awaiting %d, force %+v; want b awaiting, force pending", o.AwaitingTurnStart, f)
@@ -2149,6 +2269,10 @@ func TestClaudeRunningForceAdvancesWithoutOrdinaryOrder(t *testing.T) {
 	e.fire(t, e.payload(t, "user-prompt-submit.json", map[string]any{"prompt": claudeWake(second)}))
 	if f := e.forceResult(t, c); f.Outcome != store.BusySendForceHandedOver || f.Reason != store.BusySendForceAdmitted {
 		t.Errorf("after b's sighting: force %+v; want handed_over admitted", f)
+	}
+	h, err = e.st.ReadBusySendHandover(context.Background(), c.Handover.HandoverID)
+	if err != nil || h.Open || len(h.Prompts) != 2 || h.Prompts[1].OrderKind != store.BusySendOrderOrderedAcceptance {
+		t.Fatalf("after b's sighting: %+v, %v; want its order recorded and custody closed", h, err)
 	}
 	if got := e.result(t, "a"); !reflect.DeepEqual(got, final) {
 		t.Errorf("a's Final Result changed: %+v; want %+v", got, final)

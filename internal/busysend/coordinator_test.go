@@ -1043,8 +1043,10 @@ func (e *coordEnv) pause(t *testing.T) store.BusySendPauseDecision {
 // durable and its Messages show forced; the remainder stays claimed by the
 // force after the wake, and a repeated wake issues nothing. The next prompt
 // issues only once the first has both its order secured and its admission
-// recorded, each alone being insufficient, to the original destination under
-// the original issue deadline.
+// recorded, each alone being insufficient: a sighting after partial output
+// admits without securing order; the fake route's qualified order alone
+// supplies no admission. Both allow the next prompt to issue to the original
+// destination under the original issue deadline.
 func TestCoordinatorDrivesForcePrompts(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1063,7 +1065,7 @@ func TestCoordinatorDrivesForcePrompts(t *testing.T) {
 			c := e.forceClaim(t)
 			first := delivered
 			if !tc.order {
-				first = busysend.Disposition{Output: store.BusySendOutputComplete, More: true}
+				first = busysend.Disposition{Output: store.BusySendOutputPartial, More: true}
 			}
 			e.route.issue = func(ctx context.Context, p busysend.Prepared) busysend.Disposition {
 				h, err := e.st.ReadBusySendHandover(ctx, p.HandoverID)
@@ -1091,6 +1093,13 @@ func TestCoordinatorDrivesForcePrompts(t *testing.T) {
 			}
 			if tc.admit {
 				e.sight(t, c.Handover.HandoverID, 1)
+			}
+			h, err := e.st.ReadBusySendHandover(ctx, c.Handover.HandoverID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p := h.Prompts[0]; (p.OrderKind != "") != tc.order || (!tc.order && p.Transport != store.BusySendTransportPartial) {
+				t.Fatalf("first prompt before the next wake = %+v; want order %t and partial output when unordered", p, tc.order)
 			}
 			next, err := e.wake(ctx)
 			issued := e.route.prepared()

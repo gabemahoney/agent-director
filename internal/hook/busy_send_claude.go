@@ -211,7 +211,7 @@ type busySendTurnEnder interface {
 // current covered Launch (claudeRouteFacts), reads it. A subagent's or background
 // callback, a SubagentStop, a Notification or any other event never does.
 // observed is the hook's start (Handle's start), captured before any store
-// call. The read returns tool-boundary and wake prompts whose completion was
+// call. The read returns ordinary tool-boundary prompts whose completion was
 // committed before its SQLite snapshot, with an output observation strictly
 // before observed (store.ReadBusySendTurnEndPrompts): a completion that
 // commits after the snapshot never counts at this Stop, while the time
@@ -248,8 +248,8 @@ func readClaudeTurnEnd(ctx context.Context, st HookStore, instanceID string, gat
 // (readClaudeTurnEnd), as take evidence after that Stop's own gated write
 // applied and before resignalClaudeWake reads the awaiting count. The store
 // revalidates the gate and destination in its own transaction and admits
-// only te's tool-boundary prompts still at their entry revision, or releases
-// their wake order barriers without admission. A nil te records nothing.
+// only te's tool-boundary prompts still at their entry revision. A Stop never
+// admits or orders a wake. A nil te records nothing.
 // It is fail-open: it writes nothing to stdout, carries no continuation,
 // permission decision or force authority, and a failure is logged and
 // supplies no evidence.
@@ -324,8 +324,9 @@ func recoverClaudeAbandonedForce(ctx context.Context, st HookStore, hc HandleCon
 // gate and session in the current covered Launch (claudeRouteFacts), it
 // finishes a force abandoned by its call (recoverClaudeAbandonedForce), so a
 // sighting that arrives after the force's recorded deadline both admits its
-// prompt and ends the force. Recording the sighting itself changes no
-// custody, order or Result; only this separate release does.
+// prompt and ends the force. A sighting may secure the issued wake's order
+// once its output is written; only this separate release returns the force's
+// never-issued tail and fences its job.
 func recoverClaudeInputForce(ctx context.Context, st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
 	if !gate.ClaudeTurnStart {
 		return
@@ -565,8 +566,8 @@ func (r *claudeRoute) Eligibility(ctx context.Context, _ busysend.Event) (busyse
 // a Dialog's: its tool boundary is inside the running turn, so neither that
 // turn nor earlier steered input still awaiting take evidence holds it (E4
 // Main Agent decision 2). An earlier wake keeps the store's order barrier
-// until a later parent Stop (O4/G3); its guards also judge transport,
-// turn, helper and pause fence.
+// until its sighting and written output are both recorded (O4 P-b); its
+// guards also judge transport, turn, helper and pause fence.
 func (r *claudeRoute) wait(f store.BusySendRouteFacts) store.BusySendWaitReason {
 	if w := r.launchWait(f); w != "" || r.force {
 		return w
@@ -653,10 +654,11 @@ func (r *claudeRoute) Authorize(ctx context.Context, p busysend.Prepared) (busys
 // the hook's exit 2; a steer's is the envelope Authorize serialized for p, on
 // stdout, which Claude takes on the hook's exit 0. It is complete only when
 // every byte was written (the handed_over_not_proven boundary, SR-3.5).
-// Only a steer supplies emission_complete order evidence; a wake keeps its
-// barrier until a later parent Stop (O4/G3). Some bytes is partial and
-// none uncertain, both unproven and never retried. More is false: one wake or
-// steer carries one prompt, and nothing is written after it.
+// Only a steer supplies emission_complete order evidence (O4 P-c). Wake
+// output supplies no order by itself: the store combines written output with
+// its uniquely bound sighting, in either order (O4 P-b). Some bytes is partial
+// and none uncertain, both unproven and never retried. More is false: one wake
+// or steer carries one prompt, and nothing is written after it.
 func (r *claudeRoute) Issue(ctx context.Context, p busysend.Prepared) busysend.Disposition {
 	out := p.Body
 	if r.steer {

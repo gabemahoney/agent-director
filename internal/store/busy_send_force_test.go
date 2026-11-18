@@ -13,6 +13,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -93,8 +94,8 @@ func forceIssue(k int) forceStep {
 	return func(t *testing.T, in *busySendInbox, h *store.BusySendHandover) { in.issue(t, h, k, in.revision(t, h)) }
 }
 
-// forceOutput records prompt k's completion; complete output carries
-// Claude's order evidence at its unproven boundary.
+// forceOutput records prompt k's completion with explicit generic order
+// evidence. Claude wake tests pass no Order and require a sighting instead.
 func forceOutput(k int, out store.BusySendOutput) forceStep {
 	return func(t *testing.T, in *busySendInbox, h *store.BusySendHandover) {
 		var order store.BusySendOrderKind
@@ -842,5 +843,210 @@ func TestBusySendForceLateCallEnd(t *testing.T) {
 				t.Errorf("the old call's end changed the newer force (%+v, was %+v) or custody", got, newest)
 			}
 		})
+	}
+}
+
+// TestBusySendForceWakeSuccessor (SR-3.4; M1 Intent, M2 S1) checks the
+// advisory reader and the issuing transaction independently. A synthetic
+// cursor advance reaches the latter's predecessor guard without bypassing it.
+func TestBusySendForceWakeSuccessor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, first, afterRead string
+		ready                  bool
+	}{
+		{name: "written only", first: "written"},
+		{name: "sighting only", first: "sighting"},
+		{name: "unrelated admission plus written", first: "native"},
+		{name: "order without admission", first: "order"},
+		{name: "both facts and new helper", first: "both", ready: true},
+		{name: "negative after read", first: "both", ready: true, afterRead: "negative"},
+		{name: "call end after read", first: "both", ready: true, afterRead: "end"},
+		{name: "call owner changed after read", first: "both", ready: true, afterRead: "owner"},
+		{name: "call revision changed after read", first: "both", ready: true, afterRead: "revision"},
+		{name: "deadline after read", first: "both", ready: true, afterRead: "deadline"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			in := newBusySendInbox(t, busySendTwoPrompts...)
+			c := in.forceClaim(t, time.Time{})
+			h := c.Handover
+			revision := in.issue(t, h, 0, h.Revision).Revision
+			if tc.first == "sighting" || tc.first == "both" {
+				in.sight(t, in.sighting(t, h.Prompts[0].Body))
+			}
+			if tc.first == "native" {
+				if _, err := in.s.RecordBusySendEvidence(ctx, store.BusySendPromptEvidence{HandoverID: h.HandoverID,
+					LaunchID: in.dest.LaunchID, Admission: store.BusySendAdmissionNativeSignal}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.first != "sighting" {
+				var order store.BusySendOrderKind
+				if tc.first == "order" {
+					order = store.BusySendOrderEmissionComplete
+				}
+				in.complete(t, h, 0, revision, store.BusySendOutputComplete, order, true)
+			}
+			next, err := in.s.ReadBusySendForcePrompt(ctx, in.id)
+			want := -1
+			if tc.ready {
+				want = 1
+			}
+			if err != nil || next.Next != want {
+				t.Fatalf("advisory prompt %+v, %v; want %d", next, err, want)
+			}
+			// Reach the authority check even when the real cursor is held at 0.
+			if !tc.ready {
+				setBusySendFact(t, in.path, `UPDATE busy_send_handovers SET prompt_cursor = 1 WHERE handover_id = ?`, h.HandoverID)
+				if p, err := in.s.ReadBusySendForcePrompt(ctx, in.id); err != nil || p.Next != -1 {
+					t.Fatalf("cursor alone authorized successor: %+v, %v", p, err)
+				}
+			}
+			other := store.BusySendIssuer{Role: store.BusySendProcessHelper, PID: 4343, StartTime: "200"}
+			ref := c.Ref
+			req := store.BusySendIssueRequest{Issuer: &other, Force: &ref,
+				Ref: store.BusySendPromptRef{HandoverID: h.HandoverID, PromptIndex: 1, Revision: in.revision(t, h)}}
+			switch tc.afterRead {
+			case "negative":
+				forceNegate(0)(t, in, h)
+			case "end":
+				if _, err := in.s.EndBusySendForceCall(ctx, c.Ref, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			case "owner":
+				setBusySendFact(t, in.path, `UPDATE busy_send_forces SET owner_call_id = 'new-owner' WHERE force_id = ?`, c.Ref.ForceID)
+			case "revision":
+				setBusySendFact(t, in.path, `UPDATE busy_send_forces SET revision = revision + 1 WHERE force_id = ?`, c.Ref.ForceID)
+			case "deadline":
+				req.Now = func() time.Time { return time.UnixMilli(c.Force.CallDeadlineMillis + 1) }
+			}
+			before := readBusySendTables(t, in.path)
+			_, err = in.s.CommitBusySendIssue(ctx, req)
+			if tc.ready && tc.afterRead == "" {
+				if err != nil || !in.listsIssuer(t, other) {
+					t.Fatalf("qualified successor/new helper: %v", err)
+				}
+				got, err := in.s.ReadBusySendHandover(ctx, h.HandoverID)
+				if err != nil || got.Prompts[0].OrderKind != store.BusySendOrderOrderedAcceptance ||
+					got.Prompts[1].Emission != store.BusySendEmissionIssued || got.Prompts[1].OrderKind != "" {
+					t.Fatalf("successor issue: %+v, %v", got, err)
+				}
+				return
+			}
+			var guard *store.BusySendGuardError
+			if !errors.As(err, &guard) || !reflect.DeepEqual(before, readBusySendTables(t, in.path)) ||
+				!in.listsIssuer(t, busySendHelper) || in.listsIssuer(t, other) {
+				t.Fatalf("unqualified successor changed custody/helper: %v", err)
+			}
+			if !tc.ready && guard.Failure != store.BusySendGuardPrompt {
+				t.Fatalf("predecessor guard: %v", err)
+			}
+		})
+	}
+}
+
+// TestBusySendForceWakeCallEnd covers only conjunction-specific additions to
+// the generic call-end/abandonment matrices (M1 ForceEndReleases, FinalStable).
+// A later second fact may order an issued wake, but cannot restore its job.
+func TestBusySendForceWakeCallEnd(t *testing.T) {
+	t.Parallel()
+	for _, release := range []bool{false, true} {
+		for _, facts := range []string{"written", "sighting", "both"} {
+			t.Run(fmt.Sprintf("release=%t/%s", release, facts), func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				in := newBusySendInbox(t, busySendTwoPrompts...)
+				c := in.forceClaim(t, time.Time{})
+				h := c.Handover
+				revision := in.issue(t, h, 0, h.Revision).Revision
+				sighting := in.sighting(t, h.Prompts[0].Body)
+				if facts != "written" {
+					in.sight(t, sighting)
+				}
+				if facts != "sighting" {
+					in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true)
+				}
+				before := readBusySendCustody(t, in.path, in.id)
+				if release {
+					got, err := in.s.ReleaseAbandonedBusySendForce(ctx, in.id, time.UnixMilli(c.Force.CallDeadlineMillis+1))
+					if err != nil || !got.Released || got.Returned != 1 {
+						t.Fatalf("abandoned release: %+v, %v", got, err)
+					}
+				} else {
+					got, err := in.s.EndBusySendForceCall(ctx, c.Ref, time.Now())
+					if err != nil || !got.Ended || got.HeldMembers != 1 {
+						t.Fatalf("call end: %+v, %v", got, err)
+					}
+				}
+				want := store.BusySendForceHandedOver
+				if facts == "written" {
+					want = store.BusySendForcePending
+				}
+				f := in.readForce(t, c.Force.ForceID)
+				if f.Outcome != want {
+					t.Fatalf("force %+v; want %s", f, want)
+				}
+				tail := readBusySendCustody(t, in.path, in.id)[1]
+				if tail.place != "held" || tail.handover != "" || tail.forced || tail.final {
+					t.Fatalf("returned tail: %v", tail)
+				}
+				if facts == "written" {
+					in.sight(t, sighting)
+				} else if facts == "sighting" {
+					if got := in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true); !got.OrderSecured || got.Revision != 0 {
+						t.Fatalf("late second fact: %+v; want order without job authority", got)
+					}
+				}
+				got, err := in.s.ReadBusySendHandover(ctx, h.HandoverID)
+				if err != nil || got.Open || got.PromptCursor != 1 || got.Prompts[0].OrderKind != store.BusySendOrderOrderedAcceptance ||
+					got.Prompts[1].Emission != store.BusySendEmissionReleased {
+					t.Fatalf("after late fact: %+v, %v", got, err)
+				}
+				after := readBusySendCustody(t, in.path, in.id)
+				if after[0].place != "closed" || !after[0].final || (before[0].final && before[0].result() != after[0].result()) ||
+					after[1].place != "held" || after[1].handover != "" || after[1].forced || after[1].final {
+					t.Fatalf("late fact changed finality or revived the tail: %v -> %v", before, after)
+				}
+				if f := in.readForce(t, c.Force.ForceID); f.Outcome != store.BusySendForceHandedOver {
+					t.Fatalf("late admission: %+v", f)
+				}
+				tables := readBusySendTables(t, in.path)
+				for _, rev := range []int64{revision, got.Revision} {
+					var guard *store.BusySendGuardError
+					if _, err := in.commit(ctx, h, 1, rev); !errors.As(err, &guard) {
+						t.Fatalf("old force issued tail: %v", err)
+					}
+				}
+				if !reflect.DeepEqual(tables, readBusySendTables(t, in.path)) {
+					t.Fatal("fenced force changed custody")
+				}
+			})
+		}
+	}
+}
+
+func TestBusySendSightedIncompleteForceKeepsOrder(t *testing.T) {
+	t.Parallel()
+	in, h, revision := newBusySendIssuedAt(t, store.BusySendBoundaryForce)
+	in.sight(t, in.sighting(t, h.Prompts[0].Body))
+	end, err := in.s.EndBusySendForceCall(context.Background(), *in.force, in.clock.Now())
+	if err != nil || end.Force.Outcome != store.BusySendForceHandedOver {
+		t.Fatalf("sighted incomplete force: %+v, %v", end, err)
+	}
+	got, err := in.s.ReadBusySendHandover(context.Background(), h.HandoverID)
+	if err != nil || !got.Open || got.Prompts[0].OrderKind != "" {
+		t.Fatalf("admitted force released incomplete order: %+v, %v", got, err)
+	}
+	final := readBusySendCustody(t, in.path, in.id)[0]
+	if final.place != "issued" {
+		t.Fatalf("custody after call end: %v", final)
+	}
+	if got := in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true); !got.OrderSecured || !got.Closed || got.Revision != 0 {
+		t.Fatalf("completion after admitted call end: %+v", got)
+	}
+	if f := in.readForce(t, end.Force.ForceID); f.Outcome != end.Force.Outcome || f.Revision != end.Force.Revision {
+		t.Fatalf("completion changed force result: %+v", f)
 	}
 }

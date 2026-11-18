@@ -113,8 +113,9 @@ func assertNoInputPath(t *testing.T, e *nativeSubmissionEnv) {
 // TestBusySendClaudeHookRoute (SR-3.9, SR-5.6; M2 P-C4.2): a covered Claude
 // agent's Messages reach it only through its own hooks. Once its wake wrote a
 // prompt, get and status show awaiting_turn_start 1, and reading them changes
-// nothing; the agent's exact sighting brings it to 0. After a later Stop
-// releases order, a wake whose output failed leaves it 1. No send and no wake
+// nothing; the agent's exact sighting brings it to 0 and closes issued custody.
+// After a later Stop makes ordinary delivery eligible, a wake whose output
+// failed leaves it 1. No send and no wake
 // reaches the native composer or the pane: delivered, with output that failed,
 // or with no route recorded.
 func TestBusySendClaudeHookRoute(t *testing.T) {
@@ -157,8 +158,10 @@ func TestBusySendClaudeHookRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaiting(0)
+	if got := busyFacts(t, e.dbPath, r.ID); len(got.Messages) != 1 || got.Messages[0].Place != "closed" {
+		t.Fatalf("after sighting, before Stop: %+v; want the written wake's custody closed", got.Messages)
+	}
 
-	e.clock.Advance(time.Millisecond)
 	if err := fireClaudeHook(t, e, r.ID, session, "Stop", nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -190,8 +193,8 @@ func claudeWakePrompt(body string) string {
 // covered Claude agent holding a, b and c, one prompt each, through the
 // agent's own hooks while the call waits on virtual time. The call's
 // notification after its claim makes the FileChanged wake issue prompt a;
-// another callback, with a's output complete but unsighted (order alone),
-// issues nothing. The agent's sighting of a admits it and touches no wake; only
+// another callback, with a's output complete but unsighted (no order),
+// issues nothing. The agent's sighting of a admits and orders it, touching no wake; only
 // the call's next notification brings the wake that issues b. With b unsighted
 // the call returns pending at its 12 s active phase, c Held again. A callback
 // after the call issues nothing; b's later sighting makes the force

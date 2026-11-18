@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -903,6 +905,101 @@ func TestBusySendPauseClaimPublication(t *testing.T) {
 					t.Fatalf("the old owner's intent %+v, %v; want nothing applied", w, err)
 				}
 				wantPauseClaims(t, in, "ended launch_end r2", "ended launch_published r2", "standing r1")
+			})
+		}
+	}
+}
+
+// TestBusySendWakeOrderAcrossEnd (SR-6.2; M1 R6/R8, M2 S1) separates
+// completion accounting from the physical write. An issuer authorized before
+// End can still write afterwards; only positive Exit closes that fence.
+func TestBusySendWakeOrderAcrossEnd(t *testing.T) {
+	t.Parallel()
+	for _, forced := range []bool{false, true} {
+		for _, history := range []string{"written before End", "sighted before End", "order before End", "physical write after End"} {
+			t.Run(fmt.Sprintf("force=%t/%s", forced, history), func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				in := newBusySendInbox(t, "wake")
+				var h *store.BusySendHandover
+				if forced {
+					h = in.forceClaim(t, time.Time{}).Handover
+				} else {
+					h = in.claim(t, time.Time{}, false)
+				}
+				revision := in.issue(t, h, 0, h.Revision).Revision
+				in.admit(t, store.BusySendSteerTurn, "later")
+				sighting := in.sighting(t, h.Prompts[0].Body)
+				path := filepath.Join(t.TempDir(), "output")
+				write := func() {
+					if err := os.WriteFile(path, h.Prompts[0].Body, 0600); err != nil {
+						t.Fatal(err)
+					}
+					if got, err := os.ReadFile(path); err != nil || string(got) != string(h.Prompts[0].Body) {
+						t.Fatalf("physical output %q, %v", got, err)
+					}
+				}
+				if history != "physical write after End" {
+					write()
+				}
+				if history == "sighted before End" || history == "order before End" {
+					in.sight(t, sighting)
+				}
+				if history == "written before End" || history == "order before End" {
+					in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true)
+				}
+				before := readBusySendCustody(t, in.path, in.id)
+				forceLaunchEnd(t, in, h)
+				ended, err := in.s.ReadBusySendHandover(ctx, h.HandoverID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				final, err := in.s.ReadBusySendResult(in.pair.CallerUUID, in.pair.DeliveryRequestID)
+				if err != nil || final.Result == nil || !final.Result.Final {
+					t.Fatalf("Final after End: %+v, %v", final, err)
+				}
+				if history == "physical write after End" {
+					if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("output exists before late write: %v", err)
+					}
+					write()
+				}
+				// Valid issue identity may report a historical stamp even after
+				// End. Neither this nor the now-stale hook grants new order.
+				completed := in.complete(t, h, 0, revision, store.BusySendOutputComplete, "", true)
+				if completed.Revision != 0 || completed.OrderSecured != (history == "order before End") {
+					t.Fatalf("late completion grants authority/order: %+v", completed)
+				}
+				if got := in.sight(t, sighting); got.Outcome != store.BusySendSightingStale {
+					t.Fatalf("late sighting: %+v", got)
+				}
+				after, err := in.s.ReadBusySendHandover(ctx, h.HandoverID)
+				if err != nil || after.Revision != ended.Revision || after.PromptCursor != ended.PromptCursor ||
+					after.Open != ended.Open || after.Prompts[0].OrderKind != ended.Prompts[0].OrderKind {
+					t.Fatalf("late facts changed order: %+v -> %+v, %v", ended, after, err)
+				}
+				custody := readBusySendCustody(t, in.path, in.id)
+				if !custody[0].final || (before[0].final && custody[0].result() != before[0].result()) || custody[1].place != "held" {
+					t.Fatalf("End/late fact changed Final or tail: %v -> %v", before, custody)
+				}
+				fence := storefix.ReadLaunchFence(t, in.s, in.dest.LaunchID)
+				want := boolCount(history != "order before End")
+				if !fence.Ended || len(fence.Prompts) != want || (want == 1 && !fence.Prompts[0].Fenced) {
+					t.Fatalf("End fence: %+v; want %d fenced prompts", fence, want)
+				}
+				if _, _, err := in.reuse(t, "1122334455667788", nil); !errors.Is(err, store.ErrBusySendExitNotEstablished) {
+					t.Fatalf("reuse without physical Exit: %v", err)
+				}
+				if applied, err := in.s.EstablishBusySendExit(*exitEvidenceForTest(t, in.s, in.id)); err != nil || !applied {
+					t.Fatalf("positive Exit: %t, %v", applied, err)
+				}
+				custody = readBusySendCustody(t, in.path, in.id)
+				if custody[0].place != "closed" || custody[1].place != "held" {
+					t.Fatalf("Exit custody: %v", custody)
+				}
+				if got, err := in.s.ReadBusySendResult(in.pair.CallerUUID, in.pair.DeliveryRequestID); err != nil || !reflect.DeepEqual(got, final) {
+					t.Fatalf("late writes/Exit changed Final Lookup: %+v -> %+v, %v", final, got, err)
+				}
 			})
 		}
 	}

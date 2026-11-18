@@ -334,9 +334,9 @@ type BusySendForcePrompt struct {
 // ReadBusySendForcePrompt reads instanceID's running force and the frozen
 // prompt it may issue now (SR-3.4, SR-4.3), in one read transaction: the
 // hand-over's cursor prompt while it is still only claimed and, after the
-// first, once the prompt before it has completed and its admission is
-// recorded with no negative. Claude's same-force exception (SR-3.4) needs no
-// parent Stop between these prompts; other routes still need secured order.
+// first, once the prompt before it has secured order and its admission is
+// recorded with no negative. For a Claude wake, order requires its sighting
+// plus written output, in either order; a parent Stop supplies neither fact.
 // It creates no force, chooses no new group,
 // releases nothing and writes nothing: the issue commit judges every captured
 // fact again. No row is ErrSpawnNotFound.
@@ -387,8 +387,8 @@ func (s *Store) ReadBusySendForcePrompt(ctx context.Context, instanceID string) 
 // busySendForceNext is the prompt of the open force hand-over h that may
 // issue now, -1 for none: its cursor prompt while still only claimed, and,
 // after the first, only once the prompt before it is admitted with no
-// negative and either secured order or Claude's complete wake output. Neither
-// admission alone nor completed output alone is enough (SR-3.4).
+// negative and has secured order. Neither admission alone nor completed
+// output alone is enough (SR-3.4).
 func busySendForceNext(ctx context.Context, q busySendLaunchSQL, h busySendHandoverRow) (int, error) {
 	k := h.PromptCursor
 	if !h.Open || k >= h.promptCount {
@@ -400,7 +400,7 @@ func busySendForceNext(ctx context.Context, q busySendLaunchSQL, h busySendHando
 	}
 	if k > 0 {
 		prev, err := readBusySendPrompt(ctx, q, h.HandoverID, k-1)
-		if err != nil || !prev.effectivelyAdmitted() || prev.orderKind == "" && !(h.claudeWake() && prev.transport == BusySendTransportWritten) {
+		if err != nil || !prev.effectivelyAdmitted() || prev.orderKind == "" {
 			return -1, err
 		}
 	}

@@ -188,16 +188,17 @@ staying under them does not promise the next send fits.
 issued prompt but no admission or negative evidence, whatever their output
 state. On Claude Code a prompt is admitted by agent-director's own
 [sighting](#claude-code-force-capability) of it or, for Steer Turn input handed
-over at a tool boundary, by a later main-agent turn end. That turn end counts the input
-only when agent-director's initial check at the turn end finds its complete
+over at a tool boundary, by a later main-agent turn end. That turn end counts
+the input only when agent-director's initial check finds its complete
 output already recorded, and that output was observed before the turn end
 began, to the millisecond. Output recorded after that check, or observed in
 the turn end's millisecond or later, waits for a later turn end, as does
 input in a turn interrupted before it ended; meanwhile ordinary Wait Turn
 delivery waits `readiness_unknown`. Comparing the output's observation with
 the turn end's start uses the host's wall clock across hook processes, a
-known limit: a clock step can count output observed just after the turn end
-began, or hold back earlier output until a later turn end.
+known limit: a clock step can count steer output observed after the turn end
+began but recorded before that initial check, or hold back earlier output
+until a later turn end. Turn-end evidence supplies no wake order.
 Neither kind of admission makes a Message `delivered_confirmed`, changes a
 Final Result or permits a resend. The count is zero after Launch End.
 `delivery.force` is the agent's running or
@@ -424,10 +425,6 @@ per wake and each remaining prompt goes at the next eligible turn end. No
 other agent-director input goes between them; a person's typing can. This adds
 latency and exposure to `wait_turn_raced` between prompts.
 
-**Known host-clock limit.** If the host wall clock steps backwards after a
-parent `Stop` starts but before a forced wake is written, that `Stop` can
-release the wake's order, allowing a later steer to pass it.
-
 An accepted Message has no age timeout. Read its Result's `wait`, or
 `delivery.first_wait` for the first Held Message:
 
@@ -454,23 +451,26 @@ exposure to overlapping work, not proof that a race happened. A Final Result
 never upgrades on later evidence. Neither that reason nor missing proof
 permits a resend.
 
-Every Claude wake, ordinary or forced, holds later Messages and a separate
-force until a later parent turn end secures its order. A sighting supplies
-admission, not order. A Final `sent_unconfirmed` wake Result and zero
-`handover_count` do not mean order is released: later Messages can still wait
-`handover_in_progress`, even after a sighting clears `awaiting_turn_start`.
-Turn end releases that order barrier without
-supplying admission or changing the Final Result; ordinary Wait Turn still
-waits while `awaiting_turn_start` is nonzero. Only the
-[same running force](#claude-code-force-capability) has the next-prompt
-exception.
+Every Claude wake, ordinary or forced, secures order only once both its
+complete output and agent-director's exact, uniquely bound
+[sighting](#claude-code-force-capability) are recorded, in either order,
+while its Launch runs. Neither fact alone nor a parent `Stop` releases wake
+order. A wake agent-director never sights, including one hidden by the
+[sighting limits](#sighting-limits) or impossible to bind, keeps every later
+Message of its conversation, Steer Turn included, Held until
+[Launch End](#launch-end-resume-and-reuse). Elapsed time, reads, repeated
+Stops and a force cannot bypass that barrier.
 
-An ordinary wake whose prompt the [sighting limits](#sighting-limits) hide leaves
-`awaiting_turn_start` nonzero until Launch End. After the order barrier
-clears, ordinary Wait Turn delivery waits `readiness_unknown` and a force
-is refused `input_unresolved`. Message-caused screen changes reset the
-ordinary `idle_screen` clock. No length of waiting alone becomes
-`needs_intelligence`.
+Complete live output makes the wake's Result Final `sent_unconfirmed`
+and frees capacity without proving intake. A Final Result, zero
+`handover_count` or zero `awaiting_turn_start` alone does not establish that
+order is released: a sighting before complete output clears the count but
+retains ownership. Later Messages can still wait `handover_in_progress`.
+Ordinary delivery after order is secured needs its own eligible event and readiness; a
+sighting does not itself deliver ordinary input.
+
+Message-caused screen changes reset the ordinary `idle_screen` clock. No
+length of waiting alone becomes `needs_intelligence`.
 
 ### Steer Turn delivery
 
@@ -491,9 +491,10 @@ Dialog, a spawn's startup prompt not yet taken and an earlier hand-over still
 unresolved hold it; earlier steered input still counted in
 [`awaiting_turn_start`](#busy-send-coverage) does not. Tool boundaries in the
 startup prompt's own turn are eligible once that prompt is taken.
-An earlier wake holds a steer until the later parent turn end described
-under [Wait Turn delivery](#wait-turn-delivery-and-waits), even after the
-wake's sighting or Final Result.
+An earlier wake holds a steer until its
+[order is secured](#wait-turn-delivery-and-waits). The steer can then go at a
+later eligible tool boundary; no additional Stop is needed as wake order
+evidence.
 
 With nothing ahead of it and nothing holding it, a Steer Turn Message reaches
 the model at the same point as the same text typed at the agent's terminal at
@@ -594,7 +595,9 @@ applies:
 
 So `agent_starting` and `launch_ended` apply even with nothing Held, and a
 pending force makes a later force `handover_in_progress`, not
-`no_held_messages`. A force that carried Messages is refused `not_issued`
+`no_held_messages`. An unsighted wake retains ownership through a Stop, so
+`handover_in_progress` can precede `input_unresolved` too.
+A force that carried Messages is refused `not_issued`
 when it issued no prompt by its call's end, even if the launch ended
 meanwhile, or `not_submitted` when the route proved every issued prompt was
 not submitted; a missing admission is not that proof.
@@ -667,10 +670,9 @@ reason is `awaiting_admission`. The refusal order and every other guard above
 still apply.
 
 **Several prompts.** Each forced wake hands over one whole prompt. While the
-same call runs, another forced wake can issue the next prompt once the
-previous prompt's output is complete and it is sighted; no turn end is
-required. This exception belongs only to that running force and does not
-release the order barrier for ordinary delivery or a separate force.
+same call remains authorized within its budget, another forced wake can issue
+the next prompt only after the previous prompt has recorded
+[order](#wait-turn-delivery-and-waits) and admission; no Stop is required.
 Prompts not issued when the call ends go back to ordinary delivery, as above,
 on its own schedule ([Wait Turn delivery and waits](#wait-turn-delivery-and-waits)).
 Wakes during the call serve only the force, so a Message accepted meanwhile
