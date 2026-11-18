@@ -418,6 +418,22 @@
 {
 set -euo pipefail
 
+# Cleanup owns only paths this invocation assigns, never inherited values.
+# Clear every ad_exit_cleanup path before any EXIT or signal trap can run;
+# leave TMP/ADMIN_TMP empty until the swap owns their target paths.
+TMP=""
+ADMIN_TMP=""
+tmp_bin=""
+tmp_admin=""
+tmp_sentinel=""
+stage_bin=""
+stage_admin=""
+migrate_tmp=""
+link_tmp=""
+version_out=""
+version_err=""
+sched_tmp=""
+
 # HOME first, before anything is read or written: every path below is built
 # from it, and an empty or relative HOME would put the install root somewhere
 # else (an empty one gives /.config/agent-director). Exit 2, the pre-flight
