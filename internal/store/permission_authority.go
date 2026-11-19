@@ -32,18 +32,23 @@ const (
 // The existing launch/epoch columns alone cannot distinguish a conversation
 // or connection replaced within a launch. Historical unknown owners fail
 // closed. The transaction's hook/independent Cursor evidence remains required.
-// New verdicts and claims require response_state IS NULL, so they must still
-// match the admission epoch. A committed Cursor claim survives a raw-state
-// epoch change caused by another request's proof: acknowledgement/native claim
-// already released its row hold, but its own response is still pending. Only
-// that unconsumed claim may cross epochs, under the same life/session/connection
-// and the caller's exact claim, closure, proof, generation and deadline checks.
+// A marked Claude or Codex child's request survives forward raw-state epoch
+// changes while its owner still matches; main-agent work does not retire it.
+// Other new verdicts and claims require the admission epoch. A committed Cursor
+// claim survives an epoch change caused by another request's proof:
+// acknowledgement/native claim already released its row hold, but its own
+// response is still pending. Cursor permits only that unconsumed claim to cross
+// epochs. All paths retain life/session/connection ownership and the caller's
+// exact claim, closure, proof, generation and deadline checks.
 // This fragment uses the table's full name, including in UPDATE statements.
 const permissionOwnerSQL = `EXISTS (SELECT 1 FROM spawns AS owner
  WHERE owner.instance_id = permission_requests.instance_id
  AND owner.state NOT IN ('pending', 'ended', 'missing')
  AND owner.launch_token IS permission_requests.owner_launch_token
  AND (owner.permission_epoch = permission_requests.owner_permission_epoch
+      OR (owner.agent IN ('claude', 'codex')
+          AND NULLIF(permission_requests.agent_id, '') IS NOT NULL
+          AND owner.permission_epoch > permission_requests.owner_permission_epoch)
       OR (owner.agent = 'cursor' AND permission_requests.response_state IN ('relay_claimed', 'native_claimed')))
  AND owner.life_number = permission_requests.owner_life_number
  AND owner.session_id IS permission_requests.owner_session_id

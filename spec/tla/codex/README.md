@@ -21,6 +21,12 @@ section of this file's tables and finding F6.
 | `src/Hold36hCx.tla` | b.36h's `Hold36h.tla` (feature/b.146-relay 5be84a8 and feature/b.3ie, SHA-256 `7856c1d8…`) | The latest merged relay model: the working hold, the turn_end / tool_ran proofs (b.omt "fixcut"), the subagent, several turns, find-missing's check_permission repair. Codex removes tool_ran and the idle Notification and adds Interrupt as a turn end. The step-2c hold of plain send-keys and pause (ErrDialogMaybeOpen) is added as properties over its existing variables. |
 | `src/B146R5Cx.tla` | b.146 round 5's `spec/tla/B146R5.tla` (design/b146-timeouts, SHA-256 `53daaa8c…`) | The integrated relay model the adopted hold (Unproven + Bypass) passed on: the pane protocol, decide, the store lock, deaths. Codex removes PostToolUse's close and proof and the idle Notification. |
 
+`Hold36hCx`'s `RelayDeliver` permits a subagent's caller verdict or timeout
+deny after the main turn ends and across later turns. It does not model
+`permission_epoch`, admission-owner equality or the schema-v17 response
+provenance/claim guards. Its results do not verify the SQL authority predicate
+described in [Permission verdict authority](../../../docs/architecture.md#permission-verdict-authority).
+
 Not changed, and why:
 - `Phase4.tla`, `Phase4Split.tla` (labels, lookups, kill, resume, b.66h launch scope): Codex rows
   use the same tmux labels and verbs; nothing in the brief changes them.

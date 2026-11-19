@@ -238,11 +238,16 @@ var errAnyStore = errors.New("any store error")
 
 // Origin and ownership are read back through a new connection, never inferred
 // from a public decision/reason. SQL below is explicit corrupt/legacy evidence.
+// b.o7x: a child keeps its epoch authority; a main request does not.
 func TestPermissionAuthorityReopen(t *testing.T) {
-	for _, history := range []string{"allow", "deny", "timeout", "outside", "refused", "proof", "allow then proof", "deny then proof", "closed", "allow then closed", "unknown", "unsupported", "old life", "old session", "old epoch", "old launch"} {
+	for _, history := range []string{"allow", "deny", "timeout", "outside", "refused", "proof", "allow then proof", "deny then proof", "closed", "allow then closed", "unknown", "unsupported", "old life", "old session", "old epoch child", "old epoch main", "old launch"} {
 		t.Run(history, func(t *testing.T) {
 			s, path := newRelayRow(t, "on", StateWorking)
-			insertRelay(t, s, relayReq(tokenA))
+			req := relayReq(tokenA)
+			if history == "old epoch main" {
+				req.AgentID = ""
+			}
+			insertRelay(t, s, req)
 			origin, decision, reason, claim := "", "", "", ""
 			if history == "allow" || history == "deny" || history == "deny then proof" || strings.HasPrefix(history, "allow then") || strings.HasPrefix(history, "old ") || history == "unknown" || history == "unsupported" {
 				decision, origin = "allow", DecisionOriginCaller
@@ -295,8 +300,14 @@ func TestPermissionAuthorityReopen(t *testing.T) {
 				mustExec(t, s.db, "UPDATE spawns SET life_number=life_number+1")
 			case "old session":
 				mustExec(t, s.db, "UPDATE spawns SET session_id='replacement'")
-			case "old epoch":
-				mustExec(t, s.db, "UPDATE spawns SET permission_epoch=permission_epoch+1")
+			case "old epoch child", "old epoch main":
+				before := mustRequest(t, s, tokenA)
+				if err := agentHook(s, relayID, StateWaiting, false, "Stop"); err != nil {
+					t.Fatal(err)
+				}
+				if mustGetSpawn(t, s, relayID).PermissionEpoch != before.OwnerPermissionEpoch+1 || mustRequest(t, s, tokenA).ProvenGone() {
+					t.Fatal("expected advanced epoch without proof")
+				}
 			case "old launch":
 				mustExec(t, s.db, "UPDATE spawns SET launch_token='2222222222222222'")
 			}
@@ -310,7 +321,7 @@ func TestPermissionAuthorityReopen(t *testing.T) {
 				t.Fatalf("reopened history: %+v", pr)
 			}
 			_, _, ack, err := other.AckRelayDecision(relayID, tokenA, time.Now(), DefaultLockWait, nil)
-			want := history == "allow" || history == "deny"
+			want := history == "allow" || history == "deny" || history == "old epoch child"
 			if err != nil || ack != want {
 				t.Fatalf("ack=%v %v, want %v", ack, err, want)
 			}
