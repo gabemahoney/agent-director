@@ -469,9 +469,9 @@ func (c *decideCall) notWritten() error {
 		return fmt.Errorf("%w: %s request %s has a pane answer recorded (pane_answer %q); nothing was recorded",
 			store.ErrNoOpenPermissionRequest, id, c.p.RequestToken, pr.PaneAnswer)
 	}
-	// Unreachable in practice — the request exists, is undecided and its
-	// Spawn is live, yet the write did not apply. Surface the conservative
-	// ErrNoOpenPermissionRequest.
+	// An open record and a live Spawn alone do not grant response authority:
+	// ownership, proof or a prior claim can still exclude the guarded write.
+	// Keep the conservative ErrNoOpenPermissionRequest for that no-op.
 	return fmt.Errorf("%w: %s (verdict write no-op against an open request)",
 		store.ErrNoOpenPermissionRequest, id)
 }
