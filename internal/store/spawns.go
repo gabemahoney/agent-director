@@ -252,9 +252,11 @@ type Spawn struct {
 	// PermissionEpoch is permission_epoch, the raw-state interval counter: each
 	// write that changes the raw state advances it (hookStateSet,
 	// immediateSettleSet, find-missing's check_permission repair). A permission
-	// request is owned by the check_permission interval it was recorded in
-	// (owner_permission_epoch), and a display observation and a pane baseline
-	// by the interval they were made in, so neither counts in a later interval.
+	// request captures its admission interval in owner_permission_epoch;
+	// permissionOwnerSQL allows marked Claude/Codex children and unconsumed
+	// Cursor response claims to cross epochs under their other authority checks.
+	// Display observations and pane baselines belong to the interval they were
+	// made in and do not count in a later interval.
 	PermissionEpoch int64
 	// ObservationVersion is observation_version, advanced by every write of
 	// the stored display observation or pane baseline: the observers' commits

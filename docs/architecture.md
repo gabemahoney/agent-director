@@ -7754,9 +7754,12 @@ own display, and no guard reads the display.
 row's continuous raw-state intervals (a stay in `check_permission` or
 `working`): every true raw transition
 (`hookStateSet`, `immediateSettleSet`) bumps it and a write of the same value
-does not. A request gets a fallback clock (`permissionCandidate`) only while
-both ownership fields equal the row's current launch token and epoch, it
-still awaits an answer and is not proven gone. `owner_launch_token` also
+does not. The display planner's `permissionCandidate` accepts a request for
+fallback-clock planning only while both ownership fields equal the row's
+current launch token and epoch, it still awaits an answer and is not proven
+gone. This interval check is separate from
+[permission verdict authority](#permission-verdict-authority), which can
+survive an epoch change. `owner_launch_token` also
 ends a Cursor request's dialog hold once a new launch replaces its own
 (`PermissionRow.OfEarlierCursorLaunch`; see "The hold" under
 [The dialog hold](#the-dialog-hold-step-2c)). Ownership is independent of
@@ -14442,19 +14445,33 @@ that reason without changing origin. Closeout, outside claims and inferred
 execution verdicts are observational; they cannot authorize a response.
 
 Admission captures launch, permission epoch, life, session and Cursor connection.
-`permissionOwnerSQL` and `permissionResponseEligibleSQL` require that owner,
-an active row, no closure and no proof. New verdicts and claims also require
-no prior `response_state`. `relayVerdictSQL` admits only caller/timeout verdicts;
-native responses require a deliberate matching pane choice. Hook parent checks
-and authenticated Cursor runtime/pane checks remain mandatory.
+`permissionOwnerSQL` requires the same launch, life and session, a row outside
+`pending`/`ended`/`missing`, and Cursor's live bound connection. Its epoch
+check accepts three cases:
+
+- The current epoch equals the captured admission epoch.
+- A Claude or Codex request has a nonempty persisted `agent_id`, and the
+  current epoch is greater than its admission epoch. Main-agent state changes
+  do not retire this child's response authority or rewrite its admission epoch.
+- A Cursor request already has an unconsumed `relay_claimed` or `native_claimed`
+  response. Fresh Cursor verdicts and claims still require epoch equality.
+
+`permissionResponseEligibleSQL` additionally requires no closure and no proof.
+New verdicts and claims require no prior `response_state`.
+`DecideRelayRequest`, `AckRelayDecision` and `DenyRelayTimeout` share these
+predicates: a child's verdict can be recorded before or after an epoch bump
+and acknowledged afterward, and its unanswered request can still receive the
+hook's timeout deny. `relayVerdictSQL` admits only caller/timeout verdicts;
+native responses require a deliberate matching pane choice. Hook parent and
+remaining-budget checks and authenticated Cursor runtime/pane checks remain
+mandatory. Main-agent requests receive no child exception; proof of their
+turn's end still excludes a response.
 
 An acknowledgement commits `delivered_at` and `relay_claimed`; native choice
 commits `native_claimed` without relay acknowledgement. Cursor's final
 `CheckCursorAnswer` validates an unconsumed claim; `IssueCursorAnswer` changes it
-once to `relay_issued` or `native_issued` before transport. An independent
-request's proof may advance the row epoch without retiring an already committed
-Cursor claim, but new acquisition still requires the admission epoch. Exact
-owner, token, origin, closure/proof, generation and deadline guards still apply.
+once to `relay_issued` or `native_issued` before transport. Exact owner, token,
+origin, closure/proof, generation and deadline guards still apply.
 
 Claims and issue verify WAL/FULL on their actual transaction lease through
 `permissionResponseDurability`. Only a confirmed commit permits output; failed
