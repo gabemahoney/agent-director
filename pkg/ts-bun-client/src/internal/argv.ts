@@ -191,6 +191,7 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
       return ["get-force", "--force-id", (params as GetForceParams).force_id];
     case "get-delivery": {
       const p = params as GetDeliveryParams;
+      refuseMalformedUnicode("get-delivery", "delivery_request_id", p.delivery_request_id);
       return ["get-delivery", "--caller-uuid", p.caller_uuid, "--delivery-request-id", p.delivery_request_id];
     }
     case "read-pane":
@@ -373,6 +374,8 @@ function buildGet(p: GetParams): string[] {
 }
 
 function buildSendKeys(p: SendKeysParams): string[] {
+  refuseMalformedUnicode("send-keys", "text", p.text);
+  refuseMalformedUnicode("send-keys", "delivery_request_id", p.delivery_request_id);
   const f: string[] = ["send-keys", "--instance-id", p.instance_id];
   if (p.text !== undefined) f.push("--text", p.text);
   if (p.allow_pending === true) f.push("--allow-pending");
@@ -392,6 +395,21 @@ function buildSendKeys(p: SendKeysParams): string[] {
   if (p.caller_uuid !== undefined) f.push("--caller-uuid", p.caller_uuid);
   if (p.force !== undefined) f.push(`--force=${p.force}`);
   return f;
+}
+
+/** Refuse lone UTF-16 surrogates before CLI argument encoding replaces them. */
+function refuseMalformedUnicode(verb: "send-keys" | "get-delivery", name: string, value: string | undefined): void {
+  if (value === undefined) return;
+  // Iteration combines valid surrogate pairs into a single code point.
+  for (const char of value) {
+    const point = char.codePointAt(0)!;
+    if (point >= 0xd800 && point <= 0xdfff) {
+      const problem = verb === "get-delivery"
+        ? "delivery_request_id must be nonempty UTF-8; nothing was read"
+        : `${name} must be valid UTF-8; nothing was stored, sent or typed`;
+      throw new ErrInvalidFlags(verb, "ErrInvalidFlags", `${verb}: ${problem}`);
+    }
+  }
 }
 
 /**

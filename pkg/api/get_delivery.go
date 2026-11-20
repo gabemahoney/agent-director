@@ -15,6 +15,8 @@ type GetDeliveryParams struct {
 	CallerUUID string `json:"caller_uuid"`
 	// DeliveryRequestID is the send's Message ID: nonempty UTF-8.
 	DeliveryRequestID string `json:"delivery_request_id"`
+	// MalformedUTF8 records a surface's refusal of a lossy JSON string decode.
+	MalformedUTF8 bool `json:"-"`
 }
 
 // GetDeliveryResult is get-delivery's answer (SR-5.4): Lookup is found, with
@@ -40,7 +42,7 @@ func getDelivery(s deliveryReader, params GetDeliveryParams) (GetDeliveryResult,
 	if !ok {
 		return GetDeliveryResult{}, fmt.Errorf("%w: get-delivery: caller_uuid %q must be a hyphenated hexadecimal UUID (8-4-4-4-12); nothing was read", ErrInvalidFlags, params.CallerUUID)
 	}
-	if params.DeliveryRequestID == "" || !utf8.ValidString(params.DeliveryRequestID) {
+	if params.MalformedUTF8 || params.DeliveryRequestID == "" || !utf8.ValidString(params.DeliveryRequestID) {
 		return GetDeliveryResult{}, fmt.Errorf("%w: get-delivery: delivery_request_id must be nonempty UTF-8; nothing was read", ErrInvalidFlags)
 	}
 	found, err := s.ReadBusySendResult(caller, params.DeliveryRequestID)

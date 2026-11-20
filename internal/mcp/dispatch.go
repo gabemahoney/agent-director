@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -223,6 +224,11 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(args, &keys); err != nil {
+			return nil, paramDecodeError(v, err)
+		}
+		p.MalformedUTF8 = !jsonStringValid(keys["delivery_request_id"])
 		return d.client.GetDelivery(p)
 
 	case "read-pane":
@@ -386,10 +392,33 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 // (internal/oldnames) is named with its new name in the refusal. Arguments
 // that are not a JSON object are refused with ErrInvalidFlags too
 // (paramDecodeError, b.ewa).
+// Duplicate parameter names are refused before typed decoding: a raw map
+// keeps only the last value, while decoding into typed fields can retain an
+// earlier string across null or merge objects, bypassing raw-string checks.
 func checkParamNames(v manifest.VerbDef, args json.RawMessage) error {
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(args, &keys); err != nil {
 		return paramDecodeError(v, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	if _, err := decoder.Token(); err != nil { // opening object, or null
+		return paramDecodeError(v, err)
+	}
+	seen := make(map[string]bool, len(keys))
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return paramDecodeError(v, err)
+		}
+		name := token.(string) // Unmarshal above established a valid object.
+		if seen[name] {
+			return fmt.Errorf("%w: %s: duplicate parameter %q", api.ErrInvalidFlags, v.Name, name)
+		}
+		seen[name] = true
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return paramDecodeError(v, err)
+		}
 	}
 	valid := make([]string, 0, len(v.Params))
 	known := make(map[string]bool, len(v.Params))
@@ -524,7 +553,43 @@ func decodeParams(v manifest.VerbDef, args json.RawMessage, into any) error {
 	if err := json.Unmarshal(args, into); err != nil {
 		return paramDecodeError(v, err)
 	}
+	// These free-text identities and values can reach durable storage or its
+	// lookups. Refuse JSON replacement before calling the verb, including array
+	// entries and extra_env's keys. text/delivery_request_id instead use their
+	// verb's malformed-input path to retain the shared API error and ordering.
+	// UUIDs, hashes and enums already reject every U+FFFD-rewritten value.
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(args, &keys); err != nil {
+		return paramDecodeError(v, err)
+	}
+	for _, name := range []string{"instance_id", "instance_ids", "parent", "request_token", "reason", "label", "cwd", "tmux_session_name", "extra_env", "agent_args", "allow", "deny", "ask", "template", "name", "key"} {
+		if !jsonStringsValid(keys[name]) {
+			return fmt.Errorf("%w: %s: %s must be valid UTF-8; nothing was read or written", api.ErrInvalidFlags, v.Name, name)
+		}
+	}
 	return nil
+}
+
+// jsonStringsValid applies jsonStringValid to every string token in an
+// already syntax-checked JSON value, including object keys and array entries.
+func jsonStringsValid(raw json.RawMessage) bool {
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '"' {
+			continue
+		}
+		start := i
+		for i++; i < len(raw); i++ {
+			if raw[i] == '\\' {
+				i++
+			} else if raw[i] == '"' {
+				break
+			}
+		}
+		if i >= len(raw) || !jsonStringValid(raw[start:i+1]) {
+			return false
+		}
+	}
+	return true
 }
 
 // paramDecodeError classifies a failure to decode verb v's arguments

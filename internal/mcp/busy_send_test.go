@@ -310,6 +310,138 @@ func TestBusySendMCPForceAndLookups(t *testing.T) {
 	}
 }
 
+// CR1: a malformed raw lookup cannot alias a retained U+FFFD ID, while real
+// replacement characters and valid surrogate pairs retain their identity.
+func TestBusySendMCPLookupExactIDs(t *testing.T) {
+	e := newEnv(t)
+	const id = "mcp-exact-id"
+	e.seed(t, id, store.StateWaiting)
+	for _, requestID := range []string{"r�", "r🦋"} {
+		sent := toolText(t, callTool(t, e.d, "send_keys", paramJSON(t, map[string]any{
+			"instance_id": id, "text": "hello", "confirmed_delivery": true,
+			"caller_uuid": paramToken, "delivery_request_id": requestID,
+		})))
+		for _, raw := range map[string][]string{
+			"r�": {`"r�"`, `"r\ufffd"`},
+			"r🦋": {`"r🦋"`, `"r\ud83e\udd8b"`},
+		}[requestID] {
+			t.Run(raw, func(t *testing.T) {
+				got := toolText(t, callTool(t, e.d, "get_delivery", `{"caller_uuid":"`+paramToken+`","delivery_request_id":`+raw+`}`))
+				if got != `{"lookup":"found","result":`+sent+`}` {
+					t.Errorf("lookup = %s; want the retained Result %s", got, sent)
+				}
+			})
+		}
+	}
+	for _, raw := range []string{"\"r\xff\"", `"r\ud800"`, `"r\udc00"`, `"r\ud800x"`} {
+		t.Run(raw, func(t *testing.T) {
+			for _, d := range []mcp.Dispatcher{e.d, mcp.NewLiveDispatcher(&api.Client{})} {
+				// The second client has no store: any attempted read panics.
+				data := toolErrorData(t, callTool(t, d, "get_delivery", `{"caller_uuid":"`+paramToken+`","delivery_request_id":`+raw+`}`))
+				want := "ErrInvalidFlags: get-delivery: delivery_request_id must be nonempty UTF-8; nothing was read"
+				if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+					t.Errorf("lookup = %s: %q; want ErrInvalidFlags: %q", data.ErrName, data.ErrDescription, want)
+				}
+			}
+		})
+	}
+}
+
+// Every free-text store key/value must reach its verb without JSON replacement.
+// UUID and enum parameters are separately constrained to ASCII by their verbs.
+func TestBusySendMCPStoreStringsExact(t *testing.T) {
+	for _, v := range exposedVerbs() {
+		for _, p := range v.Params {
+			if !slices.Contains([]string{"instance_id", "instance_ids", "parent", "request_token", "reason", "label", "cwd", "tmux_session_name", "extra_env", "agent_args", "allow", "deny", "ask", "template", "name", "key"}, p.Name) {
+				continue
+			}
+			for _, bad := range []string{"\"x\xff\"", `"x\ud800"`} {
+				t.Run(v.Name+"/"+p.Name+"/"+bad, func(t *testing.T) {
+					e, _ := newReuseParamEnv(t)
+					args := paramRequiredArgs(t, e, v)
+					var raw map[string]json.RawMessage
+					if err := json.Unmarshal([]byte(paramJSON(t, args)), &raw); err != nil {
+						t.Fatal(err)
+					}
+					value := bad
+					switch p.Name {
+					case "instance_ids", "label", "agent_args", "allow", "deny", "ask":
+						value = "[" + bad + "]"
+					case "extra_env":
+						value = `{"K":` + bad + `}`
+					}
+					raw[p.Name] = json.RawMessage(value)
+					encoded, err := json.Marshal(raw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					before := readParamState(t, e)
+					data := toolErrorData(t, callTool(t, e.d, mcp.ToolName(v.Name), string(encoded)))
+					if data.ErrName != "ErrInvalidFlags" || !strings.Contains(data.ErrDescription, p.Name+" must be valid UTF-8") {
+						t.Errorf("refusal = %s: %q; want ErrInvalidFlags naming %s", data.ErrName, data.ErrDescription, p.Name)
+					}
+					if after := readParamState(t, e); !reflect.DeepEqual(after, before) {
+						t.Error("refused string changed state")
+					}
+				})
+			}
+		}
+	}
+}
+
+// Repair CR1: typed JSON decoding can retain a string across duplicate/null
+// members or merge duplicate objects, while a raw map only keeps the last.
+func TestBusySendMCPDuplicateParamsRefused(t *testing.T) {
+	for _, tc := range []struct{ name, tool, args, param string }{
+		{"delivery surrogate/null", "get_delivery", `{"caller_uuid":"` + paramToken + `","delivery_request_id":"r\ud800","delivery_request_id":null}`, "delivery_request_id"},
+		{"delivery bytes/null", "get_delivery", `{"caller_uuid":"` + paramToken + `","delivery_request_id":"r` + "\xff" + `","delivery_request_id":null}`, "delivery_request_id"},
+		{"delivery replaced/string", "get_delivery", `{"caller_uuid":"` + paramToken + `","delivery_request_id":"r\ud800","delivery_request_id":"r�"}`, "delivery_request_id"},
+		{"instance/null", "get", `{"instance_id":"row\ud800","instance_id":null}`, "instance_id"},
+		{"escaped duplicate name", "get", `{"instance_id":"row\ud800","\u0069nstance_id":null}`, "instance_id"},
+		{"environment merge", "make_template", `{"name":"duplicate-env","agent":"codex","extra_env":{"K":"r\ud800"},"extra_env":{}}`, "extra_env"},
+		{"text/null", "send_keys", `{"instance_id":"duplicate-send","text":"h\ud800","text":null}`, "text"},
+		{"text/string", "send_keys", `{"instance_id":"duplicate-send","text":"h\ud800","text":"hello"}`, "text"},
+		{"message ID/null", "send_keys", `{"instance_id":"duplicate-send","text":"hello","confirmed_delivery":true,"caller_uuid":"` + paramToken + `","delivery_request_id":"r\ud800","delivery_request_id":null}`, "delivery_request_id"},
+		{"ordinary duplicate", "get", `{"instance_id":"row�","instance_id":"row�"}`, "instance_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.seed(t, "row�", store.StateEnded)
+			e.seed(t, "duplicate-send", store.StateWaiting)
+			toolText(t, callTool(t, e.d, "send_keys", paramJSON(t, map[string]any{
+				"instance_id": "duplicate-send", "text": "hello", "confirmed_delivery": true,
+				"caller_uuid": paramToken, "delivery_request_id": "r�",
+			})))
+			before := readParamState(t, e)
+			for _, d := range []mcp.Dispatcher{e.d, mcp.NewLiveDispatcher(&api.Client{})} {
+				// No store on the second client: no lookup or write may run.
+				data := toolErrorData(t, callTool(t, d, tc.tool, tc.args))
+				want := `ErrInvalidFlags: ` + mcp.VerbNameFromTool(tc.tool) + `: duplicate parameter "` + tc.param + `"`
+				if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+					t.Errorf("duplicate = %s: %q; want ErrInvalidFlags: %q", data.ErrName, data.ErrDescription, want)
+				}
+			}
+			if after := readParamState(t, e); !reflect.DeepEqual(after, before) {
+				t.Error("refused duplicate changed state")
+			}
+		})
+	}
+}
+
+// Store-key guarding also preserves valid strings, including escaped quotes,
+// backslashes, literal escape text, replacement characters and surrogate pairs.
+func TestBusySendMCPStoreStringsValid(t *testing.T) {
+	e := newEnv(t)
+	for _, id := range []string{"row�", "row🦋", `row\ud800`, `row"quoted`} {
+		e.seed(t, id, store.StateEnded)
+		got := callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))
+		var found string
+		if err := json.Unmarshal(got["instance_id"], &found); err != nil || found != id {
+			t.Errorf("get %q = %s (%v); want the exact instance ID", id, got["instance_id"], err)
+		}
+	}
+}
+
 // TestBusySendMCPReaderPayloadsForwardUnchanged: the lookup tools forward a
 // dispatcher's found and retention_expired answers byte for byte, nulls and
 // omitted receipt fields included (a running force's empty reason and its
