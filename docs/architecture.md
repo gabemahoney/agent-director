@@ -21812,20 +21812,25 @@ allowance and errors.
 Only `queried: false` (no setup or query ran) falls back to `GetSpawn`, with its
 existing connection wait; a completed SQL error never gets a second allowance.
 
-After the row is read, `keyless` checks caller cancellation (bare context
-error), then the spent budget (`budget_exhausted`, `signal_sent: false`),
-before any further store call, signal or write; only a store without the
-claim seam keeps a finished row's earlier no-op. Initial connection
-contention or the query's lock wait
-can delay this refusal past `pause.timeout_seconds`. Subsequent shutdown
-store waits and exit polls use the original budget's remaining time. Uncovered
-pause retains its existing first-read behavior and full post-input wait.
+After the row is read, a finished (`ended` or `missing`) row returns no-op
+success before cancellation or budget checks when the store lacks the claim
+seam or the row has no launch token. Every other row checks caller cancellation
+(bare context error), then the spent budget (`budget_exhausted`,
+`signal_sent: false`), before another store call, signal or write. Initial
+connection contention or the query's lock wait can delay this refusal past
+`pause.timeout_seconds`. Subsequent shutdown store waits and exit polls use
+the original budget's remaining time. Uncovered pause retains its existing
+first-read behavior and full post-input wait.
 The remaining covered shutdown is:
 
-1. The captured Launch: the published current Launch
-   (`GetBusySendPublishedLaunchWithin`) must be covered and the row's own (its
-   launch token), else `launch_changed`. Then the [pause claim](#pause-claims)
-   decides (`decideClaim`), for finished rows too: a conditional pause of a
+1. The captured Launch: `GetBusySendPublishedLaunchWithin` must return the
+   row's own covered published Launch with a nonempty matching launch token.
+   After the checks above, a finished row with no binding, or with an
+   uncovered, tokenless or mismatching published Launch, returns no-op success;
+   other read errors keep their error path. A live row with a nonmatching or
+   uncovered published Launch gets `launch_changed`. Only a matching covered
+   Launch reaches the [pause claim](#pause-claims) decision (`decideClaim`),
+   for finished rows too: a conditional pause of a
    live row calls `ClaimBusySendPauseWithin`, every other pause
    `CheckBusySendPauseWithin`. A refusal or a standing claim's answer is the
    call's result, nothing signalled. `claimEnded` (the claim ended or stands
@@ -21870,7 +21875,7 @@ The remaining covered shutdown is:
    `ad_recovery`, reason `proc_absent`, after commit, with no new call event
    or `ad.spawn.state_transition`.
 
-After the initial row read, budget expiry at a store read/write or before the
+During the remaining shutdown, budget expiry at a store read/write or before the
 signal is `budget_exhausted`, with `signal_sent`; expiry while polling the
 agent is step 3's cause.
 The budget is checked before the signal, Exit write and row completion, then

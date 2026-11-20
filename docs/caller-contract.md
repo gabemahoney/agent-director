@@ -650,6 +650,8 @@ refuses a force.
 [sighting limits](#sighting-limits) as `limits`, and `states`: what a force
 made in each agent state returns, in this order.
 
+Force-state requalification on Claude Code 2.1.311 remains pending.
+
 | `state` | `outcome` | `reason` |
 |---|---|---|
 | `idle` | `handed_over` | `admitted` |
@@ -693,9 +695,10 @@ Claude Code took a prompt, forced or not:
 - `unrecoverable_escaping`: Claude Code escapes reserved closing tags, and
   text that only looks escaped reads the same, so a prompt holding either
   gives no sighting. Nor does one whose wrapping changed.
-- `user_hook_after_sighting`: a hook of yours can block or rewrite the prompt
-  after agent-director's sighting without agent-director detecting it.
-  agent-director never changes your hooks.
+- `user_hook_after_sighting`: a later `UserPromptSubmit` hook of yours can
+  block prompt processing or add `additionalContext`. agent-director cannot
+  establish either effect on model intake. A sighting and secured order are
+  not model intake proof; agent-director never changes your hooks.
 
 agent-director adds no marker, nonce or ID to the text the model sees. These
 limits can leave a force `pending` until Launch End, and ordinary delivery's
@@ -2126,9 +2129,11 @@ Limits:
   ends or its launch ends. A prompt the [sighting limits](#sighting-limits)
   hide keeps `turn_pending` until launch end.
 
-When a refusal repeats, retry after the agent's next turn, or use a plain
-`pause`, which ends the agent in any live state and still honours a standing
-claim.
+After an Esc interruption, type a prompt at the terminal that starts and ends
+a new turn, or use a plain keyless `pause` followed by `resume`. A plain pause
+ends the agent in any live state and still honours a standing claim. For other
+repeating refusals, retry after the agent's next completed turn or use that
+same pause/resume path.
 
 #### Standing pause claims
 
